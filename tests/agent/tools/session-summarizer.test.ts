@@ -30,7 +30,7 @@ const CWD = '/Users/test/project';
 const BASE_CONFIG: Config = {
   version: 1,
   user: { name: 'Test' },
-  defaults: { priority: 'none', category: 'Inbox' },
+  defaults: { priority: 'none', project: '' },
   provider: { type: 'bedrock' },
 };
 

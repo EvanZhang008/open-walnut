@@ -9,31 +9,112 @@ import { scanSshConfig } from './ssh-config-scanner.js';
 const DEFAULT_CONFIG: Config = {
   version: 1,
   user: {},
-  // New users default to a local 'Inbox' so quick-add is instant and never silently
-  // routed to an external sync target. `platform: 'local'` makes the source explicit.
-  // Existing users keep whatever `defaults` is already on disk (getConfig spreads
-  // parsed over DEFAULT_CONFIG), so this never re-routes an established setup.
-  defaults: { priority: 'none', category: 'Inbox', platform: 'local' },
+  // New tasks default to Inbox (no project) and stay local, so quick-add is
+  // instant and never silently routed to an external sync target.
+  // `platform: 'local'` makes the source explicit. Existing users keep whatever
+  // `defaults` is already on disk (getConfig spreads parsed over DEFAULT_CONFIG),
+  // so this never re-routes an established setup.
+  defaults: { priority: 'none', platform: 'local' },
   provider: { type: 'claude-code' },
-  // 'Local' and 'Inbox' are built-in categories reserved for local-only tasks
-  // (Quick Start, default quick-add). Hard-reserved via validateCategorySource so
-  // no sync plugin can claim them.
-  local: { categories: ['Local', 'Inbox'] },
 };
 
-/** Built-in categories always kept local-reserved, regardless of user config. */
-const BUILTIN_LOCAL_CATEGORIES = ['Local', 'Inbox'];
+// ── One-time config migration: category removal (project-only model) ────────
 
-/** Ensure the built-in local categories stay reserved even when user config overrides `local`. */
-function ensureBuiltInLocalReservation(config: Config): void {
-  if (!config.local) config.local = {};
-  let cats = config.local.categories ?? [];
-  for (const builtin of BUILTIN_LOCAL_CATEGORIES) {
-    if (!cats.some(c => c.toLowerCase() === builtin.toLowerCase())) {
-      cats = [...cats, builtin];
+/**
+ * Strip the retired category fields from a parsed config object, in place.
+ *
+ * Field-level and idempotent (same pattern as the available_models seed):
+ *   - `defaults.category`      → deleted (Inbox is now "no project")
+ *   - `local.categories`       → deleted (whole `local` section goes with it)
+ *   - `favorites.categories`   → deleted (`favorites.projects` already flat)
+ *   - `ordering.categories` + nested `ordering.projects` map
+ *                              → flat `ordering.projects: string[]`, expanded in
+ *                                old category order, NOCASE-deduped
+ *   - `plugins.jira.category`  → `plugins.jira.project`
+ *
+ * Returns true when something changed (i.e. the file needs rewriting).
+ */
+export function migrateConfigToProjectOnly(config: Record<string, unknown>): boolean {
+  let changed = false;
+
+  const defaults = config.defaults as Record<string, unknown> | undefined;
+  if (defaults && 'category' in defaults) {
+    delete defaults.category;
+    changed = true;
+  }
+
+  if ('local' in config) {
+    delete config.local;
+    changed = true;
+  }
+
+  const favorites = config.favorites as Record<string, unknown> | undefined;
+  if (favorites && 'categories' in favorites) {
+    delete favorites.categories;
+    changed = true;
+  }
+
+  const ordering = config.ordering as Record<string, unknown> | undefined;
+  if (ordering && ('categories' in ordering || !Array.isArray(ordering.projects))) {
+    const catOrder = Array.isArray(ordering.categories) ? (ordering.categories as unknown[]) : [];
+    const nested = ordering.projects;
+    const flat: string[] = [];
+    const seen = new Set<string>();
+    const push = (raw: unknown): void => {
+      const name = typeof raw === 'string' ? raw.trim() : '';
+      if (!name) return;
+      const key = name.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      flat.push(name);
+    };
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      const byCategory = nested as Record<string, unknown>;
+      // Categories in their configured order first, then any leftover keys.
+      const ordered = [
+        ...catOrder.map((c) => (typeof c === 'string' ? c : '')),
+        ...Object.keys(byCategory).filter(
+          (k) => !catOrder.some((c) => typeof c === 'string' && c.toLowerCase() === k.toLowerCase()),
+        ),
+      ];
+      for (const cat of ordered) {
+        const key = Object.keys(byCategory).find((k) => k.toLowerCase() === cat.toLowerCase());
+        if (!key) continue;
+        const list = byCategory[key];
+        if (Array.isArray(list)) for (const p of list) push(p);
+      }
+    } else if (Array.isArray(nested)) {
+      for (const p of nested) push(p);
+    }
+    delete ordering.categories;
+    ordering.projects = flat;
+    changed = true;
+  }
+
+  // Generic across ALL plugin entries (not just jira): validateProjectSource and
+  // seedProjectsFromConfig read plugins.<id>.project generically, so any plugin
+  // still carrying the legacy `category` key would silently lose its name
+  // reservation (observed in real configs on third-party sync plugins).
+  const plugins = config.plugins as Record<string, unknown> | undefined;
+  for (const entry of Object.values(plugins ?? {})) {
+    if (!entry || typeof entry !== 'object') continue;
+    const plugin = entry as Record<string, unknown>;
+    if ('category' in plugin) {
+      if (plugin.project === undefined && typeof plugin.category === 'string') {
+        plugin.project = plugin.category;
+      }
+      delete plugin.category;
+      changed = true;
+    }
+    // The retired local plugin's `categories` reservation list has no project-only
+    // equivalent (Inbox is unclaimable by design) — drop it.
+    if ('categories' in plugin) {
+      delete plugin.categories;
+      changed = true;
     }
   }
-  config.local.categories = cats;
+
+  return changed;
 }
 
 /**
@@ -105,7 +186,9 @@ export async function getConfig(): Promise<Config> {
     if (content === null) throw new Error('no config file and no backup');
     const parsed = yaml.load(content) as Config;
     const config = { ...DEFAULT_CONFIG, ...parsed };
-    ensureBuiltInLocalReservation(config);
+    // In-memory field migration so readers never see retired category fields,
+    // even before seedConfigDefaults() persists the cleanup.
+    migrateConfigToProjectOnly(config as unknown as Record<string, unknown>);
     // Sanitize legacy priority values to new 3-tier system
     if (config.defaults?.priority && !(VALID_PRIORITIES as readonly string[]).includes(config.defaults.priority)) {
       const p = config.defaults.priority as string;
@@ -255,10 +338,45 @@ export async function updateConfig(partial: Partial<Config>): Promise<void> {
 }
 
 /**
+ * One-time migration: strip the retired category fields from config.yaml on disk.
+ *
+ * Full-file rewrite (not `updateConfig`, which can only replace top-level keys —
+ * it has no way to DELETE `local:`). Runs before the available_models seed at
+ * startup; idempotent, so a second run is a cheap parse + no write.
+ */
+export async function migrateConfigFileToProjectOnly(): Promise<boolean> {
+  return withWriteLock(async () => {
+    let parsed: Record<string, unknown>;
+    try {
+      const content = await readRawConfigContent();
+      if (content === null) return false; // first run — DEFAULT_CONFIG is already clean
+      parsed = (yaml.load(content) as Record<string, unknown>) ?? {};
+    } catch (err) {
+      log.session.warn('config-manager: skipping project-only migration, config unreadable', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+
+    if (!migrateConfigToProjectOnly(parsed)) return false;
+
+    let content = yaml.dump(parsed, { indent: 2, lineWidth: 120 });
+    content = content.replace(
+      /^(\s+)available_models:/m,
+      '$1# Available models for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
+    );
+    await writeConfigWithBackup(content);
+    log.session.info('config-manager: migrated config.yaml to the project-only model');
+    return true;
+  });
+}
+
+/**
  * One-time migration: seed `agent.available_models` into config.yaml if missing.
  * Called at startup from init.ts.
  */
 export async function seedConfigDefaults(): Promise<void> {
+  await migrateConfigFileToProjectOnly();
   const config = await getConfig();
   let needsWrite = false;
 

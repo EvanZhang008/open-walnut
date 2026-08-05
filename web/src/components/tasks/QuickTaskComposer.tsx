@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { listCategories, quickParseTask, type CategorySummary, type QuickTaskParse } from '@/api/tasks';
+import { quickParseTask, type QuickTaskParse } from '@/api/tasks';
 import { QuickTaskConfirm, type ConfirmDraft, type ConfirmField } from './QuickTaskConfirm';
 
 type Stage = 'input' | 'confirm';
@@ -9,7 +9,8 @@ type PinTier = string;
 interface Props {
   open: boolean;
   onClose: () => void;
-  projectOptions: Record<string, string[]>;
+  /** Flat list of existing project names, for the confirm step's datalist. */
+  projectOptions: string[];
   /**
    * Pre-seeded dates (e.g. the calendar slot the user clicked). Merged into
    * the confirm draft ONLY where the AI parse didn't produce a date — typing
@@ -19,7 +20,6 @@ interface Props {
   onCreate: (input: {
     title: string;
     priority: string;
-    category?: string;
     project?: string;
     due_date?: string;
     start_date?: string;
@@ -35,7 +35,6 @@ interface ActiveParseRequest {
 }
 
 function draftFromParse(parse: QuickTaskParse, rawText: string): ConfirmDraft {
-  const category = parse.category?.trim() || undefined;
   const project = parse.project?.trim() || undefined;
   const aiFields = new Set<ConfirmField>();
   const title = parse.title.trim() || rawText;
@@ -47,7 +46,6 @@ function draftFromParse(parse: QuickTaskParse, rawText: string): ConfirmDraft {
   if (parse.pinTier) aiFields.add('pin');
   if (parse.priority) aiFields.add('priority');
   if (parse.starred !== undefined) aiFields.add('star');
-  if (category) aiFields.add('category');
   if (project) aiFields.add('project');
   return {
     title,
@@ -56,8 +54,8 @@ function draftFromParse(parse: QuickTaskParse, rawText: string): ConfirmDraft {
     pin: parse.pinTier,
     priority: parse.priority,
     starred: !!parse.starred,
-    category,
     project,
+    projectIsNew: !!project && !!parse.project_is_new,
     aiFields,
   };
 }
@@ -82,7 +80,6 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
   const [parse, setParse] = useState<QuickTaskParse | null>(null);
   const [parseInFlight, setParseInFlight] = useState(false);
   const [draft, setDraft] = useState<ConfirmDraft | null>(null);
-  const [categories, setCategories] = useState<CategorySummary[] | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -128,21 +125,13 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
 
   useEffect(() => {
     if (!open) return;
-    let alive = true;
-    listCategories()
-      .then((result) => { if (alive) setCategories(result); })
-      .catch(() => { if (alive) setCategories([]); });
     const timer = setTimeout(() => inputRef.current?.focus(), 0);
-    return () => {
-      alive = false;
-      clearTimeout(timer);
-    };
+    return () => clearTimeout(timer);
   }, [open]);
 
   useEffect(() => {
     if (open) return;
     reset();
-    setCategories(null);
   }, [open, reset]);
 
   useEffect(() => {
@@ -244,8 +233,9 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
         if (key === 'starred') aiFields.delete('star');
         else if (key !== 'aiFields') aiFields.delete(key as ConfirmField);
       }
-      if ('category' in patch) aiFields.delete('project');
+      // A hand-typed project is no longer the AI's invention.
       const next = { ...current, ...patch, aiFields };
+      if ('project' in patch) next.projectIsNew = false;
       draftRef.current = next;
       return next;
     });
@@ -257,7 +247,6 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
     // a second Enter/click in the same tick from double-creating the task.
     submittingRef.current = true;
     const project = source.project?.trim() || undefined;
-    const category = source.category?.trim() || undefined;
     setSubmitting(true);
     Promise.resolve(onCreate({
       title: source.title.trim(),
@@ -266,7 +255,6 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
       ...(source.start ? { start_date: source.start } : {}),
       ...(source.pin ? { pinnedTier: source.pin } : {}),
       ...(source.starred ? { starred: true } : {}),
-      ...(category ? { category } : {}),
       ...(project ? { project } : {}),
     }))
       .then(() => reset())
@@ -356,7 +344,6 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
           <QuickTaskConfirm
             draft={draft}
             rawText={text}
-            categories={categories}
             projectOptions={projectOptions}
             submitting={submitting}
             onChange={handleDraftChange}

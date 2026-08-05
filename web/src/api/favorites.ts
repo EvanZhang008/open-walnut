@@ -1,7 +1,6 @@
 import { apiGet, apiPost, apiDelete } from './client';
 
 export interface Favorites {
-  categories: string[];
   projects: string[];
   /** Vault-relative note paths (WITH .md), e.g. "PARA/foo.md". */
   notes: string[];
@@ -11,20 +10,18 @@ export async function fetchFavorites(): Promise<Favorites> {
   return apiGet<Favorites>('/api/favorites');
 }
 
-export async function addFavoriteCategory(name: string): Promise<void> {
-  await apiPost(`/api/favorites/categories/${encodeURIComponent(name)}`);
+// Project favorites are matched case-INSENSITIVELY server-side (project identity
+// is NOCASE) and stored under the registry's canonical spelling. Both mutations
+// answer with the full post-write list, so callers should adopt it verbatim
+// instead of patching their local copy with the requested spelling.
+export async function addFavoriteProject(name: string): Promise<string[]> {
+  const res = await apiPost<{ projects: string[] }>(`/api/favorites/projects/${encodeURIComponent(name)}`);
+  return res.projects ?? [];
 }
 
-export async function removeFavoriteCategory(name: string): Promise<void> {
-  await apiDelete(`/api/favorites/categories/${encodeURIComponent(name)}`);
-}
-
-export async function addFavoriteProject(name: string): Promise<void> {
-  await apiPost(`/api/favorites/projects/${encodeURIComponent(name)}`);
-}
-
-export async function removeFavoriteProject(name: string): Promise<void> {
-  await apiDelete(`/api/favorites/projects/${encodeURIComponent(name)}`);
+export async function removeFavoriteProject(name: string): Promise<string[]> {
+  const res = await apiDelete<{ projects: string[] }>(`/api/favorites/projects/${encodeURIComponent(name)}`);
+  return res.projects ?? [];
 }
 
 // Note paths contain slashes + .md, so add goes in the request BODY (the BE reads

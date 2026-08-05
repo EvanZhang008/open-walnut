@@ -16,7 +16,7 @@ interface TaskBatchMenuProps {
   /** Number of selected tasks (drives the label + group-enabled state). */
   count: number;
   /** Whether the selection can be grouped — true once ≥2 tasks are picked (a
-   *  group has no category/project scope rule; any tasks can be grouped). */
+   *  group has no project scope rule; any tasks can be grouped). */
   canGroup: boolean;
   onGroup: () => void;
   /** Apply to every selected task. */

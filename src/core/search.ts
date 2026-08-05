@@ -142,10 +142,7 @@ export function bm25ScoreTasks(tasks: Task[], query: string): SearchResult[] {
       if (noteScore > bestScore) { bestScore = noteScore; matchField = 'note'; }
     }
 
-    const catScore = scoreMatch(task.category, query, 1);
-    if (catScore > bestScore) { bestScore = catScore; matchField = 'category'; }
-
-    const projScore = scoreMatch(task.project, query, 1);
+    const projScore = scoreMatch(task.project || '', query, 1);
     if (projScore > bestScore) { bestScore = projScore; matchField = 'project'; }
 
     if (task.tags?.length) {

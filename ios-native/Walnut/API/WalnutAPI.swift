@@ -102,6 +102,34 @@ struct WalnutAPI {
         try await get("/sessions")
     }
 
+    /// Create a task (additive endpoint). Same semantics as the web quick-add:
+    /// nil/empty project = the server default (Inbox); a new project name is
+    /// auto-created. Throws APIError.server code "not_supported_cloud" (503)
+    /// on a REPLICA — task writes run on the primary box only.
+    func createTask(
+        title: String, project: String? = nil, priority: String? = nil,
+        dueDate: String? = nil, description: String? = nil
+    ) async throws -> WalnutTask {
+        struct Body: Encodable {
+            let title: String
+            let project: String?
+            let priority: String?
+            let due_date: String?
+            let description: String?
+        }
+        let created: TaskCreated = try await send(
+            "POST", "/tasks",
+            body: Body(
+                title: title,
+                project: (project?.isEmpty ?? true) ? nil : project,
+                priority: priority,
+                due_date: dueDate,
+                description: (description?.isEmpty ?? true) ? nil : description
+            )
+        )
+        return created.task
+    }
+
     /// Hosts + frequent working dirs for the New Session sheet. Throws
     /// APIError.server with code "not_supported_cloud" (503) on a REPLICA —
     /// creation is a primary-box capability.

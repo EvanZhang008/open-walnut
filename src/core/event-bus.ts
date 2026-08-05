@@ -106,9 +106,8 @@ export const EventNames = {
   SYNC_PULLED: 'sync:pulled',
   SYNC_CONFLICT_RESOLVED: 'sync:conflict-resolved',
 
-  // Category events
-  CATEGORY_CREATED: 'category:created',
-  CATEGORY_UPDATED: 'category:updated',
+  // Project registry events
+  PROJECT_CREATED: 'project:created',
 
   // Notes events
   NOTES_UPDATED: 'notes:updated',

@@ -9,7 +9,7 @@
       "base_url": { "type": "string" },
       "auth": { "type": "object" },
       "project_key": { "type": "string" },
-      "category": { "type": "string" },
+      "project": { "type": "string" },
       "issue_type": { "type": "string" },
       "assignee_filter": { "type": "string" },
       "jql_filter": { "type": "string" },
@@ -21,6 +21,6 @@
   "uiHints": {
     "base_url": { "label": "Jira Base URL", "help": "e.g. https://yourteam.atlassian.net" },
     "project_key": { "label": "Default Project Key", "help": "e.g. PROJ" },
-    "category": { "label": "Category", "help": "Walnut category reserved for Jira tasks" }
+    "project": { "label": "Walnut Project", "help": "Walnut project reserved for Jira tasks" }
   }
 }

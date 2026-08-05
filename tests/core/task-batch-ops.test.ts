@@ -41,10 +41,10 @@ afterEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
-async function makeTasks(titles: string[], category = 'Work', project = 'Marina'): Promise<string[]> {
+async function makeTasks(titles: string[], project = 'Marina'): Promise<string[]> {
   const ids: string[] = [];
   for (const title of titles) {
-    const { task } = await addTask({ title, category, project });
+    const { task } = await addTask({ title, project });
     ids.push(task.id);
   }
   return ids;
@@ -98,7 +98,7 @@ describe('setPhaseBulk', () => {
 
   it('skips a parent with active children but still completes the rest', async () => {
     const [parent, sibling] = await makeTasks(['Parent', 'Sibling']);
-    const { task: child } = await addTask({ title: 'Child', category: 'Work', project: 'Marina', parent_task_id: parent });
+    const { task: child } = await addTask({ title: 'Child', project: 'Marina', parent_task_id: parent });
 
     const { changed, failed } = await setPhaseBulk([parent, sibling], 'COMPLETE');
 
@@ -116,7 +116,7 @@ describe('setPhaseBulk', () => {
     // Selecting a parent together with its children is the natural user intent —
     // the children are being completed too, so the guard must not fire.
     const [parent] = await makeTasks(['Parent']);
-    const { task: child } = await addTask({ title: 'Child', category: 'Work', project: 'Marina', parent_task_id: parent });
+    const { task: child } = await addTask({ title: 'Child', project: 'Marina', parent_task_id: parent });
 
     const { changed, failed } = await setPhaseBulk([child.id, parent], 'COMPLETE');
     expect(failed).toEqual([]);
@@ -155,7 +155,7 @@ describe('setPhaseBulk', () => {
     // the task IS complete — only the push failed. Merging that into `failed` made a
     // fully-applied batch report total failure (caught in the E2E log: changed:3 AND
     // failed:3 for the same 3 tasks), which would roll back correct rows in the UI.
-    const { task } = await addTask({ title: 'Synced task', category: 'Remote', project: 'Remote', source: 'ms-todo' });
+    const { task } = await addTask({ title: 'Synced task', project: 'Remote', source: 'ms-todo' });
 
     const { changed, failed, syncFailed } = await setPhaseBulk([task.id], 'COMPLETE');
 

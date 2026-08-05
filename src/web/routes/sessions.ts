@@ -199,7 +199,9 @@ sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: N
     const dirs = await getFrequentDirs()
     const config = await getConfig()
     const hosts = config.hosts ?? {}
-    const defaultCat = config.defaults?.category ?? 'Inbox'
+    // '' = Inbox. The default project is optional; an unset default means a
+    // dir with no votes suggests Inbox rather than inventing a group name.
+    const defaultProject = config.defaults?.project ?? ''
     const now = Date.now()
 
     // Find max age and max count for normalization
@@ -211,13 +213,13 @@ sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: N
       if (d.count > maxCount) maxCount = d.count
     }
 
-    // Compute score, hostLabel, resolved category at read time
+    // Compute score, hostLabel, resolved project at read time
     const entries = dirs.map(d => {
-      // Majority vote for category
-      let bestCat = defaultCat
+      // Majority vote for project
+      let bestProject = defaultProject
       let bestCount = 0
-      for (const [cat, cnt] of Object.entries(d.categoryVotes)) {
-        if (cnt > bestCount) { bestCat = cat; bestCount = cnt }
+      for (const [proj, cnt] of Object.entries(d.projectVotes ?? {})) {
+        if (cnt > bestCount) { bestProject = proj; bestCount = cnt }
       }
 
       const hostLabel = d.host ? hosts[d.host]?.label ?? d.host : undefined
@@ -229,7 +231,10 @@ sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: N
         cwd: d.cwd,
         host: d.host,
         hostLabel,
-        category: bestCat,
+        // Currently unread by the web picker (its category consumer was removed
+        // with the category tier); kept so dir→project suggestions can return
+        // without an API change.
+        project: bestProject,
         count: d.count,
         lastUsed: d.lastUsed,
         lastLaunch: d.lastLaunch,
@@ -503,12 +508,12 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     }
 
     // No system-prompt hint is injected for quick-start sessions. (We used to
-    // tell the session to rename/recategorize the task on completion, but that
+    // tell the session to rename/re-file the task on completion, but that
     // pushed sessions into unrelated task-management side-quests.) Extension
     // point: pass an `appendSystemPrompt` on SESSION_START if a future need arises.
 
     // Fix-Walnut intent: wrap the report in the repair briefing and give the
-    // task a recognizable title/project (instead of "Session: walnut" / Quick Start).
+    // task a recognizable title/project (instead of "Session: walnut" / Inbox).
     const isFixWalnut = intent === 'fix-walnut'
     const sessionMessage = isFixWalnut ? buildFixWalnutMessage(message) : message
     const reportSnippet = message.replace(/\s+/g, ' ').trim().slice(0, 60)
@@ -2057,8 +2062,8 @@ sessionsRouter.post('/:sessionId/side-question/:id/promote', async (req: Request
       return
     }
     // If this session is working on a task, file the promoted Q&A as a SUBTASK of
-    // it (addTask inherits the parent's category/project/source). Ad-hoc sessions
-    // with no originating task fall back to a top-level task.
+    // it (addTask inherits the parent's project/source). Ad-hoc sessions with no
+    // originating task fall back to a top-level task in Inbox.
     const sessionRecord = await getSessionByClaudeId(sessionId)
     const parentTaskId = sessionRecord?.taskId?.trim() || undefined
     const { task } = await addTask({
@@ -2738,7 +2743,7 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
     if (create_child_task) {
       // Fork = create a SIBLING task and visually group it with the source task
       // (NOT a parent/subtask — they have independent lifecycles). The new task
-      // inherits the source task's category/project/source but has NO parent; we
+      // inherits the source task's project/source but has NO parent; we
       // then put both the source task and the fork into a lightweight virtual
       // group (reusing the source task's existing group if it already has one).
       if (!sourceRecord.taskId) {
@@ -2773,8 +2778,7 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
       // other task. addTask throws on CJK → surfaced via next(err).
       const { task: newFork } = await addTask({
         title: newTitle,
-        category: sourceTask.category,
-        project: sourceTask.project,
+        project: sourceTask.project || '',
         source: sourceTask.source,
       })
       // Inherit the source's pin/tier so a fork of a Focus task lands in Focus

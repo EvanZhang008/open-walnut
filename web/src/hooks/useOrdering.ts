@@ -3,22 +3,17 @@ import { useEvent } from './useWebSocket';
 import * as orderingApi from '@/api/ordering';
 
 export interface UseOrderingReturn {
-  categoryOrder: string[];
-  projectOrder: Record<string, string[]>;
-  reorderCategories: (order: string[]) => Promise<void>;
-  reorderProjects: (category: string, order: string[]) => Promise<void>;
+  /** Flat project display order (config `ordering.projects`). */
+  projectOrder: string[];
+  reorderProjects: (order: string[]) => Promise<void>;
 }
 
 export function useOrdering(): UseOrderingReturn {
-  const [categoryOrder, setCategoryOrder] = useState<string[]>([]);
-  const [projectOrder, setProjectOrder] = useState<Record<string, string[]>>({});
+  const [projectOrder, setProjectOrder] = useState<string[]>([]);
 
   const fetchAll = useCallback(() => {
     orderingApi.fetchOrdering()
-      .then((data) => {
-        setCategoryOrder(data.categories);
-        setProjectOrder(data.projects);
-      })
+      .then((data) => { setProjectOrder(data.projects ?? []); })
       .catch(() => {});
   }, []);
 
@@ -31,17 +26,10 @@ export function useOrdering(): UseOrderingReturn {
     fetchAll();
   });
 
-  const reorderCategories = useCallback(async (order: string[]) => {
-    setCategoryOrder(order);
-    await orderingApi.saveCategoryOrder(order);
+  const reorderProjects = useCallback(async (order: string[]) => {
+    setProjectOrder(order);
+    await orderingApi.saveProjectOrder(order);
   }, []);
 
-  const reorderProjects = useCallback(async (category: string, order: string[]) => {
-    setProjectOrder((prev) => ({ ...prev, [category]: order }));
-    await orderingApi.saveProjectOrder(category, order);
-  }, []);
-
-  return useMemo(() => ({
-    categoryOrder, projectOrder, reorderCategories, reorderProjects,
-  }), [categoryOrder, projectOrder, reorderCategories, reorderProjects]);
+  return useMemo(() => ({ projectOrder, reorderProjects }), [projectOrder, reorderProjects]);
 }

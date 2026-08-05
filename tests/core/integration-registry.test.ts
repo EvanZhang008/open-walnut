@@ -7,11 +7,11 @@
  * - A1.2: duplicate registration throws
  * - A1.3: getAll returns all registered plugins
  * - A1.4: has returns false for unregistered plugin
- * - A1.5: getForCategory returns highest priority claim match
- * - A1.6: getForCategory falls back to lower priority
- * - A1.7: getForCategory falls back to local
- * - A1.8: getForCategory handles async claim functions
- * - A1.9: getForCategory throws when no fallback
+ * - A1.5: getForProject returns highest priority claim match
+ * - A1.6: getForProject falls back to lower priority
+ * - A1.7: getForProject falls back to local
+ * - A1.8: getForProject handles async claim functions
+ * - A1.9: getForProject throws when no fallback
  * - A1.10: clear removes all plugins
  */
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -95,7 +95,7 @@ describe('IntegrationRegistry', () => {
     });
   });
 
-  describe('getForCategory', () => {
+  describe('getForProject', () => {
     it('returns highest-priority claiming plugin', async () => {
       const local = makePlugin({
         id: 'local',
@@ -114,8 +114,8 @@ describe('IntegrationRegistry', () => {
       registry.register('ms-todo', msTodo);
       registry.register('plugin-a', pluginA);
 
-      // 'Work' category: plugin-a claims with priority 10
-      const result = await registry.getForCategory('Work');
+      // 'Work' project: plugin-a claims with priority 10
+      const result = await registry.getForProject('Work');
       expect(result.id).toBe('plugin-a');
     });
 
@@ -137,8 +137,8 @@ describe('IntegrationRegistry', () => {
       registry.register('ms-todo', msTodo);
       registry.register('plugin-a', pluginA);
 
-      // 'Life' category: plugin-a declines, ms-todo claims at priority 0
-      const result = await registry.getForCategory('Life');
+      // 'Life' project: plugin-a declines, ms-todo claims at priority 0
+      const result = await registry.getForProject('Life');
       expect(result.id).toBe('ms-todo');
     });
 
@@ -155,7 +155,7 @@ describe('IntegrationRegistry', () => {
       registry.register('local', local);
       registry.register('selective', selective);
 
-      const result = await registry.getForCategory('Anything');
+      const result = await registry.getForProject('Anything');
       expect(result.id).toBe('local');
     });
 
@@ -178,7 +178,7 @@ describe('IntegrationRegistry', () => {
       registry.register('async-plugin', asyncPlugin);
       registry.register('local', local);
 
-      const result = await registry.getForCategory('Async');
+      const result = await registry.getForProject('Async');
       expect(result.id).toBe('async-plugin');
     });
 
@@ -193,7 +193,7 @@ describe('IntegrationRegistry', () => {
       registry.register('no-claim', noClaim);
       registry.register('local', local);
 
-      const result = await registry.getForCategory('Test');
+      const result = await registry.getForProject('Test');
       expect(result.id).toBe('local');
     });
 
@@ -204,8 +204,8 @@ describe('IntegrationRegistry', () => {
       });
       registry.register('selective', plugin);
 
-      await expect(registry.getForCategory('Orphan')).rejects.toThrowError(
-        'No plugin registered for category and no local fallback found.',
+      await expect(registry.getForProject('Orphan')).rejects.toThrowError(
+        'No plugin registered for project and no local fallback found.',
       );
     });
   });

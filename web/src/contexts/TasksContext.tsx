@@ -18,8 +18,10 @@ export interface TasksContextValue {
   toggleComplete: (id: string) => void;
   setPhase: (id: string, phase: string) => void;
   star: (id: string) => void;
-  reorder: (category: string, project: string, taskIds: string[]) => void;
-  moveTask: (taskId: string, category: string, project: string, insertNearTaskId?: string) => void;
+  /** Reorder within ONE project group. `project: ''` = Inbox. */
+  reorder: (project: string, taskIds: string[]) => void;
+  /** Move a task to another project ('' = Inbox), optionally next to a sibling. */
+  moveTask: (taskId: string, project: string, insertNearTaskId?: string) => void;
   reparentTask: (taskId: string, newParentId: string | null, opts?: { insertAfterId?: string }) => void;
   deleteTask: (id: string) => void;
   /** Multi-select batch ops — one round-trip; resolve with the per-task `failed` list. */

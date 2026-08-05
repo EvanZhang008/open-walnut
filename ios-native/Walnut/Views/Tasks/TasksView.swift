@@ -2,8 +2,8 @@ import SwiftUI
 
 /// Tasks tab — read-only, Apple Reminders-style. A horizontally scrollable
 /// grid of smart-list cards sits above the task list for the active filter,
-/// grouped by category. v1 is read-only: rows and circles are NOT tappable to
-/// mutate; tapping a row opens a detail sheet.
+/// grouped by project ("" = Inbox). v1 is read-only: rows and circles are NOT
+/// tappable to mutate; tapping a row opens a detail sheet.
 struct TasksView: View {
     @Environment(ConnectionStore.self) private var connection
     @Environment(TasksStore.self) private var tasks
@@ -13,6 +13,10 @@ struct TasksView: View {
     /// Explicit path so a freshly created session can push programmatically.
     @State private var navPath: [WalnutSession] = []
     @State private var showNewSession = false
+    @State private var showNewTask = false
+    /// Local search — filters tasks (title/project) and sessions
+    /// (title/task/host/cwd) in place; no server round-trip.
+    @State private var searchText = ""
 
     var body: some View {
         NavigationStack(path: $navPath) {
@@ -24,18 +28,38 @@ struct TasksView: View {
                 }
             }
             .navigationTitle("Tasks")
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search tasks & sessions")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { StatusBadge() }
                 // Creation is a primary-box capability (a REPLICA has no spawn
                 // path) — hide the entry point entirely on the cloud companion.
                 if connection.status?.mode != .replica {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            showNewSession = true
+                        Menu {
+                            Button {
+                                showNewTask = true
+                            } label: {
+                                Label("New Task", systemImage: "checkmark.circle")
+                            }
+                            .accessibilityIdentifier("tasks.create")
+                            Button {
+                                showNewSession = true
+                            } label: {
+                                Label("New Session", systemImage: "terminal")
+                            }
+                            .accessibilityIdentifier("sessions.create")
                         } label: {
                             Image(systemName: "plus.circle.fill")
                                 .foregroundStyle(Theme.tint)
                         }
+                        // Automation compat: the collapsed Menu renders as ONE
+                        // accessibility element (a button), and SwiftUI surfaces
+                        // the identifier applied to the Menu itself — not one on
+                        // the label view. Existing Maestro flows tap "sessions.new"
+                        // to start session creation, so the menu container keeps
+                        // that id (tap → menu opens → tap "sessions.create").
+                        // The menu ITEMS carry distinct ids ("tasks.create" /
+                        // "sessions.create") so open-menu taps are unambiguous.
                         .accessibilityIdentifier("sessions.new")
                     }
                 }
@@ -51,6 +75,12 @@ struct TasksView: View {
                 }
                 .presentationDetents([.medium, .large])
             }
+            .sheet(isPresented: $showNewTask) {
+                // No onCreated action: the store's optimistic insert makes the
+                // new task appear in the list the moment the sheet dismisses.
+                NewTaskSheet()
+                    .presentationDetents([.medium, .large])
+            }
             // Session rows push a full-screen conversation page instead of a sheet.
             .navigationDestination(for: WalnutSession.self) { session in
                 SessionConversationView(session: session)
@@ -58,17 +88,41 @@ struct TasksView: View {
         }
     }
 
+    // MARK: - Search
+
+    /// Case-insensitive substring match across task title + project.
+    /// (The v1 projection has no separate category field — project is the
+    /// grouping layer, so title/project covers what the list shows.)
+    private func taskMatchesSearch(_ task: WalnutTask) -> Bool {
+        let q = searchText.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return true }
+        return task.title.localizedCaseInsensitiveContains(q)
+            || task.project.localizedCaseInsensitiveContains(q)
+    }
+
+    /// Case-insensitive substring match across session title, owning-task
+    /// title, host, and cwd.
+    private func sessionMatchesSearch(_ session: WalnutSession) -> Bool {
+        let q = searchText.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return true }
+        if session.title?.localizedCaseInsensitiveContains(q) == true { return true }
+        if session.taskTitle?.localizedCaseInsensitiveContains(q) == true { return true }
+        if session.host.localizedCaseInsensitiveContains(q) { return true }
+        if session.cwd?.localizedCaseInsensitiveContains(q) == true { return true }
+        return false
+    }
+
     // MARK: - List
 
-    private var sections: [(category: String, tasks: [WalnutTask])] {
-        let filtered = tasks.tasks(for: activeFilter)
+    private var sections: [(project: String, tasks: [WalnutTask])] {
+        let filtered = tasks.tasks(for: activeFilter).filter(taskMatchesSearch)
         let grouped = Dictionary(grouping: filtered) { task in
-            task.category.isEmpty ? "Uncategorized" : task.category
+            task.project.isEmpty ? "Inbox" : task.project
         }
         // Preserve each group's already-sorted order; sort the headers A→Z.
         return grouped
-            .map { (category: $0.key, tasks: $0.value) }
-            .sorted { $0.category.localizedCaseInsensitiveCompare($1.category) == .orderedAscending }
+            .map { (project: $0.key, tasks: $0.value) }
+            .sorted { $0.project.localizedCaseInsensitiveCompare($1.project) == .orderedAscending }
     }
 
     private var list: some View {
@@ -104,8 +158,8 @@ struct TasksView: View {
                         .listRowBackground(Color.clear)
                 }
             } else {
-                ForEach(sections, id: \.category) { section in
-                    Section(section.category) {
+                ForEach(sections, id: \.project) { section in
+                    Section(section.project) {
                         ForEach(section.tasks) { task in
                             Button { selected = task } label: {
                                 TaskRow(task: task)
@@ -166,7 +220,7 @@ struct TasksView: View {
     private var activeSessionsSection: some View {
         let pinnedAlive = tasks.pinnedSessions.filter { $0.statusKind.isAlive }
         let source = pinnedAlive.isEmpty ? tasks.activeSessions : pinnedAlive
-        let rows = Array(source.prefix(5))
+        let rows = Array(source.filter(sessionMatchesSearch).prefix(5))
         if !rows.isEmpty {
             Section("Active Sessions") {
                 ForEach(rows) { session in sessionRow(session) }
@@ -211,11 +265,14 @@ struct TasksView: View {
     }
 
     private var scopedSessions: [WalnutSession] {
+        let scoped: [WalnutSession]
         switch sessionScope {
-        case .pinned: return pinnedScopeSessions
-        case .recent: return Array(tasks.sessions.sorted(by: WalnutSession.recencySort).prefix(50))
-        case .all: return tasks.sessions.sorted(by: WalnutSession.recencySort)
+        case .pinned: scoped = pinnedScopeSessions
+        // Recent caps AFTER filtering so a search can surface older sessions.
+        case .recent: scoped = Array(tasks.sessions.sorted(by: WalnutSession.recencySort).filter(sessionMatchesSearch).prefix(50))
+        case .all: scoped = tasks.sessions.sorted(by: WalnutSession.recencySort)
         }
+        return sessionScope == .recent ? scoped : scoped.filter(sessionMatchesSearch)
     }
 
     /// The Pinned scope mirrors the desktop focus bar's built-in tiers. Each pinned
@@ -246,7 +303,7 @@ struct TasksView: View {
     /// Pinned sessions grouped by focus tier, in Focus → Satellite → Backlog → Wait
     /// order, dropping empty tiers.
     private var pinnedTierGroups: [(tier: FocusTier, sessions: [WalnutSession])] {
-        let grouped = Dictionary(grouping: pinnedScopeSessions, by: tier)
+        let grouped = Dictionary(grouping: pinnedScopeSessions.filter(sessionMatchesSearch), by: tier)
         return FocusTier.allCases.compactMap { t in
             guard let rows = grouped[t], !rows.isEmpty else { return nil }
             return (t, rows)

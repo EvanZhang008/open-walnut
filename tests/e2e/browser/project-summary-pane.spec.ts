@@ -2,7 +2,8 @@
  * Project detail pane — AI project summary ("About" section).
  *
  * The summary is generated server-side by project-summary.ts (fast model) and
- * stored in .metadata_project. The pane must:
+ * stored in the project registry's metadata (task_projects.metadata — the
+ * .metadata_project sentinel task is retired). The pane must:
  *   1. show the stored summary when present,
  *   2. show the empty-state hint (with the ↻ affordance) when absent.
  *
@@ -21,16 +22,16 @@ test.beforeEach(async ({ page }) => {
 })
 
 test('project pane shows the stored AI summary', async ({ page, request }) => {
-  // Seed: a real task creates the category/project; metadata carries the summary.
+  // Seed: a real task auto-creates the project registry row; metadata carries the summary.
   const res = await request.post(`${API}/api/tasks`, {
-    data: { title: 'Summary pane seed task', category: 'Work', project: 'SummaryProj' },
+    data: { title: 'Summary pane seed task', project: 'SummaryProj' },
   })
   expect(res.ok()).toBeTruthy()
-  const patch = await request.patch(
-    `${API}/api/categories/Work/projects/SummaryProj/metadata`,
+  const put = await request.put(
+    `${API}/api/projects/SummaryProj/metadata`,
     { data: { summary: 'Building the summary pane demo.', summary_task_count: 1 } },
   )
-  expect(patch.ok()).toBeTruthy()
+  expect(put.ok()).toBeTruthy()
 
   await page.reload()
   await showEverything(page)
@@ -48,7 +49,7 @@ test('project pane shows the stored AI summary', async ({ page, request }) => {
 
 test('project pane shows the empty-state hint and refresh button when no summary exists', async ({ page, request }) => {
   const res = await request.post(`${API}/api/tasks`, {
-    data: { title: 'No summary seed task', category: 'Work', project: 'BareProj' },
+    data: { title: 'No summary seed task', project: 'BareProj' },
   })
   expect(res.ok()).toBeTruthy()
 

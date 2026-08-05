@@ -147,11 +147,11 @@ struct SessionInfoSheet: View {
                     Section("Task") {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(taskTitle)
-                            if let category = session.category {
-                                Text([category, session.project].compactMap { $0 }.joined(separator: " › "))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+                            // One grouping layer now: the project, or Inbox.
+                            let project = session.project ?? ""
+                            Text(project.isEmpty ? "Inbox" : project)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }

@@ -31,7 +31,7 @@ export function TaskDetailModal({
 
   return createPortal(
     <div className="wf-modal-overlay" onClick={onClose}>
-      {/* Reuse the wf-modal shell; the pane brings its own header (category +
+      {/* Reuse the wf-modal shell; the pane brings its own header (project +
           external link + close), so we don't add a second header row. */}
       <div className="wf-modal task-detail-modal" onClick={(e) => e.stopPropagation()}>
         <TaskDetailPane

@@ -208,7 +208,7 @@ describe('POST /api/v1/sessions', () => {
   });
 
   it('taskId links the session to an existing task instead of creating one', async () => {
-    const { task } = await addTask({ title: 'Existing work', category: 'Local', project: 'Quick Start' });
+    const { task } = await addTask({ title: 'Existing work', project: 'Quick Start' });
     const res = await request(createApp())
       .post('/api/v1/sessions')
       .send({ cwd: '/tmp/y', taskId: task.id, message: 'continue' });
@@ -237,7 +237,7 @@ describe('POST /api/v1/sessions', () => {
   });
 
   it('retry mode archives the task\'s error/stopped sessions to free the slot', async () => {
-    const { task } = await addTask({ title: 'Retry me', category: 'Local', project: 'Quick Start' });
+    const { task } = await addTask({ title: 'Retry me', project: 'Quick Start' });
     const { createSessionRecord, getSessionByClaudeId: readRecord, updateSessionRecord } =
       await import('../../../src/core/session-tracker.js');
     await createSessionRecord('dead-session-0001', task.id, 'Quick Start', '/tmp/y', { title: 'Retry me' });

@@ -1,6 +1,6 @@
 /**
  * Tests for MS To-Do sync logic:
- * - reconcilePulledTasks: categoryMismatch rollback fix
+ * - reconcilePulledTasks: no project rollback when the local copy is newer
  * - autoPushTask: per-task dedup
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -17,7 +17,6 @@ function createLocalTask(overrides?: Partial<Task>): Task {
     status: 'todo',
     phase: 'TODO' as TaskPhase,
     priority: 'none',
-    category: 'Passion',
     project: 'Walnut',
     source: 'ms-todo',
     session_ids: [],
@@ -60,16 +59,15 @@ function mockFindByExtId(local: Map<string, Task>) {
     });
 }
 
-describe('reconcilePulledTasks — categoryMismatch fix', () => {
+describe('reconcilePulledTasks — no project rollback', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
   it('does NOT roll back local project when local is newer than remote', async () => {
     // Local: project='Walnut', _syncedAt 12:00 (NEWER)
-    // Remote: in "Passion / MyBot" list, modified 06:00 (OLDER)
+    // Remote: in a legacy "Passion / MyBot" list, modified 06:00 (OLDER)
     const localTask = createLocalTask({
-      category: 'Passion',
       project: 'Walnut',
       updated_at: '2026-02-25T12:00:00Z',
       _syncedAt: '2026-02-25T12:00:00Z',
@@ -99,7 +97,6 @@ describe('reconcilePulledTasks — categoryMismatch fix', () => {
     // Local: updated 06:00 (OLDER)
     // Remote: updated 18:00 (NEWER) with title change
     const localTask = createLocalTask({
-      category: 'Passion',
       project: 'MyBot',
       updated_at: '2026-02-24T06:00:00Z',
     });
@@ -129,10 +126,9 @@ describe('reconcilePulledTasks — categoryMismatch fix', () => {
   });
 
   it('does NOT roll back even when project differs significantly', async () => {
-    // Simulate: task moved from "Work / HomeLab" to "Passion / Walnut"
-    // Remote still in "Work / HomeLab" list, local is newer
+    // Simulate: task moved from project HomeLab to project Walnut locally.
+    // Remote still sits in the "Work / HomeLab" list, but local is newer.
     const localTask = createLocalTask({
-      category: 'Passion',
       project: 'Walnut',
       updated_at: '2026-02-25T20:00:00Z', // very recent local change
       _syncedAt: '2026-02-25T20:00:00Z',
@@ -174,6 +170,8 @@ describe('reconcilePulledTasks — categoryMismatch fix', () => {
     expect(addSpy).toHaveBeenCalledWith(expect.objectContaining({
       title: 'Brand new',
       source: 'ms-todo',
+      // Legacy two-level list name → trailing segment is the project.
+      project: 'Walnut',
     }));
     expect(count).toBe(1);
   });

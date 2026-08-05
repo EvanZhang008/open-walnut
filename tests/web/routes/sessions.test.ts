@@ -348,7 +348,6 @@ describe('PATCH /api/sessions/:sessionId', () => {
   it('returns typed 404s for unknown provider/runtime IDs without mutation', async () => {
     const { task } = await addTask({
       title: 'Session identity guard',
-      category: 'Work',
       project: 'Walnut',
       source: 'local',
     });
@@ -418,7 +417,6 @@ describe('PATCH /api/sessions/:sessionId', () => {
   it('compensates when a stale mode change relinks a task after archive cleanup', async () => {
     const { task } = await addTask({
       title: 'Archive slot race',
-      category: 'Work',
       project: 'Walnut',
       source: 'local',
     });
@@ -770,7 +768,6 @@ describe('POST /api/sessions/:sessionId/fork', () => {
   it('fails closed for Codex before creating a child task', async () => {
     const { task } = await addTask({
       title: 'Codex fork source',
-      category: 'Work',
       project: 'Walnut',
       source: 'local',
     });

@@ -65,7 +65,7 @@ describe('task-outbox: cloud side', () => {
     current = await loadWithCloudMode(true);
     const { outbox, tm } = current;
 
-    const { task } = await tm.addTask({ title: 'born on cloud', category: 'Inbox', source: 'local' });
+    const { task } = await tm.addTask({ title: 'born on cloud', source: 'local' });
     await outbox.recordTaskOp({ type: 'create', task });
     await outbox.recordTaskOp({ type: 'update', task: { ...task, title: 'renamed' } });
     await outbox.recordTaskOp({ type: 'delete', id: task.id });
@@ -88,20 +88,20 @@ describe('task-outbox: cloud side', () => {
     const { outbox, tm, projection } = current;
 
     // A cloud-born task with a pending op — must NOT be clobbered by import.
-    const { task: cloudTask } = await tm.addTask({ title: 'cloud pending', category: 'Inbox', source: 'local' });
+    const { task: cloudTask } = await tm.addTask({ title: 'cloud pending', source: 'local' });
     await outbox.recordTaskOp({ type: 'update', task: cloudTask });
 
     const now = new Date().toISOString();
     await fsp.mkdir(path.dirname(projection.PROJECTION_FILE), { recursive: true });
     await fsp.writeFile(projection.PROJECTION_FILE, JSON.stringify({
-      version: 1,
+      version: projection.PROJECTION_VERSION,
       exportedAt: now,
       tasks: [
         { id: 'mac-task-1', title: 'from mac', status: 'todo', phase: 'TODO', priority: 'none',
-          category: 'Inbox', project: 'Inbox', created_at: now, updated_at: now },
+          project: 'Walnut', created_at: now, updated_at: now },
         // Same id as the cloud task but "newer" — must be skipped (pending op).
         { id: cloudTask.id, title: 'MAC CLOBBER', status: 'todo', phase: 'TODO', priority: 'none',
-          category: 'Inbox', project: 'Inbox', created_at: now,
+          project: '', created_at: now,
           updated_at: new Date(Date.now() + 60_000).toISOString() },
       ],
     }));
@@ -126,14 +126,14 @@ describe('task-outbox: primary side', () => {
     await fsp.writeFile(path.join(dir, name), JSON.stringify(op));
   }
 
-  it('create op inserts with the SAME id, recomputes source from the primary category map, deletes the op file', async () => {
+  it('create op inserts with the SAME id, ensures the project registry row, deletes the op file', async () => {
     current = await loadWithCloudMode(false);
     const { outbox, tm } = current;
 
     const now = new Date().toISOString();
     const snapshot = {
       id: 'cloud-born-1', title: 'phone task', status: 'todo', phase: 'TODO', priority: 'none',
-      category: 'Inbox', project: 'Inbox', source: 'local', session_ids: [],
+      project: 'Walnut', source: 'local', session_ids: [],
       description: 'from the phone', summary: '', note: '', created_at: now, updated_at: now,
     };
     await writeOp(outbox.OUTBOX_DIR, '001.json', { opId: '001', type: 'create', at: now, task: snapshot });
@@ -144,6 +144,9 @@ describe('task-outbox: primary side', () => {
     const created = await tm.getTask('cloud-born-1');
     expect(created.title).toBe('phone task');
     expect(created.description).toBe('from the phone');
+    expect(created.project).toBe('Walnut');
+    // The create path registers the project (ensureProject) so the group exists.
+    expect(await tm.getProjectRecord('walnut')).toMatchObject({ name: 'Walnut', source: 'local' });
     // Op file consumed.
     const left = (await fsp.readdir(outbox.OUTBOX_DIR)).filter((f) => f.endsWith('.json'));
     expect(left.length).toBe(0);
@@ -155,7 +158,7 @@ describe('task-outbox: primary side', () => {
     current = await loadWithCloudMode(false);
     const { outbox, tm } = current;
 
-    const { task } = await tm.addTask({ title: 'local truth', category: 'Inbox', source: 'local' });
+    const { task } = await tm.addTask({ title: 'local truth', source: 'local' });
     // Local edit happens AFTER the phone snapshot was taken.
     await new Promise((r) => setTimeout(r, 5));
     await tm.updateTask(task.id, { title: 'local newer edit' });
@@ -192,7 +195,7 @@ describe('task-outbox: primary side', () => {
     current = await loadWithCloudMode(false);
     const { outbox, tm } = current;
 
-    const { task } = await tm.addTask({ title: 'to delete', category: 'Inbox', source: 'local' });
+    const { task } = await tm.addTask({ title: 'to delete', source: 'local' });
     const now = new Date().toISOString();
     await writeOp(outbox.OUTBOX_DIR, '001.json', { opId: '001', type: 'delete', at: now, id: task.id });
     await writeOp(outbox.OUTBOX_DIR, '002.json', { opId: '002', type: 'delete', at: now, id: 'never-existed' });
@@ -213,7 +216,7 @@ describe('task-outbox: primary side', () => {
     await fsp.writeFile(path.join(outbox.OUTBOX_DIR, '000-bad.json'), '{{{ not json');
     const snapshot = {
       id: 'ok-1', title: 'good op', status: 'todo', phase: 'TODO', priority: 'none',
-      category: 'Inbox', project: 'Inbox', source: 'local', session_ids: [],
+      project: '', source: 'local', session_ids: [],
       description: '', summary: '', note: '', created_at: now, updated_at: now,
     };
     await writeOp(outbox.OUTBOX_DIR, '001.json', { opId: '001', type: 'create', at: now, task: snapshot });

@@ -40,7 +40,8 @@ export interface QuickStartParams {
   taskMeta?: QuickStartTaskMeta;
   /** Task title; defaults to "Session: <basename(cwd)>". */
   taskTitle?: string;
-  /** Task project; defaults to 'Quick Start'. */
+  /** Task project. Omitted/empty = Inbox; the auto-organize pass below then
+   *  offers to file the task under an existing project. */
   project?: string;
   /** Event-bus source tag, e.g. 'quick-start' | 'routine'. */
   source: string;
@@ -83,7 +84,11 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     message, messagePrefix, cwd, host, model, mode, existingTaskId, taskMeta,
     source, requestTs = Date.now(), engine, preassignedSessionId,
   } = params;
-  const project = params.project ?? 'Quick Start';
+  const project = params.project?.trim() ?? '';
+  // Captured at creation: "the caller did not file this task anywhere" is the
+  // gate for the auto-organize pass at the end. Reading task.project later
+  // would race the pass's own write on a retry.
+  const callerSuppliedProject = project !== '';
 
   // Spill-to-disk: messages above the inline limit are saved to a temp file and
   // replaced with a short pointer prompt so Claude reads the full context via the Read tool.
@@ -102,12 +107,6 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   if (messagePrefix) {
     sessionMessage = messagePrefix + sessionMessage;
   }
-
-  // Quick Start tasks always go to the built-in 'Local' category (source=local,
-  // hard-reserved via config.local.categories so no sync plugin can claim it).
-  // The fast-model auto-organize step below moves the task to the right
-  // category/project moments later (or leaves it here when nothing matches).
-  const taskCategory = 'Local';
 
   let updatedTask: Task;
 
@@ -149,7 +148,6 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     const title = params.taskTitle?.trim() || defaultSessionTaskTitle(cwd);
     const { task } = await addTask({
       title,
-      category: taskCategory,
       project,
       source: 'local',
     });
@@ -266,15 +264,14 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       }));
   }
 
-  // AUTO-ORGANIZE: fast-model category/project placement, replacing the old
-  // client-side "[Quick Start] …move the task" wake-up of the main butler
-  // agent. New default-placed tasks only — a caller that supplied a project
+  // AUTO-ORGANIZE: fast-model project placement, replacing the old client-side
+  // "[Quick Start] …move the task" wake-up of the main butler agent. Only for
+  // tasks the caller left unfiled — a caller that supplied a project
   // (fix-walnut, routines) placed the task deliberately; retries were already
   // organized (or deliberately left) on the original launch. Gated off in
   // test servers (real ~/.aws → live Bedrock calls + mid-assertion task moves).
   const { backgroundAiDisabled } = await import('../cheap-model.js');
-  if (!existingTaskId && !backgroundAiDisabled()
-      && updatedTask.category === 'Local' && updatedTask.project === 'Quick Start') {
+  if (!existingTaskId && !backgroundAiDisabled() && !callerSuppliedProject) {
     import('../session-organize.js')
       .then(({ organizeQuickStartTask }) => organizeQuickStartTask(updatedTask.id, cwd, message))
       .catch((err) => log.web.warn(`${source}: auto-organize failed`, {
@@ -283,7 +280,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   }
 
   log.web.info(`${source}: created task + started session`, {
-    taskId: updatedTask.id, cwd, host, category: taskCategory, retry: !!existingTaskId,
+    taskId: updatedTask.id, cwd, host, project: project || 'Inbox', retry: !!existingTaskId,
   });
 
   return updatedTask;

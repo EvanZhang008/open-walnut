@@ -8,9 +8,9 @@
  * useRect saw a new element identity on every commit and its layout-effect
  * setState looped past React's 50-nested-update guard (error #185).
  *
- * This spec replicates the crash conditions: drag held on a NON-All category
- * tab (the crash URL had cat=personal — pinned cards are only visible there
- * because of the cross-category focus view) while a PATCH storm churns the
+ * This spec replicates the crash conditions: drag held on a NON-All project chip
+ * (the crash URL scoped to one group — pinned cards are only visible there
+ * because of the cross-project focus view) while a PATCH storm churns the
  * task store, including cross-tier hovers.
  */
 import { test, expect, type Page } from '@playwright/test'
@@ -44,12 +44,12 @@ async function pinTaskViaApi(taskId: string, tier = 'focus'): Promise<void> {
   if (!tierRes.ok) throw new Error(`Tier failed: ${tierRes.status} ${await tierRes.text()}`)
 }
 
-async function selectCategory(page: Page, category: string): Promise<void> {
+async function selectProject(page: Page, project: string): Promise<void> {
   if (!await page.locator('.vd-panel').isVisible()) {
     await page.getByRole('button', { name: 'View options' }).click()
   }
   await page.locator('.vd-cat').filter({
-    has: page.locator('.vd-cat-name').filter({ hasText: new RegExp(`^${category}$`) }),
+    has: page.locator('.vd-cat-name').filter({ hasText: new RegExp(`^${project}$`) }),
   }).click()
   await page.keyboard.press('Escape')
 }
@@ -75,18 +75,18 @@ function startChurnStorm(taskIds: string[], intervalMs: number): { stop: () => P
   return { stop: async () => { running = false; return loop } }
 }
 
-test('pinned drag survives task-churn storm on a non-All tab (no React #185)', async ({ page }) => {
+test('pinned drag survives task-churn storm on a non-All chip (no React #185)', async ({ page }) => {
   test.setTimeout(60_000)
-  const cat = `DragCat${Date.now().toString(36)}`
+  const proj = `DragProj${Date.now().toString(36)}`
 
   // Seed: 3 pinned across tiers + filler tasks that dominate the Recent feed so
   // churn PATCHes re-sort Recent (top-50 by updated_at/last_session_update).
-  const focusTask = await createTaskViaApi('Storm focus', { category: cat })
-  const satTask = await createTaskViaApi('Storm satellite', { category: cat })
-  const waitTask = await createTaskViaApi('Storm wait', { category: cat })
+  const focusTask = await createTaskViaApi('Storm focus', { project: proj })
+  const satTask = await createTaskViaApi('Storm satellite', { project: proj })
+  const waitTask = await createTaskViaApi('Storm wait', { project: proj })
   const fillers: string[] = []
   for (let i = 0; i < 12; i++) {
-    const t = await createTaskViaApi(`Storm filler ${i}`, { category: cat })
+    const t = await createTaskViaApi(`Storm filler ${i}`, { project: proj })
     fillers.push(t.id)
   }
   await pinTaskViaApi(focusTask.id, 'focus')
@@ -113,9 +113,9 @@ test('pinned drag survives task-churn storm on a non-All tab (no React #185)', a
   // tier only, and there'd be no cross-tier target to drop on.
   await showAllSections(page)
 
-  // Crash precondition: a NON-All category tab (cross-category focus view keeps
+  // Crash precondition: a NON-All project chip (cross-project focus view keeps
   // the pinned cards visible there).
-  await selectCategory(page, cat)
+  await selectProject(page, proj)
 
   // Tier cards: focus tier uses .todo-focus-card, satellite/wait use
   // .todo-pinned-card. Scope to the non-Recent pinned section — a pinned task

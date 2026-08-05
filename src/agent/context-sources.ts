@@ -45,8 +45,7 @@ function formatTaskDetails(task: Task): string {
     `Phase: ${task.phase}`,
     `Status: ${task.status}`,
     `Priority: ${task.priority}`,
-    `Category: ${task.category}`,
-    `Project: ${task.project}`,
+    `Project: ${task.project || 'Inbox'}`,
   ];
 
   if (task.starred) lines.push('Starred: yes');
@@ -75,24 +74,25 @@ async function loadTaskDetails(task: Task, budget: number): Promise<string> {
 }
 
 /**
- * Legacy project store (memory/projects/<cat>/<proj>/MEMORY.md). The 2026-07
- * skills migration superseded it but left the existing files in place, so this
- * still returns real content for pre-migration projects and nothing for newer
- * ones. Kept read-only; new project knowledge belongs in a skill.
+ * Legacy project store (memory/projects/<proj>/MEMORY.md). The 2026-07 skills
+ * migration superseded it but left the existing files in place, so this still
+ * returns real content for pre-migration projects and nothing for newer ones.
+ * Kept read-only; new project knowledge belongs in a skill.
  */
 async function loadProjectMemory(task: Task, budget: number): Promise<string> {
+  const project = (task.project ?? '').trim();
+  if (!project) return '(task has no project — Inbox has no project memory)';
   const { getProjectMemory } = await import('../core/project-memory.js');
-  const projectPath = `${task.category.toLowerCase()}/${task.project.toLowerCase()}`;
-  const result = getProjectMemory(projectPath);
+  const result = getProjectMemory(project.toLowerCase());
   if (!result) return '(no legacy project memory for this project)';
   return truncateToTokenBudget(result.content, budget);
 }
 
 async function loadProjectTaskList(task: Task, budget: number): Promise<string> {
   const { listTasks } = await import('../core/task-manager.js');
-  const tasks = await listTasks({ category: task.category });
+  const tasks = await listTasks({ project: task.project ?? '' });
   const projectTasks = tasks.filter(
-    (t) => t.project === task.project && t.status !== 'done' && t.id !== task.id,
+    (t) => t.status !== 'done' && t.id !== task.id,
   );
 
   if (projectTasks.length === 0) return '(no other active tasks in this project)';

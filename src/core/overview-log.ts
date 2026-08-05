@@ -1,7 +1,8 @@
 /**
  * Skill history logs — the append-only progress trail of a skill
- * (skills/<category>/<name>/history/log.md). The per-category `overview`
- * skill is the most common target; any curated skill can carry history.
+ * (skills/<category>/<name>/history/log.md). NOTE: `category` here is the SKILL
+ * grouping directory (work/, personal/, projects/, …) — unrelated to the task
+ * model, which has no categories (Project is the only grouping layer).
  *
  * Convention (memory/skill/history unification):
  * - skills/<category>/<name>/SKILL.md = the living curated doc — edited in place.
@@ -36,7 +37,7 @@ function validateSegment(kind: string, value: string): void {
   }
 }
 
-function skillDir(category: string, name: string): string {
+export function skillDir(category: string, name: string): string {
   validateSegment('category', category);
   validateSegment('skill name', name);
   return path.join(GLOBAL_SKILLS_DIR, category, name);
@@ -167,34 +168,71 @@ export function appendOverviewLog(
   return appendSkillHistoryLog(category, 'overview', text, source);
 }
 
+/** Where a project's curated skill lives: skills/<skillCategory>/<project>/. */
+export interface ProjectSkillLocation {
+  /** The skill grouping directory (work/, personal/, projects/, …). */
+  skillCategory: string;
+  /** The skill directory name, i.e. the project name as spelled on disk. */
+  name: string;
+}
+
+/** Grouping directory a NEW project skill is created under: skills/projects/<proj>/.
+ *  Existing project skills stay wherever they already live — resolution is by
+ *  name search, so nothing needs moving. */
+export const PROJECT_SKILL_CATEGORY = 'projects';
+
+function subdirs(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort((a, b) => a.localeCompare(b));
+  } catch {
+    return [];
+  }
+}
+
 /**
- * Best-effort routing of a task-scoped progress entry into the skill system.
- * Used by session on-stop summaries and legacy memory/project appends.
+ * Resolve a task project name to its skill directory by NAME SEARCH across every
+ * skill grouping directory (case-insensitive). Tasks no longer carry a category,
+ * so the skill's grouping dir can't be derived — it has to be looked up.
+ * Multiple hits (same project name under two groupings) → the alphabetically
+ * first grouping wins, so the choice is stable across runs.
+ */
+export function resolveProjectSkillDir(project: string): ProjectSkillLocation | null {
+  const proj = (project ?? '').trim();
+  if (!proj || proj.includes('/') || proj.includes('\\') || proj.includes('..')) return null;
+  const target = proj.toLowerCase();
+  for (const skillCategory of subdirs(GLOBAL_SKILLS_DIR)) {
+    const hit = subdirs(path.join(GLOBAL_SKILLS_DIR, skillCategory))
+      .find((name) => name.toLowerCase() === target);
+    if (hit && hasSkillDir(skillCategory, hit)) return { skillCategory, name: hit };
+  }
+  return null;
+}
+
+/**
+ * Best-effort routing of a project-scoped progress entry into the skill system.
+ * Used by session on-stop summaries and memory/project appends.
  *
- * Resolution order (all lowercase-normalized):
- * 1. skills/<category>/<project>/history/  — a curated skill matching the project
- * 2. skills/<category>/overview/history/   — the category's overview log
- * Returns null when neither exists (caller decides: hooks skip silently, the
- * daily log has the entry regardless).
+ * The project's skill is found by name search (resolveProjectSkillDir). Returns
+ * null when the project has no skill — the caller decides (hooks skip silently,
+ * the daily log has the entry regardless).
  */
 export function appendSkillHistoryForProject(
-  category: string,
   project: string,
   text: string,
   source?: string,
 ): OverviewLogAppendResult | null {
-  const cat = (category ?? '').trim().toLowerCase();
-  const proj = (project ?? '').trim().toLowerCase();
+  const proj = (project ?? '').trim();
+  if (!proj) return null;
   try {
-    if (proj && hasSkillDir(cat, proj)) {
-      return appendSkillHistoryLog(cat, proj, text, source);
-    }
-    if (hasOverview(cat)) {
-      return appendSkillHistoryLog(cat, 'overview', text, source);
+    const location = resolveProjectSkillDir(proj);
+    if (location) {
+      return appendSkillHistoryLog(location.skillCategory, location.name, text, source);
     }
   } catch (err) {
     log.memory.warn('skill-history: project-scoped append failed', {
-      category: cat,
       project: proj,
       error: err instanceof Error ? err.message : String(err),
     });

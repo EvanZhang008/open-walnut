@@ -23,22 +23,23 @@ export interface TaskUpdatedEvent {
   task: Task | null;
   /** Stable IDs affected by a bulk mutation, used by incremental indexers. */
   taskIds?: string[];
-  oldCategory?: string;
-  newCategory?: string;
+  oldProject?: string;
+  newProject?: string;
   count?: number;
 }
 export interface TaskCompletedEvent { task: Task }
 export interface TaskStarredEvent { task: Task; starred: boolean }
 export interface TaskDeletedEvent { id?: string; task: Task }
-export interface TaskReorderedEvent { category: string; project: string; taskIds: string[] }
+/** `project` is the single grouping layer; '' = Inbox. */
+export interface TaskReorderedEvent { project: string; taskIds: string[] }
 export interface TaskUnblockedEvent { task: Task; unblockedBy: Task }
 /** Virtual task-group membership or label changed (created / renamed / dissolved). */
 export interface TaskGroupsChangedEvent { group_id?: string; label?: string; dissolved_group_ids?: string[] }
 
-// ── Category events ──
+// ── Project registry events ──
 
-export interface CategoryCreatedEvent { name: string; source: string }
-export interface CategoryUpdatedEvent { name: string; source: string }
+/** Emitted the first time a project registry row is created (ensureProject). */
+export interface ProjectCreatedEvent { name: string; source: string }
 
 // ── Session lifecycle events ──
 
@@ -668,8 +669,7 @@ export interface EventPayloadMap {
   'task:unblocked': TaskUnblockedEvent;
   'task:groups-changed': TaskGroupsChangedEvent;
 
-  'category:created': CategoryCreatedEvent;
-  'category:updated': CategoryUpdatedEvent;
+  'project:created': ProjectCreatedEvent;
 
   'session:start': SessionStartEvent;
   'session:send': SessionSendEvent;

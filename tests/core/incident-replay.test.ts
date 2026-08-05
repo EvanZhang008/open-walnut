@@ -137,7 +137,7 @@ describe('incident C (10e7df54) — swallowed result: task wedged IN_PROGRESS be
     const { addTaskFull, getTask } = await import('../../src/core/task-manager.js')
     const task = await addTaskFull({
       title: 'incident-c task', type: 'task', status: 'in_progress', phase: 'IN_PROGRESS',
-      category: 'Inbox', project: 'proj', source: 'local', created_at: new Date().toISOString(),
+      project: 'proj', source: 'local', created_at: new Date().toISOString(),
     } as any)
 
     const sid = 'incident-c'

@@ -16,7 +16,6 @@ const parents = [
 const fixtureDirs = parents.map((parent, index) => ({
   cwd: `${fixtureRoot}/${parent}/nav-${String(index + 1).padStart(2, '0')}`,
   host: null,
-  category: 'Inbox',
   count: 200 - index,
   lastUsed: now,
 }))

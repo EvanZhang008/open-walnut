@@ -16,6 +16,12 @@ final class TasksStore {
     /// SwiftUI updates from a non-active process (P0-3).
     private var isActive = true
 
+    /// Monotonic request sequence — a slow stale list fetch must not overwrite
+    /// a newer one (same pattern as the web SessionSearchPanel requestSeq).
+    /// MainActor-confined, so increment/compare are race-free.
+    private var taskLoadSeq = 0
+    private var sessionLoadSeq = 0
+
     var tasks: [WalnutTask] = []
     var syncedAt: Date?
     var loading = false
@@ -59,11 +65,13 @@ final class TasksStore {
 
     func loadTasks() async {
         guard isActive else { return }
+        taskLoadSeq += 1
+        let seq = taskLoadSeq
         loading = true
         defer { loading = false }
         do {
             let response = try await api.tasks()
-            guard isActive, !Task.isCancelled else { return }
+            guard isActive, !Task.isCancelled, seq == taskLoadSeq else { return }
             tasks = response.tasks
             syncedAt = WalnutTask.parseISO(response.syncedAt)
             notSyncedYet = false
@@ -73,12 +81,12 @@ final class TasksStore {
             DiskCache.save(response.syncedAt, key: "tasks-syncedAt")
         } catch let error as APIError where error.isUnavailable {
             // 503 — projection hasn't synced; keep any cached tasks but flag it.
-            guard isActive else { return }
+            guard isActive, seq == taskLoadSeq else { return }
             notSyncedYet = true
             if tasks.isEmpty { errorMessage = nil }
         } catch {
             if let apiError = error as? APIError, apiError.isCancelled { return }
-            guard isActive else { return }
+            guard isActive, seq == taskLoadSeq else { return }
             reportIfNetwork(error)
             if tasks.isEmpty { errorMessage = error.localizedDescription }
         }
@@ -86,22 +94,47 @@ final class TasksStore {
 
     func loadSessions() async {
         guard isActive else { return }
+        sessionLoadSeq += 1
+        let seq = sessionLoadSeq
         do {
             let response = try await api.sessions()
-            guard isActive, !Task.isCancelled else { return }
+            guard isActive, !Task.isCancelled, seq == sessionLoadSeq else { return }
             sessions = response.sessions
             sessionsSyncedAt = WalnutTask.parseISO(response.syncedAt)
             sessionsNotSyncedYet = false
             connection?.reportReachability(true, source: "tasks-rest")
             DiskCache.save(response.sessions, key: "sessions-list")
         } catch let error as APIError where error.isUnavailable {
-            guard isActive else { return }
+            guard isActive, seq == sessionLoadSeq else { return }
             sessionsNotSyncedYet = true
         } catch {
             if let apiError = error as? APIError, apiError.isCancelled { return }
-            guard isActive else { return }
+            guard isActive, seq == sessionLoadSeq else { return }
             reportIfNetwork(error)
         }
+    }
+
+    /// Create a task on the primary box. Optimistic: the server's created task
+    /// is inserted into the local list immediately (so the Tasks list shows it
+    /// without waiting for the next projection export), then a background
+    /// refresh reconciles. Throws on failure — the sheet surfaces the error.
+    @discardableResult
+    func createTask(
+        title: String, project: String? = nil, priority: String? = nil,
+        dueDate: String? = nil, description: String? = nil
+    ) async throws -> WalnutTask {
+        let created = try await api.createTask(
+            title: title, project: project, priority: priority,
+            dueDate: dueDate, description: description
+        )
+        if isActive, !tasks.contains(where: { $0.id == created.id }) {
+            tasks.insert(created, at: 0)
+            DiskCache.save(tasks, key: "tasks-list")
+        }
+        // Reconcile with the projection in the background (it may lag a few
+        // seconds behind the SQLite write; loadTasks keeps whichever is newer).
+        Task { await self.loadTasks() }
+        return created
     }
 
     // MARK: - Derived session slices

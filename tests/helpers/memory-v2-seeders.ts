@@ -28,15 +28,15 @@ export function seedTopicFile(baseDir: string, filename: string, content: string
 }
 
 /**
- * Seed a project memory file at memory/projects/{category}/{project}/MEMORY.md
+ * Seed a project memory file at memory/projects/{project}/MEMORY.md — ONE
+ * segment, since Project is the single grouping layer.
  */
 export function seedProjectMemory(
   baseDir: string,
-  category: string,
   project: string,
   content: string,
 ): string {
-  const filepath = path.join(baseDir, 'memory', 'projects', category, project, 'MEMORY.md');
+  const filepath = path.join(baseDir, 'memory', 'projects', project, 'MEMORY.md');
   fs.mkdirSync(path.dirname(filepath), { recursive: true });
   fs.writeFileSync(filepath, content, 'utf-8');
   return filepath;

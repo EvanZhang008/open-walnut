@@ -12,12 +12,12 @@
  *   npx playwright test          (runs these tests)
  */
 import { test, expect, type Page } from '@playwright/test'
-import { selectCategory, showEverything } from './todo-panel-helpers'
+import { selectProject, showEverything } from './todo-panel-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
 /**
- * Make every task visible: the "All" CATEGORY (so no category scoping) plus the
+ * Make every task visible: the "All" PROJECT chip (so no project scoping) plus the
  * "All" SECTION tab (so the main task list and the pinned tiers are all mounted).
  * These are two independent axes — the panel defaults to the Focus section tab, in
  * which `.todo-panel-item` rows don't exist at all.
@@ -90,11 +90,11 @@ test('todo panel shows seeded test task', async ({ page }) => {
 
 test('Date=Now hides future tasks from the pinned area', async ({ page }) => {
   const futurePinned = await createTaskViaApi('Future pinned date filter', {
-    category: 'Work',
+    project: 'Work',
     due_date: new Date(Date.now() + 30 * 86_400_000).toISOString(),
   })
   const currentPinned = await createTaskViaApi('Current pinned date filter', {
-    category: 'Work',
+    project: 'Work',
   })
   await pinTaskViaApi(futurePinned.id)
   await pinTaskViaApi(currentPinned.id)
@@ -121,19 +121,19 @@ test('Date=Now hides future tasks from the pinned area', async ({ page }) => {
 test('search and filters apply across pinned, recent, and task sections', async ({ page }) => {
   const query = `shared-query-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const matchingPinned = await createTaskViaApi(`Pinned ${query} match`, {
-    category: 'Work',
+    project: 'Work',
     priority: 'immediate',
   })
   const priorityMismatch = await createTaskViaApi(`Pinned ${query} priority mismatch`, {
-    category: 'Work',
+    project: 'Work',
     priority: 'important',
   })
   const searchMismatch = await createTaskViaApi('Pinned unrelated search target', {
-    category: 'Work',
+    project: 'Work',
     priority: 'immediate',
   })
   const unpinnedMatch = await createTaskViaApi(`Unpinned ${query} match`, {
-    category: 'Work',
+    project: 'Work',
     priority: 'immediate',
   })
   await pinTaskViaApi(matchingPinned.id)
@@ -299,7 +299,7 @@ test('task created via REST API appears in browser without refresh', async ({ pa
   await showAllTasks(page)
 
   // Create a task via REST API (not through the browser)
-  const task = await createTaskViaApi('WS update task', { category: 'Work', priority: 'immediate' })
+  const task = await createTaskViaApi('WS update task', { project: 'Work', priority: 'immediate' })
 
   // Wait for the task to appear via WebSocket push (no page refresh)
   const taskItem = page.locator('.todo-panel-item', { hasText: task.title })
@@ -309,7 +309,7 @@ test('task created via REST API appears in browser without refresh', async ({ pa
 // ── Task detail navigation ──
 
 test('click task navigates to detail page', async ({ page }) => {
-  const task = await createTaskViaApi('Detail nav task', { category: 'Work' })
+  const task = await createTaskViaApi('Detail nav task', { project: 'Work' })
 
   await page.goto('/')
   await page.waitForLoadState('networkidle')
@@ -330,12 +330,12 @@ test('click task navigates to detail page', async ({ page }) => {
   })
 })
 
-// ── Category tabs ──
+// ── Project chips ──
 
-test('category tabs filter tasks', async ({ page }) => {
-  // Create tasks in different categories with unique names
-  const workTask = await createTaskViaApi('Work category task', { category: 'Work' })
-  const lifeTask = await createTaskViaApi('Life category task', { category: 'Life' })
+test('project chips filter tasks', async ({ page }) => {
+  // Create tasks in different projects with unique names
+  const workTask = await createTaskViaApi('Work project task', { project: 'Work' })
+  const lifeTask = await createTaskViaApi('Life project task', { project: 'Life' })
 
   await page.goto('/')
   await page.waitForLoadState('networkidle')
@@ -345,19 +345,19 @@ test('category tabs filter tasks', async ({ page }) => {
   await expect(page.locator('.todo-panel-item', { hasText: workTask.title })).toBeVisible({ timeout: 3000 })
   await expect(page.locator('.todo-panel-item', { hasText: lifeTask.title })).toBeVisible({ timeout: 3000 })
 
-  await selectCategory(page, 'Work')
+  await selectProject(page, 'Work')
   await expect(page.locator('.todo-panel-item', { hasText: workTask.title })).toBeVisible()
   await expect(page.locator('.todo-panel-item', { hasText: lifeTask.title })).toBeHidden()
 })
 
-test('pinned + recent stay visible across category tabs (cross-category focus view)', async ({ page }) => {
-  // Regression: a pinned task from another category must NOT vanish when the user
-  // navigates to a different category tab. Pins are a cross-category focus view —
-  // scoping the Pinned/Recent sections to the active tab made "all my focused tasks
-  // disappeared" (they reappeared only on search, which bypasses the tab).
-  const query = `xcat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  const lifePinned = await createTaskViaApi(`Life pinned ${query}`, { category: 'Life' })
-  const workTask = await createTaskViaApi(`Work list ${query}`, { category: 'Work' })
+test('pinned + recent stay visible across project chips (cross-project focus view)', async ({ page }) => {
+  // Regression: a pinned task from another project must NOT vanish when the user
+  // navigates to a different project chip. Pins are a cross-project focus view —
+  // scoping the Pinned/Recent sections to the active chip made "all my focused tasks
+  // disappeared" (they reappeared only on search, which bypasses the chip).
+  const query = `xproj-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const lifePinned = await createTaskViaApi(`Life pinned ${query}`, { project: 'Life' })
+  const workTask = await createTaskViaApi(`Work list ${query}`, { project: 'Work' })
   await pinTaskViaApi(lifePinned.id)
 
   await page.goto('/')
@@ -368,15 +368,15 @@ test('pinned + recent stay visible across category tabs (cross-category focus vi
   const recentCard = page.locator(`.todo-pinned-section-recent .todo-pinned-card[data-task-id="${lifePinned.id}"]`)
   await expect(pinnedCard).toBeVisible({ timeout: 5000 })
 
-  // Navigate to the Work tab — the Life-category pin must remain visible in both the
-  // Pinned tier and the Recent feed even though it belongs to a different category.
+  // Navigate to the Work chip — the Life-project pin must remain visible in both the
+  // Pinned tier and the Recent feed even though it belongs to a different project.
   // (No global pinned-count assertion: /api/focus/tasks is shared state and this suite
   // runs fully parallel, so other tests' pins would make an exact count flaky.)
-  await selectCategory(page, 'Work')
+  await selectProject(page, 'Work')
   await expect(page.locator('.todo-panel-item', { hasText: workTask.title })).toBeVisible()
   await expect(pinnedCard).toBeVisible()
   await expect(recentCard).toBeVisible()
-  // The Work-category list item must NOT leak into the Pinned tier (it isn't pinned).
+  // The Work-project list item must NOT leak into the Pinned tier (it isn't pinned).
   await expect(page.locator(`.todo-focus-card[data-task-id="${workTask.id}"]`)).toHaveCount(0)
 })
 

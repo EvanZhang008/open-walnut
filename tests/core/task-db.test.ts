@@ -36,7 +36,7 @@ import {
   getTask,
 } from '../../src/core/task-manager.js';
 import { WALNUT_HOME, TASKS_FILE, TASKS_DIR } from '../../src/constants.js';
-import type { Task, TaskStore } from '../../src/core/types.js';
+import type { Task } from '../../src/core/types.js';
 
 async function resetAll(): Promise<void> {
   closeDb();
@@ -75,16 +75,21 @@ describe('task-db: schema idempotency', () => {
 
     expect(tablesAfter).toEqual(tablesBefore);
     expect(tablesBefore.some((t) => t.name === 'tasks')).toBe(true);
-    expect(tablesBefore.some((t) => t.name === 'task_categories')).toBe(true);
-    // task_projects was removed: it was populated by the initial migration but
-    // never read/written by runtime code. See task-db.ts comment.
-    expect(tablesBefore.some((t) => t.name === 'task_projects')).toBe(false);
+    // Project registry: the single grouping layer + sync-claim point.
+    expect(tablesBefore.some((t) => t.name === 'task_projects')).toBe(true);
+    // task_categories died with the category concept (dropped by the v5 migration,
+    // never recreated by SCHEMA_SQL).
+    expect(tablesBefore.some((t) => t.name === 'task_categories')).toBe(false);
+    // The tasks table has no category column either.
+    const cols = db1!.prepare('PRAGMA table_info(tasks)').all() as { name: string }[];
+    expect(cols.some((c) => c.name === 'category')).toBe(false);
+    expect(cols.some((c) => c.name === 'project')).toBe(true);
   });
 
   it('re-opening after closeDb() still produces a valid schema', () => {
     const db1 = getDb();
     expect(db1).not.toBeNull();
-    db1!.prepare('INSERT INTO tasks (id, title, category) VALUES (?, ?, ?)').run('x1', 't', 'c');
+    db1!.prepare('INSERT INTO tasks (id, title, project) VALUES (?, ?, ?)').run('x1', 't', 'p');
     closeDb();
 
     const db2 = getDb();
@@ -132,7 +137,6 @@ describe('task-db: rowToTask / taskToRow round trip', () => {
     const original: Partial<Task> = {
       id: 'round-1',
       title: 'Round trip',
-      category: 'Work',
       project: 'Walnut',
       status: 'todo',
       phase: 'TODO',
@@ -168,12 +172,13 @@ describe('task-db: rowToTask / taskToRow round trip', () => {
     expect(task.pinned).toBe(true);
     expect(task.phase).toBe('TODO');
     expect(task.priority).toBe('high');
+    expect(task.project).toBe('Walnut');
   });
 
   it('CRUD: add → get → update → delete through task-manager', async () => {
     const { task: added } = await addTask({
       title: 'CRUD task',
-      category: 'Local',
+      project: 'Local',
       source: 'local',
       tags: ['x', 'y'],
     });
@@ -205,7 +210,7 @@ describe('task-db: payload fallback', () => {
     const task: Record<string, unknown> = {
       id: 'p1',
       title: 'Payload test',
-      category: 'Work',
+      project: 'Work',
       // Field not in TASK_COLUMNS — should spill into payload.
       custom_field: 'surprise',
       starred: true,
@@ -232,6 +237,53 @@ describe('task-db: payload fallback', () => {
     expect(merged.custom_field).toBe('surprise');
     expect(merged.starred).toBe(true);
   });
+
+  // ── Retired-key denylist ─────────────────────────────────────────────────
+  // `category` is not a column any more, so without an explicit denylist it lands
+  // in the `payload` spillover blob — and rowToTask merges payload keys back onto
+  // the task object, resurrecting the field. Any legacy-shaped write reaches this:
+  // an old cloud op, a stale client, a `POST /api/tasks` body spread.
+
+  it('DROPS a legacy `category` key instead of spilling it into payload', () => {
+    const legacyShaped = {
+      id: 'zombie-1',
+      title: 'Legacy write',
+      project: 'Work',
+      category: 'Work',        // retired
+      custom_field: 'kept',    // a genuine unknown key must still spill
+    };
+    const row = taskToRow(legacyShaped as Partial<Task>);
+    expect(row.category).toBeUndefined();
+    const decoded = JSON.parse(row.payload as string);
+    expect('category' in decoded).toBe(false);
+    expect(decoded.custom_field).toBe('kept');
+  });
+
+  it('a category-only extra key produces NO payload at all', () => {
+    // Guardrail: dropping the key must not leave `payload: '{}'` behind, which
+    // would make every legacy-shaped write dirty the row's fingerprint forever.
+    const row = taskToRow({ id: 'z2', title: 'T', category: 'Work' } as unknown as Partial<Task>);
+    expect(row.payload).toBeUndefined();
+  });
+
+  it('never round-trips `category` back onto a task read from the DB', () => {
+    const db = getDb()!;
+    const insertCols = [...TASK_COLUMNS, 'payload'];
+    const insertSql =
+      'INSERT INTO tasks (' + insertCols.join(', ') + ') VALUES (' +
+      insertCols.map((c) => '@' + c).join(', ') + ')';
+    const row = taskToRow({
+      id: 'zombie-2', title: 'Legacy', project: 'Work', category: 'Work',
+    } as unknown as Partial<Task>);
+    const bound: Record<string, unknown> = {};
+    for (const col of insertCols) bound[col] = row[col] === undefined ? null : row[col];
+    db.prepare(insertSql).run(bound);
+
+    const fetched = db.prepare('SELECT * FROM tasks WHERE id = ?').get('zombie-2') as Record<string, unknown>;
+    const task = rowToTask(fetched) as Record<string, unknown>;
+    expect('category' in task).toBe(false);
+    expect(task.project).toBe('Work');
+  });
 });
 
 // ── 4. Bulk update transaction atomicity ───────────────────────────────────
@@ -241,7 +293,6 @@ describe('task-db: updateTasksBulk atomicity', () => {
     const created = await addTasksBulk(
       Array.from({ length: 100 }, (_, i) => ({
         title: `Bulk ${i}`,
-        category: 'Local',
         project: 'Local',
         source: 'local' as const,
         status: 'todo' as const,
@@ -271,16 +322,16 @@ describe('task-db: updateTasksBulk atomicity', () => {
 
   it('raw transaction rolls back on mid-loop throw (no partial writes)', () => {
     const db = getDb()!;
-    db.prepare('INSERT INTO tasks (id, title, category) VALUES (?, ?, ?)').run('t1', 'Start', 'c');
+    db.prepare('INSERT INTO tasks (id, title, project) VALUES (?, ?, ?)').run('t1', 'Start', 'p');
 
     expect(() =>
       transaction((h) => {
         h.prepare('UPDATE tasks SET title = ? WHERE id = ?').run('updated', 't1');
         // Force a constraint-violating insert (PK conflict) — whole tx rolls back.
-        h.prepare('INSERT INTO tasks (id, title, category) VALUES (?, ?, ?)').run(
+        h.prepare('INSERT INTO tasks (id, title, project) VALUES (?, ?, ?)').run(
           't1',
           'dup',
-          'c',
+          'p',
         );
       }),
     ).toThrow();
@@ -297,7 +348,6 @@ describe('task-db: addTasksBulk + deleteTasksBulk', () => {
     const created = await addTasksBulk(
       Array.from({ length: 50 }, (_, i) => ({
         title: `Seed ${i}`,
-        category: 'Local',
         project: 'Local',
         source: 'local' as const,
         status: 'todo' as const,
@@ -324,7 +374,7 @@ describe('task-db: addTasksBulk + deleteTasksBulk', () => {
 
 describe('task-db: terminal-phase guard via updateTaskRaw', () => {
   it('updateTaskRaw({phase: IN_PROGRESS}) on a COMPLETE task is a no-op', async () => {
-    const { task } = await addTask({ title: 'Terminal guard', category: 'Local', source: 'local' });
+    const { task } = await addTask({ title: 'Terminal guard', project: 'Local', source: 'local' });
 
     // Raw-write a COMPLETE phase directly (simulating a human-driven completion).
     await updateTaskRaw(task.id, { phase: 'COMPLETE', status: 'done' });
@@ -345,7 +395,7 @@ describe('task-db: terminal-phase guard via updateTaskRaw', () => {
 
 describe('task-db: phase/status derivation in updateTaskRaw', () => {
   it('status=done alone drives phase=COMPLETE', async () => {
-    const { task } = await addTask({ title: 'Derive 1', category: 'Local', source: 'local' });
+    const { task } = await addTask({ title: 'Derive 1', project: 'Local', source: 'local' });
     const res = await updateTaskRaw(task.id, { status: 'done' });
     expect(res.changed).toBe(true);
     const after = await getTask(task.id);
@@ -354,7 +404,7 @@ describe('task-db: phase/status derivation in updateTaskRaw', () => {
   });
 
   it('phase=IN_PROGRESS alone drives status=in_progress', async () => {
-    const { task } = await addTask({ title: 'Derive 2', category: 'Local', source: 'local' });
+    const { task } = await addTask({ title: 'Derive 2', project: 'Local', source: 'local' });
     const res = await updateTaskRaw(task.id, { phase: 'IN_PROGRESS' });
     expect(res.changed).toBe(true);
     const after = await getTask(task.id);
@@ -371,7 +421,6 @@ describe('task-db: backup-on-empty guard', () => {
     const seeded = await addTasksBulk(
       Array.from({ length: 3 }, (_, i) => ({
         title: `Seed ${i}`,
-        category: 'Local',
         project: 'Local',
         source: 'local' as const,
         status: 'todo' as const,
@@ -414,34 +463,54 @@ describe('task-db: backup-on-empty guard', () => {
 });
 
 // ── 9. Migration idempotency ───────────────────────────────────────────────
+//
+// The JSON→SQLite import still has to read PRE-project-only stores (a machine
+// that skipped several releases), so these fixtures deliberately carry the
+// retired `category` field + `categories` registry. Task/TaskStore no longer
+// declare them, hence the local legacy shapes below.
+
+interface LegacyTaskJson extends Record<string, unknown> {
+  id: string;
+  title: string;
+  category?: string;
+  project?: string;
+}
+
+function legacyTask(overrides: Partial<LegacyTaskJson>): LegacyTaskJson {
+  return {
+    id: 'legacy-1',
+    title: 'Legacy task',
+    status: 'todo',
+    phase: 'TODO',
+    priority: 'none',
+    source: 'local',
+    session_ids: [],
+    description: '',
+    summary: '',
+    note: '',
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    ...overrides,
+  };
+}
+
+async function writeLegacyStore(store: {
+  tasks: LegacyTaskJson[];
+  categories?: Record<string, { source: string }>;
+}): Promise<void> {
+  await fsp.writeFile(TASKS_FILE, JSON.stringify({ version: 4, ...store }), 'utf-8');
+}
 
 describe('task-db migration: idempotency', () => {
   it('runMigrationIfNeeded is a no-op on a second call (row count stable, no duplicate backup)', async () => {
     // Write a seed tasks.json before anything opens the DB.
     closeDb();
-    const store: TaskStore = {
-      version: 4,
+    await writeLegacyStore({
       tasks: [
-        {
-          id: 'mig-1',
-          title: 'Migrated',
-          status: 'todo',
-          phase: 'TODO',
-          priority: 'none',
-          category: 'Work',
-          project: 'Walnut',
-          source: 'local',
-          session_ids: [],
-          description: '',
-          summary: '',
-          note: '',
-          created_at: '2026-01-01T00:00:00Z',
-          updated_at: '2026-01-01T00:00:00Z',
-        } as Task,
+        legacyTask({ id: 'mig-1', title: 'Migrated', category: 'Work', project: 'Walnut' }),
       ],
       categories: { Work: { source: 'local' } },
-    };
-    await fsp.writeFile(TASKS_FILE, JSON.stringify(store), 'utf-8');
+    });
 
     const first = await runMigrationIfNeeded();
     expect(first.migrated).toBe(true);
@@ -471,34 +540,21 @@ describe('task-db migration: idempotency', () => {
 // ── 10. Migration correctness ──────────────────────────────────────────────
 
 describe('task-db migration: correctness', () => {
-  it('migrates 5 tasks and 2 categories from tasks.json into SQLite', async () => {
+  it('migrates 5 legacy tasks into SQLite and derives the project registry', async () => {
     closeDb();
-    const fakeTasks: Task[] = Array.from({ length: 5 }, (_, i) => ({
-      id: `t-${i}`,
-      title: `Task ${i}`,
-      status: 'todo',
-      phase: 'TODO',
-      priority: 'none',
-      category: i < 3 ? 'Work' : 'Personal',
-      project: i < 3 ? 'Walnut' : 'Home',
-      source: 'local',
-      session_ids: [],
-      description: `desc-${i}`,
-      summary: '',
-      note: '',
-      tags: i === 0 ? ['alpha'] : undefined,
-      created_at: '2026-01-01T00:00:00Z',
-      updated_at: '2026-01-01T00:00:00Z',
-    } as Task));
-    const store: TaskStore = {
-      version: 4,
-      tasks: fakeTasks,
-      categories: {
-        Work: { source: 'local' },
-        Personal: { source: 'local' },
-      },
-    };
-    await fsp.writeFile(TASKS_FILE, JSON.stringify(store), 'utf-8');
+    await writeLegacyStore({
+      tasks: Array.from({ length: 5 }, (_, i) =>
+        legacyTask({
+          id: `t-${i}`,
+          title: `Task ${i}`,
+          category: i < 3 ? 'Work' : 'Personal',
+          project: i < 3 ? 'Walnut' : 'Home',
+          description: `desc-${i}`,
+          ...(i === 0 ? { tags: ['alpha'] } : {}),
+        }),
+      ),
+      categories: { Work: { source: 'local' }, Personal: { source: 'local' } },
+    });
 
     const result = await runMigrationIfNeeded();
     expect(result.migrated).toBe(true);
@@ -513,13 +569,244 @@ describe('task-db migration: correctness', () => {
     const task0 = rowToTask(rows.find((r) => r.id === 't-0')!);
     expect(task0.tags).toEqual(['alpha']);
     expect(task0.description).toBe('desc-0');
-    expect(task0.category).toBe('Work');
+    // The old category is dropped entirely; the project carries the grouping.
+    expect(task0.project).toBe('Walnut');
+    expect('category' in task0).toBe(false);
+    expect(JSON.parse((rows.find((r) => r.id === 't-0')!.payload as string) ?? '{}').category)
+      .toBeUndefined();
 
-    const cats = db
-      .prepare('SELECT name, source FROM task_categories ORDER BY order_index')
-      .all() as { name: string; source: string }[];
-    expect(cats.map((c) => c.name).sort()).toEqual(['Personal', 'Work']);
-    cats.forEach((c) => expect(c.source).toBe('local'));
+    // One registry row per surviving project, with the old category archived.
+    const projects = db
+      .prepare('SELECT name, source, metadata FROM task_projects ORDER BY name')
+      .all() as { name: string; source: string; metadata: string | null }[];
+    expect(projects.map((p) => p.name)).toEqual(['Home', 'Walnut']);
+    projects.forEach((p) => expect(p.source).toBe('local'));
+    expect(JSON.parse(projects[0].metadata!).legacy_category).toBe('Personal');
+    expect(JSON.parse(projects[1].metadata!).legacy_category).toBe('Work');
+
+    // task_categories is gone for good.
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all() as { name: string }[];
+    expect(tables.some((t) => t.name === 'task_categories')).toBe(false);
+  });
+
+  it('promotes degenerate groups and routes Quick Start / Inbox into Inbox', async () => {
+    closeDb();
+    await writeLegacyStore({
+      tasks: [
+        // Degenerate group (category == project) → the name becomes the project.
+        legacyTask({ id: 'd-1', title: 'Degenerate', category: 'Work', project: 'Work' }),
+        // Category-only task → promoted to a project named after the category.
+        legacyTask({ id: 'd-2', title: 'Bare category', category: 'Life', project: '' }),
+        // The old hardcoded quick-add landing pad → Inbox.
+        legacyTask({ id: 'd-3', title: 'Captured', category: 'Work', project: 'Quick Start' }),
+        // The old Inbox category → Inbox.
+        legacyTask({ id: 'd-4', title: 'Loose', category: 'Inbox', project: 'Inbox' }),
+      ],
+      categories: { Work: { source: 'local' }, Life: { source: 'local' }, Inbox: { source: 'local' } },
+    });
+
+    expect((await runMigrationIfNeeded()).count).toBe(4);
+
+    const db = getDb()!;
+    const byId = new Map(
+      (db.prepare('SELECT id, project FROM tasks').all() as { id: string; project: string }[])
+        .map((r) => [r.id, r.project]),
+    );
+    expect(byId.get('d-1')).toBe('Work');
+    expect(byId.get('d-2')).toBe('Life');
+    expect(byId.get('d-3')).toBe('');
+    expect(byId.get('d-4')).toBe('');
+
+    // Inbox never gets a registry row.
+    const names = (db.prepare('SELECT name FROM task_projects ORDER BY name').all() as {
+      name: string;
+    }[]).map((r) => r.name);
+    expect(names).toEqual(['Life', 'Work']);
+  });
+
+  it('absorbs .metadata_project sentinels into the registry instead of importing them as tasks', async () => {
+    closeDb();
+    await writeLegacyStore({
+      tasks: [
+        legacyTask({ id: 's-1', title: 'Real task', category: 'Work', project: 'Walnut' }),
+        legacyTask({
+          id: 's-2',
+          title: '.metadata_project',
+          category: 'Work',
+          project: 'Walnut',
+          description: 'default_host: devbox\ndefault_cwd: /tmp/walnut',
+        }),
+      ],
+      categories: { Work: { source: 'local' } },
+    });
+
+    const result = await runMigrationIfNeeded();
+    expect(result.count).toBe(1); // sentinel is not a task
+
+    const db = getDb()!;
+    const sentinelRows = db
+      .prepare("SELECT COUNT(*) AS n FROM tasks WHERE title LIKE '.metadata%'")
+      .get() as { n: number };
+    expect(sentinelRows.n).toBe(0);
+
+    const row = db
+      .prepare('SELECT metadata FROM task_projects WHERE name = ?')
+      .get('Walnut') as { metadata: string | null };
+    expect(JSON.parse(row.metadata!)).toMatchObject({
+      default_host: 'devbox',
+      default_cwd: '/tmp/walnut',
+      legacy_category: 'Work',
+    });
+  });
+
+  it('inherits a provider claim from the contributing legacy category', async () => {
+    closeDb();
+    await writeLegacyStore({
+      tasks: [
+        legacyTask({ id: 'p-1', title: 'Synced', category: 'Work', project: 'Walnut', source: 'ms-todo' }),
+      ],
+      categories: { Work: { source: 'ms-todo' } },
+    });
+
+    expect((await runMigrationIfNeeded()).count).toBe(1);
+
+    const row = getDb()!
+      .prepare('SELECT source FROM task_projects WHERE name = ?')
+      .get('Walnut') as { source: string };
+    expect(row.source).toBe('ms-todo');
+  });
+
+  // ── Parity with the v4→v5 SQLite path ───────────────────────────────────
+  // Both migrations must land on IDENTICAL data (project names, claim, alias,
+  // task sources) — they share promoteLegacyGroup / pickMajoritySource /
+  // legacyListName precisely so a machine that took the JSON route and one that
+  // took the SQLite route can't diverge.
+
+  it('picks the MAJORITY provider (by task count) for a merged project', async () => {
+    closeDb();
+    await writeLegacyStore({
+      tasks: [
+        legacyTask({ id: 'm-1', title: 'a', category: 'SyncA', project: 'Shared', source: 'ms-todo' }),
+        legacyTask({ id: 'm-2', title: 'b', category: 'SyncA', project: 'Shared', source: 'ms-todo' }),
+        legacyTask({ id: 'm-3', title: 'c', category: 'SyncA', project: 'Shared', source: 'ms-todo' }),
+        legacyTask({ id: 'm-4', title: 'd', category: 'SyncB', project: 'Shared', source: 'jira' }),
+      ],
+      categories: { SyncA: { source: 'ms-todo' }, SyncB: { source: 'jira' } },
+    });
+    expect((await runMigrationIfNeeded()).count).toBe(4);
+
+    const row = getDb()!
+      .prepare('SELECT source, metadata FROM task_projects WHERE name = ?')
+      .get('Shared') as { source: string; metadata: string | null };
+    // "first non-local wins" would have made this jira if the jira task sorted
+    // first — the majority rule makes it deterministic.
+    expect(row.source).toBe('ms-todo');
+    // …and the majority provider's legacy list name becomes the push alias.
+    expect(JSON.parse(row.metadata!).remote_list).toBe('SyncA / Shared');
+  });
+
+  it('falls back to local on a provider tie', async () => {
+    closeDb();
+    await writeLegacyStore({
+      tasks: [
+        legacyTask({ id: 't-1', title: 'a', category: 'SyncA', project: 'Shared', source: 'ms-todo' }),
+        legacyTask({ id: 't-2', title: 'b', category: 'SyncB', project: 'Shared', source: 'jira' }),
+      ],
+      categories: { SyncA: { source: 'ms-todo' }, SyncB: { source: 'jira' } },
+    });
+    expect((await runMigrationIfNeeded()).count).toBe(2);
+
+    const row = getDb()!
+      .prepare('SELECT source, metadata FROM task_projects WHERE name = ?')
+      .get('Shared') as { source: string; metadata: string | null };
+    expect(row.source).toBe('local');
+    expect(JSON.parse(row.metadata ?? '{}').remote_list).toBeUndefined();
+  });
+
+  it('omits remote_list when the legacy list name already equals the project name', async () => {
+    // Degenerate ms-todo group: the old list was named just "Acme".
+    closeDb();
+    await writeLegacyStore({
+      tasks: [legacyTask({ id: 'a-1', title: 'a', category: 'Acme', project: 'Acme', source: 'ms-todo' })],
+      categories: { Acme: { source: 'ms-todo' } },
+    });
+    expect((await runMigrationIfNeeded()).count).toBe(1);
+    const row = getDb()!
+      .prepare('SELECT source, metadata FROM task_projects WHERE name = ?')
+      .get('Acme') as { source: string; metadata: string | null };
+    expect(row.source).toBe('ms-todo');
+    expect(JSON.parse(row.metadata!).remote_list).toBeUndefined();
+  });
+
+  it('normalizes minority-source tasks onto the winning claim and clears their ext', async () => {
+    closeDb();
+    await writeLegacyStore({
+      tasks: [
+        legacyTask({ id: 'n-1', title: 'a', category: 'SyncA', project: 'Shared', source: 'ms-todo', ext: { 'ms-todo': { id: 'r1' } } }),
+        legacyTask({ id: 'n-2', title: 'b', category: 'SyncA', project: 'Shared', source: 'ms-todo', ext: { 'ms-todo': { id: 'r2' } } }),
+        legacyTask({ id: 'n-3', title: 'c', category: 'SyncB', project: 'Shared', source: 'jira', ext: { jira: { id: 'J-1' } } }),
+      ],
+      categories: { SyncA: { source: 'ms-todo' }, SyncB: { source: 'jira' } },
+    });
+    expect((await runMigrationIfNeeded()).count).toBe(3);
+
+    const rows = getDb()!
+      .prepare('SELECT id, source, ext FROM tasks ORDER BY id')
+      .all() as { id: string; source: string; ext: string | null }[];
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    // The lone jira task would be permanently unpushable under an ms-todo project.
+    expect(byId.get('n-3')!.source).toBe('ms-todo');
+    expect(byId.get('n-3')!.ext ?? null).toBeNull();
+    // Winners keep their still-valid remote ids.
+    expect(JSON.parse(byId.get('n-1')!.ext!)).toEqual({ 'ms-todo': { id: 'r1' } });
+  });
+
+  it('forces provider tasks routed to Inbox back to local', async () => {
+    closeDb();
+    await writeLegacyStore({
+      tasks: [
+        // Quick Start under a provider-claimed category → Inbox, which can never
+        // be claimed, so the task must become local.
+        legacyTask({ id: 'i-1', title: 'captured', category: 'Sync', project: 'Quick Start', source: 'ms-todo', ext: { 'ms-todo': { id: 'r-i1' } } }),
+        legacyTask({ id: 'i-2', title: 'keeper', category: 'Sync', project: 'Acme', source: 'ms-todo', ext: { 'ms-todo': { id: 'r-i2' } } }),
+      ],
+      categories: { Sync: { source: 'ms-todo' } },
+    });
+    expect((await runMigrationIfNeeded()).count).toBe(2);
+
+    const rows = getDb()!
+      .prepare('SELECT id, project, source, ext FROM tasks ORDER BY id')
+      .all() as { id: string; project: string | null; source: string; ext: string | null }[];
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    expect(byId.get('i-1')!.project ?? '').toBe('');
+    expect(byId.get('i-1')!.source).toBe('local');
+    expect(byId.get('i-1')!.ext ?? null).toBeNull();
+    expect(byId.get('i-2')!.source).toBe('ms-todo');
+    expect(JSON.parse(byId.get('i-2')!.ext!)).toEqual({ 'ms-todo': { id: 'r-i2' } });
+    // Inbox never earns a registry row.
+    const names = (getDb()!.prepare('SELECT name FROM task_projects ORDER BY name').all() as { name: string }[])
+      .map((r) => r.name);
+    expect(names).toEqual(['Acme']);
+  });
+
+  it('never imports a `.metadata`-prefixed task, even beyond the two known sentinels', async () => {
+    closeDb();
+    await writeLegacyStore({
+      tasks: [
+        legacyTask({ id: 'k-1', title: 'Real', category: 'Work', project: 'Walnut' }),
+        legacyTask({ id: 'k-2', title: '.metadata_project', category: 'Work', project: 'Walnut' }),
+        // A phantom from the same retired namespace — must not become a task.
+        legacyTask({ id: 'k-3', title: '.metadata', category: 'Work', project: 'Walnut' }),
+      ],
+      categories: { Work: { source: 'local' } },
+    });
+    expect((await runMigrationIfNeeded()).count).toBe(1);
+    const n = getDb()!
+      .prepare("SELECT COUNT(*) AS n FROM tasks WHERE title LIKE '.metadata%'")
+      .get() as { n: number };
+    expect(n.n).toBe(0);
   });
 });
 

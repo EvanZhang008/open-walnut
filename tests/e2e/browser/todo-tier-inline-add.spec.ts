@@ -11,18 +11,19 @@
  *     instead of below them — the "weird placed" report.
  *
  *  2. IT SILENTLY DID NOTHING. Quick capture routes to the configured default
- *     category ('Inbox'), which is hard-reserved for local tasks by
- *     config.local.categories while store.categories still had it registered to a
- *     sync plugin from an old sync. Source resolution said the plugin, validation
- *     said local-only → permanent 409, the optimistic card rolled back, and the task
- *     "disappeared".
+ *     project — unset means Inbox (''), which is structurally local-only. The old
+ *     model reserved a NAMED category for local while the store still had it
+ *     registered to a sync plugin from an old sync: source resolution said the
+ *     plugin, validation said local-only → permanent 409, the optimistic card rolled
+ *     back, and the task "disappeared". Inbox now can't hold a claim at all, so the
+ *     conflict is unrepresentable; this spec still guards the capture path end-to-end.
  *
  * The assertions are geometric + behavioral, not stylistic: the add row must sit
  * BELOW every card, and a typed title must end up as a real task in the tier.
  */
 
 import { test, expect, type Page } from '@playwright/test'
-import { selectSection, selectCategory } from './todo-panel-helpers'
+import { selectSection, selectProject } from './todo-panel-helpers'
 
 // Pin membership is GLOBAL server state on one shared fixture dataset: the geometry
 // test seeds 40 cards into Satellite while the per-tier tests add and then look for
@@ -47,7 +48,7 @@ async function seedTier(page: Page, tier: 'focus' | 'satellite' | 'backlog' | 'w
   const ids = await Promise.all(
     Array.from({ length: n }, async (_, i) => {
       const res = await page.request.post('/api/tasks', {
-        data: { title: `inline-add probe ${tier} ${i} ${stamp}`, source: 'local', category: 'Work' },
+        data: { title: `inline-add probe ${tier} ${i} ${stamp}`, source: 'local', project: 'Work' },
       })
       if (!res.ok()) throw new Error(`seed create failed: ${res.status()} ${await res.text()}`)
       const id = ((await res.json()) as { task?: { id?: string } }).task?.id
@@ -78,7 +79,7 @@ test.describe('tier inline add', () => {
     await seedTier(page, 'satellite', 40, stamp)
     await page.reload()
     await expect(page.locator('.todo-section-tabs')).toBeVisible({ timeout: 20_000 })
-    await selectCategory(page, 'All')
+    await selectProject(page, 'All')
 
     await selectSection(page, 'Satellite')
     const zone = page.locator('[data-drop-zone="satellite-drop-zone"]')
@@ -111,7 +112,7 @@ test.describe('tier inline add', () => {
       const title = `inline add ${tab} ${Date.now()}`
       await page.goto('/')
       await expect(page.locator('.todo-section-tabs')).toBeVisible({ timeout: 20_000 })
-      await selectCategory(page, 'All')
+      await selectProject(page, 'All')
       await selectSection(page, tab)
 
       await page.locator('.focus-inline-add-trigger', { hasText: label }).click()
@@ -148,14 +149,14 @@ test.describe('tier inline add', () => {
     })
   }
 
-  test('quick capture lands in the local-reserved default category', async ({ page }) => {
-    // Guards the actual root cause of the disappearing task: the default capture
-    // category is hard-reserved local, so the create must resolve to source=local
-    // rather than 409'ing on a stale plugin registration.
+  test('quick capture lands in Inbox as a local task', async ({ page }) => {
+    // Guards the actual root cause of the disappearing task: the fixture sets no
+    // defaults.project, so capture targets Inbox ('') — which no provider can claim
+    // — and the create must resolve to source=local instead of 409'ing.
     const title = `capture source probe ${Date.now()}`
     await page.goto('/')
     await expect(page.locator('.todo-section-tabs')).toBeVisible({ timeout: 20_000 })
-    await selectCategory(page, 'All')
+    await selectProject(page, 'All')
     await selectSection(page, 'Focus')
 
     await page.locator('.focus-inline-add-trigger', { hasText: 'Add to Focus…' }).click()
@@ -166,10 +167,12 @@ test.describe('tier inline add', () => {
       .toBeVisible({ timeout: 15_000 })
 
     const created = ((await (await page.request.get('/api/tasks?fields=list')).json()) as
-      { tasks: { title: string; source: string; category: string }[] })
+      { tasks: { title: string; source: string; project: string }[] })
       .tasks.find((t) => t.title === title)
     expect(created).toBeTruthy()
     expect(created!.source).toBe('local')
+    // '' = Inbox, never the literal string 'Inbox' (that would be a real project).
+    expect(created!.project).toBe('')
 
     // And no "Action failed" toast fired.
     await expect(page.locator('.notification-toast', { hasText: 'Action failed' })).toHaveCount(0)

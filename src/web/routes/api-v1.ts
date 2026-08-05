@@ -769,16 +769,10 @@ apiV1Router.get('/tasks', async (req: Request, res: Response, next: NextFunction
     let tasks = projection.tasks
     const status = typeof req.query.status === 'string' ? req.query.status : undefined
     if (status) tasks = tasks.filter((t) => t.status === status)
-    // v1 is FROZEN: shipped mobile builds decode `category` as a required
-    // string. Newer projections drop it (project-only), so guarantee it at
-    // this boundary: default to the project name, but let a projection that
-    // still carries a real `category` win (spread order). Old clients keep
-    // decoding; new clients ignore it. Remove only when no legacy client is
-    // left in the field.
-    res.json({
-      tasks: tasks.map((t) => ({ ...t, category: (t as { category?: string }).category ?? (t.project || 'Inbox') })),
-      syncedAt: projection.exportedAt,
-    })
+    // The projection is project-only (v2): `project` is the single grouping
+    // field, with NO `category` alias. The iOS app — v1's only consumer —
+    // decodes `project` and ships in the same release as this projection.
+    res.json({ tasks, syncedAt: projection.exportedAt })
   } catch (err) {
     next(err)
   }
@@ -859,11 +853,8 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       })
       log.web.info('task created via api-v1', { taskId: task.id, project: task.project })
       bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui', 'main-agent'], { source: 'api-v1' })
-      // Same category compat alias as GET /tasks (see the note there).
-      const projected = projectTask(task)
-      res.status(201).json({
-        task: { ...projected, category: (projected as { category?: string }).category ?? (projected.project || 'Inbox') },
-      })
+      // Project-only projection, same as GET /tasks (see the note there).
+      res.status(201).json({ task: projectTask(task) })
     } catch (err) {
       if (err instanceof ProjectSourceConflictError) {
         sendError(res, 409, 'conflict', err.message)

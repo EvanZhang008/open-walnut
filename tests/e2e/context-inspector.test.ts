@@ -59,7 +59,7 @@ describe('Context Inspector E2E', () => {
     expect(sectionNames).toContain('roleAndRules');
     expect(sectionNames).toContain('skills');
     expect(sectionNames).toContain('compactionSummary');
-    expect(sectionNames).toContain('taskCategories');
+    expect(sectionNames).toContain('taskProjects');
     expect(sectionNames).toContain('userProfile');
     expect(sectionNames).toContain('globalMemory');
     expect(sectionNames).toContain('notesContext');

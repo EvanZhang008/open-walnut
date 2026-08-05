@@ -18,7 +18,8 @@ import {
   deleteTasksByIds,
   ActiveSessionError,
   ActiveChildrenError,
-  CategorySourceConflictError,
+  InvalidProjectNameError,
+  ProjectSourceConflictError,
   addNote,
   updateNote,
   updateDescription,
@@ -41,7 +42,7 @@ import { listSessions } from '../../core/session-tracker.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { VALID_PRIORITIES, type Task, type ProcessStatus, type SessionMode } from '../../core/types.js'
 import { parseQuickTask } from '../../core/quick-task-parse.js'
-import { buildCategoryDigest, type CategoryDigest } from '../../core/quick-task-digest.js'
+import { buildProjectDigest, type ProjectDigest } from '../../core/quick-task-digest.js'
 
 /** Session info used during enrichment (includes mode for slot inference). */
 interface SessionInfo {
@@ -256,22 +257,26 @@ const VALID_PHASES_ARRAY = [...VALID_PHASES]
 tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const t0 = Date.now()
-    const { status, category, project, source, tags, sprint, slim, fields } = req.query as Record<string, string | undefined>
+    const { status, project, source, tags, sprint, slim, fields } = req.query as Record<string, string | undefined>
     // fields=list implies slim + drops summary/description/ext for the home
     // list payload (~2.6MB saved); the regular ?slim=1 path keeps them inline.
     const isMinimal = fields === 'list'
     const isSlim = slim === '1' || isMinimal
 
-    // Slim path: listTasksSlim pushes status/category/source filters into SQL
-    // and never materializes note/conversation_log. enrich + isTaskBlocked
-    // only touch session_id / depends_on / phase fields so they work on the
-    // SlimTask shape too (cast via unknown for the enrichment helper).
+    // Slim path: listTasksSlim pushes status/source filters into SQL and never
+    // materializes note/conversation_log. enrich + isTaskBlocked only touch
+    // session_id / depends_on / phase fields so they work on the SlimTask shape
+    // too (cast via unknown for the enrichment helper).
+    //
+    // `project` stays a JS filter rather than a SQL pushdown: it's a
+    // case-INSENSITIVE match (project identity is NOCASE) and '' must mean
+    // Inbox, which the `?project=` query string can't distinguish from "absent".
     if (isSlim) {
-      const rawSlim = (await listTasksSlim({ status, category, source, minimal: isMinimal }))
+      const rawSlim = (await listTasksSlim({ status, source, minimal: isMinimal }))
         .filter((t) => !t.title.startsWith('.metadata'))
       const tList = Date.now()
       let filtered: SlimTask[] = project
-        ? rawSlim.filter((t) => t.project.toLowerCase() === project.toLowerCase())
+        ? rawSlim.filter((t) => (t.project || '').toLowerCase() === project.toLowerCase())
         : rawSlim
       if (tags) {
         const tagSet = new Set(tags.split(',').map(t => t.trim()).filter(Boolean))
@@ -306,10 +311,10 @@ tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
     }
 
     // Non-slim path unchanged — full Task payload.
-    const tasks = (await listTasks({ status, category })).filter((t) => !t.title.startsWith('.metadata'))
+    const tasks = (await listTasks({ status })).filter((t) => !t.title.startsWith('.metadata'))
     const tList = Date.now()
     let filtered = project
-      ? tasks.filter((t) => t.project.toLowerCase() === project.toLowerCase())
+      ? tasks.filter((t) => (t.project || '').toLowerCase() === project.toLowerCase())
       : tasks
     if (source) {
       filtered = filtered.filter((t) => t.source === source)
@@ -429,19 +434,18 @@ tasksRouter.post('/quick-parse', async (req: Request, res: Response, next: NextF
     }
 
     const startedAt = Date.now()
-    let categoryDigest: CategoryDigest = { digest: '', categories: [], projectsByCategory: {} }
+    let projectDigest: ProjectDigest = { digest: '', projects: [] }
     try {
-      categoryDigest = await buildCategoryDigest()
+      projectDigest = await buildProjectDigest()
     } catch (err) {
-      log.web.warn('quick-parse category digest unavailable', {
+      log.web.warn('quick-parse project digest unavailable', {
         error: err instanceof Error ? err.message : String(err),
       })
     }
     const { parse, parseMs, model } = await parseQuickTask(text, {
       timeZone,
-      categoryDigest: categoryDigest.digest,
-      knownCategories: categoryDigest.categories,
-      knownProjects: categoryDigest.projectsByCategory,
+      projectDigest: projectDigest.digest,
+      knownProjects: projectDigest.projects,
       customTiers: await getCustomTiers(),
     })
     log.web.info('quick-parse', {
@@ -523,36 +527,47 @@ tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) =>
         return
       }
     }
-    // source is passed through to addTask; validation happens in task-manager via store.categories.
+    if (req.body.project !== undefined && typeof req.body.project !== 'string') {
+      res.status(400).json({ error: 'project must be a string ("" = Inbox)' })
+      return
+    }
+    // source is passed through to addTask; validation happens in task-manager against
+    // the project registry (a claimed project's source wins; Inbox is local-only).
     // asyncPush: the web UI is optimistic (renders the task immediately), so don't block the
     // HTTP response on an external sync round-trip — push runs in the background and backfills
     // ext/sync_error via TASK_UPDATED. Local-source tasks never push regardless.
     const result = await addTask({ ...req.body, asyncPush: true })
-    log.web.info('task created via REST', { taskId: result.task.id, category: result.task.category, project: result.task.project })
+    log.web.info('task created via REST', { taskId: result.task.id, project: result.task.project || '' })
     bus.emit(EventNames.TASK_CREATED, { task: result.task }, ['web-ui', 'main-agent'], { source: 'api' })
     res.status(201).json(result)
   } catch (err) {
-    if (err instanceof CategorySourceConflictError) {
+    if (err instanceof ProjectSourceConflictError) {
       res.status(409).json({
         error: err.message,
-        category: err.category,
+        project: err.project,
         intended_source: err.intendedSource,
         existing_source: err.existingSource,
       })
+      return
+    }
+    if (err instanceof InvalidProjectNameError) {
+      res.status(400).json({ error: err.message, project: err.project })
       return
     }
     next(err)
   }
 })
 
-// PATCH /api/tasks/reorder — reorder tasks within a category/project group
+// PATCH /api/tasks/reorder — reorder tasks within ONE project group.
+// `project: ''` is valid and means Inbox (the single grouping layer is optional),
+// so the guard is a type check, NOT a truthiness check.
 // (Must be before /:id to avoid matching "reorder" as an ID)
 tasksRouter.patch('/reorder', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { category, project, taskIds } = req.body as { category: string; project: string; taskIds: string[] }
+    const { project, taskIds } = req.body as { project: string; taskIds: string[] }
 
-    if (typeof category !== 'string' || !category || typeof project !== 'string' || !project) {
-      res.status(400).json({ error: 'category and project must be non-empty strings' })
+    if (typeof project !== 'string') {
+      res.status(400).json({ error: "project must be a string ('' = Inbox)" })
       return
     }
     if (!Array.isArray(taskIds) || taskIds.length === 0 || !taskIds.every((id: unknown) => typeof id === 'string')) {
@@ -560,8 +575,8 @@ tasksRouter.patch('/reorder', async (req: Request, res: Response, next: NextFunc
       return
     }
 
-    await reorderTasks(category, project, taskIds)
-    bus.emit(EventNames.TASK_REORDERED, { category, project, taskIds }, ['web-ui'], { source: 'api' })
+    await reorderTasks(project, taskIds)
+    bus.emit(EventNames.TASK_REORDERED, { project, taskIds }, ['web-ui'], { source: 'api' })
     res.json({ ok: true })
   } catch (err) {
     next(err)
@@ -786,6 +801,10 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
       res.status(400).json({ error: 'sprint must be a string (sprint name or empty string to clear)' })
       return
     }
+    if (req.body.project !== undefined && typeof req.body.project !== 'string') {
+      res.status(400).json({ error: 'project must be a string ("" = Inbox)' })
+      return
+    }
     // Dependency validation
     for (const field of ['add_depends_on', 'remove_depends_on', 'set_depends_on'] as const) {
       if (req.body[field] !== undefined) {
@@ -820,13 +839,17 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
 
     res.json(result)
   } catch (err) {
-    if (err instanceof CategorySourceConflictError) {
+    if (err instanceof ProjectSourceConflictError) {
       res.status(409).json({
         error: err.message,
-        category: err.category,
+        project: err.project,
         intended_source: err.intendedSource,
         existing_source: err.existingSource,
       })
+      return
+    }
+    if (err instanceof InvalidProjectNameError) {
+      res.status(400).json({ error: err.message, project: err.project })
       return
     }
     if (err instanceof ActiveChildrenError) {

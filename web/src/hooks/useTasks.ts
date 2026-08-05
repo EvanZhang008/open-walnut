@@ -34,7 +34,7 @@ const OPTIMISTIC_STARTING_STATUS = { process_status: 'running' as const };
  */
 function tasksShallowEqual(a: Task, b: Task): boolean {
   const scalarKeys: (keyof Task)[] = [
-    'title', 'status', 'phase', 'priority', 'category', 'project',
+    'title', 'status', 'phase', 'priority', 'project',
     'parent_task_id', 'group_id', 'starred', 'due_date', 'start_date', 'completed_at', 'updated_at',
     'sync_error', 'external_url', 'needs_attention', 'source', 'sprint',
     'cwd', 'session_id', 'plan_session_id', 'exec_session_id',
@@ -101,14 +101,15 @@ function mergeTask(existing: Task, incoming: Task): Task {
   };
 }
 
-/** Rearrange tasks within a category/project group to match the given ID order. */
-function applyReorder(tasks: Task[], category: string, project: string, taskIds: string[]): Task[] {
+/** Rearrange tasks within ONE project group to match the given ID order.
+ *  `project: ''` addresses Inbox (task.project undefined or ''). */
+function applyReorder(tasks: Task[], project: string, taskIds: string[]): Task[] {
   const idOrder = new Map(taskIds.map((id, i) => [id, i]));
   const result = [...tasks];
   const inGroup: Task[] = [];
   const slots: number[] = [];
   for (let i = 0; i < result.length; i++) {
-    if (result[i].category === category && result[i].project === project) {
+    if ((result[i].project || '') === project) {
       inGroup.push(result[i]);
       slots.push(i);
     }
@@ -187,7 +188,7 @@ function applyPhaseChangeMany(tasks: Task[], ids: Set<string>, phase: string): T
 
 /** Only spread direct-value task fields for optimistic update (not instruction fields like add_tags). */
 const OPTIMISTIC_FIELDS = new Set([
-  'title', 'status', 'phase', 'priority', 'category', 'project',
+  'title', 'status', 'phase', 'priority', 'project',
   'due_date', 'start_date', 'needs_attention', 'parent_task_id', 'starred',
 ]);
 
@@ -258,8 +259,10 @@ interface UseTasksReturn {
   toggleComplete: (id: string) => void;
   setPhase: (id: string, phase: string) => void;
   star: (id: string) => void;
-  reorder: (category: string, project: string, taskIds: string[]) => void;
-  moveTask: (taskId: string, category: string, project: string, insertNearTaskId?: string) => void;
+  /** Reorder within ONE project group. `project: ''` = Inbox. */
+  reorder: (project: string, taskIds: string[]) => void;
+  /** Move a task to another project ('' = Inbox), optionally next to a sibling. */
+  moveTask: (taskId: string, project: string, insertNearTaskId?: string) => void;
   reparentTask: (taskId: string, newParentId: string | null, opts?: { insertAfterId?: string }) => void;
   /**
    * Rearrange the local tasks array so the given IDs come first in the given order,
@@ -568,11 +571,13 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
     setTasks((prev) => prev.filter((t) => t.id !== id));
   });
 
+  // TASK_REORDERED payload is `{ project, taskIds }` — `project: ''` = Inbox. The
+  // echo key must stay lock-step with the `reorder:${project}` keys guarded below.
   useEvent('task:reordered', (data) => {
-    const { category, project, taskIds } = data as { category: string; project: string; taskIds: string[] };
-    if (consumeEcho(`reorder:${category}/${project}`)) { scrollLog('drag-trace-ws-reordered-echo', { cat: category, proj: project }); return; }
-    scrollLog('drag-trace-ws-reordered-APPLY', { cat: category, proj: project, count: taskIds.length });
-    setTasks((prev) => applyReorder(prev, category, project, taskIds));
+    const { project, taskIds } = data as { project: string; taskIds: string[] };
+    if (consumeEcho(`reorder:${project}`)) { scrollLog('drag-trace-ws-reordered-echo', { proj: project }); return; }
+    scrollLog('drag-trace-ws-reordered-APPLY', { proj: project, count: taskIds.length });
+    setTasks((prev) => applyReorder(prev, project, taskIds));
   });
 
   // Virtual task group created / renamed / dissolved. Membership lives on the
@@ -621,8 +626,7 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
       status: 'todo',
       priority: (input.priority ?? 'none'),
       phase: 'TODO',
-      category: input.category,
-      project: input.project,
+      project: input.project ?? '',
       source: input.source ?? 'local',
       session_ids: [],
       created_at: now,
@@ -679,23 +683,23 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
     withRetry(() => tasksApi.starTask(id)).catch(onOpError);
   }, [guardEcho, onOpError]);
 
-  const reorder = useCallback((category: string, project: string, taskIds: string[]) => {
-    guardEcho(`reorder:${category}/${project}`);
-    setTasks((prev) => applyReorder(prev, category, project, taskIds));
-    withRetry(() => tasksApi.reorderTasks(category, project, taskIds))
+  const reorder = useCallback((project: string, taskIds: string[]) => {
+    guardEcho(`reorder:${project}`);
+    setTasks((prev) => applyReorder(prev, project, taskIds));
+    withRetry(() => tasksApi.reorderTasks(project, taskIds))
       .catch(onOpError);
   }, [guardEcho, onOpError]);
 
-  const moveTask = useCallback((taskId: string, category: string, project: string, insertNearTaskId?: string) => {
+  const moveTask = useCallback((taskId: string, project: string, insertNearTaskId?: string) => {
     guardEcho(`move:${taskId}`);
-    guardEcho(`reorder:${category}/${project}`);
+    guardEcho(`reorder:${project}`);
 
-    // Optimistic local state: move task to new category/project + reposition.
+    // Optimistic local state: move task to the new project + reposition.
     // Also capture the new group order for the subsequent reorder API call.
     let newGroupOrder: string[] = [];
     setTasks((prev) => {
       const result = prev.map((t) =>
-        t.id === taskId ? { ...t, category, project } : t
+        t.id === taskId ? { ...t, project } : t
       );
       let final: Task[];
       if (insertNearTaskId) {
@@ -709,15 +713,15 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
         final = result;
       }
       newGroupOrder = final
-        .filter((t) => t.category === category && t.project === project)
+        .filter((t) => (t.project || '') === project)
         .map((t) => t.id);
       return final;
     });
 
-    withRetry(() => tasksApi.updateTask(taskId, { category, project }))
-      .then(() => withRetry(() => tasksApi.reorderTasks(category, project, newGroupOrder)))
+    withRetry(() => tasksApi.updateTask(taskId, { project }))
+      .then(() => withRetry(() => tasksApi.reorderTasks(project, newGroupOrder)))
       .catch(onOpError);
-  }, [refetch, guardEcho, onOpError]);
+  }, [guardEcho, onOpError]);
 
   const reparentTask = useCallback((
     taskId: string,
@@ -740,7 +744,7 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
     //   1. insertAfterId (drag drop target) — user's chosen drop spot, always respected
     //   2. Unparent fallback: just below old parent — keeps kebab Move-left visually stable
     //   3. Otherwise no reposition.
-    let optimisticGroupIds: { cat: string; proj: string; ids: string[] } | null = null;
+    let optimisticGroupIds: { project: string; ids: string[] } | null = null;
     setTasks((prev) => {
       const next = prev.map((t) =>
         t.id === taskId
@@ -766,20 +770,16 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
       }
 
       if (isUnparent && current) {
-        const cat = current.category;
-        const proj = current.project ?? current.category;
+        const project = current.project || '';
         optimisticGroupIds = {
-          cat,
-          proj,
-          ids: next
-            .filter((t) => t.category === cat && (t.project ?? t.category) === proj)
-            .map((t) => t.id),
+          project,
+          ids: next.filter((t) => (t.project || '') === project).map((t) => t.id),
         };
       }
       return next;
     });
 
-    // Backend does NOT cascade category/project on parent change
+    // Backend does NOT cascade project on parent change
     // (verified in task-manager.ts updateTask: parent_task_id is the only
     // field touched). So the optimistic state above is authoritative; the
     // `move:<id>` echoGuard eats the primary WS event and the sync-echo
@@ -793,9 +793,9 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
       .then((freshTask) => {
         scrollLog('drag-trace-reparentTask-response', { id: taskId.slice(0,12), isUnparent });
         if (isUnparent && optimisticGroupIds) {
-          const { cat, proj, ids } = optimisticGroupIds;
-          guardEcho(`reorder:${cat}/${proj}`);
-          return withRetry(() => tasksApi.reorderTasks(cat, proj, ids));
+          const { project, ids } = optimisticGroupIds;
+          guardEcho(`reorder:${project}`);
+          return withRetry(() => tasksApi.reorderTasks(project, ids));
         }
         setTasks((prev) => {
           const idx = prev.findIndex((t) => t.id === freshTask.id);

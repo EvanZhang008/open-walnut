@@ -8,10 +8,10 @@
  * - pw-task-001:              source=ms-todo, no ext (unsynced)
  * - pw-task-plugina-synced:   source=plugin-a, ext.plugin-a.id set (synced)
  * - pw-task-plugina-unsynced: source=plugin-a, no ext (unsynced)
- * - pw-task-pluginb-synced:   source=plugin-b, ext.plugin-b set (synced), category=Engineering
- * - pw-task-local:            source=local, category=Later
+ * - pw-task-pluginb-synced:   source=plugin-b, ext.plugin-b set (synced), project=Backend
+ * - pw-task-local:            source=local, project=Ideas
  * - pw-task-sync-error:       source=ms-todo, sync_error set
- * - pw-task-ms-synced:        source=ms-todo, ext.ms-todo set (synced), category=Personal
+ * - pw-task-ms-synced:        source=ms-todo, ext.ms-todo set (synced), project=Errands
  */
 import { test, expect } from '@playwright/test'
 import { showEverything } from './todo-panel-helpers'
@@ -24,7 +24,7 @@ async function showAllTasksInTodoPanel(page: import('@playwright/test').Page) {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   // Both axes: the SECTION tab defaults to Focus (main list not mounted) and the
-  // CATEGORY defaults to ★ Starred. Categories live in the View dropdown now.
+  // PROJECT chip defaults to ★ Starred. Projects live in the View dropdown now.
   await showEverything(page)
   await page.waitForTimeout(300)
 }
@@ -54,21 +54,21 @@ test.describe('2. Create task — source auto-assigned', () => {
   test('task created via API gets source auto-assigned', async ({ page }) => {
     const title = `Plugin API task ${Date.now()}`
     const res = await page.request.post(`${API}/api/tasks`, {
-      data: { title, category: 'Inbox' },
+      data: { title },
     })
     expect(res.status()).toBe(201)
     const body = await res.json() as { task: { source: string; id: string } }
 
-    // Source is auto-assigned by plugin system (Inbox → local or ms-todo depending on config)
-    expect(body.task.source).toBeTruthy()
-    expect(body.task.source.length).toBeGreaterThan(0)
+    // No project = Inbox, which is structurally local-only (no registry row, no
+    // provider can claim it) — so the plugin system must resolve source=local.
+    expect(body.task.source).toBe('local')
   })
 
   test('task appears in UI with source badge after page load', async ({ page }) => {
     // Create task, then load page — task should be in the todo panel
     const title = `Plugin badge test ${Date.now()}`
     await page.request.post(`${API}/api/tasks`, {
-      data: { title, category: 'Inbox' },
+      data: { title },
     })
 
     await showAllTasksInTodoPanel(page)
@@ -115,7 +115,7 @@ test.describe('4. Dashboard task with phase info', () => {
   test('seeded task shows sync indicator on dashboard', async ({ page }) => {
     await goToDashboard(page)
 
-    // Look for any task card that has a sync indicator — Work category tasks should be visible
+    // Look for any task card that has a sync indicator — Walnut-project tasks should be visible
     const taskCard = page.locator('.task-card', { hasText: 'PluginA synced task' })
     await expect(taskCard).toBeVisible({ timeout: 5000 })
     await page.screenshot({ path: 'playwright-report/plugin-04-phase-dashboard.png' })
@@ -180,9 +180,9 @@ test.describe('6. Sync indicator states on dashboard', () => {
 
   test('synced plugin-b task: badge with sync-synced', async ({ page }) => {
     await goToDashboard(page)
-    // Plugin-b task is in Engineering category — check it appears on /tasks
+    // Plugin-b task is in the Backend project — check it appears on /tasks
     const taskCard = page.locator('.task-card', { hasText: 'PluginB synced task' })
-    // May not be visible if dashboard filters by default category
+    // May not be visible if the dashboard scopes to a different project
     if (await taskCard.isVisible().catch(() => false)) {
       const indicator = taskCard.locator('.sync-indicator')
       await expect(indicator).toHaveClass(/sync-synced/)
@@ -325,17 +325,20 @@ test.describe('8. TodoPanel source badges', () => {
   })
 })
 
-// ── 9. Multi-category source assignment ──
+// ── 9. Multi-project source assignment ──
 
-test.describe('9. Multi-category source assignment', () => {
-  test('tasks in different categories get sources assigned', async ({ page }) => {
-    const categories = ['PW-Cat-One', 'PW-Cat-Two']
-    for (const cat of categories) {
+test.describe('9. Multi-project source assignment', () => {
+  test('tasks in different projects get sources assigned (auto-created registry rows)', async ({ page }) => {
+    const projects = ['PW-Proj-One', 'PW-Proj-Two']
+    for (const proj of projects) {
       const res = await page.request.post(`${API}/api/tasks`, {
-        data: { title: `Cat ${cat} ${Date.now()}`, category: cat },
+        data: { title: `Proj ${proj} ${Date.now()}`, project: proj },
       })
       expect(res.status()).toBe(201)
-      const body = await res.json() as { task: { source: string } }
+      const body = await res.json() as { task: { source: string; project: string } }
+      // A brand-new project name auto-creates its registry row, and the task's
+      // source comes from that row (local unless a plugin claims the name).
+      expect(body.task.project).toBe(proj)
       expect(body.task.source).toBeTruthy()
     }
   })

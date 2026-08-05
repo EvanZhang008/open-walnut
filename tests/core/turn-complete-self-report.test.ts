@@ -127,7 +127,7 @@ let task: Task;
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   await fs.mkdir(WALNUT_HOME, { recursive: true });
-  const created = await addTask({ title: 'self report task', category: 'Inbox' });
+  const created = await addTask({ title: 'self report task' });
   taskId = created.task.id;
   task = created.task;
 });

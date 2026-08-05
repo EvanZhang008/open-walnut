@@ -48,7 +48,6 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     status: 'todo',
     phase: 'TODO',
     priority: 'none',
-    category: TEST_LIST_NAME,
     project: TEST_LIST_NAME,
     source: 'ms-todo',
     session_ids: [],

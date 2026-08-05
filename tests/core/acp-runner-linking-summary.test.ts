@@ -177,7 +177,6 @@ describe('ACP task linking and fork routing', () => {
     const runner = new SessionRunner();
     const { task } = await addTask({
       title: 'ACP link target',
-      category: 'Local',
       project: 'Quick Start',
       source: 'local',
       _skipPluginOps: true,
@@ -216,12 +215,11 @@ describe('ACP task linking and fork routing', () => {
     const runner = new SessionRunner();
     const { task } = await addTask({
       title: 'ACP attach target',
-      category: 'Local',
       project: 'Quick Start',
       source: 'local',
       _skipPluginOps: true,
     });
-    await createSessionRecord('acp-attach-session', task.id, task.project, '/tmp', {
+    await createSessionRecord('acp-attach-session', task.id, task.project ?? '', '/tmp', {
       initialProcessStatus: 'idle',
       engine: 'codex',
       acpRuntimeId: 'acp-attach-runtime',
@@ -251,12 +249,11 @@ describe('ACP task linking and fork routing', () => {
     const runner = new SessionRunner();
     const { task } = await addTask({
       title: 'Archived ACP target',
-      category: 'Local',
       project: 'Quick Start',
       source: 'local',
       _skipPluginOps: true,
     });
-    await createSessionRecord('acp-archived-session', task.id, task.project, '/tmp', {
+    await createSessionRecord('acp-archived-session', task.id, task.project ?? '', '/tmp', {
       initialProcessStatus: 'stopped',
       engine: 'codex',
       acpRuntimeId: 'acp-archived-runtime',
@@ -277,13 +274,12 @@ describe('ACP task linking and fork routing', () => {
     const runner = new SessionRunner();
     const { task } = await addTask({
       title: 'ACP archive race target',
-      category: 'Local',
       project: 'Quick Start',
       source: 'local',
       _skipPluginOps: true,
     });
     const sessionId = 'acp-archive-race-session';
-    await createSessionRecord(sessionId, task.id, task.project, '/tmp', {
+    await createSessionRecord(sessionId, task.id, task.project ?? '', '/tmp', {
       initialProcessStatus: 'idle',
       engine: 'codex',
       acpRuntimeId: 'acp-archive-race-runtime',
@@ -314,13 +310,12 @@ describe('ACP task linking and fork routing', () => {
     const runner = new SessionRunner();
     const { task } = await addTask({
       title: 'ACP final archive race target',
-      category: 'Local',
       project: 'Quick Start',
       source: 'local',
       _skipPluginOps: true,
     });
     const sessionId = 'acp-final-archive-race-session';
-    await createSessionRecord(sessionId, task.id, task.project, '/tmp', {
+    await createSessionRecord(sessionId, task.id, task.project ?? '', '/tmp', {
       initialProcessStatus: 'idle',
       engine: 'codex',
       acpRuntimeId: 'acp-final-archive-race-runtime',
@@ -356,14 +351,13 @@ describe('ACP task linking and fork routing', () => {
     const runner = new SessionRunner();
     const { task } = await addTask({
       title: 'ACP fallback target',
-      category: 'Local',
       project: 'Quick Start',
       source: 'local',
       _skipPluginOps: true,
     });
     const oldId = 'acp-provider-old';
     const newId = 'acp-provider-new';
-    await createSessionRecord(oldId, task.id, task.project, '/tmp', {
+    await createSessionRecord(oldId, task.id, task.project ?? '', '/tmp', {
       initialProcessStatus: 'idle',
       engine: 'codex',
       acpRuntimeId: 'acp-fallback-runtime',
@@ -374,7 +368,7 @@ describe('ACP task linking and fork routing', () => {
     }).linkAcpSessionToTask(task.id, oldId, 'default');
     const session = new AcpSession({
       taskId: task.id,
-      project: task.project,
+      project: task.project ?? '',
       cwd: '/tmp',
       mode: 'default',
       providerSessionId: oldId,
@@ -403,14 +397,13 @@ describe('ACP task linking and fork routing', () => {
     const runner = new SessionRunner();
     const { task } = await addTask({
       title: 'ACP fallback rollback target',
-      category: 'Local',
       project: 'Quick Start',
       source: 'local',
       _skipPluginOps: true,
     });
     const oldId = 'acp-provider-rollback-old';
     const newId = 'acp-provider-rollback-new';
-    await createSessionRecord(oldId, task.id, task.project, '/tmp', {
+    await createSessionRecord(oldId, task.id, task.project ?? '', '/tmp', {
       initialProcessStatus: 'idle',
       engine: 'codex',
       acpRuntimeId: 'acp-fallback-rollback-runtime',
@@ -420,7 +413,7 @@ describe('ACP task linking and fork routing', () => {
     }).linkAcpSessionToTask(task.id, oldId, 'default');
     const session = new AcpSession({
       taskId: task.id,
-      project: task.project,
+      project: task.project ?? '',
       cwd: '/tmp',
       mode: 'default',
       providerSessionId: oldId,
@@ -494,7 +487,6 @@ describe('ACP task linking and fork routing', () => {
     const runner = new SessionRunner();
     const { task } = await addTask({
       title: 'ACP fallback crash recovery target',
-      category: 'Local',
       project: 'Quick Start',
       source: 'local',
       _skipPluginOps: true,
@@ -503,7 +495,7 @@ describe('ACP task linking and fork routing', () => {
     const newId = 'acp-provider-crash-new';
     const runtimeId = 'acp-fallback-crash-runtime';
     const journalPath = '/tmp/acp-fallback-crash-runtime.acp.jsonl';
-    await createSessionRecord(oldId, task.id, task.project, '/tmp', {
+    await createSessionRecord(oldId, task.id, task.project ?? '', '/tmp', {
       initialProcessStatus: 'idle',
       engine: 'codex',
       acpRuntimeId: runtimeId,
@@ -599,33 +591,31 @@ describe('ACP task linking and fork routing', () => {
   it('rejects a fallback provider ID already owned by another ACP runtime', async () => {
     const { task: sourceTask } = await addTask({
       title: 'ACP collision source',
-      category: 'Local',
       project: 'Quick Start',
       source: 'local',
       _skipPluginOps: true,
     });
     const { task: otherTask } = await addTask({
       title: 'ACP collision owner',
-      category: 'Local',
       project: 'Quick Start',
       source: 'local',
       _skipPluginOps: true,
     });
     const oldId = 'acp-provider-collision-old';
     const occupiedId = 'acp-provider-collision-occupied';
-    await createSessionRecord(oldId, sourceTask.id, sourceTask.project, '/tmp', {
+    await createSessionRecord(oldId, sourceTask.id, sourceTask.project ?? '', '/tmp', {
       initialProcessStatus: 'idle',
       engine: 'codex',
       acpRuntimeId: 'acp-collision-source-runtime',
     });
-    await createSessionRecord(occupiedId, otherTask.id, otherTask.project, '/tmp', {
+    await createSessionRecord(occupiedId, otherTask.id, otherTask.project ?? '', '/tmp', {
       initialProcessStatus: 'idle',
       engine: 'codex',
       acpRuntimeId: 'acp-collision-other-runtime',
     });
     const session = new AcpSession({
       taskId: sourceTask.id,
-      project: sourceTask.project,
+      project: sourceTask.project ?? '',
       cwd: '/tmp',
       mode: 'default',
       providerSessionId: oldId,
@@ -652,13 +642,12 @@ describe('ACP task linking and fork routing', () => {
     const runner = new SessionRunner();
     const { task } = await addTask({
       title: 'ACP destroy race target',
-      category: 'Local',
       project: 'Quick Start',
       source: 'local',
       _skipPluginOps: true,
     });
     const sessionId = 'acp-destroy-race-session';
-    await createSessionRecord(sessionId, task.id, task.project, '/tmp', {
+    await createSessionRecord(sessionId, task.id, task.project ?? '', '/tmp', {
       initialProcessStatus: 'idle',
       engine: 'codex',
       acpRuntimeId: 'acp-destroy-race-runtime',
@@ -803,7 +792,6 @@ describe('provider-neutral turn-complete self-report', () => {
   it('persists ACP task summary and session recap through the existing merge policy', async () => {
     const { task } = await addTask({
       title: 'ACP summary target',
-      category: 'Local',
       project: 'Quick Start',
       source: 'local',
       _skipPluginOps: true,
@@ -812,7 +800,7 @@ describe('provider-neutral turn-complete self-report', () => {
     const record = await createSessionRecord(
       sessionId,
       task.id,
-      task.project,
+      task.project ?? '',
       '/tmp/acp-summary',
       {
         initialProcessStatus: 'idle',

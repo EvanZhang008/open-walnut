@@ -42,9 +42,17 @@ export type TaskOp =
   | { opId: string; type: 'update'; at: string; task: Task }
   | { opId: string; type: 'delete'; at: string; id: string };
 
-/** Fields an 'update' op may write onto an existing primary row. */
+/**
+ * Fields an 'update' op may write onto an existing primary row.
+ *
+ * VERSION SKEW: a cloud box running pre-category-removal code keeps emitting ops
+ * that carry `category`. Dropping the key from this list is the whole tolerance
+ * mechanism — an unknown field is simply never copied into the patch, so an old
+ * op degrades to "project + the other fields" instead of failing or resurrecting
+ * the retired column. No op-format version number needed.
+ */
 const UPDATE_WHITELIST: (keyof Task)[] = [
-  'title', 'status', 'phase', 'priority', 'category', 'project',
+  'title', 'status', 'phase', 'priority', 'project',
   'due_date', 'start_date', 'completed_at', 'starred', 'pinned', 'tags', 'summary',
   'description', 'note', 'sprint', 'needs_attention', 'updated_at',
 ];
@@ -139,18 +147,33 @@ export async function applyOutboxOnPrimary(): Promise<number> {
           // Born on the cloud box. Insert with the SAME id (prevents dup when
           // the projection round-trips), then recompute source on the primary:
           // the cloud has no sync plugins, so it always stamps 'local' — the
-          // primary knows whether this category is claimed by a sync plugin.
-          const cats = await tm.getStoreCategories();
-          const catKey = Object.keys(cats).find(
-            (k) => k.toLowerCase() === snapshot.category.toLowerCase(),
-          );
-          if (!catKey) {
-            // Category born on the cloud too — materialize it as local.
-            await tm.createCategory(snapshot.category, 'local').catch(() => { /* races are fine */ });
+          // primary knows whether this project is claimed by a sync plugin.
+          //
+          // SKEW RULE: an op from an old cloud box may carry `category` with an
+          // empty `project`. The task stays in Inbox ('') — the retired category
+          // must NEVER be revived as a project name (that would invent projects
+          // on the primary and, for a claimed name, hand the task to a provider).
+          let snapshotProject = (snapshot.project ?? '').trim();
+          let primarySource = 'local';
+          if (snapshotProject) {
+            try {
+              const ensured = await tm.ensureProject(snapshotProject, 'local');
+              primarySource = ensured.source;
+            } catch (err) {
+              if (!(err instanceof tm.InvalidProjectNameError)) throw err;
+              // The name came off a remote JSON file we don't control. Rethrowing
+              // would keep the op file and retry it EVERY git-pull cycle forever —
+              // fall back to Inbox and consume the op instead.
+              log.task.warn('task-outbox: invalid project name from cloud op — filing in Inbox', {
+                opId: op.opId, project: snapshotProject, err: String(err),
+              });
+              snapshotProject = '';
+            }
           }
-          const primarySource = catKey ? cats[catKey].source : 'local';
           const { id, ...rest } = snapshot;
-          const [created] = await tm.addTasksBulk([{ ...rest, id, source: primarySource }]);
+          const [created] = await tm.addTasksBulk([
+            { ...rest, id, project: snapshotProject, source: primarySource },
+          ]);
           if (created) {
             const { bus, EventNames } = await import('./event-bus.js');
             bus.emit(EventNames.TASK_CREATED, { task: created }, ['web-ui'], { source: 'cloud-outbox' });
@@ -240,8 +263,7 @@ export async function importProjectionOnCloud(): Promise<number> {
         status: p.status as Task['status'],
         phase: p.phase as Task['phase'],
         priority: p.priority as Task['priority'],
-        category: p.category,
-        project: p.project,
+        project: p.project || '',
         source: 'local', // display-only on cloud; primary owns the real source
         session_ids: [],
         description: '',
@@ -264,8 +286,7 @@ export async function importProjectionOnCloud(): Promise<number> {
           status: p.status as Task['status'],
           phase: p.phase as Task['phase'],
           priority: p.priority as Task['priority'],
-          category: p.category,
-          project: p.project,
+          project: p.project || '',
           // Projection omits cleared dates entirely; `undefined` in a patch means
           // "don't touch" (taskToRow drops it), which left stale dates on the
           // cloud replica forever. `null` is the explicit-clear marker that

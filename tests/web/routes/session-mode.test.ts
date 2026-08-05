@@ -50,7 +50,6 @@ async function seedTask(taskId: string): Promise<void> {
     status: 'todo',
     phase: 'IN_PROGRESS',
     priority: 'immediate',
-    category: 'Test',
     project: 'ModeTest',
     source: 'local',
     session_ids: [],

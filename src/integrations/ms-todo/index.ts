@@ -64,7 +64,19 @@ export default function register(api: PluginApi): void {
       const { autoPushTask } = await import('../microsoft-todo.js');
       await autoPushTask(task);
     },
-    async updateCategory(task: Task) {
+    /**
+     * A single task moved between projects → re-push it, which resolves the target
+     * list (creating one if the project has no remote list yet) and migrates the
+     * remote twin into it.
+     *
+     * NOTE: this is NOT the project-rename path. Renaming a project renames the
+     * remote LIST once (core's renameProject → renameListByName, keyed on the
+     * `remote_list` alias); calling this hook per task instead would resolve the
+     * new name, find no list, and CREATE one — forking the user's list in two.
+     * It stays the fallback for when that container rename fails, and the surviving
+     * alias makes that fallback land in the existing list rather than a new one.
+     */
+    async updateProject(task: Task) {
       const { autoPushTask } = await import('../microsoft-todo.js');
       await autoPushTask(task);
     },
@@ -111,9 +123,9 @@ export default function register(api: PluginApi): void {
     paths: [{ key: 'id', json: '$."ms-todo".id' }],
   });
 
-  api.registerSourceClaim((category) => {
-    // MS To-Do claims categories that aren't claimed by higher-priority plugins
-    // This is the default — priority 0 means it's below higher-priority plugins (10) but above local (-1)
+  api.registerSourceClaim(() => {
+    // MS To-Do claims any project not claimed by a higher-priority plugin.
+    // priority 0 = below higher-priority plugins (10) but above local (-1).
     return true;
   }, { priority: 0 });
 

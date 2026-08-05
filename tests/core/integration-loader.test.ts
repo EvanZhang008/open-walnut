@@ -21,7 +21,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
   getConfig: vi.fn(async () => ({
     version: 1,
     user: { name: 'test' },
-    defaults: { priority: 'none', category: 'Inbox' },
+    defaults: { priority: 'none' },
     provider: { type: 'bedrock' },
     plugins: {},
   })),
@@ -52,7 +52,7 @@ function makeNoopSync() {
     updatePhase: async () => {},
     updateDueDate: async () => {},
     updateStar: async () => {},
-    updateCategory: async () => {},
+    updateProject: async () => {},
     updateDependencies: async () => {},
     associateSubtask: async () => {},
     disassociateSubtask: async () => {},
@@ -77,7 +77,7 @@ beforeEach(async () => {
   vi.mocked(getConfig).mockResolvedValue({
     version: 1,
     user: { name: 'test' },
-    defaults: { priority: 'none', category: 'Inbox' },
+    defaults: { priority: 'none' },
     provider: { type: 'bedrock' },
     plugins: {},
   } as any);
@@ -124,7 +124,7 @@ describe('migrateConfigToPlugins', () => {
     await installPluginDir('plugin-a');
     const config = {
       version: 1,
-      'plugin-a': { category: 'Work', base_url: 'https://plugin-a.example.com' },
+      'plugin-a': { project: 'Work', base_url: 'https://plugin-a.example.com' },
     };
     await fsp.writeFile(CONFIG_FILE, yaml.dump(config));
 
@@ -137,7 +137,7 @@ describe('migrateConfigToPlugins', () => {
     const plugins = result.plugins as Record<string, unknown>;
     expect(plugins['plugin-a']).toEqual({
       enabled: true,
-      category: 'Work',
+      project: 'Work',
       base_url: 'https://plugin-a.example.com',
     });
   });
@@ -170,7 +170,7 @@ describe('migrateConfigToPlugins', () => {
     const config = {
       version: 1,
       ms_todo: { client_id: 'x' },
-      'plugin-a': { category: 'W' },
+      'plugin-a': { project: 'W' },
       'plugin-b': { host: 'j' },
     };
     await fsp.writeFile(CONFIG_FILE, yaml.dump(config));
@@ -182,7 +182,7 @@ describe('migrateConfigToPlugins', () => {
     const result = yaml.load(content) as Record<string, unknown>;
     const plugins = result.plugins as Record<string, Record<string, unknown>>;
     expect(plugins['ms-todo'].client_id).toBe('x');
-    expect(plugins['plugin-a'].category).toBe('W');
+    expect(plugins['plugin-a'].project).toBe('W');
     expect(plugins['plugin-b'].host).toBe('j');
   });
 
@@ -335,7 +335,6 @@ describe('runPluginMigrations', () => {
           status: 'todo',
           phase: 'TODO',
           priority: 'none',
-          category: 'Inbox',
           project: 'Inbox',
           source: 'ms-todo',
           session_ids: [],
@@ -394,7 +393,6 @@ describe('runPluginMigrations', () => {
           status: 'todo',
           phase: 'TODO',
           priority: 'none',
-          category: 'Inbox',
           project: 'Inbox',
           source: 'local',
           session_ids: [],
@@ -455,7 +453,6 @@ describe('runPluginMigrations', () => {
           status: 'todo',
           phase: 'TODO',
           priority: 'none',
-          category: 'Inbox',
           project: 'Inbox',
           source: 'local',
           session_ids: [],

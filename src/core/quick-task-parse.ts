@@ -16,9 +16,10 @@ export interface QuickTaskParseOptions {
   now?: Date;
   timeoutMs?: number;
   timeZone?: string;
-  categoryDigest?: string;
-  knownCategories?: string[];
-  knownProjects?: Record<string, string[]>;
+  /** Flat project digest (buildProjectDigest().digest) injected as context. */
+  projectDigest?: string;
+  /** Canonical project names the model may pick from. */
+  knownProjects?: string[];
   modelOverride?: string;
   /** Registered custom tiers — accepted as pinTier values (by id, or label normalized to id). */
   customTiers?: CustomTierRecord[];
@@ -46,8 +47,8 @@ Fields:
 ${buildPinTierRule(customTiers)}
 - priority: immediate|important|backlog — only when urgency is stated (urgent/asap -> immediate, important/重要 -> important, later/someday -> backlog).
 - starred: true only when the note explicitly says star it.
-- category: the ONE best-matching category NAME from the "Your categories and projects" list, judged by similarity between the note and that category's example task titles. Copy the name EXACTLY as written. Always give your best guess — the user confirms it in a UI, so a plausible guess beats omitting. For everyday personal errands (shopping, calls, appointments) prefer the category whose examples look most like personal life. Omit ONLY if the list is empty or truly nothing fits. NEVER invent a name not in the list.
-- project: only if you set category — the best-matching project name listed UNDER that category, judged by its example titles. Copy EXACTLY. If none clearly matches, OMIT (the task goes to the category default). NEVER invent a name.
+- project: the ONE best-matching project NAME from the "Your projects" list, judged by similarity between the note and that project's summary and example task titles. Copy the name EXACTLY as written. A task without a project lands in Inbox, which is fine and normal — OMIT the field for one-off items (an errand, a call, a single reminder) that don't belong to an ongoing stream of work.
+- project_is_new: set to true ONLY when you supply a project name that is NOT in the list. Do that sparingly — only when the note clearly starts a NEW ongoing stream of work that deserves its own project (a new repo, a new trip, a new recurring commitment). Then \`project\` is your proposed new name (short, in the note's language) and the user confirms it in the UI. For anything else, either match an existing project or omit.
 Omit every field that is not clearly present.`;
 }
 
@@ -76,6 +77,24 @@ function canonicalMatch(value: unknown, choices: string[] | undefined): string |
   if (typeof value !== 'string' || !choices?.length) return undefined;
   const normalized = value.trim().toLowerCase();
   return choices.find((choice) => choice.trim().toLowerCase() === normalized);
+}
+
+/** Max chars for a model-proposed NEW project name (a name, not a sentence). */
+const MAX_NEW_PROJECT_CHARS = 40;
+
+/**
+ * Sanity-check a model-proposed NEW project name. Names are registry keys and
+ * (for ms-todo) remote list names, so reject path separators and anything long
+ * enough to be a restated task title.
+ */
+function newProjectName(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const name = value.trim();
+  if (!name) return undefined;
+  if (Array.from(name).length > MAX_NEW_PROJECT_CHARS) return undefined;
+  if (/[/\\\n\r]/.test(name)) return undefined;
+  if (name.toLowerCase() === 'inbox') return undefined; // Inbox is the absence of a project
+  return name;
 }
 
 function validLocalDueDate(value: unknown): string | undefined {
@@ -119,12 +138,12 @@ export async function parseQuickTask(
     }
     const now = opts.now ?? new Date();
     const timeZone = opts.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const digest = opts.categoryDigest?.trim();
+    const digest = opts.projectDigest?.trim();
     const content = [
       `Current local datetime: ${localDateTime(now, timeZone)}`,
       `IANA timezone: ${timeZone}`,
       ...(digest
-        ? ['', 'Your categories and projects (name, open task count, recent task titles):', digest]
+        ? ['', 'Your projects (name, open task count, summary, recent task titles):', digest]
         : []),
       '',
       `Note:\n${trimmed.slice(0, 500)}`,
@@ -179,11 +198,19 @@ export async function parseQuickTask(
     }
     if (parsed.starred === true) output.starred = true;
 
-    const category = canonicalMatch(parsed.category, opts.knownCategories);
-    if (category) {
-      output.category = category;
-      const project = canonicalMatch(parsed.project, opts.knownProjects?.[category]);
-      if (project) output.project = project;
+    // Project: an existing name always wins over the model's new-name claim (it
+    // can set project_is_new on a name that IS in the list). A name outside the
+    // list is only accepted through the explicit new-project escape hatch —
+    // otherwise a hallucinated name would silently create a project.
+    const existing = canonicalMatch(parsed.project, opts.knownProjects);
+    if (existing) {
+      output.project = existing;
+    } else {
+      const proposed = newProjectName(parsed.project);
+      if (proposed && parsed.project_is_new === true) {
+        output.project = proposed;
+        output.project_is_new = true;
+      }
     }
 
     return { parse: output, parseMs, ...(model ? { model } : {}) };

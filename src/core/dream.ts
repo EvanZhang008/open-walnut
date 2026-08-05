@@ -290,8 +290,9 @@ export function ensureMemoryIndex(): void {
 _(No topic files yet. Dream consolidation will populate this.)_
 
 ## Active Projects
-_(Project knowledge lives in skills/<category>/<project>/. memory/projects/ is
-retired legacy data — read-only, never written to.)_
+_(Project knowledge lives in skills — resolved by project name across skill
+groups; new project skills land in skills/projects/<project>/. memory/projects/
+is retired legacy data — read-only, never written to.)_
 
 ## Recent Daily Logs
 _(Daily logs are stored under memory/daily/.)_

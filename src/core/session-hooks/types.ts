@@ -101,8 +101,8 @@ export interface OnTurnErrorPayload extends SessionHookContext {
 /** Filter criteria for hook matching. */
 export interface SessionHookFilter {
   modes?: SessionMode[];
+  /** Project names. A hook filtered on projects never fires for Inbox tasks. */
   projects?: string[];
-  categories?: string[];
 }
 
 /** A registered hook definition. */

@@ -51,7 +51,6 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     title: `Roundtrip test ${Date.now()}`,
     status: 'todo',
     priority: 'backlog',
-    category: TEST_LIST_NAME,
     project: TEST_LIST_NAME,
     source: 'ms-todo',
     session_ids: [],

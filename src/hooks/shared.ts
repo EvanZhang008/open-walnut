@@ -298,8 +298,11 @@ export function formatDailyLogEntry(
 }
 
 /**
- * Derive a project path from a task ID by reading the task store.
- * Returns "{category}/{project}" if both exist, null otherwise.
+ * Derive the task's project name by reading the task store.
+ * Returns the project name, or null for Inbox (empty project) / unknown task.
+ *
+ * Raw SQL on its own read-only handle: this runs in a hook child process, which
+ * must not touch the server's singleton connection.
  */
 export function deriveProjectPath(taskId: string): string | null {
   try {
@@ -311,18 +314,17 @@ export function deriveProjectPath(taskId: string): string | null {
       const escaped = taskId.replace(/[\\%_]/g, (ch) => '\\' + ch);
       const row = db
         .prepare(
-          `SELECT category, project
+          `SELECT project
            FROM tasks
            WHERE id = ? OR id LIKE ? ESCAPE '\\'
            ORDER BY (id = ?) DESC
            LIMIT 1`,
         )
         .get(taskId, escaped + '%', taskId) as
-        | { category: string | null; project: string | null }
+        | { project: string | null }
         | undefined;
       if (!row) return null;
-      if (row.category && row.project) return `${row.category}/${row.project}`;
-      return null;
+      return row.project?.trim() || null;
     } finally {
       try { db.close(); } catch { /* ignore */ }
     }

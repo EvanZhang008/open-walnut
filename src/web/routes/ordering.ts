@@ -1,5 +1,6 @@
 /**
- * Ordering routes — manage category/project display order via config.
+ * Ordering routes — the project display order (single grouping layer), stored
+ * flat in config as `ordering.projects: string[]`.
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
@@ -12,47 +13,23 @@ export const orderingRouter = Router()
 orderingRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const config = await getConfig()
-    res.json({
-      categories: config.ordering?.categories ?? [],
-      projects: config.ordering?.projects ?? {},
-    })
+    res.json({ projects: config.ordering?.projects ?? [] })
   } catch (err) {
     next(err)
   }
 })
 
-// PUT /api/ordering/categories — replace category order
-orderingRouter.put('/categories', async (req: Request, res: Response, next: NextFunction) => {
+// PUT /api/ordering/projects — replace the flat project order
+orderingRouter.put('/projects', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { order } = req.body as { order: string[] }
-    if (!Array.isArray(order)) {
+    if (!Array.isArray(order) || !order.every((p) => typeof p === 'string')) {
       res.status(400).json({ error: 'order must be an array of strings' })
       return
     }
     const config = await getConfig()
     if (!config.ordering) config.ordering = {}
-    config.ordering.categories = order
-    await updateConfig({ ordering: config.ordering })
-    bus.emit(EventNames.CONFIG_CHANGED, { key: 'ordering' }, ['web-ui'])
-    res.json({ categories: config.ordering.categories })
-  } catch (err) {
-    next(err)
-  }
-})
-
-// PUT /api/ordering/projects/:category — replace project order within a category
-orderingRouter.put('/projects/:category', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const category = decodeURIComponent(req.params.category as string)
-    const { order } = req.body as { order: string[] }
-    if (!Array.isArray(order)) {
-      res.status(400).json({ error: 'order must be an array of strings' })
-      return
-    }
-    const config = await getConfig()
-    if (!config.ordering) config.ordering = {}
-    if (!config.ordering.projects) config.ordering.projects = {}
-    config.ordering.projects[category] = order
+    config.ordering.projects = order
     await updateConfig({ ordering: config.ordering })
     bus.emit(EventNames.CONFIG_CHANGED, { key: 'ordering' }, ['web-ui'])
     res.json({ projects: config.ordering.projects })

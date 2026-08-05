@@ -20,7 +20,6 @@ function task(overrides: Partial<Task> = {}): Task {
     title: 'Default task',
     status: 'todo',
     priority: 'none',
-    category: 'Personal',
     project: 'Walnut',
     session_ids: [],
     description: '',
@@ -85,16 +84,15 @@ describe('completion semantics', () => {
 describe('field composition', () => {
   it('ORs values within fields and ANDs different fields', () => {
     const fixtures = [
-      task({ id: 'match', phase: 'COMPLETE', pinned: true, category: 'Work', project: 'Alpha', updated_at: '2026-01-15T07:00:00.000Z' }),
-      task({ id: 'not-pinned', phase: 'COMPLETE', pinned: false, category: 'Work', project: 'Alpha', updated_at: '2026-01-15T07:00:00.000Z' }),
-      task({ id: 'too-old', phase: 'COMPLETE', pinned: true, category: 'work', project: 'Alpha', updated_at: '2026-01-15T05:59:59.999Z' }),
-      task({ id: 'wrong-project', phase: 'COMPLETE', pinned: true, category: 'Work', project: 'Gamma', updated_at: '2026-01-15T07:00:00.000Z' }),
+      task({ id: 'match', phase: 'COMPLETE', pinned: true, project: 'Alpha', updated_at: '2026-01-15T07:00:00.000Z' }),
+      task({ id: 'not-pinned', phase: 'COMPLETE', pinned: false, project: 'Alpha', updated_at: '2026-01-15T07:00:00.000Z' }),
+      task({ id: 'too-old', phase: 'COMPLETE', pinned: true, project: 'alpha', updated_at: '2026-01-15T05:59:59.999Z' }),
+      task({ id: 'wrong-project', phase: 'COMPLETE', pinned: true, project: 'Gamma', updated_at: '2026-01-15T07:00:00.000Z' }),
     ];
     const normalized = query({
       pinned: true,
       completion: ['complete'],
-      categories: ['Personal', 'WORK'],
-      projects: ['Alpha', 'Beta'],
+      projects: ['ALPHA', 'Beta'],
       time: { basis: 'updated', last: { value: 6, unit: 'hours' } },
     });
 
@@ -133,17 +131,18 @@ describe('field composition', () => {
     expect(matchesTaskQuery(task({ pinned: true, starred: true, needs_attention: true }), query())).toBe(true);
   });
 
-  it('computes effective starred from task, favorite category, or favorite project', () => {
-    const fixture = task({ category: 'Personal', project: 'Walnut' });
-    expect(matchesTaskQuery(fixture, query({ starred: true }), {
-      favoriteCategories: new Set(['personal']),
-    })).toBe(true);
+  it('computes effective starred from the task or a favorite project', () => {
+    const fixture = task({ project: 'Walnut' });
     expect(matchesTaskQuery(fixture, query({ starred: true }), {
       favoriteProjects: new Set(['walnut']),
     })).toBe(true);
     expect(matchesTaskQuery(task({ starred: true }), query({ starred: true }))).toBe(true);
     expect(matchesTaskQuery(fixture, query({ starred: false }), {
-      favoriteCategories: new Set(['personal']),
+      favoriteProjects: new Set(['walnut']),
+    })).toBe(false);
+    // Inbox tasks ('' project) can't be favorite-starred.
+    expect(matchesTaskQuery(task({ project: '' }), query({ starred: true }), {
+      favoriteProjects: new Set(['walnut']),
     })).toBe(false);
   });
 

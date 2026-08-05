@@ -11,7 +11,6 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     status: 'todo',
     phase: 'TODO',
     priority: 'none',
-    category: 'personal',
     project: 'personal',
     session_ids: [],
     source: 'ms-todo',
@@ -42,7 +41,7 @@ export function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
     version: 1,
     user: {},
-    defaults: { priority: 'none', category: 'personal' },
+    defaults: { priority: 'none', project: 'personal' },
     provider: { type: 'claude-code' },
     ...overrides,
   };

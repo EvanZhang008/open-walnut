@@ -146,11 +146,19 @@ export function parseProjectMemory(content: string): ParsedProjectMemory {
  */
 export function ensureProjectDir(projectPath: string): void {
   const parts = projectPath.split('/').filter(Boolean);
+  if (parts.length === 0) {
+    throw new Error('Project path must be non-empty.');
+  }
   if (parts.length > 3) {
     throw new Error(`Project path "${projectPath}" exceeds max depth of 3 levels.`);
   }
+  // Path segments come from user/agent config (stateful memory_project) and
+  // project names — reject traversal and hidden-dir shapes before mkdir.
+  if (parts.some((p) => p === '.' || p === '..' || p.startsWith('.') || p.includes('\\') || p.includes('\0'))) {
+    throw new Error(`Project path "${projectPath}" contains an invalid segment.`);
+  }
 
-  const dirPath = path.join(PROJECTS_MEMORY_DIR, projectPath);
+  const dirPath = path.join(PROJECTS_MEMORY_DIR, ...parts);
   fs.mkdirSync(dirPath, { recursive: true });
 
   const memFile = path.join(dirPath, 'MEMORY.md');

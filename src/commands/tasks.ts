@@ -6,7 +6,7 @@ import type { GlobalOptions } from '../core/types.js';
 
 interface TasksOptions {
   status?: string;
-  category?: string;
+  project?: string;
 }
 
 export async function runTasks(
@@ -15,7 +15,7 @@ export async function runTasks(
 ): Promise<void> {
   const tasks = await listTasks({
     status: options.status,
-    category: options.category,
+    project: options.project,
   });
 
   if (globals.json) {
@@ -34,8 +34,8 @@ export async function runTasks(
     const id = chalk.dim(t.id.slice(0, 8));
     const title = t.status === 'done' ? chalk.strikethrough(t.title) : t.title;
     const date = chalk.dim(shortDate(t.created_at));
-    const cat = chalk.cyan(t.category);
+    const group = chalk.cyan(t.project || 'Inbox');
 
-    console.log(`  ${sym} ${pri.padEnd(3)} ${id}  ${title}  ${cat}  ${date}`);
+    console.log(`  ${sym} ${pri.padEnd(3)} ${id}  ${title}  ${group}  ${date}`);
   }
 }

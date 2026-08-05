@@ -2,17 +2,17 @@ import fsSync from 'node:fs';
 import { TASKS_FILE } from '../constants.js';
 import { withFileLock } from '../utils/file-lock.js';
 import { log } from '../logging/index.js';
-import { generateId, parseGroupFromCategory } from '../utils/format.js';
+import { generateId, isLegacyInboxGroup, isRetiredQuickStartGroup } from '../utils/format.js';
 import { initDirectories } from './init.js';
 import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
-import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type CategoryRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
+import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
 import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES } from './phase.js';
 import { registry } from './integration-registry.js';
 import { getDb, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction, TASK_DB_PATH } from './task-db.js';
 import { runMigrationIfNeeded } from './task-db-migration.js';
+import { migrateProjectMemoryDirs } from './memory-dir-migration.js';
 import { getExtIndexSpec } from './ext-index-registry.js';
-import yaml from 'js-yaml';
 
 // CJK detection regex — used only for log enrichment so that "plugin not loaded"
 // warnings flag the cases that an external sync plugin's validateContent would
@@ -43,6 +43,20 @@ function runPluginContentValidation(task: { source: string; id?: string }, field
     log.task.info('content validation rejected', { source: task.source, field, taskId: (task as Task).id, error });
     throw new Error(error);
   }
+}
+
+/**
+ * The retired sentinel-task shape. `.metadata_project` / `.metadata_category`
+ * tasks used to carry per-group settings; those now live in the `task_projects`
+ * registry row's `metadata` blob and the v5 migration deleted the task rows.
+ *
+ * Matched by PREFIX (not exact title) because the whole `.metadata*` namespace is
+ * retired — readers across the codebase already filter on
+ * `title.startsWith('.metadata')`, so anything in that namespace would be an
+ * invisible phantom row.
+ */
+export function isRetiredSentinelTitle(title: string | undefined | null): boolean {
+  return (title ?? '').trim().startsWith('.metadata');
 }
 
 let initialized = false;
@@ -177,6 +191,7 @@ export function _resetForTesting(): void {
   rowShadow = null;
   rowShadowDataVersion = null;
   pendingRowShadow = null;
+  writeLockDepth = 0;
 }
 
 // ── Write lock: serializes all read-modify-write operations ──
@@ -184,6 +199,12 @@ export function _resetForTesting(): void {
 // The promise chain prevents concurrent async operations within the server.
 // The file lock prevents races with hook child processes (on-stop, on-compact).
 let writeLock: Promise<void> = Promise.resolve();
+// Depth of the currently-executing locked section. The lock serializes, so this
+// is 0 or 1 in practice; it exists so a helper reachable BOTH from inside a
+// locked section and from a bare call can avoid self-deadlocking (the file lock
+// is not re-entrant — a nested acquire waits out the full 10s timeout and
+// throws). See withWriteLockIfFree.
+let writeLockDepth = 0;
 
 function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   const prev = writeLock;
@@ -194,11 +215,28 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   // writeStore — funnel through this lock, so this one hook keeps the cache
   // correct without enumerating writers.
   return prev
-    .then(() => withFileLock(TASKS_FILE, fn))
+    .then(() => withFileLock(TASKS_FILE, async () => {
+      writeLockDepth += 1;
+      try { return await fn(); } finally { writeLockDepth -= 1; }
+    }))
     .finally(() => {
       invalidateTaskStoreCache();
       resolve!();
     });
+}
+
+/**
+ * Run `fn` under the write lock, or inline when the lock is ALREADY held by the
+ * current locked section. For helpers on the init path: `ensureInit()` is awaited
+ * by `readStore()`, and readStore runs inside withWriteLock all over this file —
+ * so an unconditional withWriteLock there self-deadlocks.
+ *
+ * `fn` must therefore be correct in both modes: keep its DB work inside a single
+ * `dbTransaction` (better-sqlite3 is synchronous, so a transaction can't be
+ * interleaved by another in-process writer) and do any awaits BEFORE it.
+ */
+function withWriteLockIfFree<T>(fn: () => Promise<T>): Promise<T> {
+  return writeLockDepth > 0 ? fn() : withWriteLock(fn);
 }
 
 async function ensureInit(): Promise<void> {
@@ -209,100 +247,116 @@ async function ensureInit(): Promise<void> {
     // idempotent no-ops on subsequent calls.
     getDb();
     await runMigrationIfNeeded();
-    await seedCategoriesFromConfig();
+    // One-shot: memory/projects/<cat>/<proj>/ → <proj>/ (marker-guarded no-op
+    // after the first pass). Lives here because every project-memory reader
+    // goes through a task lookup first.
+    await migrateProjectMemoryDirs();
+    await seedProjectsFromConfig();
     initialized = true;
   }
 }
 
 /**
- * Idempotently seed task_categories rows that must exist:
- *   - 'Local' built-in for Quick Start (always seeded with source=local)
- *   - every category in config.local.categories (source=local)
- *   - every plugins.*.category reservation (source=<plugin id>)
- *   - every distinct category already present on existing tasks (source derived
- *     from that task's source) — keeps behavior of the old
- *     migrateToV3Categories intact for restores that dropped the categories
- *     table but kept task rows.
+ * Idempotently seed task_projects rows that must exist:
+ *   - every `plugins.<id>.project` reservation (source = <plugin id>)
+ *   - every distinct non-empty project already present on tasks (source derived
+ *     from that task's source) — heals a restore that dropped the registry table
+ *     but kept task rows.
  *
- * Config / plugin reservations take precedence over task-derived sources; if
- * a category name is already in the table we leave it alone.
+ * Plugin reservations take precedence over task-derived sources. An existing row
+ * is never rewritten: the registry is the claim of record, and the v5 migration
+ * already resolved conflicts once.
+ *
+ * Inbox (the empty project) deliberately has no row and can never be claimed.
+ *
+ * Runs under the write lock (or inline when already held — it's on the ensureInit
+ * path that writeStore's own callers await). Unlocked, its read-then-INSERT raced
+ * a concurrent writeStore(), whose registry rewrite is DELETE-then-reinsert from a
+ * snapshot: the seeded rows could be wiped, or the seed could re-add a row that
+ * snapshot had legitimately dropped.
  */
-async function seedCategoriesFromConfig(): Promise<void> {
-  const db = getDb()!;
-  const existingRows = db.prepare('SELECT name, source FROM task_categories').all() as
-    { name: string; source: string }[];
-  const existing = new Map<string, string>();
-  for (const row of existingRows) existing.set(row.name.toLowerCase(), row.name);
+async function seedProjectsFromConfig(): Promise<void> {
+  const config = await getConfig(); // await BEFORE the lock/transaction
+  return withWriteLockIfFree(async () => {
+    const db = getDb()!;
+    const desired: Array<{ name: string; source: TaskSource }> = [];
+    let added = 0;
+    dbTransaction((handle) => {
+      const existingRows = handle.prepare('SELECT name FROM task_projects').all() as { name: string }[];
+      const existing = new Set(existingRows.map((r) => r.name.trim().toLowerCase()));
+      const seen = new Set<string>();
+      const addIfNew = (rawName: string, source: TaskSource) => {
+        const name = (rawName ?? '').trim();
+        if (!name) return; // Inbox is never registered
+        // Seeding reads UNVALIDATED names (plugin config + raw task rows), so
+        // without this gate a bad name that reached a task row by any legacy
+        // path gets laundered into the registry on the next boot. Skip, don't
+        // throw — this runs on the ensureInit path and must never block boot.
+        try {
+          assertValidProjectName(name);
+        } catch (err) {
+          log.task.warn('seedProjectsFromConfig: skipping invalid project name', {
+            name, source, err: String(err),
+          });
+          return;
+        }
+        const key = name.toLowerCase();
+        if (seen.has(key) || existing.has(key)) return;
+        seen.add(key);
+        desired.push({ name, source });
+      };
 
-  const config = await getConfig();
-  const desired: Array<{ name: string; source: TaskSource }> = [];
-  const seen = new Set<string>();
-  const addIfNew = (name: string, source: TaskSource) => {
-    if (!name) return;
-    const key = name.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    if (existing.has(key)) return;
-    desired.push({ name, source });
-  };
+      const plugins = (config.plugins ?? {}) as Record<string, Record<string, unknown>>;
+      for (const [pluginId, cfg] of Object.entries(plugins)) {
+        const reserved = (cfg as Record<string, unknown>).project;
+        if (typeof reserved === 'string' && reserved) addIfNew(reserved, pluginId as TaskSource);
+      }
 
-  addIfNew('Local', 'local');
-  for (const cat of config.local?.categories ?? []) addIfNew(cat, 'local');
-  const plugins = (config.plugins ?? {}) as Record<string, Record<string, unknown>>;
-  for (const [pluginId, cfg] of Object.entries(plugins)) {
-    const cat = (cfg as Record<string, unknown>).category;
-    if (typeof cat === 'string' && cat) addIfNew(cat, pluginId as TaskSource);
-  }
+      const taskRows = handle
+        .prepare("SELECT project, source, COUNT(*) AS n FROM tasks WHERE project IS NOT NULL AND project != '' GROUP BY project, source ORDER BY n DESC")
+        .all() as { project: string; source: string; n: number }[];
+      for (const row of taskRows) {
+        addIfNew(row.project, (row.source as TaskSource) ?? 'local');
+      }
 
-  // Heal a stale registration that contradicts a local reservation. addIfNew above
-  // only INSERTs missing rows, so a category registered to a sync plugin BEFORE it
-  // became local-reserved (the built-in 'Inbox' is the common case: an old ms-todo
-  // sync registered it, then it became a built-in local category) kept its plugin
-  // source forever. Validation hard-rejects non-local sources for those names, so
-  // the row's source was unusable — and it also made every /api/tasks list and the
-  // UI attribute the category to a sync target it can never push to. Row source is
-  // corrected to 'local'; TASKS keep their own source (existing synced rows stay
-  // synced), which validateCategorySource now tolerates for reserved names.
-  const localReservedNames = ['Local', ...(config.local?.categories ?? [])];
-  const fixSource = db.prepare('UPDATE task_categories SET source = ? WHERE name = ?');
-  let healed = 0;
-  for (const name of localReservedNames) {
-    const key = name.toLowerCase();
-    const registeredName = existing.get(key);
-    if (!registeredName) continue;
-    const row = existingRows.find(r => r.name === registeredName);
-    if (!row || row.source === 'local') continue;
-    fixSource.run('local', registeredName);
-    healed += 1;
-    log.task.warn('healed local-reserved category registration', {
-      category: registeredName, was: row.source, now: 'local',
+      if (desired.length === 0) return;
+      const nextOrder = (handle
+        .prepare('SELECT COALESCE(MAX(order_index), -1) + 1 AS next FROM task_projects')
+        .get() as { next: number }).next;
+      const stmt = handle.prepare(
+        'INSERT INTO task_projects (name, source, order_index) VALUES (?, ?, ?) ON CONFLICT(name) DO NOTHING'
+      );
+      let idx = nextOrder;
+      for (const { name, source } of desired) {
+        stmt.run(name, source, idx);
+        idx += 1;
+        added += 1;
+      }
     });
-  }
-  if (healed > 0) invalidateTaskStoreCache();
+    void db;
+    if (added === 0) return;
+    // Only the registry changed; the row shadow covers `tasks` rows, so it stays valid.
+    invalidateTaskStoreCache();
+    log.task.info('seeded task_projects', { added });
+  });
+}
 
-  // Task-derived categories: any distinct (category, source) pair on existing
-  // tasks that isn't already registered. Matches the legacy V3 migration.
-  const taskRows = db
-    .prepare("SELECT DISTINCT category, source FROM tasks WHERE category IS NOT NULL AND category != ''")
-    .all() as { category: string; source: string }[];
-  for (const row of taskRows) {
-    if (row.category.startsWith('.metadata')) continue;
-    addIfNew(row.category, (row.source as TaskSource) ?? 'local');
+/** Parse a task_projects.metadata JSON blob. Corrupt JSON degrades to "no
+ *  metadata" rather than taking the whole store read down. */
+function parseProjectMetadataJson(
+  raw: string | null | undefined,
+  project: string,
+): Record<string, unknown> | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch (err) {
+    log.task.warn('task_projects: metadata JSON parse failed', { project, err: String(err) });
   }
-
-  if (desired.length === 0) return;
-  const nextOrder = (db
-    .prepare('SELECT COALESCE(MAX(order_index), -1) + 1 AS next FROM task_categories')
-    .get() as { next: number }).next;
-  const stmt = db.prepare(
-    'INSERT INTO task_categories (name, source, order_index) VALUES (?, ?, ?)'
-  );
-  let idx = nextOrder;
-  for (const { name, source } of desired) {
-    stmt.run(name, source, idx);
-    idx += 1;
-  }
-  log.task.info('seeded task_categories', { added: desired.length });
+  return undefined;
 }
 
 const VALID_PRIORITIES_SET = new Set<string>(VALID_PRIORITIES_ARRAY);
@@ -319,8 +373,8 @@ function sanitizePriority(p: string | undefined): TaskPriority {
 
 // ── Store I/O ──────────────────────────────────────────────────────────────
 // Whole-store reads return the "legacy" TaskStore shape (version + tasks[] +
-// categories{}) so the helper functions below can keep using
-// store.tasks.filter / store.categories without restructuring. Per-row hot
+// projects{}) so the helper functions below can keep using
+// store.tasks.filter / store.projects without restructuring. Per-row hot
 // paths (updateTaskRaw, *Bulk) query rows directly and never go through here.
 //
 // ⚠️ DESIGN DEBT — that "read the whole store, filter in JS" shape is a leftover
@@ -338,7 +392,7 @@ function sanitizePriority(p: string | undefined): TaskPriority {
  * (withWriteLock.finally). Returns per-call ISOLATED clones — the canonical
  * cached store is never handed out, because the many exported helpers below
  * read-modify-write `store.tasks` in place before calling writeStore(). Cloning
- * (shallow per task object + fresh array/categories) is far cheaper than the
+ * (shallow per task object + fresh array/projects) is far cheaper than the
  * `SELECT *` + per-row rowToTask JSON.parse this cache replaces.
  *
  * NOTE: the cache addresses the REPETITION of the scan, not the scan itself —
@@ -362,12 +416,17 @@ async function readStore(): Promise<TaskStore> {
   const taskRows = db.prepare('SELECT * FROM tasks').all() as Record<string, any>[];
   const tasks = taskRows.map(rowToTask);
 
-  const catRows = db
-    .prepare('SELECT name, source FROM task_categories ORDER BY order_index ASC')
-    .all() as { name: string; source: string }[];
-  const categories: Record<string, CategoryRecord> = {};
-  for (const row of catRows) {
-    categories[row.name] = { source: row.source as CategoryRecord['source'] };
+  const projectRows = db
+    .prepare('SELECT name, source, order_index, metadata FROM task_projects ORDER BY (order_index IS NULL), order_index ASC, name ASC')
+    .all() as { name: string; source: string; order_index: number | null; metadata: string | null }[];
+  const projects: Record<string, ProjectRecord> = {};
+  for (const row of projectRows) {
+    const metadata = parseProjectMetadataJson(row.metadata, row.name);
+    projects[row.name] = {
+      source: row.source as TaskSource,
+      ...(row.order_index != null ? { order_index: row.order_index } : {}),
+      ...(metadata ? { metadata } : {}),
+    };
   }
 
   const groupRows = db
@@ -385,7 +444,7 @@ async function readStore(): Promise<TaskStore> {
 
   const store: TaskStore = {
     tasks,
-    ...(Object.keys(categories).length > 0 ? { categories } : {}),
+    ...(Object.keys(projects).length > 0 ? { projects } : {}),
     ...(Object.keys(taskGroups).length > 0 ? { task_groups: taskGroups } : {}),
     ...(customTiers.length > 0 ? { custom_tiers: customTiers } : {}),
   };
@@ -400,7 +459,7 @@ async function readStore(): Promise<TaskStore> {
 /**
  * Shallow-clone a TaskStore so callers can mutate freely without touching the
  * cached canonical copy. Each task is spread into a fresh object; the array and
- * categories map are rebuilt.
+ * projects map is rebuilt.
  *
  * Scalar field replacements on a cloned task (task.session_id = …,
  * task.plan_session_id = undefined, task.phase = …) are fully isolated. A few
@@ -419,14 +478,25 @@ function cloneTaskStore(store: TaskStore): TaskStore {
   return {
     ...store,
     tasks: store.tasks.map((t) => ({ ...t })),
-    ...(store.categories ? { categories: { ...store.categories } } : {}),
+    // Registry rows carry a nested metadata object; clone it too so a caller
+    // mutating settings can't reach into the cached snapshot.
+    ...(store.projects
+      ? {
+          projects: Object.fromEntries(
+            Object.entries(store.projects).map(([name, rec]) => [
+              name,
+              { ...rec, ...(rec.metadata ? { metadata: { ...rec.metadata } } : {}) },
+            ]),
+          ),
+        }
+      : {}),
     ...(store.task_groups ? { task_groups: { ...store.task_groups } } : {}),
     ...(store.custom_tiers ? { custom_tiers: store.custom_tiers.map((t) => ({ ...t })) } : {}),
   };
 }
 
 /**
- * Replace the task + category tables with the full `store` snapshot.
+ * Replace the task + project-registry tables with the full `store` snapshot.
  *
  * Used by every exported helper that still reads the whole store, mutates it
  * in JS, and writes it back. One transaction, prepared INSERT/REPLACE.
@@ -546,17 +616,33 @@ async function writeStore(store: TaskStore): Promise<void> {
     // them. commitRowShadow() below adopts it only once the commit succeeded.
     pendingRowShadow = { fingerprints: nextFingerprints, order: nextOrder };
 
-    handle.prepare('DELETE FROM task_categories').run();
-    const catInsert = handle.prepare(
-      'INSERT INTO task_categories (name, source, order_index) VALUES (@name, @source, @order_index)'
-    );
-    let idx = 0;
-    for (const [name, rec] of Object.entries(store.categories ?? {})) {
-      catInsert.run({ name, source: rec?.source ?? 'local', order_index: idx });
-      idx += 1;
+    // Project registry snapshot rewrite. Guarded on `!== undefined`: readStore
+    // OMITS the key when the table is empty, and a hand-built snapshot may not
+    // carry it at all — rewriting from `{}` in either case would erase the rows
+    // (incl. the order_index/metadata the v5 migration populated). Registry
+    // mutations (ensureProject/renameProject/setProjectMetadata) use targeted
+    // SQL instead of routing through here.
+    if (store.projects !== undefined) {
+      handle.prepare('DELETE FROM task_projects').run();
+      const projInsert = handle.prepare(
+        'INSERT INTO task_projects (name, source, order_index, metadata) VALUES (@name, @source, @order_index, @metadata)'
+      );
+      let idx = 0;
+      for (const [name, rec] of Object.entries(store.projects)) {
+        if (!name.trim()) continue; // Inbox never gets a row
+        projInsert.run({
+          name,
+          source: rec?.source ?? 'local',
+          order_index: rec?.order_index ?? idx,
+          metadata: rec?.metadata && Object.keys(rec.metadata).length > 0
+            ? JSON.stringify(rec.metadata)
+            : null,
+        });
+        idx += 1;
+      }
     }
 
-    // Full-snapshot rewrite of the group-name registry (mirrors categories).
+    // Full-snapshot rewrite of the group-name registry (mirrors task_projects).
     // Membership lives on tasks.group_id; this table only holds labels.
     handle.prepare('DELETE FROM task_groups').run();
     const groupInsert = handle.prepare(
@@ -592,7 +678,7 @@ async function writeStore(store: TaskStore): Promise<void> {
 export interface AddTaskInput {
   title: string;
   priority?: TaskPriority;
-  category?: string;
+  /** Target project. Omitted/'' = Inbox. A name with no registry row is created. */
   project?: string;
   due_date?: string;
   start_date?: string;
@@ -602,7 +688,7 @@ export interface AddTaskInput {
   depends_on?: string[];
   cwd?: string;
   sprint?: string;
-  /** Explicit source override. Only needed for the first task in a new category (e.g. source='local'). */
+  /** Explicit source override. Only needed for the first task in a new project (e.g. source='local'). */
   source?: TaskSource;
   /** Don't block the return on the external sync push. The task is written locally and
    *  returned immediately; the push to the external target runs in the background and
@@ -614,119 +700,520 @@ export interface AddTaskInput {
   _skipPluginOps?: boolean;
 }
 
+// ── Project registry (task_projects) — the single grouping layer ────────────
+//
+// A project is identified case-insensitively (the SQLite PK is COLLATE NOCASE),
+// carries at most ONE provider claim (`source`), and owns its settings in a
+// `metadata` JSON blob (the retired `.metadata_project` sentinel task).
+//
+// The empty project ('' = Inbox) NEVER has a row and can never be claimed. That
+// single rule replaces the whole old local-reservation config
+// machinery: an unclaimable bucket is now structural, not configured.
+
 /**
- * Build the MS To-Do list name from category and project fields.
- * "Work" + "HomeLab" → "Work / HomeLab"
- * If category === project (e.g. "Inbox"), returns just the category.
+ * MS To-Do list name for a project. New projects push to a list named after the
+ * project; a project migrated from the old "Cat / Proj" encoding keeps pushing
+ * into its existing remote list via the `remote_list` metadata alias, so an
+ * upgrade never forks a second list or renames the user's.
  */
-export function buildListName(category: string, project: string): string {
-  if (!category || !project || category === project) return category || project;
-  return `${category} / ${project}`;
+export async function remoteListNameFor(project: string): Promise<string> {
+  const name = (project ?? '').trim();
+  if (!name) return '';
+  const metadata = await getProjectMetadata(name);
+  const alias = metadata?.remote_list;
+  return typeof alias === 'string' && alias.trim() ? alias : name;
 }
 
-// ── Category as first-class entity ──
-
-/**
- * Create a new category in store.categories.
- * Only 'local' and 'ms-todo' can be created explicitly.
- * Plugin-reserved categories are created by their respective sync configuration.
- */
-export async function createCategory(name: string, source: TaskSource): Promise<{ name: string; source: TaskSource }> {
-  if (!name || !name.trim()) throw new Error('Category name must be a non-empty string');
-
-  return withWriteLock(async () => {
-    const store = await readStore();
-    const categories = store.categories ?? {};
-    const nameLower = name.toLowerCase();
-
-    // Case-insensitive uniqueness check
-    const existing = Object.keys(categories).find(k => k.toLowerCase() === nameLower);
-    if (existing) {
-      throw new Error(`Category "${existing}" already exists (case-insensitive match for "${name}")`);
-    }
-
-    // Validate against config reservations
-    const config = await getConfig();
-    const validation = validateCategorySource(store.tasks, name, source, config);
-    if (!validation.ok) {
-      throw new CategorySourceConflictError(validation.error, name, source, validation.existingSource);
-    }
-
-    categories[name] = { source };
-    store.categories = categories;
-    await writeStore(store);
-
-    bus.emit(EventNames.CATEGORY_CREATED, { name, source }, ['web-ui', 'main-agent'], { source: 'task-manager' });
-    log.task.info('category created', { name, source });
-    return { name, source };
-  });
-}
-
-/**
- * Create a project within an existing category.
- * Category must exist in store.categories.
- */
-export async function createProject(category: string, project: string): Promise<{ category: string; project: string; source: TaskSource }> {
-  if (!category || !category.trim()) throw new Error('Category name must be a non-empty string');
-  if (!project || !project.trim()) throw new Error('Project name must be a non-empty string');
-
+/** All registry rows, keyed by their canonical spelling. Never includes Inbox. */
+export async function getStoreProjects(): Promise<Record<string, ProjectRecord>> {
   const store = await readStore();
-  const categories = store.categories ?? {};
-  const catLower = category.toLowerCase();
-  const catKey = Object.keys(categories).find(k => k.toLowerCase() === catLower);
-  if (!catKey) {
-    throw new Error(`Category "${category}" does not exist. Create it first with task_create type=category.`);
+  return store.projects ?? {};
+}
+
+/** Registry row for a project name (case-insensitive). Null for Inbox/unknown. */
+export async function getProjectRecord(project: string): Promise<(ProjectRecord & { name: string }) | null> {
+  const name = (project ?? '').trim();
+  if (!name) return null;
+  const projects = await getStoreProjects();
+  const key = Object.keys(projects).find((k) => k.toLowerCase() === name.toLowerCase());
+  return key ? { name: key, ...projects[key] } : null;
+}
+
+/**
+ * Thrown when a project name has an unusable SHAPE (as opposed to a claim
+ * conflict). Typed so routes can map it to 400 rather than 500.
+ */
+export class InvalidProjectNameError extends Error {
+  public readonly project: string;
+  constructor(message: string, project: string) {
+    super(message);
+    this.name = 'InvalidProjectNameError';
+    this.project = project;
   }
-
-  const source = categories[catKey].source;
-
-  // Create .metadata task for the project
-  await setProjectMetadata(catKey, project, {});
-
-  return { category: catKey, project, source };
 }
 
 /**
- * Get all categories from the store.
- * Returns store.categories or empty object if not yet migrated.
+ * Validate a project name's shape and return the trimmed value.
+ *
+ * A project name becomes a FILESYSTEM PATH SEGMENT — `memory/projects/<project>/`
+ * (project-memory) and it flows into session cwd resolution — so path
+ * metacharacters are a traversal hole, not a cosmetic issue: "../../.ssh" would
+ * escape the memory root. NUL truncates paths in syscalls, and a leading '.'
+ * makes hidden dirs (and collides with the retired `.metadata*` namespace).
+ *
+ * Inbox ('') is legal in the MODEL but never reaches here: every caller returns
+ * early for the empty name (it has no registry row and needs no directory).
  */
-export async function getStoreCategories(): Promise<Record<string, { source: TaskSource }>> {
-  const store = await readStore();
-  return store.categories ?? {};
+export function assertValidProjectName(name: string): string {
+  const trimmed = (name ?? '').trim();
+  if (!trimmed) {
+    throw new InvalidProjectNameError(
+      'Project name must be a non-empty string. To clear a project, move its tasks to Inbox.',
+      trimmed,
+    );
+  }
+  if (trimmed.includes('/') || trimmed.includes('\\')) {
+    throw new InvalidProjectNameError(
+      `Invalid project name "${name}": path separators ('/', '\\') are not allowed — a project name becomes a directory segment.`,
+      trimmed,
+    );
+  }
+  if (trimmed.includes('..')) {
+    throw new InvalidProjectNameError(
+      `Invalid project name "${name}": '..' is not allowed — a project name becomes a directory segment.`,
+      trimmed,
+    );
+  }
+  if (trimmed.includes('\0')) {
+    throw new InvalidProjectNameError(
+      `Invalid project name "${name}": it contains a NUL character.`,
+      trimmed,
+    );
+  }
+  if (trimmed.startsWith('.')) {
+    throw new InvalidProjectNameError(
+      `Invalid project name "${name}": it cannot start with '.' (hidden directory / retired .metadata namespace).`,
+      trimmed,
+    );
+  }
+  return trimmed;
 }
 
 /**
- * Update the source of an existing category.
- * Validates that no tasks in the category conflict with the new source.
+ * Lock-free registry upsert. Must be called with the write lock already held
+ * (addTask does its whole create inside one lock; a nested ensureProject() would
+ * self-deadlock). Returns the canonical spelling and whether it was just created
+ * — the caller emits PROJECT_CREATED, since the bus must not be touched while a
+ * transaction is open.
  */
-export async function updateCategorySource(name: string, source: TaskSource): Promise<{ name: string; source: TaskSource }> {
-  return withWriteLock(async () => {
+function ensureProjectRowLocked(
+  name: string,
+  source: TaskSource,
+): { name: string; source: TaskSource; created: boolean } {
+  const trimmed = (name ?? '').trim();
+  if (!trimmed) return { name: '', source: 'local', created: false };
+  const db = getDb()!;
+  // Existence check is done in JS with toLowerCase(), NOT by leaning on the
+  // column's COLLATE NOCASE. SQLite's NOCASE folds ASCII A-Z only, while JS
+  // toLowerCase() folds Unicode — so "Ärger" vs "ärger" are ONE project to every
+  // JS-side lookup (getProjectRecord, addTask's registryKey, renameProject) but
+  // TWO distinct PK values to SQLite. Relying on `WHERE name = ?` + `ON CONFLICT
+  // DO NOTHING` would therefore insert a second row and split the project. This
+  // runs with the write lock held, so lookup-then-insert is not racy in-process;
+  // the ON CONFLICT below stays as the cross-process backstop.
+  //
+  // Accepted asymmetry: the JS side is the enforcer of project identity; SQLite's
+  // NOCASE PK is only the ASCII-case backstop.
+  const rows = db.prepare('SELECT name, source FROM task_projects').all() as
+    { name: string; source: string }[];
+  const lower = trimmed.toLowerCase();
+  const existing = rows.find((r) => r.name.trim().toLowerCase() === lower);
+  if (existing) {
+    return { name: existing.name, source: existing.source as TaskSource, created: false };
+  }
+  const nextOrder = (db
+    .prepare('SELECT COALESCE(MAX(order_index), -1) + 1 AS next FROM task_projects')
+    .get() as { next: number }).next;
+  db.prepare(
+    'INSERT INTO task_projects (name, source, order_index) VALUES (?, ?, ?) ON CONFLICT(name) DO NOTHING',
+  ).run(trimmed, source, nextOrder);
+  log.task.info('project created', { project: trimmed, source });
+  return { name: trimmed, source, created: true };
+}
+
+function emitProjectCreated(name: string, source: TaskSource): void {
+  bus.emit(
+    EventNames.PROJECT_CREATED,
+    { name, source },
+    ['web-ui', 'main-agent'],
+    { source: 'task-manager' },
+  );
+}
+
+/**
+ * Idempotently ensure a registry row for `name`. Returns the canonical spelling
+ * plus the row's source — which is the EXISTING row's source when one is already
+ * there, so a caller can't silently re-claim a project by passing a source.
+ *
+ * Emits PROJECT_CREATED only on a real first create (web project lists update
+ * live). Inbox ('') is a no-op: it has no row by design.
+ */
+export async function ensureProject(
+  name: string,
+  source: TaskSource = 'local',
+): Promise<{ name: string; source: TaskSource; created: boolean }> {
+  // Inbox short-circuits BEFORE shape validation: '' is the legal absence of a
+  // project, never a row, never a directory.
+  if (!(name ?? '').trim()) return { name: '', source: 'local', created: false };
+  const trimmed = assertValidProjectName(name);
+
+  await ensureInit();
+  const result = await withWriteLock(async () => ensureProjectRowLocked(trimmed, source));
+  if (result.created) emitProjectCreated(result.name, result.source);
+  return result;
+}
+
+/**
+ * Rename a project, moving every task with it.
+ *
+ * Semantics (all of them — the old doc claimed only the last one):
+ *  - MERGE-ON-COLLISION: renaming onto an existing project folds the two together
+ *    (case-insensitive), which is the only sane semantic given NOCASE identity.
+ *    A rename onto a project claimed by ANOTHER provider is refused
+ *    (ProjectSourceConflictError), as is a source-mixed origin project.
+ *  - Registry metadata moves with the row; on a MERGE the TARGET's own settings
+ *    win (it already exists and may have a live cwd/alias).
+ *  - Config lists follow: `favorites.projects` and `ordering.projects` are
+ *    rewritten to the new name (NOCASE-deduped), so a rename doesn't silently
+ *    unstar the project or drop it out of the user's hand-ordering.
+ *  - For an ms-todo-claimed PLAIN rename (not a merge) the REMOTE LIST itself is
+ *    renamed ONCE by display name (`renameListByName`, old alias → new name).
+ *    Only if that fails do we fall back to per-task pushes, which would create a
+ *    new list. The `remote_list` alias is kept pointing at the old list until the
+ *    remote rename succeeds, then repointed to the new name — so a failure leaves
+ *    pushes landing in the existing list rather than forking one.
+ *
+ * Returns the number of tasks moved and whether this was a merge.
+ */
+export async function renameProject(
+  oldProject: string,
+  newProject: string,
+): Promise<{ count: number; merged: boolean }> {
+  const from = (oldProject ?? '').trim();
+  if (!from) throw new InvalidProjectNameError('Cannot rename Inbox — it is the absence of a project.', '');
+  // Shape validation on the TARGET only: an existing project with a bad legacy
+  // name must stay renamable (that's how you fix it).
+  const to = assertValidProjectName(newProject);
+
+  const {
+    count, merged, renameSource, renamedTasks, renamedTaskIds, canonical, oldAlias,
+  } = await withWriteLock(async () => {
     const store = await readStore();
-    const categories = store.categories ?? {};
-    const nameLower = name.toLowerCase();
-    const catKey = Object.keys(categories).find(k => k.toLowerCase() === nameLower);
-    if (!catKey) {
-      throw new Error(`Category "${name}" does not exist`);
+    const now = new Date().toISOString();
+    const fromLower = from.toLowerCase();
+    const toLower = to.toLowerCase();
+
+    const tasksToRename = store.tasks.filter((t) => (t.project || '').toLowerCase() === fromLower);
+    const projects = store.projects ?? {};
+    const fromKey = Object.keys(projects).find((k) => k.toLowerCase() === fromLower);
+    if (tasksToRename.length === 0 && !fromKey) {
+      throw new Error(`No project "${from}" found`);
     }
 
-    // Check no conflicting tasks
-    const conflicting = store.tasks.find(
-      t => t.category.toLowerCase() === nameLower && t.source !== source,
-    );
-    if (conflicting) {
-      throw new CategorySourceConflictError(
-        `Category "${name}" has ${conflicting.source} tasks. Cannot change source to ${source}.`,
-        name, source, conflicting.source,
+    // Source of record: the registry row, falling back to the tasks themselves
+    // for a project that only exists implicitly (registry row lost in a restore).
+    const renameSource: TaskSource = fromKey
+      ? projects[fromKey].source
+      : (tasksToRename[0]?.source ?? 'local');
+    const mixed = tasksToRename.find((t) => t.source !== renameSource);
+    if (mixed) {
+      throw new Error(
+        `Project "${from}" has mixed sources (${renameSource} and ${mixed.source}). Clean it up before renaming.`,
       );
     }
 
-    categories[catKey] = { source };
-    store.categories = categories;
-    await writeStore(store);
+    // Target claim check: merging into a project owned by ANOTHER provider is a
+    // conflict, not a merge — the tasks cannot legally live there.
+    const toKey = Object.keys(projects).find((k) => k.toLowerCase() === toLower);
+    const merged = !!toKey && toLower !== fromLower;
+    if (toKey && projects[toKey].source !== renameSource) {
+      throw new ProjectSourceConflictError(
+        `Cannot rename "${from}" to "${to}" — project "${to}" is claimed by ${projects[toKey].source} but "${from}" tasks sync to ${renameSource}.`,
+        to,
+        renameSource,
+        projects[toKey].source,
+      );
+    }
+    const config = await getConfig();
+    const validation = validateProjectSource(to, renameSource, config, projects);
+    if (!validation.ok) {
+      throw new ProjectSourceConflictError(validation.error, to, renameSource, validation.existingSource);
+    }
 
-    bus.emit(EventNames.CATEGORY_UPDATED, { name: catKey, source }, ['web-ui'], { source: 'task-manager' });
-    log.task.info('category source updated', { name: catKey, source });
-    return { name: catKey, source };
+    const canonical = toKey ?? to;
+    const renamedTaskIds: string[] = [];
+    for (const task of store.tasks) {
+      if ((task.project || '').toLowerCase() !== fromLower) continue;
+      task.project = canonical;
+      task.updated_at = now;
+      renamedTaskIds.push(task.id);
+    }
+
+    // Registry: carry the old row's metadata onto the target. Merge keeps the
+    // TARGET's own settings (it already exists and may have a live cwd/alias);
+    // a plain rename moves everything.
+    // The remote list this project's tasks currently live in — the alias if set,
+    // else the old project's CANONICAL name (not the caller's spelling). The
+    // post-lock remote rename needs it.
+    let oldAlias = fromKey ?? '';
+    if (fromKey) {
+      const oldRec = projects[fromKey];
+      const aliasValue = oldRec.metadata?.remote_list;
+      if (typeof aliasValue === 'string' && aliasValue.trim()) oldAlias = aliasValue;
+      delete projects[fromKey];
+      const targetRec = toKey && toKey !== fromKey ? projects[toKey] : undefined;
+      const nextMetadata: Record<string, unknown> = {
+        ...(oldRec.metadata ?? {}),
+        ...(targetRec?.metadata ?? {}),
+      };
+      // KEEP the alias here. It points at the remote list the tasks actually live
+      // in, and the remote rename below hasn't happened yet — dropping it now
+      // would make every push in the meantime resolve the NEW name and fork a
+      // second list. It is repointed to `to` only after the remote rename
+      // succeeds (and left alone if it fails), which is what makes the fallback
+      // path non-destructive.
+      projects[canonical] = {
+        source: renameSource,
+        ...(targetRec?.order_index !== undefined
+          ? { order_index: targetRec.order_index }
+          : oldRec.order_index !== undefined ? { order_index: oldRec.order_index } : {}),
+        ...(Object.keys(nextMetadata).length > 0 ? { metadata: nextMetadata } : {}),
+      };
+      store.projects = projects;
+    } else {
+      store.projects = { ...projects, [canonical]: { source: renameSource } };
+    }
+
+    await writeStore(store);
+    const renamedTasks = store.tasks.filter((t) => renamedTaskIds.includes(t.id));
+    return {
+      count: renamedTaskIds.length, merged, renameSource, renamedTasks, renamedTaskIds,
+      canonical, oldAlias,
+    };
+  });
+
+  // Config lists follow the rename (outside the store lock — config has its own).
+  await migrateProjectInConfigLists(from, canonical);
+
+  // Remote rename (best effort, outside the lock). The local rename already
+  // committed; a remote failure leaves tasks pushing to the OLD list via the
+  // surviving alias, which is exactly what the alias model tolerates.
+  if (renameSource !== 'local') {
+    let remoteRenamed = false;
+    // Rename the CONTAINER once instead of pushing N tasks: a per-task push
+    // resolves the new name, doesn't find a list, and CREATES one — forking the
+    // user's list in two. Only meaningful for a plain rename; on a merge the
+    // target list already exists and the tasks genuinely have to move into it.
+    if (!merged && renameSource === 'ms-todo' && oldAlias) {
+      try {
+        const { renameListByName } = await import('../integrations/microsoft-todo.js');
+        await renameListByName(oldAlias, canonical);
+        remoteRenamed = true;
+        // Remote list now IS the project name — repoint (not delete) the alias so
+        // there is exactly one source of truth for the list name.
+        await setProjectMetadata(canonical, { remote_list: canonical });
+        log.task.info('project rename: renamed remote list', {
+          project: canonical, from: oldAlias,
+        });
+      } catch (err) {
+        log.task.warn('project rename: remote list rename failed, falling back to per-task push', {
+          project: canonical, from: oldAlias,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    if (!remoteRenamed) {
+      for (const task of renamedTasks) {
+        pushToPlugin(task, 'updateProject', canonical).catch(() => { /* best effort */ });
+      }
+    }
+  }
+
+  if (renamedTaskIds.length > 0) {
+    bus.emit(EventNames.TASK_UPDATED, {
+      task: null,
+      taskIds: renamedTaskIds,
+      oldProject: from,
+      newProject: canonical,
+      count,
+    }, ['web-ui', 'main-agent'], { source: 'task-manager' });
+  }
+
+  return { count, merged };
+}
+
+/**
+ * Keep `config.favorites.projects` / `config.ordering.projects` in step with a
+ * project rename or delete. Both are plain NAME lists, so a rename that skipped
+ * them would silently unstar the project and drop it out of the user's
+ * hand-ordering — the same class of bug the retired renameCategory fixed for
+ * `config.local.categories`.
+ *
+ * `to === null` = delete (drop the entry). Comparison and dedupe are NOCASE,
+ * matching project identity. No-op (no config write) when neither list mentions
+ * the old name.
+ */
+async function migrateProjectInConfigLists(from: string, to: string | null): Promise<void> {
+  const fromLower = from.trim().toLowerCase();
+  if (!fromLower) return;
+  try {
+    const config = await getConfig();
+    const rewrite = (list: string[] | undefined): { next: string[]; changed: boolean } | null => {
+      if (!Array.isArray(list) || list.length === 0) return null;
+      if (!list.some((n) => (n ?? '').trim().toLowerCase() === fromLower)) return null;
+      const next: string[] = [];
+      const seen = new Set<string>();
+      for (const raw of list) {
+        const name = (raw ?? '').trim();
+        if (!name) continue;
+        const replaced = name.toLowerCase() === fromLower ? to : name;
+        if (!replaced) continue; // delete case
+        const key = replaced.toLowerCase();
+        if (seen.has(key)) continue; // rename collapsed onto an existing entry
+        seen.add(key);
+        next.push(replaced);
+      }
+      return { next, changed: true };
+    };
+
+    const favorites = rewrite(config.favorites?.projects);
+    const ordering = rewrite(config.ordering?.projects);
+    if (!favorites && !ordering) return;
+
+    await updateConfig({
+      ...(favorites
+        ? { favorites: { ...(config.favorites ?? {}), projects: favorites.next } }
+        : {}),
+      ...(ordering
+        ? { ordering: { ...(config.ordering ?? {}), projects: ordering.next } }
+        : {}),
+    });
+    log.task.info('project config lists updated', {
+      from, to,
+      favorites: favorites ? favorites.next.length : undefined,
+      ordering: ordering ? ordering.next.length : undefined,
+    });
+  } catch (err) {
+    // Never fail the rename/delete over a config write — the store change already
+    // committed and a stale favorite is cosmetic.
+    log.task.warn('project config list migration failed', {
+      from, to, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * Delete a project: its tasks fall back to Inbox ('') and the registry row goes
+ * away. Both halves MUST land in ONE transaction — a half-applied delete leaves
+ * tasks pointing at a project with no row — hence this lives in the storage
+ * layer, not the route. Case-insensitive; throws /^No project / when unknown.
+ */
+export async function deleteProject(project: string): Promise<{ movedToInbox: number }> {
+  const name = (project ?? '').trim();
+  if (!name) throw new Error('Inbox is not a project — nothing to delete.');
+
+  await ensureInit();
+  const { movedToInbox, taskIds, canonical } = await withWriteLock(async () => {
+    const store = await readStore();
+    const now = new Date().toISOString();
+    const lower = name.toLowerCase();
+    const projects = store.projects ?? {};
+    const key = Object.keys(projects).find((k) => k.toLowerCase() === lower);
+    const affected = store.tasks.filter((t) => (t.project || '').toLowerCase() === lower);
+    if (!key && affected.length === 0) throw new Error(`No project "${name}" found`);
+
+    for (const task of affected) {
+      task.project = '';
+      task.updated_at = now;
+    }
+    if (key) {
+      // writeStore's registry rewrite is guarded on `!== undefined`, so mutating
+      // the snapshot map is the transactional way to drop the row.
+      const next = { ...projects };
+      delete next[key];
+      store.projects = next;
+    }
+    await writeStore(store);
+    return {
+      movedToInbox: affected.length,
+      taskIds: affected.map((t) => t.id),
+      canonical: key ?? name,
+    };
+  });
+
+  // Drop the deleted project from the config name lists (favorites / ordering) —
+  // otherwise a deleted project keeps a phantom star and an ordering slot.
+  await migrateProjectInConfigLists(canonical, null);
+
+  if (taskIds.length > 0) {
+    bus.emit(EventNames.TASK_UPDATED, {
+      task: null,
+      taskIds,
+      oldProject: canonical,
+      newProject: '',
+      count: taskIds.length,
+    }, ['web-ui', 'main-agent'], { source: 'task-manager' });
+  }
+
+  log.task.info('project deleted', { project: canonical, movedToInbox });
+  return { movedToInbox };
+}
+
+/**
+ * Merged settings for a project — the registry row's `metadata` blob (default_cwd,
+ * default_host, summary, remote_list, legacy_category, …). Null for Inbox or an
+ * unregistered name.
+ */
+export async function getProjectMetadata(project: string): Promise<{
+  default_host?: string;
+  default_cwd?: string;
+  [key: string]: unknown;
+} | null> {
+  const record = await getProjectRecord(project);
+  if (!record?.metadata || Object.keys(record.metadata).length === 0) return null;
+  return record.metadata as { default_host?: string; default_cwd?: string; [key: string]: unknown };
+}
+
+/**
+ * Merge `settings` into a project's registry metadata, creating the row when
+ * absent. Returns the merged object. Inbox can't hold settings (no row).
+ */
+export async function setProjectMetadata(
+  project: string,
+  settings: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const raw = (project ?? '').trim();
+  if (!raw) throw new Error('Inbox has no project settings — pass a project name.');
+
+  // Create the row first (outside the metadata write lock — ensureProject takes
+  // the same lock and would self-deadlock). Use the CANONICAL spelling it returns
+  // for the lookup below: `WHERE name = ?` leans on NOCASE, which is ASCII-only,
+  // so a unicode-case variant would otherwise miss its own row.
+  const { name } = await ensureProject(raw);
+
+  return withWriteLock(async () => {
+    const db = getDb()!;
+    const row = db
+      .prepare('SELECT name, metadata FROM task_projects WHERE name = ?')
+      .get(name) as { name: string; metadata: string | null } | undefined;
+    if (!row) throw new Error(`Project "${name}" not found`);
+    const existing = parseProjectMetadataJson(row.metadata, row.name) ?? {};
+    const merged = { ...existing, ...settings };
+    db.prepare('UPDATE task_projects SET metadata = ? WHERE name = ?').run(
+      Object.keys(merged).length > 0 ? JSON.stringify(merged) : null,
+      row.name,
+    );
+    return merged;
   });
 }
 
@@ -880,7 +1367,7 @@ async function autoPushIfConfiguredImpl(task: Task): Promise<SyncResult> {
   }
 
   // Layer 2: detect list migration BEFORE parallel field pushes.
-  // If the task's project/category changed (list changed), do a single push first
+  // If the task's project changed (list changed), do a single push first
   // to handle DELETE+CREATE atomically, then do parallel field updates (PATCH path).
   const needsListMigration = await detectListMigration(task);
   if (needsListMigration) {
@@ -956,7 +1443,8 @@ async function autoPushIfConfiguredImpl(task: Task): Promise<SyncResult> {
 
 /**
  * Detect if a task's target MS To-Do list has changed (Layer 2).
- * Compares the stored list_id in ext with the resolved list_id from current category/project.
+ * Compares the stored list_id in ext with the list_id resolved from the task's
+ * current project (via remoteListNameFor → the remote_list alias or the name).
  */
 async function detectListMigration(task: Task): Promise<boolean> {
   if (task.source !== 'ms-todo') return false;
@@ -1040,13 +1528,13 @@ export async function migrateCompletedTaskSessions(): Promise<number> {
  */
 export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncResult: SyncResult }> {
   // Read-modify-write under lock; sync push happens outside to avoid holding lock during network I/O
-  const task = await withWriteLock(async () => {
+  const { task, createdProject } = await withWriteLock(async () => {
     const config = await getConfig();
     const store = await readStore();
 
     const now = new Date().toISOString();
 
-    // If parent_task_id is set, inherit category/project/source from parent
+    // If parent_task_id is set, inherit project/source from parent
     let parentTask: Task | undefined;
     if (input.parent_task_id) {
       const matches = store.tasks.filter((t) => t.id.startsWith(input.parent_task_id!));
@@ -1059,49 +1547,58 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       parentTask = matches[0];
     }
 
-    let category = input.category ?? parentTask?.category ?? config.defaults.category;
-    let project = input.project ?? parentTask?.project;
+    // Project resolution: explicit input → parent's project → config default → Inbox.
+    // An explicit '' means "Inbox, on purpose" and must NOT fall through to the
+    // config default (`??` alone can't express that — updateTask already honors
+    // '' as Inbox, so create and update would otherwise disagree on the same value).
+    const requestedProject = (
+      input.project !== undefined
+        ? input.project
+        : (parentTask?.project ?? config.defaults.project ?? '')
+    ).trim();
 
-    // Parse slash-separated "category / project" format
-    if (category.includes(' / ')) {
-      const parsed = parseGroupFromCategory(category);
-      category = parsed.group;
-      project = project ?? parsed.listName;
+    const projects = store.projects ?? {};
+    const registryKey = requestedProject
+      ? Object.keys(projects).find((k) => k.toLowerCase() === requestedProject.toLowerCase())
+      : undefined;
+    // A name about to mint a NEW registry row must pass the shape gate here —
+    // this store.projects write bypasses ensureProject, and the name later
+    // becomes a path segment (memory/projects/<name>/). An EXISTING row is
+    // exempt so a legacy name that predates the validator stays usable.
+    if (requestedProject && !registryKey) assertValidProjectName(requestedProject);
+    // Canonical spelling wins so two casings can't split one project.
+    const project = registryKey ?? requestedProject;
+    const registrySource: TaskSource | undefined = registryKey ? projects[registryKey].source : undefined;
+
+    // Source chain: parent → registry row → caller override → plugin claim.
+    // Inbox is structurally local-only: no registry row exists for '' and no
+    // provider may claim it, so a provider-sourced task MUST name a project.
+    let source: TaskSource;
+    if (!project) {
+      const demanded = parentTask?.source ?? input.source;
+      if (demanded && demanded !== 'local') {
+        throw new Error(
+          `Cannot create a ${demanded} task in Inbox — provider-synced tasks need a project. Pass a project name.`,
+        );
+      }
+      source = 'local';
+    } else {
+      // The registry row OUTRANKS input.source deliberately: the project's claim
+      // is the source of record, so a caller naming a claimed project gets that
+      // provider rather than a 409 (the task has to be pushable to live there).
+      // input.source only decides a project that has no row yet. A conflict is
+      // therefore only reachable through parent inheritance — a child whose
+      // parent belongs to provider A can't be filed under provider B's project.
+      source = parentTask?.source
+        ?? registrySource
+        ?? input.source
+        ?? (await registry.getForProject(project)).id;
     }
 
-    // Auto-determine source: parent → local reservation → store.categories →
-    // existing tasks → input.source → registry claim.
-    const catLower = category.toLowerCase();
-    const storeCatKey = Object.keys(store.categories ?? {}).find(k => k.toLowerCase() === catLower);
-    const storeCatSource: TaskSource | undefined = storeCatKey ? store.categories![storeCatKey].source : undefined;
-
-    // Fallback: if store.categories doesn't have this category, check existing tasks
-    const existingSource = storeCatSource == null
-      ? store.tasks.find(t => t.category.toLowerCase() === catLower)?.source
-      : undefined;
-
-    // config.local.categories is a HARD reservation (validateCategorySource rejects
-    // any non-local source for these names, with no migration path). It therefore has
-    // to win the source *resolution* too, ahead of store.categories and existing
-    // tasks — otherwise a category that is both reserved-local and historically
-    // registered to a sync plugin (e.g. 'Inbox' left as ms-todo by an old sync) is a
-    // permanent deadlock: resolution says ms-todo, validation says local-only, and
-    // EVERY create into the default capture category 409s. That is exactly what broke
-    // "Add to Focus" — the task never existed, so the optimistic card rolled back and
-    // read as "the task I added disappeared".
-    const localReserved = (config.local?.categories ?? []).some(c => c.toLowerCase() === catLower);
-
-    const source: TaskSource = parentTask?.source
-      ?? (localReserved ? 'local' : undefined)
-      ?? storeCatSource
-      ?? existingSource
-      ?? input.source
-      ?? (await registry.getForCategory(category)).id;
-
-    // Validate category-source consistency
-    const validation = validateCategorySource(store.tasks, category, source, config, store.categories);
+    // Validate project-source consistency
+    const validation = validateProjectSource(project, source, config, projects);
     if (!validation.ok) {
-      throw new CategorySourceConflictError(validation.error, category, source, validation.existingSource);
+      throw new ProjectSourceConflictError(validation.error, project, source, validation.existingSource);
     }
 
     const newTask: Task = {
@@ -1110,8 +1607,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       status: 'todo',
       phase: 'TODO',
       priority: sanitizePriority(input.priority ?? config.defaults.priority),
-      category,
-      project: project ?? category,
+      project,
       source,
       session_ids: [],
       description: input.description ?? '',
@@ -1143,16 +1639,21 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
 
     store.tasks.push(newTask);
 
-    // Auto-ensure: if category is not in store.categories, add it
-    if (!store.categories) store.categories = {};
-    if (!storeCatKey) {
-      store.categories[category] = { source };
+    // Auto-ensure the registry row for a brand-new project name. Done through
+    // store.projects (not ensureProjectRowLocked) because writeStore rewrites the
+    // whole registry from this snapshot right after.
+    let createdProject: { name: string; source: TaskSource } | undefined;
+    if (project && !registryKey) {
+      store.projects = { ...projects, [project]: { source } };
+      createdProject = { name: project, source };
     }
 
     await writeStore(store);
 
-    return newTask;
+    return { task: newTask, createdProject };
   });
+
+  if (createdProject) emitProjectCreated(createdProject.name, createdProject.source);
 
   // Local-source tasks never push, so async vs sync is moot — skip the branch.
   if (input._skipPluginOps || task.source === 'local') {
@@ -1190,11 +1691,12 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
 
 export interface ListTasksFilter {
   status?: string;
-  category?: string;
+  /** Exact project match. '' filters to Inbox; undefined = no project filter. */
+  project?: string;
 }
 
 /**
- * List tasks, optionally filtered by status and/or category.
+ * List tasks, optionally filtered by status and/or project.
  */
 export async function listTasks(filter: ListTasksFilter = {}): Promise<Task[]> {
   const store = await readStore();
@@ -1203,8 +1705,8 @@ export async function listTasks(filter: ListTasksFilter = {}): Promise<Task[]> {
   if (filter.status) {
     tasks = tasks.filter((t) => t.status === filter.status);
   }
-  if (filter.category) {
-    tasks = tasks.filter((t) => t.category === filter.category);
+  if (filter.project !== undefined) {
+    tasks = tasks.filter((t) => (t.project || '') === filter.project);
   }
 
   return tasks;
@@ -1262,7 +1764,7 @@ export async function listTasksSlim(filter: ListTasksSlimFilter = {}): Promise<S
   // never renders them; they're lazy-loaded on focus via fetchTask(id).
   const heavyCols = ['summary', 'description', 'ext'];
   const selectCols = [
-    'id', 'title', 'category', 'project', 'status', 'phase', 'priority', 'source',
+    'id', 'title', 'project', 'status', 'phase', 'priority', 'source',
     'parent_task_id', 'due_date', 'start_date', 'created_at', 'updated_at', 'completed_at',
     'sprint', 'focus_tier', 'pinned', 'ext', 'tags', 'depends_on', 'session_ids',
     'summary', 'description', 'sync_error', '_synced_at', 'payload',
@@ -1295,7 +1797,15 @@ export async function listTasksSlim(filter: ListTasksSlimFilter = {}): Promise<S
   const where: string[] = [];
   const params: Record<string, string> = {};
   if (filter.status) { where.push('status = @status'); params.status = filter.status; }
-  if (filter.category) { where.push('category = @category'); params.category = filter.category; }
+  if (filter.project !== undefined) {
+    // project is nullable in SQL; '' (Inbox) must match both NULL and ''.
+    if (filter.project === '') {
+      where.push("(project IS NULL OR project = '')");
+    } else {
+      where.push('project = @project');
+      params.project = filter.project;
+    }
+  }
   if (filter.source) { where.push('source = @source'); params.source = filter.source; }
   const whereSql = where.length ? ' WHERE ' + where.join(' AND ') : '';
 
@@ -1582,7 +2092,7 @@ export interface BatchPhaseResult {
    * from `failed`: the local write committed, so the row genuinely is complete and
    * the client must not roll it back or report "could not complete". Folding these
    * into `failed` made a fully-successful batch report total failure whenever the
-   * tasks belonged to a plugin category with no plugin loaded.
+   * tasks belonged to a plugin-claimed project with no plugin loaded.
    */
   syncFailed: BatchTaskOutcome[];
 }
@@ -1689,11 +2199,11 @@ export async function setPhaseBulk(
 export interface UpdateTaskInput {
   title?: string;
   priority?: TaskPriority;
-  category?: string;
   status?: TaskStatus;
   phase?: TaskPhase;
   due_date?: string;
   start_date?: string;      // When to start working (empty string clears)
+  /** Move the task to another project. '' moves it to Inbox. */
   project?: string;
   starred?: boolean;
   needs_attention?: boolean;
@@ -1719,14 +2229,13 @@ interface MigratedTask {
 }
 
 /**
- * Migrate a task (and same-source children) to a new source.
+ * Migrate a task (and same-source children) to a new project + source.
  * Called inside withWriteLock — mutates store in place (no writeStore call).
  * Returns the list of migrated tasks with their old state snapshots.
  */
 function migrateTaskSource(
   store: TaskStore,
   task: Task,
-  newCategory: string,
   newProject: string,
   newSource: TaskSource,
 ): MigratedTask[] {
@@ -1738,7 +2247,6 @@ function migrateTaskSource(
   const oldExt = task.ext ? structuredClone(task.ext) : undefined;
   const oldTitle = task.title;
   task.source = newSource;
-  task.category = newCategory;
   task.project = newProject;
   task.ext = undefined;
   task.external_url = undefined;
@@ -1754,7 +2262,7 @@ function migrateTaskSource(
     const childOldExt = child.ext ? structuredClone(child.ext) : undefined;
     const childOldTitle = child.title;
     child.source = newSource;
-    // Children keep their own category/project — only change source + ext
+    // Children keep their own project — only change source + ext
     child.ext = undefined;
     child.external_url = undefined;
     child.sync_error = undefined;
@@ -1762,16 +2270,16 @@ function migrateTaskSource(
     results.push({ task: child, oldSource, oldExt: childOldExt, oldTitle: childOldTitle });
   }
 
-  // Update store.categories for the target category
-  if (store.categories) {
-    const catKey = Object.keys(store.categories).find(
-      k => k.toLowerCase() === newCategory.toLowerCase(),
-    );
-    if (catKey) {
-      store.categories[catKey] = { source: newSource };
-    } else {
-      store.categories[newCategory] = { source: newSource };
-    }
+  // Register the destination project (Inbox never gets a row).
+  if (newProject) {
+    const projects = store.projects ?? {};
+    const key = Object.keys(projects).find((k) => k.toLowerCase() === newProject.toLowerCase());
+    // Preserve the existing row's order_index/metadata; only the claim changes.
+    const existing = key ? projects[key] : undefined;
+    store.projects = {
+      ...projects,
+      ...(key ? { [key]: { ...existing!, source: newSource } } : { [newProject]: { source: newSource } }),
+    };
   }
 
   return results;
@@ -1788,7 +2296,7 @@ export async function updateTask(
   // Lock-internal phase: validate + mutate + persist. Returns enough state for
   // the post-lock push. Push runs OUTSIDE the lock because autoPushIfConfigured
   // re-acquires the lock when stamping sync_error → self-deadlock if held.
-  const { task, migrationResult, parentChangeAction, cwdChanged, oldCwd } = await withWriteLock(async () => {
+  const { task, migrationResult, parentChangeAction, cwdChanged, oldCwd, createdProject } = await withWriteLock(async () => {
   const store = await readStore();
   const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
 
@@ -1809,41 +2317,57 @@ export async function updateTask(
     task.title = updates.title;
   }
   if (updates.priority !== undefined) task.priority = sanitizePriority(updates.priority);
-  if (updates.category !== undefined) {
-    // Parse slash-separated "category / project" format once, reuse result
-    const hasSlash = updates.category.includes(' / ') && updates.project === undefined;
-    const parsed = hasSlash ? parseGroupFromCategory(updates.category) : undefined;
-    const newCategoryName = parsed ? parsed.group : updates.category;
-    const newProject = parsed ? parsed.listName : (updates.project ?? newCategoryName);
-    let skipCategoryAssignment = false;
+  // Project move. '' = Inbox (structurally local-only, never claimed), so a
+  // provider-sourced task moved there migrates to source='local'.
+  let createdProject: { name: string; source: TaskSource } | undefined;
+  if (updates.project !== undefined) {
+    const requested = updates.project.trim();
+    const projects = store.projects ?? {};
+    const registryKey = requested
+      ? Object.keys(projects).find((k) => k.toLowerCase() === requested.toLowerCase())
+      : undefined;
+    // Same shape gate as addTask: only a name minting a NEW row is validated
+    // (the store.projects write below bypasses ensureProject).
+    if (requested && !registryKey) assertValidProjectName(requested);
+    const newProject = registryKey ?? requested;  // canonical spelling wins
+    let assigned = false;
 
-    // Validate category-source consistency when category is actually changing
-    if (newCategoryName.toLowerCase() !== task.category.toLowerCase()) {
+    if (newProject.toLowerCase() !== (task.project || '').toLowerCase()) {
       const config = await getConfig();
-      const validation = validateCategorySource(store.tasks, newCategoryName, task.source, config, store.categories);
-      if (!validation.ok) {
-        // Auto-migrate source: the task adopts the target category's source.
-        // All conflict reasons (config_local, config_plugin, store_categories,
-        // existing_tasks) are migratable — the target category's source is the
-        // correct source for the task after the move.
-        migrationResult = migrateTaskSource(store, task, newCategoryName, newProject, validation.existingSource);
-        skipCategoryAssignment = true; // migrateTaskSource already set category/project
+      const targetSource: TaskSource | undefined = !newProject
+        ? 'local'
+        : registryKey ? projects[registryKey].source : undefined;
+
+      if (targetSource !== undefined && targetSource !== task.source) {
+        // Auto-migrate: the task adopts the destination project's claim (or
+        // 'local' for Inbox). Ext/external_url are dropped — the remote twin is
+        // marked moved by the post-lock cleanup.
+        migrationResult = migrateTaskSource(store, task, newProject, targetSource);
+        assigned = true;
         log.task.info('cross-source migration triggered', {
           taskId: task.id, oldSource: migrationResult[0].oldSource,
-          newSource: validation.existingSource, newCategory: newCategoryName,
+          newSource: targetSource, newProject,
           childrenMigrated: migrationResult.length - 1,
         });
+      } else {
+        const validation = validateProjectSource(newProject, task.source, config, projects);
+        if (!validation.ok) {
+          migrationResult = migrateTaskSource(store, task, newProject, validation.existingSource);
+          assigned = true;
+          log.task.info('cross-source migration triggered', {
+            taskId: task.id, oldSource: migrationResult[0].oldSource,
+            newSource: validation.existingSource, newProject,
+            childrenMigrated: migrationResult.length - 1,
+          });
+        } else if (newProject && !registryKey) {
+          // Brand-new project name — auto-create its registry row.
+          store.projects = { ...projects, [newProject]: { source: task.source } };
+          createdProject = { name: newProject, source: task.source };
+        }
       }
     }
 
-    if (!skipCategoryAssignment) {
-      if (parsed) {
-        task.category = parsed.group;
-        task.project = parsed.listName;
-      } else {
-        task.category = updates.category;
-      }
-    }
+    if (!assigned) task.project = newProject;
   }
   if (updates.phase !== undefined && VALID_PHASES.has(updates.phase)) {
     // CAS guard: if caller specified ifPhase, only apply phase change if current phase matches
@@ -1884,7 +2408,6 @@ export async function updateTask(
   // holds an empty string (downstream code checks truthiness AND !== undefined).
   if (updates.due_date !== undefined) task.due_date = updates.due_date || undefined;
   if (updates.start_date !== undefined) task.start_date = updates.start_date || undefined;
-  if (updates.project !== undefined) task.project = updates.project;
   if (updates.starred !== undefined) task.starred = updates.starred;
   if (updates.needs_attention !== undefined) task.needs_attention = updates.needs_attention;
   // Track parent change for plugin notification (fired after writeStore)
@@ -2032,12 +2555,14 @@ export async function updateTask(
 
   await writeStore(store);
 
-  return { task, migrationResult, parentChangeAction, cwdChanged, oldCwd };
+  return { task, migrationResult, parentChangeAction, cwdChanged, oldCwd, createdProject };
   });
 
   // ── Post-lock phase: push to plugin (network I/O) + side effects ──
   // All operations below run OUTSIDE the write lock so re-entrant lock acquisitions
   // inside autoPushIfConfigured (e.g. sync_error stamping) don't self-deadlock.
+
+  if (createdProject) emitProjectCreated(createdProject.name, createdProject.source);
 
   if (migrationResult) {
     // Cross-source migration: handle old backend cleanup + new backend push per migrated task
@@ -2444,114 +2969,87 @@ export async function getTask(idPrefix: string): Promise<Task> {
 }
 
 /**
- * Error thrown when a task's source conflicts with the target category's source.
- * e.g. trying to add an ms-todo task to a category that already has plugin-reserved tasks.
+ * Error thrown when a task's source conflicts with the target project's claim —
+ * e.g. adding an ms-todo task to a project another plugin owns. Same shape as
+ * the retired category-level conflict error so the 409 payload is unchanged.
  */
-export class CategorySourceConflictError extends Error {
-  public readonly category: string;
+export class ProjectSourceConflictError extends Error {
+  public readonly project: string;
   public readonly intendedSource: TaskSource;
   public readonly existingSource: TaskSource;
-  constructor(message: string, category: string, intendedSource: TaskSource, existingSource: TaskSource) {
+  constructor(message: string, project: string, intendedSource: TaskSource, existingSource: TaskSource) {
     super(message);
-    this.name = 'CategorySourceConflictError';
-    this.category = category;
+    this.name = 'ProjectSourceConflictError';
+    this.project = project;
     this.intendedSource = intendedSource;
     this.existingSource = existingSource;
   }
 }
 
 /**
- * Validate that a task's source is consistent with the target category.
- * Rules:
- * 1. If store.categories has an entry with a different source → conflict.
- * 2. If any existing task in the category has a different source → conflict.
- * 3. Config reservations (local.categories, plugins.*.category) checked for backward compat.
- * Returns { ok: true } or { ok: false, error, existingSource, reason }.
- * `reason` distinguishes hard config reservations from soft store/existing conflicts:
- *  - 'store_categories' / 'existing_tasks': migratable (task can switch source)
- *  - 'config_local' / 'config_plugin': hard reservation (task cannot move here)
+ * Validate that a task's source is consistent with the target project's claim.
+ *
+ * Rules, in priority order:
+ *  1. Inbox ('') is structurally local-only — no registry row exists for it and
+ *     no provider can claim it. This replaces the old config-level local
+ *     reservation entirely (an unclaimable bucket is now a property of the model,
+ *     not a config field the user has to maintain).
+ *  2. A `plugins.<id>.project` reservation is a HARD block for any other source.
+ *  3. The registry row's `source` is the claim of record — a mismatch is a SOFT
+ *     conflict, i.e. updateTask migrates the task onto the project's source.
+ *
+ * Note it does NOT scan tasks: with a NOCASE registry the row is authoritative,
+ * and pull-created drift (sync bypasses validation) must not block new creates.
  */
-export type CategoryValidationReason = 'store_categories' | 'config_local' | 'config_plugin' | 'existing_tasks';
+export type ProjectValidationReason = 'inbox_local_only' | 'config_plugin' | 'registry';
 
-export function validateCategorySource(
-  tasks: Task[],
-  category: string,
+export function validateProjectSource(
+  project: string,
   intendedSource: TaskSource,
   config: unknown,
-  storeCategories?: Record<string, { source: TaskSource }>,
-): { ok: true } | { ok: false; error: string; existingSource: TaskSource; reason: CategoryValidationReason } {
-  const catLower = category.toLowerCase();
+  storeProjects?: Record<string, { source: TaskSource }>,
+): { ok: true } | { ok: false; error: string; existingSource: TaskSource; reason: ProjectValidationReason } {
+  const name = (project ?? '').trim();
   const cfg = config as Record<string, unknown>;
 
-  // Config reservations checked FIRST — these are hard blocks (user-explicit constraints)
-  // that cannot be auto-migrated, and must take priority over store/existing-task conflicts.
-
-  // Check config reservation: config.local.categories are reserved for local tasks only
-  const localConfig = cfg.local as { categories?: string[] } | undefined;
-  const localCategories = localConfig?.categories;
-  const localReserved = !!localCategories?.some(c => c.toLowerCase() === catLower);
-  if (localReserved && intendedSource !== 'local') {
-    return {
-      ok: false,
-      error: `Category "${category}" is reserved for local tasks (config.local.categories). Only local tasks can use this category. Use a different category name for ${intendedSource} tasks.`,
-      existingSource: 'local',
-      reason: 'config_local',
-    };
-  }
-  // A local-reserved category accepts local tasks unconditionally — the checks below
-  // must not veto it. store.categories or a pile of legacy tasks can still say
-  // 'ms-todo' for a name that config reserves as local-only (e.g. 'Inbox' registered
-  // by an old sync, then added to local.categories). Letting a soft conflict win there
-  // deadlocks the category outright: the hard reservation forbids every non-local
-  // source, and the soft conflict forbids local — so nothing can be created.
-  if (localReserved) return { ok: true };
-
-  // Check plugin config reservations: plugins.*.category or legacy top-level keys
-  const plugins = (cfg.plugins ?? {}) as Record<string, Record<string, unknown>>;
-  for (const [pluginId, pluginCfg] of Object.entries(plugins)) {
-    if (pluginId === intendedSource) continue;
-    const reservedCat = pluginCfg.category as string | undefined;
-    if (reservedCat && catLower === reservedCat.toLowerCase()) {
+  if (!name) {
+    if (intendedSource !== 'local') {
       return {
         ok: false,
-        error: `Category "${category}" is reserved for ${pluginId} sync (plugins.${pluginId}.category). Only ${pluginId} tasks can use this category.`,
+        error: `Inbox cannot be claimed by ${intendedSource} — provider-synced tasks need a project. Pass a project name.`,
+        existingSource: 'local',
+        reason: 'inbox_local_only',
+      };
+    }
+    return { ok: true };
+  }
+
+  const lower = name.toLowerCase();
+
+  // Plugin config reservation — a hard block (user-explicit constraint).
+  const plugins = (cfg?.plugins ?? {}) as Record<string, Record<string, unknown>>;
+  for (const [pluginId, pluginCfg] of Object.entries(plugins)) {
+    if (pluginId === intendedSource) continue;
+    const reserved = pluginCfg?.project as string | undefined;
+    if (reserved && lower === reserved.toLowerCase()) {
+      return {
+        ok: false,
+        error: `Project "${name}" is reserved for ${pluginId} sync (plugins.${pluginId}.project). Only ${pluginId} tasks can use this project.`,
         existingSource: pluginId,
         reason: 'config_plugin',
       };
     }
   }
 
-  // Soft conflicts below — these are migratable (updateTask auto-migrates source)
-
-  // Check store.categories (source of truth for v3)
-  if (storeCategories) {
-    const storeCatKey = Object.keys(storeCategories).find(k => k.toLowerCase() === catLower);
-    if (storeCatKey && storeCategories[storeCatKey].source !== intendedSource) {
+  // Registry claim — soft (migratable) conflict.
+  if (storeProjects) {
+    const key = Object.keys(storeProjects).find((k) => k.toLowerCase() === lower);
+    if (key && storeProjects[key].source !== intendedSource) {
       return {
         ok: false,
-        error: `Category "${category}" is registered as ${storeCategories[storeCatKey].source}. Cannot add a ${intendedSource} task to it.`,
-        existingSource: storeCategories[storeCatKey].source,
-        reason: 'store_categories',
-      };
-    }
-  }
-
-  // Check existing tasks in the category — but only when store.categories doesn't already
-  // confirm this category belongs to intendedSource. store.categories is the source of truth;
-  // a few drifted tasks from sync pull (which bypasses validation) shouldn't block creation.
-  const storeCatConfirmed = storeCategories && Object.keys(storeCategories).some(
-    k => k.toLowerCase() === catLower && storeCategories[k].source === intendedSource,
-  );
-  if (!storeCatConfirmed) {
-    const existing = tasks.find(
-      (t) => t.category.toLowerCase() === catLower && t.source !== intendedSource,
-    );
-    if (existing) {
-      return {
-        ok: false,
-        error: `Category "${category}" already contains ${existing.source} tasks. Cannot add a ${intendedSource} task to it. Use a different category name, or move existing tasks out first.`,
-        existingSource: existing.source,
-        reason: 'existing_tasks',
+        error: `Project "${name}" is claimed by ${storeProjects[key].source}. Cannot add a ${intendedSource} task to it.`,
+        existingSource: storeProjects[key].source,
+        reason: 'registry',
       };
     }
   }
@@ -2748,7 +3246,7 @@ export async function deleteTasksByIds(
 // This is NOT a parent/subtask relationship — grouped tasks stay flat and fully
 // independent (separate lifecycles, no inherited fields, never moved). A group is
 // purely a visual cluster: ANY tasks can be grouped together regardless of their
-// category/project (there is no scope restriction — the box just renders them as a
+// project (there is no scope restriction — the box just renders them as a
 // unit, anchored at the lead's position in whatever list is showing them). The
 // group_id lives on each task (round-trips via the SQLite payload blob); the
 // human-readable name lives in store.task_groups. Nothing here is ever pushed to
@@ -2797,7 +3295,7 @@ export interface GroupResult {
 
 /**
  * Create a new virtual group from ≥2 tasks (by id or prefix). Tasks may belong to
- * any category/project — a group is a pure visual cluster with no scope rule. If
+ * any project — a group is a pure visual cluster with no scope rule. If
  * any task is already in a group, its existing group is merged in (all those
  * members are absorbed into the new group) — this is what lets a multi-select that
  * mixes already-grouped and ungrouped tasks "add to the existing group" rather than
@@ -2835,7 +3333,7 @@ export async function groupTasks(idPrefixes: string[], label?: string): Promise<
 }
 
 /**
- * Add tasks to an existing group. Tasks may belong to any category/project (a
+ * Add tasks to an existing group. Tasks may belong to any project (a
  * group has no scope rule). No-op-safe: tasks already in the group are skipped.
  */
 export async function addToGroup(groupId: string, idPrefixes: string[]): Promise<GroupResult> {
@@ -2939,154 +3437,6 @@ export async function listGroups(): Promise<Array<{ group_id: string; label: str
     out.push({ group_id: gid, label: rec?.label ?? ids[0], hidden: !!rec?.hidden, member_ids: ids });
   }
   return out;
-}
-
-/**
- * Rename a category both locally and on the remote.
- * Updates all tasks with the old category and renames the remote lists.
- */
-export async function renameCategory(
-  oldCategory: string,
-  newCategory: string,
-): Promise<{ count: number }> {
-  return withWriteLock(async () => {
-  const store = await readStore();
-  const config = await getConfig();
-  const now = new Date().toISOString();
-  let count = 0;
-
-  // Determine the source of tasks being renamed
-  const tasksToRename = store.tasks.filter(
-    (t) => t.category.toLowerCase() === oldCategory.toLowerCase(),
-  );
-
-  // Allow renaming empty categories if they exist in store.categories
-  const oldCatStoreKey = Object.keys(store.categories ?? {}).find(
-    k => k.toLowerCase() === oldCategory.toLowerCase(),
-  );
-  if (tasksToRename.length === 0 && !oldCatStoreKey) {
-    throw new Error(`No tasks found with category "${oldCategory}"`);
-  }
-
-  // Verify all tasks in the category share the same source
-  const renameSource = tasksToRename.length > 0
-    ? tasksToRename[0].source
-    : (oldCatStoreKey ? store.categories![oldCatStoreKey].source : 'ms-todo');
-  const mixedSource = tasksToRename.find((t) => t.source !== renameSource);
-  if (mixedSource) {
-    throw new Error(
-      `Category "${oldCategory}" has mixed sources (${renameSource} and ${mixedSource.source}). Clean up the category before renaming.`,
-    );
-  }
-
-  // Check 1: target category name is reserved by a plugin config
-  const pluginsConfig = ((config as unknown as Record<string, unknown>).plugins ?? {}) as Record<string, Record<string, unknown>>;
-  for (const [pluginId, pluginCfg] of Object.entries(pluginsConfig)) {
-    if (pluginId === renameSource) continue;
-    const reservedCat = pluginCfg.category as string | undefined;
-    if (reservedCat && newCategory.toLowerCase() === reservedCat.toLowerCase()) {
-      throw new CategorySourceConflictError(
-        `Cannot rename to "${newCategory}" — it is configured as the ${pluginId} sync category. Only ${pluginId} tasks can use this category name.`,
-        newCategory,
-        renameSource,
-        pluginId,
-      );
-    }
-  }
-  // Check 2: target category in store.categories has a different source
-  if (store.categories) {
-    const targetCatKey = Object.keys(store.categories).find(
-      k => k.toLowerCase() === newCategory.toLowerCase() && k.toLowerCase() !== oldCategory.toLowerCase(),
-    );
-    if (targetCatKey && store.categories[targetCatKey].source !== renameSource) {
-      throw new CategorySourceConflictError(
-        `Cannot rename "${oldCategory}" to "${newCategory}" — category "${newCategory}" is registered as ${store.categories[targetCatKey].source} but "${oldCategory}" tasks sync to ${renameSource}. Choose a different target name.`,
-        newCategory,
-        renameSource,
-        store.categories[targetCatKey].source,
-      );
-    }
-  }
-
-  // Check 3: target category already has tasks with a different source
-  const targetConflict = store.tasks.find(
-    (t) =>
-      t.category.toLowerCase() === newCategory.toLowerCase() &&
-      t.category.toLowerCase() !== oldCategory.toLowerCase() &&
-      t.source !== renameSource,
-  );
-  if (targetConflict) {
-    throw new CategorySourceConflictError(
-      `Cannot rename "${oldCategory}" to "${newCategory}" — category "${newCategory}" already has ${targetConflict.source} tasks but "${oldCategory}" tasks sync to ${renameSource}. Choose a different target name.`,
-      newCategory,
-      renameSource,
-      targetConflict.source,
-    );
-  }
-
-  const renamedTaskIds: string[] = [];
-
-  for (const task of store.tasks) {
-    if (task.category.toLowerCase() === oldCategory.toLowerCase()) {
-      task.category = newCategory;
-      task.updated_at = now;
-      renamedTaskIds.push(task.id);
-      count++;
-    }
-  }
-
-  // Update store.categories: move old entry to new name
-  if (store.categories) {
-    const oldCatKey = Object.keys(store.categories).find(
-      k => k.toLowerCase() === oldCategory.toLowerCase(),
-    );
-    if (oldCatKey) {
-      const entry = store.categories[oldCatKey];
-      delete store.categories[oldCatKey];
-      store.categories[newCategory] = entry;
-    }
-  }
-
-  await writeStore(store);
-
-  // Update config.local.categories when renaming a local category
-  if (renameSource === 'local') {
-    const localCats = config.local?.categories;
-    if (localCats?.some(c => c.toLowerCase() === oldCategory.toLowerCase())) {
-      const freshConfig = await getConfig();
-      if (freshConfig.local?.categories) {
-        freshConfig.local.categories = freshConfig.local.categories
-          .filter(c => c.toLowerCase() !== oldCategory.toLowerCase());
-        if (!freshConfig.local.categories.some(c => c.toLowerCase() === newCategory.toLowerCase())) {
-          freshConfig.local.categories.push(newCategory);
-        }
-        await updateConfig({ local: freshConfig.local });
-      }
-    }
-  }
-
-  // Fire-and-forget: notify plugin about category change for each renamed task
-  if (renameSource !== 'local') {
-    const renamedTasks = store.tasks.filter(t => t.category === newCategory);
-    for (const task of renamedTasks) {
-      pushToPlugin(task, 'updateCategory', newCategory, task.project).catch(() => {
-        // Silent — local rename succeeded, remote rename is best-effort
-      });
-    }
-  }
-
-  if (renamedTaskIds.length > 0) {
-    bus.emit(EventNames.TASK_UPDATED, {
-      task: null,
-      taskIds: renamedTaskIds,
-      oldCategory,
-      newCategory,
-      count,
-    }, ['web-ui', 'main-agent'], { source: 'task-manager' });
-  }
-
-  return { count };
-  });
 }
 
 /**
@@ -3352,134 +3702,6 @@ export async function getChildTasks(taskIdPrefix: string): Promise<Task[]> {
   const parent = await getTask(taskIdPrefix);
   const store = await readStore();
   return store.tasks.filter((t) => t.parent_task_id === parent.id);
-}
-
-/**
- * Parse YAML description from a metadata task. Returns null on failure.
- */
-function parseMetadataYaml(task: Task): Record<string, unknown> | null {
-  if (!task.description) return null;
-  try {
-    const parsed = yaml.load(task.description);
-    if (parsed && typeof parsed === 'object') {
-      return parsed as Record<string, unknown>;
-    }
-    return null;
-  } catch (err) {
-    log.task.warn('failed to parse metadata YAML description', {
-      taskId: task.id,
-      title: task.title,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return null;
-  }
-}
-
-/**
- * Get merged metadata for a project.
- * Resolution chain: .metadata_project (project-level) → .metadata_category (category-level) → null
- * Project-level settings override category-level settings.
- */
-export async function getProjectMetadata(category: string, project: string): Promise<{
-  default_host?: string;
-  default_cwd?: string;
-  [key: string]: unknown;
-} | null> {
-  const store = await readStore();
-  const catLower = category.toLowerCase();
-
-  // Category-level: title='.metadata_category', project='.metadata_category', same category
-  const categoryMeta = store.tasks.find(
-    (t) =>
-      t.title === '.metadata_category' &&
-      t.project === '.metadata_category' &&
-      t.category.toLowerCase() === catLower,
-  );
-
-  // Project-level: title='.metadata_project', specific project, same category
-  const projectMeta = store.tasks.find(
-    (t) =>
-      t.title === '.metadata_project' &&
-      t.category.toLowerCase() === catLower &&
-      t.project.toLowerCase() === project.toLowerCase(),
-  );
-
-  const catSettings = categoryMeta ? parseMetadataYaml(categoryMeta) : null;
-  const projSettings = projectMeta ? parseMetadataYaml(projectMeta) : null;
-
-  if (!catSettings && !projSettings) return null;
-
-  // Merge: category defaults, then project overrides
-  return { ...(catSettings ?? {}), ...(projSettings ?? {}) } as {
-    default_host?: string;
-    default_cwd?: string;
-    [key: string]: unknown;
-  };
-}
-
-/**
- * Create or update metadata at category or project level.
- * - level='category': creates/updates .metadata_category task (project='.metadata_category')
- * - level='project': creates/updates .metadata_project task in the specific project
- * Merges provided settings into existing YAML description (or creates the task).
- * Returns the merged settings object.
- */
-export async function setProjectMetadata(
-  category: string,
-  project: string,
-  settings: Record<string, unknown>,
-  level: 'category' | 'project' = 'project',
-): Promise<Record<string, unknown>> {
-  const metaTitle = level === 'category' ? '.metadata_category' : '.metadata_project';
-  const metaProject = level === 'category' ? '.metadata_category' : project;
-
-  return withWriteLock(async () => {
-    const store = await readStore();
-    const metaTask = store.tasks.find(
-      (t) =>
-        t.title === metaTitle &&
-        t.category.toLowerCase() === category.toLowerCase() &&
-        t.project.toLowerCase() === metaProject.toLowerCase(),
-    );
-
-    if (metaTask) {
-      // Parse existing YAML and merge
-      const existing = parseMetadataYaml(metaTask) ?? {};
-      const merged = { ...existing, ...settings };
-      metaTask.description = yaml.dump(merged).trim();
-      metaTask.updated_at = new Date().toISOString();
-      await writeStore(store);
-      return merged;
-    }
-
-    // Create new metadata task — resolve source from store.categories first, then registry fallback
-    const now = new Date().toISOString();
-    const catLower = category.toLowerCase();
-    const storeCatKey = Object.keys(store.categories ?? {}).find(k => k.toLowerCase() === catLower);
-    const source: TaskSource = storeCatKey
-      ? store.categories![storeCatKey].source
-      : (await registry.getForCategory(category)).id;
-
-    const newTask: Task = {
-      id: generateId(),
-      title: metaTitle,
-      status: 'todo',
-      phase: 'TODO',
-      priority: 'none',
-      category,
-      project: metaProject,
-      source,
-      session_ids: [],
-      description: yaml.dump(settings).trim(),
-      summary: '',
-      note: '',
-      created_at: now,
-      updated_at: now,
-    };
-    store.tasks.push(newTask);
-    await writeStore(store);
-    return { ...settings };
-  });
 }
 
 /**
@@ -3883,12 +4105,11 @@ export async function getAllTags(): Promise<{ tag: string; count: number }[]> {
 // ── Reorder methods ──
 
 /**
- * Reorder tasks within a category/project group.
+ * Reorder tasks within one project group ('' = Inbox).
  * `orderedIds` must contain exactly the IDs of all tasks matching the group.
  * Tasks are rearranged in-place at their original index slots in the store array.
  */
 export async function reorderTasks(
-  category: string,
   project: string,
   orderedIds: string[],
 ): Promise<void> {
@@ -3896,15 +4117,25 @@ export async function reorderTasks(
   const store = await readStore();
 
   // Find tasks belonging to this group, preserving their store indices.
-  // Exclude .metadata tasks — they are internal bookkeeping and should not
-  // participate in user-facing reorder operations. The frontend never sees
-  // them (filtered out by GET /api/tasks), so orderedIds will never contain them.
+  // Case-INSENSITIVE: project identity ignores case everywhere else (NOCASE PK),
+  // so an exact match here silently resolved to zero entries whenever the caller's
+  // spelling differed from the stored one — and the reorder became a no-op.
+  const groupKey = (project || '').trim().toLowerCase();
   const groupEntries: { index: number; task: Task }[] = [];
   for (let i = 0; i < store.tasks.length; i++) {
     const t = store.tasks[i];
-    if (t.category === category && t.project === project && !t.title.startsWith('.metadata')) {
+    if ((t.project || '').trim().toLowerCase() === groupKey) {
       groupEntries.push({ index: i, task: t });
     }
+  }
+
+  if (groupEntries.length === 0 && orderedIds.length > 0) {
+    // Was a silent no-op: ids were supplied but nothing matched the group, so the
+    // user's drag simply didn't persist and nothing said why.
+    log.task.warn('reorderTasks: no tasks matched the project group, reorder dropped', {
+      project, requestedIds: orderedIds.length,
+    });
+    return;
   }
 
   const groupIds = new Set(groupEntries.map((e) => e.task.id));
@@ -3940,7 +4171,7 @@ export async function reorderTasks(
   if (reconciledIds.length !== groupEntries.length) {
     // Should never happen after reconciliation, but guard just in case
     log.task.warn('reorderTasks: reconciliation mismatch, skipping reorder', {
-      category, project, reconciledCount: reconciledIds.length, groupCount: groupEntries.length,
+      project, reconciledCount: reconciledIds.length, groupCount: groupEntries.length,
     });
     return;
   }
@@ -3971,6 +4202,22 @@ export async function addTaskFull(taskData: Omit<Task, 'id'>): Promise<Task> {
   if (!taskData.title || taskData.title.trim() === '') {
     throw new Error('addTaskFull: refusing to create task with empty title');
   }
+  // PERMANENT guard: the `.metadata_project` / `.metadata_category` sentinel task
+  // shape is retired — project settings live in the task_projects registry row's
+  // metadata blob. The v5 migration absorbed and DELETED those rows, but the
+  // remote twins still exist in providers' lists, so every pull would re-import
+  // them as phantom tasks. Refusing here (not filtering at read time) keeps the
+  // shape uncreatable for good. Callers on the pull path already log-and-skip
+  // a create rejection, which is exactly the desired outcome.
+  if (isRetiredSentinelTitle(taskData.title)) {
+    log.task.warn('addTaskFull: refusing retired .metadata sentinel task', {
+      title: taskData.title, source: taskData.source, project: taskData.project,
+    });
+    throw new Error(
+      `addTaskFull: refusing to create retired sentinel task "${taskData.title}" — ` +
+      `project settings live in the task_projects registry, not a .metadata task`,
+    );
+  }
 
   const store = await readStore();
 
@@ -3994,8 +4241,13 @@ export async function addTaskFull(taskData: Omit<Task, 'id'>): Promise<Task> {
         applyPhase(existing, phaseFromStatus(taskData.status));
       }
       existing.priority = sanitizePriority(taskData.priority);
-      existing.category = taskData.category;
-      existing.project = taskData.project;
+      // Guarded like the date fields below: a pull partial with no/empty project
+      // (e.g. mapToLocal's '' for an Inbox-routed list) must not move an existing
+      // synced task to Inbox — '' is structurally local-only, so that write would
+      // strand the task (pushTask refuses Inbox) with sync_error on every tick.
+      if (taskData.project !== undefined && taskData.project.trim()) {
+        existing.project = taskData.project.trim();
+      }
       existing.ext = { ...existing.ext, ...taskData.ext };
       // Dedup-merge is a sync-pull write path too — a full pull re-imports the
       // remote twin, so the same day-precision echo guard applies here.
@@ -4015,13 +4267,14 @@ export async function addTaskFull(taskData: Omit<Task, 'id'>): Promise<Task> {
     }
   }
 
-  // Race-condition guard: title + category + project + source match → update ext
+  // Race-condition guard: title + project + source match → update ext
   if (taskData.ext && Object.keys(taskData.ext).length > 0) {
+    // Project identity is case-insensitive everywhere else (NOCASE PK) — a
+    // remote casing change must not defeat this dedup and mint a duplicate.
     const dup = store.tasks.find((t) =>
       t.source === taskData.source &&
       t.title === taskData.title &&
-      t.category === taskData.category &&
-      t.project === taskData.project,
+      (t.project || '').trim().toLowerCase() === (taskData.project || '').trim().toLowerCase(),
     );
     if (dup) {
       dup.ext = { ...dup.ext, ...taskData.ext };
@@ -4032,16 +4285,36 @@ export async function addTaskFull(taskData: Omit<Task, 'id'>): Promise<Task> {
     }
   }
 
-  // Guard: reject new tasks whose source conflicts with store.categories registration.
-  // This prevents sync pull from different plugins creating tasks in categories
-  // owned by another source (e.g. ms-todo tasks landing in a plugin-reserved category).
-  if (store.categories && taskData.category) {
-    const catKey = Object.keys(store.categories).find(
-      k => k.toLowerCase() === taskData.category.toLowerCase(),
+  // Pull-guard, re-keyed to the project registry: a sync pull must not create a
+  // task inside a project another provider owns (e.g. ms-todo rows landing in a
+  // project reserved for a different plugin). Inbox is local-only by rule.
+  const incomingProject = (taskData.project ?? '').trim();
+  // Retired grouping names ('Quick Start'/'Inbox') are Inbox, never projects —
+  // same rule as routePulledListToProject. Without this, a provider whose
+  // remote side still carries the retired tag re-mints the registry row here
+  // on every pull (observed 2026-08-05: 7 tasks + a claimed 'Quick Start' row
+  // resurrected minutes after the v5 data repair deleted them).
+  if (incomingProject &&
+      (isRetiredQuickStartGroup(incomingProject) || isLegacyInboxGroup(incomingProject))) {
+    throw new Error(
+      `addTaskFull: refusing to create task "${taskData.title}" under retired group "${incomingProject}" — ` +
+      `that name is Inbox now, and provider-synced tasks need a real project`,
     );
-    if (catKey && store.categories[catKey].source !== taskData.source) {
+  }
+  if (!incomingProject) {
+    if (taskData.source !== 'local') {
       throw new Error(
-        `addTaskFull: category "${taskData.category}" is registered as ${store.categories[catKey].source}, ` +
+        `addTaskFull: refusing to create ${taskData.source} task "${taskData.title}" in Inbox — ` +
+        `provider-synced tasks need a project`,
+      );
+    }
+  } else if (store.projects) {
+    const key = Object.keys(store.projects).find(
+      (k) => k.toLowerCase() === incomingProject.toLowerCase(),
+    );
+    if (key && store.projects[key].source !== taskData.source) {
+      throw new Error(
+        `addTaskFull: project "${incomingProject}" is claimed by ${store.projects[key].source}, ` +
         `refusing to create ${taskData.source} task "${taskData.title}" in it`,
       );
     }
@@ -4050,11 +4323,28 @@ export async function addTaskFull(taskData: Omit<Task, 'id'>): Promise<Task> {
   const task: Task = {
     id: generateId(),
     ...taskData,
+    project: incomingProject,
     priority: sanitizePriority(taskData.priority),
   };
 
+  // Register a project a pull just introduced, so its claim is recorded and the
+  // UI/butler see it as a real project rather than an implicit one.
+  let createdProject: { name: string; source: TaskSource } | undefined;
+  if (incomingProject) {
+    const projects = store.projects ?? {};
+    const key = Object.keys(projects).find((k) => k.toLowerCase() === incomingProject.toLowerCase());
+    if (key) {
+      // Canonical spelling wins so a remote casing change can't split the project.
+      task.project = key;
+    } else {
+      store.projects = { ...projects, [incomingProject]: { source: task.source } };
+      createdProject = { name: incomingProject, source: task.source };
+    }
+  }
+
   store.tasks.push(task);
   await writeStore(store);
+  if (createdProject) emitProjectCreated(createdProject.name, createdProject.source);
   return task;
   });
 }
@@ -4309,7 +4599,7 @@ export async function updateTasksBulk(
  *
  * NOTE: Unlike addTask(), this helper is for bulk-pull paths (sync-reconciler,
  * plugin import). It does NOT run the create-time validation chain
- * (category conflict, parent lookup, plugin content validation). Callers that
+ * (project claim conflict, parent lookup, plugin content validation). Callers that
  * need those checks should use addTask() per row.
  */
 export async function addTasksBulk(
@@ -4328,6 +4618,14 @@ export async function addTasksBulk(
       const stmt = handle.prepare(insertSql);
       for (const td of tasks) {
         if (!td.title || td.title.trim() === '') continue;
+        // Same permanent refusal as addTaskFull — the reconciler's fullPull is the
+        // other pull path that would otherwise re-import remote sentinel twins.
+        if (isRetiredSentinelTitle(td.title)) {
+          log.task.warn('addTasksBulk: skipping retired .metadata sentinel task', {
+            title: td.title, source: td.source,
+          });
+          continue;
+        }
         const task: Task = {
           id: td.id ?? generateId(),
           ...td,
@@ -4504,6 +4802,3 @@ export async function bulkMigrateTasks(
     return true;
   });
 }
-
-/** Forward-compat alias for the project-only migration (T29 POST /api/v1/tasks catches this). */
-export { CategorySourceConflictError as ProjectSourceConflictError };

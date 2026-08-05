@@ -116,7 +116,7 @@ describe('Part 1: Typed session slots', () => {
   });
 
   it('linkSessionSlot sets exec_session_id and pushes to session_ids', async () => {
-    const task = await createTask('Slot test - link exec', { category: 'work' });
+    const task = await createTask('Slot test - link exec', { project: 'work' });
     const taskId = task.id as string;
 
     // Link an exec session via task-manager directly
@@ -133,7 +133,7 @@ describe('Part 1: Typed session slots', () => {
   });
 
   it('linkSessionSlot sets plan_session_id independently of exec', async () => {
-    const task = await createTask('Slot test - link plan', { category: 'work' });
+    const task = await createTask('Slot test - link plan', { project: 'work' });
     const taskId = task.id as string;
 
     const { linkSessionSlot } = await import('../../src/core/task-manager.js');
@@ -147,7 +147,7 @@ describe('Part 1: Typed session slots', () => {
   });
 
   it('clearSessionSlot clears exec slot by session ID', async () => {
-    const task = await createTask('Slot test - clear', { category: 'work' });
+    const task = await createTask('Slot test - clear', { project: 'work' });
     const taskId = task.id as string;
 
     const { linkSessionSlot, clearSessionSlot } = await import('../../src/core/task-manager.js');
@@ -161,7 +161,7 @@ describe('Part 1: Typed session slots', () => {
   });
 
   it('clearSessionSlot by slot type clears the correct slot', async () => {
-    const task = await createTask('Slot test - clear by type', { category: 'work' });
+    const task = await createTask('Slot test - clear by type', { project: 'work' });
     const taskId = task.id as string;
 
     const { linkSessionSlot, clearSessionSlot } = await import('../../src/core/task-manager.js');
@@ -176,7 +176,7 @@ describe('Part 1: Typed session slots', () => {
   });
 
   it('DELETE /api/tasks/:id returns 409 when typed slots occupied', async () => {
-    const task = await createTask('Slot test - delete guard', { category: 'work' });
+    const task = await createTask('Slot test - delete guard', { project: 'work' });
     const taskId = task.id as string;
 
     const { linkSessionSlot } = await import('../../src/core/task-manager.js');
@@ -189,7 +189,7 @@ describe('Part 1: Typed session slots', () => {
   });
 
   it('toggle-complete clears both session slots', async () => {
-    const task = await createTask('Slot test - toggle', { category: 'work' });
+    const task = await createTask('Slot test - toggle', { project: 'work' });
     const taskId = task.id as string;
 
     const { linkSessionSlot } = await import('../../src/core/task-manager.js');
@@ -212,44 +212,41 @@ describe('Part 1: Typed session slots', () => {
 // ══════════════════════════════════════════════════════════════════
 
 describe('Part 2: Child task decomposition', () => {
-  it('creates a child task that inherits parent category and project', async () => {
-    const parent = await createTask('Parent task', { category: 'Work', project: 'HomeLab' });
+  it('creates a child task that inherits the parent project', async () => {
+    const parent = await createTask('Parent task', { project: 'HomeLab' });
     const parentId = parent.id as string;
 
     const child = await createTask('Child task', { parent_task_id: parentId });
     expect(child.parent_task_id).toBe(parentId);
-    expect(child.category).toBe('Work');
     expect(child.project).toBe('HomeLab');
   });
 
-  it('child task category/project can be overridden', async () => {
-    const parent = await createTask('Parent override test', { category: 'Work', project: 'HomeLab' });
+  it('child task project can be overridden', async () => {
+    const parent = await createTask('Parent override test', { project: 'HomeLab' });
     const parentId = parent.id as string;
 
     const child = await createTask('Override child', {
       parent_task_id: parentId,
-      category: 'Life',
       project: 'Personal',
     });
     expect(child.parent_task_id).toBe(parentId);
-    expect(child.category).toBe('Life');
     expect(child.project).toBe('Personal');
   });
 
   it('child tasks appear in GET /api/tasks list', async () => {
-    const parent = await createTask('Parent list test', { category: 'Test' });
+    const parent = await createTask('Parent list test', { project: 'Test' });
     const parentId = parent.id as string;
 
     await createTask('Child A', { parent_task_id: parentId });
     await createTask('Child B', { parent_task_id: parentId });
 
-    const allTasks = await listTasks('category=Test');
+    const allTasks = await listTasks('project=Test');
     const children = allTasks.filter((t) => t.parent_task_id === parentId);
     expect(children.length).toBe(2);
   });
 
   it('GET /api/tasks/:id of parent includes children info', async () => {
-    const parent = await createTask('Parent detail test', { category: 'Detail' });
+    const parent = await createTask('Parent detail test', { project: 'Detail' });
     const parentId = parent.id as string;
 
     await createTask('Detail child 1', { parent_task_id: parentId });
@@ -265,7 +262,7 @@ describe('Part 2: Child task decomposition', () => {
   });
 
   it('WS task:created event fires for child task', async () => {
-    const parent = await createTask('WS parent', { category: 'WS' });
+    const parent = await createTask('WS parent', { project: 'WS' });
     const parentId = parent.id as string;
 
     const ws = await connectWs();
@@ -281,7 +278,7 @@ describe('Part 2: Child task decomposition', () => {
   });
 
   it('child task has its own independent session slots', async () => {
-    const parent = await createTask('Session parent', { category: 'Slots' });
+    const parent = await createTask('Session parent', { project: 'Slots' });
     const parentId = parent.id as string;
     const child = await createTask('Session child', { parent_task_id: parentId });
     const childId = child.id as string;
@@ -316,8 +313,8 @@ describe('Part 3: MS To-Do body roundtrip', () => {
 
     // Build a task with parent_task_id
     const { addTask } = await import('../../src/core/task-manager.js');
-    const { task: parent } = await addTask({ title: 'Roundtrip parent', category: 'RT' });
-    const { task: child } = await addTask({ title: 'Roundtrip child', category: 'RT', parent_task_id: parent.id });
+    const { task: parent } = await addTask({ title: 'Roundtrip parent', project: 'RT' });
+    const { task: child } = await addTask({ title: 'Roundtrip child', project: 'RT', parent_task_id: parent.id });
 
     // mapToRemote should include Parent: line
     const remote = mapToRemote(child);
@@ -352,11 +349,11 @@ describe('Part 3: MS To-Do body roundtrip', () => {
       lastModifiedDateTime: '2025-01-02T00:00:00Z',
     };
 
+    // Legacy two-level list name — the trailing segment is the project.
     const local = mapToLocal(msTask, 'Work / HomeLab');
     expect(local.parent_task_id).toBe('abcd1234');
     expect(local.description).toBe('Child description');
     expect(local.summary).toBe('Child summary');
-    expect(local.category).toBe('Work');
     expect(local.project).toBe('HomeLab');
   });
 });

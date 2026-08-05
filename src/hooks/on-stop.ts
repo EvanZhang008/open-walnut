@@ -53,15 +53,14 @@ function main(): void {
     }
 
     try {
-      const projectPath = taskId ? deriveProjectPath(taskId) : null;
+      const project = taskId ? deriveProjectPath(taskId) : null;
       const entry = formatDailyLogEntry(summary, filesChanged);
-      appendDailyLog(entry, 'session-end', projectPath ?? undefined);
-      if (projectPath) {
+      appendDailyLog(entry, 'session-end', project ?? undefined);
+      if (project) {
         // memory/projects/ retired (2026-07 unification): session summaries land
-        // in skills/<category>/<project>/history/ (or the category overview log).
-        // No matching skill → skip; the daily log has the entry regardless.
-        const [category, ...rest] = projectPath.split('/');
-        appendSkillHistoryForProject(category, rest.join('-') || category, summary.summary, 'session');
+        // in the project's skill history dir. No matching skill → skip; the
+        // daily log has the entry regardless.
+        appendSkillHistoryForProject(project, summary.summary, 'session');
       }
     } catch (err) {
       log.hook.warn('on-stop: failed to write daily/skill-history memory', {

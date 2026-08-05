@@ -67,7 +67,7 @@ function totalChanges(): number {
 /** Seed `n` filler tasks, then measure the row-writes caused by one quick-start. */
 async function rowWritesForQuickStart(n: number): Promise<number> {
   for (let i = 0; i < n; i++) {
-    await addTask({ title: `filler ${i}`, category: 'Local', source: 'local' });
+    await addTask({ title: `filler ${i}`, project: 'Local', source: 'local' });
   }
   // Warm the whole-store read cache and seed the row shadow so we measure the
   // steady state, not first-write seeding.
@@ -107,7 +107,7 @@ describe('POST /api/sessions/quick-start — write amplification', () => {
 
     // Full-rewrite behavior would make `large - small` ≈ 110 per writeStore call
     // (×~4 calls ≈ 440+). A bounded write path keeps the delta near zero; allow
-    // generous headroom for the category/group snapshot tables, which are small
+    // generous headroom for the project/group snapshot tables, which are small
     // and legitimately rewritten per commit.
     expect(large - small).toBeLessThan(60);
 

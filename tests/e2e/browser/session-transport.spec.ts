@@ -36,7 +36,6 @@ async function createTaskViaApi(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       title: uniqueTitle,
-      category: 'Work',
       project: 'TransportTest',
       ...opts,
     }),
@@ -88,7 +87,7 @@ test('session panel renders for a task with session', async ({ page }) => {
 
 test('session chat history shows messages after opening session', async ({ page }) => {
   // Without this the row isn't in the DOM at all (panel defaults to the Focus
-  // section + ★ category), and the `isVisible()` guard below would silently skip
+  // section + ★ project chip), and the `isVisible()` guard below would silently skip
   // every assertion in this test rather than fail.
   await presetPanelView(page)
   await page.goto('/')

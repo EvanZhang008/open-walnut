@@ -31,7 +31,7 @@ async function seedPinnedTasks(page: Page) {
   for (const [tier, n] of [['focus', 3], ['satellite', 2], ['wait', 2]] as const) {
     for (let i = 0; i < n; i++) {
       const res = await page.request.post('/api/tasks', {
-        data: { title: `tabs probe ${tier} ${i} ${stamp}`, source: 'local', category: 'Work' },
+        data: { title: `tabs probe ${tier} ${i} ${stamp}`, source: 'local', project: 'Work' },
       })
       if (!res.ok()) throw new Error(`seed create failed: ${res.status()} ${await res.text()}`)
       const body = await res.json() as { task?: { id?: string } }
@@ -60,7 +60,7 @@ test.describe('todo panel section tabs', () => {
     const strip = page.locator('.todo-section-tabs')
     await expect(strip).toBeVisible({ timeout: 20_000 })
 
-    // The CATEGORY tab defaults to ★ (Starred), which would filter the unstarred
+    // The PROJECT chip defaults to ★ (Starred), which would filter the unstarred
     // seed tasks out of the tiers — a separate axis from the section tabs. Pick
     // "All" so the tiers actually have cards to lay out.
     await page.getByRole('button', { name: 'View options' }).click()

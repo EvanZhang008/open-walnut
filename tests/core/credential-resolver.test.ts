@@ -16,7 +16,7 @@ function baseConfig(over: Partial<Config> = {}): Config {
   return {
     version: 1,
     user: {},
-    defaults: { priority: 'none', category: 'personal' },
+    defaults: { priority: 'none' },
     provider: { type: 'claude-code' },
     ...over,
   } as Config;

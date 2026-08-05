@@ -554,14 +554,13 @@ describe('tasks (read-only projection)', () => {
   it('serves the projected task list with status filter + syncedAt', async () => {
     // Seed real tasks through the task manager (SQLite in the temp home).
     const tm = await import('../../../src/core/task-manager.js')
-    await tm.createCategory('Inbox', 'local').catch(() => { /* pre-seeded */ })
-    await tm.createProject('Inbox', 'General').catch(() => { /* pre-seeded */ })
+    await tm.ensureProject('General', 'local')
     const { task: open } = await tm.addTask({
-      title: 'Buy milk', category: 'Inbox', project: 'General',
+      title: 'Buy milk', project: 'General',
       priority: 'important', description: '', status: 'todo',
     } as Parameters<typeof tm.addTask>[0])
     const { task: toFinish } = await tm.addTask({
-      title: 'Ship v1', category: 'Inbox', project: 'General',
+      title: 'Ship v1', project: 'General',
       priority: 'none', description: '', status: 'todo',
     } as Parameters<typeof tm.addTask>[0])
     await tm.completeTask(toFinish.id)
@@ -569,7 +568,7 @@ describe('tasks (read-only projection)', () => {
     const res = await fetch(apiUrl('/api/v1/tasks'))
     expect(res.status).toBe(200)
     const body = await res.json() as {
-      tasks: Array<{ id: string; title: string; status: string; phase: string }>
+      tasks: Array<{ id: string; title: string; status: string; phase: string; project: string }>
       syncedAt: string
     }
     expect(typeof body.syncedAt).toBe('string')
@@ -578,6 +577,9 @@ describe('tasks (read-only projection)', () => {
     expect(titles).toContain('Ship v1') // completed recently → still in scope
     const openTask = body.tasks.find((t) => t.id === open.id)!
     expect(openTask.status).toBe('todo')
+    // v2 projection: project is the only grouping field.
+    expect(openTask.project).toBe('General')
+    expect(openTask).not.toHaveProperty('category')
     // Slim contract: no heavy fields leak through.
     expect(openTask).not.toHaveProperty('note')
     expect(openTask).not.toHaveProperty('conversation_log')
@@ -594,10 +596,9 @@ describe('tasks (read-only projection)', () => {
   it('serves the projected session list with status filter + slim shape', async () => {
     const st = await import('../../../src/core/session-tracker.js')
     const tm = await import('../../../src/core/task-manager.js')
-    await tm.createCategory('Inbox', 'local').catch(() => { /* pre-seeded */ })
-    await tm.createProject('Inbox', 'General').catch(() => { /* pre-seeded */ })
+    await tm.ensureProject('General', 'local')
     const { task } = await tm.addTask({
-      title: 'Session host task', category: 'Inbox', project: 'General',
+      title: 'Session host task', project: 'General',
       priority: 'important', description: '', status: 'todo',
     } as Parameters<typeof tm.addTask>[0])
 
@@ -627,7 +628,8 @@ describe('tasks (read-only projection)', () => {
     expect(live.host).toBe('devbox')
     expect(live.task_id).toBe(task.id)
     expect(live.task_title).toBe('Session host task')
-    expect(live.category).toBe('Inbox')
+    expect(live.project).toBe('General')
+    expect(live).not.toHaveProperty('category')
     expect(typeof live.process_status).toBe('string')
     // Slim contract: registry internals don't leak.
     expect(live).not.toHaveProperty('pid')
@@ -749,7 +751,7 @@ describe('tasks (read-only projection)', () => {
     const tm = await import('../../../src/core/task-manager.js')
     // Seed a long-ago-completed task directly (updateTask strips completed_at).
     await tm.addTaskFull({
-      title: 'Ancient chore', category: 'Inbox', project: 'General',
+      title: 'Ancient chore', project: 'General',
       status: 'done', phase: 'COMPLETE', priority: 'none', source: 'local',
       session_ids: [], description: '', summary: '', note: '',
       created_at: '2020-01-01T00:00:00.000Z',
@@ -760,7 +762,8 @@ describe('tasks (read-only projection)', () => {
     await exportTaskProjection()
     const projection = await readTaskProjection()
     expect(projection).not.toBeNull()
-    expect(projection!.version).toBe(1)
+    // v2 = the project-only contract; readers fail closed on anything else.
+    expect(projection!.version).toBe(2)
     expect(projection!.tasks.map((t) => t.title)).not.toContain('Ancient chore')
   })
 })

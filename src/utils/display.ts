@@ -75,7 +75,7 @@ function formatTaskLine(task: Task, maxTitleLen: number): string {
   const sym = statusSymbol(task.status);
   const pri = prioritySymbol(task.priority);
   const id = task.id.slice(0, 8);
-  const cat = task.category ? chalk.dim(`[${task.category}]`) : '';
+  const group = task.project ? chalk.dim(`[${task.project}]`) : '';
   const title = task.title.length > maxTitleLen
     ? task.title.slice(0, maxTitleLen - 1) + '…'
     : task.title;
@@ -93,7 +93,7 @@ function formatTaskLine(task: Task, maxTitleLen: number): string {
     ? chalk.red(pri)
     : chalk.dim(pri);
 
-  return `${sym} ${chalk.dim(id)} ${priColored.padEnd(3)} ${coloredTitle} ${cat}`;
+  return `${sym} ${chalk.dim(id)} ${priColored.padEnd(3)} ${coloredTitle} ${group}`;
 }
 
 /**
@@ -180,7 +180,7 @@ export function renderTaskList(tasks: Task[]): void {
     const sym = statusSymbol(task.status);
     const id = chalk.dim(task.id.slice(0, 8));
     const pri = prioritySymbol(task.priority);
-    const cat = task.category ? chalk.dim(`[${task.category}]`) : '';
+    const group = task.project ? chalk.dim(`[${task.project}]`) : '';
     const date = chalk.dim(shortDate(task.updated_at));
 
     let coloredStatus: string;
@@ -199,6 +199,6 @@ export function renderTaskList(tasks: Task[]): void {
       ? chalk.red(pri)
       : chalk.dim(pri);
 
-    console.log(`${coloredStatus} ${id} ${priColored.padEnd(3)} ${task.title}  ${cat} ${date}`);
+    console.log(`${coloredStatus} ${id} ${priColored.padEnd(3)} ${task.title}  ${group} ${date}`);
   }
 }

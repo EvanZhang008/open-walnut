@@ -105,7 +105,7 @@ export function SlashCommandPortal({ editor, state, tasks, focusedTaskId, wikiLi
     const docSize = editor.state.doc.content.size;
     if (range.from >= docSize || range.to > docSize) { onClose(); return; }
 
-    const label = task.project && task.project !== task.category
+    const label = task.project
       ? `${task.project} / ${task.title}`
       : task.title;
 

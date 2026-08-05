@@ -27,7 +27,6 @@ describe('buildTaskContextPrefix', () => {
     const prefix = buildTaskContextPrefix({
       id: 'abc-123',
       title: 'Correct Tax',
-      category: 'Life',
       project: 'US CA',
       status: 'todo',
     });
@@ -36,8 +35,8 @@ describe('buildTaskContextPrefix', () => {
     expect(prefix).toContain('ID: abc-123');
     expect(prefix).toContain('Title: Correct Tax');
     expect(prefix).toContain('Status: todo');
-    expect(prefix).toContain('Category: Life');
     expect(prefix).toContain('Project: US CA');
+    expect(prefix).not.toContain('Category:');
     expect(prefix).toContain('[/Task Context]');
     expect(prefix).toMatch(/\n\n$/); // ends with double newline
   });
@@ -52,16 +51,14 @@ describe('buildTaskContextPrefix', () => {
     expect(buildTaskContextPrefix({ id: undefined as unknown as string, title: 'test' })).toBe('');
   });
 
-  it('omits project when it equals category', () => {
-    const prefix = buildTaskContextPrefix({
-      id: 'x',
-      title: 'test',
-      category: 'Inbox',
-      project: 'Inbox',
-    });
+  it('renders Inbox for a projectless task (the line is always present)', () => {
+    // Project is the ONLY grouping line, so it is always rendered — an empty
+    // project reads as "Inbox" rather than vanishing.
+    const prefix = buildTaskContextPrefix({ id: 'x', title: 'test', project: '' });
+    expect(prefix).toContain('Project: Inbox');
 
-    expect(prefix).toContain('Category: Inbox');
-    expect(prefix).not.toContain('Project:');
+    const noField = buildTaskContextPrefix({ id: 'x', title: 'test' });
+    expect(noField).toContain('Project: Inbox');
   });
 
   it('includes note content (short notes rendered in full)', () => {
@@ -99,7 +96,6 @@ describe('buildTaskContextPrefix', () => {
       source: 'plugin-a',
       due_date: '2026-03-01',
       created_at: '2026-01-15T08:00:00Z',
-      category: 'Work',
       project: 'MyProject',
     });
 
@@ -247,7 +243,6 @@ describe('enrichTaskContext', () => {
   const makeTestTask = (overrides = {}) => ({
     id: 'task-001',
     title: 'Fix Tax Filing',
-    category: 'Life',
     project: 'Tax',
     status: 'todo' as const,
     phase: 'IN_PROGRESS' as const,
@@ -289,28 +284,26 @@ describe('enrichTaskContext', () => {
     expect(result.prefix).toContain('[/Task Context]');
   });
 
-  it('includes project memory when available', async () => {
+  it('includes project memory when available (ONE tier — no parent injection)', async () => {
     vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask() as any);
     vi.spyOn(projectMemory, 'getProjectMemory').mockImplementation((path: string) => {
-      if (path === 'life/tax') return { content: '---\nname: Tax Project\n---\n## Memory entry\nTax-specific memory content', contentHash: 'hash_tax_001' };
-      if (path === 'life') return { content: '---\nname: Life\n---\n## Memory entry\nLife category memory content', contentHash: 'hash_life_01' };
+      if (path === 'tax') return { content: '---\nname: Tax Project\n---\n## Memory entry\nTax-specific memory content', contentHash: 'hash_tax_001' };
       return null;
     });
     vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue({});
 
     const result = await enrichTaskContext({ id: 'task-001', title: 'Fix Tax Filing' });
 
-    expect(result.prefix).toContain('[Category Memory: Life]');
-    expect(result.prefix).toContain('Life category memory content');
     expect(result.prefix).toContain('[Project Memory: Tax]');
     expect(result.prefix).toContain('Tax-specific memory content');
+    // The old parent (category) memory tier is gone entirely.
+    expect(result.prefix).not.toContain('[Category Memory');
   });
 
   it('returns hashes keyed by content source path', async () => {
     vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask() as any);
     vi.spyOn(projectMemory, 'getProjectMemory').mockImplementation((path: string) => {
-      if (path === 'life/tax') return { content: 'project memory content', contentHash: 'hash_pm_tax' };
-      if (path === 'life') return { content: 'category memory content', contentHash: 'hash_pm_lif' };
+      if (path === 'tax') return { content: 'project memory content', contentHash: 'hash_pm_tax' };
       return null;
     });
     vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue({});
@@ -321,8 +314,9 @@ describe('enrichTaskContext', () => {
     expect(result.hashes).toHaveProperty('note:task-001');
     expect(result.hashes).toHaveProperty('desc:task-001');
     expect(result.hashes).toHaveProperty('summary:task-001');
-    expect(result.hashes).toHaveProperty('pm:life/tax');
-    expect(result.hashes).toHaveProperty('pm:life');
+    // Memory key is the lowercased PROJECT name — a single flat segment.
+    expect(result.hashes).toHaveProperty('pm:tax');
+    expect(Object.keys(result.hashes).filter((k) => k.startsWith('pm:'))).toEqual(['pm:tax']);
     // Hashes should be SHA256 hex strings (64 chars)
     expect(result.hashes['note:task-001']).toMatch(/^[a-f0-9]{64}$/);
   });
@@ -365,22 +359,23 @@ describe('enrichTaskContext', () => {
     expect(second.prefix).toContain('Description: [unchanged since last injection]');
   });
 
-  it('shares parent memory hash across tasks in same category', async () => {
+  it('does not share memory across projects (each project is its own key)', async () => {
     vi.spyOn(projectMemory, 'getProjectMemory').mockImplementation((path: string) => {
-      if (path === 'life') return { content: 'shared life memory', contentHash: 'hash_life_sh' };
-      if (path === 'life/tax') return { content: 'tax memory', contentHash: 'hash_tax_mem' };
-      if (path === 'life/sport') return { content: 'sport memory', contentHash: 'hash_sport_m' };
+      if (path === 'tax') return { content: 'tax memory', contentHash: 'hash_tax_mem' };
+      if (path === 'sport') return { content: 'sport memory', contentHash: 'hash_sport_m' };
       return null;
     });
 
-    // Task 1: life/tax
+    // Task 1: project Tax
     vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask({
       id: 'task-tax', project: 'Tax',
     }) as any);
     vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue({});
     const first = await enrichTaskContext({ id: 'task-tax', title: 'Tax Task' });
+    expect(first.prefix).toContain('[Project Memory: Tax]');
 
-    // Task 2: life/sport — parent memory hash should match
+    // Task 2: project Sport — a different key, so it is injected in full even
+    // though Tax's hash is already in history (there is no shared parent tier).
     vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask({
       id: 'task-sport', project: 'Sport',
       note: 'different note', description: 'different desc', summary: 'different summary',
@@ -388,24 +383,37 @@ describe('enrichTaskContext', () => {
     vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue(first.hashes);
     const second = await enrichTaskContext({ id: 'task-sport', title: 'Sport Task' });
 
-    // Parent memory (pm:life) should be unchanged since hash matches
-    expect(second.prefix).toContain('[Category Memory: Life] [unchanged since last injection]');
-    // Project memory is different path (pm:life/sport vs pm:life/tax)
     expect(second.prefix).toContain('[Project Memory: Sport]');
     expect(second.prefix).toContain('sport memory');
+    expect(second.prefix).not.toContain('unchanged since last injection]\n');
   });
 
-  it('omits project line when project equals category', async () => {
-    vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask({
-      category: 'Inbox', project: 'Inbox',
-    }) as any);
+  it('re-marks the SAME project memory as unchanged on the second injection', async () => {
+    vi.spyOn(projectMemory, 'getProjectMemory').mockImplementation((path: string) => (
+      path === 'tax' ? { content: 'tax memory', contentHash: 'hash_tax_mem' } : null
+    ));
+    vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask({ project: 'Tax' }) as any);
+
+    vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue({});
+    const first = await enrichTaskContext({ id: 'task-001', title: 'Tax Task' });
+
+    vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue(first.hashes);
+    const second = await enrichTaskContext({ id: 'task-001', title: 'Tax Task' });
+
+    expect(second.prefix).toContain('[Project Memory: Tax] [unchanged since last injection]');
+  });
+
+  it('renders Inbox for a projectless task', async () => {
+    vi.spyOn(taskManager, 'getTask').mockResolvedValue(makeTestTask({ project: '' }) as any);
     vi.spyOn(projectMemory, 'getProjectMemory').mockReturnValue(null as any);
     vi.spyOn(chatHistory, 'getLastContextHashes').mockResolvedValue({});
 
     const result = await enrichTaskContext({ id: 'task-001', title: 'Test' });
 
-    expect(result.prefix).toContain('Category: Inbox');
-    expect(result.prefix).not.toContain('Project:');
+    expect(result.prefix).toContain('Project: Inbox');
+    expect(result.prefix).not.toContain('Category:');
+    // No project → no memory tier to load at all.
+    expect(result.prefix).not.toContain('[Project Memory');
   });
 });
 
@@ -503,7 +511,6 @@ describe('Chat RPC task context integration', () => {
         taskContext: {
           id: 'test-task-001',
           title: 'Correct Tax',
-          category: 'Life',
           project: 'US CA',
           status: 'todo',
           note: '',
@@ -523,8 +530,8 @@ describe('Chat RPC task context integration', () => {
       expect(content).toContain('[Task Context');
       expect(content).toContain('ID: test-task-001');
       expect(content).toContain('Title: Correct Tax');
-      expect(content).toContain('Category: Life');
       expect(content).toContain('Project: US CA');
+      expect(content).not.toContain('Category:');
       expect(content).toContain('Status: todo');
       expect(content).toContain('[/Task Context]');
 

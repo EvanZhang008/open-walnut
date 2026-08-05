@@ -1,30 +1,37 @@
 /**
  * Tests for the host/cwd resolution chain used by start_session.
  *
- * The resolution chain (from agent/tools.ts start_session):
- *   host:  params.host → .metadata default_host → undefined (local)
- *   cwd:   params.working_directory → .metadata default_cwd → error (if remote)
+ * The resolution chain (from agent/tools.ts resolveSessionContext):
+ *   host:  params.host → project registry metadata (default_host) → undefined (local)
+ *   cwd:   params.working_directory → task.cwd → parent chain → project registry
+ *          metadata (default_cwd) → error (in this harness; tools.ts additionally
+ *          falls back to the project memory dir — see resolve-session-cwd.test.ts)
  *
- * These tests validate the resolution logic by exercising getProjectMetadata()
- * and applying the same chain logic that tools.ts uses.
+ * Project settings now live on the task_projects registry row (setProjectMetadata),
+ * not a `.metadata_project` sentinel task, and are keyed by project name only.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
-import path from 'node:path';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
-import { _resetForTesting, addTask, getProjectMetadata, getTask, updateTask } from '../../src/core/task-manager.js';
+import {
+  _resetForTesting,
+  addTask,
+  getProjectMetadata,
+  setProjectMetadata,
+  getTask,
+  updateTask,
+} from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
-import type { Task } from '../../src/core/types.js';
-import { WALNUT_HOME, CONFIG_FILE } from '../../src/constants.js';
+import { WALNUT_HOME } from '../../src/constants.js';
 
-// Tasks live in SQLite now, and both the handle and task-manager's `initialized`
+// Tasks live in SQLite, and both the handle and task-manager's `initialized`
 // flag / whole-store cache are module singletons. Deleting WALNUT_HOME alone
 // leaves the previous test's rows readable through the still-open handle, so
-// .metadata_project lookups leak across tests (symptom: a later test resolves
+// project registry lookups leak across tests (symptom: a later test resolves
 // the *previous* test's default_host/default_cwd). Close + reset first.
 beforeEach(async () => {
   closeDb();
@@ -38,15 +45,19 @@ afterEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 
+interface ChainTask {
+  id?: string;
+  project?: string;
+  cwd?: string;
+  parent_task_id?: string;
+}
+
 /**
- * Simulate the host/cwd resolution chain from start_session tool.
- * This is the exact logic from src/agent/tools.ts, extracted for testing.
- *
- * Resolution chain:
- *   ① explicit param → ② task.cwd → ③ parent chain → ④ project metadata → ⑤ error
+ * Simulate the host/cwd resolution chain from the start_session tool.
+ * Mirrors src/agent/tools.ts resolveSessionContext, extracted for testing.
  */
 async function resolveHostAndCwd(
-  task: { id?: string; category: string; project: string; cwd?: string; parent_task_id?: string } | null,
+  task: ChainTask | null,
   paramsHost?: string,
   paramsCwd?: string,
 ): Promise<{
@@ -59,7 +70,7 @@ async function resolveHostAndCwd(
 
   // Priority 2 & 3: task cwd → walk up parent chain
   if (!resolvedCwd && task) {
-    let current: typeof task | undefined = task;
+    let current: ChainTask | undefined = task;
     const seen = new Set<string>();
     while (current && !resolvedCwd) {
       if (current.cwd) {
@@ -68,13 +79,13 @@ async function resolveHostAndCwd(
       }
       if (!current.parent_task_id || seen.has(current.parent_task_id)) break;
       if (current.id) seen.add(current.id);
-      current = await getTask(current.parent_task_id).catch(() => undefined) as typeof task | undefined;
+      current = await getTask(current.parent_task_id).catch(() => undefined) as ChainTask | undefined;
     }
   }
 
-  // Priority 4: project/category metadata
+  // Priority 4: project registry metadata (keyed by project name; Inbox has no row)
   if (task && (!resolvedHost || !resolvedCwd)) {
-    const metadata = await getProjectMetadata(task.category, task.project);
+    const metadata = await getProjectMetadata(task.project || '');
     if (metadata) {
       if (!resolvedHost) resolvedHost = metadata.default_host as string | undefined;
       if (!resolvedCwd) resolvedCwd = metadata.default_cwd as string | undefined;
@@ -86,7 +97,7 @@ async function resolveHostAndCwd(
     return {
       resolvedHost,
       resolvedCwd,
-      error: `Error: Remote host "${resolvedHost}" specified but no working directory. Set working_directory or add default_cwd to the project .metadata task.`,
+      error: `Error: Remote host "${resolvedHost}" specified but no working directory. Set working_directory or configure the project default_cwd.`,
     };
   }
 
@@ -103,16 +114,14 @@ async function resolveHostAndCwd(
 }
 
 describe('Host/CWD resolution chain', () => {
-  it('uses explicit host when provided, even if .metadata has a default', async () => {
-    await addTask({
-      title: '.metadata_project',
-      category: 'Work',
-      project: 'HomeLab',
-      description: 'default_host: staging-server\ndefault_cwd: /workspace/small',
+  it('uses explicit host when provided, even if the project has defaults', async () => {
+    await setProjectMetadata('HomeLab', {
+      default_host: 'staging-server',
+      default_cwd: '/workspace/small',
     });
 
     const result = await resolveHostAndCwd(
-      { category: 'Work', project: 'HomeLab' },
+      { project: 'HomeLab' },
       'remote-dev',         // explicit host
       '/workspace/big',  // explicit cwd
     );
@@ -122,16 +131,14 @@ describe('Host/CWD resolution chain', () => {
     expect(result.error).toBeUndefined();
   });
 
-  it('falls back to .metadata default_host when no explicit host', async () => {
-    await addTask({
-      title: '.metadata_project',
-      category: 'Work',
-      project: 'HomeLab',
-      description: 'default_host: remote-dev\ndefault_cwd: /workspace/project',
+  it('falls back to the project default_host when no explicit host', async () => {
+    await setProjectMetadata('HomeLab', {
+      default_host: 'remote-dev',
+      default_cwd: '/workspace/project',
     });
 
     const result = await resolveHostAndCwd(
-      { category: 'Work', project: 'HomeLab' },
+      { project: 'HomeLab' },
       undefined,         // no explicit host
       undefined,         // no explicit cwd
     );
@@ -141,12 +148,20 @@ describe('Host/CWD resolution chain', () => {
     expect(result.error).toBeUndefined();
   });
 
-  it('uses local execution when no host specified and no .metadata', async () => {
-    // No .metadata task exists
-    await addTask({ title: 'Regular task', category: 'Work', project: 'HomeLab' });
+  it('matches the project registry row case-insensitively', async () => {
+    await setProjectMetadata('HomeLab', { default_host: 'remote-dev', default_cwd: '/workspace/p' });
+
+    const result = await resolveHostAndCwd({ project: 'homelab' }, undefined, undefined);
+
+    expect(result.resolvedHost).toBe('remote-dev');
+    expect(result.resolvedCwd).toBe('/workspace/p');
+  });
+
+  it('uses local execution when no host specified and the project has no defaults', async () => {
+    await addTask({ title: 'Regular task', project: 'HomeLab' });
 
     const result = await resolveHostAndCwd(
-      { category: 'Work', project: 'HomeLab' },
+      { project: 'HomeLab' },
       undefined,            // no host
       '/local/workspace',   // local cwd provided
     );
@@ -156,19 +171,23 @@ describe('Host/CWD resolution chain', () => {
     expect(result.error).toBeUndefined();
   });
 
-  it('errors when remote host has no cwd and no .metadata default_cwd', async () => {
-    // .metadata exists but only has default_host, no default_cwd
-    await addTask({
-      title: '.metadata_project',
-      category: 'Work',
-      project: 'HomeLab',
-      description: 'default_host: remote-dev',
-    });
+  it('resolves nothing from the registry for an Inbox task (no row by design)', async () => {
+    const { task } = await addTask({ title: 'Loose thought' });
+    expect(task.project).toBe('');
+
+    const result = await resolveHostAndCwd({ id: task.id, project: task.project }, undefined, undefined);
+
+    expect(result.resolvedHost).toBeUndefined();
+    expect(result.error).toContain('working_directory is required');
+  });
+
+  it('errors when remote host has no cwd and the project has no default_cwd', async () => {
+    await setProjectMetadata('HomeLab', { default_host: 'remote-dev' });
 
     const result = await resolveHostAndCwd(
-      { category: 'Work', project: 'HomeLab' },
-      undefined, // host will be resolved from .metadata
-      undefined, // no cwd provided and no default_cwd in .metadata
+      { project: 'HomeLab' },
+      undefined, // host will be resolved from the project
+      undefined, // no cwd provided and no default_cwd
     );
 
     expect(result.resolvedHost).toBe('remote-dev');
@@ -178,7 +197,7 @@ describe('Host/CWD resolution chain', () => {
 
   it('errors when explicit remote host has no cwd', async () => {
     const result = await resolveHostAndCwd(
-      { category: 'Work', project: 'HomeLab' },
+      { project: 'HomeLab' },
       'remote-dev', // explicit host
       undefined, // no cwd
     );
@@ -190,7 +209,7 @@ describe('Host/CWD resolution chain', () => {
 
   it('errors when no cwd at all for local session', async () => {
     const result = await resolveHostAndCwd(
-      { category: 'Work', project: 'HomeLab' },
+      { project: 'HomeLab' },
       undefined, // no host
       undefined, // no cwd
     );
@@ -199,18 +218,16 @@ describe('Host/CWD resolution chain', () => {
     expect(result.error).toContain('working_directory is required');
   });
 
-  it('explicit host overrides .metadata host, but .metadata cwd is used as fallback', async () => {
-    await addTask({
-      title: '.metadata_project',
-      category: 'Work',
-      project: 'HomeLab',
-      description: 'default_host: staging-server\ndefault_cwd: /workspace/from-metadata',
+  it('explicit host overrides the project host, but project cwd is used as fallback', async () => {
+    await setProjectMetadata('HomeLab', {
+      default_host: 'staging-server',
+      default_cwd: '/workspace/from-metadata',
     });
 
     const result = await resolveHostAndCwd(
-      { category: 'Work', project: 'HomeLab' },
+      { project: 'HomeLab' },
       'remote-dev',   // explicit host overrides staging-server
-      undefined,   // cwd falls back to .metadata
+      undefined,   // cwd falls back to the project default
     );
 
     expect(result.resolvedHost).toBe('remote-dev');
@@ -218,18 +235,16 @@ describe('Host/CWD resolution chain', () => {
     expect(result.error).toBeUndefined();
   });
 
-  it('explicit cwd overrides .metadata cwd, and .metadata host is used as fallback', async () => {
-    await addTask({
-      title: '.metadata_project',
-      category: 'Work',
-      project: 'HomeLab',
-      description: 'default_host: remote-dev\ndefault_cwd: /workspace/from-metadata',
+  it('explicit cwd overrides the project cwd, and the project host is used as fallback', async () => {
+    await setProjectMetadata('HomeLab', {
+      default_host: 'remote-dev',
+      default_cwd: '/workspace/from-metadata',
     });
 
     const result = await resolveHostAndCwd(
-      { category: 'Work', project: 'HomeLab' },
-      undefined,              // host falls back to .metadata
-      '/workspace/explicit',  // explicit cwd overrides metadata
+      { project: 'HomeLab' },
+      undefined,              // host falls back to the project default
+      '/workspace/explicit',  // explicit cwd overrides the project default
     );
 
     expect(result.resolvedHost).toBe('remote-dev');
@@ -237,7 +252,7 @@ describe('Host/CWD resolution chain', () => {
     expect(result.error).toBeUndefined();
   });
 
-  it('skips .metadata lookup when task is null (taskless sessions)', async () => {
+  it('skips the project lookup when task is null (taskless sessions)', async () => {
     const result = await resolveHostAndCwd(
       null,       // no task
       'remote-dev',  // explicit host
@@ -249,18 +264,13 @@ describe('Host/CWD resolution chain', () => {
     expect(result.error).toBeUndefined();
   });
 
-  it('.metadata with only default_cwd (no host) resolves to local session with cwd', async () => {
-    await addTask({
-      title: '.metadata_project',
-      category: 'Work',
-      project: 'HomeLab',
-      description: 'default_cwd: /workspace/local-project',
-    });
+  it('a project with only default_cwd (no host) resolves to a local session with cwd', async () => {
+    await setProjectMetadata('HomeLab', { default_cwd: '/workspace/local-project' });
 
     const result = await resolveHostAndCwd(
-      { category: 'Work', project: 'HomeLab' },
+      { project: 'HomeLab' },
       undefined, // no host
-      undefined, // no explicit cwd — falls back to .metadata
+      undefined, // no explicit cwd — falls back to the project default
     );
 
     expect(result.resolvedHost).toBeUndefined(); // local
@@ -271,21 +281,14 @@ describe('Host/CWD resolution chain', () => {
 
 describe('Task-level cwd resolution', () => {
   it('task.cwd overrides project default_cwd', async () => {
-    // Set up project with default_cwd
-    await addTask({
-      title: '.metadata_project',
-      category: 'Work',
-      project: 'HomeLab',
-      description: 'default_cwd: /workspace/project-default',
-    });
+    await setProjectMetadata('HomeLab', { default_cwd: '/workspace/project-default' });
 
-    // Create a task with its own cwd
-    const { task } = await addTask({ title: 'Special task', category: 'Work', project: 'HomeLab' });
+    const { task } = await addTask({ title: 'Special task', project: 'HomeLab' });
     await updateTask(task.id, { cwd: '/workspace/task-override' });
     const updated = await getTask(task.id);
 
     const result = await resolveHostAndCwd(
-      { id: updated.id, category: updated.category, project: updated.project, cwd: updated.cwd },
+      { id: updated.id, project: updated.project, cwd: updated.cwd },
       undefined, // no explicit host
       undefined, // no explicit cwd
     );
@@ -295,12 +298,12 @@ describe('Task-level cwd resolution', () => {
   });
 
   it('explicit param overrides task.cwd', async () => {
-    const { task } = await addTask({ title: 'Task with cwd', category: 'Work', project: 'HomeLab' });
+    const { task } = await addTask({ title: 'Task with cwd', project: 'HomeLab' });
     await updateTask(task.id, { cwd: '/workspace/task-cwd' });
     const updated = await getTask(task.id);
 
     const result = await resolveHostAndCwd(
-      { id: updated.id, category: updated.category, project: updated.project, cwd: updated.cwd },
+      { id: updated.id, project: updated.project, cwd: updated.cwd },
       undefined,
       '/workspace/explicit',  // explicit param wins
     );
@@ -310,19 +313,18 @@ describe('Task-level cwd resolution', () => {
   });
 
   it('subtask inherits cwd from parent task', async () => {
-    const { task: parent } = await addTask({ title: 'Parent', category: 'Work', project: 'HomeLab' });
+    const { task: parent } = await addTask({ title: 'Parent', project: 'HomeLab' });
     await updateTask(parent.id, { cwd: '/workspace/parent-cwd' });
 
     const { task: child } = await addTask({
       title: 'Child',
-      category: 'Work',
       project: 'HomeLab',
       parent_task_id: parent.id,
     });
 
     // Child has no cwd — should inherit from parent
     const result = await resolveHostAndCwd(
-      { id: child.id, category: child.category, project: child.project, cwd: child.cwd, parent_task_id: child.parent_task_id },
+      { id: child.id, project: child.project, cwd: child.cwd, parent_task_id: child.parent_task_id },
       undefined,
       undefined,
     );
@@ -332,12 +334,11 @@ describe('Task-level cwd resolution', () => {
   });
 
   it('subtask cwd overrides parent cwd', async () => {
-    const { task: parent } = await addTask({ title: 'Parent', category: 'Work', project: 'HomeLab' });
+    const { task: parent } = await addTask({ title: 'Parent', project: 'HomeLab' });
     await updateTask(parent.id, { cwd: '/workspace/parent-cwd' });
 
     const { task: child } = await addTask({
       title: 'Child',
-      category: 'Work',
       project: 'HomeLab',
       parent_task_id: parent.id,
     });
@@ -345,7 +346,7 @@ describe('Task-level cwd resolution', () => {
     const updatedChild = await getTask(child.id);
 
     const result = await resolveHostAndCwd(
-      { id: updatedChild.id, category: updatedChild.category, project: updatedChild.project, cwd: updatedChild.cwd, parent_task_id: updatedChild.parent_task_id },
+      { id: updatedChild.id, project: updatedChild.project, cwd: updatedChild.cwd, parent_task_id: updatedChild.parent_task_id },
       undefined,
       undefined,
     );
@@ -355,24 +356,18 @@ describe('Task-level cwd resolution', () => {
   });
 
   it('falls back to project metadata when no task cwd in chain', async () => {
-    await addTask({
-      title: '.metadata_project',
-      category: 'Work',
-      project: 'HomeLab',
-      description: 'default_cwd: /workspace/project-default',
-    });
+    await setProjectMetadata('HomeLab', { default_cwd: '/workspace/project-default' });
 
-    const { task: parent } = await addTask({ title: 'Parent no cwd', category: 'Work', project: 'HomeLab' });
+    const { task: parent } = await addTask({ title: 'Parent no cwd', project: 'HomeLab' });
     const { task: child } = await addTask({
       title: 'Child no cwd',
-      category: 'Work',
       project: 'HomeLab',
       parent_task_id: parent.id,
     });
 
     // Neither parent nor child has cwd → falls back to project metadata
     const result = await resolveHostAndCwd(
-      { id: child.id, category: child.category, project: child.project, cwd: child.cwd, parent_task_id: child.parent_task_id },
+      { id: child.id, project: child.project, cwd: child.cwd, parent_task_id: child.parent_task_id },
       undefined,
       undefined,
     );

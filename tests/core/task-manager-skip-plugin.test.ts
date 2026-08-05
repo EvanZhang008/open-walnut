@@ -14,8 +14,9 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-test-fork-skip'));
 
-import { addTask, _resetForTesting } from '../../src/core/task-manager.js';
-import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js';
+import { addTask, ensureProject, _resetForTesting } from '../../src/core/task-manager.js';
+import { closeDb } from '../../src/core/task-db.js';
+import { WALNUT_HOME } from '../../src/constants.js';
 import { registry } from '../../src/core/integration-registry.js';
 import { createNoopSync, createMockPlugin } from './plugin-test-utils.js';
 
@@ -42,6 +43,7 @@ function createCjkRejecterPlugin() {
 describe('addTask _skipPluginOps (fork bug fix)', () => {
   beforeEach(async () => {
     // Clean temp directory & reset task-manager state
+    closeDb();
     await fs.rm(WALNUT_HOME, { recursive: true, force: true });
     _resetForTesting();
 
@@ -50,45 +52,35 @@ describe('addTask _skipPluginOps (fork bug fix)', () => {
       registry.register('fake-cjk-rejecter', createCjkRejecterPlugin());
     }
 
-    // Pre-seed the store with a category mapped to our fake plugin source.
-    // This way, when addTask creates a task in the "PluginCat" category,
-    // it picks up source='fake-cjk-rejecter' from the store's categories map.
-    const tasksDir = TASKS_FILE.replace(/\/[^/]+$/, '');
-    await fs.mkdir(tasksDir, { recursive: true });
-    await fs.writeFile(
-      TASKS_FILE,
-      JSON.stringify({
-        version: 4,
-        tasks: [],
-        categories: {
-          PluginCat: { source: 'fake-cjk-rejecter' },
-        },
-      }),
-    );
+    // Claim a project for the fake plugin: the registry row IS the source of
+    // record, so a task filed under PluginProj inherits source=fake-cjk-rejecter
+    // and therefore runs that plugin's content validation.
+    await ensureProject('PluginProj', 'fake-cjk-rejecter');
   });
 
   afterEach(async () => {
+    closeDb();
     await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   });
 
   it('creates task with CJK title when _skipPluginOps is true', async () => {
     const { task } = await addTask({
       title: '分叉测试 — Fork of CJK task',
-      category: 'PluginCat',
+      project: 'PluginProj',
       _skipPluginOps: true,
     });
 
     expect(task.title).toBe('分叉测试 — Fork of CJK task');
     expect(task.id).toBeTruthy();
     expect(task.source).toBe('fake-cjk-rejecter');
-    expect(task.category).toBe('PluginCat');
+    expect(task.project).toBe('PluginProj');
   });
 
   it('rejects CJK title WITHOUT _skipPluginOps (proves validation runs)', async () => {
     await expect(
       addTask({
         title: '测试任务 — should fail',
-        category: 'PluginCat',
+        project: 'PluginProj',
       }),
     ).rejects.toThrow('CJK characters detected');
   });
@@ -96,7 +88,7 @@ describe('addTask _skipPluginOps (fork bug fix)', () => {
   it('skips auto-push when _skipPluginOps is true (syncResult is success stub)', async () => {
     const { syncResult } = await addTask({
       title: '推送测试 — fork should not push',
-      category: 'PluginCat',
+      project: 'PluginProj',
       _skipPluginOps: true,
     });
 
@@ -107,7 +99,7 @@ describe('addTask _skipPluginOps (fork bug fix)', () => {
     // Local source has no validateContent, so CJK always passes
     const { task } = await addTask({
       title: '本地任务 — local task with CJK',
-      category: 'LocalCategory',
+      project: 'LocalProject',
     });
 
     expect(task.title).toBe('本地任务 — local task with CJK');
@@ -118,7 +110,7 @@ describe('addTask _skipPluginOps (fork bug fix)', () => {
     const { task } = await addTask({
       title: 'Fork child',
       description: '这是一个分叉任务的描述',
-      category: 'PluginCat',
+      project: 'PluginProj',
       _skipPluginOps: true,
     });
 
@@ -130,7 +122,7 @@ describe('addTask _skipPluginOps (fork bug fix)', () => {
       addTask({
         title: 'ASCII-only title',
         description: '中文描述 should fail',
-        category: 'PluginCat',
+        project: 'PluginProj',
       }),
     ).rejects.toThrow('CJK characters detected');
   });

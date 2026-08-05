@@ -7,11 +7,13 @@
  *   • SECTION tab (`.todo-section-tabs`) — which region owns the panel. Defaults
  *     to `Focus`, where the main task list (`.todo-panel-item` rows) is NOT
  *     mounted at all. `All` is the stacked view where every region renders.
- *   • CATEGORY tab (`.todo-panel-tabs`, inside the View dropdown) — which
- *     category is in scope. Defaults to ★ (Starred), which hides non-starred tasks.
+ *   • PROJECT chip (`.vd-cat`, inside the View dropdown) — which project is in
+ *     scope. Defaults to ★ (Starred), which hides non-starred tasks. Project is
+ *     now the ONLY grouping axis (the category layer was removed); `Inbox` is the
+ *     chip for tasks with no project.
  *
  * Before the section tabs existed everything was always mounted, so specs only
- * had to deal with the category axis. Any spec that locates `.todo-panel-item`
+ * had to deal with the project axis. Any spec that locates `.todo-panel-item`
  * now needs `showAllSections()` (or an explicit tab) first.
  */
 
@@ -42,24 +44,25 @@ export async function showAllSections(page: Page): Promise<void> {
 }
 
 /**
- * Pick a CATEGORY from the View dropdown. The old top-level `.todo-panel-tabs`
- * category tab strip is long gone — categories moved inside the View dropdown —
- * so specs still clicking `.todo-panel-tab` time out.
+ * Pick a PROJECT chip from the View dropdown. There is no top-level chip strip —
+ * projects live inside the View dropdown — so specs clicking a bare
+ * `.todo-panel-tab` time out. Pass 'All' for the unscoped chip, 'Inbox' for the
+ * no-project bucket, or a project name.
  */
-export async function selectCategory(page: Page, category: string): Promise<void> {
+export async function selectProject(page: Page, project: string): Promise<void> {
   if (!(await page.locator('.vd-panel').isVisible())) {
     await page.getByRole('button', { name: 'View options' }).click()
   }
   await page.locator('.vd-cat').filter({
-    has: page.locator('.vd-cat-name').filter({ hasText: new RegExp(`^${category}$`) }),
+    has: page.locator('.vd-cat-name').filter({ hasText: new RegExp(`^${project}$`) }),
   }).click()
   await page.keyboard.press('Escape')
 }
 
-/** Both axes wide open: stacked sections + the "All" category. */
+/** Both axes wide open: stacked sections + the "All" project chip. */
 export async function showEverything(page: Page): Promise<void> {
   await showAllSections(page)
-  await selectCategory(page, 'All')
+  await selectProject(page, 'All')
 }
 
 /**
@@ -67,18 +70,19 @@ export async function showEverything(page: Page): Promise<void> {
  * BEFORE `page.goto()`. Preferable to clicking when a spec just needs the rows to
  * exist on load (no post-load tab dance, no waiting for the strip to mount).
  *
- * Keys must match TodoPanel's `LS_SECTION_KEY` / `LS_TAB_KEY`.
+ * Keys must match TodoPanel's `LS_SECTION_KEY` / `LS_TAB_KEY`. `project: ''` is
+ * the All chip (no scoping).
  */
 export async function presetPanelView(
   page: Page,
-  opts: { section?: string; category?: string } = {},
+  opts: { section?: string; project?: string } = {},
 ): Promise<void> {
   const section = opts.section ?? 'all'
-  const category = opts.category ?? ''
-  await page.addInitScript(([s, c]) => {
+  const project = opts.project ?? ''
+  await page.addInitScript(([s, p]) => {
     try {
       localStorage.setItem('walnut-todo-active-section', s as string)
-      localStorage.setItem('walnut-todo-active-tab', c as string)
+      localStorage.setItem('walnut-todo-active-tab', p as string)
     } catch { /* ignore */ }
-  }, [section, category])
+  }, [section, project])
 }

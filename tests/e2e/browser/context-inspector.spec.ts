@@ -66,7 +66,7 @@ test('inspector shows all 11 sections', async ({ page }) => {
   await page.locator('button', { hasText: 'Context' }).click()
   await expect(page.locator('.context-inspector')).toBeVisible({ timeout: 5000 })
 
-  // modelConfig, roleAndRules, skills, compactionSummary, taskCategories,
+  // modelConfig, roleAndRules, skills, compactionSummary, taskProjects,
   // userProfile, globalMemory, notesContext, dailyLogs, tools, apiMessages
   const sections = page.locator('.context-section')
   await expect(sections).toHaveCount(11)

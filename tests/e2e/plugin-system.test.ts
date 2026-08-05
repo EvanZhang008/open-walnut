@@ -101,7 +101,7 @@ describe('F4: task creation triggers plugin', () => {
     const res = await fetch(apiUrl('/api/tasks'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Plugin E2E task', category: 'TestCategory', project: 'Test' }),
+      body: JSON.stringify({ title: 'Plugin E2E task', project: 'Test' }),
     });
     expect(res.status).toBe(201);
     const body = await res.json() as { task: { id: string; title: string; source: string } };
@@ -118,7 +118,7 @@ describe('F5: phase change via PATCH', () => {
     const createRes = await fetch(apiUrl('/api/tasks'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Phase test task', category: 'PhaseTest' }),
+      body: JSON.stringify({ title: 'Phase test task', project: 'PhaseTest' }),
     });
     const { task } = await createRes.json() as { task: { id: string } };
 
@@ -135,13 +135,13 @@ describe('F5: phase change via PATCH', () => {
   });
 });
 
-// F6: source is determined by plugin category claim
-describe('F6: source determined by category claim', () => {
+// F6: source is determined by plugin project claim
+describe('F6: source determined by project claim', () => {
   it('tasks get source assigned based on plugin claims', async () => {
     const res = await fetch(apiUrl('/api/tasks'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Source routing task', category: 'SourceRoute' }),
+      body: JSON.stringify({ title: 'Source routing task', project: 'SourceRoute' }),
     });
     expect(res.status).toBe(201);
     const { task } = await res.json() as { task: { source: string } };
@@ -151,20 +151,20 @@ describe('F6: source determined by category claim', () => {
   });
 });
 
-// F7: tasks in same category get consistent source
-describe('F7: source consistency within category', () => {
-  it('two tasks in same category get same source', async () => {
+// F7: tasks in same project get consistent source
+describe('F7: source consistency within project', () => {
+  it('two tasks in same project get same source', async () => {
     const res1 = await fetch(apiUrl('/api/tasks'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Consistent 1', category: 'ConsistentCat' }),
+      body: JSON.stringify({ title: 'Consistent 1', project: 'ConsistentProj' }),
     });
     const { task: task1 } = await res1.json() as { task: { source: string } };
 
     const res2 = await fetch(apiUrl('/api/tasks'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Consistent 2', category: 'ConsistentCat' }),
+      body: JSON.stringify({ title: 'Consistent 2', project: 'ConsistentProj' }),
     });
     const { task: task2 } = await res2.json() as { task: { source: string } };
 
@@ -203,7 +203,6 @@ describe('Local plugin sync through registry', () => {
       status: 'todo',
       phase: 'TODO',
       priority: 'none',
-      category: 'Local',
       project: 'Local',
       session_ids: [],
       created_at: new Date().toISOString(),
@@ -226,7 +225,7 @@ describe('Task lifecycle via REST', () => {
     const createRes = await fetch(apiUrl('/api/tasks'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Lifecycle task', category: 'Lifecycle' }),
+      body: JSON.stringify({ title: 'Lifecycle task', project: 'Lifecycle' }),
     });
     expect(createRes.status).toBe(201);
     const { task } = await createRes.json() as { task: { id: string } };
@@ -257,21 +256,21 @@ describe('Task lifecycle via REST', () => {
   });
 });
 
-// Multi-category
-describe('Multi-category task creation', () => {
-  it('creates tasks across 3 different categories', async () => {
-    const categories = ['Alpha', 'Beta', 'Gamma'];
+// Multi-project
+describe('Multi-project task creation', () => {
+  it('creates tasks across 3 different projects', async () => {
+    const projects = ['Alpha', 'Beta', 'Gamma'];
     const ids: string[] = [];
 
-    for (const cat of categories) {
+    for (const proj of projects) {
       const res = await fetch(apiUrl('/api/tasks'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: `Task in ${cat}`, category: cat }),
+        body: JSON.stringify({ title: `Task in ${proj}`, project: proj }),
       });
       expect(res.status).toBe(201);
-      const body = await res.json() as { task: { id: string; category: string } };
-      expect(body.task.category).toBe(cat);
+      const body = await res.json() as { task: { id: string; project: string } };
+      expect(body.task.project).toBe(proj);
       ids.push(body.task.id);
     }
 

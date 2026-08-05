@@ -9,6 +9,7 @@ import { createPortal } from 'react-dom';
 import type { Task } from '@open-walnut/core';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useTasksContext } from '@/contexts/TasksContext';
+import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { QuickTaskComposer } from '@/components/tasks/QuickTaskComposer';
 import type { CreateTaskInput } from '@/api/tasks';
 import { listCalendarSources, type CalendarInfo } from '@/api/calendar';
@@ -40,6 +41,7 @@ interface Props {
 
 export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent }: Props) {
   const { tasks, star } = useTasksContext();
+  const projectRegistry = useProjectRegistry();
   const anchorRef = useRef<HTMLElement | null>(seed.anchorEl ?? null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const placement = useMenuPlacement(true, anchorRef, menuRef, {
@@ -68,21 +70,23 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
+  // Flat list of existing project names for the composer's datalist. Project is
+  // the single grouping layer; Inbox is the absence of one, so '' never appears.
+  // Registry first (an existing-but-EMPTY project must not be badged "new" in the
+  // confirm step), then names seen on tasks as a fallback while that fetch is in
+  // flight. Deduped case-insensitively, canonical registry spelling winning.
   const projectOptions = useMemo(() => {
-    const options = new Map<string, Set<string>>();
-    for (const task of tasks) {
-      if (task.title.startsWith('.metadata') || task.project === task.category) continue;
-      let projects = options.get(task.category);
-      if (!projects) {
-        projects = new Set();
-        options.set(task.category, projects);
-      }
-      projects.add(task.project);
+    const seen = new Map<string, string>(); // lowercase → canonical/first spelling
+    for (const name of projectRegistry.projectNames) {
+      if (name.trim()) seen.set(name.trim().toLowerCase(), name.trim());
     }
-    return Object.fromEntries(
-      [...options.entries()].map(([category, projects]) => [category, [...projects].sort((a, b) => a.localeCompare(b))])
-    );
-  }, [tasks]);
+    for (const task of tasks) {
+      if (task.title.startsWith('.metadata') || !task.project) continue;
+      const key = task.project.toLowerCase();
+      if (!seen.has(key)) seen.set(key, task.project);
+    }
+    return [...seen.values()].sort((a, b) => a.localeCompare(b));
+  }, [tasks, projectRegistry.projectNames]);
 
   const initialDates = useMemo(
     () => ({ start: seed.start, due: seed.end }),
@@ -123,7 +127,6 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
               const task = await onCreateTask({
                 title: input.title,
                 priority: input.priority,
-                category: input.category,
                 project: input.project,
                 due_date: input.due_date,
                 start_date: input.start_date,

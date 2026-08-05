@@ -104,12 +104,12 @@ afterAll(async () => {
 function extPluginApi(configOverrides?: Record<string, unknown>) {
   return createTestPluginApi(
     { id: 'ext-sync', name: 'ExtSync' },
-    { room_id: 'R-123456', category: 'Work', ...configOverrides },
+    { room_id: 'R-123456', project: 'Work', ...configOverrides },
   );
 }
 
 function extPluginTask(overrides?: Partial<ReturnType<typeof createMockTask>>) {
-  return createMockTask({ category: 'Work', source: 'ext-sync', ...overrides });
+  return createMockTask({ project: 'Work', source: 'ext-sync', ...overrides });
 }
 
 // ── Tests ──
@@ -123,7 +123,7 @@ describe.skipIf(!PLUGIN_INSTALLED)('External plugin registration', () => {
     const methods: (keyof IntegrationSync)[] = [
       'createTask', 'deleteTask', 'updateTitle', 'updateDescription',
       'updateSummary', 'updateNote', 'updateConversationLog', 'updatePriority',
-      'updatePhase', 'updateDueDate', 'updateStar', 'updateCategory',
+      'updatePhase', 'updateDueDate', 'updateStar', 'updateProject',
       'updateDependencies', 'associateSubtask', 'disassociateSubtask', 'syncPoll',
     ];
     for (const m of methods) {
@@ -132,15 +132,15 @@ describe.skipIf(!PLUGIN_INSTALLED)('External plugin registration', () => {
   });
 
   it('registers source claim at priority 10', () => {
-    const { api, collected } = extPluginApi({ category: 'Work' });
+    const { api, collected } = extPluginApi({ project: 'Work' });
     register(api);
 
     expect(collected.claim).not.toBeNull();
     expect(collected.claim!.priority).toBe(10);
   });
 
-  it('source claim returns true for configured category (case-insensitive)', () => {
-    const { api, collected } = extPluginApi({ category: 'Work' });
+  it('source claim returns true for the configured project (case-insensitive)', () => {
+    const { api, collected } = extPluginApi({ project: 'Work' });
     register(api);
 
     // Exact match
@@ -148,13 +148,14 @@ describe.skipIf(!PLUGIN_INSTALLED)('External plugin registration', () => {
     // Case-insensitive
     expect(collected.claim!.fn('work')).toBe(true);
     expect(collected.claim!.fn('WORK')).toBe(true);
-    // Non-matching categories
+    // Non-matching projects
     expect(collected.claim!.fn('Personal')).toBe(false);
-    expect(collected.claim!.fn('Inbox')).toBe(false);
+    // Inbox ('') is structurally local-only and can never be claimed.
+    expect(collected.claim!.fn('')).toBe(false);
   });
 
-  it('source claim returns false for all categories when category config is empty', () => {
-    const { api, collected } = extPluginApi({ category: '' });
+  it('source claim returns false for every project when the project config is empty', () => {
+    const { api, collected } = extPluginApi({ project: '' });
     register(api);
 
     expect(collected.claim!.fn('Work')).toBe(false);

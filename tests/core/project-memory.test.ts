@@ -368,7 +368,7 @@ describe('getParentSummaries', () => {
 
   it('returns parent summaries for nested project', async () => {
     ensureProjectDir('work');
-    await updateProjectSummary('work', 'Work', 'Work category');
+    await updateProjectSummary('work', 'Work', 'Work umbrella');
 
     ensureProjectDir('work/api');
     const parents = getParentSummaries('work/api');

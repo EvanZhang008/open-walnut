@@ -114,7 +114,7 @@ function messagePayload(sid: string): OnMessageSendPayload {
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   await fs.mkdir(WALNUT_HOME, { recursive: true });
-  const created = await addTask({ title: 'debounce task', category: 'Inbox' });
+  const created = await addTask({ title: 'debounce task' });
   taskId = created.task.id;
   task = created.task;
   // Persist a short debounce window so the hook reads it (not the 3-min default).

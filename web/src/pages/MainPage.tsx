@@ -13,6 +13,7 @@ import { useNotifications } from '@/contexts/notifications';
 import { useFavorites } from '@/hooks/useFavorites';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useOrdering } from '@/hooks/useOrdering';
+import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { ChatPanel } from '@/components/chat/ChatPanel';
@@ -20,6 +21,7 @@ import { useOverlayHeightVar } from '@/hooks/useHeightVar';
 import { ChatMessage, type RouteInfo } from '@/components/chat/ChatMessage';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { TodoPanel } from '@/components/tasks/TodoPanel';
+import { LS_TAB_KEY } from '@/components/tasks/task-tabs';
 import { QuickTaskComposer } from '@/components/tasks/QuickTaskComposer';
 import { RoutinesView } from '@/components/routines/RoutinesView';
 import { CalendarSidePanel } from '@/components/calendar/CalendarSidePanel';
@@ -236,36 +238,43 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     const custom = focusBar.customTiers.find((t) => t.id === tier);
     return custom ? custom.label : `${tier[0]?.toUpperCase() ?? ''}${tier.slice(1)}`;
   }, [focusBar.customTiers]);
+  // Flat project picker options — Project is the single grouping layer.
+  // Sourced from the REGISTRY first (so an existing but empty project is listed,
+  // and quick-capture doesn't badge it as "new"), then unioned with names seen on
+  // the loaded tasks as a fallback for when that fetch hasn't landed / failed.
+  // Deduped case-insensitively — project identity is NOCASE — registry spelling
+  // wins since it's the canonical one.
+  const projectRegistry = useProjectRegistry();
   const quickTaskProjectOptions = useMemo(() => {
-    const options = new Map<string, Set<string>>();
-    for (const task of tasks) {
-      if (task.title.startsWith('.metadata') || task.project === task.category) continue;
-      let projects = options.get(task.category);
-      if (!projects) {
-        projects = new Set();
-        options.set(task.category, projects);
-      }
-      projects.add(task.project);
+    const byLower = new Map<string, string>();
+    for (const name of projectRegistry.projectNames) {
+      const project = name.trim();
+      if (project) byLower.set(project.toLowerCase(), project);
     }
-    return Object.fromEntries(
-      [...options.entries()].map(([category, projects]) => [category, [...projects].sort((a, b) => a.localeCompare(b))]),
-    );
-  }, [tasks]);
+    for (const task of tasks) {
+      if (task.title.startsWith('.metadata')) continue;
+      const project = (task.project || '').trim();
+      if (!project) continue;   // Inbox is the absence of a project, never an option
+      const key = project.toLowerCase();
+      if (!byLower.has(key)) byLower.set(key, project);
+    }
+    return [...byLower.values()].sort((a, b) => a.localeCompare(b));
+  }, [tasks, projectRegistry.projectNames]);
   const ordering = useOrdering();
-  // Configured task defaults (platform/category/project) for quick-add capture. Fetched
-  // once; refreshed on config:changed. Quick-add ("Add to Focus") routes to these instead
-  // of inheriting the active tab's (possibly external-synced) category/source.
-  const [taskDefaults, setTaskDefaults] = useState<{ platform?: string; category?: string; project?: string }>({});
+  // Configured task defaults (platform/project) for quick-add capture. Fetched once;
+  // refreshed on config:changed. Quick-add ("Add to Focus") routes to these instead of
+  // inheriting the active tab's (possibly provider-claimed) project/source.
+  const [taskDefaults, setTaskDefaults] = useState<{ platform?: string; project?: string }>({});
   useEffect(() => {
     let alive = true;
     fetchConfig()
-      .then((c) => { if (alive) setTaskDefaults({ platform: c.defaults?.platform, category: c.defaults?.category, project: c.defaults?.project }); })
+      .then((c) => { if (alive) setTaskDefaults({ platform: c.defaults?.platform, project: c.defaults?.project }); })
       .catch(() => { /* defaults stay empty — falls back to local/Inbox below */ });
     return () => { alive = false; };
   }, []);
   useEvent('config:changed', () => {
     fetchConfig()
-      .then((c) => setTaskDefaults({ platform: c.defaults?.platform, category: c.defaults?.category, project: c.defaults?.project }))
+      .then((c) => setTaskDefaults({ platform: c.defaults?.platform, project: c.defaults?.project }))
       .catch(() => {});
   });
   const [focusedTask, setFocusedTask] = useState<Task | null>(null);
@@ -273,8 +282,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const [focusNonce, setFocusNonce] = useState(0);
   // Locate scope for the current focus action. 'pinned' = only scroll/expand the
   // Pinned region (tier quick-adds — the new card is already visible in its tier);
-  // 'all' additionally switches the TASKS category tab to the task's category.
-  // Tier quick-adds routed to the capture category used to switch the tab to e.g.
+  // 'all' additionally switches the TASKS project tab to the task's project.
+  // Tier quick-adds routed to the capture project used to switch the tab to e.g.
   // "Personal", filtering the whole task list down to 1 — read as "all my tasks
   // disappeared".
   const [focusScope, setFocusScope] = useState<'all' | 'pinned'>('all');
@@ -375,17 +384,20 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     easing: 'cubic-bezier(0.32, 0.72, 0, 1)',
   });
 
-  // Active category tab — mirrors TodoPanel's tab for URL sync.
-  // Initialize from the same localStorage key so the URL reflects the initial tab.
-  const [activeCategory, setActiveCategory] = useState<string | undefined>(() => {
-    try { return localStorage.getItem('open-walnut-todo-active-tab') ?? undefined; } catch { return undefined; }
+  // Active project tab — mirrors TodoPanel's tab for URL sync (may be a tab
+  // sentinel: STARRED_TAB / INBOX_TAB). Initialized from the SAME localStorage key
+  // TodoPanel writes, imported rather than re-spelled: this used to read
+  // 'open-walnut-todo-active-tab' while TodoPanel wrote 'walnut-todo-active-tab',
+  // so the initial URL never reflected the restored tab.
+  const [activeProject, setActiveProject] = useState<string | undefined>(() => {
+    try { return localStorage.getItem(LS_TAB_KEY) ?? undefined; } catch { return undefined; }
   });
   // String[] projection for URL sync (doesn't need lock state — URL carries ids only).
   const sessionColumnIds = useMemo(() => sessionColumns.map(c => c.id), [sessionColumns]);
   const urlSync = useUrlSync({
     focusedTaskId: focusedTask?.id,
     sessionColumns: sessionColumnIds,
-    activeCategory,
+    activeProject,
     visible,
   });
 
@@ -635,7 +647,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         const ids = panelModeLoadedRef.current ? p.sessionIds.slice(0, maxPanelsRef.current) : p.sessionIds;
         setSessionColumns(ids.map(id => ({ id, locked: lockedById.get(id) ?? false })));
       }
-      if (p.category !== null) setActiveCategory(p.category);
+      if (p.project !== null) setActiveProject(p.project);
       urlSync.clearPending();
       return;
     }
@@ -1024,7 +1036,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (!dir) return; // pill is hidden when null; belt-and-braces
     setPathSelectorOpen(false);
     setQuickTaskOpen(false); // launcher popovers are mutually exclusive
-    setQuickStartPath({ cwd: dir, host: null, category: 'Local', intent: 'fix-walnut' });
+    setQuickStartPath({ cwd: dir, host: null, intent: 'fix-walnut' });
     // The pill skips the path picker, so nothing else ever produces the launcher's
     // task meta — seed it explicitly with the SAME settings a regular quick session
     // would get: the sticky pin tier (freshLauncherMeta; a hardcoded 'focus' here
@@ -1194,22 +1206,21 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     } catch { /* non-critical */ }
   }, [openSessionOrToast]);
 
-  const handleCreate = useCallback(async (input: { title: string; priority: string; category?: string; project?: string; due_date?: string; start_date?: string; starred?: boolean; pinnedTier?: string; capture?: boolean }) => {
+  const handleCreate = useCallback(async (input: { title: string; priority: string; project?: string; due_date?: string; start_date?: string; starred?: boolean; pinnedTier?: string; capture?: boolean }) => {
     const tier = input.pinnedTier;
     // Quick-capture ("Add to <tier>…" inline rows, Focus Dock) routes to the user's
-    // configured Default Platform + Category instead of the active tab's category — so a
-    // capture made while viewing an external-synced tab (e.g. personal → MS To-Do) still
-    // lands in the fast local Inbox unless the user changed the default. Falls back to
-    // local/Inbox if config hasn't loaded. The main Quick Add form (explicit category
-    // picker) is NOT a capture and keeps its chosen category/source.
-    const captureCategory = taskDefaults.category || 'Inbox';
+    // configured Default Platform + Project instead of the active tab's project — so a
+    // capture made while viewing a provider-claimed tab (e.g. an MS To-Do project) still
+    // lands in the fast local Inbox unless the user changed the default. An unset default
+    // project ('' / undefined) IS Inbox — never substitute a literal group name. The main
+    // Quick Add form (explicit project picker) is NOT a capture and keeps its choice.
+    const captureProject = taskDefaults.project ?? '';
     const captureSource = taskDefaults.platform || 'local';
     const task = await create(
       {
         title: input.title,
         priority: input.priority,
-        category: input.capture ? captureCategory : input.category,
-        project: input.capture ? taskDefaults.project : input.project,
+        project: input.capture ? captureProject : input.project,
         due_date: input.due_date,
         start_date: input.start_date,
         ...(input.capture ? { source: captureSource } : {}),
@@ -1232,7 +1243,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       if (tier && task?.id) {
         // Locate the task in the PINNED region only. The new card already renders in
         // its tier (optimistic pin), so scroll there — but do NOT let TodoPanel switch
-        // the TASKS category tab: a capture routes to the default capture category
+        // the TASKS project tab: a capture routes to the default capture project
         // (e.g. Personal), and switching to it filters the list below down to almost
         // nothing ("all my tasks disappeared"). Set focus directly from the returned
         // task object — dispatching the dock event alone is unreliable because the
@@ -1250,7 +1261,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [create, star, focusBar, taskDefaults]);
 
   // Inline "+" in the Focus Dock — create a task and pin it straight to the Focus tier.
-  // capture:true routes it to the configured Default Platform/Category (fast local Inbox
+  // capture:true routes it to the configured Default Platform/Project (fast local Inbox
   // by default) rather than the active tab.
   const handleQuickAddToFocus = useCallback(async (title: string) => {
     await handleCreate({ title, priority: 'none', pinnedTier: 'focus', capture: true });
@@ -1392,8 +1403,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       input.due_date ? `Due ${formatQuickTaskDate(input.due_date)}` : undefined,
       input.start_date ? `Starts ${formatQuickTaskDate(input.start_date)}` : undefined,
       input.priority !== 'none' ? `${input.priority[0].toUpperCase()}${input.priority.slice(1)}` : undefined,
-      input.category,
-      input.project,
+      // No project = Inbox; say so rather than leaving the summary silent about placement.
+      input.project?.trim() || 'Inbox',
     ].filter((value): value is string => !!value);
     notify({
       kind: 'sort',
@@ -1470,10 +1481,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         if (result.sessionId) {
           promoteToRealSession(pendingColId, result.sessionId, result.taskId);
         }
-        // No butler notification here anymore. Title AND category/project are
-        // both server-side now: the session-auto-title hook titles from the
+        // No butler notification here anymore. Title AND project are both
+        // server-side now: the session-auto-title hook titles from the
         // user's first message (CLI generate_session_title), and quick-start
-        // fires a fast-model categorizer (session-organize.ts) for placement.
+        // fires a fast-model organizer (session-organize.ts) for placement.
         // The old "[Quick Start] …move the task" chat message woke the MAIN
         // agent (full model + context) for a one-field decision on every
         // launch — deliberately removed; don't reintroduce it.
@@ -1508,7 +1519,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // Local echo as a collapsible bubble — auto-collapses to "⚡ Quick Start on <cwd>"
       // with a chevron the user can click to see the full pasted prompt. This echo
       // is the single visual confirmation (no butler message is sent anymore —
-      // titling and category placement both happen server-side).
+      // titling and project placement both happen server-side).
       chat.addLocalMessage(
         `${qsp.intent === 'fix-walnut' ? 'Fix Walnut' : 'Quick Start'} on \`${qsp.cwd}\`${qsp.host ? ` (${qsp.hostLabel ?? qsp.host})` : ''}:\n> ${text}`,
         'quick-start-echo',
@@ -1530,8 +1541,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       const taskContext: TaskContext = {
         id: focusedTask.id,
         title: focusedTask.title,
-        category: focusedTask.category,
-        project: focusedTask.project,
+        project: focusedTask.project || '',
         status: focusedTask.status,
         phase: focusedTask.phase,
         priority: focusedTask.priority,
@@ -1647,8 +1657,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           suppressDetail={suppressDetail}
           onClearOperationError={clearOperationError}
           onOperationError={showOperationError}
-          externalCategory={activeCategory}
-          onCategoryChange={setActiveCategory}
+          externalProject={activeProject}
+          onProjectChange={setActiveProject}
           onOpenLauncher={handleToolbarOpenLauncher}
         />
         {/* Todo-anchored launcher popover — the SAME components as the chat

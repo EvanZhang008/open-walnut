@@ -29,7 +29,7 @@ async function seedTask(title: string): Promise<{ id: string; title: string }> {
   const res = await fetch(`${API}/api/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, category: 'Work', project: 'Marina' }),
+    body: JSON.stringify({ title, project: 'Marina' }),
   })
   if (!res.ok) throw new Error(`seed failed: ${res.status} ${await res.text()}`)
   const body = (await res.json()) as { task: { id: string; title: string } }

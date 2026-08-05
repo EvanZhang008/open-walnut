@@ -219,9 +219,9 @@ const CUSTOM_MODEL_VALUE = '__custom__';
 // Context source definitions
 const CONTEXT_SOURCE_DEFS: { id: ContextSourceId; label: string; auto: boolean; defaultBudget: number; description: string }[] = [
   { id: 'task_details', label: 'Task Details', auto: true, defaultBudget: 1500, description: 'Task metadata, subtasks, description, summary, notes' },
-  // Legacy store: reads memory/projects/<category>/<project>/MEMORY.md, which the
-  // 2026-07 skills migration superseded but did not empty. Still real for projects
-  // whose content was never moved to a skill; empty for everything created since.
+  // Legacy store: reads memory/projects/<project>/MEMORY.md (flattened from the
+  // pre-v5 two-segment layout). The 2026-07 skills migration superseded it but did
+  // not empty it. Still real for projects whose content was never moved to a skill.
   { id: 'project_memory', label: 'Project Memory', auto: true, defaultBudget: 2000, description: 'Legacy project MEMORY.md (pre-skills projects only)' },
   { id: 'project_task_list', label: 'Project Task List', auto: false, defaultBudget: 1500, description: 'All non-completed tasks in the same project' },
   { id: 'global_memory', label: 'Global Memory', auto: false, defaultBudget: 2000, description: 'Global MEMORY.md' },
@@ -695,7 +695,7 @@ export function AgentForm({ agent, cloneFrom, toolNames, availableModels = [], s
                     className="font-mono"
                   />
                   <p className="text-muted" style={{ fontSize: '0.8rem', margin: '2px 0 0' }}>
-                    Use &#123;auto&#125; to resolve to &#123;category&#125;/&#123;project&#125; from the task
+                    Use &#123;auto&#125; to resolve to the task&apos;s project (or &quot;inbox&quot;)
                   </p>
                 </div>
                 <div className="form-row">

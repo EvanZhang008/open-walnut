@@ -26,8 +26,10 @@ const INITIAL_BACKOFF_MS = 1000;
 /** Jira plugin config — accessed via config.plugins?.jira */
 export interface JiraConfig {
   base_url: string;
+  /** Jira project key issues are created under (e.g. "PROJ"). */
   project_key: string;
-  category: string;
+  /** Walnut project reserved for Jira tasks — the claim point. */
+  project: string;
   issue_type?: string;
   assignee_filter?: string;
   jql_filter?: string;

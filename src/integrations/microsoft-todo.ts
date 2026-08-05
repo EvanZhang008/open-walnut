@@ -18,8 +18,14 @@ interface Subtask {
   created_at: string;
   updated_at: string;
 }
-import { generateId, parseGroupFromCategory } from '../utils/format.js';
-import { buildListName, getStoreCategories, findTaskByExtId } from '../core/task-manager.js';
+import { generateId, routePulledListToProject } from '../utils/format.js';
+import {
+  remoteListNameFor,
+  getProjectRecord,
+  ensureProject,
+  setProjectMetadata,
+  findTaskByExtId,
+} from '../core/task-manager.js';
 import type { Config } from '../core/types.js';
 
 // ── Plugin-system helpers ──
@@ -437,10 +443,14 @@ export function clearListIdCache(): void {
 
 /**
  * Resolve the MS To-Do list ID for a task.
- * Builds the list name from category + project (e.g. "Work / HomeLab").
+ *
+ * The target list name comes from the project registry via `remoteListNameFor`:
+ * a project migrated off the retired two-level model keeps its `remote_list`
+ * alias (e.g. "Work / HomeLab") so pushes stay in the existing remote list,
+ * while a new project pushes to a list named after the project itself.
  */
 export async function resolveListIdForTask(task: Task): Promise<string> {
-  const listName = buildListName(task.category, task.project);
+  const listName = await remoteListNameFor(task.project || '');
   return resolveListId(listName);
 }
 
@@ -674,7 +684,10 @@ export function mapToLocal(
   msTask: MSTodoTask,
   listDisplayName: string,
 ): Partial<Task> {
-  const { group, listName } = parseGroupFromCategory(listDisplayName);
+  // routePulledListToProject, NOT the raw split: 'Quick Start' / 'Inbox' lists
+  // map to Inbox ('') exactly like the v5 migration routed them (see the WHY in
+  // src/utils/format.ts — migration and pull must agree or sync undoes it).
+  const project = routePulledListToProject(listDisplayName);
 
   // Parse body first to extract phase
   const parsed = msTask.body?.content ? parseMsTodoBody(msTask.body.content) : undefined;
@@ -695,8 +708,7 @@ export function mapToLocal(
     phase,
     priority: IMPORTANCE_TO_PRIORITY[msTask.importance] ?? 'none',
     ext: { 'ms-todo': { id: msTask.id } },
-    category: group,
-    project: listName,
+    project,
   };
 
   if (parsed) {
@@ -733,26 +745,180 @@ export function mapToLocal(
   return local;
 }
 
+// -- Project registry bridge (pull side) --
+
+/**
+ * "The task store isn't there at all" (missing native binding, handle never
+ * opened) vs. a REAL store error. Only the former may degrade silently: it is
+ * the unit-test shape, where no SQLite file exists. A real failure must not be
+ * papered over — importing a list's tasks under an unverified project name is
+ * how a pull re-claims a project another provider owns.
+ */
+function isStoreUnavailableError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    /task-db is not open/i.test(msg) ||
+    /before database was successfully opened/i.test(msg) ||
+    /bindings file/i.test(msg) ||            // better-sqlite3 native module missing
+    /SQLITE_CANTOPEN/i.test(msg) ||
+    /reading 'prepare'/.test(msg)            // getDb()! returned null
+  );
+}
+
+/**
+ * Registry side-effect of a pull: ensure the list's project exists, and for a
+ * legacy "Category / Project" list name remember the FULL display name as the
+ * project's `remote_list` alias so later pushes keep landing in that exact
+ * remote list instead of forking a new one named after the project.
+ *
+ * Never renames or creates anything remote. Returns the canonical project name,
+ * or null when this list must NOT be imported: either the name yields no project
+ * (Inbox is structurally local-only, so a provider task can't live there) or the
+ * project is already claimed by a different provider. Both cases used to surface
+ * as a create-time throw; skipping is the same outcome without the noise.
+ *
+ * The alias is written only when the project has none yet (first writer wins).
+ * Two legacy lists can flatten onto one project ("Work / VPA" + "Personal / VPA"
+ * → "VPA"); silently repointing pushes at whichever list was pulled last would
+ * shuffle tasks between remote lists on every tick. Updating an existing alias
+ * happens only from the rename detector below, which knows it is the same list.
+ *
+ * Only called for lists that actually have items to import, so an empty remote
+ * list never manufactures a registry row.
+ */
+async function ensureProjectForList(listDisplayName: string): Promise<string | null> {
+  // Same routing rule as the v5 migration: a 'Quick Start' trailing segment or a
+  // whole-name 'Inbox' list is Inbox ('') locally, which a provider can never
+  // claim → skip the list rather than resurrect the retired grouping name as a
+  // project (see routePulledListToProject's WHY).
+  const parsed = routePulledListToProject(listDisplayName);
+  if (!parsed) {
+    log.web.debug('ms-todo: list name maps to Inbox / no project, skipping', { list: listDisplayName });
+    return null;
+  }
+  try {
+    // The EXISTING row always wins (spelling AND claim) — a pull can never
+    // re-claim a project another provider owns.
+    const { name, source } = await ensureProject(parsed, 'ms-todo');
+    if (source !== 'ms-todo') {
+      log.web.debug('ms-todo: project claimed by another source, skipping list', {
+        project: name, source, list: listDisplayName,
+      });
+      return null;
+    }
+    // Case-insensitive: list resolution lowercases, so a spelling-only
+    // difference is the same remote list and needs no alias.
+    if (listDisplayName.toLowerCase() === name.toLowerCase()) return name;
+    const existing = (await getProjectRecord(name))?.metadata?.remote_list;
+    if (typeof existing === 'string' && existing.trim()) {
+      if (existing !== listDisplayName) {
+        log.web.debug('ms-todo: project already aliased to another remote list', {
+          project: name, alias: existing, list: listDisplayName,
+        });
+      }
+      return name;
+    }
+    await setProjectMetadata(name, { remote_list: listDisplayName });
+    return name;
+  } catch (err) {
+    if (isStoreUnavailableError(err)) {
+      // No task DB at all (unit-test env) — fall back to the routed name rather
+      // than dropping the whole list's tasks.
+      log.web.debug('ms-todo: project registry update skipped (no task store)', {
+        list: listDisplayName,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return parsed;
+    }
+    // A real store error means we do NOT know who owns this project. Importing
+    // under an unverified name could steal another provider's claim — skip the
+    // list loudly and let the next tick retry.
+    log.web.error('ms-todo: project registry update failed, skipping list', {
+      list: listDisplayName,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+/**
+ * A remote list we already track was renamed. Same list object, new display
+ * name, so the project's alias must follow it — otherwise the next push
+ * resolves the vanished old name and MS To-Do creates a duplicate list.
+ *
+ * Unlike ensureProjectForList this OVERWRITES an existing alias: we know it is
+ * the same remote list, just renamed. Returns the canonical project name, or
+ * null when the new name maps to nothing importable.
+ */
+async function syncProjectAliasAfterRename(listDisplayName: string): Promise<string | null> {
+  const parsed = routePulledListToProject(listDisplayName);
+  if (!parsed) return null;
+  try {
+    const { name, source } = await ensureProject(parsed, 'ms-todo');
+    if (source !== 'ms-todo') return null;
+    // Written even when it equals the project name: an alias identical to the
+    // name resolves to the same list, so no separate "clear the alias" state is
+    // needed — and leaving a stale alias behind would resolve the OLD name.
+    const current = (await getProjectRecord(name))?.metadata?.remote_list;
+    if (typeof current !== 'string' || current.toLowerCase() !== listDisplayName.toLowerCase()) {
+      await setProjectMetadata(name, { remote_list: listDisplayName });
+    }
+    return name;
+  } catch (err) {
+    if (isStoreUnavailableError(err)) {
+      log.web.debug('ms-todo: project alias update skipped (no task store)', {
+        list: listDisplayName,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return parsed;
+    }
+    log.web.error('ms-todo: project alias update failed, skipping list', {
+      list: listDisplayName,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
 // -- Push/pull operations --
 
 export async function pushTask(task: Task): Promise<{ msTaskId: string; serverTimestamp: string }> {
-  // Guard: never push tasks whose category is registered to a different source.
-  // This prevents ms-todo from creating lists for categories owned by other plugins
-  // (e.g. plugin-reserved category lists appearing in MS Todo from non-ms-todo sources).
-  try {
-    const storeCategories = await getStoreCategories();
-    const catKey = Object.keys(storeCategories).find(
-      k => k.toLowerCase() === task.category.toLowerCase(),
+  // Guard: never push a task whose project is claimed by a different source.
+  // Keeps ms-todo from creating remote lists for projects another plugin owns.
+  // Inbox ('') has no registry row and can never be claimed, so a provider task
+  // there is itself a bug — refuse rather than create an unnamed remote list.
+  const taskProject = task.project || '';
+  if (!taskProject) {
+    throw new Error(
+      `pushTask: refusing to push task "${task.title}" to MS Todo — ` +
+      `it has no project (Inbox tasks are local-only)`,
     );
-    if (catKey && storeCategories[catKey].source !== 'ms-todo') {
+  }
+  try {
+    const record = await getProjectRecord(taskProject);
+    if (record && record.source !== 'ms-todo') {
       throw new Error(
         `pushTask: refusing to push task "${task.title}" to MS Todo — ` +
-        `category "${task.category}" is registered as ${storeCategories[catKey].source}`,
+        `project "${taskProject}" is registered as ${record.source}`,
       );
     }
   } catch (err) {
-    // Re-throw category source conflicts; swallow store-read failures (e.g. in tests)
+    // Re-throw project source conflicts.
     if (err instanceof Error && err.message.startsWith('pushTask: refusing')) throw err;
+    // No store at all (unit-test env) → proceed; the claim check is the store's
+    // job and there is no store. A REAL store error means the claim is unknown,
+    // and pushing anyway can create a remote list for a project another provider
+    // owns — refuse instead and let the next tick retry.
+    if (!isStoreUnavailableError(err)) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.web.error('ms-todo: project registry read failed, refusing push', {
+        taskId: task.id, project: taskProject, error: message,
+      });
+      throw new Error(
+        `pushTask: refusing to push task "${task.title}" to MS Todo — ` +
+        `project registry unreadable (${message})`,
+      );
+    }
   }
 
   const token = await getAccessToken();
@@ -767,7 +933,7 @@ export async function pushTask(task: Task): Promise<{ msTaskId: string; serverTi
   const existingMsTodoList = getMsTodoList(task);
 
   if (existingMsTodoId) {
-    // Check if the task moved to a different list (category changed)
+    // Check if the task moved to a different list (project changed)
     const oldListId = existingMsTodoList;
     if (oldListId && oldListId !== listId) {
       // Task moved lists: delete from old list, create in new list
@@ -787,7 +953,6 @@ export async function pushTask(task: Task): Promise<{ msTaskId: string; serverTi
       log.web.info('ms-todo POST create', {
         taskId: task.id,
         title: task.title,
-        category: task.category,
         project: task.project,
         oldListId,
         newListId: listId,
@@ -860,7 +1025,6 @@ export async function pushTask(task: Task): Promise<{ msTaskId: string; serverTi
     log.web.info('ms-todo POST create', {
       taskId: task.id,
       title: task.title,
-      category: task.category,
       project: task.project,
       listId,
       reason: 'first_create',
@@ -996,9 +1160,17 @@ export async function fullPullAllTasks(): Promise<Array<{
       nextLink = response['@odata.nextLink'];
     }
 
+    // Registry row + remote_list alias for this list, before any task references
+    // it. Also yields the canonical spelling, so two lists differing only in case
+    // can't split one project. null = this list is not ours to import.
+    if (allTasks.length === 0) continue;
+    const listProject = await ensureProjectForList(list.displayName);
+    if (listProject === null) continue;
+
     for (const msTask of allTasks) {
       if (deletedMsIds.has(msTask.id)) continue;
       const fields = mapToLocal(msTask, list.displayName);
+      fields.project = listProject;
       // Ensure ext includes list_id for completeness
       if (fields.ext?.['ms-todo']) {
         (fields.ext['ms-todo'] as Record<string, unknown>).list_id = list.id;
@@ -1124,7 +1296,18 @@ export async function reconcilePulledTasks(
   previousIdsMap?: Map<string, Task>,
 ): Promise<number> {
   let count = 0;
-  const { group: listCategory, listName: listProject } = parseGroupFromCategory(list.displayName);
+  if (msTasks.length === 0) return 0; // don't manufacture a registry row for an empty list
+  // Registry row + remote_list alias for this list before any task claims it.
+  // Also the canonical spelling, so two lists differing only in case can't split
+  // one project. null = the list maps to no importable project (Inbox, or a
+  // project another provider owns) — skip it wholesale.
+  const listProject = await ensureProjectForList(list.displayName);
+  if (listProject === null) {
+    log.web.debug('reconcilePulledTasks: skipped list (no importable project)', {
+      listName: list.displayName, tasks: msTasks.length,
+    });
+    return 0;
+  }
   for (const msTask of msTasks) {
     // Skip tasks with missing or empty titles (tombstones, partial delta responses)
     if (!msTask.title || msTask.title.trim() === '') continue;
@@ -1140,6 +1323,7 @@ export async function reconcilePulledTasks(
       const syncedAt = existing._syncedAt ? new Date(existing._syncedAt).getTime() : 0;
       if (remoteUpdated > syncedAt) {
         const updates = mapToLocal(msTask, list.displayName);
+        updates.project = listProject;
 
         // Checklist-to-subtask sync removed (subtasks are now child tasks)
 
@@ -1155,8 +1339,7 @@ export async function reconcilePulledTasks(
           status: partial.status ?? 'todo',
           phase: partial.phase ?? 'TODO',
           priority: partial.priority ?? 'none',
-          category: partial.category ?? listCategory,
-          project: partial.project ?? listProject,
+          project: listProject,
           source: 'ms-todo',
           session_ids: [],
           ext: { 'ms-todo': { id: msTask.id, list_id: list.id } },
@@ -1172,7 +1355,8 @@ export async function reconcilePulledTasks(
         } as Omit<Task, 'id'>);
         count++;
       } catch (err) {
-        // Skip tasks that conflict with category source (e.g. ms-todo task in a plugin-reserved category)
+        // Skip tasks that conflict with the project's claim (e.g. an ms-todo task
+        // landing in a project reserved for another plugin).
         log.web.debug('reconcilePulledTasks: skipped creating task', {
           title: msTask.title, listName: list.displayName,
           error: err instanceof Error ? err.message : String(err),
@@ -1268,14 +1452,22 @@ export async function deltaPull(
   });
   const storedNames = deltaState.listNames ?? {};
 
+  // Cache the project name per list so the catch-up pass below doesn't re-ensure.
+  // `null` = the list maps to no importable project; its tasks are left alone.
+  const projectByListId = new Map<string, string | null>();
+
   for (const list of lists) {
     const oldName = storedNames[list.id];
     if (oldName && oldName !== list.displayName) {
-      // List was renamed — update all local tasks that belong to it
-      const { group, listName } = parseGroupFromCategory(list.displayName);
+      // List was renamed — move its tasks to the new project and re-point the
+      // project's remote_list alias at the new display name.
+      const project = await syncProjectAliasAfterRename(list.displayName);
+      projectByListId.set(list.id, project);
+      if (project === null) continue;
       for (const task of msLocalTasks) {
-        if (getMsTodoList(task) === list.id && (task.category !== group || task.project !== listName)) {
-          await updateLocalTask(task.id, { category: group, project: listName });
+        if (getMsTodoList(task) === list.id
+          && (task.project || '').toLowerCase() !== project.toLowerCase()) {
+          await updateLocalTask(task.id, { project });
           hasChanges = true;
         }
       }
@@ -1290,7 +1482,7 @@ export async function deltaPull(
   deltaState.listNames = newListNames;
   await writeJsonFile(DELTA_FILE, deltaState);
 
-  // -- Catch-up: fix category mismatches + remove orphaned tasks from deleted lists --
+  // -- Catch-up: fix project mismatches + retire tasks from deleted lists --
   const listNameById = new Map(lists.map(l => [l.id, l.displayName]));
   for (const task of msLocalTasks) {
     const taskListId = getMsTodoList(task);
@@ -1304,9 +1496,16 @@ export async function deltaPull(
       }
       continue;
     }
-    const { group, listName } = parseGroupFromCategory(currentListName);
-    if (task.category !== group || task.project !== listName) {
-      await updateLocalTask(task.id, { category: group, project: listName });
+    let project = projectByListId.get(taskListId);
+    if (project === undefined) {
+      project = await ensureProjectForList(currentListName);
+      projectByListId.set(taskListId, project);
+    }
+    if (project === null) continue;
+    // Case-insensitive: project identity ignores case, so a spelling difference
+    // must not trigger a write on every tick.
+    if ((task.project || '').toLowerCase() !== project.toLowerCase()) {
+      await updateLocalTask(task.id, { project });
       hasChanges = true;
     }
   }
@@ -1359,7 +1558,7 @@ export async function syncTasks(
       try {
         const { msTaskId } = await pushTask(task);
         // Use cached list lookup instead of extra API call
-        const taskListName = buildListName(task.category, task.project);
+        const taskListName = await remoteListNameFor(task.project || '');
         const listId = listByName.get(taskListName.toLowerCase()) ?? defaultListId;
         await updateLocalTask(task.id, {
           ext: { 'ms-todo': { id: msTaskId, list_id: listId } },

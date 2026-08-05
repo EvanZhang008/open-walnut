@@ -209,13 +209,15 @@ conversation, and turns fired from mobile also stream into the web UI.
 Notes v1 shares storage and semantics (path safety, id stamping, index
 reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
 
-### Tasks (read-only)
+### Tasks
 
 - `GET /api/v1/tasks?status=todo|in_progress|done` →
   `{ "tasks": [ProjectedTask], "syncedAt": "<ISO>" }`
-- `ProjectedTask`: `{ id, title, status, phase, priority, category, project,
+- `ProjectedTask`: `{ id, title, status, phase, priority, project,
   due_date?, start_date?, created_at, updated_at, completed_at?, starred?,
   pinned?, tags?, summary? }` — `summary` is truncated to ~500 chars.
+  `category` was removed in projection v2 (2026-08); `project` is the single
+  grouping layer (`""` = Inbox).
   `start_date` (added 2026-07) is the "when to begin" time that defers a task
   out of the web Now view; additive and optional, so older clients ignore it.
 - Scope: all open tasks + tasks completed in the last 14 days (older
@@ -225,12 +227,23 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   a sync cycle; treat it as read-only replica data.
 - `503 { "error": { "code": "unavailable" } }` — projection not synced yet
   (fresh companion before its first git pull).
+- `POST /api/v1/tasks` (additive, 2026-08) body `{ "title", "project"?,
+  "priority"?, "due_date"?, "description"? }` → `201 { "task": ProjectedTask }`.
+  Same creation semantics as the web quick-add: omitted/empty `project` =
+  config default → Inbox; a new project name auto-creates its registry row;
+  `priority` one of `immediate|important|backlog|none` (default from config).
+  `description` is write-only: it is stored on the task but NOT returned in the
+  slim ProjectedTask shape (which carries `summary`, a different field) — don't
+  expect to read it back from `POST`'s response or `GET /tasks`.
+  Errors: `400 bad_request` (missing title / bad priority / bad due_date),
+  `409 conflict` (project source conflict), `503 not_supported_cloud` on a
+  REPLICA (task writes run on the primary box only).
 
 ### Sessions (read-only)
 
 - `GET /api/v1/sessions?status=running|idle|stopped|error` →
   `{ "sessions": [ProjectedSession], "syncedAt": "<ISO>" }`
-- `ProjectedSession`: `{ id, title?, task_id?, task_title?, category?,
+- `ProjectedSession`: `{ id, title?, task_id?, task_title?,
   project?, host, process_status, model?, mode?, started_at, last_active_at,
   message_count, cwd?, pinned?, focus_tier?, description? }` — `host` is `""`
   for sessions on the primary box, otherwise the host alias; `pinned` /

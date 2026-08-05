@@ -1,6 +1,6 @@
 /**
  * Task search panel for the slash command system.
- * Fuzzy-searches all tasks client-side (title + category + project).
+ * Fuzzy-searches all tasks client-side (title + project).
  * Currently focused task in TodoPanel appears first in the results.
  */
 
@@ -35,7 +35,7 @@ export function TaskSearchPanel({ tasks, focusedTaskId, onSelect, onBack }: Task
     let pool = tasks;
     if (q) {
       pool = tasks.filter(t => {
-        const haystack = `${t.title} ${t.category} ${t.project ?? ''}`.toLowerCase();
+        const haystack = `${t.title} ${t.project ?? ''}`.toLowerCase();
         return haystack.includes(q);
       });
     }
@@ -139,9 +139,7 @@ export function TaskSearchPanel({ tasks, focusedTaskId, onSelect, onBack }: Task
                 </div>
                 <div className="notes-task-search-meta">
                   <span className="notes-task-search-project">
-                    {task.project && task.project !== task.category
-                      ? `${task.category} / ${task.project}`
-                      : task.category}
+                    {task.project || 'Inbox'}
                   </span>
                   {phase && (
                     <span className={`notes-task-search-phase ${task.status === 'done' ? 'done' : ''}`}>

@@ -70,7 +70,8 @@ export interface IntegrationSync {
   updatePhase(task: Task, phase: TaskPhase): Promise<void>;
   updateDueDate(task: Task, date: string | null): Promise<void>;
   updateStar(task: Task, starred: boolean): Promise<void>;
-  updateCategory(task: Task, category: string, project: string): Promise<void>;
+  /** The task moved to a different project (the single grouping layer). */
+  updateProject(task: Task, project: string): Promise<void>;
   updateDependencies(task: Task, dependsOn: string[]): Promise<void>;
 
   // ── Subtask Relationship (child tasks are full Tasks with parent_task_id) ──
@@ -102,9 +103,11 @@ export interface IntegrationSync {
   extractRemoteId?(task: Task): string | undefined;
 }
 
-// ── CategoryClaimFn: determines if a plugin owns a category ──
+// ── ProjectClaimFn: determines if a plugin owns a project ──
+// A project is the single grouping layer and carries at most one provider claim.
+// Never called for Inbox (the empty project), which is structurally unclaimable.
 
-export type CategoryClaimFn = (category: string) => boolean | Promise<boolean>;
+export type ProjectClaimFn = (project: string) => boolean | Promise<boolean>;
 
 // ── DisplayMeta: UI rendering metadata for a plugin ──
 
@@ -161,7 +164,7 @@ export interface PluginApi {
   logger: SubsystemLogger;
 
   registerSync(sync: IntegrationSync): void;
-  registerSourceClaim(fn: CategoryClaimFn, opts?: { priority?: number }): void;
+  registerSourceClaim(fn: ProjectClaimFn, opts?: { priority?: number }): void;
   registerDisplay(meta: DisplayMeta): void;
   registerAgentContext(snippet: string): void;
   registerMigration(fn: MigrateFn): void;
@@ -180,7 +183,7 @@ export interface RegisteredPlugin {
   version?: string;
   config: Record<string, unknown>;
   sync: IntegrationSync;
-  claim?: { fn: CategoryClaimFn; priority: number };
+  claim?: { fn: ProjectClaimFn; priority: number };
   display?: DisplayMeta;
   agentContext?: string;
   migrations: MigrateFn[];

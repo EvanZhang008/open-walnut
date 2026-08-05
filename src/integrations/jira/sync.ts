@@ -84,7 +84,10 @@ export function mapToLocal(
     priority = JIRA_TO_LOCAL_PRIORITY[remote.fields.priority.name] ?? 'none';
   }
 
-  // Project from Jira project key — reverse lookup in project_mapping, fallback to key
+  // Walnut project from the Jira project key — reverse lookup in project_mapping,
+  // fallback to the key itself. This is the ONLY grouping stamped on the task;
+  // `jiraConfig.project` is the reservation/claim name, not the destination, so
+  // that migrated tasks (which kept the Jira key as their project) stay put.
   let project = remote.fields.project.key;
   if (jiraConfig.project_mapping) {
     const entry = Object.entries(jiraConfig.project_mapping).find(
@@ -101,7 +104,6 @@ export function mapToLocal(
     status,
     phase,
     priority,
-    category: jiraConfig.category,
     project,
     source: 'jira',
     ext: {
@@ -372,8 +374,9 @@ export async function deltaPull(
         status: partial.status ?? 'todo',
         phase: partial.phase ?? 'TODO',
         priority: partial.priority ?? 'none',
-        category: partial.category ?? jiraConfig.category,
-        project: partial.project ?? jiraConfig.category,
+        // Falls back to the reserved project so a provider task never lands in
+        // Inbox, which is structurally local-only.
+        project: partial.project ?? jiraConfig.project,
         source: 'jira',
         ext: partial.ext,
         external_url: partial.external_url,
@@ -517,8 +520,10 @@ export interface JiraSyncStatus {
   configured: boolean;
   hasCredentials: boolean;
   baseUrl?: string;
+  /** Jira-side project key (e.g. "PROJ"). */
   projectKey?: string;
-  category?: string;
+  /** Walnut project reserved for Jira tasks. */
+  project?: string;
 }
 
 export async function getJiraSyncStatus(): Promise<JiraSyncStatus> {
@@ -534,7 +539,7 @@ export async function getJiraSyncStatus(): Promise<JiraSyncStatus> {
     hasCredentials: !!jiraConfig.auth?.token,
     baseUrl: jiraConfig.base_url,
     projectKey: jiraConfig.project_key,
-    category: jiraConfig.category,
+    project: jiraConfig.project,
   };
 }
 
@@ -543,7 +548,7 @@ export async function getJiraSyncStatus(): Promise<JiraSyncStatus> {
 /** Resolve Jira project key from task project name using config mapping. */
 function resolveProjectKey(task: Task, config: Config): string {
   const jiraConfig = getJiraConfig(config)!;
-  if (jiraConfig.project_mapping) {
+  if (jiraConfig.project_mapping && task.project) {
     const mapped = jiraConfig.project_mapping[task.project];
     if (mapped) return mapped;
   }

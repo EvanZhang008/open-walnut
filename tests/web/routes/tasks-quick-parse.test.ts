@@ -111,10 +111,10 @@ describe('POST /api/tasks/quick-parse', () => {
     expect(res.body).toEqual({ title: text });
   });
 
-  it('includes the seeded category digest in model content', async () => {
-    await addTask({ title: 'Buy groceries', category: 'Personal', project: 'Errands' });
+  it('includes the seeded project digest in model content', async () => {
+    await addTask({ title: 'Buy groceries', project: 'Errands' });
     sendMessageMock.mockResolvedValue(textResult(
-      '{"title":"Call the clinic","category":"Personal","project":"Errands"}',
+      '{"title":"Call the clinic","project":"Errands"}',
     ));
 
     const res = await request(createApp())
@@ -123,15 +123,20 @@ describe('POST /api/tasks/quick-parse', () => {
 
     expect(res.status).toBe(200);
     expect(lastUserContent()).toContain(
-      'Your categories and projects (name, open task count, recent task titles):',
+      'Your projects (name, open task count, summary, recent task titles):',
     );
-    expect(lastUserContent()).toContain('  - Errands: "Buy groceries"');
+    expect(lastUserContent()).toContain('- Errands (1 open tasks): "Buy groceries"');
+    // A project the digest listed comes back through untouched.
+    expect(res.body.project).toBe('Errands');
+    expect(res.body).not.toHaveProperty('project_is_new');
   });
 
-  it('drops an unknown model-proposed category', async () => {
-    await addTask({ title: 'Buy groceries', category: 'Personal', project: 'Errands' });
+  it('drops an unknown model-proposed project when project_is_new is absent', async () => {
+    // Without the explicit new-project signal an off-list name is a hallucination:
+    // accepting it would silently create a registry row / remote list.
+    await addTask({ title: 'Buy groceries', project: 'Errands' });
     sendMessageMock.mockResolvedValue(textResult(
-      '{"title":"Call the clinic","category":"Unknown","project":"Errands"}',
+      '{"title":"Call the clinic","project":"Unlisted"}',
     ));
 
     const res = await request(createApp())
@@ -139,6 +144,40 @@ describe('POST /api/tasks/quick-parse', () => {
       .send({ text: 'call the clinic', ...validBody });
 
     expect(res.status).toBe(200);
+    expect(res.body).toEqual({ title: 'Call the clinic' });
+  });
+
+  it('passes a project_is_new proposal through so the UI can badge it', async () => {
+    await addTask({ title: 'Buy groceries', project: 'Errands' });
+    sendMessageMock.mockResolvedValue(textResult(
+      '{"title":"Book the Kyoto flights","project":"Kyoto Trip","project_is_new":true}',
+    ));
+
+    const res = await request(createApp())
+      .post('/api/tasks/quick-parse')
+      .send({ text: 'book the kyoto flights', ...validBody });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      title: 'Book the Kyoto flights',
+      project: 'Kyoto Trip',
+      project_is_new: true,
+    });
+  });
+
+  it('renders Inbox as an unselectable bucket and omits project for a one-off note', async () => {
+    await addTask({ title: 'Buy groceries', project: 'Errands' });
+    await addTask({ title: 'Loose thought' }); // no project → Inbox
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Call the clinic","project":"Inbox"}'));
+
+    const res = await request(createApp())
+      .post('/api/tasks/quick-parse')
+      .send({ text: 'call the clinic', ...validBody });
+
+    expect(res.status).toBe(200);
+    // "Inbox" is shown in the digest but is the ABSENCE of a project, so the
+    // parser must never echo it back as a project name.
+    expect(lastUserContent()).toContain('- Inbox — no project (1 open tasks): "Loose thought"');
     expect(res.body).toEqual({ title: 'Call the clinic' });
   });
 });

@@ -50,7 +50,7 @@ afterEach(async () => {
 
 describe('focus-tier read served from inside the setFocusTier emit', () => {
   it('sees the committed tier (cache invalidated before the in-lock emit)', async () => {
-    const { task } = await addTask({ title: 'Race repro task', category: 'Local' });
+    const { task } = await addTask({ title: 'Race repro task', project: 'Local' });
     await togglePin(task.id);
 
     // Subscribe like the WS-forwarding path does; on the focus_bar event, read
@@ -82,7 +82,7 @@ describe('focus-tier read served from inside the setFocusTier emit', () => {
   });
 
   it('togglePin emit also sees committed pin state', async () => {
-    const { task } = await addTask({ title: 'Pin race task', category: 'Local' });
+    const { task } = await addTask({ title: 'Pin race task', project: 'Local' });
 
     const readsDuringEmit: Promise<string[]>[] = [];
     bus.subscribe('race-probe-pin', (event) => {

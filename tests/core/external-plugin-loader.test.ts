@@ -24,7 +24,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
   getConfig: vi.fn(async () => ({
     version: 1,
     user: { name: 'test' },
-    defaults: { priority: 'none', category: 'Inbox' },
+    defaults: { priority: 'none' },
     provider: { type: 'bedrock' },
     plugins: {},
   })),
@@ -50,7 +50,7 @@ const NOOP_SYNC_SOURCE = `{
   updatePhase: async () => {},
   updateDueDate: async () => {},
   updateStar: async () => {},
-  updateCategory: async () => {},
+  updateProject: async () => {},
   updateDependencies: async () => {},
   associateSubtask: async () => {},
   disassociateSubtask: async () => {},
@@ -82,7 +82,7 @@ beforeEach(async () => {
   vi.mocked(getConfig).mockResolvedValue({
     version: 1,
     user: { name: 'test' },
-    defaults: { priority: 'none', category: 'Inbox' },
+    defaults: { priority: 'none' },
     provider: { type: 'bedrock' },
     plugins: {},
   } as any);
@@ -288,7 +288,7 @@ export default function register(api) {
     vi.mocked(getConfig).mockResolvedValue({
       version: 1,
       user: { name: 'test' },
-      defaults: { priority: 'none', category: 'Inbox' },
+      defaults: { priority: 'none' },
       provider: { type: 'bedrock' },
       plugins: { 'now-configured': { room_id: 'abc-123' } },
     } as any);

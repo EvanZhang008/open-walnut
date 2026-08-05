@@ -247,27 +247,26 @@ describe('Fix 3: Favorites E2E', () => {
   it('full favorites lifecycle: add, read, remove', async () => {
     // Initially empty
     const res1 = await fetch(apiUrl('/api/favorites'));
-    const body1 = await res1.json() as { categories: string[]; projects: string[] };
-    expect(body1.categories).toEqual([]);
+    const body1 = await res1.json() as { projects: string[] };
     expect(body1.projects).toEqual([]);
 
     // Add favorites
-    await fetch(apiUrl('/api/favorites/categories/Work'), { method: 'POST' });
+    await fetch(apiUrl('/api/favorites/projects/Work'), { method: 'POST' });
     await fetch(apiUrl('/api/favorites/projects/HomeLab'), { method: 'POST' });
 
     // Read back
     const res2 = await fetch(apiUrl('/api/favorites'));
-    const body2 = await res2.json() as { categories: string[]; projects: string[] };
-    expect(body2.categories).toContain('Work');
+    const body2 = await res2.json() as { projects: string[] };
+    expect(body2.projects).toContain('Work');
     expect(body2.projects).toContain('HomeLab');
 
     // Remove one
-    await fetch(apiUrl('/api/favorites/categories/Work'), { method: 'DELETE' });
+    await fetch(apiUrl('/api/favorites/projects/Work'), { method: 'DELETE' });
 
     // Verify
     const res3 = await fetch(apiUrl('/api/favorites'));
-    const body3 = await res3.json() as { categories: string[]; projects: string[] };
-    expect(body3.categories).not.toContain('Work');
+    const body3 = await res3.json() as { projects: string[] };
+    expect(body3.projects).not.toContain('Work');
     expect(body3.projects).toContain('HomeLab');
   });
 
@@ -275,7 +274,7 @@ describe('Fix 3: Favorites E2E', () => {
     const ws = await connectWs();
     const eventPromise = waitForWsEvent(ws, 'config:changed');
 
-    await fetch(apiUrl('/api/favorites/categories/Test'), { method: 'POST' });
+    await fetch(apiUrl('/api/favorites/projects/Test'), { method: 'POST' });
 
     const event = await eventPromise;
     expect(event.name).toBe('config:changed');
@@ -284,81 +283,91 @@ describe('Fix 3: Favorites E2E', () => {
     await delay(50);
 
     // Cleanup
-    await fetch(apiUrl('/api/favorites/categories/Test'), { method: 'DELETE' });
+    await fetch(apiUrl('/api/favorites/projects/Test'), { method: 'DELETE' });
   });
 
   it('favorites are stored in config and persist across reads', async () => {
-    await fetch(apiUrl('/api/favorites/categories/Persistent'), { method: 'POST' });
+    await fetch(apiUrl('/api/favorites/projects/Persistent'), { method: 'POST' });
 
     // Verify via config endpoint
     const configRes = await fetch(apiUrl('/api/config'));
-    const configBody = await configRes.json() as { config: { favorites?: { categories?: string[] } } };
-    expect(configBody.config.favorites?.categories).toContain('Persistent');
+    const configBody = await configRes.json() as { config: { favorites?: { projects?: string[] } } };
+    expect(configBody.config.favorites?.projects).toContain('Persistent');
 
     // Cleanup
-    await fetch(apiUrl('/api/favorites/categories/Persistent'), { method: 'DELETE' });
+    await fetch(apiUrl('/api/favorites/projects/Persistent'), { method: 'DELETE' });
   });
 });
 
-// ── Fix 4: Slash parsing E2E ──
+// ── Fix 4: Project is the single grouping layer ──
+//
+// The retired two-level "Category / Project" slash encoding no longer exists:
+// `project` is a plain name, stored verbatim, and an omitted project means Inbox.
 
-describe('Fix 4: Slash format parsing E2E', () => {
-  it('creating task with "category / project" splits correctly', async () => {
+describe('Fix 4: project field E2E', () => {
+  it('creating a task stores the project name verbatim', async () => {
     const res = await fetch(apiUrl('/api/tasks'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Slash E2E', category: 'idea / work idea' }),
+      body: JSON.stringify({ title: 'Project E2E', project: 'Work idea' }),
     });
-    const body = await res.json() as { task: { category: string; project: string } };
+    const body = await res.json() as { task: { project: string } };
 
-    expect(body.task.category).toBe('Idea');
     expect(body.task.project).toBe('Work idea');
   });
 
-  it('WS event for slash-parsed task has correct category/project', async () => {
+  it('creating a task without a project lands in Inbox (empty project)', async () => {
+    const res = await fetch(apiUrl('/api/tasks'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Inbox E2E' }),
+    });
+    const body = await res.json() as { task: { project: string } };
+
+    expect(body.task.project).toBe('');
+  });
+
+  it('WS event for a created task carries the project', async () => {
     const ws = await connectWs();
     const eventPromise = waitForWsEvent(ws, 'task:created');
 
     await fetch(apiUrl('/api/tasks'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Slash WS E2E', category: 'life / health' }),
+      body: JSON.stringify({ title: 'Project WS E2E', project: 'Health' }),
     });
 
     const event = await eventPromise;
-    const data = event.data as { task: { category: string; project: string } };
-    expect(data.task.category).toBe('Life');
+    const data = event.data as { task: { project: string } };
     expect(data.task.project).toBe('Health');
 
     ws.close();
     await delay(50);
   });
 
-  it('GET returns task with parsed fields, not raw slash format', async () => {
+  it('GET returns the stored project', async () => {
     const createRes = await fetch(apiUrl('/api/tasks'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'GET verify', category: 'work / taxes' }),
+      body: JSON.stringify({ title: 'GET verify', project: 'Taxes' }),
     });
-    const { task } = await createRes.json() as { task: { id: string; category: string; project: string } };
+    const { task } = await createRes.json() as { task: { id: string; project: string } };
 
     const getRes = await fetch(apiUrl(`/api/tasks/${task.id}`));
-    const body = await getRes.json() as { task: { category: string; project: string } };
+    const body = await getRes.json() as { task: { project: string } };
 
-    expect(body.task.category).toBe('Work');
     expect(body.task.project).toBe('Taxes');
   });
 
-  it('PATCH with slash category updates both fields', async () => {
-    const task = await createTask('Patch slash');
+  it('PATCH updates the project', async () => {
+    const task = await createTask('Patch project');
     const res = await fetch(apiUrl(`/api/tasks/${task.id}`), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ category: 'personal / ai eureka' }),
+      body: JSON.stringify({ project: 'Ai eureka' }),
     });
-    const body = await res.json() as { task: { category: string; project: string } };
+    const body = await res.json() as { task: { project: string } };
 
-    expect(body.task.category).toBe('Personal');
     expect(body.task.project).toBe('Ai eureka');
   });
 });
@@ -374,7 +383,7 @@ describe('Full pipeline: REST → Core → Bus → WS delivery', () => {
     const createRes = await fetch(apiUrl('/api/tasks'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Pipeline test', category: 'work', priority: 'immediate' }),
+      body: JSON.stringify({ title: 'Pipeline test', project: 'work', priority: 'immediate' }),
     });
     const { task } = await createRes.json() as { task: { id: string } };
 
@@ -500,7 +509,7 @@ describe('Starred via PATCH update_task', () => {
   });
 
   it('starring does not affect other task fields', async () => {
-    const task = await createTask('No side effects', { category: 'work', priority: 'immediate' });
+    const task = await createTask('No side effects', { project: 'work', priority: 'immediate' });
 
     await fetch(apiUrl(`/api/tasks/${task.id}`), {
       method: 'PATCH',
@@ -509,10 +518,10 @@ describe('Starred via PATCH update_task', () => {
     });
 
     const res = await fetch(apiUrl(`/api/tasks/${task.id}`));
-    const updated = ((await res.json()) as { task: { title: string; category: string; priority: string; starred: boolean } }).task;
+    const updated = ((await res.json()) as { task: { title: string; project: string; priority: string; starred: boolean } }).task;
 
     expect(updated.title).toBe('No side effects');
-    expect(updated.category).toBe('work');
+    expect(updated.project).toBe('work');
     expect(updated.priority).toBe('immediate');
     expect(updated.starred).toBe(true);
   });

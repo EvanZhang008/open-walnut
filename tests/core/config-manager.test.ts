@@ -29,13 +29,13 @@ describe('updateConfig', () => {
     const initial = {
       version: 1,
       user: { name: 'TestUser' },
-      defaults: { priority: 'none', category: 'personal' },
+      defaults: { priority: 'none', project: 'Personal' },
       ms_todo: { client_id: 'abc-123', tenant_id: 'xyz-789' },
     };
     await fs.writeFile(CONFIG_FILE, yaml.dump(initial), 'utf-8');
 
     // Update only 'defaults' — ms_todo must survive
-    await updateConfig({ defaults: { priority: 'immediate', category: 'work' } } as any);
+    await updateConfig({ defaults: { priority: 'immediate', project: 'Work' } } as any);
 
     const raw = await fs.readFile(CONFIG_FILE, 'utf-8');
     const result = yaml.load(raw) as any;
@@ -49,7 +49,7 @@ describe('updateConfig', () => {
     const initial = { version: 1, user: { name: 'TestUser' } };
     await fs.writeFile(CONFIG_FILE, yaml.dump(initial), 'utf-8');
 
-    await updateConfig({ defaults: { priority: 'backlog', category: 'life' } } as any);
+    await updateConfig({ defaults: { priority: 'backlog', project: 'Life' } } as any);
 
     const raw = await fs.readFile(CONFIG_FILE, 'utf-8');
     const result = yaml.load(raw) as any;
@@ -71,18 +71,18 @@ describe('updateConfig', () => {
   it('replaces a top-level key entirely (not deep merge)', async () => {
     const initial = {
       version: 1,
-      defaults: { priority: 'none', category: 'personal' },
+      defaults: { priority: 'none', project: 'Personal' },
     };
     await fs.writeFile(CONFIG_FILE, yaml.dump(initial), 'utf-8');
 
-    // Send defaults with only priority — category should be gone (top-level key replacement)
+    // Send defaults with only priority — project should be gone (top-level key replacement)
     await updateConfig({ defaults: { priority: 'immediate' } } as any);
 
     const raw = await fs.readFile(CONFIG_FILE, 'utf-8');
     const result = yaml.load(raw) as any;
 
     expect(result.defaults.priority).toBe('immediate');
-    expect(result.defaults.category).toBeUndefined();
+    expect(result.defaults.project).toBeUndefined();
   });
 
   it('does not write undefined values', async () => {
@@ -109,7 +109,7 @@ describe('saveConfig (full replace)', () => {
     await fs.writeFile(CONFIG_FILE, yaml.dump(initial), 'utf-8');
 
     // saveConfig with no ms_todo — it should be gone
-    await saveConfig({ version: 1, user: { name: 'TestUser' }, defaults: { priority: 'none', category: 'personal' }, provider: { type: 'claude-code' } });
+    await saveConfig({ version: 1, user: { name: 'TestUser' }, defaults: { priority: 'none' }, provider: { type: 'claude-code' } });
 
     const raw = await fs.readFile(CONFIG_FILE, 'utf-8');
     const result = yaml.load(raw) as any;
@@ -119,45 +119,29 @@ describe('saveConfig (full replace)', () => {
   });
 });
 
-describe('default platform + Inbox reservation', () => {
-  it('new users default to local platform + Inbox category', async () => {
+// Inbox is now STRUCTURAL — the absence of a project. There is nothing to
+// reserve in config: no registry row exists for '' and no provider can claim it
+// (see tests/core/project-source-validation.test.ts). The old
+// `defaults.category` / `local.categories` reservation machinery is gone; its
+// removal path is covered by tests/core/config-migration-project-only.test.ts.
+describe('default platform + optional default project', () => {
+  it('new users default to the local platform and no default project (= Inbox)', async () => {
     // No config file on disk → DEFAULT_CONFIG applies
     const config = await getConfig();
     expect(config.defaults.platform).toBe('local');
-    expect(config.defaults.category).toBe('Inbox');
+    expect(config.defaults.project).toBeUndefined();
+    // The whole `local:` reservation section is gone from the Config type too.
+    expect((config as unknown as Record<string, unknown>).local).toBeUndefined();
   });
 
-  it('reserves both Local and Inbox as local-only categories by default', async () => {
-    const config = await getConfig();
-    const cats = (config.local?.categories ?? []).map((c) => c.toLowerCase());
-    expect(cats).toContain('local');
-    expect(cats).toContain('inbox');
-  });
-
-  it('keeps Inbox reserved even when user config overrides local.categories', async () => {
-    // User config that reserves only a custom category — Local + Inbox must still be added
+  it('preserves an existing user’s default project instead of forcing Inbox', async () => {
     await fs.writeFile(CONFIG_FILE, yaml.dump({
       version: 1,
-      defaults: { priority: 'none', category: 'MyInbox', platform: 'local' },
-      local: { categories: ['MyStuff'] },
+      defaults: { priority: 'none', project: 'Walnut' },
     }), 'utf-8');
 
     const config = await getConfig();
-    const cats = (config.local?.categories ?? []).map((c) => c.toLowerCase());
-    expect(cats).toContain('mystuff');
-    expect(cats).toContain('local');
-    expect(cats).toContain('inbox');
-  });
-
-  it('does NOT re-route an existing user whose defaults are already on disk', async () => {
-    // Pre-existing setup pointing at personal — must be preserved, not forced to Inbox
-    await fs.writeFile(CONFIG_FILE, yaml.dump({
-      version: 1,
-      defaults: { priority: 'none', category: 'personal' },
-    }), 'utf-8');
-
-    const config = await getConfig();
-    expect(config.defaults.category).toBe('personal');
+    expect(config.defaults.project).toBe('Walnut');
   });
 });
 
@@ -212,12 +196,12 @@ describe('config loss recovery via sidecar backup', () => {
     await fs.rm(CONFIG_FILE, { force: true });
 
     // A wholly unrelated write — must not erase stt/tools.
-    await updateConfig({ defaults: { priority: 'none', category: 'Inbox' } } as any);
+    await updateConfig({ defaults: { priority: 'none', project: 'Walnut' } } as any);
 
     const result = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as any;
     expect(result.stt.engine).toBe('whisper-server');
     expect(result.tools.web_search.provider).toBe('tavily');
-    expect(result.defaults.category).toBe('Inbox');
+    expect(result.defaults.project).toBe('Walnut');
   });
 
   it('still falls back to defaults on a genuine first run (no config, no backup)', async () => {

@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import type { CategorySummary } from '@/api/tasks';
 import { DatePicker, formatDateTimeDisplay } from '@/components/common/DatePicker';
 import { PinTierPicker } from '@/components/common/PinTierPicker';
 import {
@@ -8,7 +7,7 @@ import {
   nextValue,
 } from '@/components/sessions/task-meta-constants';
 
-export type ConfirmField = 'title' | 'due' | 'start' | 'pin' | 'priority' | 'star' | 'category' | 'project';
+export type ConfirmField = 'title' | 'due' | 'start' | 'pin' | 'priority' | 'star' | 'project';
 
 export interface ConfirmDraft {
   title: string;
@@ -18,16 +17,23 @@ export interface ConfirmDraft {
   pin?: string;
   priority?: 'immediate' | 'important' | 'backlog';
   starred: boolean;
-  category?: string;
+  /** Target project. Empty/undefined = Inbox. */
   project?: string;
+  /** The AI invented this project name — it doesn't exist yet. Drives the "new" badge. */
+  projectIsNew?: boolean;
   aiFields: Set<ConfirmField>;
 }
 
 interface Props {
   draft: ConfirmDraft | null;
   rawText: string;
-  categories: CategorySummary[] | null;
-  projectOptions: Record<string, string[]>;
+  /**
+   * Flat list of existing project names (Project is the single grouping layer).
+   * MUST come from the project REGISTRY (`useProjectRegistry`), not from the
+   * loaded task list: an existing-but-empty project mentions no task, so a
+   * task-derived list makes it look new and the "new" badge below lies.
+   */
+  projectOptions: string[];
   submitting: boolean;
   onChange: (patch: Partial<ConfirmDraft>) => void;
   onCreate: () => void;
@@ -42,7 +48,6 @@ function AiBadge({ visible }: { visible: boolean }) {
 export function QuickTaskConfirm({
   draft,
   rawText,
-  categories,
   projectOptions,
   submitting,
   onChange,
@@ -52,9 +57,6 @@ export function QuickTaskConfirm({
 }: Props) {
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [startPickerOpen, setStartPickerOpen] = useState(false);
-  // All categories stay selectable (including Inbox) — the empty option means
-  // "server default", which is configurable and not necessarily Inbox.
-  const categoryOptions = categories ?? [];
 
   if (!draft) {
     return (
@@ -75,8 +77,12 @@ export function QuickTaskConfirm({
 
   const priorityOption = PRIORITY_OPTIONS.find((option) => option.value === draft.priority);
   const priorityLabel = priorityOption ? `${priorityOption.icon} ${priorityOption.label}` : 'No priority';
-  const suggestions = projectOptions[draft.category || 'Inbox'] ?? [];
   const titleChanged = draft.title.trim() !== rawText.trim();
+  // Badge a project the AI invented, but only while it's still absent from the
+  // known list — the moment the user picks an existing name it isn't new anymore.
+  const showNewProjectBadge = !!draft.projectIsNew
+    && !!draft.project?.trim()
+    && !projectOptions.some((p) => p.toLowerCase() === draft.project!.trim().toLowerCase());
 
   return (
     <div
@@ -167,37 +173,20 @@ export function QuickTaskConfirm({
 
       <div className="qtc-confirm-grid">
         <label className="qtc-confirm-field">
-          <span className="qtc-confirm-label">Category <AiBadge visible={draft.aiFields.has('category')} /></span>
-          {/* key forces a remount when categories arrive: React won't re-apply an
-              unchanged controlled value to a <select> whose matching option appeared
-              later, leaving the DOM stuck on the placeholder. The fallback option
-              covers a draft.category seeded before the fetch resolves. */}
-          <select
-            key={categories ? 'loaded' : 'loading'}
-            className="qtc-confirm-select"
-            value={draft.category ?? ''}
-            disabled={submitting}
-            onChange={(event) => onChange({ category: event.target.value || undefined, project: undefined })}
-          >
-            <option value="">Default</option>
-            {draft.category && !categoryOptions.some((category) => category.name === draft.category) && (
-              <option value={draft.category}>{draft.category}</option>
-            )}
-            {categoryOptions.map((category) => <option key={category.name} value={category.name}>{category.name}</option>)}
-          </select>
-        </label>
-        <label className="qtc-confirm-field">
-          <span className="qtc-confirm-label">Project <AiBadge visible={draft.aiFields.has('project')} /></span>
+          <span className="qtc-confirm-label">
+            Project <AiBadge visible={draft.aiFields.has('project')} />
+            {showNewProjectBadge && <span className="qtc-confirm-new" title="This project doesn't exist yet — it will be created">new</span>}
+          </span>
           <input
             className="qtc-confirm-input qtc-confirm-project"
             value={draft.project ?? ''}
             list="qtc-project-options"
             disabled={submitting}
-            placeholder="Default"
+            placeholder="Inbox"
             onChange={(event) => onChange({ project: event.target.value })}
           />
           <datalist id="qtc-project-options">
-            {suggestions.map((project) => <option key={project} value={project} />)}
+            {projectOptions.map((project) => <option key={project} value={project} />)}
           </datalist>
         </label>
       </div>

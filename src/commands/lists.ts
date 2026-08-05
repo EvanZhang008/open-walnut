@@ -1,34 +1,23 @@
 import type { GlobalOptions } from '../core/types.js';
-import { parseGroupFromCategory } from '../utils/format.js';
 
+/**
+ * Print the REMOTE MS To-Do lists verbatim. Deliberately not grouped: with
+ * Project as the only local grouping layer there is no second level to fold
+ * a "Cat / Proj" list name into — the remote name is just a name (a project
+ * migrated from that encoding keeps it via its `remote_list` alias).
+ */
 export async function runLists(globalOptions: GlobalOptions): Promise<void> {
   const { getTaskLists } = await import('../integrations/microsoft-todo.js');
   const lists = await getTaskLists();
 
   if (globalOptions.json) {
     const { outputJson } = await import('../utils/json-output.js');
-    outputJson(lists.map((l) => ({
-      id: l.id,
-      displayName: l.displayName,
-      ...parseGroupFromCategory(l.displayName),
-    })));
+    outputJson(lists.map((l) => ({ id: l.id, displayName: l.displayName })));
     return;
   }
 
-  // Group lists by parsed group prefix
-  const grouped = new Map<string, { id: string; displayName: string; listName: string }[]>();
   for (const list of lists) {
-    const { group, listName } = parseGroupFromCategory(list.displayName);
-    if (!grouped.has(group)) grouped.set(group, []);
-    grouped.get(group)!.push({ id: list.id, displayName: list.displayName, listName });
-  }
-
-  for (const [group, items] of grouped) {
-    console.log(`\n${group}`);
-    for (const item of items) {
-      const label = item.listName !== group ? `  ${item.listName}` : `  (root)`;
-      console.log(`${label}  ${item.id.slice(0, 12)}...`);
-    }
+    console.log(`  ${list.displayName}  ${list.id.slice(0, 12)}...`);
   }
   console.log(`\n${lists.length} lists total`);
 }
@@ -53,17 +42,18 @@ export async function runListsRename(
   newName: string,
   globalOptions: GlobalOptions,
 ): Promise<void> {
-  // Use renameCategory to update both local tasks and remote list
-  const { renameCategory } = await import('../core/task-manager.js');
+  // Use renameProject to update both local tasks and the remote list
+  const { renameProject } = await import('../core/task-manager.js');
 
   try {
-    const { count } = await renameCategory(idOrName, newName);
+    const { count, merged } = await renameProject(idOrName, newName);
 
     if (globalOptions.json) {
       const { outputJson } = await import('../utils/json-output.js');
-      outputJson({ status: 'renamed', oldCategory: idOrName, newCategory: newName, tasksUpdated: count });
+      outputJson({ status: 'renamed', oldProject: idOrName, newProject: newName, tasksUpdated: count, merged });
     } else {
-      console.log(`Renamed category "${idOrName}" to "${newName}" (${count} tasks updated)`);
+      const suffix = merged ? ', merged into the existing project' : '';
+      console.log(`Renamed project "${idOrName}" to "${newName}" (${count} tasks updated${suffix})`);
     }
   } catch (err) {
     // Fall back to direct remote list rename if no local tasks match

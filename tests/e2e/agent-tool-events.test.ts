@@ -21,9 +21,9 @@ import { startServer, stopServer } from '../../src/web/server.js';
 import { executeTool } from '../../src/agent/tools.js';
 import { _resetForTesting } from '../../src/core/task-manager.js';
 
-/** Pre-create a category so strict validation passes for subsequent task creation. */
-async function ensureCategory(name: string, source = 'ms-todo') {
-  await executeTool('task_create', { type: 'category', name, source });
+/** Pre-create a project registry row with a non-local source. */
+async function ensureProjectRow(name: string, source = 'ms-todo') {
+  await executeTool('task_create', { type: 'project', name, source });
 }
 
 // ── Helpers ──
@@ -101,8 +101,8 @@ describe('Agent tool → WS event E2E', () => {
     const ws = await connectWs();
     const eventPromise = waitForWsEvent(ws, 'task:created');
 
-    await ensureCategory('Work');
-    await executeTool('task_create', { title: 'Agent-created task', category: 'Work' });
+    await ensureProjectRow('Work');
+    await executeTool('task_create', { title: 'Agent-created task', project: 'Work' });
 
     const frame = await eventPromise;
     expect(frame.name).toBe('task:created');
@@ -165,26 +165,26 @@ describe('Agent tool → WS event E2E', () => {
     await delay(50);
   });
 
-  it('rename_category tool emits task:updated to WS clients', async () => {
-    await ensureCategory('OldCat');
+  it('project rename emits task:updated to WS clients', async () => {
+    await ensureProjectRow('OldProj');
     const addResult = await executeTool('task_create', {
       title: 'Rename test task',
-      category: 'OldCat',
+      project: 'OldProj',
     });
     const taskId = extractId(addResult);
 
     const ws = await connectWs();
     const eventPromise = waitForWsEvent(ws, 'task:updated');
 
-    await executeTool('task_update', { type: 'category', old_name: 'OldCat', new_name: 'NewCat' });
+    await executeTool('task_update', { type: 'project', old_name: 'OldProj', new_name: 'NewProj' });
 
     const frame = await eventPromise;
     expect(frame.name).toBe('task:updated');
     expect(frame.data).toMatchObject({
       task: null,
       taskIds: [taskId],
-      oldCategory: 'OldCat',
-      newCategory: 'NewCat',
+      oldProject: 'OldProj',
+      newProject: 'NewProj',
       count: 1,
     });
 
@@ -192,24 +192,24 @@ describe('Agent tool → WS event E2E', () => {
     await delay(50);
   });
 
-  it('rename_category bulk event requests a refetch and carries affected IDs', async () => {
-    await ensureCategory('BulkOld');
+  it('project rename bulk event requests a refetch and carries affected IDs', async () => {
+    await ensureProjectRow('BulkOld');
     const addResult = await executeTool('task_create', {
       title: 'Bulk test',
-      category: 'BulkOld',
+      project: 'BulkOld',
     });
     const taskId = extractId(addResult);
 
     const ws = await connectWs();
     const eventPromise = waitForWsEvent(ws, 'task:updated');
 
-    await executeTool('task_update', { type: 'category', old_name: 'BulkOld', new_name: 'BulkNew' });
+    await executeTool('task_update', { type: 'project', old_name: 'BulkOld', new_name: 'BulkNew' });
 
     const frame = await eventPromise;
     expect(frame.data).toMatchObject({
       task: null,
       taskIds: [taskId],
-      oldCategory: 'BulkOld',
+      oldProject: 'BulkOld',
     });
 
     ws.close();
@@ -237,8 +237,8 @@ describe('Agent tool → WS event E2E', () => {
   });
 
   it('agent-created task is persisted and visible via REST', async () => {
-    await ensureCategory('TestCat');
-    const addResult = await executeTool('task_create', { title: 'Persist check', category: 'TestCat', priority: 'immediate' });
+    await ensureProjectRow('TestProj');
+    const addResult = await executeTool('task_create', { title: 'Persist check', project: 'TestProj', priority: 'immediate' });
     const taskId = extractId(addResult);
 
     const res = await fetch(`http://localhost:${port}/api/tasks/${taskId}`);

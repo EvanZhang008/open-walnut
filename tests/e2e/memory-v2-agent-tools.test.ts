@@ -56,7 +56,6 @@ beforeAll(async () => {
   );
   seedProjectMemory(
     WALNUT_HOME,
-    'work',
     'backend',
     'Backend project uses Express + PostgreSQL + Redis.',
   );

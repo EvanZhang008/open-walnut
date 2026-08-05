@@ -42,7 +42,7 @@ describe('writeStore row shadow', () => {
   _resetForTesting();
 
   it('persists repeated edits through the whole-store path', async () => {
-    const { task } = await addTask({ title: 'first', category: 'Local', source: 'local' });
+    const { task } = await addTask({ title: 'first', project: 'Local', source: 'local' });
 
     // Several sequential edits: each one is a writeStore() whose diff must catch
     // the single changed row. A broken diff shows up as a lost update.
@@ -53,7 +53,7 @@ describe('writeStore row shadow', () => {
     expect((await getTask(task.id)).title).toBe('third');
 
     // Unrelated rows must survive the skip-unchanged path.
-    const { task: other } = await addTask({ title: 'sibling', category: 'Local', source: 'local' });
+    const { task: other } = await addTask({ title: 'sibling', project: 'Local', source: 'local' });
     await updateTask(task.id, { title: 'fourth' });
     expect((await getTask(task.id)).title).toBe('fourth');
     expect((await getTask(other.id)).title).toBe('sibling');
@@ -61,8 +61,8 @@ describe('writeStore row shadow', () => {
 
   it('re-writes rows changed by another connection (data_version sentinel)', async () => {
     // Two tasks: we edit `other`, while `victim` is untouched in our snapshot.
-    const { task: victim } = await addTask({ title: 'victim', category: 'Local', source: 'local' });
-    const { task: other } = await addTask({ title: 'other', category: 'Local', source: 'local' });
+    const { task: victim } = await addTask({ title: 'victim', project: 'Local', source: 'local' });
+    const { task: other } = await addTask({ title: 'other', project: 'Local', source: 'local' });
     // Seed the shadow: it now records victim's fingerprint as title='victim'.
     await updateTask(victim.id, { title: 'seeded' });
     // Warm the whole-store read cache so the next writeStore's snapshot comes from
@@ -102,7 +102,7 @@ describe('writeStore row shadow', () => {
   // contract (a raw write is never resurrected by a later whole-store write) so
   // the pairing keeps holding if that cache behavior is ever changed.
   it('does not resurrect a per-row fast-path write on the next whole-store write', async () => {
-    const { task } = await addTask({ title: 'raw-base', category: 'Local', source: 'local' });
+    const { task } = await addTask({ title: 'raw-base', project: 'Local', source: 'local' });
     await updateTask(task.id, { title: 'via-writestore' });
 
     const res = await updateTaskRaw(task.id, { title: 'via-raw' });
@@ -120,27 +120,26 @@ describe('writeStore row shadow', () => {
   // WITHOUT changing any field. A content-only diff sees zero changed rows and would
   // silently drop the reorder — this pins the order-aware skip decision.
   it('persists a pure reorder (no field changes)', async () => {
-    const cat = 'ReorderCat';
     const proj = 'ReorderProj';
-    const { task: a } = await addTask({ title: 'a', category: cat, project: proj, source: 'local' });
-    const { task: b } = await addTask({ title: 'b', category: cat, project: proj, source: 'local' });
-    const { task: c } = await addTask({ title: 'c', category: cat, project: proj, source: 'local' });
+    const { task: a } = await addTask({ title: 'a', project: proj, source: 'local' });
+    const { task: b } = await addTask({ title: 'b', project: proj, source: 'local' });
+    const { task: c } = await addTask({ title: 'c', project: proj, source: 'local' });
 
     // Seed the shadow so the reorder runs against a populated shadow.
     await listTasks();
 
     const { reorderTasks } = await import('../../src/core/task-manager.js');
-    await reorderTasks(cat, proj, [c.id, a.id, b.id]);
+    await reorderTasks(proj, [c.id, a.id, b.id]);
 
     const inGroup = (await listTasks())
-      .filter((t) => t.category === cat && t.project === proj)
+      .filter((t) => t.project === proj)
       .map((t) => t.id);
     expect(inGroup).toEqual([c.id, a.id, b.id]);
   });
 
   it('still deletes rows dropped from the store snapshot', async () => {
-    const { task: keep } = await addTask({ title: 'keep', category: 'Local', source: 'local' });
-    const { task: drop } = await addTask({ title: 'drop', category: 'Local', source: 'local' });
+    const { task: keep } = await addTask({ title: 'keep', project: 'Local', source: 'local' });
+    const { task: drop } = await addTask({ title: 'drop', project: 'Local', source: 'local' });
     // Seed the shadow so the delete path runs with a populated shadow.
     await updateTask(keep.id, { title: 'keep-2' });
 

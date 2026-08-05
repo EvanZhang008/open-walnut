@@ -63,12 +63,12 @@ describe('updateTask asyncPush', () => {
   });
 
   async function seedPluginTask(): Promise<string> {
-    // NOT 'inbox' — that's a local-reserved category whose source resolution
-    // overrides input.source to 'local', and autoPushIfConfigured no-ops on local.
+    // A project is REQUIRED for a provider-sourced task: Inbox (no project) has no
+    // registry row and can never be claimed, so addTask would reject source=plugin
+    // there — and autoPushIfConfigured no-ops on local anyway.
     const { task } = await addTask({
       title: 'async push probe',
-      type: 'task',
-      category: 'marina-external',
+      project: 'marina-external',
       source: PLUGIN_ID,
       _skipPluginOps: true,
     });

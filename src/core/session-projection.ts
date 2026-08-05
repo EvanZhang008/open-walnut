@@ -58,7 +58,6 @@ export interface ProjectedSession {
   /** Owning task (sessions are normally spawned from a task). */
   task_id?: string
   task_title?: string
-  category?: string
   project?: string
   /** '' = the primary box itself; otherwise the remote host alias. */
   host: string
@@ -89,7 +88,6 @@ function projectSession(s: SessionRecord, task: Task | undefined): ProjectedSess
     ...(s.title ? { title: s.title } : {}),
     ...(s.taskId ? { task_id: s.taskId } : {}),
     ...(task?.title ? { task_title: task.title } : {}),
-    ...(task?.category ? { category: task.category } : {}),
     ...(s.project || task?.project ? { project: s.project || task?.project } : {}),
     host: s.host ?? '',
     process_status: s.process_status,

@@ -404,7 +404,8 @@ export interface WorkingDirEntry {
   cwd: string;
   host: string | null;
   hostLabel?: string;
-  category: string;
+  /** Majority-vote project for this dir, or the configured default. '' = Inbox. */
+  project: string;
   count: number;
   lastUsed: string;
   /** Launch config remembered from the last Quick Start on this dir. `model`
@@ -535,7 +536,6 @@ export async function quickStartSession(opts: {
   cwd: string;
   host?: string;
   message: string;
-  category?: string;
   model?: string;
   mode?: string;
   images?: ImageAttachment[];

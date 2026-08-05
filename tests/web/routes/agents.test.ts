@@ -232,7 +232,7 @@ describe('GET /api/agents/meta/models', () => {
     const config = {
       version: 1,
       user: {},
-      defaults: { priority: 'none', category: 'personal' },
+      defaults: { priority: 'none', project: 'personal' },
       provider: { type: 'claude-code' },
       agent: { available_models: ['custom-model-1', 'custom-model-2'] },
     };
@@ -253,7 +253,7 @@ describe('PATCH /api/agents/:id (config write-through)', () => {
     const config = {
       version: 1,
       user: {},
-      defaults: { priority: 'none', category: 'personal' },
+      defaults: { priority: 'none', project: 'personal' },
       provider: { type: 'claude-code' },
       agent: {
         agents: [

@@ -113,7 +113,7 @@ let realTask: Task;
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   await fs.mkdir(WALNUT_HOME, { recursive: true });
-  const { task } = await addTask({ title: 'taskless control task', category: 'Inbox' });
+  const { task } = await addTask({ title: 'taskless control task' });
   realTaskId = task.id;
   realTask = task;
 });

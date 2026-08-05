@@ -155,8 +155,8 @@ export function ContextInspectorPanel({ data, loading, error, onRefresh }: Conte
           <ContextMarkdown content={sections.compactionSummary.content} fallback="(No compaction yet)" />
         </ContextSection>
 
-        <ContextSection title="Task Categories & Projects" tokens={sections.taskCategories.tokens}>
-          <ContextMarkdown content={sections.taskCategories.content} fallback="(No active tasks)" />
+        <ContextSection title="Projects" tokens={sections.taskProjects.tokens}>
+          <ContextMarkdown content={sections.taskProjects.content} fallback="(No active tasks)" />
         </ContextSection>
 
         {/* Non-General agents: show split memory sections */}

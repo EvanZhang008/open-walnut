@@ -239,7 +239,7 @@ describe('prompt caching integration', () => {
     const systemBlocks = call.system as Array<{ type: string; text: string; cache_control?: unknown }>;
     expect(systemBlocks).toHaveLength(1);
     expect(systemBlocks[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
-    expect(systemBlocks[0].text).not.toContain('## Task Categories & Projects');
+    expect(systemBlocks[0].text).not.toContain('## Projects');
 
     // The volatile memory context rides the LAST user message, appended AFTER the
     // cache breakpoint, so the cached prefix (tools + system + prior history) is stable.
@@ -247,7 +247,7 @@ describe('prompt caching integration', () => {
     const lastUser = [...msgs].reverse().find(m => m.role === 'user')!;
     const blocks = lastUser.content as Array<{ type: string; text: string; cache_control?: unknown }>;
     const ephemeral = blocks[blocks.length - 1];
-    expect(ephemeral.text).toContain('## Task Categories & Projects');
+    expect(ephemeral.text).toContain('## Projects');
     expect(ephemeral.cache_control).toBeUndefined();
     // The block carrying the breakpoint is the user's own text, NOT the ephemeral context.
     const marked = blocks.find(b => b.cache_control);

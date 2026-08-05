@@ -35,7 +35,7 @@ export const memoryNotesSearchTool: ToolDefinition = {
   Collection:
     vault — the whole notes vault (every .md note, any folder)
 
-**Task** — structured task records (title, description, summary, tags, category/project). Semantic search over all tasks.
+**Task** — structured task records (title, description, summary, tags, project). Semantic search over all tasks.
 
 **Session** — Claude Code session metadata (title, description, plan, linked task context). Semantic search over all sessions.
 

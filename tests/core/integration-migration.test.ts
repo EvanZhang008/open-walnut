@@ -20,7 +20,6 @@ function makeTask(overrides: Record<string, unknown> = {}): Task {
     status: 'todo',
     phase: 'TODO',
     priority: 'none',
-    category: 'Inbox',
     project: 'Inbox',
     source: 'local',
     session_ids: [],

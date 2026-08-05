@@ -9,7 +9,7 @@ import type {
   PluginApi,
   PluginManifest,
   DisplayMeta,
-  CategoryClaimFn,
+  ProjectClaimFn,
   MigrateFn,
   HttpRoute,
   ExtData,
@@ -35,7 +35,7 @@ export function createNoopSync(): IntegrationSync {
     updatePhase: async () => {},
     updateDueDate: async () => {},
     updateStar: async () => {},
-    updateCategory: async () => {},
+    updateProject: async () => {},
     updateDependencies: async () => {},
     pushTask: async () => ({ serverTimestamp: new Date().toISOString() }),
     associateSubtask: async () => {},
@@ -61,7 +61,7 @@ export function createSpySync(): IntegrationSync & Record<string, ReturnType<typ
     updatePhase: vi.fn().mockResolvedValue(undefined),
     updateDueDate: vi.fn().mockResolvedValue(undefined),
     updateStar: vi.fn().mockResolvedValue(undefined),
-    updateCategory: vi.fn().mockResolvedValue(undefined),
+    updateProject: vi.fn().mockResolvedValue(undefined),
     updateDependencies: vi.fn().mockResolvedValue(undefined),
     pushTask: vi.fn().mockResolvedValue({ serverTimestamp: new Date().toISOString() }),
     associateSubtask: vi.fn().mockResolvedValue(undefined),
@@ -96,7 +96,7 @@ export function createTestPluginApi(
   api: PluginApi;
   collected: {
     sync: IntegrationSync | null;
-    claim: { fn: CategoryClaimFn; priority: number } | null;
+    claim: { fn: ProjectClaimFn; priority: number } | null;
     display: DisplayMeta | null;
     agentContext: string | null;
     migrations: MigrateFn[];
@@ -107,7 +107,7 @@ export function createTestPluginApi(
   const m = { id: 'test', name: 'Test Plugin', ...manifest };
   const collected = {
     sync: null as IntegrationSync | null,
-    claim: null as { fn: CategoryClaimFn; priority: number } | null,
+    claim: null as { fn: ProjectClaimFn; priority: number } | null,
     display: null as DisplayMeta | null,
     agentContext: null as string | null,
     migrations: [] as MigrateFn[],
@@ -130,7 +130,7 @@ export function createTestPluginApi(
       if (collected.sync) throw new Error(`Plugin "${m.id}" called registerSync() more than once.`);
       collected.sync = sync;
     },
-    registerSourceClaim(fn: CategoryClaimFn, opts?: { priority?: number }) {
+    registerSourceClaim(fn: ProjectClaimFn, opts?: { priority?: number }) {
       collected.claim = { fn, priority: opts?.priority ?? 0 };
     },
     registerDisplay(meta: DisplayMeta) {
@@ -188,7 +188,6 @@ export function createMockTask(overrides?: Partial<Task>): Task {
     status: 'todo' as const,
     phase: 'TODO' as TaskPhase,
     priority: 'none' as TaskPriority,
-    category: 'Inbox',
     project: 'Inbox',
     source: 'local',
     session_ids: [],

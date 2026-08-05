@@ -55,7 +55,6 @@ function makeTask(overrides: Partial<Task> = {}): Task {
   return {
     id: 'task-1',
     title: 'Test task',
-    category: 'Work',
     project: 'Walnut',
     status: 'todo',
     session_ids: [],

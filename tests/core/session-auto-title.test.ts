@@ -53,7 +53,7 @@ function registerFakeSession(sid: string, impl: (desc: string) => Promise<string
 }
 
 async function makeTaskAndSession(sid: string, title = PLACEHOLDER): Promise<Task> {
-  const { task } = await addTask({ title, category: 'Inbox' });
+  const { task } = await addTask({ title });
   await updateTask(task.id, { cwd: CWD }, { source: 'test' });
   await createSessionRecord(sid, task.id, 'Quick Start', CWD, { title });
   return getTask(task.id);

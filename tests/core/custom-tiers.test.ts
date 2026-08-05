@@ -58,7 +58,7 @@ afterEach(async () => {
 });
 
 async function makePinnedTask(title: string): Promise<string> {
-  const { task } = await addTask({ title, category: 'Local' });
+  const { task } = await addTask({ title, project: 'Local' });
   await togglePin(task.id);
   return task.id;
 }
@@ -268,7 +268,7 @@ describe('setFocusTier with custom tiers', () => {
 
   it('still validates task existence and pinnedness', async () => {
     await expect(setFocusTier('no-such-task', 'focus')).rejects.toThrow('Task not found');
-    const { task } = await addTask({ title: 'Unpinned', category: 'Local' });
+    const { task } = await addTask({ title: 'Unpinned', project: 'Local' });
     await expect(setFocusTier(task.id, 'focus')).rejects.toThrow('not pinned');
   });
 });

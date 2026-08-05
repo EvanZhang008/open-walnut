@@ -28,7 +28,6 @@ export interface QuickStartPath {
   cwd: string;
   host: string | null;
   hostLabel?: string;
-  category: string;
   /** Launch intent — 'fix-walnut' routes through the server-side repair briefing. */
   intent?: 'fix-walnut';
   /** User opted into "create & start": quick-start mkdirs the cwd first. */
@@ -456,14 +455,13 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
   const handleSelect = useCallback((d: RankedItem) => {
     onSelect({
       cwd: d.cwd, host: d.host, hostLabel: d.hostLabel,
-      category: d.history?.category ?? 'Inbox',
     }, withLaunchMemory(d.history?.lastLaunch));
   }, [onSelect, withLaunchMemory]);
 
   // Confirm the current editingPath (Shift+Enter or the Start-session button).
   // The explicitly selected tab is the HOST AUTHORITY: a history row with the
   // same cwd on a different host (dotfiles, mirrored workspace layouts) must
-  // never override it — history only supplies the category. Host inference
+  // never override it. Host inference
   // from a history match is allowed only under the All tab, where no host was
   // explicitly chosen.
   const handleConfirm = useCallback((opts?: { createCwd?: boolean }) => {
@@ -477,7 +475,6 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
       cwd: trimmed,
       host: anyTab ? (match?.host ?? null) : currentHost,
       hostLabel: anyTab ? match?.hostLabel : currentHostLabel,
-      category: match?.category ?? 'Inbox',
       ...(opts?.createCwd ? { createCwd: true } : {}),
     }, withLaunchMemory(match?.lastLaunch));
   }, [editingPath, dirs, onSelect, hostFilter, currentHost, currentHostLabel, withLaunchMemory]);
@@ -492,7 +489,6 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
       cwd: trimmed,
       host,
       hostLabel: hostTabs.find(t => t.key === createTarget)?.label,
-      category: 'Inbox',
       createCwd: true,
       // Brand-new dir → no launch memory; withLaunchMemory(undefined) clears any
       // leaked highlight preview (user-touched picks still win inside it).

@@ -46,7 +46,7 @@ afterEach(async () => {
 })
 
 async function taskInPhase(phase: string): Promise<string> {
-  const { task } = await addTask({ title: 't', category: 'c', project: 'p' })
+  const { task } = await addTask({ title: 't', project: 'p' })
   await updateTaskRaw(task.id, { phase: phase as never })
   return task.id
 }

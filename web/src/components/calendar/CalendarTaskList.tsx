@@ -56,14 +56,19 @@ export const CalendarTaskList = memo(function CalendarTaskList({ tasks }: Props)
     const unscheduled = tasks.filter(
       (t) => !DONE_PHASES.has(t.phase) && !t.start_date && (!q || t.title.toLowerCase().includes(q))
     );
-    const byCategory = new Map<string, Task[]>();
+    // Group by project. Inbox is the ABSENCE of a project, so its bucket key is
+    // '' (the same sentinel the rest of the app uses) and the "Inbox" label is
+    // applied only at render — keying on the literal 'Inbox' would silently merge
+    // a real project of that name into the no-project bucket. '' sorts last.
+    const byProject = new Map<string, Task[]>();
     for (const t of unscheduled) {
-      const key = t.category || 'Inbox';
-      const list = byCategory.get(key);
+      const key = t.project || '';
+      const list = byProject.get(key);
       if (list) list.push(t);
-      else byCategory.set(key, [t]);
+      else byProject.set(key, [t]);
     }
-    return [...byCategory.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    return [...byProject.entries()].sort((a, b) =>
+      a[0] === '' ? 1 : b[0] === '' ? -1 : a[0].localeCompare(b[0]));
   }, [tasks, filter]);
 
   return (
@@ -79,9 +84,11 @@ export const CalendarTaskList = memo(function CalendarTaskList({ tasks }: Props)
       </div>
       <div className="cal-rail-scroll">
         {groups.length === 0 && <div className="cal-rail-empty">No unscheduled tasks</div>}
-        {groups.map(([category, list]) => (
-          <div key={category} className="cal-rail-group">
-            <div className="cal-rail-group-label">{category}</div>
+        {groups.map(([project, list]) => (
+          // Prefixed key: '' is a legal-but-ambiguous React key, and the prefix
+          // also keeps a project literally named 'inbox' distinct from the bucket.
+          <div key={`p:${project}`} className="cal-rail-group">
+            <div className="cal-rail-group-label">{project || 'Inbox'}</div>
             {list.map((t) => (
               <RailRow key={t.id} task={t} />
             ))}

@@ -22,7 +22,6 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     title: 'Test Task',
     status: 'in_progress',
     priority: 'important',
-    category: 'Work',
     project: 'HomeLab',
     session_ids: [],
     description: 'A test task description',

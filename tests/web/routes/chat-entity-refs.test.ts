@@ -35,22 +35,22 @@ describe('resolveEntityRefs', () => {
   });
 
   it('fills in label for task-ref without label', async () => {
-    const { task } = await addTask({ title: 'Fix the login bug', category: 'Work', project: 'Auth' });
+    const { task } = await addTask({ title: 'Fix the login bug', project: 'Auth' });
     const text = `I updated <task-ref id="${task.id}"/> for you.`;
     const result = await resolveEntityRefs(text);
     expect(result).toContain(`label="Auth / Fix the login bug"`);
     expect(result).toContain(`id="${task.id}"`);
   });
 
-  it('uses task title only when project equals category', async () => {
-    const { task } = await addTask({ title: 'Buy groceries', category: 'Life', project: 'Life' });
+  it('uses task title only for an Inbox task (no project)', async () => {
+    const { task } = await addTask({ title: 'Buy groceries' });
     const text = `Done: <task-ref id="${task.id}"/>`;
     const result = await resolveEntityRefs(text);
     expect(result).toContain('label="Buy groceries"');
   });
 
   it('preserves existing labels while filling missing ones', async () => {
-    const { task } = await addTask({ title: 'New task', category: 'Work', project: 'HomeLab' });
+    const { task } = await addTask({ title: 'New task', project: 'HomeLab' });
     const text = `Updated <task-ref id="${task.id}"/> and checked <task-ref id="xyz" label="Already Labeled"/>`;
     const result = await resolveEntityRefs(text);
     // First ref should get a label
@@ -73,8 +73,8 @@ describe('resolveEntityRefs', () => {
   });
 
   it('handles multiple task-ref tags in one message', async () => {
-    const { task: t1 } = await addTask({ title: 'Task A', category: 'Work', project: 'Work' });
-    const { task: t2 } = await addTask({ title: 'Task B', category: 'Life', project: 'Shopping' });
+    const { task: t1 } = await addTask({ title: 'Task A' });
+    const { task: t2 } = await addTask({ title: 'Task B', project: 'Shopping' });
     const text = `Updated <task-ref id="${t1.id}"/> and <task-ref id="${t2.id}"/>`;
     const result = await resolveEntityRefs(text);
     expect(result).toContain('label="Task A"');
@@ -82,14 +82,14 @@ describe('resolveEntityRefs', () => {
   });
 
   it('handles self-closing tags with space before slash', async () => {
-    const { task } = await addTask({ title: 'Spaced tag', category: 'Work', project: 'Work' });
+    const { task } = await addTask({ title: 'Spaced tag' });
     const text = `Done: <task-ref id="${task.id}" />`;
     const result = await resolveEntityRefs(text);
     expect(result).toContain('label="Spaced tag"');
   });
 
   it('handles mixed task-ref and session-ref tags', async () => {
-    const { task } = await addTask({ title: 'Mixed test', category: 'Work', project: 'HomeLab' });
+    const { task } = await addTask({ title: 'Mixed test', project: 'HomeLab' });
     const text = `Updated <task-ref id="${task.id}"/> and started <session-ref id="ses-123"/>`;
     const result = await resolveEntityRefs(text);
     expect(result).toContain('label="HomeLab / Mixed test"');
@@ -97,7 +97,7 @@ describe('resolveEntityRefs', () => {
   });
 
   it('escapes quotes in labels', async () => {
-    const { task } = await addTask({ title: 'Fix "quoted" bug', category: 'Work', project: 'Work' });
+    const { task } = await addTask({ title: 'Fix "quoted" bug' });
     const text = `Done: <task-ref id="${task.id}"/>`;
     const result = await resolveEntityRefs(text);
     expect(result).toContain('label="Fix &quot;quoted&quot; bug"');

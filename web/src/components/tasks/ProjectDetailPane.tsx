@@ -1,28 +1,40 @@
+/**
+ * Inline detail pane for ONE project registry row (`task_projects`).
+ *
+ * Project is the single grouping layer, so this is the only detail pane — Inbox is
+ * the ABSENCE of a project (no registry row), which is why TodoPanel never opens
+ * this for `project === ''`.
+ *
+ * Counts render immediately from the already-loaded `tasks` prop; the registry row
+ * (source / settings / AI summary / memory) arrives from GET /api/projects/:name/metadata.
+ */
+
 import { useState, useEffect, useMemo, useCallback, type CSSProperties } from 'react';
 import type { Task } from '@open-walnut/core';
 import { useIntegrations, getIntegrationMeta } from '../../hooks/useIntegrations';
-
-interface ProjectMetadata {
-  default_cwd?: string;
-  default_host?: string;
-  /** Fast-model project summary (project-summary.ts), regenerated at task-count thresholds. */
-  summary?: string;
-  summary_task_count?: number;
-  [key: string]: unknown;
-}
+import {
+  fetchProjectDetail,
+  saveProjectMetadata,
+  regenerateProjectSummary,
+  type ProjectMetadata,
+} from '@/api/projects';
 
 interface ProjectDetailPaneProps {
-  category: string;
+  /** Never '' — Inbox has no registry row. */
   project: string;
   tasks: Task[];
   onClose: () => void;
   style?: CSSProperties;
 }
 
-export function ProjectDetailPane({ category, project, tasks, onClose, style }: ProjectDetailPaneProps) {
+export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDetailPaneProps) {
   const integrations = useIntegrations();
   const [metadata, setMetadata] = useState<ProjectMetadata>({});
   const [memorySummary, setMemorySummary] = useState<string | null>(null);
+  // Canonical spelling + claim come from the registry, which is the authority on
+  // both (a task's `source` can lag a claim change).
+  const [source, setSource] = useState('local');
+  const [displayName, setDisplayName] = useState(project);
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const [summaryRefreshing, setSummaryRefreshing] = useState(false);
@@ -30,52 +42,46 @@ export function ProjectDetailPane({ category, project, tasks, onClose, style }: 
   const refreshSummary = useCallback(async () => {
     setSummaryRefreshing(true);
     try {
-      const r = await fetch(`/api/categories/${encodeURIComponent(category)}/projects/${encodeURIComponent(project)}/summary/refresh`, { method: 'POST' });
-      if (r.ok) {
-        const data = await r.json();
-        setMetadata((prev) => ({ ...prev, summary: data.summary ?? undefined, summary_task_count: data.summary_task_count ?? undefined }));
-      }
+      const data = await regenerateProjectSummary(project);
+      setMetadata((prev) => ({
+        ...prev,
+        summary: data.summary ?? undefined,
+        summary_task_count: data.summary_task_count ?? undefined,
+      }));
     } catch { /* keep the old summary */ } finally {
       setSummaryRefreshing(false);
     }
-  }, [category, project]);
+  }, [project]);
 
-  // Compute task counts from props
+  // Counts from the loaded task list. Project identity is case-insensitive server-side,
+  // so compare that way here too or a differently-cased task would go uncounted.
   const counts = useMemo(() => {
+    const key = project.toLowerCase();
     const result = { todo: 0, active: 0, done: 0, total: 0 };
     for (const t of tasks) {
-      if (t.category !== category) continue;
-      if ((t.project || t.category) !== project) continue;
+      if ((t.project ?? '').toLowerCase() !== key) continue;
       if (t.phase === 'TODO') result.todo++;
       else if (t.phase === 'COMPLETE') result.done++;
       else result.active++;
       result.total++;
     }
     return result;
-  }, [tasks, category, project]);
+  }, [tasks, project]);
 
-  // Determine source from tasks
-  const source = useMemo(() => {
-    const t = tasks.find((t) => t.category === category && (t.project || t.category) === project);
-    return t?.source ?? 'local';
-  }, [tasks, category, project]);
-
-  // Fetch metadata + memory from API
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/categories/${encodeURIComponent(category)}/projects`)
-      .then((r) => r.json())
-      .then((data) => {
+    setDisplayName(project);
+    fetchProjectDetail(project)
+      .then((detail) => {
         if (cancelled) return;
-        const proj = data.projects?.find((p: { name: string }) => p.name === project);
-        if (proj) {
-          setMetadata(proj.metadata ?? {});
-          setMemorySummary(proj.memorySummary ?? null);
-        }
+        setMetadata(detail.metadata ?? {});
+        setMemorySummary(detail.memorySummary ?? null);
+        setSource(detail.source ?? 'local');
+        if (detail.name) setDisplayName(detail.name);
       })
-      .catch(() => { /* non-critical */ });
+      .catch(() => { /* non-critical — counts above still render */ });
     return () => { cancelled = true; };
-  }, [category, project]);
+  }, [project]);
 
   const startEdit = useCallback((field: string, currentValue: string) => {
     setEditingField(field);
@@ -91,21 +97,21 @@ export function ProjectDetailPane({ category, project, tasks, onClose, style }: 
     // Optimistic update
     setMetadata((prev) => ({ ...prev, [field]: newValue || undefined }));
     try {
-      await fetch(`/api/categories/${encodeURIComponent(category)}/projects/${encodeURIComponent(project)}/metadata`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [field]: newValue || undefined }),
-      });
+      // Clearing sends null, NOT undefined: JSON.stringify DROPS undefined
+      // properties, so the PUT body would be `{}` and the merge a no-op — the
+      // old value came straight back and the field appeared to revert itself.
+      const merged = await saveProjectMetadata(project, { [field]: newValue || null });
+      setMetadata(merged);
     } catch {
       // Revert on failure
       setMetadata((prev) => ({ ...prev, [field]: oldValue || undefined }));
     }
-  }, [editValue, metadata, category, project]);
+  }, [editValue, metadata, project]);
 
   return (
     <div className="todo-detail-pane project-detail-pane" style={style}>
       <div className="todo-detail-header">
-        <span className="todo-detail-category">{category} / {project}</span>
+        <span className="todo-detail-project">{displayName}</span>
         {(() => {
           const meta = getIntegrationMeta(integrations, source);
           return meta ? (
@@ -164,6 +170,14 @@ export function ProjectDetailPane({ category, project, tasks, onClose, style }: 
             </span>
           )}
         </div>
+
+        {/* MS To-Do alias: a migrated project keeps pushing to its old remote list. */}
+        {metadata.remote_list && metadata.remote_list !== displayName && (
+          <div className="detail-setting-row">
+            <span className="detail-setting-label">Remote List</span>
+            <span className="detail-setting-value text-muted">{metadata.remote_list}</span>
+          </div>
+        )}
       </div>
 
       {/* Task statistics */}
@@ -203,7 +217,7 @@ export function ProjectDetailPane({ category, project, tasks, onClose, style }: 
           : <p className="detail-memory-text text-muted">No summary yet — generated automatically as tasks accumulate, or click ↻.</p>}
       </div>
 
-      {/* Memory summary */}
+      {/* Memory summary — memory/projects/<project>/MEMORY.md header */}
       {memorySummary && (
         <div className="detail-section">
           <div className="detail-section-title">Memory</div>

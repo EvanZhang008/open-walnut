@@ -22,6 +22,7 @@ import { getActiveConversationId } from '../../core/conversations.js'
 import { drainPendingCronNotifications } from '../server.js'
 import { getTask, appendConversationLog } from '../../core/task-manager.js'
 import { getProjectMemory } from '../../core/project-memory.js'
+import { resolveProjectSkillDir } from '../../core/overview-log.js'
 import { getSessionByClaudeId } from '../../core/session-tracker.js'
 import { processAndSaveImages, buildImageAnnotation } from './images.js'
 import type { ImagePayload } from './images.js'
@@ -106,7 +107,6 @@ export async function createCompactionCallbacks(options?: { trackUsage?: boolean
 interface TaskContext {
   id: string
   title: string
-  category?: string
   project?: string
   status?: string
   phase?: string
@@ -178,8 +178,7 @@ export function buildTaskContextPrefix(ctx: TaskContext | null | undefined): str
   if (ctx.status) lines.push(`Status: ${ctx.status}`)
   if (ctx.priority && ctx.priority !== 'none') lines.push(`Priority: ${ctx.priority}`)
   if (ctx.starred) lines.push(`Starred: yes`)
-  if (ctx.category) lines.push(`Category: ${ctx.category}`)
-  if (ctx.project && ctx.project !== ctx.category) lines.push(`Project: ${ctx.project}`)
+  lines.push(`Project: ${ctx.project || 'Inbox'}`)
   if (ctx.source) lines.push(`Source: ${ctx.source}`)
   if (ctx.start_date) lines.push(`Start: ${ctx.start_date}`)
   if (ctx.due_date) lines.push(`Due: ${ctx.due_date}`)
@@ -236,7 +235,6 @@ const ENRICHED_BUDGETS = {
   summary: 500,
   note: 2000,
   projectMemory: 2000,
-  parentMemory: 1000,
   conversationLog: 500,
 } as const;
 
@@ -246,16 +244,12 @@ function contentHash(text: string | null | undefined): string {
   return crypto.createHash('sha256').update(text).digest('hex');
 }
 
-/**
- * Load hierarchical project memory: parent (category) + self (project).
- * Returns { parentPath, parentContent, selfPath, selfContent }.
- */
 /** Read a skill's curated body + recent history tail as the project context.
  *  Skill system first (memory/projects/ retired 2026-07); legacy project
  *  MEMORY.md as fallback for anything not yet migrated. */
-function readSkillProjectContext(category: string, name: string): string | null {
+function readSkillProjectContext(skillCategory: string, name: string): string | null {
   try {
-    const dir = path.join(GLOBAL_SKILLS_DIR, category, name);
+    const dir = path.join(GLOBAL_SKILLS_DIR, skillCategory, name);
     const skillFile = path.join(dir, 'SKILL.md');
     if (!fs.existsSync(skillFile)) return null;
     let content = fs.readFileSync(skillFile, 'utf-8');
@@ -272,31 +266,20 @@ function readSkillProjectContext(category: string, name: string): string | null 
   }
 }
 
-function loadHierarchicalMemory(category: string, project: string): {
-  parentPath: string | null; parentContent: string | null;
-  selfPath: string; selfContent: string | null;
-} {
-  const catLower = category.toLowerCase();
-  const projLower = project.toLowerCase();
-  const selfPath = `${catLower}/${projLower}`;
-
-  // Self = the project's skill (skills/<cat>/<proj>/), legacy MEMORY.md fallback
-  const selfContent = readSkillProjectContext(catLower, projLower)
-    ?? getProjectMemory(selfPath)?.content
+/**
+ * Load the project's memory: ONE level. The task model has no category, so
+ * there is no parent tier to inject — the project's own skill (found by name
+ * across the skill grouping dirs) is the whole context, with the legacy
+ * memory/projects/<proj>/MEMORY.md as fallback.
+ */
+function loadProjectContext(project: string): { path: string; content: string | null } {
+  const proj = (project ?? '').trim();
+  if (!proj) return { path: '', content: null };
+  const location = resolveProjectSkillDir(proj);
+  const content = (location ? readSkillProjectContext(location.skillCategory, location.name) : null)
+    ?? getProjectMemory(proj.toLowerCase())?.content
     ?? null;
-
-  // Parent = category-level context (only if project !== category, i.e. 2 levels):
-  // the category's overview skill, legacy category MEMORY.md fallback.
-  let parentPath: string | null = null;
-  let parentContent: string | null = null;
-  if (projLower !== catLower) {
-    parentPath = catLower;
-    parentContent = readSkillProjectContext(catLower, 'overview')
-      ?? getProjectMemory(catLower)?.content
-      ?? null;
-  }
-
-  return { parentPath, parentContent, selfPath, selfContent };
+  return { path: proj.toLowerCase(), content };
 }
 
 interface EnrichedResult {
@@ -313,16 +296,15 @@ interface EnrichedResult {
 export async function enrichTaskContext(ctx: TaskContext, conversationId?: string): Promise<EnrichedResult> {
   const task = await getTask(ctx.id);
 
-  // Load hierarchical memory
-  const mem = loadHierarchicalMemory(task.category, task.project);
+  // Load the project's memory (single level — no category tier)
+  const mem = loadProjectContext(task.project ?? '');
 
   // Compute current hashes — keyed by content source path
   const currentHashes: Record<string, string> = {};
   if (task.note) currentHashes[`note:${task.id}`] = contentHash(task.note);
   if (task.description) currentHashes[`desc:${task.id}`] = contentHash(task.description);
   if (task.summary) currentHashes[`summary:${task.id}`] = contentHash(task.summary);
-  if (mem.selfContent) currentHashes[`pm:${mem.selfPath}`] = contentHash(mem.selfContent);
-  if (mem.parentPath && mem.parentContent) currentHashes[`pm:${mem.parentPath}`] = contentHash(mem.parentContent);
+  if (mem.content) currentHashes[`pm:${mem.path}`] = contentHash(mem.content);
 
   // Get last injected hashes from chat history (scoped to this conversation)
   const lastHashes = await chatHistory.getLastContextHashes('general', conversationId);
@@ -344,8 +326,7 @@ export async function enrichTaskContext(ctx: TaskContext, conversationId?: strin
   if (task.status) lines.push(`Status: ${task.status}`);
   if (task.priority && task.priority !== 'none') lines.push(`Priority: ${task.priority}`);
   if (task.starred) lines.push(`Starred: yes`);
-  if (task.category) lines.push(`Category: ${task.category}`);
-  if (task.project && task.project !== task.category) lines.push(`Project: ${task.project}`);
+  lines.push(`Project: ${task.project || 'Inbox'}`);
   if (ctx.source) lines.push(`Source: ${ctx.source}`);
   if (task.start_date) lines.push(`Start: ${task.start_date}`);
   if (task.due_date) lines.push(`Due: ${task.due_date}`);
@@ -396,25 +377,14 @@ export async function enrichTaskContext(ctx: TaskContext, conversationId?: strin
     }
   }
 
-  // Parent memory (category level)
-  if (mem.parentPath && mem.parentContent) {
-    const key = `pm:${mem.parentPath}`;
-    const label = task.category;
-    if (unchanged(key)) {
-      lines.push(`\n[Category Memory: ${label}] [unchanged since last injection]`);
-    } else {
-      lines.push(`\n[Category Memory: ${label}]\n${truncateToTokenBudget(mem.parentContent, ENRICHED_BUDGETS.parentMemory)}`);
-    }
-  }
-
-  // Project memory (self level)
-  if (mem.selfContent) {
-    const key = `pm:${mem.selfPath}`;
+  // Project memory (the only tier)
+  if (mem.content) {
+    const key = `pm:${mem.path}`;
     const label = task.project;
     if (unchanged(key)) {
       lines.push(`\n[Project Memory: ${label}] [unchanged since last injection]`);
     } else {
-      lines.push(`\n[Project Memory: ${label}]\n${truncateToTokenBudget(mem.selfContent, ENRICHED_BUDGETS.projectMemory)}`);
+      lines.push(`\n[Project Memory: ${label}]\n${truncateToTokenBudget(mem.content, ENRICHED_BUDGETS.projectMemory)}`);
     }
   }
 
@@ -504,9 +474,7 @@ export async function resolveEntityRefs(text: string): Promise<string> {
     ...Array.from(taskIds).map(async (id) => {
       try {
         const task = await getTask(id)
-        const label = task.project && task.project !== task.category
-          ? `${task.project} / ${task.title}`
-          : task.title
+        const label = task.project ? `${task.project} / ${task.title}` : task.title
         taskLabels.set(id, label)
       } catch (err) {
         log.web.debug('failed to resolve task label', { taskId: id, error: err instanceof Error ? err.message : String(err) })

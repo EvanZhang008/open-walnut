@@ -40,7 +40,6 @@ function makeTestTask(noteContent: string): Task {
     title: `Body limit test (~${Math.round(noteContent.length / 1024)}KB)`,
     status: 'todo',
     priority: 'backlog',
-    category: TEST_LIST_NAME,
     project: TEST_LIST_NAME,
     source: 'ms-todo',
     session_ids: [],

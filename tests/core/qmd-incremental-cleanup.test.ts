@@ -79,7 +79,6 @@ import {
 const task = {
   id: 'task-current',
   title: 'Updated task content',
-  category: 'Local',
   project: 'Quick Start',
   status: 'todo',
   phase: 'TODO',

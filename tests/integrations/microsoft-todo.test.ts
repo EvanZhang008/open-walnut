@@ -35,7 +35,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
   getConfig: vi.fn().mockResolvedValue({
     version: 1,
     user: {},
-    defaults: { priority: 'none', category: 'personal' },
+    defaults: { priority: 'none', project: 'personal' },
     provider: { type: 'claude-code' },
     plugins: { 'ms-todo': { client_id: 'test-client-id', list_mapping: {} } },
   }),
@@ -52,17 +52,65 @@ vi.mock('../../src/utils/fs.js', () => ({
   ensureDir: vi.fn().mockResolvedValue(undefined),
 }));
 
-// Task-store reads are the boundary of this unit: reconcilePulledTasks resolves
-// locals through the SQLite-indexed findTaskByExtId (it replaced a caller-built
-// localByMsId Map), so the tasks a test hands to syncTasks/deltaPull are only
-// findable if they're seeded here. buildListName stays real — the list-migration
-// case asserts its "category / project" output.
+// Task-store reads are the boundary of this unit, on two axes:
+//  1. reconcilePulledTasks resolves locals through the SQLite-indexed
+//     findTaskByExtId (it replaced a caller-built localByMsId Map), so tasks
+//     handed to syncTasks/deltaPull are only findable if seeded here.
+//  2. The project registry is now what decides the remote list name (the
+//     `remote_list` alias) and who owns a project. `fakeRegistry` below is a
+//     faithful in-memory stand-in (NOCASE identity, first-writer-wins metadata
+//     merge) so the alias model is genuinely exercised rather than stubbed flat.
 const mockFindTaskByExtId = vi.fn();
-const mockGetStoreCategories = vi.fn();
+
+interface FakeProjectRow { name: string; source: string; metadata: Record<string, unknown> }
+/** lower(name) → row. Mirrors task_projects' NOCASE primary key. */
+const fakeRegistry = new Map<string, FakeProjectRow>();
+
+function registrySeed(name: string, source = 'ms-todo', metadata: Record<string, unknown> = {}): void {
+  fakeRegistry.set(name.toLowerCase(), { name, source, metadata });
+}
+function registryGet(name: string): FakeProjectRow | undefined {
+  return fakeRegistry.get((name ?? '').trim().toLowerCase());
+}
+
+const mockEnsureProject = vi.fn(async (name: string, source = 'local') => {
+  const trimmed = (name ?? '').trim();
+  if (!trimmed) return { name: '', source: 'local', created: false };
+  const existing = registryGet(trimmed);
+  // The existing row always wins on BOTH spelling and claim.
+  if (existing) return { name: existing.name, source: existing.source, created: false };
+  fakeRegistry.set(trimmed.toLowerCase(), { name: trimmed, source, metadata: {} });
+  return { name: trimmed, source, created: true };
+});
+
+const mockGetProjectRecord = vi.fn(async (name: string) => {
+  const row = registryGet(name);
+  return row ? { name: row.name, source: row.source, metadata: row.metadata } : null;
+});
+
+const mockSetProjectMetadata = vi.fn(async (name: string, settings: Record<string, unknown>) => {
+  const trimmed = (name ?? '').trim();
+  if (!trimmed) throw new Error('Inbox has no project settings — pass a project name.');
+  const row = registryGet(trimmed) ?? { name: trimmed, source: 'local', metadata: {} };
+  row.metadata = { ...row.metadata, ...settings };
+  fakeRegistry.set(trimmed.toLowerCase(), row);
+  return row.metadata;
+});
+
+const mockRemoteListNameFor = vi.fn(async (project: string) => {
+  const name = (project ?? '').trim();
+  if (!name) return '';
+  const alias = registryGet(name)?.metadata?.remote_list;
+  return typeof alias === 'string' && alias.trim() ? alias : name;
+});
+
 vi.mock('../../src/core/task-manager.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/core/task-manager.js')>()),
   findTaskByExtId: (...args: unknown[]) => mockFindTaskByExtId(...args),
-  getStoreCategories: (...args: unknown[]) => mockGetStoreCategories(...args),
+  ensureProject: (...args: unknown[]) => (mockEnsureProject as any)(...args),
+  getProjectRecord: (...args: unknown[]) => (mockGetProjectRecord as any)(...args),
+  setProjectMetadata: (...args: unknown[]) => (mockSetProjectMetadata as any)(...args),
+  remoteListNameFor: (...args: unknown[]) => (mockRemoteListNameFor as any)(...args),
 }));
 
 import {
@@ -73,6 +121,7 @@ import {
   pullTasks,
   syncTasks,
   deltaPull,
+  reconcilePulledTasks,
   autoPushTask,
   getMsTodoSyncStatus,
   createList,
@@ -112,7 +161,6 @@ function makeTask(overrides: Partial<Task> & { ms_todo_id?: string; ms_todo_list
     status,
     phase,
     priority: 'none',
-    category: 'personal',
     project: 'personal',
     session_ids: [],
     created_at: '2024-01-01T00:00:00.000Z',
@@ -189,11 +237,12 @@ function seedLocalByMsId(tasks: Task[]) {
 beforeEach(() => {
   vi.clearAllMocks();
   clearListIdCache();
+  fakeRegistry.clear();
 
-  // Default: an empty task store (no local task resolves, no category is claimed
-  // by another source) — pull tests opt in via seedLocalByMsId.
+  // Default: an empty task store — no local task resolves and no project is
+  // claimed yet, so a push resolves its list straight from the project name.
+  // Pull tests opt in via seedLocalByMsId; alias tests seed the registry.
   seedLocalByMsId([]);
-  mockGetStoreCategories.mockResolvedValue({});
 
   // Default: MSAL returns a valid token
   mockAcquireTokenSilent.mockResolvedValue({ accessToken: 'fake-token' });
@@ -349,13 +398,12 @@ describe('mapToLocal', () => {
     expect(local.priority).toBe('immediate');
     const extData = local.ext?.['ms-todo'] as Record<string, unknown> | undefined;
     expect(extData?.id).toBe('ms-task-id');
-    expect(local.category).toBe('Work');
     expect(local.project).toBe('Work');
+    expect('category' in local).toBe(false);
   });
 
-  it('parses category and project from list name with separator', () => {
+  it('takes the trailing segment of a legacy two-level list name as the project', () => {
     const local = mapToLocal(makeMsTask({ title: 'Task' }), 'Work / HomeLab');
-    expect(local.category).toBe('Work');
     expect(local.project).toBe('HomeLab');
   });
 
@@ -698,14 +746,14 @@ describe('phase map completeness', () => {
 
 describe('pushTask', () => {
   it('creates a new task via POST when ms_todo_id is absent', async () => {
-    // Response 1: fetchTaskLists (for resolveListId — name matches category)
+    // Response 1: fetchTaskLists (for resolveListId — name matches the project)
     // Response 2: POST create task
     setupGraphResponses([
       { body: { value: [{ id: 'list-1', displayName: 'personal' }] } },
       { body: { id: 'new-ms-id', title: 'Test Task', status: 'notStarted', importance: 'normal' } },
     ]);
 
-    const task = makeTask({ title: 'New Task', category: 'personal' });
+    const task = makeTask({ title: 'New Task', project: 'personal' });
     const msId = await pushTask(task);
 
     expect(msId.msTaskId).toBe('new-ms-id');
@@ -719,14 +767,14 @@ describe('pushTask', () => {
   });
 
   it('updates an existing task via PATCH when ms_todo_id is present', async () => {
-    // Response 1: fetchTaskLists (for resolveListId — name matches category)
+    // Response 1: fetchTaskLists (for resolveListId — name matches the project)
     // Response 2: PATCH update task
     setupGraphResponses([
       { body: { value: [{ id: 'list-1', displayName: 'personal' }] } },
       { body: { id: 'existing-ms-id', title: 'Updated Task' } },
     ]);
 
-    const task = makeTask({ ms_todo_id: 'existing-ms-id', ms_todo_list: 'list-1', category: 'personal' });
+    const task = makeTask({ ms_todo_id: 'existing-ms-id', ms_todo_list: 'list-1', project: 'personal' });
     const msId = await pushTask(task);
 
     expect(msId.msTaskId).toBe('existing-ms-id');
@@ -780,10 +828,10 @@ describe('pushTask', () => {
     expect(writtenBody.body.content).toContain('Has dependencies');
   });
 
-  it('moves task to new list when category changed (delete old + create new)', async () => {
+  it('moves task to new list when project changed (delete old + create new)', async () => {
     setupGraphResponses([
-      // resolveListId → fetchTaskLists (finds new list)
-      { body: { value: [{ id: 'old-list', displayName: 'Work Idea' }, { id: 'new-list', displayName: 'idea / work idea' }] } },
+      // resolveListId → fetchTaskLists (finds the list named after the project)
+      { body: { value: [{ id: 'old-list', displayName: 'Old Home' }, { id: 'new-list', displayName: 'work idea' }] } },
       // DELETE from old list
       { body: {} },
       // POST create in new list
@@ -793,8 +841,7 @@ describe('pushTask', () => {
     const task = makeTask({
       ms_todo_id: 'old-ms-id',
       ms_todo_list: 'old-list',
-      category: 'idea',
-      project: 'work idea',  // buildListName → "idea / work idea"
+      project: 'work idea',  // no alias → list name is the project name verbatim
     });
     const msId = await pushTask(task);
 
@@ -809,6 +856,506 @@ describe('pushTask', () => {
     expect(mockHttpsRequest.mock.calls[1][0].path).toContain('old-list');
     expect(mockHttpsRequest.mock.calls[2][0].method).toBe('POST');
     expect(mockHttpsRequest.mock.calls[2][0].path).toContain('new-list');
+  });
+
+  it('refuses to push an Inbox task (empty project is local-only)', async () => {
+    setupGraphResponses([{ body: { value: [] } }]);
+
+    await expect(pushTask(makeTask({ title: 'Loose capture', project: '' })))
+      .rejects.toThrow(/no project \(Inbox tasks are local-only\)/);
+    // Refused before any Graph traffic — no unnamed remote list gets created.
+    expect(mockHttpsRequest).not.toHaveBeenCalled();
+  });
+
+  it('refuses to push when the project is claimed by another source', async () => {
+    registrySeed('Tickets', 'jira');
+    setupGraphResponses([{ body: { value: [] } }]);
+
+    await expect(pushTask(makeTask({ title: 'Not ours', project: 'Tickets' })))
+      .rejects.toThrow(/project "Tickets" is registered as jira/);
+    expect(mockHttpsRequest).not.toHaveBeenCalled();
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// remote_list alias (push side)
+// ────────────────────────────────────────────────────────────────────
+
+describe('pushTask — remote_list alias', () => {
+  it('pushes into the aliased legacy list, not a new project-named one', async () => {
+    // A project migrated off the retired two-level model: name "HomeLab",
+    // alias still the original remote list "Work / HomeLab".
+    registrySeed('HomeLab', 'ms-todo', { remote_list: 'Work / HomeLab' });
+
+    setupGraphResponses([
+      // Both lists exist remotely; only the alias must be picked.
+      { body: { value: [
+        { id: 'legacy-list', displayName: 'Work / HomeLab' },
+        { id: 'fresh-list', displayName: 'HomeLab' },
+      ] } },
+      { body: { id: 'aliased-ms-id', title: 'Aliased Task' } },
+    ]);
+
+    const task = makeTask({ title: 'Aliased Task', project: 'HomeLab' });
+    const result = await pushTask(task);
+
+    expect(result.msTaskId).toBe('aliased-ms-id');
+    expect(getMsExt(task).list_id).toBe('legacy-list');
+    expect(mockHttpsRequest.mock.calls[1][0].path).toContain('legacy-list');
+    // Zero renames / list creations — the remote side is left untouched.
+    expect(mockHttpsRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it('creates a list named after the project when there is no alias', async () => {
+    registrySeed('FreshProject', 'ms-todo');
+
+    setupGraphResponses([
+      { body: { value: [] } },                                        // no lists yet
+      { body: { id: 'created-list', displayName: 'FreshProject' } },  // createList
+      { body: { id: 'new-ms-id', title: 'First Task' } },             // POST task
+    ]);
+
+    const task = makeTask({ title: 'First Task', project: 'FreshProject' });
+    await pushTask(task);
+
+    const createCall = mockHttpsRequest.mock.calls[1][0];
+    expect(createCall.method).toBe('POST');
+    expect(createCall.path).toMatch(/\/me\/todo\/lists$/);
+    const createdBody = JSON.parse(mockHttpsRequest.mock.results[1].value.write.mock.calls[0][0]);
+    expect(createdBody.displayName).toBe('FreshProject');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// remote_list alias (pull side) — reconcilePulledTasks
+// ────────────────────────────────────────────────────────────────────
+
+describe('reconcilePulledTasks — project registry + remote_list alias', () => {
+  const addOk = () => vi.fn().mockResolvedValue(makeTask({ id: 'created' }));
+
+  it('a legacy "Category / Project" list lands on the trailing project + stamps the alias', async () => {
+    const addLocal = addOk();
+    const count = await reconcilePulledTasks(
+      [makeMsTask({ id: 'ms-legacy-1', title: 'Legacy list task' })],
+      { id: 'legacy-list', displayName: 'Work / HomeLab' },
+      vi.fn(),
+      addLocal,
+    );
+
+    expect(count).toBe(1);
+    // Task is filed under the trailing segment only — the leading category is gone.
+    expect(addLocal).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Legacy list task',
+      project: 'HomeLab',
+      source: 'ms-todo',
+    }));
+    // Registry row created + claimed, with the FULL remote display name aliased so
+    // later pushes keep landing in that exact list instead of forking a new one.
+    const row = registryGet('HomeLab')!;
+    expect(row.source).toBe('ms-todo');
+    expect(row.metadata.remote_list).toBe('Work / HomeLab');
+    // And the push side resolves back to the legacy list.
+    await expect(mockRemoteListNameFor('HomeLab')).resolves.toBe('Work / HomeLab');
+  });
+
+  it('a project-named list needs no alias', async () => {
+    const addLocal = addOk();
+    await reconcilePulledTasks(
+      [makeMsTask({ id: 'ms-plain-1', title: 'Plain list task' })],
+      { id: 'plain-list', displayName: 'HomeLab' },
+      vi.fn(),
+      addLocal,
+    );
+
+    expect(addLocal).toHaveBeenCalledWith(expect.objectContaining({ project: 'HomeLab' }));
+    expect(registryGet('HomeLab')!.metadata.remote_list).toBeUndefined();
+  });
+
+  it('a case-only difference is the same list, so no alias is written', async () => {
+    registrySeed('HomeLab', 'ms-todo');
+    const addLocal = addOk();
+    await reconcilePulledTasks(
+      [makeMsTask({ id: 'ms-case-1', title: 'Case task' })],
+      { id: 'case-list', displayName: 'homelab' },
+      vi.fn(),
+      addLocal,
+    );
+
+    // Canonical registry spelling wins over the remote list's casing, so two
+    // lists differing only in case can't split one project.
+    expect(addLocal).toHaveBeenCalledWith(expect.objectContaining({ project: 'HomeLab' }));
+    expect(registryGet('HomeLab')!.metadata.remote_list).toBeUndefined();
+  });
+
+  it('first alias writer wins when two legacy lists flatten onto one project', async () => {
+    const addLocal = addOk();
+    await reconcilePulledTasks(
+      [makeMsTask({ id: 'ms-a', title: 'From Work' })],
+      { id: 'list-a', displayName: 'Work / VPA' },
+      vi.fn(),
+      addLocal,
+    );
+    await reconcilePulledTasks(
+      [makeMsTask({ id: 'ms-b', title: 'From Personal' })],
+      { id: 'list-b', displayName: 'Personal / VPA' },
+      vi.fn(),
+      addLocal,
+    );
+
+    // Both tasks land in project "VPA"; the alias stays pinned to the first list
+    // so pushes don't shuffle between remote lists on every tick.
+    expect(registryGet('VPA')!.metadata.remote_list).toBe('Work / VPA');
+    expect(addLocal).toHaveBeenCalledTimes(2);
+    for (const call of addLocal.mock.calls) expect(call[0].project).toBe('VPA');
+  });
+
+  it('skips a whole list whose project is claimed by another source', async () => {
+    registrySeed('Tickets', 'jira');
+    const addLocal = addOk();
+    const updateLocal = vi.fn();
+
+    const count = await reconcilePulledTasks(
+      [makeMsTask({ id: 'ms-jira-1', title: 'Not ours' })],
+      { id: 'list-jira', displayName: 'Tickets' },
+      updateLocal,
+      addLocal,
+    );
+
+    expect(count).toBe(0);
+    expect(addLocal).not.toHaveBeenCalled();
+    expect(updateLocal).not.toHaveBeenCalled();
+    // The claim is untouched — a pull can never re-claim someone else's project.
+    expect(registryGet('Tickets')!.source).toBe('jira');
+  });
+
+  it('an empty list never manufactures a registry row', async () => {
+    const count = await reconcilePulledTasks(
+      [],
+      { id: 'list-empty', displayName: 'Work / Ghost' },
+      vi.fn(),
+      addOk(),
+    );
+
+    expect(count).toBe(0);
+    expect(registryGet('Ghost')).toBeUndefined();
+    expect(mockEnsureProject).not.toHaveBeenCalled();
+  });
+
+  it('an update from a legacy list rewrites the task onto the project', async () => {
+    const localTask = makeTask({
+      id: 'local-legacy',
+      ms_todo_id: 'ms-upd-1',
+      project: 'HomeLab',
+      updated_at: '2024-01-01T00:00:00Z',
+    });
+    seedLocalByMsId([localTask]);
+    const updateLocal = vi.fn();
+
+    const count = await reconcilePulledTasks(
+      [makeMsTask({ id: 'ms-upd-1', title: 'Renamed remotely', lastModifiedDateTime: '2026-01-01T00:00:00Z' })],
+      { id: 'legacy-list', displayName: 'Work / HomeLab' },
+      updateLocal,
+      addOk(),
+    );
+
+    expect(count).toBe(1);
+    const updates = updateLocal.mock.calls[0][1];
+    expect(updates.project).toBe('HomeLab');
+    expect('category' in updates).toBe(false);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// Retired grouping names must NOT be resurrected as projects on pull
+// ────────────────────────────────────────────────────────────────────
+// The v5 migration routed 'Quick Start' (any category) and the 'Inbox' category
+// to Inbox (''). The remote lists still carry those names, so a pull that only
+// split the display name re-created them as real projects AND the catch-up pass
+// rewrote project='Quick Start' back onto the migrated tasks — sync silently
+// undoing the migration.
+
+describe('reconcilePulledTasks — retired grouping names route to Inbox', () => {
+  const addOk = () => vi.fn().mockResolvedValue(makeTask({ id: 'created' }));
+
+  const retiredLists = [
+    'Passion / Quick Start',
+    'Inbox / Quick Start',
+    'Work / quick start',
+    'Quick Start',
+    'Inbox',
+    'inbox',
+  ];
+
+  for (const displayName of retiredLists) {
+    it(`skips the "${displayName}" list wholesale`, async () => {
+      const addLocal = addOk();
+      const updateLocal = vi.fn();
+
+      const count = await reconcilePulledTasks(
+        [makeMsTask({ id: 'ms-retired-1', title: 'Captured thought' })],
+        { id: 'list-retired', displayName },
+        updateLocal,
+        addLocal,
+      );
+
+      // Inbox is structurally local-only, so a provider task cannot live there —
+      // skipping is the same outcome as a create-time refusal, without the noise.
+      expect(count).toBe(0);
+      expect(addLocal).not.toHaveBeenCalled();
+      expect(updateLocal).not.toHaveBeenCalled();
+      // No registry row, no ensureProject call — the retired name never becomes a project.
+      expect(mockEnsureProject).not.toHaveBeenCalled();
+      expect(fakeRegistry.size).toBe(0);
+    });
+  }
+
+  it('still imports a real project from a list whose LEADING segment is "Inbox"', async () => {
+    // "Inbox / Marina" = category Inbox + project Marina → Marina survives
+    // (promoteLegacyGroup only sends the DEGENERATE Inbox group to Inbox).
+    const addLocal = addOk();
+    const count = await reconcilePulledTasks(
+      [makeMsTask({ id: 'ms-real-1', title: 'Real work' })],
+      { id: 'list-real', displayName: 'Inbox / Marina' },
+      vi.fn(),
+      addLocal,
+    );
+    expect(count).toBe(1);
+    expect(addLocal).toHaveBeenCalledWith(expect.objectContaining({ project: 'Marina' }));
+    expect(registryGet('Marina')!.metadata.remote_list).toBe('Inbox / Marina');
+  });
+
+  it('does not route a project that merely CONTAINS a retired word', async () => {
+    const addLocal = addOk();
+    await reconcilePulledTasks(
+      [makeMsTask({ id: 'ms-guide-1', title: 'Guide task' })],
+      { id: 'list-guide', displayName: 'Quick Start Guide' },
+      vi.fn(),
+      addLocal,
+    );
+    expect(addLocal).toHaveBeenCalledWith(expect.objectContaining({ project: 'Quick Start Guide' }));
+  });
+
+  it('mapToLocal itself routes a retired list name to Inbox', async () => {
+    // The field mapper is the second write path (it feeds the UPDATE branch and
+    // fullPullAllTasks), so the rule has to live below reconcile too.
+    expect(mapToLocal(makeMsTask({ id: 'x' }), 'Passion / Quick Start').project).toBe('');
+    expect(mapToLocal(makeMsTask({ id: 'x' }), 'Inbox').project).toBe('');
+    expect(mapToLocal(makeMsTask({ id: 'x' }), 'Work / VPA').project).toBe('VPA');
+  });
+
+  it('an UPDATE from a retired list does not rewrite the task back to Quick Start', async () => {
+    // The regression shape: a migrated task (project '') whose remote twin still
+    // lives in "Passion / Quick Start". The whole list is skipped, so no update.
+    const localTask = makeTask({
+      id: 'local-migrated',
+      ms_todo_id: 'ms-qs-1',
+      project: '',
+      updated_at: '2024-01-01T00:00:00Z',
+    });
+    seedLocalByMsId([localTask]);
+    const updateLocal = vi.fn();
+
+    const count = await reconcilePulledTasks(
+      [makeMsTask({ id: 'ms-qs-1', title: 'Renamed remotely', lastModifiedDateTime: '2026-01-01T00:00:00Z' })],
+      { id: 'list-qs', displayName: 'Passion / Quick Start' },
+      updateLocal,
+      addOk(),
+    );
+
+    expect(count).toBe(0);
+    expect(updateLocal).not.toHaveBeenCalled();
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// deltaPull catch-up must not rewrite migrated tasks either
+// ────────────────────────────────────────────────────────────────────
+
+describe('deltaPull catch-up — retired list names', () => {
+  function seedDeltaState(listNames: Record<string, string>): void {
+    mockReadJsonFile.mockImplementation((_path: string, defaultVal: unknown) => {
+      if (typeof _path === 'string' && _path.includes('tokens')) {
+        return Promise.resolve({
+          accessToken: 'fake-token',
+          expiresAt: new Date(Date.now() + 3600000).toISOString(),
+          msalCache: '{}',
+        });
+      }
+      if (typeof _path === 'string' && _path.includes('delta')) {
+        return Promise.resolve({ deltaLinks: {}, listNames, lastSync: '' });
+      }
+      return Promise.resolve(defaultVal);
+    });
+  }
+
+  it('leaves a migrated Inbox task alone when its list is still named "… / Quick Start"', async () => {
+    seedDeltaState({ 'list-qs': 'Passion / Quick Start' });
+    setupGraphResponses([
+      { body: { value: [{ id: 'list-qs', displayName: 'Passion / Quick Start' }] } },
+      { body: { value: [], '@odata.deltaLink': 'https://graph.microsoft.com/delta?t=qs' } },
+    ]);
+
+    const localTask = makeTask({
+      id: 'local-migrated',
+      ms_todo_id: 'ms-1',
+      ms_todo_list: 'list-qs',
+      project: '',
+    });
+    const updateLocal = vi.fn();
+
+    const hasChanges = await deltaPull([localTask], updateLocal, vi.fn());
+
+    // The catch-up pass used to fire `updateLocal(id, { project: 'Quick Start' })`
+    // here on EVERY tick, undoing the migration.
+    expect(updateLocal).not.toHaveBeenCalled();
+    expect(hasChanges).toBe(false);
+    expect(fakeRegistry.size).toBe(0);
+  });
+
+  it('a remote RENAME onto a retired name also leaves tasks alone', async () => {
+    seedDeltaState({ 'list-1': 'Work / HomeLab' });
+    setupGraphResponses([
+      // The user renamed the list to the retired grouping name.
+      { body: { value: [{ id: 'list-1', displayName: 'Inbox' }] } },
+      { body: { value: [], '@odata.deltaLink': 'https://graph.microsoft.com/delta?t=r' } },
+    ]);
+
+    const localTask = makeTask({
+      id: 'local-1', ms_todo_id: 'ms-1', ms_todo_list: 'list-1', project: 'HomeLab',
+    });
+    const updateLocal = vi.fn();
+
+    await deltaPull([localTask], updateLocal, vi.fn());
+
+    expect(updateLocal).not.toHaveBeenCalled();
+    expect(registryGet('Inbox')).toBeUndefined();
+  });
+
+  it('still performs the catch-up for an ordinary list-name change', async () => {
+    // Guardrail: the skip above must be name-specific, not a blanket disable.
+    registrySeed('HomeLab', 'ms-todo');
+    seedDeltaState({ 'list-1': 'Work / HomeLab' });
+    setupGraphResponses([
+      { body: { value: [{ id: 'list-1', displayName: 'Work / LabAtHome' }] } },
+      { body: { value: [], '@odata.deltaLink': 'https://graph.microsoft.com/delta?t=ok' } },
+    ]);
+
+    const localTask = makeTask({
+      id: 'local-1', ms_todo_id: 'ms-1', ms_todo_list: 'list-1', project: 'HomeLab',
+    });
+    const updateLocal = vi.fn();
+
+    await deltaPull([localTask], updateLocal, vi.fn());
+    expect(updateLocal).toHaveBeenCalledWith('local-1', { project: 'LabAtHome' });
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// Store errors must fail loudly, not degrade to an unverified project
+// ────────────────────────────────────────────────────────────────────
+
+describe('ms-todo pull — store failure handling', () => {
+  const addOk = () => vi.fn().mockResolvedValue(makeTask({ id: 'created' }));
+
+  it('SKIPS a list when the project registry read fails for a real reason', async () => {
+    // We cannot know who owns the project, and importing under an unverified name
+    // could steal another provider's claim. Skip and let the next tick retry.
+    mockEnsureProject.mockRejectedValueOnce(new Error('SQLITE_CORRUPT: database disk image is malformed'));
+    const addLocal = addOk();
+
+    const count = await reconcilePulledTasks(
+      [makeMsTask({ id: 'ms-err-1', title: 'Task' })],
+      { id: 'list-err', displayName: 'Work / HomeLab' },
+      vi.fn(),
+      addLocal,
+    );
+
+    expect(count).toBe(0);
+    expect(addLocal).not.toHaveBeenCalled();
+  });
+
+  it('still degrades to the routed name when there is NO task store at all', async () => {
+    // The unit-test / no-DB shape: dropping the list's tasks would be worse.
+    mockEnsureProject.mockRejectedValueOnce(new Error('ensureExtIndexes: task-db is not open'));
+    const addLocal = addOk();
+
+    const count = await reconcilePulledTasks(
+      [makeMsTask({ id: 'ms-nodb-1', title: 'Task' })],
+      { id: 'list-nodb', displayName: 'Work / HomeLab' },
+      vi.fn(),
+      addLocal,
+    );
+
+    expect(count).toBe(1);
+    expect(addLocal).toHaveBeenCalledWith(expect.objectContaining({ project: 'HomeLab' }));
+  });
+
+  it('pushTask refuses when the registry read fails for a real reason', async () => {
+    mockGetProjectRecord.mockRejectedValueOnce(new Error('SQLITE_CORRUPT: database disk image is malformed'));
+    await expect(pushTask(makeTask({ project: 'HomeLab' })))
+      .rejects.toThrow(/project registry unreadable/);
+  });
+
+  it('pushTask proceeds when there is NO task store at all', async () => {
+    mockGetProjectRecord.mockRejectedValueOnce(new Error('task-db is not open'));
+    setupGraphResponses([
+      { body: { value: [{ id: 'list-1', displayName: 'HomeLab' }] } },
+      { body: { id: 'ms-new-1', lastModifiedDateTime: '2026-01-01T00:00:00Z' } },
+    ]);
+    const result = await pushTask(makeTask({ project: 'HomeLab' }));
+    expect(result.msTaskId).toBe('ms-new-1');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// deltaPull: remote list rename re-points the alias
+// ────────────────────────────────────────────────────────────────────
+
+describe('deltaPull — remote list rename', () => {
+  it('re-points the alias and moves tasks when a tracked list is renamed', async () => {
+    // Pre-state: project HomeLab aliased to the legacy list name we stored last tick.
+    registrySeed('HomeLab', 'ms-todo', { remote_list: 'Work / HomeLab' });
+    mockReadJsonFile.mockImplementation((_path: string, defaultVal: unknown) => {
+      if (typeof _path === 'string' && _path.includes('tokens')) {
+        return Promise.resolve({
+          accessToken: 'fake-token',
+          expiresAt: new Date(Date.now() + 3600000).toISOString(),
+          msalCache: '{}',
+        });
+      }
+      if (typeof _path === 'string' && _path.includes('delta')) {
+        return Promise.resolve({
+          deltaLinks: {},
+          listNames: { 'list-1': 'Work / HomeLab' },
+          lastSync: '',
+        });
+      }
+      return Promise.resolve(defaultVal);
+    });
+
+    setupGraphResponses([
+      // fetchTaskLists — the list now has a new display name
+      { body: { value: [{ id: 'list-1', displayName: 'Work / LabAtHome' }] } },
+      // pullTasks — nothing new to reconcile
+      { body: { value: [], '@odata.deltaLink': 'https://graph.microsoft.com/delta?t=rename' } },
+    ]);
+
+    const localTask = makeTask({
+      id: 'local-1',
+      ms_todo_id: 'ms-1',
+      ms_todo_list: 'list-1',
+      project: 'HomeLab',
+    });
+    const updateLocal = vi.fn();
+
+    const hasChanges = await deltaPull([localTask], updateLocal, vi.fn());
+
+    expect(hasChanges).toBe(true);
+    // Task follows the list to the new trailing project name…
+    expect(updateLocal).toHaveBeenCalledWith('local-1', { project: 'LabAtHome' });
+    // …and the alias is OVERWRITTEN (same remote list, new name) so the next push
+    // doesn't resolve the vanished old name and create a duplicate list.
+    expect(registryGet('LabAtHome')!.metadata.remote_list).toBe('Work / LabAtHome');
   });
 });
 
@@ -1048,7 +1595,6 @@ describe('syncTasks', () => {
       id: 'local-1',
       ms_todo_id: 'ms-existing',
       title: 'Local Title',
-      category: 'Tasks',
       project: 'Tasks',
       updated_at: '2024-12-01T00:00:00Z', // newer than remote
       _syncedAt: '2024-12-01T00:00:00Z',
@@ -1179,7 +1725,6 @@ describe('deltaPull', () => {
     const localTask = makeTask({
       id: 'local-1',
       ms_todo_id: 'ms-existing',
-      category: 'Tasks',
       project: 'Tasks',
       updated_at: '2025-01-01T00:00:00Z', // very recent
       _syncedAt: '2025-01-01T00:00:00Z',
@@ -1343,13 +1888,13 @@ describe('deleteChecklistItem', () => {
 describe('createList', () => {
   it('creates a new list via POST', async () => {
     setupGraphResponses([
-      { body: { id: 'new-list-id', displayName: 'Work / NewProject' } },
+      { body: { id: 'new-list-id', displayName: 'NewProject' } },
     ]);
 
-    const list = await createList('Work / NewProject');
+    const list = await createList('NewProject');
 
     expect(list.id).toBe('new-list-id');
-    expect(list.displayName).toBe('Work / NewProject');
+    expect(list.displayName).toBe('NewProject');
     const callOptions = mockHttpsRequest.mock.calls[0][0];
     expect(callOptions.method).toBe('POST');
     expect(callOptions.path).toContain('/me/todo/lists');
@@ -1359,12 +1904,12 @@ describe('createList', () => {
 describe('renameList', () => {
   it('renames a list via PATCH', async () => {
     setupGraphResponses([
-      { body: { id: 'list-1', displayName: 'Work / Renamed' } },
+      { body: { id: 'list-1', displayName: 'Renamed' } },
     ]);
 
-    const list = await renameList('list-1', 'Work / Renamed');
+    const list = await renameList('list-1', 'Renamed');
 
-    expect(list.displayName).toBe('Work / Renamed');
+    expect(list.displayName).toBe('Renamed');
     const callOptions = mockHttpsRequest.mock.calls[0][0];
     expect(callOptions.method).toBe('PATCH');
     expect(callOptions.path).toContain('list-1');
@@ -1410,7 +1955,7 @@ describe('concurrent resolveListId dedup', () => {
       } else if (options.method === 'POST' && p.includes('/me/todo/lists') && !p.includes('/tasks')) {
         // createList (POST to /me/todo/lists without /tasks suffix)
         listCreateCount++;
-        responseBody = { id: createdListId, displayName: 'Personal / Walnut-Idea' };
+        responseBody = { id: createdListId, displayName: 'Walnut-Idea' };
       } else if (options.method === 'POST' && p.includes('/tasks')) {
         // createTask in the list
         taskCreateCount++;
@@ -1439,7 +1984,6 @@ describe('concurrent resolveListId dedup', () => {
       makeTask({
         id: `task-${i}`,
         title: `Task ${i}`,
-        category: 'Personal',
         project: 'Walnut-Idea',
       }),
     );
@@ -1468,7 +2012,7 @@ describe('concurrent resolveListId dedup', () => {
 
       if (options.method === 'GET' && p.includes('/me/todo/lists')) {
         fetchListsCount++;
-        responseBody = { value: [{ id: 'cached-list-id', displayName: 'Personal / Walnut-Idea' }] };
+        responseBody = { value: [{ id: 'cached-list-id', displayName: 'Walnut-Idea' }] };
       } else if (options.method === 'POST') {
         responseBody = { id: 'ms-task-new', title: 'Task' };
       } else {
@@ -1491,11 +2035,11 @@ describe('concurrent resolveListId dedup', () => {
     });
 
     // First push: resolves list (hits API)
-    const task1 = makeTask({ id: 'task-1', category: 'Personal', project: 'Walnut-Idea' });
+    const task1 = makeTask({ id: 'task-1', project: 'Walnut-Idea' });
     await pushTask(task1);
 
     // Second push: should use cache (no extra fetchTaskLists)
-    const task2 = makeTask({ id: 'task-2', category: 'Personal', project: 'Walnut-Idea' });
+    const task2 = makeTask({ id: 'task-2', project: 'Walnut-Idea' });
     await pushTask(task2);
 
     // Only 1 fetchTaskLists call, not 2
@@ -1540,8 +2084,8 @@ describe('concurrent resolveListId dedup', () => {
     });
 
     // Two different projects — should create 2 lists
-    const taskA = makeTask({ id: 'a', category: 'Personal', project: 'ProjectA' });
-    const taskB = makeTask({ id: 'b', category: 'Personal', project: 'ProjectB' });
+    const taskA = makeTask({ id: 'a', project: 'ProjectA' });
+    const taskB = makeTask({ id: 'b', project: 'ProjectB' });
 
     await Promise.all([pushTask(taskA), pushTask(taskB)]);
 
@@ -1566,7 +2110,7 @@ describe('concurrent resolveListId dedup', () => {
         } else {
           // Subsequent calls: succeed
           res.statusCode = 200;
-          responseBody = { value: [{ id: 'recovered-list', displayName: 'Personal / Walnut-Idea' }] };
+          responseBody = { value: [{ id: 'recovered-list', displayName: 'Walnut-Idea' }] };
         }
       } else if (options.method === 'POST' && p.includes('/tasks')) {
         res.statusCode = 200;
@@ -1591,13 +2135,13 @@ describe('concurrent resolveListId dedup', () => {
       };
     });
 
-    const task1 = makeTask({ id: 'task-err', category: 'Personal', project: 'Walnut-Idea' });
+    const task1 = makeTask({ id: 'task-err', project: 'Walnut-Idea' });
 
     // First attempt should fail (500 from fetchTaskLists)
     await expect(pushTask(task1)).rejects.toThrow();
 
     // Second attempt should succeed — inflight was cleaned up, retries fresh
-    const task2 = makeTask({ id: 'task-ok', category: 'Personal', project: 'Walnut-Idea' });
+    const task2 = makeTask({ id: 'task-ok', project: 'Walnut-Idea' });
     const result = await pushTask(task2);
 
     expect(result!.msTaskId).toBe('ms-task-recovered');
@@ -1615,9 +2159,9 @@ describe('concurrent resolveListId dedup', () => {
 
       if (options.method === 'GET' && p.includes('/me/todo/lists')) {
         fetchListsCount++;
-        responseBody = { value: [{ id: 'list-orig', displayName: 'Personal / Walnut-Idea' }] };
+        responseBody = { value: [{ id: 'list-orig', displayName: 'Walnut-Idea' }] };
       } else if (options.method === 'PATCH' && p.includes('/me/todo/lists')) {
-        responseBody = { id: 'list-orig', displayName: 'Personal / Walnut-Renamed' };
+        responseBody = { id: 'list-orig', displayName: 'Walnut-Renamed' };
       } else if (options.method === 'POST') {
         responseBody = { id: 'ms-task-new', title: 'Task' };
       } else {
@@ -1640,15 +2184,15 @@ describe('concurrent resolveListId dedup', () => {
     });
 
     // First push: populates cache
-    const task1 = makeTask({ id: 'task-1', category: 'Personal', project: 'Walnut-Idea' });
+    const task1 = makeTask({ id: 'task-1', project: 'Walnut-Idea' });
     await pushTask(task1);
     expect(fetchListsCount).toBe(1);
 
     // Rename: should invalidate cache
-    await renameList('list-orig', 'Personal / Walnut-Renamed');
+    await renameList('list-orig', 'Walnut-Renamed');
 
     // Second push: should re-fetch lists (cache was invalidated)
-    const task2 = makeTask({ id: 'task-2', category: 'Personal', project: 'Walnut-Idea' });
+    const task2 = makeTask({ id: 'task-2', project: 'Walnut-Idea' });
     await pushTask(task2);
     expect(fetchListsCount).toBe(2);
   });

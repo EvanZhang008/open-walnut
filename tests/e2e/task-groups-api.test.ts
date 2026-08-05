@@ -12,7 +12,7 @@
  *      `task:groups-changed` WS event fires, GET /api/tasks/groups lists the new
  *      group (group_id + label + member_ids), and the grouped tasks have group_id
  *      persisted (re-fetched via GET /api/tasks/:id).
- *   2. POST /api/tasks/groups with cross-category tasks → HTTP 200, group created
+ *   2. POST /api/tasks/groups with cross-project tasks → HTTP 200, group created
  *      (grouping has NO scope rule — any tasks can be grouped).
  *   3. POST /api/tasks/groups/remove dropping a 2-member group to 1 → group SURVIVES
  *      with the lone member (acts like a tag); only removing the last member (0 left)
@@ -107,19 +107,18 @@ const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 // ── REST helpers ──
 
-/** Create a task in the given category+project (both default to a shared scope). */
+/** Create a task in the given project (defaults to a shared scope). */
 async function createTask(
   title: string,
-  category = 'e2e-grp-work',
-  project = 'alpha',
-): Promise<{ id: string; category: string; project: string }> {
+  project = 'e2e-grp-alpha',
+): Promise<{ id: string; project: string }> {
   const res = await fetch(apiUrl('/api/tasks'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title, category, project }),
+    body: JSON.stringify({ title, project }),
   });
   expect(res.status).toBe(201);
-  const body = (await res.json()) as { task: { id: string; category: string; project: string } };
+  const body = (await res.json()) as { task: { id: string; project: string } };
   return body.task;
 }
 
@@ -222,17 +221,17 @@ describe('task-group REST API (REST → core → bus → WS)', () => {
   });
 
   /**
-   * Test 2: POST /api/tasks/groups across two different categories.
+   * Test 2: POST /api/tasks/groups across two different projects.
    *   A group is a pure visual cluster with NO scope rule — this must succeed (200)
-   *   and persist group_id on both cross-category tasks.
-   * Fails if reverted: if the old same-category+project scope rule came back, this
-   *   cross-category group would 409 instead of 200.
+   *   and persist group_id on both cross-project tasks.
+   * Fails if reverted: if the old same-project scope rule came back, this
+   *   cross-project group would 409 instead of 200.
    */
-  it('POST /groups with cross-category tasks creates the group (no scope rule)', async () => {
-    // Distinct categories — used to be rejected; now allowed.
-    const a = await createTask('Cross-scope A', 'e2e-grp-work', 'alpha');
-    const b = await createTask('Cross-scope B', 'e2e-grp-life', 'home');
-    expect(a.category).not.toBe(b.category);
+  it('POST /groups with cross-project tasks creates the group (no scope rule)', async () => {
+    // Distinct projects — used to be rejected; now allowed.
+    const a = await createTask('Cross-scope A', 'e2e-grp-alpha');
+    const b = await createTask('Cross-scope B', 'e2e-grp-home');
+    expect(a.project).not.toBe(b.project);
 
     const res = await fetch(apiUrl('/api/tasks/groups'), {
       method: 'POST',
@@ -243,7 +242,7 @@ describe('task-group REST API (REST → core → bus → WS)', () => {
     const created = (await res.json()) as GroupResult;
     expect(created.member_ids.sort()).toEqual([a.id, b.id].sort());
 
-    // Downstream: both cross-category tasks now carry the new group_id (persisted).
+    // Downstream: both cross-project tasks now carry the new group_id (persisted).
     expect((await getTask(a.id)).group_id).toBe(created.group_id);
     expect((await getTask(b.id)).group_id).toBe(created.group_id);
   });

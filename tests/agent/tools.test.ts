@@ -17,14 +17,9 @@ import {
 import { closeDb as closeTaskDb } from '../../src/core/task-db.js';
 import { closeDb as closeSessionDb } from '../../src/core/session-db.js';
 
-/** Pre-create a category via the agent tool so strict validation passes for subsequent task creation. */
-async function ensureCategory(name: string, source = 'ms-todo') {
-  await executeTool('task_create', { type: 'category', name, source });
-}
-
-/** Pre-create a project via the agent tool. */
-async function ensureProject(category: string, project: string) {
-  await executeTool('task_create', { type: 'project', category, project });
+/** Pre-create a project via the agent tool (task_create also auto-creates by name). */
+async function ensureProject(name: string, source = 'local') {
+  await executeTool('task_create', { type: 'project', name, source });
 }
 
 beforeEach(async () => {
@@ -113,10 +108,8 @@ describe('task tools', () => {
   });
 
   it('query_tasks returns created tasks', async () => {
-    await ensureCategory('work');
-    await ensureCategory('personal');
-    await executeTool('task_create', { title: 'Task A', priority: 'immediate', category: 'work' });
-    await executeTool('task_create', { title: 'Task B', category: 'personal' });
+    await executeTool('task_create', { title: 'Task A', priority: 'immediate', project: 'work' });
+    await executeTool('task_create', { title: 'Task B', project: 'personal' });
 
     const result = await executeTool('task_query', {});
     const parsed = JSON.parse(result);
@@ -148,68 +141,89 @@ describe('task tools', () => {
     expect(inProgress[0].phase).toBe('AGENT_COMPLETE');
   });
 
-  it('query_tasks from category returns distinct categories with counts', async () => {
-    await ensureCategory('Work');
-    await ensureCategory('Life');
-    await executeTool('task_create', { title: 'Work task 1', category: 'Work' });
-    await executeTool('task_create', { title: 'Work task 2', category: 'Work' });
-    await executeTool('task_create', { title: 'Life task', category: 'Life' });
-    const addResult = await executeTool('task_create', { title: 'Agent complete work', category: 'Work' });
+  it('query_tasks type=project returns distinct projects with counts', async () => {
+    await executeTool('task_create', { title: 'Work task 1', project: 'Work' });
+    await executeTool('task_create', { title: 'Work task 2', project: 'Work' });
+    await executeTool('task_create', { title: 'Life task', project: 'Life' });
+    const addResult = await executeTool('task_create', { title: 'Agent complete work', project: 'Work' });
     const idMatch = addResult.match(/id="([^"]+)"/);
     // update_task with phase AGENT_COMPLETE (status: in_progress), not done
     if (idMatch) await executeTool('task_update', { id: idMatch[1], phase: 'AGENT_COMPLETE' });
 
-    const result = await executeTool('task_query', { type: 'category' });
+    const result = await executeTool('task_query', { type: 'project' });
     const parsed = JSON.parse(result);
-    const work = parsed.find((c: { name: string }) => c.name === 'Work');
+    const work = parsed.find((p: { name: string }) => p.name === 'Work');
     expect(work).toMatchObject({ name: 'Work', todo: 2, active: 1, done: 0 });
-    const life = parsed.find((c: { name: string }) => c.name === 'Life');
+    const life = parsed.find((p: { name: string }) => p.name === 'Life');
     expect(life).toMatchObject({ name: 'Life', todo: 1, active: 0, done: 0 });
   });
 
-  it('query_tasks from category with contains match does fuzzy find', async () => {
-    await ensureCategory('__walnut-body-limit-test__');
-    await executeTool('task_create', { title: 'Test task', category: '__walnut-body-limit-test__' });
+  it('query_tasks type=project reports Inbox as a row with an empty name', async () => {
+    await executeTool('task_create', { title: 'Filed task', project: 'Work' });
+    await executeTool('task_create', { title: 'Loose thought' }); // no project → Inbox
 
-    const result = await executeTool('task_query', { type: 'category', where: { name: 'body-limit' }, match: 'contains' });
+    const result = await executeTool('task_query', { type: 'project' });
+    const parsed = JSON.parse(result);
+    // Inbox has no registry row, so it is reported as name '' + a label.
+    const inbox = parsed.find((p: { name: string }) => p.name === '');
+    expect(inbox).toMatchObject({ name: '', label: 'Inbox', source: 'local', todo: 1 });
+  });
+
+  it('query_tasks type=project lists an empty project created up front', async () => {
+    await ensureProject('EmptyProj');
+
+    const result = await executeTool('task_query', { type: 'project' });
+    const parsed = JSON.parse(result);
+    // The registry (not the task rows) is the source of truth for existence, so
+    // a project with zero tasks is still listed.
+    expect(parsed.find((p: { name: string }) => p.name === 'EmptyProj'))
+      .toMatchObject({ name: 'EmptyProj', source: 'local', todo: 0, active: 0, done: 0 });
+  });
+
+  it('query_tasks type=project with contains match does fuzzy find', async () => {
+    await executeTool('task_create', { title: 'Test task', project: '__walnut-body-limit-test__' });
+
+    const result = await executeTool('task_query', { type: 'project', where: { name: 'body-limit' }, match: 'contains' });
     const parsed = JSON.parse(result);
     expect(parsed).toHaveLength(1);
     expect(parsed[0].name).toBe('__walnut-body-limit-test__');
   });
 
-  it('query_tasks from project lists projects in a category', async () => {
-    await ensureCategory('Work');
-    await ensureCategory('Life');
-    await ensureProject('Work', 'HomeLab');
-    await ensureProject('Work', 'Taxes');
-    await ensureProject('Life', 'Fitness');
-    await executeTool('task_create', { title: 'HomeLab task', category: 'Work', project: 'HomeLab' });
-    await executeTool('task_create', { title: 'Taxes task', category: 'Work', project: 'Taxes' });
-    await executeTool('task_create', { title: 'Life task', category: 'Life', project: 'Fitness' });
+  it('query_tasks filters tasks by project', async () => {
+    await executeTool('task_create', { title: 'HomeLab task', project: 'HomeLab' });
+    await executeTool('task_create', { title: 'Taxes task', project: 'Taxes' });
 
-    const result = await executeTool('task_query', { type: 'project', where: { category: 'Work' } });
+    const result = await executeTool('task_query', { where: { project: 'HomeLab' } });
     const parsed = JSON.parse(result);
-    expect(parsed).toHaveLength(2);
-    expect(parsed.map((p: { name: string }) => p.name).sort()).toEqual(['HomeLab', 'Taxes']);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].title).toBe('HomeLab task');
   });
 
-  it('query_tasks with nonexistent category shows available categories hint', async () => {
-    await ensureCategory('Work');
-    await ensureCategory('Life');
-    await executeTool('task_create', { title: 'Work task', category: 'Work' });
-    await executeTool('task_create', { title: 'Life task', category: 'Life' });
+  it("query_tasks where.project='' returns Inbox tasks only", async () => {
+    await executeTool('task_create', { title: 'Filed task', project: 'HomeLab' });
+    await executeTool('task_create', { title: 'Loose thought' });
 
-    const result = await executeTool('task_query', { where: { category: 'nonexistent' } });
-    expect(result).toContain('No category matching');
+    const result = await executeTool('task_query', { where: { project: '' } });
+    const parsed = JSON.parse(result);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].title).toBe('Loose thought');
+    expect(parsed[0].project).toBe('');
+  });
+
+  it('query_tasks with a nonexistent project shows an available-projects hint', async () => {
+    await executeTool('task_create', { title: 'Work task', project: 'Work' });
+    await executeTool('task_create', { title: 'Life task', project: 'Life' });
+
+    const result = await executeTool('task_query', { where: { project: 'nonexistent' } });
+    expect(result).toContain('No project matching');
     expect(result).toContain('Work');
     expect(result).toContain('Life');
   });
 
-  it('query_tasks shows completed hint when all tasks are done', async () => {
+  it('query_tasks shows completed hint when all tasks in a project are done', async () => {
     // Use update_task with phase to set a task to COMPLETE (simulating human action)
     // since update_task with AGENT_COMPLETE only sets status: in_progress
-    await ensureCategory('Archive', 'local');
-    const addResult = await executeTool('task_create', { title: 'Done task', category: 'Archive' });
+    const addResult = await executeTool('task_create', { title: 'Done task', project: 'Archive' });
     const idMatch = addResult.match(/id="([^"]+)"/);
     if (idMatch) {
       // Simulate human setting COMPLETE via core directly
@@ -217,10 +231,17 @@ describe('task tools', () => {
       await updateTask(idMatch[1], { phase: 'COMPLETE' as any });
     }
 
-    const result = await executeTool('task_query', { where: { category: 'Archive' } });
+    const result = await executeTool('task_query', { where: { project: 'Archive' } });
     expect(result).toContain('No active tasks');
     expect(result).toContain('1 completed');
     expect(result).toContain("where.phase='COMPLETE'");
+  });
+
+  it('query_tasks reports an empty Inbox distinctly', async () => {
+    await executeTool('task_create', { title: 'Filed task', project: 'Work' });
+
+    const result = await executeTool('task_query', { where: { project: '' } });
+    expect(result).toBe('Inbox is empty.');
   });
 
   it('get_task returns task details', async () => {
@@ -617,20 +638,19 @@ describe('agent tool bus events', () => {
     );
   });
 
-  it('task_update type=category emits one bulk task update with affected IDs', async () => {
-    await ensureCategory('OldCat');
-    const created = await executeTool('task_create', { title: 'Cat rename test', category: 'OldCat' });
+  it('task_update type=project rename emits one bulk task update with affected IDs', async () => {
+    const created = await executeTool('task_create', { title: 'Project rename test', project: 'OldProj' });
     const taskId = created.match(/id="([^"]+)"/)?.[1];
     emitSpy.mockClear();
 
-    await executeTool('task_update', { type: 'category', old_name: 'OldCat', new_name: 'NewCat' });
+    await executeTool('task_update', { type: 'project', old_name: 'OldProj', new_name: 'NewProj' });
     expect(emitSpy).toHaveBeenCalledWith(
       'task:updated',
       expect.objectContaining({
         task: null,
         taskIds: [taskId],
-        oldCategory: 'OldCat',
-        newCategory: 'NewCat',
+        oldProject: 'OldProj',
+        newProject: 'NewProj',
         count: 1,
       }),
       ['web-ui', 'main-agent'],

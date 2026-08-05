@@ -9,8 +9,9 @@ let configFile: string;
 vi.mock('../../src/constants.js', () => createMockConstants());
 
 // Import after mocking
-import { addTask, listTasks, completeTask, getDashboardData, reorderTasks, deleteTask, linkSessionSlot, clearSessionSlot, ActiveSessionError, updateTask, getProjectMetadata, autoPushIfConfigured, updateTaskRaw, getTask, _resetForTesting } from '../../src/core/task-manager.js';
+import { addTask, addTaskFull, addTasksBulk, listTasks, completeTask, getDashboardData, reorderTasks, deleteTask, linkSessionSlot, clearSessionSlot, ActiveSessionError, updateTask, autoPushIfConfigured, updateTaskRaw, getTask, _resetForTesting } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
+import { log } from '../../src/logging/index.js';
 import { WALNUT_HOME, TASKS_FILE, CONFIG_FILE } from '../../src/constants.js';
 
 beforeEach(async () => {
@@ -37,9 +38,10 @@ describe('addTask', () => {
     expect(task.title).toBe('Test task');
     expect(task.status).toBe('todo');
     expect(task.priority).toBe('none');
-    // Default category is the built-in local 'Inbox' (was 'personal' before the
-    // default-platform change) — quick-add lands here, instant + local, by default.
-    expect(task.category).toBe('Inbox');
+    // No project = Inbox. Inbox is structural (no registry row, unclaimable), so
+    // a default quick-add task is always local.
+    expect(task.project).toBe('');
+    expect(task.source).toBe('local');
     expect(task.session_ids).toEqual([]);
     expect(task.description).toBe('');
     expect(task.note).toBe('');
@@ -59,17 +61,15 @@ describe('addTask', () => {
     expect(t1.id).not.toBe(t2.id);
   });
 
-  it('respects provided options (priority, category, project, due_date)', async () => {
+  it('respects provided options (priority, project, due_date)', async () => {
     const { task } = await addTask({
       title: 'Important work task',
       priority: 'immediate',
-      category: 'work',
       project: 'walnut',
       due_date: '2026-12-31',
     });
 
     expect(task.priority).toBe('immediate');
-    expect(task.category).toBe('work');
     expect(task.project).toBe('walnut');
     expect(task.due_date).toBe('2026-12-31');
   });
@@ -105,13 +105,22 @@ describe('listTasks', () => {
     expect(doneTasks[0].title).toBe('Done task');
   });
 
-  it('filters by category', async () => {
-    await addTask({ title: 'Work task', category: 'work' });
-    await addTask({ title: 'Personal task', category: 'personal' });
+  it('filters by project', async () => {
+    await addTask({ title: 'Work task', project: 'work' });
+    await addTask({ title: 'Personal task', project: 'personal' });
 
-    const workTasks = await listTasks({ category: 'work' });
+    const workTasks = await listTasks({ project: 'work' });
     expect(workTasks).toHaveLength(1);
     expect(workTasks[0].title).toBe('Work task');
+  });
+
+  it("filters to Inbox with project: ''", async () => {
+    await addTask({ title: 'Loose thought' });
+    await addTask({ title: 'Filed', project: 'work' });
+
+    const inbox = await listTasks({ project: '' });
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0].title).toBe('Loose thought');
   });
 
   it('returns empty array when no tasks match', async () => {
@@ -213,27 +222,38 @@ describe('getDashboardData', () => {
 // Subtask tests removed — subtasks are now child tasks in the plugin system
 
 describe('reorderTasks', () => {
-  it('reorders tasks within a group', async () => {
-    const { task: t1 } = await addTask({ title: 'First', category: 'work', project: 'work' });
-    const { task: t2 } = await addTask({ title: 'Second', category: 'work', project: 'work' });
-    const { task: t3 } = await addTask({ title: 'Third', category: 'work', project: 'work' });
+  it('reorders tasks within a project group', async () => {
+    const { task: t1 } = await addTask({ title: 'First', project: 'work' });
+    const { task: t2 } = await addTask({ title: 'Second', project: 'work' });
+    const { task: t3 } = await addTask({ title: 'Third', project: 'work' });
 
     // Reverse order: t3, t2, t1
-    await reorderTasks('work', 'work', [t3.id, t2.id, t1.id]);
+    await reorderTasks('work', [t3.id, t2.id, t1.id]);
 
-    const tasks = await listTasks({ category: 'work' });
+    const tasks = await listTasks({ project: 'work' });
     expect(tasks[0].id).toBe(t3.id);
     expect(tasks[1].id).toBe(t2.id);
     expect(tasks[2].id).toBe(t1.id);
   });
 
+  it('reorders the Inbox group (empty project)', async () => {
+    const { task: t1 } = await addTask({ title: 'Inbox 1' });
+    const { task: t2 } = await addTask({ title: 'Inbox 2' });
+
+    await reorderTasks('', [t2.id, t1.id]);
+
+    const tasks = await listTasks({ project: '' });
+    expect(tasks[0].id).toBe(t2.id);
+    expect(tasks[1].id).toBe(t1.id);
+  });
+
   it('does not affect tasks in other groups', async () => {
-    const { task: w1 } = await addTask({ title: 'Work 1', category: 'work', project: 'work' });
-    const { task: l1 } = await addTask({ title: 'Life 1', category: 'life', project: 'life' });
-    const { task: w2 } = await addTask({ title: 'Work 2', category: 'work', project: 'work' });
+    const { task: w1 } = await addTask({ title: 'Work 1', project: 'work' });
+    const { task: l1 } = await addTask({ title: 'Life 1', project: 'life' });
+    const { task: w2 } = await addTask({ title: 'Work 2', project: 'work' });
 
     // Reverse work tasks
-    await reorderTasks('work', 'work', [w2.id, w1.id]);
+    await reorderTasks('work', [w2.id, w1.id]);
 
     const all = await listTasks({});
     // Life task stays in its original position (index 1)
@@ -243,41 +263,146 @@ describe('reorderTasks', () => {
   });
 
   it('self-heals when orderedIds is missing a group member (appends missing at end)', async () => {
-    const { task: t1 } = await addTask({ title: 'First', category: 'work', project: 'work' });
-    const { task: t2 } = await addTask({ title: 'Second', category: 'work', project: 'work' });
-    const { task: t3 } = await addTask({ title: 'Third', category: 'work', project: 'work' });
+    const { task: t1 } = await addTask({ title: 'First', project: 'work' });
+    const { task: t2 } = await addTask({ title: 'Second', project: 'work' });
+    const { task: t3 } = await addTask({ title: 'Third', project: 'work' });
 
     // Only provide t3, t1 — t2 is missing, should be appended at the end
-    await reorderTasks('work', 'work', [t3.id, t1.id]);
+    await reorderTasks('work', [t3.id, t1.id]);
 
-    const tasks = await listTasks({ category: 'work' });
+    const tasks = await listTasks({ project: 'work' });
     expect(tasks[0].id).toBe(t3.id);
     expect(tasks[1].id).toBe(t1.id);
     expect(tasks[2].id).toBe(t2.id); // auto-appended
   });
 
   it('self-heals when orderedIds contains unknown IDs (drops them)', async () => {
-    const { task: t1 } = await addTask({ title: 'One', category: 'work', project: 'work' });
-    const { task: t2 } = await addTask({ title: 'Two', category: 'work', project: 'work' });
+    const { task: t1 } = await addTask({ title: 'One', project: 'work' });
+    const { task: t2 } = await addTask({ title: 'Two', project: 'work' });
 
     // Include a fake ID — should be silently dropped
-    await reorderTasks('work', 'work', ['fake-id', t2.id, t1.id]);
+    await reorderTasks('work', ['fake-id', t2.id, t1.id]);
 
-    const tasks = await listTasks({ category: 'work' });
+    const tasks = await listTasks({ project: 'work' });
     expect(tasks[0].id).toBe(t2.id);
     expect(tasks[1].id).toBe(t1.id);
   });
 
   it('self-heals when orderedIds has duplicates (deduplicates)', async () => {
-    const { task: t1 } = await addTask({ title: 'One', category: 'work', project: 'work' });
-    const { task: t2 } = await addTask({ title: 'Two', category: 'work', project: 'work' });
+    const { task: t1 } = await addTask({ title: 'One', project: 'work' });
+    const { task: t2 } = await addTask({ title: 'Two', project: 'work' });
 
     // Duplicate t1 — should be deduplicated, t2 appended as missing
-    await reorderTasks('work', 'work', [t1.id, t1.id]);
+    await reorderTasks('work', [t1.id, t1.id]);
 
-    const tasks = await listTasks({ category: 'work' });
+    const tasks = await listTasks({ project: 'work' });
     expect(tasks[0].id).toBe(t1.id);
     expect(tasks[1].id).toBe(t2.id); // auto-appended
+  });
+
+  it('matches the project group CASE-INSENSITIVELY', async () => {
+    // Project identity ignores case everywhere else (NOCASE registry PK), so a
+    // caller passing a different spelling than the stored one used to match zero
+    // tasks and the reorder silently vanished.
+    const { task: t1 } = await addTask({ title: 'First', project: 'Work' });
+    const { task: t2 } = await addTask({ title: 'Second', project: 'Work' });
+
+    await reorderTasks('WORK', [t2.id, t1.id]);
+
+    const tasks = await listTasks({ project: 'Work' });
+    expect(tasks[0].id).toBe(t2.id);
+    expect(tasks[1].id).toBe(t1.id);
+  });
+
+  it('warns instead of silently no-oping when the group resolves to nothing', async () => {
+    const { task } = await addTask({ title: 'Elsewhere', project: 'work' });
+    const warn = vi.spyOn(log.task, 'warn');
+
+    await reorderTasks('does-not-exist', [task.id]);
+
+    const dropped = warn.mock.calls.find(([msg]) => String(msg).includes('no tasks matched'));
+    expect(dropped, 'expected a warning when ids were supplied but nothing matched').toBeTruthy();
+    expect(dropped![1]).toMatchObject({ project: 'does-not-exist', requestedIds: 1 });
+    warn.mockRestore();
+
+    // And the real group is untouched.
+    expect((await listTasks({ project: 'work' })).map((t) => t.id)).toEqual([task.id]);
+  });
+
+  it('stays quiet when no ids were supplied at all (empty drag)', async () => {
+    const warn = vi.spyOn(log.task, 'warn');
+    await reorderTasks('nothing-here', []);
+    expect(warn.mock.calls.some(([msg]) => String(msg).includes('no tasks matched'))).toBe(false);
+    warn.mockRestore();
+  });
+});
+
+// ── Retired `.metadata` sentinel guard (pull-side resurrection) ─────────────
+// The v5 migration absorbed and DELETED the `.metadata_project` /
+// `.metadata_category` sentinel tasks, but the remote twins still exist in
+// providers' lists — so every pull re-imports them as phantom rows that every
+// reader then has to filter out. The shape must be permanently uncreatable.
+
+describe('addTaskFull: retired sentinel guard', () => {
+  function pulled(title: string): Parameters<typeof addTaskFull>[0] {
+    return {
+      title,
+      status: 'todo',
+      phase: 'TODO',
+      priority: 'none',
+      project: 'Walnut',
+      source: 'ms-todo',
+      session_ids: [],
+      description: '',
+      summary: '',
+      note: '',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+      ext: { 'ms-todo': { id: 'remote-sentinel' } },
+    } as Parameters<typeof addTaskFull>[0];
+  }
+
+  it('refuses .metadata_project and .metadata_category', async () => {
+    await expect(addTaskFull(pulled('.metadata_project'))).rejects.toThrow(/retired sentinel/);
+    await expect(addTaskFull(pulled('.metadata_category'))).rejects.toThrow(/retired sentinel/);
+    expect(await listTasks({})).toHaveLength(0);
+  });
+
+  it('refuses the whole `.metadata*` namespace, not just the two known titles', async () => {
+    // Readers filter on `startsWith('.metadata')`, so anything in that namespace
+    // would be an invisible phantom row.
+    await expect(addTaskFull(pulled('.metadata'))).rejects.toThrow(/retired sentinel/);
+    await expect(addTaskFull(pulled('.metadata_future'))).rejects.toThrow(/retired sentinel/);
+    await expect(addTaskFull(pulled('  .metadata_project  '))).rejects.toThrow(/retired sentinel/);
+  });
+
+  it('still accepts an ordinary title (guard is not over-broad)', async () => {
+    const created = await addTaskFull(pulled('metadata about the project'));
+    expect(created.title).toBe('metadata about the project');
+    // A leading dot alone is fine — only the retired namespace is blocked.
+    const dotted = await addTaskFull({ ...pulled('.gitignore notes'), ext: { 'ms-todo': { id: 'r2' } } });
+    expect(dotted.title).toBe('.gitignore notes');
+  });
+
+  it('skips sentinels in addTasksBulk (the reconciler fullPull path)', async () => {
+    const created = await addTasksBulk([
+      pulled('Real work'),
+      pulled('.metadata_project'),
+      pulled('.metadata'),
+    ]);
+    expect(created.map((t) => t.title)).toEqual(['Real work']);
+    expect((await listTasks({})).map((t) => t.title)).toEqual(['Real work']);
+  });
+
+  it('refuses the retired grouping names as a project (Quick Start / Inbox)', async () => {
+    // Same class of resurrection as the sentinels: providers' remote sides still
+    // carry the retired tags, and a pull that wrote them back would re-mint the
+    // registry rows the v5 repair deleted (observed live 2026-08-05).
+    await expect(addTaskFull({ ...pulled('QS twin'), project: 'Quick Start' }))
+      .rejects.toThrow(/retired group/);
+    await expect(addTaskFull({ ...pulled('Inbox twin'), project: 'inbox' }))
+      .rejects.toThrow(/retired group/);
+    expect(await listTasks({})).toHaveLength(0);
   });
 });
 
@@ -479,111 +604,10 @@ describe('updateTask — needs_attention (read marker)', () => {
   });
 });
 
-describe('getProjectMetadata', () => {
-  it('returns null when no .metadata task exists', async () => {
-    await addTask({ title: 'Regular task', category: 'Work', project: 'HomeLab' });
-
-    const result = await getProjectMetadata('Work', 'HomeLab');
-    expect(result).toBeNull();
-  });
-
-  it('parses YAML description from .metadata_project task', async () => {
-    await addTask({
-      title: '.metadata_project',
-      category: 'Work',
-      project: 'HomeLab',
-      description: 'default_host: remote-dev\ndefault_cwd: /home/user/project',
-    });
-
-    const result = await getProjectMetadata('Work', 'HomeLab');
-    expect(result).not.toBeNull();
-    expect(result!.default_host).toBe('remote-dev');
-    expect(result!.default_cwd).toBe('/home/user/project');
-  });
-
-  it('matches case-insensitively on category and project', async () => {
-    await addTask({
-      title: '.metadata_project',
-      category: 'Work',
-      project: 'HomeLab',
-      description: 'default_host: remote-dev\ndefault_cwd: /workspace',
-    });
-
-    // Lookup with lowercase — should still find the task
-    const result = await getProjectMetadata('work', 'homelab');
-    expect(result).not.toBeNull();
-    expect(result!.default_host).toBe('remote-dev');
-  });
-
-  it('returns null for invalid YAML in description', async () => {
-    await addTask({
-      title: '.metadata_project',
-      category: 'Work',
-      project: 'HomeLab',
-      description: 'not: valid: yaml: {{{',
-    });
-
-    const result = await getProjectMetadata('Work', 'HomeLab');
-    expect(result).toBeNull();
-  });
-
-  it('returns null when .metadata_project task has empty description', async () => {
-    await addTask({
-      title: '.metadata_project',
-      category: 'Work',
-      project: 'HomeLab',
-    });
-
-    const result = await getProjectMetadata('Work', 'HomeLab');
-    expect(result).toBeNull();
-  });
-
-  it('returns null when YAML parses to a non-object (e.g. a string)', async () => {
-    await addTask({
-      title: '.metadata_project',
-      category: 'Work',
-      project: 'HomeLab',
-      description: 'just a plain string',
-    });
-
-    const result = await getProjectMetadata('Work', 'HomeLab');
-    expect(result).toBeNull();
-  });
-
-  it('does not confuse .metadata_project tasks from different projects', async () => {
-    await addTask({
-      title: '.metadata_project',
-      category: 'Work',
-      project: 'Alpha',
-      description: 'default_host: alpha-host',
-    });
-    await addTask({
-      title: '.metadata_project',
-      category: 'Work',
-      project: 'Beta',
-      description: 'default_host: beta-host',
-    });
-
-    const alpha = await getProjectMetadata('Work', 'Alpha');
-    const beta = await getProjectMetadata('Work', 'Beta');
-
-    expect(alpha!.default_host).toBe('alpha-host');
-    expect(beta!.default_host).toBe('beta-host');
-  });
-
-  it('parses additional YAML fields beyond default_host and default_cwd', async () => {
-    await addTask({
-      title: '.metadata_project',
-      category: 'Work',
-      project: 'HomeLab',
-      description: 'default_host: remote-dev\ndefault_cwd: /workspace\ncustom_key: custom_value',
-    });
-
-    const result = await getProjectMetadata('Work', 'HomeLab');
-    expect(result).not.toBeNull();
-    expect(result!.custom_key).toBe('custom_value');
-  });
-});
+// Project settings used to live in a `.metadata_project` sentinel task whose
+// description was YAML. That whole machinery is gone — settings are now a JSON
+// blob on the task_projects registry row, covered by
+// tests/core/project-source-validation.test.ts ('project metadata').
 
 describe('updateTask — parent_task_id re-parenting', () => {
   it('re-parents a task to a new parent', async () => {
@@ -697,7 +721,7 @@ describe('autoPushIfConfigured sync_error lifecycle', () => {
       updatePhase: vi.fn().mockResolvedValue(undefined),
       updateDueDate: vi.fn(),
       updateStar: vi.fn(),
-      updateCategory: vi.fn(),
+      updateProject: vi.fn(),
       updateDependencies: vi.fn().mockResolvedValue(undefined),
       pushTask: vi.fn().mockResolvedValue({ serverTimestamp: new Date().toISOString() }),
       associateSubtask: vi.fn(),
@@ -725,7 +749,7 @@ describe('autoPushIfConfigured sync_error lifecycle', () => {
   it('clears sync_error when all plugin updates succeed', async () => {
     await registerTestPlugin('test-plugin');
 
-    const { task } = await addTask({ title: 'Sync error task', category: 'test', project: 'test' });
+    const { task } = await addTask({ title: 'Sync error task', project: 'test' });
     await updateTaskRaw(task.id, {
       source: 'test-plugin',
       ext: { 'test-plugin': { id: 'remote-123' } },
@@ -747,7 +771,7 @@ describe('autoPushIfConfigured sync_error lifecycle', () => {
       pushTask: vi.fn().mockRejectedValue(new Error('HTTP 302 redirect')),
     });
 
-    const { task } = await addTask({ title: 'Fail sync task', category: 'test', project: 'test' });
+    const { task } = await addTask({ title: 'Fail sync task', project: 'test' });
     await updateTaskRaw(task.id, {
       source: 'test-fail-plugin',
       ext: { 'test-fail-plugin': { id: 'remote-456' } },

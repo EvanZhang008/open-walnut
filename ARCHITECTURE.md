@@ -175,7 +175,7 @@ JSON data stores (`tasks.json`, `sessions.json`, `chat-history.json`, `config.ya
 
 ### Task source routing
 
-`TaskSource = 'ms-todo' | 'local' | string` (extensible via plugins) — categories are first-class citizens stored in `tasks.json` `store.categories` (v3 migration populates from config + existing tasks on first read). Source inference chain: parent → store.categories → existing tasks → input → ms-todo default. **Strict agent validation**: `create_task type=task` requires category to exist in store.categories (and project to exist) — prevents AI-hallucinated categories. Use `create_task type=category` / `type=project` to create them first. REST routes bypass this (auto-ensure in `addTask`). Each category must contain only one source type (409 on conflict). REST: `GET /api/categories` returns source per category, `POST /api/categories` creates one, `POST /api/categories/:name/source` sets source.
+`TaskSource = 'ms-todo' | 'local' | string` (extensible via plugins) — **Project is the single grouping layer** (the category tier was removed in the v5 schema migration). Projects live in the `task_projects` SQLite table (name PK COLLATE NOCASE, source, order_index, metadata JSON with default_cwd/default_host/summary/legacy_category/remote_list). Source inference chain: parent → project registry row → input → local. `task_create` takes an optional `project`; an unknown name auto-creates the registry row via `ensureProject` (source `'local'`). A task with no project lives in the **Inbox** (`project = ''`) — the Inbox has no registry row and can never be claimed by a sync provider. Each project has at most one source (409 `ProjectSourceConflictError` on conflict). REST: `GET /api/projects` lists registry rows + counts, `POST /api/projects` creates, `PATCH /api/projects/:name` renames (merge-on-collision), `GET|PUT /api/projects/:name/metadata`.
 
 ### Task phase system
 
@@ -187,11 +187,11 @@ Each task has `plan_session_id` and `exec_session_id` (2-slot model). `start_ses
 
 ### Project metadata
 
-Hidden `.metadata` tasks per project with YAML config (e.g., `default_host`, `default_cwd`). Used by `start_session` for host/cwd resolution. Filtered from query results and UI.
+Stored in the `task_projects.metadata` JSON blob (`default_host`, `default_cwd`, `summary`, `legacy_category`, `remote_list`). Used by `start_session` for host/cwd resolution. The pre-v5 hidden `.metadata_*` sentinel tasks are retired — the v5 migration folded them into the registry and `addTaskFull` permanently rejects `.metadata*` titles so provider pulls can't re-import them.
 
 ### Child tasks
 
-`parent_task_id` links to parent. Children inherit category/project/source. Parent can't be COMPLETE with non-COMPLETE children (409 error).
+`parent_task_id` links to parent. Children inherit project/source. Parent can't be COMPLETE with non-COMPLETE children (409 error).
 
 ### Needs-attention
 
@@ -213,8 +213,8 @@ Hidden `.metadata` tasks per project with YAML config (e.g., `default_host`, `de
 └── memory/
     ├── daily/                         # Time-indexed activity
     │   └── YYYY-MM-DD.md             # One file per day, timestamped entries
-    ├── projects/                      # Mirrors task hierarchy
-    │   └── {category}/{project}/MEMORY.md
+    ├── projects/                      # Mirrors task grouping (flattened to single segment by the project-only migration)
+    │   └── {project}/MEMORY.md
     ├── repos/                         # Per-repository environment knowledge
     │   └── {slug}/MEMORY.md           # Dynamic learnings (build quirks, conventions)
     ├── sessions/                      # Session summaries (auto-captured)
@@ -353,7 +353,7 @@ A pluggable hook system that reacts to session bus events. Replaces hardcoded tr
 
 **File-based hooks** (`discovery.ts`): Scans `~/.open-walnut/hooks/*.mjs` for modules exporting `describe()` → descriptor and `handle()` → handler. Same pattern as action system.
 
-**Filtering**: Hooks can specify `filter: { modes, projects, categories }`. Strict mode: denies when filter is specified but context is missing (prevents unintended dispatch).
+**Filtering**: Hooks can specify `filter: { modes, projects }`. Strict mode: denies when filter is specified but context is missing (prevents unintended dispatch).
 
 **Config** (`config.yaml` → `session_hooks`): `overrides` (per-hook enable/disable/priority/timeout), `idleTimeoutMs` (default 5 min).
 
@@ -415,9 +415,9 @@ There is **no** triage subagent. The old summarizer subagent was removed: the se
 
 `task_details` and `project_memory` always load when `taskId` is present, regardless of `context_sources` config. Other sources must be explicitly enabled.
 
-`project_memory` reads the **legacy** `memory/projects/<category>/<project>/MEMORY.md` store. The 2026-07 unification moved project knowledge to skills (`skills/<category>/<project>/`) and stopped writing here, but did not migrate the existing files — so this source still returns real content for pre-migration projects and nothing for anything newer. It is read-only; put new project knowledge in a skill.
+`project_memory` reads the **legacy** `memory/projects/<project>/MEMORY.md` store (the project-only migration flattened the old `<category>/<project>/` layout, merging on collision). The 2026-07 unification moved project knowledge to skills and stopped writing here, but did not migrate the existing files — so this source still returns real content for pre-migration projects and nothing for anything newer. It is read-only; put new project knowledge in a skill.
 
-Context sources are **read-only** injection at invocation time. `stateful` config is **read+write** persistent memory across invocations. An agent can have both. `stateful.memory_project` supports `{auto}`, resolved at runtime to `{category}/{project}` from the task.
+Context sources are **read-only** injection at invocation time. `stateful` config is **read+write** persistent memory across invocations. An agent can have both. `stateful.memory_project` supports `{auto}`, resolved at runtime to the task's `{project}` (or `inbox` when the task has none).
 
 ---
 
@@ -459,7 +459,7 @@ See `src/logging/AGENTS.md` for code examples, log levels, and redaction pattern
 - **Start**: `open-walnut web` (`src/commands/web.ts`). Default port 3456.
 - **Server**: `startServer()` at `src/web/server.ts`. Same port: REST + static files + WebSocket.
 - **WebSocket**: `attachWss()` at `src/web/ws/handler.ts`. Server subscribes to bus as `'web-ui'` and broadcasts events to all browsers.
-- **REST routes**: `src/web/routes/` — tasks, sessions, search, memory, config, categories, dashboard, cron, chat-history, session-chat, context-inspector, favorites, ordering, local-image.
+- **REST routes**: `src/web/routes/` — tasks, sessions, search, memory, config, projects, dashboard, cron, chat-history, session-chat, context-inspector, favorites, ordering, local-image.
 - **React SPA**: Vite → `dist/web/static/`. Root: `web/src/App.tsx`.
 
 See `web/src/AGENTS.md` for detailed UX implementation (message isolation, task references, image rendering, session streaming, slash commands, etc.).

@@ -28,6 +28,8 @@ import { SyncReconciler } from '../../src/core/sync-reconciler.js';
 import {
   _resetForTesting,
   addTasksBulk,
+  ensureProject,
+  getStoreProjects,
   listTasks,
 } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
@@ -43,7 +45,6 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     status: 'todo' as any,
     phase: 'TODO' as any,
     priority: 'none' as any,
-    category: 'Test',
     project: 'Test',
     source: 'test-plugin' as any,
     session_ids: [],
@@ -59,9 +60,9 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 
 /**
  * `fields` mirrors a real fullPull row: every shipped plugin's mapper sets
- * title/category/project/status/phase (see microsoft-todo.mapToLocal). category
- * matters — it is NOT NULL in the tasks table, so a fixture that omits it makes
- * the whole create batch roll back and tests nothing about the diff.
+ * title/project/status/phase (see microsoft-todo.mapToLocal). `project` matters —
+ * a provider-synced task must name a project (Inbox can never be claimed), so a
+ * fixture that omits it isn't a realistic remote row.
  */
 function makeRemoteItem(overrides: Partial<RemoteSyncItem> = {}): RemoteSyncItem {
   const { fields, ...rest } = overrides;
@@ -71,7 +72,6 @@ function makeRemoteItem(overrides: Partial<RemoteSyncItem> = {}): RemoteSyncItem
     remoteUpdatedAt: '2025-06-01T00:00:00Z',
     ...rest,
     fields: {
-      category: 'Test',
       project: 'Test',
       status: 'todo' as any,
       phase: 'TODO' as any,
@@ -114,7 +114,7 @@ function makePlugin(overrides: {
       updatePhase: vi.fn(),
       updateDueDate: vi.fn(),
       updateStar: vi.fn(),
-      updateCategory: vi.fn(),
+      updateProject: vi.fn(),
       updateDependencies: vi.fn(),
       pushTask: vi.fn().mockResolvedValue({ serverTimestamp: new Date().toISOString() }),
       associateSubtask: vi.fn(),
@@ -485,6 +485,85 @@ describe('SyncReconciler', () => {
       await reconciler.tick(plugin, ctx);
 
       expect(await storedIds()).toEqual(['untouched-1']);
+    });
+  });
+
+  // ── Project claim + retired-name gates on the bulk pull path ──
+  //
+  // addTasksBulk skips the create-time validation chain by design, so applyDiff
+  // must apply the claim/retired-name rules itself. Regression lane for the
+  // 2026-08-05 incident: a provider's full pull re-imported tasks whose project
+  // was claimed by a DIFFERENT provider (creating unpushable minority-source
+  // twins) and re-minted the retired 'Quick Start' group minutes after the v5
+  // data repair deleted it.
+  describe('project claim gate on pull', () => {
+    it('does not import a remote task whose project is claimed by another provider', async () => {
+      await ensureProject('Claimed Elsewhere', 'other-plugin' as any);
+      const remoteItems = [
+        makeRemoteItem({ remoteId: 'r1', fields: { title: 'Cross-claim', project: 'Claimed Elsewhere' } }),
+      ];
+      const plugin = makePlugin({ fullPullResult: remoteItems });
+      const ctx = makeCtx(await seedStore([]));
+
+      await reconciler.tick(plugin, ctx);
+
+      expect(await storedTitles()).not.toContain('Cross-claim');
+      // The claim itself is untouched.
+      const projects = await getStoreProjects();
+      expect(projects['Claimed Elsewhere']?.source).toBe('other-plugin');
+    });
+
+    it('does not resurrect retired grouping names (Quick Start / Inbox) as projects', async () => {
+      const remoteItems = [
+        makeRemoteItem({ remoteId: 'r-qs', fields: { title: 'Retired QS', project: 'Quick Start' } }),
+        makeRemoteItem({ remoteId: 'r-ib', fields: { title: 'Retired Inbox', project: 'Inbox' } }),
+      ];
+      const plugin = makePlugin({ fullPullResult: remoteItems });
+      const ctx = makeCtx(await seedStore([]));
+
+      await reconciler.tick(plugin, ctx);
+
+      expect(await storedTitles()).toEqual([]);
+      const projects = await getStoreProjects();
+      expect(Object.keys(projects).map((k) => k.toLowerCase())).not.toContain('quick start');
+      expect(Object.keys(projects).map((k) => k.toLowerCase())).not.toContain('inbox');
+    });
+
+    it('keeps the local project on update when remote points at another provider\'s project', async () => {
+      await ensureProject('Mine', 'test-plugin' as any);
+      await ensureProject('Theirs', 'other-plugin' as any);
+      const localTask = makeTask({
+        id: 'local-1', title: 'Stays put', project: 'Mine',
+        updated_at: '2025-01-01T00:00:00Z',
+        ext: { 'test-plugin': { remote_id: 'r1' } },
+      });
+      const remoteItems = [
+        makeRemoteItem({
+          remoteId: 'r1', remoteUpdatedAt: '2025-06-01T00:00:00Z',
+          fields: { title: 'Stays put', project: 'Theirs' },
+        }),
+      ];
+      const plugin = makePlugin({ fullPullResult: remoteItems });
+      const ctx = makeCtx(await seedStore([localTask]));
+
+      await reconciler.tick(plugin, ctx);
+
+      const [stored] = await listTasks();
+      expect(stored.project).toBe('Mine');
+    });
+
+    it('registers an unclaimed project before bulk-creating into it', async () => {
+      const remoteItems = [
+        makeRemoteItem({ remoteId: 'r1', fields: { title: 'New ground', project: 'Fresh Project' } }),
+      ];
+      const plugin = makePlugin({ fullPullResult: remoteItems });
+      const ctx = makeCtx(await seedStore([]));
+
+      await reconciler.tick(plugin, ctx);
+
+      expect(await storedTitles()).toContain('New ground');
+      const projects = await getStoreProjects();
+      expect(projects['Fresh Project']?.source).toBe('test-plugin');
     });
   });
 });

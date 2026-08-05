@@ -531,7 +531,7 @@ describe('reconcileProcessStatus — task phase sync (incident C shape)', () => 
     const { addTaskFull, getTask } = await import('../../src/core/task-manager.js')
     const task = await addTaskFull({
       title: 'stuck task', type: 'task', status: 'in_progress', phase: 'IN_PROGRESS',
-      category: 'Inbox', project: 'proj', source: 'local', created_at: new Date().toISOString(),
+      project: 'proj', source: 'local', created_at: new Date().toISOString(),
     } as any)
 
     const sid = 'phase-sync'
@@ -547,7 +547,7 @@ describe('reconcileProcessStatus — task phase sync (incident C shape)', () => 
     const { addTaskFull, getTask } = await import('../../src/core/task-manager.js')
     const task = await addTaskFull({
       title: 'incident-C task', type: 'task', status: 'in_progress', phase: 'IN_PROGRESS',
-      category: 'Inbox', project: 'proj', source: 'local', created_at: new Date().toISOString(),
+      project: 'proj', source: 'local', created_at: new Date().toISOString(),
     } as any)
 
     const sid = 'phase-debt'
@@ -570,7 +570,7 @@ describe('reconcileProcessStatus — task phase sync (incident C shape)', () => 
     const { addTaskFull, getTask } = await import('../../src/core/task-manager.js')
     const task = await addTaskFull({
       title: 'already handled', type: 'task', status: 'in_progress', phase: 'AWAIT_HUMAN_ACTION',
-      category: 'Inbox', project: 'proj', source: 'local', created_at: new Date().toISOString(),
+      project: 'proj', source: 'local', created_at: new Date().toISOString(),
     } as any)
 
     const sid = 'phase-keep'

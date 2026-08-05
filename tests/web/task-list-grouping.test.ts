@@ -8,7 +8,7 @@
  * if the corresponding piece of the grouping feature regressed out of TaskList.
  *
  * 2026-07-26: 2 of these 8 tests had rotted (the ≥2 group threshold became ≥1, and
- * the category+project scope gate was removed). The whole file was briefly deleted
+ * the same-lane scope gate was removed). The whole file was briefly deleted
  * as "a source-text test that proves nothing" — restored instead, because the other
  * 6 are the ONLY coverage of the /tasks-page grouping wiring (App.tsx routes /tasks
  * → DashboardPage → TaskList), and the two stale ones just needed re-pointing at the
@@ -38,10 +38,10 @@ const CSS_SRC = fs.readFileSync(
 
 describe('TaskList grouping wiring', () => {
   it('clusters group members contiguously before rendering each lane', () => {
-    // Both the no-project (direct) lane and each project lane must be clustered,
-    // otherwise members would scatter and the rail/chip would not be contiguous.
+    // Project is the single grouping layer, so there is ONE lane per project
+    // ('' = Inbox) and it must be clustered, otherwise members would scatter and
+    // the rail/chip would not be contiguous.
     expect(TASK_LIST_SRC).toContain('function clusterByGroup');
-    expect(TASK_LIST_SRC).toMatch(/directTasks:\s*clusterByGroup\(direct\)/);
     expect(TASK_LIST_SRC).toMatch(/clusterByGroup\(projTasks\)/);
   });
 
@@ -57,12 +57,12 @@ describe('TaskList grouping wiring', () => {
     expect(TASK_LIST_SRC).toMatch(/counts\.get\(gid\) \?\? 0\) < 1/);
   });
 
-  it('gates the Group button on the selection size, not on category+project scope', () => {
-    // The old rule required every selected task to share category AND project
+  it('gates the Group button on the selection size, not on a shared lane', () => {
+    // The old rule required every selected task to share its grouping scope
     // (`sameScope`). That was dropped — grouping across lanes is now allowed — so
     // the only gate is "at least 2 selected". Assert the rule's ABSENCE too, so
-    // silently reinstating the scope restriction fails here.
-    expect(TASK_LIST_SRC).not.toMatch(/t\.category === category && t\.project === project/);
+    // silently reinstating a same-project restriction fails here.
+    expect(TASK_LIST_SRC).not.toMatch(/t\.project === project/);
     expect(TASK_LIST_SRC).toMatch(/canGroup:\s*picked\.length >= 2/);
     expect(TASK_LIST_SRC).toContain('disabled={!selectionInfo.canGroup}');
   });

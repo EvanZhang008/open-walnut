@@ -14,6 +14,7 @@
 import Database, { type Database as DatabaseType } from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
+import yaml from 'js-yaml';
 import { TASKS_DIR } from '../constants.js';
 import { log } from '../logging/index.js';
 import type { Task } from './types.js';
@@ -37,7 +38,6 @@ export const TASK_DB_PATH = path.join(TASKS_DIR, 'tasks.sqlite');
 const EXPLICIT_TASK_COLUMNS = [
   'id',
   'title',
-  'category',
   'project',
   'status',
   'phase',
@@ -86,6 +86,13 @@ const EXPLICIT_TASK_KEYS = new Set<string>([
   // Task type uses camelCase `_syncedAt`; column is snake `_synced_at`.
   '_syncedAt',
 ]);
+
+/**
+ * Retired Task keys. NOT columns and NOT allowed into the `payload` spillover
+ * blob either — see the denylist in `taskToRow`. Project is the single grouping
+ * layer; `category` must never come back.
+ */
+const RETIRED_TASK_KEYS = new Set<string>(['category']);
 
 // ── Singleton ──────────────────────────────────────────────────────────────
 let db: DatabaseType | null = null;
@@ -198,7 +205,7 @@ export function transaction<T>(fn: (db: DatabaseType) => T): T {
  *
  * Unknown / null columns are stripped so the returned object matches the
  * "JSON-loaded" shape the rest of the code expects. Callers are responsible
- * for further normalization (phase migration, default categories, etc.) —
+ * for further normalization (phase migration, defaults, etc.) —
  * that logic stays in task-manager.ts.
  */
 export function rowToTask(row: Record<string, any>): Task {
@@ -243,6 +250,9 @@ export function rowToTask(row: Record<string, any>): Task {
   // Required-field fallbacks — the DB may have NULL where Task requires a value
   // (pre-migration data). Mirror the JSON-load defaults so downstream code
   // never sees `undefined` for these fields.
+  // project is nullable in SQL and optional on Task ('' = Inbox). Normalize to ''
+  // here so DB-loaded tasks never make callers choose between undefined and ''.
+  if (typeof task.project !== 'string') task.project = '';
   if (typeof task.session_ids === 'undefined') task.session_ids = [];
   if (typeof task.description === 'undefined') task.description = '';
   if (typeof task.summary === 'undefined') task.summary = '';
@@ -294,6 +304,11 @@ export function taskToRow(task: Partial<Task>): Record<string, any> {
   let hasPayload = false;
   for (const key of Object.keys(task)) {
     if (EXPLICIT_TASK_KEYS.has(key)) continue;
+    // Retired keys are DROPPED, never spilled into payload. Without this a
+    // legacy-shaped write (an old cloud op, a stale client, a `POST /api/tasks`
+    // body spread) round-trips `task.category` back to life via the payload
+    // blob — rowToTask merges payload keys onto the task object.
+    if (RETIRED_TASK_KEYS.has(key)) continue;
     const val = (task as Record<string, any>)[key];
     if (val === undefined) continue;
     payload[key] = val;
@@ -321,11 +336,37 @@ export const TASK_COLUMNS: readonly string[] = EXPLICIT_TASK_COLUMNS;
 // IMPORTANT: SCHEMA_SQL must stay idempotent (all CREATE ... IF NOT EXISTS).
 // One-time destructive migrations (DROP INDEX / DROP TABLE) live in
 // ONE_TIME_MIGRATIONS below, gated by PRAGMA user_version.
+
+// Project registry: the single grouping layer and the sync-claim point.
+// Identity is case-insensitive (COLLATE NOCASE PK) so two spellings of the same
+// project can never coexist. The empty project ('' = Inbox) never gets a row and
+// can never be claimed by a provider.
+//
+// ⚠️ KNOWN, ACCEPTED ASYMMETRY: SQLite's NOCASE folds ASCII A-Z only, while JS
+// `toLowerCase()` folds Unicode. So "Ärger" vs "ärger" are ONE project to every
+// JS-side lookup but TWO distinct PK values to SQLite. The JS side is the
+// ENFORCER of project identity (ensureProjectRowLocked does an explicit
+// lowercased existence check under the write lock — it does NOT rely on
+// ON CONFLICT); NOCASE is only the ASCII-case backstop for cross-process writes.
+// metadata JSON: default_cwd, default_host, summary, summary_task_count,
+//                legacy_category, remote_list.
+// Future nesting = add a nullable `parent` column.
+//
+// Its own const because the historical v1→v2 migration DROPs a long-dead table
+// of the same name — the v5 branch has to be able to recreate it after that.
+const TASK_PROJECTS_DDL = `
+  CREATE TABLE IF NOT EXISTS task_projects (
+    name        TEXT PRIMARY KEY COLLATE NOCASE,
+    source      TEXT NOT NULL DEFAULT 'local',
+    order_index INTEGER,
+    metadata    TEXT
+  );
+`;
+
 const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
-    category TEXT NOT NULL,
     project TEXT,
     status TEXT,
     phase TEXT,
@@ -352,7 +393,7 @@ const SCHEMA_SQL = `
     _synced_at TEXT,
     payload TEXT
   );
-  CREATE INDEX IF NOT EXISTS tasks_category_project ON tasks(category, project);
+  CREATE INDEX IF NOT EXISTS tasks_project ON tasks(project);
   CREATE INDEX IF NOT EXISTS tasks_status ON tasks(status);
   CREATE INDEX IF NOT EXISTS tasks_source ON tasks(source);
   CREATE INDEX IF NOT EXISTS tasks_updated_at ON tasks(updated_at);
@@ -365,11 +406,7 @@ const SCHEMA_SQL = `
   -- from ~/.open-walnut/plugins/) bring their own indexes without touching
   -- core code.
 
-  CREATE TABLE IF NOT EXISTS task_categories (
-    name TEXT PRIMARY KEY,
-    source TEXT NOT NULL,
-    order_index INTEGER
-  );
+  ${TASK_PROJECTS_DDL}
 
   -- Virtual task-group name registry (local-only). Maps Task.group_id (stored in
   -- the tasks.payload blob) to a human-readable group label. Membership itself
@@ -403,7 +440,7 @@ const SCHEMA_SQL = `
  * Bump SCHEMA_VERSION and add an `if (from < N)` branch for each new one-time
  * migration. Keep the branch append-only — never edit or reorder old ones.
  */
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 function runOneTimeMigrations(handle: DatabaseType): void {
   const current = handle.pragma('user_version', { simple: true }) as number;
@@ -411,7 +448,9 @@ function runOneTimeMigrations(handle: DatabaseType): void {
 
   if (current < 2) {
     // v1 → v2: drop the dead `task_projects` table that the initial migration
-    // created but no runtime code reads or writes.
+    // created but no runtime code reads or writes. NOTE: v5 reuses that name for
+    // the live project registry, so it recreates the table right after — do not
+    // "clean up" that seemingly redundant CREATE.
     //
     // Drop any stale plugin ext-id indexes from old releases — indexes whose
     // json_extract path drifted (e.g. jira originally pointed at $.jira.key
@@ -456,7 +495,498 @@ function runOneTimeMigrations(handle: DatabaseType): void {
     }
   }
 
+  if (current < 5) {
+    // v4 → v5: category removal — Project becomes the single grouping layer.
+    migrateToProjectOnly(handle);
+  }
+
   handle.pragma('user_version = ' + SCHEMA_VERSION);
+}
+
+// ── v5: category removal ───────────────────────────────────────────────────
+
+/** Whole-file backup written once, before the v5 rewrite touches anything. */
+export const TASK_DB_PRE_V5_BACKUP_PATH = `${TASK_DB_PATH}.pre-v5.backup`;
+
+/**
+ * Legacy MS To-Do list-name encoding (the old `buildListName`): "Cat / Proj",
+ * or just the category when the two matched. Used to pre-seed the
+ * `remote_list` alias so pushes keep landing in the existing remote list.
+ *
+ * Exported so the JSON→SQLite importer seeds the SAME alias (task-db-migration.ts).
+ */
+export function legacyListName(category: string, project: string): string {
+  // Case-insensitive equality: everything else in this migration folds case, and
+  // MS To-Do list lookup lowercases too, so "Work"/"work" was ONE list named
+  // "Work" — not "Work / work".
+  if (!category || !project || category.toLowerCase() === project.toLowerCase()) {
+    return category || project;
+  }
+  return `${category} / ${project}`;
+}
+
+/**
+ * Majority-weighted provider claim for a project merged from several legacy
+ * categories: the provider owning the most TASKS wins; a genuine tie (or no
+ * provider at all) falls back to 'local', loudly.
+ *
+ * Weighting by task count — not by distinct contributing category, which counts a
+ * 1-task straggler as much as a 700-task group — matters on real data: a project
+ * merged from a 722-task ms-todo category plus one stray task filed under another
+ * provider's category IS an ms-todo project, and labelling it `local` would make
+ * pushTask refuse all 722 (it hard-refuses any task whose project registry row
+ * names a different source).
+ *
+ * Shared by BOTH migration paths (v4→v5 SQLite, and the JSON→SQLite importer) so
+ * they can never diverge on the claim a project ends up with.
+ */
+export function pickMajoritySource(
+  weights: Map<string, number>,
+  projectName: string,
+): string {
+  const ranked = [...weights.entries()]
+    .filter(([src, n]) => src && src !== 'local' && n > 0)
+    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  if (ranked.length === 0) return 'local';
+  if (ranked.length === 1) return ranked[0][0];
+  if (ranked[0][1] > ranked[1][1]) {
+    log.task.warn('task-db: project merged categories from several providers, majority wins', {
+      project: projectName, source: ranked[0][0], weights: Object.fromEntries(ranked),
+    });
+    return ranked[0][0];
+  }
+  log.task.warn('task-db: project merged categories with tied sources, using local', {
+    project: projectName, weights: Object.fromEntries(ranked),
+  });
+  return 'local';
+}
+
+function parseYamlObject(text: string | null | undefined): Record<string, unknown> | null {
+  if (!text || !text.trim()) return null;
+  try {
+    const parsed = yaml.load(text);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch (err) {
+    log.task.warn('task-db v5: metadata YAML parse failed', { err: String(err) });
+  }
+  return null;
+}
+
+/** Copy keys that aren't already present. First writer wins; conflicts are logged. */
+function mergeFirstWins(
+  target: Record<string, unknown>,
+  src: Record<string, unknown>,
+  context: string,
+): void {
+  for (const [key, value] of Object.entries(src)) {
+    if (key in target) {
+      if (JSON.stringify(target[key]) !== JSON.stringify(value)) {
+        log.task.warn('task-db v5: metadata conflict, keeping first value', { context, key });
+      }
+      continue;
+    }
+    target[key] = value;
+  }
+}
+
+/**
+ * Target project name for a legacy (category, project) pair.
+ *
+ * Rules (locked in the refactor plan):
+ *  - "Quick Start" under ANY category was a routing artifact → Inbox ('').
+ *  - Degenerate group (project empty, or equal to the category case-insensitively):
+ *    the category carried the grouping information, so its name is promoted to
+ *    the project name — EXCEPT category 'Inbox' (or no category), which is Inbox.
+ *  - Otherwise the real project name survives unchanged.
+ *
+ * WHY promote the degenerate group instead of flattening it to Inbox:
+ *  1. Inbox has NO registry row by design, so a flatten would throw away the
+ *     grouping entirely — `legacy_category`, `default_cwd`, and the provider
+ *     claim have nowhere to live.
+ *  2. It preserves the MS To-Do list correspondence: the legacy list for a
+ *     degenerate group was named after the category alone (see `legacyListName`),
+ *     so promoting the category name keeps `remote_list` resolvable and pushes
+ *     landing in the list the account already has.
+ *  3. Measured stakes on real data: ~1200 tasks sit in degenerate groups vs ~330
+ *     in the genuinely-Inbox ones — flattening would have dumped the bulk of the
+ *     store into an unstructured, unclaimable bucket.
+ *
+ * The pull side MUST agree with this rule or sync undoes the migration — see
+ * `routePulledListToProject` in src/utils/format.ts.
+ */
+export function promoteLegacyGroup(category: string, project: string): string {
+  const cat = (category ?? '').trim();
+  const proj = (project ?? '').trim();
+  if (proj.toLowerCase() === 'quick start') return '';
+  if (!proj || proj.toLowerCase() === cat.toLowerCase()) {
+    if (!cat || cat.toLowerCase() === 'inbox') return '';
+    return cat;
+  }
+  return proj;
+}
+
+interface LegacyGroup {
+  /** Raw column values — used verbatim in the UPDATE's WHERE clause. */
+  category: string | null;
+  project: string | null;
+  taskCount: number;
+  target: string;
+  /** Canonical spelling after the case-insensitive merge. */
+  final: string;
+}
+
+function migrateToProjectOnly(handle: DatabaseType): void {
+  // MUST come before the sniff below: on a fresh DB every branch runs, and the
+  // historical v1→v2 branch DROPs a long-dead table that now shares this name —
+  // so it deletes the registry SCHEMA_SQL just created. Re-assert it here.
+  handle.exec(TASK_PROJECTS_DDL);
+
+  const cols = handle.prepare(`PRAGMA table_info(tasks)`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === 'category')) {
+    // Fresh install (SCHEMA_SQL already project-only) or an already-migrated DB
+    // whose user_version somehow lagged. Nothing to rewrite.
+    return;
+  }
+
+  // ── Backup (never overwrite: the FIRST pre-v5 snapshot is the valuable one) ──
+  try {
+    handle.pragma('wal_checkpoint(TRUNCATE)');
+    if (!fs.existsSync(TASK_DB_PRE_V5_BACKUP_PATH)) {
+      fs.copyFileSync(TASK_DB_PATH, TASK_DB_PRE_V5_BACKUP_PATH);
+      log.task.info('task-db v5: wrote pre-migration backup', { path: TASK_DB_PRE_V5_BACKUP_PATH });
+    }
+  } catch (err) {
+    // A missing backup must not block the migration — the user would be stuck on
+    // a schema the running code can no longer read.
+    log.task.warn('task-db v5: backup failed (continuing)', {
+      path: TASK_DB_PRE_V5_BACKUP_PATH,
+      err: String(err),
+    });
+  }
+
+  const summary = handle.transaction(() => {
+    // 1. Sentinel metadata tasks → plain objects, then delete the rows.
+    const sentinels = handle
+      .prepare(
+        `SELECT category, project, title, description FROM tasks
+          WHERE title IN ('.metadata_project', '.metadata_category')`,
+      )
+      .all() as { category: string | null; project: string | null; title: string; description: string | null }[];
+
+    const catMeta = new Map<string, Record<string, unknown>>();  // lower(category) → settings
+    const projMeta = new Map<string, Record<string, unknown>>(); // "lower(cat) lower(proj)" → settings
+    const sentinelPairs: { category: string | null; project: string | null }[] = [];
+    for (const row of sentinels) {
+      const cat = (row.category ?? '').trim().toLowerCase();
+      const settings = parseYamlObject(row.description);
+      if (row.title === '.metadata_category') {
+        if (!settings) continue;
+        const bucket = catMeta.get(cat) ?? {};
+        mergeFirstWins(bucket, settings, `category:${cat}`);
+        catMeta.set(cat, bucket);
+        continue;
+      }
+      // Project-level sentinel: remember the pair so a project whose only row
+      // was the sentinel still gets a registry row (it may hold default_cwd).
+      sentinelPairs.push({ category: row.category, project: row.project });
+      if (!settings) continue;
+      const key = `${cat}\u0000${(row.project ?? '').trim().toLowerCase()}`;
+      const bucket = projMeta.get(key) ?? {};
+      mergeFirstWins(bucket, settings, `project:${key}`);
+      projMeta.set(key, bucket);
+    }
+    handle
+      .prepare(`DELETE FROM tasks WHERE title IN ('.metadata_project', '.metadata_category')`)
+      .run();
+
+    // 2. Group snapshot (post-sentinel-deletion so sentinels can't skew counts).
+    const groups: LegacyGroup[] = (
+      handle
+        .prepare(`SELECT category, project, COUNT(*) AS n FROM tasks GROUP BY category, project`)
+        .all() as { category: string | null; project: string | null; n: number }[]
+    ).map((r) => ({
+      category: r.category,
+      project: r.project,
+      taskCount: r.n,
+      target: promoteLegacyGroup(r.category ?? '', r.project ?? ''),
+      final: '',
+    }));
+    for (const pair of sentinelPairs) {
+      const exists = groups.some((g) => g.category === pair.category && g.project === pair.project);
+      if (exists) continue;
+      groups.push({
+        category: pair.category,
+        project: pair.project,
+        taskCount: 0,
+        target: promoteLegacyGroup(pair.category ?? '', pair.project ?? ''),
+        final: '',
+      });
+    }
+
+    // 3. Case-insensitive canonical spelling: most tasks wins, ties alphabetical.
+    const spellings = new Map<string, Map<string, number>>();
+    for (const g of groups) {
+      if (!g.target) continue;
+      const lower = g.target.toLowerCase();
+      const bySpelling = spellings.get(lower) ?? new Map<string, number>();
+      bySpelling.set(g.target, (bySpelling.get(g.target) ?? 0) + g.taskCount);
+      spellings.set(lower, bySpelling);
+    }
+    const canonical = new Map<string, string>();
+    for (const [lower, bySpelling] of spellings) {
+      const best = [...bySpelling.entries()].sort(
+        (a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0),
+      )[0][0];
+      canonical.set(lower, best);
+    }
+    for (const g of groups) {
+      g.final = g.target ? (canonical.get(g.target.toLowerCase()) ?? g.target) : '';
+    }
+
+    // 4. Rewrite tasks.project. Null-safe WHERE (`IS`) because project was nullable.
+    const updateGroup = handle.prepare(
+      `UPDATE tasks SET project = @project WHERE category IS @category AND project IS @old`,
+    );
+    for (const g of groups) {
+      if ((g.project ?? '') === g.final) continue;
+      updateGroup.run({ project: g.final, category: g.category, old: g.project });
+    }
+
+    // 5. Populate task_projects.
+    let legacyCatSources = new Map<string, string>(); // lower(category) → source
+    let catOrder: string[] = [];
+    try {
+      const rows = handle
+        .prepare(
+          `SELECT name, source FROM task_categories
+            ORDER BY (order_index IS NULL), order_index, name`,
+        )
+        .all() as { name: string; source: string | null }[];
+      catOrder = rows.map((r) => r.name);
+      legacyCatSources = new Map(rows.map((r) => [r.name.trim().toLowerCase(), r.source || 'local']));
+    } catch {
+      // No task_categories table (very old or hand-made DB) — everything is local.
+    }
+
+    // Contributors per canonical project.
+    const contributors = new Map<string, LegacyGroup[]>(); // lower(final) → groups
+    for (const g of groups) {
+      if (!g.final) continue;
+      const key = g.final.toLowerCase();
+      const list = contributors.get(key) ?? [];
+      list.push(g);
+      contributors.set(key, list);
+    }
+
+    // order_index: old category order expanded, projects alphabetical within a
+    // category, first appearance wins.
+    const orderedKeys: string[] = [];
+    const seen = new Set<string>();
+    const catsInOrder = [
+      ...catOrder,
+      ...[...new Set(groups.map((g) => (g.category ?? '').trim()))]
+        .filter((c) => !catOrder.some((k) => k.trim().toLowerCase() === c.toLowerCase()))
+        .sort(),
+    ];
+    for (const cat of catsInOrder) {
+      const names = [
+        ...new Set(
+          groups
+            .filter((g) => g.final && (g.category ?? '').trim().toLowerCase() === cat.trim().toLowerCase())
+            .map((g) => g.final),
+        ),
+      ].sort();
+      for (const name of names) {
+        const key = name.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        orderedKeys.push(key);
+      }
+    }
+    for (const key of [...contributors.keys()].sort()) {
+      if (!seen.has(key)) { seen.add(key); orderedKeys.push(key); }
+    }
+
+    const insertProject = handle.prepare(
+      `INSERT INTO task_projects (name, source, order_index, metadata)
+       VALUES (@name, @source, @order_index, @metadata)
+       ON CONFLICT(name) DO NOTHING`,
+    );
+
+    // Minority-source normalization (mirrors task-manager's migrateTaskSource).
+    // The registry row carries ONE claim, and pushTask hard-refuses any task whose
+    // project's row names a different source — so after the majority-weighted pick
+    // above, every task in that project with a losing source would be permanently
+    // unpushable. Adopt the winning claim and drop the stale remote identity
+    // (`ext` / `external_url` / `sync_error`) so the next sync tick re-creates a
+    // twin in the right place instead of PATCHing a twin in the wrong list.
+    const selectMinority = handle.prepare(
+      `SELECT id, source FROM tasks WHERE project = @name COLLATE NOCASE AND source IS NOT @source`,
+    );
+    const normalizeMinority = handle.prepare(
+      `UPDATE tasks SET source = @source, ext = NULL, sync_error = NULL, updated_at = @now,
+         payload = CASE WHEN payload IS NOT NULL AND json_valid(payload)
+                        THEN json_remove(payload, '$.external_url') ELSE payload END
+        WHERE id = @id`,
+    );
+    const nowIso = new Date().toISOString();
+    let normalizedMinorityTotal = 0;
+
+    const perProject: Record<string, unknown>[] = [];
+    orderedKeys.forEach((key, index) => {
+      const groupsForProject = contributors.get(key);
+      if (!groupsForProject || groupsForProject.length === 0) return;
+      const name = groupsForProject[0].final;
+      const taskCount = groupsForProject.reduce((sum, g) => sum + g.taskCount, 0);
+
+      // Source inheritance: majority-weighted by task count (see
+      // pickMajoritySource — shared with the JSON→SQLite importer).
+      const providerWeights = new Map<string, number>();
+      for (const g of groupsForProject) {
+        const src = legacyCatSources.get((g.category ?? '').trim().toLowerCase()) ?? 'local';
+        if (!src || src === 'local') continue;
+        providerWeights.set(src, (providerWeights.get(src) ?? 0) + g.taskCount);
+      }
+      const source = pickMajoritySource(providerWeights, name);
+
+      // Metadata: category-level sentinels form the base, project-level ones
+      // override (mirrors the retired getProjectMetadata resolution chain).
+      const base: Record<string, unknown> = {};
+      const overlay: Record<string, unknown> = {};
+      for (const g of groupsForProject) {
+        const cat = (g.category ?? '').trim().toLowerCase();
+        const fromCat = catMeta.get(cat);
+        if (fromCat) mergeFirstWins(base, fromCat, `${name}<-category:${cat}`);
+        const fromProj = projMeta.get(`${cat}\u0000${(g.project ?? '').trim().toLowerCase()}`);
+        if (fromProj) mergeFirstWins(overlay, fromProj, `${name}<-project:${cat}/${g.project ?? ''}`);
+      }
+      const metadata: Record<string, unknown> = { ...base, ...overlay };
+
+      const legacyCats = [
+        ...new Set(groupsForProject.map((g) => (g.category ?? '').trim()).filter(Boolean)),
+      ].sort();
+      if (legacyCats.length === 1) metadata.legacy_category = legacyCats[0];
+      else if (legacyCats.length > 1) metadata.legacy_category = legacyCats;
+
+      // remote_list alias: keep pushing into the MS To-Do list the account
+      // already has ("Cat / Proj"), instead of forking a new one named after the
+      // project. Only ms-todo encodes the grouping into the remote list name.
+      if (source === 'ms-todo') {
+        const owned = groupsForProject
+          .filter((g) => (legacyCatSources.get((g.category ?? '').trim().toLowerCase()) ?? 'local') === source)
+          .sort((a, b) => b.taskCount - a.taskCount);
+        const pick = owned[0];
+        if (pick) {
+          const oldList = legacyListName((pick.category ?? '').trim(), (pick.project ?? '').trim());
+          if (oldList && oldList !== name) metadata.remote_list = oldList;
+          if (owned.length > 1) {
+            log.task.warn('task-db v5: ambiguous remote list for merged project', {
+              project: name,
+              picked: oldList,
+              candidates: owned.length,
+            });
+          }
+        }
+      }
+
+      insertProject.run({
+        name,
+        source,
+        order_index: index,
+        metadata: Object.keys(metadata).length > 0 ? JSON.stringify(metadata) : null,
+      });
+
+      // Adopt the winning claim on every task the pick left behind.
+      const minority = selectMinority.all({ name, source }) as { id: string; source: string | null }[];
+      const minorityBySource: Record<string, number> = {};
+      for (const row of minority) {
+        normalizeMinority.run({ id: row.id, source, now: nowIso });
+        const from = row.source ?? 'local';
+        minorityBySource[from] = (minorityBySource[from] ?? 0) + 1;
+      }
+      if (minority.length > 0) {
+        log.task.warn('task-db v5: normalized minority-source tasks onto the project claim', {
+          project: name, source, tasks: minority.length, from: minorityBySource,
+        });
+        normalizedMinorityTotal += minority.length;
+      }
+
+      perProject.push({
+        project: name,
+        source,
+        tasks: taskCount,
+        from: groupsForProject.map((g) => `${g.category ?? ''}/${g.project ?? ''}`),
+        remote_list: metadata.remote_list,
+        ...(minority.length > 0
+          ? { normalized_minority: minority.length, normalized_from: minorityBySource }
+          : {}),
+      });
+    });
+
+    const inboxCount = groups.filter((g) => !g.final).reduce((sum, g) => sum + g.taskCount, 0);
+
+    // 5b. Provider-sourced tasks that landed in Inbox ('') — the degenerate
+    //     "Quick Start under a provider-claimed category" shape. Inbox has NO
+    //     registry row and can never be claimed, so the model's invariant is
+    //     "a provider task requires a non-empty project" (addTaskFull and
+    //     validateProjectSource both enforce it). Leaving them provider-sourced
+    //     would mean pushTask refuses them forever AND every read sees a state
+    //     the create path would reject. Reset to local + clear the remote
+    //     identity, so they are honest local Inbox tasks.
+    const inboxProviderRows = handle
+      .prepare(
+        `SELECT id, source FROM tasks
+          WHERE (project IS NULL OR project = '') AND source IS NOT NULL AND source != 'local'`,
+      )
+      .all() as { id: string; source: string }[];
+    const inboxProviderBySource: Record<string, number> = {};
+    if (inboxProviderRows.length > 0) {
+      const toLocal = handle.prepare(
+        `UPDATE tasks SET source = 'local', ext = NULL, sync_error = NULL, updated_at = @now,
+           payload = CASE WHEN payload IS NOT NULL AND json_valid(payload)
+                          THEN json_remove(payload, '$.external_url') ELSE payload END
+          WHERE id = @id`,
+      );
+      for (const row of inboxProviderRows) {
+        toLocal.run({ id: row.id, now: nowIso });
+        inboxProviderBySource[row.source] = (inboxProviderBySource[row.source] ?? 0) + 1;
+      }
+      log.task.warn('task-db v5: reset provider-sourced Inbox tasks to local', {
+        tasks: inboxProviderRows.length, from: inboxProviderBySource,
+      });
+    }
+
+    // 6. Drop the category column. Index MUST go first — SQLite refuses to drop
+    //    an indexed column.
+    //    Requires SQLite >= 3.35 for ALTER TABLE ... DROP COLUMN (added 2021-03).
+    //    better-sqlite3 bundles its own amalgamation (3.51 at time of writing), so
+    //    the host's sqlite3 version is irrelevant — but a future switch to a
+    //    system-linked build must re-check this.
+    handle.exec(`DROP INDEX IF EXISTS tasks_category_project;`);
+    handle.exec(`ALTER TABLE tasks DROP COLUMN category;`);
+    handle.exec(`DROP TABLE IF EXISTS task_categories;`);
+
+    return {
+      perProject,
+      inboxCount,
+      sentinels: sentinels.length,
+      normalizedMinority: normalizedMinorityTotal,
+      inboxProviderReset: inboxProviderRows.length,
+      inboxProviderResetFrom: inboxProviderBySource,
+    };
+  })();
+
+  log.task.info('task-db v5: category removed — project is now the only grouping layer', {
+    projects: summary.perProject.length,
+    inboxTasks: summary.inboxCount,
+    sentinelsAbsorbed: summary.sentinels,
+    normalizedMinoritySourceTasks: summary.normalizedMinority,
+    inboxProviderTasksResetToLocal: summary.inboxProviderReset,
+    inboxProviderResetFrom: summary.inboxProviderResetFrom,
+    perProject: summary.perProject,
+  });
 }
 
 // ── Dynamic ext-index management ───────────────────────────────────────────

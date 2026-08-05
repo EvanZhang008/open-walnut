@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Read-only task detail — title, status/phase chips, category/project,
-/// priority, dates, summary, and the task's sessions (tap → conversation).
+/// Read-only task detail — title, status/phase chips, project, priority,
+/// dates, summary, and the task's sessions (tap → conversation).
 /// Presented as a medium/large sheet.
 struct TaskDetailSheet: View {
     let task: WalnutTask
@@ -136,12 +136,8 @@ struct TaskDetailSheet: View {
 
     private var metadata: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if !task.category.isEmpty {
-                MetaRow(label: "Category", value: task.category)
-            }
-            if !task.project.isEmpty {
-                MetaRow(label: "Project", value: task.project)
-            }
+            // Always shown: "Inbox" is a real, meaningful placement, not a gap.
+            MetaRow(label: "Project", value: task.project.isEmpty ? "Inbox" : task.project)
             if let due = task.dueDateValue {
                 MetaRow(label: "Due", value: Self.fullDate(due),
                         valueColor: task.isOverdue ? Theme.danger : .primary)

@@ -60,7 +60,7 @@ describe('PUT /api/config', () => {
     const newConfig = {
       version: 1,
       user: { name: 'Test User' },
-      defaults: { priority: 'immediate', category: 'work' },
+      defaults: { priority: 'immediate', project: 'work' },
       provider: { type: 'claude-code' },
     };
 
@@ -85,7 +85,7 @@ describe('PUT /api/config', () => {
     const initial = {
       version: 1,
       user: { name: 'TestUser' },
-      defaults: { priority: 'none', category: 'personal' },
+      defaults: { priority: 'none', project: 'personal' },
       ms_todo: { client_id: 'abc-123', tenant_id: 'xyz-789' },
       agent: { model: 'claude-opus-4' },
     };
@@ -94,7 +94,7 @@ describe('PUT /api/config', () => {
     // Send partial update — only change defaults
     const putRes = await request(app)
       .put('/api/config')
-      .send({ defaults: { priority: 'immediate', category: 'work' } });
+      .send({ defaults: { priority: 'immediate', project: 'work' } });
 
     expect(putRes.status).toBe(200);
 

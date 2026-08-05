@@ -29,7 +29,7 @@ export interface ContextInspectorResponse {
     roleAndRules: ContextSection;
     skills: ContextSection;
     compactionSummary: ContextSection;
-    taskCategories: ContextSection;
+    taskProjects: ContextSection;
     userProfile: ContextSection;
     globalMemory: ContextSection;
     notesContext: ContextSection;

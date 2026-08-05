@@ -8,7 +8,7 @@ import { validateAgentId, validateConversationId } from '../../constants.js'
 import { getConfig } from '../../core/config-manager.js'
 import { DEFAULT_MODEL } from '../../agent/model.js'
 import { DEFAULT_MAX_TOKENS } from '../../agent/providers/defaults.js'
-import { buildRoleSection, buildSystemPrompt, buildTaskCategoriesSection, getNotesContext } from '../../agent/context.js'
+import { buildRoleSection, buildSystemPrompt, buildTaskProjectsSection, getNotesContext } from '../../agent/context.js'
 import { buildSkillsPrompt } from '../../core/skill-loader.js'
 import { getCompactionSummary, getModelContext } from '../../core/chat-history.js'
 import { getMemoryFile } from '../../core/memory-file.js'
@@ -81,7 +81,7 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
           },
           skills: { content: '', tokens: 0 },
           compactionSummary: { content: compactionContent, tokens: compactionTokens },
-          taskCategories: { content: '', tokens: 0 },
+          taskProjects: { content: '', tokens: 0 },
           agentMemory: { content: ownMemory || '(no agent memory yet)', tokens: ownMemoryTokens },
           mainAgentMemory: { content: mainMemory || '(no main memory)', tokens: mainMemoryTokens },
           agentDailyLogs: { content: ownDaily || '(no agent daily logs)', tokens: ownDailyTokens },
@@ -117,14 +117,14 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
     const toolSchemas = getToolSchemas()
     const apiMessages = await getModelContext(undefined, conversationId)
 
-    // Task categories & projects overview
-    const taskCategoriesText = await buildTaskCategoriesSection()
+    // Projects overview (single grouping layer)
+    const taskProjectsText = await buildTaskProjectsSection()
 
     // Token estimates per section
     const roleTokens = estimateTokens(roleContent)
     const skillsTokens = estimateTokens(skillsContent)
     const compactionTokens = estimateTokens(compactionContent)
-    const taskCategoriesTokens = estimateTokens(taskCategoriesText)
+    const taskProjectsTokens = estimateTokens(taskProjectsText)
     const globalMemoryTokens = estimateTokens(globalMemory)
     const userProfileTokens = estimateTokens(userProfile)
     const dailyLogsTokens = estimateTokens(dailyLogs)
@@ -168,9 +168,9 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
           content: compactionContent,
           tokens: compactionTokens,
         },
-        taskCategories: {
-          content: taskCategoriesText,
-          tokens: taskCategoriesTokens,
+        taskProjects: {
+          content: taskProjectsText,
+          tokens: taskProjectsTokens,
         },
         userProfile: {
           content: userProfile,

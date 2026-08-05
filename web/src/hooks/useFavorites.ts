@@ -3,29 +3,23 @@ import { useEvent } from './useWebSocket';
 import * as favApi from '@/api/favorites';
 
 export interface UseFavoritesReturn {
-  favoriteCategories: string[];
   favoriteProjects: string[];
   favoriteNotes: string[];
-  toggleFavoriteCategory: (name: string) => Promise<void>;
   toggleFavoriteProject: (name: string) => Promise<void>;
   toggleFavoriteNote: (path: string) => Promise<void>;
-  isCategoryFavorite: (name: string) => boolean;
   isProjectFavorite: (name: string) => boolean;
   isNoteFavorite: (path: string) => boolean;
   hasFavorites: boolean;
 }
 
 export function useFavorites(): UseFavoritesReturn {
-  const [favoriteCategories, setFavoriteCategories] = useState<string[]>([]);
   const [favoriteProjects, setFavoriteProjects] = useState<string[]>([]);
   const [favoriteNotes, setFavoriteNotes] = useState<string[]>([]);
 
   const fetchAll = useCallback(() => {
     favApi.fetchFavorites()
       .then((data) => {
-        setFavoriteCategories(data.categories);
-        setFavoriteProjects(data.projects);
-        // Tolerate an older backend that doesn't yet return `notes`.
+        setFavoriteProjects(data.projects ?? []);
         setFavoriteNotes(data.notes ?? []);
       })
       .catch(() => {});
@@ -40,23 +34,19 @@ export function useFavorites(): UseFavoritesReturn {
     fetchAll();
   });
 
-  const toggleFavoriteCategory = useCallback(async (name: string) => {
-    if (favoriteCategories.includes(name)) {
-      await favApi.removeFavoriteCategory(name);
-      setFavoriteCategories((prev) => prev.filter((c) => c !== name));
-    } else {
-      await favApi.addFavoriteCategory(name);
-      setFavoriteCategories((prev) => [...prev, name]);
-    }
-  }, [favoriteCategories]);
-
+  // Project identity is case-INSENSITIVE server-side (task_projects is NOCASE),
+  // so every project comparison here folds case — a favorite stored as "HomeLab"
+  // must also match a task on "homelab". The server answers with the full
+  // post-write list under the registry's CANONICAL spelling; adopt that instead
+  // of appending the requested spelling.
   const toggleFavoriteProject = useCallback(async (name: string) => {
-    if (favoriteProjects.includes(name)) {
-      await favApi.removeFavoriteProject(name);
-      setFavoriteProjects((prev) => prev.filter((p) => p !== name));
+    const lower = name.toLowerCase();
+    if (favoriteProjects.some((p) => p.toLowerCase() === lower)) {
+      const next = await favApi.removeFavoriteProject(name);
+      setFavoriteProjects(next);
     } else {
-      await favApi.addFavoriteProject(name);
-      setFavoriteProjects((prev) => [...prev, name]);
+      const next = await favApi.addFavoriteProject(name);
+      setFavoriteProjects(next);
     }
   }, [favoriteProjects]);
 
@@ -70,14 +60,14 @@ export function useFavorites(): UseFavoritesReturn {
     }
   }, [favoriteNotes]);
 
-  const isCategoryFavorite = useCallback(
-    (name: string) => favoriteCategories.includes(name),
-    [favoriteCategories],
+  const favoriteProjectsLower = useMemo(
+    () => new Set(favoriteProjects.map((p) => p.toLowerCase())),
+    [favoriteProjects],
   );
 
   const isProjectFavorite = useCallback(
-    (name: string) => favoriteProjects.includes(name),
-    [favoriteProjects],
+    (name: string) => favoriteProjectsLower.has(name.toLowerCase()),
+    [favoriteProjectsLower],
   );
 
   const isNoteFavorite = useCallback(
@@ -85,20 +75,17 @@ export function useFavorites(): UseFavoritesReturn {
     [favoriteNotes],
   );
 
-  const hasFavorites = favoriteCategories.length > 0 || favoriteProjects.length > 0 || favoriteNotes.length > 0;
+  const hasFavorites = favoriteProjects.length > 0 || favoriteNotes.length > 0;
 
   // Stabilize return value — prevents downstream memo invalidation (e.g. TodoPanel filtered)
   return useMemo(() => ({
-    favoriteCategories,
     favoriteProjects,
     favoriteNotes,
-    toggleFavoriteCategory,
     toggleFavoriteProject,
     toggleFavoriteNote,
-    isCategoryFavorite,
     isProjectFavorite,
     isNoteFavorite,
     hasFavorites,
-  }), [favoriteCategories, favoriteProjects, favoriteNotes, toggleFavoriteCategory, toggleFavoriteProject,
-       toggleFavoriteNote, isCategoryFavorite, isProjectFavorite, isNoteFavorite, hasFavorites]);
+  }), [favoriteProjects, favoriteNotes, toggleFavoriteProject,
+       toggleFavoriteNote, isProjectFavorite, isNoteFavorite, hasFavorites]);
 }

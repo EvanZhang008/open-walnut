@@ -58,7 +58,6 @@ describe('GET /api/search structured references', () => {
   it('returns an exact session-id task without invoking QMD', async () => {
     const { task } = await addTask({
       title: 'Structured reference target',
-      category: 'Local',
       project: 'Quick Start',
       source: 'local',
       _skipPluginOps: true,
@@ -85,7 +84,6 @@ describe('GET /api/search structured references', () => {
   it('bypasses QMD for every structured task reference field', async () => {
     const { task } = await addTask({
       title: 'All structured references',
-      category: 'Local',
       project: 'Quick Start',
       source: 'local',
       _skipPluginOps: true,
@@ -142,7 +140,6 @@ describe('GET /api/search structured references', () => {
   it('joins an exact SessionRecord.taskId when task session fields are stale', async () => {
     const { task } = await addTask({
       title: 'Record-owned task',
-      category: 'Local',
       project: 'Quick Start',
       source: 'local',
       _skipPluginOps: true,
@@ -179,7 +176,6 @@ describe('GET /api/search structured references', () => {
   it('pins the authoritative partial session owner and still merges QMD', async () => {
     const { task: staleTask } = await addTask({
       title: 'Stale task-side owner',
-      category: 'Local',
       project: 'Quick Start',
       source: 'local',
       _skipPluginOps: true,
@@ -187,7 +183,6 @@ describe('GET /api/search structured references', () => {
     await updateTaskRaw(staleTask.id, { session_ids: [SESSION_ID] });
     const { task: authoritativeTask } = await addTask({
       title: 'Record-owned task',
-      category: 'Local',
       project: 'Quick Start',
       source: 'local',
       _skipPluginOps: true,
@@ -319,7 +314,6 @@ describe('GET /api/search structured references', () => {
     try {
       const { task } = await addTask({
         title: 'Disabled search lexical fallback',
-        category: 'Local',
         project: 'Quick Start',
         source: 'local',
         _skipPluginOps: true,

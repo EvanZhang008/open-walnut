@@ -49,7 +49,7 @@ vi.mock('../../../src/core/config-manager.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/core/config-manager.js')>();
   return {
     ...actual,
-    getConfig: vi.fn().mockResolvedValue({ defaults: { category: 'Inbox', source: 'local' } }),
+    getConfig: vi.fn().mockResolvedValue({ defaults: { project: '', source: 'local' } }),
     seedConfigDefaults: vi.fn().mockResolvedValue(undefined),
   };
 });

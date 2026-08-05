@@ -4,7 +4,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
-import { addTask, getTask, _resetForTesting } from '../../src/core/task-manager.js';
+import { addTask, getTask, getProjectRecord, _resetForTesting } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 import { registry } from '../../src/core/integration-registry.js';
@@ -26,38 +26,46 @@ afterEach(async () => {
 });
 
 describe('default platform routing', () => {
-  it('explicit source=local forces a local task in a brand-new category', async () => {
-    const { task } = await addTask({ title: 'Captured', category: 'Inbox', source: 'local' });
+  it('a task with no project lands in Inbox and is always local', async () => {
+    const { task } = await addTask({ title: 'Captured' });
+    expect(task.project).toBe('');
     expect(task.source).toBe('local');
-    expect(task.category).toBe('Inbox');
   });
 
-  it('explicit source routes a new-category task to that platform', async () => {
-    const { task } = await addTask({ title: 'External capture', category: 'NewExtCat', source: EXTERNAL });
+  it('explicit source claims a brand-new project for that platform', async () => {
+    const { task } = await addTask({ title: 'External capture', project: 'NewExtProj', source: EXTERNAL });
+    expect(task.source).toBe(EXTERNAL);
+    // The auto-created registry row carries the claim.
+    expect(await getProjectRecord('newextproj')).toMatchObject({
+      name: 'NewExtProj', source: EXTERNAL,
+    });
+  });
+
+  it("an established project's claim wins over a conflicting explicit source request", async () => {
+    // First task claims 'Shared' for the external plugin.
+    await addTask({ title: 'first', project: 'Shared', source: EXTERNAL });
+    // A later capture asking for local in the SAME project keeps the established
+    // claim — a project is never split across two sources. (input.source only
+    // takes effect for brand-new project names, where the registry row is absent.)
+    const { task } = await addTask({ title: 'second', project: 'Shared', source: 'local' });
     expect(task.source).toBe(EXTERNAL);
   });
 
-  it('an established category source wins over a conflicting explicit source request', async () => {
-    // First task establishes 'Shared' as external.
-    await addTask({ title: 'first', category: 'Shared', source: EXTERNAL });
-    // A later capture asking for local in the SAME category keeps the established
-    // external source — the category is never split across two sources. (input.source
-    // only takes effect for brand-new categories, where storeCatSource is undefined.)
-    const { task } = await addTask({ title: 'second', category: 'Shared', source: 'local' });
-    expect(task.source).toBe(EXTERNAL);
+  it('refuses a provider-sourced task with no project (Inbox is unclaimable)', async () => {
+    await expect(addTask({ title: 'Nowhere', source: EXTERNAL })).rejects.toThrow(/Inbox/);
   });
 });
 
 describe('async push (instant create)', () => {
   it('local-source create returns success without any external round-trip', async () => {
-    const { task, syncResult } = await addTask({ title: 'local task', category: 'Inbox', source: 'local', asyncPush: true });
+    const { task, syncResult } = await addTask({ title: 'local task', source: 'local', asyncPush: true });
     expect(task.source).toBe('local');
     expect(syncResult.success).toBe(true);
   });
 
   it('asyncPush returns immediately and the task is already persisted locally', async () => {
     const { task, syncResult } = await addTask({
-      title: 'ext async', category: 'AsyncExtCat', source: EXTERNAL, asyncPush: true,
+      title: 'ext async', project: 'AsyncExtProj', source: EXTERNAL, asyncPush: true,
     });
     // Returns "accepted" immediately — caller does not block on the push round-trip.
     expect(syncResult.success).toBe(true);

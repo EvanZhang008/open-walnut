@@ -23,7 +23,7 @@ import { sessionsRouter } from './routes/sessions.js'
 import { searchRouter } from './routes/search.js'
 import { memoryRouter } from './routes/memory.js'
 import { configRouter } from './routes/config.js'
-import { categoriesRouter } from './routes/categories.js'
+import { projectsRouter } from './routes/projects.js'
 import { favoritesRouter } from './routes/favorites.js'
 import { uiPrefsRouter } from './routes/ui-prefs.js'
 import { devicesRouter } from './routes/devices.js'
@@ -112,15 +112,14 @@ import {
 
 
 /**
- * Look up a task and build a rich reference: [id|Project / Title] or [id|Title].
+ * Look up a task and build a rich reference: [id|Project / Title], or
+ * [id|Inbox / Title] when the task has no project.
  * Falls back to [id] if the task can't be found.
  */
 async function resolveTaskRef(taskId: string): Promise<string> {
   try {
     const task = await getTask(taskId)
-    const label = task.project && task.project !== task.category
-      ? `${task.project} / ${task.title}`
-      : task.title
+    const label = `${task.project || 'Inbox'} / ${task.title}`
     return `[${taskId}|${label}]`
   } catch {
     return `[${taskId}]`
@@ -803,7 +802,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/search', searchRouter)
   app.use('/api/memory', memoryRouter)
   app.use('/api/config', configRouter)
-  app.use('/api/categories', categoriesRouter)
+  app.use('/api/projects', projectsRouter)
   app.use('/api/favorites', favoritesRouter)
   app.use('/api/ui-prefs', uiPrefsRouter)
   app.use('/api/devices', devicesRouter)
@@ -1541,7 +1540,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
   }
 
-  // -- Start overview maintainer (task lifecycle → category overview upkeep) --
+  // -- Start overview maintainer (task lifecycle → project skill upkeep) --
   {
     const { startOverviewMaintainer } = await import('../agent/overview-maintainer.js')
     startOverviewMaintainer()
@@ -1554,6 +1553,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   }
 
   // -- Wire bus subscriber to push events to WS clients --
+  // Deliberately NON-global and with NO `interest` filter: it is gated purely by
+  // each emit's `destinations`. So any event emitted to 'web-ui' reaches the
+  // browser with zero wiring here — including project:created (ensureProject),
+  // which is how the project lists update live. Don't add an interest allowlist:
+  // that would silently drop every future web-ui event not listed in it.
   bus.subscribe('web-ui', (event) => {
     broadcastEvent(event.name, event.data)
   })
@@ -1917,7 +1921,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // ── Routing asymmetry ──
     // session:status-changed uses destinations ['*'] → web-ui receives it directly, no re-emit needed.
     // session:result / session:error use ['main-ai', 'session-runner'] → web-ui does NOT receive them
-    // directly; we re-emit below with enrichment (taskTitle, taskProject, taskCategory).
+    // directly; we re-emit below with enrichment (taskTitle, taskProject).
     // INVARIANT: All session:status-changed emitters MUST use ['*'] destinations.
     if (!isSubagentSessionResult && (
       event.name === 'session:started' || event.name === 'session:result' || event.name === 'session:error'
@@ -1928,8 +1932,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         try {
           const task = await getTask(enrichedData.taskId as string)
           enrichedData.taskTitle = task.title
-          enrichedData.taskProject = task.project
-          enrichedData.taskCategory = task.category
+          // '' = Inbox; the frontend renders the label, the event carries the raw value.
+          enrichedData.taskProject = task.project || ''
         } catch { /* task not found — frontend falls back gracefully */ }
       }
       bus.emit(event.name, enrichedData, ['web-ui'], { source: event.source, urgency: event.urgency, reemit: true })
@@ -2443,8 +2447,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         try {
           if (!taskId) throw new Error('no taskId')
           const refTask = await getTask(taskId)
-          const refLabel = refTask.project && refTask.project !== refTask.category
-            ? `${refTask.project} / ${refTask.title}` : refTask.title
+          const refLabel = `${refTask.project || 'Inbox'} / ${refTask.title}`
           displayTaskRef = `<task-ref id="${taskId}" label="${refLabel}"/>`
         } catch {
           displayTaskRef = taskId ?? ''
@@ -2479,7 +2482,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             try {
               const task = await getTask(taskId)
               const taskNote = task?.note ?? '(no note yet)'
-              const taskTitle = task ? `${task.project ?? task.category} / ${task.title}` : taskId
+              const taskTitle = task ? `${task.project || 'Inbox'} / ${task.title}` : taskId
               const taskRef = task ? `[${task.id}]` : `[${taskId}]`
 
               // AI needs the full triage analysis to summarize for the user

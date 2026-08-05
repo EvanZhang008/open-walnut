@@ -16,10 +16,13 @@ import { log } from '../logging/index.js';
 import {
   addTasksBulk,
   deleteTasksBulk,
+  ensureProject,
+  InvalidProjectNameError,
   isPushInflight,
   updateTasksBulk,
 } from './task-manager.js';
 import { bus, EventNames } from './event-bus.js';
+import { isLegacyInboxGroup, isRetiredQuickStartGroup } from '../utils/format.js';
 import type { RegisteredPlugin, RemoteSyncItem, SyncPollContext } from './integration-types.js';
 import type { Task } from './types.js';
 
@@ -281,14 +284,72 @@ export class SyncReconciler {
     const source = `${pluginId}-reconcile`;
     let changeCount = 0;
 
+    // addTasksBulk/updateTasksBulk skip the create-time validation chain by
+    // design, so this is the one bulk path that could write `tasks.project`
+    // with no registry row (e.g. a remote list renamed between ticks) or into a
+    // project CLAIMED BY ANOTHER PROVIDER (addTaskFull hard-refuses that shape;
+    // without the same gate here a full pull re-created cross-claimed twins on
+    // every cycle — observed 2026-08-05 with one provider re-importing tasks
+    // whose project belonged to a different provider).
+    // Resolution per name: valid + unclaimed/same-claim → canonical spelling;
+    // claim conflict → 'conflict' (create skipped, update keeps local project);
+    // shape-invalid → '' (field dropped, row keeps its current project).
+    const ensuredProjects = new Map<string, string | 'conflict'>(); // lower(name) → canonical
+    const resolveProject = async (fields: Partial<Task>): Promise<'ok' | 'conflict'> => {
+      const name = (fields.project ?? '').trim();
+      if (!name) return 'ok';
+      // Retired grouping names are Inbox, and Inbox can't hold provider tasks —
+      // same pull-side rule as routePulledListToProject. Without this, a remote
+      // task still tagged with the retired name resurrects it as a claimed
+      // project on every full pull (the v5 repair deleted these rows once).
+      if (isRetiredQuickStartGroup(name) || isLegacyInboxGroup(name)) {
+        log.web.warn('sync-reconciler: remote task grouped under a retired name — not imported/moved', {
+          pluginId, project: name,
+        });
+        return 'conflict';
+      }
+      const key = name.toLowerCase();
+      let canonical = ensuredProjects.get(key);
+      if (canonical === undefined) {
+        try {
+          const ensured = await ensureProject(name, pluginId as Task['source']);
+          canonical = ensured.source === pluginId ? ensured.name : 'conflict';
+          if (canonical === 'conflict') {
+            log.web.warn('sync-reconciler: remote task targets a project claimed by another provider', {
+              pluginId, project: name, claimedBy: ensured.source,
+            });
+          }
+        } catch (err) {
+          if (!(err instanceof InvalidProjectNameError)) throw err;
+          log.web.warn('sync-reconciler: invalid project name from remote — leaving project unchanged', {
+            pluginId, project: name,
+          });
+          canonical = '';
+        }
+        ensuredProjects.set(key, canonical);
+      }
+      if (canonical === 'conflict') return 'conflict';
+      if (canonical) fields.project = canonical;
+      else delete fields.project;
+      return 'ok';
+    };
+
     // ── Creates (batch limit: 50) ──
     const createBatch = diff.toCreate.slice(0, 50);
     if (createBatch.length > 0) {
-      const creates: Array<Omit<Task, 'id'>> = createBatch.map((remote) => ({
-        ...remote.fields,
-        source: pluginId as Task['source'],
-        title: remote.fields.title ?? remote.title,
-      }) as Omit<Task, 'id'>);
+      const creates: Array<Omit<Task, 'id'>> = [];
+      for (const remote of createBatch) {
+        const fields = {
+          ...remote.fields,
+          source: pluginId as Task['source'],
+          title: remote.fields.title ?? remote.title,
+        } as Omit<Task, 'id'>;
+        // A remote task pointing at another provider's project is NOT imported:
+        // creating it would strand an unpushable minority-source task. It stays
+        // remote-only until the claim or the remote grouping is changed.
+        if ((await resolveProject(fields)) === 'conflict') continue;
+        creates.push(fields);
+      }
       try {
         const created = await addTasksBulk(creates);
         for (const task of created) {
@@ -325,6 +386,9 @@ export class SyncReconciler {
         delete (updates as any).phase;
         delete (updates as any).status;
         delete (updates as any).needs_attention;
+        // Claim conflict → keep the local project rather than moving the task
+        // into another provider's group.
+        if ((await resolveProject(updates)) === 'conflict') delete updates.project;
         updatesList.push({ id: local.id, patch: updates });
       }
       try {

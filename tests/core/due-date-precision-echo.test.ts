@@ -44,7 +44,7 @@ const SAME_DAY = '2026-07-29';
 const OTHER_DAY = '2026-08-15';
 
 async function makeTaskWithTimeDue(): Promise<string> {
-  const { task } = await addTask({ title: 'Deferred', category: 'Work', project: 'Marina' });
+  const { task } = await addTask({ title: 'Deferred', project: 'Marina' });
   await updateTask(task.id, { due_date: TIME_LEVEL });
   return task.id;
 }
@@ -74,7 +74,7 @@ describe('updateTaskRaw (sync pull path)', () => {
   });
 
   it('does not guard when local value is already day-level', async () => {
-    const { task } = await addTask({ title: 'Plain', category: 'Work', project: 'Marina' });
+    const { task } = await addTask({ title: 'Plain', project: 'Marina' });
     await updateTask(task.id, { due_date: SAME_DAY });
     const { changed } = await updateTaskRaw(task.id, { due_date: OTHER_DAY });
     expect(changed).toBe(true);
@@ -93,7 +93,7 @@ describe('updateTasksBulk (reconciler path)', () => {
 
 describe('addTaskFull dedup merge (pull-create path)', () => {
   it('preserves the time-level due date when the pulled snapshot has the truncated day', async () => {
-    const { task } = await addTask({ title: 'Synced', category: 'Work', project: 'Marina' });
+    const { task } = await addTask({ title: 'Synced', project: 'Marina' });
     await updateTaskRaw(task.id, {
       due_date: TIME_LEVEL,
       ext: { acme: { id: 'r-1' } },
@@ -105,7 +105,6 @@ describe('addTaskFull dedup merge (pull-create path)', () => {
       status: 'todo',
       phase: 'TODO',
       priority: 'none',
-      category: 'Work',
       project: 'Marina',
       source: 'acme',
       ext: { acme: { id: 'r-1' } },

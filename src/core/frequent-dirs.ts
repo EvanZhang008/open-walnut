@@ -21,7 +21,10 @@ export interface FrequentDirEntry {
   host: string | null
   count: number
   lastUsed: string // ISO timestamp
-  categoryVotes: Record<string, number>
+  /** Advisory tally of which project's tasks ran in this directory. Replaces the
+   *  retired categoryVotes; the old persisted key is simply ignored (votes
+   *  restart from zero — this is a hint, never a source of truth). */
+  projectVotes: Record<string, number>
   /** Last launch config the user picked in Quick Start for this directory.
    *  `model` stores the picker's RAW value (catalog full provider ID or legacy
    *  alias id) — NOT the CLI-normalized form — so the launcher dropdown can
@@ -109,9 +112,9 @@ export function scoreFrequentDir(
 
 /**
  * Record a directory usage (called on session start).
- * Increments count, updates lastUsed, adds category vote.
+ * Increments count, updates lastUsed, adds a project vote.
  */
-export async function recordDirectory(cwd: string, host: string | null, category?: string): Promise<void> {
+export async function recordDirectory(cwd: string, host: string | null, project?: string): Promise<void> {
   return withWriteLock(async () => {
     let store = readStore()
     if (!store) {
@@ -129,18 +132,21 @@ export async function recordDirectory(cwd: string, host: string | null, category
     if (entry) {
       entry.count++
       entry.lastUsed = new Date().toISOString()
-      if (category) {
-        entry.categoryVotes[category] = (entry.categoryVotes[category] ?? 0) + 1
+      if (project) {
+        // Legacy rows persisted before the project-only refactor have no
+        // projectVotes key — treat that as an empty tally.
+        entry.projectVotes ??= {}
+        entry.projectVotes[project] = (entry.projectVotes[project] ?? 0) + 1
       }
     } else {
       const votes: Record<string, number> = {}
-      if (category) votes[category] = 1
+      if (project) votes[project] = 1
       store.directories.push({
         cwd,
         host,
         count: 1,
         lastUsed: new Date().toISOString(),
-        categoryVotes: votes,
+        projectVotes: votes,
       })
     }
 
@@ -169,7 +175,7 @@ export async function recordLaunchPrefs(cwd: string, host: string | null, prefs:
     const key = `${cwd}::${host ?? '__local__'}`
     let entry = store.directories.find(d => `${d.cwd}::${d.host ?? '__local__'}` === key)
     if (!entry) {
-      entry = { cwd, host, count: 0, lastUsed: new Date().toISOString(), categoryVotes: {} }
+      entry = { cwd, host, count: 0, lastUsed: new Date().toISOString(), projectVotes: {} }
       store.directories.push(entry)
     }
 
@@ -209,10 +215,10 @@ async function compileFromSessionsInternal(): Promise<void> {
     const sessions = await listSessions()
     const tasks = await listTasks()
 
-    // Build taskId → category map
-    const taskCategoryMap = new Map<string, string>()
+    // Build taskId → project map (Inbox tasks contribute no vote)
+    const taskProjectMap = new Map<string, string>()
     for (const t of tasks) {
-      taskCategoryMap.set(t.id, t.category)
+      if (t.project) taskProjectMap.set(t.id, t.project)
     }
 
     // Aggregate by cwd::host
@@ -224,24 +230,24 @@ async function compileFromSessionsInternal(): Promise<void> {
       if (s.archived) continue
 
       const key = `${s.cwd}::${s.host ?? '__local__'}`
-      const category = s.taskId ? taskCategoryMap.get(s.taskId) : undefined
+      const project = s.taskId ? taskProjectMap.get(s.taskId) : undefined
       const existing = dirMap.get(key)
 
       if (existing) {
         existing.count++
         if (s.startedAt > existing.lastUsed) existing.lastUsed = s.startedAt
-        if (category) {
-          existing.categoryVotes[category] = (existing.categoryVotes[category] ?? 0) + 1
+        if (project) {
+          existing.projectVotes[project] = (existing.projectVotes[project] ?? 0) + 1
         }
       } else {
         const votes: Record<string, number> = {}
-        if (category) votes[category] = 1
+        if (project) votes[project] = 1
         dirMap.set(key, {
           cwd: s.cwd,
           host: s.host ?? null,
           count: 1,
           lastUsed: s.startedAt,
-          categoryVotes: votes,
+          projectVotes: votes,
         })
       }
     }
@@ -266,7 +272,7 @@ async function compileFromSessionsInternal(): Promise<void> {
         host: host === '__local__' ? null : host,
         count: 0,
         lastUsed: new Date().toISOString(),
-        categoryVotes: {},
+        projectVotes: {},
         lastLaunch: launch,
       })
     }

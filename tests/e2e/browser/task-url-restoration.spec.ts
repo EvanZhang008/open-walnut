@@ -4,7 +4,12 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 const SCREENSHOT_DIR = '/tmp/test-and-verify';
 const TARGET_S1 = '2532066a-e210-4702-be34-ed01008adbde';
 const TARGET_S2 = 'c520a153-6fb8-489d-b18f-c9e0d7ab9f48';
-const TARGET_PATH = `/?s1=${TARGET_S1}&s2=${TARGET_S2}&cat=starred`;
+// `_starred` is the url token for the ★ tab. Sentinel tab tokens are namespaced
+// with '_' so a project legitimately NAMED "starred"/"inbox" stays deep-linkable
+// — the mapping is injective in both directions. See the `?proj=` section of
+// web/src/components/tasks/task-tabs.ts (the pre-2026-08 bare `starred` token is
+// intentionally no longer decoded as the sentinel).
+const TARGET_PATH = `/?s1=${TARGET_S1}&s2=${TARGET_S2}&proj=_starred`;
 const TARGET_TITLES = [
   'Deep link primary session',
   'Deep link secondary session',
@@ -17,7 +22,6 @@ async function createTask(
   const response = await request.post('/api/tasks', {
     data: {
       title,
-      category: 'Browser Regression',
       project: 'URL Restoration',
       source: 'local',
     },
@@ -72,7 +76,6 @@ test('malformed HTTP 200 task list retains and restores the deep-linked task', a
     data: {
       title,
       description,
-      category: 'Browser Regression',
       project: 'URL Restoration',
       source: 'local',
     },
@@ -164,7 +167,6 @@ test('warm-page popstate survives a failed background task refresh', async ({
       data: {
         title,
         description,
-        category: 'Browser Regression',
         project: 'Warm URL Restoration',
         source: 'local',
       },
@@ -172,7 +174,6 @@ test('warm-page popstate survives a failed background task refresh', async ({
     request.post('/api/tasks', {
       data: {
         title: helperTitle,
-        category: 'Browser Regression',
         project: 'Warm URL Restoration',
         source: 'local',
       },

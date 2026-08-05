@@ -1,180 +1,189 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  getStoreCategories: vi.fn(),
+  getStoreProjects: vi.fn(),
   listTasksSlim: vi.fn(),
   getProjectMetadata: vi.fn(),
 }));
 
 vi.mock('../../src/core/task-manager.js', () => ({
-  getStoreCategories: mocks.getStoreCategories,
+  getStoreProjects: mocks.getStoreProjects,
   listTasksSlim: mocks.listTasksSlim,
   getProjectMetadata: mocks.getProjectMetadata,
 }));
 
-import { buildCategoryDigest } from '../../src/core/quick-task-digest.js';
+import { buildProjectDigest, INBOX_LABEL } from '../../src/core/quick-task-digest.js';
 
 interface FixtureTask {
   title: string;
-  category: string;
   project?: string;
   phase: string;
   updated_at?: string;
 }
 
-function task(
-  title: string,
-  category: string,
-  project: string | undefined = category,
-  phase = 'TODO',
-): FixtureTask {
-  return { title, category, project, phase, updated_at: '2026-07-23T12:00:00.000Z' };
+function task(title: string, project?: string, phase = 'TODO'): FixtureTask {
+  return { title, project, phase, updated_at: '2026-07-23T12:00:00.000Z' };
 }
 
-function categories(names: string[]): Record<string, { source: string }> {
+function registry(names: string[]): Record<string, { source: string }> {
   return Object.fromEntries(names.map((name) => [name, { source: 'local' }]));
 }
 
-describe('buildCategoryDigest', () => {
+describe('buildProjectDigest', () => {
   beforeEach(() => {
-    mocks.getStoreCategories.mockReset();
+    mocks.getStoreProjects.mockReset();
     mocks.listTasksSlim.mockReset();
     mocks.getProjectMetadata.mockReset();
-    mocks.getStoreCategories.mockResolvedValue({});
+    mocks.getStoreProjects.mockResolvedValue({});
     mocks.listTasksSlim.mockResolvedValue([]);
     mocks.getProjectMetadata.mockResolvedValue(null);
   });
 
-  it('appends the maintained project summary as an "about:" line under the project', async () => {
-    mocks.getStoreCategories.mockResolvedValue(categories(['Work']));
+  it('renders one flat line per project, busiest first', async () => {
+    mocks.getStoreProjects.mockResolvedValue(registry(['Errands', 'Website']));
     mocks.listTasksSlim.mockResolvedValue([
-      task('Update homepage', 'Work', 'Website'),
-    ]);
-    mocks.getProjectMetadata.mockImplementation(async (_cat: string, project: string) =>
-      project === 'Website' ? { summary: 'Marketing site revamp: new landing page and SEO.' } : null);
-
-    const { digest } = await buildCategoryDigest();
-
-    expect(digest).toContain('  - Website: "Update homepage"');
-    expect(digest).toContain('    about: Marketing site revamp: new landing page and SEO.');
-  });
-
-  it('groups default-project titles on category lines and named projects below them', async () => {
-    mocks.getStoreCategories.mockResolvedValue(categories(['Personal', 'Work']));
-    mocks.listTasksSlim.mockResolvedValue([
-      task('Buy groceries', 'Personal'),
-      task('Call dentist', 'Personal', undefined),
-      task('Pick up parcel', 'Personal', 'Errands'),
-      task('Update homepage', 'Work', 'Website'),
+      task('Pick up parcel', 'Errands'),
+      task('Call dentist', 'Errands'),
+      task('Update homepage', 'Website'),
     ]);
 
-    const result = await buildCategoryDigest();
+    const result = await buildProjectDigest();
 
     expect(result.digest).toBe([
-      '- Personal (3 open tasks): "Buy groceries"; "Call dentist"',
-      '  - Errands: "Pick up parcel"',
-      '- Work (1 open tasks)',
-      '  - Website: "Update homepage"',
+      '- Errands (2 open tasks): "Pick up parcel"; "Call dentist"',
+      '- Website (1 open tasks): "Update homepage"',
     ].join('\n'));
-    expect(result.categories).toEqual(['Personal', 'Work']);
-    expect(result.projectsByCategory).toEqual({ Personal: ['Errands'], Work: ['Website'] });
+    expect(result.projects).toEqual(['Errands', 'Website']);
     expect(mocks.listTasksSlim).toHaveBeenCalledWith({ minimal: true });
   });
 
-  it('caps titles and displayed projects while preserving full project allowlists', async () => {
+  it('appends the maintained project summary as an "about:" line', async () => {
+    mocks.getStoreProjects.mockResolvedValue(registry(['Website']));
+    mocks.listTasksSlim.mockResolvedValue([task('Update homepage', 'Website')]);
+    mocks.getProjectMetadata.mockImplementation(async (project: string) =>
+      project === 'Website' ? { summary: 'Marketing site revamp: new landing page and SEO.' } : null);
+
+    const { digest } = await buildProjectDigest();
+
+    expect(digest).toContain('- Website (1 open tasks): "Update homepage"');
+    expect(digest).toContain('  about: Marketing site revamp: new landing page and SEO.');
+  });
+
+  it('renders Inbox LAST and keeps it out of the selectable project list', async () => {
+    mocks.getStoreProjects.mockResolvedValue(registry(['Website']));
+    mocks.listTasksSlim.mockResolvedValue([
+      task('Loose thought'),
+      task('Another capture', ''),
+      task('Update homepage', 'Website'),
+    ]);
+
+    const result = await buildProjectDigest();
+
+    expect(result.digest.split('\n')).toEqual([
+      '- Website (1 open tasks): "Update homepage"',
+      `- ${INBOX_LABEL} — no project (2 open tasks): "Loose thought"; "Another capture"`,
+    ]);
+    expect(result.projects).toEqual(['Website']);
+  });
+
+  it('omits the Inbox line when nothing is unfiled', async () => {
+    mocks.getStoreProjects.mockResolvedValue(registry(['Website']));
+    mocks.listTasksSlim.mockResolvedValue([task('Update homepage', 'Website')]);
+
+    const { digest } = await buildProjectDigest();
+    expect(digest).not.toContain(INBOX_LABEL);
+  });
+
+  it('lists a registry project that has no tasks yet (canonical spelling wins)', async () => {
+    mocks.getStoreProjects.mockResolvedValue(registry(['Marina']));
+    mocks.listTasksSlim.mockResolvedValue([task('Ship it', 'MARINA')]);
+
+    const result = await buildProjectDigest();
+
+    expect(result.projects).toEqual(['Marina']);
+    expect(result.digest).toBe('- Marina (1 open tasks): "Ship it"');
+  });
+
+  it('caps titles per line at 3 and title length at 40 chars', async () => {
     const longTitle = '𠀀'.repeat(41);
-    mocks.getStoreCategories.mockResolvedValue(categories(['Personal']));
+    mocks.getStoreProjects.mockResolvedValue(registry(['Personal']));
     mocks.listTasksSlim.mockResolvedValue([
       task(longTitle, 'Personal'),
       task('Second title', 'Personal'),
       task('Third title', 'Personal'),
       task('Fourth title', 'Personal'),
-      task('Project one task', 'Personal', 'Project One'),
-      task('Project two task', 'Personal', 'Project Two'),
-      task('Project three task', 'Personal', 'Project Three'),
-      task('Project four task', 'Personal', 'Project Four'),
-      task('Project five task', 'Personal', 'Project Five'),
     ]);
 
-    const result = await buildCategoryDigest();
-    const lines = result.digest.split('\n');
+    const { digest } = await buildProjectDigest();
 
-    expect(Array.from(lines[0].match(/"([^"]+)"/)![1])).toHaveLength(40);
-    expect(lines[0]).toContain('"Second title"; "Third title"');
-    expect(lines[0]).not.toContain('Fourth title');
-    expect(lines.filter((line) => line.startsWith('  - '))).toHaveLength(4);
-    expect(result.digest).not.toContain('  - Project Five:');
-    expect(result.projectsByCategory.Personal).toEqual([
-      'Project One', 'Project Two', 'Project Three', 'Project Four', 'Project Five',
-    ]);
+    expect(Array.from(digest.match(/"([^"]+)"/)![1])).toHaveLength(40);
+    expect(digest).toContain('"Second title"; "Third title"');
+    expect(digest).not.toContain('Fourth title');
   });
 
-  it('skips metadata task rows', async () => {
-    mocks.getStoreCategories.mockResolvedValue(categories(['Personal']));
+  it('skips sentinel .metadata rows left over from the pre-registry model', async () => {
+    mocks.getStoreProjects.mockResolvedValue(registry(['Personal']));
     mocks.listTasksSlim.mockResolvedValue([
-      task('.metadata project record', 'Hidden', 'Setup'),
+      task('.metadata_project', 'Setup'),
       task('Call clinic', 'Personal'),
     ]);
 
-    const result = await buildCategoryDigest();
+    const result = await buildProjectDigest();
 
+    // The sentinel row is skipped before its project is even registered, so
+    // neither the title nor the 'Setup' name reaches the digest.
     expect(result.digest).toBe('- Personal (1 open tasks): "Call clinic"');
-    expect(result.categories).toEqual(['Personal']);
-    expect(result.projectsByCategory).toEqual({ Personal: [] });
+    expect(result.projects).toEqual(['Personal']);
   });
 
-  it('caps the digest at 15 categories by open count without capping allowlists', async () => {
-    const names = Array.from({ length: 16 }, (_, index) => `Category ${index + 1}`);
+  it('shows at most 20 projects in the digest while keeping the full allowlist', async () => {
+    const names = Array.from({ length: 24 }, (_, index) => `Project ${index + 1}`);
     const tasks: FixtureTask[] = [];
     names.forEach((name, index) => {
       for (let count = 0; count <= index; count += 1) {
-        tasks.push(task(`${name} task ${count + 1}`, name, `Project ${index + 1}`));
+        tasks.push(task(`${name} task ${count + 1}`, name));
       }
     });
-    mocks.getStoreCategories.mockResolvedValue(categories(names));
+    mocks.getStoreProjects.mockResolvedValue(registry(names));
     mocks.listTasksSlim.mockResolvedValue(tasks);
 
-    const result = await buildCategoryDigest();
+    const result = await buildProjectDigest();
 
-    expect(result.digest.match(/^- Category /gm)).toHaveLength(15);
-    expect(result.digest).toContain('- Category 16 (16 open tasks)');
-    expect(result.digest).not.toContain('- Category 1 (1 open tasks)');
-    expect(result.categories).toHaveLength(16);
-    expect(result.projectsByCategory['Category 1']).toEqual(['Project 1']);
-    expect(result.projectsByCategory['Category 16']).toEqual(['Project 16']);
+    expect(result.digest.match(/^- Project /gm)).toHaveLength(20);
+    expect(result.digest).toContain('- Project 24 (24 open tasks)');
+    expect(result.digest).not.toContain('- Project 1 (1 open tasks)');
+    expect(result.projects).toHaveLength(24);
   });
 
   it('truncates at 4000 characters on a whole-line boundary with a marker', async () => {
-    const names = Array.from({ length: 15 }, (_, index) => `Long Category ${index + 1} ${'x'.repeat(40)}`);
+    const names = Array.from({ length: 20 }, (_, index) => `Long Project ${index + 1} ${'x'.repeat(60)}`);
     const tasks: FixtureTask[] = [];
     for (const name of names) {
-      tasks.push(task(`Default ${'a'.repeat(80)}`, name));
-      for (let project = 1; project <= 4; project += 1) {
-        for (let title = 1; title <= 3; title += 1) {
-          tasks.push(task(
-            `Recent task ${title} ${'b'.repeat(80)}`,
-            name,
-            `Project ${project} ${'p'.repeat(40)}`,
-          ));
-        }
+      for (let title = 1; title <= 3; title += 1) {
+        tasks.push(task(`Recent task ${title} ${'b'.repeat(80)}`, name));
       }
     }
-    mocks.getStoreCategories.mockResolvedValue(categories(names));
+    mocks.getStoreProjects.mockResolvedValue(registry(names));
     mocks.listTasksSlim.mockResolvedValue(tasks);
 
-    const result = await buildCategoryDigest();
+    const result = await buildProjectDigest();
     const lines = result.digest.split('\n');
 
     expect(result.digest.length).toBeLessThanOrEqual(4000);
     expect(lines.at(-1)).toBe('…');
-    expect(lines.slice(0, -1).every((line) =>
-      line.startsWith('- Long Category') || line.startsWith('  - Project')
-    )).toBe(true);
+    expect(lines.slice(0, -1).every((line) => line.startsWith('- Long Project'))).toBe(true);
+  });
+
+  it('survives a project-summary read failure (enrichment only)', async () => {
+    mocks.getStoreProjects.mockResolvedValue(registry(['Website']));
+    mocks.listTasksSlim.mockResolvedValue([task('Update homepage', 'Website')]);
+    mocks.getProjectMetadata.mockRejectedValue(new Error('db closed'));
+
+    const { digest } = await buildProjectDigest();
+    expect(digest).toBe('- Website (1 open tasks): "Update homepage"');
   });
 
   it('returns empty output for an empty store', async () => {
-    await expect(buildCategoryDigest()).resolves.toEqual({
-      digest: '', categories: [], projectsByCategory: {},
-    });
+    await expect(buildProjectDigest()).resolves.toEqual({ digest: '', projects: [] });
   });
 });

@@ -30,7 +30,7 @@ function msTodoApi(configOverrides?: Record<string, unknown>) {
 }
 
 function msTodoTask(overrides?: Partial<ReturnType<typeof createMockTask>>) {
-  return createMockTask({ category: 'Personal', source: 'ms-todo', ...overrides });
+  return createMockTask({ project: 'Personal', source: 'ms-todo', ...overrides });
 }
 
 // ── Tests ──
@@ -49,7 +49,7 @@ describe('C1: MS To-Do plugin registration', () => {
     const methods: (keyof IntegrationSync)[] = [
       'createTask', 'deleteTask', 'updateTitle', 'updateDescription',
       'updateSummary', 'updateNote', 'updateConversationLog', 'updatePriority',
-      'updatePhase', 'updateDueDate', 'updateStar', 'updateCategory',
+      'updatePhase', 'updateDueDate', 'updateStar', 'updateProject',
       'updateDependencies', 'pushTask', 'associateSubtask', 'disassociateSubtask', 'syncPoll',
     ];
     for (const m of methods) {
@@ -57,7 +57,7 @@ describe('C1: MS To-Do plugin registration', () => {
     }
   });
 
-  it('C1.2: source claim returns true for all categories (priority 0)', async () => {
+  it('C1.2: source claim returns true for all projects (priority 0)', async () => {
     const { api, collected } = msTodoApi();
     register(api);
 

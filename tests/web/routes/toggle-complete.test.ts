@@ -1,6 +1,12 @@
 /**
- * Tests for POST /api/tasks/:id/toggle-complete route (Fix 2).
- * Also tests slash-format parsing via POST /api/tasks (Fix 4).
+ * Tests for POST /api/tasks/:id/toggle-complete route, plus the active-children
+ * completion guard at the route level.
+ *
+ * The old "slash format parsing" suites (`category: 'idea / work idea'` split
+ * into category + project on create/PATCH) are gone with the category concept:
+ * a `"A / B"` string is no longer a grouping path, it's just a project name.
+ * The remaining `"Cat / Proj"` decoding lives only in the MS To-Do remote list
+ * adapter (parseProjectFromListName — see tests/utils/format.test.ts).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -86,37 +92,26 @@ describe('POST /api/tasks/:id/toggle-complete', () => {
   });
 });
 
-describe('POST /api/tasks — slash format parsing', () => {
-  it('creates a task with slash-separated category/project', async () => {
+describe('POST /api/tasks — project is stored verbatim', () => {
+  it('rejects a slash-bearing NEW project name with 400 (no splitting, no 500)', async () => {
     const app = createApp();
     const res = await request(app)
       .post('/api/tasks')
-      .send({ title: 'Slash test', category: 'idea / work idea' });
+      .send({ title: 'Slash test', project: 'idea / work idea' });
 
-    expect(res.status).toBe(201);
-    expect(res.body.task.category).toBe('Idea');
-    expect(res.body.task.project).toBe('Work idea');
+    // assertValidProjectName: a new name becomes a filesystem path segment, so
+    // '/' is refused at the boundary — mapped to 400 via InvalidProjectNameError.
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/path separators/);
   });
 
-  it('explicit project overrides slash-parsed project', async () => {
+  it('does not title-case or otherwise rewrite the project name', async () => {
     const app = createApp();
     const res = await request(app)
       .post('/api/tasks')
-      .send({ title: 'Override test', category: 'idea / work idea', project: 'custom' });
+      .send({ title: 'Plain test', project: 'work' });
 
     expect(res.status).toBe(201);
-    expect(res.body.task.category).toBe('Idea');
-    expect(res.body.task.project).toBe('custom');
-  });
-
-  it('plain category with no slash is unchanged', async () => {
-    const app = createApp();
-    const res = await request(app)
-      .post('/api/tasks')
-      .send({ title: 'Plain test', category: 'work' });
-
-    expect(res.status).toBe(201);
-    expect(res.body.task.category).toBe('work');
     expect(res.body.task.project).toBe('work');
   });
 });
@@ -184,29 +179,28 @@ describe('active children guard — routes', () => {
   });
 });
 
-describe('PATCH /api/tasks/:id — slash format parsing', () => {
-  it('updates category with slash-separated format', async () => {
-    const { task } = await addTask({ title: 'Update slash', category: 'old' });
+describe('PATCH /api/tasks/:id — project moves', () => {
+  it('moves the task to the named project verbatim', async () => {
+    const { task } = await addTask({ title: 'Update project', project: 'old' });
     const app = createApp();
 
     const res = await request(app)
       .patch(`/api/tasks/${task.id}`)
-      .send({ category: 'new cat / new proj' });
+      .send({ project: 'new proj' });
 
     expect(res.status).toBe(200);
-    expect(res.body.task.category).toBe('New cat');
-    expect(res.body.task.project).toBe('New proj');
+    expect(res.body.task.project).toBe('new proj');
   });
 
-  it('explicit project in update overrides slash parsing', async () => {
-    const { task } = await addTask({ title: 'Update override', category: 'old' });
+  it("moves the task to Inbox on project=''", async () => {
+    const { task } = await addTask({ title: 'Back to inbox', project: 'old' });
     const app = createApp();
 
     const res = await request(app)
       .patch(`/api/tasks/${task.id}`)
-      .send({ category: 'new cat / new proj', project: 'explicit' });
+      .send({ project: '' });
 
     expect(res.status).toBe(200);
-    expect(res.body.task.project).toBe('explicit');
+    expect(res.body.task.project).toBe('');
   });
 });

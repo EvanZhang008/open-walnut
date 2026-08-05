@@ -40,16 +40,16 @@ import { isLiveTest, hasPluginCredentials } from '../helpers/live.js';
 
 const shouldRun = isLiveTest() && hasPluginCredentials('ext-sync');
 
-// ── Read ext-sync config for the category to use ──
+// ── Read ext-sync config for the project to use ──
 
-function readExtSyncCategory(): string {
+function readExtSyncProject(): string {
   try {
     const configPath = path.join(os.homedir(), '.open-walnut', 'config.yaml');
     const content = fs.readFileSync(configPath, 'utf-8');
     const config = yaml.load(content) as Record<string, unknown>;
     const plugins = config?.plugins as Record<string, unknown> | undefined;
-    const ext-sync = plugins?.ext-sync as Record<string, unknown> | undefined;
-    return (ext-sync?.category as string) || 'Work - ExtSync';
+    const extSync = plugins?.['ext-sync'] as Record<string, unknown> | undefined;
+    return (extSync?.project as string) || 'Work - ExtSync';
   } catch {
     return 'Work - ExtSync';
   }
@@ -69,7 +69,6 @@ interface TaskResponse {
   title: string;
   status: string;
   phase?: string;
-  category: string;
   project: string;
   source?: string;
   depends_on?: string[];
@@ -81,7 +80,7 @@ interface TaskResponse {
 let serverInfo: EphemeralServerInfo | null = null;
 let port: number;
 const createdTaskIds: string[] = [];
-const ext-syncCategory = readExtSyncCategory();
+const extSyncProject = readExtSyncProject();
 
 function apiUrl(p: string): string {
   return `http://localhost:${port}${p}`;
@@ -100,7 +99,7 @@ async function createTestTask(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       title: `[walnut-test] ${title}`,
-      category: ext-syncCategory,
+      project: extSyncProject,
       ...overrides,
     }),
   });
@@ -246,13 +245,13 @@ describe.skipIf(!shouldRun)('ExtSync roundtrip via ephemeral server (LIVE)', () 
       badgeColor: string;
     }>;
 
-    const ext-sync = plugins.find((p) => p.id === 'ext-sync');
-    expect(ext-sync).toBeDefined();
-    expect(ext-sync!.badge).toBe('T');
-    expect(ext-sync!.badgeColor).toBe('#00A86B');
-    expect(ext-sync!.name).toBe('ExtSync');
+    const extSync = plugins.find((p) => p.id === 'ext-sync');
+    expect(extSync).toBeDefined();
+    expect(extSync!.badge).toBe('T');
+    expect(extSync!.badgeColor).toBe('#00A86B');
+    expect(extSync!.name).toBe('ExtSync');
 
-    console.log(`ExtSync plugin loaded: ${JSON.stringify(ext-sync)}`);
+    console.log(`ExtSync plugin loaded: ${JSON.stringify(extSync)}`);
   });
 
   // ── Test 2: Create task -> push to ExtSync ──
@@ -263,7 +262,7 @@ describe.skipIf(!shouldRun)('ExtSync roundtrip via ephemeral server (LIVE)', () 
     const task = await createTestTask(`Roundtrip ${Date.now()}`);
     firstTaskId = task.id;
 
-    expect(task.category).toBe(ext-syncCategory);
+    expect(task.project).toBe(extSyncProject);
     // Source should be claimed by the ext-sync plugin
     expect(task.source).toBe('ext-sync');
 
@@ -273,20 +272,20 @@ describe.skipIf(!shouldRun)('ExtSync roundtrip via ephemeral server (LIVE)', () 
     const synced = await waitForSync(
       task.id,
       (t) => {
-        const ext-syncExt = (t.ext as Record<string, unknown>)?.ext-sync as
+        const extSyncExt = (t.ext as Record<string, unknown>)?.['ext-sync'] as
           | Record<string, unknown>
           | undefined;
-        return !!ext-syncExt?.id;
+        return !!extSyncExt?.id;
       },
       20_000,
     );
 
-    const ext-syncExt = (synced.ext as Record<string, unknown>)?.ext-sync as Record<string, unknown>;
-    expect(ext-syncExt.id).toBeTruthy();
-    expect(typeof ext-syncExt.id).toBe('string');
+    const extSyncExt = (synced.ext as Record<string, unknown>)['ext-sync'] as Record<string, unknown>;
+    expect(extSyncExt.id).toBeTruthy();
+    expect(typeof extSyncExt.id).toBe('string');
 
     console.log(
-      `Task pushed to ExtSync: ext-sync.id=${ext-syncExt.id}, short_id=${ext-syncExt.short_id}`,
+      `Task pushed to ExtSync: ext-sync.id=${extSyncExt.id}, short_id=${extSyncExt.short_id}`,
     );
   }, 30_000);
 
@@ -304,10 +303,10 @@ describe.skipIf(!shouldRun)('ExtSync roundtrip via ephemeral server (LIVE)', () 
     expect(task.id).toBe(firstTaskId);
     expect(task.title).toContain('[walnut-test]');
 
-    const ext-syncExt = (task.ext as Record<string, unknown>)?.ext-sync as
+    const extSyncExt = (task.ext as Record<string, unknown>)?.['ext-sync'] as
       | Record<string, unknown>
       | undefined;
-    expect(ext-syncExt?.id).toBeTruthy();
+    expect(extSyncExt?.id).toBeTruthy();
 
     // Source should still be ext-sync
     expect(task.source).toBe('ext-sync');
@@ -330,8 +329,8 @@ describe.skipIf(!shouldRun)('ExtSync roundtrip via ephemeral server (LIVE)', () 
     expect(task.title).toBe(newTitle);
 
     // Ext data should still be intact (push does not clear it)
-    const ext-syncExt = (task.ext as Record<string, unknown>)?.ext-sync as Record<string, unknown>;
-    expect(ext-syncExt?.id).toBeTruthy();
+    const extSyncExt = (task.ext as Record<string, unknown>)?.['ext-sync'] as Record<string, unknown>;
+    expect(extSyncExt?.id).toBeTruthy();
 
     // No sync error should have occurred
     expect(task.sync_error).toBeFalsy();
@@ -366,12 +365,12 @@ describe.skipIf(!shouldRun)('ExtSync roundtrip via ephemeral server (LIVE)', () 
     // Wait for both to be pushed first
     await waitForSync(
       taskA.id,
-      (t) => !!((t.ext as Record<string, unknown>)?.ext-sync as Record<string, unknown>)?.id,
+      (t) => !!((t.ext as Record<string, unknown>)?.['ext-sync'] as Record<string, unknown>)?.id,
       20_000,
     );
     await waitForSync(
       taskB.id,
-      (t) => !!((t.ext as Record<string, unknown>)?.ext-sync as Record<string, unknown>)?.id,
+      (t) => !!((t.ext as Record<string, unknown>)?.['ext-sync'] as Record<string, unknown>)?.id,
       20_000,
     );
 

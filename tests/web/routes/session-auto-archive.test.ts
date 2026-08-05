@@ -99,7 +99,6 @@ afterEach(async () => {
 async function createTestTask(title = 'Test Task') {
   const { task } = await addTask({
     title,
-    category: 'Inbox',
     source: 'local',
   });
   return task;

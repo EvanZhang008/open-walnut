@@ -12,9 +12,9 @@ async function fulfillWorkingDirs(route: Route): Promise<void> {
     contentType: 'application/json',
     body: JSON.stringify({
       dirs: [
-        { cwd: localCwd, host: null, category: 'Passion', count: 25, lastUsed: now },
-        { cwd: secondLocalCwd, host: null, category: 'Work', count: 10, lastUsed: now },
-        { cwd: remoteCwd, host: 'remote-fixture', hostLabel: remoteLabel, category: 'Personal', count: 4, lastUsed: now },
+        { cwd: localCwd, host: null, project: 'Passion', count: 25, lastUsed: now },
+        { cwd: secondLocalCwd, host: null, project: 'Work', count: 10, lastUsed: now },
+        { cwd: remoteCwd, host: 'remote-fixture', hostLabel: remoteLabel, project: 'Personal', count: 4, lastUsed: now },
       ],
       hosts: [],
     }),
@@ -118,7 +118,7 @@ test('live rows: relative segments when idle, full path when highlighted, icon-o
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({
-      dirs: [{ cwd: `${parent}/src/AcmeInsights`, host: null, category: 'Work', count: 2, lastUsed: now }],
+      dirs: [{ cwd: `${parent}/src/AcmeInsights`, host: null, project: 'Work', count: 2, lastUsed: now }],
       hosts: [],
     }),
   }))

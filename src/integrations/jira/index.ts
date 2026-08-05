@@ -7,7 +7,8 @@ import type { Task } from '../../core/types.js';
 
 export default function register(api: PluginApi): void {
   const config = api.config;
-  const category = (config.category as string) || '';
+  /** Walnut project reserved for Jira tasks — the claim point. */
+  const reservedProject = (config.project as string) || '';
 
   const sync: IntegrationSync = {
     async createTask(task: Task) {
@@ -63,7 +64,7 @@ export default function register(api: PluginApi): void {
     async updateStar(_task: Task) {
       // Could add/remove labels in future
     },
-    async updateCategory(task: Task) {
+    async updateProject(task: Task) {
       const { autoPushTask } = await import('./sync.js');
       await autoPushTask(task);
     },
@@ -122,8 +123,10 @@ export default function register(api: PluginApi): void {
     paths: [{ key: 'issue_key', json: '$.jira.issue_key' }],
   });
 
-  api.registerSourceClaim((cat) => {
-    return category ? cat.toLowerCase() === category.toLowerCase() : false;
+  // Exact (case-insensitive) match on the configured project name. Unset = claim
+  // nothing, so an unconfigured Jira plugin never steals a project.
+  api.registerSourceClaim((project) => {
+    return reservedProject ? project.toLowerCase() === reservedProject.toLowerCase() : false;
   }, { priority: 0 });
 
   api.registerDisplay({

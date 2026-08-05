@@ -142,7 +142,7 @@ export function buildProviderMap(
  * handles them. Region is filled only when not already set on the provider config.
  */
 function applyResolvedBedrockAuth(bedrock: ProviderConfig, fullConfig?: Config): ProviderConfig {
-  const cfg = fullConfig ?? ({ version: 1, user: {}, defaults: { priority: 'none', category: 'personal' }, provider: { type: 'claude-code' } } as Config);
+  const cfg = fullConfig ?? ({ version: 1, user: {}, defaults: { priority: 'none' }, provider: { type: 'claude-code' } } as Config);
   const resolved = resolveCredentials(cfg);
   const out: ProviderConfig = { ...bedrock };
   if (!out.region && resolved.region) out.region = resolved.region;

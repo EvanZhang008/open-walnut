@@ -18,7 +18,7 @@ export interface TaskQueryTime {
 export interface TaskQuery {
   completion?: TaskCompletion[];
   phases?: TaskPhase[];
-  categories?: string[];
+  /** Project names to match (case-insensitive). '' matches Inbox. */
   projects?: string[];
   priorities?: TaskPriority[];
   sources?: string[];
@@ -65,7 +65,6 @@ const QUERY_SORTS: readonly TaskQuerySort[] = [
 const ARRAY_FIELDS = [
   'completion',
   'phases',
-  'categories',
   'projects',
   'priorities',
   'sources',
@@ -226,7 +225,6 @@ export function normalizeTaskQuery(raw: TaskQuery, now: Date): NormalizedTaskQue
     ...raw,
     completion: raw.completion?.slice(),
     phases: raw.phases?.slice(),
-    categories: raw.categories?.slice(),
     projects: raw.projects?.slice(),
     priorities: raw.priorities?.slice(),
     sources: raw.sources?.slice(),
@@ -239,9 +237,7 @@ export function normalizeTaskQuery(raw: TaskQuery, now: Date): NormalizedTaskQue
 }
 
 export interface TaskQueryContext {
-  /** Lowercased favorite category names (for effective-starred). */
-  favoriteCategories?: ReadonlySet<string>;
-  /** Lowercased favorite project names. */
+  /** Lowercased favorite project names (for effective-starred). */
   favoriteProjects?: ReadonlySet<string>;
   /** Set of task ids currently blocked by incomplete dependencies. REQUIRED
    *  when query.blocked is set — matchesTaskQuery throws if it's absent, so
@@ -269,10 +265,7 @@ export function matchesTaskQuery(task: Task, query: NormalizedTaskQuery, ctx: Ta
   }
   if (!matchesArray(task.phase, query.phases)) return false;
 
-  const category = task.category.toLowerCase();
-  const project = task.project.toLowerCase();
-  if (query.categories !== undefined
-      && !query.categories.some((candidate) => candidate.toLowerCase() === category)) return false;
+  const project = (task.project || '').toLowerCase();
   if (query.projects !== undefined
       && !query.projects.some((candidate) => candidate.toLowerCase() === project)) return false;
   if (!matchesArray(task.priority, query.priorities)) return false;
@@ -293,7 +286,6 @@ export function matchesTaskQuery(task: Task, query: NormalizedTaskQuery, ctx: Ta
   }
   if (query.starred !== undefined) {
     const effectiveStarred = task.starred === true
-      || ctx.favoriteCategories?.has(category) === true
       || ctx.favoriteProjects?.has(project) === true;
     if (effectiveStarred !== query.starred) return false;
   }

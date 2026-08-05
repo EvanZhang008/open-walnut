@@ -42,7 +42,7 @@ describe('buildMemoryContext', () => {
 
   it('contains all section headers', async () => {
     const result = await buildMemoryContext();
-    expect(result).toContain('## Task Categories & Projects');
+    expect(result).toContain('## Projects');
     expect(result).toContain('## User profile');
     expect(result).toContain('## Your long-term memory');
     expect(result).toContain('## Recent activity');

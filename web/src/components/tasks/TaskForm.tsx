@@ -5,7 +5,7 @@ import { MicButton } from '../common/MicButton';
 export interface TaskFormData {
   title: string;
   priority: TaskPriority;
-  category: string;
+  /** '' = Inbox (no project). */
   project: string;
   due_date: string;
   note: string;
@@ -13,16 +13,14 @@ export interface TaskFormData {
 
 interface TaskFormProps {
   initial?: Partial<Task>;
-  categories: string[];
   projects: string[];
   onSubmit: (data: TaskFormData) => void;
   onCancel: () => void;
 }
 
-export function TaskForm({ initial, categories, projects, onSubmit, onCancel }: TaskFormProps) {
+export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProps) {
   const [title, setTitle] = useState(initial?.title ?? '');
   const [priority, setPriority] = useState<TaskPriority>(initial?.priority ?? 'none');
-  const [category, setCategory] = useState(initial?.category ?? '');
   const [project, setProject] = useState(initial?.project ?? '');
   const [dueDate, setDueDate] = useState(initial?.due_date ?? '');
   const [note, setNote] = useState('');
@@ -33,7 +31,6 @@ export function TaskForm({ initial, categories, projects, onSubmit, onCancel }: 
     onSubmit({
       title: title.trim(),
       priority,
-      category: category.trim(),
       project: project.trim(),
       due_date: dueDate,
       note: note.trim(),
@@ -84,36 +81,19 @@ export function TaskForm({ initial, categories, projects, onSubmit, onCancel }: 
           </div>
         </div>
 
-        <div className="form-row">
-          <div className="form-group">
-            <label htmlFor="task-category">Category</label>
-            <input
-              id="task-category"
-              type="text"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              list="categories-list"
-              placeholder="e.g., Work"
-            />
-            <datalist id="categories-list">
-              {categories.map((c) => <option key={c} value={c} />)}
-            </datalist>
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="task-project">Project</label>
-            <input
-              id="task-project"
-              type="text"
-              value={project}
-              onChange={(e) => setProject(e.target.value)}
-              list="projects-list"
-              placeholder="e.g., Walnut"
-            />
-            <datalist id="projects-list">
-              {projects.map((p) => <option key={p} value={p} />)}
-            </datalist>
-          </div>
+        <div className="form-group">
+          <label htmlFor="task-project">Project</label>
+          <input
+            id="task-project"
+            type="text"
+            value={project}
+            onChange={(e) => setProject(e.target.value)}
+            list="projects-list"
+            placeholder="Leave empty for Inbox"
+          />
+          <datalist id="projects-list">
+            {projects.map((p) => <option key={p} value={p} />)}
+          </datalist>
         </div>
 
         {!initial && (

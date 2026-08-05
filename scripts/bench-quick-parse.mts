@@ -57,30 +57,19 @@ const FIELDS: ParseField[] = [
   'pinTier',
   'priority',
   'starred',
-  'category',
   'project',
 ];
 
-const KNOWN_CATEGORIES = ['Personal', 'Work', 'Errands', 'Finance'];
-const KNOWN_PROJECTS: Record<string, string[]> = {
-  Personal: ['Fitness'],
-  Work: ['Website'],
-  Errands: ['Groceries', 'Pharmacy'],
-  Finance: ['Taxes', 'Budget'],
-};
+const KNOWN_PROJECTS = ['Fitness', 'Website', 'Groceries', 'Pharmacy', 'Taxes', 'Budget'];
 
-const CATEGORY_DIGEST = `Synthetic task history:
-- Personal
-  - Fitness: Book a workout class; Plan a weekend walk
-  - Other: Schedule an annual checkup; Organize old photos
-- Work
-  - Website: Update the contact page; Review homepage copy
-- Errands
-  - Groceries: Buy milk; Pick up rice
-  - Pharmacy: Refill a prescription
-- Finance
-  - Taxes: Gather tax forms
-  - Budget: Review the monthly budget`;
+const PROJECT_DIGEST = `Synthetic task history:
+- Fitness (2 open) — Book a workout class; Plan a weekend walk
+- Website (2 open) — Update the contact page; Review homepage copy
+- Groceries (2 open) — Buy milk; Pick up rice
+- Pharmacy (1 open) — Refill a prescription
+- Taxes (1 open) — Gather tax forms
+- Budget (1 open) — Review the monthly budget
+- Inbox (2 open) — Schedule an annual checkup; Organize old photos`;
 
 function localCalendarDate(now: Date, timeZone: string): { year: number; month: number; day: number } {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -121,7 +110,6 @@ const FIXTURES: Fixture[] = [
       title: /^buy milk$/i,
       due_date: `${dateAtOffset(1)}T02:00:00`,
       pinTier: 'focus',
-      category: 'Errands',
       project: 'Groceries',
     }),
   },
@@ -132,7 +120,6 @@ const FIXTURES: Fixture[] = [
       title: /^submit (the )?website copy$/i,
       due_date: dateAtOffset(2),
       priority: 'immediate',
-      category: 'Work',
       project: 'Website',
     }),
   },
@@ -142,7 +129,6 @@ const FIXTURES: Fixture[] = [
     expected: expected({
       title: '给妈妈打电话',
       due_date: `${dateAtOffset(1)}T15:00:00`,
-      category: 'Personal',
     }),
   },
   {
@@ -152,15 +138,13 @@ const FIXTURES: Fixture[] = [
       title: ['Renew car registration', 'renew car registration'],
       due_date: nextWeekday(5),
       starred: true,
-      category: 'Errands',
     }),
   },
   {
-    name: 'plain category guess',
+    name: 'no project match goes to inbox',
     text: 'schedule annual checkup',
     expected: expected({
       title: /^schedule (an )?annual checkup$/i,
-      category: 'Personal',
     }),
   },
   {
@@ -169,7 +153,6 @@ const FIXTURES: Fixture[] = [
     expected: expected({
       title: /^organize old photos$/i,
       priority: 'backlog',
-      category: 'Personal',
     }),
   },
   {
@@ -177,7 +160,6 @@ const FIXTURES: Fixture[] = [
     text: 'update the website contact page',
     expected: expected({
       title: /^update (the )?website contact page$/i,
-      category: 'Work',
       project: 'Website',
     }),
   },
@@ -186,7 +168,6 @@ const FIXTURES: Fixture[] = [
     text: 'replace the hallway light bulb',
     expected: expected({
       title: /^replace the hallway light bulb$/i,
-      category: 'Personal',
       project: undefined,
     }),
   },
@@ -259,10 +240,9 @@ function optionsFor(modelOverride: string, includeDigest: boolean): QuickTaskPar
     modelOverride,
     now: FIXED_NOW,
     timeZone: TIME_ZONE,
-    knownCategories: KNOWN_CATEGORIES,
     knownProjects: KNOWN_PROJECTS,
   };
-  if (includeDigest) options.categoryDigest = CATEGORY_DIGEST;
+  if (includeDigest) options.projectDigest = PROJECT_DIGEST;
   return options;
 }
 
@@ -282,9 +262,8 @@ function printDryRun(providerName: string, models: ModelSelection[]): void {
   console.log(`Fixed now: ${FIXED_NOW.toISOString()}`);
   console.log(`Time zone: ${TIME_ZONE}`);
   console.log(`Repetitions: ${REPS} per model and fixture`);
-  console.log('\nSynthetic category digest:\n' + CATEGORY_DIGEST);
-  console.log('\nKnown categories:', KNOWN_CATEGORIES);
-  console.log('Known projects:', KNOWN_PROJECTS);
+  console.log('\nSynthetic project digest:\n' + PROJECT_DIGEST);
+  console.log('\nKnown projects:', KNOWN_PROJECTS);
 
   console.log('\nModels:');
   console.table(models.map((model) => ({ alias: model.requested, model: model.id })));

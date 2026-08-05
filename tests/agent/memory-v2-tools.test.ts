@@ -114,7 +114,6 @@ describe('memory_notes_search tool', () => {
   it('9.4: resolves an exact task ID without invoking QMD', async () => {
     const { task } = await addTask({
       title: 'Structured agent memory result',
-      category: 'Local',
       project: 'Quick Start',
       source: 'local',
       _skipPluginOps: true,

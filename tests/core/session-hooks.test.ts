@@ -409,7 +409,7 @@ describe('SessionHookDispatcher', () => {
       (dispatcher['payloadBuilder'].build as ReturnType<typeof vi.fn>).mockResolvedValue({
         sessionId: 's1',
         taskId: 'task-1',
-        task: makeTask({ project: 'walnut', category: 'Work' }),
+        task: makeTask({ project: 'walnut' }),
         session: makeSession({ claudeSessionId: 's1', mode: 'plan' }),
         timestamp: new Date().toISOString(),
         traceId: 'test-trace',
@@ -505,59 +505,6 @@ describe('SessionHookDispatcher', () => {
       expect(handler).not.toHaveBeenCalled();
     });
 
-    it('hook with categories filter fires when task.category matches', async () => {
-      const handler = vi.fn();
-      const hook = makeHook({
-        hooks: ['onTurnComplete'],
-        handler,
-        filter: { categories: ['Work'] },
-      });
-      dispatcher.init([hook]);
-
-      (dispatcher['payloadBuilder'].build as ReturnType<typeof vi.fn>).mockResolvedValue({
-        sessionId: 's1',
-        taskId: 'task-1',
-        task: makeTask({ category: 'Work' }),
-        session: makeSession({ claudeSessionId: 's1' }),
-        timestamp: new Date().toISOString(),
-        traceId: 'test-trace',
-      });
-
-      bus.emit(EventNames.SESSION_RESULT, {
-        sessionId: 's1', result: 'done',
-      }, ['*']);
-
-      await tick();
-
-      expect(handler).toHaveBeenCalledTimes(1);
-    });
-
-    it('hook with categories filter does NOT fire when category does not match', async () => {
-      const handler = vi.fn();
-      const hook = makeHook({
-        hooks: ['onTurnComplete'],
-        handler,
-        filter: { categories: ['Work'] },
-      });
-      dispatcher.init([hook]);
-
-      (dispatcher['payloadBuilder'].build as ReturnType<typeof vi.fn>).mockResolvedValue({
-        sessionId: 's1',
-        taskId: 'task-1',
-        task: makeTask({ category: 'Life' }),
-        session: makeSession({ claudeSessionId: 's1' }),
-        timestamp: new Date().toISOString(),
-        traceId: 'test-trace',
-      });
-
-      bus.emit(EventNames.SESSION_RESULT, {
-        sessionId: 's1', result: 'done',
-      }, ['*']);
-
-      await tick();
-
-      expect(handler).not.toHaveBeenCalled();
-    });
 
     it('strict mode: filter specified but context missing → hook does NOT fire', async () => {
       const handler = vi.fn();

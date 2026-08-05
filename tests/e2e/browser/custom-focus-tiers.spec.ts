@@ -164,7 +164,7 @@ test('mid-drag preview: card visually enters an (empty) custom tier before drop'
   try {
     const created = await page.request.post('/api/focus/tiers', { data: { label: stamp } })
     const tierId = ((await created.json()) as { tier: { id: string } }).tier.id
-    const taskRes = await page.request.post('/api/tasks', { data: { title, source: 'local', category: 'Work' } })
+    const taskRes = await page.request.post('/api/tasks', { data: { title, source: 'local', project: 'Work' } })
     taskId = ((await taskRes.json()) as { task: { id: string } }).task.id
     await page.request.post(`/api/focus/tasks/${taskId}`)
 
@@ -226,7 +226,7 @@ test('deleting a tier moves its tasks back to Satellite', async ({ page }) => {
     // Seed: tier + a pinned task inside it (API for speed; UI covered above).
     const created = await page.request.post('/api/focus/tiers', { data: { label: stamp } })
     const tierId = ((await created.json()) as { tier: { id: string } }).tier.id
-    const taskRes = await page.request.post('/api/tasks', { data: { title, source: 'local', category: 'Work' } })
+    const taskRes = await page.request.post('/api/tasks', { data: { title, source: 'local', project: 'Work' } })
     const taskId = ((await taskRes.json()) as { task: { id: string } }).task.id
     await page.request.post(`/api/focus/tasks/${taskId}`)
     await page.request.put(`/api/focus/tasks/${taskId}/tier`, { data: { tier: tierId } })

@@ -112,74 +112,35 @@ describe('toggleComplete', () => {
   });
 });
 
-// ── Fix 4: Slash format parsing ──
+// ── Project field: no more slash splitting ──
+//
+// addTask/updateTask used to split a `category` of the form "Cat / Proj" into two
+// fields (the old MS To-Do list-name encoding). With Project as the only grouping
+// layer that parsing is gone from the write path; the legacy list name is decoded
+// on the SYNC PULL side only (parseProjectFromListName — tests/utils/format.test.ts).
+// A NEW name containing '/' is now REJECTED outright (it would become a
+// filesystem path segment — see assertValidProjectName) rather than silently
+// split — either way, no write path ever reinterprets the separator.
 
-describe('addTask slash parsing', () => {
-  it('parses "category / project" format into separate fields', async () => {
-    const { task } = await addTask({ title: 'Parsed task', category: 'idea / work idea' });
-
-    expect(task.category).toBe('Idea');
-    expect(task.project).toBe('Work idea');
+describe('project field is stored verbatim', () => {
+  it('rejects a " / " name instead of splitting it', async () => {
+    await expect(addTask({ title: 'No parse', project: 'idea / work idea' }))
+      .rejects.toThrow(/path separators/);
   });
 
-  it('explicit project overrides parsed project', async () => {
-    const { task } = await addTask({
-      title: 'Override test',
-      category: 'idea / work idea',
-      project: 'custom project',
-    });
+  it('trims but otherwise preserves the project name on update', async () => {
+    const { task } = await addTask({ title: 'Update me', project: 'original' });
 
-    expect(task.category).toBe('Idea');
-    expect(task.project).toBe('custom project');
+    const { task: updated } = await updateTask(task.id, { project: '  my-project  ' });
+    expect(updated.project).toBe('my-project');
   });
 
-  it('plain category (no slash) is unchanged', async () => {
-    const { task } = await addTask({ title: 'Plain cat', category: 'work' });
+  it('leaves the project untouched when the update does not mention it', async () => {
+    const { task } = await addTask({ title: 'Plain update', project: 'my-project' });
 
-    expect(task.category).toBe('work');
-    expect(task.project).toBe('work');
-  });
-
-  it('preserves exact spacing — only " / " is the separator', async () => {
-    // Single slash without spaces should NOT be parsed
-    const { task } = await addTask({ title: 'No parse', category: 'work/project' });
-    expect(task.category).toBe('work/project');
-    expect(task.project).toBe('work/project');
-  });
-});
-
-describe('updateTask slash parsing', () => {
-  it('splits "category / project" when project is not provided', async () => {
-    const { task } = await addTask({ title: 'Update me', category: 'original' });
-
-    const { task: updated } = await updateTask(task.id, {
-      category: 'new cat / new proj',
-    });
-
-    expect(updated.category).toBe('New cat');
-    expect(updated.project).toBe('New proj');
-  });
-
-  it('explicit project takes precedence even with slash category', async () => {
-    const { task } = await addTask({ title: 'Explicit proj', category: 'original' });
-
-    const { task: updated } = await updateTask(task.id, {
-      category: 'new cat / new proj',
-      project: 'override',
-    });
-
-    // When both category (with slash) and project are provided,
-    // the explicit project is set AFTER slash parsing
-    expect(updated.project).toBe('override');
-  });
-
-  it('plain category update (no slash) only changes category', async () => {
-    const { task } = await addTask({ title: 'Plain update', category: 'old', project: 'my-project' });
-
-    const { task: updated } = await updateTask(task.id, { category: 'new' });
-
-    expect(updated.category).toBe('new');
-    expect(updated.project).toBe('my-project'); // unchanged
+    const { task: updated } = await updateTask(task.id, { title: 'Renamed' });
+    expect(updated.title).toBe('Renamed');
+    expect(updated.project).toBe('my-project');
   });
 });
 

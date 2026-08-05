@@ -145,70 +145,78 @@ describe('parseQuickTask', () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
-  it('round-trips a valid category and project with canonical casing', async () => {
-    sendMessageMock.mockResolvedValue(textResult(
-      '{"title":"Buy groceries","category":"personal","project":"errands"}',
-    ));
+  it('round-trips a known project with canonical casing', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Buy groceries","project":"errands"}'));
     const result = await parseQuickTask('buy groceries', {
-      knownCategories: ['Personal', 'Work'],
-      knownProjects: { Personal: ['Errands'], Work: ['Website'] },
+      knownProjects: ['Errands', 'Website'],
     });
-    expect(result.parse).toEqual({ title: 'Buy groceries', category: 'Personal', project: 'Errands' });
+    expect(result.parse).toEqual({ title: 'Buy groceries', project: 'Errands' });
   });
 
-  it('drops both fields when project has no valid category', async () => {
-    sendMessageMock.mockResolvedValue(textResult(
-      '{"title":"Buy groceries","category":"Unknown","project":"Errands"}',
-    ));
-    const result = await parseQuickTask('buy groceries', {
-      knownCategories: ['Personal'], knownProjects: { Personal: ['Errands'] },
-    });
+  it('drops an unknown project name when project_is_new is not set', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Buy groceries","project":"Groceries"}'));
+    const result = await parseQuickTask('buy groceries', { knownProjects: ['Errands'] });
     expect(result.parse).toEqual({ title: 'Buy groceries' });
   });
 
-  it('drops a project answered without a category', async () => {
+  it('drops a project name when knownProjects is omitted and no new-project claim is made', async () => {
     sendMessageMock.mockResolvedValue(textResult('{"title":"Buy groceries","project":"Errands"}'));
-    const result = await parseQuickTask('buy groceries', {
-      knownCategories: ['Personal'], knownProjects: { Personal: ['Errands'] },
-    });
-    expect(result.parse).toEqual({ title: 'Buy groceries' });
-  });
-
-  it('drops a project not under the answered category but keeps category', async () => {
-    sendMessageMock.mockResolvedValue(textResult(
-      '{"title":"Buy groceries","category":"Personal","project":"Website"}',
-    ));
-    const result = await parseQuickTask('buy groceries', {
-      knownCategories: ['Personal', 'Work'],
-      knownProjects: { Personal: ['Errands'], Work: ['Website'] },
-    });
-    expect(result.parse).toEqual({ title: 'Buy groceries', category: 'Personal' });
-  });
-
-  it('drops category when it is not in knownCategories', async () => {
-    sendMessageMock.mockResolvedValue(textResult('{"title":"Buy groceries","category":"Finance"}'));
-    const result = await parseQuickTask('buy groceries', { knownCategories: ['Personal'] });
-    expect(result.parse).toEqual({ title: 'Buy groceries' });
-  });
-
-  it('drops category when knownCategories is omitted', async () => {
-    sendMessageMock.mockResolvedValue(textResult('{"title":"Buy groceries","category":"Personal"}'));
     const result = await parseQuickTask('buy groceries');
     expect(result.parse).toEqual({ title: 'Buy groceries' });
   });
 
-  it('places a non-empty digest before the Note block', async () => {
-    sendMessageMock.mockResolvedValue(textResult('{"title":"Buy groceries"}'));
-    await parseQuickTask('buy groceries', { categoryDigest: '- Personal (2 open tasks): "Call dentist"' });
-    const content = lastCall().messages[0].content;
-    expect(content).toContain('Your categories and projects (name, open task count, recent task titles):');
-    expect(content.indexOf('- Personal')).toBeLessThan(content.indexOf('Note:\n'));
+  it('accepts a NEW project name only through the explicit project_is_new escape hatch', async () => {
+    sendMessageMock.mockResolvedValue(textResult(
+      '{"title":"Book flights for Japan trip","project":"Japan Trip","project_is_new":true}',
+    ));
+    const result = await parseQuickTask('start planning the japan trip, book flights', {
+      knownProjects: ['Errands'],
+    });
+    expect(result.parse).toEqual({
+      title: 'Book flights for Japan trip',
+      project: 'Japan Trip',
+      project_is_new: true,
+    });
   });
 
-  it('omits the digest header when categoryDigest is empty', async () => {
+  it('prefers the existing project when project_is_new is set on a name that already exists', async () => {
+    sendMessageMock.mockResolvedValue(textResult(
+      '{"title":"Buy milk","project":"errands","project_is_new":true}',
+    ));
+    const result = await parseQuickTask('buy milk', { knownProjects: ['Errands'] });
+    expect(result.parse).toEqual({ title: 'Buy milk', project: 'Errands' });
+  });
+
+  it('rejects unusable new project names (path chars, over-long, literal Inbox)', async () => {
+    for (const project of ['Work/Errands', 'Inbox', 'x'.repeat(41)]) {
+      sendMessageMock.mockResolvedValueOnce(textResult(
+        JSON.stringify({ title: 'Buy groceries', project, project_is_new: true }),
+      ));
+      const result = await parseQuickTask('buy groceries');
+      expect(result.parse).toEqual({ title: 'Buy groceries' });
+    }
+  });
+
+  it('places a non-empty project digest before the Note block', async () => {
     sendMessageMock.mockResolvedValue(textResult('{"title":"Buy groceries"}'));
-    await parseQuickTask('buy groceries', { categoryDigest: '  ' });
-    expect(lastCall().messages[0].content).not.toContain('Your categories and projects');
+    await parseQuickTask('buy groceries', { projectDigest: '- Errands (2 open tasks): "Call dentist"' });
+    const content = lastCall().messages[0].content;
+    expect(content).toContain('Your projects (name, open task count, summary, recent task titles):');
+    expect(content.indexOf('- Errands')).toBeLessThan(content.indexOf('Note:\n'));
+  });
+
+  it('omits the digest header when projectDigest is empty', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Buy groceries"}'));
+    await parseQuickTask('buy groceries', { projectDigest: '  ' });
+    expect(lastCall().messages[0].content).not.toContain('Your projects');
+  });
+
+  it('tells the model that no project means Inbox and that new projects are opt-in', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Pay invoice"}'));
+    await parseQuickTask('pay invoice');
+    const system = lastCall().system;
+    expect(system).toContain('lands in Inbox');
+    expect(system).toContain('project_is_new');
   });
 
   it('uses the configured fast_model override', async () => {

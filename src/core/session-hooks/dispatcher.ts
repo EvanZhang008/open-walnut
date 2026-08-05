@@ -432,7 +432,7 @@ export class SessionHookDispatcher {
 
   private matchesFilter(hook: SessionHookDefinition, context: SessionHookContext): boolean {
     if (!hook.filter) return true;
-    const { modes, projects, categories } = hook.filter;
+    const { modes, projects } = hook.filter;
 
     // Strict filtering: when a filter dimension is specified but the context
     // lacks the corresponding data, deny rather than silently pass through.
@@ -444,10 +444,6 @@ export class SessionHookDispatcher {
     if (projects) {
       if (!context.task?.project) return false;
       if (!projects.includes(context.task.project)) return false;
-    }
-    if (categories) {
-      if (!context.task?.category) return false;
-      if (!categories.includes(context.task.category)) return false;
     }
     return true;
   }

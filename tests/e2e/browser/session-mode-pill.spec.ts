@@ -79,8 +79,8 @@ test.describe('SessionPill real-time mode change', () => {
     }, null, { timeout: 5000 })
 
     // Both panel axes to "All": the SECTION tab (default Focus doesn't mount the
-    // main task list) and the CATEGORY (default ★ Starred hides these tasks; it
-    // lives in the View dropdown now, not the removed `.todo-panel-tab` strip).
+    // main task list) and the PROJECT chip (default ★ Starred hides these tasks;
+    // it lives in the View dropdown now, not the removed `.todo-panel-tab` strip).
     await showEverything(page)
     await page.waitForTimeout(300)
 
@@ -125,8 +125,8 @@ test.describe('SessionPill real-time mode change', () => {
     }, null, { timeout: 5000 })
 
     // Both panel axes to "All": the SECTION tab (default Focus doesn't mount the
-    // main task list) and the CATEGORY (default ★ Starred hides these tasks; it
-    // lives in the View dropdown now, not the removed `.todo-panel-tab` strip).
+    // main task list) and the PROJECT chip (default ★ Starred hides these tasks;
+    // it lives in the View dropdown now, not the removed `.todo-panel-tab` strip).
     await showEverything(page)
     await page.waitForTimeout(300)
 
@@ -208,10 +208,9 @@ test.describe('SessionPill exec-slot mode change (missing session_id)', () => {
       return ws && ws.readyState === WebSocket.OPEN
     }, null, { timeout: 5000 })
 
-    // Click "All" category tab
-    const allTab = page.locator('.todo-panel-tab', { hasText: 'All' })
-    await expect(allTab).toBeVisible({ timeout: 5000 })
-    await allTab.click()
+    // Both panel axes to "All" — this test used to click a bare
+    // `.todo-panel-tab` strip that no longer exists (dead selector).
+    await showEverything(page)
     await page.waitForTimeout(300)
 
     // Find the task — initially it has NO sessions
@@ -227,7 +226,6 @@ test.describe('SessionPill exec-slot mode change (missing session_id)', () => {
         status: 'in_progress',
         phase: 'IN_PROGRESS',
         priority: 'immediate',
-        category: 'Work',
         project: 'Walnut',
         source: 'ms-todo',
         // exec_session_id set — but NO session_id (this is the bug)

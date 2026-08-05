@@ -7,7 +7,7 @@ import {
   listTasks,
   deleteTask,
   ActiveSessionError,
-  CategorySourceConflictError,
+  ProjectSourceConflictError,
   CircularDependencyError,
   isTaskBlocked,
   updateTask,
@@ -19,10 +19,10 @@ import {
   getTask,
   getProjectMetadata,
   setProjectMetadata,
-  renameCategory,
-  createCategory,
-  createProject,
-  getStoreCategories,
+  renameProject,
+  ensureProject,
+  getStoreProjects,
+  getProjectRecord,
   togglePin,
   setFocusTier,
   getCustomTiers,
@@ -180,9 +180,9 @@ async function resolveSessionContext(
     }
   }
 
-  // Priority 4: project/category metadata
+  // Priority 4: project metadata
   if (task && (!resolvedHost || !resolvedCwd)) {
-    const metadata = await getProjectMetadata(task.category, task.project);
+    const metadata = await getProjectMetadata(task.project || '');
     if (metadata) {
       if (!resolvedHost) resolvedHost = metadata.default_host as string | undefined;
       if (!resolvedCwd) resolvedCwd = metadata.default_cwd as string | undefined;
@@ -195,7 +195,7 @@ async function resolveSessionContext(
     const { PROJECTS_MEMORY_DIR } = await import('../constants.js');
     const { default: path } = await import('node:path');
     const { default: fs } = await import('node:fs');
-    const projectDir = path.join(PROJECTS_MEMORY_DIR, task.category.toLowerCase(), task.project.toLowerCase());
+    const projectDir = path.join(PROJECTS_MEMORY_DIR, (task.project || 'inbox').toLowerCase());
     fs.mkdirSync(projectDir, { recursive: true });
     resolvedCwd = projectDir;
   }
@@ -235,26 +235,25 @@ export const tools: ToolDefinition[] = [
   // ── Task Tools ──
   {
     name: 'task_query',
-    description: 'Query tasks, categories, or projects. Use `type` to pick the entity level. For tasks: defaults to non-completed. Use where.phase=\'COMPLETE\' (or where.status=\'done\') when the user asks about completed tasks or wants to delete/clean up.',
+    description: 'Query tasks or projects. Use `type` to pick the entity level. For tasks: defaults to non-completed. Use where.phase=\'COMPLETE\' (or where.status=\'done\') when the user asks about completed tasks or wants to delete/clean up.',
     input_schema: {
       type: 'object',
       properties: {
         type: {
           type: 'string',
-          enum: ['task', 'category', 'project'],
+          enum: ['task', 'project'],
           description: 'Entity to query. Default: "task".',
         },
         where: {
           type: 'object',
-          description: 'Filter conditions. Category: { name }. Project: { name, category }. Task: { phase, category, project, priority, starred }. Legacy: status (todo/in_progress/done) still works as a convenience alias.',
+          description: 'Filter conditions. Project: { name }. Task: { phase, project, priority, starred }. Legacy: status (todo/in_progress/done) still works as a convenience alias.',
           properties: {
-            name: { type: 'string', description: 'Filter category/project by name.' },
+            name: { type: 'string', description: 'Filter projects by name.' },
             phase: { type: 'string', enum: ['TODO', 'IN_PROGRESS', 'AGENT_COMPLETE', 'AWAIT_HUMAN_ACTION', 'HUMAN_VERIFIED', 'POST_WORK_COMPLETED', 'COMPLETE'], description: 'Filter by 7-state phase (preferred).' },
             status: { type: 'string', enum: ['todo', 'in_progress', 'done'], description: 'Legacy 3-state filter. Maps to phases: todo→TODO, in_progress→IN_PROGRESS+AGENT_COMPLETE+AWAIT_HUMAN_ACTION+HUMAN_VERIFIED+POST_WORK_COMPLETED, done→COMPLETE.' },
-            category: { type: 'string' },
-            project: { type: 'string' },
+            project: { type: 'string', description: 'Filter by project name. Pass "" to get Inbox (tasks with no project).' },
             priority: { type: 'string', enum: ['immediate', 'important', 'backlog', 'none'] },
-            starred: { type: 'boolean', description: 'Filter starred/favorite tasks (includes individually starred tasks and tasks in favorited categories/projects).' },
+            starred: { type: 'boolean', description: 'Filter starred/favorite tasks (includes individually starred tasks and tasks in favorited projects).' },
             needs_attention: { type: 'boolean', description: 'Filter to tasks flagged as needing human attention.' },
             parent_task_id: { type: 'string', description: 'Filter to children of a parent task (by ID prefix).' },
             group_id: { type: 'string', description: 'Filter to members of a virtual group (exact group id, e.g. "g_xxx").' },
@@ -290,74 +289,58 @@ export const tools: ToolDefinition[] = [
         return value.toLowerCase() === filter.toLowerCase();
       };
 
-      // Apply category/project name filters to the full task list
+      // Apply project name filter to the full task list.
+      // where.project='' is meaningful (Inbox), so test for presence not truthiness.
       let filtered = allTasks;
-      if (where.category) {
-        filtered = filtered.filter((t) => strMatch(t.category, where.category as string));
-      }
-      if (where.project) {
-        filtered = filtered.filter((t) => strMatch(t.project, where.project as string));
-      }
-
-      if (type === 'category') {
-        // Merge store.categories (includes empty categories) with task-derived data
-        const storeCategories = await getStoreCategories();
-        const catSet = new Set<string>([
-          ...Object.keys(storeCategories),
-          ...allTasks.map((t) => t.category),
-        ]);
-        let cats = [...catSet];
-        if (where.name) {
-          cats = cats.filter((c) => strMatch(c, where.name as string));
-        }
-        return json(cats.map((cat) => {
-          const catTasks = allTasks.filter((t) => t.category === cat);
-          const catLower = cat.toLowerCase();
-          const storeKey = Object.keys(storeCategories).find(k => k.toLowerCase() === catLower);
-          return {
-            name: cat,
-            source: storeKey ? storeCategories[storeKey].source : (catTasks[0]?.source ?? 'ms-todo'),
-            todo: catTasks.filter((t) => t.phase === 'TODO').length,
-            active: catTasks.filter((t) => t.phase !== 'TODO' && t.phase !== 'COMPLETE').length,
-            done: catTasks.filter((t) => t.phase === 'COMPLETE').length,
-          };
-        }));
+      if (where.project !== undefined) {
+        const wanted = String(where.project);
+        filtered = wanted === ''
+          ? filtered.filter((t) => !(t.project || ''))
+          : filtered.filter((t) => strMatch(t.project || '', wanted));
       }
 
       if (type === 'project') {
-        // Group by category+project
-        const projMap = new Map<string, { category: string; project: string; tasks: typeof allTasks }>();
-        for (const t of filtered) {
-          const key = `${t.category}\0${t.project}`;
-          if (!projMap.has(key)) {
-            projMap.set(key, { category: t.category, project: t.project, tasks: [] });
-          }
-          projMap.get(key)!.tasks.push(t);
-        }
-        // Apply project name filter
-        let projects = [...projMap.values()];
+        // Merge the registry (includes empty projects) with task-derived data.
+        const storeProjects = await getStoreProjects();
+        const nameSet = new Set<string>([
+          ...Object.keys(storeProjects),
+          ...allTasks.map((t) => t.project || '').filter(Boolean),
+        ]);
+        let names = [...nameSet];
         if (where.name) {
-          projects = projects.filter((p) => strMatch(p.project, where.name as string));
+          names = names.filter((n) => strMatch(n, where.name as string));
         }
-        // Enrich with settings and memory
-        const results = await Promise.all(projects.map(async (p) => {
+        const results = await Promise.all(names.map(async (name) => {
+          const projTasks = allTasks.filter((t) => (t.project || '').toLowerCase() === name.toLowerCase());
+          const storeKey = Object.keys(storeProjects).find((k) => k.toLowerCase() === name.toLowerCase());
           const entry: Record<string, unknown> = {
-            category: p.category,
-            name: p.project,
-            todo: p.tasks.filter((t) => t.phase === 'TODO').length,
-            active: p.tasks.filter((t) => t.phase !== 'TODO' && t.phase !== 'COMPLETE').length,
-            done: p.tasks.filter((t) => t.phase === 'COMPLETE').length,
+            name,
+            source: storeKey ? storeProjects[storeKey].source : (projTasks[0]?.source ?? 'local'),
+            todo: projTasks.filter((t) => t.phase === 'TODO').length,
+            active: projTasks.filter((t) => t.phase !== 'TODO' && t.phase !== 'COMPLETE').length,
+            done: projTasks.filter((t) => t.phase === 'COMPLETE').length,
           };
-          const metadata = await getProjectMetadata(p.category, p.project);
+          const metadata = await getProjectMetadata(name);
           if (metadata) entry.settings = metadata;
           try {
             const { getProjectSummary } = await import('../core/project-memory.js');
-            const projPath = `${p.category.toLowerCase()}/${p.project.toLowerCase()}`;
-            const summary = getProjectSummary(projPath);
+            const summary = getProjectSummary(name.toLowerCase());
             if (summary) entry.memory = summary;
           } catch { /* no memory */ }
           return entry;
         }));
+        // Inbox is not a registry row but is worth reporting when it holds tasks.
+        const inboxTasks = allTasks.filter((t) => !(t.project || ''));
+        if (inboxTasks.length > 0 && (!where.name || strMatch('Inbox', where.name as string))) {
+          results.push({
+            name: '',
+            label: 'Inbox',
+            source: 'local',
+            todo: inboxTasks.filter((t) => t.phase === 'TODO').length,
+            active: inboxTasks.filter((t) => t.phase !== 'TODO' && t.phase !== 'COMPLETE').length,
+            done: inboxTasks.filter((t) => t.phase === 'COMPLETE').length,
+          });
+        }
         return json(results);
       }
 
@@ -382,11 +365,11 @@ export const tools: ToolDefinition[] = [
       // Apply starred filter
       if (where.starred !== undefined) {
         const config = await getConfig();
-        const favCats = config.favorites?.categories ?? [];
         const favProjs = config.favorites?.projects ?? [];
         const wantStarred = where.starred === true || where.starred === 'true';
         tasks = tasks.filter((t) => {
-          const isStarred = !!t.starred || favCats.some(c => c.toLowerCase() === t.category.toLowerCase()) || favProjs.some(p => p.toLowerCase() === t.project.toLowerCase());
+          const proj = (t.project || '').toLowerCase();
+          const isStarred = !!t.starred || (!!proj && favProjs.some(p => p.toLowerCase() === proj));
           return wantStarred ? isStarred : !isStarred;
         });
       }
@@ -426,15 +409,17 @@ export const tools: ToolDefinition[] = [
       }
 
       if (tasks.length === 0) {
-        // Smart hints when category was specified
-        if (where.category) {
-          const allForCategory = allTasks.filter((t) => strMatch(t.category, where.category as string));
-          if (allForCategory.length > 0) {
-            const doneCount = allForCategory.filter((t) => t.phase === 'COMPLETE').length;
-            return `No active tasks in '${where.category}'. ${doneCount} completed — use where.phase='COMPLETE'.`;
+        // Smart hints when a project was specified
+        if (where.project !== undefined) {
+          const wanted = String(where.project);
+          const label = wanted === '' ? 'Inbox' : wanted;
+          if (filtered.length > 0) {
+            const doneCount = filtered.filter((t) => t.phase === 'COMPLETE').length;
+            return `No active tasks in '${label}'. ${doneCount} completed — use where.phase='COMPLETE'.`;
           }
-          const available = [...new Set(allTasks.map((t) => t.category))];
-          return `No category matching '${where.category}'. Available: [${available.join(', ')}]`;
+          if (wanted === '') return 'Inbox is empty.';
+          const available = [...new Set(allTasks.map((t) => t.project || '').filter(Boolean))];
+          return `No project matching '${wanted}'. Available: [${available.join(', ')}]`;
         }
         return 'No tasks found.';
       }
@@ -445,8 +430,7 @@ export const tools: ToolDefinition[] = [
           id: t.id,
           title: t.title,
           priority: t.priority,
-          category: t.category,
-          project: t.project,
+          project: t.project || '',
           phase: t.phase,
         };
         if (t.starred) entry.starred = true;
@@ -480,7 +464,6 @@ export const tools: ToolDefinition[] = [
       properties: {
         type: { type: 'string', enum: ['task', 'project'], description: 'Entity type. Default: "task".' },
         id: { type: 'string', description: 'Task ID or prefix. Required when type=task.' },
-        category: { type: 'string', description: 'Category name. Required when type=project.' },
         project: { type: 'string', description: 'Project name. Required when type=project.' },
       },
     },
@@ -488,27 +471,26 @@ export const tools: ToolDefinition[] = [
       const type = (params.type as string) || 'task';
       try {
         if (type === 'project') {
-          const category = params.category as string;
-          const project = params.project as string;
-          if (!category || !project) return 'Error: category and project are required for type=project.';
+          const project = (params.project as string | undefined)?.trim();
+          if (!project) return 'Error: project is required for type=project.';
 
           const allTasks = (await listTasks({})).filter((t) => !t.title.startsWith('.metadata'));
           const projTasks = allTasks.filter(
-            (t) => t.category.toLowerCase() === category.toLowerCase() && t.project.toLowerCase() === project.toLowerCase(),
+            (t) => (t.project || '').toLowerCase() === project.toLowerCase(),
           );
+          const record = await getProjectRecord(project);
           const result: Record<string, unknown> = {
-            category,
-            project,
+            name: record?.name ?? project,
+            source: record?.source ?? (projTasks[0]?.source ?? 'local'),
             todo: projTasks.filter((t) => t.phase === 'TODO').length,
             active: projTasks.filter((t) => t.phase !== 'TODO' && t.phase !== 'COMPLETE').length,
             done: projTasks.filter((t) => t.phase === 'COMPLETE').length,
           };
-          const metadata = await getProjectMetadata(category, project);
+          const metadata = await getProjectMetadata(project);
           if (metadata) result.settings = metadata;
           try {
             const { getProjectSummary } = await import('../core/project-memory.js');
-            const projPath = `${category.toLowerCase()}/${project.toLowerCase()}`;
-            const summary = getProjectSummary(projPath);
+            const summary = getProjectSummary(project.toLowerCase());
             if (summary) result.memory = summary;
           } catch { /* no memory */ }
           return json(result);
@@ -552,26 +534,24 @@ export const tools: ToolDefinition[] = [
 
   {
     name: 'task_create',
-    description: `Create a task, category, or project. Order matters: category first, then project, then task.
+    description: `Create a task, or an empty project.
 
-- type=category: Create a new category with a source (local or ms-todo). MUST be created before tasks can be added. Plugin-reserved categories are managed by their respective sync plugins.
-- type=project: Create a project within an existing category. Category must exist first.
-- type=task (default): Create a task. Category MUST exist (error if not). Project MUST exist if specified and different from category (error if not). Use parent_task_id for child tasks (inherits category, project, source from parent — skips existence checks).`,
+- type=task (default): Create a task. Tasks optionally belong to a **project**; no project = **Inbox**. Prefer an existing project (matched case-insensitively). A project name that doesn't exist yet is created automatically — do that only when the task clearly starts a new ongoing stream of work. One-off items → leave project empty. Use parent_task_id for child tasks (inherits project and source from parent).
+- type=project: Create an empty project up front (rarely needed — task_create type=task auto-creates a project by name).`,
     input_schema: {
       type: 'object',
       properties: {
-        type: { type: 'string', enum: ['task', 'category', 'project'], description: 'Entity type. Default: "task".' },
-        // Category fields
-        name: { type: 'string', description: 'Category name. Required for type=category.' },
-        source: { type: 'string', enum: ['local', 'ms-todo'], description: 'Sync target for the category. Required for type=category. "local" = never synced.' },
+        type: { type: 'string', enum: ['task', 'project'], description: 'Entity type. Default: "task".' },
+        // Project fields
+        name: { type: 'string', description: 'Project name. Required for type=project (alias: project).' },
+        source: { type: 'string', enum: ['local', 'ms-todo'], description: 'Sync target for a NEW project (type=project). "local" = never synced. Default: local.' },
         // Task fields
         title: { type: 'string', description: 'Task title. Required for type=task. Format: "<≤3-word prefix> — <short description>". Prefix MUST be the most unique identifier of the task (max 3 words) — the thing that instantly tells you WHICH task this is. Use em-dash (—). Good: "Sprint选择器 — 查询/选择当前sprint", "Task不跳转 — 点击task不定位到列表位置". Bad: generic prefixes like "Sprint功能增强", "Bug:", "Tool Description".' },
         priority: { type: 'string', enum: ['immediate', 'important', 'backlog', 'none'], description: 'Priority: immediate (urgent), important (can wait), backlog (future), none' },
-        category: { type: 'string', description: 'Category — top-level group (e.g. Work, Life, Later). Required for type=project.' },
-        project: { type: 'string', description: 'Project — list within category (e.g. HomeLab, Costco). Required for type=project. Defaults to category if omitted for type=task.' },
+        project: { type: 'string', description: 'Project — the single grouping layer (e.g. Walnut, HomeLab, Costco). Omit or pass "" to file the task in Inbox.' },
         due_date: { type: 'string', description: 'Due date — the deadline (YYYY-MM-DD, or ISO datetime for a specific time)' },
         start_date: { type: 'string', description: 'Start date — when to begin working (YYYY-MM-DD, or ISO datetime). Tasks with a future start_date are hidden from the "Now" view until that time arrives.' },
-        parent_task_id: { type: 'string', description: 'Create as child of this task. Child inherits category, project, and source from parent.' },
+        parent_task_id: { type: 'string', description: 'Create as child of this task. Child inherits project and source from parent.' },
         description: { type: 'string', description: 'What & why context for the task (pre-action). Synced to configured plugins on creation.' },
         tags: { type: 'array', items: { type: 'string' }, description: 'Initial tags. Convention: "key:value" for structured data (e.g. "team:backend", "blocked").' },
         depends_on: { type: 'array', items: { type: 'string' }, description: 'Full IDs of prerequisite tasks that must complete before this one can start.' },
@@ -582,30 +562,22 @@ export const tools: ToolDefinition[] = [
     async execute(params) {
       const entityType = (params.type as string) || 'task';
       try {
-        if (entityType === 'category') {
-          const name = params.name as string;
-          const source = params.source as TaskSource;
-          if (!name) return 'Error: "name" is required for type=category';
-          if (!source) return 'Error: "source" is required for type=category (local or ms-todo)';
-          const result = await createCategory(name, source);
-          bus.emit(EventNames.CATEGORY_CREATED, { name: result.name, source: result.source }, ['web-ui'], { source: 'agent' });
-          return `Category created: "${result.name}" (source: ${result.source})`;
-        }
-
         if (entityType === 'project') {
-          const category = params.category as string;
-          const project = params.project as string;
-          if (!category) return 'Error: "category" is required for type=project';
-          if (!project) return 'Error: "project" is required for type=project';
-          const result = await createProject(category, project);
+          const name = ((params.name as string | undefined) ?? (params.project as string | undefined))?.trim();
+          if (!name) return 'Error: "name" is required for type=project';
+          const source = (params.source as TaskSource | undefined) ?? 'local';
+          const result = await ensureProject(name, source);
+          if (!result.created) {
+            return `Project "${result.name}" already exists (source: ${result.source}).`;
+          }
 
           // Prompt AI to confirm working directory with the user
-          const metadata = await getProjectMetadata(result.category, result.project);
-          let response = `Project created: "${result.project}" in category "${result.category}" (source: ${result.source})`;
+          const metadata = await getProjectMetadata(result.name);
+          let response = `Project created: "${result.name}" (source: ${result.source})`;
           if (!metadata?.default_cwd) {
             const { PROJECTS_MEMORY_DIR } = await import('../constants.js');
             const { default: path } = await import('node:path');
-            const memDir = path.join(PROJECTS_MEMORY_DIR, result.category.toLowerCase(), result.project.toLowerCase());
+            const memDir = path.join(PROJECTS_MEMORY_DIR, result.name.toLowerCase());
             response += `\n⚠️ No default_cwd set — sessions will use: ${memDir}`;
             response += `\nPlease confirm with the user what the correct working directory should be for this project, then set it via default_cwd.`;
           }
@@ -616,44 +588,23 @@ export const tools: ToolDefinition[] = [
         const title = params.title as string;
         if (!title) return 'Error: "title" is required for type=task';
 
-        const category = params.category as string | undefined;
-        const project = params.project as string | undefined;
+        // Preserve an explicit '' — the schema promises `""` = Inbox, and addTask
+        // only bypasses config.defaults.project when the caller PASSED a value
+        // (undefined = "no opinion", '' = "Inbox, explicitly").
+        const project = params.project === undefined
+          ? undefined
+          : String(params.project).trim();
         const parentTaskId = params.parent_task_id as string | undefined;
 
-        // Strict validation: category and project must exist (skip for child tasks — they inherit)
-        if (!parentTaskId && category) {
-          const categories = await getStoreCategories();
-          const catLower = category.toLowerCase();
-          let catExists = Object.keys(categories).some(k => k.toLowerCase() === catLower);
-          // Also check task-derived categories (consistent with task_query behavior)
-          if (!catExists) {
-            const tasks = await listTasks();
-            catExists = tasks.some(t => t.category.toLowerCase() === catLower);
-          }
-          if (!catExists) {
-            return `Error: Category "${category}" does not exist. Create it first:\n  task_create type=category, name="${category}", source="local" (or "ms-todo")`;
-          }
-
-          // Project must also exist if explicitly specified and different from category
-          if (project && project.toLowerCase() !== catLower) {
-            const metadata = await getProjectMetadata(category, project);
-            if (!metadata) {
-              const tasks = await listTasks();
-              const projExists = tasks.some(t =>
-                t.category.toLowerCase() === catLower &&
-                t.project.toLowerCase() === project.toLowerCase(),
-              );
-              if (!projExists) {
-                return `Error: Project "${project}" does not exist in category "${category}". Create it first:\n  task_create type=project, category="${category}", project="${project}"`;
-              }
-            }
-          }
-        }
+        // A named project is auto-created by addTask (which also resolves its
+        // source from the plugin claim chain — so do NOT pre-create the row here,
+        // that would stamp it 'local' before the claim is consulted). We only
+        // peek beforehand so the reply can flag a brand-new project to the model.
+        const projectWasNew = !!project && !parentTaskId && !(await getProjectRecord(project));
 
         const { task, syncResult } = await addTask({
           title,
           priority: params.priority as TaskPriority | undefined,
-          category,
           project,
           due_date: params.due_date as string | undefined,
           start_date: params.start_date as string | undefined,
@@ -667,10 +618,12 @@ export const tools: ToolDefinition[] = [
         const syncStatus = syncResult?.success === false
           ? `, ⚠️ sync failed: ${syncResult.error}`
           : ', synced';
-        return `Task created: ${taskRef(task.id, task.title)} (${task.priority}, ${task.category} → ${task.source}${syncStatus})`;
+        const groupLabel = task.project || 'Inbox';
+        const newNote = projectWasNew ? ' (new project)' : '';
+        return `Task created: ${taskRef(task.id, task.title)} (${task.priority}, ${groupLabel}${newNote} → ${task.source}${syncStatus})`;
       } catch (err) {
-        if (err instanceof CategorySourceConflictError) {
-          return `Error: ${err.message} (category "${err.category}" uses ${err.existingSource} — cannot add ${err.intendedSource} task)`;
+        if (err instanceof ProjectSourceConflictError) {
+          return `Error: Project "${err.project}" is synced from ${err.existingSource}; tasks there must come from that provider (cannot add a ${err.intendedSource} task).`;
         }
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
       }
@@ -679,24 +632,21 @@ export const tools: ToolDefinition[] = [
 
   {
     name: 'task_update',
-    description: `Update a task, project, or category. Supports multiple fields in a single call.
+    description: `Update a task or a project. Supports multiple fields in a single call.
 
-For tasks (type='task'): update structural fields (priority, phase, category, project, starred, needs_attention, due_date, start_date, title, pinned, focus_tier) and/or text fields (description, summary, note, append_note) in one call. Use phase='AGENT_COMPLETE' to mark a task done (only humans can set COMPLETE). Use pinned + focus_tier to pin/unpin tasks for the Focus Bar.
+For tasks (type='task'): update structural fields (priority, phase, project, starred, needs_attention, due_date, start_date, title, pinned, focus_tier) and/or text fields (description, summary, note, append_note) in one call. Use phase='AGENT_COMPLETE' to mark a task done (only humans can set COMPLETE). Use pinned + focus_tier to pin/unpin tasks for the Focus Bar. Pass project='' to move a task to Inbox.
 
-For projects (type='project'): set default_host and default_cwd for remote session defaults.
-
-For categories (type='category'): rename a category across all tasks (requires old_name and new_name).`,
+For projects (type='project'): set default_host and default_cwd for session defaults, or rename the project across all its tasks (old_name + new_name; renaming onto an existing project merges them).`,
     input_schema: {
       type: 'object',
       properties: {
-        type: { type: 'string', enum: ['task', 'project', 'category'], description: 'Entity type. Default: "task".' },
+        type: { type: 'string', enum: ['task', 'project'], description: 'Entity type. Default: "task".' },
         // Task fields
         id: { type: 'string', description: 'Task ID or prefix. Required for type=task.' },
         title: { type: 'string', description: 'New title. Format: "<≤3-word prefix> — <short description>". Prefix MUST be the most unique identifier of the task (max 3 words) — the thing that instantly tells you WHICH task this is. Use em-dash (—). Good: "Sprint选择器 — 查询/选择当前sprint", "Task不跳转 — 点击task不定位到列表位置". Bad: generic prefixes like "Sprint功能增强", "Bug:", "Tool Description".' },
         priority: { type: 'string', enum: ['immediate', 'important', 'backlog', 'none'], description: 'New priority: immediate (urgent), important (can wait), backlog (future), none.' },
         phase: { type: 'string', enum: [...VALID_PHASES].filter(p => p !== 'COMPLETE'), description: 'Task lifecycle phase. Status is auto-derived. Only humans can set COMPLETE.' },
-        category: { type: 'string', description: 'New category (also used for project identification when type=project).' },
-        project: { type: 'string', description: 'New project (also used for project identification when type=project).' },
+        project: { type: 'string', description: 'New project for the task (empty string moves it to Inbox). For type=project: the project to update settings on.' },
         due_date: { type: 'string', description: 'New due date — the deadline (YYYY-MM-DD, or ISO datetime). Empty string clears.' },
         start_date: { type: 'string', description: 'New start date — when to begin working (YYYY-MM-DD, or ISO datetime). Tasks with a future start_date are hidden from the "Now" view until then. Empty string clears.' },
         starred: { type: 'boolean', description: 'Star or unstar the task.' },
@@ -724,38 +674,41 @@ For categories (type='category'): rename a category across all tasks (requires o
         // Project fields
         default_host: { type: 'string', description: 'SSH host alias for remote sessions (type=project).' },
         default_cwd: { type: 'string', description: 'Default working directory (type=project).' },
-        // Category rename fields
-        old_name: { type: 'string', description: 'Current category name (required for type=category).' },
-        new_name: { type: 'string', description: 'New category name (required for type=category).' },
+        // Project rename fields
+        old_name: { type: 'string', description: 'Current project name (type=project rename).' },
+        new_name: { type: 'string', description: 'New project name (type=project rename). Renaming onto an existing project merges them.' },
       },
     },
     async execute(params) {
       const type = (params.type as string) || 'task';
 
       if (type === 'project') {
-        const category = params.category as string;
-        const project = params.project as string;
-        if (!category || !project) return 'Error: category and project are required for type=project.';
+        // Rename takes precedence when old_name/new_name are supplied.
+        const oldName = (params.old_name as string | undefined)?.trim();
+        const newName = (params.new_name as string | undefined)?.trim();
+        if (oldName || newName) {
+          if (!oldName || !newName) return 'Error: both old_name and new_name are required to rename a project.';
+          try {
+            const { count, merged } = await renameProject(oldName, newName);
+            const mergeNote = merged ? ' — merged into the existing project' : '';
+            return `Renamed project "${oldName}" to "${newName}" (${count} tasks updated)${mergeNote}`;
+          } catch (err) {
+            if (err instanceof ProjectSourceConflictError) {
+              return `Error: Project "${err.project}" is synced from ${err.existingSource}; tasks there must come from that provider.`;
+            }
+            return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          }
+        }
+
+        const project = (params.project as string | undefined)?.trim();
+        if (!project) return 'Error: project is required for type=project.';
         const settings: Record<string, unknown> = {};
         if (params.default_host !== undefined) settings.default_host = params.default_host;
         if (params.default_cwd !== undefined) settings.default_cwd = params.default_cwd;
-        if (Object.keys(settings).length === 0) return 'Error: no project settings to update. Provide default_host or default_cwd.';
+        if (Object.keys(settings).length === 0) return 'Error: no project settings to update. Provide default_host, default_cwd, or old_name+new_name to rename.';
         try {
-          const merged = await setProjectMetadata(category, project, settings);
-          return `Project "${category} / ${project}" updated: ${json(merged)}`;
-        } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      }
-
-      // type === 'category'
-      if (type === 'category') {
-        const oldName = params.old_name as string;
-        const newName = params.new_name as string;
-        if (!oldName || !newName) return 'Error: old_name and new_name are required for type=category.';
-        try {
-          const { count } = await renameCategory(oldName, newName);
-          return `Renamed category "${oldName}" to "${newName}" (${count} tasks updated)`;
+          const merged = await setProjectMetadata(project, settings);
+          return `Project "${project}" updated: ${json(merged)}`;
         } catch (err) {
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
         }
@@ -800,7 +753,7 @@ For categories (type='category'): rename a category across all tasks (requires o
 
         // Structural fields
         const hasStructural = params.title !== undefined || params.priority !== undefined ||
-          params.phase !== undefined || params.category !== undefined ||
+          params.phase !== undefined ||
           params.project !== undefined || params.due_date !== undefined ||
           params.start_date !== undefined ||
           params.starred !== undefined || params.needs_attention !== undefined ||
@@ -816,11 +769,11 @@ For categories (type='category'): rename a category across all tasks (requires o
             const { task } = await updateTask(id, {
               title: params.title as string | undefined,
               priority: params.priority as TaskPriority | undefined,
-              category: params.category as string | undefined,
               phase: params.phase as TaskPhase | undefined,
               due_date: params.due_date as string | undefined,
               start_date: params.start_date as string | undefined,
-              project: params.project as string | undefined,
+              // Trim at the boundary like task_create does ('' stays '', = Inbox).
+              project: params.project === undefined ? undefined : String(params.project).trim(),
               starred: (params.starred === true || params.starred === 'true') ? true : (params.starred === false || params.starred === 'false') ? false : undefined,
               needs_attention: (params.needs_attention === true || params.needs_attention === 'true') ? true : (params.needs_attention === false || params.needs_attention === 'false') ? false : undefined,
               parent_task_id: params.parent_task_id as string | undefined,
@@ -945,7 +898,7 @@ For categories (type='category'): rename a category across all tasks (requires o
 This is NOT a parent/subtask relationship: grouped tasks stay flat and fully independent (separate lifecycles, no inherited fields, none is "under" another). Use it to say "these tasks belong together" (e.g. a task and its forks, or several tasks tackling one theme) without the heaviness of subtasks.
 
 Rules:
-- Any tasks can be grouped together — there is no category/project restriction (a group is a pure visual cluster).
+- Any tasks can be grouped together — there is no project restriction (a group is a pure visual cluster).
 - A group needs ≥2 tasks. Removing members until fewer than 2 remain dissolves the group automatically.
 - The group name is AI-suggested but you can set/override it via 'label'.
 
@@ -1024,7 +977,7 @@ Actions:
   // ── Search Tools ──
   {
     name: 'task_search',
-    description: `Search tasks via hybrid search (QMD: BM25 + vector + reranking) with BM25 keyword fallback. QMD indexes human-readable fields: title, description, summary, note, conversation_log, tags, category, and project. Task IDs, session IDs, and external URLs are resolved directly from structured records before QMD. Auto-expands child tasks of matched parents.
+    description: `Search tasks via hybrid search (QMD: BM25 + vector + reranking) with BM25 keyword fallback. QMD indexes human-readable fields: title, description, summary, note, conversation_log, tags, and project. Task IDs, session IDs, and external URLs are resolved directly from structured records before QMD. Auto-expands child tasks of matched parents.
 
 ## How matching works
 
@@ -1303,14 +1256,14 @@ For CLI sessions: working_directory is required. For embedded sessions: working_
 
 Remote execution (SSH):
 Sessions can run on remote machines. You usually do NOT need to set host or working_directory —
-most categories and projects already have defaults configured (default_host, default_cwd).
+most projects already have defaults configured (default_host, default_cwd).
 Just call session_start with task_id, title, and prompt, and the correct machine is picked automatically.
 
 Only pass host/working_directory explicitly when:
 - The user specifically asks to run on a different machine
-- You have a good reason to override the project/category default
+- You have a good reason to override the project default
 
-Override priority: explicit params > project defaults > category defaults > local.
+Override priority: explicit params > task cwd > project defaults > local.
 
 Three ways to use:
 
@@ -1546,9 +1499,9 @@ and is always allowed.`,
         }
 
         // Validate: local-looking paths should not be sent to remote hosts.
-        // Common mistake: category/project has default_host but cwd is a local Mac path.
+        // Common mistake: the project has default_host but cwd is a local Mac path.
         if (resolvedHost && resolvedCwd && /^\/Users\//.test(resolvedCwd)) {
-          const hostSource = params.host ? 'explicit host param' : 'inherited from project/category default_host';
+          const hostSource = params.host ? 'explicit host param' : 'inherited from project default_host';
           return `Error: Local path "${resolvedCwd}" cannot be used on remote host "${resolvedHost}" (${hostSource}). ` +
             `The cwd must exist on the remote machine. Either:\n` +
             `  1. Provide a remote path as working_directory (e.g. /workplace/...)\n` +
@@ -1560,7 +1513,9 @@ and is always allowed.`,
         // Local sessions still require a cwd — give actionable guidance
         if (!resolvedCwd) {
           const hint = task
-            ? ` Set working_directory explicitly, or configure a default via task_update(id:'${task.id}', cwd:'/path') or task_update(type:'project', category:'${task.category}', project:'${task.project}', default_cwd:'/path').`
+            ? task.project
+              ? ` Set working_directory explicitly, or configure a default via task_update(id:'${task.id}', cwd:'/path') or task_update(type:'project', project:'${task.project}', default_cwd:'/path').`
+              : ` Set working_directory explicitly, or configure a default via task_update(id:'${task.id}', cwd:'/path'). This task is in Inbox, so there is no project default to set.`
             : ' Provide working_directory for taskless sessions.';
           return `Error: No working directory resolved for this session.${hint}`;
         }
@@ -1603,7 +1558,7 @@ sessions started outside Walnut (e.g. via \`claude -p\` on a remote machine) und
 management — history viewing, session_send, UI tracking, etc.
 
 The session must already exist as a JSONL file on the local or remote machine.
-host and working_directory are optional — if omitted, they inherit from the task's project/category
+host and working_directory are optional — if omitted, they inherit from the task's project
 defaults (same resolution chain as session_start).`,
     input_schema: {
       type: 'object',
@@ -1783,7 +1738,7 @@ defaults (same resolution chain as session_start).`,
         const record = await importSessionRecord({
           claudeSessionId: sessionId,
           taskId: task.id,
-          project: task.project,
+          project: task.project || '',
           cwd: resolvedCwd,
           host: resolvedHost,
           title,
@@ -2259,18 +2214,18 @@ defaults (same resolution chain as session_start).`,
       properties: {
         user_name: { type: 'string', description: 'Update user name' },
         default_priority: { type: 'string', enum: ['immediate', 'important', 'backlog', 'none'], description: 'Default task priority' },
-        default_category: { type: 'string', description: 'Default task category' },
+        default_project: { type: 'string', description: 'Default project for new tasks. Empty string = Inbox.' },
       },
     },
     async execute(params) {
       const config = await getConfig();
       const partial: Partial<Config> = {};
       if (params.user_name !== undefined) partial.user = { ...config.user, name: params.user_name as string };
-      if (params.default_priority !== undefined || params.default_category !== undefined) {
+      if (params.default_priority !== undefined || params.default_project !== undefined) {
         partial.defaults = {
           ...config.defaults,
           ...(params.default_priority !== undefined ? { priority: params.default_priority as TaskPriority } : {}),
-          ...(params.default_category !== undefined ? { category: params.default_category as string } : {}),
+          ...(params.default_project !== undefined ? { project: params.default_project as string } : {}),
         };
       }
       await updateConfig(partial);

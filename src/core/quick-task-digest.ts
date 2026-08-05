@@ -1,23 +1,24 @@
-import { getStoreCategories, listTasksSlim, getProjectMetadata } from './task-manager.js';
+import { getStoreProjects, listTasksSlim, getProjectMetadata } from './task-manager.js';
 
-const MAX_CATEGORIES = 15;
-const MAX_PROJECTS_PER_CATEGORY = 4;
+const MAX_PROJECTS = 20;
 const MAX_TITLES_PER_LINE = 3;
 const MAX_TITLE_CHARS = 40;
 const MAX_DIGEST_CHARS = 4000;
 const MAX_SUMMARY_CHARS = 200;
 
-export interface CategoryDigest {
+/** Inbox is rendered under this label; it is NOT a selectable project name. */
+export const INBOX_LABEL = 'Inbox';
+
+export interface ProjectDigest {
   digest: string;
-  categories: string[];
-  projectsByCategory: Record<string, string[]>;
+  /** Canonical project names the model may pick from. Never includes Inbox. */
+  projects: string[];
 }
 
-interface CategoryDetails {
+interface ProjectDetails {
   name: string;
   openCount: number;
-  defaultTitles: string[];
-  projectTitles: Map<string, string[]>;
+  titles: string[];
 }
 
 function truncateTitle(title: string): string {
@@ -50,87 +51,76 @@ function capDigest(lines: string[]): string {
   return output.join('\n');
 }
 
-export async function buildCategoryDigest(): Promise<CategoryDigest> {
+/**
+ * Flat project digest for the fast-model placement prompts (quick-task parse,
+ * session-organize): one line per project — name, open count, up to 3 example
+ * titles, plus the maintained project summary when present.
+ *
+ * Inbox (tasks with no project) is rendered LAST and is deliberately absent from
+ * `projects`: it's the default, never something the model "picks".
+ */
+export async function buildProjectDigest(): Promise<ProjectDigest> {
   // Both calls share task-manager initialization; keep them sequential so the
-  // first cold request cannot race the category seeding transaction.
-  const storeCategories = await getStoreCategories();
+  // first cold request cannot race the project seeding transaction.
+  const storeProjects = await getStoreProjects();
   const tasks = await listTasksSlim({ minimal: true });
 
-  const categories: string[] = [];
-  const canonicalCategories = new Map<string, string>();
-  const detailsByCategory = new Map<string, CategoryDetails>();
-  const allProjects = new Map<string, Map<string, string>>();
+  const projects: string[] = [];
+  const canonicalNames = new Map<string, string>();
+  const detailsByProject = new Map<string, ProjectDetails>();
 
-  const ensureCategory = (rawName: string): CategoryDetails => {
+  const ensureProjectEntry = (rawName: string): ProjectDetails => {
     const name = rawName.trim();
     const key = name.toLowerCase();
-    const canonical = canonicalCategories.get(key) ?? name;
-    if (!canonicalCategories.has(key)) {
-      canonicalCategories.set(key, canonical);
-      categories.push(canonical);
-      allProjects.set(canonical, new Map());
+    const canonical = canonicalNames.get(key) ?? name;
+    if (!canonicalNames.has(key)) {
+      canonicalNames.set(key, canonical);
+      projects.push(canonical);
     }
-    let details = detailsByCategory.get(canonical);
+    let details = detailsByProject.get(canonical);
     if (!details) {
-      details = { name: canonical, openCount: 0, defaultTitles: [], projectTitles: new Map() };
-      detailsByCategory.set(canonical, details);
+      details = { name: canonical, openCount: 0, titles: [] };
+      detailsByProject.set(canonical, details);
     }
     return details;
   };
 
-  for (const category of Object.keys(storeCategories)) {
-    if (category.trim()) ensureCategory(category);
+  // Registry rows first, so a claimed-but-quiet project still gets listed with
+  // its canonical spelling (the registry is the source of truth for spelling).
+  for (const name of Object.keys(storeProjects)) {
+    if (name.trim()) ensureProjectEntry(name);
   }
+
+  const inbox: ProjectDetails = { name: INBOX_LABEL, openCount: 0, titles: [] };
 
   for (const task of tasks) {
-    if (!task.category?.trim() || task.title.startsWith('.metadata')) continue;
-    const category = ensureCategory(task.category);
-    if (task.phase !== 'COMPLETE') category.openCount += 1;
-
-    const project = task.project?.trim();
-    const isDefaultProject = !project || project.toLowerCase() === category.name.toLowerCase();
-    if (isDefaultProject) {
-      addTitle(category.defaultTitles, task.title);
-      continue;
-    }
-
-    const projects = allProjects.get(category.name)!;
-    const projectKey = project.toLowerCase();
-    const canonicalProject = projects.get(projectKey) ?? project;
-    if (!projects.has(projectKey)) projects.set(projectKey, canonicalProject);
-
-    let titles = category.projectTitles.get(canonicalProject);
-    if (!titles && category.projectTitles.size < MAX_PROJECTS_PER_CATEGORY) {
-      titles = [];
-      category.projectTitles.set(canonicalProject, titles);
-    }
-    if (titles) addTitle(titles, task.title);
+    if (task.title.startsWith('.metadata')) continue;
+    const name = task.project?.trim();
+    const details = name ? ensureProjectEntry(name) : inbox;
+    if (task.phase !== 'COMPLETE') details.openCount += 1;
+    addTitle(details.titles, task.title);
   }
 
-  const projectsByCategory: Record<string, string[]> = {};
-  for (const category of categories) {
-    projectsByCategory[category] = [...(allProjects.get(category)?.values() ?? [])];
-  }
+  const ordered = [...detailsByProject.values()]
+    .sort((a, b) => b.openCount - a.openCount || a.name.localeCompare(b.name))
+    .slice(0, MAX_PROJECTS);
 
-  const ordered = [...detailsByCategory.values()]
-    .sort((a, b) => b.openCount - a.openCount)
-    .slice(0, MAX_CATEGORIES);
   const lines: string[] = [];
-  for (const category of ordered) {
-    lines.push(appendTitles(`- ${category.name} (${category.openCount} open tasks)`, category.defaultTitles));
-    for (const [project, titles] of category.projectTitles) {
-      lines.push(appendTitles(`  - ${project}`, titles));
-      // The maintained project summary (project-summary.ts) beats raw titles
-      // for "does this note/session belong here?" judgment — ride it along.
-      try {
-        const meta = await getProjectMetadata(category.name, project);
-        const summary = typeof meta?.summary === 'string' ? meta.summary.trim() : '';
-        if (summary) {
-          lines.push(`    about: ${Array.from(summary).slice(0, MAX_SUMMARY_CHARS).join('')}`);
-        }
-      } catch { /* summary is enrichment only — digest works without it */ }
-    }
+  for (const project of ordered) {
+    lines.push(appendTitles(`- ${project.name} (${project.openCount} open tasks)`, project.titles));
+    // The maintained project summary (project-summary.ts) beats raw titles
+    // for "does this note/session belong here?" judgment — ride it along.
+    try {
+      const meta = await getProjectMetadata(project.name);
+      const summary = typeof meta?.summary === 'string' ? meta.summary.trim() : '';
+      if (summary) {
+        lines.push(`  about: ${Array.from(summary).slice(0, MAX_SUMMARY_CHARS).join('')}`);
+      }
+    } catch { /* summary is enrichment only — digest works without it */ }
+  }
+  if (inbox.openCount > 0) {
+    lines.push(appendTitles(`- ${INBOX_LABEL} — no project (${inbox.openCount} open tasks)`, inbox.titles));
   }
 
-  return { digest: capDigest(lines), categories, projectsByCategory };
+  return { digest: capDigest(lines), projects };
 }

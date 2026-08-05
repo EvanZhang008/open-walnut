@@ -49,7 +49,7 @@ afterEach(async () => {
 async function makeTasks(titles: string[]): Promise<string[]> {
   const ids: string[] = [];
   for (const title of titles) {
-    const { task } = await addTask({ title, category: 'Work', project: 'Marina' });
+    const { task } = await addTask({ title, project: 'Marina' });
     ids.push(task.id);
   }
   return ids;
@@ -86,7 +86,7 @@ describe('POST /api/tasks/batch/phase', () => {
 
   it('returns 200 with failed[] when one task is blocked — the rest still apply', async () => {
     const [parent, sibling] = await makeTasks(['Parent', 'Sibling']);
-    await addTask({ title: 'Child', category: 'Work', project: 'Marina', parent_task_id: parent });
+    await addTask({ title: 'Child', project: 'Marina', parent_task_id: parent });
 
     const res = await request(createApp())
       .post('/api/tasks/batch/phase')
@@ -125,7 +125,7 @@ describe('POST /api/tasks/batch/phase', () => {
   it('reports an external-sync failure in syncFailed, keeping failed empty', async () => {
     // Plugin-sourced task, no plugin loaded: the phase change lands locally, only the
     // push fails. `failed` must stay empty or the client rolls back a correct row.
-    const { task } = await addTask({ title: 'Remote task', category: 'Remote', project: 'Remote', source: 'ms-todo' })
+    const { task } = await addTask({ title: 'Remote task', project: 'Remote', source: 'ms-todo' })
 
     const res = await request(createApp())
       .post('/api/tasks/batch/phase')

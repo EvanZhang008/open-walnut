@@ -26,14 +26,14 @@ export const PROJECTION_FILE = path.join(TASKS_DIR, 'projection.json')
 const DONE_RETENTION_DAYS = 14
 const DEBOUNCE_MS = 3_000
 
-/** Slim task shape shipped to the companion — the frozen v1 contract. */
+/** Slim task shape shipped to the companion — v2 contract (category removed). */
 export interface ProjectedTask {
   id: string
   title: string
   status: string
   phase: string
   priority: string
-  category: string
+  /** Single grouping layer. '' = Inbox. */
   project: string
   due_date?: string
   start_date?: string
@@ -47,14 +47,22 @@ export interface ProjectedTask {
   summary?: string
 }
 
+/**
+ * Projection envelope. `version` is a HARD contract: the reader fail-closes on
+ * anything other than PROJECTION_VERSION, so an old reader served a v2 file
+ * returns an empty list instead of mis-parsing rows that lost `category`.
+ */
+export const PROJECTION_VERSION = 2 as const
+
 export interface TaskProjection {
-  version: 1
+  version: typeof PROJECTION_VERSION
   exportedAt: string
   tasks: ProjectedTask[]
 }
 
 const SUMMARY_MAX = 500
 
+/** Exported: POST /api/v1/tasks answers with the same slim shape GET /tasks serves. */
 export function projectTask(t: Task): ProjectedTask {
   const summary = (t.summary || '').trim()
   return {
@@ -63,8 +71,7 @@ export function projectTask(t: Task): ProjectedTask {
     status: t.status,
     phase: t.phase,
     priority: t.priority,
-    category: t.category,
-    project: t.project,
+    project: t.project || '',
     ...(t.due_date ? { due_date: t.due_date } : {}),
     ...(t.start_date ? { start_date: t.start_date } : {}),
     created_at: t.created_at,
@@ -91,17 +98,35 @@ export async function exportTaskProjection(): Promise<number> {
       return Number.isFinite(doneAt) && doneAt >= cutoff
     })
     .map(projectTask)
-  const projection: TaskProjection = { version: 1, exportedAt: new Date().toISOString(), tasks }
+  const projection: TaskProjection = {
+    version: PROJECTION_VERSION,
+    exportedAt: new Date().toISOString(),
+    tasks,
+  }
   await writeJsonFile(PROJECTION_FILE, projection)
   return tasks.length
 }
 
-/** Read the synced projection file (cloud box). Null when absent/corrupt. */
+/**
+ * Read the synced projection file (cloud box). Null when absent/corrupt, and
+ * FAIL-CLOSED on a version mismatch: a v1 file (rows keyed by category) must
+ * never be handed to v2 readers, and vice versa — an empty list is a visibly
+ * degraded state, a mis-parsed one is silent data corruption.
+ */
 export async function readTaskProjection(): Promise<TaskProjection | null> {
   try {
     const raw = await fsp.readFile(PROJECTION_FILE, 'utf-8')
     const parsed = JSON.parse(raw) as TaskProjection
-    if (parsed?.version !== 1 || !Array.isArray(parsed.tasks)) return null
+    if (parsed?.version !== PROJECTION_VERSION || !Array.isArray(parsed.tasks)) {
+      // Loud: on a replica this file is written by the PRIMARY, so a version
+      // skew (primary still pre-v5, or rolled back) means every read fails
+      // closed until the primary upgrades — without this line that presents
+      // as "git sync is slow" with no diagnosable cause.
+      log.task.warn('task-projection: version mismatch, failing closed', {
+        found: parsed?.version, expected: PROJECTION_VERSION, file: PROJECTION_FILE,
+      })
+      return null
+    }
     return parsed
   } catch {
     return null

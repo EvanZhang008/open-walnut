@@ -46,7 +46,6 @@ async function seedTask(taskId: string): Promise<void> {
       status: 'todo',
       phase: 'IN_PROGRESS',
       priority: 'immediate',
-      category: 'Test',
       project: 'StreamSubscribe',
       session_ids: [],
       created_at: new Date().toISOString(),

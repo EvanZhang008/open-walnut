@@ -7074,7 +7074,7 @@ export class SessionRunner {
           }
           // Project metadata default_cwd
           if (!cwd) {
-            const metadata = await getProjectMetadata(task.category, task.project)
+            const metadata = await getProjectMetadata(task.project || '')
             if (metadata?.default_cwd) cwd = metadata.default_cwd as string
           }
           // Last resort: project memory directory (LOCAL sessions only).
@@ -7082,17 +7082,18 @@ export class SessionRunner {
           // fail with a clear error instead of sending a bogus cwd.
           if (!cwd) {
             if (data.host) {
+              const projectLabel = task.project || 'Inbox'
               throw new Error(
                 `No working directory found for remote session on host "${data.host}" ` +
-                `(task: "${task.id}", category: "${task.category}", project: "${task.project}"). ` +
-                `Set a cwd on the task, or set default_cwd in project "${task.project}" metadata ` +
+                `(task: "${task.id}", project: "${projectLabel}"). ` +
+                `Set a cwd on the task, or set default_cwd in project "${projectLabel}" metadata ` +
                 `(e.g. /workplace/... on the remote host).`
               )
             }
             const { PROJECTS_MEMORY_DIR } = await import('../constants.js')
             const path = await import('node:path')
             const nodeFs = await import('node:fs')
-            const projectDir = path.join(PROJECTS_MEMORY_DIR, task.category.toLowerCase(), task.project.toLowerCase())
+            const projectDir = path.join(PROJECTS_MEMORY_DIR, (task.project || 'inbox').toLowerCase())
             nodeFs.mkdirSync(projectDir, { recursive: true })
             cwd = projectDir
           }
@@ -7141,14 +7142,14 @@ export class SessionRunner {
 
     // Auto-generate title + description
     let taskTitle: string | undefined
-    let taskCategory: string | undefined
+    let taskProject: string | undefined
     if (taskId) {
       try {
         const { updateTask, getTask } = await import('../core/task-manager.js')
         await updateTask(taskId, { phase: 'IN_PROGRESS' }, { source: 'session-start' })
         const task = await getTask(taskId)
         taskTitle = task?.title
-        taskCategory = task?.category
+        taskProject = task?.project || undefined
       } catch (err) {
         log.session.warn('failed to update task phase on session start', { taskId, error: err instanceof Error ? err.message : String(err) })
       }
@@ -7248,7 +7249,7 @@ export class SessionRunner {
     // Record directory usage for the frequent-dirs persistent store (fire-and-forget)
     if (cwd) {
       import('../core/frequent-dirs.js').then(({ recordDirectory }) => {
-        recordDirectory(cwd, data.host ?? null, taskCategory).catch(() => {})
+        recordDirectory(cwd, data.host ?? null, taskProject).catch(() => {})
       }).catch(() => {})
     }
 
@@ -7350,21 +7351,22 @@ export class SessionRunner {
             current = await getTaskFn(current.parent_task_id).catch(() => undefined)
           }
           if (!cwd) {
-            const metadata = await getProjectMetadata(task.category, task.project)
+            const metadata = await getProjectMetadata(task.project || '')
             if (metadata?.default_cwd) cwd = metadata.default_cwd as string
           }
           if (!cwd) {
             if (data.host) {
+              const projectLabel = task.project || 'Inbox'
               throw new Error(
                 `No working directory found for remote session on host "${data.host}" ` +
-                `(task: "${task.id}", category: "${task.category}", project: "${task.project}"). ` +
-                `Set a cwd on the task, or set default_cwd in project "${task.project}" metadata.`
+                `(task: "${task.id}", project: "${projectLabel}"). ` +
+                `Set a cwd on the task, or set default_cwd in project "${projectLabel}" metadata.`
               )
             }
             const { PROJECTS_MEMORY_DIR } = await import('../constants.js')
             const path = await import('node:path')
             const nodeFs = await import('node:fs')
-            const projectDir = path.join(PROJECTS_MEMORY_DIR, task.category.toLowerCase(), task.project.toLowerCase())
+            const projectDir = path.join(PROJECTS_MEMORY_DIR, (task.project || 'inbox').toLowerCase())
             nodeFs.mkdirSync(projectDir, { recursive: true })
             cwd = projectDir
           }
@@ -7377,14 +7379,14 @@ export class SessionRunner {
 
     // Auto-generate title (same logic as CLI path)
     let taskTitle: string | undefined
-    let sdkTaskCategory: string | undefined
+    let sdkTaskProject: string | undefined
     if (taskId) {
       try {
         const { updateTask, getTask } = await import('../core/task-manager.js')
         await updateTask(taskId, { phase: 'IN_PROGRESS' }, { source: 'session-start' })
         const task = await getTask(taskId)
         taskTitle = task?.title
-        sdkTaskCategory = task?.category
+        sdkTaskProject = task?.project || undefined
       } catch (err) {
         log.session.warn('failed to update task phase on SDK session start', {
           taskId, error: err instanceof Error ? err.message : String(err),
@@ -7479,7 +7481,7 @@ export class SessionRunner {
     // Record directory usage for frequent-dirs store (fire-and-forget)
     if (cwd) {
       import('../core/frequent-dirs.js').then(({ recordDirectory }) => {
-        recordDirectory(cwd, data.host ?? null, sdkTaskCategory).catch(() => {})
+        recordDirectory(cwd, data.host ?? null, sdkTaskProject).catch(() => {})
       }).catch(() => {})
     }
 

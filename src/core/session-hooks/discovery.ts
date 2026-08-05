@@ -23,7 +23,6 @@ interface HookDescriptor {
   filter?: {
     modes?: string[];
     projects?: string[];
-    categories?: string[];
   };
 }
 

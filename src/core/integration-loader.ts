@@ -31,7 +31,7 @@ import type {
   PluginManifest,
   PluginApi,
   IntegrationSync,
-  CategoryClaimFn,
+  ProjectClaimFn,
   DisplayMeta,
   MigrateFn,
   HttpRoute,
@@ -245,7 +245,7 @@ interface PluginApiBuilder {
   api: PluginApi;
   collected: {
     sync: IntegrationSync | null;
-    claim: { fn: CategoryClaimFn; priority: number } | null;
+    claim: { fn: ProjectClaimFn; priority: number } | null;
     display: DisplayMeta | null;
     agentContext: string | null;
     migrations: MigrateFn[];
@@ -280,7 +280,7 @@ function createPluginApiBuilder(manifest: PluginManifest, pluginConfig: Record<s
       collected.sync = sync;
     },
 
-    registerSourceClaim(fn: CategoryClaimFn, opts?: { priority?: number }) {
+    registerSourceClaim(fn: ProjectClaimFn, opts?: { priority?: number }) {
       collected.claim = { fn, priority: opts?.priority ?? 0 };
     },
 

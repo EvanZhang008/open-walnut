@@ -20,8 +20,8 @@ async function fulfillWorkingDirs(route: Route): Promise<void> {
     contentType: 'application/json',
     body: JSON.stringify({
       dirs: [
-        { cwd: rememberedCwd, host: null, category: 'Work', count: 20, lastUsed: now, lastLaunch: { model: rememberedModel } },
-        { cwd: plainCwd, host: null, category: 'Work', count: 10, lastUsed: now },
+        { cwd: rememberedCwd, host: null, project: 'Work', count: 20, lastUsed: now, lastLaunch: { model: rememberedModel } },
+        { cwd: plainCwd, host: null, project: 'Work', count: 10, lastUsed: now },
       ],
       hosts: [],
     }),

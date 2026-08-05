@@ -2,28 +2,26 @@
  * Project summary generator — a 1-3 sentence, fast-model description of what
  * each project is about, built up as the project accumulates tasks.
  *
- * WHY: category/project auto-placement (quick-task parse, session-organize)
- * judges by a handful of raw recent task titles. Titles are noisy; a concise
- * standing summary of "what lives in this project" makes those picks much
- * better, and gives the project drill-in UI something to show.
+ * WHY: project auto-placement (quick-task parse, session-organize) judges by a
+ * handful of raw recent task titles. Titles are noisy; a concise standing
+ * summary of "what lives in this project" makes those picks much better, and
+ * gives the project drill-in UI something to show.
  *
  * TRIGGER: task:created bus events (see startProjectSummaryMaintainer), NOT
  * cron. Regeneration fires only when the project's task count crosses a
  * threshold — 1, 2, 4, 8, 20, then every 20 — so young projects converge fast
- * and mature ones refresh cheaply. Also fired once by explicit project
- * creation (count 0 → threshold 1 on its first task; createProject itself has
- * no tasks yet, so the description the user typed — if any — just lives in
- * metadata until then).
+ * and mature ones refresh cheaply.
  *
  * ALWAYS full regeneration from the current task list (+ the previous summary
  * as context). NEVER append — append-style summaries grow stale clauses
  * forever; a regenerate stays exactly as long as the prompt allows.
  *
- * STORAGE: `.metadata_project` YAML (setProjectMetadata) under two keys:
+ * STORAGE: the `task_projects` registry metadata (setProjectMetadata) under two
+ * keys:
  *   summary            — the generated text
  *   summary_task_count — task count at generation time (threshold bookkeeping)
- * Zero schema change, survives sync exclusion (.metadata* filters), and rides
- * the existing GET /api/categories/:name/projects metadata payload for the UI.
+ * Inbox ('' project) never gets a summary — it has no registry row and is by
+ * definition the unfiled pile, not a stream of work worth describing.
  */
 
 import { sendMessage } from '../agent/model.js';
@@ -63,25 +61,28 @@ export interface ProjectSummaryResult {
 }
 
 /**
- * Regenerate the summary for one (category, project) from its live task list.
- * Returns null when the model produced nothing usable. Never throws.
+ * Regenerate the summary for one project from its live task list.
+ * Returns null for Inbox or when the model produced nothing usable. Never throws.
  */
 export async function generateProjectSummary(
-  category: string,
   project: string,
   opts: { timeoutMs?: number; modelOverride?: string } = {},
 ): Promise<ProjectSummaryResult | null> {
+  const name = (project ?? '').trim();
+  if (!name) return null; // Inbox
   try {
     const { listTasks, getProjectMetadata } = await import('./task-manager.js');
-    const all = await listTasks({ category });
+    // Case-insensitive match: project identity is NOCASE, and a caller may pass
+    // a user-typed spelling (manual rebuild route) rather than the canonical one.
+    const all = await listTasks();
     const tasks = all.filter((t) =>
-      (t.project || category).toLowerCase() === project.toLowerCase()
+      (t.project ?? '').toLowerCase() === name.toLowerCase()
       && !t.title.startsWith('.metadata')
       && !t.parent_task_id);
     if (!tasks.length) return null;
     const taskCount = tasks.length;
 
-    const meta = await getProjectMetadata(category, project);
+    const meta = await getProjectMetadata(name);
     const previous = typeof meta?.summary === 'string' ? meta.summary.trim() : '';
 
     // Newest first; completed tasks carry their (derived) summary when present.
@@ -104,7 +105,7 @@ export async function generateProjectSummary(
     }
 
     const content = [
-      `Project: "${project}" (category: "${category}", ${taskCount} tasks)`,
+      `Project: "${name}" (${taskCount} tasks)`,
       ...(previous ? ['', `Previous summary:\n${previous}`] : []),
       '',
       `Tasks (newest first${taskCount > MAX_TASKS_IN_PROMPT ? `, showing ${MAX_TASKS_IN_PROMPT}` : ''}):`,
@@ -140,24 +141,26 @@ export async function generateProjectSummary(
     return { summary, taskCount };
   } catch (err) {
     log.web.debug('generateProjectSummary failed', {
-      category, project,
+      project: name,
       errorKind: err instanceof Error ? err.name : typeof err,
     });
     return null;
   }
 }
 
-/** Generate + persist. Exposed for the manual rebuild route and tests. */
-export async function refreshProjectSummary(category: string, project: string): Promise<boolean> {
-  const generated = await generateProjectSummary(category, project);
+/** Generate + persist into the project registry. For the rebuild route + tests. */
+export async function refreshProjectSummary(project: string): Promise<boolean> {
+  const name = (project ?? '').trim();
+  if (!name) return false;
+  const generated = await generateProjectSummary(name);
   if (!generated) return false;
   const { setProjectMetadata } = await import('./task-manager.js');
-  await setProjectMetadata(category, project, {
+  await setProjectMetadata(name, {
     summary: generated.summary,
     summary_task_count: generated.taskCount,
   });
   log.web.info('project-summary: refreshed', {
-    category, project, taskCount: generated.taskCount,
+    project: name, taskCount: generated.taskCount,
   });
   return true;
 }
@@ -169,15 +172,14 @@ export async function refreshProjectSummary(category: string, project: string): 
  * stored count self-heals on the next crossing.
  */
 export async function maybeRefreshForTask(task: Task | undefined, source: string): Promise<boolean> {
-  if (!task?.id || !task.category) return false;
+  if (!task?.id) return false;
   if (task.parent_task_id) return false;
   if (task.title.startsWith('.metadata')) return false;
   if (SKIP_SOURCE.test(source)) return false;
-  const project = task.project || task.category;
-  // The quick-start landing zone is a transit stop, not a project — tasks get
-  // auto-organized OUT of it (session-organize.ts); a summary of "whatever is
-  // passing through" would be noise and a wasted model call per session.
-  if (task.category === 'Local' && project === 'Quick Start') return false;
+  // Inbox is the unfiled pile, not a stream of work — a summary of "whatever is
+  // passing through" would be noise and a wasted model call per capture.
+  const project = (task.project ?? '').trim();
+  if (!project) return false;
 
   // Serialize model runs — bursts of task creates must not fan out N calls.
   const prior = queueTail;
@@ -187,18 +189,18 @@ export async function maybeRefreshForTask(task: Task | undefined, source: string
 
   try {
     const { listTasks, getProjectMetadata } = await import('./task-manager.js');
-    const all = await listTasks({ category: task.category });
+    const all = await listTasks();
     const count = all.filter((t) =>
-      (t.project || task.category).toLowerCase() === project.toLowerCase()
+      (t.project ?? '').toLowerCase() === project.toLowerCase()
       && !t.title.startsWith('.metadata')
       && !t.parent_task_id).length;
     if (!isSummaryThreshold(count)) return false;
 
-    const meta = await getProjectMetadata(task.category, project);
+    const meta = await getProjectMetadata(project);
     const lastCount = typeof meta?.summary_task_count === 'number' ? meta.summary_task_count : 0;
     if (count <= lastCount) return false; // already summarized at/past this size
 
-    return await refreshProjectSummary(task.category, project);
+    return await refreshProjectSummary(project);
   } catch (err) {
     log.web.warn('project-summary: refresh check failed', {
       taskId: task.id, error: err instanceof Error ? err.message : String(err),

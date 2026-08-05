@@ -201,7 +201,7 @@ describe('exec tool with deny policy', () => {
     ).mockResolvedValue({
       version: 1,
       user: {},
-      defaults: { priority: 'none', category: 'personal' },
+      defaults: { priority: 'none', project: 'personal' },
       provider: { type: 'claude-code' },
       tools: {
         exec: {
@@ -226,7 +226,7 @@ describe('exec tool with deny policy', () => {
     ).mockResolvedValue({
       version: 1,
       user: {},
-      defaults: { priority: 'none', category: 'personal' },
+      defaults: { priority: 'none', project: 'personal' },
       provider: { type: 'claude-code' },
       tools: {
         exec: {

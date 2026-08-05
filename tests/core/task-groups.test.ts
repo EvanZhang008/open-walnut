@@ -3,8 +3,8 @@
  *
  * Covers the core store ops in task-manager.ts: groupTasks / addToGroup /
  * removeFromGroup / renameGroup / listGroups, plus the invariants:
- *  - any tasks can be grouped — NO category/project scope rule (a group is a pure
- *    visual cluster; cross-category/project members are allowed)
+ *  - any tasks can be grouped — NO project scope rule (a group is a pure visual
+ *    cluster; cross-project members, Inbox included, are allowed)
  *  - CREATING a group needs ≥2 tasks, but a created group survives down to 1 member
  *    (a lone-member group is valid, acts like a tag); only 0 members dissolves it
  *  - group_id round-trips through the SQLite payload blob (no dedicated column)
@@ -47,11 +47,11 @@ afterEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
-/** Create N tasks in the same category+project. Returns their ids. */
-async function makeTasks(titles: string[], category = 'Work', project = 'EKS'): Promise<string[]> {
+/** Create N tasks in the same project. Returns their ids. */
+async function makeTasks(titles: string[], project = 'Marina'): Promise<string[]> {
   const ids: string[] = [];
   for (const title of titles) {
-    const { task } = await addTask({ title, category, project });
+    const { task } = await addTask({ title, project });
     ids.push(task.id);
   }
   return ids;
@@ -87,10 +87,10 @@ describe('groupTasks', () => {
     await expect(groupTasks([a])).rejects.toThrow(/at least 2/);
   });
 
-  it('groups tasks from different category/project (no scope rule)', async () => {
-    // A group is a pure visual cluster — cross-category/project members are allowed.
-    const [a] = await makeTasks(['A'], 'Work', 'EKS');
-    const [b] = await makeTasks(['B'], 'Life', 'Home');
+  it('groups tasks from different projects, Inbox included (no scope rule)', async () => {
+    // A group is a pure visual cluster — cross-project members are allowed.
+    const [a] = await makeTasks(['A'], 'Marina');
+    const [b] = await makeTasks(['B'], '');  // Inbox
     const result = await groupTasks([a, b]);
     expect(result.member_ids.sort()).toEqual([a, b].sort());
     expect((await getTask(a)).group_id).toBe(result.group_id);
@@ -121,9 +121,9 @@ describe('addToGroup', () => {
   });
 
   it('adds an out-of-scope task to an existing group (no scope rule)', async () => {
-    // Cross-category/project members are allowed — grouping has no scope rule.
-    const [a, b] = await makeTasks(['A', 'B'], 'Work', 'EKS');
-    const [c] = await makeTasks(['C'], 'Life', 'Home');
+    // Cross-project members are allowed — grouping has no scope rule.
+    const [a, b] = await makeTasks(['A', 'B'], 'Marina');
+    const [c] = await makeTasks(['C'], 'Home');
     const g = await groupTasks([a, b]);
     const result = await addToGroup(g.group_id, [c]);
     expect(result.member_ids.sort()).toEqual([a, b, c].sort());

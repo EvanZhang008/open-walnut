@@ -365,7 +365,6 @@ struct NewSessionSheet: View {
                 title: created.title,
                 taskId: created.taskId,
                 taskTitle: task?.title ?? created.title,
-                category: task?.category,
                 project: task?.project,
                 host: selectedHost,
                 processStatus: "idle",

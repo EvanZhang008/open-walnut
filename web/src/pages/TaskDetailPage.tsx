@@ -343,7 +343,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
         <div className="flex gap-2 items-center mb-4">
           <StatusBadge status={task.status} phase={task.phase} />
           <PriorityBadge priority={task.priority} />
-          <span className="text-sm text-muted">{task.category}{task.project && task.project !== task.category ? ` / ${task.project}` : ''}</span>
+          <span className="text-sm text-muted">{task.project || 'Inbox'}</span>
           <DatePicker date={task.start_date} onChange={handleStartDateChange} label="Start" />
           <DatePicker date={task.due_date} onChange={handleDateChange} label="Due" />
           <SprintPicker sprint={task.sprint} onSprintChange={handleSprintChange} />

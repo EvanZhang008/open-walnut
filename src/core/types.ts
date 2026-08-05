@@ -19,8 +19,11 @@ export interface QuickTaskParse {
   pinTier?: string;  // built-in 'focus' | 'satellite' | 'backlog' | 'wait', or a custom tier id ('ct_*')
   priority?: Exclude<TaskPriority, 'none'>;
   starred?: boolean;
-  category?: string;
+  /** Target project. Omitted/empty = Inbox. */
   project?: string;
+  /** True when `project` is a name the model invented (not in the known list) —
+   *  the confirm UI badges it so the user knows a new project will be created. */
+  project_is_new?: boolean;
 }
 
 // ── Pin tier routing policy ───────────────────────────────────────────────
@@ -451,8 +454,9 @@ export interface Task {
   title: string;
   status: TaskStatus;
   priority: TaskPriority;
-  category: string;
-  project: string;
+  /** The task's single grouping layer. Optional — '' or absent means Inbox.
+   *  Readers should treat `undefined` and `''` identically (`task.project || ''`). */
+  project?: string;
   /** @deprecated Backward-compat legacy field. Before the 2-slot model, a task could
    *  accumulate unbounded session IDs. Now we use plan_session_id + exec_session_id
    *  as the source of truth (one slot per type). This array is kept for migration
@@ -482,7 +486,7 @@ export interface Task {
    *  group in the list (boxed together, ordered after the group's lead task) —
    *  this is NOT a parent/subtask relationship: the tasks stay flat and fully
    *  independent (separate lifecycles). All members must share the same
-   *  category + project. Never pushed to external sync backends; round-trips via
+   *  project. Never pushed to external sync backends; round-trips via
    *  the SQLite `payload` blob (not a dedicated column). The human-readable group
    *  name lives in TaskStore.task_groups. */
   group_id?: string;
@@ -533,8 +537,19 @@ export interface Task {
   ext?: Record<string, unknown>;
 }
 
-export interface CategoryRecord {
+/**
+ * A row of the `task_projects` registry — the single grouping layer.
+ *
+ * `source` is the sync-claim point (one provider per project at most; Inbox —
+ * the empty project — has no row and can never be claimed). `metadata` holds
+ * everything the retired `.metadata_project` sentinel task used to carry:
+ * default_cwd, default_host, summary, summary_task_count, plus migration
+ * bookkeeping (legacy_category) and the MS To-Do remote list alias (remote_list).
+ */
+export interface ProjectRecord {
   source: TaskSource;
+  order_index?: number;
+  metadata?: Record<string, unknown>;
 }
 
 export interface TaskStore {
@@ -542,7 +557,9 @@ export interface TaskStore {
    *  and tests; no live code reads it. */
   version?: 1 | 2 | 3 | 4;
   tasks: Task[];
-  categories?: Record<string, CategoryRecord>;
+  /** Project registry, keyed by project name (case-insensitive identity — the
+   *  SQLite PK is COLLATE NOCASE). Never contains a '' (Inbox) key. */
+  projects?: Record<string, ProjectRecord>;
   /** Virtual task-group name registry: group_id → { label }. Maps the local-only
    *  Task.group_id to a human-readable (AI-generated) group name. Groups with
    *  fewer than 2 live members are pruned. Local-only; never synced. */
@@ -712,12 +729,11 @@ export interface Config {
   user: { name?: string };
   defaults: {
     priority: TaskPriority;
-    category: string;
     /** Default platform/source for new tasks created via quick-add. Unset = 'local'
      *  (created locally, never blocks on an external sync round-trip). User picks this
      *  in Settings → General. */
     platform?: TaskSource;
-    /** Optional default project for new quick-add tasks. */
+    /** Optional default project for new quick-add tasks. Unset/'' = Inbox. */
     project?: string;
   };
   provider: {
@@ -730,10 +746,6 @@ export interface Config {
    *  When absent, auto-synthesized from legacy `provider.*` fields + env var auto-detection. */
   providers?: Record<string, import('../agent/providers/types.js').ProviderConfig>;
   agent?: AgentConfig;
-  local?: {
-    /** Category names reserved for local-only tasks (never synced to any external service). */
-    categories?: string[];
-  };
   /** Plugin configurations. Keys are plugin IDs (e.g. 'ms-todo'). Each plugin defines its own config schema. */
   plugins?: Record<string, Record<string, unknown> & { enabled?: boolean }>;
   /** External calendar display (EventKit — all macOS system-account calendars). */
@@ -749,14 +761,13 @@ export interface Config {
    *  ~/.open-walnut/plugin-stores/ and scanned for plugin dirs (manifest.json). */
   plugin_sources?: Array<{ url: string; ref?: string; enabled?: boolean }>;
   favorites?: {
-    categories?: string[];
     projects?: string[];
     /** Vault-relative note paths (WITH .md), e.g. "PARA/foo.md". Toggled from the notes editor/tree. */
     notes?: string[];
   };
   ordering?: {
-    categories?: string[];
-    projects?: Record<string, string[]>;
+    /** Flat project display order (single grouping layer). */
+    projects?: string[];
   };
   session_server?: {
     /** Whether to use the SDK session server instead of CLI sessions. Default: false. */
@@ -1090,7 +1101,9 @@ export type StatusReason =
   | 'reconciled_authoritative'
   | 'streaming_evidence_self_heal'
   | 'turn_interrupted'
-  | 'user_stopped';
+  | 'user_stopped'
+  /** C2 snapshot projection wrote the status (docs/plan/session-snapshot-source-of-truth.md §5). */
+  | 'snapshot_projection';
 
 export type StatusChangedBy =
   | 'health-monitor'
@@ -1099,7 +1112,9 @@ export type StatusChangedBy =
   | 'subagent-runner'
   | 'daemon'
   | 'user'
-  | 'system';
+  | 'system'
+  /** C2 snapshot projection (docs/plan/session-snapshot-source-of-truth.md §5). */
+  | 'snapshot';
 
 export interface StatusTransition {
   timestamp: string;

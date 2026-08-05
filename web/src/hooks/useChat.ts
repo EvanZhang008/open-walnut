@@ -45,7 +45,7 @@ export interface ChatMessage {
 export interface TaskContext {
   id: string;
   title: string;
-  category: string;
+  /** Project name. '' = Inbox (the task has no project). */
   project: string;
   status: string;
   phase?: string;
@@ -65,10 +65,10 @@ export interface TaskContext {
   subtasks?: { id: string; title: string; done: boolean }[];
 }
 
-/** Build a rich task reference: [id|Project / Title] or [id|Title], falling back to [id]. */
-function buildTaskRef(id: string, title?: string, project?: string, category?: string): string {
+/** Build a rich task reference: [id|Project / Title] or [id|Title] (Inbox), falling back to [id]. */
+function buildTaskRef(id: string, title?: string, project?: string): string {
   if (!title) return `[${id}]`;
-  const label = project && project !== category ? `${project} / ${title}` : title;
+  const label = project ? `${project} / ${title}` : title;
   return `[${id}|${label}]`;
 }
 
@@ -724,13 +724,13 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   useEvent('session:result', (data) => {
     if (agentIdRef.current !== 'general') return;
     const { result, taskId: eventTaskId, isError,
-            taskTitle, taskProject, taskCategory } = data as {
+            taskTitle, taskProject } = data as {
       result?: string; taskId?: string; sessionId?: string; isError?: boolean;
-      taskTitle?: string; taskProject?: string; taskCategory?: string;
+      taskTitle?: string; taskProject?: string;
     };
     if (!result || isError) return;
     const prefix = '**Session Result**';
-    const taskRef = eventTaskId ? buildTaskRef(eventTaskId, taskTitle, taskProject, taskCategory) : null;
+    const taskRef = eventTaskId ? buildTaskRef(eventTaskId, taskTitle, taskProject) : null;
     const content = taskRef
       ? `${prefix} (${taskRef}):\n\n${result}`
       : `${prefix}:\n\n${result}`;

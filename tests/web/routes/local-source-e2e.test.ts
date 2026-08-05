@@ -44,12 +44,11 @@ afterAll(async () => {
 
 describe('Local source task — full E2E lifecycle', () => {
   // ─── CREATE ───────────────────────────────────────────────
-  it('creates a local task with category, project, and description', async () => {
+  it('creates a local task with a project and description', async () => {
     const res = await request(app)
       .post('/api/tasks')
       .send({
         title: 'Local E2E Task',
-        category: 'TestCat',
         project: 'TestProj',
         source: 'local',
         priority: 'important',
@@ -63,10 +62,23 @@ describe('Local source task — full E2E lifecycle', () => {
       phase: 'TODO',
       status: 'todo',
       priority: 'important',
-      category: 'TestCat',
       project: 'TestProj',
     });
+    expect(res.body.task).not.toHaveProperty('category');
     taskId = res.body.task.id;
+  });
+
+  it('creates a projectless task — Inbox is the default, not an error', async () => {
+    const res = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'Inbox capture', source: 'local' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.task.project).toBe('');
+    expect(res.body.task.source).toBe('local');
+
+    // Clean up so the later source/tag filter assertions stay exact.
+    await request(app).delete(`/api/tasks/${res.body.task.id}`);
   });
 
   it('persists the task — GET returns it', async () => {
@@ -244,7 +256,6 @@ describe('Local source task — full E2E lifecycle', () => {
       .post('/api/tasks')
       .send({
         title: 'Local Subtask',
-        category: 'TestCat',
         project: 'TestProj',
         source: 'local',
         parent_task_id: taskId,

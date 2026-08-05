@@ -10481,7 +10481,7 @@ body.walnut-dragging {
   background: var(--hover-bg, rgba(0,0,0,0.04));
 }
 
-.todo-detail-category {
+.todo-detail-project {
   font-size: 11px;
   font-weight: 600;
   color: var(--fg-muted);
@@ -11817,11 +11817,11 @@ body.walnut-dragging {
 
 /* ===== Todo Panel Grouping ===== */
 
-.todo-group-category {
+.todo-group-project {
   margin-bottom: 4px;
 }
 
-.todo-group-category-header {
+.todo-group-project-header {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -11829,42 +11829,6 @@ body.walnut-dragging {
   font-size: 13px;
   font-weight: 600;
   color: var(--fg-secondary);
-  width: 100%;
-  touch-action: none;
-  cursor: grab;
-}
-
-.todo-group-category-header-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
-  text-align: left;
-  transition: color 0.15s;
-}
-
-.todo-group-category-header-toggle:hover {
-  color: var(--fg);
-}
-
-.todo-group-category-name {
-  flex: 1;
-}
-
-.todo-group-project {
-  padding-left: 6px;
-  margin-left: 0;
-}
-
-.todo-group-project-header {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 4px 4px 0;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--fg-muted);
   width: 100%;
   touch-action: none;
   cursor: grab;
@@ -11909,16 +11873,10 @@ body.walnut-dragging {
   transition: color 0.15s, background 0.15s;
 }
 
-.todo-group-category-header .todo-group-name-btn {
+.todo-group-project-header .todo-group-name-btn {
   color: var(--fg-secondary);
   font-weight: 600;
   font-size: 13px;
-}
-
-.todo-group-project-header .todo-group-name-btn {
-  color: var(--fg-muted);
-  font-weight: 500;
-  font-size: 12px;
 }
 
 .todo-group-name-btn:hover {
@@ -11926,7 +11884,7 @@ body.walnut-dragging {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-/* Project / Category detail pane styles */
+/* Project detail pane styles */
 .detail-source-badge {
   font-size: 10px;
   font-weight: 600;
@@ -12027,39 +11985,6 @@ body.walnut-dragging {
   text-transform: uppercase;
 }
 
-.detail-project-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.detail-project-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 12px;
-  text-align: left;
-  color: var(--fg);
-  transition: background 0.15s;
-}
-.detail-project-row:hover {
-  background: var(--hover-bg, rgba(0,0,0,0.04));
-}
-.detail-project-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.detail-project-count {
-  flex-shrink: 0;
-  font-size: 11px;
-  color: var(--fg-muted);
-  font-weight: 500;
-}
-
 .detail-memory-text {
   font-size: 12px;
   color: var(--fg-secondary);
@@ -12067,7 +11992,7 @@ body.walnut-dragging {
   margin: 0;
 }
 
-/* Favorite star button on category/project headers */
+/* Favorite star button on project group headers */
 .todo-group-fav-btn {
   font-size: 13px;
   color: var(--fg-muted);
@@ -12077,9 +12002,7 @@ body.walnut-dragging {
   transition: opacity 0.15s, color 0.15s;
 }
 
-.todo-group-category-header:hover .todo-group-fav-btn,
 .todo-group-project-header:hover .todo-group-fav-btn,
-.todo-group-fav-btn[title="Unfavorite category"],
 .todo-group-fav-btn[title="Unfavorite project"] {
   opacity: 1;
 }
@@ -12115,20 +12038,11 @@ body.walnut-dragging {
   flex-shrink: 0;
 }
 
-/* Tasks under project: align with project name (after chevron + gap) */
-/* Task text aligns with parent header's first letter.
-   Measured: category name at 38px, project name at 40px from panel left.
-   Use descendant selectors (not >) because SortableContext adds wrapper divs. */
+/* Tasks under a project group: align with the project name's first letter
+   (chevron + gap ≈ 30px). Descendant selector (not >) because SortableContext
+   inserts wrapper divs. */
 .todo-group-project .todo-panel-item {
-  padding-left: 24px;
-}
-/* Category direct tasks (not inside a project) — match category name position */
-.todo-group-category .todo-panel-item {
   padding-left: 30px;
-}
-/* Project tasks override the category rule above with higher specificity */
-.todo-group-category .todo-group-project .todo-panel-item {
-  padding-left: 24px;
 }
 
 /* Drag overlay (floating copy while dragging) */
@@ -15192,8 +15106,7 @@ a.task-kebab-info:hover {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-.qtc-confirm-input,
-.qtc-confirm-select {
+.qtc-confirm-input {
   width: 100%;
   padding: 6px 8px;
   border: 1px solid var(--border);
@@ -15204,8 +15117,7 @@ a.task-kebab-info:hover {
   font-size: 12px;
   outline: none;
 }
-.qtc-confirm-input:focus,
-.qtc-confirm-select:focus {
+.qtc-confirm-input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-subtle);
 }
@@ -15223,12 +15135,25 @@ a.task-kebab-info:hover {
   color: var(--accent);
   font-size: 10px;
 }
+/* "new" pill on an AI-invented project name (it will be created on submit). */
+.qtc-confirm-new {
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
 .qtc-confirm-chips {
   padding: 0;
 }
+/* Project is the single grouping layer, so this grid holds ONE field now. */
 .qtc-confirm-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 8px;
 }
 .qtc-confirm-footer {
@@ -19017,68 +18942,6 @@ td.usage-share-col {
   font-size: 12px;
   color: var(--fg-muted);
   white-space: nowrap;
-}
-
-/* List Editor */
-.list-editor-items {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 8px;
-}
-
-.list-editor-items:empty {
-  display: none;
-}
-
-.list-editor-vertical {
-  flex-direction: column;
-}
-
-.list-editor-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  background: var(--bg-tertiary);
-  border-radius: 10px;
-  font-size: 12px;
-  color: var(--fg-secondary);
-}
-
-.list-editor-vertical .list-editor-chip {
-  border-radius: var(--radius-sm);
-}
-
-.list-editor-chip-text {
-  max-width: 400px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono, monospace);
-}
-
-.list-editor-chip-remove {
-  border: none;
-  background: none;
-  cursor: pointer;
-  font-size: 14px;
-  color: var(--fg-muted);
-  padding: 0 2px;
-  line-height: 1;
-}
-
-.list-editor-chip-remove:hover {
-  color: var(--error);
-}
-
-.list-editor-add {
-  display: flex;
-  gap: 6px;
-}
-
-.list-editor-add input {
-  flex: 1;
 }
 
 /* KeyValue Editor */

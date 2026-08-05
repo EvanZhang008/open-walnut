@@ -1,24 +1,26 @@
 /**
- * ViewDropdown — unified [▾ View] panel replacing category tabs, filter rows, and sort controls.
+ * ViewDropdown — unified [▾ View] panel replacing project tabs, filter rows, and sort controls.
  *
- * Wide (~360px) panel with 2-column category grid and compact filter/sort/group sections.
+ * Wide (~360px) panel with a 2-column project chip grid and compact filter/sort/group sections.
  */
 
 import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { ICON_SLIDERS } from '../common/Icons';
+import { STARRED_TAB, INBOX_TAB } from './task-tabs';
 
 // ── Types ──
 
 export type SortBy = 'manual' | 'priority' | 'date' | 'updated';
-export type GroupBy = 'category' | 'none';
+export type GroupBy = 'project' | 'none';
 export type DateFilter = '' | 'now' | 'overdue' | 'this-week' | 'no-date';
 
 export interface ViewDropdownProps {
-  categories: string[];
-  activeCategory: string;
-  onCategoryChange: (cat: string) => void;
-  categoryCounts?: Record<string, number>;
+  /** Project chips. '' = the All chip; INBOX_TAB = tasks with no project. */
+  projects: string[];
+  activeProject: string;
+  onProjectChange: (project: string) => void;
+  projectCounts?: Record<string, number>;
   hasStarredContent?: boolean;
 
   phaseFilter: string;
@@ -42,7 +44,9 @@ export interface ViewDropdownProps {
   onClearAll: () => void;
 }
 
-const STARRED_TAB = '\u2605';
+// Tab sentinels live in ./task-tabs so ViewDropdown, TodoPanel, MainPage and
+// useUrlSync share ONE definition. Re-exported here for existing importers.
+export { INBOX_TAB } from './task-tabs';
 
 // Keep in sync with .vd-panel width in globals.css.
 const PANEL_WIDTH = 340;
@@ -72,7 +76,7 @@ const DATE_FILTER_OPTIONS = [
 ];
 
 export function ViewDropdown({
-  categories, activeCategory, onCategoryChange, categoryCounts, hasStarredContent,
+  projects, activeProject, onProjectChange, projectCounts, hasStarredContent,
   phaseFilter, onPhaseFilterChange, priorityFilter, onPriorityFilterChange,
   tagFilter, onTagFilterChange, availableTags,
   dateFilter, onDateFilterChange,
@@ -83,7 +87,7 @@ export function ViewDropdown({
   const containerRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  const hasActiveFilter = !!(phaseFilter || priorityFilter || tagFilter || dateFilter || activeCategory || showCompleted);
+  const hasActiveFilter = !!(phaseFilter || priorityFilter || tagFilter || dateFilter || activeProject || showCompleted);
 
   // The panel renders in a portal on document.body (fixed coords) so ancestor
   // panels/overflow can never clip it. Smart placement: right-align to the trigger,
@@ -134,12 +138,13 @@ export function ViewDropdown({
     return () => document.removeEventListener('keydown', handler);
   }, [open]);
 
-  // Build category chips: [★, All, ...categories]
+  // Build project chips: [★, All, ...projects]. Inbox rides in the project list
+  // when the caller includes it (INBOX_TAB), since '' is taken by the All chip.
   const catChips: { id: string; label: string; count?: number }[] = [];
   if (hasStarredContent) catChips.push({ id: STARRED_TAB, label: '\u2605' });
   catChips.push({ id: '', label: 'All' });
-  for (const cat of categories) {
-    catChips.push({ id: cat, label: cat, count: categoryCounts?.[cat] });
+  for (const project of projects) {
+    catChips.push({ id: project, label: project === INBOX_TAB ? 'Inbox' : project, count: projectCounts?.[project] });
   }
 
   return (
@@ -189,7 +194,7 @@ export function ViewDropdown({
             <div className="vd-field">
               <span className="vd-label">Group</span>
               <div className="vd-seg">
-                {([['category', 'Cat'], ['none', 'Flat']] as const).map(([val, lbl]) => (
+                {([['project', 'Proj'], ['none', 'Flat']] as const).map(([val, lbl]) => (
                   <button key={val} className={`vd-seg-btn${groupBy === val ? ' vd-active' : ''}`} onClick={() => onGroupByChange(val)}>{lbl}</button>
                 ))}
               </div>
@@ -198,13 +203,13 @@ export function ViewDropdown({
 
           <div className="vd-sep" />
 
-          {/* ── Categories: 2-column chip grid (bottom) ── */}
+          {/* ── Projects: 2-column chip grid (bottom) ── */}
           <div className="vd-cats">
             {catChips.map((c) => (
               <button
                 key={c.id}
-                className={`vd-cat${activeCategory === c.id ? ' vd-active' : ''}`}
-                onClick={() => onCategoryChange(c.id)}
+                className={`vd-cat${activeProject === c.id ? ' vd-active' : ''}`}
+                onClick={() => onProjectChange(c.id)}
               >
                 <span className="vd-cat-name">{c.label}</span>
                 {c.count !== undefined && <span className="vd-cat-n">{c.count}</span>}

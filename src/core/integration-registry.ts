@@ -3,7 +3,7 @@
  * Core code accesses integrations exclusively through this registry.
  */
 
-import type { RegisteredPlugin, CategoryClaimFn, IntegrationSync } from './integration-types.js';
+import type { RegisteredPlugin, ProjectClaimFn, IntegrationSync } from './integration-types.js';
 
 /** No-op sync used by the local fallback plugin. */
 const noopLocalSync: IntegrationSync = {
@@ -18,7 +18,7 @@ const noopLocalSync: IntegrationSync = {
   updatePhase: async () => {},
   updateDueDate: async () => {},
   updateStar: async () => {},
-  updateCategory: async () => {},
+  updateProject: async () => {},
   updateDependencies: async () => {},
   associateSubtask: async () => {},
   disassociateSubtask: async () => {},
@@ -53,18 +53,21 @@ class IntegrationRegistry {
   }
 
   /**
-   * Find the plugin that claims ownership of a category.
+   * Find the plugin that claims ownership of a project.
    * Iterates claims by priority (highest first). First match wins.
    * Always returns something — 'local' plugin is the universal fallback (priority -1).
+   *
+   * Inbox (the empty project) is structurally unclaimable, so callers never ask
+   * about it — it is always 'local'.
    */
-  async getForCategory(category: string): Promise<RegisteredPlugin> {
+  async getForProject(project: string): Promise<RegisteredPlugin> {
     // Collect plugins with claims, sort by priority descending
     const claimable = [...this.plugins.values()]
       .filter(p => p.claim)
       .sort((a, b) => (b.claim!.priority) - (a.claim!.priority));
 
     for (const plugin of claimable) {
-      const claimed = await plugin.claim!.fn(category);
+      const claimed = await plugin.claim!.fn(project);
       if (claimed) return plugin;
     }
 
@@ -73,7 +76,7 @@ class IntegrationRegistry {
     const local = this.plugins.get('local');
     if (local) return local;
 
-    throw new Error('No plugin registered for category and no local fallback found.');
+    throw new Error('No plugin registered for project and no local fallback found.');
   }
 
   /** Remove all plugins (useful for testing). Re-registers the local fallback. */
@@ -90,7 +93,7 @@ class IntegrationRegistry {
       name: 'Local (fallback)',
       config: {},
       sync: noopLocalSync,
-      claim: { fn: (() => true) as CategoryClaimFn, priority: -1 },
+      claim: { fn: (() => true) as ProjectClaimFn, priority: -1 },
       migrations: [],
       httpRoutes: [],
     });
@@ -101,6 +104,6 @@ class IntegrationRegistry {
 export const registry = new IntegrationRegistry();
 export { IntegrationRegistry };
 
-// Auto-register local fallback so getForCategory() always works,
+// Auto-register local fallback so getForProject() always works,
 // even in tests that don't call loadPlugins().
 registry.ensureLocalFallback();

@@ -54,48 +54,30 @@ export function TaskList({
   onUngroupTask,
   onRenameGroup,
 }: TaskListProps) {
-  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set());
   const prompt = usePrompt();
   const confirm = useConfirm();
   // ── Multi-select for group building ── (Cmd/Ctrl/Shift-click a card to toggle.)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
+  // Project is the single grouping layer: one flat lane per project, '' = Inbox (last).
   const grouped = useMemo(() => {
-    const map = new Map<string, { direct: Task[]; projects: Map<string, Task[]> }>();
+    const map = new Map<string, Task[]>();
     for (const task of tasks) {
-      const cat = task.category || 'Uncategorized';
-      const hasDistinctProject = task.project && task.project !== task.category;
-      if (!map.has(cat)) map.set(cat, { direct: [], projects: new Map() });
-      const entry = map.get(cat)!;
-      if (hasDistinctProject) {
-        const proj = task.project!;
-        if (!entry.projects.has(proj)) entry.projects.set(proj, []);
-        entry.projects.get(proj)!.push(task);
-      } else {
-        entry.direct.push(task);
-      }
+      const proj = task.project || '';
+      if (!map.has(proj)) map.set(proj, []);
+      map.get(proj)!.push(task);
     }
     return Array.from(map.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([cat, { direct, projects: projMap }]) => ({
-        category: cat,
-        directTasks: clusterByGroup(direct),
-        projects: Array.from(projMap.entries())
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([proj, projTasks]) => ({ project: proj, tasks: clusterByGroup(projTasks) })),
-      }));
+      .sort(([a], [b]) => (a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)))
+      .map(([project, projTasks]) => ({ project, tasks: clusterByGroup(projTasks) }));
   }, [tasks]);
 
   // taskId → render metadata. Count members per group from the displayed set so a
   // group needs ≥2 *visible*, contiguous members to box (a lone survivor gets no rail).
   const groupRenderMap = useMemo(() => {
     const map = new Map<string, CardGroupInfo>();
-    const lanes: Task[][] = [];
-    for (const g of grouped) {
-      if (g.directTasks.length) lanes.push(g.directTasks);
-      for (const p of g.projects) lanes.push(p.tasks);
-    }
+    const lanes: Task[][] = grouped.filter((g) => g.tasks.length).map((g) => g.tasks);
     for (const lane of lanes) {
       const counts = new Map<string, number>();
       for (const t of lane) if (t.group_id) counts.set(t.group_id, (counts.get(t.group_id) ?? 0) + 1);
@@ -138,7 +120,7 @@ export function TaskList({
   }, []);
 
   // Resolve selection → tasks. Grouping has NO scope rule — any ≥2 tasks can be
-  // grouped regardless of category/project (a group is a pure visual cluster).
+  // grouped regardless of project (a group is a pure visual cluster).
   const selectionInfo = useMemo(() => {
     const picked = tasks.filter((t) => selectedIds.has(t.id));
     const doneCount = picked.filter((t) => t.status === 'done' || t.phase === 'COMPLETE').length;
@@ -190,15 +172,6 @@ export function TaskList({
     return <EmptyState message="No tasks found" actionLabel={onAdd ? 'Add Task' : undefined} onAction={onAdd} />;
   }
 
-  const toggleCategory = (key: string) => {
-    setCollapsedCategories((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
-
   const toggleProject = (key: string) => {
     setCollapsedProjects((prev) => {
       const next = new Set(prev);
@@ -226,42 +199,17 @@ export function TaskList({
 
   return (
     <div className="task-list">
-      {grouped.map(({ category, directTasks, projects }) => (
-        <div key={category} className="task-group">
-          <button className="task-group-header" onClick={() => toggleCategory(category)}>
-            <span className="task-group-arrow">{collapsedCategories.has(category) ? '▶' : '▼'}</span>
-            <span className="task-group-name">{category}</span>
-            <span className="task-group-count text-muted text-xs">
-              {directTasks.length + projects.reduce((sum, p) => sum + p.tasks.length, 0)}
-            </span>
+      {grouped.map(({ project, tasks: projTasks }) => (
+        <div key={project || '__inbox__'} className="task-group">
+          <button className="task-group-header" onClick={() => toggleProject(project)}>
+            <span className="task-group-arrow">{collapsedProjects.has(project) ? '▶' : '▼'}</span>
+            <span className="task-group-name">{project || 'Inbox'}</span>
+            <span className="task-group-count text-muted text-xs">{projTasks.length}</span>
           </button>
-          {!collapsedCategories.has(category) && (
-            <>
-              {/* Tasks without a distinct project — directly under category */}
-              {directTasks.length > 0 && (
-                <div className="task-subgroup-items">
-                  {directTasks.map(renderCard)}
-                </div>
-              )}
-              {/* Tasks with distinct projects — collapsible sub-groups */}
-              {projects.map(({ project, tasks: projTasks }) => {
-                const projKey = `${category}/${project}`;
-                return (
-                  <div key={projKey} className="task-subgroup">
-                    <button className="task-subgroup-header" onClick={() => toggleProject(projKey)}>
-                      <span className="task-group-arrow">{collapsedProjects.has(projKey) ? '▶' : '▼'}</span>
-                      <span className="task-subgroup-name">{project}</span>
-                      <span className="task-group-count text-muted text-xs">{projTasks.length}</span>
-                    </button>
-                    {!collapsedProjects.has(projKey) && (
-                      <div className="task-subgroup-items">
-                        {projTasks.map(renderCard)}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </>
+          {!collapsedProjects.has(project) && (
+            <div className="task-subgroup-items">
+              {projTasks.map(renderCard)}
+            </div>
           )}
         </div>
       ))}

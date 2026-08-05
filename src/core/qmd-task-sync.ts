@@ -28,6 +28,14 @@ import type { Task } from './types.js';
 const COLLECTION = 'tasks';
 
 /**
+ * Serialization format version, salted into the content hash. Bumping it makes
+ * every task document's hash differ from what's on disk, so the next sync
+ * re-inserts + re-embeds the whole collection. Bump whenever
+ * serializeTaskForSearch changes shape (v2 = category removed, project-only).
+ */
+const TASK_DOC_FORMAT_VERSION = 'v2';
+
+/**
  * Serialize human-language task content for QMD.
  *
  * Opaque task/session IDs deliberately stay in the structured task store and
@@ -40,15 +48,16 @@ export function serializeTaskForSearch(task: Task): string {
   if (task.description) parts.push(task.description);
   if (task.summary) parts.push(task.summary);
   if (task.tags?.length) parts.push(`Tags: ${task.tags.join(', ')}`);
-  parts.push(`${task.category} / ${task.project}`);
+  parts.push(`Project: ${task.project || 'Inbox'}`);
   if (task.note) parts.push(task.note);
   if (task.conversation_log) parts.push(task.conversation_log);
   return parts.join('\n\n');
 }
 
-/** SHA256 hash of serialized content. */
+/** SHA256 hash of serialized content, salted with the format version so a
+ *  serializer change invalidates every existing document hash. */
 function contentHash(text: string): string {
-  return createHash('sha256').update(text).digest('hex');
+  return createHash('sha256').update(`${TASK_DOC_FORMAT_VERSION}\n${text}`).digest('hex');
 }
 
 /** Virtual document path for a task. */

@@ -46,7 +46,7 @@ describe('GET /api/config (cloud mode) redacts secrets', () => {
     const initial = {
       version: 1,
       user: { name: 'Owner' },
-      defaults: { priority: 'none', category: 'personal' },
+      defaults: { priority: 'none', project: 'personal' },
       provider: { bedrock_bearer_token: secretToken },
       providers: {
         bedrock: { api: 'bedrock', aws_secret_access_key: awsSecret },

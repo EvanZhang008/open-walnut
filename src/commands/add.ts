@@ -6,7 +6,6 @@ import type { TaskPriority } from '../core/types.js';
 
 interface AddOptions {
   priority?: string;
-  category?: string;
   list?: string;
   project?: string;
   due?: string;
@@ -20,7 +19,7 @@ export async function runAdd(
   const { task } = await addTask({
     title,
     priority: options.priority as TaskPriority | undefined,
-    category: options.category,
+    // Omitted → Inbox.
     project: options.list ?? options.project,
     due_date: options.due,
   });

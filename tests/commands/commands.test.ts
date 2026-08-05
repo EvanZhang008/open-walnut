@@ -18,8 +18,12 @@ beforeAll(() => {
 beforeEach(async () => {
   tmpHome = path.join(os.tmpdir(), `walnut-integ-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   await fs.mkdir(tmpHome, { recursive: true });
-  // Override HOME so that ~/.open-walnut resolves to our temp dir
-  env = { ...process.env, HOME: tmpHome } as Record<string, string>;
+  // HOME alone is NOT enough: the child inherits OPEN_WALNUT_HOME from the vitest
+  // globalSetup (a shared /tmp/open-walnut-test-global), and that env var OUTRANKS
+  // HOME in resolveOpenWalnutHome(). Without overriding it every CLI run in every
+  // file shares one store — leftover project rows then decide the canonical
+  // spelling of a project this test creates ("Walnut" vs "walnut").
+  env = { ...process.env, HOME: tmpHome, OPEN_WALNUT_HOME: tmpHome } as Record<string, string>;
 });
 
 afterEach(async () => {
@@ -50,12 +54,21 @@ describe('CLI integration: add command', () => {
   });
 
   it('adds a task with options', () => {
-    const result = run('add "High priority work" --json -p immediate -c work --project walnut') as Record<string, unknown>;
+    // Project is the only grouping layer: `-l, --list <project>`.
+    const result = run('add "High priority work" --json -p immediate -l walnut') as Record<string, unknown>;
     const task = result.task as Record<string, unknown>;
 
     expect(task.priority).toBe('immediate');
-    expect(task.category).toBe('work');
     expect(task.project).toBe('walnut');
+    expect(task).not.toHaveProperty('category');
+  });
+
+  it('--project is an alias for -l and omitting both files the task in Inbox', () => {
+    const aliased = run('add "Alias route" --json --project walnut') as Record<string, unknown>;
+    expect((aliased.task as Record<string, unknown>).project).toBe('walnut');
+
+    const inbox = run('add "No project" --json') as Record<string, unknown>;
+    expect((inbox.task as Record<string, unknown>).project).toBe('');
   });
 });
 

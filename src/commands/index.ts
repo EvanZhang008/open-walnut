@@ -9,9 +9,8 @@ export function registerCommands(program: Command): void {
     .command('add <title>')
     .description('Add a new task')
     .option('-p, --priority <level>', 'Priority (immediate/important/backlog/none)', 'none')
-    .option('-c, --category <category>', 'Category (top-level group, e.g. Work, Life)')
-    .option('-l, --list <project>', 'Project/list within category (e.g. HomeLab, Costco)')
-    .option('--project <project>', 'Project/list within category (alias for --list)')
+    .option('-l, --list <project>', 'Project (the only grouping layer; omit for Inbox)')
+    .option('--project <project>', 'Project (alias for --list)')
     .option('-d, --due <date>', 'Due date (YYYY-MM-DD)')
     .action(async (title: string, options: Record<string, unknown>, cmd: Command) => {
       const { runAdd } = await import('./add.js');
@@ -22,7 +21,7 @@ export function registerCommands(program: Command): void {
     .command('tasks')
     .description('List tasks')
     .option('-s, --status <status>', 'Filter by status (todo/in_progress/done)')
-    .option('-c, --category <category>', 'Filter by category')
+    .option('--project <project>', 'Filter by project (pass "" for Inbox)')
     .action(async (options: Record<string, unknown>, cmd: Command) => {
       const { runTasks } = await import('./tasks.js');
       await runTasks(options, cmd.optsWithGlobals());

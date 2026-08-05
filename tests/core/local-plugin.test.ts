@@ -6,7 +6,7 @@
  * - B1: register() calls registerSync with all 16 methods
  * - B2: every sync method resolves without error
  * - B3: createTask returns null
- * - B4: source claim returns true for any category
+ * - B4: source claim returns true for any project
  * - B5: source claim has priority -1
  * - B6: display metadata has badge "L"
  * - B7: display.getExternalUrl returns null
@@ -31,7 +31,7 @@ describe('Local plugin: registerSync', () => {
       'createTask', 'deleteTask',
       'updateTitle', 'updateDescription', 'updateSummary', 'updateNote',
       'updateConversationLog', 'updatePriority', 'updatePhase', 'updateDueDate',
-      'updateStar', 'updateCategory', 'updateDependencies',
+      'updateStar', 'updateProject', 'updateDependencies',
       'pushTask',
       'associateSubtask', 'disassociateSubtask',
       'syncPoll',
@@ -66,7 +66,7 @@ describe('Local plugin: registerSync', () => {
     await expect(sync.updatePhase(task, 'IN_PROGRESS')).resolves.not.toThrow();
     await expect(sync.updateDueDate(task, '2026-01-01')).resolves.not.toThrow();
     await expect(sync.updateStar(task, true)).resolves.not.toThrow();
-    await expect(sync.updateCategory(task, 'Work', 'Project')).resolves.not.toThrow();
+    await expect(sync.updateProject(task, 'Project')).resolves.not.toThrow();
     await expect(sync.updateDependencies(task, ['dep-1'])).resolves.not.toThrow();
     await expect(sync.associateSubtask(task, childTask)).resolves.not.toThrow();
     await expect(sync.disassociateSubtask(task, childTask)).resolves.not.toThrow();
@@ -82,7 +82,7 @@ describe('Local plugin: registerSync', () => {
 });
 
 describe('Local plugin: source claim', () => {
-  it('B4: source claim returns true for any category', () => {
+  it('B4: source claim returns true for any project', () => {
     expect(collected.claim).not.toBeNull();
     expect(collected.claim!.fn('anything')).toBe(true);
     expect(collected.claim!.fn('')).toBe(true);

@@ -1,3 +1,10 @@
+/**
+ * Skill history logs. NOTE on vocabulary: `category` in this module is the SKILL
+ * grouping directory (skills/<group>/<name>/) — an independent concept that
+ * survived the task-model refactor, where Project is the only grouping layer.
+ * Task projects reach their skill by NAME SEARCH across those groups
+ * (resolveProjectSkillDir), which is what the last describe block covers.
+ */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -9,8 +16,12 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 import { WALNUT_HOME, GLOBAL_SKILLS_DIR } from '../../src/constants.js';
 import {
   appendOverviewLog,
+  appendSkillHistoryForProject,
   hasOverview,
   overviewHistoryDir,
+  resolveProjectSkillDir,
+  skillHistoryDir,
+  PROJECT_SKILL_CATEGORY,
   OVERVIEW_LOG_ROTATE_LIMIT,
 } from '../../src/core/overview-log.js';
 
@@ -22,6 +33,16 @@ async function seedOverview(category = CAT): Promise<void> {
   await fsp.writeFile(
     path.join(dir, 'SKILL.md'),
     `---\nname: overview\ndescription: '${category} project overview'\ntype: knowledge\n---\n\n# Overview\n`,
+  );
+}
+
+/** A curated project skill under an arbitrary skill grouping directory. */
+async function seedProjectSkill(skillCategory: string, name: string): Promise<void> {
+  const dir = path.join(GLOBAL_SKILLS_DIR, skillCategory, name);
+  await fsp.mkdir(dir, { recursive: true });
+  await fsp.writeFile(
+    path.join(dir, 'SKILL.md'),
+    `---\nname: ${name}\ndescription: '${name} project skill'\ntype: knowledge\n---\n\n# ${name}\n`,
   );
 }
 
@@ -94,5 +115,54 @@ describe('appendOverviewLog', () => {
     expect(() => appendOverviewLog(CAT, '   ')).toThrow(/empty/);
     expect(() => appendOverviewLog('../evil', 'x')).toThrow(/Invalid category/);
     expect(() => appendOverviewLog('a/b', 'x')).toThrow(/Invalid category/);
+  });
+});
+
+// A task carries only a project name, so the skill grouping directory can no
+// longer be derived from it — it has to be searched for by name.
+describe('resolveProjectSkillDir', () => {
+  it('finds a project skill under any skill grouping directory, case-insensitively', async () => {
+    await seedProjectSkill('work', 'Walnut');
+
+    expect(resolveProjectSkillDir('walnut')).toEqual({ skillCategory: 'work', name: 'Walnut' });
+    expect(resolveProjectSkillDir('WALNUT')).toEqual({ skillCategory: 'work', name: 'Walnut' });
+  });
+
+  it('picks the alphabetically first grouping when the same name exists twice', async () => {
+    await seedProjectSkill('work', 'Walnut');
+    await seedProjectSkill('archive', 'walnut');
+
+    expect(resolveProjectSkillDir('walnut')?.skillCategory).toBe('archive');
+  });
+
+  it('returns null for an unknown project, Inbox, or a path-ish name', async () => {
+    await seedProjectSkill('work', 'Walnut');
+
+    expect(resolveProjectSkillDir('ghost')).toBeNull();
+    expect(resolveProjectSkillDir('')).toBeNull();
+    expect(resolveProjectSkillDir('   ')).toBeNull();
+    expect(resolveProjectSkillDir('work/Walnut')).toBeNull();
+    expect(resolveProjectSkillDir('../evil')).toBeNull();
+  });
+
+  it('exposes the grouping dir new project skills are created under', () => {
+    expect(PROJECT_SKILL_CATEGORY).toBe('projects');
+  });
+});
+
+describe('appendSkillHistoryForProject', () => {
+  it('appends into the resolved project skill history', async () => {
+    await seedProjectSkill('work', 'Walnut');
+
+    const res = appendSkillHistoryForProject('walnut', 'Shipped the project registry.', 'session');
+
+    expect(res).not.toBeNull();
+    expect(path.dirname(res!.file)).toBe(skillHistoryDir('work', 'Walnut'));
+    expect(fs.readFileSync(res!.file, 'utf-8')).toContain('Shipped the project registry.');
+  });
+
+  it('returns null (never throws) when the project has no skill, or for Inbox', async () => {
+    expect(appendSkillHistoryForProject('ghost', 'entry')).toBeNull();
+    expect(appendSkillHistoryForProject('', 'entry')).toBeNull();
   });
 });

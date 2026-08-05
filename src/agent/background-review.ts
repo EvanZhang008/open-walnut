@@ -82,7 +82,7 @@ Signals to look for (any one warrants action):
 Routing (three words):
 - **memory** (memory_manage): target user = who the user IS (identity, work, preferences); target memory = behavior rules. Bounded budgets — replace/merge, never near-duplicate.
 - **skill** (skill_manage): how to do a class of task (type action) or curated stable facts (type knowledge).
-- **history**: past events are already searchable via history_search — NEVER save episodic "we did X" as a skill or memory. Notable project progress belongs in the category's overview log via skill_manage log_append.
+- **history**: past events are already searchable via history_search — NEVER save episodic "we did X" as a skill or memory. Notable project progress belongs in that project's skill history log via skill_manage log_append.
 
 Preference order — pick the EARLIEST that fits:
 1. PATCH a skill that was loaded or consulted in this conversation (it was in play; it's the right place).

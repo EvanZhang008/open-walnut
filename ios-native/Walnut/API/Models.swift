@@ -165,7 +165,7 @@ struct WalnutTask: Codable, Identifiable, Equatable {
     let status: String   // "todo" | "in_progress" | "done"
     let phase: String     // "TODO" | "IN_PROGRESS" | "AGENT_COMPLETE" | …
     let priority: String  // "immediate" | "important" | "backlog" | "none"
-    let category: String
+    /// The single grouping layer. "" = Inbox (no project).
     let project: String
     let dueDate: String?
     // Optional: pre-migration tasks in the projection can lack these stamps.
@@ -178,7 +178,7 @@ struct WalnutTask: Codable, Identifiable, Equatable {
     let summary: String?
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, status, phase, priority, category, project
+        case id, title, status, phase, priority, project
         case dueDate = "due_date"
         case createdAt = "created_at"
         case updatedAt = "updated_at"
@@ -190,6 +190,12 @@ struct WalnutTask: Codable, Identifiable, Equatable {
 struct TasksResponse: Codable {
     let tasks: [WalnutTask]
     let syncedAt: String
+}
+
+/// POST /api/v1/tasks → 201 { task } — the created task in the same slim
+/// ProjectedTask shape GET /tasks serves (additive endpoint, primary box only).
+struct TaskCreated: Codable {
+    let task: WalnutTask
 }
 
 /// Coarse status used for the circle indicator and the smart-list filters.
@@ -292,7 +298,7 @@ struct WalnutSession: Codable, Identifiable, Equatable {
     let title: String?
     let taskId: String?
     let taskTitle: String?
-    let category: String?
+    /// The owning task's project — absent for Inbox / task-less sessions.
     let project: String?
     /// "" = the primary box (Mac); otherwise the remote host alias.
     let host: String
@@ -308,7 +314,7 @@ struct WalnutSession: Codable, Identifiable, Equatable {
     let description: String?
 
     private enum CodingKeys: String, CodingKey {
-        case id, title, category, project, host, model, mode, cwd, pinned, description
+        case id, title, project, host, model, mode, cwd, pinned, description
         case taskId = "task_id"
         case taskTitle = "task_title"
         case processStatus = "process_status"
@@ -418,8 +424,8 @@ extension WalnutSession {
     }
 
     /// The headline is the OWNING TASK'S name — that's what identifies the work
-    /// to the user. The session's own title ("Session: <category> — <msg>") is
-    /// boilerplate that surfaces the category, not the task, so it's never the
+    /// to the user. The session's own title ("Session: <project|dir> — <msg>") is
+    /// boilerplate that surfaces the grouping, not the task, so it's never the
     /// headline; its first-message tail still makes a useful grey preview.
     private var parsedTitle: (forkDepth: Int, name: String, preview: String?) {
         // Fork depth + any first-message preview come from the session title.

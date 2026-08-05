@@ -3,7 +3,7 @@
  * chip (event or task) opens this in-place editor anchored to the chip:
  *   events → editable title + date + start/end time, calendar·account line,
  *            location, Delete (read-only calendars show disabled fields)
- *   tasks  → title, category·project line, date + optional time + all-day
+ *   tasks  → title, project line, date + optional time + all-day
  *            toggle for the date this chip represents, Unschedule, Open task
  * Saves go through the same optimistic paths as drags (moveEvent / update).
  */
@@ -148,7 +148,7 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
         <div className="cal-item-sub">
           {isEvent
             ? `${item.event.calendarName} · ${item.event.accountName}${readonly ? ' · read-only' : ''}`
-            : `${item.task.category} · ${item.task.project}${item.kind === 'task-due' ? ' · due date' : ' · start date'}`}
+            : `${item.task.project || 'Inbox'}${item.kind === 'task-due' ? ' · due date' : ' · start date'}`}
         </div>
         {isEvent && item.event.location && <div className="cal-item-location">{item.event.location}</div>}
 

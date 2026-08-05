@@ -396,12 +396,17 @@ describe('Cross-tool round-trip E2E', () => {
   it('file_write → shell_exec → file_read pipeline works within the same server', async () => {
     const testFile = path.join(WALNUT_HOME, 'cross-tool-test.txt');
 
-    // Step 1: write a file using the write_file tool
+    // Step 1: write a file using the write_file tool.
+    // The param is `source` (a content-source URI; an absolute path is one of the
+    // accepted forms), not `path`.
     const writeResult = await executeTool('file_write', {
-      path: testFile,
+      source: testFile,
       content: 'Hello from E2E cross-tool test\nLine 2\nLine 3',
     });
-    expect(writeResult).toContain('File written');
+    // Returns JSON: { status, content_hash }.
+    const written = JSON.parse(writeResult) as { status: string; content_hash: string };
+    expect(written.status).toBe('updated');
+    expect(written.content_hash).toBeTruthy();
 
     // Step 2: use exec to verify the file exists and has content
     const execResult = await executeTool('shell_exec', {
@@ -411,7 +416,7 @@ describe('Cross-tool round-trip E2E', () => {
 
     // Step 3: read the file back
     const readResult = await executeTool('file_read', {
-      path: testFile,
+      source: testFile,
     });
     expect(readResult).toContain('Hello from E2E cross-tool test');
     expect(readResult).toContain('Line 2');
@@ -419,14 +424,20 @@ describe('Cross-tool round-trip E2E', () => {
   });
 
   it('task + slack tools coexist: create task then send slack notification', async () => {
-    // Create a task
-    await executeTool('task_create', { type: 'category', name: 'Test', source: 'ms-todo' });
+    // Project is the only grouping layer — create the row up front, then file a
+    // task under it (the reply names the project, so no "(new project)" note).
+    const projectResult = await executeTool('task_create', { type: 'project', name: 'Marina' });
+    expect(projectResult).toContain('Project created');
+
     const taskResult = await executeTool('task_create', {
       title: 'Integration test task',
-      category: 'Test',
+      project: 'Marina',
     });
     expect(taskResult).toContain('Task created');
-    const taskId = taskResult.match(/\[([^\]]+)\]/)?.[1];
+    expect(taskResult).toContain('Marina');
+    expect(taskResult).not.toContain('new project');
+    // The reply embeds a `<task-ref id="…" label="…"/>` tag (taskRef in tools.ts).
+    const taskId = taskResult.match(/<task-ref id="([^"]+)"/)?.[1];
     expect(taskId).toBeTruthy();
 
     // Send a Slack notification about the task (mocked)
@@ -448,11 +459,12 @@ describe('Cross-tool round-trip E2E', () => {
       delete process.env.SLACK_BOT_TOKEN;
     }
 
-    // Verify the task exists via REST
+    // Verify the task exists via REST, filed under the project we created
     const res = await fetch(apiUrl(`/api/tasks/${taskId}`));
     expect(res.status).toBe(200);
-    const body = await res.json() as { task: { id: string; title: string } };
+    const body = await res.json() as { task: { id: string; title: string; project: string } };
     expect(body.task.title).toBe('Integration test task');
+    expect(body.task.project).toBe('Marina');
   });
 });
 

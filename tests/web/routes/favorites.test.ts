@@ -1,6 +1,7 @@
 /**
- * Tests for the favorites API routes (Fix 3).
- * Covers CRUD for category/project favorites via /api/favorites.
+ * Tests for the favorites API routes.
+ * Covers CRUD for project and note favorites via /api/favorites. Project is the
+ * single grouping layer, so there is no second (category) favorites dimension.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -37,64 +38,10 @@ describe('GET /api/favorites', () => {
     const res = await request(app).get('/api/favorites');
 
     expect(res.status).toBe(200);
-    expect(res.body.categories).toEqual([]);
     expect(res.body.projects).toEqual([]);
     expect(res.body.notes).toEqual([]);
-  });
-});
-
-describe('Category favorites', () => {
-  it('POST adds a category favorite', async () => {
-    const app = createApp();
-    const res = await request(app).post('/api/favorites/categories/Work');
-
-    expect(res.status).toBe(200);
-    expect(res.body.categories).toContain('Work');
-  });
-
-  it('adding same category twice is idempotent', async () => {
-    const app = createApp();
-    await request(app).post('/api/favorites/categories/Work');
-    const res = await request(app).post('/api/favorites/categories/Work');
-
-    expect(res.status).toBe(200);
-    expect(res.body.categories.filter((c: string) => c === 'Work')).toHaveLength(1);
-  });
-
-  it('DELETE removes a category favorite', async () => {
-    const app = createApp();
-    await request(app).post('/api/favorites/categories/Work');
-    const res = await request(app).delete('/api/favorites/categories/Work');
-
-    expect(res.status).toBe(200);
-    expect(res.body.categories).not.toContain('Work');
-  });
-
-  it('deleting non-existent favorite is safe', async () => {
-    const app = createApp();
-    const res = await request(app).delete('/api/favorites/categories/NonExistent');
-    expect(res.status).toBe(200);
-  });
-
-  it('multiple categories can be favorited', async () => {
-    const app = createApp();
-    await request(app).post('/api/favorites/categories/Work');
-    await request(app).post('/api/favorites/categories/Life');
-    await request(app).post('/api/favorites/categories/Personal');
-
-    const res = await request(app).get('/api/favorites');
-    expect(res.body.categories).toHaveLength(3);
-    expect(res.body.categories).toContain('Work');
-    expect(res.body.categories).toContain('Life');
-    expect(res.body.categories).toContain('Personal');
-  });
-
-  it('handles URL-encoded category names', async () => {
-    const app = createApp();
-    const res = await request(app).post('/api/favorites/categories/My%20Category');
-
-    expect(res.status).toBe(200);
-    expect(res.body.categories).toContain('My Category');
+    // The retired category dimension must not resurface in the payload.
+    expect(res.body).not.toHaveProperty('categories');
   });
 });
 
@@ -125,12 +72,52 @@ describe('Project favorites', () => {
     expect(res.body.projects).not.toContain('HomeLab');
   });
 
+  it('deleting non-existent favorite is safe', async () => {
+    const app = createApp();
+    const res = await request(app).delete('/api/favorites/projects/NonExistent');
+    expect(res.status).toBe(200);
+  });
+
+  it('multiple projects can be favorited', async () => {
+    const app = createApp();
+    await request(app).post('/api/favorites/projects/HomeLab');
+    await request(app).post('/api/favorites/projects/Taxes');
+    await request(app).post('/api/favorites/projects/Travel');
+
+    const res = await request(app).get('/api/favorites');
+    expect(res.body.projects).toHaveLength(3);
+    expect(res.body.projects).toContain('HomeLab');
+    expect(res.body.projects).toContain('Taxes');
+    expect(res.body.projects).toContain('Travel');
+  });
+
   it('handles URL-encoded project names', async () => {
     const app = createApp();
     const res = await request(app).post('/api/favorites/projects/AI%20Eureka');
 
     expect(res.status).toBe(200);
     expect(res.body.projects).toContain('AI Eureka');
+  });
+
+  // Project identity is case-INSENSITIVE (task_projects is NOCASE), so the
+  // favorites list must be too — otherwise "HomeLab" and "homelab" both persist
+  // and the star toggle looks dead on whichever spelling isn't stored.
+  it('POST is idempotent across case (no differently-cased duplicate)', async () => {
+    const app = createApp();
+    await request(app).post('/api/favorites/projects/HomeLab');
+    const res = await request(app).post('/api/favorites/projects/homelab');
+
+    expect(res.status).toBe(200);
+    expect(res.body.projects).toHaveLength(1);
+  });
+
+  it('DELETE matches case-insensitively', async () => {
+    const app = createApp();
+    await request(app).post('/api/favorites/projects/HomeLab');
+    const res = await request(app).delete('/api/favorites/projects/HOMELAB');
+
+    expect(res.status).toBe(200);
+    expect(res.body.projects).toEqual([]);
   });
 });
 
@@ -199,34 +186,31 @@ describe('Note favorites', () => {
 });
 
 describe('Mixed favorites', () => {
-  it('category, project, and note favorites are independent', async () => {
+  it('project and note favorites are independent', async () => {
     const app = createApp();
-    await request(app).post('/api/favorites/categories/Work');
     await request(app).post('/api/favorites/projects/HomeLab');
     await request(app).post('/api/favorites/notes').send({ path: 'PARA/foo.md' });
 
     const res = await request(app).get('/api/favorites');
-    expect(res.body.categories).toEqual(['Work']);
     expect(res.body.projects).toEqual(['HomeLab']);
     expect(res.body.notes).toEqual(['PARA/foo.md']);
 
-    // Deleting a category doesn't affect projects or notes
-    await request(app).delete('/api/favorites/categories/Work');
+    // Deleting a project favorite doesn't affect notes
+    await request(app).delete('/api/favorites/projects/HomeLab');
     const res2 = await request(app).get('/api/favorites');
-    expect(res2.body.categories).toEqual([]);
-    expect(res2.body.projects).toEqual(['HomeLab']);
+    expect(res2.body.projects).toEqual([]);
     expect(res2.body.notes).toEqual(['PARA/foo.md']);
   });
 
   it('favorites persist to config and survive re-reads', async () => {
     const app = createApp();
-    await request(app).post('/api/favorites/categories/Work');
     await request(app).post('/api/favorites/projects/HomeLab');
+    await request(app).post('/api/favorites/notes').send({ path: 'PARA/foo.md' });
 
     // Create fresh app instance to force config re-read
     const app2 = createApp();
     const res = await request(app2).get('/api/favorites');
-    expect(res.body.categories).toEqual(['Work']);
     expect(res.body.projects).toEqual(['HomeLab']);
+    expect(res.body.notes).toEqual(['PARA/foo.md']);
   });
 });

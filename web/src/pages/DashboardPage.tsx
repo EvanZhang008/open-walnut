@@ -10,19 +10,20 @@ import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 
 export function DashboardPage() {
   const { tasks, loading, error, toggleComplete, star, create, deleteTask, batchSetPhase, batchDelete, taskGroups, groupTasks, ungroupTasks, renameGroup } = useTasksContext();
-  const { categoryOrder } = useOrdering();
+  const { projectOrder } = useOrdering();
   const [statusFilter, setStatusFilter] = useState('todo');
   const [priorityFilter, setPriorityFilter] = useState('');
   const [searchFilter, setSearchFilter] = useState('');
-  const [activeCategory, setActiveCategory] = useState('');
+  // '' = the "All" tab. Inbox tasks (no project) surface as the Inbox group in TaskList.
+  const [activeProject, setActiveProject] = useState('');
   const [showForm, setShowForm] = useState(false);
 
-  const categories = useMemo(() => {
+  const projects = useMemo(() => {
     const set = new Set<string>();
-    for (const t of tasks) if (t.category) set.add(t.category);
+    for (const t of tasks) if (t.project) set.add(t.project);
     const names = Array.from(set);
-    if (categoryOrder.length === 0) return names.sort();
-    const indexMap = new Map(categoryOrder.map((name, i) => [name, i]));
+    if (projectOrder.length === 0) return names.sort();
+    const indexMap = new Map(projectOrder.map((name, i) => [name, i]));
     return names.sort((a, b) => {
       const ai = indexMap.get(a);
       const bi = indexMap.get(b);
@@ -31,26 +32,20 @@ export function DashboardPage() {
       if (bi !== undefined) return 1;
       return a.localeCompare(b);
     });
-  }, [tasks, categoryOrder]);
-
-  const projects = useMemo(() => {
-    const set = new Set<string>();
-    for (const t of tasks) if (t.project) set.add(t.project);
-    return Array.from(set).sort();
-  }, [tasks]);
+  }, [tasks, projectOrder]);
 
   const filtered = useMemo(() => {
     return tasks.filter((t) => {
       if (statusFilter && t.status !== statusFilter) return false;
       if (priorityFilter && t.priority !== priorityFilter) return false;
-      if (activeCategory && t.category !== activeCategory) return false;
+      if (activeProject && (t.project || '') !== activeProject) return false;
       if (searchFilter) {
         const q = searchFilter.toLowerCase();
-        if (!t.title.toLowerCase().includes(q) && !t.project.toLowerCase().includes(q)) return false;
+        if (!t.title.toLowerCase().includes(q) && !(t.project ?? '').toLowerCase().includes(q)) return false;
       }
       return true;
     });
-  }, [tasks, statusFilter, priorityFilter, activeCategory, searchFilter]);
+  }, [tasks, statusFilter, priorityFilter, activeProject, searchFilter]);
 
   const stats = useMemo(() => ({
     total: tasks.length,
@@ -62,7 +57,6 @@ export function DashboardPage() {
     await create({
       title: data.title,
       priority: data.priority,
-      category: data.category || undefined,
       project: data.project || undefined,
       due_date: data.due_date || undefined,
     });
@@ -84,7 +78,7 @@ export function DashboardPage() {
 
       <TaskStats total={stats.total} todo={stats.todo} done={stats.done} />
 
-      <ProjectTabs projects={categories} active={activeCategory} onChange={setActiveCategory} />
+      <ProjectTabs projects={projects} active={activeProject} onChange={setActiveProject} />
 
       <TaskFilters
         status={statusFilter}
@@ -111,7 +105,6 @@ export function DashboardPage() {
 
       {showForm && (
         <TaskForm
-          categories={categories}
           projects={projects}
           onSubmit={handleCreate}
           onCancel={() => setShowForm(false)}

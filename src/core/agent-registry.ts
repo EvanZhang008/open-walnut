@@ -141,7 +141,7 @@ export async function getConsoleAgent(id: string): Promise<AgentDefinition | und
 // This map auto-migrates them at load time.
 //
 // Notes on absorbed tools:
-// - pin_task / rename_category → absorbed into task_update (use pinned/focus_tier and type='category' + old_name/new_name fields)
+// - pin_task → absorbed into task_update (use pinned/focus_tier fields)
 // - search → task_search (task-only search); memory search is now memory_notes_search (not auto-migrated, different semantics)
 const TOOL_NAME_MIGRATION: Record<string, string> = {
   query_tasks: 'task_query',
@@ -151,7 +151,6 @@ const TOOL_NAME_MIGRATION: Record<string, string> = {
   delete_task: 'task_delete',
   search: 'task_search',
   pin_task: 'task_update',
-  rename_category: 'task_update',
   memory_get: 'file_read',
   list_sessions: 'session_list',
   get_session_summary: 'session_summary',

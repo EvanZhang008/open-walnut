@@ -65,26 +65,36 @@ describe('GET /api/tasks', () => {
     expect(res.body.tasks[0].title).toBe('Todo task');
   });
 
-  it('filters by category', async () => {
-    await addTask({ title: 'Work task', category: 'work' });
-    await addTask({ title: 'Life task', category: 'life' });
-
-    const app = createApp();
-    const res = await request(app).get('/api/tasks?category=work');
-    expect(res.status).toBe(200);
-    expect(res.body.tasks).toHaveLength(1);
-    expect(res.body.tasks[0].title).toBe('Work task');
-  });
-
   it('filters by project', async () => {
-    await addTask({ title: 'HomeLab task', category: 'work', project: 'HomeLab' });
-    await addTask({ title: 'Costco task', category: 'work', project: 'Costco' });
+    await addTask({ title: 'HomeLab task', project: 'HomeLab' });
+    await addTask({ title: 'Costco task', project: 'Costco' });
 
     const app = createApp();
     const res = await request(app).get('/api/tasks?project=HomeLab');
     expect(res.status).toBe(200);
     expect(res.body.tasks).toHaveLength(1);
     expect(res.body.tasks[0].title).toBe('HomeLab task');
+  });
+
+  it('matches ?project= case-insensitively (project identity is NOCASE)', async () => {
+    await addTask({ title: 'HomeLab task', project: 'HomeLab' });
+
+    const app = createApp();
+    const res = await request(app).get('/api/tasks?project=homelab');
+    expect(res.status).toBe(200);
+    expect(res.body.tasks).toHaveLength(1);
+    expect(res.body.tasks[0].title).toBe('HomeLab task');
+  });
+
+  it('returns Inbox tasks with project="" and no category field', async () => {
+    await addTask({ title: 'Loose thought' });
+
+    const app = createApp();
+    const res = await request(app).get('/api/tasks');
+    expect(res.status).toBe(200);
+    expect(res.body.tasks).toHaveLength(1);
+    expect(res.body.tasks[0].project).toBe('');
+    expect(res.body.tasks[0]).not.toHaveProperty('category');
   });
 });
 
@@ -130,16 +140,16 @@ describe('POST /api/tasks', () => {
     const app = createApp();
     const res = await request(app)
       .post('/api/tasks')
-      .send({ title: 'New task', priority: 'immediate', category: 'work' });
+      .send({ title: 'New task', priority: 'immediate', project: 'work' });
 
     expect(res.status).toBe(201);
     expect(res.body.task.title).toBe('New task');
     expect(res.body.task.priority).toBe('immediate');
-    expect(res.body.task.category).toBe('work');
+    expect(res.body.task.project).toBe('work');
     expect(res.body.task.id).toBeDefined();
   });
 
-  it('creates a task with default fields', async () => {
+  it('creates a task with default fields (no project → Inbox)', async () => {
     const app = createApp();
     const res = await request(app)
       .post('/api/tasks')
@@ -148,20 +158,55 @@ describe('POST /api/tasks', () => {
     expect(res.status).toBe(201);
     expect(res.body.task.priority).toBe('none');
     expect(res.body.task.status).toBe('todo');
+    expect(res.body.task.project).toBe('');
+    expect(res.body.task.source).toBe('local');
   });
 
   it('creates a local task when source="local" is passed', async () => {
     const app = createApp();
     const res = await request(app)
       .post('/api/tasks')
-      .send({ title: 'Local note', category: 'Scratch', source: 'local' });
+      .send({ title: 'Local note', project: 'Scratch', source: 'local' });
 
     expect(res.status).toBe(201);
     expect(res.body.task.source).toBe('local');
-    expect(res.body.task.category).toBe('Scratch');
+    expect(res.body.task.project).toBe('Scratch');
   });
 
-  // source validation removed in v3 — source is now derived from store.categories in addTask
+  it('auto-creates the registry row for a brand-new project name', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'Kickoff', project: 'Brand New' });
+
+    expect(res.status).toBe(201);
+    const { getStoreProjects } = await import('../../../src/core/task-manager.js');
+    expect(await getStoreProjects()).toHaveProperty('Brand New');
+  });
+
+  it('folds a differently-cased project name onto the canonical spelling', async () => {
+    const app = createApp();
+    await request(app).post('/api/tasks').send({ title: 'First', project: 'HomeLab' });
+    const res = await request(app).post('/api/tasks').send({ title: 'Second', project: 'homelab' });
+
+    expect(res.status).toBe(201);
+    // NOCASE identity: the registry's spelling wins, so one project — not two.
+    expect(res.body.task.project).toBe('HomeLab');
+    const { getStoreProjects } = await import('../../../src/core/task-manager.js');
+    expect(Object.keys(await getStoreProjects())).toEqual(['HomeLab']);
+  });
+
+  it('rejects a provider-sourced task with no project (Inbox is local-only)', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/tasks')
+      .send({ title: 'Orphan remote task', source: 'ms-todo' });
+
+    // No project → structurally unclaimable, so addTask refuses rather than
+    // silently filing a syncable task where it can never be pushed.
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/Inbox/);
+  });
 });
 
 describe('PATCH /api/tasks/:id', () => {
@@ -222,32 +267,58 @@ describe('POST /api/tasks/:id/notes', () => {
 });
 
 describe('PATCH /api/tasks/reorder', () => {
-  it('reorders tasks within a group and persists', async () => {
-    const { task: t1 } = await addTask({ title: 'First', category: 'work', project: 'HomeLab' });
-    const { task: t2 } = await addTask({ title: 'Second', category: 'work', project: 'HomeLab' });
-    const { task: t3 } = await addTask({ title: 'Third', category: 'work', project: 'HomeLab' });
+  it('reorders tasks within a project group and persists', async () => {
+    const { task: t1 } = await addTask({ title: 'First', project: 'HomeLab' });
+    const { task: t2 } = await addTask({ title: 'Second', project: 'HomeLab' });
+    const { task: t3 } = await addTask({ title: 'Third', project: 'HomeLab' });
 
     const app = createApp();
     const res = await request(app)
       .patch('/api/tasks/reorder')
-      .send({ category: 'work', project: 'HomeLab', taskIds: [t3.id, t1.id, t2.id] });
+      .send({ project: 'HomeLab', taskIds: [t3.id, t1.id, t2.id] });
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
 
     // Verify order persisted via GET
-    const listRes = await request(app).get('/api/tasks?category=work&project=HomeLab');
+    const listRes = await request(app).get('/api/tasks?project=HomeLab');
     expect(listRes.status).toBe(200);
     expect(listRes.body.tasks[0].id).toBe(t3.id);
     expect(listRes.body.tasks[1].id).toBe(t1.id);
     expect(listRes.body.tasks[2].id).toBe(t2.id);
   });
 
+  it("reorders the Inbox group (project: '') — '' is a valid group, not a missing field", async () => {
+    const { task: t1 } = await addTask({ title: 'Inbox one' });
+    const { task: t2 } = await addTask({ title: 'Inbox two' });
+
+    const app = createApp();
+    const res = await request(app)
+      .patch('/api/tasks/reorder')
+      .send({ project: '', taskIds: [t2.id, t1.id] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    const listRes = await request(app).get('/api/tasks');
+    expect(listRes.body.tasks.map((t: { id: string }) => t.id)).toEqual([t2.id, t1.id]);
+  });
+
+  it('returns 400 when project is not a string', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .patch('/api/tasks/reorder')
+      .send({ taskIds: ['a', 'b'] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/project must be a string/);
+  });
+
   it('returns 400 for missing taskIds', async () => {
     const app = createApp();
     const res = await request(app)
       .patch('/api/tasks/reorder')
-      .send({ category: 'work', project: 'HomeLab' });
+      .send({ project: 'HomeLab' });
 
     expect(res.status).toBe(400);
   });
@@ -256,7 +327,7 @@ describe('PATCH /api/tasks/reorder', () => {
     const app = createApp();
     const res = await request(app)
       .patch('/api/tasks/reorder')
-      .send({ category: 'work', project: 'HomeLab', taskIds: [] });
+      .send({ project: 'HomeLab', taskIds: [] });
 
     expect(res.status).toBe(400);
   });
@@ -318,7 +389,7 @@ describe('DELETE /api/tasks/:id', () => {
   });
 });
 
-describe('Cross-source category change', () => {
+describe('Cross-source project change', () => {
   async function setupPluginConfig() {
     const { CONFIG_FILE } = await import('../../../src/constants.js');
     const path = await import('node:path');
@@ -328,17 +399,18 @@ describe('Cross-source category change', () => {
       JSON.stringify({
         version: 1,
         user: { name: 'test' },
-        defaults: { priority: 'none', category: 'personal' },
+        defaults: { priority: 'none' },
         provider: { type: 'bedrock' },
-        plugins: { 'plugin-a': { room_id: 'room-123', category: 'Work' } },
+        // The claim point moved down a level: plugins reserve a PROJECT now.
+        plugins: { 'plugin-a': { room_id: 'room-123', project: 'Work' } },
       }),
     );
   }
 
-  // 9deb72e replaced the 409 hard-block with auto-migration: a moved task adopts
-  // the target category's source. The route's CategorySourceConflictError → 409
-  // mapping still guards addTask/renameCategory, but PATCH category is a 200 now.
-  it('PATCH /api/tasks/:id auto-migrates source into a plugin-reserved category', async () => {
+  // A moved task adopts the target project's source rather than 409-ing; the
+  // route's ProjectSourceConflictError → 409 mapping still guards addTask /
+  // renameProject, but PATCH project is a 200 + migration.
+  it('PATCH /api/tasks/:id auto-migrates source into a plugin-reserved project', async () => {
     await setupPluginConfig();
 
     // The migration push is AWAITED, so the target source must be a loaded
@@ -347,36 +419,54 @@ describe('Cross-source category change', () => {
     const { createMockPlugin } = await import('../../core/plugin-test-utils.js');
     if (!registry.has('plugin-a')) registry.register('plugin-a', createMockPlugin({ id: 'plugin-a' }));
 
-    // Create a plugin-a task in 'Work' (matches config plugin-a category)
-    const { task: pluginTask } = await addTask({ title: 'Plugin task', category: 'Work' });
+    // 'Work' matches plugins.plugin-a.project, so the claim resolves to plugin-a.
+    const { task: pluginTask } = await addTask({ title: 'Plugin task', project: 'Work' });
     expect(pluginTask.source).toBe('plugin-a');
 
-    // Create a local task in 'Life' (no plugin claims it, defaults to local)
-    const { task: localTask } = await addTask({ title: 'Local task', category: 'Life' });
+    // 'Life' is unclaimed → local.
+    const { task: localTask } = await addTask({ title: 'Local task', project: 'Life' });
     expect(localTask.source).toBe('local');
 
     const app = createApp();
-    // Move the local task to 'Work' (plugin-a) → adopts plugin-a source
     const res = await request(app)
       .patch(`/api/tasks/${localTask.id}`)
-      .send({ category: 'Work' });
+      .send({ project: 'Work' });
 
     expect(res.status).toBe(200);
-    expect(res.body.task.category).toBe('Work');
+    expect(res.body.task.project).toBe('Work');
     expect(res.body.task.source).toBe('plugin-a');
   });
 
-  it('PATCH /api/tasks/:id succeeds for same-source category change', async () => {
-    // Both tasks are local (no external plugin config)
-    const { task: t1 } = await addTask({ title: 'Task A', category: 'Alpha' });
-    await addTask({ title: 'Task B', category: 'Beta' });
+  it('PATCH /api/tasks/:id succeeds for a same-source project change', async () => {
+    // Both projects are local (no external plugin config)
+    const { task: t1 } = await addTask({ title: 'Task A', project: 'Alpha' });
+    await addTask({ title: 'Task B', project: 'Beta' });
 
     const app = createApp();
     const res = await request(app)
       .patch(`/api/tasks/${t1.id}`)
-      .send({ category: 'Beta' });
+      .send({ project: 'Beta' });
 
     expect(res.status).toBe(200);
-    expect(res.body.task.category).toBe('Beta');
+    expect(res.body.task.project).toBe('Beta');
+    expect(res.body.task.source).toBe('local');
+  });
+
+  it('PATCH project="" moves a task to Inbox and migrates it back to local', async () => {
+    await setupPluginConfig();
+    const { registry } = await import('../../../src/core/integration-registry.js');
+    const { createMockPlugin } = await import('../../core/plugin-test-utils.js');
+    if (!registry.has('plugin-a')) registry.register('plugin-a', createMockPlugin({ id: 'plugin-a' }));
+
+    const { task } = await addTask({ title: 'Provider task', project: 'Work' });
+    expect(task.source).toBe('plugin-a');
+
+    const app = createApp();
+    const res = await request(app).patch(`/api/tasks/${task.id}`).send({ project: '' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.task.project).toBe('');
+    // Inbox is structurally local-only, so the task can't keep a provider claim.
+    expect(res.body.task.source).toBe('local');
   });
 });

@@ -52,13 +52,13 @@ import { CSS } from '@dnd-kit/utilities';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskBatchMenu } from './TaskBatchMenu';
 import { ViewDropdown, type SortBy, type GroupBy, type DateFilter } from './ViewDropdown';
+import { STARRED_TAB, INBOX_TAB, LS_TAB_KEY } from './task-tabs';
 import { DatePicker, formatDateDisplay, formatDateTimeDisplay, isOverdue, parseDateLocal } from '../common/DatePicker';
 import { PersonIcon } from '../common/PersonIcon';
 import { useVerticalSplitter } from '@/hooks/useVerticalSplitter';
 import { useResizableHeight } from '@/hooks/useResizableHeight';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { ProjectDetailPane } from './ProjectDetailPane';
-import { CategoryDetailPane } from './CategoryDetailPane';
 import { GlobalNotesSection } from '../notes/GlobalNotesSection';
 import { useGlobalNotes } from '@/hooks/useGlobalNotes';
 import { SortableTierCard, TierDropZone, GroupChip, groupSortableId } from './FocusSatelliteCards';
@@ -80,9 +80,10 @@ type Task = CoreTask & {
 
 const DATE_LABELS: Record<string, string> = { now: 'Now', overdue: 'Overdue', 'this-week': 'This Week', 'no-date': 'No Date' } as const;
 
+/** Inline split-pane target. Project is the single grouping layer, so 'project' is
+ *  the only kind; Inbox ('') has no registry row and therefore no detail pane. */
 type DetailTarget =
-  | { type: 'project'; category: string; project: string }
-  | { type: 'category'; category: string }
+  | { type: 'project'; project: string }
   | null;
 
 interface TodoPanelProps {
@@ -90,7 +91,7 @@ interface TodoPanelProps {
   loading: boolean;
   onComplete: (id: string) => void;
   onSetPhase?: (id: string, phase: string) => void;
-  onCreate: (input: { title: string; priority: string; category?: string; project?: string; starred?: boolean; pinnedTier?: FocusTier; capture?: boolean }) => Promise<Task | unknown>;
+  onCreate: (input: { title: string; priority: string; project?: string; starred?: boolean; pinnedTier?: FocusTier; capture?: boolean }) => Promise<Task | unknown>;
   onUpdate?: (id: string, updates: { title?: string }) => void;
   onStar?: (id: string) => void;
   onDelete?: (id: string) => void;
@@ -106,13 +107,14 @@ interface TodoPanelProps {
   /** Increments on every focus action — forces re-scroll even for same task */
   focusNonce?: number;
   /** Locate scope for the current focus action. 'pinned' (tier quick-adds) scrolls
-   *  the Pinned region only — no TASKS tab switch, no category/project expansion.
+   *  the Pinned region only — no TASKS tab switch, no project expansion.
    *  'all' (default) = full locate incl. tab switch. */
   focusScope?: 'all' | 'pinned';
   favorites?: UseFavoritesReturn;
   ordering?: UseOrderingReturn;
-  onReorder?: (category: string, project: string, taskIds: string[]) => void;
-  onMoveTask?: (taskId: string, category: string, project: string, insertNearTaskId?: string) => void;
+  /** `project` is '' for Inbox. */
+  onReorder?: (project: string, taskIds: string[]) => void;
+  onMoveTask?: (taskId: string, project: string, insertNearTaskId?: string) => void;
   onReparentTask?: (taskId: string, newParentId: string | null, opts?: { insertAfterId?: string }) => void;
   /** Called when switching to manual sort — baker freezes current displayed order into the store. */
   onBakeOrder?: (orderedIds: string[]) => void;
@@ -144,10 +146,10 @@ interface TodoPanelProps {
   // (AppShell), so TodoPanel only needs the callbacks to report/clear, not the value.
   onClearOperationError?: () => void;
   onOperationError?: (msg: string) => void;
-  /** Externally-set category (e.g. from URL deep link). When it changes from undefined to a value, the tab switches. */
-  externalCategory?: string;
-  /** Fires whenever the active category tab changes (for URL sync). */
-  onCategoryChange?: (cat: string) => void;
+  /** Externally-set project (e.g. from URL deep link). When it changes from undefined to a value, the tab switches. */
+  externalProject?: string;
+  /** Fires whenever the active project tab changes (for URL sync). */
+  onProjectChange?: (project: string) => void;
   /** Toolbar "+" — opens the todo-anchored launcher popover (Session | Task
    *  tabs, Session default) rendered by MainPage inside the task panel. */
   onOpenLauncher?: () => void;
@@ -169,7 +171,6 @@ interface TodoPanelProps {
   onSetGroupHidden?: (groupId: string, hidden: boolean) => void;
 }
 
-const STARRED_TAB = '\u2605';
 
 /**
  * Freeze a derived value while `frozen` is true: returns the last value computed
@@ -246,9 +247,7 @@ function effectivePriority(p: string): string {
 
 // ── LocalStorage persistence helpers ──
 
-const LS_TAB_KEY = 'walnut-todo-active-tab';
 const LS_COLLAPSED_SECTIONS_KEY = 'walnut-todo-collapsed-sections';
-const LS_COLLAPSED_CATS_KEY = 'walnut-todo-collapsed-cats';
 const LS_COLLAPSED_PROJS_KEY = 'walnut-todo-collapsed-projs';
 const LS_EXPANDED_PARENTS_KEY = 'walnut-todo-expanded-parents';
 // LS_FILTERS_COLLAPSED_KEY removed — filters now inside ViewDropdown
@@ -350,7 +349,7 @@ interface SortableTaskItemProps {
   onMoveUp?: (taskId: string) => void;    // Swap with previous sibling
   isPinned?: boolean;
   pinnedTier?: FocusTier;
-  searchContext?: string; // Category/Project context pill shown in search mode
+  searchContext?: string; // Project context pill shown in search mode
   filterOverrideReason?: string;  // Why this task is outside current filters (focus override)
   isFadingOverride?: boolean;     // Task is fading out after focus moved away
   /** Virtual-group rendering: present when this task is part of a multi-member group. */
@@ -784,7 +783,7 @@ function TaskItemOverlay({ task }: { task: Task }) {
   );
 }
 
-// ── SortableGroupItem (for category/project group drag) ──
+// ── SortableGroupItem (for project group drag) ──
 // Dragged item: collapsed (height 0). Other items: shift via transform to show a gap.
 
 interface SortableGroupItemProps {
@@ -800,7 +799,7 @@ function SortableGroupItem({ id, children }: SortableGroupItemProps) {
     transform,
     transition,
     isDragging,
-  } = useSortable({ id, data: { type: id.startsWith('cat:') ? 'category-group' : 'project-group' } });
+  } = useSortable({ id, data: { type: 'project-group' } });
 
   const style: CSSProperties = isDragging
     ? { opacity: 0, pointerEvents: 'none' }
@@ -817,16 +816,16 @@ function SortableGroupItem({ id, children }: SortableGroupItemProps) {
 
 interface DroppableHeaderProps {
   id: string;
-  category: string;
+  /** '' = Inbox. */
   project: string;
   disabled: boolean;
   children: (props: { isOver: boolean; setNodeRef: (node: HTMLElement | null) => void }) => React.ReactNode;
 }
 
-function DroppableHeader({ id, category, project, disabled, children }: DroppableHeaderProps) {
+function DroppableHeader({ id, project, disabled, children }: DroppableHeaderProps) {
   const { isOver, setNodeRef } = useDroppable({
     id,
-    data: { type: 'header-drop', category, project },
+    data: { type: 'header-drop', project },
     disabled,
   });
   return <>{children({ isOver, setNodeRef })}</>;
@@ -867,9 +866,11 @@ function persistSortBy(v: SortBy) {
 function readGroupBy(): GroupBy {
   try {
     const v = localStorage.getItem(LS_GROUP_KEY);
-    if (v === 'category' || v === 'none') return v;
+    // Legacy stored 'category' maps onto the surviving project grouping.
+    if (v === 'category' || v === 'project') return 'project';
+    if (v === 'none') return v;
   } catch { /* ignore */ }
-  return 'category';
+  return 'project';
 }
 
 function persistGroupBy(v: GroupBy) {
@@ -988,11 +989,10 @@ function compareUpdated(a: Task, b: Task): number {
 
 // ── Type-aware collision detection ──
 // Only considers droppable items of the same type as the active drag item.
-// This prevents category drags from colliding with tasks or project headers.
+// This prevents project-group drags from colliding with task cards.
 
 const typeAwareCollision: CollisionDetection = (args) => {
   const activeType = (args.active.data?.current as { type?: string })?.type ?? 'task';
-  const activeId = String(args.active.id);
 
   const filtered = args.droppableContainers.filter((container) => {
     const cType = (container.data?.current as { type?: string })?.type ?? 'task';
@@ -1002,17 +1002,9 @@ const typeAwareCollision: CollisionDetection = (args) => {
       return cType === 'task' || cType === 'header-drop';
     }
 
-    // Category/project group drags: same-type only
-    if (cType !== activeType) return false;
-
-    // For project groups, only match projects in the same parent category
-    if (activeType === 'project-group' && activeId.startsWith('proj:') && String(container.id).startsWith('proj:')) {
-      const activeCat = activeId.slice(5).split('/')[0];
-      const containerCat = String(container.id).slice(5).split('/')[0];
-      return activeCat === containerCat;
-    }
-
-    return true;
+    // Project group drags: same-type only. Project groups are GLOBALLY sortable
+    // now (flat ordering) — there is no parent-scope constraint left.
+    return cType === activeType;
   });
 
   if (filtered.length === 0) return [];
@@ -1232,8 +1224,8 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
   return (
     <div className="todo-detail-pane" style={style}>
       <div className="todo-detail-header">
-        <span className="todo-detail-category">
-          {task.category}{task.project && task.project !== task.category ? ` / ${task.project}` : ''}
+        <span className="todo-detail-project">
+          {task.project || 'Inbox'}
         </span>
         <DatePicker date={task.start_date} onChange={handleStartDateChange} label="Start" />
         <DatePicker date={task.due_date} onChange={handleDateChange} label="Due" />
@@ -1817,12 +1809,12 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, openSessionIds, openSessionTaskIds, onClearOperationError, onOperationError, externalCategory, onCategoryChange, onOpenLauncher, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, openSessionIds, openSessionTaskIds, onClearOperationError, onOperationError, externalProject, onProjectChange, onOpenLauncher, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden }: TodoPanelProps) {
   // TEMP drag-flash trace — remove after diagnosis
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
   scrollLog('drag-trace-TodoPanel-render', { n: __renderCountRef.current, tasks: rawTasks.length });
-  // Hide .metadata* tasks (project/category configuration tasks, not user-visible)
+  // Hide .metadata* tasks (legacy project-configuration sentinels, not user-visible)
   const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata')), [rawTasks]);
   const navigate = useNavigate();
   const prompt = usePrompt();
@@ -1843,7 +1835,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     notify({ kind: 'sort', severity: 'info', title: 'Sort', body: msg, persistent: false, dedupKey: 'sort' });
   }, [notify]);
   const [groupBy, setGroupBy] = useState<GroupBy>(readGroupBy);
-  const [activeCategory, setActiveCategory] = useState(readTab);
+  // Active project tab. '' = All, STARRED_TAB = ★, INBOX_TAB = Inbox, else a project name.
+  const [activeProject, setActiveProject] = useState(readTab);
 
   // Focus override: when a focused task would be hidden by filters, store its ID here
   // instead of clearing filters. The filtered useMemo exempts this task from all filter checks.
@@ -1878,15 +1871,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return () => { if (fadingTimerRef.current) clearTimeout(fadingTimerRef.current); };
   }, []);
 
-  // Apply externally-set category (e.g. from URL deep link)
-  const prevExternalCatRef = useRef(externalCategory);
+  // Apply externally-set project (e.g. from URL deep link)
+  const prevExternalProjRef = useRef(externalProject);
   useEffect(() => {
-    if (externalCategory !== undefined && externalCategory !== prevExternalCatRef.current) {
-      setActiveCategory(externalCategory);
-      persistTab(externalCategory);
+    if (externalProject !== undefined && externalProject !== prevExternalProjRef.current) {
+      setActiveProject(externalProject);
+      persistTab(externalProject);
     }
-    prevExternalCatRef.current = externalCategory;
-  }, [externalCategory]);
+    prevExternalProjRef.current = externalProject;
+  }, [externalProject]);
 
   // Auto-refresh tick: bump every 60s so time-dependent UI re-evaluates —
   // the date filter (deferred tasks appear on time) AND the per-row ▶ start
@@ -1899,7 +1892,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   const integrations = useIntegrations();
   const [newTitle, setNewTitle] = useState('');
-  const [quickCategory, setQuickCategory] = useState<string>(''); // '' = use default
   const [quickProject, setQuickProject] = useState<string>('');
   const [quickStarred, setQuickStarred] = useState(false);
   const [quickPinnedTier, setQuickPinnedTier] = useState<FocusTier | null>(null);
@@ -1976,7 +1968,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (!customTiersLoaded || !activeSection.startsWith('ct_') || !customTiersLive) return;
     if (!customTiersLive.some((t) => t.id === activeSection)) handleSectionChange('focus');
   }, [activeSection, customTiersLive, customTiersLoaded, handleSectionChange]);
-  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_CATS_KEY));
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_PROJS_KEY));
   // Tracks which parent tasks the user has EXPANDED (default = all collapsed)
   const [expandedParents, setExpandedParents] = useState<Set<string>>(() => readSetFromStorage(LS_EXPANDED_PARENTS_KEY));
@@ -2225,52 +2216,40 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const isUserLocate = pendingLocateRef.current;
     pendingLocateRef.current = false;
     // 'pinned' scope (tier quick-adds): the new card is already visible in its tier —
-    // scroll the Pinned region only. Switching the TASKS tab to the capture category
-    // (e.g. Personal) filtered the list below down to ~1 task and read as data loss.
+    // scroll the Pinned region only. Switching the TASKS tab to the capture project
+    // filtered the list below down to ~1 task and read as data loss.
     const pinnedOnly = focusScope === 'pinned';
-    scrollLog('focus-effect-run', { taskId: focusedTaskId.substring(0, 12), isNewFocus, cat: task.category, proj: task.project, activeTab: activeCategory, scope: focusScope ?? 'all' });
+    scrollLog('focus-effect-run', { taskId: focusedTaskId.substring(0, 12), isNewFocus, proj: task.project, activeTab: activeProject, scope: focusScope ?? 'all' });
 
-    // Switch to the correct category tab (unless already showing All or Starred with this task visible)
-    const cat = task.category || 'Uncategorized';
+    // Switch to the task's project tab (unless already showing All, or Starred with this
+    // task visible). `proj` is the GROUP key ('' = Inbox); `projTab` is the TAB id, where
+    // '' is taken by the All chip so Inbox rides the INBOX_TAB sentinel instead.
+    const proj = task.project || '';
+    const projTab = proj || INBOX_TAB;
     if (isUserLocate && !pinnedOnly) {
-      if (activeCategory !== '' && activeCategory !== cat && activeCategory !== STARRED_TAB) {
-        setActiveCategory(cat);
-        persistTab(cat);
-        onCategoryChange?.(cat);
-      } else if (activeCategory === STARRED_TAB) {
-        // If task isn't visible under starred tab, switch to its category
+      if (activeProject !== '' && activeProject !== projTab && activeProject !== STARRED_TAB) {
+        setActiveProject(projTab);
+        persistTab(projTab);
+        onProjectChange?.(projTab);
+      } else if (activeProject === STARRED_TAB) {
+        // If task isn't visible under starred tab, switch to its project
         const isStarred = !!task.starred;
-        const isCatFav = favorites?.isCategoryFavorite(cat) ?? false;
-        const isProjFav = favorites?.isProjectFavorite(task.project) ?? false;
-        if (!isStarred && !isCatFav && !isProjFav && !isDescendantVisibleInStarred(task)) {
-          setActiveCategory(cat);
-          persistTab(cat);
-          onCategoryChange?.(cat);
+        const isProjFav = !!proj && (favorites?.isProjectFavorite(proj) ?? false);
+        if (!isStarred && !isProjFav && !isDescendantVisibleInStarred(task)) {
+          setActiveProject(projTab);
+          persistTab(projTab);
+          onProjectChange?.(projTab);
         }
       }
 
-      // Expand collapsed category
-      if (collapsedCategories.has(cat)) {
-        setCollapsedCategories((prev) => {
+      // Expand the collapsed project group (collapse keys are plain project names)
+      if (collapsedProjects.has(proj)) {
+        setCollapsedProjects((prev) => {
           const next = new Set(prev);
-          next.delete(cat);
-          persistSet(LS_COLLAPSED_CATS_KEY, next);
+          next.delete(proj);
+          persistSet(LS_COLLAPSED_PROJS_KEY, next);
           return next;
         });
-      }
-
-      // Expand collapsed project
-      const hasDistinctProject = task.project && task.project !== task.category;
-      if (hasDistinctProject) {
-        const projKey = `${cat}/${task.project}`;
-        if (collapsedProjects.has(projKey)) {
-          setCollapsedProjects((prev) => {
-            const next = new Set(prev);
-            next.delete(projKey);
-            persistSet(LS_COLLAPSED_PROJS_KEY, next);
-            return next;
-          });
-        }
       }
 
       // Expand collapsed parent if focused task is a child (temporary — not persisted,
@@ -2290,8 +2269,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
     // Focus override: instead of clearing filters, temporarily inject the task
     // into the filtered list. It fades out when focus moves away.
-    // Note: activeCategory is NOT checked here — tab-switching above (lines ~1682-1698)
-    // already ensures the task's category is visible. Override only handles toolbar filters.
+    // Note: activeProject is NOT checked here — tab-switching above already ensures
+    // the task's project is visible. Override only handles toolbar filters.
     // SYNC: these conditions must match the filter logic in the `filtered` useMemo
     const isDone = task.status === 'done';
     const wouldBeHidden =
@@ -2358,7 +2337,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // query simply finds nothing). Keeps the PIN row in sync with the list below.
     scrollToPinnedTask(focusedTaskId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedTaskId, focusNonce, tasks, activeCategory, collapsedCategories, collapsedProjects, favorites]);
+  }, [focusedTaskId, focusNonce, tasks, activeProject, collapsedProjects, favorites]);
 
   // Auto-expand parent when a child task is created (via WS event)
   // Persist to localStorage so expansion survives page refresh (fork subtask bug fix)
@@ -3242,29 +3221,75 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onReorderPinned?.(newOrder);
   }, [pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, pinnedCardIds, tasks, DROP_ZONE_TIERS]);
 
-  const categories = useMemo(() => {
+  // Project chips for ViewDropdown, in the flat config order. Inbox rides along as
+  // INBOX_TAB (a sentinel chip) whenever any task has no project — '' is the All chip.
+  const projectTabs = useMemo(() => {
     const set = new Set<string>();
-    for (const t of tasks) if (t.category) set.add(t.category);
-    const names = Array.from(set);
-    return orderedSort(names, ordering?.categoryOrder ?? []);
-  }, [tasks, ordering?.categoryOrder]);
+    let hasInbox = false;
+    for (const t of tasks) {
+      if (t.project) set.add(t.project); else hasInbox = true;
+    }
+    const names = orderedSort(Array.from(set), ordering?.projectOrder ?? []);
+    return hasInbox ? [...names, INBOX_TAB] : names;
+  }, [tasks, ordering?.projectOrder]);
 
-
-
-  // Show starred tab when there are starred tasks or favorited categories/projects
+  // Show starred tab when there are starred tasks or favorited projects
   const hasStarredContent = useMemo(() => {
     const hasStarredTasks = tasks.some((t) => t.starred);
     const hasFavorites = favorites?.hasFavorites ?? false;
     return hasStarredTasks || hasFavorites;
   }, [tasks, favorites?.hasFavorites]);
 
-  // Category counts for ViewDropdown
-  const categoryCounts = useMemo(() => {
+  // Self-heal a stale project tab (same shape as the custom-tier heal above):
+  // the persisted tab may name a project that was renamed/deleted/emptied since,
+  // and ViewDropdown renders no chip for it — so the list filters to zero with no
+  // visible way back. Fall back to the default (★ when there's starred content,
+  // else All). MUST wait for the task list to actually load: healing against the
+  // empty pre-fetch snapshot would overwrite the user's tab on every page load.
+  useEffect(() => {
+    if (loading || tasks.length === 0) return;
+    // '' (All) and the ★ sentinel are always legal; everything else must have a chip.
+    if (activeProject === '' || activeProject === STARRED_TAB) return;
+    if (projectTabs.includes(activeProject)) return;
+    const fallback = hasStarredContent ? STARRED_TAB : '';
+    setActiveProject(fallback);
+    persistTab(fallback);
+    onProjectChange?.(fallback);
+  }, [loading, tasks.length, activeProject, projectTabs, hasStarredContent, onProjectChange]);
+
+  /** Every legal `collapsedProjects` key right now: real project names + '' when Inbox exists. */
+  const liveGroupKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const t of tasks) keys.add(t.project || '');
+    return keys;
+  }, [tasks]);
+
+  // Prune orphaned collapse keys (same self-heal shape as the ct_* prune above).
+  // Two sources of orphans: keys for projects that were renamed/deleted, and
+  // pre-refactor `Category/Project` composite keys that nothing ever cleaned up.
+  // They're not just dead weight — `allCollapsed` requires EVERY live group key
+  // to be present, and "collapse all" writes only live keys, so a stored orphan
+  // was harmless there, but a stale '' (Inbox) key kept Inbox folded even after
+  // its tasks moved away and it stopped rendering a header to un-collapse.
+  useEffect(() => {
+    if (loading || tasks.length === 0) return;
+    setCollapsedProjects((prev) => {
+      const stale = [...prev].filter((k) => !liveGroupKeys.has(k));
+      if (stale.length === 0) return prev;
+      const next = new Set(prev);
+      for (const k of stale) next.delete(k);
+      persistSet(LS_COLLAPSED_PROJS_KEY, next);
+      return next;
+    });
+  }, [loading, tasks.length, liveGroupKeys]);
+
+  // Project counts for ViewDropdown (Inbox counted under the INBOX_TAB sentinel)
+  const projectCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const t of tasks) {
       if (t.status !== 'done' || showCompleted) {
-        const cat = t.category || 'Uncategorized';
-        counts[cat] = (counts[cat] ?? 0) + 1;
+        const key = t.project || INBOX_TAB;
+        counts[key] = (counts[key] ?? 0) + 1;
       }
     }
     return counts;
@@ -3281,14 +3306,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // Helper: check if a task is visible in starred view via its ancestor chain.
   // Walks up parent_task_id links (max 10 depth) checking if any ancestor is starred
-  // or belongs to a favorited category/project.
+  // or belongs to a favorited project.
   const isDescendantVisibleInStarred = useCallback((t: Task): boolean => {
     if (!t.parent_task_id) return false;
     const parent = tasks.find(p => p.id.startsWith(t.parent_task_id!));
     if (!parent) return false;
     if (parent.starred) return true;
-    if (favorites?.isCategoryFavorite(parent.category)) return true;
-    if (favorites?.isProjectFavorite(parent.project)) return true;
+    if (parent.project && favorites?.isProjectFavorite(parent.project)) return true;
     return isDescendantVisibleInStarred(parent);
   }, [tasks, favorites]);
 
@@ -3323,23 +3347,23 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // Child tasks inherit parent's due_date if they have none.
       if (dateFilter && t.status !== 'done' && !matchesDateFilter(t, dateFilter, tasks)) return false;
 
-      // Starred tab: show starred tasks + tasks in favorited categories/projects
+      // Starred tab: show starred tasks + tasks in favorited projects
       // Also include children of starred parents (handles prefix parent_task_id)
-      if (activeCategory === STARRED_TAB) {
+      if (activeProject === STARRED_TAB) {
         const isStarred = !!t.starred;
-        const isCatFavorite = favorites?.isCategoryFavorite(t.category) ?? false;
-        const isProjFavorite = favorites?.isProjectFavorite(t.project) ?? false;
-        return isStarred || isCatFavorite || isProjFavorite || isDescendantVisibleInStarred(t);
+        const isProjFavorite = !!t.project && (favorites?.isProjectFavorite(t.project) ?? false);
+        return isStarred || isProjFavorite || isDescendantVisibleInStarred(t);
       }
 
-      if (activeCategory && t.category !== activeCategory) return false;
+      // Tab ids: '' = All (no scoping), INBOX_TAB = the no-project bucket.
+      if (activeProject && (t.project || INBOX_TAB) !== activeProject) return false;
       return true;
     });
     // Build included-ID set from first pass results
     const directlyMatched = new Set<string>(directList.map(t => t.id));
 
     // Second pass (iterative): include child tasks at any depth whose ancestor passed
-    // the first-pass filter. Category and other filters are relaxed for children —
+    // the first-pass filter. Project and other filters are relaxed for children —
     // only the completed-hiding rule is enforced. Repeat until no new tasks are added
     // so that grandchildren (and deeper) are also included.
     const result = [...directList];
@@ -3363,7 +3387,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
     return result;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- isDescendantVisibleInStarred is stable (useCallback); focusOverrideRef/fadingOverrideRef read via _overrideTick
-  }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, dateFilter, _tick, _overrideTick, recentTick, activeCategory, favorites, isDescendantVisibleInStarred]);
+  }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, dateFilter, _tick, _overrideTick, recentTick, activeProject, favorites, isDescendantVisibleInStarred]);
 
   // Whether a completed task will actually disappear after the grace period —
   // mirrors the visibility filter (`isDone && !showCompleted && phaseFilter !== 'COMPLETE'`).
@@ -3395,11 +3419,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [overrideReasonTaskId, tasks, showCompleted, phaseFilter, priorityFilter, sessionFilter, sourceFilter, dateFilter, tagFilter]);
 
   // Explicit toolbar filters ONLY (priority, phase, session, source, tag, date) —
-  // deliberately excludes the category and Starred tabs, which are navigation
+  // deliberately excludes the project and Starred tabs, which are navigation
   // affordances rather than refinement choices. Used by both search (which spans
-  // all categories) and the Pinned/Recent visibility set below, so a pin/recent
-  // card is never hidden merely because the user navigated to a different category
-  // tab — pins are a cross-category focus view by design.
+  // all projects) and the Pinned/Recent visibility set below, so a pin/recent
+  // card is never hidden merely because the user navigated to a different project
+  // tab — pins are a cross-project focus view by design.
   const passesExplicitFilters = useCallback((t: Task): boolean => {
     if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
     if (phaseFilter && !matchesPhaseFilter(phaseFilter, t.phase)) return false;
@@ -3411,7 +3435,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, dateFilter, tasks]);
 
   // --- Search filtering: intersect search results with active filters ---
-  // Search bypasses category tab so results span ALL categories (the whole
+  // Search bypasses the project tab so results span ALL projects (the whole
   // point of search is to find things you can't see in the current view).
   // Explicit toolbar filters (priority, phase, source, tag, session, date) are
   // still respected because the user toggled those intentionally.
@@ -3426,8 +3450,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // contain enough text to block an input frame across a large task collection.
     const metadataMatches = eligibleTasks.filter((t) =>
       t.title.toLowerCase().includes(lowerQuery) ||
-      t.category.toLowerCase().includes(lowerQuery) ||
-      t.project.toLowerCase().includes(lowerQuery) ||
+      (t.project ?? '').toLowerCase().includes(lowerQuery) ||
       (t.tags && t.tags.some(tag => tag.toLowerCase().includes(lowerQuery)))
     );
 
@@ -3474,10 +3497,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // constrain the rendered IDs so hidden cards keep their stable pin position.
   //
   // Crucially, the NON-search set here applies ONLY the explicit toolbar filters
-  // (passesExplicitFilters) and NOT the category tab — Pinned/Recent are a
-  // cross-category focus view: pinning a task means "keep this in front of me no
-  // matter which category tab I'm on". Reusing `filtered` (which scopes to
-  // activeCategory) would make pins/recent vanish whenever the user navigated off
+  // (passesExplicitFilters) and NOT the project tab — Pinned/Recent are a
+  // cross-project focus view: pinning a task means "keep this in front of me no
+  // matter which project tab I'm on". Reusing `filtered` (which scopes to
+  // activeProject) would make pins/recent vanish whenever the user navigated off
   // the "All" tab, then reappear on search (which already bypasses the tab). The
   // main task list below still uses `filtered`/`searchFiltered` and stays tab-scoped.
   // FROZEN during a pinned drag: this membership set derives from the live
@@ -3707,11 +3730,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Cross-filter counts: each dimension counts tasks matching all OTHER active filters
   const filterCounts = useMemo(() => {
     // Shared predicates to avoid duplication across filter dimensions.
-    const matchesCategory = (t: Task) => {
-      if (activeCategory === STARRED_TAB) {
-        return !!t.starred || (favorites?.isCategoryFavorite(t.category) ?? false) || (favorites?.isProjectFavorite(t.project) ?? false) || isDescendantVisibleInStarred(t);
+    const matchesProject = (t: Task) => {
+      if (activeProject === STARRED_TAB) {
+        return !!t.starred || (!!t.project && (favorites?.isProjectFavorite(t.project) ?? false)) || isDescendantVisibleInStarred(t);
       }
-      return !activeCategory || t.category === activeCategory;
+      return !activeProject || (t.project || INBOX_TAB) === activeProject;
     };
     const matchesPrioritySessionSource = (t: Task) => {
       if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
@@ -3726,7 +3749,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (!showCompleted && t.status === 'done' && phaseFilter !== 'COMPLETE') {
         return false;
       }
-      return matchesCategory(t);
+      return matchesProject(t);
     });
 
     // Priority counts (apply phase + session + source + tag filters)
@@ -3747,7 +3770,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // showCompleted is off. Clicking COMPLETE overrides showCompleted (line ~1055),
     // so the count must reflect what the user would see after clicking.
     // Note: sum(phase counts) > totalForPhase when showCompleted=false — this is intentional.
-    const forPhase = tasks.filter((t) => matchesCategory(t) && matchesPrioritySessionSource(t));
+    const forPhase = tasks.filter((t) => matchesProject(t) && matchesPrioritySessionSource(t));
     const phase: Record<string, number> = {};
     for (const p of PHASE_ORDER) phase[p] = 0;
     for (const t of forPhase) if (t.phase && phase[t.phase] !== undefined) phase[t.phase]++;
@@ -3802,38 +3825,22 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
     return { priority, phase, session, source, tagCounts, totalForPriority: forPriority.length, totalForPhase, totalForSession: forSession.length, totalForTags: forTags.length };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeCategory, favorites, isDescendantVisibleInStarred]);
+  }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeProject, favorites, isDescendantVisibleInStarred]);
 
-  // Build category -> project -> tasks hierarchy (skipped in flat mode)
+  // Flat project groups (skipped in flat mode). '' = Inbox, rendered last so the
+  // named projects (the meaningful grouping) lead the list.
   const grouped = useMemo(() => {
     if (groupBy === 'none') return [];
-    const map = new Map<string, { direct: Task[]; projects: Map<string, Task[]> }>();
+    const map = new Map<string, Task[]>();
     for (const task of sorted) {
-      const cat = task.category || 'Uncategorized';
-      const hasDistinctProject = task.project && task.project !== task.category;
-      if (!map.has(cat)) map.set(cat, { direct: [], projects: new Map() });
-      const entry = map.get(cat)!;
-      if (hasDistinctProject) {
-        const proj = task.project!;
-        if (!entry.projects.has(proj)) entry.projects.set(proj, []);
-        entry.projects.get(proj)!.push(task);
-      } else {
-        entry.direct.push(task);
-      }
+      const proj = task.project || '';
+      if (!map.has(proj)) map.set(proj, []);
+      map.get(proj)!.push(task);
     }
-    const catOrder = ordering?.categoryOrder ?? [];
-    const projOrder = ordering?.projectOrder ?? {};
-    const catNames = orderedSort(Array.from(map.keys()), catOrder);
-    return catNames.map((cat) => {
-      const entry = map.get(cat)!;
-      const projNames = orderedSort(Array.from(entry.projects.keys()), projOrder[cat] ?? []);
-      return {
-        category: cat,
-        directTasks: entry.direct,
-        projects: projNames.map((proj) => ({ project: proj, tasks: entry.projects.get(proj)! })),
-      };
-    });
-  }, [sorted, groupBy, ordering?.categoryOrder, ordering?.projectOrder]);
+    const named = orderedSort(Array.from(map.keys()).filter((p) => p !== ''), ordering?.projectOrder ?? []);
+    const order = map.has('') ? [...named, ''] : named;
+    return order.map((project) => ({ project, tasks: map.get(project)! }));
+  }, [sorted, groupBy, ordering?.projectOrder]);
 
   // Child task maps: parentId → count, set of child task IDs, and child→parent mapping
   // Only tasks whose parent is VISIBLE in the current list are treated as children.
@@ -3925,89 +3932,69 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return false;
   }, [childParentMap, expandedParents]);
 
-  // Full (unfiltered) group map — needed so task reorder sends ALL IDs to the backend
+  // Full (unfiltered) per-project task lists — so a task reorder sends ALL ids to
+  // the backend, not just the ones currently passing the filters. '' = Inbox.
   const fullGrouped = useMemo(() => {
-    const map = new Map<string, { direct: Task[]; projects: Map<string, Task[]> }>();
+    const map = new Map<string, Task[]>();
     for (const task of tasks) {
-      const cat = task.category || 'Uncategorized';
-      const hasDistinctProject = task.project && task.project !== task.category;
-      if (!map.has(cat)) map.set(cat, { direct: [], projects: new Map() });
-      const entry = map.get(cat)!;
-      if (hasDistinctProject) {
-        const proj = task.project!;
-        if (!entry.projects.has(proj)) entry.projects.set(proj, []);
-        entry.projects.get(proj)!.push(task);
-      } else {
-        entry.direct.push(task);
-      }
+      const proj = task.project || '';
+      if (!map.has(proj)) map.set(proj, []);
+      map.get(proj)!.push(task);
     }
     return map;
   }, [tasks]);
 
-  // Build a lookup: taskId → { category, project } for drag end
-  // Normalize project: direct tasks use category as project (matches DroppableHeader data)
+  // taskId → its project ('' = Inbox) for drag end.
   const taskGroupMap = useMemo(() => {
-    const m = new Map<string, { category: string; project: string }>();
-    for (const g of grouped) {
-      for (const t of g.directTasks) m.set(t.id, { category: g.category, project: g.category });
-      for (const p of g.projects) {
-        for (const t of p.tasks) m.set(t.id, { category: g.category, project: p.project });
-      }
-    }
+    const m = new Map<string, string>();
+    for (const g of grouped) for (const t of g.tasks) m.set(t.id, g.project);
     return m;
   }, [grouped]);
 
-  const quickAddCategories = useMemo(() => {
+  /** Existing project names for the quick-add picker (Inbox = leave empty). */
+  const quickAddProjects = useMemo(() => {
     const set = new Set<string>();
-    for (const t of tasks) if (t.category) set.add(t.category);
-    if (!set.has('Inbox')) set.add('Inbox');
-    return [...set].sort((a, b) => (a === 'Inbox' ? -1 : b === 'Inbox' ? 1 : a.localeCompare(b)));
+    for (const t of tasks) if (t.project) set.add(t.project);
+    return [...set].sort((a, b) => a.localeCompare(b));
   }, [tasks]);
 
-  const quickAddProjectsByCategory = useMemo(() => {
-    const m = new Map<string, Set<string>>();
-    for (const t of tasks) {
-      if (!t.category || !t.project) continue;
-      if (!m.has(t.category)) m.set(t.category, new Set());
-      m.get(t.category)!.add(t.project);
-    }
-    return m;
-  }, [tasks]);
-
-  const effectiveDefaultCategory = useMemo(() => {
-    if (quickCategory) return quickCategory;
-    if (activeCategory && activeCategory !== STARRED_TAB) return activeCategory;
-    return 'Inbox';
-  }, [quickCategory, activeCategory]);
+  /** Where a bare quick-add lands: the explicit picker, else the active project tab, else Inbox. */
+  const effectiveDefaultProject = useMemo(() => {
+    if (quickProject) return quickProject;
+    if (activeProject && activeProject !== STARRED_TAB && activeProject !== INBOX_TAB) return activeProject;
+    return '';
+  }, [quickProject, activeProject]);
 
   const handleAdd = useCallback(async (e: FormEvent) => {
     e.preventDefault();
     const title = newTitle.trim();
     if (!title) return;
-    const category = effectiveDefaultCategory;
-    const project = quickProject.trim() || undefined;
+    const project = effectiveDefaultProject;
     try {
       const result = await onCreate({
         title,
         priority: 'none',
-        category,
-        project,
+        project: project || undefined,
         starred: quickStarred,
         pinnedTier: quickPinnedTier ?? undefined,
       });
       setNewTitle('');
-      setQuickCategory('');
       setQuickProject('');
       setQuickStarred(false);
       setQuickPinnedTier(null);
       if (onClearOperationError) onClearOperationError();
       const newTask = result as Task | undefined;
       if (newTask?.id) {
-        // Jump to the category where the task actually landed
-        if (activeCategory !== '' && activeCategory !== category) {
-          setActiveCategory(category);
-          persistTab(category);
-          onCategoryChange?.(category);
+        // Jump to the tab where the task actually landed (Inbox = the INBOX_TAB
+        // chip). Read the project off the CREATED task, not the requested name:
+        // project identity is case-insensitive, so the server canonicalizes
+        // "homelab" → the registry's "HomeLab", and jumping to the requested
+        // spelling would select a tab id that no chip has → an empty list.
+        const landedTab = (newTask.project || '') || INBOX_TAB;
+        if (activeProject !== '' && activeProject !== landedTab) {
+          setActiveProject(landedTab);
+          persistTab(landedTab);
+          onProjectChange?.(landedTab);
         }
         // Auto-focus triggers scroll-into-view via SortableTaskItem
         onFocusTask?.(newTask);
@@ -4016,17 +4003,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const msg = err instanceof Error ? err.message : 'Failed to add task';
       if (onOperationError) onOperationError(msg);
     }
-  }, [newTitle, quickProject, quickStarred, quickPinnedTier, effectiveDefaultCategory, onCreate, onClearOperationError, onOperationError, onFocusTask, activeCategory, onCategoryChange]);
-
-  const toggleCategory = (cat: string) => {
-    setCollapsedCategories((prev) => {
-      const next = new Set(prev);
-      if (next.has(cat)) next.delete(cat);
-      else next.add(cat);
-      persistSet(LS_COLLAPSED_CATS_KEY, next);
-      return next;
-    });
-  };
+  }, [newTitle, quickStarred, quickPinnedTier, effectiveDefaultProject, onCreate, onClearOperationError, onOperationError, onFocusTask, activeProject, onProjectChange]);
 
   const toggleProject = (key: string) => {
     setCollapsedProjects((prev) => {
@@ -4053,36 +4030,21 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return expandedParents.has(parentId);
   }, [expandedParents]);
 
-  // Collapse all / expand all
-  const allGroupKeys = useMemo(() => {
-    const catNames = grouped.map((g) => g.category);
-    const projKeys: string[] = [];
-    for (const g of grouped) {
-      for (const p of g.projects) {
-        projKeys.push(`${g.category}/${p.project}`);
-      }
-    }
-    return { catNames, projKeys };
-  }, [grouped]);
+  // Collapse all / expand all — collapse keys are plain project names ('' = Inbox)
+  const allGroupKeys = useMemo(() => grouped.map((g) => g.project), [grouped]);
 
-  const allCollapsed = allGroupKeys.catNames.length > 0 &&
-    allGroupKeys.catNames.every((c) => collapsedCategories.has(c));
+  const allCollapsed = allGroupKeys.length > 0 &&
+    allGroupKeys.every((p) => collapsedProjects.has(p));
 
   const handleCollapseExpandAll = useCallback(() => {
     if (allCollapsed) {
-      // Expand all
-      setCollapsedCategories(new Set());
       setCollapsedProjects(new Set());
-      persistSet(LS_COLLAPSED_CATS_KEY, new Set());
       persistSet(LS_COLLAPSED_PROJS_KEY, new Set());
     } else {
       // Collapse all — also collapse child tasks
-      const nextCats = new Set(allGroupKeys.catNames);
-      const nextProjs = new Set(allGroupKeys.projKeys);
-      setCollapsedCategories(nextCats);
+      const nextProjs = new Set(allGroupKeys);
       setCollapsedProjects(nextProjs);
       setExpandedParents(new Set());
-      persistSet(LS_COLLAPSED_CATS_KEY, nextCats);
       persistSet(LS_COLLAPSED_PROJS_KEY, nextProjs);
       persistSet(LS_EXPANDED_PARENTS_KEY, new Set());
     }
@@ -4111,7 +4073,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   const handleDragOver = useCallback((event: DragOverEvent) => {
     const activeType = (event.active.data?.current as { type?: string })?.type ?? 'task';
-    // Drop-intent highlighting only applies to task drags (not cat/proj group drags).
+    // Drop-intent highlighting only applies to task drags (not project group drags).
     if (activeType !== 'task') { clearDropIntent(); return; }
 
     const activeId = String(event.active.id);
@@ -4204,7 +4166,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // "group these together". If the target is already in a group, join it; else
     // create a new group from the two. This takes precedence over reparent/reorder
     // (which only run for gap drops or right-zone subtask drops). Grouping has no
-    // scope rule, so cross-category/project drops are fine.
+    // scope rule, so cross-project drops are fine.
     // GUARD: only an UNGROUPED active can join here. A grouped member dropped on an
     // outside card must NOT group-merge (groupTasks ABSORBS the member's whole group +
     // the target — the reported bug); it falls through to the drag-OUT block below.
@@ -4244,74 +4206,49 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
     const activeType = (active.data?.current as { type?: string })?.type ?? 'task';
 
-    // Category group reorder (collision is type-aware, so over.id is always cat:*)
-    if (activeType === 'category-group' && ordering) {
-      const overId = String(over.id);
-      if (!overId.startsWith('cat:')) return;
-      const activeId = String(active.id).slice(4); // strip 'cat:'
-      const targetCat = overId.slice(4);
-      if (targetCat === activeId) return;
-      const catNames = grouped.map((g) => g.category);
-      const oldIndex = catNames.indexOf(activeId);
-      const newIndex = catNames.indexOf(targetCat);
-      if (oldIndex === -1 || newIndex === -1) return;
-      const newOrder = [...catNames];
-      newOrder.splice(oldIndex, 1);
-      newOrder.splice(newIndex, 0, activeId);
-      ordering.reorderCategories(newOrder);
-      return;
-    }
-
-    // Project group reorder (collision is type-aware, so over.id is always proj:*)
+    // Project group reorder (collision is type-aware, so over.id is always proj:*).
+    // Project groups are globally sortable — one flat `ordering.projects` list.
+    // Inbox ('') is pinned last by the grouped memo and never enters the order.
     if (activeType === 'project-group' && ordering) {
       const overId = String(over.id);
       if (!overId.startsWith('proj:')) return;
-      const activeRest = String(active.id).slice(5); // strip 'proj:'
-      const slashIdx = activeRest.indexOf('/');
-      if (slashIdx === -1) return;
-      const activeCat = activeRest.slice(0, slashIdx);
-      const activeProj = activeRest.slice(slashIdx + 1);
-      const overRest = overId.slice(5);
-      const overSlashIdx = overRest.indexOf('/');
-      if (overSlashIdx === -1) return;
-      const targetProj = overRest.slice(overSlashIdx + 1);
+      const activeProj = String(active.id).slice(5); // strip 'proj:'
+      const targetProj = overId.slice(5);
       if (targetProj === activeProj) return;
-      const group = grouped.find((g) => g.category === activeCat);
-      if (!group) return;
-      const projNames = group.projects.map((p) => p.project);
+      // '' = Inbox. It is pinned last by the `grouped` memo and never enters
+      // `ordering.projects`, so it is neither draggable nor a drop target —
+      // dropping onto its header is an explicit no-op, not a missed case.
+      if (activeProj === '' || targetProj === '') return;
+      const projNames = grouped.map((g) => g.project).filter((p) => p !== '');
       const oldIndex = projNames.indexOf(activeProj);
       const newIndex = projNames.indexOf(targetProj);
       if (oldIndex === -1 || newIndex === -1) return;
       const newOrder = [...projNames];
       newOrder.splice(oldIndex, 1);
       newOrder.splice(newIndex, 0, activeProj);
-      ordering.reorderProjects(activeCat, newOrder);
+      ordering.reorderProjects(newOrder);
       return;
     }
 
     // Task reorder or cross-group move
     const activeId = String(active.id);
     const overId = String(over.id);
-    const activeInfo = taskGroupMap.get(activeId);
-    if (!activeInfo) return;
+    const activeTaskProject = taskGroupMap.get(activeId);
+    if (activeTaskProject === undefined) return;
 
-    // Determine target group: from task or from header drop zone
-    let targetCategory: string;
+    // Determine the target project: from a task card or from a header drop zone
     let targetProject: string;
     let insertNearTaskId: string | undefined;
 
     if (taskGroupMap.has(overId)) {
       // Dropped on a task
-      const overInfo = taskGroupMap.get(overId)!;
-      targetCategory = overInfo.category;
-      targetProject = overInfo.project;
+      targetProject = taskGroupMap.get(overId)!;
       insertNearTaskId = overId;
-    } else if (overId.startsWith('hdr-cat:') || overId.startsWith('hdr-proj:')) {
-      // Dropped on a header
-      const overData = over.data?.current as { category?: string; project?: string } | undefined;
-      if (!overData?.category) return;
-      targetCategory = overData.category;
-      targetProject = overData.project ?? overData.category;
+    } else if (overId.startsWith('hdr-proj:')) {
+      // Dropped on a header. `project` is '' for Inbox, so check presence, not truthiness.
+      const overData = over.data?.current as { project?: string } | undefined;
+      if (overData?.project === undefined) return;
+      targetProject = overData.project;
       insertNearTaskId = undefined; // append to end
     } else {
       return;
@@ -4398,22 +4335,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
     }
 
-    const sameGroup = activeInfo.category === targetCategory && activeInfo.project === targetProject;
-
-    if (sameGroup) {
-      // Same group: existing reorder logic
+    if (activeTaskProject === targetProject) {
+      // Same project: existing reorder logic
       if (!onReorder) return;
       if (!insertNearTaskId) return; // dropped on own header, nothing to do
       ensureManualSort();
 
-      const { category, project } = activeInfo;
-      const group = grouped.find((g) => g.category === category);
-      if (!group) return;
-
-      const hasDistinctProject = project && project !== category;
-      const visibleTasks = hasDistinctProject
-        ? group.projects.find((p) => p.project === project)?.tasks
-        : group.directTasks;
+      const project = activeTaskProject;
+      const visibleTasks = grouped.find((g) => g.project === project)?.tasks;
       if (!visibleTasks) return;
 
       const visibleIds = visibleTasks.map((t) => t.id);
@@ -4426,11 +4355,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       newVisibleIds.splice(newIndex, 0, activeId);
 
       // Get the FULL (unfiltered) task list so the backend gets all IDs
-      const fullEntry = fullGrouped.get(category);
-      if (!fullEntry) return;
-      const fullTasks = hasDistinctProject
-        ? fullEntry.projects.get(project!)
-        : fullEntry.direct;
+      const fullTasks = fullGrouped.get(project);
       if (!fullTasks) return;
 
       // Merge reordered visible tasks back into the full list,
@@ -4447,12 +4372,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         }
       }
 
-      onReorder(category, project, result);
+      onReorder(project, result);
     } else {
-      // Cross-group move
+      // Cross-project move
       if (!onMoveTask) return;
       ensureManualSort();
-      onMoveTask(activeId, targetCategory, targetProject, insertNearTaskId);
+      onMoveTask(activeId, targetProject, insertNearTaskId);
     }
   }, [onReorder, onMoveTask, onReparentTask, ordering, taskGroupMap, grouped, fullGrouped, sorted, childParentMap, trueChildCountMap, ensureManualSort, nestTargetId, groupTargetId, clearDropIntent, tasks, onAddToGroup, onGroupTasks]);
 
@@ -4510,7 +4435,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const map = new Map<string, () => void>();
     if (!onReorder) return map;
 
-    const processGroup = (groupTasks: Task[], fullGroupTasks: Task[], category: string, project: string) => {
+    const processGroup = (groupTasks: Task[], fullGroupTasks: Task[], project: string) => {
       // Group visible tasks by sibling-key (parent_task_id, resolved to full id)
       const siblingGroups = new Map<string, Task[]>();
       for (const t of groupTasks) {
@@ -4534,34 +4459,25 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             [newOrder[a], newOrder[b]] = [newOrder[b], newOrder[a]];
             ensureManualSort();
             scrollAfterReparentRef.current = task.id;
-            onReorder(category, project, newOrder);
+            onReorder(project, newOrder);
           });
         }
       }
     };
 
-    for (const { category, directTasks, projects } of grouped) {
-      const fullEntry = fullGrouped.get(category);
-      if (fullEntry) {
-        processGroup(directTasks, fullEntry.direct, category, category);
-        for (const { project, tasks: projTasks } of projects) {
-          const fullProj = fullEntry.projects.get(project);
-          if (fullProj) processGroup(projTasks, fullProj, category, project);
-        }
-      }
+    for (const { project, tasks: projTasks } of grouped) {
+      const fullTasks = fullGrouped.get(project);
+      if (fullTasks) processGroup(projTasks, fullTasks, project);
     }
     return map;
   }, [grouped, fullGrouped, onReorder, ensureManualSort]);
 
   const draggedTask = activeDragId ? sorted.find((t) => t.id === activeDragId) : null;
 
-  // User-controlled collapse only — no auto-collapse during drag
-  const isCategoryCollapsed = useCallback((cat: string) => {
-    return collapsedCategories.has(cat);
-  }, [collapsedCategories]);
-
-  const isProjectCollapsed = useCallback((projKey: string) => {
-    return collapsedProjects.has(projKey);
+  // User-controlled collapse only — no auto-collapse during drag.
+  // Key = the plain project name ('' = Inbox).
+  const isProjectCollapsed = useCallback((project: string) => {
+    return collapsedProjects.has(project);
   }, [collapsedProjects]);
 
   // Click task row (or pinned card) = select + scroll + open session (if any). Never open detail panel.
@@ -4610,7 +4526,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [onFocusTask, onOpenSession, selectedIds]);
 
   // Resolve the current selection to actual tasks. Grouping has NO scope rule
-  // anymore — any ≥2 tasks can be grouped regardless of category/project (a group
+  // anymore — any ≥2 tasks can be grouped regardless of project (a group
   // is a pure visual cluster). `canGroup` is therefore just "≥2 selected"; it
   // drives the floating action bar's Group enabled/disabled state.
   const selectionInfo = useMemo(() => {
@@ -4732,13 +4648,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onFocusTask ? onFocusTask(task) : navigate(`/tasks/${task.id}`);
   }, [onFocusTask, navigate]);
 
-  const showProjectDetail = useCallback((category: string, project: string) => {
-    setDetailTarget({ type: 'project', category, project });
-    onClearFocus?.();
-  }, [onClearFocus]);
-
-  const showCategoryDetail = useCallback((category: string) => {
-    setDetailTarget({ type: 'category', category });
+  const showProjectDetail = useCallback((project: string) => {
+    // Inbox has no registry row, so there is nothing to show for it.
+    if (!project) return;
+    setDetailTarget({ type: 'project', project });
     onClearFocus?.();
   }, [onClearFocus]);
 
@@ -4810,7 +4723,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     && (visibleRecentTasks.length === 0 || collapsedSections.has('recent'));
   // Section counts for the tab badges. `focus`/`satellite`/`backlog`/`wait`/`recent`
   // come from the already-computed display arrays, so the badges track exactly what
-  // the tab would render (incl. category/filter scoping).
+  // the tab would render (incl. project/filter scoping).
   const sectionCounts: Partial<Record<TodoSection, number>> = {
     focus: focusTasksDisplay.length,
     satellite: satelliteTasksDisplay.length,
@@ -4839,10 +4752,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         />
         {onOpenLauncher && <NewLauncherButton onOpen={onOpenLauncher} />}
         <ViewDropdown
-          categories={categories}
-          activeCategory={activeCategory}
-          onCategoryChange={(cat) => { setActiveCategory(cat); persistTab(cat); onCategoryChange?.(cat); }}
-          categoryCounts={categoryCounts}
+          projects={projectTabs}
+          activeProject={activeProject}
+          onProjectChange={(p) => { setActiveProject(p); persistTab(p); onProjectChange?.(p); }}
+          projectCounts={projectCounts}
           hasStarredContent={hasStarredContent}
           phaseFilter={phaseFilter}
           onPhaseFilterChange={(v) => { setPhaseFilter(v); clearFocusOverride(); }}
@@ -4860,7 +4773,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           showCompleted={showCompleted}
           onShowCompletedChange={(v) => { setShowCompleted(v); clearFocusOverride(); }}
           onClearAll={() => {
-            setActiveCategory(''); persistTab(''); onCategoryChange?.('');
+            setActiveProject(''); persistTab(''); onProjectChange?.('');
             setPhaseFilter('');
             setPriorityFilter('');
             setTagFilter('');
@@ -4925,11 +4838,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                             {renderTierItems(visibleFocusIds, 'focus', focusGroupMeta)}
                           </TierDropZone>
                           <InlineAdd label="Add to Focus…" onAdd={async (title) => {
-                            // capture:true → routes to configured Default Platform/Category (fast local Inbox by default).
+                            // capture:true → routes to the configured Default Platform/Project (fast local Inbox by default).
                             // No onFocusTask here: handleCreate already locates the new card with
                             // scope 'pinned' (Pinned-region scroll only). Calling onFocusTask would
                             // reset the scope to 'all' and switch the TASKS tab to the capture
-                            // category — the "all my tasks disappeared" bug.
+                            // project — the "all my tasks disappeared" bug.
                             await onCreate({ title, priority: 'none', pinnedTier: 'focus', capture: true });
                           }} />
                         </div>
@@ -5213,7 +5126,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
       {/* Draggable divider between PINNED+RECENT and the main task list.
           Task detail now opens in a full-screen modal (hosted by MainPage), so only
-          the inline project/category pane (detailTarget) compresses the list here. */}
+          the inline project pane (detailTarget) compresses the list here. */}
       {isAll && (visiblePinnedTasks.length > 0 || visibleRecentTasks.length > 0) && !detailTarget && !tasksCollapsed && !pinnedAreaCollapsed && (
         <div className="todo-pinned-splitter" {...pinnedSplitterHandleProps} />
       )}
@@ -5247,11 +5160,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             <p className="text-sm">No tasks found</p>
           </div>
         )}
-        {/* Search mode: flat, score-sorted list (no category/project grouping) */}
+        {/* Search mode: flat, score-sorted list (no project grouping) */}
         {!loading && isSearchMode && searchFiltered.length > 0 && (
           <div className="todo-search-results">
             {(() => {
-              // Compute child maps from searchFiltered (cross-category)
+              // Compute child maps from searchFiltered (cross-project)
               const searchChildIds = new Set<string>();
               const searchChildCount = new Map<string, number>();
               const searchChildParent = new Map<string, string>();
@@ -5325,7 +5238,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     onMoveUp={moveUpMap.get(task.id)}
                     isPinned={pinnedTaskIds?.has(task.id)}
                     pinnedTier={getTier(task.id)}
-                    searchContext={`${task.category}${task.project && task.project !== task.category ? ` / ${task.project}` : ''}`}
+                    searchContext={task.project || 'Inbox'}
                     filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideReason : undefined}
                     isFadingOverride={fadingOverrideId === task.id}
                   />
@@ -5373,7 +5286,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   onUnparent={onReparentTask ? handleUnparent : undefined}
                   onMoveUp={moveUpMap.get(task.id)}
                   isPinned={pinnedTaskIds?.has(task.id)}
-                  searchContext={`${task.category}${task.project && task.project !== task.category ? ` / ${task.project}` : ''}`}
+                  searchContext={task.project || 'Inbox'}
                   filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideReason : undefined}
                   isFadingOverride={fadingOverrideId === task.id}
                   groupInfo={groupRenderMap.get(task.id)}
@@ -5397,191 +5310,93 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             onDragEnd={handleDragEnd}
             onDragCancel={clearDropIntent}
           >
-            <SortableContext items={grouped.map((g) => `cat:${g.category}`)} strategy={verticalListSortingStrategy}>
-              {grouped.map(({ category, directTasks, projects }) => (
-                <SortableGroupItem key={`cat:${category}`} id={`cat:${category}`}>
+            <SortableContext items={grouped.map((g) => `proj:${g.project}`)} strategy={verticalListSortingStrategy}>
+              {grouped.map(({ project, tasks: projTasks }) => (
+                <SortableGroupItem key={`proj:${project}`} id={`proj:${project}`}>
                   {({ dragHandleProps }: { dragHandleProps: Record<string, unknown> }) => (
-                    <div className="todo-group-category">
-                      <DroppableHeader id={`hdr-cat:${category}`} category={category} project={category} disabled={activeDragType !== 'task'}>
+                    <div className="todo-group-project">
+                      <DroppableHeader id={`hdr-proj:${project}`} project={project} disabled={activeDragType !== 'task'}>
                         {({ isOver: isHeaderOver, setNodeRef: setHeaderRef }) => (
-                          <div ref={setHeaderRef} className={`todo-group-category-header${isHeaderOver ? ' header-drop-active' : ''}`} {...dragHandleProps}>
+                          <div ref={setHeaderRef} className={`todo-group-project-header${isHeaderOver ? ' header-drop-active' : ''}`} {...dragHandleProps}>
                             <div className="todo-group-header-controls">
-                              <button className={`collapse-chevron${!isCategoryCollapsed(category) ? ' expanded' : ''}`} onClick={(e) => { e.stopPropagation(); toggleCategory(category); }} title="Collapse/Expand">
+                              <button className={`collapse-chevron${!isProjectCollapsed(project) ? ' expanded' : ''}`} onClick={(e) => { e.stopPropagation(); toggleProject(project); }} title="Collapse/Expand">
                                 {CHEVRON_ICON}
                               </button>
-                              <button className="todo-group-name-btn" onClick={() => showCategoryDetail(category)} title="View category details">
-                                <span className="todo-group-category-name">{category}</span>
-                                <span className="todo-group-count text-xs text-muted">
-                                  {directTasks.length + projects.reduce((sum, p) => sum + p.tasks.length, 0)}
-                                </span>
+                              {/* Inbox is the ABSENCE of a project — no registry row, so no detail pane and no favorite star. */}
+                              <button className="todo-group-name-btn" onClick={() => showProjectDetail(project)} disabled={!project} title={project ? 'View project details' : 'Tasks with no project'}>
+                                <span className="todo-group-project-name">{project || 'Inbox'}</span>
+                                <span className="todo-group-count text-xs text-muted">{projTasks.length}</span>
                               </button>
                             </div>
-                            {favorites && (
+                            {favorites && project && (
                               <button
                                 className="todo-group-fav-btn"
-                                onClick={(e) => { e.stopPropagation(); favorites.toggleFavoriteCategory(category); }}
-                                title={favorites.isCategoryFavorite(category) ? 'Unfavorite category' : 'Favorite category'}
+                                onClick={(e) => { e.stopPropagation(); favorites.toggleFavoriteProject(project); }}
+                                title={favorites.isProjectFavorite(project) ? 'Unfavorite project' : 'Favorite project'}
                               >
-                                {favorites.isCategoryFavorite(category) ? '\u2605' : '\u2606'}
+                                {favorites.isProjectFavorite(project) ? '\u2605' : '\u2606'}
                               </button>
                             )}
                           </div>
                         )}
                       </DroppableHeader>
-                      {!isCategoryCollapsed(category) && (
-                        <>
-                          <SortableContext items={directTasks.filter((t) => !isChildHidden(t.id)).map((t) => t.id)} strategy={verticalListSortingStrategy}>
-                            {directTasks.map((task) => {
-                              if (isChildHidden(task.id)) return null;
-                              return (
-                                <SortableTaskItem
-                                  key={task.id}
-                                  task={task}
-                                  isFocused={focusedTaskId === task.id}
-                                  isDetailOpen={focusedTaskId === task.id && !suppressDetail}
-                                  isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                                  isVanishing={recentlyCompletedRef.current.has(task.id) && completedWillHide}
-                                  isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
-                                  depth={depthMap.get(task.id) ?? 0}
-                                  childCount={trueChildCountMap.get(task.id)}
-                                  isExpanded={expandedParents.has(task.id)}
-                                  onToggleExpand={() => toggleParentExpand(task.id)}
-                                  onClick={(e) => handleTaskClick(task, e)}
-                  isSelected={selectedIds.has(task.id)}
-                  selectMode={selectMode}
-                  onSelectToggle={onSelectToggle}
-                  onStartSelect={onStartSelect}
-                                  onSetPhase={setPhaseOrComplete}
-                                  onStar={onStar}
-                                  onDelete={onDelete}
-                                  onSetPriority={onSetPriority}
-                                  onSetDate={onSetDate}
-                                  onSetStartDate={onSetStartDate}
-                                  onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
-                                  onOpenSession={onOpenSession}
-                                  onExpandDetail={handleExpandDetail}
-                                  onClearFocus={onClearFocus}
-                                  onPinTask={onPinTask}
-                                  onUnpinTask={onUnpinTask}
-                                  onSetTier={onSetTier}
-                                  onUnparent={onReparentTask ? handleUnparent : undefined}
-                                  onMoveUp={moveUpMap.get(task.id)}
-                    isPinned={pinnedTaskIds?.has(task.id)}
-                    pinnedTier={getTier(task.id)}
-                                  filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideReason : undefined}
-                                  isFadingOverride={fadingOverrideId === task.id}
-                                  groupInfo={groupRenderMap.get(task.id)}
-                                  onRenameGroup={handleRenameGroup}
-                                  onUngroupTask={onUngroupTask}
-                  isGroupHidden={!!(task.group_id && hiddenGroups?.has(task.group_id))}
-                  onUnhideGroup={handleUnhideGroup}
-                  onDissolveGroup={handleDissolveGroup}
-                                />
-                              );
-                            })}
-                            <InlineAdd label={`Add to ${category}…`} onAdd={async (title) => {
-                              const result = await onCreate({ title, priority: 'none', category });
-                              const newTask = result as Task | undefined;
-                              // openDetail:false — quick-add just scrolls to the new card; don't pop the detail panel.
-                              if (newTask?.id) onFocusTask?.(newTask, { openDetail: false });
-                            }} />
-                          </SortableContext>
-                          <SortableContext items={projects.map((p) => `proj:${category}/${p.project}`)} strategy={verticalListSortingStrategy}>
-                            {projects.map(({ project, tasks: projTasks }) => {
-                              const projKey = `${category}/${project}`;
-                              return (
-                                <SortableGroupItem key={`proj:${projKey}`} id={`proj:${projKey}`}>
-                                  {({ dragHandleProps: projDragProps }: { dragHandleProps: Record<string, unknown> }) => (
-                                    <div className="todo-group-project">
-                                      <DroppableHeader id={`hdr-proj:${category}/${project}`} category={category} project={project} disabled={activeDragType !== 'task'}>
-                                        {({ isOver: isProjHeaderOver, setNodeRef: setProjHeaderRef }) => (
-                                          <div ref={setProjHeaderRef} className={`todo-group-project-header${isProjHeaderOver ? ' header-drop-active' : ''}`} {...projDragProps}>
-                                            <div className="todo-group-header-controls">
-                                              <button className={`collapse-chevron${!isProjectCollapsed(projKey) ? ' expanded' : ''}`} onClick={(e) => { e.stopPropagation(); toggleProject(projKey); }} title="Collapse/Expand">
-                                                {CHEVRON_ICON}
-                                              </button>
-                                              <button className="todo-group-name-btn" onClick={() => showProjectDetail(category, project)} title="View project details">
-                                                <span className="todo-group-project-name">{project}</span>
-                                                <span className="todo-group-count text-xs text-muted">{projTasks.length}</span>
-                                              </button>
-                                            </div>
-                                            {favorites && (
-                                              <button
-                                                className="todo-group-fav-btn"
-                                                onClick={(e) => { e.stopPropagation(); favorites.toggleFavoriteProject(project); }}
-                                                title={favorites.isProjectFavorite(project) ? 'Unfavorite project' : 'Favorite project'}
-                                              >
-                                                {favorites.isProjectFavorite(project) ? '\u2605' : '\u2606'}
-                                              </button>
-                                            )}
-                                          </div>
-                                        )}
-                                      </DroppableHeader>
-                                      {!isProjectCollapsed(projKey) && (
-                                        <SortableContext items={projTasks.filter((t) => !isChildHidden(t.id)).map((t) => t.id)} strategy={verticalListSortingStrategy}>
-                                          {projTasks.map((task) => {
-                                            if (isChildHidden(task.id)) return null;
-                                            return (
-                                              <SortableTaskItem
-                                                key={task.id}
-                                                task={task}
-                                                isFocused={focusedTaskId === task.id}
-                                                isDetailOpen={focusedTaskId === task.id && !suppressDetail}
-                                                isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                                                isVanishing={recentlyCompletedRef.current.has(task.id) && completedWillHide}
-                                                isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
-                                                depth={depthMap.get(task.id) ?? 0}
-                                                childCount={trueChildCountMap.get(task.id)}
-                                                isExpanded={expandedParents.has(task.id)}
-                                                onToggleExpand={() => toggleParentExpand(task.id)}
-                                                onClick={(e) => handleTaskClick(task, e)}
-                  isSelected={selectedIds.has(task.id)}
-                  selectMode={selectMode}
-                  onSelectToggle={onSelectToggle}
-                  onStartSelect={onStartSelect}
-                                                onSetPhase={setPhaseOrComplete}
-                                                onStar={onStar}
-                                                onDelete={onDelete}
-                                                onSetPriority={onSetPriority}
-                                                onSetDate={onSetDate}
-                                                onSetStartDate={onSetStartDate}
-                                                onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
-                                                onOpenSession={onOpenSession}
-                                                onExpandDetail={handleExpandDetail}
-                                                onClearFocus={onClearFocus}
-                                                onPinTask={onPinTask}
-                                                onUnpinTask={onUnpinTask}
-                                                onSetTier={onSetTier}
-                                                onUnparent={onReparentTask ? handleUnparent : undefined}
-                                                onMoveUp={moveUpMap.get(task.id)}
-                    isPinned={pinnedTaskIds?.has(task.id)}
-                    pinnedTier={getTier(task.id)}
-                                                filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideReason : undefined}
-                                                isFadingOverride={fadingOverrideId === task.id}
-                                                groupInfo={groupRenderMap.get(task.id)}
-                                                onRenameGroup={handleRenameGroup}
-                                                onUngroupTask={onUngroupTask}
-                  isGroupHidden={!!(task.group_id && hiddenGroups?.has(task.group_id))}
-                  onUnhideGroup={handleUnhideGroup}
-                  onDissolveGroup={handleDissolveGroup}
-                                              />
-                                            );
-                                          })}
-                                          <InlineAdd label={`Add to ${project}…`} onAdd={async (title) => {
-                                            const result = await onCreate({ title, priority: 'none', category, project });
-                                            const newTask = result as Task | undefined;
-                                            // openDetail:false — quick-add just scrolls to the new card; don't pop the detail panel.
-                                            if (newTask?.id) onFocusTask?.(newTask, { openDetail: false });
-                                          }} />
-                                        </SortableContext>
-                                      )}
-                                    </div>
-                                  )}
-                                </SortableGroupItem>
-                              );
-                            })}
-                          </SortableContext>
-                        </>
+                      {!isProjectCollapsed(project) && (
+                        <SortableContext items={projTasks.filter((t) => !isChildHidden(t.id)).map((t) => t.id)} strategy={verticalListSortingStrategy}>
+                          {projTasks.map((task) => {
+                            if (isChildHidden(task.id)) return null;
+                            return (
+                              <SortableTaskItem
+                                key={task.id}
+                                task={task}
+                                isFocused={focusedTaskId === task.id}
+                                isDetailOpen={focusedTaskId === task.id && !suppressDetail}
+                                isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
+                                isVanishing={recentlyCompletedRef.current.has(task.id) && completedWillHide}
+                                isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
+                                depth={depthMap.get(task.id) ?? 0}
+                                childCount={trueChildCountMap.get(task.id)}
+                                isExpanded={expandedParents.has(task.id)}
+                                onToggleExpand={() => toggleParentExpand(task.id)}
+                                onClick={(e) => handleTaskClick(task, e)}
+                                isSelected={selectedIds.has(task.id)}
+                                selectMode={selectMode}
+                                onSelectToggle={onSelectToggle}
+                                onStartSelect={onStartSelect}
+                                onSetPhase={setPhaseOrComplete}
+                                onStar={onStar}
+                                onDelete={onDelete}
+                                onSetPriority={onSetPriority}
+                                onSetDate={onSetDate}
+                                onSetStartDate={onSetStartDate}
+                                onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
+                                onOpenSession={onOpenSession}
+                                onExpandDetail={handleExpandDetail}
+                                onClearFocus={onClearFocus}
+                                onPinTask={onPinTask}
+                                onUnpinTask={onUnpinTask}
+                                onSetTier={onSetTier}
+                                onUnparent={onReparentTask ? handleUnparent : undefined}
+                                onMoveUp={moveUpMap.get(task.id)}
+                                isPinned={pinnedTaskIds?.has(task.id)}
+                                pinnedTier={getTier(task.id)}
+                                filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideReason : undefined}
+                                isFadingOverride={fadingOverrideId === task.id}
+                                groupInfo={groupRenderMap.get(task.id)}
+                                onRenameGroup={handleRenameGroup}
+                                onUngroupTask={onUngroupTask}
+                                isGroupHidden={!!(task.group_id && hiddenGroups?.has(task.group_id))}
+                                onUnhideGroup={handleUnhideGroup}
+                                onDissolveGroup={handleDissolveGroup}
+                              />
+                            );
+                          })}
+                          <InlineAdd label={`Add to ${project || 'Inbox'}\u2026`} onAdd={async (title) => {
+                            const result = await onCreate({ title, priority: 'none', project: project || undefined });
+                            const newTask = result as Task | undefined;
+                            // openDetail:false — quick-add just scrolls to the new card; don't pop the detail panel.
+                            if (newTask?.id) onFocusTask?.(newTask, { openDetail: false });
+                          }} />
+                        </SortableContext>
                       )}
                     </div>
                   )}
@@ -5590,15 +5405,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             </SortableContext>
 
             <DragOverlay
-              modifiers={activeDragType === 'category-group' || activeDragType === 'project-group' ? [snapToCursor] : undefined}
+              modifiers={activeDragType === 'project-group' ? [snapToCursor] : undefined}
             >
-              {activeDragType === 'category-group' && activeDragId ? (
+              {activeDragType === 'project-group' && activeDragId ? (
                 <div className="drag-overlay-group">
-                  {activeDragId.replace('cat:', '')}
-                </div>
-              ) : activeDragType === 'project-group' && activeDragId ? (
-                <div className="drag-overlay-group drag-overlay-group-project">
-                  {activeDragId.replace(/^proj:[^/]+\//, '')}
+                  {activeDragId.slice(5) || 'Inbox'}
                 </div>
               ) : draggedTask ? (
                 <TaskItemOverlay task={draggedTask} />
@@ -5609,26 +5420,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       </div>
       )}
 
-      {/* Detail pane: project or category (inline split-pane). Task detail now
+      {/* Detail pane: the project registry row (inline split-pane). Task detail now
           opens in a full-screen modal hosted by MainPage, not inline here. */}
       {detailTarget && <div className="todo-detail-splitter" {...splitterHandleProps} />}
-      {detailTarget?.type === 'project' ? (
+      {detailTarget?.type === 'project' && (
         <ProjectDetailPane
-          category={detailTarget.category}
           project={detailTarget.project}
           tasks={tasks}
           onClose={() => setDetailTarget(null)}
           style={{ flex: `${detailRatio} 1 0%` }}
         />
-      ) : detailTarget?.type === 'category' ? (
-        <CategoryDetailPane
-          category={detailTarget.category}
-          tasks={tasks}
-          onClose={() => setDetailTarget(null)}
-          onShowProject={(cat, proj) => setDetailTarget({ type: 'project', category: cat, project: proj })}
-          style={{ flex: `${detailRatio} 1 0%` }}
-        />
-      ) : null}
+      )}
 
       {/* operationError is surfaced globally via the unified notification toaster (AppShell). */}
       {/* Quick add belongs to the Tasks section — folds away with it, and is absent
@@ -5660,7 +5462,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           <button
             ref={quickMoreBtnRef}
             type="button"
-            className={`task-kebab-btn quick-add-more-btn${quickStarred || quickPinnedTier || quickCategory || quickProject ? ' has-selections' : ''}`}
+            className={`task-kebab-btn quick-add-more-btn${quickStarred || quickPinnedTier || quickProject ? ' has-selections' : ''}`}
             onClick={() => setQuickMoreOpen(v => !v)}
             aria-label="More options"
             aria-expanded={quickMoreOpen}
@@ -5670,19 +5472,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           </button>
           {quickMoreOpen && (
             <div ref={quickMoreMenuRef} className="task-kebab-menu quick-add-menu" role="menu">
-              <div className="task-kebab-tier">
-                <span className="task-kebab-tier-label">Category</span>
-                <select
-                  className="quick-add-menu-select"
-                  value={quickCategory}
-                  onChange={(e) => { setQuickCategory(e.target.value); setQuickProject(''); }}
-                  aria-label="Category"
-                >
-                  <option value="">{effectiveDefaultCategory} (default)</option>
-                  {quickAddCategories.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-              <div className="task-kebab-divider" />
+              {/* Single project picker — the default follows the active project tab
+                  (Inbox when on All/★), so the default option means "same as the tab". */}
               <div className="task-kebab-tier">
                 <span className="task-kebab-tier-label">Project</span>
                 <select
@@ -5691,10 +5482,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   onChange={(e) => setQuickProject(e.target.value)}
                   aria-label="Project"
                 >
-                  <option value="">None</option>
-                  {[...(quickAddProjectsByCategory.get(effectiveDefaultCategory) ?? [])].map((p) => (
-                    <option key={p} value={p}>{p}</option>
-                  ))}
+                  <option value="">{effectiveDefaultProject || 'Inbox'} (default)</option>
+                  {quickAddProjects.map((pr) => <option key={pr} value={pr}>{pr}</option>)}
                 </select>
               </div>
               <div className="task-kebab-divider" />
@@ -5755,7 +5544,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
       {/* Multi-select action bar — shown in explicit select mode, or whenever ≥2 tasks
           are selected (incl. the Cmd/Ctrl-click path). "Group" is enabled once ≥2 tasks
-          are picked (no category/project scope rule). "Cancel" abandons the selection and
+          are picked (no project scope rule). "Cancel" abandons the selection and
           leaves select mode (it used to be a confusing "Done"). */}
       {onGroupTasks && (selectMode || selectionInfo.tasks.length >= 2) && (
         <div className="task-selection-bar">

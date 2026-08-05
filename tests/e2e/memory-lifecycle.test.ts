@@ -52,7 +52,7 @@ describe('Search finds tasks by title', () => {
     const createRes = await fetch(apiUrl('/api/tasks'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Implement quantum flux capacitor', category: 'work' }),
+      body: JSON.stringify({ title: 'Implement quantum flux capacitor', project: 'work' }),
     })
     expect(createRes.status).toBe(201)
 
@@ -187,7 +187,7 @@ describe('Cross-feature: task creation persists and is searchable', () => {
     const createRes = await fetch(apiUrl('/api/tasks'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, category: 'life', priority: 'backlog' }),
+      body: JSON.stringify({ title, project: 'life', priority: 'backlog' }),
     })
     const { task } = (await createRes.json()) as { task: { id: string; title: string } }
     expect(task.title).toBe(title)
@@ -195,9 +195,9 @@ describe('Cross-feature: task creation persists and is searchable', () => {
     // GET confirms persistence
     const getRes = await fetch(apiUrl(`/api/tasks/${task.id}`))
     expect(getRes.status).toBe(200)
-    const getBody = (await getRes.json()) as { task: { title: string; category: string } }
+    const getBody = (await getRes.json()) as { task: { title: string; project: string } }
     expect(getBody.task.title).toBe(title)
-    expect(getBody.task.category).toBe('life')
+    expect(getBody.task.project).toBe('life')
 
     // Search finds it
     const searchRes = await fetch(apiUrl('/api/search?q=platypus+migration'))

@@ -1,6 +1,6 @@
 /**
  * TodoSearchBar — search input for the TODO panel.
- * Renders between category tabs and filter toolbar.
+ * Renders between the project tabs and the filter toolbar.
  */
 
 import { useRef, useEffect, useCallback, useState, startTransition } from 'react';

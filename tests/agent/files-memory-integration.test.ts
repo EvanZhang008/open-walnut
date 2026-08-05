@@ -50,7 +50,8 @@ describe('files_read memory sources', () => {
   });
 
   it('reads project memory with content_hash', async () => {
-    const projDir = path.join(PROJECTS_MEMORY_DIR, 'work', 'api');
+    // Post-migration layout is FLAT: memory/projects/<project>/MEMORY.md.
+    const projDir = path.join(PROJECTS_MEMORY_DIR, 'api');
     fs.mkdirSync(projDir, { recursive: true });
     fs.writeFileSync(
       path.join(projDir, 'MEMORY.md'),
@@ -59,12 +60,25 @@ describe('files_read memory sources', () => {
     );
 
     const result = parseResult(await executeTool('file_read', {
-      source: 'memory/project/work/api',
+      source: 'memory/project/api',
     }));
 
     expect(result.content_hash).toHaveLength(12);
     expect(result.content).toContain('API');
     expect(result.content).toContain('Some content');
+  });
+
+  it('still reads a legacy two-segment project path verbatim', async () => {
+    // Unmigrated data (or an agent configured with the old two-segment path)
+    // resolves as a literal directory path, so those reads keep working.
+    const projDir = path.join(PROJECTS_MEMORY_DIR, 'work', 'api');
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(path.join(projDir, 'MEMORY.md'), '# Legacy\n\nLegacy body\n', 'utf-8');
+
+    const result = parseResult(await executeTool('file_read', {
+      source: 'memory/project/work/api',
+    }));
+    expect(result.content).toContain('Legacy body');
   });
 
   it('reads daily log with content_hash', async () => {
@@ -110,7 +124,7 @@ describe('files_read memory sources', () => {
 
   it('returns error when project memory missing', async () => {
     const result = await executeTool('file_read', {
-      source: 'memory/project/nonexistent/project',
+      source: 'memory/project/nonexistent-project',
     });
     expect(result).toContain('Error');
     expect(result).toContain('not found');
@@ -141,14 +155,14 @@ describe('files_edit memory sources', () => {
   });
 
   it('edits project memory with correct hash', async () => {
-    const projDir = path.join(PROJECTS_MEMORY_DIR, 'work', 'api');
+    const projDir = path.join(PROJECTS_MEMORY_DIR, 'api');
     fs.mkdirSync(projDir, { recursive: true });
     const content = '---\nname: API\n---\n\nOld fact here\n';
     fs.writeFileSync(path.join(projDir, 'MEMORY.md'), content, 'utf-8');
     const hash = computeContentHash(content);
 
     const result = parseResult(await executeTool('file_edit', {
-      source: 'memory/project/work/api',
+      source: 'memory/project/api',
       content_hash: hash,
       old_content: 'Old fact here',
       new_content: 'New fact here',
@@ -274,14 +288,14 @@ describe('files_write overwrite memory sources', () => {
   });
 
   it('overwrites project memory', async () => {
-    const projDir = path.join(PROJECTS_MEMORY_DIR, 'work', 'api');
+    const projDir = path.join(PROJECTS_MEMORY_DIR, 'api');
     fs.mkdirSync(projDir, { recursive: true });
     const content = '---\nname: API\n---\n\nOld body\n';
     fs.writeFileSync(path.join(projDir, 'MEMORY.md'), content, 'utf-8');
     const hash = computeContentHash(content);
 
     const result = parseResult(await executeTool('file_write', {
-      source: 'memory/project/work/api',
+      source: 'memory/project/api',
       content_hash: hash,
       content: '---\nname: API v2\n---\n\nNew body\n',
     }));
@@ -307,10 +321,12 @@ describe('files_write overwrite memory sources', () => {
 // ═══════════════════════════════════════════════════════════════════
 
 // memory/projects/ is retired as a write target (2026-07 unification):
-// project appends route to skills/<category>/<project>/history/log.md
-// (or the category overview log). Tests create the target skill first.
-function seedSkill(category: string, name: string): void {
-  const dir = path.join(GLOBAL_SKILLS_DIR, category, name);
+// project appends route to the project's SKILL history log, resolved by NAME
+// SEARCH across the skill grouping dirs (skills/<grouping>/<project>/history/).
+// Project paths are single-segment now — a legacy `<category>/<project>` path
+// collapses to its last segment. Tests create the target skill first.
+function seedSkill(skillGrouping: string, name: string): void {
+  const dir = path.join(GLOBAL_SKILLS_DIR, skillGrouping, name);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: ${name}\n---\n\n# ${name}\n`, 'utf-8');
 }
@@ -319,7 +335,7 @@ describe('files_write append memory sources', () => {
   it('appends to skill history + daily log', async () => {
     seedSkill('work', 'api');
     const result = parseResult(await executeTool('file_write', {
-      source: 'memory/project/work/api',
+      source: 'memory/project/api',
       mode: 'append',
       content: 'Added new API endpoint',
     }));
@@ -328,13 +344,13 @@ describe('files_write append memory sources', () => {
     expect(result.written_to).toContain('skill-history');
     expect(result.written_to).toContain('daily');
 
-    // Verify skill history log
+    // Verify skill history log — found by name, without knowing its grouping dir
     const historyLog = path.join(GLOBAL_SKILLS_DIR, 'work', 'api', 'history', 'log.md');
     expect(fs.existsSync(historyLog)).toBe(true);
     expect(fs.readFileSync(historyLog, 'utf-8')).toContain('Added new API endpoint');
 
     // Legacy memory/projects/ must NOT be written
-    expect(fs.existsSync(path.join(PROJECTS_MEMORY_DIR, 'work', 'api', 'MEMORY.md'))).toBe(false);
+    expect(fs.existsSync(path.join(PROJECTS_MEMORY_DIR, 'api', 'MEMORY.md'))).toBe(false);
 
     // Verify daily log
     const dateKey = formatDateKey();
@@ -343,32 +359,53 @@ describe('files_write append memory sources', () => {
     expect(fs.readFileSync(dailyLogPath, 'utf-8')).toContain('Added new API endpoint');
   });
 
+  it('collapses a legacy two-segment project path to the project name', async () => {
+    // Stateful agents configured with the old `<category>/<project>` memory path
+    // keep working: only the LAST segment is the project.
+    seedSkill('work', 'api');
+    const result = parseResult(await executeTool('file_write', {
+      source: 'memory/project/anything/api',
+      mode: 'append',
+      content: 'Legacy-path entry',
+    }));
+
+    expect(result.status).toBe('saved');
+    expect(result.written_to).toContain('skill-history');
+    const historyLog = path.join(GLOBAL_SKILLS_DIR, 'work', 'api', 'history', 'log.md');
+    expect(fs.readFileSync(historyLog, 'utf-8')).toContain('Legacy-path entry');
+  });
+
   it('project append without a matching skill errors (daily still written)', async () => {
     const result = await executeTool('file_write', {
-      source: 'memory/project/work/ghost',
+      source: 'memory/project/ghost',
       mode: 'append',
       content: 'Orphan entry',
     });
     expect(result).toContain('Error');
     expect(result).toContain('No skill history target');
+    // The error names the project (not a category path) and how to create it.
+    expect(result).toContain('"ghost"');
 
     // Daily log got the entry regardless
     const dailyLogPath = path.join(DAILY_DIR, `${formatDateKey()}.md`);
     expect(fs.readFileSync(dailyLogPath, 'utf-8')).toContain('Orphan entry');
   });
 
-  it('project append falls back to the category overview skill', async () => {
+  it('does NOT fall back to an overview skill (the parent tier is gone)', async () => {
+    // Pre-refactor an unmatched project silently routed to skills/<cat>/overview.
+    // With one grouping layer there is no parent tier to fall back to, so an
+    // unmatched project must error rather than write into an unrelated log.
     seedSkill('work', 'overview');
-    const result = parseResult(await executeTool('file_write', {
-      source: 'memory/project/work/side-quest',
+    const result = await executeTool('file_write', {
+      source: 'memory/project/side-quest',
       mode: 'append',
       content: 'Overview-routed entry',
-    }));
-    expect(result.status).toBe('saved');
-    expect(result.written_to).toContain('skill-history');
+    });
 
+    expect(result).toContain('Error');
+    expect(result).toContain('No skill history target');
     const overviewLog = path.join(GLOBAL_SKILLS_DIR, 'work', 'overview', 'history', 'log.md');
-    expect(fs.readFileSync(overviewLog, 'utf-8')).toContain('Overview-routed entry');
+    expect(fs.existsSync(overviewLog)).toBe(false);
   });
 
   it('appends to daily log only (source=memory/daily)', async () => {
@@ -400,7 +437,7 @@ describe('files_write append memory sources', () => {
   it('does not require content_hash for append', async () => {
     seedSkill('work', 'test');
     const result = parseResult(await executeTool('file_write', {
-      source: 'memory/project/work/test',
+      source: 'memory/project/test',
       mode: 'append',
       content: 'No hash needed',
     }));

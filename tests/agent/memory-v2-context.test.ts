@@ -56,7 +56,7 @@ describe('buildMemoryContext', () => {
 
     const result = await buildMemoryContext();
     expect(typeof result).toBe('string');
-    expect(result).toContain('## Task Categories & Projects');
+    expect(result).toContain('## Projects');
     expect(result).toContain('## Your long-term memory');
     expect(result).toContain('## Recent activity');
     expect(result).toContain('memory_notes_search');
@@ -167,9 +167,9 @@ describe('buildSystemPromptSplit — stable / dynamic cache split (Thing 2)', ()
     // `dynamic`, never in the cached `stable` prefix. Assert on the section headers,
     // which are unique to buildMemoryContext (tool *names* like memory_notes_search
     // also appear in the stable role prompt, so they're not a reliable discriminator).
-    expect(stable).not.toContain('## Task Categories & Projects');
+    expect(stable).not.toContain('## Projects');
     expect(stable).not.toContain('## Recent activity');
-    expect(dynamic).toContain('## Task Categories & Projects');
+    expect(dynamic).toContain('## Projects');
     expect(dynamic).toContain('## Recent activity');
   });
 

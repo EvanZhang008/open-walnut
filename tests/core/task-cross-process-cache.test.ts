@@ -53,8 +53,8 @@ function externalInsert(id: string, title: string): void {
   const ext = new Database(TASK_DB_PATH);
   try {
     ext.prepare(
-      `INSERT INTO tasks (id, title, category, project, status, phase, priority, source, created_at, updated_at)
-       VALUES (?, ?, 'Local', 'Quick Start', 'todo', 'TODO', 'none', 'local', ?, ?)`,
+      `INSERT INTO tasks (id, title, project, status, phase, priority, source, created_at, updated_at)
+       VALUES (?, ?, 'Local', 'todo', 'TODO', 'none', 'local', ?, ?)`,
     ).run(id, title, new Date().toISOString(), new Date().toISOString());
   } finally {
     ext.close();
@@ -63,7 +63,7 @@ function externalInsert(id: string, title: string): void {
 
 describe('cross-process store-cache invalidation', () => {
   it('readStore sees a row committed by another connection (stale cache dropped)', async () => {
-    await addTask({ title: 'ours', category: 'Local' }); // fills the cache
+    await addTask({ title: 'ours', project: 'Local' }); // fills the cache
     await listTasks(); // cache hit path
 
     externalInsert('xproc-created-1', 'created by the other server');
@@ -76,7 +76,7 @@ describe('cross-process store-cache invalidation', () => {
     // The incident shape: process A creates a task; process B (stale cache)
     // then runs any whole-store helper (updateTask → writeStore). Before the
     // fix, B's snapshot lacked A's row and writeStore deleted it.
-    const { task: ours } = await addTask({ title: 'ours', category: 'Local' });
+    const { task: ours } = await addTask({ title: 'ours', project: 'Local' });
     await listTasks(); // ensure cache is populated pre-external-write
 
     externalInsert('xproc-created-2', 'fork made via the other server');
@@ -90,7 +90,7 @@ describe('cross-process store-cache invalidation', () => {
   });
 
   it('own writes still serve from cache (data_version unmoved by our commits)', async () => {
-    const { task } = await addTask({ title: 'cache check', category: 'Local' });
+    const { task } = await addTask({ title: 'cache check', project: 'Local' });
     // Two consecutive reads with no external writer — second must not lose data
     // (sanity that the version check doesn't thrash correctness).
     const first = await listTasks();

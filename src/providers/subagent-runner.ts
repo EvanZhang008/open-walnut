@@ -295,7 +295,7 @@ export class SubagentRunner {
       try {
         const { getTask } = await import('../core/task-manager.js');
         const task = await getTask(data.taskId);
-        taskProject = task.project || task.category || 'embedded';
+        taskProject = task.project || 'embedded';
       } catch {
         // Task may not exist — use default
       }
@@ -437,7 +437,8 @@ export class SubagentRunner {
         try {
           const { getTask } = await import('../core/task-manager.js');
           const task = await getTask(data.taskId);
-          const autoPath = `${task.category.toLowerCase()}/${task.project.toLowerCase()}`;
+          // Single segment: project is the only grouping layer ('' = inbox).
+          const autoPath = (task.project || 'inbox').toLowerCase();
           resolvedStateful.memory_project = resolvedStateful.memory_project.replace('{auto}', autoPath);
         } catch (err) {
           log.subagent.warn('failed to resolve {auto} in memory_project', {

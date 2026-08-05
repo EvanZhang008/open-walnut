@@ -92,7 +92,7 @@ describe('Memory Context', () => {
     seedGlobalMemory(WALNUT_HOME, 'Global preference: dark mode, concise responses.');
     seedDailyLog(WALNUT_HOME, daysAgoStr(0), 'Today I worked on memory v2 context injection tests.');
     // Legacy memory/projects/ files must NOT be injected (migrated to skills 2026-07)
-    seedProjectMemory(WALNUT_HOME, 'work', 'walnut', 'Walnut is a personal AI butler project.');
+    seedProjectMemory(WALNUT_HOME, 'walnut', 'Walnut is a personal AI butler project.');
 
     const context = await buildMemoryContext(8000);
 

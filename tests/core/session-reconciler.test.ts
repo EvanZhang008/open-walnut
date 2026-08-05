@@ -136,7 +136,6 @@ describe('reconcileSessions', () => {
         title: 'Linked task',
         status: 'in_progress',
         priority: 'none',
-        category: 'test',
         project: 'test',
         session_ids: ['linked-session'],
         exec_session_id: 'linked-session',
@@ -257,7 +256,7 @@ describe('reconcileSessions', () => {
     // 'running'. Without a real IN_PROGRESS task the old code would have
     // written 'idle' too and a revert would not fail this test.
     const { addTask, updateTaskRaw } = await import('../../src/core/task-manager.js')
-    const { task } = await addTask({ title: 'inprog', category: 'c', project: 'p' })
+    const { task } = await addTask({ title: 'inprog', project: 'p' })
     await updateTaskRaw(task.id, { phase: 'IN_PROGRESS' })
 
     await createSessionRecord('alive-idle', task.id, 'proj', undefined, {

@@ -7,7 +7,7 @@ import path from 'node:path';
 import { DAILY_DIR, agentDailyDir } from '../../../constants.js';
 import { readFileWithMeta, writeFileChecked, editFileContent } from '../../../utils/file-ops.js';
 import { ensureProjectDir, getAllProjectSummaries } from '../../../core/project-memory.js';
-import { appendSkillHistoryForProject } from '../../../core/overview-log.js';
+import { appendSkillHistoryForProject, PROJECT_SKILL_CATEGORY } from '../../../core/overview-log.js';
 import { appendRepoMemory, ensureRepoMemoryDir, getAllRepoMemorySummaries } from '../../../core/repo-memory.js';
 import { appendDailyLog, formatDateKey } from '../../../core/daily-log.js';
 import { ensureMemoryFile } from '../../../core/memory-file.js';
@@ -179,12 +179,18 @@ export const memoryHandler: FileHandler = {
   },
 };
 
-/** Route "category/project[/…]" to the skill-history system. Returns the
- *  written_to label, or null when no skill/overview target exists. */
+/** Project paths are single-segment now (memory/project/<proj>). A legacy
+ *  multi-segment path is collapsed to its LAST segment — that's where the
+ *  project name sat under the old "<category>/<project>" convention. */
+function projectNameFromPath(projectPath: string): string {
+  const segments = projectPath.split('/').filter(Boolean);
+  return segments[segments.length - 1] ?? '';
+}
+
+/** Route a project entry to the skill-history system. Returns the written_to
+ *  label, or null when the project owns no skill. */
 function routeProjectEntryToSkillHistory(projectPath: string, content: string): string | null {
-  const [category, ...rest] = projectPath.split('/').filter(Boolean);
-  const project = rest.join('-') || category;
-  const result = appendSkillHistoryForProject(category ?? '', project, content, 'agent');
+  const result = appendSkillHistoryForProject(projectNameFromPath(projectPath), content, 'agent');
   return result ? 'skill-history' : null;
 }
 
@@ -216,8 +222,8 @@ function handleMemoryAppend(resolved: ResolvedSource, content: string): FilesWri
     }
 
     // Write to both the skill-history log and the daily log. memory/projects/
-    // is retired as a write target (2026-07 unification) — entries route to
-    // skills/<category>/<project>/history/ (or the category overview log).
+    // is retired as a write target (2026-07 unification) — entries route to the
+    // project's skill history (skills/<grouping>/<project>/history/).
     appendDailyLog(content, 'agent', projectPath, resolved.agentId);
     writtenTo.push('daily');
 
@@ -225,11 +231,12 @@ function handleMemoryAppend(resolved: ResolvedSource, content: string): FilesWri
     if (routed) {
       writtenTo.push(routed);
     } else {
-      const [cat] = projectPath.split('/');
+      const project = projectNameFromPath(projectPath);
       throw new Error(
-        `No skill history target for project "${projectPath}". Create the skill first ` +
-        `(skill_manage action=create, category "${cat}") or use skill_manage log_append ` +
-        `against an existing category overview. (Entry was still saved to the daily log.)`,
+        `No skill history target for project "${project}". Create the project's skill first ` +
+        `(skill_manage action=create, name "${project}", category "${PROJECT_SKILL_CATEGORY}") or use ` +
+        `skill_manage log_append against an existing skill. ` +
+        `(Entry was still saved to the daily log.)`,
       );
     }
 

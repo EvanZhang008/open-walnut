@@ -56,19 +56,12 @@ export interface TaskDetail extends Task {
 export interface TaskFilter {
   status?: string;
   priority?: string;
-  category?: string;
+  /** Project name. Matched case-insensitively by the server. Cannot express
+   *  "Inbox" (the absence of a project) — omit it and filter client-side. */
   project?: string;
 }
 
 export type { QuickTaskParse } from '@open-walnut/core';
-
-export interface CategorySummary {
-  name: string;
-  source: string;
-  todo: number;
-  active: number;
-  done: number;
-}
 
 export async function quickParseTask(text: string): Promise<QuickTaskParse> {
   // Browser timezone rides along so relative dates ("tomorrow 10am") resolve in the
@@ -77,22 +70,18 @@ export async function quickParseTask(text: string): Promise<QuickTaskParse> {
   return apiPost<QuickTaskParse>('/api/tasks/quick-parse', { text, timeZone });
 }
 
-export function listCategories(): Promise<CategorySummary[]> {
-  return apiGet<CategorySummary[]>('/api/categories');
-}
-
 export interface CreateTaskInput {
   title: string;
   priority?: string;
-  category?: string;
+  /** Target project. Omitted/'' = Inbox. A name with no registry row is created. */
   project?: string;
   due_date?: string;
   start_date?: string;
   sprint?: string;
-  /** Explicit platform/source for the new task (e.g. 'local', 'ms-todo'). When set,
-   *  overrides the backend's category-based source inference — used by quick-add so a
-   *  task lands on the user's configured Default Platform instead of inheriting an
-   *  external source from the active category. */
+  /** Explicit platform/source for the new task (e.g. 'local', 'ms-todo'). Used by
+   *  quick-add so a task lands on the user's configured Default Platform. NOTE: a
+   *  project already claimed by a provider still wins — the registry row's source
+   *  outranks this field (see task-manager addTask). */
   source?: string;
 }
 
@@ -101,7 +90,7 @@ export interface UpdateTaskInput {
   status?: string;
   phase?: string;
   priority?: string;
-  category?: string;
+  /** Move to another project. '' = Inbox. */
   project?: string;
   due_date?: string | null;
   start_date?: string | null;
@@ -248,8 +237,9 @@ export function batchDeleteTasks(taskIds: string[], opts?: { force?: boolean }):
   return apiPost('/api/tasks/batch/delete', { task_ids: taskIds, ...(opts?.force ? { force: true } : {}) });
 }
 
-export async function reorderTasks(category: string, project: string, taskIds: string[]): Promise<void> {
-  await apiPatch<{ ok: boolean }>('/api/tasks/reorder', { category, project, taskIds });
+/** Reorder tasks within ONE project group. `project: ''` = Inbox (valid, not "unset"). */
+export async function reorderTasks(project: string, taskIds: string[]): Promise<void> {
+  await apiPatch<{ ok: boolean }>('/api/tasks/reorder', { project, taskIds });
 }
 
 export async function fetchDashboard(): Promise<DashboardData> {

@@ -4,7 +4,6 @@ interface ApiTask {
   id: string
   title: string
   priority: string
-  category: string
   project: string
   due_date?: string
   starred?: boolean
@@ -37,9 +36,11 @@ async function waitForNewTask(
   return created!
 }
 
-async function createCategory(request: APIRequestContext, name: string): Promise<void> {
-  const response = await request.post('/api/categories', { data: { name, source: 'local' } })
-  expect([201, 409]).toContain(response.status())
+async function createProject(request: APIRequestContext, name: string): Promise<void> {
+  // ensureProject is idempotent: 201 on first create, 200 when the row already
+  // exists (a repeat caller never steals the existing claim).
+  const response = await request.post('/api/projects', { data: { name, source: 'local' } })
+  expect([200, 201]).toContain(response.status())
 }
 
 function unique(prefix: string): string {
@@ -56,16 +57,15 @@ function tomorrowAtTwoIso(): string {
   return `${year}-${month}-${day}T02:00:00`
 }
 
-test('two-stage review creates parsed task in chosen category', async ({ page, request }) => {
-  const category = unique('Finance')
+test('two-stage review creates parsed task in the chosen project', async ({ page, request }) => {
   const project = unique('Taxes')
   const title = unique('File annual return')
   const dueDate = tomorrowAtTwoIso()
-  await createCategory(request, category)
+  await createProject(request, project)
   await page.route('**/api/tasks/quick-parse', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ title, due_date: dueDate, pinTier: 'satellite', category, project }),
+    body: JSON.stringify({ title, due_date: dueDate, pinTier: 'satellite', project }),
   }))
   const existingIds = new Set((await listTasks(request)).map((task) => task.id))
 
@@ -90,17 +90,42 @@ test('two-stage review creates parsed task in chosen category', async ({ page, r
   const tiers = panel.getByRole('group', { name: 'Pin new task to tier' })
   await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'true')
   await expect(tiers.getByRole('button', { name: 'Focus' })).toHaveAttribute('aria-pressed', 'false')
-  await expect(panel.locator('.qtc-confirm-select')).toHaveValue(category)
   await expect(panel.locator('.qtc-confirm-project')).toHaveValue(project)
+  // The project already exists, so no "new" badge.
+  await expect(panel.locator('.qtc-confirm-new')).toHaveCount(0)
   await panel.locator('.qtc-confirm-title').press('Enter')
 
   const created = await waitForNewTask(request, title, existingIds)
-  expect(created.category).toBe(category)
   expect(created.project).toBe(project)
   expect(created.due_date).toBe(dueDate)
 })
 
-test('plain note reviews defaults and creates in the default category', async ({ page, request }) => {
+test('a parsed project the AI just invented gets the "new" badge and is created', async ({ page, request }) => {
+  const project = unique('BrandNewStream')
+  const title = unique('Kick off new stream')
+  await page.route('**/api/tasks/quick-parse', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    // project_is_new is the explicit signal from quick-task-parse: this name is
+    // NOT one of the existing projects, so the panel must warn before creating it.
+    body: JSON.stringify({ title, project, project_is_new: true }),
+  }))
+  const existingIds = new Set((await listTasks(request)).map((task) => task.id))
+
+  await openComposer(page)
+  await page.locator('.qtc-input').fill('kick off a new stream of work')
+  await page.locator('.qtc-input').press('Enter')
+
+  const panel = page.locator('.qtc-confirm-panel')
+  await expect(panel.locator('.qtc-confirm-project')).toHaveValue(project)
+  await expect(panel.locator('.qtc-confirm-new')).toBeVisible()
+  await panel.locator('.qtc-confirm-title').press('Enter')
+
+  const created = await waitForNewTask(request, title, existingIds)
+  expect(created.project).toBe(project)
+})
+
+test('plain note reviews defaults and creates in Inbox (no project)', async ({ page, request }) => {
   const rawTitle = unique('Buy milk')
   await page.route('**/api/tasks/quick-parse', (route) => route.fulfill({
     status: 200,
@@ -114,7 +139,8 @@ test('plain note reviews defaults and creates in the default category', async ({
   await page.locator('.qtc-input').press('Enter')
   const panel = page.locator('.qtc-confirm-panel')
   await expect(panel.locator('.qtc-confirm-title')).toHaveValue(rawTitle)
-  await expect(panel.locator('.qtc-confirm-select')).toHaveValue('')
+  // No project parsed → empty field, placeholder reads "Inbox".
+  await expect(panel.locator('.qtc-confirm-project')).toHaveValue('')
   // Pinned area is always present, with nothing pressed when the AI suggested no tier.
   const tiers = panel.getByRole('group', { name: 'Pin new task to tier' })
   await expect(tiers).toBeVisible()
@@ -124,21 +150,20 @@ test('plain note reviews defaults and creates in the default category', async ({
   await panel.locator('.qtc-confirm-title').press('Enter')
 
   const created = await waitForNewTask(request, rawTitle, existingIds)
-  expect(created.category).toBe('Inbox')
-  expect(created.project).toBe('Inbox')
+  // '' = Inbox. Never the literal string "Inbox" — that would be a real project.
+  expect(created.project).toBe('')
 })
 
-test('panel overrides pin, category, project, priority, and star before create', async ({ page, request }) => {
-  const parsedCategory = unique('Personal')
-  const selectedCategory = unique('Errands')
+test('panel overrides pin, project, priority, and star before create', async ({ page, request }) => {
+  const parsedProject = unique('Personal')
   const selectedProject = unique('Groceries')
   const title = unique('Plan shopping trip')
-  await createCategory(request, parsedCategory)
-  await createCategory(request, selectedCategory)
+  await createProject(request, parsedProject)
+  await createProject(request, selectedProject)
   await page.route('**/api/tasks/quick-parse', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
-    body: JSON.stringify({ title, pinTier: 'focus', category: parsedCategory, project: 'Old project' }),
+    body: JSON.stringify({ title, pinTier: 'focus', project: parsedProject }),
   }))
   const existingIds = new Set((await listTasks(request)).map((task) => task.id))
 
@@ -159,17 +184,16 @@ test('panel overrides pin, category, project, priority, and star before create',
   // The tier is now the USER's pick, so the ✦ must go — otherwise the panel keeps
   // crediting the AI for a value the user just overrode.
   await expect(pinnedField.locator('.qtc-confirm-ai')).toHaveCount(0)
-  await panel.locator('.qtc-chip').nth(1).click()
-  await expect(panel.locator('.qtc-chip').nth(1)).toContainText('Immediate')
+  // Chips: 0=due, 1=start (added with start_date), 2=priority, 3=star.
   await panel.locator('.qtc-chip').nth(2).click()
-  await expect(panel.locator('.qtc-chip').nth(2)).toContainText('Starred')
-  await panel.locator('.qtc-confirm-select').selectOption(selectedCategory)
-  await expect(panel.locator('.qtc-confirm-project')).toHaveValue('')
+  await expect(panel.locator('.qtc-chip').nth(2)).toContainText('Immediate')
+  await panel.locator('.qtc-chip').nth(3).click()
+  await expect(panel.locator('.qtc-chip').nth(3)).toContainText('Starred')
+  await expect(panel.locator('.qtc-confirm-project')).toHaveValue(parsedProject)
   await panel.locator('.qtc-confirm-project').fill(selectedProject)
   await panel.locator('.qtc-confirm-primary').click()
 
   const created = await waitForNewTask(request, title, existingIds)
-  expect(created.category).toBe(selectedCategory)
   expect(created.project).toBe(selectedProject)
   expect(created.priority).toBe('immediate')
   await expect.poll(async () => (await listTasks(request)).find((task) => task.id === created.id)?.starred).toBe(true)

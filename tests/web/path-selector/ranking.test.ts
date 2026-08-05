@@ -17,7 +17,7 @@ const NOW = new Date('2026-07-14T00:00:00Z').getTime();
 
 function hist(cwd: string, count: number, daysAgo: number, host: string | null = null): WorkingDirEntry {
   return {
-    cwd, host, category: 'Test', count,
+    cwd, host, project: 'Test', count,
     lastUsed: new Date(NOW - daysAgo * 86400_000).toISOString(),
   };
 }

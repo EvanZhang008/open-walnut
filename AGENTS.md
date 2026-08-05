@@ -91,11 +91,11 @@ scripts/walnut-sandbox.sh status | stop          # health | stop+wipe
 
 ## What Is Walnut
 
-Personal AI butler: tasks + knowledge + AI sessions. **Tasks are the atom.** `Category → Project → Task → Subtask`. Event Bus connects everything. See [ARCHITECTURE.md](./ARCHITECTURE.md).
+Personal AI butler: tasks + knowledge + AI sessions. **Tasks are the atom.** `Project → Task → Subtask` — Project is the single grouping layer; a task with no project lives in the **Inbox** (`project = ''`). Event Bus connects everything. See [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ### Key Rules for Implementation
 
-- `create_task type=task` requires category AND project to exist first
+- `task_create` takes an optional `project`; an unknown name auto-creates the registry row (`task_projects`, source `'local'`). Inbox (`''`) has no registry row and can never be claimed by a sync provider
 - Phase: `TODO` → … → `AGENT_COMPLETE` → … → `COMPLETE` (agent sets AGENT_COMPLETE, human marks COMPLETE)
 - **NEVER force-kill Claude Code processes** — bypasses on-stop hook
 - **Sessions have ONE surface: the Homepage (`/`) session columns (`SessionPanel`).** The

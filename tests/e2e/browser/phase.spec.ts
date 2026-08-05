@@ -46,9 +46,9 @@ async function updateTaskPhase(
 
 // Helper: make every task visible. Two independent axes must both be "All":
 //  • SECTION tab — the panel defaults to Focus, where the main list isn't mounted
-//  • CATEGORY  — defaults to ★ (Starred), which hides non-starred tasks. It lives
-//    in the View dropdown now; the old `.todo-panel-tabs` strip this used to click
-//    no longer exists, so these tests were timing out on a dead selector.
+//  • PROJECT chip — defaults to ★ (Starred), which hides non-starred tasks. It
+//    lives in the View dropdown now; the old `.todo-panel-tabs` strip this used to
+//    click no longer exists, so these tests were timing out on a dead selector.
 async function showAllTasks(page: import('@playwright/test').Page) {
   await showEverything(page)
   // Wait for task list to update
@@ -133,7 +133,7 @@ test('task without sprint does not show sprint pill', async ({ page }) => {
 
 test('clicking status button opens phase picker and selects phase', async ({ page }) => {
   // Create a fresh task so we don't mutate shared seeded data
-  const task = await createTaskViaApi('Phase picker test', { category: 'Work', project: 'Walnut' })
+  const task = await createTaskViaApi('Phase picker test', { project: 'Walnut' })
 
   // Navigate after task creation — page will fetch all tasks including the new one
   await page.goto('/')

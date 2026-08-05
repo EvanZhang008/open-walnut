@@ -4,7 +4,7 @@
  *   - threshold math (exact hits below 20, modulo after)
  *   - full regeneration: previous summary + task titles reach the prompt;
  *     missing descriptions never block
- *   - persisted into .metadata_project as summary + summary_task_count
+ *   - persisted onto the task_projects registry row as summary + summary_task_count
  *   - non-threshold counts and bulk sources never call the model
  *   - stale/duplicate crossings deduped via summary_task_count
  *
@@ -38,10 +38,10 @@ function textResult(text: string) {
 }
 
 let seedCounter = 0;
-async function seedTasks(n: number, category = 'Work', project = 'walnut'): Promise<Task> {
+async function seedTasks(n: number, project = 'walnut'): Promise<Task> {
   let last: Task | undefined;
   for (let i = 0; i < n; i++) {
-    const { task } = await addTask({ title: `Task number ${++seedCounter}`, category, project });
+    const { task } = await addTask({ title: `Task number ${++seedCounter}`, project });
     last = task;
   }
   return getTask(last!.id);
@@ -77,7 +77,7 @@ describe('maybeRefreshForTask', () => {
 
     expect(ran).toBe(true);
     expect(sendMessageMock).toHaveBeenCalledOnce();
-    const meta = await getProjectMetadata('Work', 'walnut');
+    const meta = await getProjectMetadata('walnut');
     expect(meta?.summary).toBe('A project about walnut development.');
     expect(meta?.summary_task_count).toBe(1);
   });
@@ -120,19 +120,37 @@ describe('maybeRefreshForTask', () => {
     expect(content).toContain('Previous summary:');
     expect(content).toContain('A project about walnut development.');
     expect(content).toContain('Task number 4');
-    const meta = await getProjectMetadata('Work', 'walnut');
+    const meta = await getProjectMetadata('walnut');
     expect(meta?.summary).toBe('Updated: walnut work continues.');
     expect(meta?.summary_task_count).toBe(4);
   });
 
+  it('never summarizes Inbox (no project = the unfiled pile)', async () => {
+    const { task } = await addTask({ title: 'Loose thought' });
+    expect(task.project).toBe('');
+
+    expect(await maybeRefreshForTask(await getTask(task.id), 'web-api')).toBe(false);
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it('counts a project case-insensitively (NOCASE identity)', async () => {
+    // 'walnut' + 'WALNUT' are one project → the 2nd create hits threshold 2.
+    await seedTasks(1, 'walnut');
+    const task = await seedTasks(1, 'WALNUT');
+
+    expect(await maybeRefreshForTask(task, 'web-api')).toBe(true);
+    const content = sendMessageMock.mock.calls.at(-1)![0].messages[0].content as string;
+    expect(content).toContain('(2 tasks)');
+  });
+
   it('keeps prior metadata keys when writing the summary', async () => {
     const { setProjectMetadata } = await import('../../src/core/task-manager.js');
-    await setProjectMetadata('Work', 'walnut', { default_cwd: '/tmp/walnut' });
+    await setProjectMetadata('walnut', { default_cwd: '/tmp/walnut' });
     const task = await seedTasks(1);
 
     await maybeRefreshForTask(task, 'web-api');
 
-    const meta = await getProjectMetadata('Work', 'walnut');
+    const meta = await getProjectMetadata('walnut');
     expect(meta?.default_cwd).toBe('/tmp/walnut');
     expect(meta?.summary).toBeTruthy();
   });
@@ -143,12 +161,12 @@ describe('refreshProjectSummary', () => {
     await seedTasks(1);
     sendMessageMock.mockResolvedValue(textResult('not json'));
 
-    expect(await refreshProjectSummary('Work', 'walnut')).toBe(false);
-    expect(await getProjectMetadata('Work', 'walnut')).toBeNull();
+    expect(await refreshProjectSummary('walnut')).toBe(false);
+    expect(await getProjectMetadata('walnut')).toBeNull();
   });
 
   it('returns false for a project with no tasks', async () => {
-    expect(await refreshProjectSummary('Work', 'ghost')).toBe(false);
+    expect(await refreshProjectSummary('ghost')).toBe(false);
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 });

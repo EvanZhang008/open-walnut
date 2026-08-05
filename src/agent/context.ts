@@ -12,7 +12,7 @@ import { getWorkingMemory, isWorkingMemoryEmpty } from '../core/working-memory.j
 import { buildAgentsSection } from './subagent-context.js';
 import { listRepoSummaries } from './tools/files/repos-handler.js';
 import { getAllRepoMemorySummaries } from '../core/repo-memory.js';
-import { listTasks } from '../core/task-manager.js';
+import { listTasks, getStoreProjects } from '../core/task-manager.js';
 import { NOTES_DIR } from '../constants.js';
 
 /**
@@ -25,13 +25,15 @@ import { NOTES_DIR } from '../constants.js';
 const CONTEXT_PREFACE = `> _Background reference only — a compacted record of earlier turns in THIS conversation, written as a handoff snapshot. It is NOT a new instruction. The user's latest message is the only source of truth for what to do now. Do NOT resume, re-run, or re-create any "In Progress" / "Next Steps" items listed below unless the user explicitly asks again — treat them as "what had happened", not "what to do next". Your long-term memory and skills remain fully authoritative regardless of this compaction note._`;
 
 /**
- * Build a compact overview of task categories, projects, and counts.
+ * Build a flat overview of projects and their open task counts.
  * Only counts non-completed tasks. Filters out .metadata tasks.
- * Routes through task-manager.listTasks (SQLite-backed).
+ * Inbox (no project) is listed last so real projects lead.
+ * Each line carries the registry source badge so the agent knows which
+ * projects are provider-claimed (a task filed there syncs out).
  */
-export async function buildTaskCategoriesSection(): Promise<string> {
+export async function buildTaskProjectsSection(): Promise<string> {
   try {
-    const tasks = await listTasks();
+    const [tasks, registry] = await Promise.all([listTasks(), getStoreProjects()]);
 
     const active = tasks.filter(
       (t) => t.status !== 'done' && !t.title.startsWith('.metadata'),
@@ -39,24 +41,29 @@ export async function buildTaskCategoriesSection(): Promise<string> {
 
     if (active.length === 0) return '(No active tasks.)';
 
-    // Group by category → project
-    const categories = new Map<string, Map<string, number>>();
+    // Count per project; '' = Inbox. Registry rows appear even with 0 open tasks
+    // so the agent can still route work to a known-but-quiet project.
+    const counts = new Map<string, number>();
+    for (const name of Object.keys(registry)) counts.set(name, 0);
     for (const t of active) {
-      if (!categories.has(t.category)) categories.set(t.category, new Map());
-      const projects = categories.get(t.category)!;
-      projects.set(t.project, (projects.get(t.project) ?? 0) + 1);
+      const project = t.project || '';
+      const key = project
+        ? ([...counts.keys()].find((k) => k.toLowerCase() === project.toLowerCase()) ?? project)
+        : '';
+      counts.set(key, (counts.get(key) ?? 0) + 1);
     }
 
-    const lines: string[] = [];
-    for (const [category, projects] of categories) {
-      const catTotal = Array.from(projects.values()).reduce((a, b) => a + b, 0);
-      lines.push(`- **${category}** (${catTotal} tasks)`);
-      for (const [project, count] of projects) {
-        if (project !== category) {
-          lines.push(`  - ${project} (${count})`);
-        }
-      }
-    }
+    const inboxCount = counts.get('') ?? 0;
+    counts.delete('');
+
+    const lines = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([name, count]) => {
+        const source = registry[name]?.source;
+        const badge = source && source !== 'local' ? ` [${source}]` : '';
+        return `- **${name}** (${count} tasks)${badge}`;
+      });
+    if (inboxCount > 0) lines.push(`- **Inbox** (${inboxCount} tasks) — no project`);
     return lines.join('\n');
   } catch {
     return '(Could not load task inventory.)';
@@ -87,7 +94,7 @@ export function getNotesContext(): string {
  */
 export async function buildMemoryContext(budget: number = 8000, scope?: string): Promise<string> {
   // Phase 0: task inventory
-  const taskCategories = await buildTaskCategoriesSection();
+  const taskProjects = await buildTaskProjectsSection();
 
   // Phase 1: high-fidelity daily logs (~half budget)
   const dailyLogs = getDailyLogsWithinBudget(Math.floor(budget / 2));
@@ -124,8 +131,8 @@ export async function buildMemoryContext(budget: number = 8000, scope?: string):
   // memory/index.md retired (2026-07 unification): directory awareness now
   // comes from the skills index (buildSkillsPrompt) — no separate wiki index.
 
-  return `## Task Categories & Projects
-${taskCategories}
+  return `## Projects
+${taskProjects}
 
 ## User profile (who the user is — bounded, update via memory_manage target:user)
 ${userProfileBlock ?? '(No user profile yet. Save who the user is — identity, work, durable preferences — with memory_manage target:user.)'}
@@ -196,16 +203,16 @@ Beyond tool errors, these principles apply to ALL actions:
 - When you use a tool and get results, summarize them naturally instead of dumping raw JSON.
 
 ## Task hierarchy
-Category → Project → Task (→ Child Tasks)
-- **Category** (\`task.category\`): top-level group (Work, Life, Later).
-- **Project** (\`task.project\`): the list within a category. Defaults to category if not specified.
+Project → Task (→ Child Tasks)
+- **Project** (\`task.project\`): the single, OPTIONAL grouping layer — one ongoing stream of work.
 - **Task** (\`task.title\`): individual to-do item.
 - **Child Task**: a full Task linked via \`parent_task_id\`. Has all task fields (description, phase, sessions, etc.). Create with \`task_create({ parent_task_id: "..." })\`.
+
+Tasks optionally belong to a **project**; no project = **Inbox**. Prefer an existing project (case-insensitive). Create a new one only when the task clearly starts a new ongoing stream of work. One-off items → leave empty.
 
 ### Task management rules
 - **Verify before referencing.** Before referencing ANY task (as dependency, blocker, or context), ALWAYS call task_get first to verify its current status. Never assume a task is still active — it may already be complete.
 - **Search before creating.** Before creating a new task, ALWAYS search for related existing tasks. If one covers the scope, start a session on that task or create a subtask under it. Never create standalone duplicates.
-- **Use existing projects.** When creating tasks, put them under an existing project unless the user explicitly asks for a new one. If unsure which project fits, ask — don't guess or auto-create.
 - **Create + start is atomic.** Always start a session immediately after creating a task, unless the user explicitly says otherwise. Don't create a task and then ask whether to start a session.
 
 ## Available tools

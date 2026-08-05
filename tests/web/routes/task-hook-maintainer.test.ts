@@ -49,20 +49,23 @@ import type { Server as HttpServer } from 'node:http'
 import { WALNUT_HOME, GLOBAL_SKILLS_DIR } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { resetMaintainerState } from '../../../src/agent/overview-maintainer.js'
-import { overviewHistoryDir } from '../../../src/core/overview-log.js'
+import { skillHistoryDir } from '../../../src/core/overview-log.js'
 import { clearSkillsCache } from '../../../src/core/skill-loader.js'
 
 let server: HttpServer
 let port: number
 
-const CAT = 'hookcat'
+/** Skill grouping directory (NOT a task category — that concept is gone). */
+const SKILL_CAT = 'hookgroup'
+/** Task project name; also the skill dir name the maintainer resolves it to. */
+const PROJECT = 'hookproj'
 
-async function seedOverview(category = CAT): Promise<void> {
-  const dir = path.join(GLOBAL_SKILLS_DIR, category, 'overview')
+async function seedProjectSkill(name = PROJECT, skillCategory = SKILL_CAT): Promise<void> {
+  const dir = path.join(GLOBAL_SKILLS_DIR, skillCategory, name)
   await fsp.mkdir(dir, { recursive: true })
   await fsp.writeFile(
     path.join(dir, 'SKILL.md'),
-    `---\nname: overview\ndescription: '${category} overview'\ntype: knowledge\n---\n\n# Overview\n`,
+    `---\nname: ${name}\ndescription: '${name} project skill'\ntype: knowledge\n---\n\n# ${name}\n`,
   )
 }
 
@@ -91,7 +94,7 @@ describe('task lifecycle → overview maintainer (full server)', () => {
     clearSkillsCache()
     await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
     await fsp.mkdir(WALNUT_HOME, { recursive: true })
-    await seedOverview()
+    await seedProjectSkill()
     server = await startServer({ port: 0, dev: true })
     const addr = server.address()
     port = typeof addr === 'object' && addr ? addr.port : 0
@@ -103,11 +106,10 @@ describe('task lifecycle → overview maintainer (full server)', () => {
     await fsp.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
   })
 
-  it('REST task create fires the maintainer, which appends to the overview log', async () => {
+  it("REST task create fires the maintainer, which appends to the project skill's log", async () => {
     const res = await post('/api/tasks', {
       title: 'Wire the task hook',
-      category: CAT,
-      project: CAT,
+      project: PROJECT,
     })
     expect(res.status).toBe(201)
 
@@ -120,16 +122,16 @@ describe('task lifecycle → overview maintainer (full server)', () => {
     expect(call.options?.tools?.map((t) => t.name)).toEqual(['skill_manage', 'skill_view'])
 
     // The mock model's log_append landed in the real file.
-    await waitFor(() => fs.existsSync(path.join(overviewHistoryDir(CAT), 'log.md')))
-    const raw = fs.readFileSync(path.join(overviewHistoryDir(CAT), 'log.md'), 'utf-8')
+    const logFile = path.join(skillHistoryDir(SKILL_CAT, PROJECT), 'log.md')
+    await waitFor(() => fs.existsSync(logFile))
+    const raw = fs.readFileSync(logFile, 'utf-8')
     expect(raw).toContain('Hook entry for:')
     expect(raw).toContain('task-hook')
   })
 
-  it('does not fire for categories without an overview skill', async () => {
+  it('does not fire for a project without a skill', async () => {
     const res = await post('/api/tasks', {
-      title: 'Task in plain category',
-      category: 'plain',
+      title: 'Task in a skill-less project',
       project: 'plain',
     })
     expect(res.status).toBe(201)
@@ -137,8 +139,15 @@ describe('task lifecycle → overview maintainer (full server)', () => {
     expect(hookCalls()).toHaveLength(0)
   })
 
+  it('does not fire for an Inbox task (no project)', async () => {
+    const res = await post('/api/tasks', { title: 'Loose capture' })
+    expect(res.status).toBe(201)
+    await new Promise((r) => setTimeout(r, 400))
+    expect(hookCalls()).toHaveLength(0)
+  })
+
   it('completing a task fires the maintainer with [Task completed]', async () => {
-    const createRes = await post('/api/tasks', { title: 'Finish me', category: CAT, project: CAT })
+    const createRes = await post('/api/tasks', { title: 'Finish me', project: PROJECT })
     expect(createRes.status).toBe(201)
     const { task } = await createRes.json() as { task: { id: string } }
     await waitFor(() => hookCalls().length === 1)
