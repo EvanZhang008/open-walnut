@@ -14,7 +14,8 @@ export interface ConfirmDraft {
   title: string;
   due?: string;
   start?: string;
-  pin?: 'focus' | 'satellite' | 'wait';
+  /** Built-in tier name or a custom tier id (`ct_*`). */
+  pin?: string;
   priority?: 'immediate' | 'important' | 'backlog';
   starred: boolean;
   category?: string;

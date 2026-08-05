@@ -219,7 +219,10 @@ const CUSTOM_MODEL_VALUE = '__custom__';
 // Context source definitions
 const CONTEXT_SOURCE_DEFS: { id: ContextSourceId; label: string; auto: boolean; defaultBudget: number; description: string }[] = [
   { id: 'task_details', label: 'Task Details', auto: true, defaultBudget: 1500, description: 'Task metadata, subtasks, description, summary, notes' },
-  { id: 'project_memory', label: 'Project Memory', auto: true, defaultBudget: 2000, description: 'Project MEMORY.md content' },
+  // Legacy store: reads memory/projects/<category>/<project>/MEMORY.md, which the
+  // 2026-07 skills migration superseded but did not empty. Still real for projects
+  // whose content was never moved to a skill; empty for everything created since.
+  { id: 'project_memory', label: 'Project Memory', auto: true, defaultBudget: 2000, description: 'Legacy project MEMORY.md (pre-skills projects only)' },
   { id: 'project_task_list', label: 'Project Task List', auto: false, defaultBudget: 1500, description: 'All non-completed tasks in the same project' },
   { id: 'global_memory', label: 'Global Memory', auto: false, defaultBudget: 2000, description: 'Global MEMORY.md' },
   { id: 'daily_log', label: 'Daily Log', auto: false, defaultBudget: 3000, description: 'Recent daily activity logs' },

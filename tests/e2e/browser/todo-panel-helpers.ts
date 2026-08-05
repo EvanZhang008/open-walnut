@@ -18,14 +18,14 @@
 import type { Page } from '@playwright/test'
 
 /** A section tab by visible name. */
-export function sectionTab(page: Page, name: 'All' | 'Focus' | 'Satellite' | 'Wait' | 'Recent' | 'Tasks' | 'Notes') {
+export function sectionTab(page: Page, name: 'All' | 'Focus' | 'Satellite' | 'Backlog' | 'Wait' | 'Recent' | 'Tasks' | 'Notes') {
   return page.locator('.todo-section-tabs [role="tab"]', { hasText: name }).first()
 }
 
 /** Switch to a section tab (no-op when it's already active). */
 export async function selectSection(
   page: Page,
-  name: 'All' | 'Focus' | 'Satellite' | 'Wait' | 'Recent' | 'Tasks' | 'Notes',
+  name: 'All' | 'Focus' | 'Satellite' | 'Backlog' | 'Wait' | 'Recent' | 'Tasks' | 'Notes',
 ): Promise<void> {
   const tab = sectionTab(page, name)
   await tab.waitFor({ state: 'visible', timeout: 15_000 })

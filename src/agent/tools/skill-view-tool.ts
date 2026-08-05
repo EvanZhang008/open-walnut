@@ -10,6 +10,7 @@ import path from 'node:path';
 import type { ToolDefinition } from '../tools.js';
 import { getSkill } from '../../core/skill-store.js';
 import { bumpSkillUsage } from '../../core/skill-usage.js';
+import { screenDocumentForPrompt } from '../../core/memory-safety.js';
 
 export const skillViewTool: ToolDefinition = {
   name: 'skill_view',
@@ -55,12 +56,15 @@ export const skillViewTool: ToolDefinition = {
         if (!realFile.startsWith(realDir + path.sep)) {
           return 'Invalid file_path: must stay inside the skill directory.';
         }
-        return await fsp.readFile(realFile, 'utf-8');
+        // A skill body becomes authoritative procedure the moment it is loaded,
+        // and reference files are written by the same paths as SKILL.md — screen
+        // both. Only the flagged blocks are withheld; the rest reads normally.
+        return screenDocumentForPrompt(await fsp.readFile(realFile, 'utf-8'), `skill reference '${name}/${filePath}'`);
       } catch {
         return `File not found in skill '${name}': ${filePath}`;
       }
     }
 
-    return skill.content;
+    return screenDocumentForPrompt(skill.content, `skill '${name}'`);
   },
 };

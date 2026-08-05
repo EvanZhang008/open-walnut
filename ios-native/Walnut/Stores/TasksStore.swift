@@ -11,6 +11,11 @@ final class TasksStore {
     private let api = WalnutAPI()
     weak var connection: ConnectionStore?
 
+    /// False while backgrounded — every completion re-checks it before touching
+    /// observed state, so a fetch that lands during suspension cannot drive
+    /// SwiftUI updates from a non-active process (P0-3).
+    private var isActive = true
+
     var tasks: [WalnutTask] = []
     var syncedAt: Date?
     var loading = false
@@ -24,15 +29,27 @@ final class TasksStore {
     var sessionsSyncedAt: Date?
     var sessionsNotSyncedYet = false
 
-    /// Instant render from cache, then a network refresh.
+    init() {
+        LifecycleHub.shared.register(self)
+    }
+
+    /// Render from cache, then refresh. The cache reads are OFF-MAIN (P0-1): a
+    /// synchronous decode here was cold-start work that could get a
+    /// background / prewarm launch killed for blowing the scene-update budget.
+    /// Each adoption is guarded on "nothing canonical landed yet" because the
+    /// network refresh can win the race.
     func initialize() async {
-        if let cached: [WalnutTask] = DiskCache.load([WalnutTask].self, key: "tasks-list") {
+        isActive = true
+        if let cached = await DiskCache.loadAsync([WalnutTask].self, key: "tasks-list"),
+           isActive, tasks.isEmpty {
             tasks = cached
         }
-        if let cachedSynced: String = DiskCache.load(String.self, key: "tasks-syncedAt") {
+        if let cachedSynced = await DiskCache.loadAsync(String.self, key: "tasks-syncedAt"),
+           isActive, syncedAt == nil {
             syncedAt = WalnutTask.parseISO(cachedSynced)
         }
-        if let cachedSessions: [WalnutSession] = DiskCache.load([WalnutSession].self, key: "sessions-list") {
+        if let cachedSessions = await DiskCache.loadAsync([WalnutSession].self, key: "sessions-list"),
+           isActive, sessions.isEmpty {
             sessions = cachedSessions
         }
         async let t: Void = loadTasks()
@@ -41,10 +58,12 @@ final class TasksStore {
     }
 
     func loadTasks() async {
+        guard isActive else { return }
         loading = true
         defer { loading = false }
         do {
             let response = try await api.tasks()
+            guard isActive, !Task.isCancelled else { return }
             tasks = response.tasks
             syncedAt = WalnutTask.parseISO(response.syncedAt)
             notSyncedYet = false
@@ -54,27 +73,33 @@ final class TasksStore {
             DiskCache.save(response.syncedAt, key: "tasks-syncedAt")
         } catch let error as APIError where error.isUnavailable {
             // 503 — projection hasn't synced; keep any cached tasks but flag it.
+            guard isActive else { return }
             notSyncedYet = true
             if tasks.isEmpty { errorMessage = nil }
         } catch {
             if let apiError = error as? APIError, apiError.isCancelled { return }
+            guard isActive else { return }
             reportIfNetwork(error)
             if tasks.isEmpty { errorMessage = error.localizedDescription }
         }
     }
 
     func loadSessions() async {
+        guard isActive else { return }
         do {
             let response = try await api.sessions()
+            guard isActive, !Task.isCancelled else { return }
             sessions = response.sessions
             sessionsSyncedAt = WalnutTask.parseISO(response.syncedAt)
             sessionsNotSyncedYet = false
             connection?.reportReachability(true, source: "tasks-rest")
             DiskCache.save(response.sessions, key: "sessions-list")
         } catch let error as APIError where error.isUnavailable {
+            guard isActive else { return }
             sessionsNotSyncedYet = true
         } catch {
             if let apiError = error as? APIError, apiError.isCancelled { return }
+            guard isActive else { return }
             reportIfNetwork(error)
         }
     }
@@ -146,6 +171,13 @@ final class TasksStore {
             }
         }
     }
+}
+
+extension TasksStore: LifecycleSuspendable {
+    /// Read-only store — nothing to tear down, the contract is only "stop
+    /// mutating observed state while not active" (see `isActive`).
+    func suspendForBackground() { isActive = false }
+    func resumeForForeground() { isActive = true }
 }
 
 /// The Reminders-style smart lists (+ the Sessions tab).

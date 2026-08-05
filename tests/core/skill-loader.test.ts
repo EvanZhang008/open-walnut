@@ -14,6 +14,7 @@ import {
   formatSkillsPrompt,
   buildSkillsPrompt,
   clearSkillsCache,
+  listAvailableSkills,
 } from '../../src/core/skill-loader.js';
 import type { SkillMeta } from '../../src/core/skill-loader.js';
 import { GLOBAL_SKILLS_DIR, CLAUDE_SKILLS_DIR, WALNUT_HOME } from '../../src/constants.js';
@@ -241,8 +242,20 @@ Do the thing.`,
     expect(result).toContain('## Skills (mandatory)');
   });
 
-  it('discovers skills from claude skills dir', async () => {
+  it('EXCLUDES ~/.claude/skills from the butler prompt (CLI-executor store)', async () => {
     clearSkillsCache();
+    // A walnut skill so the prompt is non-empty (empty skill set → empty prompt).
+    const walnutDir = path.join(GLOBAL_SKILLS_DIR, 'butler-skill');
+    await fsp.mkdir(walnutDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(walnutDir, 'SKILL.md'),
+      `---
+name: butler-skill
+description: A walnut skill
+---
+# Butler Skill`,
+    );
+
     const skillDir = path.join(CLAUDE_SKILLS_DIR, 'claude-skill');
     await fsp.mkdir(skillDir, { recursive: true });
     await fsp.writeFile(
@@ -255,7 +268,37 @@ description: A claude skill
     );
 
     const result = await buildSkillsPrompt();
-    expect(result).toContain('<name>claude-skill</name>');
+    expect(result).toContain('<name>butler-skill</name>');
+    expect(result).not.toContain('<name>claude-skill</name>');
+
+    // ...but it stays discoverable for the management UI / skill_view.
+    const all = await listAvailableSkills();
+    expect(all.map((s) => s.dirName)).toContain('claude-skill');
+  });
+
+  it('WALNUT_BUTLER_CLAUDE_SKILLS=1 opts claude skills back into the prompt', async () => {
+    clearSkillsCache();
+    const skillDir = path.join(CLAUDE_SKILLS_DIR, 'opt-in-skill');
+    await fsp.mkdir(skillDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(skillDir, 'SKILL.md'),
+      `---
+name: opt-in-skill
+description: An opted-in claude skill
+---
+# Opt In`,
+    );
+
+    const prev = process.env.WALNUT_BUTLER_CLAUDE_SKILLS;
+    process.env.WALNUT_BUTLER_CLAUDE_SKILLS = '1';
+    try {
+      const result = await buildSkillsPrompt();
+      expect(result).toContain('<name>opt-in-skill</name>');
+    } finally {
+      if (prev === undefined) delete process.env.WALNUT_BUTLER_CLAUDE_SKILLS;
+      else process.env.WALNUT_BUTLER_CLAUDE_SKILLS = prev;
+      clearSkillsCache();
+    }
   });
 
   it('higher priority source wins for same name', async () => {
@@ -272,7 +315,8 @@ description: global version
 # Dupe`,
     );
 
-    // Claude (lower priority)
+    // Workspace-local is the only source above global; use it to prove precedence
+    // (claude is no longer in the prompt scope at all).
     const claudeDir = path.join(CLAUDE_SKILLS_DIR, 'dupe');
     await fsp.mkdir(claudeDir, { recursive: true });
     await fsp.writeFile(

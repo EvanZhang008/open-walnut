@@ -12,13 +12,21 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 import { WALNUT_HOME, DAILY_DIR, MEMORY_FILE } from '../../src/constants.js';
 import { buildMemoryContext } from '../../src/agent/context.js';
 import { formatDateKey } from '../../src/core/daily-log.js';
+import {
+  beginMemoryPromptTurn,
+  getBoundedMemory,
+  invalidateMemoryPromptSnapshots,
+} from '../../src/core/bounded-memory.js';
 
 beforeEach(async () => {
   tmpDir = WALNUT_HOME;
   await fsp.rm(tmpDir, { recursive: true, force: true });
+  // Pins live on module-level singletons — thaw so each test starts unfrozen.
+  invalidateMemoryPromptSnapshots();
 });
 
 afterEach(async () => {
+  invalidateMemoryPromptSnapshots();
   await fsp.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -105,5 +113,55 @@ describe('buildMemoryContext', () => {
     // No placeholders should appear
     expect(result).not.toContain('(No global memory yet.');
     expect(result).not.toContain('(No recent activity.)');
+  });
+});
+
+// The frozen-snapshot layer as buildMemoryContext sees it (see
+// src/core/memory-prompt-snapshot.ts for the refresh policy).
+describe('buildMemoryContext — frozen memory snapshot', () => {
+  it('reads live from disk when no scope is passed', async () => {
+    await getBoundedMemory().add('## Live Rule\n\nread from disk');
+    const result = await buildMemoryContext();
+    expect(result).toContain('read from disk');
+  });
+
+  it('serves the pinned block for a frozen scope while disk has newer content', async () => {
+    const store = getBoundedMemory();
+    await store.add('## Rule A\n\npinned at the boundary');
+    const { scope } = beginMemoryPromptTurn('general', 'conv-ctx');
+
+    // Mid-turn write — durable on disk...
+    await store.add('## Rule B\n\nwritten mid-turn');
+    expect((await store.read()).entries).toHaveLength(2);
+
+    // ...but the frozen prompt for this turn still shows only the pinned state.
+    const frozen = await buildMemoryContext(8000, scope);
+    expect(frozen).toContain('pinned at the boundary');
+    expect(frozen).not.toContain('written mid-turn');
+
+    // A live build (no scope) does see it — proving the write really landed.
+    expect(await buildMemoryContext()).toContain('written mid-turn');
+  });
+
+  it('the next turn boundary adopts the mid-turn write', async () => {
+    const store = getBoundedMemory();
+    await store.add('## Rule A\n\nfirst');
+    const { scope } = beginMemoryPromptTurn('general', 'conv-ctx');
+    await store.add('## Rule B\n\nsecond');
+    expect(await buildMemoryContext(8000, scope)).not.toContain('second');
+
+    beginMemoryPromptTurn('general', 'conv-ctx');
+    expect(await buildMemoryContext(8000, scope)).toContain('second');
+  });
+
+  it('freezes the user profile section too, not just global memory', async () => {
+    const user = getBoundedMemory(undefined, 'user');
+    await user.add('## Who They Are\n\nprefers concise answers');
+    const { scope } = beginMemoryPromptTurn('general', 'conv-ctx');
+    await user.add('## New Fact\n\nlearned mid-turn');
+
+    const frozen = await buildMemoryContext(8000, scope);
+    expect(frozen).toContain('prefers concise answers');
+    expect(frozen).not.toContain('learned mid-turn');
   });
 });

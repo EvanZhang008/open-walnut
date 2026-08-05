@@ -91,6 +91,17 @@ afterEach(async () => {
 
 // ── migrateConfigToPlugins ──
 
+/**
+ * Install a plugin dir (manifest.json only) under EXTERNAL_DIR = WALNUT_HOME/plugins.
+ * That file IS the evidence the migration keys off, so a test for a plugin that
+ * isn't in the known-legacy list has to create it.
+ */
+async function installPluginDir(id: string): Promise<void> {
+  const dir = path.join(WALNUT_HOME, 'plugins', id);
+  await fsp.mkdir(dir, { recursive: true });
+  await fsp.writeFile(path.join(dir, 'manifest.json'), JSON.stringify({ id, name: id }));
+}
+
 describe('migrateConfigToPlugins', () => {
   it('migrates ms_todo to plugins.ms-todo', async () => {
     const config = {
@@ -110,6 +121,7 @@ describe('migrateConfigToPlugins', () => {
   });
 
   it('migrates plugin-a to plugins.plugin-a', async () => {
+    await installPluginDir('plugin-a');
     const config = {
       version: 1,
       'plugin-a': { category: 'Work', base_url: 'https://plugin-a.example.com' },
@@ -131,6 +143,7 @@ describe('migrateConfigToPlugins', () => {
   });
 
   it('migrates plugin-b to plugins.plugin-b', async () => {
+    await installPluginDir('plugin-b');
     const config = {
       version: 1,
       'plugin-b': { host: 'plugin-b.example.com', project: 'PROJ' },
@@ -152,6 +165,8 @@ describe('migrateConfigToPlugins', () => {
   });
 
   it('migrates all three at once', async () => {
+    await installPluginDir('plugin-a');
+    await installPluginDir('plugin-b');
     const config = {
       version: 1,
       ms_todo: { client_id: 'x' },
@@ -241,6 +256,69 @@ describe('migrateConfigToPlugins', () => {
     // the injected `enabled` flag is dropped and plugins.providers is gone
     expect(providers.enabled).toBeUndefined();
     expect((result.plugins as Record<string, unknown>).providers).toBeUndefined();
+  });
+
+  // ── The sentinel this bug was missing twice ──
+  //
+  // `providers` and `ui` were both swallowed because the migration matched
+  // "any top-level object NOT in a hand-maintained allowlist". Config sections
+  // grow with the product, so every new one was a forgotten allowlist edit away
+  // from vanishing. These two tests pin the inverted rule: no on-disk plugin and
+  // not known-legacy ⇒ leave it completely alone.
+  it('leaves an unknown top-level config section untouched (no plugin installed)', async () => {
+    const config = {
+      version: 1,
+      ui: { session_panels: '4' },
+      audio: { retention_days: 7 },
+      // A section invented after this test was written must behave the same way.
+      some_future_section: { enabled_thing: true },
+    };
+    await fsp.writeFile(CONFIG_FILE, yaml.dump(config));
+
+    const changed = await migrateConfigToPlugins();
+    expect(changed).toBe(false);
+
+    const result = yaml.load(await fsp.readFile(CONFIG_FILE, 'utf-8')) as Record<string, unknown>;
+    expect(result.ui).toEqual({ session_panels: '4' });
+    expect(result.audio).toEqual({ retention_days: 7 });
+    expect(result.some_future_section).toEqual({ enabled_thing: true });
+    expect(result.plugins).toBeUndefined();
+  });
+
+  it('self-heals a mis-migrated plugins.ui back to top-level ui', async () => {
+    // Exactly the shape found in a live config: the whole `ui` section moved
+    // under plugins with an injected `enabled: true`, so the client read
+    // config.ui.session_panels as undefined and silently fell back to auto.
+    const config = {
+      version: 1,
+      plugins: { ui: { enabled: true, session_panels: '3' } },
+    };
+    await fsp.writeFile(CONFIG_FILE, yaml.dump(config));
+
+    const changed = await migrateConfigToPlugins();
+    expect(changed).toBe(true);
+
+    const result = yaml.load(await fsp.readFile(CONFIG_FILE, 'utf-8')) as Record<string, unknown>;
+    expect(result.ui).toEqual({ session_panels: '3' });
+    expect((result.plugins as Record<string, unknown>).ui).toBeUndefined();
+  });
+
+  it('does not clobber a real installed plugin that shares a config section name', async () => {
+    // If `ui` is genuinely an installed plugin AND a top-level ui section
+    // exists, the self-heal must not overwrite the plugin's own entry.
+    await installPluginDir('ui');
+    const config = {
+      version: 1,
+      ui: { session_panels: '2' },
+      plugins: { ui: { enabled: true, some_plugin_setting: 'keep-me' } },
+    };
+    await fsp.writeFile(CONFIG_FILE, yaml.dump(config));
+
+    await migrateConfigToPlugins();
+
+    const result = yaml.load(await fsp.readFile(CONFIG_FILE, 'utf-8')) as Record<string, unknown>;
+    const plugins = result.plugins as Record<string, Record<string, unknown>>;
+    expect(plugins.ui.some_plugin_setting).toBe('keep-me');
   });
 });
 

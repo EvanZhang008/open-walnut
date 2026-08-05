@@ -143,6 +143,66 @@ describe('echo-claims', () => {
     expect(exact.walnutMessageId).toBe('qm-1');
   });
 
+  // ── REGRESSION inc-1785888617044: the separator mismatch that broke every batch ──
+  // walnut joins a delivered batch with '\n\n' before writing the FIFO, but the CLI
+  // drains its OWN queue and logs the echo joined with a single '\n'. Binding compared
+  // the claim text exactly, so no merged batch ever bound: walnutMessageId stayed null,
+  // the frontend fell through to text dedup, and that failed too (no single bubble's
+  // text equals the merged line) — the bubbles had zero evidence and stayed pinned.
+  describe("separator mismatch ('\\n\\n' delivery join vs '\\n' CLI drain join)", () => {
+    it("binds when the CLI logged the echo with a single '\\n'", () => {
+      registerEchoClaims(SID, ['qm-1', 'qm-2'], 'we have another filter on delivery\n\ndiscus with me first');
+      // What the CLI actually wrote to the canonical JSONL:
+      const messages = [userMsg('we have another filter on delivery\ndiscus with me first', 'uuid-a')];
+      bindEchoClaims(SID, messages);
+      expect(messages[0].walnutMessageId).toBe('qm-1');
+    });
+
+    it("still binds the verbatim '\\n\\n' form (delivery join reached the log unchanged)", () => {
+      registerEchoClaims(SID, ['qm-1', 'qm-2'], 'first\n\nsecond');
+      const messages = [userMsg('first\n\nsecond', 'uuid-a')];
+      bindEchoClaims(SID, messages);
+      expect(messages[0].walnutMessageId).toBe('qm-1');
+    });
+
+    it('a 3-message batch binds through the collapsed form', () => {
+      registerEchoClaims(SID, ['qm-a', 'qm-b', 'qm-c'], 'one\n\ntwo\n\nthree');
+      const messages = [userMsg('one\ntwo\nthree', 'uuid-a')];
+      bindEchoClaims(SID, messages);
+      expect(messages[0].walnutMessageId).toBe('qm-a');
+    });
+
+    it('preserves blank lines INSIDE a single message (only the join collapses)', () => {
+      // A lone message containing its own blank line is not a batch: the CLI logs it
+      // verbatim, so the collapsed candidate must not be the one that binds.
+      const body = 'para one\n\npara two';
+      registerEchoClaims(SID, ['qm-1'], body);
+      const messages = [userMsg(body, 'uuid-a')];
+      bindEchoClaims(SID, messages);
+      expect(messages[0].walnutMessageId).toBe('qm-1');
+    });
+
+    it('widening does NOT bind an unrelated echo (still an exact compare per candidate)', () => {
+      registerEchoClaims(SID, ['qm-1', 'qm-2'], 'alpha\n\nbeta');
+      const messages = [userMsg('alpha beta', 'uuid-a', 1000), userMsg('alpha\nbeta\ngamma', 'uuid-b', 2000)];
+      bindEchoClaims(SID, messages);
+      expect(messages[0].walnutMessageId).toBeUndefined();
+      expect(messages[1].walnutMessageId).toBeUndefined();
+    });
+
+    it('one echo satisfies one claim only — the second batch stays unbound', () => {
+      registerEchoClaims(SID, ['qm-1'], 'x\n\ny');
+      registerEchoClaims(SID, ['qm-2'], 'x\n\ny');
+      const messages = [userMsg('x\ny', 'uuid-a', 1000)];
+      bindEchoClaims(SID, messages);
+      expect(messages[0].walnutMessageId).toBe('qm-1');
+      // qm-2 has no echo yet; a later echo must bind it (claim still pending).
+      const later = userMsg('x\ny', 'uuid-b', 2000);
+      bindEchoClaims(SID, [later]);
+      expect(later.walnutMessageId).toBe('qm-2');
+    });
+  });
+
   // ── REGRESSION inc-1785091339102: failed batch's claim stole the Retry's echo ──
   // A failed delivery leaves an unbound claim. The user hits Retry, which re-sends
   // the SAME text under a NEW qm id. FIFO text-match binding handed the retry's

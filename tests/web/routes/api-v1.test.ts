@@ -679,6 +679,71 @@ describe('tasks (read-only projection)', () => {
     expect([400, 404]).toContain(evil.status)
   })
 
+  it('answers 200-empty for a just-created (awaiting_spawn) session instead of 404', async () => {
+    // The mobile app opens the conversation view right after POST /sessions
+    // and polls the transcript. Before the CLI spawns there is no JSONL to
+    // read — that window must be a fast empty 200, not a 404 that triggers a
+    // full export sweep plus a ~400ms fresh scan per poll.
+    const { createSessionRecord, updateSessionRecord } = await import('../../../src/core/session-tracker.js')
+    await createSessionRecord('sess-awaiting-1', 'task-await', 'Quick Start', '/tmp/x', {
+      initialProcessStatus: 'idle',
+      initialStatusReason: 'awaiting_spawn',
+    })
+
+    for (const q of ['', '?fresh=1']) {
+      const res = await fetch(apiUrl(`/api/v1/sessions/sess-awaiting-1/transcript${q}`))
+      expect(res.status).toBe(200)
+      const body = await res.json() as { sessionId: string; messages: unknown[]; truncated: boolean }
+      expect(body.sessionId).toBe('sess-awaiting-1')
+      expect(body.messages).toEqual([])
+      expect(body.truncated).toBe(false)
+    }
+
+    // A record that died BEFORE spawn (stopped, still pid-less) must NOT hit
+    // the short-circuit: the route's process_status==='idle' gate exists so a
+    // dead session serves the normal read path (404 here — no transcript).
+    await createSessionRecord('sess-awaiting-dead', 'task-await', 'Quick Start', '/tmp/x', {
+      initialProcessStatus: 'idle',
+      initialStatusReason: 'awaiting_spawn',
+    })
+    await updateSessionRecord('sess-awaiting-dead', { process_status: 'stopped' })
+    const dead = await fetch(apiUrl('/api/v1/sessions/sess-awaiting-dead/transcript'))
+    expect(dead.status).toBe(404)
+
+    // Once the spawn lands (pid recorded), the short-circuit must disengage —
+    // the normal read path serves the real (exported/fresh) transcript again.
+    // NOTE the setup deliberately keeps status_reason='awaiting_spawn': the
+    // real spawn never rewrites it (persistSessionRecord only writes
+    // pid/outputFile), so "more realistic" data with a cleared reason would
+    // quietly stop guarding against a status_reason-only regression.
+    await updateSessionRecord('sess-awaiting-1', { pid: 12345 })
+    const { SESSION_TRANSCRIPTS_DIR } = await import('../../../src/core/session-projection.js')
+    await fs.mkdir(SESSION_TRANSCRIPTS_DIR, { recursive: true })
+    await fs.writeFile(
+      `${SESSION_TRANSCRIPTS_DIR}/sess-awaiting-1.json`,
+      JSON.stringify({
+        version: 1, sessionId: 'sess-awaiting-1', exportedAt: new Date().toISOString(),
+        truncated: false,
+        messages: [{ role: 'user', text: 'first turn', timestamp: '2026-08-02T00:00:00.000Z' }],
+      }),
+    )
+    // Non-fresh serves the exported file; fresh=1 must ALSO bypass the
+    // short-circuit (its JSONL scan returns empty here — the point is the
+    // guard no longer answers for a spawned session on either path).
+    const after = await fetch(apiUrl('/api/v1/sessions/sess-awaiting-1/transcript'))
+    expect(after.status).toBe(200)
+    const afterBody = await after.json() as { messages: Array<{ text: string }> }
+    expect(afterBody.messages).toHaveLength(1)
+    expect(afterBody.messages[0].text).toBe('first turn')
+    const afterFresh = await fetch(apiUrl('/api/v1/sessions/sess-awaiting-1/transcript?fresh=1'))
+    expect(afterFresh.status).toBe(200)
+
+    // Park both records terminally so they can't bleed into later projection
+    // assertions in this shared-server suite.
+    await updateSessionRecord('sess-awaiting-1', { process_status: 'stopped', pid: undefined, archived: true })
+    await updateSessionRecord('sess-awaiting-dead', { archived: true })
+  })
+
   it('exportTaskProjection drops done tasks older than the retention window', async () => {
     const { exportTaskProjection, readTaskProjection } = await import('../../../src/core/task-projection.js')
     const tm = await import('../../../src/core/task-manager.js')

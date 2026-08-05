@@ -70,6 +70,17 @@ export interface SessionTailFold {
    *  only trace a plain-text FIFO send leaves in the stream file.
    *  Without one there is no turn anchor and no verdict can be reached. */
   foundTurnAnchor: boolean
+  /** The anchor was SYNTHESIZED at the window start (consumedOffset watermark
+   *  fold — see fetchStreamTailFold's whale-turn fallback). The watermark is by
+   *  construction a consumed turn-END position, so everything in the window is
+   *  post-turn evidence even though no user line is visible. */
+  anchorSynthetic?: boolean
+  /** Synthetic mode only: the window contained turn-activity lines (any user
+   *  line incl. tool_result echoes, assistant output, stream deltas, init,
+   *  state running/requires_action, control_request). Activity after the
+   *  watermark means a turn may be alive — the no-result synthetic verdict is
+   *  withheld. */
+  sawTurnActivity?: boolean
   /** Last REAL result (task-notification-origin results are bookkeeping, not turn-over).
    *  `endOffset` is the absolute byte position of the line's end in the stream
    *  file (the daemon's `v` coordinate) when the caller supplied a base offset;
@@ -116,6 +127,50 @@ export interface SessionTailFold {
  *  line and fold from inside the turn — the same "inline subagent interleave"
  *  class of bug as the main-stream text-fragmentation incident. Reject them
  *  the same way tool_result echoes are rejected. */
+/** Synthetic-anchor activity classifier: lines that are pure POST-turn
+ *  bookkeeping (safe to see after a consumed turn-end without implying a live
+ *  turn). Everything else — user/assistant/stream lines, init, state running /
+ *  requires_action, control_request, unknown types — is turn activity and
+ *  withholds the no-result watermark verdict. Deliberately conservative: a
+ *  line we can't classify counts as activity (the failure mode is "converge
+ *  later via another path", never "converge a live turn"). */
+function isPostTurnBookkeeping(parsed: Record<string, unknown>, type: string | undefined): boolean {
+  if (type === 'system') {
+    const subtype = parsed.subtype as string | undefined
+    if (subtype === 'session_state_changed') {
+      return parsed.state === 'idle' // running / requires_action = CLI is live
+    }
+    switch (subtype) {
+      // task_* / background_tasks_changed feed the bgTasks gating instead of
+      // the activity flag — a still-running bg task withholds the verdict via
+      // gatingBgCount, exactly like the anchored fold.
+      case 'task_started': case 'task_updated': case 'task_notification':
+      case 'background_tasks_changed':
+      // Between-turns chatter observed in real post-turn windows (57b125ab):
+      // skill/command reloads, status pings, and progress lines for
+      // walnut-initiated control reads (recap/settings polling).
+      case 'commands_changed': case 'status': case 'control_request_progress':
+        return true
+      // Everything else — init (new turn), thinking_tokens / api_retry
+      // (mid-turn), and any UNKNOWN subtype — is activity. Conservative on
+      // purpose: misclassifying activity as bookkeeping could converge a live
+      // turn; the reverse merely postpones convergence to another path/tick.
+      default:
+        return false
+    }
+  }
+  // Real results reach the R1 verdict path on their own; task-notification
+  // results are bg-summary bookkeeping. Neither implies a live turn.
+  if (type === 'result') return true
+  // CLI's replies to WALNUT-initiated control reads (get_settings /
+  // get_context_usage / recap generation). Walnut polls these between turns —
+  // observed in the 57b125ab post-watermark window alongside the companion
+  // idle. NOT the inverse direction: a `control_request` (CLI asking walnut
+  // for permission) is a live paused turn and stays classified as activity.
+  if (type === 'control_response') return true
+  return false
+}
+
 function isRealUserLine(parsed: Record<string, unknown>): boolean {
   if (parsed.type !== 'user') return false
   if (parsed.subtype === 'walnut-injected') return true
@@ -145,7 +200,25 @@ function isRealUserLine(parsed: Record<string, unknown>): boolean {
  * it against the record's consumedOffset (a result at or below the watermark
  * was already consumed by the live path — it is a PREVIOUS turn's evidence).
  */
-export function foldSessionTail(content: string, baseOffset?: number): SessionTailFold {
+export function foldSessionTail(
+  content: string,
+  baseOffset?: number,
+  opts?: {
+    /** Anchor the fold at the window START instead of scanning for a user line.
+     *  ONLY valid when the window starts at the record's consumedOffset
+     *  watermark: the watermark is advanced exclusively at turn-END positions
+     *  (_advanceConsumedOffset — result processed / withheld-turn idle), so
+     *  everything in the window is positionally-unconsumed post-turn evidence.
+     *  This is what lets a WHALE turn (last user line further back than the
+     *  tail-window cap) still reach a verdict: incident 57b125ab sat at a
+     *  false 'running' for 15h because every fold returned
+     *  'tail-window-exhausted' on its 55MB stream while the 19KB after the
+     *  watermark held the clean turn-end. The stale-result danger the anchor
+     *  scan guards against (inc-1783644415695) cannot occur here — a consumed
+     *  result is by definition at/below the watermark, outside the window. */
+    syntheticAnchor?: boolean
+  },
+): SessionTailFold {
   const fold: SessionTailFold = {
     foundTurnAnchor: false,
     lastResult: null,
@@ -154,6 +227,7 @@ export function foldSessionTail(content: string, baseOffset?: number): SessionTa
     gatingBgCount: 0,
     teamActive: false,
     turnEnded: false,
+    ...(opts?.syntheticAnchor ? { anchorSynthetic: true, sawTurnActivity: false } : {}),
   }
 
   const lines = content.split('\n')
@@ -163,15 +237,18 @@ export function foldSessionTail(content: string, baseOffset?: number): SessionTa
   // absent from every level payload).
   const seenInLevel = new Set<string>()
   // Pass 1: locate the turn anchor — the LAST real user line in the window.
+  // Skipped in syntheticAnchor mode: the window start IS the anchor.
   let anchorIdx = -1
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]
-    if (!line || !line.includes('"type":"user"')) continue
-    try {
-      if (isRealUserLine(JSON.parse(line) as Record<string, unknown>)) { anchorIdx = i; break }
-    } catch { /* torn/partial line */ }
+  if (!opts?.syntheticAnchor) {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i]
+      if (!line || !line.includes('"type":"user"')) continue
+      try {
+        if (isRealUserLine(JSON.parse(line) as Record<string, unknown>)) { anchorIdx = i; break }
+      } catch { /* torn/partial line */ }
+    }
+    if (anchorIdx === -1) return fold
   }
-  if (anchorIdx === -1) return fold
   fold.foundTurnAnchor = true
 
   // Byte-offset cursor (daemon `v` coordinate): end position of the line being
@@ -189,8 +266,35 @@ export function foldSessionTail(content: string, baseOffset?: number): SessionTa
     if (lineEndOffset !== undefined) lineEndOffset += Buffer.byteLength(line, 'utf8') + 1
     if (!line.trim()) continue
     let parsed: Record<string, unknown>
-    try { parsed = JSON.parse(line) as Record<string, unknown> } catch { continue }
+    try { parsed = JSON.parse(line) as Record<string, unknown> } catch {
+      // Synthetic mode: an unparseable non-empty line is a torn/mid-write line —
+      // the stream is being actively written, i.e. a turn is likely alive.
+      // Counting it as activity withholds the no-result verdict (safe direction).
+      if (opts?.syntheticAnchor) fold.sawTurnActivity = true
+      continue
+    }
     const type = parsed.type as string | undefined
+
+    // Synthetic-anchor activity tracking: the no-result verdict below requires
+    // that NOTHING but post-turn bookkeeping was written after the watermark.
+    // Everything else — a new user line (incl. tool_result echoes), assistant
+    // output, stream deltas, init, state running, control_request, unknown
+    // types — means a turn began (or is streaming) after the watermark. This
+    // deliberately includes lines with no turn-STARTING semantics: a legacy
+    // marker-less FIFO send leaves no user line, so the first visible trace of
+    // its turn may be an assistant/stream_event line.
+    if (opts?.syntheticAnchor && !fold.sawTurnActivity && !isPostTurnBookkeeping(parsed, type)) {
+      fold.sawTurnActivity = true
+    }
+
+    // A REAL user line after a result means a NEW turn began — that result can
+    // no longer be the current turn's verdict. Unreachable in anchor mode (the
+    // anchor IS the last real user line), but load-bearing in synthetic mode
+    // where multiple turns can sit inside the post-watermark window.
+    if (type === 'user' && isRealUserLine(parsed) && fold.lastResult) {
+      fold.lastResult = null
+      fold.trailingIdle = false
+    }
 
     if (type === 'system') {
       const subtype = parsed.subtype as string | undefined
@@ -294,6 +398,18 @@ export function foldSessionTail(content: string, baseOffset?: number): SessionTa
       fold.turnEnded = true
       fold.workStatus = 'agent_complete'
     }
+  } else if (opts?.syntheticAnchor && !fold.sawTurnActivity
+    && fold.gatingBgCount === 0 && !fold.teamActive) {
+    // Watermark verdict (no result in the window): the window base IS a
+    // consumed turn-end position — _advanceConsumedOffset's invariant is that
+    // it only ever advances at "result processed" / "withheld-turn idle"
+    // moments — and nothing but post-turn bookkeeping (companion idle,
+    // control_response polling, status chatter) has been written since. The
+    // turn the record still thinks is running provably ended AT the watermark.
+    // Success shape by construction: an ERROR consumed at the watermark would
+    // have written the record 'error' then, not left it 'running'.
+    fold.turnEnded = true
+    fold.workStatus = 'agent_complete'
   }
   return fold
 }
@@ -321,10 +437,19 @@ export function daemonStreamPath(sessionId: string, host?: string | null): strin
  *  string reason when no verdict-capable evidence could be obtained (R1: the
  *  caller must treat every string as "do not converge"). Exported so
  *  attachToExisting can fetch the evidence ONCE and share it with both the
- *  resultEmitted seeding and the reconcile call. */
+ *  resultEmitted seeding and the reconcile call.
+ *
+ *  `opts.consumedOffset` (the record's persisted watermark) enables the
+ *  WHALE-TURN fallback: when the anchor scan exhausts the tail-window cap
+ *  (last real user line further back than 2 MB — a 37-min turn easily streams
+ *  more), fold the region AFTER the watermark with a synthetic anchor instead.
+ *  Without this, a whale turn's stuck-'running' record was unreconcilable
+ *  forever (incident 57b125ab: 55 MB stream, verdict sat in the 19 KB after
+ *  the watermark, every tick returned 'tail-window-exhausted' for 15h). */
 export async function fetchStreamTailFold(
   sessionId: string,
   host: string | null | undefined,
+  opts?: { consumedOffset?: number },
 ): Promise<{ fold: SessionTailFold; fileSize: number } | string> {
   const { DaemonFileReader } = await import('./daemon-file-reader.js')
   const reader = new DaemonFileReader(host ?? '__local__')
@@ -369,9 +494,57 @@ export async function fetchStreamTailFold(
     const fold = foldSessionTail(content, base)
     if (fold.foundTurnAnchor) return { fold, fileSize: size }
     if (start === 0) return 'no-turn-anchor'                 // whole file, still no real user line
-    if (window >= TAIL_WINDOW_MAX_BYTES) return 'tail-window-exhausted'
+    if (window >= TAIL_WINDOW_MAX_BYTES) break               // whale turn — try the watermark fallback
     window = TAIL_WINDOW_MAX_BYTES
   }
+
+  // ── Whale-turn fallback: synthetic anchor at the consumed watermark ──
+  // The anchor scan failed because the turn's last real user line is beyond the
+  // window cap. The record's consumedOffset is a turn-END position this server
+  // already processed; folding what came AFTER it answers the only question the
+  // reconciler asks — "did anything real happen since the last consumed
+  // turn-end?" — without needing the (unreachable) turn anchor.
+  const watermark = opts?.consumedOffset
+  if (typeof watermark !== 'number' || !Number.isInteger(watermark)
+    || watermark <= 0 || watermark >= Number.MAX_SAFE_INTEGER) {
+    return 'tail-window-exhausted'
+  }
+  if (watermark >= size) return 'tail-window-exhausted' // sid changed / file truncated — watermark unusable
+  if (size - watermark > TAIL_WINDOW_MAX_BYTES) {
+    // Too much unconsumed data to drag over the tunnel — and that volume itself
+    // suggests a live turn streaming. Let a later tick converge it.
+    return 'tail-window-exhausted'
+  }
+  let content: string
+  try {
+    const res = await reader.readFileRange(streamPath, watermark)
+    if (res === null) return 'no-stream-file'
+    content = res.content
+  } catch (err) {
+    log.session.debug('reconcile: watermark tail read failed', {
+      sessionId, host: host ?? '__local__',
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return 'stream-read-failed'
+  }
+  // The watermark is a line-END offset by construction (_advanceConsumedOffset
+  // stores the daemon `v` of a consumed line), so content starts at a line
+  // boundary; keep the torn-prefix guard anyway for robustness (a corrupted
+  // watermark must not feed half a line into the fold).
+  let base = watermark
+  if (!content.startsWith('{')) {
+    const nl = content.indexOf('\n')
+    base = nl >= 0 ? watermark + Buffer.byteLength(content.slice(0, nl + 1), 'utf8') : size
+    content = nl >= 0 ? content.slice(nl + 1) : ''
+  }
+  const fold = foldSessionTail(content, base, { syntheticAnchor: true })
+  log.session.info('reconcile: whale-turn watermark fold', {
+    sessionId, host: host ?? '__local__', watermark, fileSize: size,
+    turnEnded: fold.turnEnded, workStatus: fold.workStatus,
+    sawTurnActivity: fold.sawTurnActivity, gatingBgCount: fold.gatingBgCount,
+    hasResult: fold.lastResult != null,
+  })
+  return { fold, fileSize: size }
 }
 
 // ── Convergence ──
@@ -439,9 +612,10 @@ export async function reconcileProcessStatus(
   const startedAtIso = new Date().toISOString()
 
   // ── Signal 1: the daemon stream file (the ONLY file containing result/idle events) ──
+  // consumedOffset rides along to arm the whale-turn watermark fallback.
   const evidence = inputs.evidence !== undefined
     ? inputs.evidence
-    : await fetchStreamTailFold(sid, record.host)
+    : await fetchStreamTailFold(sid, record.host, { consumedOffset: record.consumedOffset })
   if (typeof evidence === 'string') return { converged: false, reason: evidence }
   const { fold } = evidence
 

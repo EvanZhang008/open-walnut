@@ -18,7 +18,12 @@ final class MainThreadWatchdog: @unchecked Sendable {
     private let lock = NSLock()
     private var lastPong = MainThreadWatchdog.uptimeNow()
     private var pingInFlight = false
-    private var backgrounded = false
+    // Pessimistic default: don't count stall time until the app has
+    // demonstrably become ACTIVE. iOS prewarms apps (process launched in the
+    // background, then suspended before ever activating) — with an optimistic
+    // `false` here the first tick after the user finally opens the app counted
+    // the entire suspension as a hang (field: a 5942s "freeze" on build 27).
+    private var backgrounded = true
     private var hangStart: TimeInterval?
 
     /// CLOCK_UPTIME_RAW pauses while the host sleeps. Wall-clock Date() does
@@ -42,8 +47,12 @@ final class MainThreadWatchdog: @unchecked Sendable {
         NotificationCenter.default.addObserver(
             forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil
         ) { [weak self] _ in self?.setBackgrounded(true) }
+        // didBecomeActive (not willEnterForeground) is the ARM signal: it is
+        // the only notification that fires on ALL of cold launch, prewarmed
+        // launch finally opened, and background→foreground return. A prewarmed
+        // process never becomes active, so the watchdog stays disarmed for it.
         NotificationCenter.default.addObserver(
-            forName: UIApplication.willEnterForegroundNotification, object: nil, queue: nil
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil
         ) { [weak self] _ in self?.setBackgrounded(false) }
 
         let t = DispatchSource.makeTimerSource(queue: queue)

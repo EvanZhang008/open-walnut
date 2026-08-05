@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { DAILY_DIR, agentDailyDir } from '../constants.js';
+import { screenDocumentForPrompt } from './memory-safety.js';
 import { getTokenizer } from '@anthropic-ai/tokenizer';
 import { computeContentHash } from '../utils/file-ops.js';
 import sizeOf from 'image-size';
@@ -315,6 +316,15 @@ export function truncateDailyLogToFit(content: string, tokenBudget: number): str
  * no content yet, truncate it by entry boundary (keeping newest entries)
  * instead of returning empty. This guarantees the agent always has some
  * recent context.
+ *
+ * INJECTION-SCREENED (see memory-safety.ts). This is the one function that turns
+ * daily-log files into injected prompt text ("## Recent activity"), and its
+ * content is model- and hook-authored: session summaries written by the on-stop /
+ * on-compact hooks and `file_write memory/daily` calls, all of which can carry
+ * text the agent read from an untrusted source. Screening sits HERE and not at
+ * append time on purpose: the hooks are fire-and-forget with nobody to receive a
+ * rejection, and the daily log is the only record that a session ran at all, so
+ * losing an entry is worse than quarantining one block of it. Disk is untouched.
  */
 export function getDailyLogsWithinBudget(tokenBudget: number, agentId?: string): string {
   const parts: string[] = [];
@@ -349,7 +359,7 @@ export function getDailyLogsWithinBudget(tokenBudget: number, agentId?: string):
     break;
   }
 
-  return parts.join('\n---\n\n');
+  return screenDocumentForPrompt(parts.join('\n---\n\n'), 'daily log');
 }
 
 /**

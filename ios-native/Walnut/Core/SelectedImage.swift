@@ -30,6 +30,13 @@ struct SelectedImage: Identifiable {
     /// Reject an image whose base64 would exceed this — mirrors the server's
     /// 10MB base64 upload cap.
     static let maxUploadBase64Length = 10_000_000
+    /// Aggregate ceiling across ALL images in one message. The per-image cap
+    /// alone allowed 5 × 10MB = ~50MB of base64 to be materialized at once in
+    /// the send path (plus the JPEG bytes they were built from, plus the request
+    /// body) — a memory spike big enough to get the app jetsammed on a warm
+    /// device. 24MB total is comfortably above any realistic multi-photo message
+    /// and an order of magnitude below the danger zone.
+    static let maxTotalBase64Length = 24_000_000
     /// Reject pathological source dimensions before any raster is materialized.
     private static let maxSourcePixels = 100_000_000
 
@@ -63,7 +70,7 @@ struct SelectedImage: Identifiable {
 
     private static func make(from data: Data) -> LoadResult {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              sourcePixelCount(source) <= maxSourcePixels,
+              withinPixelBudget(source),
               let upload = thumbnail(from: source, maxDimension: maxUploadDimension),
               let preview = thumbnail(from: source, maxDimension: thumbnailDimension)
         else { return .failed }
@@ -80,7 +87,7 @@ struct SelectedImage: Identifiable {
 
     static func thumbnail(from data: Data, maxDimension: CGFloat = thumbnailDimension) -> UIImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              sourcePixelCount(source) <= maxSourcePixels
+              withinPixelBudget(source)
         else { return nil }
         return thumbnail(from: source, maxDimension: maxDimension)
     }
@@ -98,13 +105,26 @@ struct SelectedImage: Identifiable {
         return UIImage(cgImage: cgImage, scale: 1, orientation: .up)
     }
 
-    private static func sourcePixelCount(_ source: CGImageSource) -> Int {
+    /// True when the source is safe to build a (pixel-bounded) thumbnail from.
+    ///
+    /// ABSENT dimension metadata is NOT a rejection. It used to be — the helper
+    /// returned `Int.max` for "unreadable header", which the caller then compared
+    /// against the bomb threshold and refused. Plenty of ordinary images (and
+    /// re-encoded bytes coming back through the failed-bubble retry path, which
+    /// is where this surfaced) carry no pixel-dimension properties, and those
+    /// were rejected outright — a valid image the user could never re-send.
+    /// Every thumbnail request here passes an explicit
+    /// `kCGImageSourceThumbnailMaxPixelSize`, so an unknown-size source is still
+    /// decode-bounded; only a source that DECLARES a pathological size is
+    /// refused up front.
+    private static func withinPixelBudget(_ source: CGImageSource) -> Bool {
         guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
               let height = properties[kCGImagePropertyPixelHeight] as? NSNumber
-        else { return .max }
+        else { return true } // unknown dimensions → rely on the decode cap
         let (pixels, overflow) = width.intValue.multipliedReportingOverflow(by: height.intValue)
-        return overflow ? .max : pixels
+        if overflow { return false }
+        return pixels <= maxSourcePixels
     }
 
     private static func encode(upload: UIImage, thumbnail: UIImage) -> LoadResult {
@@ -120,6 +140,38 @@ struct SelectedImage: Identifiable {
     /// Base64 length without allocating the encoded string: ceil(n/3) * 4.
     static func base64Length(_ data: Data) -> Int {
         (data.count + 2) / 3 * 4
+    }
+
+    /// Build the upload payloads for a message SEQUENTIALLY, off the MainActor,
+    /// under the aggregate byte budget.
+    ///
+    /// Two problems this fixes: `datas.map { $0.base64EncodedString() }` held
+    /// every encoded string alive simultaneously (peak = sum of all of them on
+    /// top of the source JPEGs), and nothing enforced a total. Encoding one at a
+    /// time keeps the peak at "the payloads kept so far + one in flight", and
+    /// the budget check drops the overflow rather than letting the OS kill the
+    /// process mid-send. Pick-time budgeting (ComposerBar) is the primary gate;
+    /// this is the backstop that also covers failed-bubble retries, which
+    /// rebuild from retained bytes and never pass through the picker.
+    nonisolated static func buildPayloads(_ datas: [Data]) async -> [ImagePayload] {
+        await Task.detached(priority: .userInitiated) {
+            var payloads: [ImagePayload] = []
+            var used = 0
+            for data in datas {
+                let cost = base64Length(data)
+                guard used + cost <= maxTotalBase64Length else {
+                    AppLog.error("chat", "image dropped — over total attachment budget", [
+                        "budgetBytes": String(maxTotalBase64Length),
+                        "usedBytes": String(used),
+                        "imageBytes": String(cost),
+                    ])
+                    continue
+                }
+                used += cost
+                payloads.append(ImagePayload(data: data.base64EncodedString(), mediaType: "image/jpeg"))
+            }
+            return payloads
+        }.value
     }
 }
 

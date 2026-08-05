@@ -2,7 +2,7 @@
  * Agent loop: prompt → API call → tool execution → feed back → repeat.
  */
 import { sendMessageStream, DEFAULT_MODEL, type MessageParam, type Tool, type TextBlockParam, type UsageStats, type ModelConfig, type ModelResult } from './model.js';
-import { getToolSchemas, executeTool, type ToolDefinition, type ToolResultContent } from './tools.js';
+import { getToolSchemas, executeTool, type ToolDefinition, type ToolResultContent, type ToolExecuteMeta } from './tools.js';
 import { buildSystemPromptSplit } from './context.js';
 import { getConfig } from '../core/config-manager.js';
 import {
@@ -18,7 +18,7 @@ import { log } from '../logging/index.js';
 import { estimateMessagesTokens, estimateFullPayload } from '../core/daily-log.js';
 import { hydrateImagePaths } from '../core/chat-history.js';
 import { guardBudget, emergencyTrim, type ToolSchema } from './token-budget.js';
-import { getBoundedMemory } from '../core/bounded-memory.js';
+import { beginMemoryPromptTurn, getBoundedMemory } from '../core/bounded-memory.js';
 import { buildSkillPrefetchHint } from './skill-prefetch.js';
 import { getContextWindowSize } from './model.js';
 import { CONTEXT_WINDOW_DEFAULT } from './providers/defaults.js';
@@ -175,6 +175,32 @@ export async function runAgentLoop(
   if (options?.system === undefined && options?.source !== 'background-review') {
     getBoundedMemory().resetConsolidationFailures();
     getBoundedMemory(undefined, 'user').resetConsolidationFailures();
+
+    // Same gate, same reason: RE-PIN the frozen memory prompt snapshot for this
+    // conversation (Hermes frozen-snapshot pattern — see memory-prompt-snapshot.ts).
+    // A real main-butler turn is the ONLY thing that refreshes the pin, so a write
+    // mid-turn (including one from the background-review fork, which is excluded
+    // here) reaches disk immediately but only enters the prompt on the NEXT turn.
+    // Reusing this gate is deliberate: one definition of "a real turn started",
+    // not two that can drift apart. Best-effort — a snapshot failure must never
+    // block the turn, and read-through is a correct fallback.
+    try {
+      const { drift } = beginMemoryPromptTurn(options?.agentId, options?.conversationId);
+      for (const d of drift) {
+        if (d.origin !== 'external') continue;
+        // Not an error: the new bytes ARE adopted from this turn on. But these
+        // paths (hand edit, file_write on a memory path, data-repo sync, the web
+        // editor) bypass every write-time check, so make it visible.
+        log.agent.warn('memory changed outside the memory tool; adopted this turn', {
+          scope: d.scope, previousHash: d.previousHash, currentHash: d.currentHash,
+          agentId: options?.agentId, conversationId: options?.conversationId,
+        });
+      }
+    } catch (err) {
+      log.agent.warn('memory prompt snapshot pin failed; reading live', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   // Use custom system/tools/model if provided (subagent mode), else defaults.
@@ -299,7 +325,10 @@ export async function runAgentLoop(
 
   /** Execute a tool by name — uses custom tool set if provided. */
   async function executeToolLocal(name: string, params: Record<string, unknown>, toolUseId?: string): Promise<ToolResultContent> {
-    const meta = toolUseId ? { toolUseId } : undefined;
+    // `source` rides along so write-path telemetry can tell a live turn from the
+    // unattended background-review fork (memory entry provenance).
+    const metaFields: ToolExecuteMeta = { ...(toolUseId ? { toolUseId } : {}), ...(options?.source ? { source: options.source } : {}) };
+    const meta = Object.keys(metaFields).length > 0 ? metaFields : undefined;
     // Runtime dispatch whitelist (background review fork): full schemas were sent
     // to the API to keep the prompt-cache prefix byte-identical, but only the
     // whitelisted tools may actually run.

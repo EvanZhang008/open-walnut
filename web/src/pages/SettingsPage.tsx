@@ -29,6 +29,7 @@ class SectionErrorBoundary extends Component<{ name: string; children: ReactNode
 import { ProvidersSection } from '@/components/settings/sections/ProvidersSection';
 import { GeneralSection } from '@/components/settings/sections/GeneralSection';
 import { SessionsSection } from '@/components/settings/sections/SessionsSection';
+import { FocusTiersSection } from '@/components/settings/sections/FocusTiersSection';
 import { IntegrationsSection } from '@/components/settings/sections/IntegrationsSection';
 import { CalendarSection } from '@/components/settings/sections/CalendarSection';
 import { PluginStoreSection } from '@/components/settings/sections/PluginStoreSection';
@@ -47,7 +48,7 @@ import { DevicesSection } from '@/components/settings/sections/DevicesSection';
 import { BugReportSection } from '@/components/settings/sections/BugReportSection';
 
 const SECTION_IDS = [
-  'providers', 'general', 'sessions',
+  'providers', 'general', 'sessions', 'focus-tiers',
   'integrations', 'calendar', 'plugin-store', 'search', 'memory', 'stt', 'audio-capture', 'heartbeat', 'remote-hosts', 'devices', 'advanced',
   'repositories', 'hooks', 'usage', 'timeline', 'bug-report',
 ];
@@ -127,6 +128,7 @@ export function SettingsPage() {
           <SectionErrorBoundary name="AI Provider"><ProvidersSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="General"><GeneralSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Tasks & Sessions"><SessionsSection config={config} onSave={saveSection} /></SectionErrorBoundary>
+          <SectionErrorBoundary name="Focus Tiers"><FocusTiersSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Integrations"><IntegrationsSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Calendar"><CalendarSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Plugin Store"><PluginStoreSection /></SectionErrorBoundary>

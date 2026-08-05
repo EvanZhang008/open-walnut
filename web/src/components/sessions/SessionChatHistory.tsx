@@ -730,6 +730,26 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       turnWatermark.current = messagesRef.current.length;
       watermarkInitialized.current = true;
     }
+    // Streaming ENDED — refetch history unconditionally.
+    //
+    // Absorption is evidence-based: a bubble is only hidden once persisted history
+    // proves it landed. That makes the ARRIVAL of history the one thing absorption
+    // cannot do without — and until now the only trigger was
+    // `session:batch-completed` (plus session:error / _ws:reconnected). That event
+    // is not reliable: the 60s activeProcessing safety timeout force-clears the
+    // in-flight entry and emits NOTHING at all, and results withheld behind
+    // background work or suppressed as replays emit nothing either. On those paths
+    // no refetch ever fired, so the bubble stayed pinned no matter how good the
+    // matching is — and turns over 60s are exactly the reported pattern (measured:
+    // 66.2% of turns exceed the window; orphan rate 24% under 30s → 84% at ≥900s).
+    // isStreaming true→false is derived from the stream itself, so it survives
+    // every one of those server-signal losses.
+    // Cheap and idempotent: the fetch is a `?since=` delta (usually a few rows),
+    // it coalesces with the batch-completed bump via the same historyVersion state,
+    // and a redundant refetch can only ADD evidence — it can never remove a bubble.
+    if (!isStreaming && prevIsStreaming.current) {
+      setHistoryVersion((v) => v + 1);
+    }
     prevIsStreaming.current = isStreaming;
   }, [isStreaming]);
 

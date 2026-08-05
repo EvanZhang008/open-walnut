@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom';
 import type { Task, TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import * as ICONS from '../common/Icons';
+import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { getIntegrationMeta, useIntegrations } from '@/hooks/useIntegrations';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '../common/DatePicker';
@@ -59,14 +60,16 @@ interface TaskKebabMenuProps {
 const TIER_OPTIONS: { value: FocusTier; label: string; icon: ReactNode }[] = [
   { value: 'focus', label: 'Focus', icon: ICONS.ICON_TIER_FOCUS },
   { value: 'satellite', label: 'Satellite', icon: ICONS.ICON_TIER_SATELLITE },
+  { value: 'backlog', label: 'Backlog', icon: ICONS.ICON_TIER_BACKLOG },
   { value: 'wait', label: 'Wait', icon: ICONS.ICON_TIER_WAIT },
 ];
 
 // Wait is amber (paused/blocked) — the old grey half-circle was indistinguishable
-// from Satellite's grey outline at a glance.
+// from Satellite's grey outline at a glance. Backlog is teal ("stored, cool").
 const TIER_COLORS: Record<FocusTier, string> = {
   focus: 'var(--accent)',
   satellite: 'var(--fg-muted)',
+  backlog: 'var(--tier-backlog, #30b0c7)',
   wait: 'var(--tier-wait, #ff9f0a)',
 };
 
@@ -104,6 +107,13 @@ export function TaskActionMenuItems({
   /** Close the menu after an action fires. */
   afterAction: () => void;
 }) {
+  // Custom tiers append after the built-ins. Safe hook: kebabs also render on
+  // isolated surfaces (tests, popouts) that may sit outside the FocusBarProvider.
+  const customTiers = useFocusBarContextSafe()?.customTiers ?? [];
+  const tierOptions = [
+    ...TIER_OPTIONS,
+    ...customTiers.map((ct) => ({ value: ct.id, label: ct.label, icon: ICONS.ICON_TIER_CUSTOM })),
+  ];
   return (
     <>
       {/* Pin / Tier */}
@@ -122,11 +132,11 @@ export function TaskActionMenuItems({
           <div className="task-kebab-tier">
             <span className="task-kebab-tier-label">{!batchMode && isPinned ? 'Move to' : 'Pin to'}</span>
             <div className="task-kebab-tier-options">
-              {TIER_OPTIONS.map((t) => (
+              {tierOptions.map((t) => (
                 <button
                   key={t.value}
                   className={`task-kebab-tier-btn${!batchMode && pinnedTier === t.value ? ' active' : ''}`}
-                  style={{ color: TIER_COLORS[t.value] }}
+                  style={{ color: TIER_COLORS[t.value] ?? 'var(--tier-custom)' }}
                   title={t.label}
                   onClick={(e) => {
                     e.stopPropagation();

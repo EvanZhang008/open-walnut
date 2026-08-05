@@ -56,6 +56,13 @@ interface UseSessionStreamReturn {
   resetIfAbsorbed: (hiddenCount: number) => boolean;
 }
 
+/** Streaming-text UI flush interval. Each flush re-renders the accumulated
+ *  turn text through a full markdown parse, so per-frame (16ms) flushing was
+ *  the app's dominant main-thread load during multi-column streaming. 150ms
+ *  keeps prose visibly "live" while cutting that work ~10×. Semantic
+ *  boundaries (tool-use, result, message switch) still flush synchronously. */
+const TEXT_FLUSH_INTERVAL_MS = 150;
+
 /**
  * Subscribe to session streaming events for a specific session.
  *
@@ -291,7 +298,8 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
   // ── Incremental updates (broadcast to all clients; filtered by sessionId client-side) ──
 
-  // Handle text deltas — batch via rAF to coalesce rapid tokens into ~60 renders/sec
+  // Handle text deltas — coalesced on a timer (see TEXT_FLUSH_INTERVAL_MS below).
+  // Historic name kept (textDeltaRaf) — it used to be a rAF handle; now a timeout id.
   const textDeltaRaf = useRef<number | null>(null);
   // msgId of the message currently accumulating in streamBuffer. ACP-dialect
   // boundary rule: when an incoming delta carries a DIFFERENT msgId, the
@@ -304,7 +312,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
    *  to prevent data loss from the race: delta→rAF queued→buffer cleared→rAF fires with empty. */
   const flushPendingTextRaf = useCallback(() => {
     if (textDeltaRaf.current !== null) {
-      cancelAnimationFrame(textDeltaRaf.current);
+      clearTimeout(textDeltaRaf.current);
       textDeltaRaf.current = null;
 
       // Apply buffered text synchronously. Merge/new-block/liveness rules live
@@ -358,11 +366,11 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     }, 3000);
   }, [sessionId, sessionStatus?.process_status, doResubscribe, flushPendingTextRaf]);
 
-  // Cancel pending rAF on unmount to avoid setState on unmounted component
+  // Cancel pending flush on unmount to avoid setState on unmounted component
   useEffect(() => {
     return () => {
       if (textDeltaRaf.current !== null) {
-        cancelAnimationFrame(textDeltaRaf.current);
+        clearTimeout(textDeltaRaf.current);
         textDeltaRaf.current = null;
       }
     };
@@ -401,12 +409,20 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     streamBuffer.current += delta;
 
     if (textDeltaRaf.current === null) {
-      textDeltaRaf.current = requestAnimationFrame(() => {
+      // Coalesce to ~6 updates/sec, not 60. Every flush re-parses the WHOLE
+      // accumulated turn text as markdown (StreamingTextBlock), so at rAF rate
+      // a long answer costs a full marked() parse of tens of KB per frame —
+      // measured as the dominant main-thread load with 2-3 session columns
+      // streaming (the 2026-08-03 "everything times out at exactly 15s" jam:
+      // fetch callbacks starved behind render work). 150ms is imperceptible
+      // for reading prose; flushPendingTextRaf still forces synchronous
+      // catch-up at every semantic boundary (tool-use, result, msg switch).
+      textDeltaRaf.current = window.setTimeout(() => {
         textDeltaRaf.current = null;
         const accumulated = streamBuffer.current;
         const accMsgId = currentTextMsgId.current;
         setBlocks((prev) => writeMainText(prev, accumulated, accMsgId, completedLen.current));
-      });
+      }, TEXT_FLUSH_INTERVAL_MS);
     }
   });
 

@@ -16,7 +16,7 @@ export interface QuickTaskParse {
   title: string;
   due_date?: string;
   start_date?: string;
-  pinTier?: 'focus' | 'satellite' | 'wait';
+  pinTier?: string;  // built-in 'focus' | 'satellite' | 'backlog' | 'wait', or a custom tier id ('ct_*')
   priority?: Exclude<TaskPriority, 'none'>;
   starred?: boolean;
   category?: string;
@@ -33,7 +33,7 @@ export interface QuickTaskParse {
 // low-priority or far-off stays OUT of it (no tier) and lives in the task list
 // below. Over-pinning is what made the old Focus tier useless.
 export interface PinTierPolicyEntry {
-  tier: 'focus' | 'satellite' | 'wait';
+  tier: 'focus' | 'satellite' | 'backlog' | 'wait';
   /** Short label shown in pickers. */
   label: string;
   /** One-line "what goes here", shown as the tier's tooltip. */
@@ -52,6 +52,11 @@ export const PIN_TIER_POLICY: readonly PinTierPolicyEntry[] = [
     guidance: 'Needs doing soon — lower priority than Focus, or due within about a week.',
   },
   {
+    tier: 'backlog',
+    label: 'Backlog',
+    guidance: 'Keep on the list but not soon — someday/low-priority work you still want pinned.',
+  },
+  {
     tier: 'wait',
     label: 'Wait',
     guidance: 'Parked — pinned but blocked or waiting on someone else.',
@@ -60,7 +65,7 @@ export const PIN_TIER_POLICY: readonly PinTierPolicyEntry[] = [
 
 /** The "leave it unpinned" half of the policy — no tier is a real answer. */
 export const PIN_TIER_NONE_GUIDANCE =
-  'Low priority, or no near-term date (someday / vague / months out) — leave it unpinned.';
+  'Not worth tracking in the pinned working set at all — leave it unpinned.';
 
 // ── Session model registry ────────────────────────────────────────────────
 // Single source of truth for the set of selectable Claude Code session models.
@@ -510,7 +515,7 @@ export interface Task {
   starred?: boolean;
   pinned?: boolean;
   pin_order?: number;  // lower = higher in list, undefined = not pinned
-  focus_tier?: 'focus' | 'wait';  // undefined = satellite (default)
+  focus_tier?: string;  // undefined = satellite (default); 'focus' | 'backlog' | 'wait' built-ins, or a custom tier id ('ct_*')
   needs_attention?: boolean;
   /** Last sync error message — set on push failure, cleared on success. */
   sync_error?: string;
@@ -542,6 +547,17 @@ export interface TaskStore {
    *  Task.group_id to a human-readable (AI-generated) group name. Groups with
    *  fewer than 2 live members are pruned. Local-only; never synced. */
   task_groups?: Record<string, TaskGroupRecord>;
+  /** User-defined focus tiers (ordered). Ids are `ct_` + 8 base36 chars; a task's
+   *  focus_tier may reference one. Tasks pointing at a deleted/unknown tier
+   *  self-heal to satellite. Local-only; never synced. */
+  custom_tiers?: CustomTierRecord[];
+}
+
+export interface CustomTierRecord {
+  /** Stable id (`ct_` + 8 lowercase base36 chars), stored in Task.focus_tier. */
+  id: string;
+  /** Display name shown in pickers and Settings. */
+  label: string;
 }
 
 export interface TaskGroupRecord {

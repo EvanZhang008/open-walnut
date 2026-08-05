@@ -88,15 +88,22 @@ export function PendingSessionPanel({ cwd, host, hostLabel, label, realTaskId, i
   const hasError = !retrying && (error || phase === 'timeout');
   const isRemote = !!host;
 
-  // Build error message
+  // Build error message. A client-side fetch timeout ("operation timed out")
+  // means the launch outcome is UNKNOWN — the server frequently DID start the
+  // session (2026-08-03: server 200 in 2.7s, browser aborted at 15s under
+  // main-thread jam). Don't blame the CLI for those; quickStartSession already
+  // tried to reconcile by id before this error surfaced.
+  const isClientTimeout = !!error && /operation timed out|TimeoutError/i.test(error);
   const errorMessage = error
     || (isRemote
       ? 'Session timed out — SSH connection may have failed.'
       : 'Session timed out — Claude CLI may not be available.');
 
-  const errorHint = isRemote
-    ? 'Check your SSH credentials (e.g. run mwinit) and verify the host is reachable.'
-    : 'Verify that the Claude CLI is installed and accessible.';
+  const errorHint = isClientTimeout
+    ? 'The request timed out before a response arrived — the session may still have started. Check the session list before retrying (Retry may create a duplicate).'
+    : isRemote
+      ? 'Check your SSH credentials (e.g. run mwinit) and verify the host is reachable.'
+      : 'Verify that the Claude CLI is installed and accessible.';
 
   if (hasError) {
     return (

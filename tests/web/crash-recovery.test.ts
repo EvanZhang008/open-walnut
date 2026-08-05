@@ -72,12 +72,12 @@ describe('crash-recovery', () => {
     });
 
     it('hard: also clears walnut localStorage keys and sets skip flag', () => {
-      local.setItem('open-walnut-col-split', '50');
+      local.setItem('open-walnut-col-weights', '50');
       local.setItem('walnut-todo-sortBy', 'priority');
       local.setItem('walnut.deviceToken', 'tok_123');
       session.setItem('some-session-thing', 'x');
       clearPersistedUiState(true, deps());
-      expect(local.getItem('open-walnut-col-split')).toBeNull();
+      expect(local.getItem('open-walnut-col-weights')).toBeNull();
       expect(local.getItem('walnut-todo-sortBy')).toBeNull();
       expect(local.getItem('walnut.deviceToken')).toBe('tok_123');
       expect(session.getItem(SKIP_PREFS_MERGE_FLAG)).toBe('1');

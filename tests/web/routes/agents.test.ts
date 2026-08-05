@@ -185,7 +185,10 @@ describe('POST /api/agents/:id/clone', () => {
     await request(app).post('/api/agents').send({
       id: 'source-agent',
       name: 'Source',
-      allowed_tools: ['task_search', 'memory'],
+      // Use CURRENT tool names — this asserts that cloning preserves
+      // allowed_tools, so legacy names (which load-time migration rewrites)
+      // would test the migration map instead.
+      allowed_tools: ['task_search', 'file_read'],
     });
 
     const res = await request(app).post('/api/agents/source-agent/clone').send({
@@ -195,7 +198,7 @@ describe('POST /api/agents/:id/clone', () => {
     expect(res.status).toBe(201);
     expect(res.body.agent.id).toBe('cloned-agent');
     expect(res.body.agent.name).toBe('Source (Copy)');
-    expect(res.body.agent.allowed_tools).toEqual(['task_search', 'memory']);
+    expect(res.body.agent.allowed_tools).toEqual(['task_search', 'file_read']);
   });
 
   it('returns 404 when cloning nonexistent agent', async () => {

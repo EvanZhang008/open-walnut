@@ -7,6 +7,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import type { Task, TaskPhase, TaskPriority } from '@open-walnut/core';
 import { fetchTask, updateTask, starTask } from '@/api/tasks';
 import { ApiError } from '@/api/client';
@@ -15,7 +16,9 @@ import * as ICONS from '@/components/common/Icons';
 import type { FocusTier } from '@/api/focus';
 import { getIntegrationMeta, useIntegrations } from '@/hooks/useIntegrations';
 import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '@/components/common/DatePicker';
-import { TIER_OPTIONS, TIER_COLORS, PRIORITY_OPTIONS } from './task-meta-constants';
+import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
+import { TIER_OPTIONS, tierColor, PRIORITY_OPTIONS } from './task-meta-constants';
 
 /* ── Phase constants ─────────────────────────────────────────────── */
 
@@ -71,13 +74,26 @@ interface TaskQuickActionsProps {
 
 export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedTier, onPinTask, onUnpinTask, onSetTier, compact, slot = 'all', extraSection, onOpenTaskDetail }: TaskQuickActionsProps) {
   const integrations = useIntegrations();
+  // Built-ins + the user's custom tiers. Safe hook: this kebab also renders on
+  // surfaces that may sit outside the FocusBarProvider.
+  const customTiers = useFocusBarContextSafe()?.customTiers ?? [];
+  const tierOptions = [
+    ...TIER_OPTIONS,
+    ...customTiers.map((ct) => ({ value: ct.id, label: ct.label })),
+  ];
   const [task, setTask] = useState<Task | null>(externalTask ?? null);
   const [kebabOpen, setKebabOpen] = useState(false);
-  const [kebabPos, setKebabPos] = useState<{ top: number; right: number } | null>(null);
   const kebabBtnRef = useRef<HTMLButtonElement>(null);
   const kebabMenuRef = useRef<HTMLDivElement>(null);
-
   const closeKebab = useCallback(() => setKebabOpen(false), []);
+  // Measured placement — this menu is the tallest in the app (task actions +
+  // an inline date picker + the Session section), so its height must never be
+  // guessed. See useMenuPlacement for why.
+  const kebabPos = useMenuPlacement(kebabOpen, kebabBtnRef, kebabMenuRef, {
+    // The row can be filtered out or re-rendered away while the menu is open;
+    // without this the menu is stranded off-screen with no way back.
+    onAnchorLost: closeKebab,
+  });
 
   // Fetch task if not provided externally
   useEffect(() => {
@@ -103,7 +119,17 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     if (d.task && d.task.id === taskId) setTask(d.task);
   });
 
-  // Close kebab on outside click or scroll
+  // Close kebab on outside click, Escape, or once the trigger scrolls away.
+  // The menu now scrolls internally, so a scroll event originating INSIDE it
+  // must not dismiss it — and an outside scroll only closes the menu when the
+  // trigger actually leaves the viewport (useMenuPlacement repositions
+  // otherwise). A blanket close-on-scroll would fire in the same tick as the
+  // opening click whenever that click scrolls the row into view — the failure
+  // documented at length in TaskBatchMenu.tsx.
+  // Kept in the component rather than in useMenuPlacement because dismissal is a
+  // product decision (TaskKebabMenu's right-click path closes on ANY outside
+  // scroll), while the hook only owns geometry. Mirror changes in
+  // TaskKebabMenu.tsx, which runs the same rules plus a cursor-anchor branch.
   useEffect(() => {
     if (!kebabOpen) return;
     const handleClick = (e: MouseEvent) => {
@@ -111,12 +137,19 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       if (kebabMenuRef.current?.contains(e.target as Node)) return;
       closeKebab();
     };
-    const handleScroll = () => closeKebab();
+    const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeKebab(); };
+    const handleScroll = (e: Event) => {
+      if (kebabMenuRef.current?.contains(e.target as Node)) return;
+      const r = kebabBtnRef.current?.getBoundingClientRect();
+      if (r && (r.bottom < 0 || r.top > window.innerHeight)) closeKebab();
+    };
     document.addEventListener('mousedown', handleClick);
-    window.addEventListener('scroll', handleScroll);
+    document.addEventListener('keydown', handleKey);
+    window.addEventListener('scroll', handleScroll, true);
     return () => {
       document.removeEventListener('mousedown', handleClick);
-      window.removeEventListener('scroll', handleScroll);
+      document.removeEventListener('keydown', handleKey);
+      window.removeEventListener('scroll', handleScroll, true);
     };
   }, [kebabOpen, closeKebab]);
 
@@ -208,15 +241,6 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
 
   const handleKebabToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!kebabOpen && kebabBtnRef.current) {
-      const rect = kebabBtnRef.current.getBoundingClientRect();
-      // Taller when a Session section is appended — otherwise the estimate is
-      // too low and a two-section menu opens downward then gets clipped.
-      const menuHeight = extraSection ? 560 : 350;
-      const spaceBelow = window.innerHeight - rect.bottom;
-      const top = spaceBelow < menuHeight ? Math.max(8, rect.top - menuHeight) : rect.bottom + 2;
-      setKebabPos({ top, right: window.innerWidth - rect.right });
-    }
     setKebabOpen(!kebabOpen);
   };
 
@@ -257,11 +281,19 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
         ⋮
       </button>
       )}
-      {slot !== 'phase' && kebabOpen && (
+      {/* Portalled to <body> deliberately. `position: fixed` escapes CLIPPING
+          ancestors but NOT stacking contexts, and this menu's home is inside
+          .session-panel-header (position:absolute, z-index:30). Its own
+          z-index:9999 only orders it WITHIN that context, so the whole subtree
+          competed as 30 and the composer (.session-panel-input, z-index:40) drew
+          over it — the menu rendered fine, just underneath. Raising the number
+          would only lose to the next overlay; leaving the context is the fix.
+          Same reason ViewDropdown/TaskDetailModal portal. */}
+      {slot !== 'phase' && kebabOpen && createPortal(
         <div
           ref={kebabMenuRef}
           className="task-kebab-menu"
-          style={kebabPos ? { position: 'fixed', top: kebabPos.top, right: kebabPos.right, zIndex: 9999 } : undefined}
+          style={menuPlacementStyle(kebabPos)}
         >
           {task && (<>
           {/* Task detail — opens the same full-screen modal as the home task panel */}
@@ -314,11 +346,11 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
               <div className="task-kebab-tier">
                 <span className="task-kebab-tier-label">{isPinned ? 'Move to' : 'Pin to'}</span>
                 <div className="task-kebab-tier-options">
-                  {TIER_OPTIONS.map((t) => (
+                  {tierOptions.map((t) => (
                     <button
                       key={t.value}
                       className={`task-kebab-tier-btn${pinnedTier === t.value ? ' active' : ''}`}
-                      style={{ color: TIER_COLORS[t.value] }}
+                      style={{ color: tierColor(t.value) }}
                       title={t.label}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -460,7 +492,8 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
               {extraSection(closeKebab)}
             </>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

@@ -862,10 +862,64 @@ await fs.mkdir(topicsDir, { recursive: true })
 await fs.mkdir(projectsDir, { recursive: true })
 await fs.mkdir(knowledgeDir, { recursive: true })
 
-// Global MEMORY.md
+// Global MEMORY.md — legacy location; init.ts migrates it into memory/ only when
+// memory/MEMORY.md is absent, and the realistic-shape fixture below claims that
+// path first, so this one exists purely as the pre-migration shape.
 await fs.writeFile(
   path.join(tmpBase, 'MEMORY.md'),
   '---\nname: Global Memory\n---\n\n# Global Memory\n\n## Preferences\n- Theme: dark mode\n- Language: English\n',
+)
+
+// The bounded stores in their REAL on-disk shape, at their real paths, for
+// memory-frontmatter.spec.ts. What matters is the frontmatter: a `description: >`
+// YAML block scalar behind a closing `---` fence. markdown-it reads that closing
+// fence as a setext-H2 underline, so handing these bytes straight to the WYSIWYG
+// editor collapses the whole block into one `## name: … description: &gt; …`
+// heading — a FAKE entry in a store injected into the butler's prompt every turn.
+// The body also carries the two prose shapes the serializer used to mangle: a
+// tag-shaped `<id>` placeholder (deleted outright) and a bare `>` (→ `&gt;`).
+const BOUNDED_STORE_BODY = [
+  '',
+  '## Release Checklist',
+  '',
+  'Build, then verify in a real browser before claiming done.',
+  '',
+  '## Naming Rule',
+  '',
+  'When importing a record, never use a generic "Import <id>" title — read the source first. Budget: a > b.',
+  '',
+].join('\n')
+await fs.writeFile(
+  path.join(memoryDir, 'MEMORY.md'),
+  [
+    '---',
+    'name: Global Memory',
+    'description: >',
+    '  Bounded behavior rules. Updated by the agent via the memory tool.',
+    '  Hard budget: 8000 chars.',
+    '---',
+    '',
+    '# Global Memory',
+    BOUNDED_STORE_BODY,
+  ].join('\n'),
+)
+await fs.writeFile(
+  path.join(memoryDir, 'USER.md'),
+  [
+    '---',
+    'name: User Profile',
+    'description: >',
+    '  Who the user is — identity, work, durable preferences.',
+    '  Hard budget: 4000 chars.',
+    '---',
+    '',
+    '# User Profile',
+    '',
+    '## Identity',
+    '',
+    'A software engineer working on a personal assistant project.',
+    '',
+  ].join('\n'),
 )
 
 // Daily log

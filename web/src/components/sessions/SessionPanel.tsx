@@ -7,7 +7,7 @@ import { SessionTerminal } from './SessionTerminal';
 import { SessionDiffView } from './SessionDiffView';
 import { buildSelectionPrefill } from './diffPrefill';
 import type { SessionSplitView } from './sessionSplitView';
-import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_VSCODE } from '../common/Icons';
+import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB } from '../common/Icons';
 import { openPopout } from '@/popout/openPopout';
 import { UserMessagesSummary } from './UserMessagesSummary';
 // PlanPreviewSection replaced by inline plan popover in meta bar
@@ -51,7 +51,6 @@ import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
 import { useResolvedSessionRecord } from '@/hooks/useSessionStatus';
 import { useSessionControls } from '@/hooks/useSessionControls';
 import { nextSessionControlValue, SessionControlPills } from './SessionControlPills';
-import { openSessionInVscode } from './openSessionInVscode';
 import { useNotifications } from '@/contexts/notifications';
 
 interface SessionPanelErrorBoundaryProps {
@@ -369,6 +368,39 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
       if (d.phase) {
         setSessionTask(prev => prev ? { ...prev, phase: d.phase as import('@open-walnut/core').Task['phase'] } : prev);
       }
+    }
+  });
+
+  // Keep pendingPermission live so the badge flips Running↔Waiting in real time.
+  // pendingPermission is a record field (not part of SessionStatusSnapshot), so
+  // the status store can't carry it — mirror the two permission events instead.
+  // The server also re-emits unanswered requests every 60s, so a missed initial
+  // event self-heals into the Waiting display within a minute.
+  useEvent('session:permission-request', (data) => {
+    const d = data as { sessionId?: string; requestId?: string; toolName?: string; reason?: string };
+    if (d.sessionId === sessionId && d.requestId) {
+      setSession(prev => prev ? {
+        ...prev,
+        pendingPermission: {
+          requestId: d.requestId!,
+          toolName: d.toolName,
+          reason: d.reason,
+          // Event payload carries no timestamp — "now" is right for a fresh
+          // prompt and only slightly under-counts for a 60s re-emit.
+          receivedAt: prev.pendingPermission?.requestId === d.requestId
+            ? prev.pendingPermission!.receivedAt
+            : new Date().toISOString(),
+        },
+      } : prev);
+    }
+  });
+  useEvent('session:permission-resolved', (data) => {
+    const d = data as { sessionId?: string; requestId?: string };
+    if (d.sessionId === sessionId) {
+      setSession(prev => (prev && prev.pendingPermission
+        && (!d.requestId || prev.pendingPermission.requestId === d.requestId))
+        ? { ...prev, pendingPermission: undefined }
+        : prev);
     }
   });
 
@@ -760,144 +792,19 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
         ref={panelRef}
       >
         <div className="session-panel-header" ref={glassHeaderRef}>
-          <div className="session-panel-header-top">
-            <div className="session-panel-title-area">
-              {!loading && session?.taskId && (
-                <TaskQuickActions
-                  taskId={session.taskId}
-                  task={sessionTask}
-                  slot="phase"
-                  compact
-                />
-              )}
-              {headerTitle
-                ? <EditableSessionTitle
-                    sessionId={sessionId}
-                    taskId={session?.taskId}
-                    title={headerTitle}
-                    className="session-panel-title"
-                  />
-                : <span className="session-panel-title text-muted">Untitled session</span>
-              }
-              {!loading && session?.taskId && (
-                <button
-                  className="task-action-btn session-panel-locate"
-                  onClick={() => onTaskClick?.(session.taskId!)}
-                  title={taskTitle ? `Go to task: ${taskTitle}` : `Go to task ${session.taskId}`}
-                  aria-label="Locate task"
-                >
-                  {ICON_LOCATE}
-                </button>
-              )}
-              {!loading && sessionId && (
-                <TaskQuickActions
-                  taskId={session?.taskId}
-                  task={session?.taskId ? sessionTask : null}
-                  isPinned={pinned}
-                  pinnedTier={pinnedTier}
-                  onPinTask={handlePinTask}
-                  onUnpinTask={handleUnpinTask}
-                  onSetTier={handleSetTier}
-                  onOpenTaskDetail={onOpenTaskDetail}
-                  slot="kebab"
-                  extraSection={(close) => (
-                    <SessionKebabSection
-                      sessionId={sessionId}
-                      cwd={session?.cwd}
-                      host={session?.host}
-                      hostname={session?.hostname}
-                      archived={session?.archived}
-                      notesOpen={notesOpen}
-                      onToggleNotes={() => setNotesOpen(o => !o)}
-                      messagesOpen={messagesOpen}
-                      onToggleMessages={() => setMessagesOpen(o => !o)}
-                      msgCount={historyMessages.filter(m => m.role === 'user' && m.text.trim()).length}
-                      onRestart={handleRestart}
-                      restartBusy={restartBusy}
-                      onTerminate={handleTerminate}
-                      terminateBusy={terminateBusy}
-                      onInvestigate={handleInvestigate}
-                      investigating={investigating}
-                      investigateResult={investigateResult}
-                      onOpenVscodeError={handleOpenVscodeError}
-                      onAfterAction={close}
-                    />
-                  )}
-                />
-              )}
-              {!loading && session?.provider === 'embedded' && (
-                <span
-                  className="session-panel-badge"
-                  style={{
-                    color: 'var(--accent)',
-                    background: 'color-mix(in srgb, var(--accent) 10%, transparent)',
-                    fontSize: '10px',
-                    fontWeight: 600,
-                  }}
-                >
-                  {ICON_ROBOT} Embedded
-                </span>
-              )}
-              {!loading && ps && (
-                <ProcessStatusBadge
-                  processStatus={ps}
-                  size="sm"
-                  errorMessage={session?.errorMessage}
-                />
-              )}
-              {loading && <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Loading...</span>}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '3px', flexShrink: 0 }}>
-              {onToggleLock && (
-                <button
-                  className={`task-action-btn session-panel-lock${locked ? ' is-locked' : ''}`}
-                  onClick={() => onToggleLock(sessionId)}
-                  title={locked ? 'Unlock — panel will rejoin the rotation' : 'Pin to right — panel stays when new sessions open'}
-                  aria-label={locked ? 'Unlock session panel' : 'Lock session panel to the right'}
-                  aria-pressed={locked}
-                >
-                  {locked ? ICON_LOCK : ICON_UNLOCK}
-                </button>
-              )}
-              <button
-                className="task-action-btn session-panel-vscode"
-                onClick={() => { void openSessionInVscode(sessionId).catch(handleOpenVscodeError); }}
-                title="Open in VS Code"
-                aria-label="Open in VS Code"
-              >
-                {ICON_VSCODE}
-              </button>
-              <button
-                className="task-action-btn session-panel-popout"
-                onClick={() => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
-                title="Open in new tab"
-                aria-label="Open session in new tab"
-              >
-                {ICON_NEW_TAB}
-              </button>
-              <button
-                className="task-action-btn session-panel-expand"
-                onClick={isFullscreen ? exitFullscreen : enterFullscreen}
-                title={isFullscreen ? 'Collapse back' : 'Expand to full screen'}
-                aria-label={isFullscreen ? 'Collapse session' : 'Expand session to full screen'}
-              >
-                {isFullscreen ? ICON_COLLAPSE : ICON_EXPAND}
-              </button>
-              <button
-                className="task-action-btn session-panel-close"
-                onClick={() => onClose(sessionId)}
-                title="Close session panel"
-                aria-label="Close session panel"
-              >
-                {ICON_CLOSE}
-              </button>
-            </div>
-          </div>
-          {/* Meta row 1 removed — session id + SSH host both moved into the ⋮ kebab
-              Session section; open-in-Sessions-page is the title-bar ↗ popout. */}
-          {/* Meta row 2: the kept-visible actions (Plan / Fork / Changed / Files /
-              Terminal) + model + time. Everything else lives in the \u22EE kebab. */}
+          {/* Two-row header, and the split is deliberate (2026-07-27):
+              ROW 1 = tool chips (Plan / Fork / Changed / Files / Terminal) + time
+                      + EVERY icon button (locate / lock / popout / expand / close).
+              ROW 2 = the TITLE on its own full-width line. Only two things may
+                      share it: the status badge and the ⋮ kebab.
+              Before this the title shared one row with 5 icon buttons and the
+              status pill, so in a normal 3-column layout it collapsed to ~105px
+              ("Fork of ek…"). Anything new belongs in row 1 or the kebab — never
+              next to the title. Open-in-VS-Code lives in the kebab only. */}
+          {/* ROW 1 — tool chips + time on the left, window controls pinned right.
+              Session id / SSH host / Open-in-VS-Code all live in the ⋮ kebab. */}
           <div className="session-meta-row-2">
+            <div className="session-meta-row-2-chips">
             {/* Plan & Execute \u2014 shown whenever a plan actually exists (regardless
                 of mode), or there's something executable. */}
             {(hasPlanContent || showExecuteButtons) && (
@@ -1087,6 +994,138 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                 rendered in both ChatInput controlsSlot mode bars); the turn
                 count was removed entirely. Time-ago stays. */}
             {session?.lastActiveAt && <span className="session-panel-time">{timeAgo(session.lastActiveAt)}</span>}
+            </div>{/* .session-meta-row-2-chips */}
+            <div className="session-panel-window-controls">
+              {!loading && session?.taskId && (
+                <button
+                  className="task-action-btn session-panel-locate"
+                  onClick={() => onTaskClick?.(session.taskId!)}
+                  title={taskTitle ? `Go to task: ${taskTitle}` : `Go to task ${session.taskId}`}
+                  aria-label="Locate task"
+                >
+                  {ICON_LOCATE}
+                </button>
+              )}
+              {onToggleLock && (
+                <button
+                  className={`task-action-btn session-panel-lock${locked ? ' is-locked' : ''}`}
+                  onClick={() => onToggleLock(sessionId)}
+                  title={locked ? 'Unlock — panel will rejoin the rotation' : 'Pin to right — panel stays when new sessions open'}
+                  aria-label={locked ? 'Unlock session panel' : 'Lock session panel to the right'}
+                  aria-pressed={locked}
+                >
+                  {locked ? ICON_LOCK : ICON_UNLOCK}
+                </button>
+              )}
+              <button
+                className="task-action-btn session-panel-popout"
+                onClick={() => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd })}
+                title="Open in new tab"
+                aria-label="Open session in new tab"
+              >
+                {ICON_NEW_TAB}
+              </button>
+              <button
+                className="task-action-btn session-panel-expand"
+                onClick={isFullscreen ? exitFullscreen : enterFullscreen}
+                title={isFullscreen ? 'Collapse back' : 'Expand to full screen'}
+                aria-label={isFullscreen ? 'Collapse session' : 'Expand session to full screen'}
+              >
+                {isFullscreen ? ICON_COLLAPSE : ICON_EXPAND}
+              </button>
+              <button
+                className="task-action-btn session-panel-close"
+                onClick={() => onClose(sessionId)}
+                title="Close session panel"
+                aria-label="Close session panel"
+              >
+                {ICON_CLOSE}
+              </button>
+            </div>
+          </div>{/* .session-meta-row-2 */}
+
+          {/* ROW 2 — the title gets the whole line; only the status badge and the
+              kebab sit beside it. Every icon button lives on row 1. */}
+          <div className="session-panel-header-top">
+            <div className="session-panel-title-area">
+              {!loading && session?.taskId && (
+                <TaskQuickActions
+                  taskId={session.taskId}
+                  task={sessionTask}
+                  slot="phase"
+                  compact
+                />
+              )}
+              {headerTitle
+                ? <EditableSessionTitle
+                    sessionId={sessionId}
+                    taskId={session?.taskId}
+                    title={headerTitle}
+                    className="session-panel-title"
+                  />
+                : <span className="session-panel-title text-muted">Untitled session</span>
+              }
+            </div>
+            <div className="session-panel-title-meta">
+              {!loading && session?.provider === 'embedded' && (
+                <span
+                  className="session-panel-badge"
+                  style={{
+                    color: 'var(--accent)',
+                    background: 'color-mix(in srgb, var(--accent) 10%, transparent)',
+                    fontSize: '10px',
+                    fontWeight: 600,
+                  }}
+                >
+                  {ICON_ROBOT} Embedded
+                </span>
+              )}
+              {!loading && ps && (
+                <ProcessStatusBadge
+                  processStatus={ps}
+                  size="sm"
+                  errorMessage={session?.errorMessage}
+                  pendingPermission={session?.pendingPermission}
+                />
+              )}
+              {loading && <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Loading...</span>}
+              {!loading && sessionId && (
+                <TaskQuickActions
+                  taskId={session?.taskId}
+                  task={session?.taskId ? sessionTask : null}
+                  isPinned={pinned}
+                  pinnedTier={pinnedTier}
+                  onPinTask={handlePinTask}
+                  onUnpinTask={handleUnpinTask}
+                  onSetTier={handleSetTier}
+                  onOpenTaskDetail={onOpenTaskDetail}
+                  slot="kebab"
+                  extraSection={(close) => (
+                    <SessionKebabSection
+                      sessionId={sessionId}
+                      cwd={session?.cwd}
+                      host={session?.host}
+                      hostname={session?.hostname}
+                      archived={session?.archived}
+                      notesOpen={notesOpen}
+                      onToggleNotes={() => setNotesOpen(o => !o)}
+                      messagesOpen={messagesOpen}
+                      onToggleMessages={() => setMessagesOpen(o => !o)}
+                      msgCount={historyMessages.filter(m => m.role === 'user' && m.text.trim()).length}
+                      onRestart={handleRestart}
+                      restartBusy={restartBusy}
+                      onTerminate={handleTerminate}
+                      terminateBusy={terminateBusy}
+                      onInvestigate={handleInvestigate}
+                      investigating={investigating}
+                      investigateResult={investigateResult}
+                      onOpenVscodeError={handleOpenVscodeError}
+                      onAfterAction={close}
+                    />
+                  )}
+                />
+              )}
+            </div>
           </div>
         </div>
 

@@ -43,6 +43,8 @@ const REMOTE_TIMEOUT_MS = 15_000
  */
 const REMOTE_CACHE_TTL_MS = 60_000
 const remoteCache = new Map<string, { time: number; items: SlashCommandItem[] }>()
+/** Cache keys with an in-flight background revalidation (dedupes concurrent expiries). */
+const revalidating = new Set<string>()
 
 /**
  * Claude Code built-in commands that support non-interactive (-p) mode.
@@ -238,6 +240,25 @@ export function createSlashCommandsRouter(): Router {
       if (!fresh) {
         const cached = remoteCache.get(cacheKey)
         if (cached && Date.now() - cached.time < REMOTE_CACHE_TTL_MS) {
+          res.json({ items: cached.items })
+          return
+        }
+        // Stale-while-revalidate: an EXPIRED entry still answers instantly while a
+        // background re-scan refreshes it. The awaited path held a browser
+        // connection for the full 7-9s SSH scan on every TTL expiry; a few of
+        // those saturate the browser's 6-per-origin pool and cascade into client
+        // timeouts (2026-07-31). Staleness is bounded by scan time, and `?fresh=1`
+        // still forces a blocking re-scan.
+        if (cached && !revalidating.has(cacheKey)) {
+          revalidating.add(cacheKey)
+          void buildRemoteItems(host, cwd)
+            .then((items) => { remoteCache.set(cacheKey, { time: Date.now(), items }) })
+            .catch((err) => {
+              log.session.warn('slash-commands: background revalidation failed (stale cache kept)', {
+                host, error: err instanceof Error ? err.message : String(err),
+              })
+            })
+            .finally(() => { revalidating.delete(cacheKey) })
           res.json({ items: cached.items })
           return
         }

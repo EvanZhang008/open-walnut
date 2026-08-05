@@ -107,12 +107,18 @@ final class ChatStore {
         if let savedAgent = UserDefaults.standard.string(forKey: "walnut.activeAgent") {
             activeAgentID = savedAgent
         }
-        if let cachedAgents: [AgentSummary] = DiskCache.load([AgentSummary].self, key: "agents") {
+        // Cache hydration is ASYNC (P0-1): decoding these on the MainActor was
+        // part of the cold-start work that got a background/prewarm launch
+        // killed for blowing the scene-update allowance.
+        if let cachedAgents = await DiskCache.loadAsync([AgentSummary].self, key: "agents") {
+            guard isActive else { return }
             agents = cachedAgents
         }
-        if let cachedList: [ConversationSummary] = DiskCache.load([ConversationSummary].self, key: conversationsCacheKey) {
+        if let cachedList = await DiskCache.loadAsync([ConversationSummary].self, key: conversationsCacheKey) {
+            guard isActive else { return }
             conversations = cachedList
         }
+        guard isActive else { return }
         if let saved = UserDefaults.standard.string(forKey: activeConversationKey) {
             select(saved)
         }
@@ -152,16 +158,22 @@ final class ChatStore {
         activeAgentID = agentID
         UserDefaults.standard.set(agentID, forKey: "walnut.activeAgent")
         activeID = nil
-        conversations = DiskCache.load([ConversationSummary].self, key: conversationsCacheKey) ?? []
+        conversations = []
         messages = []
         hasOlder = false
         if let saved = UserDefaults.standard.string(forKey: activeConversationKey) {
             select(saved)
-        } else {
-            select(conversations.first?.id)
         }
         trackTask { [weak self] in
             guard let self else { return }
+            // Cached list first (off-main), then the network truth. Only adopt
+            // the cache while nothing canonical has landed.
+            let key = self.conversationsCacheKey
+            if let cached = await DiskCache.loadAsync([ConversationSummary].self, key: key),
+               self.conversations.isEmpty, key == self.conversationsCacheKey {
+                self.conversations = cached
+                if self.activeID == nil { self.select(cached.first?.id) }
+            }
             await self.refreshConversations()
             if self.activeID == nil || !self.conversations.contains(where: { $0.id == self.activeID }) {
                 self.select(self.conversations.first?.id)
@@ -202,15 +214,25 @@ final class ChatStore {
         activity = nil
         errorMessage = nil
         initialPaintDone = false
-        messages = id.flatMap { DiskCache.load([ChatMessage].self, key: "messages-\($0)") } ?? []
-        // Cached rows landed — force the bottom rows to instantiate (the
-        // blank-list bug hits the cold-launch cache path hardest). Deferred a
-        // tick so the view is attached and observing before the signal moves.
-        if !messages.isEmpty, isActive {
-            scrollToBottomSignal += 1
-        }
+        messages = []
         connectStream()
         if let id {
+            // Cached tail hydrates OFF-MAIN (P0-1) and only wins while nothing
+            // canonical has landed for this conversation yet — loadMessages runs
+            // concurrently and its result is authoritative whichever finishes
+            // first.
+            trackTask { [weak self] in
+                guard let self else { return }
+                if let cached = await DiskCache.loadAsync([ChatMessage].self, key: "messages-\(id)"),
+                   !cached.isEmpty, self.activeID == id,
+                   self.messages.isEmpty, !self.initialPaintDone {
+                    self.messages = cached
+                    // Cached rows landed — force the bottom rows to instantiate
+                    // (the blank-list bug hits the cold-launch cache path
+                    // hardest).
+                    if self.isActive { self.scrollToBottomSignal += 1 }
+                }
+            }
             trackTask { [weak self] in await self?.loadMessages(id) }
         }
     }
@@ -434,10 +456,9 @@ final class ChatStore {
         return out
     }
 
+    /// Sequential, budgeted, off-MainActor — see SelectedImage.buildPayloads.
     private nonisolated static func buildImagePayloads(_ datas: [Data]) async -> [ImagePayload] {
-        await Task.detached(priority: .userInitiated) {
-            datas.map { ImagePayload(data: $0.base64EncodedString(), mediaType: "image/jpeg") }
-        }.value
+        await SelectedImage.buildPayloads(datas)
     }
 
     // MARK: - Failed-bubble actions
@@ -597,6 +618,43 @@ final class ChatStore {
         guard !pendingDelta.isEmpty else { return }
         streamText += pendingDelta
         pendingDelta = ""
+        reassertPinnedFollow()
+    }
+
+    /// Last time a streaming flush re-asserted the bottom edge — throttles the
+    /// re-assert so it can't run at the full 8Hz flush rate.
+    @ObservationIgnored private var lastPinReassertAt: Date?
+    /// Must stay comfortably ABOVE the view's 250ms programmatic-geometry freeze
+    /// (`MessageListView.scrollToBottom`). Re-asserting faster than that would
+    /// keep geometry frozen for most of a streaming turn, and a user trying to
+    /// scroll back into history mid-reply would find their drags ignored (intent
+    /// tracking is deliberately suppressed while frozen). At 700ms there is
+    /// always a ~450ms clear window per cycle — hundreds of geometry samples —
+    /// for a real drag to cross the unpin threshold, after which `bottomPinned`
+    /// is false and this stops firing entirely.
+    private static let pinReassertInterval: TimeInterval = 0.7
+
+    /// Keep a PINNED reader glued to the bottom as streamed content grows.
+    ///
+    /// `ScrollPosition`'s bottom-edge association is not permanent: once the user
+    /// has scrolled manually, growing the content no longer moves the viewport,
+    /// so a reader who scrolled back to within the re-pin threshold (intent =
+    /// pinned again) simply stopped following the reply — the classic "it follows
+    /// at 0pt and above 200pt but not in between". Re-asserting the edge is cheap
+    /// and idempotent, so do it from the flush.
+    ///
+    /// This lives on the STORE side on purpose. `ScrollBottomTracking`'s geometry
+    /// callback runs inside the scroll view's layout pass; writing observable
+    /// state from there does not converge and spins the main thread (P0-2), so
+    /// the re-assert must never be driven from that callback.
+    private func reassertPinnedFollow() {
+        guard isActive, streaming, bottomPinned else { return }
+        let now = Date()
+        if let last = lastPinReassertAt, now.timeIntervalSince(last) < Self.pinReassertInterval {
+            return
+        }
+        lastPinReassertAt = now
+        scrollToBottomSignal += 1
     }
 
     /// Mid-turn freeze breaker. The composer is disabled while `streaming` is

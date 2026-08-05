@@ -1,3 +1,40 @@
+/**
+ * Legacy project memory (`memory/projects/<category>/<project>/MEMORY.md`).
+ *
+ * STATUS (audited 2026-07-29) — READS ARE LIVE. Of the writes, only
+ * `updateProjectSummary` is reachable (see the write-half note below).
+ *
+ * The 2026-07 unification moved project knowledge to the skills system
+ * (`skills/<category>/<project>/SKILL.md` + `history/log.md`), and `init.ts`
+ * deliberately stops recreating this directory. But the migration was NOT
+ * completed for existing data: most projects that have a legacy MEMORY.md
+ * still have no corresponding SKILL.md, so the readers below are the only
+ * source for that content and are genuinely load-bearing:
+ *
+ *   - `getProjectSummary`   → categories route (project "Memory" block in the
+ *                             UI) and the butler's task_query/task_get output.
+ *   - `getProjectMemory`    → chat.ts enriched task context (fallback behind
+ *                             the skill path) and stateful-agent memory
+ *                             injection (subagent-runner + cron actions).
+ *   - `getAllProjectSummaries` → `file_list memory/project`.
+ *   - `ensureProjectDir`    → stateful-agent creation. Only ever called with an
+ *                             agent's own `memory_project`, so it does NOT
+ *                             resurrect the whole legacy tree (see init.ts).
+ *
+ * `appendProjectMemory` and `editProjectMemory` have ZERO production callers —
+ * appends were rerouted to skill history in `tools/files/memory-handler.ts`, and
+ * the old `memory` tool's `update_summary`/`append` actions no longer exist.
+ *
+ * `updateProjectSummary` is the ONE live write path, and only via
+ * `stateful-memory.ts` → `persistMemoryUpdate()`: a stateful agent's
+ * carry-forward state IS this file's YAML `description`, and no tool can write
+ * it (`memory_manage` only reaches the two global bounded stores). It rewrites
+ * the summary in place and never appends, so it cannot regrow the log body.
+ *
+ * Otherwise treat this store as read-mostly legacy data: do not add new write
+ * paths here, migrate the project to a skill instead. Do not delete the readers
+ * until the data itself is migrated.
+ */
 import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
@@ -6,7 +43,6 @@ import { formatDateKey } from './daily-log.js';
 import {
   computeContentHash,
   editFileContent,
-  writeFileChecked,
 } from '../utils/file-ops.js';
 import { withFileLock } from '../utils/file-lock.js';
 
@@ -164,8 +200,49 @@ export function appendProjectMemory(
 }
 
 /**
+ * Strip a frontmatter block a model wrapped around its own summary.
+ *
+ * The summary written here comes from a MODEL (a stateful agent's
+ * `<memory_update>` block), and models re-emit the shape they were shown. The
+ * live `life/tracker` store proves it: its `description` contains a COMPLETE
+ * nested `---\nname: …\ndescription: |` document, i.e. the whole file folded
+ * into its own header, once per write. The prompt now says not to, but a prompt
+ * is a request — this is the guarantee. Unwraps repeatedly, because a nested
+ * wrap can itself be nested.
+ */
+function unwrapNestedFrontmatter(description: string): string {
+  let out = description.trim();
+  // Bounded: each pass must strictly shrink the string, so this terminates even
+  // on adversarial input; the cap is a second belt.
+  for (let pass = 0; pass < 5; pass++) {
+    const fm = out.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+    if (!fm) break;
+    let inner: unknown;
+    try {
+      inner = yaml.load(fm[1]);
+    } catch {
+      break; // Not real YAML — leave the text exactly as the model wrote it.
+    }
+    // Only unwrap a header that looks like OUR header (a description field);
+    // anything else could be legitimate content that merely starts with ---.
+    if (!inner || typeof inner !== 'object' || !('description' in inner)) break;
+    const nested = (inner as { description?: unknown }).description;
+    if (typeof nested !== 'string' || nested.trim().length === 0) break;
+    const next = nested.trim();
+    if (next.length >= out.length) break;
+    out = next;
+  }
+  return out;
+}
+
+/**
  * Rewrite the YAML frontmatter of a project MEMORY.md, preserving all log entries.
  * Uses file locking and optional hash-based stale check.
+ *
+ * This is a FULL-OVERWRITE write reached by unattended cron agents (see
+ * stateful-memory.ts → persistMemoryUpdate), so it snapshots the previous state
+ * first: a bad model write is otherwise unrecoverable, and the next tick would
+ * overwrite the only good copy.
  */
 export async function updateProjectSummary(
   projectPath: string,
@@ -194,9 +271,14 @@ export async function updateProjectSummary(
     const fmMatch = existing.match(/^---\n[\s\S]*?\n---\n?/);
     const body = fmMatch ? existing.slice(fmMatch[0].length) : existing;
 
-    const newFrontmatter = `---\n${yaml.dump({ name, description }, { lineWidth: -1 })}---\n`;
+    const cleanDescription = unwrapNestedFrontmatter(description);
+    const newFrontmatter = `---\n${yaml.dump({ name, description: cleanDescription }, { lineWidth: -1 })}---\n`;
     const newContent = newFrontmatter + body;
-    fs.writeFileSync(memFile, newContent, 'utf-8');
+
+    // Snapshot the state we're about to replace (best-effort; never blocks).
+    const { backupBeforeWrite, atomicWriteSameDir } = await import('./bounded-memory-backup.js');
+    await backupBeforeWrite(memFile, existing, newContent);
+    await atomicWriteSameDir(memFile, newContent);
 
     return {
       parentSummaries: getParentSummaries(projectPath),
@@ -312,11 +394,4 @@ export function getProjectMemory(projectPath: string): ProjectMemoryResult | nul
   } catch {
     return null;
   }
-}
-
-/**
- * Resolve a project_path to the absolute file path of its MEMORY.md.
- */
-export function resolveProjectMemoryPath(projectPath: string): string {
-  return path.join(PROJECTS_MEMORY_DIR, projectPath, 'MEMORY.md');
 }

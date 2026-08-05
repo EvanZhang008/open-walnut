@@ -123,6 +123,10 @@ export class DaemonConnection {
   private pingTimer: ReturnType<typeof setInterval> | null = null
   /** Timestamp of last pong received — used for stale connection detection. */
   private lastPongAt = 0
+  /** True while a ping has been sent and its pong not yet received. */
+  private _pongPending = false
+  /** Consecutive awake ping ticks with the pong still outstanding. */
+  private _missedPongs = 0
   /** Counter of consecutive reconnect attempts since last successful connect. Reset in setConnected(true). */
   private _reconnectAttempts = 0
   /** Last WebSocket URL opened — logged on close for troubleshooting. */
@@ -152,6 +156,16 @@ export class DaemonConnection {
   private static RECONNECT_DELAY_MS = 2_000
   /** Maximum reconnect delay — retries forever at this interval. */
   private static RECONNECT_MAX_DELAY_MS = 30_000
+  /**
+   * Backoff cap when the failure is a standing condition no amount of retrying
+   * fixes — expired SSH cert (`Permission denied (publickey)` until the user
+   * runs mwinit) or a hostname that no longer resolves (host recycled). At the
+   * normal 30s cap those hammered 2 hosts × ~19h on 2026-08-01 (each attempt
+   * spawning several ssh processes, amplified by endpoint-security agents) and
+   * read as "Walnut is frozen". Recovery after the user fixes auth is bounded
+   * by this delay, which is acceptable for a condition that took hours anyway.
+   */
+  private static RECONNECT_STANDING_FAILURE_DELAY_MS = 10 * 60_000
   /** Ping interval for keepalive. */
   private static PING_INTERVAL_MS = 15_000
 
@@ -1705,6 +1719,8 @@ export class DaemonConnection {
       ws.on('open', () => {
         this.ws = ws
         this.lastPongAt = Date.now()
+        this._pongPending = false
+        this._missedPongs = 0
         resolve()
       })
 
@@ -1748,6 +1764,8 @@ export class DaemonConnection {
 
       ws.on('pong', () => {
         this.lastPongAt = Date.now()
+        this._pongPending = false
+        this._missedPongs = 0
       })
 
       // Timeout
@@ -1823,6 +1841,16 @@ export class DaemonConnection {
   // ── Private: Reconnection ──
 
   private handleConnectionLost(): void {
+    // Stop ping BEFORE the early return. When a second loss signal arrives on an
+    // already-disconnected instance (ws 'close' after a stale-pong loss, or a
+    // pingTimer that outlived its connection), returning with the timer alive
+    // leaves a zombie interval logging "no pong received" every 15s forever —
+    // observed 2026-08-01: lastPongAgoMs grew to 12.6h across 1138 warns.
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer)
+      this.pingTimer = null
+    }
+
     if (this._destroyed || !this._connected) return
 
     this.setConnected(false)
@@ -1831,12 +1859,6 @@ export class DaemonConnection {
     if (this.ws) {
       try { this.ws.close() } catch {}
       this.ws = null
-    }
-
-    // Stop ping
-    if (this.pingTimer) {
-      clearInterval(this.pingTimer)
-      this.pingTimer = null
     }
 
     log.session.info('DaemonConnection: connection lost, scheduling reconnect', {
@@ -1872,14 +1894,23 @@ export class DaemonConnection {
       try {
         await this.reconnect()
       } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        // Standing failures: retrying every 30s can't fix an expired SSH cert
+        // (needs mwinit) or a hostname that no longer resolves. Back off to a
+        // slow probe instead of hammering — see RECONNECT_STANDING_FAILURE_DELAY_MS.
+        const standing = /Permission denied \(publickey\)|Could not resolve hostname/.test(msg)
+        const nextDelayMs = standing
+          ? DaemonConnection.RECONNECT_STANDING_FAILURE_DELAY_MS
+          : Math.min(delayMs * 2, DaemonConnection.RECONNECT_MAX_DELAY_MS)
         log.session.warn('DaemonConnection: reconnect failed, will retry', {
           host: this.hostKey,
           attempt: this._reconnectAttempts,
           stuckForMs: this._disconnectedSince ? Date.now() - this._disconnectedSince : null,
-          error: err instanceof Error ? err.message : String(err),
-          nextDelayMs: Math.min(delayMs * 2, DaemonConnection.RECONNECT_MAX_DELAY_MS),
+          error: msg,
+          standingFailure: standing || undefined,
+          nextDelayMs,
         })
-        this.scheduleReconnect(Math.min(delayMs * 2, DaemonConnection.RECONNECT_MAX_DELAY_MS))
+        this.scheduleReconnect(nextDelayMs)
       }
     }, delayMs)
   }
@@ -2236,19 +2267,34 @@ export class DaemonConnection {
 
   private startPing(): void {
     if (this.pingTimer) clearInterval(this.pingTimer)
+    this._missedPongs = 0
+    this._pongPending = false
     this.pingTimer = setInterval(() => {
-      // Detect stale connection: if no pong received for 3 ping intervals, connection is dead.
-      // 3x (45s) instead of 2x absorbs transient event-loop stalls at boot (QMD rebuild,
-      // session recovery) that previously cascaded into disconnect→reconnect→mass reattach.
-      if (this.lastPongAt > 0 && Date.now() - this.lastPongAt > DaemonConnection.PING_INTERVAL_MS * 3) {
-        log.session.warn('DaemonConnection: no pong received, connection stale', {
-          host: this.hostKey,
-          lastPongAgoMs: Date.now() - this.lastPongAt,
-        })
-        this.handleConnectionLost()
-        return
+      // Staleness = 3 consecutive AWAKE intervals with no pong (~45s), counted
+      // per timer tick — NOT clock-based. Clock math ("now - lastPongAt > 45s")
+      // is sleep-poisoned on Apple Silicon: BOTH Date.now() and hrtime advance
+      // through macOS sleep there, so every lid-close/DarkWake made a healthy
+      // link look stale and tore it down into a reconnect storm (2026-08-01).
+      // A counter only advances when this callback actually runs, i.e. while
+      // the process is awake — sleep of any length costs at most one tick.
+      // 3x instead of 2x also absorbs transient event-loop stalls at boot (QMD
+      // rebuild, session recovery) that used to cascade into mass reattach.
+      if (this._pongPending) {
+        this._missedPongs += 1
+        if (this._missedPongs >= 3) {
+          log.session.warn('DaemonConnection: no pong received, connection stale', {
+            host: this.hostKey,
+            missedPongs: this._missedPongs,
+            lastPongAgoMs: this.lastPongAt > 0 ? Date.now() - this.lastPongAt : null,
+          })
+          this.handleConnectionLost()
+          return
+        }
+      } else {
+        this._missedPongs = 0
       }
       if (this.ws?.readyState === WebSocket.OPEN) {
+        this._pongPending = true
         this.ws.ping()
       }
     }, DaemonConnection.PING_INTERVAL_MS)

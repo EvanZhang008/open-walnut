@@ -89,6 +89,25 @@ export async function getFrequentDirs(): Promise<FrequentDirEntry[]> {
 }
 
 /**
+ * The launcher relevance formula, shared by GET /api/sessions/working-dirs
+ * (web launcher) and GET /api/v1/sessions/launch-options (mobile) so the two
+ * pickers can never drift: frequency 30% + recency 70%, each normalized to
+ * the max across the given entries. Higher = better. maxAgeMs/maxCount are
+ * floored at 1 so a single-entry (age 0) store doesn't divide by zero.
+ */
+export function scoreFrequentDir(
+  entry: Pick<FrequentDirEntry, 'count' | 'lastUsed'>,
+  now: number,
+  maxAgeMs: number,
+  maxCount: number,
+): number {
+  const ageMs = now - new Date(entry.lastUsed).getTime()
+  const recencyScore = 1 - ageMs / Math.max(1, maxAgeMs)
+  const freqScore = entry.count / Math.max(1, maxCount)
+  return freqScore * 0.3 + recencyScore * 0.7
+}
+
+/**
  * Record a directory usage (called on session start).
  * Increments count, updates lastUsed, adds category vote.
  */

@@ -74,7 +74,7 @@ export function phaseIcon(phase: string): ReactNode {
   }
 }
 
-// ── Focus-tier icons (crosshair / planet+satellite / hourglass) ──
+// ── Focus-tier icons (crosshair / planet+satellite / inbox tray / hourglass / bookmark) ──
 // Stroke-style on purpose: task PHASE icons are filled-circle shapes, so the
 // tier marks must read as a different visual family (no plain dots).
 
@@ -84,12 +84,20 @@ export const ICON_TIER_SATELLITE = <svg width="13" height="13" viewBox="0 0 24 2
 
 export const ICON_TIER_WAIT = <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6.5 3 h11 M6.5 21 h11"/><path d="M8 3 v3.2 c0 2.6 8 4 8 7.3 v4.5 M16 3 v3.2 c0 2.6 -8 4 -8 7.3 v4.5"/></svg>;
 
-/** Tier icon lookup — used by tier section headers, Recent pinned badges, and the kebab menu. */
-export function tierIcon(tier: 'focus' | 'satellite' | 'wait'): ReactNode {
+// Backlog: an inbox tray — "stored for later", distinct from the custom bookmark.
+export const ICON_TIER_BACKLOG = <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M3 13 h5 l2 3 h4 l2 -3 h5"/><path d="M5.2 6.5 h13.6 L21 13 v6 H3 v-6 z"/></svg>;
+
+// Custom (user-defined) tiers: a tagged bookmark — reads as "a shelf you made".
+export const ICON_TIER_CUSTOM = <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M6 3.5 h12 v17 l-6 -4.5 -6 4.5 z"/></svg>;
+
+/** Tier icon lookup — used by tier section headers, Recent pinned badges, and the kebab menu. Custom tier ids (ct_*) get the bookmark. */
+export function tierIcon(tier: string): ReactNode {
   switch (tier) {
     case 'focus': return ICON_TIER_FOCUS;
     case 'wait': return ICON_TIER_WAIT;
-    default: return ICON_TIER_SATELLITE;
+    case 'satellite': return ICON_TIER_SATELLITE;
+    case 'backlog': return ICON_TIER_BACKLOG;
+    default: return ICON_TIER_CUSTOM;
   }
 }
 

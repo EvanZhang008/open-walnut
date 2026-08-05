@@ -12,7 +12,7 @@ import { buildRoleSection, buildSystemPrompt, buildTaskCategoriesSection, getNot
 import { buildSkillsPrompt } from '../../core/skill-loader.js'
 import { getCompactionSummary, getModelContext } from '../../core/chat-history.js'
 import { getMemoryFile } from '../../core/memory-file.js'
-import { getBoundedMemory } from '../../core/bounded-memory.js'
+import { getBoundedMemory, promptScope } from '../../core/bounded-memory.js'
 import { getDailyLogsWithinBudget, estimateTokens, estimateMessagesTokens, estimateFullPayload } from '../../core/daily-log.js'
 import { getToolSchemas } from '../../agent/tools.js'
 
@@ -106,8 +106,13 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
     const roleContent = buildRoleSection(name)
     const skillsContent = await buildSkillsPrompt() ?? ''
     const compactionContent = await getCompactionSummary(undefined, conversationId).catch(() => null) ?? ''
-    const globalMemory = getBoundedMemory().renderForPrompt() ?? ''
-    const userProfile = getBoundedMemory(undefined, 'user').renderForPrompt() ?? ''
+    // Same freeze scope buildSystemPromptSplit() derives, so these per-section
+    // views show the FROZEN block the live turn is actually injecting rather than
+    // a fresher live read — otherwise the inspector would contradict the total it
+    // computes from buildSystemPrompt() below. No pin ⇒ live read.
+    const memoryScope = promptScope(agentId, conversationId)
+    const globalMemory = getBoundedMemory().renderForPrompt(memoryScope) ?? ''
+    const userProfile = getBoundedMemory(undefined, 'user').renderForPrompt(memoryScope) ?? ''
     const dailyLogs = getDailyLogsWithinBudget(Math.floor(20000 / 2))
     const toolSchemas = getToolSchemas()
     const apiMessages = await getModelContext(undefined, conversationId)

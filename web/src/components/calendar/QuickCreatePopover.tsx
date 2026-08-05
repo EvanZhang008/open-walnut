@@ -73,7 +73,15 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
       <div className="cal-popover-backdrop" onClick={onClose} />
       <div className="cal-create-popover" ref={menuRef} style={menuPlacementStyle(placement)}>
         {onCreateEvent && (
-          <div className="cal-create-tabs" role="tablist">
+          <div
+            className="cal-create-tabs"
+            role="tablist"
+            // The tabs sit INSIDE this popover but OUTSIDE QuickTaskComposer's
+            // root div, and the composer closes on any document mousedown
+            // outside itself — so without this, clicking "Event" closed the
+            // whole popover before the tab could switch.
+            onMouseDown={(e) => e.stopPropagation()}
+          >
             <button role="tab" aria-selected={tab === 'task'} className={tab === 'task' ? 'active' : ''} onClick={() => setTab('task')}>
               Task
             </button>

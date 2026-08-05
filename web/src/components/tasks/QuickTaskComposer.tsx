@@ -3,7 +3,8 @@ import { listCategories, quickParseTask, type CategorySummary, type QuickTaskPar
 import { QuickTaskConfirm, type ConfirmDraft, type ConfirmField } from './QuickTaskConfirm';
 
 type Stage = 'input' | 'confirm';
-type PinTier = 'focus' | 'satellite' | 'wait';
+/** Built-in tier name or a custom tier id (`ct_*`). */
+type PinTier = string;
 
 interface Props {
   open: boolean;

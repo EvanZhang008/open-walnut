@@ -21,7 +21,7 @@ import {
 import { readSessionHistory, readSingleSubagentHistory, reconstructWorkflowProgress, extractPlanContent, rewriteHistoryRemoteImages } from '../../core/session-history.js'
 import { computeSessionChanges } from '../../core/session-changes.js'
 import { computeSessionGitDiff, type GitDiffBase } from '../../core/session-git-diff.js'
-import { listTasks, getTask, addTask, updateTask, togglePin, setFocusTier, linkSession, groupTasks, addToGroup, renameGroup } from '../../core/task-manager.js'
+import { listTasks, getTask, addTask, updateTask, togglePin, setFocusTier, getCustomTiers, linkSession, groupTasks, addToGroup, renameGroup } from '../../core/task-manager.js'
 import { getConfig } from '../../core/config-manager.js'
 import { bus, EventNames, eventData } from '../../core/event-bus.js'
 import fsp from 'node:fs/promises'
@@ -31,7 +31,7 @@ import { isSessionProcessAlive } from '../../utils/session-liveness.js'
 import { readPlanFromSession, buildPlanExecutionMessage } from '../../utils/plan-message.js'
 import { injectCompactBoundary, buildCompactSummary } from '../../utils/compact-inject.js'
 import { findLocalJsonlPath } from '../../core/session-file-reader.js'
-import { getFrequentDirs, compileFromSessions, recordLaunchPrefs } from '../../core/frequent-dirs.js'
+import { getFrequentDirs, compileFromSessions, recordLaunchPrefs, scoreFrequentDir } from '../../core/frequent-dirs.js'
 import type { SessionRecord, SessionMode, Task, SessionEffort } from '../../core/types.js'
 import { VALID_SESSION_MODEL_IDS, SESSION_MODEL_CLI_MAP, VALID_SESSION_EFFORT_IDS, modelSupportsEffort, modelSupportsXhighEffort, modelSupportsMaxEffort, matchSessionModelCatalogEntry, resolveModelSwitchValue, sessionModelsAsCatalog } from '../../core/types.js'
 import { getHostModelCatalog, listHostModelCatalogs } from '../../core/host-model-catalog.js'
@@ -46,6 +46,9 @@ import { ensureCwd } from '../../core/sessions/ensure-cwd.js'
 import { buildSessionVscodeUri, SessionVscodeUriError } from '../../core/session-vscode-uri.js'
 import { listLocalDirs, listRemoteDirs } from '../../core/sessions/dir-listing.js'
 import { QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
+
+/** Client-supplied session ids must be well-formed UUIDs (they become CLI --session-id args and file names). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** Diagnose message ordering — logs whether user text messages are interleaved or bunched at end. */
 function logMessageOrdering(phase: string, sessionId: string, messages: SessionHistoryMessage[], host?: string | null): void {
@@ -216,10 +219,9 @@ sessionsRouter.get('/working-dirs', async (_req: Request, res: Response, next: N
       }
 
       const hostLabel = d.host ? hosts[d.host]?.label ?? d.host : undefined
-      const ageMs = now - new Date(d.lastUsed).getTime()
-      const recencyScore = 1 - (ageMs / maxAgeMs)
-      const freqScore = d.count / maxCount
-      const score = freqScore * 0.3 + recencyScore * 0.7
+      // Shared with GET /api/v1/sessions/launch-options (mobile) — retune the
+      // weights in frequent-dirs.ts, not here, or the two pickers drift.
+      const score = scoreFrequentDir(d, now, maxAgeMs, maxCount)
 
       return {
         cwd: d.cwd,
@@ -405,7 +407,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         starred?: boolean
         needs_attention?: boolean
         priority?: 'immediate' | 'important' | 'backlog' | 'none'
-        pinTier?: 'focus' | 'satellite' | 'wait'
+        pinTier?: string // built-in tier or a registered custom tier id (ct_*)
       }
       /** Optional launch intent — 'fix-walnut' wraps the message in a repair briefing. */
       intent?: string
@@ -465,8 +467,14 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       }
     }
     if (taskMeta?.pinTier !== undefined && taskMeta.pinTier !== null) {
-      const validTiers = ['focus', 'satellite', 'wait']
-      if (!validTiers.includes(taskMeta.pinTier)) {
+      const validTiers = ['focus', 'satellite', 'backlog', 'wait', ...(await getCustomTiers()).map((t) => t.id)]
+      // A ct_*-shaped id that's NOT registered is a STALE remembered pick, not a
+      // bad request: the launcher persists the last tier in localStorage (and
+      // ui-prefs-sync mirrors it across browsers), so after the user deletes that
+      // tier in Settings every quick-start would 400 forever. Let it through —
+      // setFocusTier self-heals unknown tiers to Satellite (same contract the
+      // client comments rely on). Only reject values that were never tier ids.
+      if (!validTiers.includes(taskMeta.pinTier) && !/^ct_[a-z0-9]+$/.test(taskMeta.pinTier)) {
         res.status(400).json({ error: `Invalid taskMeta.pinTier: ${taskMeta.pinTier}. Must be one of: ${validTiers.join(', ')}` })
         return
       }
@@ -533,8 +541,18 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       // on a placeholder until the CLI's first init line (3–6s later). The CLI
       // adopts this id via --session-id. Codex/ACP is excluded (its adapter owns
       // id assignment), so those clients keep the poll-for-id path.
+      //
+      // A client-supplied `sessionId` wins over minting: it makes the launch
+      // reconcilable when the HTTP response never reaches the browser (client
+      // AbortSignal timeout under load — 2026-08-03: server 200 in 2.7s, browser
+      // gave up at 15s, pending panel showed a false "Failed" and Retry created
+      // a duplicate session). With the client owning the id, it can poll
+      // GET /api/sessions/<id> regardless of the response's fate.
       const isNativeEngine = engine !== 'codex'
-      const preassignedSessionId = isNativeEngine ? randomUUID() : undefined
+      const clientSessionId = typeof (req.body as { sessionId?: unknown }).sessionId === 'string'
+        && UUID_RE.test((req.body as { sessionId: string }).sessionId)
+        ? (req.body as { sessionId: string }).sessionId : undefined
+      const preassignedSessionId = isNativeEngine ? (clientSessionId ?? randomUUID()) : undefined
       const updatedTask = await quickStartSession({
         message: sessionMessage, messagePrefix, cwd, host, model, mode,
         existingTaskId, taskMeta: fixWalnutTaskMeta, source: 'quick-start', requestTs,

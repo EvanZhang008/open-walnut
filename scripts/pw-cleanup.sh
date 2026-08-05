@@ -52,10 +52,16 @@ belongs_to_live_run() {
 }
 
 orphan_browsers() {
-  # Playwright's browsers live under ~/Library/Caches/ms-playwright. Match that
-  # path so we never touch the user's real Chrome/Chromium.
+  # Two flavors of automation browser debris, matched so we never touch the
+  # user's real Chrome/Chromium (whose profile lives in ~/Library/Application
+  # Support and never carries these markers):
+  #   1. Playwright's own browsers under ~/Library/Caches/ms-playwright.
+  #   2. Real Chrome driven by puppeteer/playwright via a THROWAWAY profile dir
+  #      ($TMPDIR/puppeteer_dev_chrome_profile-* / playwright_chromiumdev_profile-*).
+  #      2026-07-31: 12 such trees (75 procs, ~5 GB) leaked by killed MCP
+  #      web-search servers pushed load to 120 — invisible to the old matcher.
   ps -eo pid=,ppid=,rss=,etime=,command= \
-    | grep -E 'ms-playwright/(chromium|chrome-headless-shell)' \
+    | grep -E 'ms-playwright/(chromium|chrome-headless-shell)|user-data-dir=[^ ]*(puppeteer_dev_chrome_profile|playwright_chromiumdev_profile)' \
     | grep -v grep
 }
 
@@ -145,10 +151,18 @@ fi
 # ── clean ──────────────────────────────────────────────────────────────────
 
 killed_b=0 skipped_b=0 freed=0
-while read -r pid ppid rss etime _rest; do
+while read -r pid ppid rss etime rest; do
   [[ -z "${pid:-}" ]] && continue
   if [[ "$FORCE" -eq 0 ]] && belongs_to_live_run "$pid"; then
     skipped_b=$((skipped_b + 1)); continue
+  fi
+  # Temp-profile Chrome (puppeteer/CDP-driven real Chrome) is only an orphan once
+  # reparented to launchd — a live parent (e.g. an MCP web-search server mid-query)
+  # still owns it, and its helpers (ppid = main chrome) die with the main anyway.
+  if [[ "$FORCE" -eq 0 && "$rest" == *"_dev_chrome_profile"* || "$FORCE" -eq 0 && "$rest" == *"_chromiumdev_profile"* ]]; then
+    if [[ "$ppid" -gt 1 ]] && kill -0 "$ppid" 2>/dev/null; then
+      skipped_b=$((skipped_b + 1)); continue
+    fi
   fi
   # Browsers have no cleanup handler worth waiting for; SIGKILL is correct here
   # (SIGTERM is frequently ignored by a wedged renderer).

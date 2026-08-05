@@ -76,6 +76,9 @@ describe('session launcher pin tier', () => {
 
     rememberPinTier('wait');
     expect(freshLauncherMeta().pinTier).toBe('wait');
+
+    rememberPinTier('backlog');
+    expect(freshLauncherMeta().pinTier).toBe('backlog');
   });
 
   it('remembers an explicit unpin instead of snapping back to the default', () => {
@@ -98,6 +101,14 @@ describe('session launcher pin tier', () => {
     expect(readLastPinTier()).toBe('satellite');
     localStorage.setItem(LAUNCHER_PIN_TIER_KEY, '');
     expect(readLastPinTier()).toBe('satellite');
+  });
+
+  it('remembers a custom tier id (ct_*) as the next default', () => {
+    // A stale id (tier since deleted) self-heals server-side into Satellite,
+    // so the passthrough never seeds an invalid pin.
+    rememberPinTier('ct_abcd1234');
+    expect(readLastPinTier()).toBe('ct_abcd1234');
+    expect(freshLauncherMeta().pinTier).toBe('ct_abcd1234');
   });
 
   it('survives a storage that throws (private mode / quota)', () => {

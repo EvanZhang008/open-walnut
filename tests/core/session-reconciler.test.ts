@@ -245,4 +245,47 @@ describe('reconcileSessions', () => {
     const sessions = await listSessions()
     expect(sessions.find(s => s.claudeSessionId === 'dead-no-file')!.process_status).toBe('stopped')
   })
+
+  it('REGRESSION (incident 57b125ab): an alive session\'s process_status is NOT rewritten from the task phase', async () => {
+    // The CLI process is long-running BETWEEN turns: alive + idle is the normal
+    // between-turns state. The old sweep set process_status from the task's
+    // phase (`IN_PROGRESS → 'running'`), so a dev:prod restart revived a
+    // correctly-idle record to a false 'running' that nothing ever corrected
+    // (15h of fake Running). The record's persisted value is the last
+    // event-driven truth — the sweep must keep it.
+    // Task in IN_PROGRESS FIRST — the exact phase the old proxy translated to
+    // 'running'. Without a real IN_PROGRESS task the old code would have
+    // written 'idle' too and a revert would not fail this test.
+    const { addTask, updateTaskRaw } = await import('../../src/core/task-manager.js')
+    const { task } = await addTask({ title: 'inprog', category: 'c', project: 'p' })
+    await updateTaskRaw(task.id, { phase: 'IN_PROGRESS' })
+
+    await createSessionRecord('alive-idle', task.id, 'proj', undefined, {
+      pid: process.pid, // alive (this test runner)
+      outputFile: 'remote://__local__/alive-idle',
+    })
+    await updateSessionRecord('alive-idle', { process_status: 'idle' })
+
+    const result = await reconcileSessions()
+    expect(result.reconnectable.map(s => s.claudeSessionId)).toEqual(['alive-idle'])
+
+    const sessions = await listSessions()
+    const rec = sessions.find(s => s.claudeSessionId === 'alive-idle')!
+    // The bug shape: this used to come back 'running'.
+    expect(rec.process_status).toBe('idle')
+  })
+
+  it('an alive stuck-running record is left for the evidence path (sweep neither fixes nor worsens it)', async () => {
+    // The sweep is not the healer for stale 'running' — reconcileProcessStatus
+    // (stream-file evidence) is. The sweep must simply not touch the value.
+    await createSessionRecord('alive-running', 'task-x', 'proj', undefined, {
+      pid: process.pid,
+      outputFile: 'remote://__local__/alive-running',
+    })
+    // createSessionRecord defaults to 'running' — leave it.
+
+    await reconcileSessions()
+    const sessions = await listSessions()
+    expect(sessions.find(s => s.claudeSessionId === 'alive-running')!.process_status).toBe('running')
+  })
 })

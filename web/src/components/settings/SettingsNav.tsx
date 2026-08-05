@@ -8,6 +8,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'providers', label: 'AI Provider' },
   { id: 'general', label: 'General' },
   { id: 'sessions', label: 'Tasks & Sessions' },
+  { id: 'focus-tiers', label: 'Focus Tiers' },
   { id: 'integrations', label: 'Integrations' },
   { id: 'calendar', label: 'Calendar' },
   { id: 'plugin-store', label: 'Plugin Store' },

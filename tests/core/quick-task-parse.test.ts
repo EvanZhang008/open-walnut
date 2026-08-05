@@ -245,6 +245,54 @@ describe('parseQuickTask', () => {
     expect(system).toContain('Judge it from the work itself');
   });
 
+  // Custom tiers: pinTier accepts a registered ct_* id verbatim, normalizes a
+  // label match to the id, and the prompt advertises each custom tier.
+  it('accepts the built-in backlog tier verbatim', async () => {
+    sendMessageMock.mockResolvedValue(textResult(
+      '{"title":"Sort receipts","pinTier":"backlog"}',
+    ));
+    const result = await parseQuickTask('sort receipts someday');
+    expect(result.parse).toEqual({ title: 'Sort receipts', pinTier: 'backlog' });
+  });
+
+  it('accepts a custom tier id from options.customTiers', async () => {
+    sendMessageMock.mockResolvedValue(textResult(
+      '{"title":"Sort receipts","pinTier":"ct_k3x9q2ab"}',
+    ));
+    const result = await parseQuickTask('sort receipts into the icebox', {
+      customTiers: [{ id: 'ct_k3x9q2ab', label: 'Icebox' }],
+    });
+    expect(result.parse).toEqual({ title: 'Sort receipts', pinTier: 'ct_k3x9q2ab' });
+  });
+
+  it('normalizes a custom tier label match to its id', async () => {
+    sendMessageMock.mockResolvedValue(textResult(
+      '{"title":"Sort receipts","pinTier":"icebox"}',
+    ));
+    const result = await parseQuickTask('sort receipts into the icebox', {
+      customTiers: [{ id: 'ct_k3x9q2ab', label: 'Icebox' }],
+    });
+    expect(result.parse).toEqual({ title: 'Sort receipts', pinTier: 'ct_k3x9q2ab' });
+  });
+
+  it('drops an unregistered custom tier id', async () => {
+    sendMessageMock.mockResolvedValue(textResult(
+      '{"title":"Sort receipts","pinTier":"ct_unknown1"}',
+    ));
+    const result = await parseQuickTask('sort receipts', {
+      customTiers: [{ id: 'ct_k3x9q2ab', label: 'Icebox' }],
+    });
+    expect(result.parse).toEqual({ title: 'Sort receipts' });
+  });
+
+  it('renders one prompt line per custom tier', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Pay invoice"}'));
+    await parseQuickTask('pay invoice', {
+      customTiers: [{ id: 'ct_k3x9q2ab', label: 'Icebox' }],
+    });
+    expect(lastCall().system).toContain('· ct_k3x9q2ab — user-defined tier "Icebox"');
+  });
+
   it('uses 320 max tokens and includes a weekday in the datetime line', async () => {
     sendMessageMock.mockResolvedValue(textResult('{"title":"Pay invoice"}'));
     await parseQuickTask('pay invoice tomorrow', {

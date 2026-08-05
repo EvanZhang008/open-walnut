@@ -100,6 +100,10 @@ describe('matchesRetryExhaustion', () => {
     expect(matchesRetryExhaustion('API Error: Request timed out')).toBe(true)
     expect(matchesRetryExhaustion('request TIMED OUT after 10 retries')).toBe(true)
   })
+  it('matches "The operation timed out." (undici/fetch abort text, 2026-07-31 incident)', () => {
+    expect(matchesRetryExhaustion('API Error: The operation timed out.')).toBe(true)
+    expect(matchesRetryExhaustion('the OPERATION timed out')).toBe(true)
+  })
   it('matches the api_timeout debug marker', () => {
     expect(matchesRetryExhaustion('turn ended: api_timeout')).toBe(true)
   })

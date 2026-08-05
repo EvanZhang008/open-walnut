@@ -1,6 +1,6 @@
 /**
  * Tests for journal_recent context source — loads recent diary entries
- * from NOTES_DIR/Areas/Journal/Dairy/YYYY-MM-DD.md
+ * from NOTES_DIR/journal/Dairy/YYYY-MM-DD.md
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fsp from 'node:fs/promises';
@@ -26,7 +26,8 @@ function makeAgentDef(overrides: Partial<AgentDefinition> = {}): AgentDefinition
 }
 
 function diaryDir(): string {
-  return path.join(NOTES_DIR, 'Areas', 'Journal', 'Dairy');
+  // Vault went topic-first 2026-08 (PARA retired): journal/ is top-level now.
+  return path.join(NOTES_DIR, 'journal', 'Dairy');
 }
 
 async function writeDiaryFile(dateStr: string, content: string): Promise<void> {

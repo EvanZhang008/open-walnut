@@ -10,9 +10,17 @@ import {
   BoundedMemoryStore,
   MEMORY_CHAR_BUDGET,
   parseMemoryContent,
+  renderMemoryContent,
+  decodeHtmlArtifacts,
   getBoundedMemory,
 } from '../../src/core/bounded-memory.js';
-import { WALNUT_HOME, MEMORY_FILE } from '../../src/constants.js';
+import {
+  MEMORY_BACKUP_GENERATIONS,
+  atomicWriteSameDir,
+  listMemoryBackups,
+  memoryBackupPath,
+} from '../../src/core/bounded-memory-backup.js';
+import { WALNUT_HOME, MEMORY_FILE, USER_FILE, agentMemoryDir } from '../../src/constants.js';
 
 let store: BoundedMemoryStore;
 
@@ -48,6 +56,202 @@ describe('parseMemoryContent', () => {
   it('does not treat ### deeper headings as entry boundaries', () => {
     const { entries } = parseMemoryContent('## Top\n\n### Sub\ndetail\n');
     expect(entries).toEqual(['## Top\n\n### Sub\ndetail']);
+  });
+
+  it('keeps a "## " line INSIDE the frontmatter fence as preamble', () => {
+    const content = `---\nname: Sample Store\nnote: "## not an entry"\n---\n\n## Real Entry\n\nBody\n`;
+    const { preamble, entries } = parseMemoryContent(content);
+    expect(preamble).toContain('## not an entry');
+    expect(entries).toEqual(['## Real Entry\n\nBody']);
+  });
+});
+
+/**
+ * A markdown WYSIWYG round-trip (markdown-it → HTML → serializer) turns a YAML
+ * frontmatter block into `<hr>` + a setext h2, which serializes back as ONE
+ * `## name: … description: &gt; …` line. That line must never be mistaken for a
+ * memory entry: it would eat budget, be a replace/remove target, and get
+ * injected into the system prompt as if it were a user rule.
+ */
+describe('parseMemoryContent — collapsed frontmatter (WYSIWYG round-trip rot)', () => {
+  /** The mangled shape, with invented neutral YAML values. */
+  const MANGLED = [
+    '---',
+    '',
+    '## name: Sample Store description: &gt; Placeholder description for the fixture.',
+    '',
+    '# SAMPLE.md — Sample',
+    '',
+    '## Alpha Rule',
+    '',
+    'Body alpha.',
+    '',
+    '## Beta Rule',
+    '',
+    'Body beta.',
+    '',
+  ].join('\n');
+
+  it('treats the collapsed frontmatter heading as preamble, not an entry', () => {
+    const { preamble, entries } = parseMemoryContent(MANGLED);
+    expect(entries).toEqual(['## Alpha Rule\n\nBody alpha.', '## Beta Rule\n\nBody beta.']);
+    expect(entries.some((e) => e.startsWith('## name:'))).toBe(false);
+    expect(preamble).toContain('## name: Sample Store');
+    expect(preamble).toContain('# SAMPLE.md — Sample');
+  });
+
+  it('charges the budget only for real entries (frontmatter excluded)', () => {
+    const { entries } = parseMemoryContent(MANGLED);
+    const used = entries.join('\n\n').length;
+    // '## Alpha Rule\n\nBody alpha.' = 26, '## Beta Rule\n\nBody beta.' = 24, join = 2
+    expect(used).toBe(26 + 2 + 24);
+  });
+
+  it('parses a mangled and a healthy file to the SAME entries and budget', () => {
+    const healthy = [
+      '---',
+      'name: Sample Store',
+      'description: >',
+      '  Placeholder description for the fixture.',
+      '---',
+      '',
+      '# SAMPLE.md — Sample',
+      '',
+      '## Alpha Rule',
+      '',
+      'Body alpha.',
+      '',
+      '## Beta Rule',
+      '',
+      'Body beta.',
+      '',
+    ].join('\n');
+    expect(parseMemoryContent(MANGLED).entries).toEqual(parseMemoryContent(healthy).entries);
+  });
+
+  it('render heals the collapsed header and un-escapes HTML artifacts', () => {
+    const { preamble, entries } = parseMemoryContent(MANGLED);
+    const rendered = renderMemoryContent(preamble, entries);
+    expect(rendered).not.toContain('&gt;');
+    expect(rendered).not.toMatch(/^## name:/m);
+    expect(rendered).toMatch(/^---\nname: /);
+    // The real preamble content survives; entries are untouched.
+    expect(rendered).toContain('# SAMPLE.md — Sample');
+    expect(rendered).toContain('## Alpha Rule\n\nBody alpha.');
+  });
+
+  it('round-trips stably: parse → render → parse yields the same entries', () => {
+    const first = parseMemoryContent(MANGLED);
+    const rendered = renderMemoryContent(first.preamble, first.entries);
+    const second = parseMemoryContent(rendered);
+    expect(second.entries).toEqual(first.entries);
+    // And render is idempotent from the healed state (no further drift).
+    expect(renderMemoryContent(second.preamble, second.entries)).toBe(rendered);
+  });
+
+  it('leaves a healthy preamble byte-identical through render (no needless rewrite)', () => {
+    const healthy = `---\nname: Sample Store\n---\n\n# SAMPLE.md\n\n## Alpha Rule\n\nBody alpha.\n`;
+    const { preamble, entries } = parseMemoryContent(healthy);
+    expect(renderMemoryContent(preamble, entries)).toBe(healthy);
+  });
+
+  it('does NOT misclassify a legitimate one-colon entry title as frontmatter', () => {
+    // Real entries whose titles contain a colon must survive — a false positive
+    // here would silently DELETE a user memory on the next write.
+    const content = [
+      '---',
+      'name: Sample Store',
+      '---',
+      '',
+      '# SAMPLE.md',
+      '',
+      '## Language: Neutral',
+      '',
+      'Body one.',
+      '',
+      '## Routing: Somewhere',
+      '',
+      'Body two.',
+      '',
+    ].join('\n');
+    const { entries } = parseMemoryContent(content);
+    expect(entries).toEqual(['## Language: Neutral\n\nBody one.', '## Routing: Somewhere\n\nBody two.']);
+    // Survives a render round-trip too.
+    const { preamble } = parseMemoryContent(content);
+    expect(parseMemoryContent(renderMemoryContent(preamble, entries)).entries).toEqual(entries);
+  });
+
+  it('does not swallow a body that merely starts with an hr', () => {
+    const content = '---\n\n## Alpha Rule\n\nBody alpha.\n';
+    const { entries } = parseMemoryContent(content);
+    expect(entries).toEqual(['## Alpha Rule\n\nBody alpha.']);
+  });
+
+  it('decodeHtmlArtifacts peels exactly one entity layer', () => {
+    expect(decodeHtmlArtifacts('a &gt; b &lt; c')).toBe('a > b < c');
+    expect(decodeHtmlArtifacts('&amp;gt;')).toBe('&gt;');
+    expect(decodeHtmlArtifacts('no entities')).toBe('no entities');
+  });
+});
+
+describe('store reads with collapsed frontmatter on disk', () => {
+  it('does not count the collapsed header toward usage and heals it on write', async () => {
+    await fsp.writeFile(
+      MEMORY_FILE,
+      [
+        '---',
+        '',
+        '## name: Sample Store description: &gt; Placeholder description for the fixture.',
+        '',
+        '# SAMPLE.md — Sample',
+        '',
+        '## Alpha Rule',
+        '',
+        'Body alpha.',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const snap = await store.read();
+    expect(snap.entries).toEqual(['## Alpha Rule\n\nBody alpha.']);
+    expect(snap.usedChars).toBe('## Alpha Rule\n\nBody alpha.'.length);
+
+    // The prompt block must not carry the frontmatter line either.
+    const prompt = store.renderForPrompt();
+    expect(prompt).not.toContain('## name:');
+    expect(prompt).not.toContain('&gt;');
+
+    // A normal write heals the header without touching the existing entry.
+    const res = await store.add(entry('Beta Rule'));
+    expect(res.success).toBe(true);
+    const onDisk = await fsp.readFile(MEMORY_FILE, 'utf-8');
+    expect(onDisk).not.toContain('&gt;');
+    expect(onDisk).not.toMatch(/^## name:/m);
+    expect(onDisk).toContain('## Alpha Rule\n\nBody alpha.');
+    expect(onDisk).toContain('# SAMPLE.md — Sample');
+    expect(parseMemoryContent(onDisk).entries).toHaveLength(2);
+  });
+
+  it('cannot target the collapsed header with replace/remove', async () => {
+    await fsp.writeFile(
+      MEMORY_FILE,
+      [
+        '---',
+        '',
+        '## name: Sample Store description: &gt; Placeholder description for the fixture.',
+        '',
+        '# SAMPLE.md — Sample',
+        '',
+        '## Alpha Rule',
+        '',
+        'Body alpha.',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+    const res = await store.remove('name: Sample Store');
+    expect(res.success).toBe(false);
   });
 });
 
@@ -368,5 +572,218 @@ describe('multi-process safety', () => {
     const snap = await store.read();
     expect(snap.entries).toHaveLength(3);
     expect(snap.entries.some((e) => e.includes('External'))).toBe(true);
+  });
+});
+
+// ── Pre-write backups (bounded-memory-backup.ts) ──
+
+describe('pre-write backups', () => {
+  const bak = (gen: number) => memoryBackupPath(MEMORY_FILE, gen);
+
+  it('does not create a backup on the very first write (nothing to lose)', async () => {
+    expect((await store.add(entry('First'))).success).toBe(true);
+    expect(listMemoryBackups(MEMORY_FILE)).toEqual([]);
+  });
+
+  it('snapshots the PREVIOUS content, not the new content', async () => {
+    await store.add(entry('Rule A', 'original body'));
+    await store.add(entry('Rule B', 'second body'));
+
+    const snapshot = fs.readFileSync(bak(1), 'utf-8');
+    expect(snapshot).toContain('original body');
+    // The snapshot is the pre-write state — it must NOT contain the new entry.
+    expect(snapshot).not.toContain('second body');
+    // ...while the live file has both.
+    const live = fs.readFileSync(MEMORY_FILE, 'utf-8');
+    expect(live).toContain('original body');
+    expect(live).toContain('second body');
+  });
+
+  it('makes a destructive replace fully recoverable', async () => {
+    await store.add(entry('Keep me', 'valuable knowledge worth keeping'));
+    await store.add(entry('Anchor', 'anchor body'));
+
+    // The accident: a replace that swallows the valuable entry.
+    const res = await store.replace('valuable knowledge worth keeping', entry('Oops', 'tiny'));
+    expect(res.success).toBe(true);
+    expect((await store.read()).entries.some((e) => e.includes('valuable knowledge'))).toBe(false);
+
+    // Rollback = copy the snapshot back over the file.
+    fs.writeFileSync(MEMORY_FILE, fs.readFileSync(bak(1), 'utf-8'), 'utf-8');
+    const restored = await store.read();
+    expect(restored.entries).toHaveLength(2);
+    expect(restored.entries.some((e) => e.includes('valuable knowledge worth keeping'))).toBe(true);
+  });
+
+  it('makes a destructive batch fully recoverable', async () => {
+    await store.add(entry('One', 'body one'));
+    await store.add(entry('Two', 'body two'));
+    await store.add(entry('Three', 'body three'));
+
+    // Wipe everything and leave a single entry behind.
+    const res = await store.applyBatch([
+      { action: 'remove', oldText: 'body one' },
+      { action: 'remove', oldText: 'body two' },
+      { action: 'remove', oldText: 'body three' },
+      { action: 'add', content: entry('Replacement', 'all that survived') },
+    ]);
+    expect(res.success).toBe(true);
+    expect((await store.read()).entries).toHaveLength(1);
+
+    fs.writeFileSync(MEMORY_FILE, fs.readFileSync(bak(1), 'utf-8'), 'utf-8');
+    const restored = await store.read();
+    expect(restored.entries).toHaveLength(3);
+    expect(restored.entries.map((e) => e.split('\n')[0])).toEqual(['## One', '## Two', '## Three']);
+  });
+
+  it('keeps MEMORY_BACKUP_GENERATIONS rolling generations, newest first', async () => {
+    // N+2 writes: the first leaves no snapshot, so N+1 snapshots are offered
+    // and the oldest must be evicted.
+    for (let i = 0; i < MEMORY_BACKUP_GENERATIONS + 2; i++) {
+      expect((await store.add(entry(`Rule ${i}`, `body ${i}`))).success).toBe(true);
+    }
+
+    expect(listMemoryBackups(MEMORY_FILE)).toHaveLength(MEMORY_BACKUP_GENERATIONS);
+    expect(fs.existsSync(memoryBackupPath(MEMORY_FILE, MEMORY_BACKUP_GENERATIONS + 1))).toBe(false);
+
+    // Generation 1 = state before the newest write (has all but the last entry).
+    const newest = fs.readFileSync(bak(1), 'utf-8');
+    expect(newest).toContain(`body ${MEMORY_BACKUP_GENERATIONS}`);
+    expect(newest).not.toContain(`body ${MEMORY_BACKUP_GENERATIONS + 1}`);
+
+    // Strictly older as the generation number grows, and the very first state
+    // (only "Rule 0") has aged out of the ring.
+    const oldest = fs.readFileSync(bak(MEMORY_BACKUP_GENERATIONS), 'utf-8');
+    expect(oldest.length).toBeLessThan(newest.length);
+    expect(oldest).toContain('body 1');
+    expect(fs.readFileSync(bak(MEMORY_BACKUP_GENERATIONS), 'utf-8')).not.toBe(newest);
+  });
+
+  it('does not let no-op writes evict real history (identical snapshots dedup)', async () => {
+    await store.add(entry('Real', 'real body'));
+    await store.add(entry('Second', 'second body')); // creates generation 1
+
+    // Idempotent duplicate adds still funnel through mutate() and "succeed",
+    // rewriting identical bytes. They must not consume generations.
+    for (let i = 0; i < MEMORY_BACKUP_GENERATIONS + 3; i++) {
+      expect((await store.add(entry('Second', 'second body'))).success).toBe(true);
+    }
+
+    expect(listMemoryBackups(MEMORY_FILE)).toHaveLength(1);
+    expect(fs.readFileSync(bak(1), 'utf-8')).toContain('real body');
+    expect(fs.readFileSync(bak(1), 'utf-8')).not.toContain('second body');
+  });
+
+  it('a failed backup never blocks or corrupts the real write', async () => {
+    await store.add(entry('Rule A', 'body A'));
+
+    // Make the filesystem refuse the snapshot write only — the real memory
+    // write must still go through untouched.
+    const realWriteFile = fsp.writeFile.bind(fsp);
+    const spy = vi.spyOn(fsp, 'writeFile').mockImplementation(async (target: never, ...rest: never[]) => {
+      if (String(target).includes('.bak.')) throw new Error('EACCES simulated');
+      return realWriteFile(target, ...(rest as [never]));
+    });
+
+    let res: Awaited<ReturnType<typeof store.add>>;
+    try {
+      res = await store.add(entry('Rule B', 'body B'));
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(res.success).toBe(true);
+    if (res.success) expect(res.entryCount).toBe(2);
+
+    // The write landed in full despite the backup failing, and the failed
+    // snapshot left nothing behind to confuse a later reader.
+    const live = fs.readFileSync(MEMORY_FILE, 'utf-8');
+    expect(live).toContain('body A');
+    expect(live).toContain('body B');
+    expect(listMemoryBackups(MEMORY_FILE)).toEqual([]);
+    expect(fs.readdirSync(path.dirname(MEMORY_FILE)).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('writes backups for a per-agent store, next to that agent\'s memory file', async () => {
+    const agentStore = new BoundedMemoryStore('marina');
+    const agentFile = path.join(agentMemoryDir('marina'), 'MEMORY.md');
+
+    await agentStore.add(entry('Agent rule', 'agent body one'));
+    await agentStore.add(entry('Agent rule 2', 'agent body two'));
+
+    const agentBaks = listMemoryBackups(agentFile);
+    expect(agentBaks).toHaveLength(1);
+    expect(path.dirname(agentBaks[0])).toBe(path.dirname(agentFile));
+    expect(fs.readFileSync(agentBaks[0], 'utf-8')).toContain('agent body one');
+    // The global store is untouched by a per-agent write.
+    expect(listMemoryBackups(MEMORY_FILE)).toEqual([]);
+  });
+
+  it('backs up the user profile store independently of global memory', async () => {
+    const userStore = new BoundedMemoryStore(undefined, 'user');
+    await userStore.add(entry('Identity', 'profile body one'));
+    await userStore.add(entry('Preference', 'profile body two'));
+
+    expect(listMemoryBackups(USER_FILE)).toHaveLength(1);
+    expect(fs.readFileSync(memoryBackupPath(USER_FILE, 1), 'utf-8')).toContain('profile body one');
+    expect(listMemoryBackups(MEMORY_FILE)).toEqual([]);
+  });
+
+  it('snapshot names never end in .md, so markdown walkers cannot pick them up', async () => {
+    await store.add(entry('A'));
+    await store.add(entry('B'));
+    const names = fs.readdirSync(path.dirname(MEMORY_FILE));
+    expect(names.filter((n) => n.endsWith('.md'))).toEqual(['MEMORY.md']);
+    expect(names.some((n) => /\.bak\.\d+$/.test(n))).toBe(true);
+  });
+});
+
+describe('atomic writes stay on the same filesystem (EXDEV)', () => {
+  it('renames only within the target directory, and leaves no temp files behind', async () => {
+    const renames: Array<[string, string]> = [];
+    const realRename = fsp.rename.bind(fsp);
+    const spy = vi
+      .spyOn(fsp, 'rename')
+      .mockImplementation(async (from: never, to: never) => {
+        renames.push([String(from), String(to)]);
+        return realRename(from, to);
+      });
+
+    try {
+      await store.add(entry('A', 'body A'));
+      await store.add(entry('B', 'body B')); // second write also rotates a backup
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(renames.length).toBeGreaterThan(0);
+    // Every rename source must sit in the same directory as its destination —
+    // a cross-device rename fails with EXDEV (a temp under the OS tmpdir would).
+    for (const [from, to] of renames) {
+      expect(path.dirname(from)).toBe(path.dirname(to));
+      expect(path.dirname(from)).toBe(path.dirname(MEMORY_FILE));
+    }
+    expect(fs.readdirSync(path.dirname(MEMORY_FILE)).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('atomicWriteSameDir cleans up its temp file when the rename fails', async () => {
+    const target = path.join(path.dirname(MEMORY_FILE), 'atomic-probe.txt');
+    const spy = vi.spyOn(fsp, 'rename').mockRejectedValue(new Error('EXDEV simulated'));
+    try {
+      await expect(atomicWriteSameDir(target, 'content')).rejects.toThrow('EXDEV simulated');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(fs.readdirSync(path.dirname(MEMORY_FILE)).filter((n) => n.includes('atomic-probe'))).toEqual([]);
+  });
+
+  it('the backup module never stages temp files outside the target directory', async () => {
+    const source = await fsp.readFile(
+      new URL('../../src/core/bounded-memory-backup.ts', import.meta.url),
+      'utf-8',
+    );
+    // Regression guard: a "cleanup" that moves staging to os.tmpdir() would
+    // reintroduce the EXDEV failure this repo has already been bitten by.
+    expect(source).not.toMatch(/os\.tmpdir|mkdtemp|['"]\/tmp/);
   });
 });

@@ -252,7 +252,7 @@ describe('loadContextSources', () => {
     const result = await loadContextSources(agent, { taskId: task.id });
 
     expect(result).toContain('<project_memory>');
-    expect(result).toContain('no project memory yet');
+    expect(result).toContain('no legacy project memory for this project');
   });
 
   it('handles session_history without sessionId', async () => {

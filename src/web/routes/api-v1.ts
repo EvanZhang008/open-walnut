@@ -810,13 +810,51 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
     const { readSessionTranscript, exportSessionTranscripts, buildSessionTranscript } = await import('../../core/session-projection.js')
     const sessionId = paramStr(req.params.id)
     const wantFresh = req.query.fresh === '1'
-    if (wantFresh && !CLOUD_MODE && /^[A-Za-z0-9_-]+$/.test(sessionId)) {
+    // Same safe-id alphabet readSessionTranscript enforces (ids land in filenames).
+    const safeId = /^[A-Za-z0-9_-]+$/.test(sessionId)
+    // Just-created session (record seeded, CLI not spawned yet — no pid, no
+    // outputFile): there is nothing to read, so answer 200-empty immediately.
+    // Without this, the non-fresh read 404s AND triggers a pointless full
+    // transcript sweep (~350ms), and fresh=1 burns ~400ms scanning for a JSONL
+    // that doesn't exist — the mobile app polls this exact window right after
+    // POST /sessions.
+    //
+    // Why ALL THREE record conditions: a successful spawn writes pid/outputFile
+    // but NEVER rewrites status_reason — 'awaiting_spawn' lingers on the record
+    // until the first turn completes. Gating on status_reason alone would keep
+    // serving 200-empty over a live, growing transcript for the whole first
+    // turn; pid==null && !outputFile is the earliest visible spawn signal and
+    // the real disengage latch.
+    //
+    // Why the grace window: the persist that records pid/outputFile can fail
+    // (logged as CRITICAL in claude-code-session) with the CLI alive and
+    // writing JSONL — an unbounded short-circuit would mask that real
+    // transcript forever. After the window we fall through to the real read
+    // paths; the health monitor's orphan sweep also flips a truly dead pid-less
+    // row to 'stopped' on the same clock (ORPHAN_GRACE_MS), so a wedged record
+    // stops matching either way. NOT gated to primary-only by accident:
+    // CLOUD_MODE replicas have no session DB to consult and can't create
+    // sessions, so the pre-spawn window doesn't exist there.
+    if (!CLOUD_MODE && safeId) {
+      const SPAWN_GRACE_MS = 2 * 60 * 1000
+      const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
+      const record = await getSessionByClaudeId(sessionId)
+      if (record && record.status_reason === 'awaiting_spawn' && record.pid == null && !record.outputFile
+          && record.process_status === 'idle' // seed value; a died-before-spawn record is 'stopped'
+          && Date.now() - new Date(record.last_status_change ?? record.startedAt ?? 0).getTime() < SPAWN_GRACE_MS) {
+        // Keep this shape in sync with buildSessionTranscript's SessionTranscript
+        // output — the iOS client decodes it strictly.
+        res.json({ version: 1, sessionId, exportedAt: new Date().toISOString(), truncated: false, messages: [] })
+        return
+      }
+    }
+    if (wantFresh && !CLOUD_MODE && safeId) {
       try {
         res.json(await buildSessionTranscript(sessionId))
         return
       } catch { /* unreachable session — fall back to the exported file */ }
     }
-    if (wantFresh && CLOUD_MODE && /^[A-Za-z0-9_-]+$/.test(sessionId)) {
+    if (wantFresh && CLOUD_MODE && safeId) {
       // Cloud fresh path: read the live jsonl over the daemon bridge. Falls
       // back to the git-synced file on any failure (bridge down, unknown sid).
       try {

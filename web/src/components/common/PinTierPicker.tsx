@@ -10,6 +10,7 @@
 
 import { PIN_TIER_POLICY } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
+import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 
 interface Props {
   value: FocusTier | undefined;
@@ -21,6 +22,8 @@ interface Props {
 }
 
 export function PinTierPicker({ value, onChange, label, disabled }: Props) {
+  // Safe variant: renders fine outside the FocusBarProvider (degrades to built-ins only).
+  const customTiers = useFocusBarContextSafe()?.customTiers ?? [];
   return (
     <div className="pin-tier-options" role="group" aria-label="Pin new task to tier">
       {label && <span className="pin-tier-label">{label}</span>}
@@ -44,6 +47,22 @@ export function PinTierPicker({ value, onChange, label, disabled }: Props) {
             aria-pressed={active}
           >
             {t.label}
+          </button>
+        );
+      })}
+      {customTiers.map((ct) => {
+        const active = value === ct.id;
+        return (
+          <button
+            key={ct.id}
+            type="button"
+            className={`pin-tier-btn pin-tier-custom${active ? ' active' : ''}`}
+            disabled={disabled}
+            onClick={() => onChange(active ? undefined : ct.id)}
+            title={`Custom tier "${ct.label}"${active ? ' (click to unpin)' : ''}`}
+            aria-pressed={active}
+          >
+            {ct.label}
           </button>
         );
       })}

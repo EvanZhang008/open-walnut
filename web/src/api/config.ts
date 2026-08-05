@@ -89,6 +89,47 @@ export async function fetchProviders(): Promise<Record<string, ProviderStatus>> 
   return res.providers;
 }
 
+// ── Credential resolution trace (Bedrock transparency panel) ──
+
+export interface CredentialTraceStep {
+  step: number;
+  owner: 'walnut' | 'claude-code' | 'shell-env' | 'aws-cli';
+  source: string;
+  location: string;
+  checkedFor: string[];
+  outcome: 'won' | 'empty' | 'not-reached';
+  found?: { method: string; detail?: string; keyHint?: string; value?: string };
+}
+
+export interface CredentialTrace {
+  steps: CredentialTraceStep[];
+  winner: {
+    source: string;
+    method: string | null;
+    detail?: string;
+    keyHint?: string;
+    profile?: string;
+    credentialExportCmd?: string;
+    region?: string;
+  };
+  region: { value: string; source: string };
+}
+
+export interface CredentialVerify {
+  status: 'valid' | 'invalid' | 'unverifiable' | 'skipped';
+  arn?: string;
+  account?: string;
+  expiration?: string;
+  error?: string;
+  latencyMs: number;
+}
+
+export async function fetchCredentialTrace(verify = false): Promise<{ trace: CredentialTrace; verify?: CredentialVerify }> {
+  return apiGet<{ trace: CredentialTrace; verify?: CredentialVerify }>(
+    `/api/config/credential-trace${verify ? '?verify=1' : ''}`,
+  );
+}
+
 export async function testProvider(
   providerName: string,
   providerConfig?: { api: string; api_key?: string; base_url?: string; region?: string; bearer_token?: string },

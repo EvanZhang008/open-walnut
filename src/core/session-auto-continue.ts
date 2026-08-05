@@ -39,8 +39,13 @@ import { log } from '../logging/index.js'
 // "Request timed out"; the `--debug` trace marks the same event `api_timeout`.
 // Both are the SAME underlying failure, so matching either on the result text is
 // sufficient and needs no remote debug-file read.
+// "The operation timed out." is the undici/fetch AbortSignal timeout text the CLI
+// passes through verbatim ("API Error: The operation timed out.") — observed
+// 2026-07-31 on clouddev sessions; same terminal retry-exhaustion failure, so it
+// must trigger auto-continue too.
 const RETRY_EXHAUSTION_PATTERNS: RegExp[] = [
   /request timed out/i,
+  /operation timed out/i,
   /\bapi_timeout\b/i,
 ]
 

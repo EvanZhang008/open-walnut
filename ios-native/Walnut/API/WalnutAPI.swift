@@ -102,6 +102,42 @@ struct WalnutAPI {
         try await get("/sessions")
     }
 
+    /// Hosts + frequent working dirs for the New Session sheet. Throws
+    /// APIError.server with code "not_supported_cloud" (503) on a REPLICA —
+    /// creation is a primary-box capability.
+    func sessionLaunchOptions() async throws -> SessionLaunchOptions {
+        try await get("/sessions/launch-options")
+    }
+
+    /// Create a Claude Code session on the chosen host + path. `host` "" or
+    /// nil = the primary box (Mac). `taskId` links the session to an existing
+    /// task instead of creating a new one. Empty `message` = spawn idle.
+    /// `mode` = permission mode (bypass/accept/default/plan); nil = server
+    /// default (bypass — same as the web launcher).
+    func createSession(
+        cwd: String, host: String? = nil, message: String = "",
+        taskId: String? = nil, mode: String? = nil
+    ) async throws -> SessionCreated {
+        struct Body: Encodable {
+            let cwd: String
+            let host: String?
+            let message: String
+            let taskId: String?
+            let mode: String?
+        }
+        return try await send(
+            "POST", "/sessions",
+            body: Body(
+                cwd: cwd,
+                host: (host?.isEmpty ?? true) ? nil : host,
+                message: message,
+                taskId: taskId,
+                mode: mode
+            ),
+            timeout: 60
+        )
+    }
+
     /// Transcript tail for one session (404 = no tail exported yet).
     /// `fresh: true` asks the primary to read the session's history right now
     /// (live view polling) instead of the 60s-throttled sweep file.
@@ -132,7 +168,13 @@ struct WalnutAPI {
     /// whisper model load plus a 60s clip can take a while.
     func transcribe(audio: Data, format: String, language: String? = nil) async throws -> String {
         struct Result: Codable { let text: String }
-        var body: [String: String] = ["audio": audio.base64EncodedString(), "format": format]
+        // Base64 of up to 90s of audio off the MainActor (same rule as image
+        // payloads): the caller is a @MainActor recorder, so encoding inline
+        // blocked the UI for the whole encode of a multi-MB buffer.
+        let encoded = await Task.detached(priority: .userInitiated) {
+            audio.base64EncodedString()
+        }.value
+        var body: [String: String] = ["audio": encoded, "format": format]
         if let language { body["language"] = language }
         let result: Result = try await sendAbsolute(
             "POST", "/api/v1/stt/transcribe", body: body, timeout: 120
@@ -217,8 +259,13 @@ struct WalnutAPI {
         request.httpMethod = "POST"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body = AttachmentUploadBody(notePath: notePath, data: data.base64EncodedString(), mediaType: mediaType)
-        request.httpBody = try JSONEncoder().encode(body)
+        // Base64 + JSON encode off the MainActor — callers are editor views.
+        request.httpBody = try await Task.detached(priority: .userInitiated) {
+            let body = AttachmentUploadBody(
+                notePath: notePath, data: data.base64EncodedString(), mediaType: mediaType
+            )
+            return try JSONEncoder().encode(body)
+        }.value
 
         let (responseData, response) = try await perform(request)
         guard let http = response as? HTTPURLResponse else { throw APIError.badResponse }

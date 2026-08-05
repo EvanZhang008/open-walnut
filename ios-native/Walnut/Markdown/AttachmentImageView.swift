@@ -18,25 +18,82 @@ private enum AttachmentLimits {
 
 /// Stops oversized responses at the headers or as soon as a lying/absent
 /// Content-Length crosses the byte cap, before a giant Data is materialized.
-private final class CappedDownloadDelegate: NSObject, URLSessionDataDelegate {
+///
+/// Cancellable and time-boxed: a 30MB download over a wedged connection used to
+/// be unstoppable — `withCheckedContinuation` has no cancellation handler, so
+/// the enclosing Task's cancellation (view dismissed, `.task(id:)` re-keyed,
+/// store torn down) did nothing, and with `timeoutIntervalForRequest` at the
+/// default 60s the delegate could sit on the socket long after the UI that
+/// wanted the bytes was gone. Now the URLSessionTask is cancelled on Task
+/// cancellation, and an outer deadline caps the whole fetch regardless.
+private final class CappedDownloadDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let maxBytes: Int
+    private let lock = NSLock()
     private var continuation: CheckedContinuation<(Data, HTTPURLResponse)?, Never>?
     private var response: HTTPURLResponse?
     private var buffer = Data()
     private var session: URLSession?
+    private var dataTask: URLSessionDataTask?
     private var finished = false
+
+    /// Whole-fetch deadline. Independent of URLSession's per-hop timeouts: a
+    /// server that trickles bytes forever resets those and never trips them.
+    private static let overallTimeout: TimeInterval = 60
 
     init(maxBytes: Int) {
         self.maxBytes = maxBytes
     }
 
     func fetch(_ request: URLRequest) async -> (Data, HTTPURLResponse)? {
-        await withCheckedContinuation { continuation in
-            self.continuation = continuation
-            let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
-            self.session = session
-            session.dataTask(with: request).resume()
+        let result: (Data, HTTPURLResponse)? = await withTaskGroup(
+            of: (Data, HTTPURLResponse)?.self
+        ) { group in
+            group.addTask { await self.run(request) }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(Self.overallTimeout))
+                // Deadline hit (or the group was cancelled): tear the transfer
+                // down so the other child returns promptly.
+                self.abort()
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            self.abort()
+            return first
         }
+        return result
+    }
+
+    private func run(_ request: URLRequest) async -> (Data, HTTPURLResponse)? {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                lock.lock()
+                guard !finished else {
+                    lock.unlock()
+                    continuation.resume(returning: nil)
+                    return
+                }
+                self.continuation = continuation
+                let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+                self.session = session
+                let task = session.dataTask(with: request)
+                self.dataTask = task
+                lock.unlock()
+                task.resume()
+            }
+        } onCancel: {
+            abort()
+        }
+    }
+
+    /// Cancel the transfer and settle the continuation. Safe to call repeatedly
+    /// and from any thread (cancellation handlers run off the caller's context).
+    private func abort() {
+        lock.lock()
+        let task = dataTask
+        lock.unlock()
+        task?.cancel()
+        finish(nil)
     }
 
     func urlSession(
@@ -60,37 +117,54 @@ private final class CappedDownloadDelegate: NSObject, URLSessionDataDelegate {
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        guard data.count <= maxBytes - buffer.count else {
+        lock.lock()
+        let overflow = data.count > maxBytes - buffer.count
+        if !overflow { buffer.append(data) }
+        lock.unlock()
+        if overflow {
             dataTask.cancel()
             finish(nil)
-            return
         }
-        buffer.append(data)
     }
 
     func urlSession(
         _ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?
     ) {
+        lock.lock()
+        let response = self.response
+        let payload = buffer
+        lock.unlock()
         guard error == nil, let response else {
             finish(nil)
             return
         }
-        finish((buffer, response))
+        finish((payload, response))
     }
 
     private func finish(_ value: (Data, HTTPURLResponse)?) {
-        guard !finished else { return }
+        lock.lock()
+        guard !finished else { lock.unlock(); return }
         finished = true
+        let continuation = self.continuation
+        self.continuation = nil
+        let session = self.session
+        self.session = nil
+        dataTask = nil
+        lock.unlock()
         continuation?.resume(returning: value)
-        continuation = nil
         session?.invalidateAndCancel()
-        session = nil
     }
 }
 
 /// Which session's images we're currently rendering — lets the media endpoint
 /// route a remote-host fetch (the cloud box needs to know WHICH daemon holds
 /// the file). Set by SessionConversationView on appear, cleared on disappear.
+///
+/// This is a single mutable global, so it is only ever safe to read at the
+/// MOMENT a load is requested, on the MainActor. `AttachmentLoader.image(for:)`
+/// snapshots it into a scope key and passes that down; nothing inside a detached
+/// task may read it, or a fast navigation between two sessions would resolve the
+/// URL for whichever session happened to be current when the task got scheduled.
 @MainActor
 enum MediaContext {
     static var currentSessionID: String?
@@ -114,8 +188,32 @@ final class AttachmentLoader {
         return base.appendingPathComponent("WalnutAttachments", isDirectory: true)
     }
 
-    private func diskURL(for raw: String) -> URL {
-        let safe = raw.replacingOccurrences(of: "/", with: "_")
+    /// Cache identity = (scope, path), NOT path alone.
+    ///
+    /// The same absolute path (`/tmp/screenshot.png`, `~/out.png`) exists on
+    /// EVERY exec host, and GET /api/v1/media resolves it against whichever
+    /// session was passed. Keying on the raw path made the first session's bytes
+    /// answer every later session's request for the same path — a chat image
+    /// showing up inside an unrelated session, and vice versa. Scope is the
+    /// session id captured when the load was requested ("chat" for the chat tab
+    /// and for vault attachments, which are host-independent).
+    private static func scope(for raw: String, sessionID: String?) -> String {
+        // Absolute paths are the host-dependent ones; http(s) URLs and
+        // vault-relative names resolve identically everywhere.
+        guard raw.hasPrefix("/") else { return "chat" }
+        return sessionID?.isEmpty == false ? sessionID! : "chat"
+    }
+
+    private static func cacheKey(_ raw: String, scope: String) -> String {
+        "\(scope)\u{1}\(raw)"
+    }
+
+    private func diskURL(for key: String) -> URL {
+        // `:` and `/` both appear in session ids and paths — flatten both.
+        let safe = key
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "\u{1}", with: "~")
+            .replacingOccurrences(of: ":", with: "-")
         return diskDirectory.appendingPathComponent(safe)
     }
 
@@ -124,13 +222,15 @@ final class AttachmentLoader {
     /// Walnut box) go through /api/v1/media, vault-relative names through the
     /// notes attachment endpoint. Wrong routing was why chat pictures never
     /// rendered — every path was tried against the notes vault and 404ed.
-    private static func resolvedURL(for raw: String) -> (url: URL, needsAuth: Bool)? {
+    /// `sessionID` is captured by the CALLER at request time — never read from
+    /// MediaContext in here, see that type's comment.
+    private static func resolvedURL(for raw: String, sessionID: String?) -> (url: URL, needsAuth: Bool)? {
         if raw.hasPrefix("http://") || raw.hasPrefix("https://") {
             guard let url = URL(string: raw) else { return nil }
             return (url, false)
         }
         if raw.hasPrefix("/") {
-            guard let url = WalnutAPI.mediaURL(absolutePath: raw, sessionID: MediaContext.currentSessionID) else { return nil }
+            guard let url = WalnutAPI.mediaURL(absolutePath: raw, sessionID: sessionID) else { return nil }
             return (url, true)
         }
         guard let url = WalnutAPI.attachmentURL(rawPath: raw) else { return nil }
@@ -138,19 +238,27 @@ final class AttachmentLoader {
     }
 
     func image(for raw: String) async -> UIImage? {
-        if let cached = memory.object(forKey: raw as NSString) { return cached }
-        if let running = inflight[raw] { return await running.value }
+        // Snapshot the routing context HERE, on the MainActor, at request time.
+        let sessionID = MediaContext.currentSessionID
+        let scope = Self.scope(for: raw, sessionID: sessionID)
+        let key = Self.cacheKey(raw, scope: scope)
 
-        let resolved = Self.resolvedURL(for: raw)
+        if let cached = memory.object(forKey: key as NSString) { return cached }
+        // Inflight dedup is scoped too: two sessions asking for the same path
+        // concurrently are two DIFFERENT fetches, and sharing one task handed
+        // the second session the first one's bytes.
+        if let running = inflight[key] { return await running.value }
+
+        let resolved = Self.resolvedURL(for: raw, sessionID: sessionID)
         let token = resolved?.needsAuth == true ? AppConfig.token : nil
-        let task = Task.detached(priority: .userInitiated) { [diskURL = diskURL(for: raw), diskDirectory] in
+        let task = Task.detached(priority: .userInitiated) { [diskURL = diskURL(for: key), diskDirectory] in
             await Self.loadImage(resolved: resolved, token: token, diskURL: diskURL, diskDirectory: diskDirectory)
         }
-        inflight[raw] = task
+        inflight[key] = task
         let image = await task.value
-        inflight[raw] = nil
+        inflight[key] = nil
         if let image {
-            memory.setObject(image, forKey: raw as NSString, cost: Self.decodedCost(image))
+            memory.setObject(image, forKey: key as NSString, cost: Self.decodedCost(image))
         }
         return image
     }
@@ -158,10 +266,12 @@ final class AttachmentLoader {
     /// Seed the cache with an image the caller just uploaded, so the editor's
     /// placeholder resolves instantly instead of round-tripping the fetch.
     func seed(_ image: UIImage, for raw: String) {
-        memory.setObject(image, forKey: raw as NSString, cost: Self.decodedCost(image))
+        let scope = Self.scope(for: raw, sessionID: MediaContext.currentSessionID)
+        let key = Self.cacheKey(raw, scope: scope)
+        memory.setObject(image, forKey: key as NSString, cost: Self.decodedCost(image))
         guard let data = image.jpegData(compressionQuality: 0.9) else { return }
         let directory = diskDirectory
-        let url = diskURL(for: raw)
+        let url = diskURL(for: key)
         Task.detached(priority: .utility) {
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try? data.write(to: url, options: .atomic)
@@ -191,9 +301,19 @@ final class AttachmentLoader {
     }
 
     private nonisolated static func downsample(_ data: Data) -> UIImage? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              sourcePixelCount(source) <= AttachmentLimits.maxSourcePixels
-        else { return nil }
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        switch sourcePixelCount(source) {
+        case .known(let pixels) where pixels > AttachmentLimits.maxSourcePixels:
+            // Genuinely pathological (decompression bomb) — refuse before any
+            // raster exists.
+            return nil
+        case .known, .unknown:
+            break
+        }
+        // `.unknown` (container without pixel-dimension metadata) falls through
+        // deliberately: rejecting it made perfectly ordinary images permanently
+        // unloadable, and the thumbnail request below is already pixel-bounded
+        // by `decodeMaxPixelSize`, so the decode cost stays capped either way.
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -206,15 +326,22 @@ final class AttachmentLoader {
         return UIImage(cgImage: cgImage, scale: 1, orientation: .up)
     }
 
-    /// Source pixel count from metadata only (no decode). `.max` when the
-    /// dimensions are unreadable, so an unparseable header is rejected.
-    private nonisolated static func sourcePixelCount(_ source: CGImageSource) -> Int {
+    /// Metadata-only pixel count. `.unknown` distinguishes "the header doesn't
+    /// state dimensions" from "the dimensions are huge" — collapsing both onto
+    /// `Int.max` rejected valid images (the retry path's headline symptom).
+    enum SourcePixels {
+        case known(Int)
+        case unknown
+    }
+
+    nonisolated static func sourcePixelCount(_ source: CGImageSource) -> SourcePixels {
         guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
               let height = properties[kCGImagePropertyPixelHeight] as? NSNumber
-        else { return .max }
+        else { return .unknown }
         let (pixels, overflow) = width.intValue.multipliedReportingOverflow(by: height.intValue)
-        return overflow ? .max : pixels
+        // An overflowing product IS pathologically large, not unknown.
+        return .known(overflow ? .max : pixels)
     }
 
     private nonisolated static func decodedCost(_ image: UIImage) -> Int {

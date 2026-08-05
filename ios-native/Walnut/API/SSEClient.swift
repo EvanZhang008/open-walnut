@@ -28,8 +28,54 @@ final class SSEClient: @unchecked Sendable {
     /// abandon SSE and fall back to polling instead of retrying forever.
     private let onHTTPError: (@Sendable (Int) -> Void)?
 
+    /// Both of these are touched from several concurrency domains and so live
+    /// under `stallLock` like the rest of the mutable state:
+    ///  - `task` is written by `start()` / `stop()` on whatever actor the store
+    ///    calls from, and read by `stop()`.
+    ///  - `lastEventID` is written inside the byte loop (the run-loop Task) and
+    ///    read by `streamOnce` when building the reconnect request AND by the
+    ///    stall-watchdog log line, which runs on a different task.
+    /// The class is `@unchecked Sendable`, so nothing else was enforcing this;
+    /// a torn read here means a reconnect replays from the wrong event id (a
+    /// duplicated or, worse, a skipped span of the turn).
     private var task: Task<Void, Never>?
     private var lastEventID: String?
+
+    private func currentTask() -> Task<Void, Never>? {
+        stallLock.lock()
+        defer { stallLock.unlock() }
+        return task
+    }
+
+    /// Installs a run-loop task only when none is live. Returns false when one
+    /// already is (so `start()` stays idempotent without a racy nil-check).
+    private func installTask(_ candidate: Task<Void, Never>) -> Bool {
+        stallLock.lock()
+        defer { stallLock.unlock() }
+        guard task == nil else { return false }
+        task = candidate
+        return true
+    }
+
+    private func takeTask() -> Task<Void, Never>? {
+        stallLock.lock()
+        defer { stallLock.unlock() }
+        let existing = task
+        task = nil
+        return existing
+    }
+
+    private func setLastEventID(_ id: String) {
+        stallLock.lock()
+        lastEventID = id
+        stallLock.unlock()
+    }
+
+    private func currentLastEventID() -> String? {
+        stallLock.lock()
+        defer { stallLock.unlock() }
+        return lastEventID
+    }
 
     /// Stall watchdog state. The server sends a `: ping` comment every 25s, so
     /// a healthy stream is never silent for long. Cellular NAT rebinds (WiFi↔5G,
@@ -122,17 +168,21 @@ final class SSEClient: @unchecked Sendable {
     }
 
     func start() {
-        guard task == nil else { return }
         let startGeneration = currentGeneration()
-        task = Task { [weak self] in
+        let candidate = Task { [weak self] () -> Void in
             await self?.runLoop(generation: startGeneration)
+        }
+        // Lose the race → cancel the loser rather than leaking two run loops
+        // onto one client (the old `guard task == nil` read was unsynchronized).
+        guard installTask(candidate) else {
+            candidate.cancel()
+            return
         }
     }
 
     func stop() {
         let session = advanceGenerationAndTakeSession()
-        task?.cancel()
-        task = nil
+        takeTask()?.cancel()
         // URLSession cancellation is synchronous here; no late delegate work can
         // keep the app alive after stores enter their closed state.
         session?.invalidateAndCancel()
@@ -153,7 +203,7 @@ final class SSEClient: @unchecked Sendable {
                 // went silent. A watchdog trip is a dead connection, not a
                 // deliberate close: reconnect immediately.
                 if !consumeStallTripped() { return }
-                AppLog.error("sse", "stall watchdog tripped — reconnecting", ["lastEventID": lastEventID ?? "-"])
+                AppLog.error("sse", "stall watchdog tripped — reconnecting", ["lastEventID": currentLastEventID() ?? "-"])
                 backoff = 1
             } catch {
                 AppLog.error("sse", "stream error — backing off", ["error": String(describing: error), "backoff": "\(backoff)s"])
@@ -170,8 +220,8 @@ final class SSEClient: @unchecked Sendable {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 3600
-        if let lastEventID {
-            request.setValue(lastEventID, forHTTPHeaderField: "Last-Event-ID")
+        if let resumeFrom = currentLastEventID() {
+            request.setValue(resumeFrom, forHTTPHeaderField: "Last-Event-ID")
         }
 
         // Dedicated session: the stream must outlive normal request timeouts.
@@ -226,7 +276,7 @@ final class SSEClient: @unchecked Sendable {
                 if line.last == UInt8(ascii: "\r") { line.removeLast() }
                 lineBuffer.removeAll(keepingCapacity: true)
                 if let frame = parser.consume(line: String(decoding: line, as: UTF8.self)) {
-                    if let id = frame.id { lastEventID = id }
+                    if let id = frame.id { setLastEventID(id) }
                     if isCurrent(streamGeneration) { onEvent(frame) }
                 }
             } else {

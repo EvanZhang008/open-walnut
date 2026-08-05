@@ -24,6 +24,7 @@
  */
 
 import { monitorEventLoopDelay } from 'node:perf_hooks'
+import { execFile } from 'node:child_process'
 import { log } from '../logging/index.js'
 
 /** Loop delay above this (ms) in a window is reported as a stall. */
@@ -49,6 +50,29 @@ export interface MonitorClocks {
 const defaultClocks: MonitorClocks = {
   now: () => Date.now(),
   monoNow: () => Number(process.hrtime.bigint()) / 1e6,
+}
+
+/**
+ * Second sleep signal, darwin-only: the wall-vs-monotonic gap NEVER fires on
+ * Apple Silicon because mach_absolute_time (hrtime's source) keeps advancing
+ * through system sleep there — measured hrtime ≈ os.uptime ≈ wall clock on an
+ * M-series Mac, and "system sleep detected" appeared 0 times in days of logs
+ * while minute-long sleep artifacts were reported as 1,000,000ms+ "stalls".
+ * kern.waketime is the kernel's last-wake timestamp: if it changed since we
+ * last looked, the machine slept inside the window and the report is an
+ * artifact. Only consulted when a stall is about to be reported (no per-tick
+ * exec cost); result is applied asynchronously.
+ */
+let lastObservedWakeTime = ''
+function wakeTimeChangedSince(cb: (changed: boolean) => void): void {
+  if (process.platform !== 'darwin') { cb(false); return }
+  execFile('sysctl', ['-n', 'kern.waketime'], { timeout: 2_000 }, (err, stdout) => {
+    if (err) { cb(false); return }
+    const current = stdout.trim()
+    const changed = lastObservedWakeTime !== '' && current !== lastObservedWakeTime
+    lastObservedWakeTime = current
+    cb(changed)
+  })
 }
 
 let histogram: ReturnType<typeof monitorEventLoopDelay> | null = null
@@ -182,7 +206,7 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
     }
     const maxMs = histogram.max / 1e6 // ns → ms
     if (maxMs >= STALL_THRESHOLD_MS) {
-      log.web.warn('event-loop stall detected (histogram)', {
+      const payload = {
         windowMs: WINDOW_MS,
         maxMs: Math.round(maxMs),
         p99Ms: Math.round(histogram.percentile(99) / 1e6),
@@ -194,7 +218,23 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
           const { section, detail, awaiting } = describeOpenSections()
           return { suspectSection: section, openSections: detail, sectionAwaiting: awaiting }
         })(),
-      })
+      }
+      // Giant "stalls" (minutes) are almost always sleep artifacts the
+      // wall-vs-mono gap can't see on Apple Silicon (see wakeTimeChangedSince).
+      // Confirm against the kernel's wake time before reporting those; small
+      // stalls skip the check (a real block is never minutes long without the
+      // whole process being dead anyway).
+      if (maxMs >= 60_000) {
+        wakeTimeChangedSince((slept) => {
+          if (slept) {
+            log.web.info('system sleep detected via kern.waketime (histogram window dropped)', { maxMs: payload.maxMs })
+          } else {
+            log.web.warn('event-loop stall detected (histogram)', payload)
+          }
+        })
+      } else {
+        log.web.warn('event-loop stall detected (histogram)', payload)
+      }
     }
     histogram.reset()
   }, WINDOW_MS)
@@ -224,12 +264,28 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
       const lateBy = monoDelta - PROBE_INTERVAL_MS
       if (lateBy >= STALL_THRESHOLD_MS) {
         const { section, detail, awaiting } = describeOpenSections()
-        log.web.warn('event-loop blocked (probe late)', {
+        const payload = {
           lateByMs: Math.round(lateBy),
           suspectSection: section,
           openSections: detail,
           sectionAwaiting: awaiting,
-        })
+        }
+        // Same Apple Silicon caveat as the histogram: hrtime advances through
+        // sleep there, so the wall-vs-mono branch above never triggers and a
+        // lid-close shows up here as a minutes-long "block". Verify against
+        // kern.waketime before reporting a giant one.
+        if (lateBy >= 60_000) {
+          wakeTimeChangedSince((slept) => {
+            if (slept) {
+              log.web.info('system sleep detected via kern.waketime (probe lateness dropped)', { lateByMs: payload.lateByMs })
+              clearSectionForSleep()
+            } else {
+              log.web.warn('event-loop blocked (probe late)', payload)
+            }
+          })
+        } else {
+          log.web.warn('event-loop blocked (probe late)', payload)
+        }
       }
     }
     probeTimer = setTimeout(probe, PROBE_INTERVAL_MS)

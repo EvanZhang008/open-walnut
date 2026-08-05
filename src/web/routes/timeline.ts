@@ -58,7 +58,9 @@ function parseTimelineFromMemory(content: string): { entries: TimelineEntry[]; s
     const lines = timelineMatch[1].trim().split('\n')
     for (const line of lines) {
       // Parse: "- HH:MM-HH:MM | App | Category | Description"
-      const match = line.match(/^-\s+(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+)$/)
+      // Leading whitespace is tolerated: this content comes from a YAML block
+      // scalar, so every line after the first keeps the block's indentation.
+      const match = line.match(/^\s*-\s+(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(.+)$/)
       if (match) {
         entries.push({
           startTime: match[1],
@@ -76,8 +78,8 @@ function parseTimelineFromMemory(content: string): { entries: TimelineEntry[]; s
   if (summaryMatch) {
     const lines = summaryMatch[1].trim().split('\n')
     for (const line of lines) {
-      // Parse: "- Coding: 4h 20m"
-      const match = line.match(/^-\s+(.+?):\s+(.+)$/)
+      // Parse: "- Coding: 4h 20m" (leading whitespace tolerated, see above)
+      const match = line.match(/^\s*-\s+(.+?):\s+(.+)$/)
       if (match) {
         summary[match[1].trim().toLowerCase()] = match[2].trim()
       }
@@ -86,6 +88,10 @@ function parseTimelineFromMemory(content: string): { entries: TimelineEntry[]; s
 
   return { entries, summary }
 }
+
+/** Test-only export of the parser above, so the write→render contract can be
+ *  asserted without booting the HTTP server. */
+export const __parseTimelineFromMemoryForTest = parseTimelineFromMemory
 
 // GET /api/timeline?date=YYYY-MM-DD → timeline data for a specific day
 timelineRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {

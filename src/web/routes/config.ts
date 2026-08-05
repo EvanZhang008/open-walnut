@@ -176,6 +176,48 @@ configRouter.get('/aws-profiles', async (_req: Request, res: Response) => {
   }
 })
 
+// GET /api/config/credential-trace — step-by-step Bedrock credential resolution.
+// Shows every layer the resolver reads (Walnut config vs Claude Code settings vs
+// shell env vs ~/.aws), what it looked for, and which layer won. `?verify=1`
+// additionally exercises the winning credential with STS GetCallerIdentity so
+// an expired ~/.aws cache can't masquerade as "ready" (secrets never leave the
+// box — trace values are masked, verify returns only the ARN/account/expiry).
+configRouter.get('/credential-trace', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const config = await getConfig()
+    const {
+      traceCredentialResolution, resolveCredentials,
+      readClaudeSettingsEnv, readClaudeCredentialExport,
+    } = await import('../../core/credential-resolver.js')
+    const fs = await import('node:fs')
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const home = os.homedir()
+    const exists = (p: string) => { try { return fs.existsSync(p) } catch { return false } }
+
+    const trace = traceCredentialResolution({
+      config,
+      claudeEnv: readClaudeSettingsEnv(),
+      processEnv: process.env,
+      awsFiles: {
+        credentials: exists(path.join(home, '.aws', 'credentials')),
+        config: exists(path.join(home, '.aws', 'config')),
+      },
+      claudeCredentialExport: readClaudeCredentialExport(),
+    })
+
+    if (req.query.verify === '1') {
+      const { verifyResolvedCredential } = await import('../../core/credential-verify.js')
+      const verify = await verifyResolvedCredential(resolveCredentials(config))
+      res.json({ trace, verify })
+      return
+    }
+    res.json({ trace })
+  } catch (err) {
+    next(err)
+  }
+})
+
 /** Cached Ollama model list — refreshed at most once per 30s. */
 let _ollamaCache: { models: ModelEntry[]; ts: number } = { models: [], ts: 0 }
 // 30s balances model freshness after `ollama pull` vs avoiding repeated /api/tags I/O on every settings page load.

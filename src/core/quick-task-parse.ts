@@ -2,7 +2,7 @@ import { sendMessage } from '../agent/model.js';
 import { log } from '../logging/index.js';
 import { fastModelFor } from './cheap-model.js';
 import { PIN_TIER_NONE_GUIDANCE, PIN_TIER_POLICY } from './types.js';
-import type { QuickTaskParse } from './types.js';
+import type { CustomTierRecord, QuickTaskParse } from './types.js';
 
 export type { QuickTaskParse } from './types.js';
 
@@ -20,29 +20,36 @@ export interface QuickTaskParseOptions {
   knownCategories?: string[];
   knownProjects?: Record<string, string[]>;
   modelOverride?: string;
+  /** Registered custom tiers — accepted as pinTier values (by id, or label normalized to id). */
+  customTiers?: CustomTierRecord[];
 }
 
-/** The pinTier rule, rendered from PIN_TIER_POLICY so the prompt can't drift
- *  from the tooltips the user reads in the picker. */
-const PIN_TIER_RULE = [
-  '- pinTier: which pinned tier the task belongs in. Judge it from the work itself — do NOT require the words "pin"/"focus".',
-  ...PIN_TIER_POLICY.map((p) => `  · ${p.tier} — ${p.guidance}`),
-  `  · OMIT the field entirely — ${PIN_TIER_NONE_GUIDANCE}`,
-  '  Urgency signals (urgent/critical/asap/today/紧急/right now) point at focus; a CONCRETE due date inside the next ~7 days points at satellite even with no urgency word; "waiting on"/"blocked by"/等 points at wait. An explicit "pin to X" always wins.',
-  '  Vague or far-off timing is NOT a near-term date — "sometime this year", "someday", "when I get around to it", 有空 stay UNPINNED. Unpinned is the DEFAULT: pin only what the user needs to see in the next few days.',
-].join('\n');
+/** The pinTier rule, rendered from PIN_TIER_POLICY (plus the user's custom tiers)
+ *  so the prompt can't drift from the tooltips the user reads in the picker. */
+function buildPinTierRule(customTiers: CustomTierRecord[]): string {
+  return [
+    '- pinTier: which pinned tier the task belongs in. Judge it from the work itself — do NOT require the words "pin"/"focus".',
+    ...PIN_TIER_POLICY.map((p) => `  · ${p.tier} — ${p.guidance}`),
+    ...customTiers.map((t) => `  · ${t.id} — user-defined tier "${t.label}". Pick it when the note explicitly names this tier (e.g. "icebox" → the tier labeled Icebox).`),
+    `  · OMIT the field entirely — ${PIN_TIER_NONE_GUIDANCE}`,
+    '  Urgency signals (urgent/critical/asap/today/紧急/right now) point at focus; a CONCRETE due date inside the next ~7 days points at satellite even with no urgency word; "waiting on"/"blocked by"/等 points at wait; explicit someday/backlog/later wording (someday, backlog, 以后, 有空再) points at backlog. An explicit "pin to X" always wins.',
+    '  Unpinned is still the DEFAULT for things not worth tracking in the pinned working set at all — backlog is for someday work the user DOES want to keep visible.',
+  ].join('\n');
+}
 
-const SYSTEM_PROMPT = `You convert a user's quick task note into strict JSON. Reply with ONLY a JSON object — no markdown fence, no commentary.
+function buildSystemPrompt(customTiers: CustomTierRecord[]): string {
+  return `You convert a user's quick task note into strict JSON. Reply with ONLY a JSON object — no markdown fence, no commentary.
 Fields:
 - title: cleaned task title. Remove date/time/priority/pin phrases; keep the action. Fix obvious typos. Preserve the user's language (Chinese stays Chinese). Never empty.
 - due_date: only if the note states a DEADLINE (by/before/due/截止). Date-only -> YYYY-MM-DD. With a time of day -> LOCAL ISO 8601 datetime WITHOUT timezone suffix (e.g. 2026-07-15T10:00:00) — copy the wall-clock time the user said; never convert timezones. Resolve relative dates (tomorrow, next friday, 明天, 下周三) against the current datetime given below.
 - start_date: only if the note states when to START or defer the work (start/begin/from/after/开始/之后再/等到). Same format rules as due_date. A bare date with no deadline wording ("call mom friday", "下周三处理") is a start_date, not a due_date — it says when to do it, not when it's due.
-${PIN_TIER_RULE}
+${buildPinTierRule(customTiers)}
 - priority: immediate|important|backlog — only when urgency is stated (urgent/asap -> immediate, important/重要 -> important, later/someday -> backlog).
 - starred: true only when the note explicitly says star it.
 - category: the ONE best-matching category NAME from the "Your categories and projects" list, judged by similarity between the note and that category's example task titles. Copy the name EXACTLY as written. Always give your best guess — the user confirms it in a UI, so a plausible guess beats omitting. For everyday personal errands (shopping, calls, appointments) prefer the category whose examples look most like personal life. Omit ONLY if the list is empty or truly nothing fits. NEVER invent a name not in the list.
 - project: only if you set category — the best-matching project name listed UNDER that category, judged by its example titles. Copy EXACTLY. If none clearly matches, OMIT (the task goes to the category default). NEVER invent a name.
 Omit every field that is not clearly present.`;
+}
 
 function localDateTime(now: Date, timeZone: string): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -129,7 +136,7 @@ export async function parseQuickTask(
     const parseStarted = Date.now();
     try {
       result = await sendMessage({
-        system: SYSTEM_PROMPT,
+        system: buildSystemPrompt(opts.customTiers ?? []),
         messages: [{ role: 'user', content }],
         config: { maxTokens: 320, ...(model ? { model } : {}) },
         signal: controller.signal,
@@ -155,8 +162,17 @@ export async function parseQuickTask(
     if (dueDate) output.due_date = dueDate;
     const startDate = validLocalDueDate(parsed.start_date);
     if (startDate) output.start_date = startDate;
-    if (parsed.pinTier === 'focus' || parsed.pinTier === 'satellite' || parsed.pinTier === 'wait') {
+    if (parsed.pinTier === 'focus' || parsed.pinTier === 'satellite' || parsed.pinTier === 'backlog' || parsed.pinTier === 'wait') {
       output.pinTier = parsed.pinTier;
+    } else if (typeof parsed.pinTier === 'string' && opts.customTiers?.length) {
+      // Custom tier: accept the registered id, or a label match normalized to
+      // the id (the model sometimes echoes the label the user typed). Unknown
+      // values are dropped (same behavior as before).
+      const raw = parsed.pinTier.trim().toLowerCase();
+      const match = opts.customTiers.find(
+        (t) => t.id.toLowerCase() === raw || t.label.trim().toLowerCase() === raw,
+      );
+      if (match) output.pinTier = match.id;
     }
     if (parsed.priority === 'immediate' || parsed.priority === 'important' || parsed.priority === 'backlog') {
       output.priority = parsed.priority;

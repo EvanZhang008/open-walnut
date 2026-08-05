@@ -142,7 +142,11 @@ final class VoiceRecorder: NSObject {
             fileURL = nil
         }
         do {
-            let data = try Data(contentsOf: url)
+            // Read the recording OFF the MainActor — a 90s m4a is a real file
+            // read, and this method runs on the actor that draws the UI.
+            let data = try await Task.detached(priority: .userInitiated) {
+                try Data(contentsOf: url)
+            }.value
             guard data.count > 1_000 else {
                 errorMessage = "Recording too short"
                 return nil

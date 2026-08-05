@@ -223,7 +223,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const focusBar = useFocusBarContext();
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
   const focusTaskIdSet = useMemo(() => new Set(focusBar.focusIds), [focusBar.focusIds]);
+  const backlogTaskIdSet = useMemo(() => new Set(focusBar.backlogIds), [focusBar.backlogIds]);
   const waitTaskIdSet = useMemo(() => new Set(focusBar.waitIds), [focusBar.waitIds]);
+  const customTierIdSets = useMemo(() => {
+    const map: Record<string, Set<string>> = {};
+    for (const [tid, ids] of Object.entries(focusBar.customTierIds)) map[tid] = new Set(ids);
+    return map;
+  }, [focusBar.customTierIds]);
+  // Display label for a tier value (built-in name capitalized, custom id → its label).
+  const tierLabel = useCallback((tier: string): string => {
+    const custom = focusBar.customTiers.find((t) => t.id === tier);
+    return custom ? custom.label : `${tier[0]?.toUpperCase() ?? ''}${tier.slice(1)}`;
+  }, [focusBar.customTiers]);
   const quickTaskProjectOptions = useMemo(() => {
     const options = new Map<string, Set<string>>();
     for (const task of tasks) {
@@ -1152,9 +1163,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     } catch { /* non-critical */ }
   }, [openSessionOrToast]);
 
-  const handleCreate = useCallback(async (input: { title: string; priority: string; category?: string; project?: string; due_date?: string; start_date?: string; starred?: boolean; pinnedTier?: 'focus' | 'satellite' | 'wait'; capture?: boolean }) => {
+  const handleCreate = useCallback(async (input: { title: string; priority: string; category?: string; project?: string; due_date?: string; start_date?: string; starred?: boolean; pinnedTier?: string; capture?: boolean }) => {
     const tier = input.pinnedTier;
-    // Quick-capture ("Add to Focus/Satellite/Wait", Focus Dock) routes to the user's
+    // Quick-capture ("Add to <tier>…" inline rows, Focus Dock) routes to the user's
     // configured Default Platform + Category instead of the active tab's category — so a
     // capture made while viewing an external-synced tab (e.g. personal → MS To-Do) still
     // lands in the fast local Inbox unless the user changed the default. Falls back to
@@ -1346,7 +1357,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       handleFocusTask(created, { openDetail: false });
     }
     const summary = [
-      input.pinnedTier ? `${input.pinnedTier[0].toUpperCase()}${input.pinnedTier.slice(1)}` : undefined,
+      input.pinnedTier ? tierLabel(input.pinnedTier) : undefined,
       input.due_date ? `Due ${formatQuickTaskDate(input.due_date)}` : undefined,
       input.start_date ? `Starts ${formatQuickTaskDate(input.start_date)}` : undefined,
       input.priority !== 'none' ? `${input.priority[0].toUpperCase()}${input.priority.slice(1)}` : undefined,
@@ -1364,7 +1375,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       onAction: () => { deleteTaskApi(created.id).catch(() => {}); },
     });
     return created;
-  }, [handleCreate, handleFocusTask, notify]);
+  }, [handleCreate, handleFocusTask, notify, tierLabel]);
 
   // Core quick-start launcher — creates the pending session column and fires the
   // API call. Deliberately does NOT touch chat state/visibility: the todo-panel
@@ -1597,7 +1608,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onSetTier={focusBar.setTier}
           pinnedTaskIds={pinnedTaskIdSet}
           focusTaskIds={focusTaskIdSet}
+          backlogTaskIds={backlogTaskIdSet}
           waitTaskIds={waitTaskIdSet}
+          customTiers={focusBar.customTiers}
+          customTiersLoaded={focusBar.customTiersLoaded}
+          customTierIds={customTierIdSets}
           suppressDetail={suppressDetail}
           onClearOperationError={clearOperationError}
           onOperationError={showOperationError}

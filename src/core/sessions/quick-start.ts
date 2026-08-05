@@ -19,7 +19,8 @@ export interface QuickStartTaskMeta {
   starred?: boolean;
   needs_attention?: boolean;
   priority?: 'immediate' | 'important' | 'backlog' | 'none';
-  pinTier?: 'focus' | 'satellite' | 'wait';
+  /** Built-in tier ('focus' | 'satellite' | 'backlog' | 'wait') or a registered custom tier id (ct_*). */
+  pinTier?: string;
 }
 
 export interface QuickStartParams {

@@ -176,10 +176,19 @@ describe('Focus Bar API', () => {
     expect(r.data.focus_tasks).not.toContain(taskIds[1]);
   });
 
+  it('PUT /api/focus/tasks/:id/tier moves to backlog tier', async () => {
+    const r = await api('PUT', `/api/focus/tasks/${taskIds[1]}/tier`, { tier: 'backlog' });
+    expect(r.status).toBe(200);
+    expect(r.data.backlog_tasks).toContain(taskIds[1]);
+    expect(r.data.satellite_tasks).not.toContain(taskIds[1]);
+    expect(r.data.wait_tasks).not.toContain(taskIds[1]);
+  });
+
   it('PUT /api/focus/tasks/:id/tier moves to satellite tier', async () => {
     const r = await api('PUT', `/api/focus/tasks/${taskIds[1]}/tier`, { tier: 'satellite' });
     expect(r.status).toBe(200);
     expect(r.data.satellite_tasks).toContain(taskIds[1]);
+    expect(r.data.backlog_tasks).not.toContain(taskIds[1]);
     expect(r.data.wait_tasks).not.toContain(taskIds[1]);
     expect(r.data.focus_tasks).not.toContain(taskIds[1]);
   });

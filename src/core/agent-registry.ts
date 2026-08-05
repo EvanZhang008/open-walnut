@@ -187,6 +187,17 @@ const TOOL_NAME_MIGRATION: Record<string, string> = {
   files_list: 'file_list',
   files_glob: 'file_glob',
   files_grep: 'file_grep',
+  // Pre-consolidation standalone file tools (renamed files_* in Apr 2026, then file_*).
+  // Old configs skipped straight from these to today's names, so map them directly.
+  read_file: 'file_read',
+  write_file: 'file_write',
+  edit_file: 'file_edit',
+  // The monolithic `memory` tool was split in Mar 2026. Its read half is the
+  // closest surviving equivalent; its write actions (update_summary/append) have
+  // no successor for project stores — those persist via <memory_update> instead
+  // (see stateful-memory.ts). Mapping to file_read keeps an allowed_tools
+  // whitelist from silently collapsing to almost nothing.
+  memory: 'file_read',
 };
 
 // Removed tools — silently drop from allowed/denied lists

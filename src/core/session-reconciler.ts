@@ -11,7 +11,7 @@
 
 import { log } from '../logging/index.js'
 import { isSessionProcessAlive } from '../utils/session-liveness.js'
-import type { SessionRecord, Task } from './types.js'
+import type { SessionRecord } from './types.js'
 
 export interface ReconcileResult {
   reconciled: number
@@ -65,16 +65,6 @@ export async function reconcileSessions(): Promise<ReconcileResult> {
 
   log.session.info('session reconciler: checking sessions', { count: zombieCandidates.length })
 
-  // Batch-load all tasks for phase lookups
-  let taskMap = new Map<string, Task>()
-  try {
-    const { listTasks } = await import('./task-manager.js')
-    const allTasks = await listTasks()
-    for (const t of allTasks) taskMap.set(t.id, t)
-  } catch {
-    // Tasks unavailable — fall back to 'idle' for all process_status decisions
-  }
-
   // Parallel liveness checks — routes to local PID check or remote daemon check.
   //
   // ROBUSTNESS (do not re-add an outputFile gate here): isSessionProcessAlive() is
@@ -104,26 +94,37 @@ export async function reconcileSessions(): Promise<ReconcileResult> {
     const { session, alive } = r.value
 
     if (alive) {
-      // Process survived server restart — reconnectable
-      const taskPhase = session.taskId ? taskMap.get(session.taskId)?.phase : undefined
-      const correctProcessStatus = taskPhase === 'IN_PROGRESS' ? 'running' : 'idle'
-      // One-time backfill: a local session (host null) whose outputFile column is
-      // empty is a leftover from before we persisted the sentinel on every FIFO
-      // write. Repopulate it with the canonical local sentinel so downstream
-      // readers (history/stream) and any future caller never see an empty value.
+      // Process survived server restart — reconnectable.
+      //
+      // Do NOT rewrite process_status here. A prior version set it from the
+      // task's phase (`taskPhase === 'IN_PROGRESS' ? 'running' : 'idle'`) —
+      // but phase is a TASK lifecycle field, not process state, and the CLI
+      // process is long-running BETWEEN turns, so "alive" says nothing about
+      // "currently executing a turn". Incident 57b125ab: a session finished
+      // its turn (record correctly 'idle', task back at IN_PROGRESS via a
+      // later send), then a dev:prod restart ran this sweep and the phase
+      // proxy revived the record to 'running' — it stayed a false "Running"
+      // for 15h because no later event ever contradicted it. The record's
+      // persisted process_status is the last event-driven truth; keep it.
+      // If it IS stale-running, the evidence-based reconcileProcessStatus
+      // (attach path + health monitor) converges it from the stream file.
+      //
+      // One-time backfill: a local session (host null) whose outputFile column
+      // is empty is a leftover from before we persisted the sentinel on every
+      // FIFO write. Repopulate it with the canonical local sentinel so
+      // downstream readers (history/stream) never see an empty value.
       const needsOutputFileBackfill = session.host == null && !session.outputFile
-      await updateSessionRecord(session.claudeSessionId, {
-        process_status: correctProcessStatus,
-        ...(needsOutputFileBackfill
-          ? { outputFile: `remote://__local__/${session.claudeSessionId}` }
-          : {}),
-      }).catch(() => {})
+      if (needsOutputFileBackfill) {
+        await updateSessionRecord(session.claudeSessionId, {
+          outputFile: `remote://__local__/${session.claudeSessionId}`,
+        }).catch(() => {})
+      }
 
       log.session.info('session reconciler: session still alive', {
         sessionId: session.claudeSessionId,
         taskId: session.taskId || '(none)',
         pid: session.pid,
-        processStatus: correctProcessStatus,
+        processStatus: session.process_status,
       })
       reconnectable.push(session)
       continue

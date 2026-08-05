@@ -5,11 +5,19 @@
  * Two-layer phase management (K8s-style push + reconcile):
  *
  * Layer 1: Push (ms-level, reliable with retry)
- *   session:result    → AGENT_COMPLETE      unconditional
- *   session:input     → IN_PROGRESS         unconditional
- *   session:error     → AWAIT_HUMAN_ACTION  unconditional
- *   session:streaming → IN_PROGRESS         only when === AWAIT_HUMAN_ACTION
- *   triage-sync       → AWAIT_HUMAN_ACTION  only when === AGENT_COMPLETE
+ *   session:result     → AGENT_COMPLETE      unconditional
+ *   session:input      → IN_PROGRESS         unconditional (fires at SEND time)
+ *   session:turn-start → IN_PROGRESS         unconditional (fires when the CLI
+ *                        actually STARTS the turn — session_state_changed{running};
+ *                        covers queued/mid-turn sends whose input transition was a
+ *                        no-op and whose phase was then flipped by the previous
+ *                        turn's result)
+ *   session:error      → AWAIT_HUMAN_ACTION  unconditional
+ *   session:streaming  → IN_PROGRESS         only when === AWAIT_HUMAN_ACTION
+ *   triage-sync        → AWAIT_HUMAN_ACTION  only when === AGENT_COMPLETE
+ *                        AND the session is not actively running (checked at the
+ *                        call sites via process_status — a late triage from the
+ *                        previous turn must not repaint a live turn red)
  *
  *   All go through applySessionPhase() — unified retry + logging + error handling.
  *
@@ -134,6 +142,27 @@ export function sessionInputPhase(current: TaskPhase): TaskPhase | null {
   return 'IN_PROGRESS'
 }
 
+/**
+ * CLI actually started executing a turn → IN_PROGRESS. Unconditional.
+ *
+ * The missing half of the result↔turn symmetry: turn-END has an authoritative
+ * phase driver (session:result → AGENT_COMPLETE) but turn-START only had
+ * session:input, which fires at SEND time. Interactive chat sends the next
+ * message while the previous turn is still running (queued / mid-turn inject),
+ * so that input transition is a no-op (phase already IN_PROGRESS) — then the
+ * PREVIOUS turn's result flips the phase to AGENT_COMPLETE (triage may push it
+ * on to AWAIT_HUMAN_ACTION), and when the queued message finally starts
+ * running NOTHING pulls the phase back: the task shows completed/red while
+ * the CLI is visibly streaming (incidents 46f42871 + 1f11596b, 2026-08-03).
+ * Trigger: session_state_changed{running} — the CLI's own turn-start signal —
+ * with the replay guard applied at the call site (a replayed running event
+ * describes the past and must not flip the present phase).
+ */
+export function sessionTurnStartPhase(current: TaskPhase): TaskPhase | null {
+  if (TERMINAL_PHASES.has(current) || current === 'IN_PROGRESS') return null
+  return 'IN_PROGRESS'
+}
+
 /** Session errored → AWAIT_HUMAN_ACTION. Unconditional. */
 export function sessionErrorPhase(current: TaskPhase): TaskPhase | null {
   if (TERMINAL_PHASES.has(current) || current === 'AWAIT_HUMAN_ACTION') return null
@@ -163,6 +192,7 @@ export type PhaseTransitionTrigger =
   | 'session:input'
   | 'session:error'
   | 'session:streaming'
+  | 'session:turn-start'
   | 'triage-sync'
   | 'reconciler'
 
@@ -201,8 +231,30 @@ export async function applySessionPhase(
     case 'session:input':   newPhase = sessionInputPhase(task.phase); break
     case 'session:error':   newPhase = sessionErrorPhase(task.phase); break
     case 'session:streaming': newPhase = sessionStreamingPhase(task.phase); break
+    case 'session:turn-start': newPhase = sessionTurnStartPhase(task.phase); break
     case 'triage-sync':     newPhase = task.phase === 'AGENT_COMPLETE' ? 'AWAIT_HUMAN_ACTION' : null; break
     case 'reconciler':      newPhase = opts?.newPhase ?? null; break
+  }
+
+  // Triage gate: triage summarizes the PREVIOUS turn on a debounce, so it can
+  // land minutes after the user already sent the next message. If that next
+  // turn is actively running, pushing AWAIT_HUMAN_ACTION would repaint a live
+  // task red moments after session:turn-start pulled it back to IN_PROGRESS
+  // (the reverse race of incidents 46f42871 + 1f11596b). The push is not lost
+  // work: when THIS turn ends, its own result→triage cycle re-evaluates.
+  // Centralized here so both call sites (turn-complete-summary hook,
+  // server.ts triage-done) get the guard.
+  if (newPhase && trigger === 'triage-sync' && opts?.sessionId) {
+    try {
+      const { getSessionByClaudeId } = await import('./session-tracker.js')
+      const record = await getSessionByClaudeId(opts.sessionId)
+      if (record?.process_status === 'running') {
+        log.session.info('applySessionPhase: triage-sync skipped — session is actively running', {
+          taskId, sessionId: opts.sessionId, currentPhase: task.phase, source,
+        })
+        return { changed: false, oldPhase: task.phase }
+      }
+    } catch { /* record unreadable — proceed with the push (pre-guard behavior) */ }
   }
 
   if (!newPhase) {

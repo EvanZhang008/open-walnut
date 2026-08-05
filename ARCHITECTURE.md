@@ -407,21 +407,15 @@ src/core/cron/
 - `src/agent/context-sources.ts` — `loadContextSources()` — injects task/project/memory context into subagent system prompts
 - `src/agent/tools/agent-crud-tools.ts` — CRUD tools for managing agent definitions
 
-### Session Triage Agent
+### Turn-complete triage (no subagent anymore)
 
-A builtin embedded subagent (`id: 'session-triage'`) that automatically processes completed sessions.
-
-**Flow**: `session:result` → server.ts emits `SUBAGENT_START` with `agentId: 'session-triage'` → SubagentRunner handles it → triage agent reads task + project context → updates task notes, sets `needs_attention`, decides next steps → compact 1-2 line notification added to main chat history (not streamed to main conversation).
-
-**Configuration**: `config.agent.session_triage_agent` can override the default triage agent ID to use a custom agent definition.
-
-**Context sources**: Auto-loads `task_details` + `project_memory` (auto), plus `project_task_list` (enabled by default). Uses stateful memory at `{auto}/triage` for per-project triage history.
-
-**Allowed tools**: `get_task`, `update_task`, `add_note`, `update_session`, `send_to_session`, `query_tasks`, `memory`, `search`.
+There is **no** triage subagent. The old summarizer subagent was removed: the session itself now writes the merged task summary via `side_question`, and the phase/notify decision comes from a deterministic `PHASE_SIGNAL` lookup in `src/core/session-hooks/builtins.ts` (`decideNotify`). The id `turn-complete-triage` survives only as an `agentId` label on notification events so the notify gate, UI rendering, and usage classification keep working — see the deletion notes in `src/core/agent-registry.ts`. Do not re-introduce a summarizer subagent without reading those notes first.
 
 ### Auto-inference & stateful memory
 
 `task_details` and `project_memory` always load when `taskId` is present, regardless of `context_sources` config. Other sources must be explicitly enabled.
+
+`project_memory` reads the **legacy** `memory/projects/<category>/<project>/MEMORY.md` store. The 2026-07 unification moved project knowledge to skills (`skills/<category>/<project>/`) and stopped writing here, but did not migrate the existing files — so this source still returns real content for pre-migration projects and nothing for anything newer. It is read-only; put new project knowledge in a skill.
 
 Context sources are **read-only** injection at invocation time. `stateful` config is **read+write** persistent memory across invocations. An agent can have both. `stateful.memory_project` supports `{auto}`, resolved at runtime to `{category}/{project}` from the task.
 

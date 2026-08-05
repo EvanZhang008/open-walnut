@@ -60,12 +60,15 @@ describe('Context Inspector E2E', () => {
     expect(sectionNames).toContain('skills');
     expect(sectionNames).toContain('compactionSummary');
     expect(sectionNames).toContain('taskCategories');
+    expect(sectionNames).toContain('userProfile');
     expect(sectionNames).toContain('globalMemory');
-    expect(sectionNames).toContain('projectSummaries');
     expect(sectionNames).toContain('notesContext');
     expect(sectionNames).toContain('dailyLogs');
     expect(sectionNames).toContain('tools');
     expect(sectionNames).toContain('apiMessages');
+    // projectSummaries was removed (2026-07): memory/projects/ is retired as a
+    // prompt source, so the butler no longer gets an always-empty section.
+    expect(sectionNames).not.toContain('projectSummaries');
     expect(sectionNames).toHaveLength(11);
   });
 

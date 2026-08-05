@@ -51,6 +51,8 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | GET | `/api/v1/conversations/:id/messages?limit=&before=&agentId=` | Read normalized messages |
 | POST | `/api/v1/conversations/:id/messages` | Send a message (starts an agent turn) |
 | GET | `/api/v1/conversations/:id/stream?agentId=` | SSE stream of the current turn |
+| GET | `/api/v1/sessions/launch-options` | Hosts + frequent dirs for creating a session (primary only) |
+| POST | `/api/v1/sessions` | Create a Claude Code session on a chosen host/path (primary only) |
 | GET | `/api/v1/notes` | Notes file tree |
 | GET | `/api/v1/notes/content/*path` | Read a note |
 | PUT | `/api/v1/notes/content/*path` | Update a note (optimistic locking) |
@@ -234,6 +236,11 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   for sessions on the primary box, otherwise the host alias; `pinned` /
   `focus_tier` mirror the owning task's pin state at export time;
   `description` is truncated to ~300 chars.
+- `focus_tier` values: `"focus"`, `"backlog"` (built-in since 2026-08),
+  `"wait"`, a custom tier id (`ct_` + 8 alphanumerics — user-defined tiers,
+  added 2026-08), or absent (= Satellite, the default bucket). Clients that
+  only understand the built-ins should treat any unrecognized value as
+  Satellite.
 - Scope: all live sessions + sessions stopped in the last 14 days, newest
   first, capped at 500. System sessions (triage/cron/hooks) and archived
   sessions are excluded.
@@ -248,7 +255,10 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   box exports tails for every session it can reach — local from disk, remote
   over its SSH channel — so this works for sessions on ANY machine without
   the phone talking to that machine. `404 not_found` when no tail was
-  exported yet.
+  exported yet. A just-created session still in its pre-spawn window
+  (`awaiting_spawn`, no pid) answers `200` with `messages: []` on the primary
+  box — fast and unambiguous, instead of a 404 the client would have to
+  interpret as "poll again".
 - `fresh=1` (additive): the PRIMARY box reads the session's history **right
   now** instead of serving the (60s-throttled) sweep file — poll this every
   few seconds for a live session view. On a cloud companion `fresh=1` reads
@@ -303,6 +313,45 @@ primary box the same endpoints serve directly — no bridge involved.
   `bridgeHosts: [ { hostAlias, since } ]` — hosts with a live daemon bridge.
   A session is talkable when its `ProjectedSession.host` (`""` maps to the
   primary's local daemon `__local__`) has an entry here.
+
+### Session launch (additive) — create a session from mobile
+
+Primary box only: creation reuses the web Quick Start core (task create/reuse
+→ `SESSION_START` → session-runner spawns the CLI locally or on the chosen
+host's SSH daemon). A cloud companion (REPLICA) has no spawn path — the
+`/bridge` command allowlist deliberately excludes `start` — so both endpoints
+return `503 { "error": { "code": "not_supported_cloud" } }` there; the iOS
+app hides its create UI when `/api/v1/status` reports `REPLICA` (and its
+sheet degrades to a clear unavailable state if it ever hits the 503).
+
+- `GET /api/v1/sessions/launch-options` →
+  `{ "hosts": [ { "alias", "label" } ], "dirs": [ { "cwd", "host",
+  "hostLabel"?, "lastUsed", "count" } ] }`
+  - `hosts`: where a session can run — the primary box first
+    (`alias: ""`, matching `ProjectedSession.host` semantics) plus every
+    enabled `config.hosts` entry (SSH remotes, including a cloud EC2 box you
+    added as a host).
+  - `dirs`: the user's frequent working directories (same store as the web
+    launcher's suggestions), best first, capped at 30. `host` is `""` for
+    local paths.
+- `POST /api/v1/sessions` body `{ "cwd", "host"?, "message"?, "taskId"?,
+  "model"?, "mode"? }` → `201 { "sessionId", "taskId", "title" }`
+  - `cwd` (required): absolute working path on the chosen host (must start
+    with `/`; relative paths are `400 bad_request`).
+  - `host`: `""`/absent = the primary box; otherwise an enabled alias from
+    `launch-options` (unknown/disabled → `400 bad_request`).
+  - `message`: optional first turn; empty/absent spawns the CLI idle.
+  - `taskId`: link the session to an existing task instead of creating one
+    (unknown id → `404 not_found`). Absent: a task is created and
+    auto-organized, exactly like a web Quick Start.
+  - `model` / `mode`: same accepted values as the web quick-start route
+    (`bypass`/`accept`/`default`/`plan`; alias or catalog model ids).
+  - `201` means **accepted, not spawned**: the CLI spawn is asynchronous, so
+    a typo'd path or an unreachable SSH host still returns 201 and surfaces
+    later as session `error` status. The record is pre-seeded, so the
+    returned `sessionId` immediately works with the stream/messages AND
+    transcript endpoints — the transcript answers `200 messages: []` during
+    the pre-spawn window (see above), then fills in as turns complete.
 
 ### GET /api/v1/media?path=/absolute/file.png[&session=sid] (additive)
 

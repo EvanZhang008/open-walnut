@@ -1,9 +1,10 @@
 import SwiftUI
 import PhotosUI
 
-/// Reusable chat input bar — rounded field + photo/mic/send button. Owns only
-/// the draft text and the picked-image selection; the parent does the actual
-/// send via `onSend`.
+/// Reusable chat input bar — rounded field + photo/mic/send button. The draft
+/// text and image selection live in `ComposerDrafts` (app-scoped, keyed by
+/// `draftKey`), NOT in view `@State`; the parent does the actual send via
+/// `onSend`.
 ///
 /// Invariants (freeze-proof by design):
 ///  - The TextField is NEVER disabled. `busy` and `disabled` only gate the
@@ -12,10 +13,15 @@ import PhotosUI
 ///    preservation is the STORE's job (failed bubbles keep their text AND
 ///    images in the timeline with tap-to-retry), so a slow network error can
 ///    never clobber or lose composed text or attachments.
+///  - Draft ownership is OUTSIDE the view. View-local `@State` is only as
+///    durable as the view's identity, and this view sits in a
+///    `safeAreaInset` whose geometry the keyboard changes — an identity churn
+///    there used to wipe typed text (A4: type, dismiss keyboard, draft gone).
 ///
 /// Voice input: mic button (shown when there's nothing to send) records m4a and
 /// sends it to the server for transcription; the recognized text lands in
-/// the draft for review before sending.
+/// the draft for review before sending. A live recording is view-scoped: it
+/// stops on disappear so navigating away can never leave an invisible mic open.
 ///
 /// Image input: photo button opens the native PhotosPicker (iOS 16+, sandboxed
 /// — no photo-library permission prompt). Picked images are downscaled + JPEG
@@ -25,18 +31,31 @@ struct ComposerBar: View {
     var busy: Bool = false
     var disabled: Bool = false
     var disabledNotice: String? = nil
+    /// Identity of the thread this composer writes into ("chat:<conversation>",
+    /// "session:<id>"). Scopes the durable draft.
+    var draftKey: String = "chat"
     let onSend: (String, [SelectedImage]) async -> Bool
 
-    @State private var draft = ""
     @State private var voice = VoiceRecorder()
-    @State private var selectedImages: [SelectedImage] = []
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var imageNotice: String?
     @FocusState private var focused: Bool
+    @State private var drafts = ComposerDrafts.shared
 
     private static let maxImages = 5
 
-    private var trimmed: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
+    /// Bindings onto the app-scoped draft store — the TextField edits that
+    /// directly, so nothing depends on this view's identity surviving.
+    private var draft: Binding<String> {
+        Binding(
+            get: { drafts.draft(draftKey) },
+            set: { drafts.setDraft($0, key: draftKey) }
+        )
+    }
+
+    private var selectedImages: [SelectedImage] { drafts.images(draftKey) }
+
+    private var trimmed: String { draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var hasContent: Bool { !trimmed.isEmpty || !selectedImages.isEmpty }
     private var canSend: Bool { !busy && !disabled && hasContent }
 
@@ -66,6 +85,14 @@ struct ComposerBar: View {
         .onAppear {
             voice.onAutoStopText = { text in appendToDraft(text) }
         }
+        .onDisappear {
+            // The recorder is registered app-wide with LifecycleHub but its UI
+            // lives in THIS view. Navigating away mid-recording (tab switch,
+            // pop, sheet dismiss) hid the recording row while the mic stayed
+            // hot — an invisible live recording burning battery and privacy
+            // indicator with no way to stop it. View gone = recording gone.
+            if voice.state == .recording { voice.cancel() }
+        }
         .onChange(of: pickerItems) { _, items in
             guard !items.isEmpty else { return }
             Task { await loadPicked(items) }
@@ -78,7 +105,7 @@ struct ComposerBar: View {
         HStack(alignment: .bottom, spacing: 8) {
             photoButton
 
-            TextField(busy ? "Waiting for reply…" : placeholder, text: $draft, axis: .vertical)
+            TextField(busy ? "Waiting for reply…" : placeholder, text: draft, axis: .vertical)
                 .lineLimit(1...6)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 9)
@@ -109,7 +136,9 @@ struct ComposerBar: View {
                             .frame(width: 64, height: 64)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         Button {
-                            selectedImages.removeAll { $0.id == image.id }
+                            drafts.setImages(
+                                selectedImages.filter { $0.id != image.id }, key: draftKey
+                            )
                         } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .font(.system(size: 18))
@@ -225,8 +254,7 @@ struct ComposerBar: View {
         let images = selectedImages
         guard !text.isEmpty || !images.isEmpty else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        draft = ""
-        selectedImages = []
+        drafts.clear(draftKey)
         pickerItems = []
         // Failure keeps the text AND images as a failed bubble in the timeline
         // (store's contract) — nothing restored here, so new typing/picking is
@@ -235,32 +263,49 @@ struct ComposerBar: View {
     }
 
     /// Decode + downscale + JPEG-encode picked items off the main actor, then
-    /// merge into the selection (respecting the 5-image ceiling). Surfaces a
-    /// dismissible notice for images that are too large or failed to decode.
+    /// merge into the selection (respecting the 5-image ceiling AND the total
+    /// payload budget). Surfaces a dismissible notice for images that are too
+    /// large, over budget, or failed to decode.
     private func loadPicked(_ items: [PhotosPickerItem]) async {
-        var added: [SelectedImage] = []
+        var current = selectedImages
         var tooLarge = 0
         var failed = 0
-        let room = Self.maxImages - selectedImages.count
+        var overBudget = 0
+        // Each image is individually capped at 10MB base64, so five of them can
+        // build ~50MB of concurrent base64 in the send path — enough to get the
+        // app jetsammed on a warm device. Enforce the AGGREGATE too, and do it
+        // here (at pick time) so the user learns immediately instead of after
+        // composing a message that can never be sent.
+        var budgetUsed = current.reduce(0) { $0 + SelectedImage.base64Length($1.jpegData) }
+        let room = Self.maxImages - current.count
         for item in items.prefix(max(0, room)) {
             switch await SelectedImage.load(from: item) {
-            case .ok(let image): added.append(image)
+            case .ok(let image):
+                let cost = SelectedImage.base64Length(image.jpegData)
+                if budgetUsed + cost > SelectedImage.maxTotalBase64Length {
+                    overBudget += 1
+                } else {
+                    budgetUsed += cost
+                    current.append(image)
+                }
             case .tooLarge: tooLarge += 1
             case .failed: failed += 1
             }
         }
-        selectedImages.append(contentsOf: added)
+        drafts.setImages(current, key: draftKey)
         pickerItems = []
-        if tooLarge > 0 || failed > 0 {
+        if tooLarge > 0 || failed > 0 || overBudget > 0 {
             var parts: [String] = []
             if tooLarge > 0 { parts.append("\(tooLarge) too large to send") }
+            if overBudget > 0 { parts.append("\(overBudget) over the total attachment size limit") }
             if failed > 0 { parts.append("\(failed) couldn't be read") }
             imageNotice = "Some images were skipped: \(parts.joined(separator: ", "))."
         }
     }
 
     private func appendToDraft(_ text: String) {
-        draft = draft.isEmpty ? text : draft + " " + text
+        let existing = draft.wrappedValue
+        draft.wrappedValue = existing.isEmpty ? text : existing + " " + text
         focused = true
     }
 
@@ -332,7 +377,11 @@ struct ComposerView: View {
             placeholder: "Message \(chat.activeAgentName)",
             busy: chat.sending || chat.streaming,
             disabled: !connection.online,
-            disabledNotice: connection.online ? nil : "Offline — reconnecting…"
+            disabledNotice: connection.online ? nil : "Offline — reconnecting…",
+            // Per-conversation draft. A brand-new (unsaved) conversation shares
+            // the agent-scoped key so text typed before the server assigns an id
+            // isn't orphaned when it does.
+            draftKey: "chat:\(chat.activeID ?? "new-\(chat.activeAgentID)")"
         ) { text, images in
             await chat.send(text, images: images)
         }

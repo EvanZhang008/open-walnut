@@ -701,21 +701,65 @@ export async function loadPlugins(registry: IntegrationRegistry): Promise<void> 
 
 // ── Config migration: move top-level legacy integration keys to plugins.* ──
 
-// Known non-plugin top-level config keys — everything else is treated as a legacy plugin key.
-const KNOWN_NON_PLUGIN_KEYS = new Set([
-  'version', 'user', 'defaults', 'provider', 'providers', 'agent', 'local',
-  'favorites', 'ordering', 'session_server', 'hosts', 'session_limits', 'session',
-  'heartbeat', 'tools', 'search', 'git_versioning', 'session_hooks', 'plugins', 'focus_bar',
-  'stt', 'tts', 'api_keys', 'push_tokens', 'plugin_sources',
+/**
+ * Legacy top-level integration keys to move even when no plugin by that name is
+ * installed — i.e. config left behind by an integration that has since been
+ * uninstalled. Supplements the primary test (an actual plugin directory exists;
+ * see `migrateConfigToPlugins`), it does not replace it: a privately-installed
+ * plugin can't be named in this public repo, so the on-disk evidence has to be
+ * what drives the decision.
+ *
+ * ⚠️ NEVER go back to matching "everything not in a known-config-keys list".
+ * That inverted the open and closed sets: config sections grow with the product,
+ * legacy integration keys never do. Every new top-level section (`ui`, `audio`,
+ * `developer`, …) was then one forgotten allowlist edit away from being silently
+ * swept into plugins.* on the next boot — where its real reader
+ * (`config.ui.session_panels`) no longer finds it, so the feature quietly
+ * reverted to defaults with nothing in the logs. It bit twice: `providers` (left
+ * the butler unable to authenticate) and `ui` (session_panels kept resetting).
+ */
+const LEGACY_INTEGRATION_KEYS = new Set([
+  'ms_todo',
+  'apple_reminders',
+  'google_calendar',
 ]);
+
+/** Plugin ids with a real plugin dir on disk (manifest.json), as `key` would spell them. */
+async function getInstalledPluginIds(): Promise<Set<string>> {
+  try {
+    const dirs = await discoverPluginDirs();
+    return new Set(dirs.map(d => path.basename(d.dir)));
+  } catch (err) {
+    // Can't enumerate — fall back to the legacy list alone. Migrating nothing is
+    // safe (the key stays readable at the top level); a wrong move is not.
+    log.debug('config migration: plugin discovery failed, using legacy key list only', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return new Set();
+  }
+}
+
+/**
+ * First-class config sections the OLD inverted allowlist swept into plugins.*
+ * on some machine, somewhere. Listed here so an affected config repairs itself
+ * on the next boot instead of needing a hand-edit. Append a name here if another
+ * section turns up under `plugins.` — that is now a strictly historical event,
+ * since the sweep above can no longer reach a non-legacy key.
+ */
+const MIS_MIGRATED_CONFIG_KEYS = ['providers', 'ui', 'audio', 'developer'] as const;
 
 /**
  * One-time migration: move legacy top-level integration config keys
  * into the new plugins.{id} section.
- * Scans all unknown top-level object keys (anything not in KNOWN_NON_PLUGIN_KEYS)
- * and moves them to plugins.*. Converts underscores to hyphens for the plugin ID.
- * Reads raw config.yaml, checks for legacy keys, moves them, writes back.
- * Safe to call multiple times — no-ops if already migrated.
+ *
+ * A key is migrated only on POSITIVE evidence that it configures a plugin:
+ * either a plugin directory of that name exists on disk (manifest.json), or it
+ * is a known-legacy name whose plugin is no longer installed. An unrecognised
+ * section is left alone — see LEGACY_INTEGRATION_KEYS for why the old
+ * "everything unknown is a plugin" rule was the bug, not the feature.
+ *
+ * Converts underscores to hyphens for the plugin ID. Reads raw config.yaml,
+ * moves what qualifies, writes back. Safe to call repeatedly — no-ops once done.
  */
 export async function migrateConfigToPlugins(): Promise<boolean> {
   let raw: Record<string, unknown>;
@@ -732,22 +776,36 @@ export async function migrateConfigToPlugins(): Promise<boolean> {
   let changed = false;
   const plugins = (raw.plugins ?? {}) as Record<string, Record<string, unknown>>;
 
-  // Self-heal: a previous build mis-migrated the first-class `providers` key into
-  // plugins.providers (it was missing from KNOWN_NON_PLUGIN_KEYS). The butler reads
-  // top-level config.providers, so a mis-migrated config left it unable to authenticate.
-  // Move it back to the top level (drop the injected `enabled` flag) before re-migrating.
-  if (plugins.providers && raw.providers == null) {
-    const { enabled: _enabled, ...providerEntries } = plugins.providers;
-    raw.providers = providerEntries;
-    delete plugins.providers;
-    log.info('config migration: restored plugins.providers → top-level providers');
+  // Self-heal the damage the old inverted allowlist did (see
+  // LEGACY_INTEGRATION_KEYS): first-class config sections that were swept into
+  // plugins.* get moved back to the top level, dropping the `enabled` flag the
+  // migration injected. Reversing the sweep is not optional — the readers look
+  // at the top level only, so until the key moves back the feature stays
+  // silently broken (`providers` → butler could not authenticate; `ui` →
+  // session_panels reset to its default on every boot).
+  //
+  // Only reverses keys that no longer exist at the top level, so a real plugin
+  // that happens to share a name with a config section is never clobbered.
+  for (const key of MIS_MIGRATED_CONFIG_KEYS) {
+    if (!plugins[key] || raw[key] != null) continue;
+    const { enabled: _enabled, ...entries } = plugins[key];
+    raw[key] = entries;
+    delete plugins[key];
+    log.info(`config migration: restored plugins.${key} → top-level ${key}`);
     changed = true;
   }
 
+  const installedPluginIds = await getInstalledPluginIds();
+
   for (const [key, val] of Object.entries(raw)) {
-    if (KNOWN_NON_PLUGIN_KEYS.has(key)) continue;
+    // `plugins` is the destination, not a candidate: a plugin dir literally named
+    // "plugins" would otherwise fold the whole section into itself.
+    if (key === 'plugins') continue;
+    const pluginId = key.replace(/_/g, '-'); // ms_todo → ms-todo
+    // Positive evidence only: a plugin dir of that name exists, or the plugin is
+    // gone but the key is known-legacy. Everything else is a config section.
+    if (!installedPluginIds.has(pluginId) && !LEGACY_INTEGRATION_KEYS.has(key)) continue;
     if (typeof val === 'object' && val !== null) {
-      const pluginId = key.replace(/_/g, '-'); // ms_todo → ms-todo
       if (!plugins[pluginId]) {
         plugins[pluginId] = { enabled: true, ...(val as Record<string, unknown>) };
         log.info(`config migration: moved ${key} → plugins.${pluginId}`);

@@ -10,9 +10,12 @@ struct TasksView: View {
 
     @State private var activeFilter: TaskFilter = .sessions
     @State private var selected: WalnutTask?
+    /// Explicit path so a freshly created session can push programmatically.
+    @State private var navPath: [WalnutSession] = []
+    @State private var showNewSession = false
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navPath) {
             Group {
                 if tasks.notSyncedYet && tasks.tasks.isEmpty {
                     notSyncedState
@@ -23,11 +26,30 @@ struct TasksView: View {
             .navigationTitle("Tasks")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { StatusBadge() }
+                // Creation is a primary-box capability (a REPLICA has no spawn
+                // path) — hide the entry point entirely on the cloud companion.
+                if connection.status?.mode != .replica {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showNewSession = true
+                        } label: {
+                            Image(systemName: "plus.circle.fill")
+                                .foregroundStyle(Theme.tint)
+                        }
+                        .accessibilityIdentifier("sessions.new")
+                    }
+                }
             }
             .sheet(item: $selected) { task in
                 TaskDetailSheet(task: task)
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
+            }
+            .sheet(isPresented: $showNewSession) {
+                NewSessionSheet { session in
+                    navPath.append(session)
+                }
+                .presentationDetents([.medium, .large])
             }
             // Session rows push a full-screen conversation page instead of a sheet.
             .navigationDestination(for: WalnutSession.self) { session in
@@ -113,10 +135,14 @@ struct TasksView: View {
             async let se: Void = tasks.loadSessions()
             _ = await (t, se)
         }
+        // Gated: on a background/prewarm launch the tab's `.task` would fire
+        // network fetches before the app is ever in front of the user (P0-2).
         .task {
-            async let t: Void = tasks.loadTasks()
-            async let se: Void = tasks.loadSessions()
-            _ = await (t, se)
+            LaunchGate.shared.whenActive {
+                async let t: Void = tasks.loadTasks()
+                async let se: Void = tasks.loadSessions()
+                _ = await (t, se)
+            }
         }
         .animation(.snappy(duration: 0.25), value: activeFilter)
     }
@@ -192,15 +218,17 @@ struct TasksView: View {
         }
     }
 
-    /// The Pinned scope mirrors the desktop focus bar's three tiers. Each pinned
-    /// task carries a focus_tier: `focus`, `wait`, or (default/absent) satellite.
-    /// Ordered Focus → Satellite → Wait to match the desktop reading order.
+    /// The Pinned scope mirrors the desktop focus bar's built-in tiers. Each pinned
+    /// task carries a focus_tier: `focus`, `backlog`, `wait`, or (default/absent/
+    /// unrecognized — incl. custom ct_* tiers, per api-v1) satellite.
+    /// Ordered Focus → Satellite → Backlog → Wait to match the desktop reading order.
     private enum FocusTier: String, CaseIterable {
-        case focus, satellite, wait
+        case focus, satellite, backlog, wait
         var title: String {
             switch self {
             case .focus: return "Focus"
             case .satellite: return "Satellite"
+            case .backlog: return "Backlog"
             case .wait: return "Wait"
             }
         }
@@ -209,13 +237,14 @@ struct TasksView: View {
     private func tier(of session: WalnutSession) -> FocusTier {
         switch session.focusTier {
         case "focus": return .focus
+        case "backlog": return .backlog
         case "wait": return .wait
         default: return .satellite
         }
     }
 
-    /// Pinned sessions grouped by focus tier, in Focus → Satellite → Wait order,
-    /// dropping empty tiers.
+    /// Pinned sessions grouped by focus tier, in Focus → Satellite → Backlog → Wait
+    /// order, dropping empty tiers.
     private var pinnedTierGroups: [(tier: FocusTier, sessions: [WalnutSession])] {
         let grouped = Dictionary(grouping: pinnedScopeSessions, by: tier)
         return FocusTier.allCases.compactMap { t in
@@ -258,8 +287,8 @@ struct TasksView: View {
                     .listRowBackground(Color.clear)
             }
         } else if sessionScope == .pinned {
-            // Pinned mirrors the desktop focus bar: split into Focus / Satellite
-            // / Wait sub-sections (a session's tier comes from its owning task).
+            // Pinned mirrors the desktop focus bar: split into Focus / Satellite /
+            // Backlog / Wait sub-sections (a session's tier comes from its owning task).
             ForEach(pinnedTierGroups, id: \.tier) { group in
                 Section {
                     ForEach(group.sessions) { session in sessionRow(session) }

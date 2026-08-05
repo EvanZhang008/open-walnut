@@ -25,6 +25,7 @@ import {
   getStoreCategories,
   togglePin,
   setFocusTier,
+  getCustomTiers,
   getPinnedTasks,
   groupTasks,
   addToGroup,
@@ -130,6 +131,11 @@ export type ToolResultContent = string | ToolContentBlock[];
 /** Metadata passed to tool execute functions (e.g. toolUseId for correlation). */
 export interface ToolExecuteMeta {
   toolUseId?: string;
+  /** runAgentLoop `source` of the turn that called this tool (e.g. 'chat',
+   *  'background-review'). Used for write provenance — a memory entry written by
+   *  the unattended review fork carries weaker evidence than one written while
+   *  the user was present. */
+  source?: string;
 }
 
 export interface ToolDefinition {
@@ -714,7 +720,7 @@ For categories (type='category'): rename a category across all tasks (requires o
         cwd: { type: 'string', description: 'Task-level working directory override. Takes precedence over project default_cwd when starting sessions. Empty string clears.' },
         // Pin / Focus tier
         pinned: { type: 'boolean', description: 'Pin or unpin the task. Pinned tasks appear in the Focus Bar sidebar.' },
-        focus_tier: { type: 'string', enum: ['focus', 'satellite', 'wait'], description: 'Set focus tier (task must be pinned). focus=current sprint (max 3), satellite=backlog, wait=parked/blocked.' },
+        focus_tier: { type: 'string', description: 'Set focus tier (task must be pinned). Built-ins: focus=current sprint, satellite=needs doing soon (default), backlog=someday/low-priority, wait=parked/blocked. Custom tiers (user-defined in Settings) are also accepted by id or label.' },
         // Project fields
         default_host: { type: 'string', description: 'SSH host alias for remote sessions (type=project).' },
         default_cwd: { type: 'string', description: 'Default working directory (type=project).' },
@@ -766,6 +772,31 @@ For categories (type='category'): rename a category across all tasks (requires o
 
       try {
         const results: string[] = [];
+
+        // Resolve focus_tier BEFORE any write below: built-ins match
+        // case-insensitively and pass through verbatim; custom tiers match by id
+        // OR label (case-insensitive) and resolve to the id (the schema can't
+        // enumerate them — the tier set is dynamic). Doing this first keeps the
+        // whole update atomic from the model's view: an unknown tier fails the
+        // call before title/note/etc have been written, so a retry can't
+        // double-apply the parts that did land.
+        let resolvedTier: string | undefined;
+        if (params.focus_tier !== undefined) {
+          const raw = String(params.focus_tier).trim().toLowerCase();
+          if (raw === 'focus' || raw === 'satellite' || raw === 'backlog' || raw === 'wait') {
+            resolvedTier = raw;
+          } else {
+            const customTiers = await getCustomTiers();
+            const match = customTiers.find(
+              (t) => t.id.toLowerCase() === raw || t.label.trim().toLowerCase() === raw,
+            );
+            if (!match) {
+              const valid = ['focus', 'satellite', 'backlog', 'wait', ...customTiers.map((t) => t.label)];
+              return `Error: unknown focus_tier "${String(params.focus_tier)}". Valid tiers: ${valid.join(', ')}`;
+            }
+            resolvedTier = match.id;
+          }
+        }
 
         // Structural fields
         const hasStructural = params.title !== undefined || params.priority !== undefined ||
@@ -837,35 +868,35 @@ For categories (type='category'): rename a category across all tasks (requires o
           results.push('conversation log appended');
         }
 
-        // Pin / Focus tier
+        // Pin / Focus tier (resolvedTier was validated before any write above).
         if (params.pinned !== undefined) {
           const task = await getTask(id);
           const wantPinned = params.pinned === true || params.pinned === 'true';
           if (wantPinned && !task.pinned) {
             await togglePin(task.id);
-            const tier = (params.focus_tier as string) || 'satellite';
-            await setFocusTier(task.id, tier as 'focus' | 'satellite' | 'wait');
+            const tier = resolvedTier || 'satellite';
+            await setFocusTier(task.id, tier);
             results.push(`pinned → ${tier} tier`);
           } else if (!wantPinned && task.pinned) {
             await togglePin(task.id);
             results.push('unpinned');
-          } else if (wantPinned && task.pinned && params.focus_tier) {
+          } else if (wantPinned && task.pinned && resolvedTier) {
             // Already pinned, just change tier
-            await setFocusTier(task.id, params.focus_tier as 'focus' | 'satellite' | 'wait');
-            results.push(`tier → ${params.focus_tier}`);
+            await setFocusTier(task.id, resolvedTier);
+            results.push(`tier → ${resolvedTier}`);
           } else if (wantPinned && task.pinned) {
             // Already pinned, no tier change requested
             results.push('already pinned');
           } else if (!wantPinned && !task.pinned) {
             results.push('already unpinned');
           }
-        } else if (params.focus_tier !== undefined) {
+        } else if (resolvedTier !== undefined) {
           const task = await getTask(id);
           if (!task.pinned) {
             results.push('Error: task is not pinned — pin it first with pinned=true');
           } else {
-            await setFocusTier(task.id, params.focus_tier as 'focus' | 'satellite' | 'wait');
-            results.push(`tier → ${params.focus_tier}`);
+            await setFocusTier(task.id, resolvedTier);
+            results.push(`tier → ${resolvedTier}`);
           }
         }
 

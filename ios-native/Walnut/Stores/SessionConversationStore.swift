@@ -1,6 +1,41 @@
 import Foundation
 import Observation
 
+/// One-shot handoff of a NEW session's first message from the create sheet to
+/// the conversation store. The message rides SESSION_START server-side and only
+/// reaches the transcript after the CLI spawns (seconds, more over SSH) — so
+/// without this the just-pushed conversation page renders EMPTY through the
+/// whole spawn gap. Same colocated-singleton pattern as MediaContext.
+@MainActor
+enum SessionLaunchContext {
+    private static var pending: [String: (message: String, stashedAt: Date)] = [:]
+    /// Matches the server's spawn grace (SPAWN_GRACE_MS): past it the session
+    /// either has a real transcript or was reaped — either way the stash is
+    /// stale and painting it would show a phantom launch state.
+    private static let ttl: TimeInterval = 120
+
+    static func stash(sessionId: String, message: String) {
+        guard !message.isEmpty else { return }
+        // Sweep expired entries here (no timers needed): a stash whose push
+        // never happened (sheet swiped away mid-create) must not resurface as
+        // a phantom "Starting session" hours later when the user opens that
+        // session from the list.
+        pending = pending.filter { Date().timeIntervalSince($0.value.stashedAt) < ttl }
+        pending[sessionId] = (message, Date())
+    }
+
+    /// Removes and returns the stashed message — one shot, so a RE-open after
+    /// the first turn never repaints the launch bubble on top of the
+    /// transcript row. Accepted cost: pop-and-repush INSIDE the spawn gap
+    /// loses the bubble too (consume already happened); do not "fix" that by
+    /// making this a non-destructive read — that reintroduces the duplicate.
+    /// Expired entries are dropped, not returned.
+    static func consume(_ sessionId: String) -> String? {
+        guard let entry = pending.removeValue(forKey: sessionId) else { return nil }
+        return Date().timeIntervalSince(entry.stashedAt) < ttl ? entry.message : nil
+    }
+}
+
 /// State for one session's conversation page — the transcript tail as history
 /// plus a live turn assembled from the session SSE stream.
 ///
@@ -70,11 +105,41 @@ final class SessionConversationStore {
     private static let maxRenderedRows = 150
     private static let hardMaxRenderedRows = 400
 
+    /// True from "created with a first message" until the first turn-start or
+    /// a terminal status. Keeps the Starting-session live row alive across the
+    /// SSE snapshot, which truthfully reports isStreaming=false in the
+    /// pre-spawn gap and would otherwise kill the indicator instantly.
+    @ObservationIgnored private var awaitingFirstTurn = false
+    private static let startingActivity = "Starting session"
+
     init(session: WalnutSession) {
         self.sessionId = session.id
         self.hostLabel = session.isLocal ? "Mac" : session.host
         self.processStatus = session.processStatus
         LifecycleHub.shared.register(self)
+    }
+
+    /// Paint a brand-new session's first message + Starting-session row.
+    /// Called from open(), NOT init: SwiftUI evaluates navigationDestination
+    /// builders speculatively, so View.init (and a store built inside
+    /// State(initialValue:)) can run for throwaway instances — a discarded
+    /// instance consuming the one-shot stash would leave the installed store
+    /// with nil and the page blank (the exact bug this feature fixes). open()
+    /// runs via .task only on the installed view, exactly once per screen.
+    private func adoptLaunchStash() {
+        guard !loadedOnce, let launch = SessionLaunchContext.consume(sessionId) else { return }
+        // A brand-new session's first message rode SESSION_START server-side;
+        // it reaches the transcript only after the CLI spawns (seconds — more
+        // over SSH). Paint it NOW as a normal user bubble (it was accepted,
+        // not pending) and run a Starting-session row so the page never opens
+        // blank. reconcile() absorbs the bubble once the transcript has it.
+        pendingUser.append(ChatMessage(
+            id: "launch-\(sessionId)", role: "user", text: launch,
+            createdAt: ISO8601DateFormatter().string(from: .now), kind: nil
+        ))
+        awaitingFirstTurn = true
+        streaming = true
+        activity = Self.startingActivity
     }
 
     // MARK: - Derived
@@ -111,6 +176,7 @@ final class SessionConversationStore {
         // page comes back permanently dead (guards block every reconnect).
         viewClosed = false
         isActive = true
+        adoptLaunchStash()
         connectStream()
         await loadTranscript(fresh: false)
         await loadTranscript(fresh: true)
@@ -219,6 +285,14 @@ final class SessionConversationStore {
         let changed = next.count != historyMessages.count || next.last?.id != historyMessages.last?.id
         let firstPaint = !loadedOnce
         historyMessages = next
+        // Polling-fallback path (no SSE turn events): the CLI's reply landing
+        // in the transcript is the proof the first turn ran — retire the
+        // Starting-session row here or it would shimmer forever.
+        if awaitingFirstTurn && next.contains(where: { $0.role == "assistant" }) {
+            awaitingFirstTurn = false
+            streaming = false
+            activity = nil
+        }
         // Canonical row heights can displace the viewport; restore only sticky
         // intent captured before mutation. First paint always establishes bottom.
         if isActive && (firstPaint || (changed && wasPinned)) { scrollToBottomSignal += 1 }
@@ -226,7 +300,19 @@ final class SessionConversationStore {
         // Failed bubbles are exempt: their text was NOT delivered — a match
         // here is an older identical message, and absorbing the failed bubble
         // would silently lose the pending retry.
-        pendingUser.removeAll { $0.failed != true && seen.contains($0.text) }
+        //
+        // Prefix fallback: the transcript clips user text at 4 KB + "…"
+        // (session-projection TEXT_MAX), so a long bubble never equals its
+        // transcript row — exact-match alone left the message on screen twice
+        // forever. A clipped row (trailing "…") whose body prefixes the bubble
+        // is the same message.
+        pendingUser.removeAll { bubble in
+            guard bubble.failed != true else { return false }
+            if seen.contains(bubble.text) { return true }
+            return seen.contains { row in
+                row.hasSuffix("…") && bubble.text.hasPrefix(row.dropLast())
+            }
+        }
     }
 
     /// Derive a stable id per row from its content so re-fetches don't churn
@@ -277,8 +363,20 @@ final class SessionConversationStore {
         bottomPinned = true
         if isActive { scrollToBottomSignal += 1 }
         let payloads = await Self.buildImagePayloads(jpegDatas)
+        // Encoding is a real suspension point (5 large photos take a moment).
+        // If the store went inactive meanwhile, do NOT fire the request: leave
+        // the text as a retryable failed bubble instead of writing UI state
+        // into a store whose screen is gone / whose process is suspended.
+        guard isActive, !Task.isCancelled else {
+            if let idx = pendingUser.firstIndex(where: { $0.id == optimistic.id }) {
+                pendingUser[idx].pending = false
+                pendingUser[idx].failed = true
+            }
+            return false
+        }
         do {
             _ = try await api.sendSessionMessage(id: sessionId, text: text, images: payloads)
+            guard isActive, !Task.isCancelled else { return true }
             if let idx = pendingUser.firstIndex(where: { $0.id == optimistic.id }) {
                 pendingUser[idx].pending = false
             }
@@ -312,10 +410,9 @@ final class SessionConversationStore {
         }
     }
 
+    /// Sequential, budgeted, off-MainActor — see SelectedImage.buildPayloads.
     private nonisolated static func buildImagePayloads(_ datas: [Data]) async -> [ImagePayload] {
-        await Task.detached(priority: .userInitiated) {
-            datas.map { ImagePayload(data: $0.base64EncodedString(), mediaType: "image/jpeg") }
-        }.value
+        await SelectedImage.buildPayloads(datas)
     }
 
     // MARK: - Failed-bubble actions
@@ -393,6 +490,7 @@ final class SessionConversationStore {
                 seedFromSnapshot(snap)
             }
         case "turn-start":
+            awaitingFirstTurn = false // the real turn takes over the indicator
             streaming = true
             liveText = ""
             pendingDelta = ""
@@ -420,6 +518,7 @@ final class SessionConversationStore {
             finalizeTurn()
         case "error":
             let p = try? JSONDecoder().decode(ErrorPayload.self, from: data)
+            awaitingFirstTurn = false
             streaming = false
             activity = nil
             errorMessage = p?.message ?? "The session turn failed."
@@ -443,8 +542,30 @@ final class SessionConversationStore {
     /// `completedLen` is the in-flight turn — the rest is already in the
     /// transcript, so rendering it here would duplicate history.
     private func seedFromSnapshot(_ snap: SnapshotPayload) {
+        // Snapshot content is PROOF a turn ran — retire the pre-spawn wait
+        // BEFORE applyStatus so a terminal status in the same snapshot (app
+        // backgrounded through the whole spawn→run→idle-reap arc) doesn't
+        // synthesize the died-before-start banner over a finished session,
+        // and so the blocks below actually seed instead of the early-return.
+        if awaitingFirstTurn && !snap.blocks.isEmpty {
+            awaitingFirstTurn = false
+        }
         applyStatus(snap.processStatus)
-        streaming = snap.isStreaming
+        // Pre-spawn gap of a just-created session: the buffer truthfully says
+        // "not streaming" because the CLI isn't up yet — but the first turn IS
+        // coming (the launch message rode SESSION_START). Keep the Starting-
+        // session row instead of letting the snapshot blank the page.
+        if awaitingFirstTurn && !snap.isStreaming {
+            streaming = true
+            if activity == nil { activity = Self.startingActivity }
+            return
+        }
+        // Gate on liveness, not the buffer flag alone: a CLI that dies MID-turn
+        // never emits turn-end, so the server buffer's isStreaming stays true
+        // forever. Trusting it painted an eternal "Thinking…" row on a session
+        // whose nav bar already said "Ended" (applyStatus above cleared
+        // streaming; the unguarded assignment put it right back).
+        streaming = snap.isStreaming && SessionStatus(snap.processStatus).isAlive
         pendingDelta = "" // snapshot resets the live region wholesale
         // completedLen is server-supplied — clamp both ends so a malformed
         // (negative / oversized) value can't index-crash the slice.
@@ -466,6 +587,22 @@ final class SessionConversationStore {
         guard !status.isEmpty else { return }
         processStatus = status
         if !SessionStatus(status).isAlive {
+            // Terminal status ends the pre-spawn wait too: a failed spawn must
+            // not leave "Starting session" shimmering forever. And since 201 =
+            // accepted-not-spawned, a bad path/host surfaces exactly here — as
+            // a session that dies before its first turn. Say so: bare "Ended"
+            // right after tapping Start reads as a mystery.
+            //
+            // historyMessages.isEmpty guard: a terminal status with transcript
+            // rows on screen is a session that RAN (e.g. backgrounded through
+            // the spawn gap, turn completed, CLI idle-reaped; the resumed
+            // snapshot's "stopped" races ahead of the transcript reload) — the
+            // banner would be a lie there. Wording stays cause-neutral: the
+            // phone can't distinguish bad-path from SSH failure from eviction.
+            if awaitingFirstTurn && errorMessage == nil && historyMessages.isEmpty {
+                errorMessage = "The session ended before it could start — open it on your desktop to see why."
+            }
+            awaitingFirstTurn = false
             streaming = false
             activity = nil
         }
@@ -488,6 +625,26 @@ final class SessionConversationStore {
         guard !pendingDelta.isEmpty else { return }
         liveText += pendingDelta
         pendingDelta = ""
+        reassertPinnedFollow()
+    }
+
+    @ObservationIgnored private var lastPinReassertAt: Date?
+    /// Above the view's 250ms programmatic-geometry freeze — see the long note on
+    /// ChatStore.pinReassertInterval.
+    private static let pinReassertInterval: TimeInterval = 0.7
+
+    /// Keep a PINNED reader following streamed growth. Mirrors ChatStore — see
+    /// the long explanation there. Driven from the delta flush (store side), NEVER
+    /// from ScrollBottomTracking's geometry callback, which must stay free of
+    /// observable writes (P0-2).
+    private func reassertPinnedFollow() {
+        guard isActive, streaming, bottomPinned else { return }
+        let now = Date()
+        if let last = lastPinReassertAt, now.timeIntervalSince(last) < Self.pinReassertInterval {
+            return
+        }
+        lastPinReassertAt = now
+        scrollToBottomSignal += 1
     }
 
     /// Turn ended — fold the finished turn into history and clear the live turn.
@@ -497,6 +654,7 @@ final class SessionConversationStore {
     /// "message appears all at once" feel). Keeping the text on screen makes the
     /// live bubble settle in place; the refetch quietly swaps in canonical rows.
     private func finalizeTurn() {
+        awaitingFirstTurn = false // covers a turn-end with no observed turn-start
         flushPendingDelta() // `finished` below must include the delta tail
         deltaFlushTask?.cancel()
         deltaFlushTask = nil

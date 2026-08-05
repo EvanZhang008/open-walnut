@@ -94,22 +94,49 @@ final class TableAttachment: NSTextAttachment {
         traits.performAsCurrent { rerender() }
     }
 
+    /// Rows the "too large" placeholder shows. Must be far below
+    /// `maxRenderedRows` — the old fallback capped at `maxRenderedRows` (100),
+    /// so a 100+ row table produced a substitute of exactly the same height, and
+    /// a single-column table produced one of the same width too: a
+    /// byte-identical bitmap. The guard "fired" and rendered the very bitmap it
+    /// was supposed to prevent.
+    private static let fallbackRows = 20
+    /// Placeholder render width. Height alone isn't enough — a wide table can
+    /// blow the budget on width, which no row cap can fix.
+    private static let fallbackWidth: CGFloat = 320
+
     private func rerender() {
         let effectiveOmittedRows = hiddenRowCount
-        let renderTable: EditableTable
+        var renderTable = table
+        var width = renderWidth
+        var omitted = effectiveOmittedRows
         if Self.wouldExceedBitmapLimit(
             table: table, width: renderWidth, omittedRows: effectiveOmittedRows
         ) {
-            renderTable = EditableTable(
-                header: ["Table too large to render"],
-                rows: Array(table.serialize().split(separator: "\n").prefix(Self.maxRenderedRows)).map { [String($0)] }
-            )
-        } else {
-            renderTable = table
+            renderTable = Self.fallbackTable(for: table)
+            width = min(renderWidth, Self.fallbackWidth)
+            omitted = 0
+            // Re-check after substitution: if even the placeholder can't fit
+            // (absurd renderWidth), shrink to a single-row notice. Bounded loop,
+            // not a while — two deterministic steps, no chance of spinning.
+            if Self.wouldExceedBitmapLimit(table: renderTable, width: width, omittedRows: 0) {
+                renderTable = EditableTable(header: ["Table too large to render"], rows: [])
+                width = min(width, Self.fallbackWidth)
+            }
         }
-        let image = Self.render(table: renderTable, width: renderWidth, omittedRows: effectiveOmittedRows)
+        let image = Self.render(table: renderTable, width: width, omittedRows: omitted)
         self.image = image
         self.bounds = CGRect(x: 0, y: 0, width: image.size.width, height: image.size.height)
+    }
+
+    /// A genuinely SMALLER stand-in: a fixed notice header plus at most
+    /// `fallbackRows` source lines, so the user can still see what the table is.
+    private static func fallbackTable(for table: EditableTable) -> EditableTable {
+        let preview = table.serialize()
+            .split(separator: "\n")
+            .prefix(fallbackRows)
+            .map { [String($0.prefix(200))] }
+        return EditableTable(header: ["Table too large to render"], rows: Array(preview))
     }
 
     /// Shared with TableInlineEditor so the editing grid overlays the

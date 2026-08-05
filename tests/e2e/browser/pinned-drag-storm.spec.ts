@@ -160,7 +160,21 @@ test('pinned drag survives task-churn storm on a non-All tab (no React #185)', a
     await page.waitForTimeout(1500)
     await page.mouse.move(waitBox!.x + waitBox!.width / 2, waitBox!.y + waitBox!.height / 2, { steps: 10 })
     await page.waitForTimeout(1500)
-    await page.mouse.move(satBox!.x + satBox!.width / 2, satBox!.y + satBox!.height / 2, { steps: 10 })
+    // Re-target the satellite card for the final hover: the cross-tier preview
+    // moves cards in real time (2026-08 fix — the drag Map is copy-on-write, so
+    // the tier memos recompute mid-drag) and the long hold near the container's
+    // bottom edge triggers dnd-kit auto-scroll — together they can push the sat
+    // card nearly out of the viewport (measured y 204 → 3.5). Scroll it back and
+    // re-acquire its box; releasing at the stale coordinates resolved collision
+    // to the focus drop-zone and silently kept the original tier.
+    // NO settle gap between scroll and hover: the pointer is still parked at the
+    // container's bottom edge, so auto-scroll keeps running — a 300ms pause here
+    // let it re-drift the card clean out of the viewport (measured y 204 → -87
+    // once the always-rendered Backlog subgroup grew the scrollable stack).
+    await satCard.scrollIntoViewIfNeeded()
+    const satBoxNow = await satCard.boundingBox()
+    expect(satBoxNow).not.toBeNull()
+    await page.mouse.move(satBoxNow!.x + satBoxNow!.width / 2, satBoxNow!.y + satBoxNow!.height / 2, { steps: 10 })
     await page.waitForTimeout(1500)
 
     // Mid-drag invariants:
@@ -173,6 +187,15 @@ test('pinned drag survives task-churn storm on a non-All tab (no React #185)', a
     // 3. No crash signals so far.
     expect(crashes, `crash signals mid-drag:\n${crashes.join('\n')}`).toEqual([])
 
+    // Last-instant re-hover: the 1500ms hold + the assertion roundtrips above
+    // give auto-scroll time to drift again (the drag is still live). Whatever
+    // the drift did, dragEnd resolves from the LAST hover — re-acquire the sat
+    // card and release on its live coordinates so the drop deterministically
+    // lands in Satellite.
+    await satCard.scrollIntoViewIfNeeded()
+    const satBoxUp = await satCard.boundingBox()
+    expect(satBoxUp).not.toBeNull()
+    await page.mouse.move(satBoxUp!.x + satBoxUp!.width / 2, satBoxUp!.y + satBoxUp!.height / 2, { steps: 5 })
     await page.mouse.up()
   } finally {
     await storm.stop()

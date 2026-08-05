@@ -250,7 +250,7 @@ describe('API returns last_session_update', () => {
 });
 
 describe('touchLastSessionUpdate preserves manual pinned order', () => {
-  type Tier = 'focus' | 'satellite' | 'wait';
+  type Tier = 'focus' | 'satellite' | 'backlog' | 'wait';
 
   async function pinToTier(id: string, tier: Tier): Promise<void> {
     const pinRes = await fetch(apiUrl(`/api/focus/tasks/${id}`), { method: 'POST' });

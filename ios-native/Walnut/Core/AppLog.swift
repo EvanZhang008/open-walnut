@@ -12,6 +12,18 @@ final class AppLog: @unchecked Sendable {
     static let shared = AppLog()
 
     private struct Entry: Codable {
+        /// Monotonic per-process identity. Uploads are acknowledged BY SEQUENCE,
+        /// never by count: `removeFirst(batch.count)` silently discarded
+        /// never-uploaded lines whenever the buffer changed shape mid-flight —
+        /// the `maxBuffered` trim (or a `clear`) drops from the FRONT, so after a
+        /// trim the first `batch.count` entries were no longer the batch that was
+        /// acknowledged, and the difference was thrown away unsent. That is
+        /// exactly the crash/freeze window where losing lines hurts most.
+        ///
+        /// Optional for decode compatibility with buffers persisted by older
+        /// builds; those entries are treated as pre-sequence and dropped by the
+        /// same rule as everything below the acknowledged high-water mark.
+        var seq: UInt64?
         let ts: String
         let level: String
         let subsystem: String
@@ -21,6 +33,8 @@ final class AppLog: @unchecked Sendable {
 
     private let lock = NSLock()
     private var buffer: [Entry] = []
+    /// Next sequence to hand out. Never reset within a process lifetime.
+    private var nextSequence: UInt64 = 1
     private var uploading = false
     private var errorFlushWorkItem: DispatchWorkItem?
     /// While backgrounded, uploads never START (persist-only); lines stay
@@ -59,7 +73,15 @@ final class AppLog: @unchecked Sendable {
         // Recover lines that didn't make it out before the last termination.
         if let data = try? Data(contentsOf: Self.persistURL),
            let saved = try? JSONDecoder().decode([Entry].self, from: data) {
-            buffer = Array(saved.suffix(Self.maxBuffered))
+            // Re-sequence recovered lines: sequences are per-process, and a
+            // previous process's numbers would collide with the ones this
+            // process hands out.
+            buffer = saved.suffix(Self.maxBuffered).map { entry in
+                var renumbered = entry
+                renumbered.seq = nextSequence
+                nextSequence += 1
+                return renumbered
+            }
         }
         NotificationCenter.default.addObserver(
             forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil
@@ -97,7 +119,7 @@ final class AppLog: @unchecked Sendable {
     }
 
     private func append(level: String, subsystem: String, message: String, meta: [String: String]?) {
-        let entry = Entry(
+        var entry = Entry(
             ts: ISO8601DateFormatter().string(from: Date()),
             level: level, subsystem: subsystem, message: message, meta: meta
         )
@@ -105,6 +127,8 @@ final class AppLog: @unchecked Sendable {
         print("[\(level)] \(subsystem): \(message) \(meta ?? [:])")
         #endif
         lock.lock()
+        entry.seq = nextSequence
+        nextSequence += 1
         buffer.append(entry)
         if buffer.count > Self.maxBuffered {
             buffer.removeFirst(buffer.count - Self.maxBuffered)
@@ -219,8 +243,9 @@ final class AppLog: @unchecked Sendable {
                   let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode)
             else { return } // keep lines buffered; next trigger retries
 
-            // Drop exactly the lines that were uploaded (new appends survive).
-            self.dropUploaded(batch.count)
+            // Drop exactly the lines that were uploaded, BY IDENTITY (new
+            // appends and anything the buffer trim reshuffled meanwhile survive).
+            self.dropUploaded(through: batch.last?.seq)
             self.persist()
         }
     }
@@ -236,9 +261,16 @@ final class AppLog: @unchecked Sendable {
         lock.lock(); uploading = false; lock.unlock()
     }
 
-    private func dropUploaded(_ count: Int) {
+    /// Remove every buffered entry whose sequence the server has acknowledged.
+    /// Sequence-based, not count-based — see `Entry.seq`.
+    private func dropUploaded(through highWater: UInt64?) {
+        guard let highWater else { return }
         lock.lock()
-        buffer.removeFirst(min(count, buffer.count))
+        buffer.removeAll { entry in
+            // A nil seq can only be a pre-sequence recovered line, and those are
+            // renumbered on load — treat any survivor as older than the mark.
+            (entry.seq ?? 0) <= highWater
+        }
         lock.unlock()
     }
 }

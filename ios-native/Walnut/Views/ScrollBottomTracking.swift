@@ -95,7 +95,16 @@ struct KeyboardBottomRepin: ViewModifier {
             }
             .onDisappear {
                 failsafeTask?.cancel()
+                failsafeTask = nil
                 keyboardGeometryFrozen = false
+                // Also drop the pending intent. A view dismissed mid-keyboard-
+                // transition kept `pendingRepin = true` (it is @State on a
+                // retained view — a tab switch or nav pop does not reset it), so
+                // the FIRST keyboard event after returning fired a repin that
+                // the user never asked for, yanking a history reader to the
+                // bottom. The repin belongs to the transition that armed it, and
+                // that transition is over.
+                pendingRepin = false
             }
     }
 

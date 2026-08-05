@@ -15,6 +15,7 @@ import {
   deriveStatusFromPhase,
   PHASE_TO_STATUS,
   sessionStreamingPhase,
+  sessionTurnStartPhase,
 } from '../../src/core/phase.js';
 
 describe('PHASE_ORDER', () => {
@@ -121,5 +122,30 @@ describe('sessionStreamingPhase', () => {
     expect(sessionStreamingPhase('HUMAN_VERIFIED')).toBeNull();
     expect(sessionStreamingPhase('POST_WORK_COMPLETED')).toBeNull();
     expect(sessionStreamingPhase('COMPLETE')).toBeNull();
+  });
+});
+
+describe('sessionTurnStartPhase (incidents 46f42871 + 1f11596b)', () => {
+  it('INCIDENT SHAPE: pulls AGENT_COMPLETE back to IN_PROGRESS when the CLI starts the queued turn', () => {
+    // The queued-send race: input fired while phase was already IN_PROGRESS
+    // (no-op), the previous turn's result flipped it to AGENT_COMPLETE, and the
+    // task showed completed while the CLI streamed the next turn.
+    // session:streaming can NOT fix this (it only acts on AWAIT_HUMAN_ACTION) —
+    // that gap is exactly why this trigger exists.
+    expect(sessionTurnStartPhase('AGENT_COMPLETE')).toBe('IN_PROGRESS');
+  });
+
+  it('also undoes a triage push to AWAIT_HUMAN_ACTION (red row while running)', () => {
+    expect(sessionTurnStartPhase('AWAIT_HUMAN_ACTION')).toBe('IN_PROGRESS');
+  });
+
+  it('is idempotent on IN_PROGRESS and starts TODO tasks', () => {
+    expect(sessionTurnStartPhase('IN_PROGRESS')).toBeNull();
+    expect(sessionTurnStartPhase('TODO')).toBe('IN_PROGRESS');
+  });
+
+  it('never overwrites terminal phases (human decisions win)', () => {
+    expect(sessionTurnStartPhase('HUMAN_VERIFIED')).toBeNull();
+    expect(sessionTurnStartPhase('COMPLETE')).toBeNull();
   });
 });

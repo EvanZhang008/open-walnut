@@ -63,7 +63,7 @@ import { GlobalNotesSection } from '../notes/GlobalNotesSection';
 import { useGlobalNotes } from '@/hooks/useGlobalNotes';
 import { SortableTierCard, TierDropZone, GroupChip, groupSortableId } from './FocusSatelliteCards';
 import { TodoSectionTabs, TODO_SECTIONS, type TodoSection } from './TodoSectionTabs';
-import type { FocusTier } from '@/api/focus';
+import { isBuiltinTier, type FocusTier, type CustomTierDef } from '@/api/focus';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
 import {
   resolveSessionRecordStatus,
@@ -126,7 +126,14 @@ interface TodoPanelProps {
   onSetStartDate?: (taskId: string, date: string | null) => void;
   pinnedTaskIds?: Set<string>;
   focusTaskIds?: Set<string>;
+  backlogTaskIds?: Set<string>;
   waitTaskIds?: Set<string>;
+  /** User-defined tier registry (Settings → Focus Tiers), registry order. */
+  customTiers?: CustomTierDef[];
+  /** False until the registry's first fetch resolves — gates stale-tab self-heal. */
+  customTiersLoaded?: boolean;
+  /** Per custom-tier-id membership sets (mirrors focusTaskIds/waitTaskIds). */
+  customTierIds?: Record<string, Set<string>>;
   /** When true, suppress opening the detail panel for the focused task (e.g. chat task-ref clicks). */
   suppressDetail?: boolean;
   /** Set of session IDs currently displayed in session columns. */
@@ -223,6 +230,10 @@ const PRIORITY_LABEL: Record<string, string> = {
 
 const CHEVRON_ICON = '\u25B6'; // ▶ — used by all collapse-chevron buttons (CSS rotation handles expanded state)
 
+// Shared empty set for the tierGraceUnion fast path — one identity so memos
+// keyed on the result don't churn. Never mutate.
+const EMPTY_ID_SET: Set<string> = new Set<string>();
+
 // Action icons: imported from shared Icons.tsx via ICONS.*
 
 /** Normalize legacy priority values to current 4-tier system. */
@@ -274,7 +285,10 @@ function persistTab(tab: string) {
 function readSection(): TodoSection {
   try {
     const v = localStorage.getItem(LS_SECTION_KEY);
-    if (v && (TODO_SECTIONS as readonly string[]).includes(v)) return v as TodoSection;
+    // Custom tier tabs persist by id. A stale id (tier deleted elsewhere) is
+    // accepted here — the stale-tab effect in TodoPanel switches back to
+    // 'focus' once the registry loads and the id isn't in it.
+    if (v && ((TODO_SECTIONS as readonly string[]).includes(v) || v.startsWith('ct_'))) return v as TodoSection;
   } catch { /* ignore */ }
   return 'focus';
 }
@@ -1031,6 +1045,15 @@ const snapToCursor: Modifier = ({ activatorEvent, draggingNodeRect, transform })
 const livePointer = { x: 0, y: 0 };
 function trackPointer(e: PointerEvent) { livePointer.x = e.clientX; livePointer.y = e.clientY; }
 
+/** Extract the gid from a `group:<gid>:<tier>` sortable sentinel id. Neither gid
+ *  (`g_…`) nor tier keys (`focus`/`ct_…`) contain colons, so slicing between the
+ *  first and last colon is exact — works for custom tier suffixes too. */
+function parseGroupSentinelGid(sentinel: string): string {
+  const body = sentinel.slice('group:'.length);
+  const lastColon = body.lastIndexOf(':');
+  return lastColon === -1 ? body : body.slice(0, lastColon);
+}
+
 // left 2/3 of a card = group zone, right 1/3 = subtask (indent) zone.
 export const GROUP_ZONE_RATIO = 2 / 3;
 
@@ -1493,6 +1516,58 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
 
 const RECENT_VISIBLE_MAX = 3;
 
+// ── CustomTierSubgroup — one user-defined tier section in the pinned area. ──
+// Mirrors the built-in Wait sub-group JSX exactly, but lives in its own component
+// because each tier needs its own useResizableHeight hook and the number of custom
+// tiers is dynamic (hooks can't run in a loop inside TodoPanel itself).
+function CustomTierSubgroup({ def, isAll, folded, collapsed, onToggle, visibleIds, children, isEmpty, count, onAdd }: {
+  def: CustomTierDef;
+  isAll: boolean;
+  /** Chevron-folded in the stacked view (content hidden). */
+  folded: boolean;
+  /** Raw collapsed-set membership (chevron direction). */
+  collapsed: boolean;
+  onToggle: (id: string) => void;
+  /** Sortable ids for this tier's SortableContext (mirrors visibleFocusIds etc.). */
+  visibleIds: string[];
+  children: ReactNode;
+  isEmpty: boolean;
+  count: number;
+  onAdd: (title: string) => Promise<unknown>;
+}) {
+  const resize = useResizableHeight(`open-walnut-focus-tier-height-${def.id}`, { min: 60, max: 1200 });
+  return (
+    <div className="todo-pinned-subgroup">
+      {isAll && (
+      <div className="todo-pinned-sublabel" onClick={() => onToggle(def.id)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onToggle(def.id); }} style={{ cursor: 'pointer' }} title={`${def.label} — custom tier`}>
+        <span className={`todo-pinned-chevron todo-pinned-sub-chevron${collapsed ? '' : ' todo-pinned-chevron-open'}`}>{'▸'}</span>
+        <span className="todo-pinned-sublabel-icon todo-tier-icon-custom">{ICONS.ICON_TIER_CUSTOM}</span>
+        <span className="todo-pinned-sublabel-text">{def.label}</span>
+        <span className="todo-pinned-sublabel-count">{count}</span>
+      </div>
+      )}
+      {!folded && (
+        <SortableContext items={visibleIds} strategy={verticalListSortingStrategy}>
+          <div className="todo-pinned-list-scroll" style={isAll && resize.height != null ? { maxHeight: resize.height } : undefined}>
+            <TierDropZone id={`${def.id}-drop-zone`} isEmpty={isEmpty}>
+              {children}
+            </TierDropZone>
+            <InlineAdd label={`Add to ${def.label}…`} onAdd={onAdd} />
+          </div>
+          {/* Per-tier drag handle only makes sense when tiers share the panel. */}
+          {isAll && (
+          <div
+            className={`todo-tier-resize-handle${resize.isDragging ? ' dragging' : ''}`}
+            onPointerDown={(e) => resize.handlePointerDown(e, e.currentTarget.previousElementSibling as HTMLElement | null)}
+            title={`Drag to resize ${def.label}`}
+          />
+          )}
+        </SortableContext>
+      )}
+    </div>
+  );
+}
+
 // ── InlineAdd — "+" row at the bottom of a tier or project group to add a task
 // directly into that context. Reuses the parent onCreate (optimistic + tier-correct path). ──
 function InlineAdd({ onAdd, label = 'Add to Focus…' }: { onAdd: (title: string) => void | Promise<unknown>; label?: string }) {
@@ -1559,6 +1634,8 @@ interface RecentCardProps {
   onUnpinTask?: (taskId: string) => void;
   isPinned?: boolean;
   pinnedTier?: FocusTier;
+  /** Resolved display label when pinnedTier is a custom id. */
+  pinnedTierLabel?: string;
   onSetPriority?: (id: string, priority: string) => void;
   onSetDate?: (id: string, date: string | null) => void;
   onSetStartDate?: (id: string, date: string | null) => void;
@@ -1574,7 +1651,7 @@ interface RecentCardProps {
 
 // ── SortableRecentCard — draggable recent-activity card with kebab menu ──
 
-function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onPinTask, onUnpinTask, isPinned, pinnedTier, onSetPriority, onSetDate, onSetStartDate, onStar, onSetTier, onExpandDetail, onClearFocus, onOpenSession, onSetPhase, onUpdateTitle, onDelete }: RecentCardProps) {
+function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onPinTask, onUnpinTask, isPinned, pinnedTier, pinnedTierLabel, onSetPriority, onSetDate, onSetStartDate, onStar, onSetTier, onExpandDetail, onClearFocus, onOpenSession, onSetPhase, onUpdateTitle, onDelete }: RecentCardProps) {
   // Static cards: done (tiers filter them out — a drag would silently vanish) and
   // pinned (already placed in a tier; that tier card is the draggable one). Static
   // cards register under a NAMESPACED sortable id — the raw task.id is already
@@ -1679,8 +1756,8 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
       {!isStatic && <span className="todo-pinned-drag-handle" {...attributes} {...listeners}>{'\u2261'}</span>}
       {isPinned && pinnedTier && (
         <span
-          className={`todo-recent-tier-dot todo-tier-icon-${pinnedTier}`}
-          title={`Pinned \u2014 ${pinnedTier === 'focus' ? 'Focus' : pinnedTier === 'wait' ? 'Wait' : 'Satellite'}`}
+          className={`todo-recent-tier-dot todo-tier-icon-${isBuiltinTier(pinnedTier) ? pinnedTier : 'custom'}`}
+          title={`Pinned \u2014 ${pinnedTierLabel ?? (pinnedTier === 'focus' ? 'Focus' : pinnedTier === 'backlog' ? 'Backlog' : pinnedTier === 'wait' ? 'Wait' : 'Satellite')}`}
         >
           {ICONS.tierIcon(pinnedTier)}
         </span>
@@ -1740,7 +1817,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, waitTaskIds, suppressDetail, openSessionIds, openSessionTaskIds, onClearOperationError, onOperationError, externalCategory, onCategoryChange, onOpenLauncher, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, openSessionIds, openSessionTaskIds, onClearOperationError, onOperationError, externalCategory, onCategoryChange, onOpenLauncher, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden }: TodoPanelProps) {
   // TEMP drag-flash trace — remove after diagnosis
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
@@ -1849,9 +1926,34 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       return next;
     });
   }, []);
+  // Prune localStorage orphans of DELETED custom tiers once the registry is
+  // known: collapsed-section entries and per-tier resize heights (the latter
+  // matter doubly — ui-prefs-sync mirrors `open-walnut-*` keys to the server,
+  // so orphans would replicate to every browser forever).
+  useEffect(() => {
+    if (!customTiersLoaded) return;
+    const live = new Set((customTiersLive ?? []).map((t) => t.id));
+    setCollapsedSections((prev) => {
+      const stale = [...prev].filter((id) => id.startsWith('ct_') && !live.has(id));
+      if (stale.length === 0) return prev;
+      const next = new Set(prev);
+      for (const id of stale) next.delete(id);
+      persistSet(LS_COLLAPSED_SECTIONS_KEY, next);
+      return next;
+    });
+    try {
+      const HEIGHT_PREFIX = 'open-walnut-focus-tier-height-ct_';
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (key?.startsWith(HEIGHT_PREFIX) && !live.has(key.slice('open-walnut-focus-tier-height-'.length))) {
+          localStorage.removeItem(key);
+        }
+      }
+    } catch { /* storage disabled */ }
+  }, [customTiersLoaded, customTiersLive]);
 
   // ── Section tabs ──
-  // Which of Focus / Satellite / Wait / Recent / Tasks / Notes owns the panel
+  // Which of Focus / Satellite / Backlog / Wait / Recent / Tasks / Notes owns the panel
   // right now ('all' = the legacy stacked view, kept for cross-tier drag).
   // `collapsedSections` is still the *within-a-view* chevron state; these two are
   // independent — in single-section mode the region renders regardless of its
@@ -1865,6 +1967,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     setActiveSection(section);
     persistSection(section);
   }, []);
+  // Self-heal a stale custom-tier tab: if the active tab is a deleted tier's id
+  // (registry loaded, id absent), fall back to Focus instead of an empty panel.
+  // MUST wait for customTiersLoaded: the registry starts as [] while the fetch is
+  // in flight, and healing against that empty snapshot would reset (and
+  // persistSection-overwrite) the user's ct_* tab on every single page load.
+  useEffect(() => {
+    if (!customTiersLoaded || !activeSection.startsWith('ct_') || !customTiersLive) return;
+    if (!customTiersLive.some((t) => t.id === activeSection)) handleSectionChange('focus');
+  }, [activeSection, customTiersLive, customTiersLoaded, handleSectionChange]);
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_CATS_KEY));
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_PROJS_KEY));
   // Tracks which parent tasks the user has EXPANDED (default = all collapsed)
@@ -1934,11 +2045,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const { ratio: listRatio, handleProps: pinnedSplitterHandleProps } = useVerticalSplitter({ storageKey: 'open-walnut-todo-pinned-ratio', defaultRatio: 0.4, minRatio: 0, maxRatio: 0.8, containerRef: splitterContainerRef });
   const listCollapsed = listRatio <= 0.02;
 
-  // Per-tier resize: each of Focus/Satellite/Wait gets its own drag handle at the
-  // bottom of its card list, independent of the other two and of the overall
+  // Per-tier resize: each built-in tier (Focus/Satellite/Backlog/Wait) gets its own
+  // drag handle at the bottom of its card list, independent of the others and of the overall
   // Pinned/list splitter above. Height is `null` (auto) until the user drags.
   const focusResize = useResizableHeight('open-walnut-focus-tier-height-focus', { min: 60, max: 1200 });
   const satelliteResize = useResizableHeight('open-walnut-focus-tier-height-satellite', { min: 60, max: 1200 });
+  const backlogResize = useResizableHeight('open-walnut-focus-tier-height-backlog', { min: 60, max: 1200 });
   const waitResize = useResizableHeight('open-walnut-focus-tier-height-wait', { min: 60, max: 1200 });
   // Recent gets the same treatment — before this it was hard-capped at ~3 rows
   // (RECENT_VISIBLE_MAX * 30) with no way to pull it taller.
@@ -1956,7 +2068,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const isAll = effectiveSection === 'all';
   /** True when `section` should be mounted: either we're in the stacked view or it IS the active tab. */
   const showSection = useCallback(
-    (section: Exclude<TodoSection, 'all'>) => isAll || effectiveSection === section,
+    (section: TodoSection) => isAll || effectiveSection === section,
     [isAll, effectiveSection],
   );
   /** Within the active view, is this region folded? Only the stacked view honors chevrons. */
@@ -2208,9 +2320,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // scrollToPinnedTask would silently find nothing and never jump there.
     // User-locate only: the refresh restore path must respect collapsed state.
     if (isUserLocate && pinnedTaskIds?.has(focusedTaskId)) {
-      const tierKey = focusTaskIds?.has(focusedTaskId) ? 'focus'
+      let tierKey = focusTaskIds?.has(focusedTaskId) ? 'focus'
+        : backlogTaskIds?.has(focusedTaskId) ? 'backlog'
         : waitTaskIds?.has(focusedTaskId) ? 'wait'
         : 'satellite';
+      if (tierKey === 'satellite' && customTierIds) {
+        for (const [tid, ids] of Object.entries(customTierIds)) {
+          if (ids.has(focusedTaskId)) { tierKey = tid; break; }
+        }
+      }
       if (collapsedSections.has('pinned') || collapsedSections.has(tierKey)) {
         setCollapsedSections((prev) => {
           const next = new Set(prev);
@@ -2337,45 +2455,101 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Fix: remember the pin membership each task had just BEFORE it completed, and keep
   // serving it for the length of the grace window. The server state is untouched (the
   // auto-unpin is correct); this only defers when the UI stops drawing the card.
-  const lastPinStateRef = useRef<Map<string, { pinned: boolean; focus: boolean; wait: boolean }>>(new Map());
+  const lastPinStateRef = useRef<Map<string, { pinned: boolean; tier: string }>>(new Map());
   useEffect(() => {
     for (const t of tasks) {
       // Snapshot only while OPEN — once done, the entry must stay frozen at its
       // pre-completion value (the server has already dropped it from the sets).
       if (t.status !== 'done' && t.phase !== 'COMPLETE') {
+        let tier = 'satellite';
+        if (focusTaskIds?.has(t.id)) tier = 'focus';
+        else if (backlogTaskIds?.has(t.id)) tier = 'backlog';
+        else if (waitTaskIds?.has(t.id)) tier = 'wait';
+        else if (customTierIds) {
+          for (const [tid, ids] of Object.entries(customTierIds)) {
+            if (ids.has(t.id)) { tier = tid; break; }
+          }
+        }
         lastPinStateRef.current.set(t.id, {
           pinned: pinnedTaskIds?.has(t.id) ?? false,
-          focus: focusTaskIds?.has(t.id) ?? false,
-          wait: waitTaskIds?.has(t.id) ?? false,
+          tier,
         });
       }
     }
-  }, [tasks, pinnedTaskIds, focusTaskIds, waitTaskIds]);
+  }, [tasks, pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTierIds]);
 
-  /** Pin-membership sets widened to include tasks still inside the grace window. */
-  const graceUnion = useCallback((live: Set<string> | undefined, which: 'pinned' | 'focus' | 'wait'): Set<string> => {
-    const out = new Set(live ?? []);
-    for (const t of tasks) {
-      if (!keepWhileCompleting(t)) continue;
-      if (lastPinStateRef.current.get(t.id)?.[which]) out.add(t.id);
-    }
-    return out;
-  }, [tasks, keepWhileCompleting]);
-
-  const pinnedIdsWithGrace = useMemo(() => graceUnion(pinnedTaskIds, 'pinned'), [graceUnion, pinnedTaskIds, recentTick]);
-  const focusIdsWithGrace = useMemo(() => graceUnion(focusTaskIds, 'focus'), [graceUnion, focusTaskIds, recentTick]);
-  const waitIdsWithGrace = useMemo(() => graceUnion(waitTaskIds, 'wait'), [graceUnion, waitTaskIds, recentTick]);
-
-  // Active pinned-drag id — declared BEFORE the pinned render-model memos below so
+  // Active pinned-drag id — declared BEFORE every pinned render-model memo below so
   // they can freeze on it (useFrozenWhile) while a drag is live.
   const [activeDragPinnedId, setActiveDragPinnedId] = useState<string | null>(null);
   const isPinnedDragActive = activeDragPinnedId !== null;
+  // The tier REGISTRY freezes too: a cross-client tier create/delete mid-drag
+  // (config:changed{focus_tiers} → refetch) would otherwise swap DROP_ZONE_TIERS,
+  // unmount a CustomTierSubgroup's SortableContext inside the active DndContext,
+  // and desync dragEnd's snapshot (snap.tiers has no entry for a tier born
+  // mid-drag) — the same churn class useFrozenWhile exists to stop.
+  const customTiers = useFrozenWhile(customTiersLive, isPinnedDragActive);
+
+  /** Pinned-membership set widened to include tasks still inside the grace window. */
+  const pinnedIdsWithGrace = useMemo(() => {
+    const out = new Set(pinnedTaskIds ?? []);
+    for (const t of tasks) {
+      if (keepWhileCompleting(t) && lastPinStateRef.current.get(t.id)?.pinned) out.add(t.id);
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- recentTick re-runs when a grace window opens/closes
+  }, [tasks, keepWhileCompleting, pinnedTaskIds, recentTick]);
+
+  // ONE pass over tasks collecting every tier's in-grace ids — this feeds all
+  // 2+N tier sets below. The per-tier variant used to rescan the full task list
+  // per tier (O(tasks × tiers)); with custom tiers that multiplied the panel's
+  // hottest recompute path by the registry size.
+  const graceAdditions = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const t of tasks) {
+      if (!keepWhileCompleting(t)) continue;
+      const st = lastPinStateRef.current.get(t.id);
+      if (!st?.pinned) continue;
+      const arr = map.get(st.tier);
+      if (arr) arr.push(t.id); else map.set(st.tier, [t.id]);
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- recentTick re-runs when a grace window opens/closes
+  }, [tasks, keepWhileCompleting, recentTick]);
+
+  /** Per-tier membership set widened to include tasks still inside the grace window.
+   *  Grace is empty almost always — the fast path returns `live` unchanged (stable
+   *  identity, no allocation; callers treat these sets as read-only). */
+  const tierGraceUnion = useCallback((live: Set<string> | undefined, tierKey: string): Set<string> => {
+    const extra = graceAdditions.get(tierKey);
+    if (!extra || extra.length === 0) return live ?? EMPTY_ID_SET;
+    const out = new Set(live ?? []);
+    for (const id of extra) out.add(id);
+    return out;
+  }, [graceAdditions]);
+
+  const focusIdsWithGrace = useMemo(() => tierGraceUnion(focusTaskIds, 'focus'), [tierGraceUnion, focusTaskIds, recentTick]);
+  const backlogIdsWithGrace = useMemo(() => tierGraceUnion(backlogTaskIds, 'backlog'), [tierGraceUnion, backlogTaskIds, recentTick]);
+  const waitIdsWithGrace = useMemo(() => tierGraceUnion(waitTaskIds, 'wait'), [tierGraceUnion, waitTaskIds, recentTick]);
+  // Custom tiers: one grace-widened membership set per registered tier id.
+  const customIdsWithGrace = useMemo(() => {
+    const map: Record<string, Set<string>> = {};
+    for (const def of customTiers ?? []) {
+      map[def.id] = tierGraceUnion(customTierIds?.[def.id], def.id);
+    }
+    return map;
+  }, [tierGraceUnion, customTiers, customTierIds, recentTick]);
+  // Union of every custom tier's members — the satellite bucket excludes these.
+  const customMemberIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const ids of Object.values(customIdsWithGrace)) for (const id of ids) s.add(id);
+    return s;
+  }, [customIdsWithGrace]);
 
   // Resolve pinned task IDs to Task objects for the pinned section
   // Filter out completed tasks (status=done or phase=COMPLETE) for display, and
   // members of a HIDDEN group — hiding collapses the whole cluster out of the Focus
   // area (membership untouched; unhide via a member's kebab / the /tasks page). This
-  // single filter propagates to all three tiers + clustering + drag for free.
+  // single filter propagates to every tier + clustering + drag for free.
   // FROZEN during a pinned drag: external churn must not add/remove/replace pinned
   // Task objects mid-drag (cards would remount → dnd-kit useRect loop → React #185).
   const pinnedTasksLive = useMemo(() => {
@@ -2415,28 +2589,48 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [tasks, pinnedTaskIds, hiddenGroups, taskGroups]);
   const hiddenPinnedGroups = useFrozenWhile(hiddenPinnedGroupsLive, isPinnedDragActive);
 
-  // Split pinned into Focus / Next / Satellite
+  // Split pinned into Focus / Satellite / Backlog / Wait / custom tiers
   const focusTasksLocal = useMemo(() => {
     if (focusIdsWithGrace.size === 0) return [];
     return pinnedTasks.filter((t) => focusIdsWithGrace.has(t.id));
   }, [pinnedTasks, focusIdsWithGrace]);
 
+  // Satellite = the default bucket: not focus/backlog/wait, not in any custom tier.
   const satelliteTasksLocal = useMemo(() =>
-    pinnedTasks.filter((t) => !focusIdsWithGrace.has(t.id) && !waitIdsWithGrace.has(t.id)),
-  [pinnedTasks, focusIdsWithGrace, waitIdsWithGrace]);
+    pinnedTasks.filter((t) => !focusIdsWithGrace.has(t.id) && !backlogIdsWithGrace.has(t.id) && !waitIdsWithGrace.has(t.id) && !customMemberIds.has(t.id)),
+  [pinnedTasks, focusIdsWithGrace, backlogIdsWithGrace, waitIdsWithGrace, customMemberIds]);
+
+  const backlogTasksLocal = useMemo(() => {
+    if (backlogIdsWithGrace.size === 0) return [];
+    return pinnedTasks.filter((t) => backlogIdsWithGrace.has(t.id));
+  }, [pinnedTasks, backlogIdsWithGrace]);
 
   const waitTasksLocal = useMemo(() => {
     if (waitIdsWithGrace.size === 0) return [];
     return pinnedTasks.filter((t) => waitIdsWithGrace.has(t.id));
   }, [pinnedTasks, waitIdsWithGrace]);
 
+  // Per custom tier: registry order defines section order; membership from grace sets.
+  const customTasksLocal = useMemo(() => {
+    const map: Record<string, Task[]> = {};
+    for (const def of customTiers ?? []) {
+      const ids = customIdsWithGrace[def.id];
+      map[def.id] = ids && ids.size > 0 ? pinnedTasks.filter((t) => ids.has(t.id)) : [];
+    }
+    return map;
+  }, [pinnedTasks, customTiers, customIdsWithGrace]);
+
   // Helper: resolve a task's current tier
   const getTier = useCallback((taskId: string): FocusTier | undefined => {
     if (!pinnedIdsWithGrace.has(taskId)) return undefined;
     if (focusIdsWithGrace.has(taskId)) return 'focus';
+    if (backlogIdsWithGrace.has(taskId)) return 'backlog';
     if (waitIdsWithGrace.has(taskId)) return 'wait';
+    for (const [tid, ids] of Object.entries(customIdsWithGrace)) {
+      if (ids.has(taskId)) return tid;
+    }
     return 'satellite';
-  }, [pinnedIdsWithGrace, focusIdsWithGrace, waitIdsWithGrace]);
+  }, [pinnedIdsWithGrace, focusIdsWithGrace, backlogIdsWithGrace, waitIdsWithGrace, customIdsWithGrace]);
 
   // Recent tasks: an ACTIVITY FEED — every recently created/updated task pops up
   // here, INCLUDING pinned ones (they render in their tier AND here; the Recent
@@ -2495,15 +2689,27 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   //     (DnD Kit handles visual reorder via CSS transforms; final position resolved in onDragEnd)
   //  4. React.memo on card components to prevent re-render cascades
 
-  const DROP_ZONE_TIERS: Record<string, FocusTier> = { 'focus-drop-zone': 'focus', 'satellite-drop-zone': 'satellite', 'wait-drop-zone': 'wait' };
+  // Every tier key in render order: built-ins then registry-ordered customs.
+  // Currently only feeds DROP_ZONE_TIERS — drag-start snapshots and the render
+  // loop enumerate built-ins + customTiers themselves (they need per-tier data,
+  // not just keys). Keep the orders in sync if you reorder either list.
+  const allTierKeys = useMemo<FocusTier[]>(
+    () => ['focus', 'satellite', 'backlog', 'wait', ...(customTiers ?? []).map((t) => t.id)],
+    [customTiers],
+  );
+  const DROP_ZONE_TIERS = useMemo<Record<string, FocusTier>>(() => {
+    const map: Record<string, FocusTier> = {};
+    for (const k of allTierKeys) map[`${k}-drop-zone`] = k;
+    return map;
+  }, [allTierKeys]);
 
   // Local tier arrays that can be overridden during drag
   // Drag overlay arrays stored as refs (NOT state) to avoid triggering React re-renders
   // during DnD Kit's rapid onDragOver events. A single tick counter forces a re-render
   // when we explicitly want the UI to update (during over + on end).
-  const dragFocusIdsRef = useRef<string[] | null>(null);
-  const dragSatelliteIdsRef = useRef<string[] | null>(null);
-  const dragWaitIdsRef = useRef<string[] | null>(null);
+  // One Map keyed by tier (built-in name or custom id) replaces the old three
+  // fixed refs — null = not dragging.
+  const dragTierIdsRef = useRef<Map<FocusTier, string[]> | null>(null);
   const [, setDragTick] = useState(0);
   const dragRafRef = useRef(0);
   const bumpDragTick = useCallback(() => {
@@ -2513,10 +2719,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       setDragTick(n => n + 1);
     });
   }, []);
-  // Convenience getters for the current render
-  const dragFocusIds = dragFocusIdsRef.current;
-  const dragSatelliteIds = dragSatelliteIdsRef.current;
-  const dragWaitIds = dragWaitIdsRef.current;
+  // Convenience getter for the current render
+  const dragTierIds = dragTierIdsRef.current;
 
   // Active arrays: use drag overrides when dragging, else the source-of-truth
   // (clustered so grouped pins sit together). MUST be memoized — .map() creates a
@@ -2530,16 +2734,24 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Pure + order-stable → idempotent. We do NOT cluster mid-drag (dragXxxIds present):
   // during a drag the user's live order is authority and clustering would fight it;
   // it re-applies once the drag lands.
-  const focusIds_arr = useMemo(() => dragFocusIds ?? clusterTierByGroup(focusTasksLocal), [dragFocusIds, focusTasksLocal]);
-  const satelliteIds_arr = useMemo(() => dragSatelliteIds ?? clusterTierByGroup(satelliteTasksLocal), [dragSatelliteIds, satelliteTasksLocal]);
-  const waitIds_arr = useMemo(() => dragWaitIds ?? clusterTierByGroup(waitTasksLocal), [dragWaitIds, waitTasksLocal]);
+  const focusIds_arr = useMemo(() => dragTierIds?.get('focus') ?? clusterTierByGroup(focusTasksLocal), [dragTierIds, focusTasksLocal]);
+  const satelliteIds_arr = useMemo(() => dragTierIds?.get('satellite') ?? clusterTierByGroup(satelliteTasksLocal), [dragTierIds, satelliteTasksLocal]);
+  const backlogIds_arr = useMemo(() => dragTierIds?.get('backlog') ?? clusterTierByGroup(backlogTasksLocal), [dragTierIds, backlogTasksLocal]);
+  const waitIds_arr = useMemo(() => dragTierIds?.get('wait') ?? clusterTierByGroup(waitTasksLocal), [dragTierIds, waitTasksLocal]);
+  const customIds_arr = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const def of customTiers ?? []) {
+      map[def.id] = dragTierIds?.get(def.id) ?? clusterTierByGroup(customTasksLocal[def.id] ?? []);
+    }
+    return map;
+  }, [dragTierIds, customTiers, customTasksLocal]);
 
   const pinnedTaskMap = useMemo(() => new Map(pinnedTasks.map((t) => [t.id, t])), [pinnedTasks]);
 
   // Snapshot of original tier arrays at drag start (for revert on cancel)
   // (activeDragPinnedId state lives above the pinned render-model memos — they
-  // freeze on it via useFrozenWhile.)
-  const dragStartSnapshot = useRef<{ focus: string[]; satellite: string[]; wait: string[]; recent?: string[] } | null>(null);
+  // freeze on it via useFrozenWhile.) Keyed by tier like dragTierIdsRef.
+  const dragStartSnapshot = useRef<{ tiers: Map<FocusTier, string[]>; recent?: string[] } | null>(null);
   const activeDragPinnedTask = useMemo(
     () => {
       if (!activeDragPinnedId || activeDragPinnedId.startsWith('group:')) return null;
@@ -2556,7 +2768,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // pointer and the user couldn't tell where it was going.
   const activeDragGroup = useMemo(() => {
     if (!activeDragPinnedId?.startsWith('group:')) return null;
-    const gid = activeDragPinnedId.slice('group:'.length).replace(/:(focus|satellite|wait)$/, '');
+    const gid = parseGroupSentinelGid(activeDragPinnedId);
     const members = pinnedTasks.filter((t) => t.group_id === gid);
     if (members.length === 0) return null;
     return { label: taskGroups?.[gid] ?? 'Group', titles: members.map((t) => t.title), count: members.length };
@@ -2601,16 +2813,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const handlePinnedDragStart = useCallback((event: DragStartEvent) => {
     // Freeze the CLUSTERED order (what's on screen) — not the raw pin order — so the
     // frozen refs match the rendered list and grouped members sit contiguously (a
-    // prerequisite for the collapse below).
-    const fArr = clusterTierByGroup(focusTasksLocal);
-    const sArr = clusterTierByGroup(satelliteTasksLocal);
-    const wArr = clusterTierByGroup(waitTasksLocal);
+    // prerequisite for the collapse below). One entry per tier, render order.
+    const tierArrays = new Map<FocusTier, string[]>();
+    tierArrays.set('focus', clusterTierByGroup(focusTasksLocal));
+    tierArrays.set('satellite', clusterTierByGroup(satelliteTasksLocal));
+    tierArrays.set('backlog', clusterTierByGroup(backlogTasksLocal));
+    tierArrays.set('wait', clusterTierByGroup(waitTasksLocal));
+    for (const def of customTiers ?? []) {
+      tierArrays.set(def.id, clusterTierByGroup(customTasksLocal[def.id] ?? []));
+    }
     const rArr = recentDraggableIds;
-    dragStartSnapshot.current = { focus: fArr, satellite: sArr, wait: wArr, recent: rArr };
+    dragStartSnapshot.current = { tiers: tierArrays, recent: rArr };
     // Freeze tier state — SortableContext items won't change from external events during drag
-    dragFocusIdsRef.current = fArr;
-    dragSatelliteIdsRef.current = sArr;
-    dragWaitIdsRef.current = wArr;
+    dragTierIdsRef.current = new Map(tierArrays);
     const activeId = event.active.id as string;
 
     // ── Collapse-on-drag ── When a whole group is grabbed (`group:<gid>:<tier>`),
@@ -2621,10 +2836,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // duration (renderTierItems draws the chip for the sentinel) and restored on end.
     collapsedGroupRef.current = null;
     if (activeId.startsWith('group:')) {
-      const gid = activeId.slice('group:'.length).replace(/:(focus|satellite|wait)$/, '');
-      // Members in on-screen order (focus → satellite → wait) so the restored block
+      const gid = parseGroupSentinelGid(activeId);
+      // Members in on-screen order (tier render order) so the restored block
       // preserves how the user saw them.
-      const orderedMembers = [...fArr, ...sArr, ...wArr].filter((id) => pinnedTaskMap.get(id)?.group_id === gid);
+      const orderedMembers = [...tierArrays.values()].flat().filter((id) => pinnedTaskMap.get(id)?.group_id === gid);
       if (orderedMembers.length > 0) {
         const memberSet = new Set(orderedMembers);
         const collapse = (arr: string[]): string[] => {
@@ -2640,9 +2855,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           }
           return out;
         };
-        dragFocusIdsRef.current = collapse(fArr);
-        dragSatelliteIdsRef.current = collapse(sArr);
-        dragWaitIdsRef.current = collapse(wArr);
+        const collapsedMap = new Map<FocusTier, string[]>();
+        for (const [tier, arr] of tierArrays) collapsedMap.set(tier, collapse(arr));
+        dragTierIdsRef.current = collapsedMap;
         collapsedGroupRef.current = { sentinel: activeId, gid, members: orderedMembers };
       }
     }
@@ -2653,7 +2868,35 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     window.addEventListener('pointermove', trackPointer, { passive: true });
     dropIntentRef.current = null;
     setGroupTargetId(null);
-  }, [focusTasksLocal, satelliteTasksLocal, waitTasksLocal, recentDraggableIds, pinnedTaskMap]);
+  }, [focusTasksLocal, satelliteTasksLocal, backlogTasksLocal, waitTasksLocal, customTiers, customTasksLocal, recentDraggableIds, pinnedTaskMap]);
+
+  // Shared live-drag tier accessors: dragTierIdsRef is the live state during a
+  // drag with the frozen snapshot as fallback. `findTierOf` answers "which tier
+  // array currently holds this id" across built-ins AND custom tiers.
+  const getLiveArr = useCallback((tier: FocusTier): string[] => {
+    return dragTierIdsRef.current?.get(tier)
+      ?? dragStartSnapshot.current?.tiers.get(tier)
+      ?? [];
+  }, []);
+  const setLiveArr = useCallback((tier: FocusTier, val: string[]) => {
+    // COPY-ON-WRITE, not in-place .set(): the render-side memos (focusIds_arr /
+    // satelliteIds_arr / waitIds_arr / customIds_arr) key on this Map's IDENTITY.
+    // The old three-ref model replaced each ref's array per write, so bumpDragTick's
+    // re-render saw a new identity and recomputed; mutating one long-lived Map kept
+    // the identity stable and froze the mid-drag cross-tier preview entirely.
+    const base = dragTierIdsRef.current ?? dragStartSnapshot.current?.tiers ?? [];
+    const next = new Map(base);
+    next.set(tier, val);
+    dragTierIdsRef.current = next;
+  }, []);
+  const findTierOf = useCallback((id: string): FocusTier | undefined => {
+    const tiers = dragTierIdsRef.current ?? dragStartSnapshot.current?.tiers;
+    if (!tiers) return undefined;
+    for (const [tier, arr] of tiers) {
+      if (arr.includes(id)) return tier;
+    }
+    return undefined;
+  }, []);
 
   // Live movement: when hovering over a different tier, move item between arrays
   // Also handles items dragged FROM Recent into a tier zone
@@ -2671,20 +2914,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // "join group" target for a group drag. Clear any stale single-card highlight.
     if (activeId.startsWith('group:')) {
       if (dropIntentRef.current !== null) { dropIntentRef.current = null; setGroupTargetId((prev) => (prev === null ? prev : null)); }
-      const snap = dragStartSnapshot.current;
-      if (!snap) return;
+      if (!dragStartSnapshot.current) return;
       // Target tier from the hovered drop-zone or the tier the over-card lives in now.
-      const targetTier: FocusTier | undefined = DROP_ZONE_TIERS[overId]
-        ?? ((dragFocusIdsRef.current ?? snap.focus).includes(overId) ? 'focus' : undefined)
-        ?? ((dragSatelliteIdsRef.current ?? snap.satellite).includes(overId) ? 'satellite' : undefined)
-        ?? ((dragWaitIdsRef.current ?? snap.wait).includes(overId) ? 'wait' : undefined);
+      const targetTier: FocusTier | undefined = DROP_ZONE_TIERS[overId] ?? findTierOf(overId);
       if (!targetTier || activeId === overId) return;
-      const currentTier: FocusTier =
-        (dragFocusIdsRef.current ?? snap.focus).includes(activeId) ? 'focus' :
-        (dragWaitIdsRef.current ?? snap.wait).includes(activeId) ? 'wait' : 'satellite';
+      const currentTier: FocusTier = findTierOf(activeId) ?? 'satellite';
       if (currentTier === targetTier) return; // same tier — strategy handles the visual
-      const getArr = (t: FocusTier) => t === 'focus' ? (dragFocusIdsRef.current ?? snap.focus) : t === 'wait' ? (dragWaitIdsRef.current ?? snap.wait) : (dragSatelliteIdsRef.current ?? snap.satellite);
-      const setArr = (t: FocusTier, v: string[]) => { if (t === 'focus') dragFocusIdsRef.current = v; else if (t === 'wait') dragWaitIdsRef.current = v; else dragSatelliteIdsRef.current = v; };
       const addAt = (arr: string[], ovId: string) => {
         const idx = arr.indexOf(ovId);
         if (idx === -1) return [...arr, activeId];
@@ -2692,8 +2927,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         copy.splice(idx, 0, activeId);
         return copy;
       };
-      setArr(currentTier, getArr(currentTier).filter((id) => id !== activeId));
-      setArr(targetTier, addAt(getArr(targetTier), overId));
+      setLiveArr(currentTier, getLiveArr(currentTier).filter((id) => id !== activeId));
+      setLiveArr(targetTier, addAt(getLiveArr(targetTier), overId));
       bumpDragTick();
       return;
     }
@@ -2737,27 +2972,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Use drag refs (live state during drag) with snapshot as fallback.
     // IMPORTANT: only check drag refs, not raw snapshot, for non-drop-zone items —
     // the snapshot is frozen at drag start and doesn't reflect cross-tier moves.
-    const targetTier = DROP_ZONE_TIERS[overId]
-      ?? ((dragFocusIdsRef.current ?? snap.focus).includes(overId) ? 'focus' : undefined)
-      ?? ((dragSatelliteIdsRef.current ?? snap.satellite).includes(overId) ? 'satellite' : undefined)
-      ?? ((dragWaitIdsRef.current ?? snap.wait).includes(overId) ? 'wait' : undefined);
+    const targetTier = DROP_ZONE_TIERS[overId] ?? findTierOf(overId);
     if (!targetTier) return;
 
     // For items from Recent: check if already placed in a tier during this drag
     if (isFromRecent) {
-      const getRef = (tier: FocusTier) => tier === 'focus' ? (dragFocusIdsRef.current ?? snap.focus) : tier === 'wait' ? (dragWaitIdsRef.current ?? snap.wait) : (dragSatelliteIdsRef.current ?? snap.satellite);
-      const setRef = (tier: FocusTier, val: string[]) => { if (tier === 'focus') dragFocusIdsRef.current = val; else if (tier === 'wait') dragWaitIdsRef.current = val; else dragSatelliteIdsRef.current = val; };
-      const currentPlacement =
-        getRef('focus').includes(activeId) ? 'focus' as FocusTier :
-        getRef('wait').includes(activeId) ? 'wait' as FocusTier :
-        getRef('satellite').includes(activeId) ? 'satellite' as FocusTier : null;
+      const currentPlacement = findTierOf(activeId) ?? null;
       if (currentPlacement === targetTier) return;
       const remove = (arr: string[]) => arr.filter((id) => id !== activeId);
       if (currentPlacement) {
-        setRef(currentPlacement, remove(getRef(currentPlacement)));
+        setLiveArr(currentPlacement, remove(getLiveArr(currentPlacement)));
       }
-      const targetArr = getRef(targetTier);
-      setRef(targetTier, [...remove(targetArr), activeId]);
+      const targetArr = getLiveArr(targetTier);
+      setLiveArr(targetTier, [...remove(targetArr), activeId]);
       bumpDragTick();
       return;
     }
@@ -2767,9 +2994,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // over render-time values. With RAF batching, refs can be mutated multiple times
     // between renders; reading stale tier data would duplicate the item across two
     // tier arrays.
-    const currentTier: FocusTier =
-      (dragFocusIdsRef.current ?? snap.focus).includes(activeId) ? 'focus' :
-      (dragWaitIdsRef.current ?? snap.wait).includes(activeId) ? 'wait' : 'satellite';
+    const currentTier: FocusTier = findTierOf(activeId) ?? 'satellite';
     // Same tier — skip (invariant #3: never mutate SortableContext items for same-tier
     // reorders in onDragOver). DnD Kit handles visual reorder via CSS transforms;
     // final position is resolved in handlePinnedDragEnd using the `over` target.
@@ -2787,19 +3012,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       return copy;
     };
 
-    const getArr = (tier: FocusTier) => tier === 'focus' ? (dragFocusIdsRef.current ?? snap.focus) : tier === 'wait' ? (dragWaitIdsRef.current ?? snap.wait) : (dragSatelliteIdsRef.current ?? snap.satellite);
-    const setArr = (tier: FocusTier, val: string[]) => { if (tier === 'focus') dragFocusIdsRef.current = val; else if (tier === 'wait') dragWaitIdsRef.current = val; else dragSatelliteIdsRef.current = val; };
-
-    setArr(currentTier, remove(getArr(currentTier)));
-    setArr(targetTier, addAt(getArr(targetTier), overId));
+    setLiveArr(currentTier, remove(getLiveArr(currentTier)));
+    setLiveArr(targetTier, addAt(getLiveArr(targetTier), overId));
     bumpDragTick(); // trigger visual update
-  }, [bumpDragTick, pinnedCardIds, tasks]);
+  }, [bumpDragTick, pinnedCardIds, tasks, DROP_ZONE_TIERS, findTierOf, getLiveArr, setLiveArr]);
 
   const clearDragState = useCallback(() => {
     if (dragRafRef.current) { cancelAnimationFrame(dragRafRef.current); dragRafRef.current = 0; }
-    dragFocusIdsRef.current = null;
-    dragSatelliteIdsRef.current = null;
-    dragWaitIdsRef.current = null;
+    dragTierIdsRef.current = null;
     dragStartSnapshot.current = null;
     collapsedGroupRef.current = null;
     setActiveDragPinnedId(null);
@@ -2822,9 +3042,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // moved the active item cross-tier during drag. We need these to persist the
     // final position when dnd-kit reports over === active (common after cross-tier
     // moves, since the dragged card's center follows the pointer).
-    const liveFocus = dragFocusIdsRef.current;
-    const liveSatellite = dragSatelliteIdsRef.current;
-    const liveWait = dragWaitIdsRef.current;
+    const liveTiers = dragTierIdsRef.current;
     const collapsed = collapsedGroupRef.current;
 
     clearDragState();
@@ -2832,6 +3050,25 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (!over || !snap) return;
     const activeId = active.id as string;
     const overId = over.id as string;
+
+    // Post-clear accessors over the captured maps (getLiveArr/findTierOf read the
+    // refs, which clearDragState just nulled).
+    const finalArr = (tier: FocusTier): string[] => liveTiers?.get(tier) ?? snap.tiers.get(tier) ?? [];
+    const finalTierOf = (id: string): FocusTier | undefined => {
+      for (const tier of snap.tiers.keys()) {
+        if (finalArr(tier).includes(id)) return tier;
+      }
+      return undefined;
+    };
+    const snapTierOf = (id: string): FocusTier | undefined => {
+      for (const [tier, arr] of snap.tiers) {
+        if (arr.includes(id)) return tier;
+      }
+      return undefined;
+    };
+    // Global pinned order = tiers concatenated in render order.
+    const globalOrder = (arrOf: (t: FocusTier) => string[]): string[] =>
+      [...snap.tiers.keys()].flatMap((t) => arrOf(t));
 
     // ── Whole-group drag (chip grip) ── The active id is the `group:<gid>:<tier>`
     // sentinel that stood in for the collapsed cluster. Its FINAL tier is simply the
@@ -2844,12 +3081,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const memberSet = new Set(orderedMembers);
 
       // The sentinel's final tier = whichever live ref contains it.
-      const overTier: FocusTier =
-        (liveFocus ?? snap.focus).includes(activeId) ? 'focus' :
-        (liveWait ?? snap.wait).includes(activeId) ? 'wait' : 'satellite';
+      const overTier: FocusTier = finalTierOf(activeId) ?? 'satellite';
 
       // Live global order (sentinel present once, members already collapsed out).
-      const liveGlobal = [...(liveFocus ?? snap.focus), ...(liveSatellite ?? snap.satellite), ...(liveWait ?? snap.wait)];
+      const liveGlobal = globalOrder(finalArr);
 
       // Same-tier drop onto a real card: reposition the sentinel just before that card
       // (mirrors the task same-tier reorder). Drop-zone or self → keep dragOver's spot.
@@ -2861,7 +3096,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
       // Retier members whose ORIGINAL tier differs from the drop tier.
       for (const mid of orderedMembers) {
-        const cur: FocusTier = snap.focus.includes(mid) ? 'focus' : snap.wait.includes(mid) ? 'wait' : 'satellite';
+        const cur: FocusTier = snapTierOf(mid) ?? 'satellite';
         if (cur !== overTier) onSetTier?.(mid, overTier);
       }
 
@@ -2889,9 +3124,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const activeTask = tasks.find((t) => t.id === activeId);
       if (overTask && activeTask && !activeTask.group_id && activeTask.group_id !== overTask.group_id) {
         if (isFromRecent) {
-          const overTier: FocusTier =
-            (liveFocus ?? snap.focus).includes(overId) ? 'focus' :
-            (liveWait ?? snap.wait).includes(overId) ? 'wait' : 'satellite';
+          const overTier: FocusTier = finalTierOf(overId) ?? 'satellite';
           onPinTask?.(activeId);
           setTimeout(() => onSetTier?.(activeId, overTier), 100);
         }
@@ -2924,11 +3157,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // Build global pinned order from live tier refs, optionally adjusting the
     // active item's position within a tier to match the final drop target.
     const buildOrderFromRefs = (adjustInTier?: FocusTier) => {
-      const focus = [...(liveFocus ?? snap.focus)];
-      const satellite = [...(liveSatellite ?? snap.satellite)];
-      const wait = [...(liveWait ?? snap.wait)];
+      const arrs = new Map<FocusTier, string[]>();
+      for (const tier of snap.tiers.keys()) arrs.set(tier, [...finalArr(tier)]);
       if (adjustInTier && activeId !== overId) {
-        const arr = adjustInTier === 'focus' ? focus : adjustInTier === 'wait' ? wait : satellite;
+        const arr = arrs.get(adjustInTier) ?? [];
         const ai = arr.indexOf(activeId);
         const oi = arr.indexOf(overId);
         if (ai !== -1 && oi !== -1 && ai !== oi) {
@@ -2936,17 +3168,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           arr.splice(oi, 0, activeId);
         }
       }
-      return [...focus, ...satellite, ...wait];
+      return [...arrs.values()].flat();
     };
 
     // When over === active, collision detected the dragged card itself (its center
     // follows the pointer). handlePinnedDragOver may have moved it cross-tier —
     // check live refs to persist that move.
     if (activeId === overId) {
-      const currentTier: FocusTier | undefined =
-        (liveFocus ?? snap.focus).includes(activeId) ? 'focus' :
-        (liveWait ?? snap.wait).includes(activeId) ? 'wait' :
-        (liveSatellite ?? snap.satellite).includes(activeId) ? 'satellite' : undefined;
+      const currentTier = finalTierOf(activeId);
       if (isFromRecent) {
         if (currentTier) {
           const order = buildOrderFromRefs();
@@ -2954,7 +3183,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           setTimeout(() => onSetTier?.(activeId, currentTier, order), 100);
         }
       } else {
-        const origTier: FocusTier = snap.focus.includes(activeId) ? 'focus' : snap.wait.includes(activeId) ? 'wait' : 'satellite';
+        const origTier: FocusTier = snapTierOf(activeId) ?? 'satellite';
         if (currentTier && origTier !== currentTier) {
           onSetTier?.(activeId, currentTier, buildOrderFromRefs());
         }
@@ -2963,11 +3192,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
 
     if (isFromRecent) {
-      // Determine target tier from drop zone or card
-      const targetTier = DROP_ZONE_TIERS[overId]
-        ?? (snap.focus.includes(overId) ? 'focus' : undefined)
-        ?? (snap.satellite.includes(overId) ? 'satellite' : undefined)
-        ?? (snap.wait.includes(overId) ? 'wait' : undefined);
+      // Target tier: explicit drop-zone → over-card's tier → where dragOver last
+      // placed the dragged card (see the pinned-to-pinned note below).
+      const targetTier = DROP_ZONE_TIERS[overId] ?? snapTierOf(overId) ?? finalTierOf(activeId);
       if (!targetTier) return;
       // Pin first, then set tier. setFocusTier requires task.pinned===true in the
       // store, so we delay to let the pin write complete before changing tier.
@@ -2978,11 +3205,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
 
     // Existing pinned-to-pinned logic
-    const origTier: FocusTier = snap.focus.includes(activeId) ? 'focus' : snap.wait.includes(activeId) ? 'wait' : 'satellite';
-    const targetTier = DROP_ZONE_TIERS[overId]
-      ?? (snap.focus.includes(overId) ? 'focus' : undefined)
-      ?? (snap.wait.includes(overId) ? 'wait' : undefined)
-      ?? 'satellite';
+    const origTier: FocusTier = snapTierOf(activeId) ?? 'satellite';
+    // Over-target resolution: explicit drop-zone → the over-card's tier → where
+    // dragOver last placed the dragged card. The third leg matters for small
+    // targets: over an EMPTY tier's low zone, the release collision can land on
+    // a non-tier element just below (e.g. a Recent card) even though the live
+    // preview already moved the card into the tier — without the finalTierOf
+    // fallback that move silently reverted on drop (mirrors the self-drop branch).
+    const targetTier = DROP_ZONE_TIERS[overId] ?? snapTierOf(overId) ?? finalTierOf(activeId) ?? 'satellite';
 
     if (origTier !== targetTier) {
       onSetTier?.(activeId, targetTier, buildOrderFromRefs(targetTier));
@@ -3000,23 +3230,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     reorderedVisible.splice(oldIndex, 1);
     reorderedVisible.splice(newIndex, 0, activeId);
 
-    const completeTier = origTier === 'focus'
-      ? snap.focus
-      : origTier === 'wait'
-        ? snap.wait
-        : snap.satellite;
+    const completeTier = snap.tiers.get(origTier) ?? [];
     const visibleSet = new Set(visibleIds);
     let visibleIndex = 0;
     const reorderedTier = completeTier.map((id) =>
       visibleSet.has(id) ? reorderedVisible[visibleIndex++] : id
     );
-    const newOrder = [
-      ...(origTier === 'focus' ? reorderedTier : snap.focus),
-      ...(origTier === 'satellite' ? reorderedTier : snap.satellite),
-      ...(origTier === 'wait' ? reorderedTier : snap.wait),
-    ];
+    const newOrder = [...snap.tiers.keys()].flatMap((tier) =>
+      tier === origTier ? reorderedTier : (snap.tiers.get(tier) ?? [])
+    );
     onReorderPinned?.(newOrder);
-  }, [pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, pinnedCardIds, tasks]);
+  }, [pinnedTaskIds_arr, onReorderPinned, onSetTier, onPinTask, clearDragState, onAddToGroup, onGroupTasks, onUngroupTask, pinnedCardIds, tasks, DROP_ZONE_TIERS]);
 
   const categories = useMemo(() => {
     const set = new Set<string>();
@@ -3259,8 +3483,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // FROZEN during a pinned drag: this membership set derives from the live
   // `tasks` array, so external churn (WS echoes / refetches) would otherwise
   // change the SortableContext items / remount cards mid-drag (→ React #185 via
-  // dnd-kit useRect). Tier ORDER is separately frozen by the drag refs
-  // (dragFocusIdsRef etc.) — freezing membership here completes the invariant.
+  // dnd-kit useRect). Tier ORDER is separately frozen by the drag ref
+  // (dragTierIdsRef) — freezing membership here completes the invariant.
   const visibleTaskIdsLive = useMemo(
     () => new Set(
       (isSearchMode ? searchMatches : tasks.filter(passesExplicitFilters)).map((task) => task.id),
@@ -3288,10 +3512,26 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     () => satelliteIds_arr.filter((id) => id.startsWith('group:') || visibleTaskIds.has(id)),
     [satelliteIds_arr, visibleTaskIds],
   );
+  const visibleBacklogIds = useMemo(
+    () => backlogIds_arr.filter((id) => id.startsWith('group:') || visibleTaskIds.has(id)),
+    [backlogIds_arr, visibleTaskIds],
+  );
   const visibleWaitIds = useMemo(
     () => waitIds_arr.filter((id) => id.startsWith('group:') || visibleTaskIds.has(id)),
     [waitIds_arr, visibleTaskIds],
   );
+  // Per-custom-tier render model: visible ids + display tasks + group meta in one
+  // memo (the built-ins keep their three separate memos; a custom tier bundles them
+  // because the set of tiers itself is dynamic).
+  const customTierRender = useMemo(() => {
+    const map: Record<string, { visibleIds: string[]; display: Task[]; groupMeta: Map<string, GroupRenderInfo> }> = {};
+    for (const def of customTiers ?? []) {
+      const visibleIds = (customIds_arr[def.id] ?? []).filter((id) => id.startsWith('group:') || visibleTaskIds.has(id));
+      const display = visibleIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task);
+      map[def.id] = { visibleIds, display, groupMeta: buildTierGroupMeta(display, taskGroups) };
+    }
+    return map;
+  }, [customTiers, customIds_arr, visibleTaskIds, pinnedTaskMap, taskGroups]);
   const focusTasksDisplay = useMemo(
     () => visibleFocusIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task),
     [pinnedTaskMap, visibleFocusIds],
@@ -3299,6 +3539,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const satelliteTasksDisplay = useMemo(
     () => visibleSatelliteIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task),
     [pinnedTaskMap, visibleSatelliteIds],
+  );
+  const backlogTasksDisplay = useMemo(
+    () => visibleBacklogIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task),
+    [pinnedTaskMap, visibleBacklogIds],
   );
   const waitTasksDisplay = useMemo(
     () => visibleWaitIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task),
@@ -3311,6 +3555,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const satelliteGroupMeta = useMemo(
     () => buildTierGroupMeta(satelliteTasksDisplay, taskGroups),
     [satelliteTasksDisplay, taskGroups],
+  );
+  const backlogGroupMeta = useMemo(
+    () => buildTierGroupMeta(backlogTasksDisplay, taskGroups),
+    [backlogTasksDisplay, taskGroups],
   );
   const waitGroupMeta = useMemo(
     () => buildTierGroupMeta(waitTasksDisplay, taskGroups),
@@ -4510,7 +4758,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const out: ReactNode[] = [];
     for (const id of ids) {
       if (id.startsWith('group:')) {
-        const gid = id.slice('group:'.length).replace(/:(focus|satellite|wait)$/, '');
+        const gid = parseGroupSentinelGid(id);
         out.push(
           <GroupChip key={groupSortableId(gid, tier)} groupId={gid} tier={tier}
             label={taskGroups?.[gid] ?? ''} onRename={handleRenameGroup}
@@ -4550,7 +4798,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const tasksCollapsed = isAll && collapsedSections.has('tasks');
   const tasksVisible = showSection('tasks');
   // Any pinned tier showing? Drives whether the pinned wrapper mounts at all.
-  const anyTierVisible = showSection('focus') || showSection('satellite') || showSection('wait');
+  const anyTierVisible = showSection('focus') || showSection('satellite') || showSection('backlog') || showSection('wait')
+    || (customTiers ?? []).some((t) => showSection(t.id));
   const recentVisible = showSection('recent');
   // When both Pinned and Recent are collapsed (or absent), the pinned wrapper
   // shrink-wraps its header rows instead of holding the splitter ratio — no
@@ -4559,16 +4808,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const pinnedAreaCollapsed = isAll
     && (visiblePinnedTasks.length === 0 || collapsedSections.has('pinned'))
     && (visibleRecentTasks.length === 0 || collapsedSections.has('recent'));
-  // Section counts for the tab badges. `focus`/`satellite`/`wait`/`recent` come
-  // from the already-computed display arrays, so the badges track exactly what
+  // Section counts for the tab badges. `focus`/`satellite`/`backlog`/`wait`/`recent`
+  // come from the already-computed display arrays, so the badges track exactly what
   // the tab would render (incl. category/filter scoping).
   const sectionCounts: Partial<Record<TodoSection, number>> = {
     focus: focusTasksDisplay.length,
     satellite: satelliteTasksDisplay.length,
+    backlog: backlogTasksDisplay.length,
     wait: waitTasksDisplay.length,
     recent: visibleRecentTasks.length,
     tasks: isSearchMode ? searchMatches.length : filtered.length,
   };
+  for (const def of customTiers ?? []) {
+    sectionCounts[def.id] = customTierRender[def.id]?.display.length ?? 0;
+  }
   // In a single-tier view the tier fills the panel: the persisted per-tier drag
   // height (a cap sized for the old cramped stack) would leave dead space below.
   const tierHeight = (h: number | null) => (isAll && h != null ? { maxHeight: h } : undefined);
@@ -4622,7 +4875,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       </div>
 
       {/* Section tabs — one section owns the panel at a time (see TodoSectionTabs). */}
-      <TodoSectionTabs active={effectiveSection} onChange={handleSectionChange} counts={sectionCounts} />
+      <TodoSectionTabs active={effectiveSection} onChange={handleSectionChange} counts={sectionCounts} customTiers={customTiers} />
 
       {/* Unified DndContext wrapping both Pinned + Recent — enables drag from Recent to Pin */}
       {(anyTierVisible || recentVisible) && (visiblePinnedTasks.length > 0 || visibleRecentTasks.length > 0 || hiddenPinnedGroups.length > 0) && (
@@ -4640,7 +4893,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               : { flex: `${1 - listRatio} 1 0%` }
             }
           >
-          {/* PINNED section — Focus + Satellite + Wait sub-groups. In a single-tier
+          {/* PINNED section — Focus + Satellite + Backlog + Wait sub-groups. In a single-tier
               view the "Pinned" wrapper header is dropped (the tab already names the
               tier) and only that tier's subgroup renders. */}
           {anyTierVisible && (visiblePinnedTasks.length > 0 || !isAll) && (
@@ -4698,7 +4951,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   {showSection('satellite') && (satelliteTasksDisplay.length > 0 || !isAll) && (
                     <div className="todo-pinned-subgroup">
                       {isAll && (
-                      <div className="todo-pinned-sublabel" onClick={() => toggleSection('satellite')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('satellite'); }} style={{ cursor: 'pointer' }} title="Backlog — other pinned tasks">
+                      <div className="todo-pinned-sublabel" onClick={() => toggleSection('satellite')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('satellite'); }} style={{ cursor: 'pointer' }} title="Satellite — needs doing soon, the default pinned tier">
                         <span className={`todo-pinned-chevron todo-pinned-sub-chevron${collapsedSections.has('satellite') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
                         <span className="todo-pinned-sublabel-icon todo-tier-icon-satellite">{ICONS.ICON_TIER_SATELLITE}</span>
                         <span className="todo-pinned-sublabel-text">Satellite</span>
@@ -4731,6 +4984,45 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         </SortableContext>
                       )}
                     </div>
+                  )}
+
+                  {/* Backlog sub-group — someday work, pinned but not soon.
+                      Renders unconditionally like Wait (NOT non-empty-gated like
+                      Satellite/customs): the four built-ins ARE the tier model, so an
+                      empty Backlog stays visible as a drop target / affordance.
+                      Customs instead mount-on-drag (see the isPinnedDragActive gate
+                      below) because N user tiers would multiply empty chrome. */}
+                  {showSection('backlog') && (
+                  <div className="todo-pinned-subgroup">
+                    {isAll && (
+                    <div className="todo-pinned-sublabel" onClick={() => toggleSection('backlog')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('backlog'); }} style={{ cursor: 'pointer' }} title="Backlog — someday work you still want pinned">
+                      <span className={`todo-pinned-chevron todo-pinned-sub-chevron${collapsedSections.has('backlog') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
+                      <span className="todo-pinned-sublabel-icon todo-tier-icon-backlog">{ICONS.ICON_TIER_BACKLOG}</span>
+                      <span className="todo-pinned-sublabel-text">Backlog</span>
+                      <span className="todo-pinned-sublabel-count">{backlogTasksDisplay.length}</span>
+                    </div>
+                    )}
+                    {!isFolded('backlog') && (
+                      <SortableContext items={visibleBacklogIds} strategy={verticalListSortingStrategy}>
+                        <div className="todo-pinned-list-scroll" style={tierHeight(backlogResize.height)}>
+                          <TierDropZone id="backlog-drop-zone" isEmpty={backlogTasksDisplay.length === 0}>
+                            {renderTierItems(visibleBacklogIds, 'backlog', backlogGroupMeta)}
+                          </TierDropZone>
+                          <InlineAdd label="Add to Backlog…" onAdd={async (title) => {
+                            // handleCreate locates with scope 'pinned' — see the Focus InlineAdd note.
+                            await onCreate({ title, priority: 'none', pinnedTier: 'backlog', capture: true });
+                          }} />
+                        </div>
+                        {isAll && (
+                        <div
+                          className={`todo-tier-resize-handle${backlogResize.isDragging ? ' dragging' : ''}`}
+                          onPointerDown={(e) => backlogResize.handlePointerDown(e, e.currentTarget.previousElementSibling as HTMLElement | null)}
+                          title="Drag to resize Backlog"
+                        />
+                        )}
+                      </SortableContext>
+                    )}
+                  </div>
                   )}
 
                   {/* Wait sub-group — parked tasks pinned but deprioritized */}
@@ -4766,6 +5058,35 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     )}
                   </div>
                   )}
+
+                  {/* Custom tier sub-groups — one per registry entry, after the built-ins.
+                      Each is its own component (owns its useResizableHeight hook). */}
+                  {(customTiers ?? []).map((def) => {
+                    if (!showSection(def.id)) return null;
+                    const render = customTierRender[def.id] ?? { visibleIds: [], display: [], groupMeta: new Map<string, GroupRenderInfo>() };
+                    // Stacked view hides an EMPTY custom tier (mirrors Satellite's
+                    // non-empty gate) — its own tab always renders it. EXCEPT while
+                    // a drag is live: dragging a tier's last card out empties its
+                    // live array, and unmounting the subgroup here would remove its
+                    // droppable mid-drag — the user could never drag the card back.
+                    if (isAll && !isPinnedDragActive && render.display.length === 0) return null;
+                    return (
+                      <CustomTierSubgroup
+                        key={def.id}
+                        def={def}
+                        isAll={isAll}
+                        folded={isFolded(def.id)}
+                        collapsed={collapsedSections.has(def.id)}
+                        onToggle={toggleSection}
+                        visibleIds={render.visibleIds}
+                        isEmpty={render.display.length === 0}
+                        count={render.display.length}
+                        onAdd={(title) => onCreate({ title, priority: 'none', pinnedTier: def.id, capture: true })}
+                      >
+                        {renderTierItems(render.visibleIds, def.id, render.groupMeta)}
+                      </CustomTierSubgroup>
+                    );
+                  })}
                 </>
               )}
             </div>
@@ -4834,6 +5155,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         onUnpinTask={onUnpinTask}
                         isPinned={pinnedTaskIds?.has(task.id)}
                         pinnedTier={getTier(task.id)}
+                        pinnedTierLabel={(() => { const t = getTier(task.id); return t ? (customTiers?.find((d) => d.id === t)?.label) : undefined; })()}
                         onSetPriority={onSetPriority}
                         onSetDate={onSetDate}
                         onSetStartDate={onSetStartDate}
@@ -5374,15 +5696,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               <div className="task-kebab-tier">
                 <span className="task-kebab-tier-label">Pin to</span>
                 <div className="task-kebab-tier-options">
-                  {(['focus', 'satellite', 'wait'] as FocusTier[]).map((t) => {
-                    const colors: Record<FocusTier, string> = { focus: 'var(--accent)', satellite: 'var(--fg-muted)', wait: '#8e8e93' };
-                    const label = t.charAt(0).toUpperCase() + t.slice(1);
+                  {([
+                    ...(['focus', 'satellite', 'backlog', 'wait'] as FocusTier[]).map((t) => ({ tier: t, label: t.charAt(0).toUpperCase() + t.slice(1) })),
+                    ...(customTiers ?? []).map((t) => ({ tier: t.id, label: t.label })),
+                  ]).map(({ tier: t, label }) => {
+                    const colors: Record<string, string> = { focus: 'var(--accent)', satellite: 'var(--fg-muted)', backlog: 'var(--tier-backlog, #30b0c7)', wait: 'var(--tier-wait, #ff9f0a)' };
                     return (
                       <button
                         key={t}
                         type="button"
                         className={`task-kebab-tier-btn${quickPinnedTier === t ? ' active' : ''}`}
-                        style={{ color: colors[t] }}
+                        style={{ color: colors[t] ?? 'var(--tier-custom)' }}
                         title={label}
                         onClick={() => setQuickPinnedTier(quickPinnedTier === t ? null : t)}
                       >

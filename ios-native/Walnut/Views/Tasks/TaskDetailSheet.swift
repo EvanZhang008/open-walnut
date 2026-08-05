@@ -7,6 +7,11 @@ struct TaskDetailSheet: View {
     let task: WalnutTask
     @Environment(\.dismiss) private var dismiss
     @Environment(TasksStore.self) private var tasks
+    @Environment(ConnectionStore.self) private var connection
+
+    /// Explicit path so a freshly created session can push programmatically.
+    @State private var navPath: [WalnutSession] = []
+    @State private var showNewSession = false
 
     /// Every task can be (or spawn) a session — surface them here so the
     /// conversation is one tap from the task, newest first.
@@ -17,15 +22,13 @@ struct TaskDetailSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navPath) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     header
                     chips
                     metadata
-                    if !taskSessions.isEmpty {
-                        sessionsBlock
-                    }
+                    sessionsBlock
                     if let summary = task.summary, !summary.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Summary")
@@ -51,14 +54,37 @@ struct TaskDetailSheet: View {
             .navigationDestination(for: WalnutSession.self) { session in
                 SessionConversationView(session: session)
             }
+            .sheet(isPresented: $showNewSession) {
+                NewSessionSheet(task: task) { session in
+                    navPath.append(session)
+                }
+                .presentationDetents([.medium, .large])
+            }
         }
     }
 
+    // Always rendered (no isEmpty gate): the header hosts the New Session
+    // button — the only per-task create entry — which must be reachable on
+    // tasks with zero sessions too.
     private var sessionsBlock: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Sessions")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+            HStack {
+                Text("Sessions")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                // Hidden on a REPLICA — creation is a primary-box capability.
+                if connection.status?.mode != .replica {
+                    Button {
+                        showNewSession = true
+                    } label: {
+                        Label("New Session", systemImage: "plus.circle.fill")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(Theme.tint)
+                    }
+                    .accessibilityIdentifier("task.newSession")
+                }
+            }
             VStack(spacing: 0) {
                 ForEach(taskSessions.prefix(5)) { session in
                     NavigationLink(value: session) {

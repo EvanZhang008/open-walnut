@@ -136,12 +136,64 @@ function regionFromConfig(config: Config): string | undefined {
   return config.providers?.bedrock?.region || config.provider?.bedrock_region || undefined;
 }
 
+/** One rung of the resolution ladder, with the metadata the trace UI displays. */
+interface LadderRung {
+  source: CredentialSource;
+  /** Which tool owns this source — the "is this Claude Code's or Walnut's?" answer. */
+  owner: 'walnut' | 'claude-code' | 'shell-env' | 'aws-cli';
+  /** File path / pseudo-path the rung reads. */
+  location: string;
+  /** Field names this rung inspects, for the "what did we look for" display. */
+  checkedFor: string[];
+  auth: Pick<ResolvedCredential, 'method' | 'bearerToken' | 'accessKeyId' | 'secretAccessKey' | 'profile' | 'credentialExportCmd' | 'detail'> | null;
+}
+
+/**
+ * Build the shared resolution ladder. Order IS the priority contract:
+ * config.yaml → settings.json env block → process.env → settings.json
+ * awsCredentialExport. The settings.json top-level `awsCredentialExport` sits
+ * BELOW env-block static creds (bearer/keys/profile) so an existing user's
+ * explicit auth keeps winning, but ABOVE the bare ~/.aws chain — it's the
+ * SSO/ada posture most internal users have.
+ */
+function buildLadder(inputs: ResolveInputs): LadderRung[] {
+  const { config, claudeEnv, processEnv, claudeCredentialExport } = inputs;
+  return [
+    {
+      source: 'config', owner: 'walnut',
+      location: '~/.open-walnut/config.yaml',
+      checkedFor: ['providers.bedrock.bearer_token', 'providers.bedrock.aws_access_key_id + aws_secret_access_key', 'providers.bedrock.aws_profile', 'providers.bedrock.aws_credential_export'],
+      auth: authFromConfig(config),
+    },
+    {
+      source: 'claude-settings', owner: 'claude-code',
+      location: '~/.claude/settings.json (env block)',
+      checkedFor: ['env.AWS_BEARER_TOKEN_BEDROCK', 'env.AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY', 'env.AWS_PROFILE'],
+      auth: authFromEnv(claudeEnv),
+    },
+    {
+      source: 'env', owner: 'shell-env',
+      location: 'process environment (shell that launched Walnut)',
+      checkedFor: ['AWS_BEARER_TOKEN_BEDROCK', 'AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY', 'AWS_PROFILE'],
+      auth: authFromEnv(processEnv),
+    },
+    {
+      source: 'claude-settings', owner: 'claude-code',
+      location: '~/.claude/settings.json (top-level awsCredentialExport)',
+      checkedFor: ['awsCredentialExport'],
+      auth: claudeCredentialExport
+        ? { method: 'credential_process', credentialExportCmd: claudeCredentialExport, detail: 'settings.json awsCredentialExport' }
+        : null,
+    },
+  ];
+}
+
 /**
  * Pure resolver: pick the winning Bedrock credential + region across all sources
  * by priority. No I/O — feed it data, get a decision. Unit-test this directly.
  */
 export function resolveCredentialFrom(inputs: ResolveInputs): ResolvedCredential {
-  const { config, claudeEnv, processEnv, awsFiles, claudeCredentialExport } = inputs;
+  const { config, claudeEnv, processEnv, awsFiles } = inputs;
 
   // Region: independent priority chain so a config-only region still applies
   // even when the key comes from a lower source. Falls back to the default.
@@ -152,19 +204,7 @@ export function resolveCredentialFrom(inputs: ResolveInputs): ResolvedCredential
     DEFAULT_REGION;
 
   // Credential material: first source that yields auth wins.
-  // The settings.json top-level `awsCredentialExport` sits BELOW env-block static
-  // creds (bearer/keys/profile) so an existing user's explicit auth keeps winning,
-  // but ABOVE the bare ~/.aws chain — it's the SSO/ada姿势 most internal users have.
-  const ladder: Array<{ source: CredentialSource; auth: Pick<ResolvedCredential, 'method' | 'bearerToken' | 'accessKeyId' | 'secretAccessKey' | 'profile' | 'credentialExportCmd' | 'detail'> | null }> = [
-    { source: 'config', auth: authFromConfig(config) },
-    { source: 'claude-settings', auth: authFromEnv(claudeEnv) },
-    { source: 'env', auth: authFromEnv(processEnv) },
-    { source: 'claude-settings', auth: claudeCredentialExport
-        ? { method: 'credential_process', credentialExportCmd: claudeCredentialExport, detail: 'settings.json awsCredentialExport' }
-        : null },
-  ];
-
-  for (const { source, auth } of ladder) {
+  for (const { source, auth } of buildLadder(inputs)) {
     if (auth) return { source, region, ...auth };
   }
 
@@ -179,6 +219,124 @@ export function resolveCredentialFrom(inputs: ResolveInputs): ResolvedCredential
   }
 
   return { source: 'none', method: null };
+}
+
+// ── Resolution trace (transparency for the settings UI) ──
+
+/** Mask key material for display: keep the last 4 chars only. */
+function maskTail(v: string | undefined): string | undefined {
+  if (!v) return undefined;
+  return v.length > 4 ? `…${v.slice(-4)}` : '…';
+}
+
+/** One step of the trace as shown in the UI. Never carries secret values. */
+export interface CredentialTraceStep {
+  /** 1-based priority order. */
+  step: number;
+  /** Who owns this source: walnut | claude-code | shell-env | aws-cli. */
+  owner: LadderRung['owner'];
+  source: CredentialSource;
+  /** File / pseudo-location this step reads. */
+  location: string;
+  /** Field names inspected at this step. */
+  checkedFor: string[];
+  /** 'won' = this step supplied the credential; 'empty' = inspected, nothing
+   *  found; 'not-reached' = a higher step already won so this never ran. */
+  outcome: 'won' | 'empty' | 'not-reached';
+  /** When outcome==='won': what was found (masked, display-safe). */
+  found?: {
+    method: CredentialMethod;
+    detail?: string;
+    /** Last-4 hint of the key/token, when the method carries one. */
+    keyHint?: string;
+    /** The profile name / command string (not a secret). */
+    value?: string;
+  };
+}
+
+/** Full resolution trace: every step, the winner, and region provenance. */
+export interface CredentialTrace {
+  steps: CredentialTraceStep[];
+  /** The same decision resolveCredentialFrom returns (secrets masked). */
+  winner: {
+    source: CredentialSource;
+    method: CredentialMethod | null;
+    detail?: string;
+    keyHint?: string;
+    profile?: string;
+    credentialExportCmd?: string;
+    region?: string;
+  };
+  region: { value: string; source: string };
+}
+
+/**
+ * Trace variant of resolveCredentialFrom: same ladder, same winner, but returns
+ * every step with its outcome so the UI can show exactly which file each layer
+ * read, whether it was Claude Code's or Walnut's, and why the winner won.
+ * Pure — no I/O; drive it with the same ResolveInputs.
+ */
+export function traceCredentialResolution(inputs: ResolveInputs): CredentialTrace {
+  const { config, claudeEnv, processEnv, awsFiles } = inputs;
+
+  const regionSource =
+    regionFromConfig(config) ? '~/.open-walnut/config.yaml (providers.bedrock.region)'
+    : regionFromEnv(claudeEnv) ? '~/.claude/settings.json env block (AWS_REGION)'
+    : regionFromEnv(processEnv) ? 'process environment (AWS_REGION)'
+    : `default (${DEFAULT_REGION})`;
+
+  const winner = resolveCredentialFrom(inputs);
+
+  const steps: CredentialTraceStep[] = [];
+  let won = false;
+  for (const rung of buildLadder(inputs)) {
+    const outcome: CredentialTraceStep['outcome'] = won ? 'not-reached' : rung.auth ? 'won' : 'empty';
+    const step: CredentialTraceStep = {
+      step: steps.length + 1,
+      owner: rung.owner,
+      source: rung.source,
+      location: rung.location,
+      checkedFor: rung.checkedFor,
+      outcome,
+    };
+    if (outcome === 'won' && rung.auth) {
+      step.found = {
+        method: rung.auth.method!,
+        detail: rung.auth.detail,
+        keyHint: maskTail(rung.auth.bearerToken ?? rung.auth.accessKeyId),
+        value: rung.auth.profile ?? rung.auth.credentialExportCmd,
+      };
+      won = true;
+    }
+    steps.push(step);
+  }
+
+  // Rung 5: the ~/.aws existence fallback (checked only when nothing above won).
+  const awsOutcome: CredentialTraceStep['outcome'] = won ? 'not-reached'
+    : (awsFiles.credentials || awsFiles.config) ? 'won' : 'empty';
+  steps.push({
+    step: steps.length + 1,
+    owner: 'aws-cli',
+    source: 'aws-files',
+    location: '~/.aws/credentials + ~/.aws/config',
+    checkedFor: ['file exists (contents are NOT validated here — the AWS SDK default chain picks whichever profile applies at call time)'],
+    outcome: awsOutcome,
+    ...(awsOutcome === 'won' ? { found: { method: 'aws_chain' as CredentialMethod, detail: winner.detail } } : {}),
+  });
+
+  return {
+    steps,
+    winner: {
+      source: winner.source,
+      method: winner.method,
+      detail: winner.detail,
+      keyHint: maskTail(winner.bearerToken ?? winner.accessKeyId),
+      profile: winner.profile,
+      credentialExportCmd: winner.credentialExportCmd,
+      region: winner.region,
+    },
+    region: { value: winner.region ?? DEFAULT_REGION, source: regionSource },
+  };
 }
 
 /** Read & parse the `env` block from ~/.claude/settings.json. Best-effort. */

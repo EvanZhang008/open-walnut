@@ -1,7 +1,8 @@
-import { useState, useCallback, useMemo, useRef } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useEvent } from './useWebSocket';
+import { log } from '@/utils/log';
 import * as focusApi from '@/api/focus';
-import type { FocusTier } from '@/api/focus';
+import type { FocusTier, CustomTierDef } from '@/api/focus';
 import type { Task } from '@open-walnut/core';
 import { useTasksContext } from '@/contexts/TasksContext';
 
@@ -10,10 +11,20 @@ export interface UseFocusBarReturn {
   pinnedTasks: Task[];
   focusIds: string[];
   satelliteIds: string[];
+  backlogIds: string[];
   waitIds: string[];
   focusTasks: Task[];
   satelliteTasks: Task[];
+  backlogTasks: Task[];
   waitTasks: Task[];
+  /** User-defined tiers (Settings → Focus Tiers), registry order. */
+  customTiers: CustomTierDef[];
+  /** False until the first registry fetch resolves. Consumers that self-heal
+   *  away from a stale ct_* reference MUST wait for this — the initial []
+   *  is indistinguishable from "user has no custom tiers". */
+  customTiersLoaded: boolean;
+  /** Per custom-tier-id ordered pinned task ids. Identity-stable. */
+  customTierIds: Record<string, string[]>;
   pin: (taskId: string) => Promise<void>;
   unpin: (taskId: string) => Promise<void>;
   reorder: (newIds: string[]) => Promise<void>;
@@ -53,8 +64,8 @@ function arraysEqual(a: string[], b: string[]): boolean {
 }
 
 /** Normalize a tier for storage on the task object: satellite = undefined (default). */
-function tierField(tier: FocusTier): 'focus' | 'wait' | undefined {
-  return tier === 'focus' || tier === 'wait' ? tier : undefined;
+function tierField(tier: FocusTier): string | undefined {
+  return tier === 'satellite' ? undefined : tier;
 }
 
 /**
@@ -71,11 +82,30 @@ function tierField(tier: FocusTier): 'focus' | 'wait' | undefined {
  * channel. GET /api/focus/tasks remains only as a cross-client convergence
  * snapshot on non-self config:changed{focus_bar} (pin_order reorders don't
  * emit per-task events).
+ *
+ * Custom tiers: the registry (id+label defs) is the ONE piece that is not
+ * derivable from tasks — fetched once and refreshed on
+ * config:changed{focus_tiers}. Tier membership still derives from
+ * task.focus_tier; a task pointing at an unregistered tier id renders in
+ * Satellite (mirrors server splitTiers self-heal).
  */
 export function useFocusBar(): UseFocusBarReturn {
   const { tasks, patchTasksLocal, guardEcho } = useTasksContext();
 
   const [visible, setVisibleState] = useState(readVisible);
+
+  // ── Custom tier registry ──
+  const [customTiersRaw, setCustomTiers] = useState<CustomTierDef[]>([]);
+  const [customTiersLoaded, setCustomTiersLoaded] = useState(false);
+  useEffect(() => {
+    focusApi.fetchCustomTiers()
+      .then((r) => { setCustomTiers(r.tiers); setCustomTiersLoaded(true); })
+      // Not silent: a failed fetch hides every custom tier (tabs, subgroups,
+      // picker entries) with no other symptom — leave a trace for triage.
+      .catch((err) => { log.warn('focus', 'custom tier registry fetch failed', { err: String(err) }); });
+  }, []);
+  const customTiers = useStableDefs(customTiersRaw);
+  const customIdSet = useMemo(() => new Set(customTiers.map((t) => t.id)), [customTiers]);
 
   // ── Derivation ──
   const orderedPinned = useMemo(() =>
@@ -87,12 +117,26 @@ export function useFocusBar(): UseFocusBarReturn {
   const pinnedIds = useStableIds(useMemo(() => orderedPinned.map((t) => t.id), [orderedPinned]));
   const focusIds = useStableIds(useMemo(
     () => orderedPinned.filter((t) => t.focus_tier === 'focus').map((t) => t.id), [orderedPinned]));
-  // Satellite is the default tier: anything not focus and not wait (incl. the
-  // retired 'next' value on legacy tasks) falls here — mirrors server splitTiers().
+  // Satellite is the default tier: anything not a non-default built-in
+  // (focus/backlog/wait) and not in a REGISTERED custom tier falls here (incl.
+  // the retired 'next' value and ids of deleted custom tiers on legacy tasks)
+  // — mirrors server splitTiers().
+  const isSatellite = useCallback((t: Task) =>
+    !(t.focus_tier && (t.focus_tier === 'focus' || t.focus_tier === 'backlog' || t.focus_tier === 'wait' || customIdSet.has(t.focus_tier))),
+  [customIdSet]);
   const satelliteIds = useStableIds(useMemo(
-    () => orderedPinned.filter((t) => t.focus_tier !== 'focus' && t.focus_tier !== 'wait').map((t) => t.id), [orderedPinned]));
+    () => orderedPinned.filter(isSatellite).map((t) => t.id), [orderedPinned, isSatellite]));
+  const backlogIds = useStableIds(useMemo(
+    () => orderedPinned.filter((t) => t.focus_tier === 'backlog').map((t) => t.id), [orderedPinned]));
   const waitIds = useStableIds(useMemo(
     () => orderedPinned.filter((t) => t.focus_tier === 'wait').map((t) => t.id), [orderedPinned]));
+  const customTierIds = useStableTierMap(useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const def of customTiers) {
+      map[def.id] = orderedPinned.filter((t) => t.focus_tier === def.id).map((t) => t.id);
+    }
+    return map;
+  }, [orderedPinned, customTiers]));
 
   // Refs for async closures (commitPin, event handlers) — always-current values
   // without re-creating the callbacks each render.
@@ -120,8 +164,26 @@ export function useFocusBar(): UseFocusBarReturn {
   const applyFocusData = useCallback((data: Partial<focusApi.FocusBarData>) => {
     if (!data.pinned_tasks) return;
     const hasTierSplit = data.focus_tasks !== undefined || data.wait_tasks !== undefined;
+    // custom_tier_tasks is typed optional ("absent on old servers"): a payload
+    // with the built-in split but no custom map must not wipe custom-tier
+    // members to satellite — keep each task's existing custom assignment then.
+    const hasCustomSplit = data.custom_tier_tasks !== undefined;
+    // Same defense for backlog_tasks (absent on pre-Backlog servers).
+    const hasBacklogSplit = data.backlog_tasks !== undefined;
     const focusSet = new Set(data.focus_tasks ?? []);
+    const backlogSet = new Set(data.backlog_tasks ?? []);
     const waitSet = new Set(data.wait_tasks ?? []);
+    // Reverse lookup taskId → custom tier id from the per-tier arrays.
+    const customOf = new Map<string, string>();
+    for (const [tierId, ids] of Object.entries(data.custom_tier_tasks ?? {})) {
+      for (const id of ids) customOf.set(id, tierId);
+    }
+    const currentCustomOf = (id: string): string | undefined => {
+      const cur = tasksRef.current.find((t) => t.id === id)?.focus_tier;
+      return cur && customIdSet.has(cur) ? cur : undefined;
+    };
+    const currentBacklogOf = (id: string): string | undefined =>
+      tasksRef.current.find((t) => t.id === id)?.focus_tier === 'backlog' ? 'backlog' : undefined;
     const pinnedSet = new Set(data.pinned_tasks);
     const patches: Record<string, Partial<Task>> = {};
     data.pinned_tasks.forEach((id, i) => {
@@ -129,7 +191,11 @@ export function useFocusBar(): UseFocusBarReturn {
         pinned: true,
         pin_order: i,
         ...(hasTierSplit
-          ? { focus_tier: focusSet.has(id) ? 'focus' as const : waitSet.has(id) ? 'wait' as const : undefined }
+          ? {
+            focus_tier: focusSet.has(id) ? 'focus' : waitSet.has(id) ? 'wait'
+              : (hasBacklogSplit ? (backlogSet.has(id) ? 'backlog' : undefined) : currentBacklogOf(id))
+              ?? (hasCustomSplit ? customOf.get(id) : currentCustomOf(id)),
+          }
           : {}),
       };
     });
@@ -139,14 +205,22 @@ export function useFocusBar(): UseFocusBarReturn {
       }
     }
     patchTasksLocal(patches);
-  }, [patchTasksLocal]);
+  }, [patchTasksLocal, customIdSet]);
 
   // Cross-client convergence: another client's pin/reorder emits
   // config:changed{focus_bar}. pin_order reorders carry no per-task WS events,
   // so pull the snapshot. Cooldown skips our own echoes (we already applied
-  // the same change optimistically).
+  // the same change optimistically). config:changed{focus_tiers} = the custom
+  // tier registry changed (Settings CRUD, any client) — always refetch defs;
+  // tier membership self-corrects via task:updated echoes.
   useEvent('config:changed', (data: unknown) => {
     const { key } = (data ?? {}) as { key?: string };
+    if (key === 'focus_tiers') {
+      focusApi.fetchCustomTiers()
+        .then((r) => { setCustomTiers(r.tiers); setCustomTiersLoaded(true); })
+        .catch((err) => { log.warn('focus', 'custom tier registry refetch failed', { err: String(err) }); });
+      return;
+    }
     if (key !== 'focus_bar') return;
     if (Date.now() - lastWriteRef.current < SELF_CHANGE_COOLDOWN) return;
     focusApi.fetchPinnedTasks().then(applyFocusData).catch(() => {});
@@ -290,20 +364,26 @@ export function useFocusBar(): UseFocusBarReturn {
 
   const tierOf = useCallback((taskId: string): FocusTier => {
     if (focusIds.includes(taskId)) return 'focus';
+    if (backlogIds.includes(taskId)) return 'backlog';
     if (waitIds.includes(taskId)) return 'wait';
+    for (const [tierId, ids] of Object.entries(customTierIds)) {
+      if (ids.includes(taskId)) return tierId;
+    }
     return 'satellite';
-  }, [focusIds, waitIds]);
+  }, [focusIds, backlogIds, waitIds, customTierIds]);
 
   // Resolved Task arrays (identity follows `tasks` — consumers needing stability
   // should key on the ID arrays, as FocusBarContext's memo does).
   const focusTasks = useMemo(() => orderedPinned.filter((t) => t.focus_tier === 'focus'), [orderedPinned]);
-  const satelliteTasks = useMemo(() => orderedPinned.filter((t) => t.focus_tier !== 'focus' && t.focus_tier !== 'wait'), [orderedPinned]);
+  const satelliteTasks = useMemo(() => orderedPinned.filter(isSatellite), [orderedPinned, isSatellite]);
+  const backlogTasks = useMemo(() => orderedPinned.filter((t) => t.focus_tier === 'backlog'), [orderedPinned]);
   const waitTasks = useMemo(() => orderedPinned.filter((t) => t.focus_tier === 'wait'), [orderedPinned]);
 
   return {
     pinnedIds, pinnedTasks: orderedPinned,
-    focusIds, satelliteIds, waitIds,
-    focusTasks, satelliteTasks, waitTasks,
+    focusIds, satelliteIds, backlogIds, waitIds,
+    focusTasks, satelliteTasks, backlogTasks, waitTasks,
+    customTiers, customTiersLoaded, customTierIds,
     pin, unpin, reorder, setTier,
     addLocalPin, replaceLocalPinId, removeLocalPin, commitPin,
     isPinned, tierOf,
@@ -317,5 +397,26 @@ export function useFocusBar(): UseFocusBarReturn {
 function useStableIds(ids: string[]): string[] {
   const ref = useRef<string[]>(ids);
   if (!arraysEqual(ref.current, ids)) ref.current = ids;
+  return ref.current;
+}
+
+/** Identity-stable custom tier defs (compared by id+label sequence). */
+function useStableDefs(defs: CustomTierDef[]): CustomTierDef[] {
+  const ref = useRef<CustomTierDef[]>(defs);
+  const same = ref.current.length === defs.length
+    && ref.current.every((d, i) => d.id === defs[i].id && d.label === defs[i].label);
+  if (!same) ref.current = defs;
+  return ref.current;
+}
+
+/** Identity-stable tierId → ids map (compared by keys + array contents). */
+function useStableTierMap(map: Record<string, string[]>): Record<string, string[]> {
+  const ref = useRef<Record<string, string[]>>(map);
+  const prev = ref.current;
+  const prevKeys = Object.keys(prev);
+  const nextKeys = Object.keys(map);
+  const same = prevKeys.length === nextKeys.length
+    && nextKeys.every((k) => prev[k] !== undefined && arraysEqual(prev[k], map[k]));
+  if (!same) ref.current = map;
   return ref.current;
 }

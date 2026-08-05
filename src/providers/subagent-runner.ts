@@ -26,7 +26,7 @@ import { TRIAGE_AGENTS as TRIAGE_AGENT_IDS } from '../core/session-tracker.js';
 import { getAgent } from '../core/agent-registry.js';
 import { getConfig } from '../core/config-manager.js';
 import { buildSubagentSystemPrompt, buildSubagentToolSet } from '../agent/subagent-context.js';
-import { buildStatefulMemorySection } from '../agent/stateful-memory.js';
+import { buildStatefulMemorySection, persistMemoryUpdate } from '../agent/stateful-memory.js';
 import { buildFilteredSkillsPrompt } from '../core/skill-loader.js';
 import { loadContextSources, type ContextSourcesInput } from '../agent/context-sources.js';
 import { getProjectMemory } from '../core/project-memory.js';
@@ -616,7 +616,14 @@ export class SubagentRunner {
         }, ['*'], { source: 'subagent-runner' });
       }
 
-      // Memory is now agent-driven: the agent uses the `memory` tool directly.
+      // Persist the agent's <memory_update> block. Uses resolvedStateful so an
+      // {auto}-resolved memory_project writes where the prompt said it would.
+      if (resolvedStateful) {
+        await persistMemoryUpdate(result.response, resolvedStateful, agentDef.name, {
+          runId: run.runId,
+          agentId: run.agentId,
+        });
+      }
 
       log.subagent.info('run completed', {
         runId: run.runId,

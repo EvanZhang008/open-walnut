@@ -164,7 +164,7 @@ describe('layout prefs persist on release, not per frame', () => {
     ['pages/NotesPage.tsx', 'listWidth'],
     ['pages/NotesPage.tsx', 'chatWidth'],
     ['pages/MemoryPage.tsx', 'listWidth'],
-    ['pages/MainPage.tsx', 'colSplitPct'],
+    ['pages/MainPage.tsx', 'colWeights'],
   ];
 
   it.each(PER_FRAME_KEYS)('%s does not persist %s from a useEffect', (rel, stateVar) => {

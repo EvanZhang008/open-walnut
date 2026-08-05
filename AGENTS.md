@@ -105,6 +105,15 @@ Personal AI butler: tasks + knowledge + AI sessions. **Tasks are the atom.** `Ca
   `DashboardPage`/`TaskList`/`TaskCard` (secondary). Default to the Homepage panel for any
   Task/Session work, demos, and recordings.
 - Concurrency: `tasks.json`/`sessions.json` use in-process + cross-process file locks
+- **Skill discovery has TWO scopes — don't collapse them** (`src/core/skill-loader.ts`). The
+  butler's injected index (`buildSkillsPrompt` → `getPromptSearchDirs()`) covers workspace
+  `skills/` + `~/.open-walnut/skills/` + shipped `dist/data/skills/` — deliberately **NOT**
+  `~/.claude/skills/`, which is the Claude Code CLI's own store (deploy/close-session/plan
+  skills for an *executor*; the butler is a coordinator that never runs the work, and the CLI
+  discovers them natively in its own process anyway). Management/`skill_view` scope
+  (`getSearchDirs()`) still covers all four, so a claude skill stays listable and readable.
+  Opt back in with `WALNUT_BUTLER_CLAUDE_SKILLS=1`. Measured: excluding them cut the Skills
+  prompt section from 10.2K → 3.9K tokens (77 → 34 entries).
 
 ### Remote Session Daemon (resilience model)
 

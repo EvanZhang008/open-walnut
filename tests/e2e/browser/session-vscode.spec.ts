@@ -49,24 +49,21 @@ test.beforeEach(async ({ page }) => {
   await installVscodeIntercept(page)
 })
 
-test('Open in VS Code is available from the homepage header and menu', async ({ page }) => {
+// Open in VS Code lives ONLY in the ⋮ kebab (2026-07-27): the header icon was a
+// duplicate of this menu item and it was stealing width from the session title.
+test('Open in VS Code is available from the session kebab, not the header', async ({ page }) => {
   const requestCount = await installEndpointStub(page)
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
   const panel = await openHomepageSession(page)
-  const headerButton = panel.getByRole('button', { name: 'Open in VS Code' })
-  await expect(headerButton).toBeVisible()
-  await headerButton.click()
-  await expectCapturedUri(page)
-  expect(requestCount()).toBe(1)
+  await expect(panel.locator('.session-panel-vscode')).toHaveCount(0)
 
-  await page.evaluate(() => { delete (window as Window & { __capturedVscodeUri?: string }).__capturedVscodeUri })
   await panel.getByRole('button', { name: 'More actions' }).click()
   const menuItem = page.locator('.task-kebab-menu:visible').getByText('Open in VS Code', { exact: true })
   await expect(menuItem).toBeVisible()
   await menuItem.click()
   await expectCapturedUri(page)
-  expect(requestCount()).toBe(2)
+  expect(requestCount()).toBe(1)
 })
 

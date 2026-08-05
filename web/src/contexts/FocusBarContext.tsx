@@ -16,8 +16,9 @@ export function FocusBarProvider({ children }: { children: ReactNode }) {
   // and only those — refresh the context. Consumers that need fresh task data
   // already get it from TasksContext.
   const value = useMemo<UseFocusBarReturn>(() => focusBar,
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only IDs + visible trigger context update
-    [focusBar.pinnedIds, focusBar.focusIds, focusBar.satelliteIds, focusBar.waitIds,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only IDs + tier defs + visible trigger context update
+    [focusBar.pinnedIds, focusBar.focusIds, focusBar.satelliteIds, focusBar.backlogIds, focusBar.waitIds,
+     focusBar.customTiers, focusBar.customTiersLoaded, focusBar.customTierIds,
      focusBar.visible]);
   return <FocusBarContext.Provider value={value}>{children}</FocusBarContext.Provider>;
 }
@@ -26,4 +27,13 @@ export function useFocusBarContext(): UseFocusBarReturn {
   const ctx = useContext(FocusBarContext);
   if (!ctx) throw new Error('useFocusBarContext must be used within FocusBarProvider');
   return ctx;
+}
+
+/**
+ * Null-tolerant variant for deep/shared components (kebab menus, pickers) that
+ * may render outside the provider (e.g. isolated pages/tests) — they degrade to
+ * "no custom tiers" instead of crashing.
+ */
+export function useFocusBarContextSafe(): UseFocusBarReturn | null {
+  return useContext(FocusBarContext);
 }

@@ -9,6 +9,12 @@ final class NotesStore {
     private let api = WalnutAPI()
     weak var connection: ConnectionStore?
 
+    /// False while the app is backgrounded. EVERY async completion re-checks it
+    /// before mutating observed state: a fetch that lands while suspended would
+    /// otherwise drive SwiftUI updates from the background, which is exactly the
+    /// scene-update work the OS kills a non-active process for (P0-3).
+    private var isActive = true
+
     var tree: [NoteTreeNode] = []
     var loadingTree = false
     var errorMessage: String?
@@ -24,12 +30,22 @@ final class NotesStore {
     }
     var rowMeta: [String: RowMeta] = [:]
 
-    /// Loaded from disk cache instantly; refreshed from the network after.
+    init() {
+        LifecycleHub.shared.register(self)
+    }
+
+    /// Hydrated from the disk cache OFF-MAIN, then refreshed from the network.
+    /// The cache read must never block the caller's thread: on a background /
+    /// prewarm launch that read is scene-update work the OS bills against the
+    /// 10s allowance before killing the process (P0-1).
     func initialize() async {
-        if let cached: [NoteTreeNode] = DiskCache.load([NoteTreeNode].self, key: "notes-tree") {
+        isActive = true
+        if let cached = await DiskCache.loadAsync([NoteTreeNode].self, key: "notes-tree"),
+           isActive, tree.isEmpty {
             tree = cached
         }
-        if let cachedPins: [String] = DiskCache.load([String].self, key: "notes-pinned") {
+        if let cachedPins = await DiskCache.loadAsync([String].self, key: "notes-pinned"),
+           isActive, pinned.isEmpty {
             pinned = cachedPins
         }
         async let treeRefresh: Void = refreshTree()
@@ -38,14 +54,18 @@ final class NotesStore {
     }
 
     func refreshTree() async {
+        guard isActive else { return }
         loadingTree = true
         defer { loadingTree = false }
         do {
-            tree = try await api.notesTree()
+            let fetched = try await api.notesTree()
+            guard isActive, !Task.isCancelled else { return }
+            tree = fetched
             connection?.reportReachability(true, source: "notes-rest")
             DiskCache.save(tree, key: "notes-tree")
         } catch {
             if let apiError = error as? APIError, apiError.isCancelled { return }
+            guard isActive else { return }
             reportIfNetwork(error)
             if tree.isEmpty { errorMessage = error.localizedDescription }
         }
@@ -54,11 +74,15 @@ final class NotesStore {
     // MARK: - Pinned (favorites)
 
     func refreshPinned() async {
+        guard isActive else { return }
         do {
-            pinned = try await api.favoriteNotes()
+            let fetched = try await api.favoriteNotes()
+            guard isActive, !Task.isCancelled else { return }
+            pinned = fetched
             DiskCache.save(pinned, key: "notes-pinned")
         } catch {
             if let apiError = error as? APIError, apiError.isCancelled { return }
+            guard isActive else { return }
             reportIfNetwork(error)
         }
     }
@@ -76,9 +100,11 @@ final class NotesStore {
             pinned.append(path)
         }
         do {
-            pinned = wasPinned
+            let updated = wasPinned
                 ? try await api.removeFavoriteNote(path: path)
                 : try await api.addFavoriteNote(path: path)
+            guard isActive, !Task.isCancelled else { return }
+            pinned = updated
             DiskCache.save(pinned, key: "notes-pinned")
         } catch {
             if let apiError = error as? APIError, apiError.isCancelled {
@@ -91,6 +117,7 @@ final class NotesStore {
                 }
                 return
             }
+            guard isActive else { return }
             reportIfNetwork(error)
             await refreshPinned() // roll back to server truth
         }
@@ -101,12 +128,15 @@ final class NotesStore {
     /// Ensure date+preview metadata for a row. Disk-cached note content is used
     /// first; otherwise fetch once. Called from row `.task` as rows appear.
     func ensureRowMeta(for path: String) async {
+        guard isActive else { return }
         if rowMeta[path] != nil { return }
-        if let cached: NoteContent = DiskCache.load(NoteContent.self, key: "note-\(path)") {
+        if let cached = await DiskCache.loadAsync(NoteContent.self, key: "note-\(path)") {
+            guard isActive else { return }
             rowMeta[path] = Self.meta(from: cached)
             return
         }
         guard let note = try? await api.noteContent(path: path) else { return }
+        guard isActive, !Task.isCancelled else { return }
         DiskCache.save(note, key: "note-\(path)")
         rowMeta[path] = Self.meta(from: note)
     }
@@ -153,13 +183,14 @@ final class NotesStore {
             let note = try await api.noteContent(path: path)
             connection?.reportReachability(true, source: "notes-rest")
             DiskCache.save(note, key: "note-\(path)")
-            rowMeta[path] = Self.meta(from: note)
+            // Observable write only while the app is in front of the user.
+            if isActive { rowMeta[path] = Self.meta(from: note) }
             return note
         } catch {
             if let apiError = error as? APIError, apiError.isCancelled { throw error }
             reportIfNetwork(error)
             // Offline fallback: serve the cached copy if we have one.
-            if let cached: NoteContent = DiskCache.load(NoteContent.self, key: "note-\(path)") {
+            if let cached = await DiskCache.loadAsync(NoteContent.self, key: "note-\(path)") {
                 return cached
             }
             throw error
@@ -177,7 +208,9 @@ final class NotesStore {
             let result = try await api.saveNote(path: path, content: content, expectedHash: expectedHash)
             let note = NoteContent(content: content, contentHash: result.contentHash, updatedAt: result.updatedAt)
             DiskCache.save(note, key: "note-\(path)")
-            rowMeta[path] = Self.meta(from: note)
+            // A backgrounded save still persists (the user's text must land) —
+            // only the observable row-preview write waits for foreground.
+            if isActive { rowMeta[path] = Self.meta(from: note) }
             return .saved(result)
         } catch let error as APIError where error.isConflict {
             if case .server(_, _, _, let serverHash, let serverContent) = error {
@@ -199,10 +232,11 @@ final class NotesStore {
             await refreshTree()
             return true
         } catch let error as APIError where error.isConflict {
-            errorMessage = "A note with that name already exists."
+            if isActive { errorMessage = "A note with that name already exists." }
             return false
         } catch {
             if let apiError = error as? APIError, apiError.isCancelled { return false }
+            guard isActive else { return false }
             reportIfNetwork(error)
             errorMessage = error.localizedDescription
             return false
@@ -214,11 +248,12 @@ final class NotesStore {
         do {
             try await api.deleteNote(path: path)
             if isPinned(path) { await togglePin(path) }
-            rowMeta[path] = nil
+            if isActive { rowMeta[path] = nil }
             await refreshTree()
             return true
         } catch {
             if let apiError = error as? APIError, apiError.isCancelled { return false }
+            guard isActive else { return false }
             reportIfNetwork(error)
             errorMessage = error.localizedDescription
             return false
@@ -264,4 +299,12 @@ final class NotesStore {
             }
         }
     }
+}
+
+extension NotesStore: LifecycleSuspendable {
+    /// No streams or timers to tear down here — the quiescence contract is
+    /// purely "stop mutating observed state" (see `isActive`). In-flight
+    /// requests settle and their completions become no-ops.
+    func suspendForBackground() { isActive = false }
+    func resumeForForeground() { isActive = true }
 }

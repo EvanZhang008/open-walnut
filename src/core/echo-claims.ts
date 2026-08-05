@@ -19,11 +19,22 @@
  * The bound message is stamped with `walnutMessageId = qmIds[0]`, giving the
  * frontend an exact id to consume instead of a fuzzy text match.
  *
+ * SEPARATOR MISMATCH (inc-1785888617044 — the reason a claim could never bind):
+ * walnut joins a multi-message batch with '\n\n' before writing it to the FIFO,
+ * but the CLI drains its own queue and logs the echo joined with a SINGLE '\n'
+ * (independently confirmed on the real corpus — see the batched-twin pass in
+ * session-history.ts). Because binding compared the claim text EXACTLY, every
+ * merged batch failed to bind: `walnutMessageId` stayed null, the frontend fell
+ * through to text matching, and that ALSO failed (no single bubble's text equals
+ * the merged line) — so the bubbles had no evidence at all and stayed pinned at
+ * the bottom forever. `candidateTexts()` therefore offers BOTH join forms, and a
+ * claim binds when the echo matches any candidate.
+ *
  * Limitations (documented, acceptable):
- *  - Batches >1 queued message are written as ONE combined FIFO payload, so
- *    the echo is one user line with the joined text; only qmIds[0] is stamped
- *    (SessionHistoryMessage has a single walnutMessageId). Remaining bubbles
- *    fall back to the historical count/text semantics — no worse than before.
+ *  - A merged batch echoes as ONE user line, and SessionHistoryMessage carries a
+ *    single walnutMessageId, so only qmIds[0] is stamped. `segments` is kept on
+ *    the claim so the frontend's join-run matcher can absorb the whole run (see
+ *    optimistic-dedup.ts); bubbles 2..N are proven by that run, not by an id.
  *  - The registry is in-memory: a server restart loses unbound claims and the
  *    frontend falls back to text dedup. Bindings only matter for the short
  *    window while optimistic bubbles are still rendered, so this is fine.
@@ -40,6 +51,34 @@ interface EchoClaim {
   qmIds: string[];
   text: string;
   registeredAt: number;
+}
+
+/**
+ * The echo forms a claim may legitimately appear as in the canonical JSONL.
+ *
+ * walnut delivers a batch joined with '\n\n'; the CLI's own queue drain re-joins
+ * the same messages with a single '\n'. Both are the SAME logical send, so both
+ * must bind. Returns unique, non-empty candidates (single-message claims yield
+ * exactly one, so the common path is unchanged).
+ *
+ * Deliberately NOT fuzzy: each candidate is still compared for EXACT equality, so
+ * the widening can only ever match a line whose bytes are one of these two forms.
+ * The residual ambiguity is that a lone message which itself contains a blank line
+ * is byte-identical to the collapsed join of a two-message batch — indistinguishable
+ * on disk, so no matcher could tell them apart. It stays harmless because a bound id
+ * can only ever hide a bubble whose text the bound line actually contains, and the
+ * FIFO/timestamp/boundMsgIds guards below already bound mis-claim damage to "the
+ * bubble disappears a bit early", which is the documented acceptable direction.
+ */
+function candidateTexts(text: string): string[] {
+  const primary = text.trim();
+  const out = [primary];
+  if (primary.includes('\n\n')) {
+    // Re-join the '\n\n'-separated segments with a single '\n' — the CLI form.
+    const alt = primary.split('\n\n').join('\n').trim();
+    if (alt && alt !== primary) out.push(alt);
+  }
+  return out;
 }
 
 interface SessionClaims {
@@ -114,12 +153,13 @@ export function bindEchoClaims(sessionId: string, messages: EchoBindableMessage[
 
   const stillUnbound: EchoClaim[] = [];
   for (const claim of sc.claims) {
-    const wanted = claim.text.trim();
+    // Both join forms are the same logical send — see candidateTexts().
+    const wanted = candidateTexts(claim.text);
     let bound = false;
     for (const msg of messages) {
       if (msg.role !== 'user' || msg.walnutMessageId || !msg.msgId) continue;
       if (sc.boundMsgIds.has(msg.msgId)) continue;
-      if (msg.text.trim() !== wanted) continue;
+      if (!wanted.includes(msg.text.trim())) continue;
       // Echoes are written at/after delivery — never bind to a message that
       // predates the claim (identical short texts recur across old turns).
       const ts = Date.parse(msg.timestamp);

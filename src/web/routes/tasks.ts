@@ -34,6 +34,7 @@ import {
   renameGroup,
   setGroupHidden,
   listGroups,
+  getCustomTiers,
   type SlimTask,
 } from '../../core/task-manager.js'
 import { listSessions } from '../../core/session-tracker.js'
@@ -441,6 +442,7 @@ tasksRouter.post('/quick-parse', async (req: Request, res: Response, next: NextF
       categoryDigest: categoryDigest.digest,
       knownCategories: categoryDigest.categories,
       knownProjects: categoryDigest.projectsByCategory,
+      customTiers: await getCustomTiers(),
     })
     log.web.info('quick-parse', {
       parseMs,
@@ -797,7 +799,11 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
     const taskBeforeUpdate = req.body.phase ? await getTask(id) : undefined
     const previousPhase = taskBeforeUpdate?.phase
 
-    const result = await updateTask(id, req.body, { source: 'api', extraTargets: ['main-agent'] })
+    // asyncPush: the UI's PATCH must ack as soon as the local write lands — awaiting
+    // the external sync round-trip (2-3s each) held browser connections long enough
+    // to saturate the 6-per-origin pool and time out every other request (2026-07-31).
+    // Push failures still surface via sync_error + TASK_UPDATED, which the UI renders.
+    const result = await updateTask(id, req.body, { source: 'api', extraTargets: ['main-agent'], asyncPush: true })
     log.web.info('task updated via REST', { taskId: id, fields: Object.keys(req.body) })
 
     // Phase hooks: declarative automation triggered by phase transitions.

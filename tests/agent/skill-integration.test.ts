@@ -109,8 +109,8 @@ Use curl to check weather via wttr.in`,
     expect(prompt).toContain('SKILL.md</location>');
   });
 
-  it('system prompt contains multiple skills from different dirs', async () => {
-    // Global skill
+  it('system prompt contains walnut skills but NOT claude-store skills', async () => {
+    // Global skill — belongs to the butler
     const globalDir = path.join(GLOBAL_SKILLS_DIR, 'deploy');
     await fsp.mkdir(globalDir, { recursive: true });
     await fsp.writeFile(
@@ -122,7 +122,9 @@ description: Deploy services to production
 # Deploy Skill`,
     );
 
-    // Claude skill
+    // Claude skill — belongs to the Claude Code CLI (the executor), which
+    // discovers it natively. Injecting it into the coordinator's prompt is
+    // pure token waste, so the butler index must skip it.
     const claudeDir = path.join(CLAUDE_SKILLS_DIR, 'github');
     await fsp.mkdir(claudeDir, { recursive: true });
     await fsp.writeFile(
@@ -143,7 +145,7 @@ description: Interact with GitHub using the gh CLI
     const prompt = capturedSystemPrompt();
 
     expect(prompt).toContain('<name>deploy</name>');
-    expect(prompt).toContain('<name>github</name>');
+    expect(prompt).not.toContain('<name>github</name>');
   });
 
   it('ineligible skills are excluded from system prompt', async () => {

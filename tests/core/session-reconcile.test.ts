@@ -31,7 +31,7 @@ import { mockLocalDaemonReader } from '../helpers/mock-local-daemon-reader.js'
 vi.mock('../../src/constants.js', () => createMockConstants())
 vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader())
 
-import { foldSessionTail, reconcileProcessStatus, daemonStreamPath } from '../../src/core/session-reconcile.js'
+import { foldSessionTail, fetchStreamTailFold, reconcileProcessStatus, daemonStreamPath } from '../../src/core/session-reconcile.js'
 import {
   createSessionRecord,
   updateSessionRecord,
@@ -725,5 +725,165 @@ describe('daemonStreamPath', () => {
   it('local → honors WALNUT_STREAMS_DIR isolation', () => {
     expect(daemonStreamPath('sid-1', null)).toBe(path.join(streamsDir, 'sid-1.jsonl'))
     expect(daemonStreamPath('sid-1', '__local__')).toBe(path.join(streamsDir, 'sid-1.jsonl'))
+  })
+})
+
+// ── Whale-turn watermark fallback (incident 57b125ab) ──
+// A 37-min turn streamed >2 MB after its user line, so the anchor scan always
+// returned 'tail-window-exhausted' and the stuck-'running' record was
+// unreconcilable for 15h — while the 19 KB after record.consumedOffset held a
+// clean companion idle. The fallback folds from the watermark with a synthetic
+// anchor instead of requiring the (unreachable) user line.
+
+describe('foldSessionTail — synthetic anchor (watermark fold)', () => {
+  const sid = 'whale-sid'
+
+  it('INCIDENT 57b125ab shape: only post-turn bookkeeping after the watermark → agent_complete', () => {
+    // Exact post-watermark line sequence from the real incident stream file.
+    const fold = foldSessionTail([
+      stateEvent(sid, 'idle'),
+      JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: 'r1' } }),
+      JSON.stringify({ type: 'system', subtype: 'control_request_progress', session_id: sid }),
+      JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: 'r2' } }),
+    ].join('\n'), 1000, { syntheticAnchor: true })
+    expect(fold.foundTurnAnchor).toBe(true)
+    expect(fold.anchorSynthetic).toBe(true)
+    expect(fold.sawTurnActivity).toBe(false)
+    expect(fold.turnEnded).toBe(true)
+    expect(fold.workStatus).toBe('agent_complete')
+  })
+
+  it('turn activity after the watermark withholds the no-result verdict (live turn safe)', () => {
+    // Real continuation shape from the same file later: marker → running → init → assistant…
+    const fold = foldSessionTail([
+      stateEvent(sid, 'idle'),
+      walnutInjectedEvent(sid, 'next message'),
+      stateEvent(sid, 'running'),
+      initEvent(sid),
+    ].join('\n'), 1000, { syntheticAnchor: true })
+    expect(fold.sawTurnActivity).toBe(true)
+    expect(fold.turnEnded).toBe(false)
+  })
+
+  it('assistant/stream output alone counts as activity (marker-less legacy send)', () => {
+    const fold = foldSessionTail([
+      stateEvent(sid, 'idle'),
+      JSON.stringify({ type: 'assistant', session_id: sid, message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] } }),
+    ].join('\n'), 1000, { syntheticAnchor: true })
+    expect(fold.sawTurnActivity).toBe(true)
+    expect(fold.turnEnded).toBe(false)
+  })
+
+  it('a REAL result + idle in the synthetic window converges via the normal R1 path', () => {
+    const fold = foldSessionTail([
+      walnutInjectedEvent(sid, 'go'),
+      resultEvent(sid), stateEvent(sid, 'idle'),
+    ].join('\n'), 1000, { syntheticAnchor: true })
+    expect(fold.turnEnded).toBe(true)
+    expect(fold.workStatus).toBe('agent_complete')
+    expect(fold.lastResult).not.toBe(null)
+  })
+
+  it('running bg task in the synthetic window gates the verdict', () => {
+    const fold = foldSessionTail([
+      stateEvent(sid, 'idle'),
+      taskStarted(sid, 'bg-1'),
+    ].join('\n'), 1000, { syntheticAnchor: true })
+    expect(fold.gatingBgCount).toBe(1)
+    expect(fold.turnEnded).toBe(false)
+  })
+
+  it('idle WITHOUT a watermark-anchored window never fires (anchored mode unchanged)', () => {
+    // Same bookkeeping-only content WITHOUT syntheticAnchor: no user line → no
+    // anchor → no verdict. Pins that the new verdict is opt-in.
+    const fold = foldSessionTail([
+      stateEvent(sid, 'idle'),
+    ].join('\n'), 1000)
+    expect(fold.foundTurnAnchor).toBe(false)
+    expect(fold.turnEnded).toBe(false)
+  })
+})
+
+describe('fetchStreamTailFold — whale-turn watermark fallback (incident 57b125ab)', () => {
+  /** Build a whale stream: anchor + huge filler beyond the 2 MB window cap,
+   *  then a turn end, then bookkeeping-only tail. Returns the byte offset of
+   *  the turn-end (what _advanceConsumedOffset would have persisted). */
+  async function writeWhaleStream(sid: string, tail: string[]): Promise<number> {
+    const filler = JSON.stringify({
+      type: 'system', subtype: 'thinking_tokens', session_id: sid, pad: 'x'.repeat(4000),
+    })
+    const head = [initEvent(sid), userEvent(sid, 'the whale turn message')]
+    const fillers = Array.from({ length: 600 }, () => filler) // ~2.4 MB > cap
+    const consumed = [resultEvent(sid), stateEvent(sid, 'idle')]
+    const pre = [...head, ...fillers, ...consumed]
+    const preContent = pre.join('\n') + '\n'
+    const watermark = Buffer.byteLength(preContent, 'utf8')
+    await writeStream(sid, [...pre, ...tail])
+    return watermark
+  }
+
+  it('INCIDENT E2E: whale turn + clean post-watermark idle → stuck running converges to idle', async () => {
+    const sid = 'whale-converge'
+    const watermark = await writeWhaleStream(sid, [
+      stateEvent(sid, 'idle'),
+      JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: 'r1' } }),
+    ])
+    const record = await stuckRunningRecord(sid, { pid: process.pid })
+    await updateSessionRecord(sid, { consumedOffset: watermark })
+    const fresh = (await getSessionByClaudeId(sid))!
+
+    const outcome = await reconcileProcessStatus(fresh, { isAlive: true })
+    expect(outcome).toEqual({ converged: true, from: 'running', to: 'idle' })
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('idle')
+  })
+
+  it('whale turn + LIVE next turn after the watermark → no convergence', async () => {
+    const sid = 'whale-live'
+    const watermark = await writeWhaleStream(sid, [
+      stateEvent(sid, 'idle'),
+      walnutInjectedEvent(sid, 'next message'),
+      stateEvent(sid, 'running'),
+    ])
+    const record = await stuckRunningRecord(sid, { pid: process.pid })
+    await updateSessionRecord(sid, { consumedOffset: watermark })
+    const fresh = (await getSessionByClaudeId(sid))!
+
+    const outcome = await reconcileProcessStatus(fresh, { isAlive: true })
+    expect(outcome).toEqual({ converged: false, reason: 'turn-not-terminal' })
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('running')
+  })
+
+  it('whale turn WITHOUT a watermark → still tail-window-exhausted (fallback needs the offset)', async () => {
+    const sid = 'whale-no-mark'
+    await writeWhaleStream(sid, [stateEvent(sid, 'idle')])
+    const record = await stuckRunningRecord(sid, { pid: process.pid })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: true })
+    expect(outcome).toEqual({ converged: false, reason: 'tail-window-exhausted' })
+  })
+
+  it('stale watermark past EOF (sid reuse / truncation) is rejected', async () => {
+    const sid = 'whale-stale-mark'
+    await writeWhaleStream(sid, [stateEvent(sid, 'idle')])
+    const record = await stuckRunningRecord(sid, { pid: process.pid })
+    await updateSessionRecord(sid, { consumedOffset: 999_999_999 })
+    const fresh = (await getSessionByClaudeId(sid))!
+
+    const outcome = await reconcileProcessStatus(fresh, { isAlive: true })
+    expect(outcome).toEqual({ converged: false, reason: 'tail-window-exhausted' })
+  })
+
+  it('anchored fold still wins when the anchor IS reachable (fallback never preempts)', async () => {
+    const sid = 'whale-not-needed'
+    await writeStream(sid, [
+      initEvent(sid), userEvent(sid, 'normal turn'),
+      resultEvent(sid), stateEvent(sid, 'idle'),
+    ])
+    const result = await fetchStreamTailFold(sid, null, { consumedOffset: 1 })
+    expect(typeof result).not.toBe('string')
+    if (typeof result !== 'string') {
+      expect(result.fold.anchorSynthetic).toBeUndefined()
+      expect(result.fold.turnEnded).toBe(true)
+    }
   })
 })

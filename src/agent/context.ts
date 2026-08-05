@@ -6,7 +6,7 @@ import path from 'node:path';
 import { getConfig } from '../core/config-manager.js';
 import { buildSkillsPrompt } from '../core/skill-loader.js';
 import { getDailyLogsWithinBudget } from '../core/daily-log.js';
-import { getBoundedMemory } from '../core/bounded-memory.js';
+import { getBoundedMemory, promptScope } from '../core/bounded-memory.js';
 import { getCompactionSummary } from '../core/chat-history.js';
 import { getWorkingMemory, isWorkingMemoryEmpty } from '../core/working-memory.js';
 import { buildAgentsSection } from './subagent-context.js';
@@ -78,8 +78,14 @@ export function getNotesContext(): string {
 
 /**
  * Build the memory context section from daily logs, global memory, and project summaries.
+ *
+ * `scope` (from beginMemoryPromptTurn) selects the FROZEN memory render pinned at
+ * this turn's boundary, so every prompt build for one turn — the compaction
+ * gate's estimate, the real payload, an interleaved background-review fork — sees
+ * the same memory even if a write lands mid-turn. Omitted → reads live from disk
+ * (unchanged pre-freeze behavior; see memory-prompt-snapshot.ts).
  */
-export async function buildMemoryContext(budget: number = 8000): Promise<string> {
+export async function buildMemoryContext(budget: number = 8000, scope?: string): Promise<string> {
   // Phase 0: task inventory
   const taskCategories = await buildTaskCategoriesSection();
 
@@ -90,8 +96,8 @@ export async function buildMemoryContext(budget: number = 8000): Promise<string>
   // Global memory + user profile are BOUNDED stores ("## Title" entries).
   // renderForPrompt() prepends a usage header so the model always sees how full
   // each is — no truncation needed, the budget is enforced at write time.
-  const globalMemoryBlock = getBoundedMemory().renderForPrompt();
-  const userProfileBlock = getBoundedMemory(undefined, 'user').renderForPrompt();
+  const globalMemoryBlock = getBoundedMemory().renderForPrompt(scope);
+  const userProfileBlock = getBoundedMemory(undefined, 'user').renderForPrompt(scope);
 
   // Repo summaries for context
   const repoSummaries = listRepoSummaries();
@@ -355,7 +361,13 @@ export async function buildSystemPromptSplit(agentId?: string, conversationId?: 
     // Chat history file may not exist yet — that's fine
   }
 
-  const dynamic = `${contextSection}${await buildMemoryContext()}`;
+  // Memory renders from THIS conversation's frozen pin when the turn boundary
+  // created one (loop.ts → beginMemoryPromptTurn). The scope is DERIVED from the
+  // conversation identity rather than passed in, so every independent prompt build
+  // for one turn — compaction gate, real payload, an interleaved review fork, the
+  // context inspector — lands on the same pin without each caller having to know
+  // it exists. No pin for this scope ⇒ live read, i.e. pre-freeze behavior.
+  const dynamic = `${contextSection}${await buildMemoryContext(8000, promptScope(agentId, conversationId))}`;
 
   return { stable, dynamic };
 }

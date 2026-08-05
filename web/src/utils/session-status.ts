@@ -48,6 +48,39 @@ export const PROCESS_COLORS: Record<ProcessStatus, string> = {
   error: 'var(--error)',
 };
 
+/** Amber for the derived "Waiting" display state: process_status 'running' +
+ *  pendingPermission (CLI paused on requires_action). Distinct from idle's
+ *  --warning by design tokens sharing is fine — but keep a dedicated constant
+ *  so all surfaces (badge, composite dots) stay in sync if it ever diverges. */
+export const WAITING_COLOR = 'var(--warning, #f59e0b)';
+
+/** DERIVED display state for the status badge — the source of truth stays the
+ *  4-value ProcessStatus (frozen /api/v1 contract; iOS parses it). 'waiting'
+ *  exists only at the display layer: the CLI reported requires_action (paused
+ *  on a permission / plan-approval prompt) — process_status stays 'running' in
+ *  that state, so without this derivation the badge showed a green "Running"
+ *  while the CLI sat blocked on a human click (incident 7e26389d: 15h of fake
+ *  Running on an unapproved ExitPlanMode). 'running' only: a pendingPermission
+ *  left on an errored/stopped record is stale and must not mask that state. */
+export function deriveDisplayStatus(
+  processStatus: ProcessStatus,
+  pendingPermission?: { requestId?: string } | null,
+): ProcessStatus | 'waiting' {
+  return processStatus === 'running' && pendingPermission ? 'waiting' : processStatus;
+}
+
+/** Hover title for the derived 'waiting' badge: which tool + how long. */
+export function waitingBadgeTitle(pp: { toolName?: string; receivedAt?: string }, now = Date.now()): string {
+  const tool = pp.toolName || 'a tool';
+  const since = pp.receivedAt ? Date.parse(pp.receivedAt) : NaN;
+  if (!Number.isNaN(since)) {
+    const mins = Math.max(0, Math.round((now - since) / 60000));
+    const dur = mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
+    return `Waiting for approval: ${tool} (${dur})`;
+  }
+  return `Waiting for approval: ${tool}`;
+}
+
 export const PHASE_COLORS: Record<TaskPhase, string> = {
   TODO: '#6b7280',
   IN_PROGRESS: '#f59e0b',

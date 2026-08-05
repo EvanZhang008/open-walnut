@@ -256,3 +256,79 @@ describe('readClaudeCredentialExport', () => {
     expect(readClaudeCredentialExport(tmp)).toBeUndefined();
   });
 });
+
+describe('traceCredentialResolution — step-by-step transparency', () => {
+  it('marks the winning rung "won", earlier rungs "empty", later rungs "not-reached"', async () => {
+    const { traceCredentialResolution } = await import('../../src/core/credential-resolver.js');
+    // process.env (rung 3) wins; rungs 1-2 empty; rungs 4-5 not reached.
+    const trace = traceCredentialResolution(inputs({
+      processEnv: { AWS_BEARER_TOKEN_BEDROCK: 'tok-abcd1234' },
+      awsFiles: { credentials: true, config: true },
+    }));
+    expect(trace.steps).toHaveLength(5);
+    expect(trace.steps.map(s => s.outcome)).toEqual(['empty', 'empty', 'won', 'not-reached', 'not-reached']);
+    expect(trace.winner.source).toBe('env');
+    expect(trace.winner.method).toBe('bearer_token');
+  });
+
+  it('never leaks full key material — only a masked tail', async () => {
+    const { traceCredentialResolution } = await import('../../src/core/credential-resolver.js');
+    // Deliberately NOT AKIA-prefixed: the pre-commit secret scanner would flag a
+    // realistic-looking access key even in test data. Masking only needs the tail.
+    const secret = 'WALNUTFAKEIOSFODNN7EXAMPLE';
+    const trace = traceCredentialResolution(inputs({
+      processEnv: { AWS_ACCESS_KEY_ID: secret, AWS_SECRET_ACCESS_KEY: 'wJalrXUtnFEMI/K7MDENG' },
+    }));
+    const dump = JSON.stringify(trace);
+    expect(dump).not.toContain(secret);
+    expect(dump).not.toContain('wJalrXUtnFEMI');
+    expect(trace.winner.keyHint).toBe('…MPLE');
+  });
+
+  it('labels each rung with its owner (walnut / claude-code / shell-env / aws-cli)', async () => {
+    const { traceCredentialResolution } = await import('../../src/core/credential-resolver.js');
+    const trace = traceCredentialResolution(inputs());
+    expect(trace.steps.map(s => s.owner)).toEqual(
+      ['walnut', 'claude-code', 'shell-env', 'claude-code', 'aws-cli'],
+    );
+  });
+
+  it('falls through to the ~/.aws existence rung and flags that contents are unvalidated', async () => {
+    const { traceCredentialResolution } = await import('../../src/core/credential-resolver.js');
+    const trace = traceCredentialResolution(inputs({ awsFiles: { credentials: true, config: false } }));
+    const last = trace.steps[4];
+    expect(last.outcome).toBe('won');
+    expect(last.source).toBe('aws-files');
+    expect(last.checkedFor.join(' ')).toMatch(/NOT validated/);
+    expect(trace.winner.method).toBe('aws_chain');
+  });
+
+  it('reports region provenance independently of the credential winner', async () => {
+    const { traceCredentialResolution } = await import('../../src/core/credential-resolver.js');
+    const trace = traceCredentialResolution(inputs({
+      config: baseConfig({ providers: { bedrock: { api: 'bedrock', region: 'eu-west-1' } } } as Partial<Config>),
+      processEnv: { AWS_BEARER_TOKEN_BEDROCK: 'tok-1234' },
+    }));
+    expect(trace.region.value).toBe('eu-west-1');
+    expect(trace.region.source).toContain('config.yaml');
+    expect(trace.winner.source).toBe('env');
+  });
+
+  it('trace winner always agrees with resolveCredentialFrom', async () => {
+    const { traceCredentialResolution } = await import('../../src/core/credential-resolver.js');
+    const cases: Partial<ResolveInputs>[] = [
+      {},
+      { processEnv: { AWS_PROFILE: 'walnut-dev' } },
+      { claudeEnv: { AWS_BEARER_TOKEN_BEDROCK: 'x' } },
+      { claudeCredentialExport: 'ada credentials print' },
+      { awsFiles: { credentials: true, config: true } },
+    ];
+    for (const over of cases) {
+      const inp = inputs(over);
+      const resolved = resolveCredentialFrom(inp);
+      const trace = traceCredentialResolution(inp);
+      expect(trace.winner.source).toBe(resolved.source);
+      expect(trace.winner.method).toBe(resolved.method);
+    }
+  });
+});

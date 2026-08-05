@@ -45,6 +45,16 @@ export interface SessionRecord {
   archive_reason?: string;
   /** Error message when process_status is 'error' — for clear error display. */
   errorMessage?: string;
+  /** Pending permission prompt (control_request) the CLI is PAUSED on. The CLI's
+   *  session state is 'requires_action' — process_status stays 'running', so the
+   *  badge derives an amber "Waiting" from this field (incident 7e26389d: a plan
+   *  session sat on an unapproved ExitPlanMode for 15h showing a green Running). */
+  pendingPermission?: {
+    requestId: string;
+    toolName?: string;
+    reason?: string;
+    receivedAt: string;
+  };
   /** Monotonic revision for the centralized frontend status store. */
   statusRevision?: number;
   /** ISO timestamp attached to statusRevision. */

@@ -44,7 +44,11 @@ final class ConnectionStore {
     /// Confirm a 401 before treating the token as dead. Runs at most one probe
     /// at a time; a transport error is inconclusive and leaves pairing intact.
     private func handleUnauthorized() async {
-        guard isConfigured, unauthorizedProbe == nil else { return }
+        // Not while suspended: `disconnect()` below rewrites four observed
+        // fields and tears every store down — a scene-driving cascade that must
+        // not run in a background/prewarm process (P0-3). The 401 will be
+        // re-raised by the first request after the app comes back.
+        guard isConfigured, isActive, unauthorizedProbe == nil else { return }
         let probe = Task { [weak self] () -> Bool in
             guard let self else { return false }
             guard let url = AppConfig.serverURL?.absoluteString, let token = AppConfig.token, !token.isEmpty else {
@@ -63,6 +67,7 @@ final class ConnectionStore {
         unauthorizedProbe = probe
         let revoked = await probe.value
         unauthorizedProbe = nil
+        guard isActive else { return }
         if revoked {
             AppLog.error("auth", "device token confirmed revoked — returning to setup", [:])
             disconnect()
@@ -92,7 +97,7 @@ final class ConnectionStore {
     /// Called at pair time AND on every launch — the launch call is what
     /// backfills devices paired before this existed.
     func reportDeviceInfo() {
-        guard isConfigured else { return }
+        guard isConfigured, isActive else { return }
         let model = DeviceIdentity.model
         let os = DeviceIdentity.os
         let name = DeviceIdentity.name
@@ -107,13 +112,17 @@ final class ConnectionStore {
     }
 
     func refreshStatus() async {
-        guard isConfigured else { return }
+        guard isConfigured, isActive else { return }
         let started = Date()
         do {
-            status = try await api.status()
+            let probed = try await api.status()
+            // Backgrounded mid-probe: settle silently rather than driving an
+            // observable update from a non-active process (P0-3).
+            guard isActive, !Task.isCancelled else { return }
+            status = probed
             reportReachability(true, source: "status-rest", endpoint: "/api/v1/status", latencyMs: Self.latency(since: started))
         } catch let error as APIError {
-            guard !error.isCancelled else { return }
+            guard !error.isCancelled, isActive else { return }
             if case .network = error {
                 reportReachability(false, source: "status-rest", endpoint: "/api/v1/status", error: error,
                                    latencyMs: Self.latency(since: started))
@@ -137,8 +146,16 @@ final class ConnectionStore {
 
         if ok {
             // SSE health must not mask a REST-only outage: a healthy stream
-            // resetting the counter would keep the gate from ever tripping.
-            if !isSSE { consecutiveFailures = 0 }
+            // resetting the counter WHILE ALREADY ONLINE would keep the gate
+            // from ever tripping.
+            //
+            // But an SSE-driven offline→online recovery MUST reset it. The gate
+            // means "two consecutive failures since the last known-good", and
+            // leaving a stale count of 2+ standing after we declared ourselves
+            // online degraded it into a 1-failure hair trigger: the very next
+            // REST hiccup flipped the whole app offline (and disabled the chat
+            // composer) with no second sample.
+            if !isSSE || !oldState { consecutiveFailures = 0 }
             online = true
         } else if !isSSE {
             consecutiveFailures += 1
@@ -168,9 +185,23 @@ final class ConnectionStore {
     }
 
     /// Wipe the keychain token + prefs and return to setup.
+    ///
+    /// Disconnect must TEAR DOWN every other subsystem too, not just clear this
+    /// store: ChatStore's SSE stream, an open session stream, and the recovery
+    /// probes all keep running against a server we no longer have a token for
+    /// (they then 401-storm, and a 401 storm is what the transient-401 probe
+    /// exists to survive). Fanning out through the hub is the one path that
+    /// reaches all registered participants. `teardownAll` (NOT `suspendAll`) so
+    /// the hub doesn't latch "suspended": the app is still in the foreground, so
+    /// no `.active` transition is coming to clear that latch, and stores
+    /// registered after a re-pair would be born dead.
+    ///
+    /// `DiskCache.clearAll()` is a recursive directory delete — it now hops to
+    /// the cache's own IO queue instead of running on the MainActor here.
     func disconnect() {
         probeTask?.cancel()
         probeTask = nil
+        LifecycleHub.shared.teardownAll()
         AppConfig.clear()
         DiskCache.clearAll()
         isConfigured = false
@@ -179,10 +210,21 @@ final class ConnectionStore {
         status = nil
         consecutiveFailures = 0
         online = true
+        // This store itself must stay live: SetupView drives connect() through
+        // it, and the fan-out above just told every participant (us included)
+        // to stand down.
+        isActive = true
     }
 
     private func startRecoveryProbe() {
-        guard probeTask == nil, isConfigured else { return }
+        guard probeTask == nil, isConfigured, isActive else { return }
+        // A background/prewarm launch must not start probing the network before
+        // the app is ever shown (P0-2); the probe's own loop then keeps it
+        // parked whenever the app leaves active.
+        guard LaunchGate.shared.hasActivated else {
+            LaunchGate.shared.whenActive { [weak self] in self?.startRecoveryProbe() }
+            return
+        }
         probeTask = Task { [weak self] in
             var delay: Double = 10
             while !Task.isCancelled {
@@ -195,7 +237,11 @@ final class ConnectionStore {
                 guard !Task.isCancelled, self.isActive, !self.online else { return }
                 let started = Date()
                 do {
-                    self.status = try await self.api.status()
+                    let probed = try await self.api.status()
+                    // Suspended mid-probe: don't publish into a store whose
+                    // process is no longer active (P0-3).
+                    guard !Task.isCancelled, self.isActive else { return }
+                    self.status = probed
                     self.reportReachability(
                         true,
                         source: "recovery-rest",

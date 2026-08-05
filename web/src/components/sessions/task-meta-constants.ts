@@ -26,6 +26,7 @@ export const DEFAULT_META: QuickStartTaskMeta = {
 export const TIER_OPTIONS: { value: FocusTier; label: string }[] = [
   { value: 'focus', label: 'Focus' },
   { value: 'satellite', label: 'Satellite' },
+  { value: 'backlog', label: 'Backlog' },
   { value: 'wait', label: 'Wait' },
 ];
 
@@ -42,6 +43,9 @@ export function readLastPinTier(): FocusTier | undefined {
     const raw = localStorage.getItem(LAUNCHER_PIN_TIER_KEY);
     if (raw === PIN_TIER_NONE) return undefined;
     if (TIER_OPTIONS.some(t => t.value === raw)) return raw as FocusTier;
+    // Custom tier ids are legitimate remembered picks. A stale id (tier since
+    // deleted) self-heals server-side into Satellite, so passing it through is safe.
+    if (raw?.startsWith('ct_')) return raw;
   } catch { /* storage disabled — fall through to the default */ }
   return DEFAULT_META.pinTier;
 }
@@ -59,11 +63,19 @@ export function freshLauncherMeta(): QuickStartTaskMeta {
   return { ...DEFAULT_META, pinTier: readLastPinTier() };
 }
 
+// Keep in sync with TaskKebabMenu's TIER_COLORS: wait is amber (paused/blocked) —
+// a grey wait was indistinguishable from Satellite's grey at a glance.
 export const TIER_COLORS: Record<FocusTier, string> = {
   focus: 'var(--accent)',
   satellite: 'var(--fg-muted)',
-  wait: '#8e8e93',
+  backlog: 'var(--tier-backlog, #30b0c7)',
+  wait: 'var(--tier-wait, #ff9f0a)',
 };
+
+/** Tier → color with a fallback for custom tier ids (all customs share one hue). */
+export function tierColor(tier: FocusTier): string {
+  return TIER_COLORS[tier] ?? 'var(--tier-custom)';
+}
 
 export const PRIORITY_OPTIONS: { value: TaskPriority; icon: string; label: string }[] = [
   { value: 'immediate', icon: '!!', label: 'Immediate' },
@@ -73,7 +85,7 @@ export const PRIORITY_OPTIONS: { value: TaskPriority; icon: string; label: strin
 ];
 
 /** No PIN_CYCLE: the pin tier is picked directly in the shared PinTierPicker
- *  (three visible buttons), never cycled through by repeated clicks. */
+ *  (all tiers visible as buttons), never cycled through by repeated clicks. */
 export const PRIORITY_CYCLE: Array<TaskPriority | undefined> = [undefined, 'immediate', 'important', 'backlog'];
 
 export function nextValue<T>(values: T[], current: T): T {

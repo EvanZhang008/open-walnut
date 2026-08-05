@@ -224,7 +224,7 @@ struct NoteDetailView: View {
             contentHash = note.contentHash
             // A leftover draft means the last final save never landed
             // (backgrounded mid-PUT).
-            let draft = Self.loadDraft(path: path)
+            let draft = await Self.loadDraft(path: path)
             if let draft, draft.content != note.content {
                 if draft.baseHash == note.contentHash {
                     // Server is still exactly what the draft was based on — the
@@ -250,9 +250,9 @@ struct NoteDetailView: View {
 
     /// Reads the current draft record, transparently upgrading the legacy
     /// bare-string format (no baseline hash → treated as unknown baseline).
-    private static func loadDraft(path: String) -> NoteDraft? {
-        if let draft = DiskCache.load(NoteDraft.self, key: draftKey(path)) { return draft }
-        if let legacy = DiskCache.load(String.self, key: draftKey(path)) {
+    private static func loadDraft(path: String) async -> NoteDraft? {
+        if let draft = await DiskCache.loadAsync(NoteDraft.self, key: draftKey(path)) { return draft }
+        if let legacy = await DiskCache.loadAsync(String.self, key: draftKey(path)) {
             return NoteDraft(content: legacy, baseHash: nil)
         }
         return nil

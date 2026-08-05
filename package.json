@@ -71,6 +71,7 @@
     "@anthropic-ai/bedrock-sdk": "^0.26.3",
     "@anthropic-ai/claude-agent-sdk": "^0.2.42",
     "@anthropic-ai/tokenizer": "^0.0.4",
+    "@aws-sdk/client-sts": "^3.996.0",
     "@azure/msal-node": "^5.0.3",
     "@google/generative-ai": "^0.24.1",
     "@homebridge/node-pty-prebuilt-multiarch": "^0.12.0",

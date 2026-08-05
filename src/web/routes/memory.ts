@@ -8,10 +8,46 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { listMemories, getMemory } from '../../core/memory.js'
 import { compactDailyLog, formatDateKey, getDailyLog, estimateTokens } from '../../core/daily-log.js'
 import { getMemoryFile } from '../../core/memory-file.js'
+import {
+  invalidateMemoryPromptSnapshots,
+  parseMemoryContent,
+  type MemoryTarget,
+} from '../../core/bounded-memory.js'
+import {
+  loadMemoryTelemetry,
+  recordMemoryWrite,
+  observeMemoryEntries,
+  entryTitle,
+  getEntryEvidence,
+} from '../../core/memory-telemetry.js'
 import { MEMORY_FILE, USER_FILE, DAILY_DIR, MEMORY_DIR, REPOS_MEMORY_DIR } from '../../constants.js'
 import { log } from '../../logging/index.js'
 
 export const memoryRouter = Router()
+
+/**
+ * Bounded-store writes that come from the browser editor are 'human-edit'
+ * provenance — strictly stronger evidence than anything the agent wrote itself.
+ * Best-effort: telemetry must never fail the save the user just made.
+ */
+async function recordBoundedStoreEdit(target: MemoryTarget, before: string, after: string): Promise<void> {
+  try {
+    await recordMemoryWrite({
+      target,
+      before: parseMemoryContent(before).entries,
+      after: parseMemoryContent(after).entries,
+      origin: 'human-edit',
+    })
+  } catch { /* telemetry is best-effort */ }
+  // Thaw every frozen prompt snapshot. The agent's OWN writes deliberately do
+  // not do this (see memory-prompt-snapshot.ts: freezing is what stops the
+  // same-turn re-learn loop), but a human editing their memory in the UI is
+  // explicit intent to change what the butler believes RIGHT NOW — making them
+  // wait for the next turn boundary would read as the edit not having landed.
+  try {
+    invalidateMemoryPromptSnapshots()
+  } catch { /* freeze bookkeeping must never fail the save */ }
+}
 
 // ── Browse endpoint — lightweight tree of all memory sources (metadata only) ──
 
@@ -159,7 +195,9 @@ memoryRouter.put('/global', async (req: Request, res: Response, next: NextFuncti
       return
     }
     await fsp.mkdir(path.dirname(MEMORY_FILE), { recursive: true })
+    const previous = await fsp.readFile(MEMORY_FILE, 'utf-8').catch(() => '')
     await fsp.writeFile(MEMORY_FILE, content, 'utf-8')
+    await recordBoundedStoreEdit('memory', previous, content)
     const stat = await fsp.stat(MEMORY_FILE)
     log.memory.info('Global MEMORY.md updated via browser', { size: content.length })
     res.json({ ok: true, updatedAt: stat.mtime.toISOString() })
@@ -204,10 +242,58 @@ memoryRouter.put('/user', async (req: Request, res: Response, next: NextFunction
       return
     }
     await fsp.mkdir(path.dirname(USER_FILE), { recursive: true })
+    const previous = await fsp.readFile(USER_FILE, 'utf-8').catch(() => '')
     await fsp.writeFile(USER_FILE, content, 'utf-8')
+    await recordBoundedStoreEdit('user', previous, content)
     const stat = await fsp.stat(USER_FILE)
     log.memory.info('USER.md updated via browser', { size: content.length })
     res.json({ ok: true, updatedAt: stat.mtime.toISOString() })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── GET /api/memory/telemetry — read-only entry usefulness evidence ──
+//
+// Answers "which of these always-injected rules has ever actually mattered?".
+// Memory is injected unconditionally every turn, so there is no per-entry "used"
+// count to report — only write-path facts (age, revision churn, provenance).
+// Side effect is confined to the telemetry SIDECAR: opening this view bootstraps
+// records for entries that predate tracking, so their age clock starts.
+memoryRouter.get('/telemetry', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const targets: Array<{ target: MemoryTarget; file: string }> = [
+      { target: 'memory', file: MEMORY_FILE },
+      { target: 'user', file: USER_FILE },
+    ]
+    const stores: Record<string, unknown> = {}
+
+    for (const { target, file } of targets) {
+      const raw = await fsp.readFile(file, 'utf-8').catch(() => '')
+      const { entries } = parseMemoryContent(raw)
+      // Guard: never observe an EMPTY parse — a transient read failure looks the
+      // same as "store is empty", and observing would prune every record.
+      if (entries.length > 0) await observeMemoryEntries({ target, entries }).catch(() => {})
+      const telemetry = loadMemoryTelemetry()
+      const evidence = getEntryEvidence(entries, { target })
+      stores[target] = {
+        entryCount: entries.length,
+        entries: entries.map((entry, i) => ({
+          title: entryTitle(entry),
+          chars: entry.length,
+          evidence: evidence[i] ?? null,
+          ...(telemetry[`${target}:${entryTitle(entry)}`] ?? {}),
+        })),
+      }
+    }
+
+    res.json({
+      stores,
+      note:
+        'Write-path telemetry only. Memory is injected into every turn, so no per-entry ' +
+        '"used" count exists or can be inferred — age, revision churn, and provenance are ' +
+        'the honest signals.',
+    })
   } catch (err) {
     next(err)
   }

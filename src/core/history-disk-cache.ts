@@ -35,10 +35,16 @@ function cachePath(sessionId: string): string {
 /**
  * Persist session history to disk (fire-and-forget).
  * Only caches sessions with >0 messages.
+ *
+ * `mtimeMs` is the source JSONL's mtime at parse time. It lets the main read
+ * path validate the disk entry with one cheap stat after a server restart
+ * (in-memory cache cold) instead of re-fetching the whole JSONL. Absent for
+ * writes from paths that had no stat (stream fallbacks) — those entries still
+ * serve the offline/stale fallbacks, just not the mtime fast-path.
  */
-export function writeHistoryCache(sessionId: string, messages: SessionHistoryMessage[]): void {
+export function writeHistoryCache(sessionId: string, messages: SessionHistoryMessage[], mtimeMs?: number): void {
   if (messages.length === 0) return;
-  const payload = JSON.stringify({ messages, cachedAt: new Date().toISOString() });
+  const payload = JSON.stringify({ messages, cachedAt: new Date().toISOString(), ...(mtimeMs !== undefined ? { mtimeMs } : {}) });
   ensureDir()
     .then(() => fsp.writeFile(cachePath(sessionId), payload, 'utf-8'))
     .catch((err) => {
@@ -51,12 +57,16 @@ export function writeHistoryCache(sessionId: string, messages: SessionHistoryMes
 /**
  * Read cached history from disk. Returns null if no cache or on error.
  */
-export async function readHistoryCache(sessionId: string): Promise<{ messages: SessionHistoryMessage[]; cachedAt: string } | null> {
+export async function readHistoryCache(sessionId: string): Promise<{ messages: SessionHistoryMessage[]; cachedAt: string; mtimeMs?: number } | null> {
   try {
     const raw = await fsp.readFile(cachePath(sessionId), 'utf-8');
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed.messages) && parsed.messages.length > 0) {
-      return { messages: parsed.messages, cachedAt: parsed.cachedAt ?? 'unknown' };
+      return {
+        messages: parsed.messages,
+        cachedAt: parsed.cachedAt ?? 'unknown',
+        ...(typeof parsed.mtimeMs === 'number' ? { mtimeMs: parsed.mtimeMs } : {}),
+      };
     }
   } catch {
     // File doesn't exist or is corrupt — no cache available

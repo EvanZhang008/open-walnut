@@ -177,6 +177,58 @@ describe('updateProjectSummary', () => {
     expect(summary!.name).toBe('Service');
     expect(summary!.description).toBe('has: colons and "quotes"');
   });
+
+  // The description here is written by a MODEL (a stateful agent's
+  // <memory_update>), and the live life/tracker store shows what they actually
+  // do: re-emit the whole document, header and all, so each write nests the
+  // previous one one level deeper. Prompt wording can ask them not to; only code
+  // can guarantee it.
+  it('strips a frontmatter block the model wrapped around its own summary', async () => {
+    ensureProjectDir('life/tracker');
+    const selfWrapped = [
+      '---',
+      'name: Life Tracker',
+      'description: |',
+      '  ## Day Record: 2026-07-30',
+      '  ',
+      '  ### Activity Timeline',
+      '  - 09:00-10:00 | Editor | coding | Real content',
+      '---',
+    ].join('\n');
+
+    await updateProjectSummary('life/tracker', 'Life Tracker', selfWrapped);
+
+    const summary = getProjectSummary('life/tracker')!;
+    expect(summary.description).toContain('## Day Record: 2026-07-30');
+    expect(summary.description).toContain('- 09:00-10:00 | Editor | coding | Real content');
+    // The wrapper is gone: no nested header survives into the stored summary.
+    expect(summary.description).not.toContain('name: Life Tracker');
+    expect(summary.description.trimStart().startsWith('---')).toBe(false);
+  });
+
+  it('keeps a description that merely starts with --- but is not our header', async () => {
+    ensureProjectDir('work/notes');
+    const horizontalRule = '---\n\nA note that opens with a horizontal rule.';
+    await updateProjectSummary('work/notes', 'Notes', horizontalRule);
+
+    // No `description:` key inside ⇒ not a self-wrap ⇒ content preserved verbatim.
+    expect(getProjectSummary('work/notes')!.description).toContain('horizontal rule');
+  });
+
+  // This write is reached by unattended cron agents and fully overwrites the
+  // header, so the state it replaces must be recoverable.
+  it('snapshots the previous state before overwriting', async () => {
+    ensureProjectDir('life/tracker');
+    await updateProjectSummary('life/tracker', 'Life Tracker', 'first state');
+    await updateProjectSummary('life/tracker', 'Life Tracker', 'second state');
+
+    const memFile = path.join(PROJECTS_MEMORY_DIR, 'life/tracker', 'MEMORY.md');
+    const backup = await fsp.readFile(`${memFile}.bak.1`, 'utf-8');
+    expect(backup).toContain('first state');
+    // Snapshots must NOT end in .md — memory-index.ts globs *.md and would
+    // otherwise index the agent's own history back in as live memory.
+    expect(`${memFile}.bak.1`.endsWith('.md')).toBe(false);
+  });
 });
 
 describe('getAllProjectSummaries', () => {

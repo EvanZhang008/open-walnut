@@ -33,6 +33,16 @@ final class LifecycleHub {
         forEachParticipant { $0.suspendForBackground() }
     }
 
+    /// Tear every participant down WITHOUT latching the suspended flag — for
+    /// disconnect, where the app stays in the foreground. Latching here would
+    /// be wrong twice over: no `.active` transition is coming to clear it (the
+    /// scene never left active), so stores registered afterwards (a re-pair, a
+    /// freshly opened session page) would be born suspended and stay dead.
+    func teardownAll() {
+        forEachParticipant { $0.suspendForBackground() }
+        suspended = false
+    }
+
     func resumeAll() {
         suspended = false
         forEachParticipant { $0.resumeForForeground() }

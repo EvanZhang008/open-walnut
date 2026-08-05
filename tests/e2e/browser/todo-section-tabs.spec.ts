@@ -8,7 +8,7 @@
  * needs source and target mounted together.
  *
  * These assertions are about the LAYOUT CONTRACT, not styling:
- *   1. the strip renders all 7 tabs
+ *   1. the strip renders all 8 tabs
  *   2. picking a tier tab mounts that tier and UNMOUNTS the others
  *   3. the picked section actually gets the height (not a few-rows sliver)
  *   4. `All` restores the stacked view (every section header back)
@@ -18,7 +18,7 @@
 
 import { test, expect, type Page } from '@playwright/test'
 
-const TABS = ['All', 'Focus', 'Satellite', 'Wait', 'Recent', 'Tasks', 'Notes'] as const
+const TABS = ['All', 'Focus', 'Satellite', 'Backlog', 'Wait', 'Recent', 'Tasks', 'Notes'] as const
 
 function tab(page: Page, name: (typeof TABS)[number]) {
   return page.locator('.todo-section-tabs [role="tab"]', { hasText: name }).first()
@@ -69,7 +69,7 @@ test.describe('todo panel section tabs', () => {
     }).click()
     await page.keyboard.press('Escape')
 
-    // 1. all seven tabs present
+    // 1. all eight tabs present
     for (const name of TABS) {
       await expect(tab(page, name)).toBeVisible()
     }

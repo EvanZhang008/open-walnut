@@ -51,7 +51,11 @@
   /* Focus-tier colors (crosshair / satellite / hourglass icons) */
   --tier-focus: var(--accent);
   --tier-satellite: var(--fg-muted);
+  --tier-backlog: #30B0C7; /* iOS teal — "stored, cool", between satellite grey and wait amber */
   --tier-wait: #FF9F0A;
+  /* All user-defined tiers share one hue (iOS system purple — distinct from
+     accent blue, satellite grey, backlog teal, wait amber, and the indigo session-ref). */
+  --tier-custom: #AF52DE;
 
   /* iOS material helpers — translucent chrome recipe shared by all glass
      surfaces (sidebar, dock, popovers). Solid fallback via @supports below. */
@@ -106,7 +110,9 @@
   --session-ref: #5E5CE6;
   --session-ref-subtle: rgba(94, 92, 230, 0.12);
   --session-ref-subtle-hover: rgba(94, 92, 230, 0.24);
+  --tier-backlog: #40C8E0;
   --tier-wait: #FFB340;
+  --tier-custom: #BF5AF2;
   /* G4 dark = translucent #1C1C1E (bg-secondary), same blur + opacity floor. */
   --glass-g4-bg: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
   --glass-g4-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
@@ -133,7 +139,9 @@
     --overlay-bg: rgba(0, 0, 0, 0.5);
     --bg-hover: rgba(255, 255, 255, 0.06);
     --bg-elevated: #2C2C2E;
+    --tier-backlog: #40C8E0;
     --tier-wait: #FFB340;
+    --tier-custom: #BF5AF2;
     /* G4 dark = translucent #1C1C1E (bg-secondary), same blur + opacity floor. */
     --glass-g4-bg: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
     --glass-g4-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
@@ -2942,6 +2950,15 @@ input:focus, textarea:focus, select:focus {
   border-radius: 18px;
   font-size: 14px;
   line-height: 1.6;
+  /* Off-screen rows skip layout/paint entirely (browser-native lazy render).
+     With 30+ message rows × several session columns this is the difference
+     between re-laying-out the whole transcript on every streaming flush and
+     only the viewport. contain-intrinsic-size reserves an estimated height so
+     the scrollbar doesn't jump; the browser replaces it with the real height
+     once a row is rendered. Selection/find-in-page still work (spec renders
+     content for those). */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
 }
 
 .session-msg-user {
@@ -7972,7 +7989,9 @@ img[data-lightbox-src],
    back to document listeners, and THEN an iframe would steal the pointer again
    (this is exactly how the Files-panel divider got stuck next to the HTML
    preview iframe). Making iframes transparent to pointer events for the
-   duration of a drag closes that fallback path too. */
+   duration of a drag closes that fallback path too.
+   Also kills text-selection and width/height transitions globally so a drag
+   never fights a 0.25s ease. */
 body.walnut-dragging iframe {
   pointer-events: none;
 }
@@ -8057,29 +8076,55 @@ body.walnut-dragging {
   z-index: 10;
 }
 
+/* Title row (row 2 of the session header — row 1 is .session-meta-row-2).
+   PendingSessionPanel renders this row alone, so the row gap is expressed as an
+   adjacency rule below instead of a margin here. */
 .session-panel-header-top {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.session-meta-row-2 + .session-panel-header-top {
+  margin-top: 2px;
 }
 
 .session-panel-title-area {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
-  flex: 1;
+  /* The title owns every pixel row 1 doesn't need. Its siblings on this row
+     (status badge / kebab) are flex-shrink:0, so the ellipsis lands on the
+     title — which is what hover-for-full-title backstops. */
+  flex: 1 1 auto;
+}
+
+/* Right cluster of the title row: status badge + kebab, nothing else. Every icon
+   button and the tool chips live on row 1 so the title keeps its full line
+   (2026-07-27). */
+.session-panel-title-meta {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
 }
 
 .session-panel-title {
-  font-size: 14px;
+  /* 13px, not the 14px section-header size: at this weight it reads as the same
+     heading but fits ~8% more characters before the ellipsis, which is the whole
+     point of giving the title its own row. */
+  font-size: 13px;
   font-weight: 600;
+  letter-spacing: -0.1px;
   color: var(--fg);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+  /* Shrink-to-fit, never grow, so a short title doesn't strand its siblings. */
+  flex: 0 1 auto;
 }
 
 .session-panel-title-editable {
@@ -8105,9 +8150,10 @@ body.walnut-dragging {
 }
 
 .session-panel-title-input {
-  font-size: 14px;
+  /* Must match .session-panel-title metrics — otherwise the row jumps on edit. */
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: -0.2px;
+  letter-spacing: -0.1px;
   flex: 1;
   min-width: 0;
   border: 1px solid var(--accent, #007AFF);
@@ -9566,11 +9612,15 @@ body.walnut-dragging {
    Wait amber (paused/blocked — the old grey half-circle read as Satellite). */
 .todo-tier-icon-focus { color: var(--tier-focus, var(--accent, #007aff)); }
 .todo-tier-icon-satellite { color: var(--tier-satellite, var(--fg-muted)); }
+.todo-tier-icon-backlog { color: var(--tier-backlog, #30b0c7); }
 .todo-tier-icon-wait { color: var(--tier-wait, #ff9f0a); }
+.todo-tier-icon-custom { color: var(--tier-custom, #af52de); }
 
 .todo-tier-icon-focus,
 .todo-tier-icon-satellite,
-.todo-tier-icon-wait {
+.todo-tier-icon-backlog,
+.todo-tier-icon-wait,
+.todo-tier-icon-custom {
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
@@ -9813,7 +9863,7 @@ body.walnut-dragging {
   to   { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; margin-top: 0; margin-bottom: 0; transform: translateX(24px); border-width: 0; }
 }
 .todo-panel-item-vanishing,
-/* Same hold-then-vanish for the card-shaped surfaces (Focus / Satellite / Wait tier
+/* Same hold-then-vanish for the card-shaped surfaces (Focus / Satellite / Backlog / Wait tier
    cards + Recent cards) — one rule so the timing can't drift between surfaces. */
 .todo-card-vanishing {
   overflow: hidden;
@@ -12681,7 +12731,9 @@ body.walnut-dragging {
 .todo-focus-card:hover .task-kebab-btn,
 .todo-pinned-card:hover .task-kebab-btn,
 .task-kebab-btn:focus-visible,
-.task-kebab-wrapper:has(.task-kebab-menu) .task-kebab-btn {
+/* Was `:has(.task-kebab-menu)`, which broke when the menu moved into a portal on
+   <body> — it is no longer a descendant. The component sets data-menu-open. */
+.task-kebab-wrapper[data-menu-open] .task-kebab-btn {
   opacity: 1;
 }
 
@@ -12698,6 +12750,33 @@ body.walnut-dragging {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
   padding: 4px 0;
   font-size: 12px;
+}
+
+/* Height cap + internal scrolling, scoped to the FIXED-positioned kebab menus
+   (the ones useMenuPlacement measures and places). Four components share the
+   .task-kebab-menu class, but only these two are viewport-anchored:
+     · TaskQuickActions  (session panel — task actions + Session section)
+     · TaskKebabMenu     (task rows, click and right-click)
+   The other two are deliberately EXCLUDED because `100vh` is the wrong frame of
+   reference for them and neither can overflow the way the bug did:
+     · .quick-add-menu     — position:absolute, bottom:calc(100% + 6px), short
+     · .task-batch-dropdown — position:fixed but anchored by `bottom`, so it
+                              grows upward from the selection bar
+   `overflow-y` is the actual fix: a position:fixed menu sits in NO scroll
+   container, so without it the items past the viewport edge aren't merely
+   scrolled away — they're unreachable (no scrollbar, no wheel target).
+   Keep the 16px in step with useMenuPlacement's `margin = 8` (8px per edge). */
+.task-kebab-menu:not(.quick-add-menu):not(.task-batch-dropdown) {
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  /* Structural, not cosmetic: `overflow-y: auto` alone makes overflow-x compute
+     to `auto` too, and a horizontal scrollbar would inflate
+     (offsetHeight - clientHeight) — the value useMenuPlacement adds back as the
+     border correction — by ~16px on every pass. Pinning overflow-x keeps that
+     delta equal to the border alone, which is what makes the re-measure loop
+     converge. Menu rows wrap or ellipsize, so nothing needs to scroll sideways. */
+  overflow-x: hidden;
+  overscroll-behavior: contain;   /* don't scroll-chain to the page behind */
 }
 
 .task-kebab-item {
@@ -12905,6 +12984,16 @@ a.task-kebab-info:hover {
   box-shadow: 0 4px 16px rgba(0,0,0,0.18);
   padding: 8px;
   z-index: 9999;
+  /* Required counterpart to useMenuPlacement's `maxHeight`: a cap WITHOUT
+     overflow-y clips the calendar and makes the hidden rows unreachable, since a
+     position:fixed popover belongs to no scroll container. Keep the 16px in step
+     with the hook's `margin = 8` (8px per edge). overflow-x is pinned for the
+     same reason as .task-kebab-menu: an h-scrollbar would inflate the border
+     correction the hook re-measures. */
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
 }
 .dp-content { display: flex; flex-direction: column; gap: 6px; }
 .dp-pills { display: flex; gap: 4px; flex-wrap: wrap; }
@@ -15629,7 +15718,9 @@ a.task-kebab-info:hover {
 .pin-tier-btn:disabled { cursor: default; opacity: 0.55; }
 .pin-tier-focus.active { color: var(--tier-focus); }
 .pin-tier-satellite.active { color: var(--fg); }
+.pin-tier-backlog.active { color: var(--tier-backlog); }
 .pin-tier-wait.active { color: var(--tier-wait); }
+.pin-tier-custom.active { color: var(--tier-custom); }
 .pin-tier-btn.active {
   border-color: currentColor;
   background: color-mix(in srgb, currentColor 12%, transparent);
@@ -17484,14 +17575,33 @@ td.usage-share-col {
 
 /* ── Session action chips (Plan / Notes / Messages) in meta bar ── */
 
+/* Row 1 of the session header: tool chips + time on the left, window controls
+   pinned right. The title lives on its OWN row below (.session-panel-header-top)
+   so it never competes with these for width — see the SessionPanel header comment. */
 .session-meta-row-2 {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 6px;
-  margin-top: 4px;
   font-size: 11px;
   color: var(--fg-muted);
+}
+
+.session-meta-row-2-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+  /* Chips wrap rather than push the window controls off-panel in a narrow column. */
   flex-wrap: wrap;
+}
+
+.session-panel-window-controls {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
 }
 
 /* Ghost text buttons — no resting box; hover reveals a soft accent wash. */
@@ -24185,6 +24295,36 @@ a.file-link:hover {
   display: block; word-break: break-all; font-size: 12px;
   padding: 6px 8px; background: var(--bg-secondary); border-radius: 6px; margin-top: 6px;
 }
+
+/* ── Focus Tiers section (Settings → Focus Tiers, custom tier CRUD) ── */
+.focus-tiers-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.focus-tiers-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
+  min-height: 40px;
+}
+.focus-tiers-icon { display: inline-flex; align-items: center; flex-shrink: 0; }
+.focus-tiers-label { flex: 1; font-size: 14px; font-weight: 500; text-align: left; }
+/* Custom labels rename inline — the label itself is the affordance. */
+button.focus-tiers-label-editable {
+  background: transparent; border: none; color: var(--fg); cursor: text;
+  padding: 2px 4px; margin: -2px -4px; border-radius: 4px;
+  font: inherit; font-size: 14px; font-weight: 500;
+}
+button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
+.focus-tiers-edit-input {
+  flex: 1; font-size: 14px; font-weight: 500;
+  padding: 2px 4px; margin: -2px -4px;
+  border: 1px solid var(--accent); border-radius: 4px;
+  background: var(--bg); color: var(--fg);
+}
+.focus-tiers-tag {
+  padding: 1px 8px; border-radius: 999px; flex-shrink: 0;
+  font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+  background: var(--bg-secondary); color: var(--fg-muted);
+}
+.focus-tiers-add-row { display: flex; gap: 8px; }
+.focus-tiers-add-row input { flex: 1; }
 
 /* ===== iOS Materials Pass ===== */
 /* Frosted-glass chrome for FLOATING surfaces only (popovers, menus, the

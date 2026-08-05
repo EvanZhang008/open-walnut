@@ -30,7 +30,20 @@ final class CrashReporter: NSObject, MXMetricManagerSubscriber {
     /// re-reporting the same diagnostic on the next launch.
     private static let seenKey = "crash-fingerprints"
     private static let maxRememberedFingerprints = 60
-    private var seenFingerprints: [String] = DiskCache.load([String].self, key: CrashReporter.seenKey) ?? []
+    /// LAZY on purpose: as a stored-property initializer this decoded a JSON
+    /// file synchronously the moment `CrashReporter.shared` was first touched —
+    /// which is `WalnutApp.init`, i.e. the cold-start path (P0-1). MetricKit
+    /// delivers diagnostics on its own queue, so paying the read there is free.
+    private var loadedFingerprints: [String]?
+    private var seenFingerprints: [String] {
+        get {
+            if let loadedFingerprints { return loadedFingerprints }
+            let loaded = DiskCache.load([String].self, key: Self.seenKey) ?? []
+            loadedFingerprints = loaded
+            return loaded
+        }
+        set { loadedFingerprints = newValue }
+    }
 
     func didReceive(_ payloads: [MXDiagnosticPayload]) {
         var reported = 0

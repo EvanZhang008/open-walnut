@@ -1703,7 +1703,11 @@ export class ClaudeCodeSession {
     let streamEvidence: Awaited<ReturnType<typeof import('../core/session-reconcile.js')['fetchStreamTailFold']>> = 'not-fetched'
     try {
       const { fetchStreamTailFold } = await import('../core/session-reconcile.js')
-      streamEvidence = await fetchStreamTailFold(record.claudeSessionId, record.host)
+      // consumedOffset arms the whale-turn watermark fallback (incident 57b125ab:
+      // a 37-min turn pushed the anchor beyond the tail-window cap, so every
+      // attach returned 'tail-window-exhausted' and the stuck record never healed).
+      streamEvidence = await fetchStreamTailFold(record.claudeSessionId, record.host,
+        { consumedOffset: record.consumedOffset })
     } catch (err) {
       streamEvidence = 'evidence-fetch-threw'
       log.session.warn('attachToExisting: stream evidence fetch failed', {
@@ -3060,6 +3064,18 @@ export class ClaudeCodeSession {
               runningBgTasks: this._runningBgCount(), idleDebt: this._idleDebt,
             })
             if (newState === 'running') {
+              // Positional replay guard — same P3 rule as the idle branch below.
+              // A replayed running (daemon reattach re-streams history) describes
+              // a PAST turn; without this guard it flips a settled record back to
+              // 'running' while the matching replayed idle is (correctly) ignored
+              // by its own guard — a one-way door into a false "Running".
+              if (this._isReplayedByOffset() === true) {
+                log.session.info('ignoring replayed running (at/below consumed watermark)', {
+                  sessionId: sid, taskId: this.taskId,
+                  v: this._currentEventV, consumedOffset: this._consumedOffset,
+                })
+                break
+              }
               if (this._processStatus !== 'running') {
                 this._processStatus = 'running'
                 this.emitStatusChanged('IN_PROGRESS')
@@ -3084,6 +3100,30 @@ export class ClaudeCodeSession {
                     }).catch(() => {})
                   }).catch(() => {})
                 }
+              }
+              // ── Turn-start phase pullback (incidents 46f42871 + 1f11596b) ──
+              // The CLI actually began executing a turn. session:input only fires
+              // at SEND time — for a queued/mid-turn send the phase was already
+              // IN_PROGRESS then (no-op), after which the PREVIOUS turn's result
+              // flipped it to AGENT_COMPLETE (and triage possibly to AWAIT) with
+              // nothing pulling it back when this turn started: task showed
+              // completed/red while the CLI was visibly streaming. This is the
+              // missing turn-START half of the result↔phase symmetry. Runs even
+              // when _processStatus was already 'running' (a late triage can
+              // repaint the phase mid-turn without touching process_status);
+              // applySessionPhase no-ops when the phase is already IN_PROGRESS.
+              if (this.taskId) {
+                const turnStartTaskId = this.taskId
+                import('../core/phase.js').then(({ applySessionPhase }) =>
+                  applySessionPhase(turnStartTaskId, 'session:turn-start', 'session-runner:state-running', {
+                    sessionId: sid,
+                  }),
+                ).catch((err) => {
+                  log.session.warn('turn-start phase pullback failed', {
+                    sessionId: sid, taskId: turnStartTaskId,
+                    error: err instanceof Error ? err.message : String(err),
+                  })
+                })
               }
             } else if (newState === 'idle') {
               // Idle-debt consumption: every idle settles an owed companion first
@@ -5739,6 +5779,20 @@ export class SessionRunner {
     // stale entries are harmless (the frontend only removes bubbles whose queueId
     // actually matches), the next batch overwrites the entry, and
     // `clearActiveProcessing` deletes it on the real turn end.
+    //
+    // DELIBERATELY NOT FIXED — `messageIds` at :5722 OVERWRITES rather than merges, so
+    // when this timeout fires and `processNext` re-enters, the earlier turn's ids are
+    // dropped and the eventual SESSION_BATCH_COMPLETED under-reports (measured on the
+    // real corpus: 150/247 orphaned qm-ids, 89.9% co-signalled by this timeout).
+    // Merging looks like the obvious fix and is WRONG: after a force-clear the CLI is
+    // usually still chewing the FIRST turn, so a merged list reports the NEWLY queued
+    // ids as "completed" before the CLI has consumed them. That is premature removal
+    // proof — the one failure direction the bubble model forbids (a vanished message is
+    // unacceptable; a briefly duplicated one is not). This event is therefore NOT a
+    // removal signal and the frontend correctly refuses to treat it as one
+    // (SessionChatHistory's `session:batch-completed` handler only bumps historyVersion;
+    // bubbles are hidden from HISTORY evidence — see optimistic-dedup.ts). Under-reporting
+    // costs only a status-badge fallback, so leave the overwrite alone.
     const timer = setTimeout(() => {
       if (this.activeProcessing.has(sessionId)) {
         log.session.warn('activeProcessing safety timeout (60s): force-clearing stuck entry (batch ids retained)', { sessionId })

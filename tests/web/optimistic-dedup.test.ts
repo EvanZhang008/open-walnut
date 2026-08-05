@@ -228,3 +228,97 @@ describe('dedupeOptimisticMessages — attachment text augmentation', () => {
     expect(dedupeOptimisticMessages([bubble], persisted, 0)).toEqual([]);
   });
 });
+
+/**
+ * REGRESSION inc-1785888617044 — the merged-batch blind spot that pinned THREE
+ * bubbles at the bottom of a big chat forever.
+ *
+ * Several sends queued during one long turn are drained by the CLI into ONE
+ * prompt, so history holds a SINGLE user line = the messages joined with '\n'.
+ * All three independent defenses failed on that one shape:
+ *   · echo-claim never bound (walnut registered the '\n\n' join, the CLI logged
+ *     the '\n' join → exact compare failed) ⇒ walnutMessageId stayed null
+ *   · per-bubble text never equals the merged line ⇒ multiset failed
+ *   · SESSION_BATCH_COMPLETED ids were lost/overwritten ⇒ no signal either
+ * With no evidence at all the bubbles could never be hidden. The join-run pass
+ * proves the whole run from the merged line alone.
+ */
+describe('dedupeOptimisticMessages — merged batch (CLI drained N sends into one prompt)', () => {
+  // Verbatim from the incident's canonical JSONL (history idx 1893, 5 lines).
+  const SEG_A = 'also for the filer Cache-level: mandatory TransformFunc projection\n\nin the EO we do filter base don allwolist right';
+  const SEG_B = 'we have another filter on delivery';
+  const SEG_C = 'discus with me first';
+
+  it('absorbs all three bubbles from the single merged history line', () => {
+    const merged = [SEG_A, SEG_B, SEG_C].join('\n');
+    const bubbles = [
+      opt(SEG_A, 'delivered', 'qm-xz9sm3'),
+      opt(SEG_B, 'delivered', 'qm-mlrmcv'),
+      opt(SEG_C, 'delivered', 'qm-jdqh2h'),
+    ];
+    // Pre-fix this returned all 3 (the exact stuck-bubble screenshot).
+    expect(dedupeOptimisticMessages(bubbles, [user(merged)], 0)).toEqual([]);
+  });
+
+  it('absorbs a 2-message merged batch', () => {
+    const bubbles = [opt(SEG_B, 'delivered', 'qm-1'), opt(SEG_C, 'delivered', 'qm-2')];
+    expect(dedupeOptimisticMessages(bubbles, [user(`${SEG_B}\n${SEG_C}`)], 0)).toEqual([]);
+  });
+
+  it("also accepts walnut's own '\\n\\n' delivery join", () => {
+    const bubbles = [opt('first', 'delivered', 'qm-1'), opt('second', 'delivered', 'qm-2')];
+    expect(dedupeOptimisticMessages(bubbles, [user('first\n\nsecond')], 0)).toEqual([]);
+  });
+
+  it('does NOT absorb when the merged line only partially matches', () => {
+    // History merged A+B, but a third bubble was never delivered → must survive.
+    const bubbles = [
+      opt(SEG_B, 'delivered', 'qm-1'),
+      opt(SEG_C, 'delivered', 'qm-2'),
+      opt('never sent', 'delivered', 'qm-3'),
+    ];
+    const kept = dedupeOptimisticMessages(bubbles, [user(`${SEG_B}\n${SEG_C}`)], 0);
+    expect(kept.map(m => m.text)).toEqual(['never sent']);
+  });
+
+  it('a failed bubble is never absorbed by a join-run', () => {
+    const bubbles = [
+      { text: SEG_B, status: 'failed', queueId: 'qm-1' },
+      opt(SEG_C, 'delivered', 'qm-2'),
+    ];
+    const kept = dedupeOptimisticMessages(bubbles, [user(`${SEG_B}\n${SEG_C}`)], 0);
+    expect(kept.map(m => m.status)).toContain('failed');
+  });
+
+  it('single unmatched bubble is untouched (no run to form)', () => {
+    const bubbles = [opt('solo', 'delivered', 'qm-1')];
+    expect(dedupeOptimisticMessages(bubbles, [user('something else')], 0)).toHaveLength(1);
+  });
+
+  it('multiset: a merged line is consumed only ONCE', () => {
+    const merged = `${SEG_B}\n${SEG_C}`;
+    // Two independent batches with identical text, but only ONE persisted line
+    // → exactly one pair may be absorbed; the other pair must survive.
+    const bubbles = [
+      opt(SEG_B, 'delivered', 'qm-1'), opt(SEG_C, 'delivered', 'qm-2'),
+      opt(SEG_B, 'delivered', 'qm-3'), opt(SEG_C, 'delivered', 'qm-4'),
+    ];
+    expect(dedupeOptimisticMessages(bubbles, [user(merged)], 0)).toHaveLength(2);
+  });
+
+  it('exact per-bubble matches still win — no join-run needed', () => {
+    const bubbles = [opt('aa', 'delivered', 'qm-1'), opt('bb', 'delivered', 'qm-2')];
+    // Each has its own persisted twin; the join 'aa\nbb' does not exist.
+    expect(dedupeOptimisticMessages(bubbles, [user('aa'), user('bb')], 0)).toEqual([]);
+  });
+
+  it('id-exact still wins for the first message of a merged batch', () => {
+    // Real shape: only qmIds[0] gets stamped; the rest rely on the join-run.
+    const bubbles = [
+      opt(SEG_B, 'delivered', 'qm-first'),
+      opt(SEG_C, 'delivered', 'qm-second'),
+    ];
+    const persisted = [{ role: 'user', text: `${SEG_B}\n${SEG_C}`, walnutMessageId: 'qm-first' }];
+    expect(dedupeOptimisticMessages(bubbles, persisted, 0)).toEqual([]);
+  });
+});

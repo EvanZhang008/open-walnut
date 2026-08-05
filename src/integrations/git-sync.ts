@@ -265,6 +265,11 @@ tasks/*.backup*
 tasks/*.bak*
 tasks/archive/
 
+# Bounded-memory pre-write snapshots (bounded-memory-backup.ts) — machine-local
+# rollback artifacts. Recovery always happens on the box that took the damage,
+# and syncing them would multiply memory write churn into the history.
+memory/**/*.bak.*
+
 # Runtime ephemeral
 session-message-queue.json
 *.lock/
@@ -293,8 +298,19 @@ node_modules/
 const CRITICAL_IGNORES = ['auth.json', 'auth.json.bak', 'config.yaml', 'config.yaml.bak'];
 
 /**
- * Append missing CRITICAL_IGNORES to an existing .gitignore (idempotent).
- * Called from ensureRepo() so every boot self-heals older installations.
+ * Ignore-only patterns: kept out of the .gitignore drift, but NOT fed to the
+ * untrack pass, which matches exact paths and cannot resolve a glob.
+ *
+ * `memory/**\/*.bak.*` — bounded-memory pre-write snapshots. Purely local
+ * rollback artifacts, rewritten on every memory mutation; they have never been
+ * tracked, so there is no index state to repair, only churn to keep out.
+ */
+const EXTRA_IGNORE_PATTERNS = ['memory/**/*.bak.*'];
+
+/**
+ * Append missing CRITICAL_IGNORES / EXTRA_IGNORE_PATTERNS to an existing
+ * .gitignore (idempotent). Called from ensureRepo() so every boot self-heals
+ * older installations.
  */
 export function ensureCriticalIgnores(): void {
   const gitignorePath = path.join(WALNUT_HOME, '.gitignore');
@@ -305,7 +321,7 @@ export function ensureCriticalIgnores(): void {
     return; // no .gitignore yet — initSync writes the full template
   }
   const lines = new Set(content.split('\n').map((l) => l.trim()));
-  const missing = CRITICAL_IGNORES.filter((entry) => !lines.has(entry));
+  const missing = [...CRITICAL_IGNORES, ...EXTRA_IGNORE_PATTERNS].filter((entry) => !lines.has(entry));
   if (missing.length === 0) return;
   const suffix = (content.endsWith('\n') ? '' : '\n')
     + '\n# Machine-local / sensitive — never synced\n'

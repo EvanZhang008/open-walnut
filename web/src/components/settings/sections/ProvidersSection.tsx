@@ -4,7 +4,7 @@ import { SectionCard } from '../inputs/SectionCard';
 import { SecretInput } from '../inputs/SecretInput';
 import { StatusIndicator } from '../inputs/StatusIndicator';
 import { NumberInput } from '../inputs/NumberInput';
-import { fetchProviders, fetchAwsProfiles, testProvider, testConnection, type ProviderStatus, type TestConnectionResult, type ModelEntry } from '@/api/config';
+import { fetchProviders, fetchAwsProfiles, testProvider, testConnection, fetchCredentialTrace, type ProviderStatus, type TestConnectionResult, type ModelEntry, type CredentialTrace, type CredentialVerify } from '@/api/config';
 import { InstallButton } from '@/components/common/InstallButton';
 
 // Providers we actively test and support.
@@ -51,6 +51,112 @@ function truncateError(msg: string, max = 80): string {
 interface Props {
   config: Config;
   onSave: (partial: Partial<Config>) => Promise<void>;
+}
+
+// ── Credential resolution trace — the "which file did each layer read, and who
+//    won?" transparency panel inside the Bedrock card ──
+
+const OWNER_LABELS: Record<string, string> = {
+  'walnut': 'Walnut',
+  'claude-code': 'Claude Code',
+  'shell-env': 'Shell env',
+  'aws-cli': 'AWS CLI',
+};
+
+function CredentialTracePanel() {
+  const [open, setOpen] = useState(false);
+  const [trace, setTrace] = useState<CredentialTrace | null>(null);
+  const [verify, setVerify] = useState<CredentialVerify | null>(null);
+  const [state, setState] = useState<'idle' | 'loading' | 'verifying' | 'error'>('idle');
+
+  const load = async (withVerify: boolean) => {
+    setState(withVerify ? 'verifying' : 'loading');
+    try {
+      const res = await fetchCredentialTrace(withVerify);
+      setTrace(res.trace);
+      if (res.verify) setVerify(res.verify);
+      setState('idle');
+    } catch {
+      setState('error');
+    }
+  };
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && !trace) load(false);
+  };
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="provider-models-toggle" onClick={toggle}>
+        <span className="provider-card-arrow">{open ? '▾' : '▸'}</span>
+        <span>How was this credential resolved?</span>
+      </div>
+      {open && (
+        <div style={{ marginTop: 6, padding: '8px 10px', border: '1px solid var(--border-color, #e5e5e5)', borderRadius: 8 }}>
+          {state === 'loading' && <p className="text-xs text-muted">Tracing resolution…</p>}
+          {state === 'error' && <p className="text-xs text-muted">Failed to load the trace.</p>}
+          {trace && (
+            <>
+              <p className="text-xs text-muted" style={{ margin: '0 0 6px' }}>
+                Walnut checks these sources top-to-bottom; the first one holding a credential wins.
+              </p>
+              <ol style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {trace.steps.map((s) => (
+                  <li key={s.step} style={{ opacity: s.outcome === 'not-reached' ? 0.45 : 1 }}>
+                    <div className="text-sm" style={{ display: 'flex', gap: 6, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: s.outcome === 'won' ? 600 : 400 }}>
+                        {s.outcome === 'won' ? '✓' : s.outcome === 'empty' ? '✗' : '·'}
+                      </span>
+                      <span className="provider-badge" style={{ fontSize: 10 }}>{OWNER_LABELS[s.owner] ?? s.owner}</span>
+                      <code style={{ fontSize: 11 }}>{s.location}</code>
+                      {s.outcome === 'won' && s.found && (
+                        <span className="text-xs" style={{ fontWeight: 600 }}>
+                          → {s.found.method}{s.found.keyHint ? ` (${s.found.keyHint})` : ''}{s.found.value ? `: ${s.found.value}` : ''}
+                        </span>
+                      )}
+                      {s.outcome === 'empty' && <span className="text-xs text-muted">nothing set</span>}
+                      {s.outcome === 'not-reached' && <span className="text-xs text-muted">not checked — a higher source already won</span>}
+                    </div>
+                    <div className="text-xs text-muted" style={{ marginLeft: 18 }}>
+                      looks for: {s.checkedFor.join(' · ')}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+              <p className="text-xs text-muted" style={{ margin: '8px 0 0' }}>
+                Region: <code style={{ fontSize: 11 }}>{trace.region.value}</code> from {trace.region.source}
+              </p>
+
+              {/* Live verify — proves the winner actually works (catches expired ~/.aws caches) */}
+              <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <button type="button" className="btn btn-sm" onClick={() => load(true)} disabled={state === 'verifying'}>
+                  {state === 'verifying' ? 'Verifying…' : 'Verify identity (STS)'}
+                </button>
+                {verify && verify.status === 'valid' && (
+                  <span className="text-xs">
+                    ✓ <code style={{ fontSize: 11 }}>{verify.arn}</code>
+                    {verify.expiration ? ` · expires ${new Date(verify.expiration).toLocaleTimeString()}` : ''}
+                  </span>
+                )}
+                {verify && verify.status === 'invalid' && (
+                  <span className="text-xs" style={{ color: 'var(--danger, #c0392b)' }}>
+                    ✗ Credential does NOT work: {truncateError(verify.error ?? 'unknown error', 120)}
+                  </span>
+                )}
+                {verify && verify.status === 'unverifiable' && (
+                  <span className="text-xs text-muted">
+                    Bearer tokens can't be checked via STS — use Test Connection for a real round-trip.
+                  </span>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ── Bedrock-specific config inside the active card ──
@@ -355,6 +461,9 @@ function BedrockConfig({
           )}
         </div>
       </div>
+
+      {/* Step-by-step resolution transparency */}
+      <CredentialTracePanel />
 
       {/* Actions */}
       <div className="provider-config-row" style={{ alignItems: 'center', gap: 8, marginTop: 8 }}>

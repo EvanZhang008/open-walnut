@@ -115,6 +115,22 @@ describe('POST /api/sessions/quick-start — taskMeta.pinTier=focus', () => {
     expect(task!.focus_tier).toBe('focus');
   });
 
+  it('accepts the built-in backlog tier', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/sessions/quick-start')
+      .send({
+        cwd: '/tmp/test-backlog',
+        message: 'Someday task',
+        taskMeta: { pinTier: 'backlog' },
+      });
+
+    expect(res.status).toBe(200);
+    const task = await getTask(res.body.taskId);
+    expect(task!.pinned).toBe(true);
+    expect(task!.focus_tier).toBe('backlog');
+  });
+
   it('rejects an invalid pinTier value with 400', async () => {
     const app = createApp();
     const res = await request(app)
@@ -127,6 +143,26 @@ describe('POST /api/sessions/quick-start — taskMeta.pinTier=focus', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toContain('Invalid taskMeta.pinTier');
+  });
+
+  it('accepts a STALE ct_* pinTier and self-heals it to Satellite', async () => {
+    // The launcher remembers the last tier in localStorage (mirrored across
+    // browsers by ui-prefs-sync). After the user deletes that tier in Settings,
+    // launches must NOT 400 forever — the unregistered ct_* id passes through
+    // and setFocusTier self-heals it to the default bucket (focus_tier unset).
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/sessions/quick-start')
+      .send({
+        cwd: '/tmp/test-focus-stale',
+        message: 'Launch with a deleted tier remembered',
+        taskMeta: { pinTier: 'ct_deadbeef' },
+      });
+
+    expect(res.status).toBe(200);
+    const task = await getTask(res.body.taskId);
+    expect(task!.pinned).toBe(true);
+    expect(task!.focus_tier).toBeUndefined();
   });
 
   it('does not pin when no pinTier is supplied', async () => {

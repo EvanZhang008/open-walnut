@@ -17,6 +17,7 @@ import {
   getSkill,
 } from '../../core/skill-store.js';
 import { clearSkillsCache } from '../../core/skill-loader.js';
+import { screenSkillWrite } from '../../core/memory-safety.js';
 import { recordSkillCreated, recordSkillPatched, removeSkillUsage } from '../../core/skill-usage.js';
 import { dispatchQmdIncrementalIndex } from '../../core/qmd-dispatcher.js';
 import { appendOverviewLog, appendSkillHistoryLog } from '../../core/overview-log.js';
@@ -31,6 +32,21 @@ function refreshSkillIndex(): void {
       error: err instanceof Error ? err.message : String(err),
     });
   });
+}
+
+/**
+ * Injection screen for a skill write (see memory-safety.ts). The writer is a
+ * model that may itself be under an attacker's influence — the butler distils
+ * skills from conversation content, and the unattended background-review fork
+ * does the same with nobody watching — so the cheapest place to stop a payload
+ * is before it reaches disk. Only the text the model SUPPLIES is screened, never
+ * the existing file, so a skill that is already poisoned can still be patched or
+ * deleted. Returns a tool-error string, or null to allow.
+ */
+function screenWrite(action: string, name: string, ...parts: Array<string | undefined>): string | null {
+  const text = parts.filter(Boolean).join('\n\n');
+  const err = screenSkillWrite(text, `skill_manage ${action} '${name}'`);
+  return err ? `Error: ${err}` : null;
 }
 
 function validateDescription(description: string): string | null {
@@ -157,6 +173,10 @@ Each category MAY have an \`overview\` skill (skills/<category>/overview/SKILL.m
         // Optional name targets a specific skill's history (skills/<cat>/<name>/history/);
         // default is the category's overview log.
         const targetName = (params.name as string | undefined)?.trim() || 'overview';
+        // History logs are read back by the butler and feed the overview skills,
+        // so they get the same screen as a skill body.
+        const logErr = screenWrite('log_append', `${category}/${targetName}`, content);
+        if (logErr) return logErr;
         const result = targetName === 'overview'
           ? appendOverviewLog(category, content, 'butler')
           : appendSkillHistoryLog(category, targetName, content, 'butler');
@@ -178,6 +198,8 @@ Each category MAY have an \`overview\` skill (skills/<category>/overview/SKILL.m
         if (!content.trim()) return 'Error: content is required for create.';
         const type = params.type === 'knowledge' ? 'knowledge' : 'action';
         const category = (params.category as string) ?? undefined;
+        const createErr = screenWrite('create', name, description, content);
+        if (createErr) return createErr;
 
         const md = buildSkillMd({ name, description: description.trim(), type, content });
         const skill = await createSkill(name, md, 'walnut', category);
@@ -193,6 +215,10 @@ Each category MAY have an \`overview\` skill (skills/<category>/overview/SKILL.m
         const newString = params.new_string as string | undefined;
         if (!oldString) return 'Error: old_string is required for patch.';
         if (newString === undefined) return 'Error: new_string is required for patch.';
+        // Only new_string is screened: old_string is quoted from the file, so
+        // screening it would block the very patch that removes a poisoned line.
+        const patchErr = screenWrite('patch', name, newString);
+        if (patchErr) return patchErr;
 
         const skill = await getSkill(name);
         if (!skill) return `Error: skill not found: ${name}`;
@@ -225,6 +251,10 @@ Each category MAY have an \`overview\` skill (skills/<category>/overview/SKILL.m
         const type = params.type === 'knowledge' || params.type === 'action'
           ? (params.type as 'action' | 'knowledge')
           : skill.type;
+        // Screen only what the model supplied. `description` may have fallen back
+        // to the existing frontmatter value, so pass the supplied one only.
+        const editErr = screenWrite('edit', name, params.description as string | undefined, content);
+        if (editErr) return editErr;
 
         // Merge onto the EXISTING frontmatter — a rebuild from just name/desc/type
         // would silently drop category overrides and metadata.openclaw gating.

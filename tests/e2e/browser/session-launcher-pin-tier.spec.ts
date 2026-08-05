@@ -30,7 +30,7 @@ const PREF_KEY = 'open-walnut-launcher-pin-tier'
  * Pass null to simulate a never-chose-anything browser: the server entry is
  * tombstoned first (so the merge has nothing to adopt), then the key is cleared.
  */
-async function seedPinTierPref(page: Page, value: 'focus' | 'satellite' | 'wait' | 'none' | null) {
+async function seedPinTierPref(page: Page, value: 'focus' | 'satellite' | 'backlog' | 'wait' | 'none' | null) {
   if (value === null) {
     await page.request.put('/api/ui-prefs', {
       data: { prefs: { [PREF_KEY]: { v: null, ts: Date.now() } } },

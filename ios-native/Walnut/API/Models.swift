@@ -229,12 +229,21 @@ enum TaskPriority {
 }
 
 extension WalnutTask {
+    // Cached: parseISO runs inside sort comparators (recencySort) and
+    // per-render filters, so per-call formatter allocation is thousands of
+    // allocations per render with a few hundred sessions. The formatters are
+    // documented thread-safe.
+    private static let isoFractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static let isoPlain = ISO8601DateFormatter()
+
     /// ISO-8601 parse tolerant of fractional seconds (same shape as NotesStore).
     static func parseISO(_ iso: String?) -> Date? {
         guard let iso else { return nil }
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
+        return isoFractional.date(from: iso) ?? isoPlain.date(from: iso)
     }
 
     var statusKind: TaskStatus { TaskStatus(status) }
@@ -313,6 +322,38 @@ struct WalnutSession: Codable, Identifiable, Equatable {
 struct SessionsResponse: Codable {
     let sessions: [WalnutSession]
     let syncedAt: String
+}
+
+/// GET /api/v1/sessions/launch-options — where a new session can run and the
+/// user's frequent working directories (additive endpoint, primary box only).
+struct SessionLaunchOptions: Codable {
+    struct Host: Codable, Identifiable, Hashable {
+        /// "" = the primary box (Mac); otherwise a config.hosts alias.
+        let alias: String
+        let label: String
+        var id: String { alias }
+    }
+
+    struct Dir: Codable, Identifiable, Hashable {
+        let cwd: String
+        /// "" = the primary box — matches WalnutSession.host semantics.
+        let host: String
+        let hostLabel: String?
+        let lastUsed: String
+        let count: Int
+        var id: String { "\(host)|\(cwd)" }
+    }
+
+    let hosts: [Host]
+    let dirs: [Dir]
+}
+
+/// POST /api/v1/sessions → 201. The record is pre-seeded server-side, so the
+/// app can open the conversation view with this id immediately.
+struct SessionCreated: Codable {
+    let sessionId: String
+    let taskId: String
+    let title: String
 }
 
 /// Slim transcript tail for one session (`/api/v1/sessions/:id/transcript`).

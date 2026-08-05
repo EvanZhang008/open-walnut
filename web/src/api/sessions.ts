@@ -513,10 +513,11 @@ export interface QuickStartTaskMeta {
   starred?: boolean;
   needs_attention?: boolean;
   priority?: 'immediate' | 'important' | 'backlog' | 'none';
-  /** Tier to pin the new task to. `null` = explicitly DON'T pin — distinct from
-   *  omitted, which lets the server apply its own default (fix-walnut → Satellite,
-   *  the same launcher baseline as a regular quick session). */
-  pinTier?: 'focus' | 'satellite' | 'wait' | null;
+  /** Tier to pin the new task to — a built-in name or a custom tier id (`ct_*`).
+   *  `null` = explicitly DON'T pin — distinct from omitted, which lets the server
+   *  apply its own default (fix-walnut → Satellite, the same launcher baseline as
+   *  a regular quick session). */
+  pinTier?: string | null;
 }
 
 export async function quickStartSession(opts: {
@@ -544,11 +545,57 @@ export async function quickStartSession(opts: {
   } else {
     delete payload.images;
   }
-  const result = await apiPost<{ taskId: string; task: unknown; sessionId?: string }>('/api/sessions/quick-start', payload);
-  seedTaskSessionStatuses(result.task, 'rest:task');
-  invalidateWorkingDirsCache(); // new session → new path entry
-  if (opts.createCwd) invalidateLiveDirCache(); // the dir now exists — stale "missing" entries lie
-  return result;
+  // CLIENT-OWNED session id (native engine only — Codex's ACP adapter assigns its
+  // own). The server honors it as the preassigned id, which makes the launch
+  // reconcilable even if this HTTP response never arrives: the caller can poll
+  // GET /api/sessions/<id> instead of being stuck on a placeholder. This is the
+  // root fix for the false-"Failed"-then-duplicate-on-Retry incident (2026-08-03:
+  // server 200 in 2.7s, browser AbortSignal fired at 15s under main-thread jam).
+  const clientSessionId = opts.engine !== 'codex' && typeof crypto?.randomUUID === 'function'
+    ? crypto.randomUUID() : undefined;
+  if (clientSessionId) payload.sessionId = clientSessionId;
+  // 60s, not the 15s default: quick-start spawns a real CLI process (slow under
+  // load) AND creates durable state (task + session) — it must not share the
+  // lightweight-GET timeout budget.
+  try {
+    const result = await apiPost<{ taskId: string; task: unknown; sessionId?: string }>('/api/sessions/quick-start', payload, { timeoutMs: 60_000 });
+    seedTaskSessionStatuses(result.task, 'rest:task');
+    invalidateWorkingDirsCache(); // new session → new path entry
+    if (opts.createCwd) invalidateLiveDirCache(); // the dir now exists — stale "missing" entries lie
+    return result;
+  } catch (err) {
+    // Timeout with a client-owned id = UNKNOWN outcome, not failure. The server
+    // may well have started the session; reconcile by id before giving up so the
+    // pending panel resolves to the live session instead of a false "Failed".
+    const isTimeout = err instanceof DOMException && err.name === 'TimeoutError';
+    if (isTimeout && clientSessionId) {
+      const recovered = await reconcileQuickStart(clientSessionId);
+      if (recovered) return recovered;
+    }
+    throw err;
+  }
+}
+
+/** After a quick-start response was lost (client timeout), check whether the
+ *  server actually created the session. A few short polls cover the case where
+ *  the POST is still mid-flight server-side when our timeout fired. */
+async function reconcileQuickStart(sessionId: string): Promise<{ taskId: string; task: unknown; sessionId: string } | null> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 2000));
+    try {
+      // Response envelope: { session: { taskId }, pendingPermissions }.
+      const res = await apiGet<{ session?: { taskId?: string } }>(`/api/sessions/${sessionId}`, undefined, { timeoutMs: 10_000 });
+      const taskId = res?.session?.taskId;
+      if (taskId) {
+        log.info('sessions', 'quick-start response lost but session exists — reconciled by client id', { sessionId, taskId });
+        const task = await apiGet<unknown>(`/api/tasks/${taskId}`, undefined, { timeoutMs: 10_000 }).catch(() => null);
+        if (task) seedTaskSessionStatuses(task, 'rest:task');
+        invalidateWorkingDirsCache();
+        return { taskId, task, sessionId };
+      }
+    } catch { /* not there (yet) — retry */ }
+  }
+  return null;
 }
 
 export async function retrySession(sessionId: string): Promise<

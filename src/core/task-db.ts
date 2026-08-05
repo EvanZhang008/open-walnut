@@ -379,6 +379,14 @@ const SCHEMA_SQL = `
     label TEXT NOT NULL,
     hidden INTEGER NOT NULL DEFAULT 0
   );
+
+  -- User-defined focus tiers (local-only). Ids are ct_* strings referenced by
+  -- tasks.focus_tier; order_index preserves the user's Settings ordering.
+  CREATE TABLE IF NOT EXISTS custom_tiers (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    order_index INTEGER
+  );
 `;
 
 /**

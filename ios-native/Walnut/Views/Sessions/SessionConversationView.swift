@@ -38,6 +38,7 @@ struct SessionConversationView: View {
                 placeholder: "Message this session",
                 disabled: !store.canSend,
                 disabledNotice: store.composerNotice,
+                draftKey: "session:\(session.id)",
                 onSend: { text, images in await store.send(text, images: images) }
             )
         }
