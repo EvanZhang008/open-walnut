@@ -6,7 +6,7 @@ import { generateId, parseGroupFromCategory } from '../utils/format.js';
 import { initDirectories } from './init.js';
 import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
-import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type CategoryRecord, type TaskGroupRecord } from './types.js';
+import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type CategoryRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
 import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES } from './phase.js';
 import { registry } from './integration-registry.js';
 import { getDb, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction, TASK_DB_PATH } from './task-db.js';
@@ -64,10 +64,20 @@ let initialized = false;
 // the cache. Env-gated for instant prod revert.
 const STORE_CACHE_ENABLED = process.env.WALNUT_STORE_CACHE !== '0';
 let taskStoreCache: TaskStore | null = null;
+// data_version observed when the cache was filled. `PRAGMA data_version` bumps
+// when ANOTHER connection commits (our own writes don't move it — they
+// invalidate via withWriteLock.finally instead), so a mismatch on a cache hit
+// means an external process wrote the DB and the snapshot is stale. Without
+// this check a second server process sharing the DB file reads its stale
+// cache, and writeStore()'s full-snapshot delete-diff then ERASES the rows the
+// other process created (2026-08-04 task-loss incident — a stray second server
+// on :3467 silently deleted every task created via :3456).
+let taskStoreCacheDataVersion: number | null = null;
 
 /** Drop the cached whole-store snapshot. Called from withWriteLock.finally. */
 function invalidateTaskStoreCache(): void {
   taskStoreCache = null;
+  taskStoreCacheDataVersion = null;
 }
 
 // ── Row shadow: makes writeStore() write only the rows that changed ──
@@ -163,6 +173,7 @@ function invalidateRowShadow(): void {
 export function _resetForTesting(): void {
   initialized = false;
   taskStoreCache = null;
+  taskStoreCacheDataVersion = null;
   rowShadow = null;
   rowShadowDataVersion = null;
   pendingRowShadow = null;
@@ -336,7 +347,16 @@ function sanitizePriority(p: string | undefined): TaskPriority {
 async function readStore(): Promise<TaskStore> {
   await ensureInit();
   if (STORE_CACHE_ENABLED && taskStoreCache !== null) {
-    return cloneTaskStore(taskStoreCache);
+    // Trust the cache only while no OTHER connection has committed since it was
+    // filled (same trust boundary as rowShadowIfCurrent — see the cache decl).
+    const current = readDataVersion(getDb()!);
+    if (current !== null && current === taskStoreCacheDataVersion) {
+      return cloneTaskStore(taskStoreCache);
+    }
+    log.task.warn('task store cache dropped: external process wrote the DB', {
+      cachedDataVersion: taskStoreCacheDataVersion, currentDataVersion: current,
+    });
+    invalidateTaskStoreCache();
   }
   const db = getDb()!;
   const taskRows = db.prepare('SELECT * FROM tasks').all() as Record<string, any>[];
@@ -358,13 +378,20 @@ async function readStore(): Promise<TaskStore> {
     taskGroups[row.id] = { label: row.label, ...(row.hidden ? { hidden: true } : {}) };
   }
 
+  const tierRows = db
+    .prepare('SELECT id, label FROM custom_tiers ORDER BY order_index ASC')
+    .all() as { id: string; label: string }[];
+  const customTiers: CustomTierRecord[] = tierRows.map((row) => ({ id: row.id, label: row.label }));
+
   const store: TaskStore = {
     tasks,
     ...(Object.keys(categories).length > 0 ? { categories } : {}),
     ...(Object.keys(taskGroups).length > 0 ? { task_groups: taskGroups } : {}),
+    ...(customTiers.length > 0 ? { custom_tiers: customTiers } : {}),
   };
   if (STORE_CACHE_ENABLED) {
     taskStoreCache = store;
+    taskStoreCacheDataVersion = readDataVersion(db);
     return cloneTaskStore(store);
   }
   return store;
@@ -394,6 +421,7 @@ function cloneTaskStore(store: TaskStore): TaskStore {
     tasks: store.tasks.map((t) => ({ ...t })),
     ...(store.categories ? { categories: { ...store.categories } } : {}),
     ...(store.task_groups ? { task_groups: { ...store.task_groups } } : {}),
+    ...(store.custom_tiers ? { custom_tiers: store.custom_tiers.map((t) => ({ ...t })) } : {}),
   };
 }
 
@@ -456,6 +484,20 @@ async function writeStore(store: TaskStore): Promise<void> {
       if (t && typeof t.id === 'string') newIds.add(t.id);
     }
     const toDelete = existingIds.filter((id) => !newIds.has(id));
+
+    // Audit every row the snapshot-diff removes. In the 2026-08-04 incident this
+    // path silently erased tasks another process had just created — deletions
+    // here MUST be traceable. Explicit deletes arrive with small intentional
+    // diffs; a LARGE diff means the in-memory snapshot is stale vs the DB.
+    if (toDelete.length > 0) {
+      const logFn = toDelete.length > 5 ? log.task.warn : log.task.info;
+      logFn.call(log.task, 'writeStore snapshot diff deleting rows', {
+        count: toDelete.length,
+        ids: toDelete.slice(0, 20),
+        dbRows: existingIds.length,
+        snapshotRows: newIds.size,
+      });
+    }
 
     const deleteStmt = handle.prepare('DELETE FROM tasks WHERE id = ?');
     for (const id of toDelete) deleteStmt.run(id);
@@ -523,6 +565,16 @@ async function writeStore(store: TaskStore): Promise<void> {
     for (const [id, rec] of Object.entries(store.task_groups ?? {})) {
       if (rec?.label) groupInsert.run({ id, label: rec.label, hidden: rec.hidden ? 1 : 0 });
     }
+
+    // Full-snapshot rewrite of the custom-tier registry (mirrors task_groups).
+    // Array index is the persisted order.
+    handle.prepare('DELETE FROM custom_tiers').run();
+    const tierInsert = handle.prepare(
+      'INSERT INTO custom_tiers (id, label, order_index) VALUES (@id, @label, @order_index)'
+    );
+    (store.custom_tiers ?? []).forEach((tier, i) => {
+      if (tier?.id && tier?.label) tierInsert.run({ id: tier.id, label: tier.label, order_index: i });
+    });
   });
 
   // Transaction committed — the staged row shadow now describes what's on disk.
@@ -1731,7 +1783,7 @@ function migrateTaskSource(
 export async function updateTask(
   idPrefix: string,
   updates: UpdateTaskInput,
-  eventOptions?: { source?: string; extraTargets?: string[]; ifPhase?: TaskPhase },
+  eventOptions?: { source?: string; extraTargets?: string[]; ifPhase?: TaskPhase; asyncPush?: boolean },
 ): Promise<{ task: Task }> {
   // Lock-internal phase: validate + mutate + persist. Returns enough state for
   // the post-lock push. Push runs OUTSIDE the lock because autoPushIfConfigured
@@ -2022,6 +2074,20 @@ export async function updateTask(
       //    emission below — harmless because the frontend mergeTask is idempotent).
       bus.emit(EventNames.TASK_UPDATED, { task: m.task }, ['web-ui'], { source: 'migration' });
     }
+  } else if (eventOptions?.asyncPush) {
+    // Async push (same contract as addTask's asyncPush): the local write is already
+    // durable, so ack the caller now and reconcile the external round-trip in the
+    // background. autoPushIfConfigured stamps sync_error + emits TASK_UPDATED on
+    // failure, so the UI still learns about a failed push — just not by blocking
+    // the HTTP response on a 2-3s network round-trip. 2026-07-31 incident: awaited
+    // pushes saturated the browser's 6-connection pool and cascaded every other
+    // request into 15s client timeouts.
+    autoPushIfConfigured(task).catch((err) => {
+      log.task.warn('async task push failed', {
+        taskId: task.id, source: task.source,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
   } else {
     // Normal (non-migration) sync push — propagate failure to caller. Calls that
     // wrote to plugin-backed tasks must surface push errors (plugin not loaded,
@@ -3571,46 +3637,217 @@ export async function getPinnedTasks(): Promise<Task[]> {
     .sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
 }
 
-// Focus tiers: focus (current sprint) → satellite (backlog) → wait (parked).
-// No cap — users decide how many tasks per tier.
-type FocusTier = 'focus' | 'satellite' | 'wait';
+// Focus tiers: focus (current sprint) → satellite (needs doing soon; the
+// default) → backlog (someday, still pinned) → wait (parked/blocked), plus
+// user-defined custom tiers (ct_* ids, managed below).
+// No cap on tasks per tier — users decide how many tasks per tier.
 
 export interface TierResult {
   pinned_tasks: string[];
   focus_tasks: string[];
   satellite_tasks: string[];
+  backlog_tasks: string[];
   wait_tasks: string[];
+  /** Per registered custom tier id: pinned task ids in that tier (pin_order). */
+  custom_tier_tasks: Record<string, string[]>;
 }
+
+// Non-default built-in focus_tier values (satellite = the undefined default).
+const BUILTIN_TIER_VALUES = ['focus', 'backlog', 'wait'];
 
 /** Helper: split pinned tasks into tier arrays (includes pinned_tasks for full state sync). */
 function splitTiers(store: TaskStore): TierResult {
   const pinned = store.tasks
     .filter((t) => t.pinned && t.phase !== 'COMPLETE' && t.status !== 'done')
     .sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
+  const customIds = new Set((store.custom_tiers ?? []).map((t) => t.id));
+  const customTierTasks: Record<string, string[]> = {};
+  for (const id of customIds) {
+    customTierTasks[id] = pinned.filter((t) => t.focus_tier === id).map((t) => t.id);
+  }
   return {
     pinned_tasks: pinned.map((t) => t.id),
     focus_tasks: pinned.filter((t) => t.focus_tier === 'focus').map((t) => t.id),
-    // Satellite is the default tier: anything not focus and not wait (incl. the
-    // retired 'next' value on legacy tasks) falls here.
-    satellite_tasks: pinned.filter((t) => t.focus_tier !== 'focus' && t.focus_tier !== 'wait').map((t) => t.id),
+    // Satellite is the default tier: anything not a non-default built-in and not
+    // a REGISTERED custom tier (incl. the retired 'next' value on legacy tasks
+    // and stale ids of deleted custom tiers) falls here.
+    satellite_tasks: pinned
+      .filter((t) => !(t.focus_tier && (BUILTIN_TIER_VALUES.includes(t.focus_tier) || customIds.has(t.focus_tier))))
+      .map((t) => t.id),
+    backlog_tasks: pinned.filter((t) => t.focus_tier === 'backlog').map((t) => t.id),
     wait_tasks: pinned.filter((t) => t.focus_tier === 'wait').map((t) => t.id),
+    custom_tier_tasks: customTierTasks,
   };
+}
+
+/** Read-only tier snapshot for the GET /api/focus/tasks route — one definition
+ *  of the four-bucket split (satellite excludes REGISTERED custom ids only). */
+export async function getTierSplit(): Promise<TierResult> {
+  return splitTiers(await readStore());
+}
+
+// ── Custom tier registry ──
+// User-defined pin tiers alongside the built-ins. Registry lives in the
+// custom_tiers table (store.custom_tiers, ordered); membership lives on
+// tasks.focus_tier as the tier's ct_* id.
+
+const CUSTOM_TIER_MAX = 20;
+const CUSTOM_TIER_LABEL_MAX = 40;
+const BUILTIN_TIER_LABELS = ['focus', 'satellite', 'backlog', 'wait'];
+
+/** Generate a fresh `ct_` + 8 random [a-z0-9] chars id, avoiding collisions.
+ *  The id FORMAT is a cross-layer contract — change it and the frontend breaks:
+ *  the `ct_` prefix is the web client's type discriminator (startsWith checks in
+ *  TodoPanel/TodoSectionTabs/task-meta-constants), the id must contain no ':'
+ *  (group drag sentinels are `group:<gid>:<tier>` and parseGroupSentinelGid
+ *  splits on colons), and it's embedded raw in localStorage keys + CSS classes. */
+function generateCustomTierId(existing: CustomTierRecord[]): string {
+  const taken = new Set(existing.map((t) => t.id));
+  for (;;) {
+    let suffix = '';
+    for (let i = 0; i < 8; i++) {
+      suffix += '0123456789abcdefghijklmnopqrstuvwxyz'[Math.floor(Math.random() * 36)];
+    }
+    const id = `ct_${suffix}`;
+    if (!taken.has(id)) return id;
+  }
+}
+
+// Frontend section tabs the tier tabs share a strip with (TodoSectionTabs) — a
+// custom tier named "Recent" would render two identical tabs.
+const RESERVED_SECTION_LABELS = ['all', 'recent', 'tasks', 'pinned', 'notes'];
+
+/** Validate a custom tier label. Returns the trimmed label; throws on violation. */
+function validateTierLabel(label: string, existing: CustomTierRecord[], excludeId?: string): string {
+  // Collapse ALL whitespace (incl. newlines/tabs) to single spaces: labels are
+  // interpolated into the quick-parse system prompt line-by-line, so an embedded
+  // newline would break its rule structure.
+  const trimmed = (label ?? '').replace(/\s+/g, ' ').trim();
+  if (!trimmed) throw new Error('Tier label cannot be empty');
+  if (trimmed.length > CUSTOM_TIER_LABEL_MAX) {
+    throw new Error(`Tier label too long (max ${CUSTOM_TIER_LABEL_MAX} chars)`);
+  }
+  const lower = trimmed.toLowerCase();
+  // Not just UI hygiene: the agent tool (tools.ts) and quick-task parse resolve
+  // tiers BY LABEL with built-ins matched first — a custom tier named "Focus"
+  // would be permanently shadowed and unreachable on those paths.
+  if (BUILTIN_TIER_LABELS.includes(lower)) {
+    throw new Error(`Tier label "${trimmed}" conflicts with a built-in tier`);
+  }
+  if (RESERVED_SECTION_LABELS.includes(lower)) {
+    throw new Error(`Tier label "${trimmed}" is a reserved section name`);
+  }
+  // A label shaped like a tier ID would collide with the id space in the agent
+  // tool's id-or-label resolution (ids match first — such a label would be
+  // unreachable) — reject the whole ct_ prefix.
+  if (lower.startsWith('ct_')) {
+    throw new Error(`Tier label "${trimmed}" cannot start with the reserved prefix "ct_"`);
+  }
+  if (existing.some((t) => t.id !== excludeId && t.label.trim().toLowerCase() === lower)) {
+    throw new Error(`Tier label "${trimmed}" already exists`);
+  }
+  return trimmed;
+}
+
+/** List registered custom tiers (ordered). */
+export async function getCustomTiers(): Promise<CustomTierRecord[]> {
+  const store = await readStore();
+  return store.custom_tiers ?? [];
+}
+
+/** Create a custom tier. Appends to the end of the registry. */
+export async function createCustomTier(label: string): Promise<{ tier: CustomTierRecord; tiers: CustomTierRecord[] }> {
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const existing = store.custom_tiers ?? [];
+    if (existing.length >= CUSTOM_TIER_MAX) {
+      throw new Error(`Too many custom tiers (max ${CUSTOM_TIER_MAX})`);
+    }
+    const trimmed = validateTierLabel(label, existing);
+    const tier: CustomTierRecord = { id: generateCustomTierId(existing), label: trimmed };
+    store.custom_tiers = [...existing, tier];
+    await writeStore(store);
+    bus.emit(EventNames.CONFIG_CHANGED, { key: 'focus_tiers' }, ['web-ui']);
+    return { tier, tiers: store.custom_tiers };
+  });
+}
+
+/** Rename a custom tier. Same label validation as create (excluding self). */
+export async function renameCustomTier(id: string, label: string): Promise<{ tier: CustomTierRecord; tiers: CustomTierRecord[] }> {
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const existing = store.custom_tiers ?? [];
+    const tier = existing.find((t) => t.id === id);
+    if (!tier) throw new Error(`Tier not found: ${id}`);
+    tier.label = validateTierLabel(label, existing, id);
+    store.custom_tiers = existing;
+    await writeStore(store);
+    bus.emit(EventNames.CONFIG_CHANGED, { key: 'focus_tiers' }, ['web-ui']);
+    return { tier, tiers: existing };
+  });
+}
+
+/**
+ * Delete a custom tier. Every task in it self-heals to satellite (focus_tier
+ * cleared). Returns the remaining registry and how many tasks were moved.
+ */
+export async function deleteCustomTier(id: string): Promise<{ tiers: CustomTierRecord[]; moved: number }> {
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const existing = store.custom_tiers ?? [];
+    if (!existing.some((t) => t.id === id)) throw new Error(`Tier not found: ${id}`);
+    store.custom_tiers = existing.filter((t) => t.id !== id);
+
+    const now = new Date().toISOString();
+    const movedTasks: Task[] = [];
+    for (const task of store.tasks) {
+      if (task.focus_tier === id) {
+        delete task.focus_tier;
+        task.updated_at = now;
+        movedTasks.push(task);
+      }
+    }
+
+    await writeStore(store);
+    // Three event channels, each with a distinct consumer — don't "simplify":
+    // per-task TASK_UPDATED patches this client's task objects immediately;
+    // focus_tiers makes every client refetch the REGISTRY (its handler returns
+    // without pulling the pinned snapshot — see useFocusBar); focus_bar is what
+    // drives cross-client membership/pin_order convergence. Delete is the only
+    // registry op that changes membership, hence the extra emits vs create/rename.
+    for (const task of movedTasks) {
+      bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'internal' });
+    }
+    bus.emit(EventNames.CONFIG_CHANGED, { key: 'focus_tiers' }, ['web-ui']);
+    bus.emit(EventNames.CONFIG_CHANGED, { key: 'focus_bar' }, ['web-ui']);
+    return { tiers: store.custom_tiers, moved: movedTasks.length };
+  });
 }
 
 /**
  * Set the focus tier for a pinned task.
- * 'focus' = current sprint, 'satellite' = backlog, 'wait' = parked.
+ * 'focus' = current sprint, 'satellite' = needs doing soon (the default),
+ * 'backlog' = someday/low-priority, 'wait' = parked; a registered custom tier
+ * id (ct_*) is also accepted. Anything else — including stale ids of deleted
+ * custom tiers — self-heals to satellite (lenient by design: internal copy
+ * paths like session fork pass through stale values and must not throw).
  */
-export async function setFocusTier(taskId: string, tier: FocusTier): Promise<TierResult> {
+export async function setFocusTier(taskId: string, tier: string): Promise<TierResult> {
   return withWriteLock(async () => {
     const store = await readStore();
     const task = store.tasks.find((t) => t.id === taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
     if (!task.pinned) throw new Error(`Task is not pinned: ${task.title}`);
 
-    if (tier === 'focus' || tier === 'wait') {
+    const isCustom = (store.custom_tiers ?? []).some((t) => t.id === tier);
+    if (BUILTIN_TIER_VALUES.includes(tier) || isCustom) {
       task.focus_tier = tier;
     } else {
+      if (tier !== 'satellite') {
+        log.task.warn('setFocusTier: unknown tier, self-healing to satellite', {
+          taskId, tier,
+        });
+      }
       delete task.focus_tier;
     }
     task.updated_at = new Date().toISOString();

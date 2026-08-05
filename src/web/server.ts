@@ -90,6 +90,7 @@ import { authRouter } from './routes/auth.js'
 import { setupRouter } from './routes/setup.js'
 import { apiV1Router, closeApiV1Streams } from './routes/api-v1.js'
 import { sessionStreamV1Router } from './routes/session-stream-v1.js'
+import { sessionLaunchV1Router } from './routes/session-launch-v1.js'
 import { sttV1Router } from './routes/stt-v1.js'
 import { mediaV1Router } from './routes/media-v1.js'
 import { incidentsRouter } from './routes/incidents.js'
@@ -226,6 +227,7 @@ let qmdWatcherHandle: { stop: () => void } | null = null
 let qmdSyncStop: (() => Promise<void>) | null = null
 let gitAutoCommitHandle: { stop: () => void; health: GitAutoCommitHealth } | null = null
 let taskProjectionHandle: { stop: () => void } | null = null
+let foreignWriterWatchdog: { stop: () => void } | null = null
 let sessionProjectionHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
 let claudeSettingsWatcherStop: (() => void) | null = null
@@ -466,6 +468,32 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
   }
 
+  // Single-instance lock on WALNUT_HOME: a second server on the SAME data dir
+  // (even on a different port) silently corrupts task data — each process's
+  // whole-store cache goes stale against the other's writes, and writeStore()'s
+  // full-snapshot rewrite then DELETES the rows it never saw (2026-08-04: a
+  // stray `web --port 3467` erased every task/fork created via :3456 for a
+  // day). Different port ≠ different data; the lock guards the data directory.
+  // Ephemeral/test servers run on their own snapshot HOME → their own lock.
+  //
+  // Three layers, because the lock file only binds lock-AWARE builds:
+  //   1. lock file      — new builds refuse to double-start (instant, free)
+  //   2. lsof gate      — an OLD binary already holding tasks.sqlite blocks
+  //                       startup too (it can't know about the lock; we can
+  //                       still see it). Skipped in cloud mode (no local DB
+  //                       contention model) — lock file still applies.
+  //   3. watchdog       — a rogue writer arriving AFTER startup raises a
+  //                       notification-center error within ~2 ticks.
+  {
+    const { acquireInstanceLock, assertNoForeignDbHolders, startForeignWriterWatchdog } =
+      await import('../core/instance-lock.js')
+    acquireInstanceLock(port)
+    if (!CLOUD_MODE) {
+      await assertNoForeignDbHolders()
+      foreignWriterWatchdog = startForeignWriterWatchdog()
+    }
+  }
+
   const app = express()
 
   // Never auto-generate ETags for API JSON. Express's default weak ETag let the
@@ -657,7 +685,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const { getAgent } = await import('../core/agent-registry.js')
       const { runAgentLoop } = await import('../agent/loop.js')
       const { buildSubagentSystemPrompt, buildSubagentToolSet } = await import('../agent/subagent-context.js')
-      const { buildStatefulMemorySection } = await import('../agent/stateful-memory.js')
+      const { buildStatefulMemorySection, persistMemoryUpdate } = await import('../agent/stateful-memory.js')
       const { getProjectMemory } = await import('../core/project-memory.js')
 
       const agentDef = await getAgent(agentId)
@@ -707,7 +735,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           source: `cron-action-${agentId}`,
         })
 
-        // Memory is now agent-driven: the agent uses the `memory` tool directly.
+        // Persist the agent's <memory_update> block — the only write path to a
+        // stateful agent's memory_project (see stateful-memory.ts). Without this
+        // the protocol we just injected into the prompt would be a no-op.
+        if (agentDef.stateful) {
+          await persistMemoryUpdate(result.response, agentDef.stateful, agentDef.name, { agentId, source: 'cron' })
+        }
 
         return { status: 'ok' as const, summary: result.response?.slice(0, 2000) }
       } catch (err) {
@@ -818,6 +851,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', apiV1Router)
   // Session talk endpoints (additive): send into + stream out of CC sessions.
   app.use('/api/v1', sessionStreamV1Router)
+  // Session launch endpoints (additive): create a session from mobile
+  // (host + path picker). Primary box only — REPLICA returns 503.
+  app.use('/api/v1', sessionLaunchV1Router)
   // Voice input (additive): phone audio → text, works on primary AND cloud.
   app.use('/api/v1', sttV1Router)
   // Image bytes for mobile (additive): local file, daemon, or bridge proxy.
@@ -897,6 +933,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   })
   const label = dev ? 'dev' : 'production'
   log.web.info(`server listening on http://localhost:${port}`, { mode: label, port })
+  // Record the REAL port in the instance lock (port 0 resolves at listen time).
+  {
+    const bound = httpServer.address()
+    if (bound && typeof bound === 'object') {
+      const { updateInstanceLockPort } = await import('../core/instance-lock.js')
+      updateInstanceLockPort(bound.port)
+    }
+  }
 
   // -- Cloud mode: first-boot claim banner --
   // While zero devices are paired, print the one-time setup token so the
@@ -3447,6 +3491,16 @@ export async function stopServer(): Promise<void> {
     terminalManager.shutdown()
   } catch { /* terminal feature may be disabled */ }
   closeWss()
+
+  if (foreignWriterWatchdog) {
+    foreignWriterWatchdog.stop()
+    foreignWriterWatchdog = null
+  }
+  // Release the single-instance lock so the next startServer() (tests restart
+  // in-process; dev:prod restarts across processes) can acquire it cleanly.
+  import('../core/instance-lock.js')
+    .then(({ releaseInstanceLock }) => releaseInstanceLock())
+    .catch(() => {})
 
   if (httpServer) {
     return new Promise((resolve, reject) => {

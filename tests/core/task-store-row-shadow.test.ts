@@ -76,13 +76,19 @@ describe('writeStore row shadow', () => {
     foreign.prepare('UPDATE tasks SET title = ? WHERE id = ?').run('changed-externally', victim.id);
     foreign.close();
 
-    // Whole-store write that does NOT touch victim. A shadow-trusting implementation
-    // would skip victim (its fingerprint matches the shadow) and leave the foreign
-    // value on disk — a silently lost write. The data_version sentinel must notice
-    // the foreign commit and fall back to a full rewrite, restoring our snapshot.
+    // Whole-store write that does NOT touch victim. The data_version sentinel
+    // must notice the foreign commit BEFORE the read-modify-write: the stale
+    // whole-store cache is dropped, the snapshot re-reads the DB and adopts the
+    // foreign value, and writeStore persists a state that includes it.
+    //
+    // (Historical note: this test used to assert the OPPOSITE — that our stale
+    // in-memory 'seeded' value was restored over the foreign write. That "our
+    // snapshot wins" semantics is exactly what caused the 2026-08-04 task-loss
+    // incident: a second server process's stale snapshot deleted rows the first
+    // process had just created. External commits are now authoritative.)
     await updateTask(other.id, { title: 'other-2' });
 
-    expect((await getTask(victim.id)).title).toBe('seeded');
+    expect((await getTask(victim.id)).title).toBe('changed-externally');
     expect((await getTask(other.id)).title).toBe('other-2');
   });
 
