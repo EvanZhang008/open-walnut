@@ -25237,6 +25237,15 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .cal-grid-header {
   display: flex;
   border-bottom: 1px solid var(--border);
+  /* Styling ::-webkit-scrollbar (globals top) turns macOS overlay scrollbars into
+     CLASSIC ones that eat 6px of content width. .cal-grid-scroll always overflows
+     (24h of slots) so its columns are 6px narrower than this header and the
+     all-day row — every day boundary drifts right, compounding across the week.
+     Reserve the same gutter on all three rows so they share column widths.
+     (Headless Chromium uses overlay scrollbars = 0px, which is why the original
+     E2E pass never saw the drift.) */
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .cal-grid-gutter {
@@ -25283,6 +25292,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   min-height: 26px;
   max-height: 74px;
   overflow-y: auto;
+  /* Match .cal-grid-scroll's reserved scrollbar gutter (see .cal-grid-header). */
+  scrollbar-gutter: stable;
   border-bottom: 2px solid var(--border);
 }
 
@@ -25298,6 +25309,13 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .cal-allday-cells {
   display: flex;
   flex: 1;
+  /* Nested-flex gotcha: without this the container's min-content (the sum of
+     the chips' nowrap titles) wins over flex:1 — the row refuses to shrink,
+     overflows horizontally, and every cell drifts off its day column. Only
+     reproduces when the week carries enough long all-day chips, which is why
+     it survived the initial E2E pass. min-width:0 on the CELLS alone is not
+     enough; the container needs it too. */
+  min-width: 0;
 }
 
 .cal-allday-cell {
@@ -25319,6 +25337,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* Keep the gutter reserved even if content ever fits (see .cal-grid-header). */
+  scrollbar-gutter: stable;
 }
 
 .cal-grid-ruler {
@@ -25734,7 +25754,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   min-width: 240px;
   max-width: 320px;
   padding: 8px 10px;
-  background: var(--bg-primary);
+  background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm, 10px);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
@@ -25795,7 +25815,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   z-index: 10000;
   min-width: 170px;
   padding: 4px;
-  background: var(--bg-primary);
+  background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm, 10px);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
@@ -25839,7 +25859,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   border: none;
   border-left: 3px solid var(--cal-chip-tint);
   border-radius: 6px;
-  background: color-mix(in srgb, var(--cal-chip-tint) 32%, var(--bg-primary));
+  background: color-mix(in srgb, var(--cal-chip-tint) 32%, var(--card-bg));
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
   padding: 2px 6px;
   overflow: hidden;
@@ -25866,7 +25886,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   padding: 3px 8px;
   border-left: 3px solid var(--cal-chip-tint);
   border-radius: 6px;
-  background: color-mix(in srgb, var(--cal-chip-tint) 28%, var(--bg-primary));
+  background: color-mix(in srgb, var(--cal-chip-tint) 28%, var(--card-bg));
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
   font-size: 11.5px;
   font-weight: 600;
@@ -25886,7 +25906,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: var(--bg-primary);
+  background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: 12px;
   box-shadow: 0 10px 34px rgba(0, 0, 0, 0.26);
@@ -25898,6 +25918,9 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 .cal-item-title {
   width: 100%;
+  /* The popover is a flex column with a max-height: when the error row appears
+     the title input was the flexible item and squashed to a 9px sliver. */
+  flex-shrink: 0;
   padding: 5px 8px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -25936,6 +25959,15 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   display: flex;
   align-items: center;
   gap: 6px;
+  /* Defense in depth for wide locale-rendered date/time inputs: wrap instead of
+     overflowing — overflow here once let focus auto-scroll push Save out of the
+     popover's hit-testable area entirely. */
+  flex-wrap: wrap;
+}
+
+.cal-item-row input[type='date'],
+.cal-item-row input[type='time'] {
+  min-width: 0;
 }
 
 .cal-item-row input[type='date'],

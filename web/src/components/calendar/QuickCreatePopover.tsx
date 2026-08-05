@@ -47,6 +47,27 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
   });
   const [tab, setTab] = useState<'task' | 'event'>(seed.tab && onCreateEvent ? seed.tab : 'task');
 
+  // The page's canCreateEvent gate is OPTIMISTIC while calendar sources load.
+  // If it settles to "no writable source" while the user sits on the Event tab,
+  // onCreateEvent flips to undefined — without this fallback the tab bar
+  // unmounts but the event form stays, and Create throws a raw TypeError into
+  // the form ("onCreateEvent is not a function") with the user stranded.
+  useEffect(() => {
+    if (!onCreateEvent && tab === 'event') setTab('task');
+  }, [onCreateEvent, tab]);
+
+  // Window-level Escape: the composer/form inputs handle Escape only while
+  // focused — after clicking non-focusable popover chrome (tabs, header, the
+  // when-line) focus sits on <body> and Escape went dead, leaving the modal
+  // backdrop swallowing every grid click. Same pattern as CalendarItemPopover.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
   const projectOptions = useMemo(() => {
     const options = new Map<string, Set<string>>();
     for (const task of tasks) {
@@ -90,7 +111,7 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
             </button>
           </div>
         )}
-        {tab === 'task' ? (
+        {tab === 'task' || !onCreateEvent ? (
           <QuickTaskComposer
             open
             onClose={onClose}

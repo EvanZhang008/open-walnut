@@ -229,7 +229,16 @@ export function CalendarPage() {
 
   const openCreate = useCallback((seed: CreateSeed) => setCreateSeed(seed), []);
 
-  const canCreateEvent = calendar.sources.some((s) => s.available && s.enabled);
+  // While the FIRST events fetch is in flight (sources never resolved yet),
+  // assume event-creation IS available: gating on the resolved sources made a
+  // quick-create opened during a slow load render with no Task|Event tab bar
+  // at all (the "can't select Event" race). Once sources have resolved once we
+  // trust them — `sources` persists across range-change refetches, so this
+  // never flashes the Event tab at users with no writable calendar. If the
+  // optimism was wrong, QuickCreatePopover falls back to the Task tab.
+  const canCreateEvent = calendar.sources.length === 0
+    ? calendar.loading
+    : calendar.sources.some((s) => s.available && s.enabled);
 
   const openContextMenu = useCallback(
     (point: { x: number; y: number }, target: { item?: CalendarItem; seed?: CreateSeed }) =>

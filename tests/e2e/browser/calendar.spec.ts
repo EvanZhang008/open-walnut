@@ -481,6 +481,171 @@ test.describe('Calendar view', () => {
     await expect(chip).toHaveCount(0)
   })
 
+  test('event popover keeps Save reachable while editing times (no overflow)', async ({ page }) => {
+    // Regression: date + start + end on one 300px row overflowed 84px; typing in
+    // the end-time input auto-scrolled the popover and pushed Save fully outside
+    // the hit-testable area — the click landed on the backdrop and the edit was
+    // silently discarded (zero PATCH).
+    const today = localDay(0)
+    const created = await fetch(`${API}/api/calendar/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        calendarId: 'cal-home',
+        title: `CalPopoverOverflow ${Date.now()}`,
+        start: `${today}T19:00:00`,
+        end: `${today}T19:30:00`,
+      }),
+    })
+    const { event } = (await created.json()) as { event: { id: string } }
+
+    await openCalendar(page)
+    const chip = page.locator(`.cal-day-col .cal-chip[data-item-id="event:${event.id}"]`)
+    await chip.scrollIntoViewIfNeeded()
+    await chip.click()
+    const popover = page.locator('[data-testid="cal-item-popover"]')
+    await expect(popover).toBeVisible()
+
+    // No horizontal overflow anywhere in the popover
+    const overflow = await popover.evaluate((el) => el.scrollWidth - el.clientWidth)
+    expect(overflow).toBeLessThanOrEqual(0)
+
+    // Focus + type in BOTH time inputs (the trigger for the auto-scroll bug),
+    // then verify Save is still the element at its own centre point.
+    await popover.locator('input[type="time"]').nth(1).click()
+    await popover.locator('input[type="time"]').nth(1).fill('20:45')
+    await popover.locator('input[type="time"]').nth(0).click()
+    await popover.locator('input[type="time"]').nth(0).fill('20:00')
+    const saveHittable = await popover.locator('.cal-item-save').evaluate((btn) => {
+      const r = btn.getBoundingClientRect()
+      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
+      return btn === hit || btn.contains(hit)
+    })
+    expect(saveHittable).toBe(true)
+
+    await popover.locator('.cal-item-save').click()
+    await expect
+      .poll(async () => {
+        const ev = await getEventViaApi(event.id)
+        return `${ev?.start}|${ev?.end}`
+      }, { timeout: 5000 })
+      .toBe(`${today}T20:00:00|${today}T20:45:00`)
+    // cleanup so other runs' weeks stay tidy
+    await fetch(`${API}/api/calendar/events/${event.id}`, { method: 'DELETE' })
+  })
+
+  test('editing a timed event date shifts the end date too (stays valid)', async ({ page }) => {
+    // Regression: endDate was seeded at mount and never re-synced, so picking a
+    // later day made end < start → permanently invalid, date un-editable.
+    const today = localDay(0)
+    const tomorrow = localDay(1)
+    const created = await fetch(`${API}/api/calendar/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        calendarId: 'cal-home',
+        title: `CalDateShift ${Date.now()}`,
+        start: `${today}T18:00:00`,
+        end: `${today}T18:30:00`,
+      }),
+    })
+    const { event } = (await created.json()) as { event: { id: string } }
+
+    await openCalendar(page)
+    const chip = page.locator(`.cal-day-col .cal-chip[data-item-id="event:${event.id}"]`)
+    await chip.scrollIntoViewIfNeeded()
+    await chip.click()
+    const popover = page.locator('[data-testid="cal-item-popover"]')
+    await expect(popover).toBeVisible()
+
+    // Clear first (fires change with ''), then retype — the transient empty
+    // once poisoned the delta base and stranded the popover invalid forever.
+    await popover.locator('input[type="date"]').fill('')
+    await popover.locator('input[type="date"]').fill(tomorrow)
+    await expect(popover.locator('.cal-item-error')).toHaveCount(0)
+    const saveBtn = popover.locator('.cal-item-save')
+    await expect(saveBtn).toBeEnabled()
+    await saveBtn.click()
+
+    await expect
+      .poll(async () => {
+        const res = await fetch(`${API}/api/calendar/events?from=${tomorrow}&to=${tomorrow}`)
+        const body = (await res.json()) as { events: Array<{ id: string; start: string; end: string }> }
+        const ev = body.events.find((e) => e.id === event.id)
+        return ev ? `${ev.start}|${ev.end}` : undefined
+      }, { timeout: 5000 })
+      .toBe(`${tomorrow}T18:00:00|${tomorrow}T18:30:00`)
+    await fetch(`${API}/api/calendar/events/${event.id}`, { method: 'DELETE' })
+  })
+
+  test('Escape closes the item popover even when nothing inside is focused', async ({ page }) => {
+    // Regression: Escape was bound via onKeyDown on the popover div, so task
+    // popovers (static title, no autofocus) never saw the key — backdrop click
+    // was the only way out.
+    const today = localDay(0)
+    const task = await createTaskViaApi('CalEscClose', { start_date: `${today}T17:00:00` })
+
+    await openCalendar(page)
+    const chip = page.locator(`.cal-day-col .cal-chip[data-item-id="task-start:${task.id}"]`)
+    await chip.scrollIntoViewIfNeeded()
+    await chip.click()
+    const popover = page.locator('[data-testid="cal-item-popover"]')
+    await expect(popover).toBeVisible()
+
+    await page.keyboard.press('Escape')
+    await expect(popover).toHaveCount(0)
+  })
+
+  test('quick-create shows the Event tab even while the events fetch is slow', async ({ page }) => {
+    // Regression: canCreateEvent derived only from the RESOLVED events response,
+    // so a quick-create opened during a slow first load had no tab bar at all —
+    // the reported "can't select Event". The gate is now optimistic while loading.
+    await page.route('**/api/calendar/events*', async (route) => {
+      await new Promise((r) => setTimeout(r, 3000))
+      await route.continue()
+    })
+    await openCalendar(page)
+    // Click an empty slot immediately — before the delayed events fetch lands.
+    const point = await columnPoint(page, localDay(0), 22)
+    await page.mouse.click(point.x, point.y)
+    const tabs = page.locator('.cal-create-popover .cal-create-tabs')
+    await expect(tabs).toBeVisible({ timeout: 2000 })
+    await tabs.locator('button:has-text("Event")').click()
+    // Popover must survive the tab click and show the event form.
+    await expect(page.locator('.cal-create-popover input.cal-event-form-title')).toBeVisible()
+    await page.keyboard.press('Escape')
+  })
+
+  test('quick-create falls back to the Task tab when sources settle unwritable', async ({ page }) => {
+    // Regression: the optimistic Event tab had no settle path — when the
+    // delayed sources resolved to "no writable calendar" while the user sat on
+    // the Event tab, the tab bar unmounted but the dead form stayed, and
+    // Create surfaced a raw "onCreateEvent is not a function".
+    await page.route('**/api/calendar/events*', async (route) => {
+      await new Promise((r) => setTimeout(r, 2500))
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          events: [],
+          sources: [{ id: 'eventkit', available: false, enabled: false, reason: 'not-configured' }],
+        }),
+      })
+    })
+    await openCalendar(page)
+    const point = await columnPoint(page, localDay(0), 21)
+    await page.mouse.click(point.x, point.y)
+    const popover = page.locator('.cal-create-popover')
+    await popover.locator('.cal-create-tabs button:has-text("Event")').click()
+    await expect(popover.locator('input.cal-event-form-title')).toBeVisible()
+
+    // Delayed unwritable sources land → auto-fallback to the Task tab.
+    await expect(popover.locator('.quick-task-composer')).toBeVisible({ timeout: 5000 })
+    await expect(popover.locator('input.cal-event-form-title')).toHaveCount(0)
+    await expect(popover.locator('.cal-event-form-error')).toHaveCount(0)
+    await page.keyboard.press('Escape')
+  })
+
   test('homepage day-agenda side panel renders and creates', async ({ page }) => {
     const today = localDay(0)
     const task = await createTaskViaApi('CalAgenda', { start_date: `${today}T10:00:00` })

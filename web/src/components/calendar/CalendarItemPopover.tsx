@@ -7,7 +7,7 @@
  *            toggle for the date this chip represents, Unschedule, Open task
  * Saves go through the same optimistic paths as drags (moveEvent / update).
  */
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import type { CalendarItem } from './calendar-items';
@@ -43,12 +43,32 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
 
   const composeStart = () => (allDay ? startDate : `${startDate}T${startTime}:00`);
   const composeEnd = () => (allDay ? (endDate || startDate) : `${endDate || startDate}T${endTime}:00`);
-  const invalid = isEvent && !allDay && composeEnd() <= composeStart();
+  // Guard EVERY branch, not just timed events. Chromium's date field happily
+  // emits 6-digit years ('192028-08-14') AND zero-pads 1–2 digit years into
+  // parseable ones ('26' → '0026-08-12') — both save fine through the tasks
+  // API and then the chip vanishes from every calendar surface (real data
+  // loss). Parseability alone isn't enough; require the shape AND a sane year.
+  const saneWhen = (iso: string) => {
+    const d = datePart(iso);
+    return (
+      /^\d{4}-\d{2}-\d{2}$/.test(d) &&
+      d >= '1900-01-01' &&
+      d <= '2999-12-31' &&
+      // Full-string parse still matters: a cleared time input composes
+      // '…T:00', which has a sane date part but is not a valid datetime.
+      Number.isFinite(Date.parse(iso.includes('T') ? iso : `${iso}T00:00:00`))
+    );
+  };
+  const malformed = !saneWhen(composeStart()) || (isEvent && !saneWhen(composeEnd()));
+  const misordered =
+    isEvent && !malformed && (allDay ? composeEnd() < composeStart() : composeEnd() <= composeStart());
+  const invalid = malformed || misordered;
 
   const save = () => {
-    if (readonly) return;
+    // invalid gates tasks too (Enter bypasses the button's disabled attribute).
+    if (readonly || invalid) return;
     if (isEvent) {
-      if (invalid || !title.trim()) return;
+      if (!title.trim()) return;
       onSaveEvent?.(item.event, { start: composeStart(), end: composeEnd(), title: title.trim() });
     } else {
       onSaveTaskWhen?.(item, composeStart());
@@ -59,6 +79,44 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') save();
     if (e.key === 'Escape') onClose();
+  };
+
+  // Escape must work regardless of focus. The div's onKeyDown only fires with
+  // focus inside the popover — read-only popovers never autofocus and task
+  // popovers have a static title, so Escape was dead there (backdrop click was
+  // the only way out). Same window-level pattern as CalendarContextMenu.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  // A timed event renders ONE date input (its day). Moving that day must move
+  // the WHOLE event, i.e. endDate has to follow. Two traps this must survive
+  // (both found by adversarial UI agents):
+  //  - clear-then-retype fires change with '' — committing it strands the
+  //    popover permanently invalid, so transient empties are ignored;
+  //  - typing a year emits PARTIAL values per keystroke ('0002-08-06'…), so
+  //    the end date is recomputed every change from the IMMUTABLE mount span
+  //    (event end day − start day), never chained through previous state —
+  //    one transient value must not poison every edit after it.
+  const eventSpanMs = isEvent
+    ? Math.max(0, Date.parse(`${datePart(item.event.end || item.event.start)}T00:00:00`) -
+        Date.parse(`${datePart(item.event.start)}T00:00:00`))
+    : 0;
+  const setEventDate = (newDate: string) => {
+    if (!newDate) return;
+    const base = Date.parse(`${newDate}T00:00:00`);
+    if (isEvent && !allDay && Number.isFinite(base)) {
+      // Noon anchor dodges DST: adding a 24h-multiple to midnight can land in
+      // the previous day across a spring-forward boundary.
+      const shifted = new Date(base + eventSpanMs + 12 * 3600 * 1000);
+      const pad = (n: number) => String(n).padStart(2, '0');
+      setEndDate(`${String(shifted.getFullYear()).padStart(4, '0')}-${pad(shifted.getMonth() + 1)}-${pad(shifted.getDate())}`);
+    }
+    setStartDate(newDate);
   };
 
   return createPortal(
@@ -95,22 +153,27 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
         {isEvent && item.event.location && <div className="cal-item-location">{item.event.location}</div>}
 
         <div className="cal-item-fields">
+          {/* Events get date and start–end on SEPARATE rows: all three inputs on
+              one line total ~358px vs the popover's 274px content box, and with
+              overflow-x hidden the browser's focus auto-scroll shoved the Save
+              button clean out of the clickable area (edit silently lost). */}
           <div className="cal-item-row">
-            <input type="date" value={startDate} disabled={readonly} onChange={(e) => setStartDate(e.target.value)} />
-            {!allDay && (
+            <input type="date" value={startDate} min="1900-01-01" max="2999-12-31" disabled={readonly} onChange={(e) => setEventDate(e.target.value)} />
+            {!allDay && !isEvent && (
               <input type="time" value={startTime} disabled={readonly} onChange={(e) => setStartTime(e.target.value)} />
             )}
-            {isEvent && !allDay && (
-              <>
-                <span className="cal-item-dash">–</span>
-                <input type="time" value={endTime} disabled={readonly} onChange={(e) => setEndTime(e.target.value)} />
-              </>
-            )}
           </div>
+          {isEvent && !allDay && (
+            <div className="cal-item-row">
+              <input type="time" value={startTime} disabled={readonly} onChange={(e) => setStartTime(e.target.value)} />
+              <span className="cal-item-dash">–</span>
+              <input type="time" value={endTime} disabled={readonly} onChange={(e) => setEndTime(e.target.value)} />
+            </div>
+          )}
           {isEvent && allDay && (endDate !== startDate || !!item.event.end) && (
             <div className="cal-item-row">
               <span className="cal-item-dash">to</span>
-              <input type="date" value={endDate || startDate} disabled={readonly} onChange={(e) => setEndDate(e.target.value)} />
+              <input type="date" value={endDate || startDate} min="1900-01-01" max="2999-12-31" disabled={readonly} onChange={(e) => setEndDate(e.target.value)} />
             </div>
           )}
           {!isEvent && (
@@ -119,7 +182,9 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
               All-day
             </label>
           )}
-          {invalid && <div className="cal-item-error">End must be after start.</div>}
+          {invalid && (
+            <div className="cal-item-error">{malformed ? 'Invalid date.' : 'End must be after start.'}</div>
+          )}
         </div>
 
         <div className="cal-item-footer">

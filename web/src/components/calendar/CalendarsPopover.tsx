@@ -22,6 +22,16 @@ export function CalendarsPopover({ anchorEl, onClose }: Props) {
   const [calendars, setCalendars] = useState<CalendarInfo[] | null>(null);
   const [unavailable, setUnavailable] = useState(false);
 
+  // Window-level Escape — the popover contains no autofocused input, so a div
+  // onKeyDown never fires (focus stays on the toolbar button / body).
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
   useEffect(() => {
     let alive = true;
     listCalendarSources()
