@@ -16,17 +16,21 @@
  *   3. tests/setup/test-gate.ts admits ONE run group machine-wide, so a second
  *      agent session queues instead of doubling the budget.
  *
- * Deliberately conservative: 2 workers × 2GB heap ≈ 4GB peak. Tests take longer;
+ * Deliberately conservative: 1 worker × 2GB heap ≈ 2GB peak. Tests take longer;
  * that is the right trade — a crashed machine costs far more than a slow suite.
  * This box also carries ~3GB of mandated security agents, the prod server on
  * :3456, simulators and browsers, and 128 test files spawn REAL servers/daemons
  * whose memory sits outside any V8 heap cap.
  *
- * One-off override on an idle machine only: WALNUT_TEST_WORKERS=4 npm test
+ * 2026-08-05: crashed the machine AGAIN at 2 workers (concurrent agent
+ * sessions + real spawned servers/daemons outside the heap cap pushed it
+ * over). Default is now 1 — one vitest worker machine-wide, period.
+ *
+ * One-off override on an idle machine only: WALNUT_TEST_WORKERS=2 npm test
  */
 
 /** Hard ceiling — no override may exceed this. */
-const ABSOLUTE_MAX = 4
+const ABSOLUTE_MAX = 2
 
 /** Worker processes allowed concurrently, machine-wide. */
 export function maxWorkers(): number {
@@ -34,7 +38,7 @@ export function maxWorkers(): number {
   if (process.env.CI) return 4
   const n = Number(process.env.WALNUT_TEST_WORKERS)
   if (Number.isFinite(n) && n > 0) return Math.min(Math.floor(n), ABSOLUTE_MAX)
-  return 2
+  return 1
 }
 
 /** Per-worker V8 heap cap. One uncapped worker was measured at 4.7GB RSS. */
