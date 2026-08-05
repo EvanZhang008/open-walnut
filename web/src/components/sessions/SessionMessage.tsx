@@ -9,6 +9,7 @@ import { useLivePlanContent } from '@/contexts/PlanContentContext';
 import { fetchSubagentHistory } from '@/api/sessions';
 import { getSubagentCache, setSubagentCache } from '@/cache/session-cache';
 import { CopyMessageButtons } from '@/components/common/CopyMessageButtons';
+import { BashToolCall } from './BashToolCall';
 import { log } from '@/utils/log';
 
 // ── Edit Diff View ──
@@ -566,7 +567,17 @@ interface GenericToolCallProps {
   onFileOpen?: (path: string) => void;
 }
 
-export function GenericToolCall({ tool, status: statusProp = 'done', result: resultProp, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: GenericToolCallProps) {
+export function GenericToolCall(props: GenericToolCallProps) {
+  // Bash gets terminal-style rendering (real newlines, plain-pre output, popup)
+  // instead of the JSON input dump. Dispatch BEFORE any hooks; single choke
+  // point covering history, streaming, and ClaudeStreamView callers alike.
+  if (props.tool.name === 'Bash' && typeof props.tool.input?.command === 'string') {
+    return <BashToolCall tool={props.tool} status={props.status} result={props.result} sessionCwd={props.sessionCwd} />;
+  }
+  return <GenericToolCallInner {...props} />;
+}
+
+function GenericToolCallInner({ tool, status: statusProp = 'done', result: resultProp, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: GenericToolCallProps) {
   const [open, setOpen] = useState(false);
   // Merge result from explicit prop (streaming path) and tool.result (persisted history path)
   const result = resultProp ?? (tool as { result?: string }).result;

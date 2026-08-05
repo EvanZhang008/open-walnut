@@ -5527,6 +5527,70 @@ input:focus, textarea:focus, select:focus {
   word-break: break-word;
 }
 
+/* ===== Bash tool call — terminal-style rendering =====
+   Command + output render like a terminal: dark panel in both themes (GitHub
+   Actions log look), monospace, REAL newlines (white-space: pre-wrap on plain
+   text, never JSON-escaped). */
+.bash-tool-pre {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #d4d8de;
+  background: #16191f;
+  padding: 8px 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  margin: 0;
+}
+
+.bash-tool-prompt {
+  color: #7ee787;
+  user-select: none;
+}
+
+/* Hover-reveal expand button in the Bash header (mirrors .plan-card-expand-btn) */
+.bash-tool-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 5px;
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.chat-tool-block-header:hover .bash-tool-expand-btn,
+.bash-tool-expand-btn:focus-visible {
+  opacity: 1;
+}
+
+.bash-tool-expand-btn:hover {
+  background: var(--accent-subtle);
+  color: var(--fg-secondary);
+}
+
+/* Popup body (inside plan-popup-container shell) */
+.bash-popup-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bash-popup-pre {
+  max-height: none;
+  flex-shrink: 0;
+}
+
 /* ===== Merged tool-run row (Claude Code app style) =====
    Consecutive generic tool calls collapse into one muted text line:
    "Ran 3 commands, read a file ›". No border, no box — reads like a quiet
