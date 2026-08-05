@@ -16,8 +16,10 @@ import { spawn, execSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import crypto from 'node:crypto'
 import { createServer } from 'node:net'
 import { createAcpDaemon, type AcpStartParams } from '../../src/providers/acp-daemon.js'
+import { REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -59,10 +61,21 @@ export class MockDaemon {
   private _sendFaults = new Map<string, SendFault>()
   /** Spawn fault returned by every cmdStart until cleared (see injectStartFault). */
   private _startFault: string | null = null
+  /** Command names to silently swallow (no reply) — one-shot each; forces a
+   *  client-side command timeout (bulk-channel self-heal tests). */
+  private _swallowNext = new Set<string>()
   /** Sessions flagged as dead via simulateDeath — exitCode returned in session_dead replies. */
   private _deadSessions = new Map<string, number>()
-  /** Command log for test assertions. */
-  private _commandHistory: Array<{ cmd: string; payload: Record<string, unknown>; timestamp: number }> = []
+  /** Command log for test assertions. `connIndex` = arrival socket (0-based,
+   *  connection order) so bulk-channel tests can assert routing. */
+  private _commandHistory: Array<{ cmd: string; payload: Record<string, unknown>; timestamp: number; connIndex: number }> = []
+  /** Connection-order index per live socket (never reused). */
+  private _connIndices = new WeakMap<WebSocket, number>()
+  private _connSeq = 0
+  /** Stable instance id reported by `hello` (daemon-identity checks). */
+  readonly instanceId = `mock-${crypto.randomBytes(4).toString('hex')}`
+  /** When true, `hello` reports a DIFFERENT instanceId (bulk-channel identity-mismatch tests). */
+  private _helloInstanceMismatch = false
   private readonly streamsDir: string
   /** Real ACP supervision (same module the standalone daemon embeds) so tests
    *  can drive acp* sessions through MockDaemon with real workers + mock agent. */
@@ -119,14 +132,17 @@ export class MockDaemon {
       this.wss!.on('error', reject)
     })
 
-    this.wss.on('connection', (ws) => {
-      this._wsClients.add(ws)
-      ws.on('close', () => this._wsClients.delete(ws))
-      ws.on('error', () => this._wsClients.delete(ws))
-      ws.on('message', (data) => {
-        const raw = typeof data === 'string' ? data : data.toString()
-        this.handleMessage(ws, raw)
-      })
+    this.wss.on('connection', (ws) => this.registerClient(ws))
+  }
+
+  private registerClient(ws: WebSocket): void {
+    this._wsClients.add(ws)
+    this._connIndices.set(ws, this._connSeq++)
+    ws.on('close', () => this._wsClients.delete(ws))
+    ws.on('error', () => this._wsClients.delete(ws))
+    ws.on('message', (data) => {
+      const raw = typeof data === 'string' ? data : data.toString()
+      this.handleMessage(ws, raw)
     })
   }
 
@@ -188,6 +204,7 @@ export class MockDaemon {
         cmd: cmd.cmd,
         payload: { ...cmd },
         timestamp: Date.now(),
+        connIndex: this._connIndices.get(ws) ?? -1,
       })
     }
 
@@ -195,6 +212,10 @@ export class MockDaemon {
     if (this._fault === 'disconnect') {
       ws.close()
       return
+    }
+    if (typeof cmd.cmd === 'string' && this._swallowNext.has(cmd.cmd)) {
+      this._swallowNext.delete(cmd.cmd)
+      return // no reply — client's per-command timer fires
     }
 
     switch (cmd.cmd) {
@@ -207,7 +228,18 @@ export class MockDaemon {
       case 'status': return this.cmdStatus(ws, id, cmd)
       case 'rename': return this.cmdRename(ws, id, cmd)
       case 'ping': return this.sendOk(ws, id, { pong: true })
+      // Mirrors daemon-standalone's cmdHello reply shape (instanceId is what
+      // the bulk-channel dial verifies before routing to a second socket).
+      case 'hello': return this.sendOk(ws, id, {
+        version: 'mock',
+        capabilities: [...REQUIRED_DAEMON_CAPABILITIES],
+        instanceId: this._helloInstanceMismatch ? `mock-other-${this._connSeq}` : this.instanceId,
+        startedAt: Date.now(),
+        uptimeSec: 0,
+      })
       case 'fs.read': return this.cmdFsRead(ws, id, cmd)
+      case 'fs.readRange': return this.cmdFsReadRange(ws, id, cmd)
+      case 'fs.readImage': return this.cmdFsReadImage(ws, id, cmd)
       case 'fs.mkdir': return this.cmdFsMkdir(ws, id, cmd)
       case 'fs.ls': return this.cmdFsLs(ws, id, cmd)
       case 'list': return this.cmdList(ws, id)
@@ -552,6 +584,46 @@ export class MockDaemon {
     }
   }
 
+  /** Mirrors daemon-standalone cmdFsReadRange: base64 window + eof/fileSize. */
+  private cmdFsReadRange(ws: WebSocket, id: number, cmd: Record<string, unknown>): void {
+    const filePath = cmd.path as string
+    const start = typeof cmd.start === 'number' && cmd.start >= 0 ? cmd.start : 0
+    const length = typeof cmd.length === 'number' && cmd.length > 0 ? (cmd.length as number) : 1024 * 1024
+    if (!filePath) return this.sendError(ws, id, 'fs.readRange: missing path')
+    try {
+      const st = fs.statSync(filePath)
+      if (start >= st.size) {
+        return this.sendOk(ws, id, { data: '', bytesRead: 0, fileSize: st.size, eof: true })
+      }
+      const toRead = Math.min(length, st.size - start)
+      const buf = Buffer.alloc(toRead)
+      const fd = fs.openSync(filePath, 'r')
+      const bytesRead = fs.readSync(fd, buf, 0, toRead, start)
+      fs.closeSync(fd)
+      this.sendOk(ws, id, {
+        data: buf.subarray(0, bytesRead).toString('base64'),
+        bytesRead,
+        fileSize: st.size,
+        eof: start + bytesRead >= st.size,
+      })
+    } catch (err) {
+      this.sendError(ws, id, `fs.readRange failed: ${(err as Error).message}`)
+    }
+  }
+
+  /** Simplified daemon-standalone cmdFsReadImage: base64 whole-file read
+   *  (skips the extension/magic-byte checks — tests control the fixture). */
+  private cmdFsReadImage(ws: WebSocket, id: number, cmd: Record<string, unknown>): void {
+    const filePath = cmd.path as string
+    if (!filePath) return this.sendError(ws, id, 'fs.readImage: missing path')
+    try {
+      const data = fs.readFileSync(filePath)
+      this.sendOk(ws, id, { data: data.toString('base64'), encoding: 'base64' })
+    } catch (err) {
+      this.sendError(ws, id, `fs.readImage failed: ${(err as Error).message}`)
+    }
+  }
+
   private cmdFsMkdir(ws: WebSocket, id: number, cmd: Record<string, unknown>): void {
     const dirPath = cmd.path as string
     if (!dirPath) return this.sendError(ws, id, 'fs.mkdir: missing path')
@@ -657,6 +729,18 @@ export class MockDaemon {
     }
   }
 
+  /** Send an event to ONE client by connIndex — e.g. deliver stt-request on
+   *  the bulk socket only (mirrors the daemon's first-client relay pick). */
+  emitEventTo(connIndex: number, ev: string, payload: Record<string, unknown>): boolean {
+    for (const ws of this._wsClients) {
+      if (this._connIndices.get(ws) === connIndex && ws.readyState === WebSocket.OPEN) {
+        try { ws.send(JSON.stringify({ ev, ...payload })) } catch { return false }
+        return true
+      }
+    }
+    return false
+  }
+
   /**
    * Mark a session as "dead" on the server — next cmdSend returns session_dead,
    * and a session_state=dead event is broadcast to all clients.
@@ -715,19 +799,11 @@ export class MockDaemon {
       this.wss!.on('listening', resolve)
       this.wss!.on('error', reject)
     })
-    this.wss.on('connection', (ws) => {
-      this._wsClients.add(ws)
-      ws.on('close', () => this._wsClients.delete(ws))
-      ws.on('error', () => this._wsClients.delete(ws))
-      ws.on('message', (data) => {
-        const raw = typeof data === 'string' ? data : data.toString()
-        this.handleMessage(ws, raw)
-      })
-    })
+    this.wss.on('connection', (ws) => this.registerClient(ws))
   }
 
   /** Full command history for test assertions. */
-  getCommandHistory(): Array<{ cmd: string; payload: Record<string, unknown>; timestamp: number }> {
+  getCommandHistory(): Array<{ cmd: string; payload: Record<string, unknown>; timestamp: number; connIndex: number }> {
     return [...this._commandHistory]
   }
 
@@ -737,15 +813,43 @@ export class MockDaemon {
   }
 
   /** Commands matching `cmd` name. */
-  getCommandHistoryFor(cmd: string): Array<{ payload: Record<string, unknown>; timestamp: number }> {
+  getCommandHistoryFor(cmd: string): Array<{ payload: Record<string, unknown>; timestamp: number; connIndex: number }> {
     return this._commandHistory
       .filter((e) => e.cmd === cmd)
-      .map(({ payload, timestamp }) => ({ payload, timestamp }))
+      .map(({ payload, timestamp, connIndex }) => ({ payload, timestamp, connIndex }))
   }
 
   /** Clear recorded command history (useful between assertions in the same test). */
   clearCommandHistory(): void {
     this._commandHistory = []
+  }
+
+  /** Number of currently-open WS client connections. */
+  get clientCount(): number {
+    return this._wsClients.size
+  }
+
+  /** Server-side terminate the client at `connIndex` (connection order). */
+  killClient(connIndex: number): boolean {
+    for (const ws of this._wsClients) {
+      if (this._connIndices.get(ws) === connIndex) {
+        try { ws.terminate() } catch { /* ignore */ }
+        return true
+      }
+    }
+    return false
+  }
+
+  /** Make subsequent `hello` replies report a DIFFERENT instanceId —
+   *  exercises the bulk channel's daemon-identity mismatch guard. */
+  injectHelloInstanceMismatch(on: boolean): void {
+    this._helloInstanceMismatch = on
+  }
+
+  /** Swallow (never reply to) the NEXT command named `cmd` — one-shot.
+   *  Forces the client's per-command timeout to fire. */
+  swallowNextCommand(cmd: string): void {
+    this._swallowNext.add(cmd)
   }
 
   // ── Helpers ──

@@ -142,6 +142,24 @@ export class DaemonConnection {
   private _daemonStartedAt: number | null = null
 
   /**
+   * Bulk data channel — a SECOND WebSocket to the same daemon (same tunnel
+   * localPort; each TCP connection becomes an independent SSH channel, and
+   * SSH interleaves channels in ~32KB packets). MB-scale response frames
+   * (BULK_COMMANDS) ride here so they can't head-of-line-block interactive
+   * commands on the strictly-ordered main socket. Purely an optional
+   * accelerator: dialed in the background after connect, used only when
+   * open+verified, silently falling back to the main WS otherwise. Its
+   * failures NEVER touch _connected / handleConnectionLost.
+   */
+  private bulkWs: WebSocket | null = null
+  /** At most one pending bulk redial at a time (unref'd). */
+  private bulkRedialTimer: ReturnType<typeof setTimeout> | null = null
+  /** Dial generation — bumped on every dial/teardown so a slow in-flight
+   *  dial can't install a socket for a connection that has since moved on
+   *  (reconnect allocates a NEW localPort). */
+  private bulkDialSeq = 0
+
+  /**
    * Last upgrade attempt (expected version + timestamp). Circuit breaker for
    * shouldUpgradeDaemon: if a just-upgraded daemon still reports a mismatch,
    * the stamping/deploy pipeline is broken and killing it again won't help.
@@ -150,6 +168,15 @@ export class DaemonConnection {
 
   /** Command timeout in ms. Generous for initial deploy operations. */
   private static COMMAND_TIMEOUT_MS = 30_000
+  /**
+   * Commands whose responses can be MB-scale frames (1MB JSONL chunks,
+   * base64 images, git diffs up to 64MB) — routed to the bulk channel when
+   * it's open. Everything else (fs.ls, status, sends, events) stays on the
+   * main WS. Membership is by response size, not command family.
+   */
+  private static readonly BULK_COMMANDS = new Set(['fs.read', 'fs.readRange', 'fs.readImage', 'git.diff'])
+  /** Delay before re-dialing the bulk channel after it drops (main stays up). */
+  private static BULK_REDIAL_DELAY_MS = 10_000
   /** Within this window, refuse a second upgrade toward the same expected version. */
   private static UPGRADE_RETRY_COOLDOWN_MS = 10 * 60_000
   /** Initial reconnect delay after connection loss (doubles each attempt, caps at MAX). */
@@ -283,6 +310,10 @@ export class DaemonConnection {
     // connect(), reconnect() and forceRedeployAndReconnect() all land here.
     // Fire-and-forget — bridge provisioning must never block or fail a connect.
     if (changed && value) this.pushBridgeConfig()
+    // Dial the bulk data channel in the background on every (re)connect —
+    // same choke-point rationale as pushBridgeConfig. Reconnects allocate a
+    // new localPort, so the dial must follow every transition to connected.
+    if (changed && value) this.dialBulkChannel()
   }
 
   /**
@@ -517,15 +548,34 @@ export class DaemonConnection {
       })
     }
 
+    // Bulk routing: big-response commands ride the second socket when it's
+    // open, so their MB-scale frames can't head-of-line-block interactive
+    // commands on the main WS. Shared pendingCommands map — the response is
+    // matched by id regardless of which socket delivers it.
+    const bulkSocket = DaemonConnection.BULK_COMMANDS.has(cmd) && this.bulkWs?.readyState === WebSocket.OPEN
+      ? this.bulkWs
+      : null
+
     const startedAt = Date.now()
     return new Promise<DaemonCommandResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingCommands.delete(id)
+        // A bulk-routed timeout means the bulk socket may be half-dead
+        // (TCP up, daemon unreachable through it). Terminate it so the next
+        // bulk command falls back to the main WS immediately; the close
+        // handler schedules a redial. Main-socket timeouts keep today's
+        // behavior (ping staleness owns main liveness).
+        if (bulkSocket && this.bulkWs === bulkSocket) {
+          log.session.warn('DaemonConnection: bulk command timeout — terminating bulk channel', {
+            host: this.hostKey, cmd, traceId,
+          })
+          try { bulkSocket.terminate() } catch {}
+        }
         reject(new Error(`daemon command timeout: ${cmd} (${timeoutMs}ms) [traceId=${traceId}]`))
       }, timeoutMs)
 
       this.pendingCommands.set(id, { resolve, reject, timer, cmd, startedAt, traceId })
-      this.ws!.send(message)
+      ;(bulkSocket ?? this.ws!).send(message)
     })
   }
 
@@ -602,7 +652,8 @@ export class DaemonConnection {
     }
     this.pendingCommands.clear()
 
-    // Close WebSocket
+    // Close WebSockets (bulk first — it must never outlive the main socket)
+    this.closeBulkChannel()
     if (this.ws) {
       try { this.ws.close() } catch {}
       this.ws = null
@@ -1078,6 +1129,7 @@ export class DaemonConnection {
     })
 
     // Close WS + tunnel, but keep ControlMaster (we'll reuse it).
+    this.closeBulkChannel()
     try { this.ws?.close() } catch {}
     this.ws = null
     this.setConnected(false)
@@ -1133,6 +1185,7 @@ export class DaemonConnection {
       // this.tunnel to `never` after the pre-try assignments to null above;
       // connectWebSocket and createTunnel re-populate them via side effects
       // that TS can't track through an async call boundary.
+      this.closeBulkChannel()
       const currentWs = this.ws as WebSocket | null
       try { currentWs?.close() } catch {}
       this.ws = null
@@ -1780,36 +1833,46 @@ export class DaemonConnection {
 
   // ── Private: Message handling ──
 
+  /**
+   * Resolve a command-response frame (has numeric `id`) against the shared
+   * pendingCommands map. Called from BOTH the main and bulk socket message
+   * handlers — the map is shared, ids are monotonic, so a response resolves
+   * correctly no matter which socket delivered it. Returns true if the frame
+   * was a command response (matched or stale).
+   */
+  private resolveCommandFrame(msg: Record<string, unknown>): boolean {
+    if (!('id' in msg) || typeof msg.id !== 'number') return false
+    const pending = this.pendingCommands.get(msg.id)
+    if (pending) {
+      clearTimeout(pending.timer)
+      this.pendingCommands.delete(msg.id)
+      // Per-command round-trip RTT — paired with the `DaemonConnection: send`
+      // dispatch log by traceId. This is the SSH-tunnel/daemon hop that the
+      // enqueue→delivered `deliveryMs` field omits; on a slow tunnel a `send`
+      // RTT spike here is the smoking gun for "message send is slow". Skip
+      // `ping` (fires every 15s, adds noise). Gated at debug (zero overhead by
+      // default); enable with WALNUT_LOG_LEVEL=debug.
+      if (pending.cmd && pending.cmd !== 'ping' && pending.startedAt != null) {
+        log.session.debug('DaemonConnection: recv (rtt)', {
+          host: this.hostKey,
+          cmd: pending.cmd,
+          id: msg.id,
+          traceId: pending.traceId,
+          rttMs: Date.now() - pending.startedAt,
+          ok: (msg as { ok?: boolean }).ok ?? null,
+        })
+      }
+      pending.resolve(msg as unknown as DaemonCommandResult)
+    }
+    return true
+  }
+
   private handleMessage(raw: string): void {
     let msg: Record<string, unknown>
     try { msg = JSON.parse(raw) } catch { return }
 
     // Command response (has 'id' field)
-    if ('id' in msg && typeof msg.id === 'number') {
-      const pending = this.pendingCommands.get(msg.id)
-      if (pending) {
-        clearTimeout(pending.timer)
-        this.pendingCommands.delete(msg.id)
-        // Per-command round-trip RTT — paired with the `DaemonConnection: send`
-        // dispatch log by traceId. This is the SSH-tunnel/daemon hop that the
-        // enqueue→delivered `deliveryMs` field omits; on a slow tunnel a `send`
-        // RTT spike here is the smoking gun for "message send is slow". Skip
-        // `ping` (fires every 15s, adds noise). Gated at debug (zero overhead by
-        // default); enable with WALNUT_LOG_LEVEL=debug.
-        if (pending.cmd && pending.cmd !== 'ping' && pending.startedAt != null) {
-          log.session.debug('DaemonConnection: recv (rtt)', {
-            host: this.hostKey,
-            cmd: pending.cmd,
-            id: msg.id,
-            traceId: pending.traceId,
-            rttMs: Date.now() - pending.startedAt,
-            ok: (msg as { ok?: boolean }).ok ?? null,
-          })
-        }
-        pending.resolve(msg as unknown as DaemonCommandResult)
-      }
-      return
-    }
+    if (this.resolveCommandFrame(msg)) return
 
     // Unsolicited event (has 'ev' field)
     if ('ev' in msg) {
@@ -1838,6 +1901,139 @@ export class DaemonConnection {
     }
   }
 
+  // ── Private: Bulk channel ──
+
+  /**
+   * Dial the bulk data channel in the background. Fire-and-forget from
+   * setConnected(true) — a bulk dial failure NEVER affects the main
+   * connection (worst case bulk commands keep riding the main WS, which is
+   * exactly today's behavior).
+   *
+   * The dial verifies via `hello` that the socket reached the SAME daemon
+   * instance as the main connection before routing anything to it. On
+   * close/error after establishment it schedules ONE redial (10s) while the
+   * main connection is still up; reconnects re-dial via setConnected(true)
+   * (the localPort changes on every reconnect).
+   */
+  private dialBulkChannel(): void {
+    this.closeBulkChannel()
+    const url = this._lastWsUrl
+    if (!url || !this._connected || this._destroyed) return
+    const seq = ++this.bulkDialSeq
+    const isCurrent = () => seq === this.bulkDialSeq && this._connected && !this._destroyed
+
+    let ws: WebSocket
+    try {
+      ws = new WebSocket(url, { handshakeTimeout: 10_000 })
+    } catch (err) {
+      log.session.debug('DaemonConnection: bulk channel dial failed', {
+        host: this.hostKey, url, error: err instanceof Error ? err.message : String(err),
+      })
+      return
+    }
+    let established = false
+
+    // Responses to bulk-routed commands resolve through the SHARED pending
+    // map. Event frames are dropped — the main socket owns event dispatch
+    // (session_state broadcasts to ALL daemon clients; forwarding here would
+    // double-dispatch every event). Sole exception: stt-request, which the
+    // daemon sends to its FIRST client — after a main-WS reconnect that can
+    // be this socket, and dropping it would break phone voice input.
+    ws.on('message', (data) => {
+      let msg: Record<string, unknown>
+      try { msg = JSON.parse(typeof data === 'string' ? data : data.toString()) } catch { return }
+      if (this.resolveCommandFrame(msg)) return
+      if ('ev' in msg && (msg as { ev?: string }).ev === 'stt-request') {
+        void this.handleSttRequest(msg as unknown as DaemonEvent)
+      }
+    })
+
+    ws.on('open', () => {
+      if (!isCurrent()) { try { ws.terminate() } catch {}; return }
+      // Verify daemon identity on THIS socket before routing to it. The reply
+      // arrives on the bulk socket and resolves via resolveCommandFrame.
+      const id = ++this.cmdCounter
+      const hello = new Promise<DaemonCommandResult>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.pendingCommands.delete(id)
+          reject(new Error('bulk hello timeout'))
+        }, 10_000)
+        this.pendingCommands.set(id, { resolve, reject, timer })
+        ws.send(JSON.stringify({ id, cmd: 'hello' }))
+      })
+      hello.then((res) => {
+        if (!isCurrent()) { try { ws.terminate() } catch {}; return }
+        const instanceId = typeof res.instanceId === 'string' ? res.instanceId : null
+        if (!res.ok || (this._daemonInstanceId !== null && instanceId !== null && instanceId !== this._daemonInstanceId)) {
+          // Wrong/unhealthy daemon behind this socket — the main-connection
+          // machinery owns daemon-identity problems. Invalidate the dial gen
+          // so the close handler does NOT redial.
+          log.session.warn('DaemonConnection: bulk channel hello mismatch — not using', {
+            host: this.hostKey, ok: res.ok, instanceId, mainInstanceId: this._daemonInstanceId,
+          })
+          this.bulkDialSeq++
+          try { ws.terminate() } catch {}
+          return
+        }
+        established = true
+        this.bulkWs = ws
+        log.session.info('DaemonConnection: bulk channel connected', {
+          host: this.hostKey, url, instanceId,
+        })
+      }).catch((err) => {
+        // Terminate UNCONDITIONALLY: disconnect() rejects the shared pending
+        // map (including this hello) but closeBulkChannel only terminates an
+        // INSTALLED bulkWs — a mid-hello socket would otherwise leak open.
+        try { ws.terminate() } catch {}
+        if (!isCurrent()) return
+        log.session.debug('DaemonConnection: bulk channel hello failed', {
+          host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+        })
+        // close handler schedules the redial
+      })
+    })
+
+    ws.on('error', () => { /* close always follows — handled there */ })
+
+    ws.on('close', () => {
+      if (seq !== this.bulkDialSeq) return // superseded or deliberately torn down
+      if (this.bulkWs === ws) this.bulkWs = null
+      if (established) {
+        log.session.info('DaemonConnection: bulk channel down — falling back to main socket', {
+          host: this.hostKey,
+        })
+      }
+      // One pending redial at a time, only while the main connection is up.
+      if (this._connected && !this._destroyed && !this.bulkRedialTimer) {
+        this.bulkRedialTimer = setTimeout(() => {
+          this.bulkRedialTimer = null
+          if (this._connected && !this._destroyed) this.dialBulkChannel()
+        }, DaemonConnection.BULK_REDIAL_DELAY_MS)
+        this.bulkRedialTimer.unref?.()
+      }
+    })
+  }
+
+  /** True when the bulk data channel is open and routing bulk commands.
+   *  Observability + test hook — never required for correctness. */
+  get bulkChannelActive(): boolean {
+    return this.bulkWs?.readyState === WebSocket.OPEN
+  }
+
+  /** Tear down the bulk channel (socket + pending redial). Safe to call
+   *  repeatedly; called from every main-connection teardown path. */
+  private closeBulkChannel(): void {
+    this.bulkDialSeq++ // invalidate any in-flight dial/close callbacks
+    if (this.bulkRedialTimer) {
+      clearTimeout(this.bulkRedialTimer)
+      this.bulkRedialTimer = null
+    }
+    if (this.bulkWs) {
+      try { this.bulkWs.terminate() } catch {}
+      this.bulkWs = null
+    }
+  }
+
   // ── Private: Reconnection ──
 
   private handleConnectionLost(): void {
@@ -1855,7 +2051,10 @@ export class DaemonConnection {
 
     this.setConnected(false)
 
-    // Close WebSocket
+    // Close WebSockets. The bulk channel rides the same tunnel — when the
+    // main socket is gone the tunnel is suspect, so tear bulk down too; the
+    // reconnect path re-dials it via setConnected(true).
+    this.closeBulkChannel()
     if (this.ws) {
       try { this.ws.close() } catch {}
       this.ws = null
@@ -1957,7 +2156,9 @@ export class DaemonConnection {
     this._deployedViaSource = false
     this._bunPath = null
 
-    // Kill old tunnel if any
+    // Kill old tunnel if any (bulk channel rides it — tear that down first;
+    // usually already gone via handleConnectionLost, this is belt-and-braces)
+    this.closeBulkChannel()
     if (this.tunnel) {
       try { this.tunnel.kill('SIGTERM') } catch {}
       this.tunnel = null
