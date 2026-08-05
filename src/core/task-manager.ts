@@ -4504,3 +4504,6 @@ export async function bulkMigrateTasks(
     return true;
   });
 }
+
+/** Forward-compat alias for the project-only migration (T29 POST /api/v1/tasks catches this). */
+export { CategorySourceConflictError as ProjectSourceConflictError };

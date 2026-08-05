@@ -2615,6 +2615,10 @@ let bridgeClient = null;
 let bridgeAdapter = null;
 let bridgeRedialTimer = null;
 let bridgePingTimer = null;
+let bridgeDialTimer = null;
+// When the in-flight dial started (null = no dial in flight) — feeds the
+// reconcile decision so an identical-config push can't kill a young dial.
+let bridgeDialStartedAt = null;
 let bridgeBackoffMs = 1000;
 let bridgeGeneration = 0;
 let bridgeLastInbound = 0;
@@ -2622,6 +2626,19 @@ let bridgeLastInbound = 0;
 const BRIDGE_BACKOFF_MAX_MS = 60000;
 const BRIDGE_PING_INTERVAL_MS = 30000;
 const BRIDGE_SILENCE_MS = 75000;
+// No onopen within this window → the dial is wedged (e.g. stuck in
+// CONNECTING); abandon it and redial. Env override is for tests.
+const BRIDGE_DIAL_TIMEOUT_MS = parseInt(process.env.WALNUT_BRIDGE_DIAL_TIMEOUT_MS || '', 10) || 20000;
+
+// Mirror of daemon-core.ts decideBridgeRestart (template can't import).
+function decideBridgeRestart(s) {
+  if (s.changed) return { restart: true, reason: 'configure' };
+  if (!s.enabled) return { restart: false };
+  if (s.adapterConnected) return { restart: false };
+  if (s.redialPending) return { restart: false };
+  if (s.dialAgeMs != null && s.dialAgeMs < s.dialTimeoutMs) return { restart: false };
+  return { restart: true, reason: 'reconcile' };
+}
 
 function getWsClientCtor() {
   // Node 22+ has a global browser-style WebSocket client; older deploys get
@@ -2660,8 +2677,22 @@ function cmdBridgeConfigure(ws, id, cmd) {
   } catch (err) {
     logMsg('error', 'bridge: failed to persist bridge.json', { err: err.message });
   }
-  if (changed) startBridge('configure');
-  logMsg('info', 'bridge: configured', { enabled: next.enabled, hostAlias: next.hostAlias, changed });
+  // changed → restart ('configure'). Unchanged but bridge should be up and
+  // nothing is working on it → restart ('reconcile') so the Mac's periodic
+  // identical push heals a wedged dial.
+  const decision = decideBridgeRestart({
+    enabled: next.enabled,
+    changed,
+    adapterConnected: bridgeAdapter != null,
+    redialPending: bridgeRedialTimer != null,
+    dialAgeMs: bridgeDialStartedAt != null ? Date.now() - bridgeDialStartedAt : null,
+    dialTimeoutMs: BRIDGE_DIAL_TIMEOUT_MS,
+  });
+  if (decision.restart) startBridge(decision.reason);
+  logMsg('info', 'bridge: configured', {
+    enabled: next.enabled, hostAlias: next.hostAlias, changed,
+    restarted: decision.restart ? decision.reason : false,
+  });
   sendOk(ws, id, { applied: true, connected: bridgeAdapter != null });
 }
 
@@ -2669,6 +2700,8 @@ function stopBridge() {
   bridgeGeneration++;
   if (bridgeRedialTimer) { clearTimeout(bridgeRedialTimer); bridgeRedialTimer = null; }
   if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null; }
+  if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null; }
+  bridgeDialStartedAt = null;
   if (bridgeAdapter) {
     wsClients.delete(bridgeAdapter);
     for (const [, session] of sessions) session.subscribers.delete(bridgeAdapter);
@@ -2695,6 +2728,9 @@ function startBridge(reason) {
 
 function scheduleBridgeRedial(gen) {
   if (gen !== bridgeGeneration || !bridgeConfig || !bridgeConfig.enabled) return;
+  // One pending redial at a time — a dial-timeout teardown and a late onclose
+  // from the same dead socket must not stack two timers.
+  if (bridgeRedialTimer) return;
   const jitter = 0.75 + Math.random() * 0.5;
   const delay = Math.round(Math.min(bridgeBackoffMs, BRIDGE_BACKOFF_MAX_MS) * jitter);
   bridgeBackoffMs = Math.min(bridgeBackoffMs * 2, BRIDGE_BACKOFF_MAX_MS);
@@ -2746,9 +2782,30 @@ function dialBridge(gen) {
     return;
   }
   bridgeClient = client;
+  bridgeDialStartedAt = Date.now();
+  // NOTE: bridgeLastInbound is (re)set in onopen — the silence watchdog only
+  // starts there; the pre-open window is covered by the dial timeout below.
+  // Dial timeout: no onopen within the window → tear down + redial. A socket
+  // wedged in CONNECTING fires neither onopen nor onclose, so without this
+  // timer the bridge would stay down forever with zero log lines.
+  bridgeDialTimer = setTimeout(function() {
+    bridgeDialTimer = null;
+    if (gen !== bridgeGeneration || bridgeAdapter != null) return;
+    logMsg('warn', 'bridge: dial timeout — abandoning socket', {
+      dialMs: bridgeDialStartedAt != null ? Date.now() - bridgeDialStartedAt : null,
+    });
+    bridgeDialStartedAt = null;
+    if (bridgeClient === client) bridgeClient = null;
+    try { client.close(); } catch {}
+    // Don't rely on close() firing onclose for a wedged socket — schedule
+    // directly. scheduleBridgeRedial dedupes if onclose does fire too.
+    scheduleBridgeRedial(gen);
+  }, BRIDGE_DIAL_TIMEOUT_MS);
 
   const onOpen = function() {
     if (gen !== bridgeGeneration) { try { client.close(); } catch {} return; }
+    if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null; }
+    bridgeDialStartedAt = null;
     bridgeBackoffMs = 1000;
     bridgeLastInbound = Date.now();
     const adapter = makeBridgeAdapter(client);
@@ -2783,6 +2840,16 @@ function dialBridge(gen) {
 
   const onClose = function() {
     if (gen !== bridgeGeneration) return;
+    // Late close from a socket the dial timeout already abandoned — a newer
+    // dial may be in flight; don't clobber its state.
+    // LOAD-BEARING with scheduleBridgeRedial's dedupe: after the dial timeout
+    // sets bridgeClient=null there is a window where this guard passes
+    // (bridgeClient===null) and the late close falls through to
+    // scheduleBridgeRedial — only the "if (bridgeRedialTimer) return" dedupe
+    // stops a SECOND stacked redial then. Change either side only in tandem.
+    if (bridgeClient !== null && bridgeClient !== client) return;
+    if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null; }
+    bridgeDialStartedAt = null;
     if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null; }
     if (bridgeAdapter) {
       wsClients.delete(bridgeAdapter);

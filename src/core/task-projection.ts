@@ -55,7 +55,7 @@ export interface TaskProjection {
 
 const SUMMARY_MAX = 500
 
-function projectTask(t: Task): ProjectedTask {
+export function projectTask(t: Task): ProjectedTask {
   const summary = (t.summary || '').trim()
   return {
     id: t.id,

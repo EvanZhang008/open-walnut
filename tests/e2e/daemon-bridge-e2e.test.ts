@@ -11,6 +11,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { WebSocket, WebSocketServer } from 'ws'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
+import net from 'node:net'
 import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
@@ -21,6 +22,8 @@ interface DaemonProc { proc: ChildProcess; port: number }
 
 let scriptPath: string
 let daemonDir: string
+/** TCP server that never completes the WS upgrade (wedged-dial test). */
+let blackHole: net.Server | null = null
 
 function writeDaemonScript(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-bridge-e2e-'))
@@ -29,9 +32,9 @@ function writeDaemonScript(): string {
   return p
 }
 
-async function spawnDaemon(): Promise<DaemonProc> {
+async function spawnDaemon(extraEnv: Record<string, string> = {}): Promise<DaemonProc> {
   const proc = spawn('node', [scriptPath, '--start'], {
-    env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir },
+    env: { ...process.env, WALNUT_DAEMON_DIR: daemonDir, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   const port = await new Promise<number>((resolve, reject) => {
@@ -240,6 +243,118 @@ describe('daemon cloud bridge (real source daemon)', () => {
       // status IS allowlisted → still works over the bridge.
       const ok = await bridgeRpc(702, 'status', { sid: 'no-such-session' })
       expect(ok.ok).toBe(true)
+    } finally {
+      try { ctl.close() } catch { /* already closed */ }
+      await stopDaemon(daemon)
+      await cloud.close()
+    }
+  }, 60_000)
+
+  // RC1 of the 2-day cloud-bridge wedge: a dial stuck before the WS upgrade
+  // completes (TCP established, onopen never fires) was NEVER torn down —
+  // the silence watchdog only started in onopen. The dial timeout must
+  // abandon the wedged socket and redial until the cloud answers properly.
+  //
+  // PINNING NOTE (why the assertion is an accept COUNT): a wedged socket that
+  // is later destroyed sends a TCP reset, which fires onclose even from
+  // CONNECTING — so any variant that tears the black hole down before
+  // asserting lets PRE-FIX code pass too (verified empirically). Here the
+  // black hole STAYS wedged for the whole assertion window: accepted sockets
+  // are never destroyed and never answered, so the ONLY thing that can
+  // abandon a CONNECTING socket and produce a second accept is the dial
+  // timeout itself. Pre-fix = exactly 1 accept forever; post-fix = a fresh
+  // accept every dial-timeout + backoff cycle (measured 1 vs 6 in 8s).
+  it('wedged dial (TCP accepted, upgrade never completes) → dial timeout keeps redialing; recovery connects', async () => {
+    // Black hole: accepts TCP, never answers the HTTP upgrade. Sockets are
+    // destroyed ONLY in closeBlackHole(), which runs strictly AFTER the
+    // accept-count assertions (see pinning note above).
+    const blackHoleSockets: net.Socket[] = []
+    let acceptCount = 0
+    const closeBlackHole = () => new Promise<void>((r) => {
+      for (const s of blackHoleSockets) { try { s.destroy() } catch {} }
+      if (blackHole) blackHole.close(() => r()); else r()
+      blackHole = null
+    })
+    const blackHolePort = await new Promise<number>((resolve) => {
+      const srv = net.createServer((sock) => { acceptCount++; blackHoleSockets.push(sock) })
+      srv.listen(0, '127.0.0.1', () => resolve((srv.address() as net.AddressInfo).port))
+      blackHole = srv
+    })
+
+    // Lowered dial timeout so several timeout→redial cycles fit in seconds.
+    const daemon = await spawnDaemon({ WALNUT_BRIDGE_DIAL_TIMEOUT_MS: '1000' })
+    const ctl = await connectWs(daemon.port)
+    let cloud: FakeCloud | null = null
+    try {
+      await rpc(ctl, 1, 'bridge.configure', {
+        enabled: true,
+        url: `ws://127.0.0.1:${blackHolePort}/bridge`,
+        token: 't',
+        hostAlias: HOST_ALIAS,
+      })
+
+      // Progress only the dial timeout can produce: ≥3 accepts while wedged.
+      // Cycle ≈ 1s dial timeout + 1s/2s/… backoff → 3rd accept lands ~5s in;
+      // 20s is generous under CI load. Pre-fix this waitFor times out at 1.
+      await waitFor(() => acceptCount >= 3, 20_000)
+      expect(acceptCount).toBeGreaterThanOrEqual(3)
+
+      // Now END the wedge (assertions above are done): free the port and
+      // stand up a real cloud on it — the next redial must complete a
+      // healthy WS connect + hello (redial recovers, not just churns).
+      await closeBlackHole()
+      cloud = await new Promise<FakeCloud>((resolve, reject) => {
+        const wss = new WebSocketServer({ port: blackHolePort, host: '127.0.0.1' })
+        const c: FakeCloud = {
+          wss, port: blackHolePort, connections: [],
+          close: () => new Promise((res) => { for (const conn of c.connections) { try { conn.ws.close() } catch {} } wss.close(() => res()) }),
+        }
+        wss.on('connection', (ws, req) => {
+          const entry = { ws: ws as unknown as WebSocket, url: req.url ?? '', frames: [] as Array<Record<string, unknown>> }
+          c.connections.push(entry)
+          ws.on('message', (data) => { try { entry.frames.push(JSON.parse(data.toString())) } catch {} })
+        })
+        wss.on('listening', () => resolve(c))
+        wss.on('error', reject)
+      })
+      // Backoff may have grown to ~8-16s by now; allow a full cycle.
+      await waitFor(() => cloud!.connections.some((c) => c.frames.some((f) => f.ev === 'hello')), 40_000)
+      const conf = await rpc(ctl, 2, 'bridge.configure', {
+        enabled: true, url: `ws://127.0.0.1:${blackHolePort}/bridge`, token: 't', hostAlias: HOST_ALIAS,
+      })
+      expect(conf.connected).toBe(true)
+    } finally {
+      // Teardown only — all socket destruction happens after assertions.
+      try { ctl.close() } catch { /* already closed */ }
+      await stopDaemon(daemon)
+      if (cloud) await cloud.close()
+      await closeBlackHole()
+    }
+  }, 90_000)
+
+  // RC2 companion: an identical config push against a HEALTHY bridge must be
+  // a no-op (no reconnect churn), while still reporting connected:true.
+  it('identical config push on a healthy bridge does not reconnect (reconcile no-op)', async () => {
+    const cloud = await startFakeCloud()
+    const daemon = await spawnDaemon()
+    const ctl = await connectWs(daemon.port)
+    try {
+      const cfg = {
+        enabled: true,
+        url: `ws://127.0.0.1:${cloud.port}/bridge`,
+        token: 't',
+        hostAlias: HOST_ALIAS,
+      }
+      await rpc(ctl, 1, 'bridge.configure', cfg)
+      await waitFor(() => cloud.connections.some((c) => c.frames.some((f) => f.ev === 'hello')))
+      const before = cloud.connections.length
+
+      const again = await rpc(ctl, 2, 'bridge.configure', cfg)
+      expect(again.ok).toBe(true)
+      expect(again.connected).toBe(true)
+      // No new dial: the healthy adapter short-circuits the reconcile.
+      await new Promise((r) => setTimeout(r, 1000))
+      expect(cloud.connections.length).toBe(before)
     } finally {
       try { ctl.close() } catch { /* already closed */ }
       await stopDaemon(daemon)

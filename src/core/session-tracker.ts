@@ -393,6 +393,24 @@ export async function listSessions(): Promise<SessionRecord[]> {
   return store.sessions;
 }
 
+/**
+ * Bounded, index-backed most-recent-first read (`sessions_updated_at` index on
+ * last_active_at). For request-path callers that only need a recent candidate
+ * window (e.g. the sessions `?q=` search on every debounced keystroke) — a
+ * keystroke must never materialize the whole table (the browser-pool-saturation
+ * class fixed in c0320af). Isolated rows (rowToSession builds fresh objects).
+ */
+export async function listRecentSessionRecords(limit: number): Promise<SessionRecord[]> {
+  await ensureSessionInit();
+  const db = getDb();
+  if (!db) return [];
+  const bounded = Math.max(1, Math.min(Math.floor(limit), 10_000));
+  const rows = db.prepare(
+    'SELECT * FROM sessions ORDER BY last_active_at DESC LIMIT ?',
+  ).all(bounded) as Record<string, any>[];
+  return rows.map(rowToSession);
+}
+
 export interface SessionQueryOptions {
   query?: string;
   limit?: number;

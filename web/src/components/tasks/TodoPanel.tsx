@@ -5639,6 +5639,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           type="text"
           value={newTitle}
           onChange={(e) => setNewTitle(e.target.value)}
+          onKeyDown={(e) => {
+            // Todo-app convention: Escape abandons the draft (clear + blur).
+            // Reset the SAME state handleAdd resets after a create — leaving
+            // project/star/pin selections behind would silently apply them to
+            // the next, unrelated quick-add.
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              setNewTitle('');
+              setQuickProject('');
+              setQuickStarred(false);
+              setQuickPinnedTier(null);
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
           placeholder="Quick add task..."
           aria-label="New task title"
         />

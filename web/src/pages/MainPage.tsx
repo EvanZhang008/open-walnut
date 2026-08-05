@@ -27,6 +27,7 @@ import { TaskDetailModal } from '@/components/tasks/TaskDetailModal';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
+import { SessionSearchPanel } from '@/components/sessions/SessionSearchPanel';
 import { freshLauncherMeta } from '@/components/sessions/task-meta-constants';
 import { QuestionPopover, parseAskQuestionInput } from '@/components/chat/QuestionPopover';
 import { TriagePanel } from '@/components/triage/TriagePanel';
@@ -434,6 +435,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Session/task quick-entry popovers above the chat input.
   const [pathSelectorOpen, setPathSelectorOpen] = useState(false);
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
+  // Session finder — search existing sessions by title/task/cwd/host and open
+  // one as a column. Toggled by the QuickAccessBar pill or ⌘⇧O.
+  const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   // Where the launcher popover is anchored: 'chat' = above the chat input
   // (message-first flow), 'todo' = dropdown inside the task panel (path-first
   // flow that NEVER touches chat visibility — sessions can start with the chat
@@ -812,6 +816,33 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [showOperationError]);
 
   const handleToggleSession = openSessionOrToast;
+
+  // ⌘⇧O opens the session finder from anywhere on the home page (no mouse
+  // needed). Plain ⌘K stays with the task search (TodoSearchBar) — don't
+  // collide. Shortcut choice: ⌘⇧K is Firefox's Web Console, ⌘J is Chrome's
+  // Downloads, ⌘⇧S is Firefox's screenshot — ⌘⇧O is free in this app (only
+  // ⌘K / ⌘E / ⌘S are taken) and browsers let pages intercept it. Gated on
+  // `visible`: MainPage stays mounted behind other routes, where the shortcut
+  // must not silently toggle a hidden overlay.
+  useEffect(() => {
+    if (!visible) return;
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'o' || e.key === 'O')) {
+        // Match the file's other shortcut guards: never hijack the combo while
+        // the user is typing in an input/textarea/contentEditable.
+        const active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable)) return;
+        e.preventDefault();
+        // Mirror the QuickAccessBar pill handler: close the launcher popovers
+        // so the finder overlay can't stack on an open path-selector/quick-task.
+        setPathSelectorOpen(false);
+        setQuickTaskOpen(false);
+        setSessionSearchOpen(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [visible]);
 
   const handleCloseSession = useCallback((sessionId: string) => {
     const opener = sessionOpenersRef.current.get(sessionId);
@@ -1870,6 +1901,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 setPathSelectorOpen(true);
                 setQuickTaskOpen(false);
               }}
+              onSessionSearchClick={() => {
+                setSessionSearchOpen(true);
+                setPathSelectorOpen(false);
+                setQuickTaskOpen(false);
+              }}
               onFixWalnutClick={walnutInstallDir ? handleFixWalnut : undefined}
               mode={chatMode}
               onModeToggle={toggleMode}
@@ -2013,6 +2049,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onFocusChild={handleFocusTask}
         />
       )}
+
+      {/* Session finder — page-level overlay so ⌘⇧O works even with the chat
+          column collapsed. Opens the picked session as a home column. */}
+      <SessionSearchPanel
+        open={sessionSearchOpen}
+        onClose={() => setSessionSearchOpen(false)}
+        onOpenSession={handleToggleSession}
+      />
 
     </div>
   );

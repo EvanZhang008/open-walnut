@@ -22,6 +22,17 @@ export async function fetchRecentSessions(limit?: number): Promise<SessionSummar
   return res.sessions;
 }
 
+/** Server-side session search (title / task title / cwd / host) over the FULL
+ *  list — the client never holds all sessions, so filtering happens in the
+ *  /recent route's ?q= handler. Empty q = plain recent list. */
+export async function searchSessions(q: string, limit = 30): Promise<SessionRecord[]> {
+  const params: Record<string, string> = { limit: String(limit) };
+  if (q.trim()) params.q = q.trim();
+  const res = await apiGet<{ sessions: SessionRecord[] }>('/api/sessions/recent', params);
+  for (const session of res.sessions) seedSessionStatus(session, 'rest:session-list');
+  return res.sessions;
+}
+
 export async function fetchSessionSummaries(limit?: number): Promise<SessionSummary[]> {
   const params = limit ? { limit: String(limit) } : undefined;
   const res = await apiGet<{ summaries: SessionSummary[] }>('/api/sessions/summaries', params);

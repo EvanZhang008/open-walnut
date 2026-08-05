@@ -438,11 +438,46 @@ describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
       expect(src).toMatch(/case 'bridge\.configure': return cmdBridgeConfigure/)
     }
   })
-  it('both persist bridge.json (0600) and redial only on change', () => {
+  it('both persist bridge.json (0600) and restart via the shared decision', () => {
     for (const src of [standaloneSrc, templateSrc]) {
       expect(src).toMatch(/BRIDGE_FILE = path\.join\(DAEMON_DIR, 'bridge\.json'\)/)
       expect(src).toMatch(/mode: 0o600/)
-      expect(src).toMatch(/if \(changed\) startBridge\('configure'\)/)
+      // configure-time reconcile: both twins route the restart decision
+      // through decideBridgeRestart (daemon-core.ts is the source of truth;
+      // the template mirrors it inline).
+      expect(src).toMatch(/decideBridgeRestart\(\{/)
+      expect(src).toMatch(/if \(decision\.restart\) startBridge\(decision\.reason\)/)
+    }
+  })
+  it('template mirrors decideBridgeRestart from daemon-core verbatim (modulo semicolons)', () => {
+    // Extract the decision ladder from both and compare normalized bodies so
+    // a logic edit on one side fails loudly.
+    const extract = (src: string) => {
+      const start = src.search(/function decideBridgeRestart\(/)
+      expect(start).toBeGreaterThan(-1)
+      const body = src.slice(start, src.indexOf('}', src.indexOf('return { restart: true, reason: \'reconcile\' }', start)) + 1)
+      return body
+        .replace(/\(s: BridgeConfigureState\): BridgeRestartDecision/, '(s)')
+        .replace(/;/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+    }
+    const coreBridgeSrc = readFile(corePath)
+    expect(extract(templateSrc)).toBe(extract(coreBridgeSrc))
+  })
+  it('both enforce a dial timeout so a wedged CONNECTING socket gets redialed', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/BRIDGE_DIAL_TIMEOUT_MS = parseInt\(process\.env\.WALNUT_BRIDGE_DIAL_TIMEOUT_MS \|\| '', 10\) \|\| 20[_]?000/)
+      expect(src).toMatch(/bridge: dial timeout — abandoning socket/)
+      // The timeout handler must schedule the redial itself (a wedged socket
+      // may never fire onclose).
+      const idx = src.indexOf('bridge: dial timeout')
+      expect(src.slice(idx, idx + 600)).toMatch(/scheduleBridgeRedial\(gen\)/)
+    }
+  })
+  it('both dedupe pending redial timers (dial-timeout + late onclose must not stack)', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/if \(bridgeRedialTimer\) return/)
     }
   })
   it('both carry the generation guard against stale dials', () => {

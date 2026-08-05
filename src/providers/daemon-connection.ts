@@ -140,6 +140,15 @@ export class DaemonConnection {
   private _daemonInstanceId: string | null = null
   /** Daemon start timestamp from the most recent successful `hello`. */
   private _daemonStartedAt: number | null = null
+  /** Cloud-bridge liveness from the last bridge.configure reply (null = unknown / disabled). */
+  private _lastBridgeConnected: boolean | null = null
+  private _lastBridgeCheckedAt: number | null = null
+  /** Periodic bridge-config re-push while connected — keeps the health surface
+   *  fresh AND heals a wedged bridge (cmdBridgeConfigure reconciles). */
+  private bridgeRepushTimer: ReturnType<typeof setInterval> | null = null
+  /** True while a bridge.configure push is in flight — periodic re-pushes
+   *  must never overlap (a slow RPC + a 5-min tick would stack them). */
+  private bridgePushInFlight = false
 
   /**
    * Bulk data channel — a SECOND WebSocket to the same daemon (same tunnel
@@ -195,6 +204,14 @@ export class DaemonConnection {
   private static RECONNECT_STANDING_FAILURE_DELAY_MS = 10 * 60_000
   /** Ping interval for keepalive. */
   private static PING_INTERVAL_MS = 15_000
+  /**
+   * Periodic bridge.configure re-push interval. The daemon's configure handler
+   * is idempotent AND self-healing (reconcile restarts a wedged dial), so
+   * re-pushing identical config is a no-op on a healthy bridge and a heal on a
+   * broken one. Each push also refreshes _lastBridgeConnected/_lastBridgeCheckedAt,
+   * so /api/system/health never shows bridge state staler than this window.
+   */
+  private static BRIDGE_REPUSH_INTERVAL_MS = 5 * 60_000
 
   /** Cached remote arch (detected once per connection). */
   private _remoteArch: string | null = null
@@ -279,6 +296,9 @@ export class DaemonConnection {
   get disconnectedSince(): number | null { return this._disconnectedSince }
   get daemonInstanceId(): string | null { return this._daemonInstanceId }
   get daemonStartedAt(): number | null { return this._daemonStartedAt }
+  /** Last bridge.configure reply's connected flag (null = never pushed / bridge disabled). */
+  get lastBridgeConnected(): boolean | null { return this._lastBridgeConnected }
+  get lastBridgeCheckedAt(): number | null { return this._lastBridgeCheckedAt }
 
   /**
    * Centralized setter for _connected — fires the pool-level callback
@@ -293,6 +313,12 @@ export class DaemonConnection {
       this._reconnectAttempts = 0
     } else if (changed) {
       this._disconnectedSince = Date.now()
+    }
+    if (!value) {
+      // Bridge liveness rode this (now dead) connection — a stale `true` would
+      // render the contradictory 'Disconnected · bridge ✓' in the health UI.
+      this._lastBridgeConnected = null
+      this._lastBridgeCheckedAt = null
     }
     if (changed && onPoolStatusChange) {
       try {
@@ -310,6 +336,12 @@ export class DaemonConnection {
     // connect(), reconnect() and forceRedeployAndReconnect() all land here.
     // Fire-and-forget — bridge provisioning must never block or fail a connect.
     if (changed && value) this.pushBridgeConfig()
+    // Keep bridge health fresh while connected: without a periodic re-push,
+    // _lastBridgeConnected only updates on (re)connect and rots for days.
+    if (changed) {
+      if (value) this.startBridgeRepush()
+      else this.stopBridgeRepush()
+    }
     // Dial the bulk data channel in the background on every (re)connect —
     // same choke-point rationale as pushBridgeConfig. Reconnects allocate a
     // new localPort, so the dial must follow every transition to connected.
@@ -323,22 +355,74 @@ export class DaemonConnection {
    */
   private pushBridgeConfig(): void {
     if (this.isReadOnlyRemote) return
+    // In-flight guard: a slow configure RPC + the 5-min re-push tick must not
+    // stack overlapping pushes against the same daemon.
+    if (this.bridgePushInFlight) return
+    this.bridgePushInFlight = true
     void (async () => {
       try {
         const { getBridgeConfigForHost } = await import('../integrations/cloud-bridge-config.js')
         const cfg = await getBridgeConfigForHost(this.hostKey)
         // Push disabled too — an operator turning the bridge off must reach
         // daemons that already hold a persisted bridge.json.
-        await this.send('bridge.configure', cfg as unknown as Record<string, unknown>)
-        log.session.info('DaemonConnection: bridge config pushed', {
-          host: this.hostKey, enabled: cfg.enabled,
-        })
+        const reply = await this.send('bridge.configure', cfg as unknown as Record<string, unknown>)
+        if (reply.ok !== true) {
+          // Rejected configure — the daemon refused/errored the command. That
+          // says nothing about bridge liveness, so don't record `false`; keep
+          // the previous observation and log the rejection on its own branch.
+          log.session.warn('DaemonConnection: bridge config push rejected by daemon', {
+            host: this.hostKey, error: typeof reply.error === 'string' ? reply.error : undefined,
+          })
+          return
+        }
+        // Record the daemon's own bridge liveness so /api/system/health can
+        // surface phone-reachability per host (a wedged bridge dial used to
+        // rot for days with zero observability).
+        // NOTE: `reply.connected` reflects the adapter AT REPLY TIME — a
+        // reconcile that just kicked off a fresh dial answers connected:false
+        // even though it's healing; the next periodic re-push self-corrects.
+        this._lastBridgeConnected = cfg.enabled ? reply.connected === true : null
+        this._lastBridgeCheckedAt = Date.now()
+        if (cfg.enabled && reply.connected !== true) {
+          log.session.warn('DaemonConnection: bridge enabled but NOT connected on daemon', {
+            host: this.hostKey,
+          })
+        } else {
+          log.session.info('DaemonConnection: bridge config pushed', {
+            host: this.hostKey, enabled: cfg.enabled, bridgeConnected: this._lastBridgeConnected,
+          })
+        }
       } catch (err) {
         log.session.warn('DaemonConnection: bridge config push failed', {
           host: this.hostKey, error: err instanceof Error ? err.message : String(err),
         })
+      } finally {
+        this.bridgePushInFlight = false
       }
     })()
+  }
+
+  /**
+   * Re-push the bridge config every BRIDGE_REPUSH_INTERVAL_MS while connected.
+   * Same timer discipline as pingTimer: (re)armed on every transition to
+   * connected, cleared on disconnect/destroy and connection loss.
+   */
+  private startBridgeRepush(): void {
+    if (this.bridgeRepushTimer) clearInterval(this.bridgeRepushTimer)
+    if (this.isReadOnlyRemote) return
+    this.bridgeRepushTimer = setInterval(() => {
+      if (this._destroyed || !this._connected) return
+      this.pushBridgeConfig()
+    }, DaemonConnection.BRIDGE_REPUSH_INTERVAL_MS)
+    // Never keep the process alive just for bridge health refreshes.
+    this.bridgeRepushTimer.unref?.()
+  }
+
+  private stopBridgeRepush(): void {
+    if (this.bridgeRepushTimer) {
+      clearInterval(this.bridgeRepushTimer)
+      this.bridgeRepushTimer = null
+    }
   }
 
   // ── Event subscription ──
@@ -644,6 +728,10 @@ export class DaemonConnection {
       clearInterval(this.pingTimer)
       this.pingTimer = null
     }
+
+    // Stop bridge re-push (setConnected(false) above also stops it when the
+    // state actually changed; this covers the already-disconnected case).
+    this.stopBridgeRepush()
 
     // Reject pending commands
     for (const [id, pending] of this.pendingCommands) {
@@ -2684,6 +2772,8 @@ export function disconnectAllDaemons(): void {
 export interface DaemonStatus {
   host: string
   connected: boolean
+  /** Cloud-bridge liveness reported by the daemon (null = unknown / bridge not configured). */
+  bridgeConnected: boolean | null
 }
 
 /**
@@ -2705,7 +2795,7 @@ export function getDaemonDisconnectedSince(hostKey: string): number | null {
 export function getDaemonPoolStatus(): DaemonStatus[] {
   const result: DaemonStatus[] = []
   for (const [host, conn] of connectionPool) {
-    result.push({ host, connected: conn.connected })
+    result.push({ host, connected: conn.connected, bridgeConnected: conn.lastBridgeConnected })
   }
   return result
 }

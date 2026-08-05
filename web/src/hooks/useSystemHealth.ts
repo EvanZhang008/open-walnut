@@ -16,6 +16,8 @@ export interface DaemonHealth {
   host: string;
   label?: string;
   connected: boolean;
+  /** Cloud-bridge liveness reported by the host's daemon (null/undefined = no cloud bridge configured). */
+  bridgeConnected?: boolean | null;
 }
 
 /** Where the active Bedrock credential was resolved from. Mirrors the server's CredentialSource. */

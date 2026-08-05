@@ -50,7 +50,7 @@ systemRouter.get('/health', async (req, res) => {
     const config = await getConfig()
     const hosts = config.hosts
     if (hosts && Object.keys(hosts).length > 0) {
-      let activeMap = new Map<string, { connected: boolean }>()
+      let activeMap = new Map<string, { connected: boolean; bridgeConnected: boolean | null }>()
       try {
         activeMap = new Map(getDaemonPoolStatus().map(d => [d.host, d]))
       } catch { /* pool not ready */ }
@@ -59,6 +59,8 @@ systemRouter.get('/health', async (req, res) => {
         host: key,
         label: def.label ?? def.hostname,
         connected: activeMap.get(key)?.connected ?? false,
+        // null = unknown / no cloud bridge configured for this host.
+        bridgeConnected: activeMap.get(key)?.bridgeConnected ?? null,
       }))
     }
   } catch { /* config not ready */ }

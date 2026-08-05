@@ -23,7 +23,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import type { MessageParam } from '../../agent/model.js'
-import type { ChatEntry } from '../../core/types.js'
+import { VALID_PRIORITIES, type ChatEntry, type TaskPriority } from '../../core/types.js'
 import { CLOUD_MODE, NOTES_DIR } from '../../constants.js'
 import * as chatHistory from '../../core/chat-history.js'
 import { listConversations, createConversation } from '../../core/conversations.js'
@@ -769,7 +769,108 @@ apiV1Router.get('/tasks', async (req: Request, res: Response, next: NextFunction
     let tasks = projection.tasks
     const status = typeof req.query.status === 'string' ? req.query.status : undefined
     if (status) tasks = tasks.filter((t) => t.status === status)
-    res.json({ tasks, syncedAt: projection.exportedAt })
+    // v1 is FROZEN: shipped mobile builds decode `category` as a required
+    // string. Newer projections drop it (project-only), so guarantee it at
+    // this boundary: default to the project name, but let a projection that
+    // still carries a real `category` win (spread order). Old clients keep
+    // decoding; new clients ignore it. Remove only when no legacy client is
+    // left in the field.
+    res.json({
+      tasks: tasks.map((t) => ({ ...t, category: (t as { category?: string }).category ?? (t.project || 'Inbox') })),
+      syncedAt: projection.exportedAt,
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/v1/tasks — quick task creation from mobile (additive).
+// Same creation path as the web quick-add (addTask in task-manager): project
+// defaults to config default / Inbox, a missing project registry row is
+// auto-created, source resolution is identical. Answers 201 with the created
+// task in the slim ProjectedTask shape GET /tasks serves.
+// Primary box only: a REPLICA has no task DB — 503 like the launch endpoints.
+apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (CLOUD_MODE) {
+      sendError(res, 503, 'not_supported_cloud',
+        'Creating tasks runs on the primary box — connect the app to it directly')
+      return
+    }
+    const { title, project, priority, due_date: dueDate, description } = (req.body ?? {}) as {
+      title?: unknown
+      project?: unknown
+      priority?: unknown
+      due_date?: unknown
+      description?: unknown
+    }
+    if (typeof title !== 'string' || !title.trim()) {
+      sendError(res, 400, 'bad_request', 'title must be a non-empty string')
+      return
+    }
+    if (title.length > 500) {
+      sendError(res, 400, 'bad_request', 'title too long (max 500 chars)')
+      return
+    }
+    if (project !== undefined && typeof project !== 'string') {
+      sendError(res, 400, 'bad_request', 'project must be a string')
+      return
+    }
+    if (priority !== undefined
+        && !(typeof priority === 'string' && (VALID_PRIORITIES as readonly string[]).includes(priority))) {
+      sendError(res, 400, 'bad_request', `priority must be one of: ${VALID_PRIORITIES.join(', ')}`)
+      return
+    }
+    // Real ISO-8601 only: YYYY-MM-DD or a full datetime. Bare Date.parse is
+    // too lax — it accepts junk like '12345' (parsed as a year) AND silently
+    // rolls calendar-invalid dates over ('2030-02-30' → Mar 2). Regex gates
+    // the shape; the round-trip check catches rollover: parse the date part
+    // as UTC and require the re-serialized day to match.
+    const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:?\d{2})?)?$/
+    const isValidIsoDate = (s: string): boolean => {
+      if (!ISO_DATE_RE.test(s) || Number.isNaN(Date.parse(s))) return false
+      // Round-trip the DATE PART in UTC (a date-only string parses as UTC
+      // midnight; for datetimes the calendar day must survive re-serialization
+      // of its own date component regardless of the time/offset suffix).
+      const datePart = s.slice(0, 10)
+      return new Date(`${datePart}T00:00:00Z`).toISOString().slice(0, 10) === datePart
+    }
+    if (dueDate !== undefined && !(typeof dueDate === 'string' && isValidIsoDate(dueDate))) {
+      sendError(res, 400, 'bad_request', 'due_date must be an ISO-8601 date string (YYYY-MM-DD or full datetime)')
+      return
+    }
+    if (description !== undefined && typeof description !== 'string') {
+      sendError(res, 400, 'bad_request', 'description must be a string')
+      return
+    }
+
+    const { addTask, ProjectSourceConflictError } = await import('../../core/task-manager.js')
+    const { projectTask } = await import('../../core/task-projection.js')
+    try {
+      // asyncPush like the web create path: the client renders the task
+      // immediately, so don't block the response on an external sync push.
+      const { task } = await addTask({
+        title: title.trim(),
+        ...(project !== undefined ? { project } : {}),
+        ...(priority !== undefined ? { priority: priority as TaskPriority } : {}),
+        ...(dueDate !== undefined ? { due_date: dueDate } : {}),
+        ...(description !== undefined ? { description } : {}),
+        asyncPush: true,
+      })
+      log.web.info('task created via api-v1', { taskId: task.id, project: task.project })
+      bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui', 'main-agent'], { source: 'api-v1' })
+      // Same category compat alias as GET /tasks (see the note there).
+      const projected = projectTask(task)
+      res.status(201).json({
+        task: { ...projected, category: (projected as { category?: string }).category ?? (projected.project || 'Inbox') },
+      })
+    } catch (err) {
+      if (err instanceof ProjectSourceConflictError) {
+        sendError(res, 409, 'conflict', err.message)
+        return
+      }
+      throw err
+    }
   } catch (err) {
     next(err)
   }

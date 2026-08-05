@@ -196,7 +196,17 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
                       <div key={d.host} className="notification-detail-row">
                         <span>{d.label ?? d.host}</span>
                         <span className={`notification-detail-value ${d.connected ? 'ok' : 'muted'}`}>
-                          {d.connected ? 'Connected' : 'Idle'}
+                          {/* 'Idle' used to render for connected:false, hiding real outages. */}
+                          {d.connected ? 'Connected' : 'Disconnected'}
+                          {/* Cloud-bridge state (phone reachability) — only when a bridge is
+                              configured AND the host itself is connected: bridge liveness rides
+                              the daemon connection, so next to 'Disconnected' any ✓/✗ is stale
+                              and contradictory. */}
+                          {d.connected && d.bridgeConnected != null && (
+                            <span className={`notification-detail-value ${d.bridgeConnected ? 'ok' : 'warn'}`}>
+                              {d.bridgeConnected ? ' · bridge ✓' : ' · bridge ✗'}
+                            </span>
+                          )}
                         </span>
                       </div>
                     ))}

@@ -752,6 +752,52 @@ export function buildControlResponse(requestId: string, request: Record<string, 
   })
 }
 
+// ── Cloud bridge: restart decision (pure) ──
+
+/** Snapshot of bridge state at bridge.configure time. */
+export interface BridgeConfigureState {
+  /** next.enabled — the config being applied. */
+  enabled: boolean
+  /** Did the pushed config differ from the current one? */
+  changed: boolean
+  /** Is the outbound bridge socket currently open (adapter registered)? */
+  adapterConnected: boolean
+  /** Is a redial timer already pending? */
+  redialPending: boolean
+  /** Age of the in-flight dial in ms, or null when no dial is in flight. */
+  dialAgeMs: number | null
+  /** Dial timeout — a dial younger than this is still allowed to finish. */
+  dialTimeoutMs: number
+}
+
+export type BridgeRestartDecision =
+  | { restart: true; reason: 'configure' | 'reconcile' }
+  | { restart: false }
+
+/**
+ * Should bridge.configure (re)start the bridge?
+ *
+ * - Config changed → always restart ('configure', pre-existing behavior).
+ * - Config unchanged but the bridge SHOULD be up and nothing is working on it
+ *   (no open socket, no pending redial, no young in-flight dial) → restart
+ *   ('reconcile'). The Mac re-pushes an identical config on every daemon
+ *   (re)connect, so this makes each push a healing opportunity for a wedged
+ *   dial (a socket stuck in CONNECTING never fires onopen/onclose, so the
+ *   redial loop dies silently). No restart storms: a pending redial timer or
+ *   a dial still within its timeout is left alone.
+ *
+ * Mirrored verbatim in daemon-source.ts (template can't import) — parity test
+ * locks the sync.
+ */
+export function decideBridgeRestart(s: BridgeConfigureState): BridgeRestartDecision {
+  if (s.changed) return { restart: true, reason: 'configure' }
+  if (!s.enabled) return { restart: false }
+  if (s.adapterConnected) return { restart: false }
+  if (s.redialPending) return { restart: false }
+  if (s.dialAgeMs != null && s.dialAgeMs < s.dialTimeoutMs) return { restart: false }
+  return { restart: true, reason: 'reconcile' }
+}
+
 export function defaultReadStartTime(fs: typeof import('node:fs'), pid: number): string | null {
   // Linux: /proc/<pid>/stat field 22 (kernel start time in clock ticks)
   try {

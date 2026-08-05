@@ -13,6 +13,8 @@ const CONTEXT_WINDOW_DEFAULT = 200_000; // fallback when backend doesn't provide
 interface QuickAccessBarProps {
   onSessionClick: () => void;
   onTaskClick?: () => void;
+  /** Session finder pill — opens the search-and-open panel (also ⌘⇧O). */
+  onSessionSearchClick?: () => void;
   /** Fix Walnut pill — omit to hide (e.g. npm installs / cloud, where installDir is unknown). */
   onFixWalnutClick?: () => void;
   mode?: ChatMode;
@@ -21,7 +23,7 @@ interface QuickAccessBarProps {
   stats?: ChatStats | null;
 }
 
-export function QuickAccessBar({ onSessionClick, onTaskClick, onFixWalnutClick, mode, onModeToggle, stats }: QuickAccessBarProps) {
+export function QuickAccessBar({ onSessionClick, onTaskClick, onSessionSearchClick, onFixWalnutClick, mode, onModeToggle, stats }: QuickAccessBarProps) {
   const isPlan = mode === 'plan';
 
   const contextWindow = stats?.contextWindow ?? CONTEXT_WINDOW_DEFAULT;
@@ -47,6 +49,15 @@ export function QuickAccessBar({ onSessionClick, onTaskClick, onFixWalnutClick, 
       >
         <span className="quick-access-pill-label">+ Session</span>
       </button>
+      {onSessionSearchClick && (
+        <button
+          className="quick-access-pill"
+          onClick={onSessionSearchClick}
+          title="Find and open an existing session — search by title, task, path or host (⌘⇧O)"
+        >
+          <span className="quick-access-pill-label">&#x2315; Sessions</span>
+        </button>
+      )}
       {onFixWalnutClick && (
         <button
           className="quick-access-pill"

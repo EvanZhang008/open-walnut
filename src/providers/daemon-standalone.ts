@@ -30,6 +30,7 @@ import {
   defaultReadStartTime,
   shouldAutoRespond,
   buildControlResponse,
+  decideBridgeRestart,
   type CoreSessionData,
   type RegistryEntry as CoreRegistryEntry,
   type SessionMode,
@@ -2805,6 +2806,10 @@ let bridgeClient: WebSocket | null = null
 let bridgeAdapter: ServerWebSocket<WsData> | null = null
 let bridgeRedialTimer: ReturnType<typeof setTimeout> | null = null
 let bridgePingTimer: ReturnType<typeof setInterval> | null = null
+let bridgeDialTimer: ReturnType<typeof setTimeout> | null = null
+// When the in-flight dial started (null = no dial in flight). Feeds the
+// reconcile decision so an identical-config push can't kill a young dial.
+let bridgeDialStartedAt: number | null = null
 let bridgeBackoffMs = 1000
 // Generation guard: every (re)start bumps this; stale socket callbacks and
 // queued redials check it and no-op, so an old dial can't fight a new config.
@@ -2815,6 +2820,11 @@ const BRIDGE_BACKOFF_MAX_MS = 60_000
 const BRIDGE_PING_INTERVAL_MS = 30_000
 // 2 missed 30s pings + margin — half-open sockets get torn down and redialed.
 const BRIDGE_SILENCE_MS = 75_000
+// A dial that hasn't reached onopen within this window is wedged (TCP up but
+// upgrade never completing) — abandon it and redial. Without this a socket
+// stuck in CONNECTING was NEVER torn down (the silence watchdog only started
+// in onopen), which held the bridge down for days. Env override is for tests.
+const BRIDGE_DIAL_TIMEOUT_MS = parseInt(process.env.WALNUT_BRIDGE_DIAL_TIMEOUT_MS || '', 10) || 20_000
 
 function loadBridgeConfig(): void {
   try {
@@ -2846,8 +2856,22 @@ function cmdBridgeConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record
   } catch (err) {
     logMsg('error', 'bridge: failed to persist bridge.json', { err: (err as Error).message })
   }
-  if (changed) startBridge('configure')
-  logMsg('info', 'bridge: configured', { enabled: next.enabled, hostAlias: next.hostAlias, changed })
+  // changed → restart ('configure'). Unchanged but bridge should be up and
+  // nothing is working on it → restart ('reconcile') so the Mac's periodic
+  // identical push heals a wedged dial. Decision logic: daemon-core.ts.
+  const decision = decideBridgeRestart({
+    enabled: next.enabled,
+    changed,
+    adapterConnected: bridgeAdapter != null,
+    redialPending: bridgeRedialTimer != null,
+    dialAgeMs: bridgeDialStartedAt != null ? Date.now() - bridgeDialStartedAt : null,
+    dialTimeoutMs: BRIDGE_DIAL_TIMEOUT_MS,
+  })
+  if (decision.restart) startBridge(decision.reason)
+  logMsg('info', 'bridge: configured', {
+    enabled: next.enabled, hostAlias: next.hostAlias, changed,
+    restarted: decision.restart ? decision.reason : false,
+  })
   sendOk(ws, id, { applied: true, connected: bridgeAdapter != null })
 }
 
@@ -2855,6 +2879,8 @@ function stopBridge(): void {
   bridgeGeneration++
   if (bridgeRedialTimer) { clearTimeout(bridgeRedialTimer); bridgeRedialTimer = null }
   if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null }
+  if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null }
+  bridgeDialStartedAt = null
   if (bridgeAdapter) { try { handleDisconnect(bridgeAdapter) } catch {} }
   if (bridgeClient) { try { bridgeClient.close() } catch {} }
   bridgeClient = null
@@ -2871,6 +2897,9 @@ function startBridge(reason: string): void {
 
 function scheduleBridgeRedial(gen: number): void {
   if (gen !== bridgeGeneration || !bridgeConfig?.enabled) return
+  // One pending redial at a time — a dial-timeout teardown and a late onclose
+  // from the same dead socket must not stack two timers.
+  if (bridgeRedialTimer) return
   const jitter = 0.75 + Math.random() * 0.5
   const delay = Math.round(Math.min(bridgeBackoffMs, BRIDGE_BACKOFF_MAX_MS) * jitter)
   bridgeBackoffMs = Math.min(bridgeBackoffMs * 2, BRIDGE_BACKOFF_MAX_MS)
@@ -2922,9 +2951,30 @@ function dialBridge(gen: number): void {
     return
   }
   bridgeClient = client
+  bridgeDialStartedAt = Date.now()
+  // NOTE: bridgeLastInbound is (re)set in onopen — the silence watchdog only
+  // starts there; the pre-open window is covered by the dial timeout below.
+  // Dial timeout: no onopen within the window → tear down + redial. A socket
+  // wedged in CONNECTING fires neither onopen nor onclose, so without this
+  // timer the bridge would stay down forever with zero log lines.
+  bridgeDialTimer = setTimeout(() => {
+    bridgeDialTimer = null
+    if (gen !== bridgeGeneration || bridgeAdapter != null) return
+    logMsg('warn', 'bridge: dial timeout — abandoning socket', {
+      dialMs: bridgeDialStartedAt != null ? Date.now() - bridgeDialStartedAt : null,
+    })
+    bridgeDialStartedAt = null
+    if (bridgeClient === client) bridgeClient = null
+    try { client.close() } catch {}
+    // Don't rely on close() firing onclose for a wedged socket — schedule
+    // directly. scheduleBridgeRedial dedupes if onclose does fire too.
+    scheduleBridgeRedial(gen)
+  }, BRIDGE_DIAL_TIMEOUT_MS)
 
   client.onopen = () => {
     if (gen !== bridgeGeneration) { try { client.close() } catch {}; return }
+    if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null }
+    bridgeDialStartedAt = null
     bridgeBackoffMs = 1000
     bridgeLastInbound = Date.now()
     const adapter = makeBridgeAdapter(client)
@@ -2963,6 +3013,16 @@ function dialBridge(gen: number): void {
 
   client.onclose = () => {
     if (gen !== bridgeGeneration) return
+    // Late close from a socket the dial timeout already abandoned — a newer
+    // dial may be in flight; don't clobber its state.
+    // LOAD-BEARING with scheduleBridgeRedial's dedupe: after the dial timeout
+    // sets bridgeClient=null there is a window where this guard passes
+    // (bridgeClient===null) and the late close falls through to
+    // scheduleBridgeRedial — only the "if (bridgeRedialTimer) return" dedupe
+    // stops a SECOND stacked redial then. Change either side only in tandem.
+    if (bridgeClient !== null && bridgeClient !== client) return
+    if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null }
+    bridgeDialStartedAt = null
     if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null }
     if (bridgeAdapter) { try { handleDisconnect(bridgeAdapter) } catch {}; bridgeAdapter = null }
     bridgeClient = null

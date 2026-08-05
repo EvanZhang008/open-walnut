@@ -13,6 +13,7 @@ import {
   getSessionsForTask,
   isEnvironmentSession,
   isTriageSession,
+  listRecentSessionRecords,
   listSessions,
   toSessionStatusSnapshot,
   updateSessionRecord,
@@ -21,7 +22,7 @@ import {
 import { readSessionHistory, readSingleSubagentHistory, reconstructWorkflowProgress, extractPlanContent, rewriteHistoryRemoteImages } from '../../core/session-history.js'
 import { computeSessionChanges } from '../../core/session-changes.js'
 import { computeSessionGitDiff, type GitDiffBase } from '../../core/session-git-diff.js'
-import { listTasks, getTask, addTask, updateTask, togglePin, setFocusTier, getCustomTiers, linkSession, groupTasks, addToGroup, renameGroup } from '../../core/task-manager.js'
+import { listTasksByIds, getTask, addTask, updateTask, togglePin, setFocusTier, getCustomTiers, linkSession, groupTasks, addToGroup, renameGroup } from '../../core/task-manager.js'
 import { getConfig } from '../../core/config-manager.js'
 import { bus, EventNames, eventData } from '../../core/event-bus.js'
 import fsp from 'node:fs/promises'
@@ -45,6 +46,7 @@ import { quickStartSession, QuickStartError } from '../../core/sessions/quick-st
 import { ensureCwd } from '../../core/sessions/ensure-cwd.js'
 import { buildSessionVscodeUri, SessionVscodeUriError } from '../../core/session-vscode-uri.js'
 import { listLocalDirs, listRemoteDirs } from '../../core/sessions/dir-listing.js'
+import { filterSessionsByQuery } from '../../core/session-search.js'
 import { QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
 
 /** Client-supplied session ids must be well-formed UUIDs (they become CLI --session-id args and file names). */
@@ -626,23 +628,72 @@ function unavailableHistoryReason(record: SessionRecord): string {
     : 'Session history file not found'
 }
 
-// GET /api/sessions
-sessionsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
+/** Apply the optional `?q=` list filter (title / owning-task title / cwd / host / hostname).
+ *  Task titles are looked up once per request so the pure filter stays sync.
+ *  Hostname: records from SQLite carry only the host ALIAS (enrichWithHostnames
+ *  runs after filtering), so resolve alias→hostname from config here — otherwise
+ *  searching by full hostname silently never matches. */
+async function applySessionSearch(sessions: SessionRecord[], q: unknown): Promise<SessionRecord[]> {
+  const query = typeof q === 'string' ? q.trim() : ''
+  if (!query) return sessions
+  const taskIds = new Set(sessions.map(s => s.taskId).filter(Boolean))
+  const titleById = new Map<string, string>()
+  if (taskIds.size > 0) {
+    // Bounded batch lookup (predicate pushed into SQL) — a full listTasks()
+    // table read per debounced keystroke was the browser-pool-saturation
+    // class fixed in c0320af.
+    const tasks = await listTasksByIds([...taskIds] as string[])
+    for (const t of tasks) if (taskIds.has(t.id)) titleById.set(t.id, t.title)
+  }
+  let hosts: Record<string, { hostname: string }> = {}
   try {
-    const all = await listSessions()
-    const sessions = all.filter(s => !isEnvironmentSession(s) && !s.archived)
+    hosts = (await getConfig()).hosts ?? {}
+  } catch { /* config read failure — hostname search degrades to alias-only */ }
+  return filterSessionsByQuery(
+    sessions,
+    query,
+    (id) => titleById.get(id),
+    (alias) => hosts[alias]?.hostname,
+  )
+}
+
+/** Cap on the pre-filter candidate set for `?q=` searches. These routes run on
+ *  every debounced finder keystroke — an unbounded whole-table read here is the
+ *  browser-pool-saturation class fixed in c0320af. 2000 most-recent rows (an
+ *  ordered, index-backed SQL read) covers months of history; anything older is
+ *  out of finder scope by design. */
+const SEARCH_CANDIDATE_LIMIT = 2000
+
+// GET /api/sessions?q=<filter>
+sessionsRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const query = typeof req.query.q === 'string' ? req.query.q.trim() : ''
+    // With q: bounded most-recent-first candidate window (see cap above).
+    const all = query ? await listRecentSessionRecords(SEARCH_CANDIDATE_LIMIT) : await listSessions()
+    let sessions = all.filter(s => !isEnvironmentSession(s) && !s.archived)
+    sessions = await applySessionSearch(sessions, query)
     res.json({ sessions: await enrichWithHostnames(await enrichWithLiveStatus(sessions)) })
   } catch (err) {
     next(err)
   }
 })
 
-// GET /api/sessions/recent
+// GET /api/sessions/recent?q=<filter>
 sessionsRouter.get('/recent', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 10
-    const all = await getRecentSessions(limit)
-    const sessions = all.filter(s => !isEnvironmentSession(s) && !s.archived)
+    // With a query, search a WIDE bounded window then cap — filtering only the
+    // tiny recent window would miss older matches (defeats a finder), but the
+    // candidate set stays bounded (SEARCH_CANDIDATE_LIMIT, index-backed) so a
+    // keystroke can never trigger a whole-table read.
+    const query = typeof req.query.q === 'string' ? req.query.q.trim() : ''
+    const all = query ? await listRecentSessionRecords(SEARCH_CANDIDATE_LIMIT) : await getRecentSessions(limit)
+    let sessions = all.filter(s => !isEnvironmentSession(s) && !s.archived)
+    if (query) {
+      sessions = (await applySessionSearch(sessions, query))
+        .sort((a, b) => (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? ''))
+        .slice(0, limit)
+    }
     res.json({ sessions: await enrichWithHostnames(await enrichWithLiveStatus(sessions)) })
   } catch (err) {
     next(err)

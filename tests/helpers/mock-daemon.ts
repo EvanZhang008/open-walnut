@@ -76,6 +76,8 @@ export class MockDaemon {
   readonly instanceId = `mock-${crypto.randomBytes(4).toString('hex')}`
   /** When true, `hello` reports a DIFFERENT instanceId (bulk-channel identity-mismatch tests). */
   private _helloInstanceMismatch = false
+  /** Bridge liveness reported by `bridge.configure` replies (Mac-side visibility tests). */
+  private _bridgeConnected = false
   private readonly streamsDir: string
   /** Real ACP supervision (same module the standalone daemon embeds) so tests
    *  can drive acp* sessions through MockDaemon with real workers + mock agent. */
@@ -106,6 +108,11 @@ export class MockDaemon {
   /** Override the CLI command used for sessions (default: mock-claude.mjs) */
   setCliCommand(cmd: string): void {
     this._cliCommand = cmd
+  }
+
+  /** Control the bridge liveness reported by `bridge.configure` replies. */
+  setBridgeConnected(connected: boolean): void {
+    this._bridgeConnected = connected
   }
 
   async start(): Promise<void> {
@@ -228,6 +235,12 @@ export class MockDaemon {
       case 'status': return this.cmdStatus(ws, id, cmd)
       case 'rename': return this.cmdRename(ws, id, cmd)
       case 'ping': return this.sendOk(ws, id, { pong: true })
+      // Mirrors daemon-standalone's cmdBridgeConfigure reply shape; the
+      // reported liveness is test-controlled via setBridgeConnected().
+      case 'bridge.configure': return this.sendOk(ws, id, {
+        applied: true,
+        connected: this._bridgeConnected,
+      })
       // Mirrors daemon-standalone's cmdHello reply shape (instanceId is what
       // the bulk-channel dial verifies before routing to a second socket).
       case 'hello': return this.sendOk(ws, id, {

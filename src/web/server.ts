@@ -268,7 +268,7 @@ export function drainPendingCronNotifications(): PendingCronNotification[] {
 // ── System health state ──
 
 export interface SystemHealthState {
-  daemons?: Array<{ host: string; label: string; connected: boolean }>;
+  daemons?: Array<{ host: string; label: string; connected: boolean; bridgeConnected?: boolean | null }>;
   claudeCliAvailable: boolean;
   hasReadyProvider: boolean;
   /** Where the active Bedrock credential was resolved from (for the onboarding UI).
@@ -1578,6 +1578,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           host: key,
           label: def.label ?? def.hostname,
           connected: activeMap.get(key)?.connected ?? false,
+          // null = unknown / no cloud bridge configured for this host.
+          bridgeConnected: activeMap.get(key)?.bridgeConnected ?? null,
         }))
 
         // Persist daemons onto systemHealth so all subsequent broadcasts include it.
