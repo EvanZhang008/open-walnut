@@ -38,6 +38,8 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `turn_active` | 409 | A turn is already running on this conversation |
 | `images_need_daemon_upgrade` | 400 | Session-talk images sent via the cloud companion to a host whose daemon predates `image.save` — self-heals on the next primary-box reconnect (auto-deploy) |
 | `image_upload_failed` | 400 | Session-talk image save failed on the session's host (daemon refused the payload or the write errored) |
+| `session_launch_needs_upgrade` | 400 | Session creation via the cloud companion when the primary's daemon predates the `session.launch` relay — self-heals on the next primary-box reconnect (auto-deploy) |
+| `bridge_offline` | 503 | Cloud companion has no live bridge to the needed host (or the primary's server is disconnected from its daemon) |
 | `too_large` | 413 | Note content exceeds 2 MB |
 | `internal` | 500 | Unhandled server error |
 
@@ -52,8 +54,8 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | GET | `/api/v1/conversations/:id/messages?limit=&before=&agentId=` | Read normalized messages |
 | POST | `/api/v1/conversations/:id/messages` | Send a message (starts an agent turn) |
 | GET | `/api/v1/conversations/:id/stream?agentId=` | SSE stream of the current turn |
-| GET | `/api/v1/sessions/launch-options` | Hosts + frequent dirs for creating a session (primary only) |
-| POST | `/api/v1/sessions` | Create a Claude Code session on a chosen host/path (primary only) |
+| GET | `/api/v1/sessions/launch-options` | Hosts + frequent dirs for creating a session (cloud relays to the primary) |
+| POST | `/api/v1/sessions` | Create a Claude Code session on a chosen host/path (cloud relays to the primary) |
 | GET | `/api/v1/notes` | Notes file tree |
 | GET | `/api/v1/notes/content/*path` | Read a note |
 | PUT | `/api/v1/notes/content/*path` | Update a note (optimistic locking) |
@@ -340,13 +342,28 @@ primary box the same endpoints serve directly — no bridge involved.
 
 ### Session launch (additive) — create a session from mobile
 
-Primary box only: creation reuses the web Quick Start core (task create/reuse
-→ `SESSION_START` → session-runner spawns the CLI locally or on the chosen
-host's SSH daemon). A cloud companion (REPLICA) has no spawn path — the
-`/bridge` command allowlist deliberately excludes `start` — so both endpoints
-return `503 { "error": { "code": "not_supported_cloud" } }` there; the iOS
-app hides its create UI when `/api/v1/status` reports `REPLICA` (and its
-sheet degrades to a clear unavailable state if it ever hits the 503).
+Creation reuses the web Quick Start core (task create/reuse →
+`SESSION_START` → session-runner spawns the CLI locally or on the chosen
+host's SSH daemon). Works on BOTH boxes:
+
+- **Primary box**: validation + quick-start run directly.
+- **Cloud companion (REPLICA)**: session records live on the primary, so both
+  endpoints relay over the `/bridge` WS via the narrow `session.launch`
+  daemon command (allowlisted alongside `image.save`; the raw spawn command
+  stays OFF the bridge). The primary's daemon forwards the request up to its
+  connected walnut server, which runs the exact same validation +
+  quick-start chain and replies. The chosen `host` may be any enabled
+  `config.hosts` alias — the primary handles it exactly like a local
+  request, so the bridge hop always targets the primary's daemon
+  (`__local__`) regardless of where the session will run.
+  - Failure ladder (mirrors the session-images one):
+    `400 session_launch_needs_upgrade` — the primary's daemon predates the
+    relay (self-heals on the next primary reconnect via auto-deploy);
+    `503 bridge_offline` — no live bridge, or the primary's server is
+    disconnected from its daemon; validation errors from the primary surface
+    verbatim with their original code/status (`bad_request`/`not_found`/…).
+  - Older cloud servers answer `503 not_supported_cloud`; clients should
+    treat that as "update the cloud companion".
 
 - `GET /api/v1/sessions/launch-options` →
   `{ "hosts": [ { "alias", "label" } ], "dirs": [ { "cwd", "host",
