@@ -1228,7 +1228,9 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
           {task.project || 'Inbox'}
         </span>
         <DatePicker date={task.start_date} onChange={handleStartDateChange} label="Start" />
-        <DatePicker date={task.due_date} onChange={handleDateChange} label="Due" />
+        {/* Calendar semantics: start is the primary date, the end/due is
+            usually empty — collapse it to a "+ Due" ghost until set. */}
+        <DatePicker date={task.due_date} onChange={handleDateChange} label="Due" ghostWhenEmpty />
         {task.external_url && (
           <a
             className="todo-detail-external-link"

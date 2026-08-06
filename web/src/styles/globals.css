@@ -12921,6 +12921,17 @@ a.task-kebab-info:hover {
 }
 .dp-trigger:hover { background: var(--bg-tertiary); }
 .dp-trigger-has-date { background: var(--bg-tertiary); color: var(--fg-primary); }
+/* Empty secondary date (calendar-style: due/end is usually unset) — borderless
+   "+ Due" ghost that only firms up on hover, so an empty field reads as
+   optional instead of missing. */
+.dp-trigger-ghost {
+  border-color: transparent;
+  color: var(--fg-muted);
+}
+.dp-trigger-ghost:hover {
+  border-color: var(--border);
+  color: var(--fg-secondary);
+}
 .dp-trigger-overdue {
   background: rgba(255, 59, 48, 0.12);
   color: var(--error);
@@ -15100,6 +15111,14 @@ a.task-kebab-info:hover {
 .qtc-chip-ai {
   border-color: var(--accent);
   color: var(--fg);
+}
+/* Empty due/end chip (calendar-style: usually unset) — borderless ghost that
+   firms up on hover. An AI-filled chip is never ghosted (qtc-chip-ai wins). */
+.qtc-chip-ghost:not(.qtc-chip-ai) {
+  border-color: transparent;
+}
+.qtc-chip-ghost:not(.qtc-chip-ai):hover {
+  border-color: var(--border);
 }
 .qtc-chip-manual {
   background: var(--bg-secondary, transparent);

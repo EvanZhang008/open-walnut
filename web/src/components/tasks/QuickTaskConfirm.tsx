@@ -98,14 +98,9 @@ export function QuickTaskConfirm({
       <div className="qtc-confirm-field">
         <span className="qtc-confirm-label">Details</span>
         <div className="qtc-chips qtc-confirm-chips">
-          <button
-            type="button"
-            className={`qtc-chip${draft.aiFields.has('due') ? ' qtc-chip-ai' : ''}`}
-            disabled={submitting}
-            onClick={() => { setStartPickerOpen(false); setDatePickerOpen((open) => !open); }}
-          >
-            {draft.due ? `Due ${formatDateTimeDisplay(draft.due)}` : 'No due'} <AiBadge visible={draft.aiFields.has('due')} />
-          </button>
+          {/* Calendar semantics: Start is the primary date and leads; the
+              due/end date is usually empty, so its empty state is a low-key
+              "+ Due" ghost rather than a full chip. */}
           <button
             type="button"
             className={`qtc-chip${draft.aiFields.has('start') ? ' qtc-chip-ai' : ''}`}
@@ -113,6 +108,14 @@ export function QuickTaskConfirm({
             onClick={() => { setDatePickerOpen(false); setStartPickerOpen((open) => !open); }}
           >
             {draft.start ? `Start ${formatDateTimeDisplay(draft.start)}` : 'No start'} <AiBadge visible={draft.aiFields.has('start')} />
+          </button>
+          <button
+            type="button"
+            className={`qtc-chip${draft.aiFields.has('due') ? ' qtc-chip-ai' : ''}${!draft.due ? ' qtc-chip-ghost' : ''}`}
+            disabled={submitting}
+            onClick={() => { setStartPickerOpen(false); setDatePickerOpen((open) => !open); }}
+          >
+            {draft.due ? `Due ${formatDateTimeDisplay(draft.due)}` : '+ Due'} <AiBadge visible={draft.aiFields.has('due')} />
           </button>
           <button
             type="button"

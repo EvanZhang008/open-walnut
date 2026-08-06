@@ -345,7 +345,9 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
           <PriorityBadge priority={task.priority} />
           <span className="text-sm text-muted">{task.project || 'Inbox'}</span>
           <DatePicker date={task.start_date} onChange={handleStartDateChange} label="Start" />
-          <DatePicker date={task.due_date} onChange={handleDateChange} label="Due" />
+          {/* Calendar semantics: start is the primary date, the end/due is
+              usually empty — collapse it to a "+ Due" ghost until set. */}
+          <DatePicker date={task.due_date} onChange={handleDateChange} label="Due" ghostWhenEmpty />
           <SprintPicker sprint={task.sprint} onSprintChange={handleSprintChange} />
         </div>
         {/* Dependencies */}

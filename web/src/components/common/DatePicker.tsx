@@ -129,6 +129,11 @@ interface DatePickerProps {
   /** Trigger-pill label when no date is set, and prefix when set
    *  (e.g. "Start" → "Start 8h"). Default: "Date" / bare value. */
   label?: string;
+  /** Calendar-style secondary date (the due/end date is usually empty): when no
+   *  date is set, render a low-key "+ <label>" ghost instead of a full labeled
+   *  pill. The picker stays one click away; once a date is set the pill renders
+   *  normally. */
+  ghostWhenEmpty?: boolean;
 }
 
 /** Inner content shared by popover and inline modes. */
@@ -213,7 +218,7 @@ function DatePickerContent({ date, onChange }: Pick<DatePickerProps, 'date' | 'o
   );
 }
 
-export function DatePicker({ date, onChange, inline, label }: DatePickerProps) {
+export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty }: DatePickerProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -277,11 +282,13 @@ export function DatePicker({ date, onChange, inline, label }: DatePickerProps) {
     <div className="dp-wrapper" ref={wrapperRef}>
       <button
         ref={btnRef}
-        className={`dp-trigger${overdue ? ' dp-trigger-overdue' : ''}${display ? ' dp-trigger-has-date' : ''}`}
+        className={`dp-trigger${overdue ? ' dp-trigger-overdue' : ''}${display ? ' dp-trigger-has-date' : ''}${!display && ghostWhenEmpty ? ' dp-trigger-ghost' : ''}`}
         onClick={handleToggle}
         title={date ? `${label ?? 'Date'}: ${date}` : `Set ${(label ?? 'date').toLowerCase()}`}
       >
-        {display ? (label ? `${label} ${display}` : display) : (label ?? 'Date')}
+        {display
+          ? (label ? `${label} ${display}` : display)
+          : (ghostWhenEmpty ? `+ ${label ?? 'Date'}` : (label ?? 'Date'))}
       </button>
       {/* Portalled for the same reason as the kebab menus: `position: fixed`
           escapes clipping ancestors but not stacking contexts, and this pill can
