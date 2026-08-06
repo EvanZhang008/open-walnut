@@ -199,10 +199,9 @@ test.describe('Calendar view', () => {
 
     const title = `CalSlotCreate ${Date.now()}`
     await composer.locator('.qtc-input').fill(title)
+    // Single-panel composer: the form mirrors the sentence live and the slot's
+    // time pre-fills Start — Enter creates immediately, no confirm stage.
     await composer.locator('.qtc-input').press('Enter')
-    // Confirm stage → create (button label per QuickTaskConfirm)
-    const createBtn = composer.locator('button:has-text("Create")').first()
-    await createBtn.click()
 
     // Task exists with the seeded 14:00 start
     await expect

@@ -2,19 +2,18 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { quickParseTask, type QuickTaskParse } from '@/api/tasks';
 import { QuickTaskConfirm, type ConfirmDraft, type ConfirmField } from './QuickTaskConfirm';
 
-type Stage = 'input' | 'confirm';
 /** Built-in tier name or a custom tier id (`ct_*`). */
 type PinTier = string;
 
 interface Props {
   open: boolean;
   onClose: () => void;
-  /** Flat list of existing project names, for the confirm step's datalist. */
+  /** Flat list of existing project names, for the form's datalist. */
   projectOptions: string[];
   /**
-   * Pre-seeded dates (e.g. the calendar slot the user clicked). Merged into
-   * the confirm draft ONLY where the AI parse didn't produce a date — typing
-   * "call mom tomorrow 3pm" beats the clicked slot. Never badged as AI.
+   * Pre-seeded dates (e.g. the calendar slot the user clicked). They pre-fill
+   * the form; an AI-parsed date still overwrites them — typing "call mom
+   * tomorrow 3pm" beats the clicked slot. Never badged as AI.
    */
   initialDates?: { start?: string; due?: string };
   onCreate: (input: {
@@ -28,94 +27,54 @@ interface Props {
   }) => Promise<unknown>;
 }
 
-interface ActiveParseRequest {
-  nonce: number;
-  text: string;
-  start: () => Promise<QuickTaskParse>;
-}
-
-function draftFromParse(parse: QuickTaskParse, rawText: string): ConfirmDraft {
-  const project = parse.project?.trim() || undefined;
-  const aiFields = new Set<ConfirmField>();
-  const title = parse.title.trim() || rawText;
-  // Badge the title only when the AI actually changed it — a raw-fallback
-  // response (parse failure/timeout) echoes the input and isn't an AI suggestion.
-  if (title !== rawText.trim()) aiFields.add('title');
-  if (parse.due_date) aiFields.add('due');
-  if (parse.start_date) aiFields.add('start');
-  if (parse.pinTier) aiFields.add('pin');
-  if (parse.priority) aiFields.add('priority');
-  if (parse.starred !== undefined) aiFields.add('star');
-  if (project) aiFields.add('project');
-  return {
-    title,
-    due: parse.due_date,
-    start: parse.start_date,
-    pin: parse.pinTier,
-    priority: parse.priority,
-    starred: !!parse.starred,
-    project,
-    projectIsNew: !!project && !!parse.project_is_new,
-    aiFields,
-  };
-}
-
-function fallbackDraft(rawText: string): ConfirmDraft {
-  return { title: rawText, starred: false, aiFields: new Set() };
-}
-
-/** Fill empty date fields from the caller's seed (calendar slot). AI wins. */
-function applyInitialDates(draft: ConfirmDraft, seed?: { start?: string; due?: string }): ConfirmDraft {
-  if (!seed) return draft;
-  return {
-    ...draft,
-    start: draft.start ?? seed.start,
-    due: draft.due ?? seed.due,
-  };
-}
-
+/**
+ * ONE panel, two sections, no stages: a natural-language sentence input on
+ * top, the full task form always visible below. The AI parse runs in the
+ * background and back-fills form fields when it lands (✦-badged); it never
+ * gates anything — Enter/Create at any moment persists exactly what the form
+ * shows, and typing straight into the form needs no sentence at all.
+ */
 export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, initialDates }: Props) {
-  const [stage, setStage] = useState<Stage>('input');
+  // Refs before state: the draft initializer below reads the seed ref.
+  const initialDatesRef = useRef(initialDates);
+  initialDatesRef.current = initialDates;
+
+  const emptyDraft = useCallback((): ConfirmDraft => ({
+    title: '',
+    starred: false,
+    aiFields: new Set(),
+    start: initialDatesRef.current?.start,
+    due: initialDatesRef.current?.due,
+  }), []);
+
   const [text, setText] = useState('');
-  const [parse, setParse] = useState<QuickTaskParse | null>(null);
+  const [draft, setDraft] = useState<ConfirmDraft>(emptyDraft);
   const [parseInFlight, setParseInFlight] = useState(false);
-  const [draft, setDraft] = useState<ConfirmDraft | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const popoverRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const skeletonRef = useRef<HTMLDivElement>(null);
   const textRef = useRef(text);
-  const parseRef = useRef(parse);
-  const stageRef = useRef(stage);
   const draftRef = useRef(draft);
   const submittingRef = useRef(false);
   const requestNonceRef = useRef(0);
-  const activeRequestRef = useRef<ActiveParseRequest | null>(null);
+  // Fields the user hand-edited — neither the sentence mirror nor a late AI
+  // result may overwrite these.
+  const userEditedRef = useRef(new Set<ConfirmField>());
 
   textRef.current = text;
-  parseRef.current = parse;
-  stageRef.current = stage;
   draftRef.current = draft;
   submittingRef.current = submitting;
-  // Ref, not dep: the memoized callbacks below must see the latest seed
-  // without re-creating on every render.
-  const initialDatesRef = useRef(initialDates);
-  initialDatesRef.current = initialDates;
 
   const reset = useCallback(() => {
     requestNonceRef.current += 1;
-    activeRequestRef.current = null;
+    userEditedRef.current = new Set();
     textRef.current = '';
-    stageRef.current = 'input';
-    draftRef.current = null;
-    parseRef.current = null;
+    draftRef.current = emptyDraft();
     setText('');
-    setStage('input');
-    setParse(null);
+    setDraft(draftRef.current);
     setParseInFlight(false);
-    setDraft(null);
-  }, []);
+  }, [emptyDraft]);
 
   const close = useCallback(() => {
     if (submittingRef.current) return;
@@ -147,94 +106,100 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
     };
   }, [close, open]);
 
+  // Merge a landed parse into the form: fill only what the user hasn't taken
+  // over, badge each filled field ✦. The title is special — a raw-fallback
+  // response echoes the input and isn't a suggestion.
+  const applyParse = useCallback((result: QuickTaskParse, rawText: string) => {
+    const edited = userEditedRef.current;
+    setDraft((cur) => {
+      const next: ConfirmDraft = { ...cur, aiFields: new Set(cur.aiFields) };
+      const parsedTitle = result.title?.trim() || rawText;
+      if (!edited.has('title') && parsedTitle !== rawText.trim()) {
+        next.title = parsedTitle;
+        next.aiFields.add('title');
+      }
+      if (result.due_date && !edited.has('due')) { next.due = result.due_date; next.aiFields.add('due'); }
+      if (result.start_date && !edited.has('start')) { next.start = result.start_date; next.aiFields.add('start'); }
+      if (result.pinTier && !edited.has('pin')) { next.pin = result.pinTier; next.aiFields.add('pin'); }
+      if (result.priority && !edited.has('priority')) { next.priority = result.priority; next.aiFields.add('priority'); }
+      if (result.starred !== undefined && !edited.has('star')) { next.starred = !!result.starred; next.aiFields.add('star'); }
+      const project = result.project?.trim();
+      if (project && !edited.has('project')) {
+        next.project = project;
+        next.projectIsNew = !!result.project_is_new;
+        next.aiFields.add('project');
+      }
+      draftRef.current = next;
+      return next;
+    });
+  }, []);
+
+  // Debounced background parse of the sentence. Purely additive — nothing
+  // waits on it, and a stale response (nonce or text moved on) is dropped.
   useEffect(() => {
     if (!open) return;
     const requestedText = text.trim();
     if (!requestedText) {
       requestNonceRef.current += 1;
-      activeRequestRef.current = null;
-      setParse(null);
       setParseInFlight(false);
       return;
     }
-
     const nonce = ++requestNonceRef.current;
-    let requestPromise: Promise<QuickTaskParse> | null = null;
-    const start = () => {
-      if (requestPromise) return requestPromise;
-      requestPromise = quickParseTask(requestedText)
+    setParseInFlight(true);
+    const timer = setTimeout(() => {
+      quickParseTask(requestedText)
         .then((result) => {
-          const isCurrent = nonce === requestNonceRef.current && requestedText === textRef.current.trim();
-          if (!isCurrent) return result;
-          parseRef.current = result;
-          setParse(result);
-          if (stageRef.current === 'confirm' && draftRef.current === null) {
-            const seeded = applyInitialDates(draftFromParse(result, requestedText), initialDatesRef.current);
-            draftRef.current = seeded;
-            setDraft(seeded);
-            setTimeout(() => popoverRef.current?.querySelector<HTMLInputElement>('.qtc-confirm-title')?.focus(), 0);
-          }
-          return result;
+          if (nonce !== requestNonceRef.current || requestedText !== textRef.current.trim()) return;
+          applyParse(result, requestedText);
         })
-        .catch(() => ({ title: requestedText }))
+        .catch(() => {})
         .finally(() => {
-          if (activeRequestRef.current?.nonce === nonce) activeRequestRef.current = null;
           if (nonce === requestNonceRef.current) setParseInFlight(false);
         });
-      return requestPromise;
-    };
-    activeRequestRef.current = { nonce, text: requestedText, start };
-    setParseInFlight(true);
-    const timer = setTimeout(() => { start().catch(() => {}); }, 500);
+    }, 500);
     return () => clearTimeout(timer);
-  }, [open, text]);
+  }, [applyParse, open, text]);
 
-  useEffect(() => {
-    if (stage !== 'confirm' || draft !== null) return;
-    const timer = setTimeout(() => {
-      if (stageRef.current !== 'confirm' || draftRef.current !== null) return;
-      const fallback = applyInitialDates(fallbackDraft(textRef.current.trim()), initialDatesRef.current);
-      draftRef.current = fallback;
-      setDraft(fallback);
-    }, 12_000);
-    return () => clearTimeout(timer);
-  }, [draft, stage]);
-
-  const enterConfirm = useCallback(() => {
-    const rawText = textRef.current.trim();
-    if (!rawText || submittingRef.current) return;
-    const seeded = parseRef.current
-      ? applyInitialDates(draftFromParse(parseRef.current, rawText), initialDatesRef.current)
-      : null;
-    stageRef.current = 'confirm';
-    draftRef.current = seeded;
-    setStage('confirm');
-    setDraft(seeded);
-    if (!seeded) activeRequestRef.current?.start().catch(() => {});
-    setTimeout(() => {
-      if (seeded) popoverRef.current?.querySelector<HTMLInputElement>('.qtc-confirm-title')?.focus();
-      else skeletonRef.current?.focus();
-    }, 0);
-  }, []);
-
-  const goBack = useCallback(() => {
-    stageRef.current = 'input';
-    draftRef.current = null;
-    setStage('input');
-    setDraft(null);
-    setTimeout(() => inputRef.current?.focus(), 0);
+  const handleTextChange = useCallback((value: string) => {
+    textRef.current = value;
+    setText(value);
+    const edited = userEditedRef.current;
+    const seed = initialDatesRef.current;
+    setDraft((cur) => {
+      const next: ConfirmDraft = { ...cur };
+      const ai = cur.aiFields;
+      // AI contributions belong to the OLD sentence — revert any the user
+      // hasn't taken over (dates fall back to the seeded slot, not to blank).
+      if (ai.size) {
+        if (ai.has('due') && !edited.has('due')) next.due = seed?.due;
+        if (ai.has('start') && !edited.has('start')) next.start = seed?.start;
+        if (ai.has('pin') && !edited.has('pin')) next.pin = undefined;
+        if (ai.has('priority') && !edited.has('priority')) next.priority = undefined;
+        if (ai.has('star') && !edited.has('star')) next.starred = false;
+        if (ai.has('project') && !edited.has('project')) { next.project = undefined; next.projectIsNew = false; }
+      }
+      // Live mirror: the form always shows exactly what Enter would create.
+      if (!edited.has('title')) next.title = value;
+      next.aiFields = new Set();
+      draftRef.current = next;
+      return next;
+    });
   }, []);
 
   const handleDraftChange = useCallback((patch: Partial<ConfirmDraft>) => {
     setDraft((current) => {
-      if (!current) return current;
       const aiFields = new Set(current.aiFields);
       for (const key of Object.keys(patch)) {
-        if (key === 'starred') aiFields.delete('star');
-        else if (key !== 'aiFields') aiFields.delete(key as ConfirmField);
+        if (key === 'aiFields') continue;
+        const field = (key === 'starred' ? 'star' : key) as ConfirmField;
+        aiFields.delete(field);
+        // Clearing the title hands it back to the sentence mirror; anything
+        // else marks the field user-owned so AI/mirror won't overwrite it.
+        if (field === 'title' && !(patch.title ?? '').trim()) userEditedRef.current.delete('title');
+        else userEditedRef.current.add(field);
       }
-      // A hand-typed project is no longer the AI's invention.
       const next = { ...current, ...patch, aiFields };
+      // A hand-typed project is no longer the AI's invention.
       if ('project' in patch) next.projectIsNew = false;
       draftRef.current = next;
       return next;
@@ -266,14 +231,6 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
       });
   }, [onCreate, reset]);
 
-  // Direct path — "buy milk" needs no AI round-trip. Creates verbatim (title =
-  // raw text, dates = the seeded slot if any), skipping the confirm stage.
-  const createAsIs = useCallback(() => {
-    const rawText = textRef.current.trim();
-    if (!rawText || submittingRef.current) return;
-    create(applyInitialDates(fallbackDraft(rawText), initialDatesRef.current));
-  }, [create]);
-
   const handleContainerKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.key === 'Tab') {
@@ -296,21 +253,14 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
     if (event.key === 'Enter') {
       if ((event.target as HTMLElement).tagName === 'BUTTON') return;
       event.preventDefault();
-      // Cmd/Ctrl+Enter = create exactly what was typed, no AI review step.
-      if (stageRef.current === 'input' && (event.metaKey || event.ctrlKey)) {
-        createAsIs();
-        return;
-      }
-      if (stageRef.current === 'input') enterConfirm();
-      else if (draftRef.current) create(draftRef.current);
+      create(draftRef.current);
       return;
     }
     if (event.key !== 'Escape') return;
     event.preventDefault();
     event.stopPropagation();
-    if (stageRef.current === 'confirm') goBack();
-    else close();
-  }, [close, create, createAsIs, enterConfirm, goBack]);
+    close();
+  }, [close, create]);
 
   if (!open) return null;
 
@@ -326,64 +276,31 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
       <div className="qtc-header">
         <span className="qtc-header-title">Add a task</span>
       </div>
-      {stage === 'input' ? (
-        <>
-          <input
-            ref={inputRef}
-            className="qtc-input"
-            value={text}
-            maxLength={500}
-            autoFocus={open}
-            disabled={submitting}
-            placeholder="Buy milk / file taxes tomorrow / fix login bug…"
-            onChange={(event) => {
-              requestNonceRef.current += 1;
-              activeRequestRef.current = null;
-              textRef.current = event.target.value;
-              setText(event.target.value);
-              setParse(null);
-              setParseInFlight(false);
-            }}
-          />
-          {/* Two equal exits: "buy milk" doesn't need an AI round-trip, so the
-              as-is path must be one click — AI review is the option, not a gate. */}
-          {text.trim() && (
-            <div className="qtc-input-actions">
-              <button
-                type="button"
-                className="qtc-input-add"
-                disabled={submitting}
-                onClick={createAsIs}
-                title="Create exactly what you typed (⌘⏎)"
-              >
-                {submitting ? 'Adding…' : 'Add'}
-              </button>
-              <button
-                type="button"
-                className="qtc-input-ai"
-                disabled={submitting}
-                onClick={enterConfirm}
-                title="AI cleans up the title and suggests dates/priority (⏎)"
-              >
-                {parseInFlight ? '✦ Analyzing…' : '✦ Review with AI'}
-              </button>
-            </div>
-          )}
-        </>
-      ) : (
-        <div ref={skeletonRef} tabIndex={draft ? undefined : -1}>
-          <QuickTaskConfirm
-            draft={draft}
-            rawText={text}
-            projectOptions={projectOptions}
-            submitting={submitting}
-            onChange={handleDraftChange}
-            onCreate={() => { if (draftRef.current) create(draftRef.current); }}
-            onBack={goBack}
-            onCreateWithoutAi={() => create(applyInitialDates(fallbackDraft(textRef.current.trim()), initialDatesRef.current))}
-          />
-        </div>
-      )}
+      <input
+        ref={inputRef}
+        className="qtc-input"
+        value={text}
+        maxLength={500}
+        autoFocus={open}
+        disabled={submitting}
+        placeholder="✦ One sentence — AI fills the form below…"
+        onChange={(event) => handleTextChange(event.target.value)}
+      />
+      <div className="qtc-input-status" aria-live="polite">
+        {text.trim() && parseInFlight && <span className="qtc-parsing">✦ Analyzing…</span>}
+        {text.trim() && !parseInFlight && draft.aiFields.size > 0 && (
+          <span className="qtc-parsed">✦ Suggestions applied — edit anything below</span>
+        )}
+      </div>
+      <div className="qtc-divider" role="separator" />
+      <QuickTaskConfirm
+        draft={draft}
+        rawText={text}
+        projectOptions={projectOptions}
+        submitting={submitting}
+        onChange={handleDraftChange}
+        onCreate={() => create(draftRef.current)}
+      />
     </div>
   );
 }

@@ -25,7 +25,8 @@ export interface ConfirmDraft {
 }
 
 interface Props {
-  draft: ConfirmDraft | null;
+  draft: ConfirmDraft;
+  /** The sentence in the NL input above — drives the "was:" line under an AI-rewritten title. */
   rawText: string;
   /**
    * Flat list of existing project names (Project is the single grouping layer).
@@ -37,14 +38,17 @@ interface Props {
   submitting: boolean;
   onChange: (patch: Partial<ConfirmDraft>) => void;
   onCreate: () => void;
-  onBack: () => void;
-  onCreateWithoutAi: () => void;
 }
 
 function AiBadge({ visible }: { visible: boolean }) {
   return visible ? <span className="qtc-confirm-ai" aria-label="AI suggested">✦</span> : null;
 }
 
+/**
+ * The always-visible task form. Nothing here waits on the AI: every field is
+ * directly editable from the moment the composer opens, and the background
+ * parse back-fills fields (✦-badged) only where the user hasn't typed.
+ */
 export function QuickTaskConfirm({
   draft,
   rawText,
@@ -52,32 +56,12 @@ export function QuickTaskConfirm({
   submitting,
   onChange,
   onCreate,
-  onBack,
-  onCreateWithoutAi,
 }: Props) {
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [startPickerOpen, setStartPickerOpen] = useState(false);
 
-  if (!draft) {
-    return (
-      <div className="qtc-confirm-panel qtc-confirm-skeleton" tabIndex={-1} aria-busy="true">
-        <div className="qtc-confirm-analyzing">✦ Analyzing…</div>
-        <div className="qtc-confirm-skeleton-row qtc-confirm-skeleton-title" />
-        <div className="qtc-confirm-skeleton-row" />
-        <div className="qtc-confirm-skeleton-row" />
-        <div className="qtc-confirm-footer">
-          <button type="button" className="qtc-confirm-primary" onClick={onCreateWithoutAi} disabled={submitting}>
-            Create without AI
-          </button>
-          <button type="button" className="qtc-confirm-back" onClick={onBack} disabled={submitting}>Back</button>
-        </div>
-      </div>
-    );
-  }
-
   const priorityOption = PRIORITY_OPTIONS.find((option) => option.value === draft.priority);
   const priorityLabel = priorityOption ? `${priorityOption.icon} ${priorityOption.label}` : 'No priority';
-  const titleChanged = draft.title.trim() !== rawText.trim();
   // Badge a project the AI invented, but only while it's still absent from the
   // known list — the moment the user picks an existing name it isn't new anymore.
   const showNewProjectBadge = !!draft.projectIsNew
@@ -103,9 +87,12 @@ export function QuickTaskConfirm({
           value={draft.title}
           maxLength={500}
           disabled={submitting}
+          placeholder="Task title"
           onChange={(event) => onChange({ title: event.target.value })}
         />
-        {titleChanged && <span className="qtc-confirm-was">was: &quot;{rawText}&quot;</span>}
+        {draft.aiFields.has('title') && !!rawText.trim() && (
+          <span className="qtc-confirm-was">was: &quot;{rawText}&quot;</span>
+        )}
       </label>
 
       <div className="qtc-confirm-field">
@@ -195,8 +182,7 @@ export function QuickTaskConfirm({
         <button type="button" className="qtc-confirm-primary" disabled={submitting || !draft.title.trim()} onClick={onCreate}>
           {submitting ? 'Creating…' : 'Create'}
         </button>
-        <button type="button" className="qtc-confirm-back" disabled={submitting} onClick={onBack}>Back</button>
-        <span className="qtc-confirm-key-hint">Enter to create · Esc to edit text</span>
+        <span className="qtc-confirm-key-hint">Enter to create · Esc to close</span>
       </div>
     </div>
   );
