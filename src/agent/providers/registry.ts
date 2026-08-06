@@ -127,9 +127,12 @@ export function buildProviderMap(
 
   // 3. Fill Bedrock auth when none is explicitly configured, using the unified
   //    resolver (settings.json env → process.env → ~/.aws). Only fill when there's
-  //    no bearer_token / access keys / profile so the user's chosen auth wins.
+  //    no bearer_token / access keys / profile / credential-export command so the
+  //    user's chosen auth wins (an explicit aws_credential_export was previously
+  //    clobbered by the resolver's own credential_process on machines that have one).
   if (result.bedrock && !result.bedrock.bearer_token
-      && !result.bedrock.aws_access_key_id && !result.bedrock.aws_profile) {
+      && !result.bedrock.aws_access_key_id && !result.bedrock.aws_profile
+      && !result.bedrock.aws_credential_export) {
     result.bedrock = applyResolvedBedrockAuth(result.bedrock, fullConfig);
   }
 
