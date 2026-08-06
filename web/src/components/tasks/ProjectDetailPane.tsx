@@ -12,10 +12,12 @@
 import { useState, useEffect, useMemo, useCallback, type CSSProperties } from 'react';
 import type { Task } from '@open-walnut/core';
 import { useIntegrations, getIntegrationMeta } from '../../hooks/useIntegrations';
+import { useConfirm } from '@/hooks/useConfirm';
 import {
   fetchProjectDetail,
   saveProjectMetadata,
   regenerateProjectSummary,
+  deleteProject,
   type ProjectMetadata,
 } from '@/api/projects';
 
@@ -38,6 +40,9 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
   const [summaryRefreshing, setSummaryRefreshing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const confirm = useConfirm();
 
   const refreshSummary = useCallback(async () => {
     setSummaryRefreshing(true);
@@ -87,6 +92,35 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
     setEditingField(field);
     setEditValue(currentValue);
   }, []);
+
+  // Delete the project. Local claim = row drop, tasks → Inbox (reversible-ish:
+  // the data survives). Provider claim = the ?remote=1 CASCADE — the plugin
+  // deletes the remote container itself (MS To-Do: the list), which is
+  // IRREVERSIBLE, so the confirm copy spells out the provider-specific effect.
+  const handleDelete = useCallback(async () => {
+    const isClaimed = source !== 'local';
+    const ok = await confirm({
+      title: `Delete project “${displayName}”?`,
+      message: isClaimed
+        ? `This project is synced with ${source}. Deleting it ALSO DELETES the remote container (e.g. the MS To-Do list) — this cannot be undone. Local tasks are kept and move to the Inbox.`
+        : `Its ${counts.total} task${counts.total === 1 ? '' : 's'} move to the Inbox (nothing is deleted).`,
+      confirmLabel: isClaimed ? 'Delete here + remote' : 'Delete project',
+      danger: true,
+    });
+    if (!ok) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteProject(displayName, isClaimed ? { remote: true } : undefined);
+      onClose(); // row is gone — the task list refreshes via the task:updated broadcast
+    } catch (err) {
+      // Surface inline: 409 = plugin lacks the cascade hook; 502 = the remote
+      // call failed (auth expired…) with local state untouched — retryable.
+      setDeleteError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeleting(false);
+    }
+  }, [confirm, displayName, source, counts.total, onClose]);
 
   const saveEdit = useCallback(async (field: string) => {
     setEditingField(null);
@@ -224,6 +258,25 @@ export function ProjectDetailPane({ project, tasks, onClose, style }: ProjectDet
           <p className="detail-memory-text">{memorySummary}</p>
         </div>
       )}
+
+      {/* Delete — tasks always survive (they move to Inbox / the provider's
+          fallback); what's destroyed is the grouping row and, for a synced
+          project, the REMOTE container. */}
+      <div className="detail-section project-danger-section">
+        <button
+          className="project-delete-btn"
+          onClick={handleDelete}
+          disabled={deleting}
+        >
+          {deleting ? 'Deleting…' : 'Delete Project'}
+        </button>
+        {source !== 'local' && (
+          <p className="project-delete-hint">
+            Synced with {source} — also removes the remote container. Tasks move to the Inbox.
+          </p>
+        )}
+        {deleteError && <p className="project-delete-error">{deleteError}</p>}
+      </div>
     </div>
   );
 }

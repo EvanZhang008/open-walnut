@@ -76,12 +76,27 @@ export function renameProject(from: string, to: string): Promise<{ count: number
   return apiPatch(`/api/projects/${encodeURIComponent(from)}`, { name: to });
 }
 
+export interface DeleteProjectResult {
+  project: string;
+  movedToInbox: number;
+  /** 'grouping-removed' cascade — tasks moved to the provider's fallback project, binding kept. */
+  movedToProject?: { project: string; count: number };
+  remoteDeleted: boolean;
+  source: string;
+}
+
 /**
- * Delete the registry row; its tasks fall back to Inbox. Rejects with 409 for a
- * provider-claimed project (the remote list still exists — unclaim it first).
+ * Delete the registry row; its tasks fall back to Inbox.
+ *
+ * A provider-claimed project without `remote: true` rejects with 409 (the remote
+ * container still exists — the next pull would just recreate the row). The 409
+ * body's `cascade_available` says whether the plugin supports the cascade.
+ * `remote: true` opts into it: the plugin deletes the remote container
+ * (IRREVERSIBLE — MS To-Do deletes the list itself), so the UI must confirm first.
  */
-export function deleteProject(name: string): Promise<{ project: string; movedToInbox: number }> {
-  return apiDelete<{ project: string; movedToInbox: number }>(`/api/projects/${encodeURIComponent(name)}`);
+export function deleteProject(name: string, opts?: { remote?: boolean }): Promise<DeleteProjectResult> {
+  const qs = opts?.remote ? '?remote=1' : '';
+  return apiDelete<DeleteProjectResult>(`/api/projects/${encodeURIComponent(name)}${qs}`);
 }
 
 /** Everything the detail pane needs in one call. */

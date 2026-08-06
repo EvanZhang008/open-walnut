@@ -11923,6 +11923,36 @@ body.walnut-dragging {
 .detail-summary-refresh:hover:not(:disabled) { color: var(--fg); }
 .detail-summary-refresh:disabled { cursor: default; opacity: 0.6; }
 
+/* Project delete — quiet by default, unmistakably destructive on hover */
+.project-danger-section {
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.project-delete-btn {
+  border: 1px solid color-mix(in srgb, var(--danger, #ff3b30) 35%, transparent);
+  background: none;
+  color: var(--danger, #ff3b30);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.project-delete-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger, #ff3b30) 10%, transparent);
+}
+.project-delete-btn:disabled { cursor: default; opacity: 0.6; }
+.project-delete-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.project-delete-error {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--danger, #ff3b30);
+}
+
 .detail-setting-row {
   display: flex;
   align-items: center;
