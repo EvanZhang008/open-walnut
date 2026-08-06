@@ -783,14 +783,17 @@ apiV1Router.get('/tasks', async (req: Request, res: Response, next: NextFunction
 // defaults to config default / Inbox, a missing project registry row is
 // auto-created, source resolution is identical. Answers 201 with the created
 // task in the slim ProjectedTask shape GET /tasks serves.
-// Primary box only: a REPLICA has no task DB — 503 like the launch endpoints.
+//
+// Works on BOTH boxes. A REPLICA has a real local task store (the projection
+// import seeds it — task-outbox.ts importProjectionOnCloud), and the
+// TASK_CREATED emit below is what the cloud outbox subscriber (server.ts)
+// listens for to drop an op file that rides git-sync back to the primary —
+// the exact path the web UI's task creation already uses on cloud. The one
+// cloud caveat: GET /api/v1/tasks serves the git-synced projection, so the
+// new task appears there only after the outbox→primary→projection round trip
+// (the app renders its own 201 response optimistically in the meantime).
 apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (CLOUD_MODE) {
-      sendError(res, 503, 'not_supported_cloud',
-        'Creating tasks runs on the primary box — connect the app to it directly')
-      return
-    }
     const { title, project, priority, due_date: dueDate, description } = (req.body ?? {}) as {
       title?: unknown
       project?: unknown

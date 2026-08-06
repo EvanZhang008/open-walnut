@@ -179,7 +179,46 @@ async function projectedHostForSession(sessionId: string): Promise<string | null
   return (await projectedSession(sessionId))?.host ?? null
 }
 
-async function cloudSend(res: Response, sessionId: string, text: string): Promise<void> {
+/**
+ * Cloud path for image attachments: save each image on the SESSION'S HOST via
+ * the narrow bridge-allowlisted `image.save` daemon command (mediaType
+ * allowlist + size cap + fixed daemon-owned dir — deliberately NOT fs.write),
+ * then reference the returned paths in the augmented text exactly like the
+ * primary-box path does, so the CLI's Read tool can open them.
+ *
+ * Throws CloudImageError with a precise code — never silently drops an image:
+ * - images_need_daemon_upgrade: pre-image.save daemon (unknown command). The
+ *   daemon auto-upgrades on the next Mac reconnect, so this self-heals.
+ * - image_upload_failed: the daemon refused (bad mediaType/size) or the save
+ *   errored on the host.
+ * BridgeOfflineError propagates to cloudSend's 503 handler.
+ */
+class CloudImageError extends Error {
+  constructor(public code: 'images_need_daemon_upgrade' | 'image_upload_failed', message: string) { super(message) }
+}
+
+async function saveImagesViaBridge(host: string, sessionId: string, images: SessionImage[]): Promise<string[]> {
+  const { bridgeRequest } = await import('../ws/bridge-registry.js')
+  const savedPaths: string[] = []
+  for (const img of images) {
+    // 30s: an image frame is up to ~14MB of base64 over the bridge WS.
+    const saved = await bridgeRequest(host, 'image.save', { data: img.data, mediaType: img.mediaType }, 30_000)
+    if (saved.ok === true && typeof saved.path === 'string') {
+      savedPaths.push(saved.path)
+      continue
+    }
+    const reason = String(saved.error ?? 'unknown')
+    if (reason.startsWith('unknown command')) {
+      throw new CloudImageError('images_need_daemon_upgrade',
+        'This host\'s daemon predates image support — it upgrades automatically on the next primary-box reconnect')
+    }
+    throw new CloudImageError('image_upload_failed', `Image save failed on ${host}: ${reason}`)
+  }
+  log.web.info('mobile session images saved via bridge', { sessionId, host, count: savedPaths.length })
+  return savedPaths
+}
+
+async function cloudSend(res: Response, sessionId: string, text: string, images: SessionImage[] = []): Promise<void> {
   const projected = await projectedSession(sessionId)
   if (!projected) {
     sendError(res, 404, 'not_found', `Session not found: ${sessionId}`)
@@ -188,6 +227,14 @@ async function cloudSend(res: Response, sessionId: string, text: string): Promis
   const host = projected.host
   const { bridgeRequest, BridgeOfflineError } = await import('../ws/bridge-registry.js')
   try {
+    // Images first: if any save fails the send is aborted with a precise error
+    // (never a text-only turn that silently dropped the pictures). Augmented
+    // text mirrors the primary-box "[Images attached …]" format.
+    if (images.length > 0) {
+      const savedPaths = await saveImagesViaBridge(host, sessionId, images)
+      const pathList = savedPaths.map((p) => `- ${p}`).join('\n')
+      text = `[Images attached — use the Read tool to view them]\n${pathList}\n\n${text}`
+    }
     // Liveness precheck — if the CLI is gone (dead record, or the record
     // itself was lost to a daemon restart), attempt a bridgeResume instead
     // of 409. This lets the phone send to idle/stopped/error sessions
@@ -228,9 +275,13 @@ async function cloudSend(res: Response, sessionId: string, text: string): Promis
       }
       log.web.info('mobile session resumed via bridge', { sessionId, host, messageId, pid: resumed.pid })
     }
-    log.web.info('mobile session send via bridge', { sessionId, host, messageId })
+    log.web.info('mobile session send via bridge', { sessionId, host, messageId, imageCount: images.length })
     res.status(202).json({ messageId })
   } catch (err) {
+    if (err instanceof CloudImageError) {
+      sendError(res, 400, err.code, err.message)
+      return
+    }
     if (err instanceof BridgeOfflineError) {
       sendError(res, 503, 'bridge_offline', 'No live bridge to this session\'s host')
       return
@@ -287,6 +338,12 @@ export async function buildTranscriptViaBridge(sessionId: string): Promise<Recor
   const messages: Array<{ role: string; text: string; timestamp: string; kind?: 'tool' | 'thinking'; detail?: string; resultPreview?: string }> = []
   for (const parsed of lines) {
     if (parsed.parent_tool_use_id) continue // subagent lane
+    // CLI-injected user lines (skill dumps, compaction summaries) — same skip
+    // as buildSessionTranscript's `m.injected` filter on the primary box.
+    // walnut-injected markers are exempt: they ARE the user's words.
+    if (parsed.subtype !== 'walnut-injected'
+        && (parsed.isMeta === true || parsed.isSynthetic === true
+          || parsed.isCompactSummary === true || parsed.isVisibleInTranscriptOnly === true)) continue
     const timestamp = typeof parsed.timestamp === 'string' ? parsed.timestamp : new Date().toISOString()
     const type = parsed.type as string
     const content = (parsed.message as { content?: unknown } | undefined)?.content
@@ -294,14 +351,21 @@ export async function buildTranscriptViaBridge(sessionId: string): Promise<Recor
     if (type === 'user') {
       // Real user turns + walnut-injected markers (both ARE the user's words);
       // tool_result carrier lines have array content with tool_result blocks.
+      // Drop ONLY the CLI's interrupt markers — the old blanket startsWith('[')
+      // filter also swallowed "[Images attached — use the Read tool …]" turns
+      // (every phone/web image send), so a cloud fresh=1 read showed a
+      // transcript with the user's image messages missing while the primary
+      // path (buildSessionTranscript) kept them. Keep parity with primary:
+      // everything the human's turn carries survives.
       if (typeof content === 'string') {
         const text = content.trim()
-        if (text && !text.startsWith('[')) messages.push({ role: 'user', text: clip(text), timestamp })
+        if (text && !isInterruptMarker(text)) messages.push({ role: 'user', text: clip(text), timestamp })
       } else if (Array.isArray(content)) {
         for (const block of content) {
           const b = block as { type?: string; text?: string }
-          if (b.type === 'text' && b.text?.trim() && !b.text.trim().startsWith('[')) {
-            messages.push({ role: 'user', text: clip(b.text.trim()), timestamp })
+          const text = b.type === 'text' ? b.text?.trim() : undefined
+          if (text && !isInterruptMarker(text)) {
+            messages.push({ role: 'user', text: clip(text), timestamp })
           }
         }
       }
@@ -337,6 +401,13 @@ function clip(text: string): string {
   return text.length > TRANSCRIPT_TEXT_MAX ? text.slice(0, TRANSCRIPT_TEXT_MAX) + '…' : text
 }
 
+/** The CLI's abort echo ("[Request interrupted by user( for tool use)]") —
+ *  plumbing, not the human's words. The only bracket-prefixed user line the
+ *  slim tail hides (matches the web console's SessionMessage handling). */
+function isInterruptMarker(text: string): boolean {
+  return /^\[Request interrupted by user( for tool use)?\]$/.test(text)
+}
+
 // ─── POST /sessions/:id/messages ────────────────────────────────────────────
 
 sessionStreamV1Router.post('/sessions/:id/messages', async (req: Request, res: Response, next: NextFunction) => {
@@ -358,14 +429,11 @@ sessionStreamV1Router.post('/sessions/:id/messages', async (req: Request, res: R
 
     if (CLOUD_MODE) {
       // The CLI runs on a different machine than this EC2 replica, so images
-      // saved here are unreadable by the session's Read tool. Uploading base64
-      // over the bridge needs the privileged fs.write (not in the bridge
-      // allowlist) — out of scope. Reject clearly instead of silently dropping.
-      if (images.length > 0) {
-        sendError(res, 400, 'images_not_supported_cloud', 'Images can only be sent to sessions from the primary box')
-        return
-      }
-      await cloudSend(res, sessionId, text)
+      // are saved on the SESSION'S HOST via the narrow bridge-allowlisted
+      // `image.save` daemon command (deliberately NOT fs.write — see the
+      // containment note in daemon-standalone.ts), then referenced by path in
+      // the augmented text the same way the primary-box path does below.
+      await cloudSend(res, sessionId, text, images)
       return
     }
 

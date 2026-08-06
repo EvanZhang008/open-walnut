@@ -36,7 +36,8 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `not_found` | 404 | Unknown conversation / note |
 | `conflict` | 409 | Note hash mismatch / note already exists |
 | `turn_active` | 409 | A turn is already running on this conversation |
-| `images_not_supported_cloud` | 400 | Session-talk images attempted against the cloud companion (the CLI runs on another machine) — send from the primary box |
+| `images_need_daemon_upgrade` | 400 | Session-talk images sent via the cloud companion to a host whose daemon predates `image.save` — self-heals on the next primary-box reconnect (auto-deploy) |
+| `image_upload_failed` | 400 | Session-talk image save failed on the session's host (daemon refused the payload or the write errored) |
 | `too_large` | 413 | Note content exceeds 2 MB |
 | `internal` | 500 | Unhandled server error |
 
@@ -236,8 +237,12 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   slim ProjectedTask shape (which carries `summary`, a different field) — don't
   expect to read it back from `POST`'s response or `GET /tasks`.
   Errors: `400 bad_request` (missing title / bad priority / bad due_date),
-  `409 conflict` (project source conflict), `503 not_supported_cloud` on a
-  REPLICA (task writes run on the primary box only).
+  `409 conflict` (project source conflict).
+  Works on BOTH boxes (2026-08: the REPLICA's former `503 not_supported_cloud`
+  gate was removed — the cloud companion writes to its local store and the
+  task outbox syncs it back to the primary). On a REPLICA the new task shows
+  up in `GET /tasks` only after the outbox→primary→projection round trip
+  (up to a couple of git-sync cycles); render the `201` response optimistically.
 
 ### Sessions (read-only)
 
@@ -291,17 +296,23 @@ primary box the same endpoints serve directly — no bridge involved.
   session (mid-turn sends are fine — the session reads them between turns).
   - `images` (additive) — same shape/limits as the conversation endpoint
     (`[ { "data": "<raw base64>", "mediaType": "image/png" } ]`, ≤5, png/jpeg/
-    gif/webp). Non-cloud only: each image is saved to disk and the message is
-    prefixed with `[Images attached — use the Read tool to view them]` plus the
-    file paths, so the CLI reads them with its Read tool (remote hosts: the
-    files are uploaded and paths rewritten automatically). `text` may be empty
-    when images are present; with no images an empty `text` is still
+    gif/webp). Each image is saved to disk and the message is prefixed with
+    `[Images attached — use the Read tool to view them]` plus the file paths,
+    so the CLI reads them with its Read tool (remote hosts: the files are
+    uploaded and paths rewritten automatically). On the cloud companion the
+    images are saved on the SESSION'S HOST over the daemon bridge via the
+    narrow `image.save` command (mediaType allowlist, 10MB decoded cap,
+    daemon-owned directory, generated filename). `text` may be empty when
+    images are present; with no images an empty `text` is still
     `400 bad_request` (unchanged for old clients).
   - `404 not_found` — unknown session.
-  - `400 { "error": { "code": "images_not_supported_cloud" } }` — images were
-    attached while talking to the cloud companion (`REPLICA` mode). The CLI runs
-    on a different machine and can't read files saved on the cloud box; send
-    images to sessions from the primary box. Text-only sends are unaffected.
+  - `400 { "error": { "code": "images_need_daemon_upgrade" } }` — (cloud only)
+    the session's host runs a daemon that predates `image.save`. The daemon
+    auto-upgrades on the next primary-box reconnect; retry later or send from
+    the primary box.
+  - `400 { "error": { "code": "image_upload_failed" } }` — (cloud only) an
+    image save failed on the session's host; nothing was sent (images are
+    never silently dropped).
   - `409 { "error": { "code": "session_dead" } }` — the CLI process is not
     running (idle-reaped). Waking a dead session stays a primary-box action;
     show "wake it from your desktop".
