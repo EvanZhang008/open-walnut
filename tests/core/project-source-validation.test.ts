@@ -59,6 +59,12 @@ beforeEach(async () => {
   for (const id of PLUGIN_SOURCES) {
     if (!registry.has(id)) registry.register(id, createMockPlugin({ id }));
   }
+  // renameProject reaches the remote container ONLY through the plugin's
+  // renameProjectRemote hook now (core never imports an integration) — wire the
+  // ms-todo mock's hook to the same spy the module mock uses.
+  registry.get('ms-todo')!.sync.renameProjectRemote = async ({ oldRemoteName, newName }) => {
+    await mockRenameListByName(oldRemoteName, newName);
+  };
 });
 
 afterEach(async () => {

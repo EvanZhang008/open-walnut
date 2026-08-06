@@ -91,6 +91,48 @@ export interface IntegrationSync {
   // ── Pull (periodic sync from remote) ──
   syncPoll(ctx: SyncPollContext): Promise<void>;
 
+  // ── Project (grouping container) lifecycle — optional ──
+  // A project is Walnut's single grouping layer; providers map it to whatever
+  // container they have (MS To-Do: a list; tag-based platforms: a task tag).
+  // These hooks let core rename/delete the CONTAINER once instead of touching
+  // N tasks — and they are the only sanctioned way core reaches a provider's
+  // container (core never imports a specific integration).
+
+  /** Rename the remote container that backs a project.
+   *  `oldRemoteName` is the container's CURRENT remote name — the registry's
+   *  `remote_list` alias when set (legacy "Cat / Proj" lists), else the old
+   *  project name. Called only for a plain rename (not a merge — a merge's
+   *  target container already exists and tasks genuinely move via
+   *  updateProject). Throw to make core fall back to per-task pushes. */
+  renameProjectRemote?(args: { oldRemoteName: string; newName: string }): Promise<void>;
+
+  /** Delete the remote side of a project (cascade delete). Called BEFORE any
+   *  local mutation — a throw aborts the cascade with local state untouched.
+   *  Must be idempotent (an already-missing container is success, so a retry
+   *  after a partial failure converges).
+   *
+   *  `tasks` are the project's tasks with ext intact, so the plugin can
+   *  register deletion tombstones that stop a mid-flight pull re-importing
+   *  the twins.
+   *
+   *  The RESULT tells core what happened to the remote twins — the two
+   *  container models genuinely diverge here and core must not guess:
+   *   - `{ outcome: 'container-deleted' }` — the remote container AND the twins
+   *     in it are gone (MS To-Do: the list was deleted). Core detaches the
+   *     local tasks (source='local', ext cleared, project='' = Inbox): data
+   *     preserved, binding honest.
+   *   - `{ outcome: 'grouping-removed', fallbackProject }` — the platform has
+   *     no container; only the grouping marker was removed and the remote
+   *     tasks SURVIVE (tag-based platforms: the project tag was stripped).
+   *     Core moves the local tasks to `fallbackProject` KEEPING their provider
+   *     binding — that must be the same project the plugin's own pull mapper
+   *     falls back to for an unmarked task, so the next pull is a no-op
+   *     instead of a duplicate-import. */
+  deleteProjectRemote?(args: { project: string; remoteList?: string; tasks: Task[] }): Promise<
+    | { outcome: 'container-deleted' }
+    | { outcome: 'grouping-removed'; fallbackProject: string }
+  >;
+
   // ── Full Reconciliation (optional — enables framework-driven full sync) ──
 
   /** Pull ALL remote items matching this plugin's scope (no date filter).

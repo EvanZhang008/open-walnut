@@ -107,6 +107,16 @@ export default function register(api: PluginApi): void {
         async (taskData) => { const t = await ctx.addTask(taskData as any); return t as any; },
       );
     },
+    async renameProjectRemote({ oldRemoteName, newName }: { oldRemoteName: string; newName: string }) {
+      const { renameListByName } = await import('../microsoft-todo.js');
+      await renameListByName(oldRemoteName, newName);
+    },
+    async deleteProjectRemote(args: { project: string; remoteList?: string; tasks: Task[] }) {
+      const { deleteListForProject } = await import('../microsoft-todo.js');
+      await deleteListForProject(args);
+      // The list AND the twins in it are gone — core detaches the local tasks.
+      return { outcome: 'container-deleted' as const };
+    },
     async fullPull(): Promise<RemoteSyncItem[]> {
       const { fullPullAllTasks } = await import('../microsoft-todo.js');
       return fullPullAllTasks();

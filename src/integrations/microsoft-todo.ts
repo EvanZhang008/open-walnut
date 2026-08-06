@@ -414,6 +414,56 @@ export async function renameListByName(oldName: string, newName: string): Promis
   return renameList(match.id, newName);
 }
 
+/**
+ * Cascade-delete the remote list that backs a project (the container itself,
+ * not per-task deletes). Backs the plugin's `deleteProjectRemote` hook.
+ *
+ * Order matters for crash-safety:
+ *   1. Tombstone every task's ms id (registerDeletedMsIds) FIRST — if the
+ *      list delete fails partway, the next pull must not re-import the twins.
+ *   2. DELETE the list on Graph. An already-missing list is SUCCESS (idempotent
+ *      retry: a previous attempt may have deleted it and died before step 3).
+ *   3. Scrub the list's deltaLink/listName from delta state — a deltaLink for
+ *      a deleted list 404s forever on the next delta pull.
+ */
+export async function deleteListForProject(args: {
+  project: string;
+  remoteList?: string;
+  tasks: Task[];
+}): Promise<void> {
+  const listName = (args.remoteList ?? args.project).trim();
+
+  for (const task of args.tasks) {
+    await registerDeletedMsIds(task);
+  }
+
+  const token = await getAccessToken();
+  const lists = await fetchTaskLists(token);
+  const match = lists.find((l) => l.displayName.toLowerCase() === listName.toLowerCase());
+  if (match) {
+    await deleteList(match.id);
+    const deltaState = await readJsonFile<DeltaState>(DELTA_FILE, {
+      deltaLinks: {},
+      listNames: {},
+      lastSync: '',
+    });
+    if (deltaState.deltaLinks[match.id] !== undefined || deltaState.listNames[match.id] !== undefined) {
+      delete deltaState.deltaLinks[match.id];
+      delete deltaState.listNames[match.id];
+      await writeJsonFile(DELTA_FILE, deltaState);
+    }
+    log.web.info('ms-todo: deleted remote list for project', {
+      project: args.project, list: listName, listId: match.id, tombstoned: args.tasks.length,
+    });
+  } else {
+    // Already gone remotely — fine (idempotent retry, or user deleted it in the
+    // MS To-Do app). The tombstones above still matter for any stale twins.
+    log.web.info('ms-todo: remote list already absent on cascade delete', {
+      project: args.project, list: listName,
+    });
+  }
+}
+
 // -- List ID resolution (with concurrency dedup) --
 
 /**

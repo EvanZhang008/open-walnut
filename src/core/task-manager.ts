@@ -1014,22 +1014,27 @@ export async function renameProject(
     // resolves the new name, doesn't find a list, and CREATES one — forking the
     // user's list in two. Only meaningful for a plain rename; on a merge the
     // target list already exists and the tasks genuinely have to move into it.
-    if (!merged && renameSource === 'ms-todo' && oldAlias) {
-      try {
-        const { renameListByName } = await import('../integrations/microsoft-todo.js');
-        await renameListByName(oldAlias, canonical);
-        remoteRenamed = true;
-        // Remote list now IS the project name — repoint (not delete) the alias so
-        // there is exactly one source of truth for the list name.
-        await setProjectMetadata(canonical, { remote_list: canonical });
-        log.task.info('project rename: renamed remote list', {
-          project: canonical, from: oldAlias,
-        });
-      } catch (err) {
-        log.task.warn('project rename: remote list rename failed, falling back to per-task push', {
-          project: canonical, from: oldAlias,
-          error: err instanceof Error ? err.message : String(err),
-        });
+    // Goes through the plugin's optional renameProjectRemote hook — core never
+    // imports a specific integration (a plugin without the hook just takes the
+    // per-task fallback below).
+    if (!merged && oldAlias) {
+      const remoteRename = registry.get(renameSource)?.sync.renameProjectRemote;
+      if (remoteRename) {
+        try {
+          await remoteRename({ oldRemoteName: oldAlias, newName: canonical });
+          remoteRenamed = true;
+          // Remote container now IS the project name — repoint (not delete) the
+          // alias so there is exactly one source of truth for the list name.
+          await setProjectMetadata(canonical, { remote_list: canonical });
+          log.task.info('project rename: renamed remote container', {
+            project: canonical, from: oldAlias, source: renameSource,
+          });
+        } catch (err) {
+          log.task.warn('project rename: remote container rename failed, falling back to per-task push', {
+            project: canonical, from: oldAlias, source: renameSource,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     }
     if (!remoteRenamed) {
@@ -1167,6 +1172,168 @@ export async function deleteProject(project: string): Promise<{ movedToInbox: nu
 
   log.task.info('project deleted', { project: canonical, movedToInbox });
   return { movedToInbox };
+}
+
+/**
+ * Cascade-delete a provider-claimed project: delete the REMOTE side first
+ * (via the plugin's optional `deleteProjectRemote` hook), then apply the
+ * matching local transition, then drop the registry row. Local tasks are
+ * NEVER deleted — the cascade removes the container/grouping, not the data.
+ *
+ * The hook's result picks the local transition (see integration-types.ts):
+ *   - 'container-deleted'  → remote twins died with the container: local tasks
+ *     DETACH (source='local', ext cleared, project='' = Inbox).
+ *   - 'grouping-removed'   → remote tasks survive, only the grouping marker was
+ *     stripped: local tasks MOVE to the plugin's fallbackProject KEEPING their
+ *     provider binding, so the next pull is a no-op instead of a dup-import.
+ *
+ * Throws ProjectRemoteDeleteUnsupportedError when the claiming plugin doesn't
+ * implement the hook (routes map it to 409, same dead-end as before — but now
+ * the error names the actual gap instead of pointing at a non-existent UI).
+ *
+ * ORDER (crash-safety):
+ *   1. Snapshot tasks WITH ext (the plugin needs remote ids for tombstones).
+ *   2. Plugin deletes the remote side FIRST. If it throws, nothing local
+ *      changed — the project is intact and the operation is retryable.
+ *   3. Only then apply the local transition + drop the row (single store
+ *      transaction). Between 2 and 3 a concurrent pull sees the remote side
+ *      already changed — harmless: tombstones/strips from step 2 stop
+ *      re-imports of the old grouping.
+ * The inverse order would strand step-1 detached local tasks if the remote
+ * call failed, and a mid-flight reconcile could mass-delete provider tasks
+ * whose container was gone but whose rows still claimed the provider.
+ */
+export class ProjectRemoteDeleteUnsupportedError extends Error {
+  public readonly project: string;
+  public readonly source: string;
+  constructor(project: string, source: string) {
+    super(
+      `Project "${project}" is claimed by ${source}, and that integration does not support ` +
+      `remote container deletion (no deleteProjectRemote hook). Delete the remote container ` +
+      `in the provider's own app, then delete the project here.`,
+    );
+    this.name = 'ProjectRemoteDeleteUnsupportedError';
+    this.project = project;
+    this.source = source;
+  }
+}
+
+export async function deleteProjectCascade(project: string): Promise<{
+  movedToInbox: number;
+  /** Tasks moved to a surviving fallback project ('grouping-removed'), with binding kept. */
+  movedToProject?: { project: string; count: number };
+  remoteDeleted: boolean;
+  source: string;
+}> {
+  const name = (project ?? '').trim();
+  if (!name) throw new Error('Inbox is not a project — nothing to delete.');
+  await ensureInit();
+
+  const record = await getProjectRecord(name);
+  if (!record) throw new Error(`No project "${name}" found`);
+
+  // Local claim → plain delete (no remote side to cascade to).
+  if (record.source === 'local') {
+    const result = await deleteProject(record.name);
+    return { ...result, remoteDeleted: false, source: 'local' };
+  }
+
+  const plugin = registry.get(record.source);
+  const remoteDelete = plugin?.sync.deleteProjectRemote;
+  if (!remoteDelete) {
+    throw new ProjectRemoteDeleteUnsupportedError(record.name, record.source);
+  }
+
+  // Snapshot the project's tasks WITH ext intact — the plugin tombstones their
+  // remote ids so a mid-flight pull can't re-import them.
+  const lower = record.name.toLowerCase();
+  const snapshot = (await listTasks({})).filter(
+    (t) => (t.project || '').toLowerCase() === lower,
+  );
+
+  const remoteList = typeof record.metadata?.remote_list === 'string'
+    ? record.metadata.remote_list
+    : undefined;
+
+  // Remote side first — a failure here leaves everything local untouched.
+  const remoteResult = await remoteDelete({ project: record.name, remoteList, tasks: snapshot });
+
+  // 'grouping-removed' survivors keep their binding and move to the plugin's
+  // fallback project; 'container-deleted' twins are gone → detach to Inbox.
+  const survivorProject = remoteResult.outcome === 'grouping-removed'
+    ? (remoteResult.fallbackProject ?? '').trim()
+    : '';
+  if (remoteResult.outcome === 'grouping-removed' && !survivorProject) {
+    // A provider task can't live in Inbox — a plugin returning an empty
+    // fallback is a contract bug; fail before mutating anything local.
+    throw new Error(
+      `Plugin ${record.source} returned grouping-removed with an empty fallbackProject for "${record.name}".`,
+    );
+  }
+  if (survivorProject) {
+    // Register the fallback row (same claim) BEFORE moving tasks onto it.
+    await ensureProject(survivorProject, record.source);
+  }
+
+  // Apply the local transition + drop the row in one store transaction.
+  const { movedCount, taskIds, newProjectName } = await withWriteLock(async () => {
+    const store = await readStore();
+    const now = new Date().toISOString();
+    const projects = store.projects ?? {};
+    // Canonical spelling of the fallback row (ensureProject may have matched an
+    // existing row with different casing).
+    const survivorKey = survivorProject
+      ? Object.keys(projects).find((k) => k.toLowerCase() === survivorProject.toLowerCase()) ?? survivorProject
+      : '';
+    const affected = store.tasks.filter((t) => (t.project || '').toLowerCase() === lower);
+    for (const task of affected) {
+      if (survivorKey) {
+        task.project = survivorKey; // binding kept — remote twin survives
+      } else {
+        task.project = '';
+        task.source = 'local';
+        task.ext = undefined;
+        task.external_url = undefined;
+        task.sync_error = undefined;
+      }
+      task.updated_at = now;
+    }
+    const key = Object.keys(projects).find((k) => k.toLowerCase() === lower);
+    if (key) {
+      const next = { ...projects };
+      delete next[key];
+      store.projects = next;
+    }
+    await writeStore(store);
+    return {
+      movedCount: affected.length,
+      taskIds: affected.map((t) => t.id),
+      newProjectName: survivorKey,
+    };
+  });
+
+  await migrateProjectInConfigLists(record.name, null);
+
+  if (taskIds.length > 0) {
+    bus.emit(EventNames.TASK_UPDATED, {
+      task: null,
+      taskIds,
+      oldProject: record.name,
+      newProject: newProjectName,
+      count: taskIds.length,
+    }, ['web-ui', 'main-agent'], { source: 'task-manager' });
+  }
+
+  log.task.info('project cascade-deleted', {
+    project: record.name, source: record.source, outcome: remoteResult.outcome,
+    moved: movedCount, movedTo: newProjectName || 'Inbox',
+  });
+  return {
+    movedToInbox: newProjectName ? 0 : movedCount,
+    ...(newProjectName ? { movedToProject: { project: newProjectName, count: movedCount } } : {}),
+    remoteDeleted: true,
+    source: record.source,
+  };
 }
 
 /**

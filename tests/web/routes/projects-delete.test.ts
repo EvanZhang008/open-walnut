@@ -18,6 +18,8 @@ import {
 } from '../../../src/core/task-manager.js';
 import { closeDb } from '../../../src/core/task-db.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
+import { registry } from '../../../src/core/integration-registry.js';
+import { createMockPlugin, createNoopSync } from '../../core/plugin-test-utils.js';
 
 let app: express.Express;
 
@@ -57,7 +59,7 @@ describe('deleteProject', () => {
 
     const del = await request(app).delete('/api/projects/Marina');
     expect(del.status).toBe(200);
-    expect(del.body).toEqual({ project: 'Marina', movedToInbox: 2 });
+    expect(del.body).toEqual({ project: 'Marina', movedToInbox: 2, remoteDeleted: false, source: 'local' });
 
     const tasks = await listTasks();
     expect(tasks.find((t) => t.id === a.id)!.project).toBe('');
@@ -76,11 +78,49 @@ describe('deleteProject', () => {
     expect((await request(app).delete('/api/projects/%20')).status).toBe(400);
   });
 
-  it('409s a provider-claimed project', async () => {
+  it('409s a provider-claimed project and advertises whether the cascade exists', async () => {
     await ensureProject('Synced', 'ms-todo');
     const res = await request(app).delete('/api/projects/Synced');
     expect(res.status).toBe(409);
+    // No ms-todo plugin is registered in this suite → no cascade on offer.
+    expect(res.body.cascade_available).toBe(false);
     expect((await getStoreProjects())['Synced']).toBeTruthy();
+  });
+
+  it('?remote=1 on a claimed project runs the cascade through the plugin hook', async () => {
+    const hook = vi.fn(async () => ({ outcome: 'container-deleted' as const }));
+    const sync = createNoopSync();
+    sync.deleteProjectRemote = hook;
+    if (registry.has('cascade-plugin')) {
+      (registry.get('cascade-plugin') as { sync: typeof sync }).sync = sync;
+    } else {
+      registry.register('cascade-plugin', createMockPlugin({ id: 'cascade-plugin', sync }));
+    }
+
+    await ensureProject('Synced2', 'cascade-plugin');
+    const { task } = await addTask({ title: 'T', project: 'Synced2', source: 'cascade-plugin' as any });
+
+    // Advertised before the cascade is requested…
+    const refused = await request(app).delete('/api/projects/Synced2');
+    expect(refused.status).toBe(409);
+    expect(refused.body.cascade_available).toBe(true);
+
+    // …and executed with the explicit flag.
+    const res = await request(app).delete('/api/projects/Synced2?remote=1');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ project: 'Synced2', remoteDeleted: true, source: 'cascade-plugin', movedToInbox: 1 });
+    expect(hook).toHaveBeenCalledTimes(1);
+    expect((await getStoreProjects())['Synced2']).toBeUndefined();
+    const detached = (await listTasks()).find((t) => t.id === task.id)!;
+    expect(detached.project).toBe('');
+    expect(detached.source).toBe('local');
+  });
+
+  it('?remote=1 on a claimed project whose plugin lacks the hook → 409 Unsupported', async () => {
+    await ensureProject('NoHook', 'ms-todo'); // ms-todo not registered here
+    const res = await request(app).delete('/api/projects/NoHook?remote=1');
+    expect(res.status).toBe(409);
+    expect((await getStoreProjects())['NoHook']).toBeTruthy();
   });
 
   it('deletes an empty project row (no tasks)', async () => {

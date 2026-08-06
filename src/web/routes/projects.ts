@@ -19,6 +19,8 @@ import {
   ensureProject,
   renameProject,
   deleteProject,
+  deleteProjectCascade,
+  ProjectRemoteDeleteUnsupportedError,
   listTasksSlim,
   getStoreProjects,
   getProjectRecord,
@@ -175,17 +177,19 @@ projectsRouter.patch('/:name', async (req: Request, res: Response, next: NextFun
 })
 
 // DELETE /api/projects/:name — drop the registry row; its tasks fall back to
-// Inbox (project ''). Refused for a provider-claimed project: the remote list
-// still exists, so silently orphaning its tasks into Inbox would desync the
-// twin. Unclaim/rename it in the plugin first.
+// Inbox (project '').
+//
+// Provider-claimed projects: a plain DELETE is refused (409) because the remote
+// container still exists and the next pull would just recreate the project.
+// `?remote=1` opts into the CASCADE: the plugin deletes the remote container
+// (MS To-Do: the list itself), local tasks detach to source='local' + Inbox
+// (never deleted — the cascade removes the container, not the data), and the
+// registry row goes. The flag is required precisely because the remote half is
+// irreversible — a bare DELETE must never reach into the user's provider account.
 //
 // The move + row removal MUST be one transaction (a half-applied delete leaves
 // tasks pointing at a project with no row), which only the storage layer can do,
-// hence core's deleteProject:
-//   deleteProject(project: string): Promise<{ movedToInbox: number }>
-//   — case-insensitive; clears `project` on every matching task, deletes the
-//     task_projects row, emits TASK_UPDATED {task:null, taskIds, oldProject,
-//     newProject:''}; throws /^No project /  when the name is unknown.
+// hence core's deleteProject / deleteProjectCascade.
 projectsRouter.delete('/:name', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const name = req.params.name as string
@@ -193,23 +197,44 @@ projectsRouter.delete('/:name', async (req: Request, res: Response, next: NextFu
       res.status(400).json({ error: 'Inbox is not a project — nothing to delete' })
       return
     }
+    const cascade = req.query.remote === '1' || req.query.remote === 'true'
     const record = await getProjectRecord(name)
     if (!record) {
       res.status(404).json({ error: `No project "${name}" found` })
       return
     }
-    if (record.source !== 'local') {
+
+    if (record.source !== 'local' && !cascade) {
       res.status(409).json({
-        error: `Project "${record.name}" is claimed by ${record.source}. Remove the claim in that integration before deleting it.`,
+        error: `Project "${record.name}" is claimed by ${record.source}. Its remote container still exists — deleting only locally would desync (the next pull recreates it). Re-request with ?remote=1 to also delete the remote container (irreversible), or delete the container in the provider's app first.`,
         project: record.name,
         existing_source: record.source,
+        cascade_available: !!registry.get(record.source)?.sync.deleteProjectRemote,
       })
       return
     }
 
+    if (record.source !== 'local') {
+      const result = await deleteProjectCascade(record.name)
+      res.json({ project: record.name, ...result })
+      return
+    }
+
     const result = await deleteProject(record.name)
-    res.json({ project: record.name, ...result })
+    res.json({ project: record.name, ...result, remoteDeleted: false, source: 'local' })
   } catch (err) {
+    if (err instanceof ProjectRemoteDeleteUnsupportedError) {
+      res.status(409).json({ error: err.message, project: err.project, existing_source: err.source })
+      return
+    }
+    // The plugin's remote call failed (auth expired, Graph 5xx…) — nothing local
+    // changed (cascade deletes remote-first), so surface it as a gateway error
+    // and let the client retry.
+    const msg = err instanceof Error ? err.message : String(err)
+    if (/^No project /.test(msg)) {
+      res.status(404).json({ error: msg })
+      return
+    }
     next(err)
   }
 })
