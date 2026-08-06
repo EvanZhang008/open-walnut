@@ -196,4 +196,30 @@ describe('git smart HTTP data hub (cloud mode)', () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('refs/heads/main');
   });
+
+  it('hub self-maintains: pack count stays bounded across many pushes (post-receive gc --auto)', async () => {
+    // 2026-08 incident regression: every push leaves a new pack in a bare repo
+    // and nothing ever consolidated them — 32 packs/9.9GB made fetch slower
+    // than the Mac's 15s timeout and the retry loop buried the box. The route
+    // now spawns `gc --auto` (autoPackLimit=8) after each successful push.
+    const dest = path.join(tmpRoot, 'clone-gc');
+    await git(['clone', cloneUrl(deviceToken), dest]);
+    await git(['-C', dest, 'checkout', '-B', 'main']);
+    for (let i = 0; i < 12; i++) {
+      await fs.writeFile(path.join(dest, 'churn.txt'), `push ${i}\n`);
+      await git(['-C', dest, 'add', 'churn.txt']);
+      await git(['-C', dest, 'commit', '-m', `churn ${i}`]);
+      await git(['-C', dest, 'push', 'origin', 'main']);
+    }
+    // gc is spawn-and-forget; give the last one a moment to finish.
+    const packDir = path.join(hubRepo, 'objects', 'pack');
+    let packs = 0;
+    for (let waited = 0; waited < 10_000; waited += 500) {
+      packs = (await fs.readdir(packDir)).filter((f) => f.endsWith('.pack')).length;
+      if (packs <= 8) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    // Without the gc hook this is 12+ (one pack per push); with it, ≤8.
+    expect(packs).toBeLessThanOrEqual(8);
+  }, 60_000);
 });

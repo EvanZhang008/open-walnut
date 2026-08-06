@@ -166,7 +166,21 @@ function runHttpBackend(req: Request, res: Response, pathInfo: string): void {
   const gitProtocol = req.headers['git-protocol']
   if (typeof gitProtocol === 'string') env.HTTP_GIT_PROTOCOL = gitProtocol
 
-  const child = spawn('git', ['http-backend'], { env, stdio: ['pipe', 'pipe', 'pipe'] })
+  // detached:true puts the backend in its own process GROUP so we can reap the
+  // whole tree. `git http-backend` is only a CGI front — the real work runs in
+  // grandchildren (`upload-pack`/`pack-objects`, minutes of CPU + GBs of RAM on
+  // a big repo). A plain child.kill() reaps only the front and ORPHANS those
+  // grandchildren; with the Mac's 15s client timeout aborting requests every
+  // 60s tick, orphans stacked until the box sat at 99.85% CPU for a week and
+  // the kernel OOM-killed random gits (2026-08 incident — the phone app showed
+  // "offline" because TLS handshakes starved).
+  const child = spawn('git', ['http-backend'], { env, stdio: ['pipe', 'pipe', 'pipe'], detached: true })
+
+  /** SIGKILL the backend's whole process group (falls back to the child alone). */
+  const killTree = (): void => {
+    if (child.pid === undefined) return
+    try { process.kill(-child.pid, 'SIGKILL') } catch { child.kill('SIGKILL') }
+  }
 
   let finished = false
   const fail = (status: number, message: string): void => {
@@ -174,7 +188,7 @@ function runHttpBackend(req: Request, res: Response, pathInfo: string): void {
     finished = true
     if (!res.headersSent) res.status(status).type('text/plain').send(message)
     else res.end()
-    child.kill('SIGKILL')
+    killTree()
   }
 
   child.on('error', (err) => {
@@ -259,13 +273,30 @@ function runHttpBackend(req: Request, res: Response, pathInfo: string): void {
       log.web.warn('git-http: http-backend nonzero exit', { code, stderr: stderrTail })
     }
     res.end()
+    // Post-push housekeeping. Nobody else ever maintains the bare hub, and a
+    // pack file accumulates on every push: the 2026-08 incident hub reached 32
+    // packs/9.9GB, which made every fetch's object walk slower than the Mac's
+    // 15s client timeout — the retry loop then buried the box (see killTree).
+    // `gc --auto` is a cheap threshold check that no-ops almost always; the
+    // -c overrides force consolidation at 8 packs (default 50 is far too lax
+    // for a push-every-30s repo) and write bitmaps so fetch stays O(refs).
+    // gc self-daemonizes (setsid) — spawn-and-forget, never blocks a request.
+    if (pathInfo === '/git-receive-pack' && code === 0) {
+      const gc = spawn('git', [
+        '-C', path.join(repoRoot, HUB_REPO_NAME),
+        '-c', 'gc.auto=6700', '-c', 'gc.autoPackLimit=8', '-c', 'repack.writeBitmaps=true',
+        'gc', '--auto', '--quiet',
+      ], { stdio: 'ignore', detached: true })
+      gc.on('error', (err) => log.web.warn('git-http: hub gc --auto failed to spawn', { error: err.message }))
+      gc.unref()
+    }
   })
 
   // Client went away — reap the backend so pushes can't leave zombies.
   res.on('close', () => {
     if (!finished) {
       finished = true
-      child.kill('SIGKILL')
+      killTree()
     }
   })
 }

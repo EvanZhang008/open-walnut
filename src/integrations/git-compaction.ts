@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { WALNUT_HOME } from '../constants.js';
 import { git, gitSafe, setCompactionInProgress, clearStaleLock } from './git-sync.js';
+import { log } from '../logging/index.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -187,6 +188,35 @@ export function compactGitHistory(repoDir = WALNUT_HOME): CompactionResult {
     git('checkout main', opts);
   }
 
+  // 0b. Remote coordination (cloud hub). Compaction REWRITES main, so with a
+  // remote configured the new chain must be force-pushed — otherwise the next
+  // sync tick hits non-fast-forward, pull --rebase finds no merge base with
+  // the rewritten chain, and sync wedges permanently while every retry
+  // re-packs gigabytes (the exact CPU-storm this module exists to prevent).
+  // Preconditions before we may safely rewrite:
+  //   - remote reachable (else abort — compact only when we can also push)
+  //   - origin/main is an ANCESTOR of local main (else the cloud box has
+  //     commits we don't — force-pushing would DESTROY them; let the normal
+  //     sync merge them in and compact on a later run)
+  // Both deferrals are NORMAL (offline laptop / sync lag), not failures —
+  // plain `skipped` without `error`, or the daily attempt would fire a false
+  // "Compaction Failing" alert every time the Mac is offline. If the remote
+  // stays unreachable long-term the repo-size sentinel (3GB) still alerts.
+  const hasRemote = (gitSafe('remote', opts) ?? '').length > 0;
+  let remoteHeadBeforeRewrite: string | null = null;
+  if (hasRemote) {
+    if (gitSafe('fetch origin main', opts) === null) {
+      log.git.warn('compaction deferred: remote unreachable (rewriting without pushing would wedge sync)');
+      return { skipped: true, before: 0, after: 0 };
+    }
+    remoteHeadBeforeRewrite = gitSafe('rev-parse origin/main', opts);
+    if (remoteHeadBeforeRewrite
+        && gitSafe(`merge-base --is-ancestor ${remoteHeadBeforeRewrite} main`, opts) === null) {
+      log.git.warn('compaction deferred: origin/main has commits not merged locally — sync must catch up first');
+      return { skipped: true, before: 0, after: 0 };
+    }
+  }
+
   // 1. Collect all commits (oldest first).
   // Paged: one `git log` over the whole history blew execSync's 1MB default
   // maxBuffer once the repo passed ~10k commits (ENOBUFS) — which silently
@@ -266,7 +296,29 @@ export function compactGitHistory(repoDir = WALNUT_HOME): CompactionResult {
     gitSafe('update-ref -d refs/heads/compaction-wip', opts);
     writeState(repoDir, { phase: 'swapped', backup: backupName, startedAt: new Date().toISOString() });
 
-    // 7. Cleanup (non-fatal)
+    // 7. Push the rewritten chain to the hub. force-with-lease pinned to the
+    // pre-rewrite remote head: if the cloud box pushed anything between our
+    // fetch (step 0b) and now, the lease fails instead of destroying it — the
+    // next sync tick merges those commits and a later compaction run retries.
+    // Skipping the push entirely is NOT an option once main is rewritten
+    // (non-fast-forward would wedge every subsequent sync), which is why step
+    // 0b refuses to start when the remote is unreachable.
+    if (hasRemote) {
+      const lease = remoteHeadBeforeRewrite
+        ? `--force-with-lease=refs/heads/main:${remoteHeadBeforeRewrite}`
+        : '--force-with-lease';
+      // 120s: pushing the compacted history is one big pack; the default 30s
+      // LOCAL_TIMEOUT is calibrated for local ops, not a full-history upload.
+      if (gitSafe(`push ${lease} origin main`, { ...opts, timeout: 120_000 }) === null) {
+        log.git.warn('compaction: force-with-lease push failed — restoring pre-compaction main so sync stays consistent with the hub');
+        git(`update-ref refs/heads/main ${backupName}`, opts);
+        gitSafe('reset --mixed HEAD', opts);
+        removeState(repoDir);
+        return { before: commits.length, after: commits.length, error: 'push of compacted history failed (lease lost or network) — rolled back, will retry next run' };
+      }
+    }
+
+    // 8. Cleanup (non-fatal)
     writeState(repoDir, { phase: 'cleaning', backup: backupName, startedAt: new Date().toISOString() });
     try {
       git('reflog expire --expire=now --all', opts);
@@ -275,7 +327,7 @@ export function compactGitHistory(repoDir = WALNUT_HOME): CompactionResult {
       // gc failure is non-fatal
     }
 
-    // 8. Delete old backup branches (keep latest 2)
+    // 9. Delete old backup branches (keep latest 2)
     deleteOldBackups(repoDir, 2);
 
     removeState(repoDir);

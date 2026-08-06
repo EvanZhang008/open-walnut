@@ -1420,15 +1420,31 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           dedupScope: 'git:compaction',
         })
       }
-      const attemptCompaction = (retriesLeft = 2): void => {
+      const attemptCompaction = async (retriesLeft = 2): Promise<void> => {
         if (!workerPath) {
           reportCompactionFailure('compaction worker build is missing from dist/workers')
           return
         }
+        // Pause the 30s auto-commit/sync tick IN THIS PROCESS for the worker's
+        // whole lifetime. The worker sets compactionInProgress too, but that's
+        // its own forked memory — it pauses nothing here. When only the worker
+        // set it, ticks kept moving `main` mid-rewrite and every run failed
+        // tree verification for 9 days straight (the repo regrew to 6.5GB and
+        // its pushes CPU-starved the cloud companion, 2026-08 incident).
+        const { setCompactionInProgress, waitForSyncSettled } = await import('../integrations/git-sync.js')
+        setCompactionInProgress(true)
+        await waitForSyncSettled() // a tick already in flight still moves main — let it drain first
         const child = fork(workerPath, [], { stdio: 'ignore' })
         let reply: { ok: boolean; result?: { skipped?: boolean; before: number; after: number; error?: string }; error?: string } | null = null
         child.on('message', (msg) => { reply = msg as typeof reply })
+        // 'error' without 'exit' (spawn failure) must not leave the tick
+        // paused forever — that would silently stop ALL data backups.
+        child.on('error', (err) => {
+          setCompactionInProgress(false)
+          reportCompactionFailure(`compaction worker failed to spawn: ${err.message}`)
+        })
         child.on('exit', () => {
+          setCompactionInProgress(false)
           const result = reply?.ok ? reply.result : null
           if (result && !result.skipped && !result.error) {
             log.git.info('git compaction complete', { before: result.before, after: result.after })
@@ -1442,7 +1458,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           // off-phase instead of alerting (45s keeps us misaligned with the tick).
           if (isLockContention(new Error(failure)) && retriesLeft > 0) {
             log.git.debug('git compaction hit lock contention — retrying', { retriesLeft })
-            setTimeout(() => attemptCompaction(retriesLeft - 1), 45_000).unref?.()
+            setTimeout(() => { void attemptCompaction(retriesLeft - 1) }, 45_000).unref?.()
             return
           }
           reportCompactionFailure(failure)
@@ -1450,8 +1466,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       }
       // 75s start delay: deliberately NOT a multiple of the 30s sync tick —
       // at 60s the two collided on index.lock at every single boot.
-      setTimeout(() => attemptCompaction(), 75_000)
-      setInterval(() => attemptCompaction(), 24 * 60 * 60 * 1000).unref?.()
+      setTimeout(() => { void attemptCompaction() }, 75_000)
+      setInterval(() => { void attemptCompaction() }, 24 * 60 * 60 * 1000).unref?.()
     }
   }
 

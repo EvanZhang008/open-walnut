@@ -354,6 +354,27 @@ describe('stale git lock recovery', () => {
     await expect(fsp.stat(nested)).rejects.toThrow();
   });
 
+  it('clears stale top-level pseudo-ref locks (AUTO_MERGE.lock etc.)', async () => {
+    // A merge killed mid-run (execGitGroup timeout) leaves AUTO_MERGE.lock;
+    // every later merge then fails "cannot lock ref" — observed 2026-08 as a
+    // two-day `pull -X theirs` fallback loop on every 30s tick.
+    initSync();
+    const autoMerge = await writeLock(['AUTO_MERGE.lock'], 10 * 60_000);
+    const mergeHead = await writeLock(['MERGE_HEAD.lock'], 10 * 60_000);
+
+    expect(clearStaleLock()).toBe(true);
+    await expect(fsp.stat(autoMerge)).rejects.toThrow();
+    await expect(fsp.stat(mergeHead)).rejects.toThrow();
+  });
+
+  it('leaves a fresh AUTO_MERGE.lock alone (live merge in progress)', async () => {
+    initSync();
+    const autoMerge = await writeLock(['AUTO_MERGE.lock'], 2_000);
+
+    expect(clearStaleLock()).toBe(false);
+    await expect(fsp.stat(autoMerge)).resolves.toBeDefined();
+  });
+
   it('is a no-op when there are no locks', () => {
     initSync();
     expect(clearStaleLock()).toBe(false);

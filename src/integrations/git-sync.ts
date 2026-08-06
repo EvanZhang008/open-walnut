@@ -21,10 +21,30 @@ const NETWORK_TIMEOUT = 15_000;
 /** Grace period between SIGTERM and SIGKILL when reaping a git process group. */
 const KILL_GRACE_MS = 3_000;
 
-/** Flag set by git-compaction to pause auto-commits during compaction. */
+/**
+ * Flag set while history compaction runs, to pause auto-commits AND sync.
+ *
+ * ⚠️ Process-boundary trap (root cause of the 2026-08 cloud incident): the
+ * compaction worker is a FORKED child (dist/workers/git-compaction-worker.js),
+ * so runScheduledCompaction() setting this flag inside the worker pauses
+ * nothing in the server. The PARENT must set it around the fork (server.ts
+ * does). When only the worker set it, the 30s tick kept committing while the
+ * worker rebuilt history, `main` moved between collection and verify, and
+ * every compaction run for 9 days failed "verification failed: trees differ" —
+ * the data repo regrew to 25k commits/6.5GB and its pushes wedged the cloud box.
+ */
 export let compactionInProgress = false;
 export function setCompactionInProgress(v: boolean): void {
   compactionInProgress = v;
+}
+
+/**
+ * Resolves when no sync() is in flight. The parent calls this before forking
+ * the compaction worker so a mid-flight pull/push can't interleave with the
+ * history rewrite (the flag only stops NEW ticks, not one already running).
+ */
+export async function waitForSyncSettled(): Promise<void> {
+  try { await syncInflight; } catch { /* a failed sync is still settled */ }
 }
 
 // Network git subcommands that may authenticate against a remote. Only these
@@ -474,6 +494,13 @@ export function hardenGitConfigPerms(url: string, repoDir?: string): void {
 let syncInflight: Promise<{ pulled: number; pushed: number; conflicts: number }> | null = null;
 
 export async function sync(): Promise<{ pulled: number; pushed: number; conflicts: number }> {
+  // Compaction pause must gate sync() too, not just commitIfDirty(): syncInner
+  // runs its own `add -A` + commit, so an unpaused tick would still move `main`
+  // mid-rewrite and fail the tree verification.
+  if (compactionInProgress) {
+    log.git.debug('git-sync skipped — history compaction in progress');
+    return { pulled: 0, pushed: 0, conflicts: 0 };
+  }
   if (syncInflight) {
     log.git.debug('git-sync already in flight — joining instead of stacking');
     return syncInflight;
@@ -600,6 +627,25 @@ async function lwwMerge(branch: string): Promise<{ merged: boolean; conflicts: n
   const remoteHead = await gitSafeAsync(`rev-parse ${remoteRef}`);
   if (!localHead || !remoteHead || localHead === remoteHead) {
     return { merged: false, conflicts: 0 };
+  }
+
+  // Upstream history rewrite (weekly compaction on the primary force-pushes a
+  // rewritten main). No common ancestor means merging would join the OLD fat
+  // chain with the compacted one — resurrecting the entire pre-compaction
+  // history into the hub and undoing the compaction. Adopt the new chain
+  // instead: park the old head on a self-replacing backup ref (any local-only
+  // commits stay recoverable from it until the next rewrite), then hard-reset.
+  // Safe against dirty-file loss: syncInner() commits everything before pull.
+  if (await gitSafeAsync(`merge-base HEAD ${remoteRef}`) === null) {
+    await gitSafeAsync('branch -f pre-rewrite-backup HEAD');
+    if (await gitSafeAsync(`reset --hard ${remoteRef}`) === null) {
+      log.git.error('git-sync: upstream history rewritten but reset --hard failed — will retry next cycle', { localHead, remoteHead });
+      return { merged: false, conflicts: 0 };
+    }
+    log.git.warn('git-sync: upstream history rewritten (compaction) — adopted the new chain; previous head saved on pre-rewrite-backup', {
+      previousHead: localHead, newHead: remoteHead,
+    });
+    return { merged: true, conflicts: 0 };
   }
 
   // True merge WITHOUT -X: non-overlapping edits auto-merge; overlapping
@@ -771,6 +817,22 @@ export function clearStaleLock(maxAgeMs = 60_000): boolean {
   };
 
   removeIfStale(path.join(gitDir, 'index.lock'));
+
+  // Top-level .git/*.lock beyond index.lock: a merge killed mid-run (e.g. by
+  // execGitGroup's timeout during the 2026-08 hub CPU-starvation) leaves
+  // AUTO_MERGE.lock / MERGE_HEAD.lock behind, and every later merge then fails
+  // "cannot lock ref" FOREVER — observed as a merge-failure loop falling back
+  // to `pull -X theirs` on every 30s tick for two days. Sweep them all; the
+  // same mtime staleness guard keeps a live git's locks safe.
+  try {
+    for (const entry of fs.readdirSync(gitDir)) {
+      if (entry !== 'index.lock' && entry.endsWith('.lock')) {
+        removeIfStale(path.join(gitDir, entry));
+      }
+    }
+  } catch {
+    // .git unreadable — nothing to do
+  }
 
   // Walk .git/refs for *.lock. Depth-bounded and tiny in practice (a handful of
   // refs), so this stays cheap enough for the 30s tick.
