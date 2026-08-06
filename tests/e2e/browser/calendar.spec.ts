@@ -872,4 +872,61 @@ test.describe('Calendar view', () => {
     await panel.locator('button[title="Close calendar panel"]').click()
     await expect(panel).toHaveCount(0)
   })
+
+  test('rail groups pinned tasks under their tier before the project groups', async ({ page, request }) => {
+    const task = await createTaskViaApi('CalRailTier')
+    // Pin into Focus via the API (tier sections read the same membership).
+    await request.post(`${API}/api/focus/tasks/${task.id}`)
+    await request.put(`${API}/api/focus/tasks/${task.id}/tier`, { data: { tier: 'focus' } })
+
+    await openCalendar(page)
+    const focusSection = page.locator('.cal-rail-group[data-rail-section="t:focus"]')
+    await expect(focusSection).toBeVisible()
+    await expect(focusSection.locator('.cal-rail-group-label')).toHaveText(/Focus/)
+    await expect(focusSection.locator(`.cal-rail-row[data-task-id="${task.id}"]`)).toBeVisible()
+    // Tier sections render ABOVE project groups (priority leads the rail).
+    const sectionKeys = await page.locator('.cal-rail-group').evaluateAll(
+      (els) => els.map((el) => el.getAttribute('data-rail-section') ?? ''),
+    )
+    const focusIdx = sectionKeys.indexOf('t:focus')
+    const firstProjectIdx = sectionKeys.findIndex((k) => k.startsWith('p:'))
+    expect(focusIdx).toBeGreaterThanOrEqual(0)
+    if (firstProjectIdx !== -1) expect(focusIdx).toBeLessThan(firstProjectIdx)
+    // And a tier-pinned task must not ALSO appear in its project group.
+    await expect(page.locator(`.cal-rail-row[data-task-id="${task.id}"]`)).toHaveCount(1)
+  })
+
+  test('todo card drags onto the homepage calendar panel via the drag bus', async ({ page }) => {
+    // Cross-panel drag: TodoPanel's dnd-kit context can't reach the calendar
+    // panel, so the drop rides the drag bus. The stored hour must match the
+    // visually targeted slot.
+    const today = localDay(0)
+    const task = await createTaskViaApi('CalBusDrag')
+
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    await page.click('[data-testid="sidebar-toggle-calendar"]')
+    const panel = page.locator('[data-testid="cal-side-panel"]')
+    await expect(panel).toBeVisible()
+
+    const card = page.locator(`.todo-panel-item[data-task-id="${task.id}"]`)
+    await card.scrollIntoViewIfNeeded()
+    const cardBox = await card.boundingBox()
+    if (!cardBox) throw new Error('todo card not visible')
+
+    const target = await columnPoint(page, today, 15, panel)
+    await page.mouse.move(cardBox.x + cardBox.width / 2, cardBox.y + cardBox.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(target.x, target.y, { steps: 15 })
+    // The bus preview line appears in the panel's grid
+    await expect(panel.locator('.cal-drop-line')).toBeVisible()
+    await page.mouse.up()
+
+    await expect
+      .poll(async () => (await getTaskViaApi(task.id)).start_date, { timeout: 5000 })
+      .toBe(`${today}T15:00:00`)
+    // The in-panel drop semantics must have been skipped: no group/reorder
+    // artifacts — the task still renders as a plain row (now scheduled).
+    await expect(panel.locator(`.cal-chip[data-item-id="task-start:${task.id}"]`)).toBeVisible()
+  })
 })

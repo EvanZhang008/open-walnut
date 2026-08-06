@@ -11,10 +11,11 @@ import { DndContext } from '@dnd-kit/core';
 import { Link } from 'react-router-dom';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useCalendarEvents } from '@/hooks/useCalendarEvents';
+import { useDragBusTarget } from '@/hooks/useDragBusTarget';
 import { parseDateLocal } from '@/components/common/DatePicker';
-import { addDays, formatDateOnly } from '@/utils/calendar-date';
+import { SLOT_MINUTES, addDays, formatDateOnly, slotToLocalIso, snapMinutes } from '@/utils/calendar-date';
 import { eventsToCalendarItems, tasksToCalendarItems, useFrozenWhile, type CalendarItem } from './calendar-items';
-import { TimeGrid, type GridMetrics } from './TimeGrid';
+import { TimeGrid, type DropPreview, type GridMetrics } from './TimeGrid';
 import { QuickCreatePopover, type CreateSeed } from './QuickCreatePopover';
 import { CalendarContextMenu, type CalendarContextTarget } from './CalendarContextMenu';
 import { CalendarItemPopover } from './CalendarItemPopover';
@@ -33,6 +34,40 @@ export function CalendarSidePanel({ onClose }: Props) {
   const [ctxTarget, setCtxTarget] = useState<CalendarContextTarget | null>(null);
   const [openItem, setOpenItem] = useState<{ item: CalendarItem; anchorEl: HTMLElement } | null>(null);
   const metricsRef = useRef<GridMetrics | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
+  // ── Cross-panel drop target (drag bus) ──
+  // TodoPanel cards ride the drag bus (their dnd-kit context can't reach this
+  // panel); dropping one here schedules it: time-grid position → timed
+  // start_date, above the grid (all-day strip) → date-only.
+  const [busPreview, setBusPreview] = useState<DropPreview | null>(null);
+  const dayRef = useRef(day);
+  dayRef.current = day;
+  const slotFromPoint = useCallback((y: number): number | null => {
+    const m = metricsRef.current;
+    const rect = m?.colTops.get(dayRef.current);
+    if (!m || !rect) return null;
+    if (y < m.gridTop) return null; // above the scrollable grid = all-day
+    const mins = snapMinutes(((y - rect.top) / m.slotPx) * SLOT_MINUTES, SLOT_MINUTES);
+    return Math.max(0, Math.min(Math.floor(mins / SLOT_MINUTES), (24 * 60) / SLOT_MINUTES - 1));
+  }, []);
+  useDragBusTarget({
+    element: () => panelRef.current,
+    onDragOver: (p) => {
+      const slot = slotFromPoint(p.y);
+      setBusPreview({ day: dayRef.current, slot, zone: slot === null ? 'allday' : 'col' });
+    },
+    onDragLeave: () => setBusPreview(null),
+    onDrop: (p, payload) => {
+      setBusPreview(null);
+      if (payload.kind !== 'task') return false;
+      const slot = slotFromPoint(p.y);
+      update(payload.task.id, {
+        start_date: slot === null ? dayRef.current : slotToLocalIso(dayRef.current, slot),
+      });
+      return true;
+    },
+  });
 
   // The agenda is "what's today" — meetings matter as much as tasks. The
   // panel shipped tasks-only at first and users glancing at it before their
@@ -97,7 +132,7 @@ export function CalendarSidePanel({ onClose }: Props) {
     : calendar.sources.some((s) => s.available && s.enabled);
 
   return (
-    <div className="cal-side-panel" data-testid="cal-side-panel">
+    <div className="cal-side-panel" data-testid="cal-side-panel" ref={panelRef}>
       <div className="cal-side-header">
         <span className="cal-side-title">
           {isToday ? 'Today' : anchor.toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric' })}
@@ -126,7 +161,7 @@ export function CalendarSidePanel({ onClose }: Props) {
             days={1}
             anchor={anchor}
             items={items}
-            dropPreview={null}
+            dropPreview={busPreview}
             metricsRef={metricsRef}
             onMoveItem={moveItem}
             onChipDragging={setChipDragging}

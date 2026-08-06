@@ -1,12 +1,16 @@
 /**
  * CalendarTaskList — the left rail of unscheduled tasks (no own start_date),
  * each row a dnd-kit draggable that can be dropped onto any calendar surface.
+ * Pinned tiers lead (Focus / Satellite / … — the same priority structure as
+ * the homepage pinned area), then everything else grouped by project.
  * Deliberately slim (NOT a TodoPanel embed — that component owns its own
  * DndContexts and nesting them invites sensor conflicts).
  */
 import { memo, useMemo, useState } from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import type { Task } from '@open-walnut/core';
+import { PIN_TIER_POLICY } from '@open-walnut/core';
+import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { PriorityBadge } from '@/components/common/PriorityBadge';
 
 const DONE_PHASES = new Set(['COMPLETE', 'CANCELLED']);
@@ -48,28 +52,83 @@ const RailRow = memo(function RailRow({ task }: { task: Task }) {
   );
 });
 
+interface RailSection {
+  key: string;
+  label: string;
+  /** 'tier' sections get the colored tier dot; 'project' sections don't. */
+  kind: 'tier' | 'project';
+  /** Built-in tier name for the dot color class ('custom' for ct_*). */
+  tier?: string;
+  tasks: Task[];
+}
+
 export const CalendarTaskList = memo(function CalendarTaskList({ tasks }: Props) {
   const [filter, setFilter] = useState('');
+  // Safe variant: the rail renders fine without the provider (tests, popouts) —
+  // it just degrades to project-only grouping.
+  const focusBar = useFocusBarContextSafe();
+  const customTiers = focusBar?.customTiers ?? [];
 
-  const groups = useMemo(() => {
+  const sections = useMemo(() => {
     const q = filter.trim().toLowerCase();
     const unscheduled = tasks.filter(
       (t) => !DONE_PHASES.has(t.phase) && !t.start_date && (!q || t.title.toLowerCase().includes(q))
     );
-    // Group by project. Inbox is the ABSENCE of a project, so its bucket key is
-    // '' (the same sentinel the rest of the app uses) and the "Inbox" label is
-    // applied only at render — keying on the literal 'Inbox' would silently merge
-    // a real project of that name into the no-project bucket. '' sorts last.
+
+    const out: RailSection[] = [];
+
+    // ── Pinned tiers first — same structure and order as the homepage pinned
+    // area, so "schedule my Focus tasks" is a glance, not a hunt.
+    let remaining = unscheduled;
+    if (focusBar) {
+      const tierOrder: { key: string; label: string; tier: string; ids: string[] }[] = [
+        ...PIN_TIER_POLICY.map((p) => ({
+          key: p.tier,
+          label: p.label,
+          tier: p.tier,
+          ids: p.tier === 'focus' ? focusBar.focusIds
+            : p.tier === 'satellite' ? focusBar.satelliteIds
+            : p.tier === 'backlog' ? focusBar.backlogIds
+            : focusBar.waitIds,
+        })),
+        ...customTiers.map((ct) => ({
+          key: ct.id,
+          label: ct.label,
+          tier: 'custom',
+          ids: focusBar.customTierIds[ct.id] ?? [],
+        })),
+      ];
+      const byId = new Map(unscheduled.map((t) => [t.id, t]));
+      const pinnedShown = new Set<string>();
+      for (const { key, label, tier, ids } of tierOrder) {
+        const members = ids.map((id) => byId.get(id)).filter((t): t is Task => !!t);
+        if (members.length === 0) continue;
+        for (const t of members) pinnedShown.add(t.id);
+        out.push({ key: `t:${key}`, label, kind: 'tier', tier, tasks: members });
+      }
+      remaining = unscheduled.filter((t) => !pinnedShown.has(t.id));
+    }
+
+    // ── Then by project. Inbox is the ABSENCE of a project, so its bucket key
+    // is '' (the same sentinel the rest of the app uses) and the "Inbox" label
+    // is applied only at render — keying on the literal 'Inbox' would silently
+    // merge a real project of that name into the no-project bucket. '' sorts last.
     const byProject = new Map<string, Task[]>();
-    for (const t of unscheduled) {
+    for (const t of remaining) {
       const key = t.project || '';
       const list = byProject.get(key);
       if (list) list.push(t);
       else byProject.set(key, [t]);
     }
-    return [...byProject.entries()].sort((a, b) =>
+    const projects = [...byProject.entries()].sort((a, b) =>
       a[0] === '' ? 1 : b[0] === '' ? -1 : a[0].localeCompare(b[0]));
-  }, [tasks, filter]);
+    for (const [project, list] of projects) {
+      // Prefixed key: '' is a legal-but-ambiguous React key, and the prefix
+      // also keeps a project literally named 'inbox' distinct from the bucket.
+      out.push({ key: `p:${project}`, label: project || 'Inbox', kind: 'project', tasks: list });
+    }
+    return out;
+  }, [tasks, filter, focusBar, customTiers]);
 
   return (
     <div className="cal-rail" data-testid="cal-rail">
@@ -83,13 +142,14 @@ export const CalendarTaskList = memo(function CalendarTaskList({ tasks }: Props)
         />
       </div>
       <div className="cal-rail-scroll">
-        {groups.length === 0 && <div className="cal-rail-empty">No unscheduled tasks</div>}
-        {groups.map(([project, list]) => (
-          // Prefixed key: '' is a legal-but-ambiguous React key, and the prefix
-          // also keeps a project literally named 'inbox' distinct from the bucket.
-          <div key={`p:${project}`} className="cal-rail-group">
-            <div className="cal-rail-group-label">{project || 'Inbox'}</div>
-            {list.map((t) => (
+        {sections.length === 0 && <div className="cal-rail-empty">No unscheduled tasks</div>}
+        {sections.map((s) => (
+          <div key={s.key} className="cal-rail-group" data-rail-section={s.key}>
+            <div className={`cal-rail-group-label${s.kind === 'tier' ? ' cal-rail-tier-label' : ''}`}>
+              {s.kind === 'tier' && <span className={`cal-rail-tier-dot cal-rail-tier-${s.tier}`} />}
+              {s.label}
+            </div>
+            {s.tasks.map((t) => (
               <RailRow key={t.id} task={t} />
             ))}
           </div>

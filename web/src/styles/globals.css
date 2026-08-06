@@ -24872,6 +24872,25 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   color: var(--fg-muted);
 }
 
+/* Pinned-tier sections lead the rail; the dot mirrors each tier's color. */
+.cal-rail-tier-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--fg);
+}
+.cal-rail-tier-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--fg-muted);
+}
+.cal-rail-tier-focus { background: var(--tier-focus, var(--accent)); }
+.cal-rail-tier-satellite { background: var(--fg-muted); }
+.cal-rail-tier-backlog { background: var(--tier-backlog); }
+.cal-rail-tier-wait { background: var(--tier-wait); }
+.cal-rail-tier-custom { background: var(--accent-subtle, var(--accent)); border: 1px solid var(--accent); box-sizing: border-box; }
+
 .cal-rail-row {
   cursor: grab;
   touch-action: none;

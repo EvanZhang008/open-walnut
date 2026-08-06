@@ -49,6 +49,7 @@ import {
   type AnimateLayoutChanges,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { dragBus } from '@/utils/drag-bus';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskBatchMenu } from './TaskBatchMenu';
 import { ViewDropdown, type SortBy, type GroupBy, type DateFilter } from './ViewDropdown';
@@ -1818,6 +1819,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   scrollLog('drag-trace-TodoPanel-render', { n: __renderCountRef.current, tasks: rawTasks.length });
   // Hide .metadata* tasks (legacy project-configuration sentinels, not user-visible)
   const tasks = useMemo(() => rawTasks.filter((t) => !t.title.startsWith('.metadata')), [rawTasks]);
+  // Always-current task list for drag closures (drag handlers freeze their deps).
+  const tasksRef = useRef<Task[]>(tasks);
+  tasksRef.current = tasks;
   const navigate = useNavigate();
   const prompt = usePrompt();
   const confirm = useConfirm();
@@ -2849,6 +2853,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     window.addEventListener('pointermove', trackPointer, { passive: true });
     dropIntentRef.current = null;
     setGroupTargetId(null);
+    // Cross-panel drag: announce single-task drags on the bus so out-of-context
+    // targets (calendar side panel) can accept the drop. Group sentinels stay
+    // in-panel — a multi-task cluster has no calendar semantics.
+    const busTask = pinnedTaskMap.get(activeId)
+      ?? tasksRef.current.find((t) => t.id === activeId);
+    if (busTask && !activeId.startsWith('group:')) {
+      const pe = event.activatorEvent as PointerEvent | undefined;
+      dragBus.begin({ kind: 'task', task: busTask }, pe?.clientX !== undefined ? { x: pe.clientX, y: pe.clientY } : undefined);
+    }
   }, [focusTasksLocal, satelliteTasksLocal, backlogTasksLocal, waitTasksLocal, customTiers, customTasksLocal, recentDraggableIds, pinnedTaskMap]);
 
   // Shared live-drag tier accessors: dragTierIdsRef is the live state during a
@@ -3012,10 +3025,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, []);
 
   const handlePinnedDragCancel = useCallback(() => {
+    dragBus.cancel();
     clearDragState();
   }, [clearDragState]);
 
   const handlePinnedDragEnd = useCallback((event: DragEndEvent) => {
+    // Cross-panel drop first: if a bus target (calendar side panel) consumed
+    // the pointer-up, skip ALL in-panel drop semantics — dnd-kit's
+    // closestCenter still reports an in-panel `over` even when the pointer is
+    // physically outside the panel, and acting on it would reorder/retier.
+    if (dragBus.end()) {
+      clearDragState();
+      return;
+    }
     const { active, over } = event;
     const snap = dragStartSnapshot.current;
 
@@ -4063,6 +4085,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     dropIntentRef.current = null;
     setNestTargetId(null);
     setGroupTargetId(null);
+    // Cross-panel drag: single task cards ride the bus (calendar side panel
+    // accepts them); project-group headers stay in-panel.
+    if (type === 'task') {
+      const busTask = tasksRef.current.find((t) => t.id === id);
+      if (busTask) {
+        const pe = event.activatorEvent as PointerEvent | undefined;
+        dragBus.begin({ kind: 'task', task: busTask }, pe?.clientX !== undefined ? { x: pe.clientX, y: pe.clientY } : undefined);
+      }
+    }
   }, []);
 
   /** Clear all drop-intent highlights + stop pointer tracking — on drag end/cancel. */
@@ -4072,6 +4103,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     setNestTargetId((prev) => (prev === null ? prev : null));
     setGroupTargetId((prev) => (prev === null ? prev : null));
   }, []);
+
+  /** Main-list drag cancel: also retract the cross-panel bus announcement. */
+  const handleMainDragCancel = useCallback(() => {
+    dragBus.cancel();
+    clearDropIntent();
+  }, [clearDropIntent]);
 
   const handleDragOver = useCallback((event: DragOverEvent) => {
     const activeType = (event.active.data?.current as { type?: string })?.type ?? 'task';
@@ -4152,6 +4189,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [sortBy, sortOrder, onBakeOrder, showSortToast]);
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
+    // Cross-panel drop first (calendar side panel via the drag bus). When a bus
+    // target consumed the drop, every in-panel semantic (group/nest/reorder)
+    // must be skipped — dnd-kit's collision detection still reports an
+    // in-panel `over` while the pointer is physically over another panel.
+    const busHandled = dragBus.end();
     // Capture the drop intent BEFORE clearing. Position-based (set in handleDragOver
     // from the cursor's horizontal position over the target card):
     //   • nestTarget  → dropped in the right indent zone → nest as subtask
@@ -4161,6 +4203,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     setActiveDragId(null);
     setActiveDragType(null);
     clearDropIntent();
+    if (busHandled) return;
     const { active, over } = event;
     if (!over || active.id === over.id) return;
 
@@ -5310,7 +5353,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             onDragStart={handleDragStart}
             onDragOver={handleDragOver}
             onDragEnd={handleDragEnd}
-            onDragCancel={clearDropIntent}
+            onDragCancel={handleMainDragCancel}
           >
             <SortableContext items={grouped.map((g) => `proj:${g.project}`)} strategy={verticalListSortingStrategy}>
               {grouped.map(({ project, tasks: projTasks }) => (
