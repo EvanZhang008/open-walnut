@@ -266,6 +266,14 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
       });
   }, [onCreate, reset]);
 
+  // Direct path — "buy milk" needs no AI round-trip. Creates verbatim (title =
+  // raw text, dates = the seeded slot if any), skipping the confirm stage.
+  const createAsIs = useCallback(() => {
+    const rawText = textRef.current.trim();
+    if (!rawText || submittingRef.current) return;
+    create(applyInitialDates(fallbackDraft(rawText), initialDatesRef.current));
+  }, [create]);
+
   const handleContainerKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.key === 'Tab') {
@@ -288,6 +296,11 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
     if (event.key === 'Enter') {
       if ((event.target as HTMLElement).tagName === 'BUTTON') return;
       event.preventDefault();
+      // Cmd/Ctrl+Enter = create exactly what was typed, no AI review step.
+      if (stageRef.current === 'input' && (event.metaKey || event.ctrlKey)) {
+        createAsIs();
+        return;
+      }
       if (stageRef.current === 'input') enterConfirm();
       else if (draftRef.current) create(draftRef.current);
       return;
@@ -297,7 +310,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
     event.stopPropagation();
     if (stageRef.current === 'confirm') goBack();
     else close();
-  }, [close, create, enterConfirm, goBack]);
+  }, [close, create, createAsIs, enterConfirm, goBack]);
 
   if (!open) return null;
 
@@ -312,7 +325,6 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
     >
       <div className="qtc-header">
         <span className="qtc-header-title">Add a task</span>
-        <span className="qtc-header-hint">AI can clean up the title and suggest task details before you create it.</span>
       </div>
       {stage === 'input' ? (
         <>
@@ -333,9 +345,28 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
               setParseInFlight(false);
             }}
           />
+          {/* Two equal exits: "buy milk" doesn't need an AI round-trip, so the
+              as-is path must be one click — AI review is the option, not a gate. */}
           {text.trim() && (
-            <div className={`qtc-input-status${parseInFlight ? ' qtc-parsing' : ''}`}>
-              {parseInFlight ? '✦ Analyzing…' : '✦ AI will structure this — press Enter to review'}
+            <div className="qtc-input-actions">
+              <button
+                type="button"
+                className="qtc-input-add"
+                disabled={submitting}
+                onClick={createAsIs}
+                title="Create exactly what you typed (⌘⏎)"
+              >
+                {submitting ? 'Adding…' : 'Add'}
+              </button>
+              <button
+                type="button"
+                className="qtc-input-ai"
+                disabled={submitting}
+                onClick={enterConfirm}
+                title="AI cleans up the title and suggests dates/priority (⏎)"
+              >
+                {parseInFlight ? '✦ Analyzing…' : '✦ Review with AI'}
+              </button>
             </div>
           )}
         </>

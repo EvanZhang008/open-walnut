@@ -348,3 +348,44 @@ test('Escape returns to preserved input, reuses parse, then closes', async ({ pa
   await page.locator('.qtc-input').press('Escape')
   await expect(page.locator('.quick-task-composer')).toBeHidden()
 })
+
+test('Add button creates the task verbatim with no AI round-trip', async ({ page, request }) => {
+  // "buy milk" needs no review step — the as-is path must be one click and
+  // must never call quick-parse's result into the created task.
+  const title = unique('buy milk')
+  let parseCalls = 0
+  await page.route('**/api/tasks/quick-parse', async (route) => {
+    parseCalls += 1
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ title: 'WRONG AI TITLE', priority: 'immediate' }),
+    })
+  })
+  const existingIds = new Set((await listTasks(request)).map((task) => task.id))
+
+  await openComposer(page)
+  await page.locator('.qtc-input').fill(title)
+  await page.locator('.qtc-input-add').click()
+
+  const created = await waitForNewTask(request, title, existingIds)
+  expect(created.title).toBe(title) // verbatim, not the AI title
+  expect(created.priority).toBe('none')
+})
+
+test('Cmd+Enter is the keyboard as-is path', async ({ page, request }) => {
+  const title = unique('water plants')
+  await page.route('**/api/tasks/quick-parse', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ title: 'WRONG AI TITLE' }),
+  }))
+  const existingIds = new Set((await listTasks(request)).map((task) => task.id))
+
+  await openComposer(page)
+  await page.locator('.qtc-input').fill(title)
+  await page.locator('.qtc-input').press('ControlOrMeta+Enter')
+
+  const created = await waitForNewTask(request, title, existingIds)
+  expect(created.title).toBe(title)
+})

@@ -15049,6 +15049,33 @@ a.task-kebab-info:hover {
   color: var(--fg-muted);
   font-size: 11px;
 }
+/* Input-stage exits: plain "Add" (create as typed) + "Review with AI". */
+.qtc-input-actions {
+  display: flex;
+  gap: 8px;
+  padding: 2px 10px 10px;
+}
+.qtc-input-actions button {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.qtc-input-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.qtc-input-add {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.qtc-input-ai {
+  background: var(--card-bg);
+  color: var(--fg);
+}
 .qtc-chips {
   display: flex;
   flex-wrap: wrap;
@@ -25373,12 +25400,18 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   /* useMenuPlacement caps height — scroll internally so the footer buttons
      never land outside the viewport */
   overflow-y: auto;
+  /* Never a horizontal bar: with classic (space-taking) scrollbars, even a
+     2px x-overflow spawns an H-bar, which eats 8px of height and then forces
+     the V-bar too — "every panel has scrollbars". */
+  overflow-x: hidden;
 }
 
 .cal-create-popover .quick-task-composer {
   position: static;
   width: 340px;
-  max-width: 80vw;
+  /* 100%, not 80vw: the popover maxes at 340px MINUS its 1px borders, so a
+     hard 340px child overflows by 2px (see overflow-x note above). */
+  max-width: 100%;
   box-shadow: none;
   border: none;
 }
@@ -25505,7 +25538,10 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   gap: 8px;
   padding: 10px;
   width: 340px;
-  max-width: 80vw;
+  /* See .cal-create-popover .quick-task-composer — a hard 340px overflows the
+     popover's 338px content box and spawns scrollbars. */
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .cal-event-form-title {
