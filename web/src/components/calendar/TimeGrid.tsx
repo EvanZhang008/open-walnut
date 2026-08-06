@@ -24,6 +24,7 @@ import { useDroppable } from '@dnd-kit/core';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import {
   SLOT_MINUTES,
+  SNAP_MINUTES,
   formatDateOnly,
   layoutDayEvents,
   snapMinutes,
@@ -460,9 +461,12 @@ export const TimeGrid = memo(function TimeGrid({
           anchorPoint: sel.pointer,
         });
       } else {
+        // Selection endpoints snap to SNAP_MINUTES (15), not SLOT_MINUTES (30)
+        // — flooring into 30-min slots shaved up to 15 min off a :15/:45
+        // endpoint (the overlay said 6:45, the created event ended 6:30).
         onCreate({
-          start: slotToLocalIso(sel.day, Math.floor(sel.startMin / SLOT_MINUTES)),
-          end: slotToLocalIso(sel.day, Math.floor(sel.endMin / SLOT_MINUTES)),
+          start: slotToLocalIso(sel.day, sel.startMin / SNAP_MINUTES, SNAP_MINUTES),
+          end: slotToLocalIso(sel.day, sel.endMin / SNAP_MINUTES, SNAP_MINUTES),
           anchorPoint: sel.pointer,
         });
       }

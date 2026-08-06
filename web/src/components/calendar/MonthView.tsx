@@ -4,7 +4,7 @@
  * already on the calendar uses ONE view-level useDragGesture (pointer math
  * over captured cell rects — no per-cell droppable churn mid-drag).
  */
-import { memo, useCallback, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useDroppable } from '@dnd-kit/core';
 import { useDragGesture } from '@/hooks/useDragGesture';
@@ -174,6 +174,21 @@ export const MonthView = memo(function MonthView({
     overflowAnchorRef.current = el;
     setOverflowDay(day);
   }, []);
+
+  // Window-level Escape for the overflow popover — it has no focusable content,
+  // so element-level onKeyDown can never fire. Without this, Escape left the
+  // (invisible) full-screen backdrop up and it silently swallowed the next chip
+  // drag: pointerdown landed on the backdrop, no gesture armed, and the
+  // trailing mouseup closed the popover — so the retry "mysteriously" worked
+  // and the failure read as speed-dependent (customer-journey finding).
+  useEffect(() => {
+    if (overflowDay === null) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOverflowDay(null);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [overflowDay]);
 
   // ---- chip move gesture (one per view) -------------------------------------
   const dragRef = useRef<ChipDrag | null>(null);

@@ -75,6 +75,13 @@ export interface MenuPlacementOptions {
    * referentially stable (keep it in state), since it is a dependency.
    */
   anchorPoint?: { x: number; y: number } | null;
+  /**
+   * Horizontal alignment relative to the anchor. Default 'right' (menu's right
+   * edge at the anchor — matches kebab buttons at a row's right edge). 'left'
+   * opens rightward from the anchor: used by the calendar's quick-create
+   * popover, where opening leftward covered the very slot/day just clicked.
+   */
+  align?: 'right' | 'left';
 }
 
 /** Which side the menu opens toward. `null` = decide from the geometry. */
@@ -107,6 +114,8 @@ export interface PlacementInput {
    * the position glued to the trigger.
    */
   forceSide?: OpenSide;
+  /** See MenuPlacementOptions.align. */
+  align?: 'right' | 'left';
 }
 
 /**
@@ -150,8 +159,18 @@ export function computePlacement(input: PlacementInput): MenuPlacement & { side:
   top = Math.min(top, viewportHeight - height - margin);
   top = Math.max(top, margin);
 
-  // Right-aligned to the anchor, clamped so the left edge stays visible.
-  let right = viewportWidth - anchor.right;
+  // Horizontal: right edge at the anchor (default), or left edge for
+  // align:'left' (menu opens rightward, keeping the anchor visible). When the
+  // rightward open doesn't fit (clicks in the last columns), flip leftward
+  // instead of letting the viewport clamp slide the menu back OVER the anchor
+  // — that fully covered the very day column being clicked.
+  let right =
+    input.align === 'left' && menuWidth > 0
+      ? viewportWidth - anchor.right - menuWidth
+      : viewportWidth - anchor.right;
+  if (input.align === 'left' && menuWidth > 0 && right < margin) {
+    right = viewportWidth - anchor.right;
+  }
   if (menuWidth > 0) {
     right = Math.min(right, Math.max(margin, viewportWidth - menuWidth - margin));
   }
@@ -172,7 +191,7 @@ export function useMenuPlacement(
   menuRef: RefObject<HTMLElement | null>,
   options: MenuPlacementOptions = {},
 ): MenuPlacement | null {
-  const { gap = 2, margin = 8, minHeight = 180, anchorPoint = null, onAnchorLost } = options;
+  const { gap = 2, margin = 8, minHeight = 180, anchorPoint = null, align = 'right', onAnchorLost } = options;
   const [placement, setPlacement] = useState<MenuPlacement | null>(null);
   // The side is decided ONCE per open and then latched — see PlacementInput.forceSide.
   const sideRef = useRef<OpenSide>(null);
@@ -242,7 +261,7 @@ export function useMenuPlacement(
         menuWidth: menu ? menu.offsetWidth : 0,
         viewportWidth: window.innerWidth,
         viewportHeight: window.innerHeight,
-        gap, margin, minHeight,
+        gap, margin, minHeight, align,
         forceSide: sideRef.current,
       });
       // Latch on the first pass only — but not before the menu has been measured,
@@ -324,7 +343,7 @@ export function useMenuPlacement(
       window.removeEventListener('scroll', onScrollOrResize, true);
       window.removeEventListener('resize', onScrollOrResize);
     };
-  }, [open, triggerRef, menuRef, gap, margin, minHeight, anchorPoint]);
+  }, [open, triggerRef, menuRef, gap, margin, minHeight, anchorPoint, align]);
 
   return placement;
 }

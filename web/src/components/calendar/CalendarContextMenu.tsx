@@ -6,7 +6,7 @@
  *   empty slot  → New task… · New event… (seeds the quick-create popover)
  * Anchored at the pointer via useMenuPlacement's anchorPoint mode.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import type { CalendarItem } from './calendar-items';
@@ -43,6 +43,9 @@ export function CalendarContextMenu({
   const anchorRef = useRef<HTMLElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const placement = useMenuPlacement(true, anchorRef, menuRef, { anchorPoint: target.point });
+  // Deleting an event writes through to the REAL external calendar with no
+  // undo, so a single stray right-click+click must not be enough.
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -85,8 +88,12 @@ export function CalendarContextMenu({
               {item.event.readonly ? ' (read-only)' : ''}
             </div>
             {eventWritable && onDeleteEvent && (
-              <button role="menuitem" className="cal-ctx-danger" onClick={run(() => onDeleteEvent(item))}>
-                Delete event
+              <button
+                role="menuitem"
+                className="cal-ctx-danger"
+                onClick={confirmDelete ? run(() => onDeleteEvent(item)) : () => setConfirmDelete(true)}
+              >
+                {confirmDelete ? 'Delete — are you sure?' : 'Delete event'}
               </button>
             )}
           </>

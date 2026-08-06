@@ -6,7 +6,7 @@
  * (shareable/reloadable); everything transient (drag previews, popovers)
  * stays local to the views.
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   DndContext,
@@ -127,9 +127,27 @@ export function CalendarPage() {
     });
   }, []);
 
+  // Live pointer during a rail drag. dnd-kit's activatorEvent+delta looked
+  // equivalent to the live pointer but drifts once scroll containers are
+  // involved (delta bakes in scrollable-ancestor adjustments), which stored
+  // drop times hours away from where the user visibly dropped — the drop line
+  // even rendered offset from the cursor. Tracking the real pointermove
+  // sidesteps dnd-kit's coordinate model entirely.
+  const dragPointerY = useRef<number | null>(null);
+  useEffect(() => {
+    const track = (ev: PointerEvent) => {
+      if (dragPointerY.current !== null) dragPointerY.current = ev.clientY;
+    };
+    window.addEventListener('pointermove', track, { passive: true });
+    return () => window.removeEventListener('pointermove', track);
+  }, []);
+
   const handleDragStart = useCallback((e: DragStartEvent) => {
     const task = e.active.data.current?.task as Task | undefined;
-    if (task) setActiveTask(task);
+    if (task) {
+      setActiveTask(task);
+      dragPointerY.current = (e.activatorEvent as PointerEvent)?.clientY ?? 0;
+    }
   }, []);
 
   const computeColPreview = useCallback(
@@ -142,10 +160,8 @@ export function CalendarPage() {
       const metrics = gridMetricsRef.current;
       const rect = metrics?.colTops.get(target.day);
       if (!rect || !metrics) return { day: target.day, slot: null, zone: 'col' };
-      // Pointer Y within the column → snapped slot. dnd-kit exposes the
-      // activator event + accumulated delta rather than the live pointer.
-      const activator = e.activatorEvent as PointerEvent;
-      const y = (activator?.clientY ?? 0) + e.delta.y - rect.top;
+      const pointerY = dragPointerY.current ?? (e.activatorEvent as PointerEvent)?.clientY ?? 0;
+      const y = pointerY - rect.top;
       const mins = snapMinutes((y / metrics.slotPx) * SLOT_MINUTES, SLOT_MINUTES);
       return { day: target.day, slot: Math.floor(mins / SLOT_MINUTES), zone: 'col' };
     },
@@ -165,11 +181,12 @@ export function CalendarPage() {
       const task = e.active.data.current?.task as Task | undefined;
       setActiveTask(null);
       scheduleDropPreview(null);
+      const preview = task && e.over ? computeColPreview(e) : null;
+      dragPointerY.current = null;
       if (!task || !e.over) return;
       const target = parseDroppableId(String(e.over.id));
       if (!target) return;
       if (target.zone === 'col') {
-        const preview = computeColPreview(e);
         const slot = preview?.slot ?? 0;
         update(task.id, { start_date: slotToLocalIso(target.day, slot) });
       } else {
@@ -181,6 +198,7 @@ export function CalendarPage() {
 
   const handleDragCancel = useCallback(() => {
     setActiveTask(null);
+    dragPointerY.current = null;
     scheduleDropPreview(null);
   }, [scheduleDropPreview]);
 

@@ -46,6 +46,9 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
   const menuRef = useRef<HTMLDivElement | null>(null);
   const placement = useMenuPlacement(true, anchorRef, menuRef, {
     anchorPoint: seed.anchorPoint ?? null,
+    // Open rightward from the click: right-aligned (the default) covered the
+    // very day column being scheduled, hiding which day you clicked.
+    align: 'left',
   });
   const [tab, setTab] = useState<'task' | 'event'>(seed.tab && onCreateEvent ? seed.tab : 'task');
 
@@ -95,7 +98,23 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
 
   return createPortal(
     <>
-      <div className="cal-popover-backdrop" onClick={onClose} />
+      {/* Instinctive double-clicks must not toggle-close: the popover the 1st
+          click opened puts this backdrop under the 2nd click, which then undid
+          everything (customer finding: "double-click leaves you with nothing").
+          detail>1 = later clicks of a multi-click — swallow them. mousedown too:
+          QuickTaskComposer closes itself on any document mousedown outside. */}
+      <div
+        className="cal-popover-backdrop"
+        onMouseDown={(e) => {
+          if (e.detail > 1) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }}
+        onClick={(e) => {
+          if (e.detail <= 1) onClose();
+        }}
+      />
       <div className="cal-create-popover" ref={menuRef} style={menuPlacementStyle(placement)}>
         {onCreateEvent && (
           <div
@@ -176,15 +195,54 @@ function EventCreateForm({
   }, []);
 
   const allDay = !seed.start.includes('T');
-  // Slot click has no end — default to one hour.
-  const end = seed.end ?? (allDay ? seed.start : addHourLocal(seed.start));
+  const day = seed.start.slice(0, 10);
+  // Editable times: a meeting is rarely exactly the clicked slot + 1h, and
+  // without these every new event was silently forced to one hour.
+  const [startTime, setStartTime] = useState(() => (allDay ? '' : seed.start.slice(11, 16)));
+  const [endTime, setEndTime] = useState(() => {
+    if (allDay) return '';
+    const end = seed.end ?? addHourLocal(seed.start);
+    return end.slice(11, 16);
+  });
+  // Editing Start keeps the duration (same macOS-Calendar behavior as the item
+  // popover) — holding End fixed dead-ended "the meeting is 3h later" edits in
+  // "End must be after start." Duration = intent: only explicit End edits set it,
+  // and Start edits don't shift a misordered End (the user is mid-correction).
+  const toMin = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+  const [durMin, setDurMin] = useState(() => (allDay || !startTime || !endTime ? 0 : Math.max(0, toMin(endTime) - toMin(startTime))));
+  const changeStart = (newStart: string) => {
+    // Skip the shift only on a REAL misorder (both fields filled, end<=start —
+    // the user is mid-correction). A transiently blank field (Chromium emits
+    // '' between keystrokes; Backspace-retype) must NOT disarm the shift.
+    const misorderedNow = !!startTime && !!endTime && endTime <= startTime;
+    if (newStart && durMin > 0 && !misorderedNow) {
+      const shifted = Math.min(toMin(newStart) + durMin, 23 * 60 + 59);
+      const pad = (n: number) => String(n).padStart(2, '0');
+      setEndTime(`${pad(Math.floor(shifted / 60))}:${pad(shifted % 60)}`);
+    }
+    setStartTime(newStart);
+  };
+  const changeEnd = (newEnd: string) => {
+    if (newEnd && startTime) {
+      const d = toMin(newEnd) - toMin(startTime);
+      if (d > 0) setDurMin(d);
+    }
+    setEndTime(newEnd);
+  };
+  // A cleared time input (Backspace mid-retype) must gate Create too —
+  // submitting a blank composes '<day>T:00' and surfaces a raw server 400.
+  const incomplete = !allDay && (!startTime || !endTime);
+  const misordered = !allDay && !!startTime && !!endTime && endTime <= startTime;
+  const invalid = incomplete || misordered;
 
   const submit = async () => {
-    if (!title.trim() || !calendarId || submitting) return;
+    if (!title.trim() || !calendarId || submitting || invalid) return;
     setSubmitting(true);
     setError(null);
     try {
-      await onCreateEvent({ calendarId, title: title.trim(), start: seed.start, end, allDay });
+      const start = allDay ? day : `${day}T${startTime}:00`;
+      const end = allDay ? (seed.end ?? day) : `${day}T${endTime}:00`;
+      await onCreateEvent({ calendarId, title: title.trim(), start, end, allDay });
       onClose();
     } catch (err) {
       setError(String((err as Error).message ?? err).slice(0, 200));
@@ -207,9 +265,21 @@ function EventCreateForm({
         }}
       />
       <div className="cal-event-form-when">
-        {seed.start.replace('T', ' ').slice(0, 16)}
-        {seed.end ? ` – ${seed.end.split('T')[1]?.slice(0, 5) ?? seed.end}` : allDay ? ' (all-day)' : ''}
+        {allDay ? (
+          <>
+            {day}
+            {seed.end && seed.end !== day ? ` – ${seed.end}` : ' (all-day)'}
+          </>
+        ) : (
+          <>
+            <span>{day}</span>
+            <input type="time" value={startTime} onChange={(e) => changeStart(e.target.value)} aria-label="Start time" />
+            <span className="cal-item-dash">–</span>
+            <input type="time" value={endTime} onChange={(e) => changeEnd(e.target.value)} aria-label="End time" />
+          </>
+        )}
       </div>
+      {misordered && <div className="cal-event-form-error">End must be after start.</div>}
       <select value={calendarId} disabled={!calendars?.length} onChange={(e) => setCalendarId(e.target.value)}>
         {calendars === null && <option>Loading calendars…</option>}
         {calendars?.length === 0 && <option>No writable calendar</option>}
@@ -221,7 +291,7 @@ function EventCreateForm({
       </select>
       {error && <div className="cal-event-form-error">{error}</div>}
       <div className="cal-event-form-footer">
-        <button className="cal-event-form-create" disabled={!title.trim() || !calendarId || submitting} onClick={submit}>
+        <button className="cal-event-form-create" disabled={!title.trim() || !calendarId || submitting || invalid} onClick={submit}>
           {submitting ? 'Creating…' : 'Create event'}
         </button>
         <button onClick={onClose}>Cancel</button>
@@ -233,7 +303,10 @@ function EventCreateForm({
 function addHourLocal(iso: string): string {
   const [day, time] = iso.split('T');
   const [h, m] = time.split(':').map(Number);
-  const nh = Math.min(h + 1, 23);
+  // Clamp to 23:59, not "hour 23 same minute": the latter seeded a ZERO-length
+  // 23:00–23:00 range for 22:30+ slots — the form opened pre-broken with
+  // 'End must be after start.' before the user touched anything.
+  const mins = Math.min(h * 60 + m + 60, 23 * 60 + 59);
   const pad = (n: number) => String(n).padStart(2, '0');
-  return `${day}T${pad(nh)}:${pad(m)}:00`;
+  return `${day}T${pad(Math.floor(mins / 60))}:${pad(mins % 60)}:00`;
 }

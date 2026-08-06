@@ -65,7 +65,7 @@ export const CalendarChip = memo(function CalendarChip({
       style={tint ? ({ ...style, '--cal-chip-tint': tint } as CSSProperties) : style}
       data-item-id={item.id}
       data-day={item.day}
-      title={title}
+      title={isDue ? `Due · ${title}` : title}
       onPointerDown={readonly ? undefined : (e) => {
         if (e.button !== 0) return; // right/middle button must not arm a drag
         onMovePointerDown?.(e, item);

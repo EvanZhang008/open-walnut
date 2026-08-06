@@ -243,6 +243,11 @@ export class CalendarService {
       return result;
     } catch (err) {
       if (err instanceof CalendarHelperError) {
+        // Per-EVENT failures (deleting an already-deleted event, editing a
+        // readonly one) say nothing about the SOURCE's health — latching them
+        // into lastError flipped available:false and silently removed the
+        // Event tab + "New event…" everywhere until a manual refresh.
+        if (err.code === 'not-found' || err.code === 'readonly') throw err;
         this.lastError = {
           reason: err.code === 'permission-denied' ? 'permission-denied' : err.code === 'not-configured' ? 'not-configured' : 'fetch-error',
           message: err.message,

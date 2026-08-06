@@ -35,6 +35,9 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
   const readonly = isEvent && !!item.event.readonly;
 
   const [title, setTitle] = useState(isEvent ? item.event.title : item.task.title);
+  // Deleting writes through to the REAL external calendar with no undo — a
+  // single misclick must not be enough (same two-step as CalendarContextMenu).
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [allDay, setAllDay] = useState(item.allDay);
   const [startDate, setStartDate] = useState(datePart(item.when));
   const [startTime, setStartTime] = useState(timePart(item.when));
@@ -93,35 +96,103 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  // A timed event renders ONE date input (its day). Moving that day must move
-  // the WHOLE event, i.e. endDate has to follow. Two traps this must survive
-  // (both found by adversarial UI agents):
-  //  - clear-then-retype fires change with '' — committing it strands the
-  //    popover permanently invalid, so transient empties are ignored;
-  //  - typing a year emits PARTIAL values per keystroke ('0002-08-06'…), so
-  //    the end date is recomputed every change from the IMMUTABLE mount span
-  //    (event end day − start day), never chained through previous state —
-  //    one transient value must not poison every edit after it.
-  const eventSpanMs = isEvent
-    ? Math.max(0, Date.parse(`${datePart(item.event.end || item.event.start)}T00:00:00`) -
-        Date.parse(`${datePart(item.event.start)}T00:00:00`))
-    : 0;
+  // Moving an event's START (time or date) keeps its duration — macOS Calendar
+  // behavior; holding end fixed dead-ended "push the meeting later" edits in
+  // "End must be after start." The duration is tracked as INTENT, updated only
+  // by explicit END edits — deriving it from current state each keystroke let
+  // clamps silently shorten the event and then STICK. Computed over FULL
+  // datetimes: a 23:00→01:00 cross-midnight event is 2h, not "-22h of
+  // time-of-day". Recomputing end = start + durMin also survives Chromium's
+  // per-keystroke PARTIAL date values ('0002-08-06'…): both dates move
+  // together, so no transient value poisons the edits after it.
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+  // 15-min floor: a zero-length event otherwise seeds durMin=0, start edits
+  // never move end, and the popover stays stuck on "End must be after start."
+  // with no way out. The floor gives the first start edit a valid 15-min out.
+  const [durMin, setDurMin] = useState(() =>
+    isEvent && !item.allDay
+      ? Math.max(15, Math.round((Date.parse(item.event.end || item.event.start) - Date.parse(item.event.start)) / 60000))
+      : 0
+  );
+  // Last non-blank start, for the misorder check below. Chromium's type=time
+  // emits a transient '' mid-typing ("0"→''→"08:00"); judging misorder against
+  // that blank (NaN) either disarmed the shift for good (silent 5h save) or —
+  // once treated as "not misordered" — overwrote an End the user was
+  // mid-correcting. The last committed value is the real comparison point.
+  const lastStartTimeRef = useRef(timePart(item.when));
+  const setEventStartTime = (newStart: string) => {
+    if (isEvent && newStart && durMin > 0) {
+      const base = Date.parse(`${startDate}T${newStart}:00`);
+      // Don't shift while the typed end is a REAL misorder — the user is
+      // mid-correction there, and jumping end would discard what they typed.
+      const cmpStart = startTime || lastStartTimeRef.current;
+      const endMs = Date.parse(`${endDate || startDate}T${endTime}:00`);
+      const startMs = Date.parse(`${startDate}T${cmpStart}:00`);
+      const misorderedNow = Number.isFinite(endMs) && Number.isFinite(startMs) && endMs <= startMs;
+      if (Number.isFinite(base) && !misorderedNow) {
+        const shifted = new Date(base + durMin * 60000);
+        setEndDate(`${shifted.getFullYear()}-${pad2(shifted.getMonth() + 1)}-${pad2(shifted.getDate())}`);
+        setEndTime(`${pad2(shifted.getHours())}:${pad2(shifted.getMinutes())}`);
+      }
+    }
+    if (newStart) lastStartTimeRef.current = newStart;
+    setStartTime(newStart);
+  };
+  const setEventEndTime = (newEnd: string) => {
+    if (isEvent && newEnd) {
+      const d = Math.round(
+        (Date.parse(`${endDate || startDate}T${newEnd}:00`) - Date.parse(`${startDate}T${startTime}:00`)) / 60000
+      );
+      if (Number.isFinite(d) && d > 0) setDurMin(d);
+    }
+    setEndTime(newEnd);
+  };
+  // Explicit end-DATE edits are end edits too — update the duration intent.
+  const setEventEndDate = (newDate: string) => {
+    if (!newDate) return;
+    if (isEvent) {
+      const d = Math.round(
+        (Date.parse(`${newDate}T${endTime}:00`) - Date.parse(`${startDate}T${startTime}:00`)) / 60000
+      );
+      if (Number.isFinite(d) && d > 0) setDurMin(d);
+    }
+    setEndDate(newDate);
+  };
+
   const setEventDate = (newDate: string) => {
     if (!newDate) return;
-    const base = Date.parse(`${newDate}T00:00:00`);
-    if (isEvent && !allDay && Number.isFinite(base)) {
-      // Noon anchor dodges DST: adding a 24h-multiple to midnight can land in
-      // the previous day across a spring-forward boundary.
-      const shifted = new Date(base + eventSpanMs + 12 * 3600 * 1000);
-      const pad = (n: number) => String(n).padStart(2, '0');
-      setEndDate(`${String(shifted.getFullYear()).padStart(4, '0')}-${pad(shifted.getMonth() + 1)}-${pad(shifted.getDate())}`);
+    if (isEvent && !allDay && durMin > 0) {
+      // End follows from duration intent, NOT from a span captured at mount:
+      // after a time edit changed whether the event crosses midnight, the
+      // mount-time day span is stale and re-shifting by it moved the end a
+      // whole day off (verifier round 4). Same mid-correction guard as
+      // setEventStartTime: while the typed end is a real misorder, a date
+      // keystroke must not silently rewrite it (verifier round 5).
+      const cmpStart = startTime || lastStartTimeRef.current;
+      const endMs = Date.parse(`${endDate || startDate}T${endTime}:00`);
+      const startMs = Date.parse(`${startDate}T${cmpStart}:00`);
+      const misorderedNow = Number.isFinite(endMs) && Number.isFinite(startMs) && endMs <= startMs;
+      const base = Date.parse(`${newDate}T${cmpStart}:00`);
+      if (Number.isFinite(base) && !misorderedNow) {
+        const shifted = new Date(base + durMin * 60000);
+        setEndDate(`${String(shifted.getFullYear()).padStart(4, '0')}-${pad2(shifted.getMonth() + 1)}-${pad2(shifted.getDate())}`);
+        setEndTime(`${pad2(shifted.getHours())}:${pad2(shifted.getMinutes())}`);
+      }
     }
     setStartDate(newDate);
   };
 
   return createPortal(
     <>
-      <div className="cal-popover-backdrop" onClick={onClose} />
+      {/* Ignore the trailing clicks of a double-click: the popover the 1st
+          click opened puts this backdrop under the 2nd, which toggle-closed it
+          (same customer papercut as QuickCreatePopover). */}
+      <div
+        className="cal-popover-backdrop"
+        onClick={(e) => {
+          if (e.detail <= 1) onClose();
+        }}
+      />
       <div
         className="cal-item-popover"
         ref={menuRef}
@@ -165,15 +236,20 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
           </div>
           {isEvent && !allDay && (
             <div className="cal-item-row">
-              <input type="time" value={startTime} disabled={readonly} onChange={(e) => setStartTime(e.target.value)} />
+              <input type="time" value={startTime} disabled={readonly} onChange={(e) => setEventStartTime(e.target.value)} />
               <span className="cal-item-dash">–</span>
-              <input type="time" value={endTime} disabled={readonly} onChange={(e) => setEndTime(e.target.value)} />
+              <input type="time" value={endTime} disabled={readonly} onChange={(e) => setEventEndTime(e.target.value)} />
             </div>
           )}
-          {isEvent && allDay && (endDate !== startDate || !!item.event.end) && (
+          {isEvent && (allDay ? endDate !== startDate || !!item.event.end : endDate !== startDate || misordered) && (
+            // All-day ranges always show their end date; a TIMED event shows it
+            // when it crosses midnight — otherwise "11 PM – 1 AM" gives no hint
+            // the end is tomorrow — and when MISORDERED: typing End 01:00 on a
+            // 22:00 event means "past midnight", and without this row there was
+            // no way to say "tomorrow" (permanent dead-end, verifier round 5).
             <div className="cal-item-row">
               <span className="cal-item-dash">to</span>
-              <input type="date" value={endDate || startDate} min="1900-01-01" max="2999-12-31" disabled={readonly} onChange={(e) => setEndDate(e.target.value)} />
+              <input type="date" value={endDate || startDate} min="1900-01-01" max="2999-12-31" disabled={readonly} onChange={(e) => setEventEndDate(e.target.value)} />
             </div>
           )}
           {!isEvent && (
@@ -197,11 +273,15 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
             <button
               className="cal-item-danger"
               onClick={() => {
+                if (!confirmDelete) {
+                  setConfirmDelete(true);
+                  return;
+                }
                 onDeleteEvent(item.event);
                 onClose();
               }}
             >
-              Delete
+              {confirmDelete ? 'Really delete?' : 'Delete'}
             </button>
           )}
           {!isEvent && onSaveTaskWhen && (

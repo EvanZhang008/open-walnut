@@ -10,9 +10,10 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { DndContext } from '@dnd-kit/core';
 import { Link } from 'react-router-dom';
 import { useTasksContext } from '@/contexts/TasksContext';
+import { useCalendarEvents } from '@/hooks/useCalendarEvents';
 import { parseDateLocal } from '@/components/common/DatePicker';
 import { addDays, formatDateOnly } from '@/utils/calendar-date';
-import { tasksToCalendarItems, useFrozenWhile, type CalendarItem } from './calendar-items';
+import { eventsToCalendarItems, tasksToCalendarItems, useFrozenWhile, type CalendarItem } from './calendar-items';
 import { TimeGrid, type GridMetrics } from './TimeGrid';
 import { QuickCreatePopover, type CreateSeed } from './QuickCreatePopover';
 import { CalendarContextMenu, type CalendarContextTarget } from './CalendarContextMenu';
@@ -33,16 +34,40 @@ export function CalendarSidePanel({ onClose }: Props) {
   const [openItem, setOpenItem] = useState<{ item: CalendarItem; anchorEl: HTMLElement } | null>(null);
   const metricsRef = useRef<GridMetrics | null>(null);
 
-  const liveItems = useMemo(() => tasksToCalendarItems(tasks, day, day), [tasks, day]);
+  // The agenda is "what's today" — meetings matter as much as tasks. The
+  // panel shipped tasks-only at first and users glancing at it before their
+  // day missed real calendar events entirely.
+  const calendar = useCalendarEvents(day, day);
+  const liveItems = useMemo(
+    () => [...tasksToCalendarItems(tasks, day, day), ...eventsToCalendarItems(calendar.events)],
+    [tasks, day, calendar.events]
+  );
   const items = useFrozenWhile(liveItems, chipDragging);
 
   const moveItem = useCallback(
     (itemId: string, newWhen: string) => {
-      const [kind, taskId] = itemId.split(':');
-      if (kind === 'task-start') update(taskId, { start_date: newWhen });
-      else if (kind === 'task-due') update(taskId, { due_date: newWhen });
+      // Event ids may themselves contain ':' — split on the FIRST colon only.
+      const sep = itemId.indexOf(':');
+      const kind = itemId.slice(0, sep);
+      const rest = itemId.slice(sep + 1);
+      if (kind === 'task-start') update(rest, { start_date: newWhen });
+      else if (kind === 'task-due') update(rest, { due_date: newWhen });
+      else if (kind === 'event') {
+        const ev = calendar.events.find((e) => e.id === rest);
+        if (!ev || !newWhen.includes('T')) return;
+        const durMs = Math.max(
+          15 * 60_000,
+          parseDateLocal(ev.end || ev.start).getTime() - parseDateLocal(ev.start).getTime()
+        );
+        const newEnd = new Date(parseDateLocal(newWhen).getTime() + durMs);
+        const pad = (n: number) => String(n).padStart(2, '0');
+        calendar.moveEvent(rest, {
+          start: newWhen,
+          end: `${newEnd.getFullYear()}-${pad(newEnd.getMonth() + 1)}-${pad(newEnd.getDate())}T${pad(newEnd.getHours())}:${pad(newEnd.getMinutes())}:00`,
+        });
+      }
     },
-    [update]
+    [update, calendar]
   );
 
   const unscheduleTask = useCallback(
@@ -65,6 +90,11 @@ export function CalendarSidePanel({ onClose }: Props) {
 
   const step = (dir: 1 | -1) => setDay(formatDateOnly(addDays(anchor, dir)));
   const isToday = day === formatDateOnly(new Date());
+
+  // Same optimistic-while-unresolved gate as CalendarPage (see its comment).
+  const canCreateEvent = calendar.sources.length === 0
+    ? calendar.loading
+    : calendar.sources.some((s) => s.available && s.enabled);
 
   return (
     <div className="cal-side-panel" data-testid="cal-side-panel">
@@ -107,14 +137,25 @@ export function CalendarSidePanel({ onClose }: Props) {
         </DndContext>
       </div>
       {createSeed && (
-        <QuickCreatePopover seed={createSeed} onClose={() => setCreateSeed(null)} onCreateTask={create} />
+        <QuickCreatePopover
+          seed={createSeed}
+          onClose={() => setCreateSeed(null)}
+          onCreateTask={create}
+          onCreateEvent={canCreateEvent ? calendar.createEvent : undefined}
+        />
       )}
       {ctxTarget && (
         <CalendarContextMenu
           target={ctxTarget}
           onClose={() => setCtxTarget(null)}
           onUnscheduleTask={unscheduleTask}
-          onCreate={(seed) => setCreateSeed(seed)}
+          // Context menu hands back the ITEM (id "event:<real-id>"), not the
+          // event — passing item.id to the API 404s and the chip resurrects.
+          onDeleteEvent={(item) => {
+            if (item.kind === 'event') calendar.removeEvent(item.event.id);
+          }}
+          onCreate={(seed, tab) => setCreateSeed({ ...seed, tab })}
+          canCreateEvent={canCreateEvent}
         />
       )}
       {openItem && (
@@ -122,6 +163,8 @@ export function CalendarSidePanel({ onClose }: Props) {
           item={openItem.item}
           anchorEl={openItem.anchorEl}
           onClose={() => setOpenItem(null)}
+          onSaveEvent={(ev, patch) => calendar.moveEvent(ev.id, patch)}
+          onDeleteEvent={(ev) => calendar.removeEvent(ev.id)}
           onSaveTaskWhen={saveTaskWhen}
         />
       )}

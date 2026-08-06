@@ -198,6 +198,29 @@ describe('POST /api/calendar/events + DELETE', () => {
     expect(body2.events.some((e) => e.id === event.id)).toBe(false);
   });
 
+  it('a 404 delete does NOT latch the source unavailable', async () => {
+    // Regression: trackErrors stored the benign not-found as lastError, so a
+    // double-delete (two tabs, stale chip) flipped available:false and
+    // silently removed the Event tab + "New event…" until a manual refresh.
+    const created = await fetch(apiUrl('/api/calendar/events'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        calendarId: 'cal-work',
+        title: 'Double delete',
+        start: '2026-08-06T10:00:00',
+        end: '2026-08-06T10:30:00',
+      }),
+    });
+    const { event } = await created.json() as { event: EventShape };
+    expect((await fetch(apiUrl(`/api/calendar/events/${event.id}`), { method: 'DELETE' })).status).toBe(200);
+    expect((await fetch(apiUrl(`/api/calendar/events/${event.id}`), { method: 'DELETE' })).status).toBe(404);
+
+    const res = await fetch(apiUrl('/api/calendar/sources'));
+    const { sources } = await res.json() as { sources: { available: boolean }[] };
+    expect(sources[0].available).toBe(true);
+  });
+
   it('rejects creates on read-only calendars (409) and incomplete bodies (400)', async () => {
     const readonly = await fetch(apiUrl('/api/calendar/events'), {
       method: 'POST',

@@ -382,10 +382,11 @@ test.describe('Calendar view', () => {
     // Writable mock source is connected → event creation offered
     await menu.locator('button:has-text("New event…")').click()
 
-    // Straight to the Event tab of the quick-create popover
+    // Straight to the Event tab of the quick-create popover; the slot time
+    // seeds the (now editable) start-time input
     const form = page.locator('.cal-create-popover .cal-event-form')
     await expect(form).toBeVisible()
-    await expect(form.locator('.cal-event-form-when')).toContainText('22:00')
+    await expect(form.locator('input[aria-label="Start time"]')).toHaveValue('22:00')
     await page.keyboard.press('Escape')
   })
 
@@ -473,7 +474,10 @@ test.describe('Calendar view', () => {
 
     const menu = page.locator('[data-testid="cal-ctx-menu"]')
     await expect(menu).toBeVisible()
+    // Two-step confirm: deleting writes through to the real calendar, so the
+    // first click only arms the button.
     await menu.locator('button:has-text("Delete event")').click()
+    await menu.locator('button:has-text("Delete — are you sure?")').click()
 
     await expect
       .poll(async () => (await getEventViaApi(event.id)) === undefined, { timeout: 5000 })
@@ -511,11 +515,13 @@ test.describe('Calendar view', () => {
     expect(overflow).toBeLessThanOrEqual(0)
 
     // Focus + type in BOTH time inputs (the trigger for the auto-scroll bug),
-    // then verify Save is still the element at its own centre point.
-    await popover.locator('input[type="time"]').nth(1).click()
-    await popover.locator('input[type="time"]').nth(1).fill('20:45')
+    // then verify Save is still the element at its own centre point. Start
+    // first: editing start shifts end to preserve duration (macOS Calendar
+    // behavior), so the explicit end edit must come after.
     await popover.locator('input[type="time"]').nth(0).click()
     await popover.locator('input[type="time"]').nth(0).fill('20:00')
+    await popover.locator('input[type="time"]').nth(1).click()
+    await popover.locator('input[type="time"]').nth(1).fill('20:45')
     const saveHittable = await popover.locator('.cal-item-save').evaluate((btn) => {
       const r = btn.getBoundingClientRect()
       const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
@@ -646,6 +652,200 @@ test.describe('Calendar view', () => {
     await page.keyboard.press('Escape')
   })
 
+  test('rail drop lands at the visually targeted hour on a scrolled grid', async ({ page }) => {
+    // Regression (customer-journey BLOCKER): with the grid scrolled, dnd-kit's
+    // activatorEvent+delta drifted by the scroll offset — a drop at visual 9:00
+    // stored 10:30+ and the drop line rendered away from the cursor. The fix
+    // tracks the live pointer, so the stored hour must equal the targeted one.
+    const task = await createTaskViaApi('CalScrolledDrop')
+    await openCalendar(page)
+
+    const row = page.locator(`.cal-rail-row[data-task-id="${task.id}"]`)
+    await row.scrollIntoViewIfNeeded()
+    const rowBox = await row.boundingBox()
+    if (!rowBox) throw new Error('rail row not visible')
+
+    const today = localDay(0)
+    // columnPoint scrolls the grid so hour 6 is centered (scrollTop far from
+    // the mount auto-scroll) and returns the VISUAL point for 06:00.
+    const target = await columnPoint(page, today, 6)
+
+    await page.mouse.move(rowBox.x + rowBox.width / 2, rowBox.y + rowBox.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(target.x, target.y, { steps: 12 })
+    await expect(page.locator('.cal-drop-line')).toBeVisible()
+    // The preview label must agree with the visual target too
+    await expect(page.locator('.cal-drop-time')).toHaveText(/6:00/)
+    await page.mouse.up()
+
+    await expect
+      .poll(async () => (await getTaskViaApi(task.id)).start_date, { timeout: 5000 })
+      .toBe(`${today}T06:00:00`)
+  })
+
+  test('event quick-create honors an edited end time', async ({ page }) => {
+    // Regression (customer-journey MAJOR): the form had no end-time control —
+    // every new event was silently forced to slot+1h.
+    await openCalendar(page)
+    // Tomorrow 11:00 — today 15:00 belongs to the parallel Event-tab spec,
+    // whose freshly created chip would swallow this click (item popover
+    // instead of the create form).
+    const day = localDay(1)
+    const point = await columnPoint(page, day, 11)
+    await page.mouse.click(point.x, point.y)
+
+    const popover = page.locator('.cal-create-popover')
+    await expect(popover).toBeVisible()
+    await popover.locator('.cal-create-tabs button:has-text("Event")').click()
+
+    const title = `CalEvtEndTime ${Date.now()}`
+    await popover.locator('.cal-event-form-title').fill(title)
+    const end = popover.locator('input[aria-label="End time"]')
+    await expect(end).toHaveValue('12:00') // default = slot + 1h
+    await end.fill('13:30')
+    await expect(popover.locator('select')).toBeEnabled()
+    await popover.locator('.cal-event-form-create').click()
+
+    await expect
+      .poll(async () => {
+        const res = await fetch(`${API}/api/calendar/events?from=${day}&to=${day}`)
+        const body = (await res.json()) as { events: Array<{ title: string; start: string; end: string }> }
+        const ev = body.events.find((e) => e.title === title)
+        return ev ? `${ev.start}|${ev.end}` : undefined
+      }, { timeout: 10_000 })
+      .toBe(`${day}T11:00:00|${day}T13:30:00`)
+  })
+
+  test('leading-zero start retype keeps duration on a cross-midnight event', async ({ page }) => {
+    // Regression (round-3 blocker): typing "0800PM" into the start input emits
+    // a transient '' keystroke; the mid-correction guard treated the blank as
+    // "invalid, skip the shift" and never re-armed — a 23:00→01:00 (2h) event
+    // silently saved as 20:00→01:00 (5h). The guard now only skips on a REAL
+    // parseable end<=start misorder.
+    const today = localDay(0)
+    const tomorrow = localDay(1)
+    const created = await fetch(`${API}/api/calendar/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        calendarId: 'cal-work',
+        title: `CalXmid ${Date.now()}`,
+        start: `${today}T23:00:00`,
+        end: `${tomorrow}T01:00:00`,
+      }),
+    })
+    const { event } = (await created.json()) as { event: { id: string } }
+
+    await openCalendar(page)
+    const chip = page.locator(`.cal-day-col .cal-chip[data-item-id="event:${event.id}"]`)
+    await chip.scrollIntoViewIfNeeded()
+    await chip.click()
+    const popover = page.locator('[data-testid="cal-item-popover"]')
+    await expect(popover).toBeVisible()
+
+    // Type the hour with a LEADING ZERO — per-keystroke input events (which
+    // fill() skips) reproduce the transient '' emission. Click the HOUR
+    // segment (left edge); a center click lands on the minutes.
+    const start = popover.locator('input[type="time"]').nth(0)
+    await start.click({ position: { x: 8, y: 10 } })
+    await start.pressSequentially('0800PM')
+    // End must have shifted with the 2h duration: 20:00 + 2h = 22:00 same day
+    await expect(popover.locator('input[type="time"]').nth(1)).toHaveValue('22:00')
+    await popover.locator('.cal-item-save').click()
+    await expect
+      .poll(async () => {
+        const ev = await getEventViaApi(event.id)
+        return `${ev?.start}|${ev?.end}`
+      }, { timeout: 5000 })
+      .toBe(`${today}T20:00:00|${today}T22:00:00`)
+    await fetch(`${API}/api/calendar/events/${event.id}`, { method: 'DELETE' })
+  })
+
+  test('late-night slot seeds a valid range; cleared time input blocks Create', async ({ page }) => {
+    // Regression 1: 23:00 slots seeded end = "hour clamped to 23, same minute"
+    // → a zero-length 23:00–23:00 range, form pre-broken with an error the
+    // user never caused. Now the end clamps to 23:59.
+    await openCalendar(page)
+    const day = localDay(2)
+    const point = await columnPoint(page, day, 23)
+    await page.mouse.click(point.x, point.y)
+    const popover = page.locator('.cal-create-popover')
+    await expect(popover).toBeVisible()
+    await popover.locator('.cal-create-tabs button:has-text("Event")').click()
+    await expect(popover.locator('input[aria-label="Start time"]')).toHaveValue('23:00')
+    await expect(popover.locator('input[aria-label="End time"]')).toHaveValue('23:59')
+    await expect(popover.locator('.cal-event-form-error')).toHaveCount(0)
+
+    // Regression 2: Backspace-clearing a time input left Create ENABLED and
+    // POSTed a malformed '<day>T:00' → raw server 400 in the form.
+    await popover.locator('.cal-event-form-title').fill('CalLateNight probe')
+    await popover.locator('input[aria-label="Start time"]').press('ControlOrMeta+a')
+    await popover.locator('input[aria-label="Start time"]').press('Backspace')
+    await expect(popover.locator('.cal-event-form-create')).toBeDisabled()
+    await page.keyboard.press('Escape')
+  })
+
+  test('double-clicking an empty slot or a chip keeps the popover open', async ({ page }) => {
+    // Regression (customer papercut): the popover the 1st click opened put its
+    // backdrop under the 2nd click, which toggle-closed everything.
+    const today = localDay(0)
+    const task = await createTaskViaApi('CalDblClick', { start_date: `${today}T03:00:00` })
+    await openCalendar(page)
+
+    const point = await columnPoint(page, today, 19)
+    await page.mouse.dblclick(point.x, point.y)
+    await expect(page.locator('.cal-create-popover')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.cal-create-popover')).toHaveCount(0)
+
+    const chip = page.locator(`.cal-chip[data-item-id="task-start:${task.id}"]`)
+    await chip.scrollIntoViewIfNeeded()
+    await chip.dblclick()
+    await expect(page.locator('[data-testid="cal-item-popover"]')).toBeVisible()
+    await page.keyboard.press('Escape')
+  })
+
+  test('Escape closes the month overflow popover; a quick chip drag still works', async ({ page }) => {
+    // Regression (customer-journey "flick drags silently dropped"): the +N more
+    // popover had no window-level Escape handler, so Escape left its INVISIBLE
+    // full-screen backdrop up — the next drag's pointerdown landed on the
+    // backdrop, no gesture armed, and the trailing mouseup closed the popover,
+    // making the retry "mysteriously" work. Speed was never the variable.
+    const day = localDay(7)
+    for (let i = 0; i < 5; i++) {
+      await createTaskViaApi(`CalEscDrag${i}`, { start_date: `${day}T0${i + 1}:00:00` })
+    }
+    await openCalendar(page)
+    await page.click('.cal-view-btn:has-text("Month")')
+    await expect(page.locator('.cal-month-grid')).toBeVisible()
+    for (let hop = 0; hop < 2 && !(await page.locator(`.cal-month-cell[data-day="${day}"]`).count()); hop++) {
+      await page.click('.cal-nav-btns button[aria-label="Next"]')
+      await page.waitForTimeout(200)
+    }
+    const cell = page.locator(`.cal-month-cell[data-day="${day}"]`)
+    await cell.locator('.cal-month-more').click()
+    await expect(page.locator('.cal-overflow-popover')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.cal-overflow-popover')).toHaveCount(0)
+    await expect(page.locator('.cal-popover-backdrop')).toHaveCount(0)
+
+    // Now a brisk drag (no per-step pauses) must move the chip
+    const chip = cell.locator('.cal-chip').first()
+    const id = await chip.getAttribute('data-item-id')
+    const src = await chip.boundingBox()
+    const dstDay = localDay(8)
+    const dstBox = await page.locator(`.cal-month-cell[data-day="${dstDay}"]`).boundingBox()
+    if (!src || !dstBox) throw new Error('month drag geometry missing')
+    await page.mouse.move(src.x + src.width / 2, src.y + src.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(dstBox.x + dstBox.width / 2, dstBox.y + dstBox.height - 20, { steps: 8 })
+    await page.mouse.up()
+    const taskId = id!.split(':').slice(1).join(':')
+    await expect
+      .poll(async () => (await getTaskViaApi(taskId)).start_date, { timeout: 5000 })
+      .toContain(dstDay)
+  })
+
   test('homepage day-agenda side panel renders and creates', async ({ page }) => {
     const today = localDay(0)
     const task = await createTaskViaApi('CalAgenda', { start_date: `${today}T10:00:00` })
@@ -658,6 +858,10 @@ test.describe('Calendar view', () => {
 
     // Today's chip renders in the panel
     await expect(panel.locator(`.cal-chip[data-item-id="task-start:${task.id}"]`)).toBeVisible()
+
+    // Calendar EVENTS render too (customer-journey MAJOR: the agenda shipped
+    // tasks-only and users glancing at "Today" missed real meetings entirely)
+    await expect(panel.locator('.cal-chip[data-item-id="event:ev-e2e-brief"]')).toBeVisible()
 
     // Clicking an empty slot opens the quick-create popover
     const point = await columnPoint(page, today, 16, panel)
