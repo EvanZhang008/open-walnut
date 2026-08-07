@@ -103,6 +103,24 @@ async function relayLaunchAction(
     return
   }
   if (reply.ok === true && reply.result && typeof reply.result === 'object') {
+    // Successful launch: seed the id→host mapping NOW. The other v1 session
+    // endpoints resolve hosts from the git-synced projection, which lags a
+    // launch by 1–3 minutes — without the seed the phone's very next
+    // stream/transcript/send calls 404 on the session we just created
+    // (2026-08-07 incident: every message "Not sent — tap to retry").
+    if (action === 'launch') {
+      const sessionId = (reply.result as { sessionId?: unknown }).sessionId
+      if (typeof sessionId === 'string' && sessionId) {
+        const { seedLaunchedSession } = await import('../../core/sessions/launch-seed.js')
+        const host = typeof params?.host === 'string' ? params.host : ''
+        seedLaunchedSession(sessionId, {
+          // Same alias mapping as the projection: '' = primary → '__local__'.
+          host: host === '' ? '__local__' : host,
+          ...(typeof params?.cwd === 'string' ? { cwd: params.cwd } : {}),
+          ...(typeof params?.model === 'string' ? { model: params.model } : {}),
+        })
+      }
+    }
     res.status(successStatus).json(reply.result)
     return
   }

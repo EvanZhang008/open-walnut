@@ -980,6 +980,19 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
       }
       exportSessionTranscripts().catch(() => { /* background; throttled internally */ })
     }
+    if (!transcript && CLOUD_MODE && safeId) {
+      // Replica just launched this session itself (launch-seed hit): the
+      // synced transcript file and the projection both lag the launch by
+      // minutes, and the bridge jsonl may not exist yet either. Serve the
+      // same 200-empty the primary serves for its awaiting_spawn window —
+      // a 404 here made the phone's just-opened conversation view error out
+      // on a perfectly healthy session (2026-08-07).
+      const { getLaunchSeed } = await import('../../core/sessions/launch-seed.js')
+      if (getLaunchSeed(sessionId)) {
+        res.json({ version: 1, sessionId, exportedAt: new Date().toISOString(), truncated: false, messages: [] })
+        return
+      }
+    }
     if (!transcript) {
       sendError(res, 404, 'not_found', `No transcript for session: ${sessionId}`)
       return

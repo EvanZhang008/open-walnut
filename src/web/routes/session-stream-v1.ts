@@ -170,9 +170,18 @@ async function projectedSession(sessionId: string): Promise<{ host: string; cwd?
   const { readSessionProjection } = await import('../../core/session-projection.js')
   const projection = await readSessionProjection()
   const s = projection?.sessions.find((p) => p.id === sessionId)
-  if (!s) return null
-  // Projection: '' = the primary box; daemons register as '__local__'.
-  return { host: s.host === '' ? '__local__' : s.host, cwd: s.cwd, model: s.model }
+  if (s) {
+    // Projection: '' = the primary box; daemons register as '__local__'.
+    return { host: s.host === '' ? '__local__' : s.host, cwd: s.cwd, model: s.model }
+  }
+  // Projection miss ≠ unknown session: a session THIS replica just launched
+  // won't appear in the git-synced projection for 1–3 minutes (primary's 60s
+  // sweep + 30s git ticks both ways). The launch relay seeded its id→host at
+  // 201 time — without this fallback every stream/transcript/send in that
+  // window 404'd and the phone showed "Not sent" on a healthy session
+  // (2026-08-07). Seeds are TTL'd; once the projection lands it wins above.
+  const { getLaunchSeed } = await import('../../core/sessions/launch-seed.js')
+  return getLaunchSeed(sessionId)
 }
 
 async function projectedHostForSession(sessionId: string): Promise<string | null> {
