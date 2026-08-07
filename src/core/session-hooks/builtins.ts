@@ -883,17 +883,27 @@ async function askAndApplyTitle(
           : '');
       // Two tries on the first round: the send that triggered us may be
       // cold-resuming a dead CLI, in which case the first control write fails
-      // before the FIFO exists. The feedback round skips the pause — the CLI
-      // just answered, it's alive. Ask budget (10+4+10=24s) stays under the
-      // dispatcher's 30s inline-handler timeout; even if the feedback round
-      // pushes past it, that timeout only stops the dispatcher WAITING — the
-      // handler still completes and the finally below still cleans up.
-      title = await live.generateSessionTitle(description, 10_000);
+      // before the FIFO exists. The feedback round gets ONE ask with a much
+      // longer window instead: the CLI is definitely alive (it just answered),
+      // but it's typically mid-turn on the user's first message and serves the
+      // titler late — measured 22s on a cold remote session (2026-08-07
+      // incident: the 10s wait expired, the CLI's title arrived to nobody, and
+      // the placeholder stuck). Budget note: the dispatcher's 30s inline
+      // timeout only stops it WAITING — the handler still completes and the
+      // finally below still cleans up.
+      title = await live.generateSessionTitle(description, round === 0 ? 10_000 : 45_000);
       if (!title && round === 0) {
         await new Promise((r) => setTimeout(r, autoTitleRetryDelayMs));
         title = await live.generateSessionTitle(description, 10_000);
       }
-      if (!title) return false;
+      if (!title) {
+        // Explicit trail — this used to be a silent return, which made a
+        // timed-out feedback round look like the retry never happened.
+        log.session.warn('session-auto-title: CLI produced no title — placeholder kept', {
+          sessionId, taskId, round, hadConstraint: !!constraint,
+        });
+        return false;
+      }
       // The CLI titler contracts to a few words, but updateTask has no length
       // gate (unlike PATCH /api/sessions/:id's 500) — cap defensively.
       title = title.slice(0, 200);
