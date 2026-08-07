@@ -65,6 +65,8 @@ export interface DaemonGetStateResult extends DaemonCommandResult {
   alive?: boolean
   state?: 'running' | 'dead'
   taskState?: DaemonTaskState
+  /** C1: assembled SessionSnapshot (absent from pre-snapshot daemons). */
+  snapshot?: import('./daemon-fold.js').SessionSnapshot
 }
 
 export interface DaemonEvent {
@@ -86,6 +88,8 @@ export interface DaemonEvent {
   exitCode?: number
   /** Reason string on session_state=dead (e.g. 'proc-exit', 'send-enxio', 'idle-scan-missed-exit') */
   reason?: string
+  /** C1 snapshot push ({ev:'snapshot'}): the assembled SessionSnapshot. */
+  snapshot?: import('./daemon-fold.js').SessionSnapshot
   [key: string]: unknown
 }
 
@@ -140,6 +144,14 @@ export class DaemonConnection {
   private _daemonInstanceId: string | null = null
   /** Daemon start timestamp from the most recent successful `hello`. */
   private _daemonStartedAt: number | null = null
+  /**
+   * Capability list from the most recent successful `hello`, null until one
+   * completes. EVERY connect path runs the handshake (connect / reconnect /
+   * connectDirect), so null in practice means "the daemon answered no hello" —
+   * a pre-hello binary or a minimal test fixture. Used to gate optional flows
+   * ('snapshot-v1') on a per-host basis.
+   */
+  private _capabilities: string[] | null = null
   /** Cloud-bridge liveness from the last bridge.configure reply (null = unknown / disabled). */
   private _lastBridgeConnected: boolean | null = null
   private _lastBridgeCheckedAt: number | null = null
@@ -294,6 +306,15 @@ export class DaemonConnection {
 
   get connected(): boolean { return this._connected }
   get disconnectedSince(): number | null { return this._disconnectedSince }
+  /** Host key this connection serves ('__local__' for the local daemon). */
+  get host(): string { return this.hostKey }
+  /** True when the last `hello` advertised the capability (false pre-handshake). */
+  hasCapability(cap: string): boolean { return this._capabilities?.includes(cap) ?? false }
+  /** False until a `hello` handshake has SUCCEEDED on this connection. All
+   *  connect paths attempt it, so false = the daemon answered no hello. */
+  get capabilitiesKnown(): boolean { return this._capabilities !== null }
+  /** 'snapshot-v1' shorthand — the C2 intake gate (contract §5). */
+  get supportsSnapshots(): boolean { return this.hasCapability('snapshot-v1') }
   get daemonInstanceId(): string | null { return this._daemonInstanceId }
   get daemonStartedAt(): number | null { return this._daemonStartedAt }
   /** Last bridge.configure reply's connected flag (null = never pushed / bridge disabled). */
@@ -697,6 +718,46 @@ export class DaemonConnection {
       await this.send('stt-result', reply)
     } catch (err) {
       log.session.warn('DaemonConnection: stt-result send failed', {
+        host: this.hostKey, relayId, message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  /**
+   * Answer a daemon-relayed session-launch request (phone creating a session
+   * over the cloud bridge while this box holds the session records + config).
+   * Runs the shared mobile-launch core (validation + quickStartSession) and
+   * replies with a `launch-result` carrying the relayId. Errors are reported
+   * back with an errorKind (not thrown) so the daemon can fail the bridge
+   * request and the cloud route can map a precise 4xx for the phone.
+   */
+  private async handleLaunchRequest(event: DaemonEvent): Promise<void> {
+    const relayId = (event as unknown as { relayId?: unknown }).relayId
+    const action = (event as unknown as { action?: unknown }).action
+    const params = (event as unknown as { params?: unknown }).params
+    if (typeof relayId !== 'number' || typeof action !== 'string') return
+    let reply: Record<string, unknown>
+    try {
+      const { handleLaunchRelayRequest } = await import('../core/sessions/mobile-launch.js')
+      const outcome = await handleLaunchRelayRequest(action, params)
+      if (outcome.ok) {
+        log.session.info('DaemonConnection: launch relay handled', { host: this.hostKey, relayId, action })
+        reply = { relayId, result: outcome.result }
+      } else {
+        log.session.warn('DaemonConnection: launch relay refused', {
+          host: this.hostKey, relayId, action, error: outcome.error, errorKind: outcome.errorKind,
+        })
+        reply = { relayId, error: outcome.error, errorKind: outcome.errorKind }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      log.session.warn('DaemonConnection: launch relay failed', { host: this.hostKey, relayId, message })
+      reply = { relayId, error: message, errorKind: 'internal' }
+    }
+    try {
+      await this.send('launch-result', reply)
+    } catch (err) {
+      log.session.warn('DaemonConnection: launch-result send failed', {
         host: this.hostKey, relayId, message: err instanceof Error ? err.message : String(err),
       })
     }
@@ -1145,6 +1206,7 @@ export class DaemonConnection {
         return false
       }
       const caps = Array.isArray(res.capabilities) ? res.capabilities as string[] : []
+      this._capabilities = caps
       const missing = REQUIRED_DAEMON_CAPABILITIES.filter(c => !caps.includes(c))
       if (missing.length > 0) {
         log.session.warn('DaemonConnection: daemon missing capabilities', {
@@ -1833,11 +1895,27 @@ export class DaemonConnection {
 
   /**
    * Connect directly to a WebSocket URL, bypassing SSH deploy/tunnel.
-   * Used by tests to connect RemoteSessionManager to a local MockDaemon.
+   * Used for the LOCAL daemon (`__local__`, via getDirectDaemonConnection) and
+   * by tests to connect RemoteSessionManager to a MockDaemon.
+   *
+   * Runs the same `hello` handshake as connect()/reconnect(). It used to skip
+   * it, which left `_capabilities` null forever on every direct connection — so
+   * `supportsSnapshots` was false for the local daemon and
+   * getPooledSnapshotConnection('__local__') never matched: the C2 pull channel
+   * was dead for ALL local sessions (C31), and every local session's snapshot
+   * flow depended on pushes alone. A failed handshake is NOT fatal here (unlike
+   * the SSH path there is nothing to redeploy — a test MockDaemon may not even
+   * implement `hello`); it only leaves optional capabilities unadvertised.
    */
   async connectDirect(wsUrl: string): Promise<void> {
     if (this._connected) return
     await this.connectWebSocket(wsUrl)
+    const ok = await this.verifyCapabilities()
+    if (!ok) {
+      log.session.warn('DaemonConnection: direct connect hello failed — proceeding anyway', {
+        host: this.hostKey, wsUrl,
+      })
+    }
     this.setConnected(true)
     this.startPing()
   }
@@ -1972,6 +2050,14 @@ export class DaemonConnection {
         void this.handleSttRequest(event)
         return
       }
+      // Launch relay (cloud session creation): the daemon forwards a phone's
+      // create-session request from its bridge here because this box owns the
+      // session records + quick-start core. Handled internally — session-level
+      // eventHandlers never see it.
+      if (event.ev === 'launch-request') {
+        void this.handleLaunchRequest(event)
+        return
+      }
       // DUP-DEBUG: if handlerCount > 1, every event below fans out N times.
       // jsonl events are high-frequency — only log when something is off
       // (multiple handlers) or for low-frequency event types.
@@ -2024,15 +2110,19 @@ export class DaemonConnection {
     // Responses to bulk-routed commands resolve through the SHARED pending
     // map. Event frames are dropped — the main socket owns event dispatch
     // (session_state broadcasts to ALL daemon clients; forwarding here would
-    // double-dispatch every event). Sole exception: stt-request, which the
-    // daemon sends to its FIRST client — after a main-WS reconnect that can
-    // be this socket, and dropping it would break phone voice input.
+    // double-dispatch every event). Exceptions: stt-request / launch-request,
+    // which the daemon sends to its FIRST trusted client — after a main-WS
+    // reconnect that can be this socket, and dropping them would break phone
+    // voice input / cloud session creation.
     ws.on('message', (data) => {
       let msg: Record<string, unknown>
       try { msg = JSON.parse(typeof data === 'string' ? data : data.toString()) } catch { return }
       if (this.resolveCommandFrame(msg)) return
       if ('ev' in msg && (msg as { ev?: string }).ev === 'stt-request') {
         void this.handleSttRequest(msg as unknown as DaemonEvent)
+      }
+      if ('ev' in msg && (msg as { ev?: string }).ev === 'launch-request') {
+        void this.handleLaunchRequest(msg as unknown as DaemonEvent)
       }
     })
 
@@ -2333,6 +2423,42 @@ export class DaemonConnection {
     this.recoverDisconnectedSessions().catch(() => {})
   }
 
+  /**
+   * Re-subscribe a recovered session's manager to the daemon push stream.
+   *
+   * Under the session-bound watcher model the daemon's file tailer never
+   * stopped — but `ws.close` removed us from the session's `subscribers` Set,
+   * so `send('attach')` (inside reattachWatcher) is what re-adds us and replays
+   * the bytes we missed from our tracked fromOffset. Under the older per-ws
+   * watcher model it was the ONLY way to get push back at all. Either way the
+   * call is correct and idempotent.
+   *
+   * Shared by BOTH recovery branches (snapshot-handled and legacy-alive) —
+   * record convergence differs between them, ws re-subscription does not.
+   * `quiet` suppresses the "no manager registered" debug line on the snapshot
+   * branch, where an attach-only session with no live manager is expected.
+   */
+  private async reattachRecoveredSession(sessionId: string, quiet = false): Promise<void> {
+    try {
+      const { getRegisteredSessionManager } = await import('./session-manager.js')
+      const mgr = getRegisteredSessionManager(sessionId)
+      type Reattachable = { reattachWatcher?: () => Promise<boolean> }
+      const reattachable = mgr as unknown as Reattachable | undefined
+      if (reattachable?.reattachWatcher) {
+        await reattachable.reattachWatcher()
+      } else if (!quiet) {
+        log.session.debug('DaemonConnection: no manager to reattach — session has no active subscriber', {
+          sessionId, host: this.hostKey,
+        })
+      }
+    } catch (err) {
+      log.session.warn('DaemonConnection: reattach watcher failed (recovery continued)', {
+        sessionId, host: this.hostKey,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   /** After successful reconnect, recover sessions marked error due to connection loss. */
   private async recoverDisconnectedSessions(): Promise<void> {
     try {
@@ -2462,7 +2588,63 @@ export class DaemonConnection {
 
         // Ask daemon if this session's process is still alive
         try {
-          const result = await this.send('status', { sid: s.claudeSessionId })
+          // ── C2 reconnect pull (contract §5): snapshot-capable daemon →
+          // getState carries the authoritative snapshot; feed the projection.
+          // In ENFORCE mode a successfully-routed snapshot REPLACES the manual
+          // record patching below (applySnapshot is the sole writer). In
+          // shadow/off the legacy patching stays authoritative (shadow never
+          // writes, so skipping the patch would strand 'Connection lost'
+          // records) — and non-snapshot daemons always take the legacy path
+          // (version-skew fallback).
+          let result: DaemonCommandResult
+          let snapshotHandled = false
+          if (this.supportsSnapshots) {
+            result = await this.send('getState', { sid: s.claudeSessionId }) as DaemonGetStateResult
+            const snapshot = (result as DaemonGetStateResult).snapshot
+            if (result.ok && snapshot) {
+              try {
+                const { applySnapshot, getSnapshotStatusMode } = await import('../core/session-snapshot-apply.js')
+                const applied = await applySnapshot(s.claudeSessionId, snapshot, 'reconnect-pull')
+                snapshotHandled = getSnapshotStatusMode() === 'enforce'
+                  && applied.outcome !== 'error'
+                  && applied.outcome !== 'no-record'
+                  && applied.outcome !== 'excluded'
+                  && applied.outcome !== 'disabled'
+              } catch (err) {
+                log.session.warn('DaemonConnection: reconnect snapshot apply failed — falling back to legacy recovery', {
+                  sessionId: s.claudeSessionId, host: this.hostKey,
+                  error: err instanceof Error ? err.message : String(err),
+                })
+              }
+            }
+          } else {
+            // ── CAPABILITY DOWNGRADE (contract §5 version-skew fallback) ──
+            // This host no longer speaks snapshot-v1 (daemon redeployed to an
+            // older build / rolled back). Any coverage this sid earned from a
+            // previous snapshot-capable daemon is now a lie: no snapshot will
+            // ever arrive to correct the record, yet in enforce mode the gate
+            // would keep stripping the legacy category-① writers below
+            // ('daemon'/'daemon_reconnected', 'daemon'/'daemon_reported_exit'),
+            // freezing the record at its last status forever. Drop coverage
+            // BEFORE patching so the legacy write lands. Coverage re-arms
+            // automatically on the next applySnapshot for this sid.
+            try {
+              const { unmarkSnapshotCovered } = await import('../core/session-snapshot-gate.js')
+              unmarkSnapshotCovered(s.claudeSessionId)
+            } catch { /* gate unavailable — legacy patching is the fallback anyway */ }
+            result = await this.send('status', { sid: s.claudeSessionId })
+          }
+
+          if (snapshotHandled) {
+            // Record convergence is the projection's job now — but the ws
+            // re-subscription is still ours (the daemon dropped us from
+            // session.subscribers on close).
+            if (result.ok && result.alive) {
+              await this.reattachRecoveredSession(s.claudeSessionId, true)
+            }
+            continue
+          }
+
           if (result.ok && result.alive) {
             // Preserve 'idle' if that's what the session was before reconnect —
             // FIFO sessions sit in 'idle' between turns and forcing 'running'
@@ -2488,32 +2670,9 @@ export class DaemonConnection {
               recoveredStatus,
             })
 
-            // Re-subscribe this new ws to the session's push stream. Under
-            // the new session-bound watcher model the daemon's file tailer
-            // never stopped — but ws.close removed us from the subscribers
-            // Set. send('attach') re-adds us and replays any bytes we missed
-            // (catch-up from our tracked fromOffset). Under the old per-ws
-            // watcher model this was the only way to get push back at all,
-            // since the tailer was destroyed on ws.close. Either way, calling
-            // reattachWatcher is correct and idempotent.
-            try {
-              const { getRegisteredSessionManager } = await import('./session-manager.js')
-              const mgr = getRegisteredSessionManager(s.claudeSessionId)
-              type Reattachable = { reattachWatcher?: () => Promise<boolean> }
-              const reattachable = mgr as unknown as Reattachable | undefined
-              if (reattachable?.reattachWatcher) {
-                await reattachable.reattachWatcher()
-              } else {
-                log.session.debug('DaemonConnection: no manager to reattach — session has no active subscriber', {
-                  sessionId: s.claudeSessionId, host: this.hostKey,
-                })
-              }
-            } catch (err) {
-              log.session.warn('DaemonConnection: reattach watcher failed (recovery continued)', {
-                sessionId: s.claudeSessionId, host: this.hostKey,
-                error: err instanceof Error ? err.message : String(err),
-              })
-            }
+            // Re-subscribe this new ws to the session's push stream (shared
+            // helper — identical work on the snapshot branch above).
+            await this.reattachRecoveredSession(s.claudeSessionId)
           } else {
             // Process died during disconnect — mark stopped so session is resumable.
             // Don't inject a message; user's next message will trigger --resume naturally.
@@ -2790,6 +2949,27 @@ export function isDaemonConnected(hostKey: string): boolean {
 
 export function getDaemonDisconnectedSince(hostKey: string): number | null {
   return connectionPool.get(hostKey)?.disconnectedSince ?? null
+}
+
+/**
+ * C2 pull channel (contract §5): the POOLED, CONNECTED connection for a host,
+ * but only when its daemon advertises 'snapshot-v1'. NEVER dials — a health
+ * tick must not pay SSH connect costs; hosts without a live pooled connection
+ * simply skip the pull until something else warms the pool.
+ * Host is normalized like session records store it (null/undefined = local).
+ */
+export function getPooledSnapshotConnection(host: string | null | undefined): DaemonConnection | null {
+  const hostKey = host ?? '__local__'
+  // Direct-pool entries are keyed `direct:<wsUrl>`; the local host's tunnel
+  // pool entry is keyed '__local__'. Check the hostKey entry first, then fall
+  // back to scanning for a direct entry whose hostKey matches (local daemon).
+  const conn = connectionPool.get(hostKey)
+  if (conn?.connected && conn.supportsSnapshots) return conn
+  for (const [key, pooled] of connectionPool) {
+    if (!key.startsWith('direct:')) continue
+    if (pooled.connected && pooled.supportsSnapshots && pooled.host === hostKey) return pooled
+  }
+  return null
 }
 
 export function getDaemonPoolStatus(): DaemonStatus[] {

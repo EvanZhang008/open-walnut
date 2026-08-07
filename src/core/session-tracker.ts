@@ -19,6 +19,16 @@ import { getDb, rowToSession, sessionToRow, SESSION_COLUMNS, transaction as sess
 import { runSessionMigrationIfNeeded } from './session-db-migration.js';
 import { bus, EventNames, type EmitOptions } from './event-bus.js';
 import type { SessionStatusChangedEvent } from './event-types.js';
+// Snapshot enforce-mode legacy-writer gate. session-snapshot-gate has ZERO
+// imports (deliberately — this file is imported by nearly everything, so the
+// gate lives in a leaf module to avoid a tracker ↔ snapshot-apply cycle).
+import {
+  getSnapshotStatusMode,
+  isSnapshotCovered,
+  isLegacyGatedStatusWrite,
+  isUnstampedStatusWrite,
+  noteSuppressedStatusWrite,
+} from './session-snapshot-gate.js';
 
 let sessionInitialized = false;
 
@@ -1095,6 +1105,74 @@ function applyUpdateToSession(
   logLabel: string,
 ): boolean {
   updates = withoutStatusVersionOverrides(updates);
+
+  // ── C2 enforce-mode legacy-writer gate (contract §5) ──────────────────────
+  // When the snapshot projection is the sole status writer for a session
+  // (enforce mode + session snapshot-covered), stream-event-driven legacy
+  // writers must not race it. TWO shapes are gated, with deliberately
+  // different blast radius:
+  //
+  //  (a) category-① pairs (the table in session-snapshot-gate.ts) → the WHOLE
+  //      patch is dropped. These writers exist ONLY to publish a status verdict
+  //      (`{process_status, status_reason, status_changed_by, activity: undefined,
+  //      last_status_change, consumedOffset?, pid: undefined?}`); stripping just
+  //      the status trio used to let `pid: undefined` / `consumedOffset` /
+  //      `activity` / `last_status_change` land, producing a half-applied state
+  //      no writer ever intended (e.g. a PID cleared on a session the snapshot
+  //      still reports running, or a turn-END watermark adopted with no
+  //      matching status). All-or-nothing is the only coherent choice.
+  //
+  //  (b) UN-STAMPED status writes (neither changed_by nor reason) → strip ONLY
+  //      the status fields, keep the rest. This shape is the session runner's
+  //      stream projector (emitStatusChanged + the spawn/turn-start persists) —
+  //      the highest-volume status writer in the system, and previously
+  //      un-gateable because it carries no pair to match (C30). Its patches DO
+  //      carry load-bearing non-status facts (pid, host, outputFile, mode,
+  //      activity, planCompleted) that other subsystems depend on, so dropping
+  //      the whole patch here would regress the orphan-dead-pool fix and live
+  //      mode persistence.
+  //
+  // Category-② writers (user intent, spawn seeds, migrations) and any other
+  // stamped-but-unlisted pair PASS THROUGH — contract §5's explicit tiebreak.
+  if (
+    updates.process_status !== undefined
+    && getSnapshotStatusMode() === 'enforce'
+    && isSnapshotCovered(session.claudeSessionId)
+  ) {
+    const changedBy = (updates as Record<string, unknown>).status_changed_by;
+    const reason = (updates as Record<string, unknown>).status_reason;
+    const gatedPair = isLegacyGatedStatusWrite(changedBy, reason);
+    const unstamped = !gatedPair && isUnstampedStatusWrite(changedBy, reason);
+    if (gatedPair || unstamped) {
+      // Log churn control: a suppressed writer keeps refiring (the health
+      // monitor retries every 30s for as long as the divergence lasts). Info on
+      // the first suppression per sid, debug after that, always with the count.
+      const count = noteSuppressedStatusWrite(session.claudeSessionId);
+      const payload = {
+        sessionId: session.claudeSessionId,
+        suppressedStatus: updates.process_status,
+        statusReason: reason ?? null,
+        changedBy: changedBy ?? null,
+        currentStatus: session.process_status,
+        shape: gatedPair ? 'category-1-pair' : 'unstamped-runner-projection',
+        suppressedCount: count,
+      };
+      if (count === 1) log.session.info('legacy status write suppressed', payload);
+      else log.session.debug('legacy status write suppressed', payload);
+
+      // (a) drop the entire patch — nothing in it was meant to apply alone.
+      if (gatedPair) return false;
+
+      // (b) strip the status labeling, let the transport facts through.
+      updates = { ...updates } as Partial<SessionRecord>;
+      delete (updates as Partial<SessionRecord>).process_status;
+      delete (updates as Partial<SessionRecord>).status_reason;
+      delete (updates as Partial<SessionRecord>).status_changed_by;
+      delete (updates as Partial<SessionRecord>).errorMessage;
+      if (Object.keys(updates).length === 0) return false;
+    }
+  }
+
   initializeStatusVersion(session);
   const beforeStatus = canonicalStatusProjection(session);
   // ── consumedOffset monotonic arbitration (single write choke point) ──

@@ -2189,7 +2189,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         }
       }
 
-      const { sessionId, taskId, result, isError, totalCost, costDelta, duration } = eventData<'session:result'>(event)
+      const { sessionId, taskId, result, isError, totalCost, costDelta, duration, turnGen } = eventData<'session:result'>(event)
       log.web.info('session result received', { sessionId, taskId, resultLength: result?.length ?? 0 })
 
       // Record session cost (external Claude Code CLI process).
@@ -2285,7 +2285,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         if (!teamActive) {
           try {
             const { applySessionPhase } = await import('../core/phase.js')
-            await applySessionPhase(taskId, 'session:result', 'server.ts:session-result', { sessionId })
+            // turnGen threads the emitting session's turn generation into the
+            // stale-result gate: by the time this flip runs (enrichment above adds
+            // ~800ms) the CLI may already be running the NEXT turn (incident
+            // ed347bde). Undefined on non-CLI emitters → gate fails open.
+            await applySessionPhase(taskId, 'session:result', 'server.ts:session-result', { sessionId, turnGen })
           } catch (err) {
             log.web.warn('failed to apply session:result phase', { taskId, error: String(err) })
           }

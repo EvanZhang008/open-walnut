@@ -65,6 +65,12 @@ for (let i = 0; i < args.length; i++) {
 // Resolver for an init-only spawn awaiting its first FIFO user message (see below).
 let pendingUserResolve = null;
 
+// Mode hook for the multi-turn snapshot modes (snapshot-clean-turn,
+// snapshot-whale-turn, snapshot-init-edge). Set by armSnapshotNextTurn; consulted
+// by the persistent stdin listener so a LATER FIFO user line re-enters the mode
+// dispatcher and drives the next turn on the SAME live process.
+let onUserLine = null;
+
 // When --input-format stream-json is used, read the message from stdin (FIFO pipe).
 // The real CLI reads JSON lines like: {"type":"user","message":{"role":"user","content":"..."}}
 // The FIFO is opened O_RDWR so it won't EOF — we read available data with a short timeout.
@@ -149,6 +155,9 @@ if (inputFormat === 'stream-json') {
           const resolve = pendingUserResolve;
           pendingUserResolve = null;
           resolve(typeof c === 'string' ? c : JSON.stringify(c));
+        } else if (parsed.type === 'user' && parsed.message?.content !== undefined && onUserLine) {
+          const c = parsed.message.content;
+          onUserLine(typeof c === 'string' ? c : JSON.stringify(c));
         }
       } catch { /* not JSON — ignore */ }
     }
@@ -248,8 +257,227 @@ if (outputFormat === 'stream-json') {
     }, 100);
   }
 
+  // ── Multi-turn support for the snapshot-* modes ──
+  // Every other mode is single-turn: it either exits at `result` or parks
+  // forever. The snapshot modes must survive several turns on ONE process (the
+  // real FIFO-mode CLI does, and an E2E that spawns a fresh CLI per turn can't
+  // reproduce the mid-turn shapes at all). armSnapshotNextTurn re-enters this
+  // dispatcher when the NEXT FIFO user line arrives, so turn 2 can select a
+  // different snapshot mode than turn 1. Only the snapshot modes arm it, so no
+  // existing mode's behavior changes.
+  let snapshotTurnSeq = 0;
+  // Cumulative session cost, like the real CLI's `total_cost_usd` (which is the
+  // running total for the SESSION, not the turn). Load-bearing for any mode that
+  // runs MORE THAN ONE turn on one process: Walnut treats "cumulative cost
+  // identical to the previous turn's" as proof the CLI made zero API calls and
+  // replayed old JSONL, so it kills the FIFO and forces a cold --resume
+  // (claude-code-session.ts, "stale result detected"). A flat per-turn cost
+  // therefore makes every turn after the first look replayed — measured: 5 of 6
+  // concurrent sessions went to 'stopped' mid-suite. Grow it per turn.
+  let snapshotCostUsd = 0;
+  function nextSnapshotCost(increment) {
+    snapshotCostUsd = Math.round((snapshotCostUsd + increment) * 1e6) / 1e6;
+    return snapshotCostUsd;
+  }
+  function armSnapshotNextTurn() {
+    onUserLine = (content) => {
+      onUserLine = null;
+      message = content;
+      computeMessageParts();
+      emitRemainingEvents();
+    };
+  }
+
   // Emit remaining events (optionally delayed for "slow:N" messages)
   function emitRemainingEvents() {
+    // 2a.-1. "snapshot-clean-turn[:<text>]" — ONE clean turn then STAY ALIVE
+    //         (real FIFO-mode CLI behavior), so the daemon's fold sees the
+    //         canonical settle sequence and the session converges to idle
+    //         without the process dying:
+    //           assistant → result → session_state_changed{idle}
+    //         The trailing idle is what daemon-fold needs to mark the turn
+    //         settled (a result alone leaves turnActive=true). Every other
+    //         success mode either exits at `result` (killing the process, so
+    //         the snapshot projects 'stopped' not 'idle') or omits the idle.
+    //
+    //         Multi-turn: a LATER FIFO user line re-enters the dispatcher (see
+    //         armSnapshotNextTurn), so a follow-up send can select a different
+    //         snapshot mode on the SAME live process — that's how the real CLI
+    //         behaves and it keeps an E2E to one CLI process for several turns.
+    if (effectiveMessage === 'snapshot-clean-turn' || effectiveMessage.startsWith('snapshot-clean-turn:')) {
+      const text = effectiveMessage.includes(':')
+        ? effectiveMessage.split(':').slice(1).join(':')
+        : 'Clean turn done; process stays alive.';
+      const sid = outputSessionId;
+      const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
+      const body = () => {
+        emit({ type: 'assistant', message: { id: 'msg_snap_clean_' + (++snapshotTurnSeq), type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 } }, session_id: sid });
+        emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 40, num_turns: 1, result: text, session_id: sid, total_cost_usd: nextSnapshotCost(0.001), usage: { input_tokens: 20, output_tokens: 8 } });
+        emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+        armSnapshotNextTurn();
+      };
+      // Minimum "think time" before the turn's output. NOT cosmetic — it is
+      // ordering fidelity for the turn-start MARKER. Walnut delivers a send by
+      // writing the FIFO and, SEPARATELY (fire-and-forget RPC), asking the
+      // daemon to append a `user/walnut-injected` anchor line to the stream file
+      // (RemoteSessionManager.writeSyntheticUserEvent). A real CLI takes
+      // hundreds of ms to seconds per turn, so the anchor always lands BEFORE
+      // that turn's assistant/result/idle. Emitting synchronously here wins the
+      // race instead, producing a line order production never emits — anchor
+      // AFTER settle — which the fold correctly reads as "a new turn just
+      // started and never finished": turnActive sticks true forever and the
+      // record projects 'running' with the CLI idle. Measured on the stress
+      // suite: all 6 concurrent sessions wedged at 'running' this way.
+      const THINK_MS = Number(process.env.MOCK_SNAPSHOT_TURN_DELAY_MS ?? 300);
+      if (THINK_MS > 0) setTimeout(body, THINK_MS);
+      else body();
+      // Do NOT exit: stream-json FIFO mode stays alive between turns.
+      return;
+    }
+
+    // 2a.-0.75. "snapshot-whale-turn[:<kb>]" — a WHALE turn: ~<kb> KB (default
+    //         2048 = 2MB) of assistant lines, then result → idle, then STAY
+    //         ALIVE like every other snapshot mode. Exercises the daemon
+    //         tailer + incremental fold at whale volume through the REAL chain,
+    //         where the unit/integration whale tests only append to disk.
+    //
+    //         TORN TAIL: the first MOCK_SNAPSHOT_WHALE_TORN (default 3) lines
+    //         are written in TWO writes with a real pause between them, so the
+    //         100ms tailer poll lands INSIDE the line and must park the
+    //         fragment in its carry. process.stdout for a FILE fd is
+    //         synchronous in Node on POSIX, and the daemon hands the CLI an
+    //         O_APPEND fd on the jsonl — so the half-line is genuinely on disk
+    //         before the pause. Without the carry, `v` would advance past the
+    //         fragment and the tailer's `v > foldState.v` guard would skip the
+    //         real line forever (the wedge tests/providers/
+    //         daemon-snapshot-wiring.test.ts scenario 7 covers synthetically).
+    //
+    //         Knobs: MOCK_SNAPSHOT_WHALE_KB (total, default 2048),
+    //                MOCK_SNAPSHOT_WHALE_LINE_KB (per line, default 64),
+    //                MOCK_SNAPSHOT_WHALE_TORN (torn line count, default 3),
+    //                MOCK_SNAPSHOT_WHALE_TEAR_MS (pause mid-line, default 250).
+    //         An explicit ":<kb>" in the message wins over the env default so a
+    //         smoke run can shrink the whale without touching the daemon env.
+    if (effectiveMessage === 'snapshot-whale-turn' || effectiveMessage.startsWith('snapshot-whale-turn:')) {
+      const arg = effectiveMessage.includes(':')
+        ? effectiveMessage.split(':').slice(1).join(':').trim()
+        : '';
+      const argKb = parseInt(arg, 10);
+      const totalKb = Number.isFinite(argKb) && argKb > 0
+        ? argKb
+        : Number(process.env.MOCK_SNAPSHOT_WHALE_KB || 2048);
+      const lineKb = Math.max(1, Number(process.env.MOCK_SNAPSHOT_WHALE_LINE_KB || 64));
+      const tornLines = Math.max(0, Number(process.env.MOCK_SNAPSHOT_WHALE_TORN ?? 3));
+      const tearMs = Math.max(1, Number(process.env.MOCK_SNAPSHOT_WHALE_TEAR_MS || 250));
+      const sid = outputSessionId;
+      const seq = ++snapshotTurnSeq;
+      const lineCount = Math.max(1, Math.ceil(totalKb / lineKb));
+      const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      (async () => {
+        let emitted = 0;
+        for (let i = 0; i < lineCount; i++) {
+          const payload = JSON.stringify({
+            type: 'assistant',
+            message: {
+              id: `msg_snap_whale_${seq}_${i}`, type: 'message', role: 'assistant',
+              model: modelFlag || 'mock-model',
+              content: [{ type: 'text', text: 'w'.repeat(lineKb * 1024) }],
+              stop_reason: 'end_turn',
+              usage: { input_tokens: 10, output_tokens: lineKb * 256 },
+            },
+            session_id: sid,
+          });
+          if (i < tornLines) {
+            // Split mid-JSON (never on a newline) and pause ≥2 tailer ticks.
+            const half = Math.floor(payload.length / 2);
+            process.stdout.write(payload.slice(0, half));
+            await sleep(tearMs);
+            process.stdout.write(payload.slice(half) + '\n');
+          } else {
+            process.stdout.write(payload + '\n');
+          }
+          emitted += Buffer.byteLength(payload, 'utf8') + 1;
+        }
+        emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 100, num_turns: 1, result: `whale turn ${seq}: ${emitted} bytes in ${lineCount} lines`, session_id: sid, total_cost_usd: nextSnapshotCost(0.01), usage: { input_tokens: 10, output_tokens: lineCount * lineKb * 256 } });
+        emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+        armSnapshotNextTurn();
+      })();
+      // Do NOT exit: stream-json FIFO mode stays alive between turns.
+      return;
+    }
+
+    // 2a.-0.5. "snapshot-init-edge" — reproduce incident ed347bde (2026-08-05):
+    //         the CLI picks up a QUEUED send the instant the previous turn's
+    //         result lands and emits a fresh `init` with NO
+    //         session_state_changed{running} anywhere — the bare init is the
+    //         ONLY evidence the new turn began (Fix E's init-after-result edge:
+    //         bump _turnGen, flip process_status to running, pull the task phase
+    //         back to IN_PROGRESS). Without Fix E the record reads idle and the
+    //         task reads AGENT_COMPLETE while the CLI visibly streams.
+    //
+    //         Emission order (deliberately NOT all in one tick):
+    //           assistant → result → idle          ← turn A settles COMPLETELY
+    //           …SETTLE_MS…                        ← walnut converges: idle + AGENT_COMPLETE
+    //           init → streaming deltas (heartbeat)← turn B, Fix E's ONLY signal
+    //           …HOLD_MS…
+    //           assistant → result → idle          ← turn B converges
+    //
+    //         The SETTLE_MS gap is load-bearing for a revert-proof assertion:
+    //         it lets the observer first see the fully-settled state, so a later
+    //         "running / IN_PROGRESS" reading cannot be the leftover of the
+    //         send-time write — it can ONLY have come from the init edge.
+    //         Knobs: MOCK_SNAPSHOT_EDGE_SETTLE_MS (default 5000),
+    //                MOCK_SNAPSHOT_EDGE_HOLD_MS   (default 8000).
+    //
+    //         Both results go through nextSnapshotCost: this mode runs TWO turns
+    //         on ONE process, so a flat per-turn total_cost_usd would make turn B
+    //         look replayed and trip walnut's "stale result (cost unchanged)"
+    //         kill-switch (see the nextSnapshotCost comment above).
+    if (effectiveMessage === 'snapshot-init-edge' || effectiveMessage.startsWith('snapshot-init-edge:')) {
+      const tag = effectiveMessage.includes(':')
+        ? effectiveMessage.split(':').slice(1).join(':')
+        : 'edge';
+      const sid = outputSessionId;
+      const seq = ++snapshotTurnSeq;
+      const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
+      const SETTLE_MS = Number(process.env.MOCK_SNAPSHOT_EDGE_SETTLE_MS || 5000);
+      const HOLD_MS = Number(process.env.MOCK_SNAPSHOT_EDGE_HOLD_MS || 8000);
+
+      // ── Turn A: normal answer, terminal result, companion idle. Fully settles.
+      emit({ type: 'assistant', message: { id: `msg_edge_a_${seq}`, type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text: `turnA ${tag}` }], stop_reason: 'end_turn', usage: { input_tokens: 30, output_tokens: 10 } }, session_id: sid });
+      emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: 50, num_turns: 1, result: `turnA ${tag}`, session_id: sid, total_cost_usd: nextSnapshotCost(0.002), usage: { input_tokens: 30, output_tokens: 10 } });
+      emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+
+      let beat = null;
+      setTimeout(() => {
+        // ── Turn B: a BARE init. No {running}, no user line, no marker — this
+        //    is the whole incident. Streaming follows immediately.
+        emit({ type: 'system', subtype: 'init', session_id: sid, cwd: process.cwd(), model: modelFlag || 'mock-model', tools: ['Read'], mcp_servers: [], permissionMode: permissionMode || 'default' });
+        emit({ type: 'stream_event', session_id: sid, parent_tool_use_id: null, event: { type: 'message_start', message: { id: `msg_edge_b_${seq}`, role: 'assistant', content: [], model: modelFlag || 'mock-model', usage: { input_tokens: 40, output_tokens: 0 } } } });
+        emit({ type: 'stream_event', session_id: sid, parent_tool_use_id: null, event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } });
+        emit({ type: 'stream_event', session_id: sid, parent_tool_use_id: null, event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'turnB ' } } });
+        // Heartbeat deltas keep the stream visibly alive across the hold window,
+        // so an observer sees a genuinely-running turn rather than a still frame.
+        beat = setInterval(() => {
+          emit({ type: 'stream_event', session_id: sid, parent_tool_use_id: null, event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '.' } } });
+        }, 1000);
+        beat.unref?.();
+      }, SETTLE_MS);
+
+      setTimeout(() => {
+        if (beat) clearInterval(beat);
+        emit({ type: 'stream_event', session_id: sid, parent_tool_use_id: null, event: { type: 'content_block_stop', index: 0 } });
+        emit({ type: 'assistant', message: { id: `msg_edge_b_${seq}`, type: 'message', role: 'assistant', model: 'mock-model', content: [{ type: 'text', text: `turnB ${tag} done` }], stop_reason: 'end_turn', usage: { input_tokens: 40, output_tokens: 20 } }, session_id: sid });
+        emit({ type: 'result', subtype: 'success', is_error: false, duration_ms: HOLD_MS, num_turns: 2, result: `turnB ${tag} done`, session_id: sid, total_cost_usd: nextSnapshotCost(0.003), usage: { input_tokens: 40, output_tokens: 20 } });
+        emit({ type: 'system', subtype: 'session_state_changed', session_id: sid, state: 'idle' });
+        armSnapshotNextTurn();
+      }, SETTLE_MS + HOLD_MS);
+      // Do NOT exit: stream-json FIFO mode stays alive between turns.
+      return;
+    }
+
     // 2a.0. "truncated-success" — reproduce the 2026-06-04 session 1fc886da bug:
     //        the stream cuts off mid-message (message_delta carries
     //        stop_reason:null) yet the CLI still reports result subtype=success.

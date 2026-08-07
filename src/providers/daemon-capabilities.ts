@@ -61,4 +61,33 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
   'acpSubscribe',
 ] as const
 
+/**
+ * Full capability list a CURRENT daemon advertises on `hello`. Superset of
+ * REQUIRED_DAEMON_CAPABILITIES: optional capabilities live ONLY here so that
+ * old daemons (which don't advertise them) stay usable — the server gates the
+ * corresponding feature on presence instead of forcing a redeploy.
+ *
+ * 'snapshot-v1' — C1 session-snapshot push/pull (docs/plan/
+ * session-snapshot-source-of-truth.md §4). Walnut treats hosts without it as
+ * legacy: no snapshot flow, old status writers stay authoritative. Do NOT
+ * move it into REQUIRED until the C4 soak completes.
+ *
+ * 'image.save' — narrow bridge-safe image save (phone → cloud → daemon).
+ * Optional: a pre-image.save daemon answers with an unknown-command error,
+ * which the cloud route maps to 400 images_need_daemon_upgrade (self-heals
+ * on the next Mac reconnect via the normal auto-deploy).
+ *
+ * 'session.launch' — narrow bridge launch relay (phone → cloud → daemon →
+ * connected walnut server, which runs the full quick-start chain). Optional:
+ * a pre-session.launch daemon answers with an unknown-command error, which
+ * the cloud route maps to 400 session_launch_needs_upgrade (self-heals on
+ * the next primary reconnect via the normal auto-deploy).
+ */
+export const ADVERTISED_DAEMON_CAPABILITIES = [
+  ...REQUIRED_DAEMON_CAPABILITIES,
+  'snapshot-v1',
+  'image.save',
+  'session.launch',
+] as const
+
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

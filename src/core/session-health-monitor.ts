@@ -335,6 +335,13 @@ export class SessionHealthMonitor {
     await this.reconcilePendingBackgroundTasks(sessions)
     endPhase('pendingBgTasks')
 
+    // C2 snapshot pull channel — 30s PULL of the daemon-authoritative
+    // SessionSnapshot for active sessions (contract §5). Complements the push
+    // path: a dropped push degrades to "self-heals within one pull cycle".
+    if (ctx.overBudget()) return
+    await this.checkSnapshotPull(sessions, ctx)
+    endPhase('snapshotPull')
+
     // Authoritative reconcile for stuck sessions — the periodic safety net behind
     // the event-driven paths. Any lost/swallowed result event (tailer freeze,
     // restart window, WS drop, replay-guard swallow) previously wedged
@@ -976,6 +983,107 @@ export class SessionHealthMonitor {
         ['*'],
         { source: 'health-monitor' },
       )
+    }
+  }
+
+  /**
+   * C2 snapshot pull channel (contract §5): every 30s tick, for records in
+   * {running, idle} on a native (non-codex, non-embedded/sdk) engine whose
+   * host has a POOLED CONNECTED DaemonConnection advertising 'snapshot-v1',
+   * PULL getState and feed the snapshot to applySnapshot. NEVER dials a new
+   * connection. Sequential, capped at 10 sids/tick, per-sid 25s spacing.
+   *
+   * TWO fairness/budget properties this loop must keep (C8/C9/C12/C29):
+   *
+   *  - It honors the TickContext budget INSIDE the loop (same discipline as
+   *    checkHungSessions). Each iteration is a real daemon RPC with a
+   *    probe-timeout ceiling, so 10 slow hosts could burn 10 × the probe
+   *    timeout sequentially BEFORE the authoritative reconcile phases that run
+   *    after it. Abandoning mid-loop is safe: this is a self-healing safety
+   *    net, every pull is idempotent, and the remaining sids come first on the
+   *    next tick (see the rotation below).
+   *
+   *  - Candidates are ordered by lastPullAt ASCENDING (never-pulled first),
+   *    which turns the 10/tick cap into a round-robin. In list order the SAME
+   *    first ten sids were pulled every tick and — because the 25s spacing is
+   *    shorter than the 30s cadence — sids 11+ were never pulled at all: the
+   *    pull channel silently did not exist for them.
+   */
+  private snapshotPullAt = new Map<string, number>()
+
+  private async checkSnapshotPull(sessions: SessionRecord[], ctx?: TickContext): Promise<void> {
+    const PULL_MIN_GAP_MS = 25_000
+    const MAX_PULLS_PER_TICK = 10
+    try {
+      const { getSnapshotStatusMode } = await import('./session-snapshot-gate.js')
+      if (getSnapshotStatusMode() === 'off') return
+      const { getPooledSnapshotConnection } = await import('../providers/daemon-connection.js')
+      const { applySnapshot } = await import('./session-snapshot-apply.js')
+
+      const now = Date.now()
+      // Eligibility first, then oldest-pull-first ordering. Stable within equal
+      // timestamps (Array.sort is stable), so a never-pulled batch keeps list
+      // order and the rotation is deterministic.
+      const candidates = sessions
+        .filter((s) => {
+          if (s.process_status !== 'running' && s.process_status !== 'idle') return false
+          if (s.engine === 'codex') return false
+          if (s.provider === 'embedded' || s.provider === 'sdk') return false
+          if (s.status_reason === 'awaiting_spawn') return false
+          const lastPull = this.snapshotPullAt.get(s.claudeSessionId) ?? 0
+          return now - lastPull >= PULL_MIN_GAP_MS
+        })
+        .sort((a, b) =>
+          (this.snapshotPullAt.get(a.claudeSessionId) ?? 0) - (this.snapshotPullAt.get(b.claudeSessionId) ?? 0))
+
+      let pulled = 0
+      let capped = false
+      for (const s of candidates) {
+        if (ctx?.overBudget()) {
+          log.session.warn('health monitor: checkSnapshotPull abandoned mid-loop (over budget)', {
+            pulled, candidateCount: candidates.length,
+          })
+          break
+        }
+        const conn = getPooledSnapshotConnection(s.host)
+        if (!conn) continue // no pooled snapshot-capable connection — skip (never dial)
+        if (pulled >= MAX_PULLS_PER_TICK) { capped = true; break }
+        pulled++
+        this.snapshotPullAt.set(s.claudeSessionId, now)
+        try {
+          // Sequential on purpose: this is a background safety net; parallel
+          // fan-out to a slow host would stack daemon RPCs on the tick budget.
+          const resp = await probeWithTimeout(
+            conn.send('getState', { sid: s.claudeSessionId }),
+            null as Record<string, unknown> | null,
+            'snapshot-pull-getState', s.claudeSessionId,
+          )
+          const snapshot = resp?.ok ? (resp as { snapshot?: import('../providers/daemon-fold.js').SessionSnapshot }).snapshot : undefined
+          if (snapshot) await applySnapshot(s.claudeSessionId, snapshot, 'pull-30s')
+        } catch (err) {
+          log.session.debug('health monitor: snapshot pull failed', {
+            sessionId: s.claudeSessionId, host: s.host ?? '__local__',
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }
+      if (capped) {
+        log.session.info('health monitor: snapshot pull capped this tick', {
+          cap: MAX_PULLS_PER_TICK, sessionCount: sessions.length,
+          candidateCount: candidates.length,
+        })
+      }
+      // Bounded memory: drop timestamps for sids no longer in the scan set.
+      if (this.snapshotPullAt.size > 200) {
+        const liveIds = new Set(sessions.map((s) => s.claudeSessionId))
+        for (const sid of this.snapshotPullAt.keys()) {
+          if (!liveIds.has(sid)) this.snapshotPullAt.delete(sid)
+        }
+      }
+    } catch (err) {
+      log.session.warn('health monitor: checkSnapshotPull failed', {
+        error: err instanceof Error ? err.message : String(err),
+      })
     }
   }
 

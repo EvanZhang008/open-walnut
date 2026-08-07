@@ -40,6 +40,7 @@ fi
 SOURCES=(
   src/providers/daemon-standalone.ts
   src/providers/daemon-core.ts
+  src/providers/daemon-fold.ts
   src/providers/daemon-source.ts
   src/providers/acp-daemon.ts
   src/providers/acp-worker/worker.ts

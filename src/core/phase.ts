@@ -5,13 +5,17 @@
  * Two-layer phase management (K8s-style push + reconcile):
  *
  * Layer 1: Push (ms-level, reliable with retry)
- *   session:result     → AGENT_COMPLETE      unconditional
+ *   session:result     → AGENT_COMPLETE      unconditional, EXCEPT when the event's
+ *                        turnGen is older than the live session's current turnGen
+ *                        (a newer turn already started — the late flip would
+ *                        repaint a streaming session as completed)
  *   session:input      → IN_PROGRESS         unconditional (fires at SEND time)
  *   session:turn-start → IN_PROGRESS         unconditional (fires when the CLI
- *                        actually STARTS the turn — session_state_changed{running};
- *                        covers queued/mid-turn sends whose input transition was a
- *                        no-op and whose phase was then flipped by the previous
- *                        turn's result)
+ *                        actually STARTS the turn — session_state_changed{running},
+ *                        or an `init` arriving after this turn's result when the CLI
+ *                        never went idle; covers queued/mid-turn sends whose input
+ *                        transition was a no-op and whose phase was then flipped by
+ *                        the previous turn's result)
  *   session:error      → AWAIT_HUMAN_ACTION  unconditional
  *   session:streaming  → IN_PROGRESS         only when === AWAIT_HUMAN_ACTION
  *   triage-sync        → AWAIT_HUMAN_ACTION  only when === AGENT_COMPLETE
@@ -145,6 +149,12 @@ export function sessionInputPhase(current: TaskPhase): TaskPhase | null {
 /**
  * CLI actually started executing a turn → IN_PROGRESS. Unconditional.
  *
+ * Two triggers feed this: session_state_changed{running} (the CLI's explicit
+ * turn-start signal) and an `init` that arrives after this turn's result was
+ * already emitted. The second exists because the CLI can start a queued
+ * mid-turn send WITHOUT ever going idle — no running state event is emitted at
+ * all, and the init is the only evidence (incident ed347bde, 2026-08-05).
+ *
  * The missing half of the result↔turn symmetry: turn-END has an authoritative
  * phase driver (session:result → AGENT_COMPLETE) but turn-START only had
  * session:input, which fires at SEND time. Interactive chat sends the next
@@ -201,6 +211,10 @@ interface ApplySessionPhaseOpts {
   processAlive?: boolean
   /** For 'reconciler' trigger: caller computes the expected phase. */
   newPhase?: TaskPhase
+  /** For 'session:result': the emitting session's turn generation at EMIT time
+   *  (SessionResultEvent.turnGen). Compared against the live session instance's
+   *  current gen to detect a stale result — see the gate below. */
+  turnGen?: number
 }
 
 /**
@@ -255,6 +269,31 @@ export async function applySessionPhase(
         return { changed: false, oldPhase: task.phase }
       }
     } catch { /* record unreadable — proceed with the push (pre-guard behavior) */ }
+  }
+
+  // Stale-result gate (incident ed347bde, 2026-08-05): SESSION_RESULT enrichment
+  // adds latency (~800ms measured) between the CLI's result line and this flip.
+  // In that window the CLI can already have STARTED the next turn — it picks up a
+  // queued mid-turn send without ever going idle, so its only turn-start signal is
+  // an `init` (no session_state_changed{running}). The runner's init-after-result
+  // edge bumps _turnGen and pulls the phase back to IN_PROGRESS; then this late
+  // result would flip it straight back to AGENT_COMPLETE and the task row reads
+  // completed/attention while the CLI visibly streams. Compare generations: an
+  // event stamped BEFORE the live instance's current gen belongs to a superseded
+  // turn. Fails OPEN (no gen, no live instance, any error → proceed) so the normal
+  // flow — where liveGen === eventGen — is untouched.
+  if (newPhase && trigger === 'session:result' && opts?.turnGen !== undefined && opts.sessionId) {
+    try {
+      const { sessionRunner } = await import('../providers/claude-code-session.js')
+      const live = sessionRunner.findSessionByClaudeId(opts.sessionId)
+      const liveGen = live?.turnGen
+      if (typeof liveGen === 'number' && liveGen > opts.turnGen) {
+        log.session.info('applySessionPhase: session:result skipped — stale result (a newer turn already started)', {
+          taskId, sessionId: opts.sessionId, eventGen: opts.turnGen, liveGen, source,
+        })
+        return { changed: false, oldPhase: task.phase }
+      }
+    } catch { /* runner not loaded / lookup failed — proceed (pre-gate behavior) */ }
   }
 
   if (!newPhase) {

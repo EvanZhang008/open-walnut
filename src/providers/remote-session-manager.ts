@@ -1065,6 +1065,29 @@ export class RemoteSessionManager implements SessionManager {
         }
         break
 
+      case 'snapshot':
+        // C2 intake: daemon-authoritative SessionSnapshot push (contract §5).
+        // Route into the projection layer; NEVER let a failure escape the
+        // event handler (same discipline as the sibling cases).
+        if ((event.sid === this._sid || event.sid === this._prevSid) && event.snapshot) {
+          // Capability guard: a daemon that pushes snapshots necessarily
+          // supports them, but if this connection's hello EXPLICITLY advertised
+          // a capability set without snapshot-v1, treat the event as protocol
+          // noise. Unknown caps (connectDirect skips hello) pass — the event
+          // itself is the evidence.
+          if (this.conn && this.conn.capabilitiesKnown && !this.conn.supportsSnapshots) break
+          const sid = event.sid === this._prevSid && this._sid ? this._sid : event.sid
+          import('../core/session-snapshot-apply.js')
+            .then(({ applySnapshot }) => applySnapshot(sid!, event.snapshot as never, 'daemon-push'))
+            .catch((err) => {
+              log.session.warn('RemoteSessionManager: snapshot apply failed', {
+                host: this.hostKey, sid: event.sid,
+                error: err instanceof Error ? err.message : String(err),
+              })
+            })
+        }
+        break
+
       case 'agent':
         // Subagent events — forward as-is (handled by session-chat.ts)
         break

@@ -36,7 +36,15 @@ import {
   type SessionMode,
   type PendingCtrl,
 } from './daemon-core.js'
-import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
+import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
+import {
+  foldLine,
+  initialFoldState,
+  assembleSnapshot,
+  snapshotDiffers,
+  type FoldState,
+  type SessionSnapshot,
+} from './daemon-fold.js'
 import { createAcpDaemon, type AcpStartParams } from './acp-daemon.js'
 import { computeGitDiff, GitDiffError, type GitDiffBase } from './git-diff-core.js'
 import { execFile as execFileCb } from 'node:child_process'
@@ -251,6 +259,14 @@ interface SessionData {
   orphanPollTimer: ReturnType<typeof setInterval> | null
   mode: SessionMode
   pendingCtrl: PendingCtrl | null
+  // C1: incremental fold of the stream file → authoritative SessionSnapshot
+  // (docs/plan/session-snapshot-source-of-truth.md §4). Maintains its own v
+  // and bg map — coexists with taskState L2 (retirement is C4's call).
+  foldState: FoldState
+  // Last snapshot pushed to subscribers — change detection ignores bare v advance.
+  lastPushedSnapshot?: SessionSnapshot | null
+  // 50ms coalesce timer for snapshot pushes (death pushes skip it).
+  snapshotTimer?: ReturnType<typeof setTimeout> | null
   spawnTs?: number   // latency instrumentation: CLI spawn ts
   sawInit?: boolean  // latency instrumentation: first init line seen
   // Tailer self-heal: last forced watcher rebuild ts. Session-level (not watcher
@@ -296,6 +312,16 @@ const BRIDGE_ALLOWED_COMMANDS = new Set([
   // proxy session-referenced pictures to phones. NOT fs.read: a compromised
   // cloud box must never get arbitrary file reads on exec hosts.
   'fs.readImage',
+  // Narrow image save (mediaType allowlist + decoded-size cap + magic-byte
+  // check, fixed daemon-owned directory, generated filename) — lets a phone
+  // attach pictures to a session over the cloud box. NOT fs.write: a
+  // compromised cloud box must never get arbitrary file writes on exec hosts.
+  'image.save',
+  // Narrow launch relay: forwarded UP to the connected walnut server (same
+  // relay shape as stt), which runs its full quick-start validation chain —
+  // the daemon spawns NOTHING from this command. NOT the raw spawn command:
+  // a compromised cloud box must never hand this daemon arbitrary argv.
+  'session.launch',
 ])
 
 // DUP-DEBUG: per-process counter and lookup map for stable ws ids.
@@ -685,6 +711,214 @@ function rebuildTaskStateFromJsonl(jsonlPath: string, now: number): TaskState {
   return ts
 }
 
+// ── C1: session-snapshot fold (docs/plan/session-snapshot-source-of-truth.md §4) ──
+// The daemon folds the stream file line-by-line into an authoritative
+// SessionSnapshot (foldLine/assembleSnapshot from daemon-fold.ts) and pushes
+// {ev:'snapshot'} to subscribers on change. Coexists with taskState L2 —
+// retirement of L2 is C4's call. Keep in sync with daemon-source.ts.
+const SNAPSHOT_COALESCE_MS = 50
+
+// Upper bound on the tailer's in-memory torn-tail carry (see ensureWatcher).
+// A single stream line larger than this cannot be assembled, so we log and
+// realign rather than growing the buffer without limit.
+const TAILER_CARRY_MAX = 32 * 1024 * 1024
+
+// Result of a fold rebuild: the folded state PLUS the byte offset of the last
+// COMPLETE-line boundary it stopped at. Every adopt/attach/resume site must seed
+// the watcher from `boundary`, never from a raw stat().size (contract §4
+// "Rebuild boundary rule").
+interface FoldRebuild {
+  state: FoldState
+  /** Absolute offset after the last complete (newline-terminated) line. */
+  boundary: number
+}
+
+// Stream the whole jsonl through foldLine, from byte 0. Used by every rebuild
+// site (daemon start / adopt / attach-discover / resume / unknown-sid getState).
+// Reads in 1MB chunks and carries the torn tail as BYTES (a UTF-8 char split
+// across chunks must not be decoded twice) so whale files never materialize as
+// one string.
+//
+// A final unterminated segment (the CLI was mid-write when we read) is NOT
+// folded and NOT counted in `boundary` — same rule as the live tailer's carry.
+// Folding it would (a) parse a fragment as a whole line and (b) advance `v` past
+// the real line end, so when the newline finally arrives the tailer's
+// `v > foldState.v` guard skips the COMPLETE line forever. Reporting `boundary`
+// (rather than stat().size) is what lets the caller start the watcher on a line
+// boundary so the torn region is simply re-read.
+//
+// Carry cap: identical to the tailer's. A single line larger than the cap can't
+// be assembled, so we drop it and realign on the next newline instead of
+// re-concatenating an unbounded buffer (the old loop grew it with O(n²) copying).
+// Keep in sync with daemon-source.ts.
+const FOLD_REBUILD_CHUNK = 1024 * 1024
+function rebuildFoldStateFromJsonl(jsonlPath: string): FoldRebuild {
+  let state = initialFoldState(0)
+  let fd: number
+  // Running end-of-line byte offset — same coordinate as the tailer's v. Only
+  // ever advanced past COMPLETE lines, so it doubles as the boundary.
+  let v = 0
+  try { fd = fs.openSync(jsonlPath, 'r') } catch { return { state, boundary: 0 } }
+  try {
+    const buf = Buffer.alloc(FOLD_REBUILD_CHUNK)
+    let filePos = 0
+    let carry: Buffer = Buffer.alloc(0)
+    let discardThroughNextNewline = false
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, FOLD_REBUILD_CHUNK, filePos)
+      if (n <= 0) break
+      filePos += n
+      const chunk = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n)
+      let start = 0
+      for (;;) {
+        const nl = chunk.indexOf(10, start) // '\n'
+        if (nl === -1) break
+        v += (nl - start) + 1
+        if (discardThroughNextNewline) discardThroughNextNewline = false
+        else {
+          const line = chunk.subarray(start, nl).toString('utf-8')
+          if (line.trim()) state = foldLine(state, line, v)
+        }
+        start = nl + 1
+      }
+      // Copy the torn tail — `buf` is reused by the next readSync.
+      carry = Buffer.from(chunk.subarray(start))
+      if (carry.length > TAILER_CARRY_MAX) {
+        logMsg('error', 'fold rebuild carry overflow — dropping oversized partial line', {
+          jsonlPath, carryBytes: carry.length, cap: TAILER_CARRY_MAX, filePos,
+        })
+        v = filePos
+        carry = Buffer.alloc(0)
+        discardThroughNextNewline = true
+      }
+    }
+    // A trailing unterminated fragment is deliberately left unfolded — see above.
+  } catch { /* partial fold is still monotone-safe — serve what we have */ } finally {
+    try { fs.closeSync(fd) } catch {}
+  }
+  return { state, boundary: v }
+}
+
+// ── C18: synchronous pre-death fold drain ──
+// The CLI writes its final `result` + companion `idle` lines microseconds before
+// exiting, and the tailer's 100ms poll does nothing once `state !== 'running'`
+// (reapSession flips that first). Without this drain the death snapshot — and
+// every later getState pull, which just re-assembles the same frozen fold —
+// reports turnActive=true for a turn that provably ended on disk.
+//
+// Reads from the last complete-line boundary the watcher published (its in-memory
+// carry died with it, so the torn region is simply re-read) to EOF, folds every
+// COMPLETE line, and re-publishes the boundary. Bounded by the same carry cap.
+// Keep in sync with daemon-source.ts drainSessionFold.
+function drainSessionFold(session: SessionData): void {
+  const from = session.watcher ? session.watcher.offset : (session.offset || 0)
+  let size = 0
+  try { size = fs.statSync(session.jsonlPath).size } catch { return }
+  if (size <= from) return
+  const boundary = drainFoldRange(session, from, size)
+  session.offset = boundary
+  if (session.watcher) session.watcher.offset = boundary
+}
+
+// Fold [from, to) into session.foldState, honoring the `v > foldState.v` guard
+// (bytes already folded out-of-band must not fold twice). Returns the new
+// complete-line boundary. Keep in sync with daemon-source.ts.
+function drainFoldRange(session: SessionData, from: number, to: number): number {
+  let boundary = from
+  let fd: number
+  try { fd = fs.openSync(session.jsonlPath, 'r') } catch { return boundary }
+  try {
+    const buf = Buffer.alloc(FOLD_REBUILD_CHUNK)
+    let filePos = from
+    let carry: Buffer = Buffer.alloc(0)
+    let discardThroughNextNewline = false
+    while (filePos < to) {
+      const want = Math.min(FOLD_REBUILD_CHUNK, to - filePos)
+      const n = fs.readSync(fd, buf, 0, want, filePos)
+      if (n <= 0) break
+      filePos += n
+      const chunk = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n)
+      let start = 0
+      for (;;) {
+        const nl = chunk.indexOf(10, start)
+        if (nl === -1) break
+        boundary += (nl - start) + 1
+        if (discardThroughNextNewline) discardThroughNextNewline = false
+        else {
+          const line = chunk.subarray(start, nl).toString('utf-8')
+          if (line.trim() && boundary > session.foldState.v) {
+            session.foldState = foldLine(session.foldState, line, boundary)
+          }
+        }
+        start = nl + 1
+      }
+      carry = Buffer.from(chunk.subarray(start))
+      if (carry.length > TAILER_CARRY_MAX) {
+        logMsg('error', 'fold drain carry overflow — dropping oversized partial line', {
+          jsonlPath: session.jsonlPath, carryBytes: carry.length, cap: TAILER_CARRY_MAX, filePos,
+        })
+        boundary = filePos
+        carry = Buffer.alloc(0)
+        discardThroughNextNewline = true
+      }
+    }
+  } catch { /* partial drain is still monotone-safe */ } finally {
+    try { fs.closeSync(fd) } catch {}
+  }
+  return boundary
+}
+
+// Combine the pure fold with imperatively-tracked daemon facts. exitCode is
+// already normalized by reapSession (isTurnCompleteExit) by the time state
+// flips to 'dead'.
+function assembleSessionSnapshot(session: SessionData): SessionSnapshot {
+  const ctrl = session.pendingCtrl
+  return assembleSnapshot({
+    foldState: session.foldState,
+    pendingCtrl: ctrl
+      ? { requestId: ctrl.reqId, toolName: ctrl.toolName, sinceTs: ctrl.receivedAt }
+      : null,
+    dead: session.state === 'dead',
+    pid: session.pid,
+    exitCode: session.exitCode,
+  })
+}
+
+// snapshotDiffers (the change-compare that ignores a bare v advance) is
+// imported from daemon-fold.ts — it is pure + zero-dep, so it rides the same
+// injection path into the source template instead of being hand-mirrored there.
+
+function emitSnapshot(sid: string, session: SessionData): void {
+  const snapshot = assembleSessionSnapshot(session)
+  const prev = session.lastPushedSnapshot
+  if (prev && !snapshotDiffers(prev, snapshot)) return
+  session.lastPushedSnapshot = snapshot
+  for (const ws of session.subscribers) {
+    if (ws.readyState === 1) {
+      try { sendEvent(ws, 'snapshot', { sid, snapshot }) } catch {}
+    }
+  }
+}
+
+// Push entry point: coalesce within a 50ms window; death snapshots skip the
+// coalesce (immediate=true) so a dead session is never reported late.
+function pushSnapshot(sid: string, immediate: boolean): void {
+  const session = sessions.get(sid)
+  if (!session) return
+  if (immediate) {
+    if (session.snapshotTimer) { clearTimeout(session.snapshotTimer); session.snapshotTimer = null }
+    emitSnapshot(sid, session)
+    return
+  }
+  if (session.snapshotTimer) return // window already open — coalesce
+  session.snapshotTimer = setTimeout(() => {
+    session.snapshotTimer = null
+    // Generation guard: cmdStart may have replaced the session under this sid.
+    if (sessions.get(sid) !== session) return
+    emitSnapshot(sid, session)
+  }, SNAPSHOT_COALESCE_MS)
+}
+
 // ── daemon-core wiring ──
 // SessionData already extends CoreSessionData (same field names). Core reaps,
 // persists, and reconciles in pure functions; we inject the Bun-specific
@@ -713,35 +947,59 @@ const core = createDaemonCore<SessionData>({
     session.subscribers.clear()
   },
   sessions,
-  createAdoptedSession: (_sid, entry) => ({
-    proc: null,
-    pipePath: entry.pipePath,
-    jsonlPath: entry.jsonlPath,
-    pgidPath: entry.pgidPath,
-    pid: entry.pid,
-    // Adopt at the CURRENT end of the stream file, not 0. The previous daemon
-    // generation already fanned out everything before this point; starting the
-    // watcher at 0 made it re-emit the entire file to every subscriber (UI
-    // symptom: whole conversation replays after a daemon restart). Subscribers
-    // that genuinely need history request it via attach fromOffset.
-    offset: statSizeOrZero(entry.jsonlPath),
-    // Rebuild task state from the durable jsonl — recovers terminal events the previous
-    // daemon generation saw (and Walnut's live stream may have missed across the restart).
-    taskState: rebuildTaskStateFromJsonl(entry.jsonlPath, Date.now()),
-    watcher: null,
-    subscribers: new Set(),
-    exitCode: null,
-    state: 'running',
-    exitReason: null,
-    exitedAt: null,
-    parented: false,
-    startTime: entry.startTime,
-    cwd: entry.cwd ?? '',
-    args: entry.args ?? [],
-    orphanPollTimer: null,
-    mode: entry.mode ?? 'default',
-    pendingCtrl: entry.pendingCtrl ?? null,
-  }),
+  // C1 snapshot hooks — appendUserMarker overlays its marker immediately; reap /
+  // pendingCtrl-clear paths push through the coalescer (death = immediate).
+  foldAppendedLineFn: (session, rawLine) => {
+    // Optimistic overlay at the CURRENT v — NO v advance (contract §4 "Feed").
+    // Any offset computed here would race the concurrently-appending CLI and
+    // could push foldState.v past a line the tailer hasn't read yet, which the
+    // `v > foldState.v` guard would then skip forever. The tailer re-folds this
+    // marker at its true v; re-anchoring is idempotent. Keep in sync with
+    // daemon-source.ts cmdAppendUserMarker.
+    session.foldState = foldLine(session.foldState, rawLine, session.foldState.v)
+  },
+  pushSnapshotFn: (sid, immediate) => pushSnapshot(sid, immediate),
+  // C18: synchronous pre-death fold drain (see drainSessionFold).
+  drainFoldFn: (session) => drainSessionFold(session),
+  createAdoptedSession: (_sid, entry) => {
+    // C1: rebuild fold state from the durable jsonl (streamed, whale-safe) AND
+    // take the watcher offset from the SAME rebuild's complete-line boundary.
+    // Contract §4 "Rebuild boundary rule": a raw stat().size here would start
+    // the watcher MID-LINE whenever the CLI was writing during adopt — the
+    // rebuild would have consumed the fragment's first half and the completed
+    // line would never be folded whole (C3/C7).
+    const adoptFold = rebuildFoldStateFromJsonl(entry.jsonlPath)
+    return {
+      proc: null,
+      pipePath: entry.pipePath,
+      jsonlPath: entry.jsonlPath,
+      pgidPath: entry.pgidPath,
+      pid: entry.pid,
+      // Adopt at the CURRENT end of the stream file, not 0. The previous daemon
+      // generation already fanned out everything before this point; starting the
+      // watcher at 0 made it re-emit the entire file to every subscriber (UI
+      // symptom: whole conversation replays after a daemon restart). Subscribers
+      // that genuinely need history request it via attach fromOffset.
+      offset: adoptFold.boundary,
+      // Rebuild task state from the durable jsonl — recovers terminal events the previous
+      // daemon generation saw (and Walnut's live stream may have missed across the restart).
+      taskState: rebuildTaskStateFromJsonl(entry.jsonlPath, Date.now()),
+      foldState: adoptFold.state,
+      watcher: null,
+      subscribers: new Set(),
+      exitCode: null,
+      state: 'running' as const,
+      exitReason: null,
+      exitedAt: null,
+      parented: false,
+      startTime: entry.startTime,
+      cwd: entry.cwd ?? '',
+      args: entry.args ?? [],
+      orphanPollTimer: null,
+      mode: entry.mode ?? 'default',
+      pendingCtrl: entry.pendingCtrl ?? null,
+    }
+  },
 })
 
 // Back-reference lookup — the exit-watcher broadcast needs sid from session,
@@ -816,6 +1074,7 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     case 'write-inbox': return cmdWriteInbox(ws, id as number, cmd)
     case 'fs.read': return cmdFsRead(ws, id as number, cmd)
     case 'fs.readImage': return cmdFsReadImage(ws, id as number, cmd)
+    case 'image.save': return cmdImageSave(ws, id as number, cmd)
     case 'fs.write': return cmdFsWrite(ws, id as number, cmd)
     case 'fs.mkdir': return cmdFsMkdir(ws, id as number, cmd)
     case 'fs.ls': return cmdFsLs(ws, id as number, cmd)
@@ -828,6 +1087,8 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     case 'bridgeResume': return cmdBridgeResume(ws, id as number, cmd)
     case 'stt': return cmdSttRelay(ws, id as number, cmd)
     case 'stt-result': return cmdSttResult(ws, id as number, cmd)
+    case 'session.launch': return cmdLaunchRelay(ws, id as number, cmd)
+    case 'launch-result': return cmdLaunchResult(ws, id as number, cmd)
     case 'acpStart': return cmdAcpStart(ws, id as number, cmd)
     case 'acpSend': return cmdAcpOp(ws, id as number, cmd, 'prompt')
     case 'acpCancel': return cmdAcpOp(ws, id as number, cmd, 'cancel')
@@ -840,7 +1101,7 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     case 'ping': return sendOk(ws, id as number, { pong: true })
     case 'hello': return sendOk(ws, id as number, {
       version: DAEMON_VERSION,
-      capabilities: REQUIRED_DAEMON_CAPABILITIES,
+      capabilities: ADVERTISED_DAEMON_CAPABILITIES,
       instanceId: DAEMON_INSTANCE_ID,
       startedAt: DAEMON_START_TS,
       uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000),
@@ -992,6 +1253,72 @@ function cmdSttResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<strin
   sendOk(ws, id, {})
 }
 
+// ── Launch relay: bridge session-create request → the connected walnut server ──
+// The daemon has no session-record store — records live on the walnut server
+// (session-tracker), and quickStartSession is the only correct creation core.
+// A bridge `session.launch` request is relayed as a `launch-request` event to
+// a TRUSTED (non-bridge) client — the walnut server holding this daemon's WS
+// — which validates + creates and answers with a `launch-result` command
+// carrying the same relayId. The daemon spawns NOTHING here; a compromised
+// cloud box gets exactly one verb: "ask the primary to run its own launch
+// validation". No trusted client (walnut server down) → fail fast.
+
+const LAUNCH_RELAY_TIMEOUT_MS = 45_000
+let launchRelayCounter = 0
+const launchRelayPending = new Map<number, {
+  ws: ServerWebSocket<WsData>; id: number; timer: ReturnType<typeof setTimeout>
+}>()
+
+function cmdLaunchRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { action, params } = cmd as { action?: string; params?: Record<string, unknown> }
+  if (!action) {
+    return sendError(ws, id, 'session.launch: missing action')
+  }
+  // Pick any trusted client (never the bridge adapter — that would bounce the
+  // request straight back to the cloud). Normally there is exactly one: the
+  // walnut server's DaemonConnection.
+  let target: ServerWebSocket<WsData> | null = null
+  for (const client of wsClients) {
+    if (client.data?.origin !== 'bridge') { target = client; break }
+  }
+  if (!target) {
+    return sendError(ws, id, 'session.launch: no primary server connected')
+  }
+  const relayId = ++launchRelayCounter
+  const timer = setTimeout(() => {
+    launchRelayPending.delete(relayId)
+    sendError(ws, id, 'session.launch: primary server timed out')
+  }, LAUNCH_RELAY_TIMEOUT_MS)
+  launchRelayPending.set(relayId, { ws, id, timer })
+  logMsg('info', 'session.launch: relaying to primary server', { relayId, action })
+  sendEvent(target, 'launch-request', { relayId, action, params: params ?? {} })
+}
+
+function cmdLaunchResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { relayId, result, error, errorKind } = cmd as {
+    relayId?: number; result?: Record<string, unknown>; error?: string; errorKind?: string
+  }
+  const pending = typeof relayId === 'number' ? launchRelayPending.get(relayId) : undefined
+  if (!pending) {
+    // Late result after timeout — ack and drop.
+    return sendOk(ws, id, { stale: true })
+  }
+  launchRelayPending.delete(relayId as number)
+  clearTimeout(pending.timer)
+  if (result && !error) {
+    logMsg('info', 'session.launch: relay complete', { relayId })
+    sendOk(pending.ws, pending.id, { result })
+  } else {
+    // Carry errorKind through so the cloud route maps the precise 4xx.
+    safeSend(pending.ws, JSON.stringify({
+      id: pending.id, ok: false,
+      error: error ?? 'launch failed',
+      errorKind: errorKind ?? 'internal',
+    }))
+  }
+  sendOk(ws, id, {})
+}
+
 // ── ACP session commands (engine=codex etc; see acp-daemon.ts) ──
 // sid here is the Walnut runtimeId; journal = STREAMS_DIR/<sid>.acp.jsonl.
 
@@ -1072,7 +1399,11 @@ function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
         const sendResult = core.handleSendCommand(sid, message)
         if (sendResult.ok) {
           if (mode) existing.mode = mode as SessionMode
-          const curSize = statSizeOrZero(existing.jsonlPath)
+          // Hand out a COMPLETE-line boundary, never a raw stat().size: this
+          // value becomes the client's cursor AND addSubscriber's replay start,
+          // and a mid-line start fans a JSON fragment to the client (contract §4
+          // boundary rule). The live watcher already publishes the boundary.
+          const curSize = existing.watcher ? existing.watcher.offset : statSizeOrZero(existing.jsonlPath)
           logMsg('info', 'cmdStart: adopted live session — message delivered via FIFO, respawn skipped', {
             sid, pid: existing.pid, offset: curSize,
           })
@@ -1139,10 +1470,16 @@ function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
   const stderrPath = jsonlPath + '.err'
   const pgidPath = path.join(STREAMS_DIR, sid + '.pgid')
 
-  // Record offset before spawn (for resume — only stream new data)
+  // Record offset before spawn (for resume — only stream new data).
+  // C1: on resume the fold is rebuilt from the surviving jsonl, and the watcher
+  // offset comes from THAT rebuild's complete-line boundary — never a raw
+  // stat().size, which can sit mid-line if the previous CLI died mid-write
+  // (contract §4 "Rebuild boundary rule").
   let offset = 0
+  let resumeFold: FoldRebuild | null = null
   if (resume) {
-    try { offset = fs.statSync(jsonlPath).size } catch { offset = 0 }
+    resumeFold = rebuildFoldStateFromJsonl(jsonlPath)
+    offset = resumeFold.boundary
   }
 
   // Create FIFO
@@ -1288,6 +1625,8 @@ function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
     offset,
     // Fresh spawn → empty; resume → rebuild from the existing jsonl (its tasks may still be live).
     taskState: resume ? rebuildTaskStateFromJsonl(jsonlPath, Date.now()) : emptyTaskState(),
+    // C1: fresh spawn starts an empty fold; resume streams the surviving jsonl.
+    foldState: resumeFold ? resumeFold.state : initialFoldState(0),
     watcher: null,
     subscribers: new Set(),
     exitCode: null,
@@ -1348,6 +1687,42 @@ function ensureWatcher(sid: string) {
 
   let offset = session.offset || 0
   const stderrPath = session.jsonlPath + '.err'
+  // ── Torn-tail carry (contract §4 "Feed", adjudicated 2026-08-05) ──
+  // A poll can land MID-LINE: the CLI appends a >64KB whale tool_result while
+  // we read, so `stat.size` cuts the line in half. Such a fragment must NEVER
+  // be processed — not folded, not fanned out:
+  //   * fold: two unparseable fragments each advance foldState.v past the real
+  //     line end, and the `v > foldState.v` guard then skips the COMPLETE line
+  //     forever → a torn result/idle wedges the snapshot at turnActive=true.
+  //   * fan-out (pre-existing bug this also fixes): the client received half a
+  //     JSON line, failed to parse it, then received the whole line again.
+  // So the fragment waits here in `carry` (BYTES — a UTF-8 char split across
+  // polls must not be decoded twice) until its newline arrives.
+  //
+  // Offset semantics: `offset` is the READ cursor (every byte we've read, incl.
+  // the carry). `carryStartV` is the absolute offset of the carry's first byte,
+  // i.e. the last COMPLETE-line boundary, and satisfies
+  // `carryStartV + carryLen === offset` at all times. We publish
+  // `watcher.offset = carryStartV`, not the read cursor, so that
+  //   * addSubscriber replay + the attach `currentOffset` reply never hand a
+  //     client a mid-line boundary, and
+  //   * stopSessionWatcher persists a complete-line boundary — a rebuilt
+  //     watcher (self-heal, cmdRename) simply re-reads the torn region from
+  //     there, so the carry is pure memory and nothing is lost when it dies.
+  //
+  // The carry is a PART LIST, not one Buffer (C26): a whale line arrives across
+  // many polls, and concatenating (carry + new bytes) then searching for a
+  // newline from byte 0 every tick re-copied and re-scanned the same megabytes
+  // (quadratic). Instead: no newline in the NEW bytes ⇒ nothing can be
+  // completed, so just append to the list; concat once, and start the newline
+  // search at `carryLen` (the carry holds no newline by invariant), only when a
+  // newline actually appears.
+  let carryParts: Buffer[] = []
+  let carryLen = 0
+  let carryStartV = offset
+  // Set after a carry-overflow drop: the remainder of the oversized line is
+  // still coming, so skip everything up to and including its newline.
+  let discardThroughNextNewline = false
   // Tailer self-heal state (incident 6c8428ac): a per-tick exception (e.g. EMFILE
   // on the openSync below) swallowed by the old empty catch froze `offset` forever
   // while the CLI kept writing — walnut showed idle for a running session. Track
@@ -1370,23 +1745,79 @@ function ensureWatcher(sid: string) {
       fs.readSync(fd, buf, 0, bytesToRead, offset)
       fs.closeSync(fd)
       consecutiveErrors = 0
-      const batchStart = offset
+      // The read cursor advances past ALL read bytes, including the torn tail we
+      // are about to park in the carry (the carry is memory-only, see above).
       offset = stat.size
-      if (s.watcher) s.watcher.offset = offset // expose for catch-up
 
-      const text = buf.toString('utf-8')
-      const lines = text.split('\n')
+      // Assemble COMPLETE lines only. `v` is the byte offset at the END of the
+      // line in the append-only jsonl — monotonic per session, and identical
+      // whether the line is delivered live (here) or via replay
+      // (addSubscriber), so the client orders and dedupes by `v` alone. It is
+      // computed from absolute file positions (carryStartV), so parking a
+      // fragment in the carry across polls changes no line's `v`.
+      const batch: Array<{ line: string; v: number }> = []
+      // C26 fast path: if the NEW bytes hold no newline, no line can complete —
+      // so skip the concat + full rescan entirely.
+      if (buf.indexOf(10) === -1) {
+        if (discardThroughNextNewline) {
+          // Still inside an over-cap line: these bytes can never complete a line
+          // and re-buffering them would just re-trip the cap. Drop them and keep
+          // the carryStartV + carryLen === offset invariant.
+          carryStartV = offset
+        } else {
+          carryParts.push(buf)
+          carryLen += buf.length
+        }
+      } else {
+        // A newline arrived. Concat once; the carry itself holds no newline (that
+        // is why it was carried), so the first search may start at `carryLen`.
+        const chunk = carryLen ? Buffer.concat([...carryParts, buf], carryLen + buf.length) : buf
+        let searchFrom = carryLen
+        let lineEnd = carryStartV
+        let cut = 0
+        for (;;) {
+          const nl = chunk.indexOf(10, searchFrom) // '\n'
+          if (nl === -1) break
+          lineEnd += (nl - cut) + 1
+          const line = chunk.subarray(cut, nl).toString('utf-8')
+          // A discarded whale (carry overflow below) ends at this newline: `v` is
+          // now realigned, so resume normal processing with the NEXT line.
+          if (discardThroughNextNewline) discardThroughNextNewline = false
+          else batch.push({ line, v: lineEnd })
+          cut = nl + 1
+          searchFrom = cut
+        }
+        // Copy the torn tail — `chunk` may alias `buf`, which the next tick reuses.
+        const tail = Buffer.from(chunk.subarray(cut))
+        carryParts = tail.length ? [tail] : []
+        carryLen = tail.length
+        carryStartV = lineEnd
+      }
+      if (carryLen > TAILER_CARRY_MAX) {
+        // A single line larger than the cap can't be assembled. Drop it and
+        // realign on the next newline; `carryStartV` stays absolute so every
+        // later line keeps its true `v`.
+        logMsg('error', 'tailer carry overflow — dropping oversized partial line', {
+          sid, carryBytes: carryLen, cap: TAILER_CARRY_MAX, offset,
+        })
+        carryStartV = offset
+        carryParts = []
+        carryLen = 0
+        discardThroughNextNewline = true
+      }
+      // Publish the last COMPLETE-line boundary (not the read cursor) so
+      // replay/attach never hand a client a mid-line offset.
+      if (s.watcher) s.watcher.offset = carryStartV
+
       let sawResult = false
-      // L1 versioned events: `v` is the byte offset at the END of this line in the
-      // append-only jsonl — monotonic per session, and identical whether the line is
-      // delivered live (here) or via replay (addSubscriber), so the client orders and
-      // dedupes by `v` alone. Accumulate across EVERY line (incl. skipped/control) so
-      // `v` stays byte-aligned with the file regardless of which lines we forward.
-      let lineStartV = batchStart
-      for (const line of lines) {
-        const v = lineStartV + Buffer.byteLength(line, 'utf-8') + 1 // +1 = the '\n' split() removed
-        lineStartV = v
+      for (const { line, v } of batch) {
         if (!line.trim()) continue
+
+        // ── C1: incremental snapshot fold — EVERY complete line, BEFORE any
+        // intercept `continue`s past fan-out. foldLine keeps its own v; the
+        // `v > foldState.v` guard dedupes bytes already folded out-of-band
+        // (appendUserMarker's optimistic overlay, watcher-heal overlap re-reads).
+        if (v > s.foldState.v) s.foldState = foldLine(s.foldState, line, v)
 
         // ── Latency instrumentation: time from CLI spawn → first init line ──
         // Pure CLI cold-start (incl. MCP connect) as the daemon sees it, directly
@@ -1480,6 +1911,9 @@ function ensureWatcher(sid: string) {
         }
         if (!sawResult && line.includes('"type":"result"')) sawResult = true
       }
+      // ── C1: after each tailer batch, push the snapshot if it changed (this
+      // also covers pendingCtrl set/clear — both happen inside this loop).
+      pushSnapshot(sid, false)
       // After a result event, push stderr tail so MCP failures / CLI bails are
       // visible without SSH. Fan to all subscribers.
       if (sawResult) {
@@ -1541,12 +1975,15 @@ function ensureWatcher(sid: string) {
           return
         }
         s.lastWatcherHealAt = now
-        logMsg('error', 'watcher stalled — forcing rebuild', { sid, offset, consecutiveErrors })
-        // Persist the frozen offset, tear down, recreate. The rebuilt watcher
-        // resumes from session.offset; if the root cause (e.g. fd exhaustion)
-        // has cleared, tailing continues from where it froze — no bytes lost
-        // (append-only file), and client-side `v` dedup absorbs any overlap.
-        s.offset = offset
+        logMsg('error', 'watcher stalled — forcing rebuild', { sid, offset, carryStartV, consecutiveErrors })
+        // Persist the last COMPLETE-line boundary (NOT the read cursor), tear
+        // down, recreate. The in-memory carry dies with this watcher, so the
+        // rebuilt one must re-read the torn region — resuming at `offset` would
+        // swallow the fragment's first half. If the root cause (e.g. fd
+        // exhaustion) has cleared, tailing continues from a clean line boundary
+        // — no bytes lost (append-only file), and client-side `v` dedup absorbs
+        // any overlap.
+        s.offset = carryStartV
         stopSessionWatcher(sid)
         ensureWatcher(sid)
       }
@@ -1664,19 +2101,24 @@ function cmdAttach(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
       alive = true
     } catch { pid = null; alive = false }
 
+    const discovered = rebuildFoldStateFromJsonl(jsonlPath)
     session = {
       proc: null,
       pipePath,
       jsonlPath,
       pgidPath,
       pid,
-      // Watcher starts at the CURRENT end of the stream file — same rule as
-      // adopt. Catch-up for [fromOffset, end) is addSubscriber's job (it reads
+      // Watcher starts at the fold rebuild's COMPLETE-line boundary — same rule
+      // as adopt. Catch-up for [fromOffset, end) is addSubscriber's job (it reads
       // the file directly). Using the client's fromOffset here is wrong both
       // ways: 0 re-fans the whole file; MAX_SAFE_INTEGER (future-only
-      // sentinel) freezes the watcher forever (stat.size <= offset).
-      offset: statSizeOrZero(jsonlPath),
+      // sentinel) freezes the watcher forever (stat.size <= offset). And a raw
+      // stat().size would sit mid-line whenever the CLI is writing during
+      // attach — the rebuild consumed the fragment's first half, so the
+      // completed line would never be folded whole (contract §4 boundary rule).
+      offset: discovered.boundary,
       taskState: rebuildTaskStateFromJsonl(jsonlPath, Date.now()),
+      foldState: discovered.state,
       watcher: null,
       subscribers: new Set(),
       exitCode: alive ? null : 0,
@@ -1772,6 +2214,7 @@ function cmdSetMode(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string,
     if (writeFifoRaw(session.pipePath, resp)) {
       logMsg('info', 'setMode: auto-allowed pending control_request', { sid, tool: session.pendingCtrl.toolName, mode })
       session.pendingCtrl = null
+      pushSnapshot(sid, false) // C1: pendingCtrl cleared → waiting resolves
     } else {
       logMsg('warn', 'setMode: failed to write pending control_response', { sid, tool: session.pendingCtrl.toolName, mode })
     }
@@ -1881,13 +2324,24 @@ function cmdGetState(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
       alive: session.state === 'running',
       state: session.state,
       taskState: session.taskState,
+      // C1: assembled on demand — the PULL half of snapshot flow.
+      snapshot: assembleSessionSnapshot(session),
     })
   }
   // Unknown in memory — rebuild from the durable jsonl if it exists (post-restart PULL).
   const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl')
   if (!fs.existsSync(jsonlPath)) return sendOk(ws, id, { exists: false })
   const taskState = rebuildTaskStateFromJsonl(jsonlPath, Date.now())
-  return sendOk(ws, id, { exists: true, alive: false, state: 'dead', taskState })
+  // C1: disk-rebuild snapshot. No live process backs this sid (it would be in
+  // the map) → dead, no pendingCtrl, unknown pid/exitCode.
+  const snapshot = assembleSnapshot({
+    foldState: rebuildFoldStateFromJsonl(jsonlPath).state,
+    pendingCtrl: null,
+    dead: true,
+    pid: null,
+    exitCode: null,
+  })
+  return sendOk(ws, id, { exists: true, alive: false, state: 'dead', taskState, snapshot })
 }
 
 // ── Rename session files ──
@@ -1901,6 +2355,18 @@ function cmdRename(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
 
   const oldBase = path.join(STREAMS_DIR, oldSid)
   const newBase = path.join(STREAMS_DIR, newSid)
+
+  // C14: flush a pending coalesced snapshot BEFORE the re-key. pushSnapshot's
+  // 50ms timer carries a generation guard (`sessions.get(sid) !== session`) that
+  // is keyed on the OLD sid — after the delete/set below it can never match, so
+  // the queued state change would be silently dropped and walnut would only
+  // learn about it on the next 30s pull. Flush at the old sid (that is the sid
+  // walnut's subscribers know right now) and clear the timer.
+  // Keep in sync with daemon-source.ts cmdRename.
+  if (session.snapshotTimer) {
+    try { pushSnapshot(oldSid, true) } catch {}
+    if (session.snapshotTimer) { clearTimeout(session.snapshotTimer); session.snapshotTimer = null }
+  }
 
   try {
     for (const ext of ['.jsonl', '.jsonl.err', '.pipe', '.pgid', '.log']) {
@@ -2189,6 +2655,59 @@ async function cmdFsReadImage(ws: ServerWebSocket<WsData>, id: number, cmd: Reco
     const e = err as NodeJS.ErrnoException
     const code = e.code ?? ''
     sendError(ws, id, 'fs.readImage failed: ' + e.message + (code ? ' (' + code + ')' : ''))
+  }
+}
+
+// Bridge-safe image save: mediaType allowlist + decoded-size cap + magic-byte
+// check, writing ONLY into a fixed daemon-owned directory with a generated
+// filename. The ONLY write command reachable from the cloud bridge (see
+// BRIDGE_ALLOWED_COMMANDS) — phones attach pictures to sessions, but a
+// compromised cloud box must never get arbitrary file writes on exec hosts:
+// no caller-controlled path component ever reaches the filesystem (the
+// extension comes from the mediaType allowlist, never from the caller), and
+// non-image bytes are refused, so this cannot plant scripts/configs/keys.
+const IMAGE_SAVE_MEDIA_TO_EXT: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'image/heic': 'heic',
+}
+const IMAGE_SAVE_MAX_BYTES = 10 * 1024 * 1024
+// ~4/3 base64 overhead + slack — refuse before decoding an oversized string.
+const IMAGE_SAVE_MAX_BASE64_LENGTH = 14_000_000
+const IMAGE_SAVE_DIR = path.join(DAEMON_DIR, 'images', 'mobile')
+
+// HEIC rides ISO-BMFF: a 'ftyp' box at byte 4. looksLikeImage covers the rest.
+function looksLikeHeic(data: Buffer): boolean {
+  return data.length >= 12 && data.slice(4, 8).toString('latin1') === 'ftyp'
+}
+
+async function cmdImageSave(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const data = cmd.data
+  const mediaType = cmd.mediaType
+  if (typeof data !== 'string' || data.length === 0) return sendError(ws, id, 'image.save: missing data')
+  if (data.length > IMAGE_SAVE_MAX_BASE64_LENGTH) return sendError(ws, id, 'image.save: too large (EFBIG)')
+  const ext = typeof mediaType === 'string' ? IMAGE_SAVE_MEDIA_TO_EXT[mediaType] : undefined
+  if (!ext) return sendError(ws, id, 'image.save: unsupported mediaType (ENOTIMAGE)')
+  const buf = Buffer.from(data, 'base64')
+  if (buf.length === 0) return sendError(ws, id, 'image.save: invalid base64')
+  if (buf.length > IMAGE_SAVE_MAX_BYTES) return sendError(ws, id, 'image.save: too large (EFBIG)')
+  const isImage = mediaType === 'image/heic' ? looksLikeHeic(buf) : looksLikeImage(buf)
+  if (!isImage) return sendError(ws, id, 'image.save: not an image (ENOTIMAGE)')
+  // Generated filename — timestamp + random; extension from the mediaType
+  // allowlist. NEVER from caller input: no path component crosses the bridge.
+  const filename = Date.now() + '-' + crypto.randomBytes(4).toString('hex') + '.' + ext
+  const filePath = path.join(IMAGE_SAVE_DIR, filename)
+  try {
+    await fs.promises.mkdir(IMAGE_SAVE_DIR, { recursive: true })
+    await fs.promises.writeFile(filePath, buf)
+    logMsg('info', 'image.save: saved', { path: filePath, size: buf.length })
+    sendOk(ws, id, { path: filePath, size: buf.length })
+  } catch (err: unknown) {
+    const e = err as NodeJS.ErrnoException
+    const code = e.code ?? ''
+    sendError(ws, id, 'image.save failed: ' + e.message + (code ? ' (' + code + ')' : ''))
   }
 }
 
@@ -2639,18 +3158,21 @@ function cleanupOrphanedProcessGroups() {
           const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl')
           const pipePath = path.join(STREAMS_DIR, sid + '.pipe')
           logMsg('info', 'startup: adopting live session from previous daemon (legacy pgid-only)', { sid, pid })
+          const legacyFold = rebuildFoldStateFromJsonl(jsonlPath)
           sessions.set(sid, {
             proc: null,
             pipePath,
             jsonlPath,
             pgidPath,
             pid,
-            // Watcher starts at the CURRENT end of the jsonl — same rule as
-            // registry adopt and attach-discover. 0 here would live-fan the
-            // entire multi-MB history to the first subscriber AND poison the
-            // client cursor (attach reply currentOffset=0 adopted as valid).
-            offset: statSizeOrZero(jsonlPath),
+            // Watcher starts at the fold rebuild's COMPLETE-line boundary — same
+            // rule as registry adopt and attach-discover. 0 here would live-fan
+            // the entire multi-MB history to the first subscriber AND poison the
+            // client cursor (attach reply currentOffset=0 adopted as valid); a
+            // raw stat().size would start mid-line (contract §4 boundary rule).
+            offset: legacyFold.boundary,
             taskState: rebuildTaskStateFromJsonl(jsonlPath, Date.now()),
+            foldState: legacyFold.state,
             watcher: null,
             subscribers: new Set(),
             exitCode: null,
@@ -2708,6 +3230,13 @@ function cleanup() {
   // level via this path). See reapAllSessionGroupsSync + shouldReapOnExit.
   for (const [sid, session] of sessions) {
     stopSessionWatcher(sid)
+    // C1: flush a pending coalesced snapshot BEFORE dropping subscribers — the
+    // last state change of this daemon's life still reaches the connected
+    // walnut instead of dying inside a 50ms timer. Keep in sync with
+    // daemon-source.ts cleanup().
+    if (session.snapshotTimer) {
+      try { pushSnapshot(sid, true) } catch {}
+    }
     session.subscribers.clear()
     if (session.orphanPollTimer) {
       try { clearInterval(session.orphanPollTimer) } catch {}

@@ -1,5 +1,5 @@
 /**
- * applySessionPhase integration tests for the two 2026-08-03/04 status-mismatch
+ * applySessionPhase integration tests for the 2026-08-03/04/05 status-mismatch
  * fixes that need real task + session records:
  *
  *  1. session:turn-start — the CLI's session_state_changed{running} pulls a
@@ -9,6 +9,9 @@
  *     PREVIOUS turn) must not push AGENT_COMPLETE → AWAIT_HUMAN_ACTION while
  *     the session is actively running the NEXT turn (the reverse race of the
  *     same incidents).
+ *  3. session:result stale-result gate — a SESSION_RESULT whose turnGen is
+ *     older than the live session's current turnGen belongs to a superseded
+ *     turn and must not flip AGENT_COMPLETE (incident ed347bde, 2026-08-05).
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -17,6 +20,16 @@ import path from 'node:path'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants())
+
+// Live-runner registry double for the stale-result gate: applySessionPhase
+// dynamic-imports the session runner and reads the live instance's turnGen.
+const liveTurnGens = new Map<string, number>()
+vi.mock('../../src/providers/claude-code-session.js', () => ({
+  sessionRunner: {
+    findSessionByClaudeId: (sid: string) =>
+      liveTurnGens.has(sid) ? { turnGen: liveTurnGens.get(sid)! } : undefined,
+  },
+}))
 
 import { applySessionPhase } from '../../src/core/phase.js'
 import { addTask, updateTaskRaw, getTask } from '../../src/core/task-manager.js'
@@ -32,6 +45,7 @@ let tmpDir: string
 
 beforeEach(async () => {
   tmpDir = WALNUT_HOME
+  liveTurnGens.clear()
   closeDb()
   _resetSessionTrackerForTesting()
   await fsp.rm(tmpDir, { recursive: true, force: true })
@@ -108,5 +122,48 @@ describe('applySessionPhase: triage-sync running gate', () => {
     const res = await applySessionPhase(taskId, 'triage-sync', 'test', { sessionId: 'sid-ghost' })
     expect(res.changed).toBe(true)
     expect((await getTask(taskId)).phase).toBe('AWAIT_HUMAN_ACTION')
+  })
+})
+
+describe('applySessionPhase: session:result stale-result gate (incident ed347bde)', () => {
+  it('STALE: live turnGen ahead of the event → AGENT_COMPLETE flip skipped', async () => {
+    const taskId = await taskInPhase('IN_PROGRESS')
+    liveTurnGens.set('sid-gen', 4) // the init-after-result edge already bumped to 4
+
+    const res = await applySessionPhase(taskId, 'session:result', 'test', {
+      sessionId: 'sid-gen', turnGen: 3, // event was stamped during turn 3
+    })
+    expect(res.changed).toBe(false)
+    expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
+  })
+
+  it('NORMAL FLOW: equal turnGen → flip proceeds to AGENT_COMPLETE', async () => {
+    const taskId = await taskInPhase('IN_PROGRESS')
+    liveTurnGens.set('sid-gen', 3)
+
+    const res = await applySessionPhase(taskId, 'session:result', 'test', {
+      sessionId: 'sid-gen', turnGen: 3,
+    })
+    expect(res.changed).toBe(true)
+    expect((await getTask(taskId)).phase).toBe('AGENT_COMPLETE')
+  })
+
+  it('no live session instance → gate fails open (pre-fix behavior)', async () => {
+    const taskId = await taskInPhase('IN_PROGRESS')
+    // liveTurnGens empty → findSessionByClaudeId returns undefined
+    const res = await applySessionPhase(taskId, 'session:result', 'test', {
+      sessionId: 'sid-detached', turnGen: 1,
+    })
+    expect(res.changed).toBe(true)
+    expect((await getTask(taskId)).phase).toBe('AGENT_COMPLETE')
+  })
+
+  it('no turnGen in opts (non-CLI emitter / legacy payload) → gate fails open', async () => {
+    const taskId = await taskInPhase('IN_PROGRESS')
+    liveTurnGens.set('sid-gen', 9) // even a far-ahead live gen cannot gate an unstamped event
+
+    const res = await applySessionPhase(taskId, 'session:result', 'test', { sessionId: 'sid-gen' })
+    expect(res.changed).toBe(true)
+    expect((await getTask(taskId)).phase).toBe('AGENT_COMPLETE')
   })
 })

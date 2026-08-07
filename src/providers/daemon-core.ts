@@ -96,6 +96,37 @@ export interface DaemonCoreDeps<S extends CoreSessionData = CoreSessionData> {
    * (watchers: new Map(), proc: null, offset: 0, ...).
    */
   createAdoptedSession: (sid: string, entry: RegistryEntry) => S
+  /**
+   * C1 session-snapshot hooks (docs/plan/session-snapshot-source-of-truth.md §4).
+   * Optional so unit-test fixtures and pre-C1 adapters keep working unchanged.
+   *
+   * foldAppendedLineFn — fold a line the DAEMON just appended to the stream
+   * file (appendUserMarker) into the session's fold state as a pure OPTIMISTIC
+   * OVERLAY: folded at the CURRENT foldState.v with NO v advance, so the daemon
+   * knows the turn started before the CLI echoes anything, yet no unread byte
+   * range is ever skipped. Deliberately takes no offset — see
+   * handleAppendUserMarker for why a post-append stat is unusable.
+   */
+  foldAppendedLineFn?: (session: S, rawLine: string) => void
+  /**
+   * pushSnapshotFn — assemble + push the session's snapshot to subscribers.
+   * `immediate=true` skips the 50ms coalesce window (death paths). Core calls
+   * it on reapSession (immediate), after appendUserMarker's fold, and when
+   * handleSendRawCommand clears pendingCtrl; the adapter's tailer calls it
+   * after each batch.
+   */
+  pushSnapshotFn?: (sid: string, immediate: boolean) => void
+  /**
+   * drainFoldFn (C18) — synchronously fold every COMPLETE line the tailer
+   * hasn't reached yet, from the watcher's published boundary to EOF. Called by
+   * reapSession BEFORE assembling the death snapshot: the CLI writes its final
+   * `result` + companion `idle` microseconds before exiting, and the tailer's
+   * poll does nothing once `state !== 'running'` — so without the drain the
+   * death push (and every later getState pull, which re-assembles the same
+   * frozen fold) reports turnActive=true for a turn that provably ended on
+   * disk. Bounded by the tailer carry cap in the adapter.
+   */
+  drainFoldFn?: (session: S) => void
 }
 
 /** Outcome of a cmdSend attempt — mirrors the wire envelope sent to clients. */
@@ -163,6 +194,9 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     broadcastExitToWatchersFn,
     sessions,
     createAdoptedSession,
+    foldAppendedLineFn,
+    pushSnapshotFn,
+    drainFoldFn,
   } = deps
   const setIntervalFn = deps.setIntervalFn ?? setInterval
   const clearIntervalFn = deps.clearIntervalFn ?? clearInterval
@@ -361,6 +395,19 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     // Persist registry change before broadcasting so a daemon crash between
     // broadcast and persist can't leave a stale entry pointing at a dead pid.
     try { persistRegistry() } catch {}
+
+    // C18: DRAIN the tailer before assembling the death snapshot. The tailer's
+    // poll returns early once state !== 'running' (set above), so the final
+    // result/idle lines the CLI wrote microseconds before exiting would never be
+    // folded — the death push and every later getState pull would serve a frozen
+    // fold stuck at turnActive=true. Must run BEFORE pushSnapshotFn.
+    if (drainFoldFn) { try { drainFoldFn(session) } catch {} }
+
+    // C1: death snapshots push IMMEDIATELY (skip the 50ms coalesce), and MUST
+    // run BEFORE the exit fan-out below — the adapter's exit broadcast clears
+    // session.subscribers, so a later push would fan out to an empty set.
+    // exitCode is already normalized via isTurnCompleteExit above.
+    if (pushSnapshotFn) { try { pushSnapshotFn(sid, true) } catch {} }
 
     // Legacy exit fan-out to per-session watchers (backcompat).
     try { broadcastExitToWatchersFn(session, code, stderrTail) } catch {}
@@ -594,6 +641,8 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
               session.pendingCtrl = null
               persistRegistry()
               logger('info', 'sendRaw cleared pending control_response', { sid, requestId })
+              // C1: pendingCtrl cleared → snapshot changes (waiting → running/idle).
+              if (pushSnapshotFn) { try { pushSnapshotFn(sid, false) } catch {} }
             }
           } catch { /* non-JSON raw payload — nothing to acknowledge */ }
         }
@@ -636,6 +685,25 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       }) + '\n'
       fs.appendFileSync(session.jsonlPath, line)
       const size = fs.statSync(session.jsonlPath).size
+      // C1 (contract §4 "Feed"): fold the marker immediately as a pure
+      // OPTIMISTIC OVERLAY — at the CURRENT foldState.v, with NO v advance.
+      // The daemon knows the turn started before the CLI echoes anything, and
+      // the tailer re-folds the same marker later at its TRUE v (a double-fold
+      // is a safe re-anchor: re-anchoring an anchored state is idempotent, and
+      // file order still ends with the marker, so every interleaving converges).
+      //
+      // Do NOT pass `size` as the marker's lineEndV: the CLI appends
+      // concurrently, so a line can land between appendFileSync and statSync
+      // (executed repro). `size` would then be INFLATED past the raced line, and
+      // the tailer's `v > foldState.v` guard would skip that raced result/idle
+      // forever → snapshot wedged at turnActive=true. No gap catch-up either:
+      // with no v advance there is no gap to catch up.
+      if (foldAppendedLineFn) {
+        try {
+          foldAppendedLineFn(session, line.slice(0, -1))
+          if (pushSnapshotFn) pushSnapshotFn(sid, false)
+        } catch {}
+      }
       return { ok: true, size }
     } catch (err) {
       return { error: 'appendUserMarker failed: ' + (err as Error).message }

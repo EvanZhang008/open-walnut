@@ -30,6 +30,7 @@ import { DAEMON_BINARIES_DIR } from '../constants.js'
 const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-standalone.ts',
   'src/providers/daemon-core.ts',
+  'src/providers/daemon-fold.ts',
   'src/providers/daemon-source.ts',
   // ACP worker stack — compiled into the daemon deploy unit (worker artifact
   // ships with the daemon; version skew impossible by construction).

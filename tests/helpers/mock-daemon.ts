@@ -19,7 +19,7 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import { createServer } from 'node:net'
 import { createAcpDaemon, type AcpStartParams } from '../../src/providers/acp-daemon.js'
-import { REQUIRED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
+import { ADVERTISED_DAEMON_CAPABILITIES } from '../../src/providers/daemon-capabilities.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 
@@ -243,9 +243,15 @@ export class MockDaemon {
       })
       // Mirrors daemon-standalone's cmdHello reply shape (instanceId is what
       // the bulk-channel dial verifies before routing to a second socket).
+      // ADVERTISED (not REQUIRED) is what a CURRENT daemon answers — the
+      // difference is the optional capability set ('snapshot-v1' and friends),
+      // and it is load-bearing now that connectDirect runs the handshake: with
+      // REQUIRED only, every MockDaemon-backed connection had
+      // capabilitiesKnown=true + supportsSnapshots=false, i.e. it modelled a
+      // ROLLED-BACK daemon and the C2 snapshot flow was gated off.
       case 'hello': return this.sendOk(ws, id, {
         version: 'mock',
-        capabilities: [...REQUIRED_DAEMON_CAPABILITIES],
+        capabilities: [...ADVERTISED_DAEMON_CAPABILITIES],
         instanceId: this._helloInstanceMismatch ? `mock-other-${this._connSeq}` : this.instanceId,
         startedAt: Date.now(),
         uptimeSec: 0,

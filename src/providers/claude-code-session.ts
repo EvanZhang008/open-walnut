@@ -397,6 +397,31 @@ export class ClaudeCodeSession {
   /** Per-turn flag: reset on writeMessage()/send(), prevents duplicate JSONL result
    *  events within a single turn (e.g., tailer emits result, then PID-death handler fires). */
   private _turnResultEmitted = false
+  /** Monotonic counter of OBSERVED TURN-START EDGES. Stamped onto every SESSION_RESULT
+   *  so a LATE consumer can tell "this result is still the current turn" from "a newer
+   *  turn has already started" (incident ed347bde, 2026-08-05: the result's ~800ms-late
+   *  AGENT_COMPLETE flip landed AFTER the next turn's start and repainted a visibly
+   *  streaming session as Idle/completed for 44s).
+   *
+   *  Three edges bump it — the gate must not fail open on any delivery shape:
+   *    1. writeMessage() on an idle→running delivery — the QUEUED-SEND shape, and the
+   *       most common one: walnut holds the message while turn A runs and writes the
+   *       FIFO the instant A's result lands. That write is the FIRST evidence of turn
+   *       B, arriving BEFORE anything the CLI emits for it.
+   *    2. session_state_changed{running} — the CLI's explicit turn-start signal.
+   *    3. an `init` after this turn's result — the only signal when the CLI picks up a
+   *       queued send without ever going idle (no {running} is emitted at all).
+   *
+   *  Semantics: "number of turn-start edges seen", NOT "number of turns". One turn can
+   *  legitimately produce several edges (FIFO write, then the CLI's {running}, then an
+   *  init) — that is harmless by construction, because every result is stamped with the
+   *  gen CURRENT AT ITS OWN EMIT TIME, i.e. after all of its own turn's edges. So a
+   *  turn's own result always compares equal to the live gen and flips normally; only a
+   *  result emitted BEFORE a later edge reads as stale, which is exactly the intent.
+   *
+   *  Never reset — a reset would make a live gen look older than an in-flight result's
+   *  gen, and the stale-result gate in core/phase.ts fails OPEN on that comparison. */
+  private _turnGen = 0
   /** Did any MAIN-lane assistant text reach the UI stream during this turn?
    *
    *  Set as a side effect of emitting SESSION_TEXT_DELTA (both the `assistant`
@@ -710,6 +735,78 @@ export class ClaudeCodeSession {
   // truly-lost-event-without-process-death case. That trade is the honest one — we never claim
   // a liveness we cannot observe.
 
+  /** ── ONE turn-start edge, called from every place a turn is observed to begin ──
+   *
+   *  Bumps the generation, flips the in-memory status to running, and pulls the task
+   *  phase back to IN_PROGRESS. Extracted because the CLI-event turn-start paths — the
+   *  `session_state_changed{running}` branch and the init-after-result branch — had
+   *  divergent copies of this exact sequence (only one of them persisted the record).
+   *
+   *  Callers MUST apply their own replay guard first: a replayed event (daemon reattach
+   *  re-streams history) describes a PAST turn and must not flip the present.
+   *
+   *  `persist` writes the running transition to the session record. Both CLI-event
+   *  edges pass true (same semantic edge, and a turn started by a message injected
+   *  straight into the daemon's FIFO never goes through writeMessage, so this write is
+   *  the only one). writeMessage does its own richer record write and passes false.
+   *
+   *  `sidHint` covers the init edge, which runs BEFORE `claudeSessionId` is (re)assigned
+   *  from the init line. */
+  private _onTurnStartEdge(
+    source: 'init-after-result' | 'state-running',
+    persist: boolean,
+    sidHint?: string,
+  ): void {
+    const sid = this.claudeSessionId ?? sidHint
+    this._turnGen++
+    if (this._processStatus !== 'running') {
+      this._processStatus = 'running'
+      // Clear in-memory activity too, not just the persisted column: emitStatusChanged
+      // folds _activity into its own record write, so a stale value would land there
+      // and race the explicit `activity: undefined` below.
+      this._activity = undefined
+      this.emitStatusChanged('IN_PROGRESS')
+      // Persist the running transition — mirrors writeMessage()'s DB write. Carries
+      // pid + host so the record stays verifiable (a 'running' row with both null is
+      // un-verifiable and the health monitor rewrites it every tick — the orphan
+      // dead-pool write-amp stall).
+      if (persist && sid) {
+        import('../core/session-tracker.js').then(({ updateSessionRecord }) => {
+          updateSessionRecord(sid, {
+            process_status: 'running',
+            activity: undefined,
+            last_status_change: new Date().toISOString(),
+            status_reason: 'message_sent',
+            status_changed_by: 'session-runner',
+            ...(this.pid != null ? { pid: this.pid } : {}),
+            ...(this._host ? { host: this._host } : {}),
+          }).catch(() => {})
+        }).catch(() => {})
+      }
+    }
+    // ── Turn-start phase pullback (incidents 46f42871 + 1f11596b + ed347bde) ──
+    // session:input only fires at SEND time — for a queued/mid-turn send the phase was
+    // already IN_PROGRESS then (no-op), after which the PREVIOUS turn's result flipped
+    // it to AGENT_COMPLETE (and triage possibly to AWAIT) with nothing pulling it back
+    // when this turn started: task showed completed/red while the CLI was visibly
+    // streaming. This is the missing turn-START half of the result↔phase symmetry.
+    // Runs even when _processStatus was already 'running' (a late triage can repaint
+    // the phase mid-turn without touching process_status); applySessionPhase no-ops
+    // when the phase is already IN_PROGRESS.
+    if (!this.taskId) return
+    const turnStartTaskId = this.taskId
+    import('../core/phase.js').then(({ applySessionPhase }) =>
+      applySessionPhase(turnStartTaskId, 'session:turn-start', `session-runner:${source}`, {
+        sessionId: sid,
+      }),
+    ).catch((err) => {
+      log.session.warn('turn-start phase pullback failed', {
+        source, sessionId: sid, taskId: turnStartTaskId,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
+  }
+
   /** Emit the withheld turn-over (AGENT_COMPLETE + SESSION_RESULT) exactly once. Called by
    *  the idle handler when the CLI goes idle with no background work left.
    *  `_turnResultEmitted` guards against the CLI's trailing idles re-firing it.
@@ -739,6 +836,9 @@ export class ClaudeCodeSession {
     this.emitStatusChanged('AGENT_COMPLETE', outcome?.isError ? (outcome.resultText ?? '').slice(0, 500) || undefined : undefined)
     bus.emit(EventNames.SESSION_RESULT, {
       sessionId: sid, taskId: this.taskId,
+      // Turn generation at emit time — lets a LATE consumer detect that a newer
+      // turn has since started (stale-result gate, core/phase.ts).
+      turnGen: this._turnGen,
       // Success: fullText — it carries the LATEST answer (a task-notification
       // followup's summary overwrites it after the withheld result was stored, and
       // that summary IS the turn's real answer). Error: the stored error text is
@@ -930,6 +1030,7 @@ export class ClaudeCodeSession {
       bus.emit(EventNames.SESSION_RESULT, {
         sessionId: this.claudeSessionId,
         taskId: this.taskId,
+        turnGen: this._turnGen,
         result: resultText ?? '(team-idle timeout)',
         totalCost,
         // Same total already billed by the teamActive emit — billableCostDelta
@@ -1104,6 +1205,12 @@ export class ClaudeCodeSession {
 
   get processStatus(): ProcessStatus {
     return this._processStatus
+  }
+
+  /** Current turn generation — see `_turnGen`. Read by core/phase.ts's stale-result
+   *  gate to reject a SESSION_RESULT whose turn has already been superseded. */
+  get turnGen(): number {
+    return this._turnGen
   }
 
   /** Allow the health-monitor reconcile loop to sync the in-memory status after
@@ -2129,6 +2236,20 @@ export class ClaudeCodeSession {
       this._activity = undefined
       this.resultEmitted = false
       this._turnResultEmitted = false  // New turn starting — allow result emission
+      // ── THE QUEUED-SEND turn-start edge (incident ed347bde, 2026-08-05) ──
+      // This FIFO write is a genuine idle→running turn-start, and for the most
+      // common shape it is the EARLIEST evidence of the new turn: walnut queues
+      // the message while turn A runs (processNext → writeMessage) and delivers
+      // it the instant A's result lands. The line above resets
+      // _turnResultEmitted BEFORE the CLI's `init` for turn B arrives, so the
+      // init-after-result edge (gated on that flag) never fires for this shape —
+      // and the CLI may emit no session_state_changed{running} either. Without a
+      // bump here the stale-result gate in core/phase.ts fails OPEN: turn A's
+      // ~800ms-late AGENT_COMPLETE flip carries eventGen == liveGen, passes the
+      // strict `liveGen > eventGen` test, and repaints turn B as completed while
+      // it visibly streams. Mid-turn injections deliberately skip this block —
+      // they join the SAME turn and must not bump.
+      this._turnGen++
       // #870 hand-off: the user moving on outranks a still-pending hold. A stale
       // withheld outcome must not settle the NEW turn (a withheld turn that reached
       // this reset already completed via idle/followup/reconcile, or its process
@@ -2412,6 +2533,7 @@ export class ClaudeCodeSession {
         bus.emit(EventNames.SESSION_RESULT, {
           sessionId: this.claudeSessionId,
           taskId: this.taskId,
+          turnGen: this._turnGen,
           result: this.fullText,
           isError: false,
         }, ['main-ai', 'session-runner'], { source: 'session-runner' })
@@ -2486,6 +2608,7 @@ export class ClaudeCodeSession {
           bus.emit(EventNames.SESSION_RESULT, {
             sessionId: this.claudeSessionId,
             taskId: this.taskId,
+            turnGen: this._turnGen,
             result: this.fullText,
             isError: false,
           }, ['main-ai', 'session-runner'], { source: 'session-runner' })
@@ -2763,6 +2886,32 @@ export class ClaudeCodeSession {
               sessionId: this.claudeSessionId, taskId: this.taskId,
             })
             this._turnResultEmitted = false
+            // ── init-after-result IS a turn-start edge (incident ed347bde, 2026-08-05) ──
+            // The CLI can pick up a queued mid-turn send the instant the previous
+            // turn's result lands (128ms in that incident) WITHOUT ever going idle,
+            // so it emits NO session_state_changed{running} — the state-running
+            // pullback below never fires for this shape. This init is then the only
+            // CLI-side evidence a new turn began: the result handler had just set
+            // _processStatus='idle' and the server's ~800ms-late SESSION_RESULT
+            // handler flips the phase to AGENT_COMPLETE, so the badge reads Idle and
+            // the task row reads completed/attention while the CLI is visibly
+            // streaming (44s in that incident; 185 same-shape divergences that day).
+            // Auto-continuation / post-compaction inits take this path too — also
+            // "actively working", also correct to show as running. (When walnut
+            // itself delivered the send, writeMessage already bumped the generation
+            // — a second bump for the same turn is harmless, see _turnGen.)
+            //
+            // Replay guard mirrors the state-running branch: a replayed init (daemon
+            // reattach re-streams history) describes a PAST turn and must not flip
+            // the present status/phase, nor bump the generation.
+            if (this._isReplayedByOffset() !== true) {
+              this._onTurnStartEdge('init-after-result', true, sys.session_id as string)
+            } else {
+              log.session.info('ignoring replayed init-after-result (at/below consumed watermark)', {
+                sessionId: this.claudeSessionId, taskId: this.taskId,
+                v: this._currentEventV, consumedOffset: this._consumedOffset,
+              })
+            }
           }
           if (this.resultEmitted) {
             // Optimistic remote-exit (~line 2286) set this true, but the daemon is
@@ -3076,55 +3225,19 @@ export class ClaudeCodeSession {
                 })
                 break
               }
-              if (this._processStatus !== 'running') {
-                this._processStatus = 'running'
-                this.emitStatusChanged('IN_PROGRESS')
-                // Persist the running transition — mirrors writeMessage()'s DB write.
-                // This event also fires for turns started by messages injected
-                // directly into the daemon's FIFO (e.g. phone → EC2 bridge → daemon),
-                // which never go through this class's own writeMessage(). Without
-                // this write, process_status stays on whatever the PREVIOUS turn left
-                // behind (idle/error/stopped) for the entire duration of the new turn,
-                // since the only other writer is the SESSION_RESULT/SESSION_ERROR
-                // handler below, which fires exclusively at turn-END.
-                if (this.claudeSessionId) {
-                  import('../core/session-tracker.js').then(({ updateSessionRecord }) => {
-                    updateSessionRecord(this.claudeSessionId!, {
-                      process_status: 'running',
-                      activity: undefined,
-                      last_status_change: new Date().toISOString(),
-                      status_reason: 'message_sent',
-                      status_changed_by: 'session-runner',
-                      ...(this.pid != null ? { pid: this.pid } : {}),
-                      ...(this._host ? { host: this._host } : {}),
-                    }).catch(() => {})
-                  }).catch(() => {})
-                }
-              }
-              // ── Turn-start phase pullback (incidents 46f42871 + 1f11596b) ──
-              // The CLI actually began executing a turn. session:input only fires
-              // at SEND time — for a queued/mid-turn send the phase was already
-              // IN_PROGRESS then (no-op), after which the PREVIOUS turn's result
-              // flipped it to AGENT_COMPLETE (and triage possibly to AWAIT) with
-              // nothing pulling it back when this turn started: task showed
-              // completed/red while the CLI was visibly streaming. This is the
-              // missing turn-START half of the result↔phase symmetry. Runs even
-              // when _processStatus was already 'running' (a late triage can
-              // repaint the phase mid-turn without touching process_status);
-              // applySessionPhase no-ops when the phase is already IN_PROGRESS.
-              if (this.taskId) {
-                const turnStartTaskId = this.taskId
-                import('../core/phase.js').then(({ applySessionPhase }) =>
-                  applySessionPhase(turnStartTaskId, 'session:turn-start', 'session-runner:state-running', {
-                    sessionId: sid,
-                  }),
-                ).catch((err) => {
-                  log.session.warn('turn-start phase pullback failed', {
-                    sessionId: sid, taskId: turnStartTaskId,
-                    error: err instanceof Error ? err.message : String(err),
-                  })
-                })
-              }
+              // The CLI's explicit turn-start signal. Same semantic edge as the
+              // init-after-result branch above — one shared implementation
+              // (_onTurnStartEdge): bump the generation, flip + PERSIST 'running',
+              // pull the task phase back to IN_PROGRESS. Persisting matters here
+              // because this event also fires for turns started by messages injected
+              // directly into the daemon's FIFO (e.g. phone → cloud bridge → daemon),
+              // which never go through this class's own writeMessage(); without it
+              // process_status stays on whatever the PREVIOUS turn left behind
+              // (idle/error/stopped) for the whole new turn, since the only other
+              // writer is the SESSION_RESULT/SESSION_ERROR handler at turn-END.
+              // A second bump for a turn walnut itself delivered is harmless — the
+              // counter is "turn-start edges seen", see _turnGen.
+              this._onTurnStartEdge('state-running', true, sid)
             } else if (newState === 'idle') {
               // Idle-debt consumption: every idle settles an owed companion first
               // (FIFO stream order guarantees a result's companion idle arrives
@@ -4275,6 +4388,7 @@ export class ClaudeCodeSession {
           bus.emit(EventNames.SESSION_RESULT, {
             sessionId: this.claudeSessionId,
             taskId: this.taskId,
+            turnGen: this._turnGen,
             result: resultText,
             totalCost: result.total_cost_usd,
             costDelta: this.billableCostDelta(result.total_cost_usd),
@@ -4301,6 +4415,10 @@ export class ClaudeCodeSession {
           bus.emit(EventNames.SESSION_RESULT, {
             sessionId: this.claudeSessionId,
             taskId: this.taskId,
+            // Stamped at emit time; the server's phase flip compares it against the
+            // live instance's CURRENT gen so a late flip can't repaint a newer turn
+            // (incident ed347bde — see _turnGen).
+            turnGen: this._turnGen,
             result: resultText,
             totalCost: result.total_cost_usd,
             costDelta: this.billableCostDelta(result.total_cost_usd),
