@@ -249,7 +249,31 @@ async function cloudSend(res: Response, sessionId: string, text: string, images:
     // of 409. This lets the phone send to idle/stopped/error sessions
     // without the Mac being online. The daemon gates the resume on the
     // session's jsonl existing on that host.
-    const status = await bridgeRequest(host, 'status', { sid: sessionId })
+    let status = await bridgeRequest(host, 'status', { sid: sessionId })
+    // Just-launched race (caught by the live suite, 2026-08-07): the 201 is
+    // "accepted", the CLI spawn on the primary is ASYNC — a send fired
+    // milliseconds later finds status.exists=false, falls into the resume
+    // path, and the daemon rightly refuses (no jsonl yet) → 409 on a session
+    // that is seconds from being alive. While the launch seed is fresh, poll
+    // for the spawn instead of declaring death; fall through to the normal
+    // paths if it still hasn't appeared (a genuinely failed spawn surfaces
+    // as session error status anyway).
+    if (status.exists !== true) {
+      const { getLaunchSeed } = await import('../../core/sessions/launch-seed.js')
+      if (getLaunchSeed(sessionId)) {
+        const SPAWN_POLL_MS = 1_000
+        const SPAWN_WAIT_MAX_MS = 20_000
+        const deadline = Date.now() + SPAWN_WAIT_MAX_MS
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, SPAWN_POLL_MS))
+          status = await bridgeRequest(host, 'status', { sid: sessionId })
+          if (status.exists === true) break
+        }
+        log.web.info('mobile send waited for just-launched spawn', {
+          sessionId, host, spawned: status.exists === true,
+        })
+      }
+    }
     const messageId = `qm-mobile-${crypto.randomBytes(6).toString('hex')}`
     if (status.exists === true && status.alive === true) {
       // Live path — append marker + FIFO write (same as before).

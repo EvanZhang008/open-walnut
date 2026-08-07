@@ -155,6 +155,42 @@ describe('mobile launch through the replica → immediate use (projection gap)',
     controller.abort()
   })
 
+  it('send racing the async CLI spawn waits instead of 409 (live-suite catch, 2026-08-07)', async () => {
+    // 201 is "accepted": the spawn on the primary is async. A send fired
+    // milliseconds later sees status.exists=false; pre-fix it dropped into
+    // the resume path and the daemon refused (no jsonl yet) → 409 on a
+    // session seconds from alive. With a fresh seed the route now polls.
+    let statusCalls = 0
+    const calls = daemonAnswers()
+    bridgeRequestMock.mockImplementation(async (host: string, cmd: string, params: Record<string, unknown> = {}) => {
+      calls.push({ host, cmd })
+      if (cmd === 'session.launch' && (params as { action?: string }).action === 'launch') {
+        return { ok: true, result: { sessionId: SID, taskId: 'task-1', title: 'Session: repo' } }
+      }
+      if (cmd === 'status') {
+        statusCalls++
+        // First 2 probes: not spawned yet. Then alive.
+        return statusCalls <= 2 ? { ok: true, exists: false } : { ok: true, exists: true, alive: true }
+      }
+      return { ok: true }
+    })
+
+    const create = await fetch(apiUrl('/api/v1/sessions'), {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ cwd: '/home/user/repo', host: HOST, message: 'hi' }),
+    })
+    expect(create.status).toBe(201)
+
+    const send = await fetch(apiUrl(`/api/v1/sessions/${SID}/messages`), {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify({ text: 'race the spawn' }),
+    })
+    expect(send.status).toBe(202)
+    expect(statusCalls).toBeGreaterThanOrEqual(3) // it actually waited
+    // Delivered via the live FIFO path, not resume.
+    expect(calls.some((c) => c.cmd === 'send')).toBe(true)
+    expect(calls.some((c) => c.cmd === 'bridgeResume')).toBe(false)
+  }, 30_000)
+
   it('an unknown session id (never launched here, not in projection) still 404s', async () => {
     daemonAnswers()
     const send = await fetch(apiUrl('/api/v1/sessions/never-launched-here/messages'), {
