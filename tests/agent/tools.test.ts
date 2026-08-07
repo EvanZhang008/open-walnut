@@ -107,6 +107,37 @@ describe('task tools', () => {
     expect(result).toContain('Test agent task');
   });
 
+  // Regression: 2026-08-04 cron re-fire storm created 33 identical daily-report
+  // tasks. Unattended sources (cron/triage/background/heartbeat) must dedupe an
+  // exact-title same-day live duplicate; interactive chat must not.
+  describe('task_create unattended same-day dedup', () => {
+    it('cron source returns the existing task instead of duplicating', async () => {
+      const first = await executeTool('task_create', { title: 'Daily Report — 2026-08-04' }, { source: 'cron-isolated' });
+      expect(first).toContain('Task created:');
+      const second = await executeTool('task_create', { title: 'Daily Report — 2026-08-04' }, { source: 'cron-isolated' });
+      expect(second).toContain('Task already exists');
+      const all = JSON.parse(await executeTool('task_query', {}));
+      expect(all).toHaveLength(1);
+    });
+
+    it('interactive chat source may create same-titled tasks', async () => {
+      await executeTool('task_create', { title: 'Buy milk' }, { source: 'chat' });
+      const second = await executeTool('task_create', { title: 'Buy milk' }, { source: 'chat' });
+      expect(second).toContain('Task created:');
+      const all = JSON.parse(await executeTool('task_query', {}));
+      expect(all).toHaveLength(2);
+    });
+
+    it('cron source still creates when the same-titled task is COMPLETE', async () => {
+      const first = await executeTool('task_create', { title: 'Daily Report — done case' }, { source: 'cron-isolated' });
+      const idMatch = first.match(/id="([^"]+)"/);
+      const { updateTask } = await import('../../src/core/task-manager.js');
+      await updateTask(idMatch![1], { phase: 'COMPLETE' });
+      const second = await executeTool('task_create', { title: 'Daily Report — done case' }, { source: 'cron-isolated' });
+      expect(second).toContain('Task created:');
+    });
+  });
+
   it('query_tasks returns created tasks', async () => {
     await executeTool('task_create', { title: 'Task A', priority: 'immediate', project: 'work' });
     await executeTool('task_create', { title: 'Task B', project: 'personal' });

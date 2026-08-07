@@ -559,7 +559,7 @@ export const tools: ToolDefinition[] = [
       },
       required: [],
     },
-    async execute(params) {
+    async execute(params, meta) {
       const entityType = (params.type as string) || 'task';
       try {
         if (entityType === 'project') {
@@ -587,6 +587,27 @@ export const tools: ToolDefinition[] = [
         // type === 'task' (default)
         const title = params.title as string;
         if (!title) return 'Error: "title" is required for type=task';
+
+        // Idempotency backstop for UNATTENDED creators (cron / triage / review
+        // forks): an exact-title live duplicate on the same day means the turn
+        // is a replay — return the existing task instead of minting another.
+        // 2026-08-04 incident: a cron job re-fired ~19× and created 33
+        // identical daily-report tasks. Interactive chat is exempt — a human
+        // re-asking for a same-titled task is deliberate.
+        const unattended = typeof meta?.source === 'string'
+          && /^(cron|triage|background|heartbeat)/.test(meta.source);
+        if (unattended) {
+          const { listTasks } = await import('../core/task-manager.js');
+          const today = new Date().toISOString().slice(0, 10);
+          const dup = (await listTasks()).find((t) =>
+            t.title === title.trim()
+            && t.phase !== 'COMPLETE'
+            && (t.created_at ?? '').slice(0, 10) === today,
+          );
+          if (dup) {
+            return `Task already exists (created today, same title — not duplicating): ${taskRef(dup.id, dup.title)} (${dup.priority}, ${dup.project || 'Inbox'}). Reuse this task.`;
+          }
+        }
 
         // Preserve an explicit '' — the schema promises `""` = Inbox, and addTask
         // only bypasses config.defaults.project when the caller PASSED a value
