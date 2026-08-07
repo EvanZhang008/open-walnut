@@ -292,6 +292,10 @@ memory/**/*.bak.*
 
 # Runtime ephemeral
 session-message-queue.json
+# Cron RUNTIME state (nextRunAtMs etc.) is machine-local — syncing it echoes a
+# stale due time back from the other box and re-fires jobs (2026-08-04 storm).
+# Job DEFINITIONS (cron-jobs.json) still sync.
+cron-state.json
 *.lock/
 *.lock
 
@@ -310,12 +314,16 @@ node_modules/
  *    devices. Losing it presents as a blanket 401 on every token.
  *  - config.yaml (+ its backup) — MACHINE-LOCAL settings: the STT engine, SSH
  *    hosts, provider credentials, per-device model lists. Never synced.
+ *  - cron-state.json — per-machine cron RUNTIME state (nextRunAtMs etc.).
+ *    Syncing it echoes a stale due time back from the other box and re-fires
+ *    jobs (2026-08-04 storm). Pre-existing repos' .gitignore predates this
+ *    file, so it needs both the append and the untrack self-heal.
  *
  * These are also actively untracked (see ensureMachineLocalUntracked): being
  * gitignored on THIS box while still tracked in the index is the dangerous
  * state — see that function for the incident this prevents.
  */
-const CRITICAL_IGNORES = ['auth.json', 'auth.json.bak', 'config.yaml', 'config.yaml.bak'];
+const CRITICAL_IGNORES = ['auth.json', 'auth.json.bak', 'config.yaml', 'config.yaml.bak', 'cron-state.json'];
 
 /**
  * Ignore-only patterns: kept out of the .gitignore drift, but NOT fed to the

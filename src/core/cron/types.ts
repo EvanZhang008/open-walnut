@@ -119,6 +119,17 @@ export type CronStoreFile = {
   jobs: CronJob[];
 };
 
+/**
+ * On-disk sidecar (cron-state.json, next to cron-jobs.json) holding per-job
+ * runtime state. Machine-local and gitignored: job definitions sync between
+ * machines via the git data repo, runtime state must NOT — a synced stale
+ * nextRunAtMs echoing back from another box re-fires jobs (2026-08-04 storm).
+ */
+export type CronStateFile = {
+  version: 1;
+  states: Record<string, CronJobState>;
+};
+
 export type CronJobCreate = Omit<CronJob, 'id' | 'createdAtMs' | 'updatedAtMs' | 'state' | 'sessionTarget' | 'payload'> & {
   state?: Partial<CronJobState>;
   /** Legacy fields — optional when `executor` is provided (derived from it). */
@@ -198,6 +209,18 @@ export type CronServiceState = {
   running: boolean;
   op: Promise<unknown>;
   warnedDisabled: boolean;
+  /**
+   * In-memory replay guard: jobId → earliest ms a subsequent run may start
+   * (null = no future runs, e.g. a finished one-shot). Never persisted — it is
+   * this process's own memory of what it already executed, so a cron store
+   * file that gets reverted by an external writer (a second server process, a
+   * git-sync echo of an older snapshot) cannot re-fire a slot that already
+   * ran. 2026-08-04 incident: the daily-report job re-fired ~19× in one day
+   * because the shared store kept flapping back to a due state. Cleared when
+   * the user edits the job's schedule/enabled state or removes the job.
+   * Optional so hand-built test states don't break; access via replayGuardOf().
+   */
+  replayGuard?: Map<string, number | null>;
 };
 
 // ── Result types ──

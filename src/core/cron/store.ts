@@ -2,18 +2,51 @@
  * Store persistence — adapted from moltbot/src/cron/service/store.ts
  * Simplified: no legacy migrations since this is a fresh implementation.
  *
+ * Two files, split on purpose (2026-08-04 re-fire storm): cron-jobs.json holds
+ * DEFINITIONS only and rides git-sync between machines; cron-state.json (same
+ * dir) holds per-job RUNTIME state and is machine-local + gitignored, so a
+ * git-sync echo of another box's stale nextRunAtMs can never re-fire a job
+ * here. Both files are only read/written inside locked() (timer.ts), which
+ * holds the cross-process file lock on storePath — no separate sidecar lock.
+ *
  * Safety: persist() creates a .backup file before writing an empty store
  * to prevent accidental data loss (e.g., a rogue DELETE sweep from tests).
  */
 
 import fs from 'node:fs/promises';
-import type { CronStoreFile, CronServiceState } from './types.js';
+import path from 'node:path';
+import type { CronStoreFile, CronStateFile, CronJobState, CronServiceState } from './types.js';
 import { readJsonFile, writeJsonFile } from '../../utils/fs.js';
 import { recomputeNextRuns } from './jobs.js';
 import { syncExecutorFields } from './executor-compat.js';
 
 function emptyStore(): CronStoreFile {
   return { version: 2, jobs: [] };
+}
+
+function emptyStateFile(): CronStateFile {
+  return { version: 1, states: {} };
+}
+
+/** Machine-local runtime-state sidecar, next to the (synced) jobs file. */
+export function cronStatePath(storePath: string): string {
+  return path.join(path.dirname(storePath), 'cron-state.json');
+}
+
+/**
+ * Load the sidecar's state map. Runtime state is recomputable, so a corrupt
+ * sidecar degrades to empty rather than failing the whole load.
+ */
+async function loadStateMap(state: CronServiceState): Promise<Record<string, CronJobState>> {
+  try {
+    const file = await readJsonFile<CronStateFile>(cronStatePath(state.deps.storePath), emptyStateFile());
+    if (file && typeof file.states === 'object' && file.states !== null) return file.states;
+  } catch (err) {
+    state.deps.log.warn('cron state sidecar corrupted — starting with empty runtime state', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return {};
 }
 
 export async function ensureLoaded(
@@ -42,10 +75,25 @@ export async function ensureLoaded(
       loaded = emptyStore();
     }
   }
+  const stateMap = await loadStateMap(state);
+
   let dirty = false;
-  // Ensure every job has a state object + migrate action payloads to initProcessor
+  // Attach runtime state from the sidecar + migrate action payloads to initProcessor
   for (const job of loaded.jobs) {
-    if (!job.state || typeof job.state !== 'object') {
+    const hadEmbeddedState = !!job.state && typeof job.state === 'object';
+    const sidecarState = stateMap[job.id];
+    if (sidecarState && typeof sidecarState === 'object') {
+      // Sidecar is authoritative — an embedded state here is an old binary's
+      // (possibly stale, possibly echoed-back) write; strip it on persist.
+      job.state = sidecarState;
+      if (hadEmbeddedState) dirty = true;
+    } else if (hadEmbeddedState) {
+      // Legacy embedded state in cron-jobs.json (pre-sidecar file, or written
+      // by an old binary on another box) — seed the sidecar from it and strip
+      // it from the jobs file on the persist below.
+      dirty = true;
+    } else {
+      // No sidecar entry and no legacy embedded state (fresh job / stripped file)
       job.state = {};
     }
     // Migrate legacy action payload → initProcessor
@@ -94,6 +142,11 @@ export async function ensureLoaded(
 /**
  * Persist the cron store to disk.
  *
+ * Writes two files: cron-jobs.json with `state` STRIPPED from every job
+ * (definitions only — this file git-syncs), and the cron-state.json sidecar
+ * with the runtime state map (machine-local). States for job ids no longer in
+ * the store are dropped, so the sidecar cannot grow without bound.
+ *
  * Safety net: if we're about to write an empty store but the file on disk
  * has jobs, create a .backup copy first. This protects against accidental
  * mass-deletion (e.g., a test suite sweeping all jobs via REST API).
@@ -118,7 +171,16 @@ export async function persist(state: CronServiceState): Promise<void> {
     }
   }
 
-  await writeJsonFile(state.deps.storePath, state.store);
+  const states: Record<string, CronJobState> = {};
+  const jobsWithoutState = state.store.jobs.map((job) => {
+    states[job.id] = job.state ?? {};
+    const { state: _state, ...definition } = job;
+    return definition;
+  });
+
+  await writeJsonFile(state.deps.storePath, { ...state.store, jobs: jobsWithoutState });
+  const stateFile: CronStateFile = { version: 1, states };
+  await writeJsonFile(cronStatePath(state.deps.storePath), stateFile);
 }
 
 export function warnIfDisabled(state: CronServiceState, action: string): void {

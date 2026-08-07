@@ -16,7 +16,7 @@ import {
   recomputeNextRuns,
 } from './jobs.js';
 import { ensureLoaded, persist, warnIfDisabled } from './store.js';
-import { armTimer, emit, executeJob, findMissedJobs, locked, stopTimer } from './timer.js';
+import { armTimer, emit, executeJob, findMissedJobs, locked, replayGuardOf, stopTimer } from './timer.js';
 
 export async function start(state: CronServiceState): Promise<void> {
   // Phase 1: Load store, clear stale markers, find missed jobs (under lock)
@@ -78,6 +78,7 @@ export async function start(state: CronServiceState): Promise<void> {
       // Phase 3: Always finalize under lock, even if execution threw.
       // This clears runningAtMs markers and re-arms the timer.
       await locked(state, async () => {
+        await ensureLoaded(state, { forceReload: true, skipRecompute: true });
         recomputeNextRuns(state);
         await persist(state);
         armTimer(state);
@@ -92,7 +93,8 @@ export function stop(state: CronServiceState): void {
 
 export async function status(state: CronServiceState): Promise<CronStatusSummary> {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    // forceReload: recomputeNextRuns below may persist — never from a stale snapshot.
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
     if (state.store) {
       const changed = recomputeNextRuns(state);
       if (changed) await persist(state);
@@ -108,7 +110,8 @@ export async function status(state: CronServiceState): Promise<CronStatusSummary
 
 export async function list(state: CronServiceState, opts?: { includeDisabled?: boolean }) {
   return await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
+    // forceReload: recomputeNextRuns below may persist — never from a stale snapshot.
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
     if (state.store) {
       const changed = recomputeNextRuns(state);
       if (changed) await persist(state);
@@ -122,7 +125,10 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
 export async function add(state: CronServiceState, input: CronJobCreate) {
   return await locked(state, async () => {
     warnIfDisabled(state, 'add');
-    await ensureLoaded(state);
+    // forceReload on every mutating op: the store file is shared with other
+    // processes (and git-sync), so mutating a stale in-memory snapshot and
+    // blind-writing it would revert their changes (2026-08-04 re-fire storm).
+    await ensureLoaded(state, { forceReload: true });
     const job = createJob(state, input);
     state.store?.jobs.push(job);
 
@@ -152,7 +158,7 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
 export async function update(state: CronServiceState, id: string, patch: CronJobPatch) {
   return await locked(state, async () => {
     warnIfDisabled(state, 'update');
-    await ensureLoaded(state);
+    await ensureLoaded(state, { forceReload: true });
     const job = findJobOrThrow(state, id);
     const now = state.deps.nowMs();
 
@@ -180,6 +186,8 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
 
     job.updatedAtMs = now;
     if (scheduleChanged || enabledChanged) {
+      // Deliberate user edit — the old slot's replay guard no longer applies.
+      replayGuardOf(state).delete(id);
       if (job.enabled) {
         job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
       } else {
@@ -202,11 +210,12 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
 export async function remove(state: CronServiceState, id: string) {
   return await locked(state, async () => {
     warnIfDisabled(state, 'remove');
-    await ensureLoaded(state);
+    await ensureLoaded(state, { forceReload: true });
     const before = state.store?.jobs.length ?? 0;
     if (!state.store) {
       return { ok: false, removed: false } as const;
     }
+    replayGuardOf(state).delete(id);
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = state.store.jobs.length !== before;
     await persist(state);
@@ -222,7 +231,7 @@ export async function run(state: CronServiceState, id: string, mode?: 'due' | 'f
   // Phase 1: validate and mark running under lock
   const phase1 = await locked(state, async () => {
     warnIfDisabled(state, 'run');
-    await ensureLoaded(state, { skipRecompute: true });
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
     const job = findJobOrThrow(state, id);
     if (typeof job.state.runningAtMs === 'number') {
       return { ok: true, ran: false, reason: 'already-running' as const };
@@ -231,6 +240,14 @@ export async function run(state: CronServiceState, id: string, mode?: 'due' | 'f
     const due = isJobDue(job, now, { forced: mode === 'force' });
     if (!due) {
       return { ok: true, ran: false, reason: 'not-due' as const };
+    }
+    // Replay guard applies to 'due' runs only — an explicit force is the user
+    // deliberately re-running the job.
+    if (mode !== 'force') {
+      const guard = replayGuardOf(state).get(id);
+      if (guard === null || (typeof guard === 'number' && now < guard)) {
+        return { ok: true, ran: false, reason: 'already-ran-this-slot' as const };
+      }
     }
     // Mark running and persist so the lock can be released
     job.state.runningAtMs = now;
@@ -263,12 +280,14 @@ export async function run(state: CronServiceState, id: string, mode?: 'due' | 'f
 export async function toggle(state: CronServiceState, id: string) {
   return await locked(state, async () => {
     warnIfDisabled(state, 'toggle');
-    await ensureLoaded(state);
+    await ensureLoaded(state, { forceReload: true });
     const job = findJobOrThrow(state, id);
     const now = state.deps.nowMs();
 
     job.enabled = !job.enabled;
     job.updatedAtMs = now;
+    // Deliberate user edit — drop the replay guard so re-enabling schedules fresh.
+    replayGuardOf(state).delete(id);
 
     if (job.enabled) {
       job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);

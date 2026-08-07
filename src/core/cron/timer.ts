@@ -11,6 +11,7 @@
 import type { CronJob, CronServiceState, CronEvent } from './types.js';
 import { cloudModeSkipsJob, computeJobNextRunAtMs, nextWakeAtMs, recomputeNextRuns } from './jobs.js';
 import { ensureLoaded, persist } from './store.js';
+import { withFileLock } from '../../utils/file-lock.js';
 
 const MAX_TIMER_DELAY_MS = 60_000;
 
@@ -41,8 +42,13 @@ function errorBackoffMs(consecutiveErrors: number): number {
 // ── Locking ──
 
 /**
- * Simple promise-chain lock. Serializes all mutating operations on the
- * cron state so that concurrent timer ticks and API calls don't race.
+ * Two-layer lock. The promise chain serializes async operations within this
+ * process; the file lock (`${storePath}.lock`) serializes read-modify-write
+ * cycles ACROSS processes. 2026-08-04 incident: an orphaned second server
+ * shared cron-jobs.json with prod — each side blind-wrote its stale snapshot,
+ * flapping jobs back to a due state and re-firing a daily job ~19× in a day.
+ * All locked sections here are short (load + mutate + persist), so holding
+ * the file lock for their duration is safe.
  */
 export async function locked<T>(state: CronServiceState, fn: () => Promise<T>): Promise<T> {
   const prev = state.op;
@@ -50,10 +56,36 @@ export async function locked<T>(state: CronServiceState, fn: () => Promise<T>): 
   state.op = new Promise<void>((r) => { resolve = r; });
   await prev.catch(() => {});
   try {
-    return await fn();
+    return await withFileLock(state.deps.storePath, fn);
   } finally {
     resolve();
   }
+}
+
+/** Lazy accessor — tolerates states constructed without the field (tests). */
+export function replayGuardOf(state: CronServiceState): Map<string, number | null> {
+  if (!state.replayGuard) state.replayGuard = new Map();
+  return state.replayGuard;
+}
+
+/**
+ * True when this process already executed the job for the current schedule
+ * slot, regardless of what the (shared, externally writable) store file says.
+ * `null` guard = no future runs (finished one-shot).
+ */
+function replayGuardBlocks(state: CronServiceState, job: CronJob, nowMs: number): boolean {
+  const guard = replayGuardOf(state).get(job.id);
+  if (guard === undefined) return false;
+  if (guard === null || nowMs < guard) {
+    state.deps.log.warn('replay guard: job already ran this slot — skipping despite due store state', {
+      jobId: job.id,
+      jobName: job.name,
+      guardUntilMs: guard,
+      storeNextRunAtMs: job.state.nextRunAtMs,
+    });
+    return true;
+  }
+  return false;
 }
 
 // ── Event emission ──
@@ -149,12 +181,19 @@ export function applyJobResult(
   const shouldDelete =
     job.schedule.kind === 'at' && result.status === 'ok' && job.deleteAfterRun === true;
 
+  // Arm the replay guard for every terminal result (including 'skipped' —
+  // the slot was consumed either way). Set below once nextRunAtMs is known.
+  const armGuard = (nextMs: number | undefined) => {
+    replayGuardOf(state).set(job.id, typeof nextMs === 'number' ? nextMs : null);
+  };
+
   if (!shouldDelete) {
     if (job.schedule.kind === 'at') {
       // One-shot jobs are always disabled after ANY terminal status
       // (ok, error, or skipped). This prevents tight-loop rescheduling.
       job.enabled = false;
       job.state.nextRunAtMs = undefined;
+      armGuard(undefined);
       if (result.status === 'error') {
         state.deps.log.warn('disabling one-shot job after error', {
           jobId: job.id,
@@ -171,6 +210,7 @@ export function applyJobResult(
       // Use whichever is later: the natural next run or the backoff delay.
       job.state.nextRunAtMs =
         normalNext !== undefined ? Math.max(normalNext, backoffNext) : backoffNext;
+      armGuard(job.state.nextRunAtMs);
       state.deps.log.info('applying error backoff', {
         jobId: job.id,
         consecutiveErrors: job.state.consecutiveErrors,
@@ -179,9 +219,13 @@ export function applyJobResult(
       });
     } else if (job.enabled) {
       job.state.nextRunAtMs = computeJobNextRunAtMs(job, result.endedAt);
+      armGuard(job.state.nextRunAtMs);
     } else {
       job.state.nextRunAtMs = undefined;
+      armGuard(undefined);
     }
+  } else {
+    replayGuardOf(state).delete(job.id);
   }
 
   return shouldDelete;
@@ -387,28 +431,38 @@ export async function executeJob(
   }
 
   const endedAt = state.deps.nowMs();
-  const shouldDelete = applyJobResult(state, job, {
-    status: coreResult.status,
-    error: coreResult.error,
-    startedAt,
-    endedAt,
-  });
 
-  emit(state, {
-    jobId: job.id,
-    action: 'finished',
-    status: coreResult.status,
-    error: coreResult.error,
-    summary: coreResult.summary,
-    runAtMs: startedAt,
-    durationMs: job.state.lastDurationMs,
-    nextRunAtMs: job.state.nextRunAtMs,
-  });
+  // Apply the result under the lock to a FRESH load: execution can take
+  // minutes, during which another process may have rewritten the store.
+  // Applying to the pre-execution snapshot and blind-persisting it would
+  // revert those external writes (2026-08-04 re-fire storm).
+  await locked(state, async () => {
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    const target = state.store?.jobs.find((j) => j.id === job.id) ?? job;
+    const shouldDelete = applyJobResult(state, target, {
+      status: coreResult.status,
+      error: coreResult.error,
+      startedAt,
+      endedAt,
+    });
 
-  if (shouldDelete && state.store) {
-    state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
-    emit(state, { jobId: job.id, action: 'removed' });
-  }
+    emit(state, {
+      jobId: target.id,
+      action: 'finished',
+      status: coreResult.status,
+      error: coreResult.error,
+      summary: coreResult.summary,
+      runAtMs: startedAt,
+      durationMs: target.state.lastDurationMs,
+      nextRunAtMs: target.state.nextRunAtMs,
+    });
+
+    if (shouldDelete && state.store) {
+      state.store.jobs = state.store.jobs.filter((j) => j.id !== target.id);
+      emit(state, { jobId: target.id, action: 'removed' });
+    }
+    await persist(state);
+  });
 }
 
 // ── Timer tick ──
@@ -422,6 +476,7 @@ function findDueJobs(state: CronServiceState): CronJob[] {
     if (typeof j.state.runningAtMs === 'number') return false;
     const next = j.state.nextRunAtMs;
     if (!(typeof next === 'number' && now >= next)) return false;
+    if (replayGuardBlocks(state, j, now)) return false;
     if (cloudModeSkipsJob(j)) {
       state.deps.log.info('cloud mode: skipping non-allowlisted cron job', { jobId: j.id, jobName: j.name });
       return false;
@@ -572,6 +627,7 @@ export function findMissedJobs(state: CronServiceState): CronJob[] {
     if (j.schedule.kind === 'at' && j.state.lastStatus === 'ok') return false;
     const next = j.state.nextRunAtMs;
     if (!(typeof next === 'number' && now >= next)) return false;
+    if (replayGuardBlocks(state, j, now)) return false;
     if (cloudModeSkipsJob(j)) {
       state.deps.log.info('cloud mode: skipping non-allowlisted missed cron job', { jobId: j.id, jobName: j.name });
       return false;

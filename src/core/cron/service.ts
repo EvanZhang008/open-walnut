@@ -23,6 +23,7 @@ function createCronServiceState(deps: CronServiceDeps): CronServiceState {
     running: false,
     op: Promise.resolve(),
     warnedDisabled: false,
+    replayGuard: new Map(),
   };
 }
 
