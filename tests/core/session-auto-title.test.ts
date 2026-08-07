@@ -170,4 +170,79 @@ describe('sessionAutoTitleHook', () => {
 
     expect((await getTask(task.id)).title).toBe(PLACEHOLDER);
   });
+
+  describe('plugin content-validation feedback (generic, rule comes from the plugin)', () => {
+    // A sync plugin that only accepts ASCII titles — stand-in for any external
+    // system's content rule (2026-08-06 incident: an English-only plugin rule
+    // rejected a Chinese AI title and the placeholder stuck forever).
+    const RULE = 'Titles must be ASCII-only for this tracker.';
+    beforeEach(async () => {
+      const { registry } = await import('../../src/core/integration-registry.js');
+      const noop = async () => {};
+      registry.register('ascii-tracker', {
+        id: 'ascii-tracker',
+        name: 'ASCII tracker (test)',
+        config: {},
+        sync: {
+          createTask: async () => null,
+          deleteTask: noop,
+          updateTitle: noop, updateDescription: noop, updateSummary: noop,
+          updateNote: noop, updateConversationLog: noop, updatePriority: noop,
+          updatePhase: noop, updateDueDate: noop, updateStar: noop,
+          updateProject: noop, updateDependencies: noop,
+          associateSubtask: noop, disassociateSubtask: noop,
+          pushTask: async () => ({ serverTimestamp: new Date().toISOString() }),
+          syncPoll: noop,
+          validateContent: (_task, field, value) =>
+            // eslint-disable-next-line no-control-regex
+            field === 'title' && /[^\x00-\x7F]/.test(value) ? RULE : null,
+        },
+        migrations: [],
+        httpRoutes: [],
+      });
+    });
+    afterEach(async () => {
+      const { registry } = await import('../../src/core/integration-registry.js');
+      registry.clear();
+    });
+
+    async function makePluginTaskAndSession(sid: string): Promise<Task> {
+      // Inbox is structurally local-only — a provider-sourced task needs a project.
+      const { task } = await addTask({ title: PLACEHOLDER, project: 'Tracked', source: 'ascii-tracker' });
+      await updateTask(task.id, { cwd: CWD }, { source: 'test' });
+      await createSessionRecord(sid, task.id, 'Quick Start', CWD, { title: PLACEHOLDER });
+      return getTask(task.id);
+    }
+
+    it('re-asks once with the plugin rule as feedback when the title is rejected', async () => {
+      const sid = nextSid();
+      const task = await makePluginTaskAndSession(sid);
+      let call = 0;
+      const fake = registerFakeSession(sid, async (desc) => {
+        call++;
+        if (call === 1) {
+          expect(desc).not.toContain(RULE);
+          return '修复登录问题'; // violates the plugin rule
+        }
+        expect(desc).toContain(RULE); // the plugin's own reason reaches the titler
+        return 'Fix login issue';
+      });
+
+      await sessionAutoTitleHook.handler(payloadFor(sid, task, '登录页面一直重定向'));
+
+      expect(fake.generateSessionTitle).toHaveBeenCalledTimes(2);
+      expect((await getTask(task.id)).title).toBe('Fix login issue');
+    });
+
+    it('keeps the placeholder when the feedback round is rejected too (no infinite loop)', async () => {
+      const sid = nextSid();
+      const task = await makePluginTaskAndSession(sid);
+      const fake = registerFakeSession(sid, async () => '还是中文标题');
+
+      await sessionAutoTitleHook.handler(payloadFor(sid, task, '登录页面一直重定向'));
+
+      expect(fake.generateSessionTitle).toHaveBeenCalledTimes(2);
+      expect((await getTask(task.id)).title).toBe(PLACEHOLDER);
+    });
+  });
 });

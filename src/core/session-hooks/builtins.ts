@@ -859,43 +859,72 @@ async function askAndApplyTitle(
     if (((await getTask(taskId)).title ?? '') !== placeholder) return false;
 
     autoTitleAttempts.set(sessionId, (autoTitleAttempts.get(sessionId) ?? 0) + 1);
-    // The CLI passes `description` VERBATIM to its Haiku titler (fork
-    // sessionTitle.ts: userPrompt = description) — so ship context, not just
-    // the raw message. The current (placeholder) title carries the directory
-    // name; the titler keeps it when it matters ("Fix walnut session titles")
-    // and drops it when it doesn't. slice(2000): the titler only needs the
-    // opening of the message, and the envelope rides the FIFO — no point
-    // shipping a pasted wall of text.
-    const description = `Current session title: ${placeholder}\nUser's first message: ${message.slice(0, 2000)}`;
-    // Two tries per call: the send that triggered us may be cold-resuming a
-    // dead CLI, in which case the first control write fails before the FIFO
-    // exists. Ask budget (10+4+10=24s) stays under the dispatcher's 30s
-    // inline-handler timeout; even if the trailing task writes push past it,
-    // that timeout only stops the dispatcher WAITING — the handler still
-    // completes and the finally below still cleans up.
-    let title = await live.generateSessionTitle(description, 10_000);
-    if (!title) {
-      await new Promise((r) => setTimeout(r, autoTitleRetryDelayMs));
+    const { ContentValidationError } = await import('../task-manager.js');
+    // When a sync plugin's validateContent rejects the generated title (e.g.
+    // an English-only rule on an externally-synced task — 2026-08-06 incident:
+    // a Chinese first message → Chinese title → rejected → placeholder stuck
+    // forever), we re-ask ONCE with the plugin's own rejection message as
+    // feedback. Generic on purpose: whatever rule any plugin enforces, its
+    // human-readable reason is the constraint the titler needs — no rule is
+    // hardcoded here. `constraint` carries that reason into round 2.
+    let constraint: string | undefined;
+    let title: string | null | undefined;
+    for (let round = 0; round < 2; round++) {
+      // The CLI passes `description` VERBATIM to its Haiku titler (fork
+      // sessionTitle.ts: userPrompt = description) — so ship context, not just
+      // the raw message. The current (placeholder) title carries the directory
+      // name; the titler keeps it when it matters ("Fix walnut session titles")
+      // and drops it when it doesn't. slice(2000): the titler only needs the
+      // opening of the message, and the envelope rides the FIFO — no point
+      // shipping a pasted wall of text.
+      const description = `Current session title: ${placeholder}\nUser's first message: ${message.slice(0, 2000)}`
+        + (constraint
+          ? `\nIMPORTANT: your previous title was rejected by the task system — ${constraint}\nGenerate a title that satisfies this rule.`
+          : '');
+      // Two tries on the first round: the send that triggered us may be
+      // cold-resuming a dead CLI, in which case the first control write fails
+      // before the FIFO exists. The feedback round skips the pause — the CLI
+      // just answered, it's alive. Ask budget (10+4+10=24s) stays under the
+      // dispatcher's 30s inline-handler timeout; even if the feedback round
+      // pushes past it, that timeout only stops the dispatcher WAITING — the
+      // handler still completes and the finally below still cleans up.
       title = await live.generateSessionTitle(description, 10_000);
-    }
-    if (!title) return false;
-    // The CLI titler contracts to a few words, but updateTask has no length
-    // gate (unlike PATCH /api/sessions/:id's 500) — cap defensively.
-    title = title.slice(0, 200);
+      if (!title && round === 0) {
+        await new Promise((r) => setTimeout(r, autoTitleRetryDelayMs));
+        title = await live.generateSessionTitle(description, 10_000);
+      }
+      if (!title) return false;
+      // The CLI titler contracts to a few words, but updateTask has no length
+      // gate (unlike PATCH /api/sessions/:id's 500) — cap defensively.
+      title = title.slice(0, 200);
 
-    // Re-read before writing — the user (or the butler) may have renamed the
-    // task while the CLI was thinking; the placeholder check must hold at
-    // write time, not just at dispatch time.
-    const current = await getTask(taskId);
-    if ((current.title ?? '') !== placeholder) {
-      log.session.info('session-auto-title: skipped — title changed during generation', {
-        sessionId, taskId,
-      });
-      return false;
+      // Re-read before writing — the user (or the butler) may have renamed the
+      // task while the CLI was thinking; the placeholder check must hold at
+      // write time, not just at dispatch time.
+      const current = await getTask(taskId);
+      if ((current.title ?? '') !== placeholder) {
+        log.session.info('session-auto-title: skipped — title changed during generation', {
+          sessionId, taskId,
+        });
+        return false;
+      }
+      try {
+        // updateTask's central emit covers web-ui; main-agent rides extraTargets
+        // (a second manual emit would double-process the task in every frontend).
+        await updateTask(taskId, { title }, { source: 'session-auto-title', extraTargets: ['main-agent'] });
+      } catch (err) {
+        if (err instanceof ContentValidationError && round === 0) {
+          constraint = err.message;
+          log.session.info('session-auto-title: title rejected by plugin rule — retrying with feedback', {
+            sessionId, taskId, rejectedTitle: title, rule: err.message,
+          });
+          continue;
+        }
+        throw err;
+      }
+      break; // written
     }
-    // updateTask's central emit covers web-ui; main-agent rides extraTargets
-    // (a second manual emit would double-process the task in every frontend).
-    await updateTask(taskId, { title }, { source: 'session-auto-title', extraTargets: ['main-agent'] });
+    if (!title) return false; // unreachable (loop breaks/returns/throws) — narrows the type for the mirror below
     autoTitleAttempts.delete(sessionId); // done — free the entry
 
     // Mirror onto the session record (same placeholder guard) so the session

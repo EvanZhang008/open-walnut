@@ -19,6 +19,17 @@ import { getExtIndexSpec } from './ext-index-registry.js';
 // have rejected.
 const CJK_DETECT_REGEX = /[一-鿿㐀-䶿぀-ヿ]/;
 
+/** A sync plugin's validateContent rejected a write. Typed (vs a bare Error) so
+ *  AI writers can tell "the content broke a plugin rule — regenerate with the
+ *  rule as feedback" apart from real failures. `.message` is the plugin's own
+ *  human-readable reason, suitable to feed back to a model verbatim. */
+export class ContentValidationError extends Error {
+  constructor(message: string, public field: string) {
+    super(message);
+    this.name = 'ContentValidationError';
+  }
+}
+
 /** Ask the task's plugin to validate content before writing. Throws on rejection. */
 function runPluginContentValidation(task: { source: string; id?: string }, field: string, value: string): void {
   const plugin = registry.get(task.source);
@@ -41,7 +52,7 @@ function runPluginContentValidation(task: { source: string; id?: string }, field
   const error = plugin.sync.validateContent(task as Task, field, value);
   if (error) {
     log.task.info('content validation rejected', { source: task.source, field, taskId: (task as Task).id, error });
-    throw new Error(error);
+    throw new ContentValidationError(error, field);
   }
 }
 
