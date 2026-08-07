@@ -909,9 +909,20 @@ test.describe('Calendar view', () => {
     const panel = page.locator('[data-testid="cal-side-panel"]')
     await expect(panel).toBeVisible()
 
-    const card = page.locator(`.todo-panel-item[data-task-id="${task.id}"]`)
+    // The panel may open on a pinned-tier tab (e.g. Focus) that hides a fresh
+    // unpinned task — switch to All so the card list shows it.
+    const allTab = page.locator('.todo-section-tab-all')
+    if (await allTab.count()) await allTab.click()
+
+    // The row renders either as a plain list item (whole-card draggable) or as
+    // a pinned-style card (drag ONLY via its ☰ handle) depending on which
+    // section variant the tab uses — grab whichever is present and pick the
+    // correct grip point.
+    const card = page.locator(`[data-task-id="${task.id}"]`).first()
     await card.scrollIntoViewIfNeeded()
-    const cardBox = await card.boundingBox()
+    const isPinnedCard = await card.evaluate((el) => el.classList.contains('todo-pinned-card') || el.classList.contains('todo-focus-card'))
+    const grip = isPinnedCard ? card.locator('.todo-pinned-drag-handle') : card
+    const cardBox = await grip.boundingBox()
     if (!cardBox) throw new Error('todo card not visible')
 
     const target = await columnPoint(page, today, 15, panel)
@@ -928,5 +939,50 @@ test.describe('Calendar view', () => {
     // The in-panel drop semantics must have been skipped: no group/reorder
     // artifacts — the task still renders as a plain row (now scheduled).
     await expect(panel.locator(`.cal-chip[data-item-id="task-start:${task.id}"]`)).toBeVisible()
+  })
+})
+
+test.describe('Calendar touch drag (mobile)', () => {
+  // Touch is a separate input pipeline: pointer events are synthesized from
+  // touches and the browser will pointercancel the gesture for scrolling
+  // unless the chip declares `touch-action: none`. A desktop-mouse pass says
+  // nothing about this path — drive it with real CDP touch events.
+  test.use({ hasTouch: true, viewport: { width: 390, height: 844 } })
+
+  test('all-day chip touch-drags into a time slot (phone layout)', async ({ page }) => {
+    const today = localDay(0)
+    const task = await createTaskViaApi('CalTouchAllDay', { start_date: today })
+
+    await page.goto(`/calendar?view=day&d=${today}`)
+    await page.waitForLoadState('networkidle')
+
+    const chip = page.locator(`.cal-chip[data-item-id="task-start:${task.id}"]`)
+    await expect(chip).toBeVisible()
+    const chipBox = await chip.boundingBox()
+    const gridBox = await page.locator('.cal-grid-scroll').boundingBox()
+    if (!chipBox || !gridBox) throw new Error('chip or grid not visible')
+
+    const cdp = await page.context().newCDPSession(page)
+    const from = { x: chipBox.x + chipBox.width / 2, y: chipBox.y + chipBox.height / 2 }
+    // Clearly inside the time grid (below gridTop) so the drop is timed.
+    const to = { x: from.x, y: gridBox.y + 250 }
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [from] })
+    for (let i = 1; i <= 12; i++) {
+      await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchMove',
+        touchPoints: [{ x: from.x, y: from.y + ((to.y - from.y) * i) / 12 }],
+      })
+      await page.waitForTimeout(20)
+    }
+    // Mid-gesture the solid ghost must be tracking the finger — its absence
+    // means the browser stole the gesture for scrolling (touch-action broke).
+    await expect(page.locator('.cal-move-ghost-solid')).toBeVisible()
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+
+    // Date-only start becomes a timed one; exact hour depends on device
+    // pixel geometry, so assert the shape rather than a specific slot.
+    await expect
+      .poll(async () => (await getTaskViaApi(task.id)).start_date, { timeout: 5000 })
+      .toMatch(new RegExp(`^${today}T\\d{2}:\\d{2}:00$`))
   })
 })
