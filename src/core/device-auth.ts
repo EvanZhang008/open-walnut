@@ -19,6 +19,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { WALNUT_HOME } from '../constants.js'
+import { withFileLock } from '../utils/file-lock.js'
 import { log } from '../logging/index.js'
 
 export interface DeviceRecord {
@@ -181,6 +182,25 @@ async function saveAuth(auth: AuthFile): Promise<void> {
   }
 }
 
+/**
+ * Locked read-modify-write over auth.json. The file is written by BOTH the
+ * server process and the `walnut device` CLI (a separate process), so a blind
+ * save-after-load can revert the other writer's changes. We keep the bespoke
+ * saveAuth (mode 0600 + .bak sidecar) instead of the generic updateJsonFile,
+ * but take the same cross-process file lock around the read→mutate→write
+ * cycle. `mutate` returns `persist: false` to skip the write (no-op outcome).
+ */
+async function updateAuth<R>(
+  mutate: (auth: AuthFile) => { persist: boolean; result: R } | Promise<{ persist: boolean; result: R }>,
+): Promise<R> {
+  return withFileLock(authFilePath(), async () => {
+    const auth = await loadAuth()
+    const { persist, result } = await mutate(auth)
+    if (persist) await saveAuth(auth)
+    return result
+  })
+}
+
 function validateDeviceName(name: string): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(name)) {
     throw new Error('Invalid device name: use 1-64 chars of letters, digits, dot, dash, underscore')
@@ -193,16 +213,16 @@ function validateDeviceName(name: string): void {
  */
 export async function createDevice(name: string, opts?: { kind?: 'machine' }): Promise<{ name: string; token: string; createdAt: string }> {
   validateDeviceName(name)
-  const auth = await loadAuth()
-  if (auth.devices.some((d) => d.name === name)) {
-    throw new Error(`Device "${name}" already exists`)
-  }
-  const token = crypto.randomBytes(16).toString('hex')
-  const createdAt = new Date().toISOString()
-  auth.devices.push({ name, tokenHash: sha256Hex(token), createdAt, ...(opts?.kind ? { kind: opts.kind } : {}) })
-  await saveAuth(auth)
-  log.web.info('device-auth: device created', { name, kind: opts?.kind ?? 'device' })
-  return { name, token, createdAt }
+  return updateAuth((auth) => {
+    if (auth.devices.some((d) => d.name === name)) {
+      throw new Error(`Device "${name}" already exists`)
+    }
+    const token = crypto.randomBytes(16).toString('hex')
+    const createdAt = new Date().toISOString()
+    auth.devices.push({ name, tokenHash: sha256Hex(token), createdAt, ...(opts?.kind ? { kind: opts.kind } : {}) })
+    log.web.info('device-auth: device created', { name, kind: opts?.kind ?? 'device' })
+    return { persist: true, result: { name, token, createdAt } }
+  })
 }
 
 /**
@@ -226,13 +246,20 @@ export async function verifyDeviceToken(token: string): Promise<{ name: string; 
   const lastWrite = lastUsedWriteAt.get(matched.name) ?? 0
   if (now - lastWrite >= LAST_USED_WRITE_THROTTLE_MS) {
     lastUsedWriteAt.set(matched.name, now)
-    matched.lastUsedAt = new Date(now).toISOString()
-    // Best-effort — a failed lastUsedAt write must never fail auth.
+    const name = matched.name
+    // Best-effort — a failed lastUsedAt write must never fail auth. Locked RMW
+    // on a FRESH read: persisting the snapshot loaded above could revert a
+    // concurrent CLI device add/revoke (auth.json has two writer processes).
     try {
-      await saveAuth(auth)
+      await updateAuth((fresh) => {
+        const device = fresh.devices.find((d) => d.name === name)
+        if (!device) return { persist: false, result: undefined }
+        device.lastUsedAt = new Date(now).toISOString()
+        return { persist: true, result: undefined }
+      })
     } catch (err) {
       log.web.warn('device-auth: failed to persist lastUsedAt', {
-        name: matched.name,
+        name,
         error: err instanceof Error ? err.message : String(err),
       })
     }
@@ -242,11 +269,12 @@ export async function verifyDeviceToken(token: string): Promise<{ name: string; 
 
 /** Revoke a device by name. Returns true if it existed. */
 export async function revokeDevice(name: string): Promise<boolean> {
-  const auth = await loadAuth()
-  const before = auth.devices.length
-  auth.devices = auth.devices.filter((d) => d.name !== name)
-  if (auth.devices.length === before) return false
-  await saveAuth(auth)
+  const removed = await updateAuth((auth) => {
+    const before = auth.devices.length
+    auth.devices = auth.devices.filter((d) => d.name !== name)
+    return { persist: auth.devices.length !== before, result: auth.devices.length !== before }
+  })
+  if (!removed) return false
   lastUsedWriteAt.delete(name)
   log.web.info('device-auth: device revoked', { name })
   return true
@@ -270,9 +298,6 @@ const INFO_FIELD_MAX = 120
  * not be able to bloat auth.json or forge a report time.
  */
 export async function setDeviceInfo(name: string, info: DeviceSelfInfo): Promise<boolean> {
-  const auth = await loadAuth()
-  const device = auth.devices.find((d) => d.name === name)
-  if (!device) return false
   const clean = (v: unknown): string | undefined => {
     if (typeof v !== 'string') return undefined
     const trimmed = v.trim().slice(0, INFO_FIELD_MAX)
@@ -285,19 +310,26 @@ export async function setDeviceInfo(name: string, info: DeviceSelfInfo): Promise
     appVersion: clean(info.appVersion),
     reportedAt: new Date().toISOString(),
   }
-  // Don't churn the file when nothing meaningful changed — clients report on
-  // every launch, and each auth.json write also rewrites the .bak sidecar.
-  const prev = device.info
-  if (prev
-    && prev.model === next.model && prev.os === next.os
-    && prev.deviceName === next.deviceName && prev.appVersion === next.appVersion) {
-    return true
-  }
-  device.info = next
-  await saveAuth(auth)
-  log.web.info('device-auth: device info reported', {
-    name, model: next.model, os: next.os, appVersion: next.appVersion,
+  const outcome = await updateAuth((auth) => {
+    const device = auth.devices.find((d) => d.name === name)
+    if (!device) return { persist: false, result: 'unknown' as const }
+    // Don't churn the file when nothing meaningful changed — clients report on
+    // every launch, and each auth.json write also rewrites the .bak sidecar.
+    const prev = device.info
+    if (prev
+      && prev.model === next.model && prev.os === next.os
+      && prev.deviceName === next.deviceName && prev.appVersion === next.appVersion) {
+      return { persist: false, result: 'unchanged' as const }
+    }
+    device.info = next
+    return { persist: true, result: 'updated' as const }
   })
+  if (outcome === 'unknown') return false
+  if (outcome === 'updated') {
+    log.web.info('device-auth: device info reported', {
+      name, model: next.model, os: next.os, appVersion: next.appVersion,
+    })
+  }
   return true
 }
 

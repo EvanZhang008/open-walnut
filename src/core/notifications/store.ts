@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
+import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { log } from '../../logging/index.js';
 
 /** notifications.json lives next to incidents.json / sessions.json under WALNUT_HOME. */
@@ -65,41 +66,70 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 // ── Read / Write ──
+//
+// notifications.json has multiple writer modules (this store's callers span
+// chat-history, overview-maintainer, the log-error bridge, routes) and can be
+// touched from more than one process, so ALL read-modify-write cycles go
+// through updateJsonFile (cross-process file lock + fresh read + atomic write).
+// The in-process writeLock stays on top to keep same-process callers FIFO.
 
 function emptyStore(): NotificationsStore {
   return { version: 1, notifications: [] };
 }
 
-function readStore(): NotificationsStore {
+/** Validate the on-disk shape; wrong version / corrupt shape → fresh store. */
+function normalizeStore(raw: unknown): NotificationsStore {
+  const parsed = raw as NotificationsStore | null;
+  if (parsed?.version !== 1 || !Array.isArray(parsed?.notifications)) return emptyStore();
+  return parsed;
+}
+
+/** Read-only snapshot. Unparseable file → empty (matches previous behavior). */
+async function readStore(): Promise<NotificationsStore> {
   try {
-    if (!fs.existsSync(NOTIFICATIONS_FILE)) return emptyStore();
-    const parsed = JSON.parse(fs.readFileSync(NOTIFICATIONS_FILE, 'utf-8'));
-    if (parsed?.version !== 1 || !Array.isArray(parsed?.notifications)) return emptyStore();
-    return parsed as NotificationsStore;
+    return normalizeStore(await readJsonFile<unknown>(NOTIFICATIONS_FILE, null));
   } catch (err) {
     log.notif.warn('notifications: failed to read store', { error: errMsg(err) });
     return emptyStore();
   }
 }
 
-function writeStore(store: NotificationsStore): void {
-  // Cap to most-recent MAX (appended, so the tail is newest).
-  if (store.notifications.length > MAX_NOTIFICATIONS) {
-    store.notifications = store.notifications.slice(-MAX_NOTIFICATIONS);
-  }
-  // dismiss/clear can legitimately empty the feed, so guard the non-empty→empty
-  // transition with a .backup snapshot (same safety net as the cron store) in
-  // case the wipe turns out to be a bug rather than a user action.
-  if (store.notifications.length === 0 && fs.existsSync(NOTIFICATIONS_FILE)) {
-    try {
-      const prev = JSON.parse(fs.readFileSync(NOTIFICATIONS_FILE, 'utf-8'));
-      if (Array.isArray(prev?.notifications) && prev.notifications.length > 0) {
+/**
+ * Locked read-modify-write: mutate a FRESH store under the cross-process lock,
+ * apply the cap + backup safety nets, persist, and return the callback's value.
+ */
+async function withStore<R>(fn: (store: NotificationsStore) => R): Promise<R> {
+  let out!: R;
+  const apply = (raw: unknown): NotificationsStore => {
+    const store = normalizeStore(raw);
+    const prevCount = store.notifications.length;
+    out = fn(store);
+    // Cap to most-recent MAX (appended, so the tail is newest).
+    if (store.notifications.length > MAX_NOTIFICATIONS) {
+      store.notifications = store.notifications.slice(-MAX_NOTIFICATIONS);
+    }
+    // dismiss/clear can legitimately empty the feed, so guard the non-empty→empty
+    // transition with a .backup snapshot (same safety net as the cron store) in
+    // case the wipe turns out to be a bug rather than a user action. The file on
+    // disk still holds the previous store here — the atomic write lands after.
+    if (store.notifications.length === 0 && prevCount > 0) {
+      try {
         fs.copyFileSync(NOTIFICATIONS_FILE, NOTIFICATIONS_FILE.replace(/\.json$/, '.backup.json'));
-      }
-    } catch { /* best-effort */ }
+      } catch { /* best-effort */ }
+    }
+    return store;
+  };
+  try {
+    await updateJsonFile<unknown>(NOTIFICATIONS_FILE, null, apply);
+  } catch (err) {
+    if (!(err instanceof Error) || !/Failed to parse/.test(err.message)) throw err;
+    // Corrupt store file — previous behavior was reset-to-empty. Move the bad
+    // file aside (forensics) and retry once against the fresh fallback.
+    log.notif.warn('notifications: corrupt store — resetting', { error: errMsg(err) });
+    try { fs.renameSync(NOTIFICATIONS_FILE, `${NOTIFICATIONS_FILE}.corrupt`); } catch { /* already gone */ }
+    await updateJsonFile<unknown>(NOTIFICATIONS_FILE, null, apply);
   }
-  fs.mkdirSync(path.dirname(NOTIFICATIONS_FILE), { recursive: true });
-  fs.writeFileSync(NOTIFICATIONS_FILE, JSON.stringify(store, null, 2));
+  return out;
 }
 
 function errMsg(err: unknown): string {
@@ -122,8 +152,7 @@ function generateId(): string {
  * Returns the stored record (existing or new).
  */
 export async function addNotification(input: NewNotification): Promise<NotificationRecord> {
-  return withWriteLock(async () => {
-    const store = readStore();
+  return withWriteLock(() => withStore((store) => {
     const existing = store.notifications.find(n => n.dedupKey === input.dedupKey);
     if (existing) return existing;
 
@@ -137,15 +166,14 @@ export async function addNotification(input: NewNotification): Promise<Notificat
       read: input.read ?? false,
     };
     store.notifications.push(record);
-    writeStore(store);
     return record;
-  });
+  }));
 }
 
 /** The feed (newest-last insertion order) + count of unread entries. */
 export async function listNotifications(): Promise<{ feed: NotificationRecord[]; unreadCount: number }> {
   return withWriteLock(async () => {
-    const { notifications } = readStore();
+    const { notifications } = await readStore();
     return { feed: notifications, unreadCount: notifications.filter(n => !n.read).length };
   });
 }
@@ -155,15 +183,13 @@ export async function listNotifications(): Promise<{ feed: NotificationRecord[];
  * panel" case). Returns the resulting unread count.
  */
 export async function markRead(ids?: string[]): Promise<{ unreadCount: number }> {
-  return withWriteLock(async () => {
-    const store = readStore();
+  return withWriteLock(() => withStore((store) => {
     const idSet = ids && ids.length > 0 ? new Set(ids) : null;
     for (const n of store.notifications) {
       if (!idSet || idSet.has(n.id)) n.read = true;
     }
-    writeStore(store);
     return { unreadCount: store.notifications.filter(n => !n.read).length };
-  });
+  }));
 }
 
 /**
@@ -181,8 +207,7 @@ export async function markRead(ids?: string[]): Promise<{ unreadCount: number }>
 export async function dismissNotifications(
   filter?: { ids?: string[]; dedupKeys?: string[] },
 ): Promise<{ unreadCount: number; removed: number }> {
-  return withWriteLock(async () => {
-    const store = readStore();
+  return withWriteLock(() => withStore((store) => {
     const before = store.notifications.length;
     const idSet = filter?.ids?.length ? new Set(filter.ids) : null;
     const keySet = filter?.dedupKeys?.length ? new Set(filter.dedupKeys) : null;
@@ -192,12 +217,11 @@ export async function dismissNotifications(
     } else if (clearAll) {
       store.notifications = [];
     }
-    writeStore(store);
     return {
       unreadCount: store.notifications.filter(n => !n.read).length,
       removed: before - store.notifications.length,
     };
-  });
+  }));
 }
 
 /**
@@ -208,8 +232,7 @@ export async function resolvePermissionNotification(
   requestId: string,
   resolved: 'allowed' | 'denied',
 ): Promise<void> {
-  return withWriteLock(async () => {
-    const store = readStore();
+  return withWriteLock(() => withStore((store) => {
     const rec = store.notifications.find(n => n.dedupKey === `perm:${requestId}`);
     if (!rec || rec.resolved === resolved) return;
     rec.resolved = resolved;
@@ -217,6 +240,5 @@ export async function resolvePermissionNotification(
     // nothing needs fixing. NotificationProvider mirrors this mapping for the
     // optimistic client-side stamp — keep the two in sync.
     rec.severity = resolved === 'allowed' ? 'success' : 'info';
-    writeStore(store);
-  });
+  }));
 }

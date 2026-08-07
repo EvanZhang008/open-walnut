@@ -3,6 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { log } from '../logging/index.js';
+import { withFileLock } from './file-lock.js';
 
 /**
  * Atomically write JSON to a file (write to tmp, then rename).
@@ -58,6 +59,37 @@ export async function readJsonFile<T>(filePath: string, fallback: T): Promise<T>
       `Failed to parse ${filePath}: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
     );
   }
+}
+
+/**
+ * Locked read-modify-write for a shared JSON file.
+ *
+ * RULE: any JSON file that can have MORE THAN ONE writer (a second server
+ * process, a hook child process, a worker, or several modules) must do its
+ * read→mutate→write cycle through this primitive — never a bare
+ * `readJsonFile` + `writeJsonFile` pair. The unlocked pair re-persists a
+ * stale in-memory snapshot and silently reverts the other writer's changes
+ * (the tasks.sqlite double-writer and the 2026-08-04 cron re-fire were both
+ * this exact incident class).
+ *
+ * Semantics: acquire the cross-process lock (`withFileLock`, mkdir-based) →
+ * read a FRESH copy (fallback when missing) → `mutate(current)`. A returned
+ * value is persisted; returning `undefined` means "mutated in place", so
+ * `current` itself is persisted. The write goes through the atomic
+ * `writeJsonFile`. Returns the persisted value.
+ */
+export async function updateJsonFile<T>(
+  filePath: string,
+  fallback: T,
+  mutate: (current: T) => T | Promise<T> | undefined | Promise<undefined>,
+): Promise<T> {
+  return withFileLock(filePath, async () => {
+    const current = await readJsonFile<T>(filePath, fallback);
+    const result = await mutate(current);
+    const next = result === undefined ? current : result;
+    await writeJsonFile(filePath, next);
+    return next;
+  });
 }
 
 /**

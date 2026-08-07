@@ -10,7 +10,7 @@
  *   removeProcessed()→ removed from disk      (now in JSONL history)
  */
 
-import { readJsonFile, writeJsonFile } from '../utils/fs.js';
+import { readJsonFile, updateJsonFile } from '../utils/fs.js';
 import { SESSION_QUEUE_FILE } from '../constants.js';
 import { log } from '../logging/index.js';
 
@@ -79,35 +79,62 @@ function compareEnqueueOrder(a: QueuedMessage, b: QueuedMessage): number {
   return a.seq - b.seq;
 }
 
+/** Ensure a valid store shape (corrupt/legacy rows → fresh empty store). */
+function normalizeShape(s: QueueStore): QueueStore {
+  if (!s || !s.queues || typeof s.queues !== 'object') {
+    return { version: 1, queues: {} };
+  }
+  return s;
+}
+
 async function getStore(): Promise<QueueStore> {
   if (store) return store;
-  store = await readJsonFile<QueueStore>(SESSION_QUEUE_FILE, { version: 1, queues: {} });
-  // Ensure valid shape
-  if (!store.queues || typeof store.queues !== 'object') {
-    store = { version: 1, queues: {} };
-  }
+  store = normalizeShape(await readJsonFile<QueueStore>(SESSION_QUEUE_FILE, { version: 1, queues: {} }));
   return store;
 }
 
 /**
- * Persist the current in-memory store to disk.
- * Serializes writes to avoid concurrent file corruption.
+ * Locked read-modify-write over the queue file.
+ *
+ * The queue has TWO writer processes (the server + the `walnut start` CLI,
+ * which enqueues via sendMessageToSession), so persisting the in-memory cache
+ * blindly could revert the other process's enqueue. Every mutation therefore
+ * runs against a FRESH read under the cross-process file lock (updateJsonFile)
+ * and the cache is refreshed to the persisted result. The in-process chain on
+ * `writeLock` keeps same-process mutations FIFO (mkdir-lock polling is not).
+ *
+ * strict=false preserves the old best-effort contract: on a disk failure the
+ * mutation is still applied to the in-memory cache (logged, not thrown).
  */
-async function persist(strict = false): Promise<void> {
-  const s = store;
-  if (!s) return;
-  // Chain writes so they don't interleave
-  writeLock = writeLock.catch(() => {}).then(async () => {
-    try {
-      await writeJsonFile(SESSION_QUEUE_FILE, s);
-    } catch (err) {
-      log.session.error('failed to persist session message queue', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      if (strict) throw err;
-    }
-  });
-  await writeLock;
+async function mutateStore<R>(fn: (s: QueueStore) => R, strict = false): Promise<R> {
+  let result!: R;
+  const prev = writeLock;
+  let release!: () => void;
+  writeLock = new Promise<void>((r) => { release = r; });
+  await prev.catch(() => {});
+  try {
+    store = await updateJsonFile<QueueStore>(
+      SESSION_QUEUE_FILE,
+      { version: 1, queues: {} },
+      (current) => {
+        const s = normalizeShape(current);
+        result = fn(s);
+        return s;
+      },
+    );
+  } catch (err) {
+    log.session.error('failed to persist session message queue', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    if (strict) throw err;
+    // Disk write (or lock) failed — apply to the cache anyway so the message
+    // isn't lost in-process (matches the previous mutate-cache-then-persist
+    // behavior). It re-persists with the next successful mutation.
+    result = fn(await getStore());
+  } finally {
+    release();
+  }
+  return result;
 }
 
 // ── Public API ──
@@ -118,19 +145,20 @@ async function persist(strict = false): Promise<void> {
  */
 export async function loadQueue(): Promise<void> {
   store = null; // force re-read from disk
-  const s = await getStore();
-  let changed = false;
-  for (const [, msgs] of Object.entries(s.queues)) {
-    for (const msg of msgs) {
-      if (msg.status === 'processing') {
-        msg.status = 'pending';
-        changed = true;
+  const changed = await mutateStore((s) => {
+    let dirty = false;
+    for (const [, msgs] of Object.entries(s.queues)) {
+      for (const msg of msgs) {
+        if (msg.status === 'processing') {
+          msg.status = 'pending';
+          dirty = true;
+        }
       }
     }
-  }
+    return dirty;
+  });
   if (changed) {
     log.session.info('reset processing messages to pending after restart');
-    await persist();
   }
 }
 
@@ -139,7 +167,6 @@ export async function loadQueue(): Promise<void> {
  * Returns the queued message (with generated ID).
  */
 export async function enqueueMessage(sessionId: string, message: string): Promise<QueuedMessage> {
-  const s = await getStore();
   const msg: QueuedMessage = {
     id: generateId(),
     sessionId,
@@ -148,12 +175,14 @@ export async function enqueueMessage(sessionId: string, message: string): Promis
     enqueuedAt: new Date().toISOString(),
     seq: ++enqueueSeq,
   };
-  if (!s.queues[sessionId]) {
-    s.queues[sessionId] = [];
-  }
-  s.queues[sessionId].push(msg);
-  await persist();
-  log.session.info('message enqueued', { sessionId, messageId: msg.id, queueDepth: s.queues[sessionId].length });
+  const queueDepth = await mutateStore((s) => {
+    if (!s.queues[sessionId]) {
+      s.queues[sessionId] = [];
+    }
+    s.queues[sessionId].push(msg);
+    return s.queues[sessionId].length;
+  });
+  log.session.info('message enqueued', { sessionId, messageId: msg.id, queueDepth });
   return msg;
 }
 
@@ -210,17 +239,16 @@ export async function sendMessageToSession(
  * Returns empty array if no pending messages.
  */
 export async function markProcessing(sessionId: string): Promise<QueuedMessage[]> {
-  const s = await getStore();
-  const queue = s.queues[sessionId];
-  if (!queue) return [];
-
-  const pending = queue.filter((m) => m.status === 'pending');
+  const pending = await mutateStore((s) => {
+    const queue = s.queues[sessionId];
+    if (!queue) return [];
+    const batch = queue.filter((m) => m.status === 'pending');
+    for (const m of batch) {
+      m.status = 'processing';
+    }
+    return batch;
+  });
   if (pending.length === 0) return [];
-
-  for (const m of pending) {
-    m.status = 'processing';
-  }
-  await persist();
   log.session.info('messages batched for delivery', { sessionId, count: pending.length });
   return pending;
 }
@@ -233,22 +261,24 @@ export async function markProcessing(sessionId: string): Promise<QueuedMessage[]
  * scoped remove/revert APIs identical while guaranteeing a cardinality of 0–1.
  */
 export async function markNextProcessing(sessionId: string): Promise<QueuedMessage[]> {
-  const s = await getStore();
-  const queue = s.queues[sessionId];
-  if (!queue) return [];
-  if (queue.some((message) => message.status === 'processing')) return [];
+  const picked = await mutateStore((s) => {
+    const queue = s.queues[sessionId];
+    if (!queue) return null;
+    if (queue.some((message) => message.status === 'processing')) return null;
 
-  const next = queue.find((message) => message.status === 'pending');
-  if (!next) return [];
+    const next = queue.find((message) => message.status === 'pending');
+    if (!next) return null;
 
-  next.status = 'processing';
-  await persist();
+    next.status = 'processing';
+    return { next, queueDepth: queue.length };
+  });
+  if (!picked) return [];
   log.session.info('next message selected for delivery', {
     sessionId,
-    messageId: next.id,
-    queueDepth: queue.length,
+    messageId: picked.next.id,
+    queueDepth: picked.queueDepth,
   });
-  return [next];
+  return [picked.next];
 }
 
 /**
@@ -265,19 +295,20 @@ export async function markNextProcessing(sessionId: string): Promise<QueuedMessa
  *   already-delivered messages as duplicates. (See revertToPending.)
  */
 export async function removeProcessed(sessionId: string, ids?: string[]): Promise<void> {
-  const s = await getStore();
-  const queue = s.queues[sessionId];
-  if (!queue) return;
+  const found = await mutateStore((s) => {
+    const queue = s.queues[sessionId];
+    if (!queue) return false;
 
-  const idSet = ids ? new Set(ids) : null;
-  s.queues[sessionId] = queue.filter((m) =>
-    m.status !== 'processing' || (idSet !== null && !idSet.has(m.id)));
-  // Clean up empty queues
-  if (s.queues[sessionId].length === 0) {
-    delete s.queues[sessionId];
-  }
-  await persist();
-  log.session.debug('message queue drained', { sessionId, scoped: !!ids });
+    const idSet = ids ? new Set(ids) : null;
+    s.queues[sessionId] = queue.filter((m) =>
+      m.status !== 'processing' || (idSet !== null && !idSet.has(m.id)));
+    // Clean up empty queues
+    if (s.queues[sessionId].length === 0) {
+      delete s.queues[sessionId];
+    }
+    return true;
+  });
+  if (found) log.session.debug('message queue drained', { sessionId, scoped: !!ids });
 }
 
 /**
@@ -285,16 +316,16 @@ export async function removeProcessed(sessionId: string, ids?: string[]): Promis
  * Returns false if message not found or already processing.
  */
 export async function editMessage(sessionId: string, messageId: string, newText: string): Promise<boolean> {
-  const s = await getStore();
-  const queue = s.queues[sessionId];
-  if (!queue) return false;
+  return mutateStore((s) => {
+    const queue = s.queues[sessionId];
+    if (!queue) return false;
 
-  const msg = queue.find((m) => m.id === messageId);
-  if (!msg || msg.status !== 'pending') return false;
+    const msg = queue.find((m) => m.id === messageId);
+    if (!msg || msg.status !== 'pending') return false;
 
-  msg.message = newText;
-  await persist();
-  return true;
+    msg.message = newText;
+    return true;
+  });
 }
 
 /**
@@ -302,20 +333,20 @@ export async function editMessage(sessionId: string, messageId: string, newText:
  * Returns false if message not found or already processing.
  */
 export async function deleteMessage(sessionId: string, messageId: string): Promise<boolean> {
-  const s = await getStore();
-  const queue = s.queues[sessionId];
-  if (!queue) return false;
+  return mutateStore((s) => {
+    const queue = s.queues[sessionId];
+    if (!queue) return false;
 
-  const idx = queue.findIndex((m) => m.id === messageId);
-  if (idx === -1) return false;
-  if (queue[idx].status !== 'pending') return false;
+    const idx = queue.findIndex((m) => m.id === messageId);
+    if (idx === -1) return false;
+    if (queue[idx].status !== 'pending') return false;
 
-  queue.splice(idx, 1);
-  if (queue.length === 0) {
-    delete s.queues[sessionId];
-  }
-  await persist();
-  return true;
+    queue.splice(idx, 1);
+    if (queue.length === 0) {
+      delete s.queues[sessionId];
+    }
+    return true;
+  });
 }
 
 /**
@@ -336,20 +367,25 @@ export async function deleteMessage(sessionId: string, messageId: string): Promi
  */
 export async function revertToPending(messages: QueuedMessage[]): Promise<void> {
   if (messages.length === 0) return;
-  const s = await getStore();
-  for (const m of messages) {
-    if (m.status === 'processing') m.status = 'pending';
-    const queue = s.queues[m.sessionId] ?? (s.queues[m.sessionId] = []);
-    if (!queue.some((q) => q.id === m.id)) {
-      log.session.warn('revertToPending: message missing from store — re-inserting (loss averted)', {
-        sessionId: m.sessionId, messageId: m.id,
-      });
-      queue.push(m);
-      // Keep queue ordered by enqueue time so redelivery preserves user order
-      queue.sort(compareEnqueueOrder);
+  await mutateStore((s) => {
+    for (const m of messages) {
+      if (m.status === 'processing') m.status = 'pending';
+      const queue = s.queues[m.sessionId] ?? (s.queues[m.sessionId] = []);
+      const existing = queue.find((q) => q.id === m.id);
+      if (existing) {
+        // The fresh on-disk row is authoritative for identity; make sure ITS
+        // status flips too (the caller's object may be a detached copy).
+        if (existing.status === 'processing') existing.status = 'pending';
+      } else {
+        log.session.warn('revertToPending: message missing from store — re-inserting (loss averted)', {
+          sessionId: m.sessionId, messageId: m.id,
+        });
+        queue.push(m);
+        // Keep queue ordered by enqueue time so redelivery preserves user order
+        queue.sort(compareEnqueueOrder);
+      }
     }
-  }
-  await persist();
+  });
 }
 
 /**
@@ -390,30 +426,24 @@ export async function migrateSessionQueue(
   newSessionId: string,
 ): Promise<SessionQueueMigration> {
   if (oldSessionId === newSessionId) return { movedIds: [] };
-  const s = await getStore();
-  const source = s.queues[oldSessionId] ?? [];
-  if (source.length === 0) return { movedIds: [] };
+  // strict mutateStore: a failed persist throws WITHOUT committing the fresh
+  // copy or the cache, so no in-memory compensation is needed on error.
+  const movedIds = await mutateStore((s) => {
+    const source = s.queues[oldSessionId] ?? [];
+    if (source.length === 0) return [];
 
-  const oldSource = source;
-  const oldTarget = s.queues[newSessionId];
-  const target = oldTarget ?? [];
-  const existingIds = new Set(target.map((message) => message.id));
-  const moved = source
-    .filter((message) => !existingIds.has(message.id))
-    .map((message) => ({ ...message, sessionId: newSessionId }));
-  const movedIds = moved.map((message) => message.id);
+    const target = s.queues[newSessionId] ?? [];
+    const existingIds = new Set(target.map((message) => message.id));
+    const moved = source
+      .filter((message) => !existingIds.has(message.id))
+      .map((message) => ({ ...message, sessionId: newSessionId }));
 
-  s.queues[newSessionId] = [...target, ...moved]
-    .sort(compareEnqueueOrder);
-  delete s.queues[oldSessionId];
-  try {
-    await persist(true);
-  } catch (error) {
-    s.queues[oldSessionId] = oldSource;
-    if (oldTarget) s.queues[newSessionId] = oldTarget;
-    else delete s.queues[newSessionId];
-    throw error;
-  }
+    s.queues[newSessionId] = [...target, ...moved]
+      .sort(compareEnqueueOrder);
+    delete s.queues[oldSessionId];
+    return moved.map((message) => message.id);
+  }, true);
+  if (movedIds.length === 0) return { movedIds: [] };
   log.session.info('session message queue identity migrated', {
     oldSessionId,
     newSessionId,
@@ -432,34 +462,26 @@ export async function rollbackSessionQueueMigration(
   movedIds: string[],
 ): Promise<void> {
   if (oldSessionId === newSessionId || movedIds.length === 0) return;
-  const s = await getStore();
-  const oldSource = s.queues[oldSessionId];
-  const oldTarget = s.queues[newSessionId];
-  const target = oldTarget ?? [];
-  const movedSet = new Set(movedIds);
-  const returning = target
-    .filter((message) => movedSet.has(message.id))
-    .map((message) => ({ ...message, sessionId: oldSessionId }));
-  if (returning.length === 0) return;
+  // strict mutateStore: a failed persist throws without committing anywhere,
+  // so the old hand-rolled in-memory compensation is no longer needed.
+  await mutateStore((s) => {
+    const target = s.queues[newSessionId] ?? [];
+    const movedSet = new Set(movedIds);
+    const returning = target
+      .filter((message) => movedSet.has(message.id))
+      .map((message) => ({ ...message, sessionId: oldSessionId }));
+    if (returning.length === 0) return;
 
-  const source = oldSource ?? [];
-  const sourceIds = new Set(source.map((message) => message.id));
-  s.queues[oldSessionId] = [
-    ...source,
-    ...returning.filter((message) => !sourceIds.has(message.id)),
-  ].sort(compareEnqueueOrder);
-  const remaining = target.filter((message) => !movedSet.has(message.id));
-  if (remaining.length > 0) s.queues[newSessionId] = remaining;
-  else delete s.queues[newSessionId];
-  try {
-    await persist(true);
-  } catch (error) {
-    if (oldSource) s.queues[oldSessionId] = oldSource;
-    else delete s.queues[oldSessionId];
-    if (oldTarget) s.queues[newSessionId] = oldTarget;
+    const source = s.queues[oldSessionId] ?? [];
+    const sourceIds = new Set(source.map((message) => message.id));
+    s.queues[oldSessionId] = [
+      ...source,
+      ...returning.filter((message) => !sourceIds.has(message.id)),
+    ].sort(compareEnqueueOrder);
+    const remaining = target.filter((message) => !movedSet.has(message.id));
+    if (remaining.length > 0) s.queues[newSessionId] = remaining;
     else delete s.queues[newSessionId];
-    throw error;
-  }
+  }, true);
 }
 
 /**

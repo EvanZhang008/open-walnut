@@ -16,6 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { LOG_DIR } from '../../constants.js';
+import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { log } from '../../logging/index.js';
 import { bus, EventNames } from '../event-bus.js';
 import { registerIncidentSink } from './recorder.js';
@@ -50,26 +51,57 @@ function withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 // ── Read / Write ──
+//
+// incidents.json lives in LOG_DIR (/tmp/open-walnut), which is SHARED by any
+// server process that doesn't override WALNUT_DAEMON_DIR — a second/ephemeral
+// server writing here would revert this process's incidents from a stale
+// snapshot. All read-modify-write cycles therefore go through updateJsonFile
+// (cross-process lock + fresh read + atomic write); the in-process writeLock
+// stays on top to keep same-process callers FIFO.
 
-function readStore(): IncidentsStore {
+/** Validate the on-disk shape; wrong version / corrupt shape → fresh store. */
+function normalizeStore(raw: unknown): IncidentsStore {
+  const parsed = raw as IncidentsStore | null;
+  if (parsed?.version !== 1 || !Array.isArray(parsed?.incidents)) return { version: 1, incidents: [] };
+  return parsed;
+}
+
+/** Read-only snapshot. Unparseable file → empty (matches previous behavior). */
+async function readStore(): Promise<IncidentsStore> {
   try {
-    if (!fs.existsSync(INCIDENTS_FILE)) return { version: 1, incidents: [] };
-    const parsed = JSON.parse(fs.readFileSync(INCIDENTS_FILE, 'utf-8'));
-    if (parsed?.version !== 1 || !Array.isArray(parsed?.incidents)) return { version: 1, incidents: [] };
-    return parsed as IncidentsStore;
+    return normalizeStore(await readJsonFile<unknown>(INCIDENTS_FILE, null));
   } catch (err) {
     log.obs.warn('incidents: failed to read store', { error: errMsg(err) });
     return { version: 1, incidents: [] };
   }
 }
 
-function writeStore(store: IncidentsStore): void {
-  // Cap to most-recent MAX_INCIDENTS (incidents are appended, so the tail is newest).
-  if (store.incidents.length > MAX_INCIDENTS) {
-    store.incidents = store.incidents.slice(-MAX_INCIDENTS);
+/**
+ * Locked read-modify-write: mutate a FRESH store under the cross-process lock,
+ * apply the size cap, persist atomically, return the callback's value.
+ */
+async function withStore<R>(fn: (store: IncidentsStore) => R): Promise<R> {
+  let out!: R;
+  const apply = (raw: unknown): IncidentsStore => {
+    const store = normalizeStore(raw);
+    out = fn(store);
+    // Cap to most-recent MAX_INCIDENTS (incidents are appended, so the tail is newest).
+    if (store.incidents.length > MAX_INCIDENTS) {
+      store.incidents = store.incidents.slice(-MAX_INCIDENTS);
+    }
+    return store;
+  };
+  try {
+    await updateJsonFile<unknown>(INCIDENTS_FILE, null, apply);
+  } catch (err) {
+    if (!(err instanceof Error) || !/Failed to parse/.test(err.message)) throw err;
+    // Corrupt store file — previous behavior was reset-to-empty. Move the bad
+    // file aside (forensics) and retry once against the fresh fallback.
+    log.obs.warn('incidents: corrupt store — resetting', { error: errMsg(err) });
+    try { fs.renameSync(INCIDENTS_FILE, `${INCIDENTS_FILE}.corrupt`); } catch { /* already gone */ }
+    await updateJsonFile<unknown>(INCIDENTS_FILE, null, apply);
   }
-  fs.mkdirSync(path.dirname(INCIDENTS_FILE), { recursive: true });
-  fs.writeFileSync(INCIDENTS_FILE, JSON.stringify(store, null, 2));
+  return out;
 }
 
 function errMsg(err: unknown): string {
@@ -87,12 +119,12 @@ function generateIncidentId(): string {
 
 /** All incidents, newest-last (insertion order). */
 export async function listIncidents(): Promise<Incident[]> {
-  return withWriteLock(async () => readStore().incidents);
+  return withWriteLock(async () => (await readStore()).incidents);
 }
 
 /** One incident by id, or null. */
 export async function getIncident(id: string): Promise<Incident | null> {
-  return withWriteLock(async () => readStore().incidents.find(i => i.id === id) ?? null);
+  return withWriteLock(async () => (await readStore()).incidents.find(i => i.id === id) ?? null);
 }
 
 /**
@@ -102,7 +134,7 @@ export async function getIncident(id: string): Promise<Incident | null> {
 export async function createIncident(
   partial: Omit<Incident, 'id' | 'createdAt' | 'updatedAt' | 'status'> & Partial<Pick<Incident, 'id' | 'status'>>,
 ): Promise<Incident> {
-  return withWriteLock(async () => {
+  return withWriteLock(() => withStore((store) => {
     const now = Date.now();
     const incident: Incident = {
       id: partial.id ?? generateIncidentId(),
@@ -111,36 +143,30 @@ export async function createIncident(
       updatedAt: now,
       ...partial,
     } as Incident;
-    const store = readStore();
     store.incidents.push(incident);
-    writeStore(store);
     return incident;
-  });
+  }));
 }
 
 /** Update an incident's lifecycle status; returns the updated incident or null. */
 export async function updateIncidentStatus(id: string, status: IncidentStatus): Promise<Incident | null> {
-  return withWriteLock(async () => {
-    const store = readStore();
+  return withWriteLock(() => withStore((store) => {
     const incident = store.incidents.find(i => i.id === id);
     if (!incident) return null;
     incident.status = status;
     incident.updatedAt = Date.now();
-    writeStore(store);
     return incident;
-  });
+  }));
 }
 
 /** Set the captured bundle path on an incident (called once capture finishes). */
 async function setIncidentBundlePath(id: string, bundlePath: string): Promise<void> {
-  await withWriteLock(async () => {
-    const store = readStore();
+  await withWriteLock(() => withStore((store) => {
     const incident = store.incidents.find(i => i.id === id);
     if (!incident) return;
     incident.bundlePath = bundlePath;
     incident.updatedAt = Date.now();
-    writeStore(store);
-  });
+  }));
 }
 
 /**
@@ -153,18 +179,16 @@ async function setIncidentBundlePath(id: string, bundlePath: string): Promise<vo
 async function createIncidentIfNotRecent(
   partial: Omit<Incident, 'id' | 'createdAt' | 'updatedAt' | 'status'>,
 ): Promise<Incident | null> {
-  return withWriteLock(async () => {
+  return withWriteLock(() => withStore((store) => {
     const now = Date.now();
-    const store = readStore();
     const recent = store.incidents.some(
       i => i.sessionId === partial.sessionId && i.label === partial.label && now - i.createdAt < DEDUPE_WINDOW_MS,
     );
     if (recent) return null;
     const incident: Incident = { id: generateIncidentId(), status: 'open', createdAt: now, updatedAt: now, ...partial };
     store.incidents.push(incident);
-    writeStore(store);
     return incident;
-  });
+  }));
 }
 
 // ── The sink (wired into recorder at startup) ──
