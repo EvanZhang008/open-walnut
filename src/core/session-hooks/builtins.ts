@@ -801,11 +801,20 @@ export const messageSendTriageHook: SessionHookDefinition = {
   },
 };
 
-// ── Session auto-title (CLI generate_session_title control protocol) ──
+// ── Session auto-title (side_question with our own prompt, CLI titler fallback) ──
 // EVERY quick start (text-first and path-first) creates its task with the
 // `Session: <basename(cwd)>` placeholder title. The AI title comes from the
-// SESSION'S OWN CLI (the same Haiku titler the CLI uses natively, over the
-// existing stream-json control_request pipe — no separate LLM plumbing):
+// SESSION'S OWN model over the existing stream-json control pipe — no
+// Walnut-side LLM credentials required (a running session by definition has
+// a working CLI; Walnut-side model config is optional):
+//   - PRIMARY channel: side_question — answered by the session's MAIN model
+//     with a prompt WE fully author, so plugin content requirements (see
+//     contentRequirement in integration-types.ts) ride the FIRST generation
+//     and the title is born compliant. Chosen after three incidents where the
+//     CLI's fork titler (fixed system prompt, user-prompt-only control)
+//     mirrored the message language over our in-prompt instructions.
+//   - FALLBACK channel: the CLI's fire-and-forget generate_session_title
+//     Haiku titler, for sessions where side_question fails or isn't there.
 //   - text-first: triggered at LAUNCH from quick-start.ts (autoTitleFromLaunch
 //     below) using the launch message — the hook alone would only see the
 //     SECOND send, because the first message rides SESSION_START, which the
@@ -832,50 +841,93 @@ export function __resetAutoTitleState(retryDelayMs = 4_000): void {
   autoTitleRetryDelayMs = retryDelayMs;
 }
 
+/** A live session's title-generation surface — what askAndApplyTitle needs. */
+interface TitleCapableSession {
+  askSideQuestion?: (question: string, timeoutMs?: number) => Promise<string>;
+  generateSessionTitle?: (description: string, timeoutMs?: number) => Promise<string | null>;
+}
+
 /**
- * Last-resort title rewrite via the session's OWN main model (side_question
- * control request) when the CLI titler keeps violating a plugin content rule.
- * The CLI titler only lets us shape the USER prompt (its system prompt says
- * nothing about language, and Haiku mirrors the message language more strongly
- * than it follows an in-prompt instruction — 2026-08-08 incident: two feedback
- * rounds, Chinese title both times). The session's main model follows an
- * explicit instruction reliably AND rides the session's own CLI credentials —
- * the only model access GUARANTEED to exist (Walnut-side model config is
- * optional; a running session by definition has a working CLI). Deliberately
- * NOT Walnut's own cheap-model pipeline for that reason. Still generic: the
- * plugin's own rejection reason is the only rule shipped. Returns null on any
- * failure (no side-question support, timeout, empty output).
+ * PRIMARY title channel: side_question, answered by the session's MAIN model
+ * with a prompt we fully author. The plugin's content requirement (if any)
+ * rides the FIRST generation, so the title is born compliant — this replaced
+ * the generate-then-reject-then-retry dance after three incidents where the
+ * CLI's fork titler (fixed system prompt; we only control the user prompt)
+ * mirrored the message language over our appended instructions. Costs one
+ * main-model call per new session; rides the session's own CLI credentials,
+ * so it works with zero Walnut-side model config. Returns null on any failure
+ * (no side-question support, timeout, empty answer).
  */
-async function rewriteTitleForRule(
-  live: { askSideQuestion?: (question: string, timeoutMs?: number) => Promise<string> },
-  rejectedTitle: string, rule: string,
+async function titleViaSideQuestion(
+  live: TitleCapableSession, message: string, placeholder: string, requirement: string | null,
 ): Promise<string | null> {
   if (!live.askSideQuestion) return null;
   try {
     const question = [
-      "This session's auto-generated title was rejected by the task system.",
-      `THE RULE IS ABSOLUTE: ${rule}`,
-      `Rejected title: ${rejectedTitle}`,
-      'Rewrite the title so it satisfies the rule while keeping its meaning',
-      '(translate rather than transliterate when the rule demands another language).',
-      'Keep it 3-7 words. Reply with ONLY the corrected title — no quotes, no commentary.',
+      'Generate a title for this session (it appears in the user\'s session list).',
+      'Concise, 3-7 words, sentence case. Capture the main topic or goal.',
+      ...(requirement ? [
+        `MANDATORY RULE from the task system: ${requirement}`,
+        'Obey this rule even if it conflicts with the language or style of the message below (translate, don\'t mirror).',
+      ] : []),
+      `Current placeholder title: ${placeholder}`,
+      `User's first message: ${message.slice(0, 2000)}`,
+      'Reply with ONLY the title — no quotes, no commentary.',
     ].join('\n');
     // 60s: a side question is answered by the main model and may queue behind
-    // the turn the CLI is currently running (same FIFO) — be generous; all
-    // failure modes resolve to null and the placeholder simply stays.
-    const answer = (await live.askSideQuestion(question, 60_000)).trim();
+    // the turn the CLI is currently running (same FIFO) — measured 22s+ on a
+    // cold remote session; all failure modes resolve to null.
+    // Two tries, same reason as the CLI-titler channel: on a cold spawn the
+    // first control WRITE can fail before the FIFO is ready ("failed to write
+    // side question") — without the retry, every cold launch silently fell
+    // through to the fallback channel.
+    let answer: string;
+    try {
+      answer = (await live.askSideQuestion(question, 60_000)).trim();
+    } catch (firstErr) {
+      log.session.debug('session-auto-title: side-question first try failed — retrying', {
+        error: firstErr instanceof Error ? firstErr.message : String(firstErr),
+      });
+      await new Promise((r) => setTimeout(r, autoTitleRetryDelayMs));
+      answer = (await live.askSideQuestion(question, 60_000)).trim();
+    }
     // Main models sometimes wrap the answer — take the first non-empty line,
     // strip quotes, cap like every other title write.
     const firstLine = answer.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
     const cleaned = firstLine.replace(/^["']|["']$/g, '').trim();
     return cleaned ? cleaned.slice(0, 200) : null;
   } catch (err) {
-    log.session.warn('session-auto-title: side-question rewrite failed', {
+    log.session.warn('session-auto-title: side-question title failed', {
       errorKind: err instanceof Error ? err.name : typeof err,
       error: err instanceof Error ? err.message : String(err),
     });
     return null;
   }
+}
+
+/**
+ * FALLBACK title channel: the CLI's fire-and-forget generate_session_title
+ * (Haiku, fixed system prompt — fork sessionTitle.ts). Cheap and always
+ * present on native sessions, but only the USER prompt is ours: an appended
+ * requirement is advisory at best (Haiku mirrors the message language over
+ * in-prompt instructions), so the caller MUST validate the result. Two tries:
+ * the triggering send may be cold-resuming a dead CLI, in which case the
+ * first control write fails before the FIFO exists.
+ */
+async function titleViaCliTitler(
+  live: TitleCapableSession, message: string, placeholder: string, requirement: string | null,
+): Promise<string | null> {
+  if (!live.generateSessionTitle) return null;
+  const description = (requirement
+    ? `MANDATORY RULE from the task system: ${requirement}\nObey this rule even if it conflicts with the language of the user's message below (translate, don't mirror).\n\n`
+    : '')
+    + `Current session title: ${placeholder}\nUser's first message: ${message.slice(0, 2000)}`;
+  let title = await live.generateSessionTitle(description, 10_000);
+  if (!title) {
+    await new Promise((r) => setTimeout(r, autoTitleRetryDelayMs));
+    title = await live.generateSessionTitle(description, 10_000);
+  }
+  return title ? title.slice(0, 200) : null;
 }
 
 /**
@@ -896,7 +948,7 @@ async function askAndApplyTitle(
     const live = sessionRunner.findSessionByClaudeId(sessionId);
     // No live native session (ACP/codex engine, or record-only) → nothing to
     // ask. Deliberately does NOT burn an attempt: the CLI may attach later.
-    if (!live?.generateSessionTitle) return false;
+    if (!live || (!live.askSideQuestion && !live.generateSessionTitle)) return false;
 
     // The caller's task snapshot can be stale (hook payload cache is up to
     // 10s old) — re-read before spending a CLI round-trip, so a send that
@@ -905,115 +957,72 @@ async function askAndApplyTitle(
     if (((await getTask(taskId)).title ?? '') !== placeholder) return false;
 
     autoTitleAttempts.set(sessionId, (autoTitleAttempts.get(sessionId) ?? 0) + 1);
-    const { ContentValidationError, validatePluginContent } = await import('../task-manager.js');
-    // When a sync plugin's validateContent would reject the generated title
-    // (e.g. an English-only rule on an externally-synced task — 2026-08-06
-    // incident: a Chinese first message → Chinese title → rejected →
-    // placeholder stuck forever), we re-ask ONCE with the plugin's own
-    // rejection message as feedback. Generic on purpose: whatever rule any
-    // plugin enforces, its human-readable reason is the constraint the titler
-    // needs — no rule is hardcoded here. `constraint` carries that reason
-    // into round 2. Validation runs BEFORE the write (validatePluginContent)
-    // so a rejection never costs a failed updateTask.
-    let constraint: string | undefined;
-    let title: string | null | undefined;
-    let written = false;
-    for (let round = 0; round < 2 && !written; round++) {
-      // The CLI passes `description` VERBATIM to its Haiku titler (fork
-      // sessionTitle.ts: userPrompt = description) — so ship context, not just
-      // the raw message. The current (placeholder) title carries the directory
-      // name; the titler keeps it when it matters ("Fix walnut session titles")
-      // and drops it when it doesn't. slice(2000): the titler only needs the
-      // opening of the message, and the envelope rides the FIFO — no point
-      // shipping a pasted wall of text. On the feedback round the constraint
-      // leads and the language warning is explicit — the titler mirrors the
-      // user's language by default, and a trailing one-liner loses to a
-      // Chinese message (2026-08-08 incident: round 2 returned Chinese again).
-      const description = (constraint
-        ? `MANDATORY RULE — the task system rejected your previous title: ${constraint}\nObey this rule even if it conflicts with the language or style of the user's message below (translate, don't mirror).\n\n`
-        : '')
-        + `Current session title: ${placeholder}\nUser's first message: ${message.slice(0, 2000)}`;
-      // Two tries on the first round: the send that triggered us may be
-      // cold-resuming a dead CLI, in which case the first control write fails
-      // before the FIFO exists. The feedback round gets ONE ask with a much
-      // longer window instead: the CLI is definitely alive (it just answered),
-      // but it's typically mid-turn on the user's first message and serves the
-      // titler late — measured 22s on a cold remote session (2026-08-07
-      // incident: the 10s wait expired, the CLI's title arrived to nobody, and
-      // the placeholder stuck). Budget note: the dispatcher's 30s inline
-      // timeout only stops it WAITING — the handler still completes and the
-      // finally below still cleans up.
-      title = await live.generateSessionTitle(description, round === 0 ? 10_000 : 45_000);
-      if (!title && round === 0) {
-        await new Promise((r) => setTimeout(r, autoTitleRetryDelayMs));
-        title = await live.generateSessionTitle(description, 10_000);
-      }
-      if (!title) {
-        // Explicit trail — this used to be a silent return, which made a
-        // timed-out feedback round look like the retry never happened.
-        log.session.warn('session-auto-title: CLI produced no title — placeholder kept', {
-          sessionId, taskId, round, hadConstraint: !!constraint,
-        });
-        return false;
-      }
-      // The CLI titler contracts to a few words, but updateTask has no length
-      // gate (unlike PATCH /api/sessions/:id's 500) — cap defensively.
-      title = title.slice(0, 200);
+    const { ContentValidationError, validatePluginContent, pluginContentRequirement } =
+      await import('../task-manager.js');
+    // The plugin's content requirement (contentRequirement) ships in the FIRST
+    // generation prompt — prevention, not correction. Read fresh: auto-organize
+    // may have just moved the task under an external sync plugin whose rule
+    // (e.g. English-only) the launch-time snapshot wouldn't know about.
+    // Falls back to the CLI titler when side_question fails; either way the
+    // result is validated against the plugin BEFORE the write, and a rejected
+    // title is never written. No rule is hardcoded anywhere — the plugin
+    // authors both the requirement and the validator.
+    const requirement = pluginContentRequirement(await getTask(taskId), 'title');
 
-      // Re-read before writing — the user (or the butler) may have renamed the
-      // task while the CLI was thinking; the placeholder check must hold at
-      // write time, not just at dispatch time. (Also refreshes `source`:
-      // auto-organize may have just moved the task under a sync plugin.)
-      const current = await getTask(taskId);
-      if ((current.title ?? '') !== placeholder) {
-        log.session.info('session-auto-title: skipped — title changed during generation', {
-          sessionId, taskId,
-        });
-        return false;
-      }
-
-      // Validate BEFORE writing — a plugin rejection must not cost a failed
-      // updateTask, and we need the reason to drive the next layer.
-      const violation = validatePluginContent(current, 'title', title);
-      if (violation) {
-        if (round === 0) {
-          constraint = violation;
-          log.session.info('session-auto-title: title rejected by plugin rule — retrying with feedback', {
-            sessionId, taskId, rejectedTitle: title, rule: violation,
-          });
-          continue;
-        }
-        // Layer 3: the CLI titler ignored the feedback (Haiku mirrors the
-        // message language more strongly than it follows instructions).
-        // Rewrite via side_question — the session's main model follows an
-        // explicit rule reliably and needs no Walnut-side model credentials.
-        title = await rewriteTitleForRule(live, title, violation);
-        const still = title ? validatePluginContent(current, 'title', title) : 'rewrite unavailable';
-        if (!title || still) {
-          log.session.warn('session-auto-title: no compliant title after rewrite — placeholder kept', {
-            sessionId, taskId, rule: violation, rewriteFailure: still ?? undefined,
-          });
-          return false;
-        }
-      }
-      try {
-        // updateTask's central emit covers web-ui; main-agent rides extraTargets
-        // (a second manual emit would double-process the task in every frontend).
-        // ContentValidationError is still possible here (auto-organize can move
-        // the task under a plugin between our check and the write) — final, no loop.
-        await updateTask(taskId, { title }, { source: 'session-auto-title', extraTargets: ['main-agent'] });
-        written = true;
-      } catch (err) {
-        if (err instanceof ContentValidationError) {
-          log.session.warn('session-auto-title: write rejected by plugin rule — placeholder kept', {
-            sessionId, taskId, rejectedTitle: title, rule: err.message, round,
-          });
-          return false;
-        }
-        throw err;
-      }
+    let title = await titleViaSideQuestion(live, message, placeholder, requirement);
+    let channel = 'side_question';
+    if (!title) {
+      title = await titleViaCliTitler(live, message, placeholder, requirement);
+      channel = 'cli_titler';
     }
-    if (!written || !title) return false;
+    if (!title) {
+      log.session.warn('session-auto-title: no title from any channel — placeholder kept', {
+        sessionId, taskId,
+      });
+      return false;
+    }
+
+    // Re-read before writing — the user (or the butler) may have renamed the
+    // task while the model was thinking; the placeholder check must hold at
+    // write time, not just at dispatch time. (Also refreshes `source` for the
+    // validation below.)
+    const current = await getTask(taskId);
+    if ((current.title ?? '') !== placeholder) {
+      log.session.info('session-auto-title: skipped — title changed during generation', {
+        sessionId, taskId,
+      });
+      return false;
+    }
+
+    // Validate BEFORE writing — a candidate that violates the plugin rule is
+    // dropped here (never costs a failed updateTask). With the requirement in
+    // the generation prompt this should be rare; when it fires, the fallback
+    // titler ignored the rule (known Haiku behavior) or a plugin validates
+    // more than its stated requirement — both are the plugin/channel's gap,
+    // logged with everything needed to trace which.
+    const violation = validatePluginContent(current, 'title', title);
+    if (violation) {
+      log.session.warn('session-auto-title: generated title violates plugin rule — placeholder kept', {
+        sessionId, taskId, channel, rejectedTitle: title, rule: violation,
+        requirementShipped: !!requirement,
+      });
+      return false;
+    }
+    try {
+      // updateTask's central emit covers web-ui; main-agent rides extraTargets
+      // (a second manual emit would double-process the task in every frontend).
+      // ContentValidationError is still possible (auto-organize can move the
+      // task under a plugin between our check and the write) — final, no loop.
+      await updateTask(taskId, { title }, { source: 'session-auto-title', extraTargets: ['main-agent'] });
+    } catch (err) {
+      if (err instanceof ContentValidationError) {
+        log.session.warn('session-auto-title: write rejected by plugin rule — placeholder kept', {
+          sessionId, taskId, channel, rejectedTitle: title, rule: err.message,
+        });
+        return false;
+      }
+      throw err;
+    }
     autoTitleAttempts.delete(sessionId); // done — free the entry
 
     // Mirror onto the session record (same placeholder guard) so the session
@@ -1060,10 +1069,22 @@ export async function autoTitleFromLaunch(
   const placeholder = defaultSessionTaskTitle(cwd);
 
   const { sessionRunner } = await import('../../providers/claude-code-session.js');
-  const deadline = Date.now() + 30_000;
+  // 60s: a cold spawn's init can take ~27s (2026-08-08 incident: a 30s
+  // deadline expired right as init landed and the whole launch kick vanished
+  // WITHOUT A TRACE — askAndApplyTitle's no-live-session guard was silent).
+  const deadline = Date.now() + 60_000;
+  let found = false;
   while (Date.now() < deadline) {
-    if (sessionRunner.findSessionByClaudeId(sessionId)?.generateSessionTitle) break;
+    // Presence is enough: a native ClaudeCodeSession always carries both title
+    // channels (askSideQuestion / generateSessionTitle) as class methods.
+    if (sessionRunner.findSessionByClaudeId(sessionId)) { found = true; break; }
     await new Promise((r) => setTimeout(r, 1_000));
+  }
+  if (!found) {
+    log.session.warn('session-auto-title: launch kick expired — no live session in 60s', {
+      sessionId, taskId,
+    });
+    return; // the onMessageSend hook still covers the user's next send
   }
   await askAndApplyTitle(sessionId, taskId, trimmed, placeholder);
 }

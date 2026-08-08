@@ -144,13 +144,13 @@ describe('session auto-title E2E (path-first quick start)', () => {
         10_000,
       )
     }
-    expect(title).toBe('Mock title: title-test:please fix the login redirect')
+    expect(title).toBe('Side title: title-test:please fix the login redirect')
 
     // 4. The session record mirrors the new title.
     const recRes = await fetch(apiUrl(`/api/sessions/${body.sessionId}`))
     const rec = await recRes.json() as { session?: { title?: string }; title?: string }
     const recTitle = rec.session?.title ?? rec.title
-    expect(recTitle).toBe('Mock title: title-test:please fix the login redirect')
+    expect(recTitle).toBe('Side title: title-test:please fix the login redirect')
 
     ws.close()
   }, 60_000)
@@ -178,11 +178,11 @@ describe('session auto-title E2E (text-first quick start)', () => {
       (t) => t !== 'Session: demo-text-first',
       30_000,
     )
-    expect(title).toBe('Mock title: title-test:add dark mode to settings')
+    expect(title).toBe('Side title: title-test:add dark mode to settings')
 
     // Session record mirrors it.
     const recRes = await fetch(apiUrl(`/api/sessions/${body.sessionId}`))
     const rec = await recRes.json() as { session?: { title?: string }; title?: string }
-    expect(rec.session?.title ?? rec.title).toBe('Mock title: title-test:add dark mode to settings')
+    expect(rec.session?.title ?? rec.title).toBe('Side title: title-test:add dark mode to settings')
   }, 60_000)
 })

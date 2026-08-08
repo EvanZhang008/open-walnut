@@ -176,10 +176,11 @@ describe('sessionAutoTitleHook', () => {
     expect((await getTask(task.id)).title).toBe(PLACEHOLDER);
   });
 
-  describe('plugin content-validation feedback (generic, rule comes from the plugin)', () => {
+  describe('plugin content requirement (generic — the plugin authors rule + validator)', () => {
     // A sync plugin that only accepts ASCII titles — stand-in for any external
-    // system's content rule (2026-08-06 incident: an English-only plugin rule
-    // rejected a Chinese AI title and the placeholder stuck forever).
+    // system's content rule (2026-08-06/07/08 incident chain: an English-only
+    // plugin rule kept rejecting AI titles after the fact; the requirement now
+    // ships in the FIRST generation prompt instead).
     const RULE = 'Titles must be ASCII-only for this tracker.';
     beforeEach(async () => {
       const { registry } = await import('../../src/core/integration-registry.js');
@@ -198,6 +199,7 @@ describe('sessionAutoTitleHook', () => {
           associateSubtask: noop, disassociateSubtask: noop,
           pushTask: async () => ({ serverTimestamp: new Date().toISOString() }),
           syncPoll: noop,
+          contentRequirement: (field) => (field === 'title' ? RULE : null),
           validateContent: (_task, field, value) =>
             // eslint-disable-next-line no-control-regex
             field === 'title' && /[^\x00-\x7F]/.test(value) ? RULE : null,
@@ -219,85 +221,81 @@ describe('sessionAutoTitleHook', () => {
       return getTask(task.id);
     }
 
-    it('re-asks once with the plugin rule as feedback when the title is rejected', async () => {
-      const sid = nextSid();
-      const task = await makePluginTaskAndSession(sid);
-      let call = 0;
-      const fake = registerFakeSession(sid, async (desc) => {
-        call++;
-        if (call === 1) {
-          expect(desc).not.toContain(RULE);
-          return '修复登录问题'; // violates the plugin rule
-        }
-        expect(desc).toContain(RULE); // the plugin's own reason reaches the titler
-        return 'Fix login issue';
-      });
-
-      await sessionAutoTitleHook.handler(payloadFor(sid, task, '登录页面一直重定向'));
-
-      expect(fake.generateSessionTitle).toHaveBeenCalledTimes(2);
-      expect((await getTask(task.id)).title).toBe('Fix login issue');
-    });
-
-    it('rewrites via side_question when the CLI titler ignores the feedback (layer 3)', async () => {
+    it('ships the requirement in the FIRST side-question prompt and writes the answer', async () => {
       const sid = nextSid();
       const task = await makePluginTaskAndSession(sid);
       const fake = registerFakeSession(
         sid,
-        async () => '还是中文标题', // both titler rounds violate
+        async () => { throw new Error('CLI titler must not be consulted when side_question works'); },
         async (question) => {
-          expect(question).toContain(RULE); // plugin rule reaches the side question
-          expect(question).toContain('还是中文标题'); // and so does the rejected title
-          return '"Still a Chinese title, translated"\n(quotes stripped, first line taken)';
+          expect(question).toContain(RULE); // requirement rides the FIRST call
+          expect(question).toContain('登录页面一直重定向'); // with the user's message
+          return '"Fix login redirect loop"\n(extra commentary stripped)';
         },
       );
 
       await sessionAutoTitleHook.handler(payloadFor(sid, task, '登录页面一直重定向'));
 
-      expect(fake.generateSessionTitle).toHaveBeenCalledTimes(2);
       expect(fake.askSideQuestion).toHaveBeenCalledTimes(1);
-      expect((await getTask(task.id)).title).toBe('Still a Chinese title, translated');
+      expect(fake.generateSessionTitle).not.toHaveBeenCalled();
+      expect((await getTask(task.id)).title).toBe('Fix login redirect loop');
     });
 
-    it('keeps the placeholder when every layer fails (no infinite loop, no bad write)', async () => {
+    it('falls back to the CLI titler (requirement included) when the side question fails', async () => {
       const sid = nextSid();
       const task = await makePluginTaskAndSession(sid);
       const fake = registerFakeSession(
         sid,
-        async () => '还是中文标题',
-        async () => '翻译失败还是中文', // side question violates too
-      );
-
-      await sessionAutoTitleHook.handler(payloadFor(sid, task, '登录页面一直重定向'));
-
-      expect(fake.generateSessionTitle).toHaveBeenCalledTimes(2);
-      expect(fake.askSideQuestion).toHaveBeenCalledTimes(1);
-      expect((await getTask(task.id)).title).toBe(PLACEHOLDER);
-    });
-
-    it('keeps the placeholder when the session has no side-question support', async () => {
-      const sid = nextSid();
-      const task = await makePluginTaskAndSession(sid);
-      // No sideQuestionImpl → live.askSideQuestion is undefined (ACP/older CLI).
-      registerFakeSession(sid, async () => '还是中文标题');
-
-      await sessionAutoTitleHook.handler(payloadFor(sid, task, '登录页面一直重定向'));
-
-      expect((await getTask(task.id)).title).toBe(PLACEHOLDER);
-    });
-
-    it('keeps the placeholder when the side question throws (timeout)', async () => {
-      const sid = nextSid();
-      const task = await makePluginTaskAndSession(sid);
-      registerFakeSession(
-        sid,
-        async () => '还是中文标题',
+        async (desc) => {
+          expect(desc).toContain(RULE); // requirement also rides the fallback
+          return 'Fix login issue';
+        },
         async () => { throw new Error('side question timed out'); },
       );
 
       await sessionAutoTitleHook.handler(payloadFor(sid, task, '登录页面一直重定向'));
 
+      // A throwing side question is retried once (cold-spawn FIFO write can
+      // fail) before falling through to the CLI titler.
+      expect(fake.askSideQuestion).toHaveBeenCalledTimes(2);
+      expect(fake.generateSessionTitle).toHaveBeenCalledTimes(1);
+      expect((await getTask(task.id)).title).toBe('Fix login issue');
+    });
+
+    it('never writes a rule-violating title (pre-write validation, no loop)', async () => {
+      const sid = nextSid();
+      const task = await makePluginTaskAndSession(sid);
+      const fake = registerFakeSession(
+        sid,
+        async () => '还是中文标题', // fallback ignores the rule too
+        async () => '中文标题', // side question ignores the shipped rule
+      );
+
+      await sessionAutoTitleHook.handler(payloadFor(sid, task, '登录页面一直重定向'));
+
+      // side_question answered (non-empty) → its candidate is validated and
+      // dropped; no second channel, no retry loop — one attempt, clean exit.
+      expect(fake.askSideQuestion).toHaveBeenCalledTimes(1);
+      expect(fake.generateSessionTitle).not.toHaveBeenCalled();
       expect((await getTask(task.id)).title).toBe(PLACEHOLDER);
+    });
+
+    it('local tasks (no plugin rule) get no requirement text in the prompt', async () => {
+      const sid = nextSid();
+      const task = await makeTaskAndSession(sid); // plain local task
+      const fake = registerFakeSession(
+        sid,
+        async () => null,
+        async (question) => {
+          expect(question).not.toContain('MANDATORY RULE');
+          return 'Investigate login loop';
+        },
+      );
+
+      await sessionAutoTitleHook.handler(payloadFor(sid, task, 'the login page redirects forever'));
+
+      expect(fake.askSideQuestion).toHaveBeenCalledTimes(1);
+      expect((await getTask(task.id)).title).toBe('Investigate login loop');
     });
   });
 });

@@ -82,6 +82,14 @@ export interface IntegrationSync {
   /** Return error string to reject, null to accept. */
   validateContent?(task: Task, field: string, value: string): string | null;
 
+  /** Human-readable content rule for a field (e.g. "Titles must be in
+   *  English"). AI content generators (session auto-title, …) ship it in
+   *  their FIRST generation prompt so content is born compliant, instead of
+   *  being rejected by validateContent after the fact and regenerated.
+   *  Plugins enforcing a rule should implement BOTH: this to prevent,
+   *  validateContent to enforce. Return null when the field has no rule. */
+  contentRequirement?(field: string): string | null;
+
   // ── Full Push (single-call push with server timestamp for echo detection) ──
   /** Push all mutable fields to remote. Returns server-side timestamp for echo detection.
    *  Framework calls this for existing tasks instead of individual update* methods.

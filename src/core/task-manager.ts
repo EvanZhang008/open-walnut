@@ -30,6 +30,13 @@ export class ContentValidationError extends Error {
   }
 }
 
+/** The plugin's stated content rule for a field — what an AI generator should
+ *  know BEFORE generating (vs validatePluginContent, which judges a candidate
+ *  after). Returns null when the task's plugin has no rule for the field. */
+export function pluginContentRequirement(task: { source: string }, field: string): string | null {
+  return registry.get(task.source)?.sync.contentRequirement?.(field) ?? null;
+}
+
 /** Non-throwing plugin content check — returns the plugin's human-readable
  *  rejection reason, or null when the content is acceptable (or no plugin /
  *  no validator). Exported so AI writers (session-auto-title) can check a

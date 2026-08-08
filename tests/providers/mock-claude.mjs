@@ -135,7 +135,21 @@ if (inputFormat === 'stream-json') {
       ctlBuf = ctlBuf.slice(nl + 1);
       try {
         const parsed = JSON.parse(line);
-        if (parsed.type === 'control_request' && parsed.request?.subtype === 'generate_session_title') {
+        if (parsed.type === 'control_request' && parsed.request?.subtype === 'side_question') {
+          // side_question is auto-title's PRIMARY channel (main-model prompt we
+          // author). Mirror the real CLI's 3-level nesting: response.response.response.
+          // Deterministic title: "Side title: " + first five words of the user's
+          // message line in the question envelope (same word logic as the titler).
+          const q = String(parsed.request.question ?? '');
+          const msgLine = q.match(/User's first message: ([\s\S]*?)(?:\nReply with|$)/);
+          let src = (msgLine ? msgLine[1] : q).trim();
+          src = src.replace(/^(?:(?:slow|chunk-delay):\d+\s+)+/, '');
+          const five = src.split(/\s+/).slice(0, 5).join(' ');
+          process.stdout.write(JSON.stringify({
+            type: 'control_response',
+            response: { subtype: 'success', request_id: parsed.request_id, response: { response: `Side title: ${five}` } },
+          }) + '\n');
+        } else if (parsed.type === 'control_request' && parsed.request?.subtype === 'generate_session_title') {
           // The auto-title caller wraps the message in a context envelope
           // ("Current session title: …\nUser's first message: <msg>") — unwrap
           // so asserted titles stay derived from the user's own words. Then

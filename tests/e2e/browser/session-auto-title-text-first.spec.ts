@@ -31,14 +31,14 @@ test('text-first quick session gets an AI title from the launch message alone', 
   await page.waitForURL((url) => url.pathname === '/', { timeout: 10_000 })
   const panel = page.locator('.main-page-session-column .session-panel').first()
   await expect(panel).toBeVisible({ timeout: 15_000 })
-  await expect(panel).toContainText('Mock title: title-test:speed up the nightly build', { timeout: 45_000 })
+  await expect(panel).toContainText('Side title: title-test:speed up the nightly build', { timeout: 45_000 })
 
   // Durable on the task too.
   await expect.poll(async () => {
     const r = await fetch(`${API}/api/tasks/${taskId}`)
     const b = await r.json() as { task: { title: string } }
     return b.task.title
-  }, { timeout: 10_000 }).toBe('Mock title: title-test:speed up the nightly build')
+  }, { timeout: 10_000 }).toBe('Side title: title-test:speed up the nightly build')
 
   await page.screenshot({ path: '/tmp/walnut-autoorg/scene-text-first-title.png', fullPage: true })
 })

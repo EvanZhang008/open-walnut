@@ -50,14 +50,14 @@ test('path-first quick session gets an AI title from the first real message', as
   await input.press('Enter')
 
   // The hook asks the CLI; the panel header updates via task:updated.
-  await expect(panel).toContainText('Mock title: title-test:investigate flaky checkout tests', { timeout: 30_000 })
+  await expect(panel).toContainText('Side title: title-test:investigate flaky checkout tests', { timeout: 30_000 })
 
   // The task title is durably replaced too (not just the visible header).
   await expect.poll(async () => {
     const r = await fetch(`${API}/api/tasks/${taskId}`)
     const b = await r.json() as { task: { title: string } }
     return b.task.title
-  }, { timeout: 10_000 }).toBe('Mock title: title-test:investigate flaky checkout tests')
+  }, { timeout: 10_000 }).toBe('Side title: title-test:investigate flaky checkout tests')
 
   await page.screenshot({ path: '/tmp/session-auto-title/ai-title.png', fullPage: true })
 })
