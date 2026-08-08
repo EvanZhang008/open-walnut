@@ -1130,6 +1130,60 @@ export const sessionAutoTitleHook: SessionHookDefinition = {
 };
 
 /**
+ * session-auto-title-turn-complete: SAFETY-NET trigger for the same titling
+ * core. The onMessageSend trigger only fires for sends that pass through THIS
+ * server's message pipeline (SESSION_SEND emitters: WS session:send, v1
+ * routes' sendMessageToSession). A phone-through-cloud send does NOT: the EC2
+ * replica's cloudSend writes the FIFO via the bridge/daemon directly, so the
+ * Mac never emits SESSION_SEND and the primary trigger never fires (2026-08-08
+ * incident: path-first mobile launch + all sends via cloud → zero title
+ * attempts, zero logs). Turn completion, by contrast, is observed on the Mac
+ * for EVERY delivery path (JSONL tail → SESSION_RESULT), so this hook
+ * back-fills the title after the first turn if the task still wears its
+ * placeholder — reading the user's words from the session's JSONL history
+ * since no message rides the payload. Idempotent with the primary trigger via
+ * askAndApplyTitle's own placeholder re-check + in-flight/attempt guards.
+ */
+export const sessionAutoTitleTurnCompleteHook: SessionHookDefinition = {
+  id: 'session-auto-title-turn-complete',
+  name: 'Session Auto Title (turn-complete safety net)',
+  description: 'Back-fills the AI title after a turn when the send bypassed this server (e.g. phone via cloud bridge).',
+  hooks: ['onTurnComplete'],
+  priority: 56,
+  source: 'builtin',
+  enabled: true,
+  handler: async (payload) => {
+    const p = payload as OnTurnCompletePayload;
+    if (!p.taskId || !p.task) return;
+
+    // Same placeholder gate as the primary trigger (both cwds — see there).
+    const { defaultSessionTaskTitle } = await import('../sessions/quick-start.js');
+    const taskTitle = p.task.title ?? '';
+    const placeholder = [p.session?.cwd, p.task.cwd]
+      .filter((c): c is string => !!c)
+      .map(defaultSessionTaskTitle)
+      .find((ph) => taskTitle === ph);
+    if (!placeholder) return;
+
+    // The turn payload carries the ASSISTANT result, not the user's message —
+    // pull the first real user message from the session's JSONL (tail is
+    // plenty: this fires on the FIRST turn; walnut-injected synthetic user
+    // events are already filtered by the history reader).
+    let message = '';
+    try {
+      const { readSessionHistoryTail } = await import('../session-history.js');
+      const history = await readSessionHistoryTail(
+        p.sessionId, p.session?.cwd ?? p.task.cwd, p.session?.host, p.session?.outputFile);
+      message = history?.find((m) => m.role === 'user' && m.text.trim())?.text.trim() ?? '';
+    } catch { /* no history → nothing to title from */ }
+    if (!message) return;
+    if (/^\/[a-z][\w-]*(\s|$)/i.test(message)) return; // same slash-command gate
+
+    await askAndApplyTitle(p.sessionId, p.taskId, message, placeholder);
+  },
+};
+
+/**
  * session-error-notify: Logs session errors.
  */
 export const sessionErrorNotifyHook: SessionHookDefinition = {
@@ -1285,6 +1339,7 @@ export const builtinHooks: SessionHookDefinition[] = [
   turnCompleteTriageHook,
   messageSendTriageHook,
   sessionAutoTitleHook,
+  sessionAutoTitleTurnCompleteHook,
   sessionErrorNotifyHook,
   cwdRenameDetectorHook,
 ];

@@ -23,11 +23,18 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-auto-title'));
 
+// History reader for the turn-complete safety-net trigger (the payload carries
+// no user message — the hook reads it from the session JSONL).
+const historyTailMock = vi.fn();
+vi.mock('../../src/core/session-history.js', () => ({
+  readSessionHistoryTail: (...args: unknown[]) => historyTailMock(...args),
+}));
+
 import { WALNUT_HOME } from '../../src/constants.js';
 import { sessionRunner } from '../../src/providers/claude-code-session.js';
 import { addTask, getTask, updateTask, _resetForTesting as resetTaskManager } from '../../src/core/task-manager.js';
 import { createSessionRecord, getSessionByClaudeId } from '../../src/core/session-tracker.js';
-import { sessionAutoTitleHook, __resetAutoTitleState } from '../../src/core/session-hooks/builtins.js';
+import { sessionAutoTitleHook, sessionAutoTitleTurnCompleteHook, __resetAutoTitleState } from '../../src/core/session-hooks/builtins.js';
 import { defaultSessionTaskTitle } from '../../src/core/sessions/quick-start.js';
 import type { OnMessageSendPayload } from '../../src/core/session-hooks/types.js';
 import type { Task } from '../../src/core/types.js';
@@ -81,6 +88,8 @@ beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   resetTaskManager();
   __resetAutoTitleState(10); // shrink the in-dispatch retry pause for tests
+  historyTailMock.mockReset();
+  historyTailMock.mockResolvedValue(null);
 });
 
 afterEach(async () => {
@@ -174,6 +183,59 @@ describe('sessionAutoTitleHook', () => {
     await sessionAutoTitleHook.handler(payloadFor(sid, task, 'hello'));
 
     expect((await getTask(task.id)).title).toBe(PLACEHOLDER);
+  });
+
+  describe('turn-complete safety net (sends that bypass this server, e.g. phone via cloud)', () => {
+    function turnPayload(sid: string, task: Task) {
+      return {
+        sessionId: sid, taskId: task.id, task,
+        timestamp: new Date().toISOString(), traceId: 'trace-test',
+        result: 'assistant turn text', turnIndex: 1, isPlanSession: false,
+      };
+    }
+
+    it('back-fills the title from JSONL history after a turn', async () => {
+      const sid = nextSid();
+      const task = await makeTaskAndSession(sid);
+      const fake = registerFakeSession(sid, async () => null, async (question) => {
+        expect(question).toContain('why are more transistors faster');
+        return 'CPU transistor scaling explained';
+      });
+      historyTailMock.mockResolvedValue([
+        { role: 'user', text: 'why are more transistors faster', timestamp: 't1' },
+        { role: 'assistant', text: 'because…', timestamp: 't2' },
+      ]);
+
+      await sessionAutoTitleTurnCompleteHook.handler(turnPayload(sid, task));
+
+      expect(fake.askSideQuestion).toHaveBeenCalledTimes(1);
+      expect((await getTask(task.id)).title).toBe('CPU transistor scaling explained');
+    });
+
+    it('is a no-op when the task no longer wears the placeholder (already titled)', async () => {
+      const sid = nextSid();
+      const task = await makeTaskAndSession(sid, 'Already titled');
+      const fake = registerFakeSession(sid, async () => null, async () => 'Nope');
+
+      await sessionAutoTitleTurnCompleteHook.handler(turnPayload(sid, task));
+
+      expect(fake.askSideQuestion).not.toHaveBeenCalled();
+      expect(historyTailMock).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op when history has no real user message', async () => {
+      const sid = nextSid();
+      const task = await makeTaskAndSession(sid);
+      const fake = registerFakeSession(sid, async () => null, async () => 'Nope');
+      historyTailMock.mockResolvedValue([
+        { role: 'assistant', text: 'greeting', timestamp: 't1' },
+      ]);
+
+      await sessionAutoTitleTurnCompleteHook.handler(turnPayload(sid, task));
+
+      expect(fake.askSideQuestion).not.toHaveBeenCalled();
+      expect((await getTask(task.id)).title).toBe(PLACEHOLDER);
+    });
   });
 
   describe('plugin content requirement (generic — the plugin authors rule + validator)', () => {
