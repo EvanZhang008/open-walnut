@@ -19,13 +19,17 @@ targets:
     platform: iOS
     sources:
       - Walnut
-    scheme: {}
+    # Hosted unit tests: `xcodebuild test -scheme Walnut` runs WalnutTests
+    # (correctness + rendering-perf regression gates) on a simulator.
+    scheme:
+      testTargets:
+        - WalnutTests
     info:
       path: Walnut/Support/Info.plist
       properties:
         CFBundleDisplayName: Walnut
         CFBundleShortVersionString: "1.0.0"
-        CFBundleVersion: "30"
+        CFBundleVersion: "36"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -47,3 +51,18 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ENABLE_PREVIEWS: "YES"
+  # Hosted unit tests (@testable import Walnut). Covers LiveMarkdownWindow
+  # invariants, MessageRow pure helpers, clipProvisional, and the long-session
+  # markdown rendering perf gates (see WalnutTests/MarkdownPerfTests.swift).
+  # xcodegen auto-sets TEST_HOST/BUNDLE_LOADER from the app dependency.
+  WalnutTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - WalnutTests
+    dependencies:
+      - target: Walnut
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.openwalnut.ios.tests
+        GENERATE_INFOPLIST_FILE: "YES"

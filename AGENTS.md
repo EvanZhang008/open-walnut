@@ -195,6 +195,7 @@ Full details: [Testing pipeline](./docs/reference/testing-pipeline.md).
 | L2 focus | `npm run test:focus <path>` | 0.3–30s | one module |
 | L3 pre-commit | `npm run test:pre-commit` | 1–6 min | before a larger commit — maps your diff → affected tiers |
 | L4 CI | GitHub Actions, automatic | free | every push/PR |
+| L5 live | `npm run test:live:cloud` / `test:live:daemon` | ~25s / ~2min | cross-machine feature sign-off — zero mocks, real cloud→bridge→CLI; asserts the CLI's actual reply. Mock-green ≠ working (2026-08-07: live layer's first run caught a spawn race no mock can reproduce) |
 
 **The suite has a 118-failure baseline on `main`** (stale imports of exports deleted 2026-05, tests needing a real CLI/daemon, some load flakes). So judge your change with `npm run test:baseline` — it fails ONLY on failures absent from `tests/setup/known-failures.json`. Never judge from the raw aggregate count. When you fix some, `npm run test:baseline:record`.
 

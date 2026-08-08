@@ -1,6 +1,6 @@
 # Testing pipeline
 
-Four layers, chosen so the one you run most often is the one that costs least. Run `npm run test:quick` on every change, `npm run test:pre-commit` before a bigger commit, and let GitHub Actions run everything on push — Actions is free for this repo (public repos get unlimited minutes on GitHub-hosted runners).
+Five layers, chosen so the one you run most often is the one that costs least. Run `npm run test:quick` on every change, `npm run test:pre-commit` before a bigger commit, and let GitHub Actions run everything on push — Actions is free for this repo (public repos get unlimited minutes on GitHub-hosted runners). Cross-machine features additionally need the L5 live journey before they count as done.
 
 | Layer | Command | Scope | Time | When |
 |---|---|---|---|---|
@@ -8,6 +8,17 @@ Four layers, chosen so the one you run most often is the one that costs least. R
 | **L2 focus** | `npm run test:focus <path>` | whatever you name | 0.3–30 s | while working on one module |
 | **L3 pre-commit** | `npm run test:pre-commit` | the tiers your diff can break | 1–6 min | before a larger commit |
 | **L4 CI** | GitHub Actions, automatic | everything + lint + build | ~6 min wall-clock, free | every push and PR |
+| **L5 live** | `npm run test:live:cloud` / `test:live:daemon` | real cloud + real daemon, zero mocks | ~25 s / ~2 min | cross-machine feature sign-off; part of `test:full` |
+
+## L5 — live journeys (why mocked-green is not enough)
+
+Born from the 2026-08-07 incident: every mock-level suite was green while the real phone couldn't send a single message to a session it had just created. Two bugs hid in seams no mock reproduces — the git-synced projection lags a cloud-relayed launch by 1–3 minutes (404 storm), and the CLI spawn is async so an immediate send hit the resume path and got 409. The live layer (`tests/e2e/cloud-mobile-journey.live.test.ts`) drives the phone's exact request sequence against the REAL cloud companion → daemon bridge → primary box → real `claude` CLI, and asserts on the model's actual reply text, not HTTP status codes. Its first-ever run caught the second bug.
+
+Rules that keep it honest and cheap:
+
+- **Zero secrets in the repo** — `scripts/run-live-cloud-tests.sh` derives the cloud URL + device token from the data repo's git remote and injects them via env (in-process derivation is impossible: under VITEST, `WALNUT_HOME` is force-pointed at a temp dir). No cloud companion configured → loud SKIPPED banner, exit 0, explicitly non-authoritative.
+- **Assert the end effect** — the journey passes only when the CLI's reply contains the unique marker the test sent. Anything less lets "accepted but never delivered" slip through.
+- **Feed catches back down the pyramid** — every bug the live layer finds must be pinned as a fast mocked regression too (the spawn race lives on as an integration case with a mock daemon that answers `exists=false` twice). Live is for discovery; the cheap tiers are for retention.
 
 ## L1 — the fast tier
 
