@@ -133,13 +133,51 @@ test.describe('todo panel section tabs', () => {
     await tab(page, 'Focus').click()
     await expect(page.locator('.todo-panel-list')).toHaveCount(0)
 
-    // Typing a query must auto-route to the Tasks view rather than silently showing nothing.
+    // Typing a query auto-routes to the stacked All view (pinned tiers AND the
+    // task list all show their matches) rather than silently showing nothing.
     await page.locator('.todo-search-bar input').fill('probe')
+    await expect(tab(page, 'All')).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator('.todo-panel-list')).toHaveCount(1)
+
+    // Tabs stay usable during a search — narrowing to Tasks is ephemeral and
+    // must not overwrite the user's persisted tab.
+    await tab(page, 'Tasks').click()
     await expect(tab(page, 'Tasks')).toHaveAttribute('aria-selected', 'true')
     await expect(page.locator('.todo-panel-list')).toHaveCount(1)
 
     // Clearing the query drops back to the tab the user had actually picked.
     await page.locator('.todo-search-bar input').fill('')
     await expect(tab(page, 'Focus')).toHaveAttribute('aria-selected', 'true')
+
+    // A fresh search starts from the All default again (the ephemeral Tasks
+    // narrowing above must not stick).
+    await page.locator('.todo-search-bar input').fill('probe')
+    await expect(tab(page, 'All')).toHaveAttribute('aria-selected', 'true')
+  })
+
+  test('clicking a pinned task in the Tasks list stays on the Tasks tab', async ({ page }) => {
+    await page.goto('/')
+    await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 20_000 })
+    const [id] = await seedPinnedTasks(page)
+    await page.reload()
+    await expect(page.locator('.todo-section-tabs')).toBeVisible({ timeout: 20_000 })
+
+    // Project chip → All so the seed task is visible in the main list.
+    await page.getByRole('button', { name: 'View options' }).click()
+    await page.locator('.vd-cat').filter({
+      has: page.locator('.vd-cat-name').filter({ hasText: /^All$/ }),
+    }).click()
+    await page.keyboard.press('Escape')
+
+    await tab(page, 'Tasks').click()
+    await expect(tab(page, 'Tasks')).toHaveAttribute('aria-selected', 'true')
+
+    // Click the pinned task's row in the main list — the view must NOT teleport
+    // to the task's pin tier (the old behavior); the user is working in Tasks.
+    const row = page.locator(`.todo-panel-list [data-task-id="${id}"]`).first()
+    await expect(row).toBeVisible()
+    await row.click()
+    await expect(tab(page, 'Tasks')).toHaveAttribute('aria-selected', 'true')
+    await expect(page.locator('.todo-panel-list')).toHaveCount(1)
   })
 })

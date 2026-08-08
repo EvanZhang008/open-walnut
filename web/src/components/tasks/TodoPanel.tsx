@@ -1916,7 +1916,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return () => document.removeEventListener('mousedown', handleClick);
   }, [quickMoreOpen]);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_SECTIONS_KEY));
+  // True while a search query is active (assigned during render below). A live
+  // search force-expands every region, so chevron clicks are ignored — otherwise
+  // a click on a visually-open header would silently flip the PERSISTED collapse
+  // state with zero visible effect until the query is cleared.
+  const isSearchModeRef = useRef(false);
   const toggleSection = useCallback((id: string) => {
+    if (isSearchModeRef.current) return;
     setCollapsedSections((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
@@ -1957,11 +1963,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // independent — in single-section mode the region renders regardless of its
   // collapse flag (a tab you just picked must never show up already folded).
   const [activeSection, setActiveSection] = useState<TodoSection>(readSection);
+  // Ephemeral view override while a search query is active. Search defaults to the
+  // stacked All view (every region shows its matches at once); picking a tab during
+  // a search narrows the view WITHOUT touching the persisted tab, so clearing the
+  // query drops back to wherever the user was before searching.
+  const [searchSection, setSearchSection] = useState<TodoSection | null>(null);
   // Mirror in a ref: the focus/locate effect reads the current section but must NOT
   // list it as a dependency (a tab switch would re-run the whole locate pass).
-  const activeSectionRef = useRef(activeSection);
-  activeSectionRef.current = activeSection;
+  // Holds the EFFECTIVE section (assigned after search-view resolution below).
+  const activeSectionRef = useRef<TodoSection>(activeSection);
   const handleSectionChange = useCallback((section: TodoSection) => {
+    if (isSearchModeRef.current) { setSearchSection(section); return; }
     setActiveSection(section);
     persistSection(section);
   }, []);
@@ -1970,10 +1982,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // MUST wait for customTiersLoaded: the registry starts as [] while the fetch is
   // in flight, and healing against that empty snapshot would reset (and
   // persistSection-overwrite) the user's ct_* tab on every single page load.
+  // Heals BOTH tab states directly (not via handleSectionChange, whose search-mode
+  // branch would divert the persisted-tab heal into the ephemeral override and
+  // leave the deleted ct_* id to resurface as an empty panel after the search).
   useEffect(() => {
-    if (!customTiersLoaded || !activeSection.startsWith('ct_') || !customTiersLive) return;
-    if (!customTiersLive.some((t) => t.id === activeSection)) handleSectionChange('focus');
-  }, [activeSection, customTiersLive, customTiersLoaded, handleSectionChange]);
+    if (!customTiersLoaded || !customTiersLive) return;
+    const isDeleted = (s: TodoSection | null) =>
+      !!s && s.startsWith('ct_') && !customTiersLive.some((t) => t.id === s);
+    if (isDeleted(activeSection)) { setActiveSection('focus'); persistSection('focus'); }
+    if (isDeleted(searchSection)) setSearchSection('focus');
+  }, [activeSection, searchSection, customTiersLive, customTiersLoaded]);
   const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_PROJS_KEY));
   // Tracks which parent tasks the user has EXPANDED (default = all collapsed)
   const [expandedParents, setExpandedParents] = useState<Set<string>>(() => readSetFromStorage(LS_EXPANDED_PARENTS_KEY));
@@ -2057,21 +2075,38 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const isSearchMode = searchQuery.trim().length > 0;
 
   // ── Section-tab view resolution ──
-  // Search results only ever render in the main-list region, so a query typed
-  // while a tier tab is active would look like the search did nothing. Searching
-  // therefore FORCES the tasks view (without touching the persisted tab — clearing
-  // the query drops you back where you were).
-  const effectiveSection: TodoSection = isSearchMode && activeSection !== 'all' ? 'tasks' : activeSection;
+  // Search defaults to the stacked All view so EVERY region (pinned tiers, Recent,
+  // Tasks) shows its matches at once — the user finds the hit at a glance no matter
+  // where it lives. Tabs stay usable during a search via the ephemeral
+  // `searchSection` override; the persisted tab is untouched, so clearing the query
+  // restores the pre-search view.
+  isSearchModeRef.current = isSearchMode;
+  const effectiveSection: TodoSection = isSearchMode ? (searchSection ?? 'all') : activeSection;
+  activeSectionRef.current = effectiveSection;
+  // Drop the ephemeral override when the query is cleared, so the next search
+  // starts from the All default again.
+  useEffect(() => {
+    if (!isSearchMode && searchSection !== null) setSearchSection(null);
+  }, [isSearchMode, searchSection]);
   const isAll = effectiveSection === 'all';
   /** True when `section` should be mounted: either we're in the stacked view or it IS the active tab. */
   const showSection = useCallback(
     (section: TodoSection) => isAll || effectiveSection === section,
     [isAll, effectiveSection],
   );
-  /** Within the active view, is this region folded? Only the stacked view honors chevrons. */
+  /** Within the active view, is this region folded? Only the stacked view honors
+   *  chevrons — and a live search ignores them entirely (a hit hidden inside a
+   *  folded region would read as "search found nothing"). The persisted collapse
+   *  state is untouched; clearing the query folds things back. */
   const isFolded = useCallback(
-    (id: string) => isAll && collapsedSections.has(id),
-    [isAll, collapsedSections],
+    (id: string) => isAll && !isSearchMode && collapsedSections.has(id),
+    [isAll, isSearchMode, collapsedSections],
+  );
+  /** Chevron direction — must track the CONTENT (isFolded), not the raw collapsed
+   *  set, or a search's force-expand would show open regions with "collapsed" arrows. */
+  const chevronCollapsed = useCallback(
+    (id: string) => !isSearchMode && collapsedSections.has(id),
+    [isSearchMode, collapsedSections],
   );
 
   // Track previous focusedTaskId to detect new focus (not re-renders)
@@ -2325,9 +2360,15 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
       // Section tabs make "unmounted" a second way the target can be missing:
       // a locate into Wait while the Focus tab is showing would scroll to nothing.
-      // Switch to the task's own tier (no-op in the stacked view).
+      // STAY PUT whenever the current view already shows the task — the stacked
+      // view, the Tasks list (pinned tasks are ordinary rows there), and the
+      // task's own tier tab all do. Clicking a card must never yank the user to
+      // a different tab (the old "click in Tasks → teleport to its Pin tier"
+      // complaint). Only an off-view locate (chat/session ref while some OTHER
+      // tier/Recent/Notes tab is showing) switches — to the stacked All view,
+      // which shows the task in its tier AND the list at once.
       const cur = activeSectionRef.current;
-      if (cur !== 'all' && cur !== tierKey) handleSectionChange(tierKey);
+      if (cur !== 'all' && cur !== 'tasks' && cur !== tierKey) handleSectionChange('all');
     } else if (isUserLocate && !pinnedOnly && activeSectionRef.current !== 'all' && activeSectionRef.current !== 'tasks') {
       // Unpinned task located from outside (chat ref, session panel, search): it
       // only exists in the main list, so that's the tab that must be showing.
@@ -4753,7 +4794,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // The regular task list gets its own PINNED/RECENT-style collapsible bar.
   // Outside the stacked view the Tasks tab IS the list — it can't be folded away.
-  const tasksCollapsed = isAll && collapsedSections.has('tasks');
+  // A live search also unfolds it (matching isFolded): hits must never hide
+  // behind a chevron the user folded before searching.
+  const tasksCollapsed = isAll && !isSearchMode && collapsedSections.has('tasks');
   const tasksVisible = showSection('tasks');
   // Any pinned tier showing? Drives whether the pinned wrapper mounts at all.
   const anyTierVisible = showSection('focus') || showSection('satellite') || showSection('backlog') || showSection('wait')
@@ -4764,8 +4807,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // dead blank region pushing the task list down. In a single-section view the
   // region always owns the full panel, so it's never "collapsed" in this sense.
   const pinnedAreaCollapsed = isAll
-    && (visiblePinnedTasks.length === 0 || collapsedSections.has('pinned'))
-    && (visibleRecentTasks.length === 0 || collapsedSections.has('recent'));
+    && (visiblePinnedTasks.length === 0 || (!isSearchMode && collapsedSections.has('pinned')))
+    && (visibleRecentTasks.length === 0 || (!isSearchMode && collapsedSections.has('recent')));
   // Section counts for the tab badges. `focus`/`satellite`/`backlog`/`wait`/`recent`
   // come from the already-computed display arrays, so the badges track exactly what
   // the tab would render (incl. project/filter scoping).
@@ -4858,7 +4901,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             <div className={`todo-pinned-section${isAll ? '' : ' todo-pinned-section-solo'}`}>
               {isAll && (
               <div className="todo-pinned-header" onClick={() => toggleSection('pinned')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('pinned'); }} style={{ cursor: 'pointer' }}>
-                <span className={`todo-pinned-chevron${collapsedSections.has('pinned') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
+                <span className={`todo-pinned-chevron${chevronCollapsed('pinned') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
                 <span className="todo-pinned-label">Pinned</span>
                 <span className="todo-pinned-count">{visiblePinnedTasks.length}</span>
               </div>
@@ -4870,7 +4913,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   <div className="todo-pinned-subgroup">
                     {isAll && (
                     <div className="todo-pinned-sublabel" onClick={() => toggleSection('focus')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('focus'); }} style={{ cursor: 'pointer' }} title="Current sprint — finish these first">
-                      <span className={`todo-pinned-chevron todo-pinned-sub-chevron${collapsedSections.has('focus') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
+                      <span className={`todo-pinned-chevron todo-pinned-sub-chevron${chevronCollapsed('focus') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
                       <span className="todo-pinned-sublabel-icon todo-tier-icon-focus">{ICONS.ICON_TIER_FOCUS}</span>
                       <span className="todo-pinned-sublabel-text">Focus</span>
                       <span className="todo-pinned-sublabel-count">{focusTasksDisplay.length}</span>
@@ -4910,7 +4953,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     <div className="todo-pinned-subgroup">
                       {isAll && (
                       <div className="todo-pinned-sublabel" onClick={() => toggleSection('satellite')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('satellite'); }} style={{ cursor: 'pointer' }} title="Satellite — needs doing soon, the default pinned tier">
-                        <span className={`todo-pinned-chevron todo-pinned-sub-chevron${collapsedSections.has('satellite') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
+                        <span className={`todo-pinned-chevron todo-pinned-sub-chevron${chevronCollapsed('satellite') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
                         <span className="todo-pinned-sublabel-icon todo-tier-icon-satellite">{ICONS.ICON_TIER_SATELLITE}</span>
                         <span className="todo-pinned-sublabel-text">Satellite</span>
                         <span className="todo-pinned-sublabel-count">{satelliteTasksDisplay.length}</span>
@@ -4954,7 +4997,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   <div className="todo-pinned-subgroup">
                     {isAll && (
                     <div className="todo-pinned-sublabel" onClick={() => toggleSection('backlog')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('backlog'); }} style={{ cursor: 'pointer' }} title="Backlog — someday work you still want pinned">
-                      <span className={`todo-pinned-chevron todo-pinned-sub-chevron${collapsedSections.has('backlog') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
+                      <span className={`todo-pinned-chevron todo-pinned-sub-chevron${chevronCollapsed('backlog') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
                       <span className="todo-pinned-sublabel-icon todo-tier-icon-backlog">{ICONS.ICON_TIER_BACKLOG}</span>
                       <span className="todo-pinned-sublabel-text">Backlog</span>
                       <span className="todo-pinned-sublabel-count">{backlogTasksDisplay.length}</span>
@@ -4988,7 +5031,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   <div className="todo-pinned-subgroup">
                     {isAll && (
                     <div className="todo-pinned-sublabel" onClick={() => toggleSection('wait')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('wait'); }} style={{ cursor: 'pointer' }} title="Wait — parked tasks, pinned but not actively worked on">
-                      <span className={`todo-pinned-chevron todo-pinned-sub-chevron${collapsedSections.has('wait') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
+                      <span className={`todo-pinned-chevron todo-pinned-sub-chevron${chevronCollapsed('wait') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
                       <span className="todo-pinned-sublabel-icon todo-tier-icon-wait">{ICONS.ICON_TIER_WAIT}</span>
                       <span className="todo-pinned-sublabel-text">Wait</span>
                       <span className="todo-pinned-sublabel-count">{waitTasksDisplay.length}</span>
@@ -5034,7 +5077,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         def={def}
                         isAll={isAll}
                         folded={isFolded(def.id)}
-                        collapsed={collapsedSections.has(def.id)}
+                        collapsed={chevronCollapsed(def.id)}
                         onToggle={toggleSection}
                         visibleIds={render.visibleIds}
                         isEmpty={render.display.length === 0}
@@ -5081,7 +5124,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             <div className={`todo-pinned-section${!isFolded('recent') ? ' todo-pinned-section-recent' : ''}${isAll ? '' : ' todo-pinned-section-solo'}`}>
               {isAll && (
               <div className="todo-pinned-header" onClick={() => toggleSection('recent')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('recent'); }} style={{ cursor: 'pointer' }}>
-                <span className={`todo-pinned-chevron${collapsedSections.has('recent') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
+                <span className={`todo-pinned-chevron${chevronCollapsed('recent') ? '' : ' todo-pinned-chevron-open'}`}>{'\u25B8'}</span>
                 <span className="todo-pinned-label">Recent</span>
                 <span className="todo-pinned-count">{visibleRecentTasks.length}</span>
               </div>
