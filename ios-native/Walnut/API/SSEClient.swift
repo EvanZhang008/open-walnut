@@ -89,6 +89,12 @@ final class SSEClient: @unchecked Sendable {
     private var generation: UInt64 = 0
     private var liveSession: URLSession?
     private static let stallThreshold: TimeInterval = 50
+    /// Single-line buffer cap. Real SSE lines are tiny except the attach
+    /// `snapshot`, which the server now byte-budgets (session-stream-buffer's
+    /// SNAPSHOT_BYTE_BUDGET ≈ 640KB plus JSON overhead) — 4MB is comfortably
+    /// above every legitimate frame while still bounding memory against a
+    /// newline-free garbage stream. Internal for WalnutTests.
+    static let maxLineBytes = 4_194_304
 
     private func touchActivity() {
         stallLock.lock()
@@ -188,13 +194,46 @@ final class SSEClient: @unchecked Sendable {
         session?.invalidateAndCancel()
     }
 
+    /// Oversized-line strikes before the client stops retrying and degrades.
+    /// One oversized line CAN be transient garbage (captive portal); the same
+    /// failure three connections in a row is structural — most likely a
+    /// server whose snapshot line exceeds `maxLineBytes` (audit IO-3): every
+    /// reconnect replays the same giant snapshot, so retrying forever is a
+    /// silent livelock that delivers nothing and burns ~4MB per cycle.
+    /// Internal for WalnutTests.
+    static let maxOversizedStrikes = 3
+
+    /// Distinguishes the oversized-line bail from generic badResponse so the
+    /// run loop can count strikes (a plain APIError.badResponse can't carry
+    /// that meaning — non-200s and decode issues share it).
+    private struct OversizedLineError: Error {}
+
+    /// Backoff policy for a clean EOF (audit TMR-1): only a connection that
+    /// proved REAL (delivered at least one frame, or held long enough that
+    /// per-connection cost amortizes) earns a prompt reconnect. A server that
+    /// 200s-then-closes instantly used to reset backoff every loop — a ~1Hz
+    /// forever storm of fresh URLSessions + TLS handshakes against a
+    /// flapping/captive endpoint. Internal + pure for WalnutTests.
+    static func shouldResetBackoff(deliveredFrame: Bool, connectedSeconds: TimeInterval) -> Bool {
+        deliveredFrame || connectedSeconds > 30
+    }
+
     private func runLoop(generation runGeneration: UInt64) async {
         var backoff: Double = 1
+        var oversizedStrikes = 0
         while !Task.isCancelled {
             do {
-                try await streamOnce(generation: runGeneration)
+                let outcome = try await streamOnce(generation: runGeneration)
                 guard isCurrent(runGeneration) else { return }
-                backoff = 1 // clean EOF — server closed; reconnect promptly
+                oversizedStrikes = 0
+                // Clean EOF: prompt reconnect only for a proven connection
+                // (see shouldResetBackoff — the anti-storm gate).
+                if Self.shouldResetBackoff(
+                    deliveredFrame: outcome.deliveredFrame,
+                    connectedSeconds: outcome.connectedSeconds
+                ) {
+                    backoff = 1
+                }
             } catch is CancellationError {
                 return
             } catch let urlError as URLError where urlError.code == .cancelled {
@@ -204,7 +243,31 @@ final class SSEClient: @unchecked Sendable {
                 // deliberate close: reconnect immediately.
                 if !consumeStallTripped() { return }
                 AppLog.error("sse", "stall watchdog tripped — reconnecting", ["lastEventID": currentLastEventID() ?? "-"])
+                oversizedStrikes = 0
                 backoff = 1
+            } catch is OversizedLineError {
+                oversizedStrikes += 1
+                AppLog.error("sse", "oversized line — server frame exceeds client cap", [
+                    "strikes": "\(oversizedStrikes)", "path": Self.sanitizedPath(url),
+                ])
+                if oversizedStrikes >= Self.maxOversizedStrikes {
+                    // Terminal: reconnecting replays the same oversized frame
+                    // (attach re-sends the snapshot, and Last-Event-ID can't
+                    // skip it — the killed line never yielded an id). Report
+                    // 404 to ride the existing "route unusable → fall back to
+                    // polling" contract both stores already implement; the
+                    // page stays live via the 5s transcript poll instead of
+                    // silently dead behind an eternal reconnect loop (IO-3).
+                    AppLog.error("sse", "oversized-line livelock — abandoning stream, degrading to polling", [
+                        "path": Self.sanitizedPath(url),
+                    ])
+                    if isCurrent(runGeneration) {
+                        onConnectionChange(false)
+                        onHTTPError?(404)
+                    }
+                    return
+                }
+                if isCurrent(runGeneration) { onConnectionChange(false) }
             } catch {
                 AppLog.error("sse", "stream error — backing off", ["error": String(describing: error), "backoff": "\(backoff)s"])
                 if isCurrent(runGeneration) { onConnectionChange(false) }
@@ -215,7 +278,14 @@ final class SSEClient: @unchecked Sendable {
         }
     }
 
-    private func streamOnce(generation streamGeneration: UInt64) async throws {
+    /// What a connection accomplished — the run loop's backoff policy input.
+    private struct StreamOutcome {
+        let deliveredFrame: Bool
+        let connectedSeconds: TimeInterval
+    }
+
+    @discardableResult
+    private func streamOnce(generation streamGeneration: UInt64) async throws -> StreamOutcome {
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
@@ -242,6 +312,9 @@ final class SSEClient: @unchecked Sendable {
         guard isCurrent(streamGeneration) else { throw CancellationError() }
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            AppLog.error("sse", "stream endpoint refused", [
+                "status": String(status), "path": Self.sanitizedPath(url),
+            ])
             if isCurrent(streamGeneration) { onHTTPError?(status) }
             // 404 = route absent (older server) — terminal, don't retry.
             if status == 404 { throw CancellationError() }
@@ -249,6 +322,21 @@ final class SSEClient: @unchecked Sendable {
         }
         if isCurrent(streamGeneration) { onConnectionChange(true) }
         touchActivity()
+        // Stream attach/detach is the spine of any "the app went quiet" report:
+        // whether the phone still had a live turn stream, and for how long, is
+        // otherwise unknowable after the fact.
+        let connectedAt = Date()
+        AppLog.info("sse", "stream connected", [
+            "path": Self.sanitizedPath(url),
+            "resumedFrom": currentLastEventID() ?? "-",
+        ])
+        defer {
+            AppLog.info("sse", "stream disconnected", [
+                "path": Self.sanitizedPath(url),
+                "connectedSeconds": String(Int(Date().timeIntervalSince(connectedAt))),
+                "lastEventID": currentLastEventID() ?? "-",
+            ])
+        }
 
         // Watchdog: any byte (data OR ping comment) counts as activity. If the
         // stream is silent past the threshold, the connection is dead — kill
@@ -268,28 +356,57 @@ final class SSEClient: @unchecked Sendable {
 
         var parser = FrameParser()
         var lineBuffer: [UInt8] = []
+        var deliveredFrame = false
+        var sinceTouch = 0
         for try await byte in bytes {
-            try Task.checkCancellation()
-            touchActivity()
+            // Watchdog feed + cancellation check per LINE (and every 64KB of
+            // an unbroken line), not per byte: touchActivity is an NSLock +
+            // Date() (~32ns), which alone cost ~134ms across a 4MB frame
+            // (audit IO-4) — pure overhead added to event delivery latency.
+            // Granularity stays far below the 50s stall threshold.
+            sinceTouch += 1
+            if sinceTouch >= 65_536 {
+                try Task.checkCancellation()
+                touchActivity()
+                sinceTouch = 0
+            }
             if byte == UInt8(ascii: "\n") {
+                try Task.checkCancellation()
+                touchActivity()
+                sinceTouch = 0
                 var line = lineBuffer
                 if line.last == UInt8(ascii: "\r") { line.removeLast() }
                 lineBuffer.removeAll(keepingCapacity: true)
                 if let frame = parser.consume(line: String(decoding: line, as: UTF8.self)) {
                     if let id = frame.id { setLastEventID(id) }
+                    deliveredFrame = true
                     if isCurrent(streamGeneration) { onEvent(frame) }
                 }
             } else {
                 lineBuffer.append(byte)
-                // A newline-free stream (captive portal, proxy garbage) would
-                // grow this buffer forever — and the stall watchdog never trips
-                // because bytes keep arriving. Real SSE lines are tiny; anything
-                // past 4MB is not our server. Bail out and let the run loop
-                // reconnect with backoff.
-                if lineBuffer.count > 4_194_304 { throw APIError.badResponse }
+                // A single line past the cap is either a newline-free garbage
+                // stream (captive portal — the stall watchdog never trips
+                // because bytes keep arriving) or a server frame bigger than
+                // we'll buffer (a whale `snapshot`). Typed error so the run
+                // loop can count strikes and degrade instead of relooping
+                // through the same frame forever (audit IO-3).
+                if lineBuffer.count > Self.maxLineBytes { throw OversizedLineError() }
             }
         }
         if isCurrent(streamGeneration) { onConnectionChange(false) }
+        return StreamOutcome(
+            deliveredFrame: deliveredFrame,
+            connectedSeconds: Date().timeIntervalSince(connectedAt)
+        )
+    }
+}
+
+extension SSEClient {
+    /// Coarse endpoint template only — session ids and note paths never enter
+    /// client diagnostics (same rule as WalnutAPI.sanitizedPath).
+    fileprivate static func sanitizedPath(_ url: URL) -> String {
+        let segments = url.path.split(separator: "/")
+        return "/" + segments.prefix(3).joined(separator: "/")
     }
 }
 

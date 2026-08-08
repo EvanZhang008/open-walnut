@@ -130,6 +130,71 @@ struct WalnutAPI {
         return created.task
     }
 
+    /// PATCH /api/v1/tasks/:id — update task fields (additive endpoint, works
+    /// on BOTH server modes: a REPLICA applies locally and outbox-syncs back).
+    /// Only non-nil fields ride the wire; `dueDate` "" = explicit clear.
+    /// Answers the updated task in the same slim shape GET /tasks serves.
+    func updateTask(
+        id: String, status: String? = nil, priority: String? = nil,
+        dueDate: String? = nil, project: String? = nil, title: String? = nil,
+        description: String? = nil
+    ) async throws -> WalnutTask {
+        struct Body: Encodable {
+            let status: String?
+            let priority: String?
+            let due_date: String?
+            let project: String?
+            let title: String?
+            let description: String?
+        }
+        let updated: TaskCreated = try await send(
+            "PATCH", "/tasks/\(escape(id))",
+            body: Body(
+                status: status, priority: priority, due_date: dueDate,
+                project: project, title: title, description: description
+            )
+        )
+        return updated.task
+    }
+
+    // MARK: - Session control (model / effort / fork — additive, 2026-08)
+
+    /// Picker data for the model sheet: selectable models + current model/effort.
+    func sessionModelOptions(id: String) async throws -> SessionModelOptions {
+        try await get("/sessions/\(escape(id))/model-options")
+    }
+
+    /// Switch the session's model. `appliedLive` false = persisted only (the
+    /// next --resume spawn picks it up). Long timeout: a live CLI apply waits
+    /// out a control_request round trip (~15s server-side), and the cloud
+    /// relay adds a bridge hop on top.
+    func setSessionModel(id: String, model: String) async throws -> SessionModelChange {
+        try await send("POST", "/sessions/\(escape(id))/model", body: ["model": model], timeout: 45)
+    }
+
+    /// Switch the session's reasoning effort. Unsupported level → 409 conflict.
+    func setSessionEffort(id: String, effort: String) async throws -> SessionEffortChange {
+        try await send("POST", "/sessions/\(escape(id))/effort", body: ["effort": effort], timeout: 45)
+    }
+
+    /// Fork the session into a sibling child task (+ optional first message).
+    /// 201 = accepted, not spawned — the returned sessionId already resolves
+    /// on the transcript/stream endpoints, same contract as POST /sessions.
+    func forkSession(id: String, message: String?) async throws -> SessionForked {
+        struct Body: Encodable {
+            let create_child_task: Bool
+            let message: String?
+        }
+        return try await send(
+            "POST", "/sessions/\(escape(id))/fork",
+            body: Body(
+                create_child_task: true,
+                message: (message?.isEmpty ?? true) ? nil : message
+            ),
+            timeout: 45
+        )
+    }
+
     /// Hosts + frequent working dirs for the New Session sheet. Throws
     /// APIError.server with code "not_supported_cloud" (503) on a REPLICA —
     /// creation is a primary-box capability.
@@ -208,6 +273,12 @@ struct WalnutAPI {
             "POST", "/api/v1/stt/transcribe", body: body, timeout: 120
         )
         return result.text
+    }
+
+    /// Authenticated SSE URL for the live task+session events feed (nil if unpaired).
+    static func eventsFeedURL() -> URL? {
+        guard let base = AppConfig.serverURL else { return nil }
+        return URL(string: "\(base.absoluteString)/api/v1/events")
     }
 
     /// Authenticated SSE URL for a session's live turn stream (nil if unpaired).
@@ -378,7 +449,18 @@ struct WalnutAPI {
     private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
         let started = Date()
         do {
-            return try await session.data(for: request)
+            let result = try await session.data(for: request)
+            // Single funnel for HTTP outcomes — every endpoint in this client
+            // goes through here, so no per-call-site instrumentation is needed.
+            // AppLog's own uploader uses URLSession.shared directly, so this
+            // cannot recurse into log traffic about log traffic.
+            Self.logOutcome(
+                status: (result.1 as? HTTPURLResponse)?.statusCode ?? -1,
+                path: Self.sanitizedPath(request.url),
+                method: request.httpMethod ?? "GET",
+                latencyMs: Int(Date().timeIntervalSince(started) * 1_000)
+            )
+            return result
         } catch {
             let nsError = error as NSError
             // Classify BEFORE logging: view-lifecycle cancellations are normal
@@ -398,6 +480,27 @@ struct WalnutAPI {
                 "latencyMs": String(latency),
             ])
             throw APIError.network(underlying: error)
+        }
+    }
+
+    /// HTTP-level outcome of every request, logged from `decode` (the single
+    /// point every response funnels through). Transport failures are covered by
+    /// `perform` above; this covers the other half — a 4xx/5xx the app quietly
+    /// turned into an error state was previously invisible in a field log, so
+    /// "it just showed an error" was unanswerable.
+    ///
+    /// Success is `debug` (full-dump keeps it: latency-by-endpoint over a day is
+    /// how a slow server shows up), failure is `error` so it also triggers the
+    /// upload debounce.
+    private static func logOutcome(status: Int, path: String, method: String, latencyMs: Int) {
+        let meta = [
+            "path": path, "method": method,
+            "status": String(status), "latencyMs": String(latencyMs),
+        ]
+        if (200...299).contains(status) {
+            AppLog.debug("network", "request ok", meta)
+        } else {
+            AppLog.error("network", "request rejected", meta)
         }
     }
 

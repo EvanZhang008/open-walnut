@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // MARK: - Models for the frozen /api/v1 REST+SSE contract (docs/reference/api-v1.md)
 
@@ -55,6 +56,9 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     let detail: String?
     /// kind == .tool only — clipped tool output for the expanded card, additive.
     let resultPreview: String?
+    /// kind == .tool only — subagent name for Task/Agent delegation rows
+    /// (session transcripts, additive 2026-08); nil on plain tool rows.
+    let agent: String?
 
     // Client-only flags for optimistic user bubbles (not part of the wire format).
     var pending: Bool? = nil
@@ -68,11 +72,11 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     var localImages: [Data]? = nil
 
     private enum CodingKeys: String, CodingKey {
-        case id, role, text, createdAt, kind, source, detail, resultPreview
+        case id, role, text, createdAt, kind, source, detail, resultPreview, agent
     }
 
     init(id: String, role: String, text: String, createdAt: String, kind: Kind?, source: String? = nil,
-         detail: String? = nil, resultPreview: String? = nil) {
+         detail: String? = nil, resultPreview: String? = nil, agent: String? = nil) {
         self.id = id
         self.role = role
         self.text = text
@@ -81,6 +85,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
         self.source = source
         self.detail = detail
         self.resultPreview = resultPreview
+        self.agent = agent
     }
 
     var isUser: Bool { role == "user" }
@@ -245,11 +250,54 @@ extension WalnutTask {
         return f
     }()
     private static let isoPlain = ISO8601DateFormatter()
+    /// Bare "YYYY-MM-DD" (the PATCH due_date contract accepts date-only) —
+    /// ISO8601DateFormatter rejects it, so without this a mobile-set due date
+    /// round-tripped as "no date" in the UI.
+    private static let isoDayOnly: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = .current // a due DAY means the user's local day
+        return f
+    }()
 
-    /// ISO-8601 parse tolerant of fractional seconds (same shape as NotesStore).
+    #if DEBUG
+    /// Formatter-invocation counter for perf gates (TasksDerivedPerfTests):
+    /// a formatter parse is ~26-59µs and sort comparators call parseISO
+    /// O(n log n) times per pass, so the gate asserts a warm derived-list
+    /// pass runs ZERO formatter parses. Counts MISSES only (cache hits are
+    /// the point), so it directly measures the thing the budget depends on.
+    static let isoFormatterParses = OSAllocatedUnfairLock(initialState: 0)
+    #endif
+
+    /// Memoized ISO string → Date. The wire keeps dates as strings and the
+    /// derived Tasks/Sessions lists re-parse them inside sort comparators and
+    /// per-render filters — measured 30,588 formatter parses / ~324ms for ONE
+    /// TasksView body pass at field scale (766 tasks / 351 sessions) before
+    /// this cache. Timestamps are heavily repeated across body evaluations,
+    /// so a memo table turns the steady state into pure dictionary hits.
+    /// Negative results are cached too (a malformed stamp must not re-run
+    /// three formatters per render). Wholesale reset on overflow — cheaper
+    /// than LRU bookkeeping and the working set (~4 stamps x rows) fits.
+    private static let dateCache = OSAllocatedUnfairLock(initialState: [String: Date?]())
+    private static let dateCacheLimit = 16_384
+
+    /// ISO-8601 parse tolerant of fractional seconds (same shape as NotesStore)
+    /// and of bare dates ("2026-08-08"), memoized (thread-safe).
     static func parseISO(_ iso: String?) -> Date? {
         guard let iso else { return nil }
-        return isoFractional.date(from: iso) ?? isoPlain.date(from: iso)
+        if let hit = dateCache.withLock({ $0[iso] }) { return hit }
+        #if DEBUG
+        isoFormatterParses.withLock { $0 += 1 }
+        #endif
+        let parsed = isoFractional.date(from: iso)
+            ?? isoPlain.date(from: iso)
+            ?? isoDayOnly.date(from: iso)
+        dateCache.withLock {
+            if $0.count >= Self.dateCacheLimit { $0.removeAll(keepingCapacity: true) }
+            $0[iso] = parsed
+        }
+        return parsed
     }
 
     var statusKind: TaskStatus { TaskStatus(status) }
@@ -286,6 +334,34 @@ extension WalnutTask {
     static func doneSort(_ a: WalnutTask, _ b: WalnutTask) -> Bool {
         (a.completedAtValue ?? a.updatedAtValue ?? .distantPast)
             > (b.completedAtValue ?? b.updatedAtValue ?? .distantPast)
+    }
+
+    // Decorate-sort-undecorate versions of the comparators above. The
+    // comparator forms compute their keys (incl. a parseISO) on EVERY
+    // comparison — O(n log n) key computations per sort per body eval, the
+    // dominant term of the Tasks tab's 300ms+ derived recompute (audit
+    // MAIN-5). These extract keys once per row and compare cheap tuples.
+    // Semantics are gated identical by TasksDerivedPerfTests.
+
+    /// Same order as `openSort`, with O(n) key extraction.
+    static func openSorted(_ tasks: [WalnutTask]) -> [WalnutTask] {
+        tasks
+            .map { (task: $0, pinned: $0.pinned == true, rank: $0.priorityKind.sortRank,
+                    updated: $0.updatedAtValue ?? .distantPast) }
+            .sorted { a, b in
+                if a.pinned != b.pinned { return a.pinned }
+                if a.rank != b.rank { return a.rank < b.rank }
+                return a.updated > b.updated
+            }
+            .map(\.task)
+    }
+
+    /// Same order as `doneSort`, with O(n) key extraction.
+    static func doneSorted(_ tasks: [WalnutTask]) -> [WalnutTask] {
+        tasks
+            .map { (task: $0, key: $0.completedAtValue ?? $0.updatedAtValue ?? .distantPast) }
+            .sorted { $0.key > $1.key }
+            .map(\.task)
     }
 }
 
@@ -362,6 +438,52 @@ struct SessionCreated: Codable {
     let title: String
 }
 
+// MARK: - Session control (model / effort / fork — additive, 2026-08)
+
+/// GET /api/v1/sessions/:id/model-options — the model picker's data.
+struct SessionModelOptions: Codable {
+    struct Model: Codable, Identifiable, Equatable {
+        let id: String
+        let label: String
+        let supportsEffort: Bool?
+        let supportedEffortLevels: [String]?
+    }
+
+    let models: [Model]
+    /// Active row id (or the raw runtime model when not in the catalog).
+    let current: String?
+    /// The record's requested effort ("low"|"medium"|"high"|"xhigh"|"max").
+    let currentEffort: String?
+}
+
+/// POST /api/v1/sessions/:id/model → 200.
+struct SessionModelChange: Codable {
+    let model: String
+    let cliModel: String?
+    let appliedLive: Bool?
+    /// Codex/ACP sessions reply `{ applied: true, model }` (no appliedLive) —
+    /// the switch took effect immediately there too.
+    let applied: Bool?
+    /// The CLI's read-back truth — may differ if it substituted the value.
+    let effectiveModel: String?
+}
+
+/// POST /api/v1/sessions/:id/effort → 200.
+struct SessionEffortChange: Codable {
+    let effort: String
+    let appliedLive: Bool?
+    let effectiveEffort: String?
+    /// True = the CLI is using a DIFFERENT level than requested (override).
+    let overridden: Bool?
+}
+
+/// POST /api/v1/sessions/:id/fork → 201 (accepted, not spawned).
+struct SessionForked: Codable {
+    let sessionId: String
+    let taskId: String
+    let title: String
+}
+
 /// Slim transcript tail for one session (`/api/v1/sessions/:id/transcript`).
 struct SessionTranscript: Codable {
     struct Message: Codable, Equatable {
@@ -373,6 +495,20 @@ struct SessionTranscript: Codable {
         let detail: String?
         /// kind == "tool" only — clipped tool output, additive.
         let resultPreview: String?
+        /// Task/Agent delegation rows only (additive, 2026-08) — the subagent's
+        /// name, rendered as a badge on the tool chip.
+        let agent: String?
+
+        init(role: String, text: String, timestamp: String, kind: String?,
+             detail: String? = nil, resultPreview: String? = nil, agent: String? = nil) {
+            self.role = role
+            self.text = text
+            self.timestamp = timestamp
+            self.kind = kind
+            self.detail = detail
+            self.resultPreview = resultPreview
+            self.agent = agent
+        }
     }
 
     let sessionId: String
@@ -448,6 +584,39 @@ extension WalnutSession {
     /// Recency order — most recently active first.
     static func recencySort(_ a: WalnutSession, _ b: WalnutSession) -> Bool {
         (a.lastActiveValue ?? .distantPast) > (b.lastActiveValue ?? .distantPast)
+    }
+
+    /// Same order as `recencySort`, with O(n) key extraction (see
+    /// WalnutTask.openSorted for why: comparator forms re-run parseISO per
+    /// comparison; measured 466ms for one 351-session recency sort pre-cache).
+    static func recencySorted(_ sessions: [WalnutSession]) -> [WalnutSession] {
+        sessions
+            .map { (session: $0, key: $0.lastActiveValue ?? Date.distantPast) }
+            .sorted { $0.key > $1.key }
+            .map(\.session)
+    }
+
+    /// "global.anthropic.claude-opus-4-8[1m]" → "Opus 4.8". Full version
+    /// digits matter ("Opus 4.8", never a bare "Opus") — strip decorations
+    /// like "[1m]" or "-v1" BEFORE parsing so they can't eat a version part.
+    /// Shared by the session rows and the conversation nav subtitle.
+    static func shortModelName(_ model: String) -> String {
+        var lower = model.lowercased()
+        while let bracket = lower.range(of: "[", options: .backwards) {
+            lower = String(lower[..<bracket.lowerBound])
+        }
+        for family in ["opus", "sonnet", "haiku", "fable"] where lower.contains(family) {
+            if let range = lower.range(of: family) {
+                let tail = lower[range.upperBound...]
+                let digits = tail.split(separator: "-")
+                    .prefix(while: { !$0.isEmpty && $0.allSatisfy(\.isNumber) })
+                    .prefix(2)
+                let version = digits.joined(separator: ".")
+                let name = family.prefix(1).uppercased() + family.dropFirst()
+                return version.isEmpty ? name : "\(name) \(version)"
+            }
+        }
+        return model
     }
 }
 

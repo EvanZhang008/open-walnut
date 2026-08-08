@@ -261,15 +261,23 @@ struct NewSessionSheet: View {
             DiskCache.save(opts, key: Self.optionsCacheKey)
             apply(opts)
         } catch let APIError.server(_, code, _, _, _) where code == "not_supported_cloud" {
-            // A REPLICA can't create sessions no matter what the cache says.
-            // Two distinct actions: `options = nil` overrides the cached form
-            // already painted THIS open; `DiskCache.remove` stops every FUTURE
-            // open from flashing a usable-looking form (Start-able before the
-            // 503 lands) that then flips to unavailable. Neither substitutes
-            // for the other.
+            // Only a PRE-2026-08 cloud server answers this (current replicas
+            // relay launch-options to the primary over the bridge). Same two
+            // distinct actions as ever: `options = nil` overrides the cached
+            // form already painted THIS open; `DiskCache.remove` stops every
+            // FUTURE open from flashing a usable-looking form that then flips
+            // to unavailable. Neither substitutes for the other.
             options = nil
             DiskCache.remove(key: Self.optionsCacheKey)
-            loadFailed = "Sessions can only be created when the app talks to your primary box directly — this server is the cloud companion."
+            loadFailed = "This cloud companion is too old to create sessions — update it, or connect the app to your primary box directly."
+        } catch let APIError.server(_, code, msg, _, _) where code == "session_launch_needs_upgrade" || code == "bridge_offline" {
+            // Transient/self-healing cloud-relay states: the daemon upgrades
+            // on the next primary reconnect / the bridge redials. Keep the
+            // cache (the form is valid once the relay recovers) but show the
+            // honest state with Retry when nothing is on screen yet.
+            if options == nil {
+                loadFailed = msg
+            }
         } catch {
             // With cached options on screen the form still works (host list is
             // near-static); only a truly empty sheet degrades to the error state.
@@ -383,9 +391,18 @@ struct NewSessionSheet: View {
             onCreated(session)
             dismiss()
         } catch let APIError.server(_, code, msg, _, _) {
-            createError = code == "not_supported_cloud"
-                ? "Creation needs a direct connection to your primary box."
-                : msg
+            // Honest, actionable messages for the cloud-relay failure ladder;
+            // everything else (validation 4xx from the primary) verbatim.
+            switch code {
+            case "not_supported_cloud":
+                createError = "This cloud companion is too old to create sessions — update it, or connect directly to your primary box."
+            case "session_launch_needs_upgrade":
+                createError = "Your primary box's daemon needs an update for mobile session launch — it updates automatically on its next reconnect. Try again in a minute."
+            case "bridge_offline":
+                createError = "The primary box isn't reachable from the cloud right now — try again when it reconnects."
+            default:
+                createError = msg
+            }
         } catch {
             createError = error.localizedDescription
         }

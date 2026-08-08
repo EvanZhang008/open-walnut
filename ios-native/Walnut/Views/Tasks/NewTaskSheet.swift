@@ -2,9 +2,10 @@ import SwiftUI
 
 /// Quick task creation — todo-app grade: type a title, hit Add. Optional
 /// project (pick an existing one or type a new name — the server auto-creates
-/// it), priority, and due date. Mirrors NewSessionSheet's structure: the
-/// entry point is hidden on a REPLICA (task writes run on the primary box),
-/// and the sheet degrades to a clear error if it ever hits the 503.
+/// it), priority, and due date. Works against the primary box AND the cloud
+/// companion (2026-08: the replica creates locally and the task outbox syncs
+/// back to the primary); the not_supported_cloud handling below only fires
+/// against a pre-2026-08 cloud server and degrades to a clear error.
 struct NewTaskSheet: View {
     /// Called with the created task right before dismissal.
     var onCreated: ((WalnutTask) -> Void)? = nil

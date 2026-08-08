@@ -17,6 +17,12 @@ struct TasksView: View {
     /// Local search — filters tasks (title/project) and sessions
     /// (title/task/host/cwd) in place; no server round-trip.
     @State private var searchText = ""
+    /// Locate-me flash for a just-created task (scroll target + row tint).
+    @State private var highlightedTaskId: String?
+    /// True while the inline add row's field is focused — rapid consecutive
+    /// adds must not yank the scroll position / filter out from under the
+    /// keyboard (Reminders keeps you anchored on the field).
+    @State private var inlineAddActive = false
 
     var body: some View {
         NavigationStack(path: $navPath) {
@@ -31,37 +37,40 @@ struct TasksView: View {
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search tasks & sessions")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { StatusBadge() }
-                // Creation is a primary-box capability (a REPLICA has no spawn
-                // path) — hide the entry point entirely on the cloud companion.
-                if connection.status?.mode != .replica {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Menu {
-                            Button {
-                                showNewTask = true
-                            } label: {
-                                Label("New Task", systemImage: "checkmark.circle")
-                            }
-                            .accessibilityIdentifier("tasks.create")
-                            Button {
-                                showNewSession = true
-                            } label: {
-                                Label("New Session", systemImage: "terminal")
-                            }
-                            .accessibilityIdentifier("sessions.create")
+                // BOTH create entries show on BOTH server modes (2026-08).
+                // TASK creation: the replica writes its local store and the
+                // task outbox syncs it back to the primary. SESSION creation:
+                // the replica relays over the bridge to the primary box
+                // (narrow session.launch command → quick-start there); an
+                // old cloud server / old daemon degrades to a clear error in
+                // the sheet (not_supported_cloud / session_launch_needs_upgrade).
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button {
+                            showNewTask = true
                         } label: {
-                            Image(systemName: "plus.circle.fill")
-                                .foregroundStyle(Theme.tint)
+                            Label("New Task", systemImage: "checkmark.circle")
                         }
-                        // Automation compat: the collapsed Menu renders as ONE
-                        // accessibility element (a button), and SwiftUI surfaces
-                        // the identifier applied to the Menu itself — not one on
-                        // the label view. Existing Maestro flows tap "sessions.new"
-                        // to start session creation, so the menu container keeps
-                        // that id (tap → menu opens → tap "sessions.create").
-                        // The menu ITEMS carry distinct ids ("tasks.create" /
-                        // "sessions.create") so open-menu taps are unambiguous.
-                        .accessibilityIdentifier("sessions.new")
+                        .accessibilityIdentifier("tasks.create")
+                        Button {
+                            showNewSession = true
+                        } label: {
+                            Label("New Session", systemImage: "terminal")
+                        }
+                        .accessibilityIdentifier("sessions.create")
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundStyle(Theme.tint)
                     }
+                    // Automation compat: the collapsed Menu renders as ONE
+                    // accessibility element (a button), and SwiftUI surfaces
+                    // the identifier applied to the Menu itself — not one on
+                    // the label view. Existing Maestro flows tap "sessions.new"
+                    // to start session creation, so the menu container keeps
+                    // that id (tap → menu opens → tap "sessions.create").
+                    // The menu ITEMS carry distinct ids ("tasks.create" /
+                    // "sessions.create") so open-menu taps are unambiguous.
+                    .accessibilityIdentifier("sessions.new")
                 }
             }
             .sheet(item: $selected) { task in
@@ -89,12 +98,23 @@ struct TasksView: View {
     }
 
     // MARK: - Search
+    //
+    // Derived-collection discipline (audit MAIN-5, 2026-08-08): every helper
+    // below is a STATIC PURE function over (rows, query) so (a) the perf gate
+    // in TasksDerivedPerfTests can drive the exact production code, and
+    // (b) body passes can bind the result ONCE instead of recomputing per
+    // reference. The store memoizes its slices per data generation; these
+    // helpers are the remaining O(visible rows) per body pass.
+
+    /// Trimmed search query ("" = match everything).
+    private var trimmedQuery: String {
+        searchText.trimmingCharacters(in: .whitespaces)
+    }
 
     /// Case-insensitive substring match across task title + project.
     /// (The v1 projection has no separate category field — project is the
     /// grouping layer, so title/project covers what the list shows.)
-    private func taskMatchesSearch(_ task: WalnutTask) -> Bool {
-        let q = searchText.trimmingCharacters(in: .whitespaces)
+    static func taskMatches(_ task: WalnutTask, query q: String) -> Bool {
         guard !q.isEmpty else { return true }
         return task.title.localizedCaseInsensitiveContains(q)
             || task.project.localizedCaseInsensitiveContains(q)
@@ -102,8 +122,7 @@ struct TasksView: View {
 
     /// Case-insensitive substring match across session title, owning-task
     /// title, host, and cwd.
-    private func sessionMatchesSearch(_ session: WalnutSession) -> Bool {
-        let q = searchText.trimmingCharacters(in: .whitespaces)
+    static func sessionMatches(_ session: WalnutSession, query q: String) -> Bool {
         guard !q.isEmpty else { return true }
         if session.title?.localizedCaseInsensitiveContains(q) == true { return true }
         if session.taskTitle?.localizedCaseInsensitiveContains(q) == true { return true }
@@ -112,10 +131,17 @@ struct TasksView: View {
         return false
     }
 
+    private func sessionMatchesSearch(_ session: WalnutSession) -> Bool {
+        Self.sessionMatches(session, query: trimmedQuery)
+    }
+
     // MARK: - List
 
-    private var sections: [(project: String, tasks: [WalnutTask])] {
-        let filtered = tasks.tasks(for: activeFilter).filter(taskMatchesSearch)
+    /// Group already-sorted task rows by project, headers A→Z.
+    static func sections(
+        from rows: [WalnutTask], query: String
+    ) -> [(project: String, tasks: [WalnutTask])] {
+        let filtered = rows.filter { taskMatches($0, query: query) }
         let grouped = Dictionary(grouping: filtered) { task in
             task.project.isEmpty ? "Inbox" : task.project
         }
@@ -125,80 +151,192 @@ struct TasksView: View {
             .sorted { $0.project.localizedCaseInsensitiveCompare($1.project) == .orderedAscending }
     }
 
+    private var sections: [(project: String, tasks: [WalnutTask])] {
+        Self.sections(from: tasks.tasks(for: activeFilter), query: trimmedQuery)
+    }
+
     private var list: some View {
-        List {
-            if !connection.online {
-                OfflineBanner(text: "Offline — tasks are read-only from cache")
-                    .listRowInsets(EdgeInsets())
-                    .listRowBackground(Color.clear)
-            }
-
-            Section {
-                SmartListCards(activeFilter: $activeFilter)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 8, trailing: 12))
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-            }
-
-            // Live sessions ride the top of every task filter (except the
-            // Sessions filter, which shows the full Pinned/Active/Recent list).
-            if activeFilter != .sessions {
-                activeSessionsSection
-            }
-
-            if activeFilter == .sessions {
-                sessionSections
-            } else if sections.isEmpty {
-                Section {
-                    Text(emptyText)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.vertical, 24)
-                        .listRowSeparator(.hidden)
+        ScrollViewReader { proxy in
+            // Bind the derived sections ONCE per body pass — the old computed-
+            // property form was evaluated at every reference (isEmpty check +
+            // ForEach = 2 full filter+group+sort walks per pass).
+            let sections = self.sections
+            List {
+                if !connection.online {
+                    OfflineBanner(text: "Offline — tasks are read-only from cache")
+                        .listRowInsets(EdgeInsets())
                         .listRowBackground(Color.clear)
                 }
-            } else {
-                ForEach(sections, id: \.project) { section in
-                    Section(section.project) {
-                        ForEach(section.tasks) { task in
-                            Button { selected = task } label: {
-                                TaskRow(task: task)
+
+                Section {
+                    SmartListCards(activeFilter: $activeFilter)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 8, trailing: 12))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                }
+
+                // Live sessions ride the top of every task filter (except the
+                // Sessions filter, which shows the full Pinned/Active/Recent list).
+                if activeFilter != .sessions {
+                    activeSessionsSection
+                }
+
+                if activeFilter == .sessions {
+                    sessionSections
+                } else if sections.isEmpty {
+                    Section {
+                        Text(emptyText)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .padding(.vertical, 24)
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                    }
+                } else {
+                    ForEach(sections, id: \.project) { section in
+                        Section(section.project) {
+                            ForEach(section.tasks) { task in
+                                Button { selected = task } label: {
+                                    TaskRow(task: task)
+                                }
+                                .buttonStyle(.plain)
+                                .id("task-\(task.id)")
+                                // Locate-me flash for a just-created task.
+                                .listRowBackground(
+                                    task.id == highlightedTaskId ? Theme.tintSoft : nil
+                                )
+                                .accessibilityIdentifier("tasks.row.\(task.id)")
+                                // Quick status toggle without opening the sheet:
+                                // leading swipe = todo↔done (Reminders muscle
+                                // memory); long-press menu mirrors it.
+                                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                    Button {
+                                        toggleDone(task)
+                                    } label: {
+                                        Label(
+                                            task.isDone ? "Reopen" : "Done",
+                                            systemImage: task.isDone ? "arrow.uturn.backward.circle" : "checkmark.circle.fill"
+                                        )
+                                    }
+                                    .tint(task.isDone ? .secondary : Theme.success)
+                                }
+                                .contextMenu {
+                                    Button {
+                                        toggleDone(task)
+                                    } label: {
+                                        Label(
+                                            task.isDone ? "Mark as To Do" : "Mark as Done",
+                                            systemImage: task.isDone ? "circle" : "checkmark.circle.fill"
+                                        )
+                                    }
+                                    Button {
+                                        selected = task
+                                    } label: {
+                                        Label("Details", systemImage: "info.circle")
+                                    }
+                                }
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("tasks.row.\(task.id)")
                         }
                     }
                 }
-            }
 
-            if let synced = tasks.syncedAt {
-                Section {
-                    Text("Synced \(synced.formatted(.relative(presentation: .named)))")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .listRowSeparator(.hidden)
-                        .listRowBackground(Color.clear)
+                // Apple Reminders-style inline add — a persistent row at the
+                // BOTTOM of every task list (not the Sessions tab): tap →
+                // inline TextField, Return creates + keeps typing for rapid
+                // consecutive adds. Goes to Inbox; the toolbar "+" menu keeps
+                // the full sheet for project/priority/due picks.
+                if activeFilter != .sessions {
+                    Section {
+                        InlineAddTaskRow(isActive: $inlineAddActive)
+                    }
+                }
+
+                if let synced = tasks.syncedAt {
+                    Section {
+                        Text("Synced \(synced.formatted(.relative(presentation: .named)))")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                    }
                 }
             }
-        }
-        .listStyle(.insetGrouped)
-        .accessibilityIdentifier("tasks.list")
-        .refreshable {
-            async let t: Void = tasks.loadTasks()
-            async let se: Void = tasks.loadSessions()
-            _ = await (t, se)
-        }
-        // Gated: on a background/prewarm launch the tab's `.task` would fire
-        // network fetches before the app is ever in front of the user (P0-2).
-        .task {
-            LaunchGate.shared.whenActive {
+            .listStyle(.insetGrouped)
+            .accessibilityIdentifier("tasks.list")
+            // Failed quick-toggle: the optimistic row already rolled back —
+            // tell the user why (sync-source conflict, offline, …).
+            .alert("Couldn't update task", isPresented: Binding(
+                get: { toggleError != nil },
+                set: { if !$0 { toggleError = nil } }
+            )) {
+                Button("OK", role: .cancel) { toggleError = nil }
+            } message: {
+                Text(toggleError ?? "")
+            }
+            .refreshable {
                 async let t: Void = tasks.loadTasks()
                 async let se: Void = tasks.loadSessions()
                 _ = await (t, se)
             }
+            // Gated: on a background/prewarm launch the tab's `.task` would fire
+            // network fetches before the app is ever in front of the user (P0-2).
+            .task {
+                LaunchGate.shared.whenActive {
+                    async let t: Void = tasks.loadTasks()
+                    async let se: Void = tasks.loadSessions()
+                    _ = await (t, se)
+                }
+            }
+            .animation(.snappy(duration: 0.25), value: activeFilter)
+            // Locate a just-created task: switch to a filter that shows it,
+            // scroll to it, and flash its row — "created but can't find it"
+            // was a real complaint. Skipped while the inline add row is
+            // focused (rapid consecutive adds must not yank the scroll away
+            // from the keyboard — the row appears in place instead).
+            .onChange(of: tasks.lastCreatedTaskId) { _, newId in
+                guard let newId else { return }
+                if inlineAddActive {
+                    flashHighlight(newId)
+                    return
+                }
+                if activeFilter == .sessions || !tasks.tasks(for: activeFilter).contains(where: { $0.id == newId }) {
+                    activeFilter = .allOpen
+                }
+                flashHighlight(newId)
+                // Next runloop: the (possibly) new filter's rows must exist
+                // before scrollTo can target one.
+                DispatchQueue.main.async {
+                    withAnimation(.snappy(duration: 0.35)) {
+                        proxy.scrollTo("task-\(newId)", anchor: .center)
+                    }
+                }
+            }
         }
-        .animation(.snappy(duration: 0.25), value: activeFilter)
+    }
+
+    /// One-tap todo↔done from a row (swipe / context menu). Optimistic via the
+    /// store; a failure surfaces as a transient alert-style banner row is
+    /// overkill here — reuse the store's error line on next refresh instead.
+    @State private var toggleError: String?
+    private func toggleDone(_ task: WalnutTask) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Task {
+            if let error = await tasks.toggleDone(task) {
+                toggleError = error
+            }
+        }
+    }
+
+    /// Tint the row for a few seconds, then fade the highlight out.
+    private func flashHighlight(_ taskId: String) {
+        withAnimation(.easeIn(duration: 0.2)) { highlightedTaskId = taskId }
+        Task {
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            if highlightedTaskId == taskId {
+                withAnimation(.easeOut(duration: 0.6)) { highlightedTaskId = nil }
+            }
+        }
     }
 
     private var emptyText: String {
@@ -244,12 +382,14 @@ struct TasksView: View {
     /// desktop's Pinned list holds ~44 open tasks. Cross-reference the TASKS
     /// projection (fresh pin + status) instead; fall back to the session flag
     /// only when the tasks list hasn't loaded.
-    private var pinnedScopeSessions: [WalnutSession] {
+    static func pinnedScopeSessions(
+        tasks: [WalnutTask], sessions: [WalnutSession]
+    ) -> [WalnutSession] {
         let pinnedOpenTaskIds = Set(
-            tasks.tasks.filter { $0.pinned == true && $0.statusKind != .done }.map(\.id)
+            tasks.filter { $0.pinned == true && $0.statusKind != .done }.map(\.id)
         )
         var latest: [String: WalnutSession] = [:]
-        for s in tasks.sessions {
+        for s in sessions {
             let isPinnedNow = pinnedOpenTaskIds.isEmpty
                 ? s.isPinned
                 : (s.taskId.map { pinnedOpenTaskIds.contains($0) } ?? false)
@@ -264,13 +404,17 @@ struct TasksView: View {
         }
     }
 
+    private var pinnedScopeSessions: [WalnutSession] {
+        Self.pinnedScopeSessions(tasks: tasks.tasks, sessions: tasks.sessions)
+    }
+
     private var scopedSessions: [WalnutSession] {
         let scoped: [WalnutSession]
         switch sessionScope {
         case .pinned: scoped = pinnedScopeSessions
         // Recent caps AFTER filtering so a search can surface older sessions.
-        case .recent: scoped = Array(tasks.sessions.sorted(by: WalnutSession.recencySort).filter(sessionMatchesSearch).prefix(50))
-        case .all: scoped = tasks.sessions.sorted(by: WalnutSession.recencySort)
+        case .recent: scoped = Array(WalnutSession.recencySorted(tasks.sessions).filter(sessionMatchesSearch).prefix(50))
+        case .all: scoped = WalnutSession.recencySorted(tasks.sessions)
         }
         return sessionScope == .recent ? scoped : scoped.filter(sessionMatchesSearch)
     }
@@ -279,7 +423,7 @@ struct TasksView: View {
     /// task carries a focus_tier: `focus`, `backlog`, `wait`, or (default/absent/
     /// unrecognized — incl. custom ct_* tiers, per api-v1) satellite.
     /// Ordered Focus → Satellite → Backlog → Wait to match the desktop reading order.
-    private enum FocusTier: String, CaseIterable {
+    enum FocusTier: String, CaseIterable {
         case focus, satellite, backlog, wait
         var title: String {
             switch self {
@@ -291,7 +435,7 @@ struct TasksView: View {
         }
     }
 
-    private func tier(of session: WalnutSession) -> FocusTier {
+    private static func tier(of session: WalnutSession) -> FocusTier {
         switch session.focusTier {
         case "focus": return .focus
         case "backlog": return .backlog
@@ -302,12 +446,20 @@ struct TasksView: View {
 
     /// Pinned sessions grouped by focus tier, in Focus → Satellite → Backlog → Wait
     /// order, dropping empty tiers.
-    private var pinnedTierGroups: [(tier: FocusTier, sessions: [WalnutSession])] {
-        let grouped = Dictionary(grouping: pinnedScopeSessions.filter(sessionMatchesSearch), by: tier)
+    static func pinnedTierGroups(
+        pinned: [WalnutSession], query: String
+    ) -> [(tier: FocusTier, sessions: [WalnutSession])] {
+        let grouped = Dictionary(
+            grouping: pinned.filter { sessionMatches($0, query: query) }, by: tier(of:)
+        )
         return FocusTier.allCases.compactMap { t in
             guard let rows = grouped[t], !rows.isEmpty else { return nil }
             return (t, rows)
         }
+    }
+
+    private var pinnedTierGroups: [(tier: FocusTier, sessions: [WalnutSession])] {
+        Self.pinnedTierGroups(pinned: pinnedScopeSessions, query: trimmedQuery)
     }
 
     @ViewBuilder
@@ -325,6 +477,10 @@ struct TasksView: View {
             .accessibilityIdentifier("sessions.scope")
         }
 
+        // Bind ONCE per body pass (each reference used to recompute the full
+        // filter+sort walk — isEmpty check, ForEach, and the count header
+        // were three separate evaluations).
+        let scoped = self.scopedSessions
         if tasks.sessionsNotSyncedYet && tasks.sessions.isEmpty {
             Section {
                 Text("Sessions not synced yet.")
@@ -334,7 +490,7 @@ struct TasksView: View {
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
             }
-        } else if scopedSessions.isEmpty {
+        } else if scoped.isEmpty {
             Section {
                 Text(emptyText)
                     .foregroundStyle(.secondary)
@@ -360,19 +516,19 @@ struct TasksView: View {
             // (recent sessions are usually pinned), so a bottom footer read
             // as "the buttons do nothing".
             Section {
-                ForEach(scopedSessions) { session in sessionRow(session) }
+                ForEach(scoped) { session in sessionRow(session) }
             } header: {
-                Text(scopeHeader)
+                Text(scopeHeader(count: scoped.count))
             }
             .id(sessionScope) // force a fresh section render per scope
         }
     }
 
-    private var scopeHeader: String {
+    private func scopeHeader(count: Int) -> String {
         switch sessionScope {
-        case .pinned: return "\(scopedSessions.count) pinned — one per task"
-        case .recent: return "Last \(scopedSessions.count) by activity"
-        case .all: return "All \(scopedSessions.count) sessions"
+        case .pinned: return "\(count) pinned — one per task"
+        case .recent: return "Last \(count) by activity"
+        case .all: return "All \(count) sessions"
         }
     }
 
@@ -394,6 +550,117 @@ struct TasksView: View {
             Button("Retry") { Task { await tasks.loadTasks() } }
                 .buttonStyle(.borderedProminent)
                 .tint(Theme.tint)
+        }
+    }
+}
+
+// MARK: - Inline add row (Apple Reminders behavior)
+
+/// Persistent "+ New Task" row at the bottom of the task list. Tap → becomes
+/// an inline TextField; Return creates immediately (Inbox, no project) and
+/// KEEPS the field active for rapid consecutive adds — exactly Reminders'
+/// behavior. Tap-away/dismiss with an empty field collapses back to the
+/// button. Creation goes through the same TasksStore.createTask path as the
+/// sheet, so the optimistic insert + pending overlay + locate-me flash all
+/// apply.
+struct InlineAddTaskRow: View {
+    /// Bubbles focus state up so the list can suppress its scroll-to-created
+    /// behavior while the user is chain-adding.
+    @Binding var isActive: Bool
+
+    @Environment(TasksStore.self) private var tasks
+
+    @State private var title = ""
+    @State private var editing = false
+    @State private var submitting = false
+    @State private var errorMessage: String?
+    @FocusState private var fieldFocused: Bool
+
+    var body: some View {
+        Group {
+            if editing {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "circle")
+                            .font(.body)
+                            .foregroundStyle(.tertiary)
+                        TextField("New task", text: $title)
+                            .focused($fieldFocused)
+                            .submitLabel(.done)
+                            .onSubmit { submit() }
+                            .disabled(submitting)
+                            .accessibilityIdentifier("tasks.inlineAdd.field")
+                        if submitting {
+                            ProgressView().controlSize(.small)
+                        }
+                    }
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundStyle(Theme.danger)
+                    }
+                }
+                .onChange(of: fieldFocused) { _, focused in
+                    isActive = focused
+                    // Tap-away with nothing typed = cancel (Reminders behavior).
+                    // Mid-submit blur (keyboard dropped by the async create)
+                    // must not collapse the row before the task lands.
+                    if !focused && !submitting && title.trimmingCharacters(in: .whitespaces).isEmpty {
+                        collapse()
+                    }
+                }
+            } else {
+                Button {
+                    editing = true
+                    errorMessage = nil
+                    // Next runloop: the TextField must exist before focusing.
+                    DispatchQueue.main.async { fieldFocused = true }
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.body)
+                            .foregroundStyle(Theme.tint)
+                        Text("New Task")
+                            .foregroundStyle(Theme.tint)
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("tasks.inlineAdd")
+            }
+        }
+    }
+
+    private func collapse() {
+        editing = false
+        title = ""
+        errorMessage = nil
+        isActive = false
+    }
+
+    private func submit() {
+        let trimmed = title.trimmingCharacters(in: .whitespaces)
+        // Return on an empty field = done adding (Reminders behavior).
+        guard !trimmed.isEmpty else { collapse(); return }
+        guard !submitting else { return }
+        submitting = true
+        errorMessage = nil
+        Task {
+            defer { submitting = false }
+            do {
+                _ = try await tasks.createTask(title: trimmed)
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                // Stay active for the next one — clear the text, keep focus.
+                title = ""
+                fieldFocused = true
+            } catch let APIError.server(_, _, msg, _, _) {
+                errorMessage = msg
+                fieldFocused = true
+            } catch {
+                errorMessage = error.localizedDescription
+                fieldFocused = true
+            }
         }
     }
 }
