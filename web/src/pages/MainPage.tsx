@@ -523,6 +523,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Resizable panels
   const todoPanel = useResizablePanel('open-walnut-todo-width', 25, 'left');
   const sessionPanel = useResizablePanel('walnut-session-panel-width-v2', 35);
+  const calendarPanel = useResizablePanel('open-walnut-calendar-width', 20, 'left');
 
   // Merge sessionPanel.panelRef (for width resize observer) with auto-animate's
   // callback ref on the sessions container. Must be stable — a new function
@@ -1705,7 +1706,16 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       {todoVisible && <div className="todo-resize-handle" {...todoPanel.handleProps} />}
 
       {/* Calendar day-agenda panel (slide-out, toggled via Sidebar) */}
-      {calendarVisible && <CalendarSidePanel onClose={() => setCalendarVisible(false)} />}
+      {calendarVisible && (
+        <>
+          <CalendarSidePanel
+            onClose={() => setCalendarVisible(false)}
+            width={calendarPanel.width}
+            panelRef={calendarPanel.panelRef}
+          />
+          <div className="cal-side-resize-handle" {...calendarPanel.handleProps} />
+        </>
+      )}
 
       {/* Routines Panel (slide-out, toggled via Sidebar) */}
       {routinesVisible && (

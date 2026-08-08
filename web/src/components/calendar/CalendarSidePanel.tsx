@@ -22,9 +22,12 @@ import { CalendarItemPopover } from './CalendarItemPopover';
 
 interface Props {
   onClose: () => void;
+  /** Viewport-% width from useResizablePanel; falls back to the CSS default. */
+  width?: string;
+  panelRef?: React.RefObject<HTMLDivElement | null>;
 }
 
-export function CalendarSidePanel({ onClose }: Props) {
+export function CalendarSidePanel({ onClose, width, panelRef: externalPanelRef }: Props) {
   const { tasks, update, create } = useTasksContext();
   const [day, setDay] = useState(() => formatDateOnly(new Date()));
   const anchor = useMemo(() => parseDateLocal(day), [day]);
@@ -34,7 +37,10 @@ export function CalendarSidePanel({ onClose }: Props) {
   const [ctxTarget, setCtxTarget] = useState<CalendarContextTarget | null>(null);
   const [openItem, setOpenItem] = useState<{ item: CalendarItem; anchorEl: HTMLElement } | null>(null);
   const metricsRef = useRef<GridMetrics | null>(null);
-  const panelRef = useRef<HTMLDivElement | null>(null);
+  const internalPanelRef = useRef<HTMLDivElement | null>(null);
+  // One element, two consumers: the drag-bus hit-test reads it, and MainPage's
+  // useResizablePanel needs it for the `.resizing` class toggle mid-drag.
+  const panelRef = externalPanelRef ?? internalPanelRef;
 
   // ── Cross-panel drop target (drag bus) ──
   // TodoPanel cards ride the drag bus (their dnd-kit context can't reach this
@@ -132,7 +138,12 @@ export function CalendarSidePanel({ onClose }: Props) {
     : calendar.sources.some((s) => s.available && s.enabled);
 
   return (
-    <div className="cal-side-panel" data-testid="cal-side-panel" ref={panelRef}>
+    <div
+      className="cal-side-panel"
+      data-testid="cal-side-panel"
+      ref={panelRef}
+      style={width ? { width } : undefined}
+    >
       <div className="cal-side-header">
         <span className="cal-side-title">
           {isToday ? 'Today' : anchor.toLocaleDateString('en', { weekday: 'short', month: 'short', day: 'numeric' })}

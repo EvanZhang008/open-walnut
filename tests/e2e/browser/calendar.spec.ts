@@ -940,6 +940,34 @@ test.describe('Calendar view', () => {
     // artifacts — the task still renders as a plain row (now scheduled).
     await expect(panel.locator(`.cal-chip[data-item-id="task-start:${task.id}"]`)).toBeVisible()
   })
+
+  test('homepage calendar panel resizes by dragging its right edge and persists', async ({ page }) => {
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    await page.click('[data-testid="sidebar-toggle-calendar"]')
+    const panel = page.locator('[data-testid="cal-side-panel"]')
+    await expect(panel).toBeVisible()
+
+    const before = (await panel.boundingBox())!.width
+    const handle = page.locator('.cal-side-resize-handle')
+    const hb = await handle.boundingBox()
+    if (!hb) throw new Error('resize handle not visible')
+
+    // width:0 handle — the ±3px ::before zone straddles the seam.
+    await page.mouse.move(hb.x, hb.y + 300)
+    await page.mouse.down()
+    await page.mouse.move(hb.x + 150, hb.y + 300, { steps: 8 })
+    await page.mouse.up()
+
+    const after = (await panel.boundingBox())!.width
+    expect(after).toBeGreaterThan(before + 100)
+
+    // Width is persisted (localStorage) and survives a reload.
+    await page.reload()
+    await page.waitForLoadState('networkidle')
+    await expect(panel).toBeVisible()
+    expect((await panel.boundingBox())!.width).toBeGreaterThan(before + 100)
+  })
 })
 
 test.describe('Calendar touch drag (mobile)', () => {

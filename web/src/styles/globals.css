@@ -7924,7 +7924,8 @@ img[data-lightbox-src],
 .session-resize-handle,
 .memory-resize-handle,
 .notes-resize-handle,
-.session-col-resize-handle {
+.session-col-resize-handle,
+.cal-side-resize-handle {
   width: 0;
   flex-shrink: 0;
   position: relative;
@@ -7935,7 +7936,8 @@ img[data-lightbox-src],
 .session-resize-handle::before,
 .memory-resize-handle::before,
 .notes-resize-handle::before,
-.session-col-resize-handle::before {
+.session-col-resize-handle::before,
+.cal-side-resize-handle::before {
   content: '';
   position: absolute;
   top: 0;
@@ -7948,7 +7950,8 @@ img[data-lightbox-src],
 .session-resize-handle::after,
 .memory-resize-handle::after,
 .notes-resize-handle::after,
-.session-col-resize-handle::after {
+.session-col-resize-handle::after,
+.cal-side-resize-handle::after {
   content: '';
   position: absolute;
   top: 0;
@@ -7964,7 +7967,8 @@ img[data-lightbox-src],
 .session-resize-handle:hover::after,
 .memory-resize-handle:hover::after,
 .notes-resize-handle:hover::after,
-.session-col-resize-handle:hover::after {
+.session-col-resize-handle:hover::after,
+.cal-side-resize-handle:hover::after {
   opacity: 0.5;
 }
 
@@ -8024,7 +8028,8 @@ body.walnut-dragging {
 .global-notes-resize-handle,
 .todo-tier-resize-handle,
 .todo-detail-splitter,
-.todo-pinned-splitter {
+.todo-pinned-splitter,
+.cal-side-resize-handle {
   touch-action: none;
 }
 
