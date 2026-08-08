@@ -63,13 +63,18 @@ function writeSseEvent(res: Response, ev: SseEvent): void {
  * Emit an event into the channel's ring buffer + all live SSE conns.
  * `reset: true` starts a fresh replay window (turn boundary) — seq stays
  * monotonic across resets so a stale Last-Event-ID never replays old events.
+ * `buffer: false` skips the ring entirely (live fan-out only) — for channels
+ * whose subscribers get a fresh snapshot on attach (e.g. the mobile events
+ * feed): replaying stale history there would OVERWRITE the newer snapshot.
  */
-export function emitSse(key: string, event: string, data: unknown, opts?: { reset?: boolean }): void {
+export function emitSse(key: string, event: string, data: unknown, opts?: { reset?: boolean; buffer?: boolean }): void {
   const ch = getChannel(key)
   if (opts?.reset) ch.events = []
   const ev: SseEvent = { seq: nextSeq++, event, data }
-  ch.events.push(ev)
-  if (ch.events.length > RING_MAX) ch.events.splice(0, ch.events.length - RING_MAX)
+  if (opts?.buffer !== false) {
+    ch.events.push(ev)
+    if (ch.events.length > RING_MAX) ch.events.splice(0, ch.events.length - RING_MAX)
+  }
   for (const conn of ch.conns) {
     try { writeSseEvent(conn.res, ev) } catch { /* dead conn — close handler cleans up */ }
   }
@@ -88,12 +93,20 @@ export function sseConnCount(key: string): number {
  * `onAttach(write)` runs after headers but before replay — for one-off
  * per-connection events (e.g. a snapshot). Events written this way carry no
  * SSE id, so they never disturb Last-Event-ID replay bookkeeping.
+ *
+ * `replay: false` skips the ring replay entirely — pair it with
+ * `emitSse(..., { buffer: false })` on channels whose attach snapshot already
+ * carries the full state (replaying pre-snapshot history would regress it).
  */
 export function attachSse(
   key: string,
   req: Request,
   res: Response,
-  opts?: { onClose?: () => void; onAttach?: (write: (event: string, data: unknown) => void) => void },
+  opts?: {
+    onClose?: () => void
+    onAttach?: (write: (event: string, data: unknown) => void) => void
+    replay?: boolean
+  },
 ): void {
   res.status(200)
   res.setHeader('Content-Type', 'text/event-stream')
@@ -114,12 +127,15 @@ export function attachSse(
 
   // Replay: with Last-Event-ID → events after it; without → the whole
   // current-turn window (late joiners see the in-flight turn from the top).
-  const lastIdRaw = req.header('Last-Event-ID')
-    ?? (typeof req.query.lastEventId === 'string' ? req.query.lastEventId : undefined)
-  const lastSeq = lastIdRaw != null && lastIdRaw !== '' ? Number(lastIdRaw) : null
-  for (const ev of ch.events) {
-    if (lastSeq != null && Number.isFinite(lastSeq) && ev.seq <= lastSeq) continue
-    writeSseEvent(res, ev)
+  // Skipped for replay:false channels — their attach snapshot is the truth.
+  if (opts?.replay !== false) {
+    const lastIdRaw = req.header('Last-Event-ID')
+      ?? (typeof req.query.lastEventId === 'string' ? req.query.lastEventId : undefined)
+    const lastSeq = lastIdRaw != null && lastIdRaw !== '' ? Number(lastIdRaw) : null
+    for (const ev of ch.events) {
+      if (lastSeq != null && Number.isFinite(lastSeq) && ev.seq <= lastSeq) continue
+      writeSseEvent(res, ev)
+    }
   }
 
   const conn: SseConn = {

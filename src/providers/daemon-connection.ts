@@ -764,6 +764,98 @@ export class DaemonConnection {
   }
 
   /**
+   * Answer a daemon-relayed session-control request (phone driving model/
+   * effort/fork/model-options over the cloud bridge while this box holds the
+   * session records + live CLIs). Runs the shared session-controls core and
+   * replies with a `control-result` carrying the relayId. Errors are reported
+   * back with an errorKind (not thrown) so the daemon can fail the bridge
+   * request and the cloud route can map a precise 4xx for the phone.
+   */
+  private async handleControlRequest(event: DaemonEvent): Promise<void> {
+    const relayId = (event as unknown as { relayId?: unknown }).relayId
+    const action = (event as unknown as { action?: unknown }).action
+    const sessionId = (event as unknown as { sessionId?: unknown }).sessionId
+    const params = (event as unknown as { params?: unknown }).params
+    if (typeof relayId !== 'number' || typeof action !== 'string') return
+    let reply: Record<string, unknown>
+    try {
+      const { handleSessionControlRelay } = await import('../core/sessions/session-controls.js')
+      const outcome = await handleSessionControlRelay(action, sessionId, params)
+      if (outcome.ok) {
+        log.session.info('DaemonConnection: control relay handled', { host: this.hostKey, relayId, action, sessionId })
+        reply = { relayId, result: outcome.result }
+      } else {
+        log.session.warn('DaemonConnection: control relay refused', {
+          host: this.hostKey, relayId, action, sessionId, error: outcome.error, errorKind: outcome.errorKind,
+        })
+        reply = { relayId, error: outcome.error, errorKind: outcome.errorKind }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      log.session.warn('DaemonConnection: control relay failed', { host: this.hostKey, relayId, message })
+      reply = { relayId, error: message, errorKind: 'internal' }
+    }
+    try {
+      await this.send('control-result', reply)
+    } catch (err) {
+      log.session.warn('DaemonConnection: control-result send failed', {
+        host: this.hostKey, relayId, message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  /**
+   * Answer a daemon-relayed agent-gateway request (a `wn` CLI inside one of
+   * this host's sessions calling peers.list / peers.send over the daemon's
+   * unix socket). Runs the hub-side capability router and replies with a
+   * `gateway-result` carrying the relayId. Errors are reported back with an
+   * errorCode (not thrown) so the daemon can fail the unix-socket request
+   * with a precise typed error.
+   */
+  private async handleGatewayRequest(event: DaemonEvent): Promise<void> {
+    const relayId = (event as unknown as { relayId?: unknown }).relayId
+    const capability = (event as unknown as { capability?: unknown }).capability
+    const callerSid = (event as unknown as { callerSid?: unknown }).callerSid
+    const payload = (event as unknown as { payload?: unknown }).payload
+    if (typeof relayId !== 'number' || typeof capability !== 'string' || typeof callerSid !== 'string') return
+    let reply: Record<string, unknown>
+    try {
+      const { handleGatewayCapability } = await import('../core/peers/capability-router.js')
+      const outcome = await handleGatewayCapability(
+        capability,
+        callerSid,
+        typeof payload === 'object' && payload !== null ? payload as Record<string, unknown> : undefined,
+        this.hostKey,
+      )
+      if (outcome.ok) {
+        log.session.info('DaemonConnection: gateway relay handled', { host: this.hostKey, relayId, capability, callerSid })
+        reply = { relayId, result: outcome.result }
+      } else {
+        log.session.warn('DaemonConnection: gateway relay refused', {
+          host: this.hostKey, relayId, capability, callerSid, errorCode: outcome.error.code,
+        })
+        reply = { relayId, error: outcome.error.message, errorCode: outcome.error.code }
+        const detail: Record<string, unknown> = {
+          ...(typeof outcome.error.detail === 'object' && outcome.error.detail !== null ? outcome.error.detail as Record<string, unknown> : {}),
+          ...(outcome.error.retryAfterMs !== undefined ? { retryAfterMs: outcome.error.retryAfterMs } : {}),
+        }
+        if (Object.keys(detail).length > 0) reply.detail = detail
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      log.session.warn('DaemonConnection: gateway relay failed', { host: this.hostKey, relayId, message })
+      reply = { relayId, error: message, errorCode: 'internal' }
+    }
+    try {
+      await this.send('gateway-result', reply)
+    } catch (err) {
+      log.session.warn('DaemonConnection: gateway-result send failed', {
+        host: this.hostKey, relayId, message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  /**
    * Disconnect from the daemon and clean up SSH tunnel.
    * Does NOT stop the daemon — it continues running independently.
    *
@@ -2058,6 +2150,18 @@ export class DaemonConnection {
         void this.handleLaunchRequest(event)
         return
       }
+      // Control relay (cloud model/effort/fork): same internal handling as
+      // launch-request — session-level eventHandlers never see it.
+      if (event.ev === 'control-request') {
+        void this.handleControlRequest(event)
+        return
+      }
+      // Agent-gateway relay (wn CLI peers.list/peers.send): same internal
+      // handling — session-level eventHandlers never see it.
+      if (event.ev === 'gateway-request') {
+        void this.handleGatewayRequest(event)
+        return
+      }
       // DUP-DEBUG: if handlerCount > 1, every event below fans out N times.
       // jsonl events are high-frequency — only log when something is off
       // (multiple handlers) or for low-frequency event types.
@@ -2123,6 +2227,15 @@ export class DaemonConnection {
       }
       if ('ev' in msg && (msg as { ev?: string }).ev === 'launch-request') {
         void this.handleLaunchRequest(msg as unknown as DaemonEvent)
+      }
+      if ('ev' in msg && (msg as { ev?: string }).ev === 'control-request') {
+        void this.handleControlRequest(msg as unknown as DaemonEvent)
+      }
+      // gateway-request also targets the daemon's FIRST trusted client — after
+      // a main-WS reconnect that can be this bulk socket; dropping it here
+      // would silently time out every wn CLI call until the next reconnect.
+      if ('ev' in msg && (msg as { ev?: string }).ev === 'gateway-request') {
+        void this.handleGatewayRequest(msg as unknown as DaemonEvent)
       }
     })
 
@@ -2949,6 +3062,24 @@ export function isDaemonConnected(hostKey: string): boolean {
 
 export function getDaemonDisconnectedSince(hostKey: string): number | null {
   return connectionPool.get(hostKey)?.disconnectedSince ?? null
+}
+
+/**
+ * The POOLED, CONNECTED connection for a host — never dials. Used by the
+ * mobile events push (events-v1): a fire-and-forget event forward must not
+ * pay SSH connect costs; when the pool is cold the event is simply dropped
+ * (the phone's snapshot frame covers the gap on its next connect).
+ */
+export function getConnectedDaemonConnection(hostKey: string): DaemonConnection | null {
+  const conn = connectionPool.get(hostKey)
+  if (conn?.connected) return conn
+  // Direct-pool entries are keyed `direct:<wsUrl>` (the local daemon usually
+  // lives there) — same fallback scan as getPooledSnapshotConnection.
+  for (const [key, pooled] of connectionPool) {
+    if (!key.startsWith('direct:')) continue
+    if (pooled.connected && pooled.host === hostKey) return pooled
+  }
+  return null
 }
 
 /**

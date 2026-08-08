@@ -125,6 +125,9 @@ export const EventNames = {
 
   // System health events
   SYSTEM_HEALTH: 'system:health',
+
+  // Mobile client incidents (a freeze/crash line arrived in an uploaded iOS log)
+  CLIENT_INCIDENT: 'client:incident',
 } as const;
 
 export type EventName = (typeof EventNames)[keyof typeof EventNames];

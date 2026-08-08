@@ -748,7 +748,23 @@ async function runApiV1Turn(
   })
 }
 
-// ─── Tasks (read-only v1) ──────────────────────────────────────────────────
+// ─── Tasks ─────────────────────────────────────────────────────────────────
+
+// Real ISO-8601 only: YYYY-MM-DD or a full datetime. Bare Date.parse is
+// too lax — it accepts junk like '12345' (parsed as a year) AND silently
+// rolls calendar-invalid dates over ('2030-02-30' → Mar 2). Regex gates
+// the shape; the round-trip check catches rollover: parse the date part
+// as UTC and require the re-serialized day to match. Shared by POST /tasks
+// and PATCH /tasks/:id.
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:?\d{2})?)?$/
+function isValidIsoDate(s: string): boolean {
+  if (!ISO_DATE_RE.test(s) || Number.isNaN(Date.parse(s))) return false
+  // Round-trip the DATE PART in UTC (a date-only string parses as UTC
+  // midnight; for datetimes the calendar day must survive re-serialization
+  // of its own date component regardless of the time/offset suffix).
+  const datePart = s.slice(0, 10)
+  return new Date(`${datePart}T00:00:00Z`).toISOString().slice(0, 10) === datePart
+}
 
 // GET /api/v1/tasks — slim task list for mobile.
 // Cloud box: serves the git-synced tasks/projection.json (the replica).
@@ -818,20 +834,6 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       sendError(res, 400, 'bad_request', `priority must be one of: ${VALID_PRIORITIES.join(', ')}`)
       return
     }
-    // Real ISO-8601 only: YYYY-MM-DD or a full datetime. Bare Date.parse is
-    // too lax — it accepts junk like '12345' (parsed as a year) AND silently
-    // rolls calendar-invalid dates over ('2030-02-30' → Mar 2). Regex gates
-    // the shape; the round-trip check catches rollover: parse the date part
-    // as UTC and require the re-serialized day to match.
-    const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:?\d{2})?)?$/
-    const isValidIsoDate = (s: string): boolean => {
-      if (!ISO_DATE_RE.test(s) || Number.isNaN(Date.parse(s))) return false
-      // Round-trip the DATE PART in UTC (a date-only string parses as UTC
-      // midnight; for datetimes the calendar day must survive re-serialization
-      // of its own date component regardless of the time/offset suffix).
-      const datePart = s.slice(0, 10)
-      return new Date(`${datePart}T00:00:00Z`).toISOString().slice(0, 10) === datePart
-    }
     if (dueDate !== undefined && !(typeof dueDate === 'string' && isValidIsoDate(dueDate))) {
       sendError(res, 400, 'bad_request', 'due_date must be an ISO-8601 date string (YYYY-MM-DD or full datetime)')
       return
@@ -861,6 +863,130 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
     } catch (err) {
       if (err instanceof ProjectSourceConflictError) {
         sendError(res, 409, 'conflict', err.message)
+        return
+      }
+      throw err
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// PATCH /api/v1/tasks/:id — update task fields from mobile (additive).
+// Allowed fields: { status?, priority?, due_date?, project?, title?, description? }.
+// Same core path as the web PATCH (updateTask with source 'api' + asyncPush) so
+// hooks/emits/terminal-phase-guard semantics are identical — updateTask emits
+// TASK_UPDATED internally, which on a REPLICA also feeds the task outbox (the
+// op file rides git-sync back to the primary; see task-outbox.ts). Answers 200
+// with the slim ProjectedTask shape GET /tasks serves.
+//
+// Works on BOTH boxes: a REPLICA has a real local task store (projection
+// import seeds it — NEVER 503 here), and the response is the locally-updated
+// row served optimistically while the outbox round-trips.
+const V1_TASK_STATUSES = new Set(['todo', 'in_progress', 'done'])
+
+apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = paramStr(req.params.id)
+    const { status, priority, due_date: dueDate, project, title, description } = (req.body ?? {}) as {
+      status?: unknown
+      priority?: unknown
+      due_date?: unknown
+      project?: unknown
+      title?: unknown
+      description?: unknown
+    }
+
+    if (status !== undefined && !(typeof status === 'string' && V1_TASK_STATUSES.has(status))) {
+      sendError(res, 400, 'bad_request', 'status must be one of: todo, in_progress, done')
+      return
+    }
+    if (priority !== undefined
+        && !(typeof priority === 'string' && (VALID_PRIORITIES as readonly string[]).includes(priority))) {
+      sendError(res, 400, 'bad_request', `priority must be one of: ${VALID_PRIORITIES.join(', ')}`)
+      return
+    }
+    // '' = explicit clear (same as the web PATCH — updateTask normalizes '' to undefined).
+    if (dueDate !== undefined && !(typeof dueDate === 'string' && (dueDate === '' || isValidIsoDate(dueDate)))) {
+      sendError(res, 400, 'bad_request', 'due_date must be an ISO-8601 date string (YYYY-MM-DD or full datetime) or "" to clear')
+      return
+    }
+    if (project !== undefined && typeof project !== 'string') {
+      sendError(res, 400, 'bad_request', 'project must be a string ("" = Inbox)')
+      return
+    }
+    if (title !== undefined && !(typeof title === 'string' && title.trim())) {
+      sendError(res, 400, 'bad_request', 'title must be a non-empty string')
+      return
+    }
+    if (typeof title === 'string' && title.length > 500) {
+      sendError(res, 400, 'bad_request', 'title too long (max 500 chars)')
+      return
+    }
+    if (description !== undefined && typeof description !== 'string') {
+      sendError(res, 400, 'bad_request', 'description must be a string')
+      return
+    }
+    if (status === undefined && priority === undefined && dueDate === undefined
+        && project === undefined && title === undefined && description === undefined) {
+      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/priority/due_date/project/title/description)')
+      return
+    }
+
+    const tm = await import('../../core/task-manager.js')
+    const { projectTask } = await import('../../core/task-projection.js')
+    try {
+      let updated
+      const patch = {
+        ...(status !== undefined ? { status: status as import('../../core/types.js').TaskStatus } : {}),
+        ...(priority !== undefined ? { priority: priority as TaskPriority } : {}),
+        ...(dueDate !== undefined ? { due_date: dueDate as string } : {}),
+        ...(project !== undefined ? { project: project as string } : {}),
+        ...(title !== undefined ? { title: (title as string).trim() } : {}),
+      }
+      // description FIRST (not atomic with the main patch — two separate
+      // writes). Ordering rationale: updateDescription resolves the same task
+      // id and runs plugin content validation, so its likeliest failures
+      // (not found / validation) reject BEFORE the main patch touches
+      // anything — the error response then truthfully means "nothing was
+      // applied", instead of a 500 that silently half-applied the patch.
+      if (description !== undefined) {
+        // description is not an UpdateTaskInput field — it has its own setter
+        // (plugin content validation + push + TASK_UPDATED emit).
+        const result = await tm.updateDescription(id, description as string)
+        updated = result.task
+      }
+      if (Object.keys(patch).length > 0) {
+        // Same options as the web PATCH: source 'api' (human-initiated — the
+        // terminal phase guard applies its human policy), asyncPush so the
+        // response never waits out an external sync round trip.
+        const result = await tm.updateTask(id, patch, { source: 'api', extraTargets: ['main-agent'], asyncPush: true })
+        updated = result.task
+      }
+      if (!updated) {
+        // Unreachable given the "at least one field" validation above, but
+        // never let a non-null assertion turn a logic slip into a crash.
+        sendError(res, 500, 'internal', 'update produced no task row')
+        return
+      }
+      log.web.info('task updated via api-v1', { taskId: updated.id, fields: Object.keys(req.body ?? {}) })
+      res.json({ task: projectTask(updated) })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (/No task found matching/i.test(msg)) {
+        sendError(res, 404, 'not_found', `Task not found: ${id}`)
+        return
+      }
+      if (/Ambiguous ID prefix/i.test(msg)) {
+        sendError(res, 400, 'bad_request', msg)
+        return
+      }
+      if (err instanceof tm.ProjectSourceConflictError || err instanceof tm.ActiveChildrenError) {
+        sendError(res, 409, 'conflict', msg)
+        return
+      }
+      if (err instanceof tm.InvalidProjectNameError) {
+        sendError(res, 400, 'bad_request', msg)
         return
       }
       throw err
@@ -1009,10 +1135,25 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
 // push its structured log buffer so issues can be diagnosed server-side.
 // Files land in /tmp/open-walnut/ios-client/<device>-<localdate>.log as
 // JSON-lines — same directory family the log toolkit already greps.
+//
+// The iOS app runs in FULL-DUMP mode (every level, every subsystem, batched
+// every ~45s, gzipped), so this route is a firehose by design and the caps
+// below are the only thing bounding it. Two consequences worth knowing:
+//
+//  - Bodies arrive `Content-Encoding: gzip`. express.json() inflates those
+//    transparently, so nothing here needs to change — but the size limit that
+//    matters is the DECOMPRESSED one (express.json({ limit: '15mb' })).
+//  - Any line from the `freeze` / `crash` subsystem is an INCIDENT: it raises a
+//    bus event + a deduped notification so it surfaces on the console bell
+//    instead of waiting for someone to grep the file (see
+//    core/notifications/client-incidents.ts). Ingest still succeeds if that
+//    fails — losing the client's log to a bell failure would be worse.
 
 const CLIENT_LOG_DIR = '/tmp/open-walnut/ios-client'
 const CLIENT_LOG_MAX_LINES = 5000
-const CLIENT_LOG_MAX_FILE_BYTES = 20 * 1024 * 1024 // rotate guard per device+day
+/** Per device+day rotate guard. Full-dump traffic is ~2-6 MB/day gzipped-on-wire
+ *  but lands expanded on disk, so this holds several heavy days. */
+const CLIENT_LOG_MAX_FILE_BYTES = 64 * 1024 * 1024
 
 apiV1Router.post('/client-logs', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -1045,9 +1186,26 @@ apiV1Router.post('/client-logs', async (req: Request, res: Response, next: NextF
         ...(typeof l === 'object' && l !== null ? l : { message: String(l) }),
       }))
       .join('\n') + '\n'
+    // Persist BEFORE flagging: the file is the source of truth for forensics,
+    // and a notification pointing at a line that failed to land is a lie.
     await fsp.appendFile(file, out, 'utf-8')
     log.web.info('api-v1 client logs received', { device: safeDevice, count: accepted.length, appVersion })
     res.json({ ok: true, received: accepted.length })
+
+    // After the response — incident flagging must never add latency to the
+    // phone's upload (a slow ack shrinks the OS background-task budget the
+    // critical freeze upload depends on).
+    const structured = accepted.filter(
+      (l: unknown): l is Record<string, unknown> => typeof l === 'object' && l !== null,
+    )
+    if (structured.length > 0) {
+      const { flagClientIncidents } = await import('../../core/notifications/client-incidents.js')
+      flagClientIncidents(safeDevice, structured, { broadcast: broadcastEvent }).catch((err) => {
+        log.web.warn('api-v1 client incident flagging failed', {
+          device: safeDevice, error: err instanceof Error ? err.message : String(err),
+        })
+      })
+    }
   } catch (err) {
     next(err)
   }

@@ -39,6 +39,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `images_need_daemon_upgrade` | 400 | Session-talk images sent via the cloud companion to a host whose daemon predates `image.save` — self-heals on the next primary-box reconnect (auto-deploy) |
 | `image_upload_failed` | 400 | Session-talk image save failed on the session's host (daemon refused the payload or the write errored) |
 | `session_launch_needs_upgrade` | 400 | Session creation via the cloud companion when the primary's daemon predates the `session.launch` relay — self-heals on the next primary-box reconnect (auto-deploy) |
+| `session_control_needs_upgrade` | 400 | Session model/effort/fork/model-options via the cloud companion when the primary's daemon predates the `session.control` relay — self-heals on the next primary-box reconnect (auto-deploy) |
 | `bridge_offline` | 503 | Cloud companion has no live bridge to the needed host (or the primary's server is disconnected from its daemon) |
 | `too_large` | 413 | Note content exceeds 2 MB |
 | `internal` | 500 | Unhandled server error |
@@ -56,6 +57,12 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | GET | `/api/v1/conversations/:id/stream?agentId=` | SSE stream of the current turn |
 | GET | `/api/v1/sessions/launch-options` | Hosts + frequent dirs for creating a session (cloud relays to the primary) |
 | POST | `/api/v1/sessions` | Create a Claude Code session on a chosen host/path (cloud relays to the primary) |
+| PATCH | `/api/v1/tasks/:id` | Update task fields (status/priority/due_date/project/title/description) |
+| GET | `/api/v1/sessions/:id/model-options` | Selectable models + current model/effort for the picker (cloud relays to the primary) |
+| POST | `/api/v1/sessions/:id/model` | Switch the session's model (cloud relays to the primary) |
+| POST | `/api/v1/sessions/:id/effort` | Switch the session's reasoning effort (cloud relays to the primary) |
+| POST | `/api/v1/sessions/:id/fork` | Fork a session to another/new task (cloud relays to the primary) |
+| GET | `/api/v1/events` | SSE live feed of slim task + session updates (snapshot frame on connect) |
 | GET | `/api/v1/notes` | Notes file tree |
 | GET | `/api/v1/notes/content/*path` | Read a note |
 | PUT | `/api/v1/notes/content/*path` | Update a note (optimistic locking) |
@@ -245,6 +252,25 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   task outbox syncs it back to the primary). On a REPLICA the new task shows
   up in `GET /tasks` only after the outbox→primary→projection round trip
   (up to a couple of git-sync cycles); render the `201` response optimistically.
+- `PATCH /api/v1/tasks/:id` (additive, 2026-08) body — any subset of
+  `{ "status"?, "priority"?, "due_date"?, "project"?, "title"?, "description"? }`
+  → `200 { "task": ProjectedTask }` (the updated task in the same slim shape).
+  - `status`: `todo` | `in_progress` | `done` (the server derives `phase` from
+    it — a human-initiated `PATCH` may reopen a terminal task, same policy as
+    the web UI).
+  - `priority`: `immediate|important|backlog|none`; `due_date`: ISO-8601
+    (`YYYY-MM-DD` or full datetime) or `""` to clear; `project`: any project
+    name (`""` = Inbox; a new name auto-creates its registry row); `title`:
+    non-empty, ≤500 chars (trimmed); `description`: write-only, same caveat
+    as `POST /tasks` (not present in the ProjectedTask response).
+  - At least one field is required (`400 bad_request` on an empty body).
+  - Errors: `400 bad_request` (invalid value / no fields / ambiguous id
+    prefix), `404 not_found` (unknown task id), `409 conflict` (project
+    source conflict / blocked by active child tasks).
+  - Works on BOTH boxes: on a REPLICA the update lands in the local store and
+    a task-outbox op rides git-sync back to the primary (LWW-guarded there);
+    the `200` response is the locally-updated row — render it optimistically,
+    same as `POST /tasks`.
 
 ### Sessions (read-only)
 
@@ -268,10 +294,13 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   `503 unavailable` on a fresh companion).
 - `GET /api/v1/sessions/:id/transcript?fresh=1` →
   `{ "sessionId", "exportedAt", "truncated", "messages": [ { role, text,
-  timestamp, kind?, detail?, resultPreview? } ] }` — a slim transcript tail
-  (last ~100 entries; text capped at 4 KB/row; `kind: "tool"` rows carry the
-  tool name, plus additive `detail` (input summary) / `resultPreview`
-  (clipped output) when available). The primary
+  timestamp, kind?, detail?, resultPreview?, agent? } ] }` — a slim transcript
+  tail (last ~100 entries; text capped at 4 KB/row; `kind: "tool"` rows carry
+  the tool name, plus additive `detail` (input summary) / `resultPreview`
+  (clipped output) when available). `agent` (additive, 2026-08) appears on
+  `Task`/`Agent` tool rows and names the delegated subagent (team agent name,
+  the tool input's `name`, or its `subagent_type`) — render it as a badge on
+  the delegation row; the subagent's own transcript is not inlined. The primary
   box exports tails for every session it can reach — local from disk, remote
   over its SSH channel — so this works for sessions on ANY machine without
   the phone talking to that machine. `404 not_found` when no tail was
@@ -393,6 +422,96 @@ host's SSH daemon). Works on BOTH boxes:
     returned `sessionId` immediately works with the stream/messages AND
     transcript endpoints — the transcript answers `200 messages: []` during
     the pre-spawn window (see above), then fills in as turns complete.
+
+### Session control (additive, 2026-08) — model / effort / fork / model-options
+
+Semantics are identical to the web console's session controls: both surfaces
+call the same shared core (`src/core/sessions/session-controls.ts`). Works on
+BOTH boxes:
+
+- **Primary box**: the core runs directly.
+- **Cloud companion (REPLICA)**: session records + live CLIs live on the
+  primary, so every endpoint relays over the `/bridge` WS via the narrow
+  `session.control` daemon command (allowlisted alongside `session.launch`).
+  The primary's daemon forwards the request up to its connected walnut server,
+  which runs the same core and replies. Failure ladder mirrors session launch:
+  `400 session_control_needs_upgrade` — the primary's daemon predates the
+  relay (self-heals on the next primary reconnect via auto-deploy);
+  `503 bridge_offline` — no live bridge, or the primary's server is
+  disconnected from its daemon; validation errors from the primary surface
+  verbatim with their original code/status.
+
+- `GET /api/v1/sessions/:id/model-options` →
+  `{ "models": [ { "id", "label", "supportsEffort"?, "supportedEffortLevels"? } ],
+  "current", "currentEffort" }`
+  - `models`: the session's selectable catalog (live CLI catalog when the
+    session is alive → the host's last-known catalog → the static registry on
+    a first install). Each row's `id` is what the picker must send back to
+    `POST .../model`. `supportedEffortLevels` (when present) drives the effort
+    buttons per model.
+  - `current`: the active row's `id` (falls back to the raw runtime model
+    string when it isn't in the catalog); `null` when unknown.
+  - `currentEffort`: the record's requested effort (`low|medium|high|xhigh|max`)
+    or `null`.
+  - `404 not_found` for an unknown session id.
+- `POST /api/v1/sessions/:id/model` body `{ "model" }` →
+  `200 { "model", "cliModel", "appliedLive", "effectiveModel"? }`
+  - `model`: a catalog `id` from `model-options` or a legacy alias
+    (`opus`, `sonnet-1m`, …). Garbage → `400 bad_request`.
+  - `appliedLive: true` = the running CLI switched now (no respawn);
+    `false` = persisted only — a dead/idle-reaped session picks the model up
+    on its next `--resume` spawn. `effectiveModel` is the CLI's read-back
+    truth when available (may differ if the CLI substituted the value).
+  - Codex/ACP sessions answer `{ "applied": true, "model" }` instead
+    (`409 conflict` when the switch fails).
+- `POST /api/v1/sessions/:id/effort` body `{ "effort" }` →
+  `200 { "effort", "appliedLive", "effectiveEffort"?, "overridden" }`
+  - `effort`: `low|medium|high|xhigh|max`. A level the model doesn't support →
+    `409 conflict` (the picker should grey those out using
+    `supportedEffortLevels` from `model-options`).
+  - `overridden: true` = the CLI is actually using a DIFFERENT level than
+    requested (env override / model downgrade), per the read-back.
+- `POST /api/v1/sessions/:id/fork` body `{ "task_id"?, "create_child_task"?,
+  "child_title"?, "message"?, "title"?, "model"? }` →
+  `201 { "status": "pending", "sourceSessionId", "sessionId", "taskId",
+  "title", "childTaskCreated"?, "host"? }`
+  - Exactly one of `task_id` (fork onto an existing task) or
+    `create_child_task: true` (create a sibling task, auto-grouped with the
+    source task) is required.
+  - `message`: the fork's first request (defaults to "Continue working on:
+    <task title>"); `title`: session title override; `model`: model override
+    (defaults to the parent's exact model).
+  - `201` means **accepted, not spawned** (same contract as `POST /sessions`):
+    the fork record is pre-seeded, so the returned `sessionId` immediately
+    works with the transcript/stream/messages endpoints.
+  - Errors: `400 bad_request` (neither/both target fields; source session has
+    no cwd/task), `404 not_found` (unknown source session / target task),
+    `409 conflict` (target task already has a session — the response carries
+    `existing_session_id`; or a Codex source session, which cannot fork).
+
+### GET /api/v1/events (SSE, additive, 2026-08) — live task + session feed
+
+One long-lived SSE stream that pushes slim updates so the app can keep its task list and session list current without polling. Works on BOTH boxes; auth is the standard Bearer.
+
+**Frames, in order:**
+
+1. `event: snapshot` — sent once per connection, immediately on attach. `data: { "sessions": [ProjectedSession…], "tasks": [ProjectedTask…] }` — the exact same row shapes as `GET /api/v1/sessions` and `GET /api/v1/tasks`. Carries **no SSE id** (it is per-connection state, never part of replay). Treat it as a full replace of both lists.
+2. Live events (each with an SSE `id`; **no server-side replay** — the snapshot on (re)connect is the sole catch-up mechanism):
+   - `event: session-upsert` — `data:` one `ProjectedSession` row (`id`, `title`?, `task_id`?, `task_title`?, `project`?, `host`, `process_status`, `model`?, `mode`?, `started_at`, `last_active_at`, `message_count`, `cwd`?, `pinned`?, `focus_tier`?, `description`?; absent fields are omitted, not null). Merge by `id` (insert when new).
+   - `event: task-upsert` — `data:` one `ProjectedTask` row (same shape as `GET /tasks` rows). Merge by `id`.
+   - `event: task-delete` — `data: { "id" }`. Remove the row.
+3. `: ping` comment every ~25s (heartbeat; ignore).
+
+**Client contract:** on (re)connect, apply the snapshot as a full replace, then apply live events incrementally. This feed keeps **no replay ring** and ignores `Last-Event-ID` — replaying pre-snapshot history would regress the fresh snapshot (a completed task flipping back to todo). Clients need no replay logic; every gap heals on the next snapshot.
+
+**Data sources (why events can lag or thin out):**
+
+- **Primary box**: fed directly off the internal event bus (session lifecycle/status + task create/update/delete) — effectively real-time.
+- **Cloud companion (REPLICA)**: task events for the replica's OWN mutations are local (real-time); session events arrive relayed from the primary (primary bus → primary's daemon → `/bridge` WS → this feed). When the bridge is down or the primary's daemon predates the relay, the stream stays open but degrades to **snapshot + heartbeats** — no error frame; the app's normal pull endpoints keep working. The snapshot's session half on cloud comes from the git-synced projection (may lag 1–3 min; see the sessions section).
+
+Session events are lifecycle/status-grade only (started/ended/status/result/error). Per-token streaming rides the per-session `GET /sessions/:id/stream`, never this feed. `session-upsert` frames are coalesced per session (~250ms): rapid status flaps produce one frame carrying the latest authoritative row.
+
+**Known gap (cloud):** primary task changes that arrive on the replica via git-sync import (`addTasksBulk`/`updateTasksBulk`) do not emit bus events, so they produce no real-time `task-upsert` on the cloud feed — they converge on the next reconnect snapshot (or the app's pull paths).
 
 ### GET /api/v1/media?path=/absolute/file.png[&session=sid] (additive)
 

@@ -82,12 +82,32 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * a pre-session.launch daemon answers with an unknown-command error, which
  * the cloud route maps to 400 session_launch_needs_upgrade (self-heals on
  * the next primary reconnect via the normal auto-deploy).
+ *
+ * 'session.control' — narrow bridge control relay (model/effort/fork/
+ * model-options; same forward-to-walnut-server shape as session.launch).
+ * Optional: a pre-session.control daemon answers with an unknown-command
+ * error, which the cloud route maps to 400 session_control_needs_upgrade
+ * (self-heals on the next primary reconnect via the normal auto-deploy).
+ *
+ * 'mobile-event' — reverse relay for the mobile events feed: the walnut
+ * server pushes slim task/session frames DOWN to the daemon, which forwards
+ * them over the bridge to the cloud box (events-v1 → phones). Optional: the
+ * feed checks hasCapability before pushing, so an old daemon just means the
+ * cloud feed degrades to snapshot + heartbeats until the next auto-deploy.
+ *
+ * 'agent-gateway' — on-host unix-socket gateway for the `wn` peer-session
+ * CLI (daemon relays `gateway-request` events UP; the server answers with
+ * the `gateway-result` command). Optional: on an old daemon `wn` simply
+ * exits 6 (socket absent) until the next auto-deploy upgrades it.
  */
 export const ADVERTISED_DAEMON_CAPABILITIES = [
   ...REQUIRED_DAEMON_CAPABILITIES,
   'snapshot-v1',
   'image.save',
   'session.launch',
+  'session.control',
+  'mobile-event',
+  'agent-gateway',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

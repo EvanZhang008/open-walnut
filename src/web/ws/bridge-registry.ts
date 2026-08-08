@@ -12,6 +12,15 @@
  * hostAlias REPLACES the old socket (close code 4000) — the daemon's redial
  * loop guarantees eventual convergence, and two live sockets for one host
  * would double every jsonl event.
+ *
+ * Two data planes, two freshness classes: this bridge is REAL-TIME (send/
+ * stream/launch relay), while session *metadata* (lists, host resolution,
+ * transcript tails) rides the git-synced projection, which lags 1–3 min —
+ * see the LATENCY CONTRACT in src/core/session-projection.ts. Anything the
+ * replica does THROUGH this bridge (e.g. a session launch) must be seeded
+ * locally (src/core/sessions/launch-seed.ts) rather than waiting for the
+ * projection to echo it back (2026-08-07: missing seed = 404 storm on
+ * every just-launched session).
  */
 
 import type { WebSocket } from 'ws'
@@ -178,6 +187,27 @@ function handleFrame(conn: BridgeConn, raw: string): void {
     }
     return
   }
+
+  if (ev === 'mobile-event') {
+    // Slim mobile events feed frame relayed from the primary's daemon
+    // (events-v1). Only frames from the primary's own bridge are trusted —
+    // a remote exec host's daemon has no business feeding the task/session
+    // list. handleBridgeMobileEvent re-validates the kind allowlist.
+    if (conn.hostAlias !== '__local__') return
+    if (mobileEventHandler) mobileEventHandler(msg.kind, msg.data)
+    return
+  }
+}
+
+/**
+ * Cloud-side sink for `mobile-event` frames (registered by events-v1 at
+ * startup). Kept as a callback so this transport module never imports the
+ * route layer.
+ */
+let mobileEventHandler: ((kind: unknown, data: unknown) => void) | null = null
+
+export function setMobileEventHandler(handler: ((kind: unknown, data: unknown) => void) | null): void {
+  mobileEventHandler = handler
 }
 
 /**

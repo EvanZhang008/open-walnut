@@ -86,10 +86,14 @@ export function projectTask(t: Task): ProjectedTask {
   }
 }
 
-/** Export the current task list to the projection file (atomic write). */
-export async function exportTaskProjection(): Promise<number> {
-  // Lazy import breaks the task-manager ↔ projection cycle risk and keeps
-  // cloud boxes (which never export) from touching SQLite.
+/**
+ * Build the projection in memory. Shared by the file export below and the
+ * mobile events feed's snapshot frame (events-v1), which needs the same rows
+ * without a disk round trip. Works on both boxes (the replica has a real
+ * local task store).
+ */
+export async function buildTaskProjection(): Promise<TaskProjection> {
+  // Lazy import breaks the task-manager ↔ projection cycle risk.
   const { listTasks } = await import('./task-manager.js')
   const all = await listTasks()
   const cutoff = Date.now() - DONE_RETENTION_DAYS * 24 * 60 * 60 * 1000
@@ -100,13 +104,18 @@ export async function exportTaskProjection(): Promise<number> {
       return Number.isFinite(doneAt) && doneAt >= cutoff
     })
     .map(projectTask)
-  const projection: TaskProjection = {
+  return {
     version: PROJECTION_VERSION,
     exportedAt: new Date().toISOString(),
     tasks,
   }
+}
+
+/** Export the current task list to the projection file (atomic write). */
+export async function exportTaskProjection(): Promise<number> {
+  const projection = await buildTaskProjection()
   await writeJsonFile(PROJECTION_FILE, projection)
-  return tasks.length
+  return projection.tasks.length
 }
 
 /**

@@ -568,6 +568,25 @@ export interface ConfigChangedEvent { key?: string; config?: Record<string, unkn
 
 // ── System health events ──
 
+// ── Mobile client incidents ──
+
+/**
+ * A `freeze` / `crash` line arrived in an uploaded iOS client log. Raised by
+ * core/notifications/client-incidents.ts once per device+class per 10-min
+ * window (see that module for why this is a notification and not a task).
+ */
+export interface ClientIncidentEvent {
+  /** Sanitized device label, as it appears in the ios-client log filename. */
+  device: string;
+  kind: 'crash' | 'freeze' | 'stall';
+  /** The client's own message line ("main thread unresponsive", …). */
+  message: string;
+  dedupKey: string;
+  /** Matching lines in the batch that raised this. */
+  count: number;
+  timestamp: number;
+}
+
 export interface SystemHealthEvent {
   embedding: {
     total: number;
@@ -738,6 +757,8 @@ export interface EventPayloadMap {
   'config:changed': ConfigChangedEvent;
 
   'system:health': SystemHealthEvent;
+
+  'client:incident': ClientIncidentEvent;
 
   'audio:started': AudioStartedEvent;
   'audio:stopped': AudioStoppedEvent;

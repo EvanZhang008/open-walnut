@@ -29,6 +29,22 @@
  * STOPPED_RETENTION_DAYS. Environment sessions (triage/cron/hook/embedded
  * subagents) and archived sessions are excluded — same visibility rule as
  * the web session tree.
+ *
+ * ⚠️ LATENCY CONTRACT — this projection is EVENTUALLY consistent, and every
+ * consumer must design for the gap. Worst-case freshness on the cloud box is
+ * the SUM of: this file's debounce/throttle (up to 60s for transcripts) +
+ * the Mac's 30s git-sync push tick + the cloud's 30s pull tick ≈ 1–3 min.
+ * 2026-08-07 incident: the cloud replica resolved JUST-LAUNCHED sessions
+ * exclusively from this file — the phone got 201 then a 404 storm on
+ * stream/transcript/send for the whole gap ("Not sent — tap to retry" on a
+ * healthy session). Rule of thumb: if the replica ITSELF performed the
+ * action, it must not wait for this projection to learn the result — that's
+ * what src/core/sessions/launch-seed.ts is for (TTL'd write-through cache of
+ * the replica's own launches; projection wins the moment it lands). Do NOT
+ * "fix" gaps by cranking the git-sync frequency: the 2026-08-06 CPU-storm
+ * incident was partly caused by git sync pressure on the 2-vCPU hub box,
+ * and any polling interval still leaves a window for a millisecond-scale
+ * client.
  */
 
 import fsp from 'node:fs/promises'
@@ -81,7 +97,8 @@ export interface SessionProjection {
   sessions: ProjectedSession[]
 }
 
-function projectSession(s: SessionRecord, task: Task | undefined): ProjectedSession {
+/** Exported: the mobile events feed (events-v1) maps single rows with it. */
+export function projectSession(s: SessionRecord, task: Task | undefined): ProjectedSession {
   const description = (s.description || '').trim()
   return {
     id: s.claudeSessionId,
@@ -105,8 +122,12 @@ function projectSession(s: SessionRecord, task: Task | undefined): ProjectedSess
   }
 }
 
-/** Export the current session list to the projection file (atomic write). */
-export async function exportSessionProjection(): Promise<number> {
+/**
+ * Build the projection in memory (primary box). Shared by the file export
+ * below and the mobile events feed's snapshot frame (events-v1), which needs
+ * the same rows without paying a disk round trip.
+ */
+export async function buildSessionProjection(): Promise<SessionProjection> {
   // Lazy imports keep cloud boxes (which never export) from touching the
   // session registry / task store at module load.
   const { listSessions, isEnvironmentSession } = await import('./session-tracker.js')
@@ -129,9 +150,14 @@ export async function exportSessionProjection(): Promise<number> {
     .slice(0, MAX_SESSIONS)
     .map((s) => projectSession(s, s.taskId ? taskById.get(s.taskId) : undefined))
 
-  const projection: SessionProjection = { version: 1, exportedAt: new Date().toISOString(), sessions }
+  return { version: 1, exportedAt: new Date().toISOString(), sessions }
+}
+
+/** Export the current session list to the projection file (atomic write). */
+export async function exportSessionProjection(): Promise<number> {
+  const projection = await buildSessionProjection()
   await writeJsonFile(SESSION_PROJECTION_FILE, projection)
-  return sessions.length
+  return projection.sessions.length
 }
 
 // ── Transcript tails (the "open session" payload) ──────────────────────────
@@ -147,6 +173,11 @@ export interface ProjectedTranscriptMessage {
   detail?: string
   /** kind:'tool' only (additive) — clipped tool output for the expanded card. */
   resultPreview?: string
+  /** Task/Agent tool rows only (additive) — the subagent's name/label
+   *  (team agent name, `name` input, or `subagent_type`), so mobile can show
+   *  which agent a delegated run belongs to. The subagent's own transcript
+   *  lives in a separate subagents/*.jsonl and is not inlined here. */
+  agent?: string
 }
 
 export interface SessionTranscript {
@@ -189,10 +220,23 @@ export async function buildSessionTranscript(sessionId: string): Promise<Session
     for (const t of m.tools ?? []) {
       const detail = toolDetail(t.name, t.input)
       const resultPreview = toolResultPreview(t.result)
+      // Subagent attribution (additive): Task/Agent rows carry the subagent's
+      // label. Sources, most→least specific: team agent name (Agent tool,
+      // parsed from tool input by session-history), the tool input's `name`,
+      // then `subagent_type` (Task tool). Full nested lane transcripts stay in
+      // subagents/*.jsonl — this only labels the delegation row itself.
+      let agent: string | undefined
+      if (t.name === 'Task' || t.name === 'Agent') {
+        const input = t.input as Record<string, unknown>
+        agent = t.teamAgentName
+          ?? (typeof input.name === 'string' && input.name ? input.name : undefined)
+          ?? (typeof input.subagent_type === 'string' && input.subagent_type ? input.subagent_type : undefined)
+      }
       messages.push({
         role: 'assistant', text: t.name, timestamp: m.timestamp, kind: 'tool',
         ...(detail ? { detail } : {}),
         ...(resultPreview ? { resultPreview } : {}),
+        ...(agent ? { agent } : {}),
       })
     }
     const text = (m.text || '').trim()

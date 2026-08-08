@@ -91,9 +91,12 @@ import { setupRouter } from './routes/setup.js'
 import { apiV1Router, closeApiV1Streams } from './routes/api-v1.js'
 import { sessionStreamV1Router } from './routes/session-stream-v1.js'
 import { sessionLaunchV1Router } from './routes/session-launch-v1.js'
+import { sessionControlV1Router } from './routes/session-control-v1.js'
+import { eventsV1Router, startMobileEventsFeed, stopMobileEventsFeed } from './routes/events-v1.js'
 import { sttV1Router } from './routes/stt-v1.js'
 import { mediaV1Router } from './routes/media-v1.js'
 import { incidentsRouter } from './routes/incidents.js'
+import { clientEvidenceRouter } from './routes/client-evidence.js'
 import { notificationsRouter } from './routes/notifications.js'
 import { addNotification as addFeedNotification, resolvePermissionNotification } from '../core/notifications/store.js'
 import { djb2 as notificationHash } from '../core/notifications/log-error-bridge.js'
@@ -853,6 +856,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Session launch endpoints (additive): create a session from mobile
   // (host + path picker). Primary box only — REPLICA returns 503.
   app.use('/api/v1', sessionLaunchV1Router)
+  // Session control endpoints (additive): model/effort switch, fork, and the
+  // picker's model-options — relayed over the daemon bridge on a REPLICA.
+  app.use('/api/v1', sessionControlV1Router)
+  // Live events feed (additive): one SSE stream of slim task/session updates
+  // for mobile — bus-fed on the primary, bridge-fed on a REPLICA. Started
+  // unconditionally (one lifecycle-interest bus subscription — cheap even on
+  // ephemeral servers, and tests exercise the feed through real servers).
+  app.use('/api/v1', eventsV1Router)
+  startMobileEventsFeed()
   // Voice input (additive): phone audio → text, works on primary AND cloud.
   app.use('/api/v1', sttV1Router)
   // Image bytes for mobile (additive): local file, daemon, or bridge proxy.
@@ -863,6 +875,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/audio', audioRouter)
   app.use('/api/stt', sttRouter)
   app.use('/api/incidents', incidentsRouter)
+  app.use('/api/client-evidence', clientEvidenceRouter)
   app.use('/api/notifications', notificationsRouter)
   app.get('/api/task-phase-hooks', async (_req, res) => {
     const { getHookInfoList } = await import('../core/task-phase-hooks/index.js')
@@ -3492,6 +3505,7 @@ export async function stopServer(): Promise<void> {
     sessionProjectionHandle.stop()
     sessionProjectionHandle = null
   }
+  stopMobileEventsFeed()
   if (autoContinueHandle) {
     autoContinueHandle.stop()
     autoContinueHandle = null
