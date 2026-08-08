@@ -800,6 +800,28 @@ export function TaskGroupPrompt({ input }: { input?: Record<string, unknown> }) 
 const TASK_GROUP_INITIAL = 10;
 const TASK_GROUP_LOAD_MORE = 20;
 
+/** Subagent-tree summary from nested childMessages: direct = Agent/Task tools
+ *  this agent called itself; total = whole loaded subtree (deeper levels are
+ *  only known once their transcripts are loaded/attached — the chip shows
+ *  what's known, e.g. "2+2 agents" once the sync children are inline). */
+function countAgentTreeHistory(children: SessionHistoryMessage[] | null | undefined): { direct: number; total: number } {
+  let direct = 0;
+  let total = 0;
+  const walk = (msgs: SessionHistoryMessage[], depth: number) => {
+    for (const m of msgs) {
+      for (const t of m.tools ?? []) {
+        if (GROUPABLE_HISTORY_TOOLS.has(t.name)) {
+          total++;
+          if (depth === 0) direct++;
+          if (t.childMessages?.length) walk(t.childMessages, depth + 1);
+        }
+      }
+    }
+  };
+  if (children) walk(children, 0);
+  return { direct, total };
+}
+
 function TaskGroup({ tool, assistantLabel, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: SessionToolCallProps) {
   const [open, setOpen] = useState(false);
   const [lazyChildren, setLazyChildren] = useState<SessionHistoryMessage[] | null>(null);
@@ -818,6 +840,7 @@ function TaskGroup({ tool, assistantLabel, sessionId, sessionCwd, sessionHost, o
   // Resolved children: inline (already attached) or lazy-loaded
   const children = tool.childMessages ?? lazyChildren;
   const toolCount = children?.reduce((n, m) => n + (m.tools?.length ?? 0), 0) ?? 0;
+  const agentTree = countAgentTreeHistory(children);
 
   const handleToggle = useCallback(async () => {
     if (!open && !children && !loadingChildren && tool.agentId && sessionId) {
@@ -862,6 +885,11 @@ function TaskGroup({ tool, assistantLabel, sessionId, sessionCwd, sessionHost, o
         {subagentType && <span className="task-group-agent-type">{subagentType}</span>}
         {modelChip && <span className="task-group-model">{modelChip}</span>}
         <span className="task-group-description">{description}</span>
+        {agentTree.total > 0 && (
+          <span className="task-group-agent-count" title={`This agent spawned ${agentTree.direct} subagent${agentTree.direct !== 1 ? 's' : ''} directly${agentTree.total > agentTree.direct ? `; ${agentTree.total - agentTree.direct} more spawned deeper in the tree` : ''}`}>
+            ⑂ {agentTree.direct}{agentTree.total > agentTree.direct ? `+${agentTree.total - agentTree.direct}` : ''} agent{agentTree.total !== 1 ? 's' : ''}
+          </span>
+        )}
         {!open && toolCount > 0 && (
           <span className="task-group-badge">{toolCount} tool{toolCount !== 1 ? 's' : ''}</span>
         )}

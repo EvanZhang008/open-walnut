@@ -6013,6 +6013,20 @@ input:focus, textarea:focus, select:focus {
   flex-shrink: 0;
 }
 
+/* Subagent fan-out chip: "⑂ 2+2 agents" — direct spawns + deeper-tree spawns.
+   Always visible (unlike the tool-count badge) so the tree size reads without
+   expanding the box. */
+.task-group-agent-count {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .task-group-streaming-dot {
   width: 6px;
   height: 6px;

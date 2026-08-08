@@ -82,6 +82,11 @@ export interface DeltaEvidence {
   finishedBgParents: Set<string>;
 }
 
+/** Tool names that anchor a subagent lane in the STREAMING view (kept in sync
+ *  with stream/group-blocks.ts GROUPABLE_STREAM_TOOLS and the parser's
+ *  GROUPABLE_TOOL_NAMES — all three must agree on what "lane parent" means). */
+const GROUPABLE_STREAM_PARENTS = new Set(['Task', 'Agent']);
+
 export function buildDeltaEvidence(delta: SessionHistoryMessage[]): DeltaEvidence {
   const toolUseIds = new Set<string>();
   const texts = new Map<string, number>();
@@ -180,6 +185,35 @@ export function computeAbsorbedIndices(
   // pure-UI blocks are only GC'd when their turn's real content fully promoted.
   let allMatchableMatched = true;
   const pureUiIndices: number[] = [];
+  // Groupable Task/Agent parents whose absorption is decided AFTER the main
+  // pass (atomic with their lane children — see the tool_call branch).
+  const deferredParents: number[] = [];
+
+  // NESTED lanes (a subagent spawned its own Agent — inc-1786138083302): a
+  // grandchild block's parentToolUseId is the nested Agent's tool_use id, but
+  // archival proof (bgTaskFinished) only ever lands on the TOP-LEVEL parent —
+  // the whole nested run persists into that one subagents/agent-<id>.jsonl.
+  // Map each nested groupable tool_call to its own parent so lane checks can
+  // resolve any block's ancestry chain to its top-level root (cycle-guarded).
+  const laneParentOf = new Map<string, string>();
+  for (const b of blocks) {
+    if (b.type === 'tool_call' && b.parentToolUseId && GROUPABLE_STREAM_PARENTS.has(b.name)) {
+      laneParentOf.set(b.toolUseId, b.parentToolUseId);
+    }
+  }
+  const resolveLaneRoot = (pid: string): string => {
+    let cur = pid;
+    const seen = new Set<string>();
+    while (laneParentOf.has(cur) && !seen.has(cur)) {
+      seen.add(cur);
+      cur = laneParentOf.get(cur)!;
+    }
+    return cur;
+  };
+  const laneRootFinished = (pid: string): boolean => {
+    const root = resolveLaneRoot(pid);
+    return ev.finishedBgParents.has(root) || full?.finishedBgParents.has(root) === true;
+  };
 
   for (let i = 0; i < bound; i++) {
     const b = blocks[i];
@@ -194,10 +228,19 @@ export function computeAbsorbedIndices(
     // divergence — no unmatched log, no pure-UI GC veto).
     const laneParent = (b.type === 'text' || b.type === 'thinking' || b.type === 'tool_call')
       ? b.parentToolUseId : undefined;
-    const laneFinished = laneParent != null
-      && (ev.finishedBgParents.has(laneParent) || full?.finishedBgParents.has(laneParent) === true);
+    const laneFinished = laneParent != null && laneRootFinished(laneParent);
 
     if (b.type === 'tool_call') {
+      // GROUPABLE PARENT (Task/Agent, main lane): its absorption is decided
+      // ATOMICALLY with its lane children in a post-pass below — absorbing it
+      // on the bare toolUseId twin while children are still live removes the
+      // anchor those children need and the grouping layer synthesizes an
+      // anonymous "Subagent (continued)" orphan box at the bottom
+      // (inc-1785965937858's amplifier, the phantom-box incident shape).
+      if (!laneParent && GROUPABLE_STREAM_PARENTS.has(b.name)) {
+        deferredParents.push(i);
+        continue;
+      }
       if (b.toolUseId && (ev.toolUseIds.has(b.toolUseId) || full?.toolUseIds.has(b.toolUseId))) { absorbed.add(i); continue; }
       if (laneParent) {
         if (laneFinished) absorbed.add(i);
@@ -261,6 +304,46 @@ export function computeAbsorbedIndices(
     // Pure-UI block (permission/system): no possible twin; GC below iff its
     // whole window matched.
     pureUiIndices.push(i);
+  }
+
+  // Deferred groupable parents — parent/child ATOMICITY + completion proof.
+  // A parent absorbs iff it has its own twin, NO live lane child (anywhere in
+  // blocks, live tail included), AND the run is proven over by either:
+  //  · finishedBgParents (bgTaskFinished from a task-notification, or a sync
+  //    agent's persisted result) — the authoritative proof; or
+  //  · at least one lane child, ALL absorbed (a sync agent's children persist
+  //    inline via childMessages, so each has its own id twin).
+  // The childCount>0 requirement is the phantom-box guard: an agent that has
+  // produced NO lane output yet has nothing to anchor, and absorbing its
+  // parent lets the physical reset drop the array — the NEXT lane block then
+  // arrives parentless and the grouping layer synthesizes an anonymous
+  // "Subagent (continued)" orphan box at the bottom (inc-1785965937858's
+  // amplifier, reproduced in tests/web/chat-lab). A RUNNING agent keeps its
+  // parent SILENTLY — expected live state, not a divergence: worst case is a
+  // brief labeled duplicate next to the history card (the safe direction).
+  for (const i of deferredParents) {
+    const b = blocks[i] as StreamingBlock & { type: 'tool_call' };
+    const hasTwin = !!b.toolUseId
+      && (ev.toolUseIds.has(b.toolUseId) || full?.toolUseIds.has(b.toolUseId) === true);
+    if (!hasTwin) {
+      if (b.toolUseId) { allMatchableMatched = false; unmatched.push({ index: i, kind: 'tool_call', reason: 'no toolUseId twin in delta' }); }
+      continue;
+    }
+    const finished = !!b.toolUseId
+      && (ev.finishedBgParents.has(b.toolUseId) || full?.finishedBgParents.has(b.toolUseId) === true);
+    let childCount = 0;
+    let liveChild = false;
+    for (let j = 0; j < blocks.length; j++) {
+      const c = blocks[j];
+      // Root-resolved: nested agents' grandchildren belong to THIS parent's
+      // run — a live grandchild must keep the top-level anchor alive too.
+      if ((c.type === 'text' || c.type === 'thinking' || c.type === 'tool_call')
+        && c.parentToolUseId && resolveLaneRoot(c.parentToolUseId) === b.toolUseId) {
+        childCount++;
+        if (!absorbed.has(j)) { liveChild = true; break; }
+      }
+    }
+    if (!liveChild && (finished || childCount > 0)) absorbed.add(i);
   }
 
   // Second pass: GC pure-UI blocks in the eligible window IFF all matchable content

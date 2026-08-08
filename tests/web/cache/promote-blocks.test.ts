@@ -519,6 +519,61 @@ describe('promoteCompletedBlocks — background-subagent lane', () => {
     expect(r.kept).toEqual([laneText('bg interleaved', 'toolu_bg')]);
     expect(r.removed).toBe(2);
   });
+
+  // NESTED lanes (inc-1786138083302): a subagent spawns its own Agent — the
+  // grandchild's parentToolUseId is the NESTED Agent's id, but bgTaskFinished
+  // only ever lands on the TOP-LEVEL tool. Lane proof must resolve the chain.
+  describe('nested subagent lanes', () => {
+    const nestedAgent = (id: string, parent: string): StreamingBlock =>
+      ({ type: 'tool_call', toolUseId: id, name: 'Agent', status: 'done', parentToolUseId: parent });
+
+    it('promotes grandchild lane blocks when the TOP-LEVEL parent is bgTaskFinished', () => {
+      const blocks = [
+        laneText('child narration', 'toolu_top'),
+        nestedAgent('toolu_mid', 'toolu_top'),
+        laneText('grandchild narration', 'toolu_mid'),
+        laneTool('toolu_gc_bash', 'toolu_mid'),
+      ];
+      const full = buildIdOnlyEvidence([agentToolMsg('toolu_top', true)]);
+      const r = promoteCompletedBlocks(blocks, [], blocks.length, full);
+      expect(r.removed).toBe(4);
+      expect(r.kept).toHaveLength(0);
+    });
+
+    it('keeps grandchild lane blocks while the top-level agent is RUNNING (silently)', () => {
+      const blocks = [
+        nestedAgent('toolu_mid', 'toolu_top'),
+        laneText('grandchild narration', 'toolu_mid'),
+      ];
+      const delta = [agentToolMsg('toolu_top', false)];
+      const r = promoteCompletedBlocks(blocks, delta, blocks.length);
+      expect(r.kept).toEqual(blocks);
+      expect(r.unmatched).toHaveLength(0);
+    });
+
+    it('a live grandchild keeps the top-level parent anchor alive (deferred-parent pass)', () => {
+      // Top-level Agent has a twin AND children, but a grandchild is still live —
+      // absorbing the anchor would orphan it into an anonymous box.
+      const blocks: StreamingBlock[] = [
+        { type: 'tool_call', toolUseId: 'toolu_top', name: 'Agent', status: 'calling' },
+        nestedAgent('toolu_mid', 'toolu_top'),
+        laneText('grandchild live output', 'toolu_mid'),
+      ];
+      const delta = [agentToolMsg('toolu_top', false)];
+      const r = promoteCompletedBlocks(blocks, delta, blocks.length);
+      expect(r.kept).toEqual(blocks); // anchor + children all kept
+    });
+
+    it('cyclic parent chain terminates and keeps blocks (degraded, never hangs)', () => {
+      const blocks = [
+        nestedAgent('toolu_a', 'toolu_b'),
+        nestedAgent('toolu_b', 'toolu_a'),
+        laneText('cyclic child', 'toolu_a'),
+      ];
+      const r = promoteCompletedBlocks(blocks, [], blocks.length);
+      expect(r.kept).toEqual(blocks);
+    });
+  });
 });
 
 describe('buildIdOnlyEvidence', () => {
