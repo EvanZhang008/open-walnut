@@ -833,48 +833,46 @@ export function __resetAutoTitleState(retryDelayMs = 4_000): void {
 }
 
 /**
- * Last-resort title rewrite with Walnut's OWN fast model when the CLI titler
- * keeps violating a plugin content rule. The CLI titler only lets us shape the
- * USER prompt (its system prompt says nothing about language, and Haiku
- * mirrors the message language more strongly than it follows an in-prompt
- * instruction — 2026-08-08 incident: two feedback rounds, Chinese title both
- * times). Here we own the SYSTEM prompt, so the rule is authoritative. Still
- * generic: the plugin's own rejection reason is the only rule shipped.
- * Returns null on any failure (model gated off, timeout, empty output).
+ * Last-resort title rewrite via the session's OWN main model (side_question
+ * control request) when the CLI titler keeps violating a plugin content rule.
+ * The CLI titler only lets us shape the USER prompt (its system prompt says
+ * nothing about language, and Haiku mirrors the message language more strongly
+ * than it follows an in-prompt instruction — 2026-08-08 incident: two feedback
+ * rounds, Chinese title both times). The session's main model follows an
+ * explicit instruction reliably AND rides the session's own CLI credentials —
+ * the only model access GUARANTEED to exist (Walnut-side model config is
+ * optional; a running session by definition has a working CLI). Deliberately
+ * NOT Walnut's own cheap-model pipeline for that reason. Still generic: the
+ * plugin's own rejection reason is the only rule shipped. Returns null on any
+ * failure (no side-question support, timeout, empty output).
  */
 async function rewriteTitleForRule(
-  rejectedTitle: string, message: string, rule: string,
+  live: { askSideQuestion?: (question: string, timeoutMs?: number) => Promise<string> },
+  rejectedTitle: string, rule: string,
 ): Promise<string | null> {
+  if (!live.askSideQuestion) return null;
   try {
-    const { backgroundAiDisabled, fastModelFor } = await import('../cheap-model.js');
-    if (backgroundAiDisabled()) return null;
-    const { getConfig } = await import('../config-manager.js');
-    const { sendMessage } = await import('../../agent/model.js');
-    const model = fastModelFor(await getConfig());
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15_000);
-    try {
-      const result = await sendMessage({
-        system: `You fix a session title that violated a task-system rule. THE RULE IS ABSOLUTE: ${rule}\nRewrite the title so it satisfies the rule while keeping its meaning (translate rather than transliterate when the rule demands another language). Reply with ONLY the corrected title — no quotes, no commentary.`,
-        messages: [{
-          role: 'user',
-          content: `Rejected title: ${rejectedTitle}\nSession's first message (context): ${message.slice(0, 500)}`,
-        }],
-        // maxTokens stays small: Haiku catalog default (64K) trips the SDK's
-        // "streaming required" guard on the non-streaming path.
-        config: { maxTokens: 128, ...(model ? { model } : {}) },
-        signal: controller.signal,
-      });
-      const text = (result.content ?? [])
-        .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))
-        .join('').trim().replace(/^["']|["']$/g, '');
-      return text ? text.slice(0, 200) : null;
-    } finally {
-      clearTimeout(timer);
-    }
+    const question = [
+      "This session's auto-generated title was rejected by the task system.",
+      `THE RULE IS ABSOLUTE: ${rule}`,
+      `Rejected title: ${rejectedTitle}`,
+      'Rewrite the title so it satisfies the rule while keeping its meaning',
+      '(translate rather than transliterate when the rule demands another language).',
+      'Keep it 3-7 words. Reply with ONLY the corrected title — no quotes, no commentary.',
+    ].join('\n');
+    // 60s: a side question is answered by the main model and may queue behind
+    // the turn the CLI is currently running (same FIFO) — be generous; all
+    // failure modes resolve to null and the placeholder simply stays.
+    const answer = (await live.askSideQuestion(question, 60_000)).trim();
+    // Main models sometimes wrap the answer — take the first non-empty line,
+    // strip quotes, cap like every other title write.
+    const firstLine = answer.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
+    const cleaned = firstLine.replace(/^["']|["']$/g, '').trim();
+    return cleaned ? cleaned.slice(0, 200) : null;
   } catch (err) {
-    log.session.warn('session-auto-title: rule rewrite failed', {
+    log.session.warn('session-auto-title: side-question rewrite failed', {
       errorKind: err instanceof Error ? err.name : typeof err,
+      error: err instanceof Error ? err.message : String(err),
     });
     return null;
   }
@@ -987,9 +985,9 @@ async function askAndApplyTitle(
         }
         // Layer 3: the CLI titler ignored the feedback (Haiku mirrors the
         // message language more strongly than it follows instructions).
-        // Rewrite with Walnut's own fast model, whose SYSTEM prompt we fully
-        // control — still generic, the plugin's reason is the only rule.
-        title = await rewriteTitleForRule(title, message, violation);
+        // Rewrite via side_question — the session's main model follows an
+        // explicit rule reliably and needs no Walnut-side model credentials.
+        title = await rewriteTitleForRule(live, title, violation);
         const still = title ? validatePluginContent(current, 'title', title) : 'rewrite unavailable';
         if (!title || still) {
           log.session.warn('session-auto-title: no compliant title after rewrite — placeholder kept', {

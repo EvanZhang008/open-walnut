@@ -23,18 +23,6 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-auto-title'));
 
-// Layer-3 rewrite dependencies (rewriteTitleForRule). Default: gated off, as
-// in real test runs — individual tests opt in by flipping bgDisabled.
-const rewriteSendMock = vi.fn();
-let bgDisabled = true;
-vi.mock('../../src/agent/model.js', () => ({
-  sendMessage: (...args: unknown[]) => rewriteSendMock(...args),
-}));
-vi.mock('../../src/core/cheap-model.js', () => ({
-  backgroundAiDisabled: () => bgDisabled,
-  fastModelFor: () => undefined,
-}));
-
 import { WALNUT_HOME } from '../../src/constants.js';
 import { sessionRunner } from '../../src/providers/claude-code-session.js';
 import { addTask, getTask, updateTask, _resetForTesting as resetTaskManager } from '../../src/core/task-manager.js';
@@ -52,10 +40,15 @@ function nextSid(): string {
   return `auto-title-sid-${++sidCounter}`;
 }
 
-function registerFakeSession(sid: string, impl: (desc: string) => Promise<string | null>) {
+function registerFakeSession(
+  sid: string,
+  impl: (desc: string) => Promise<string | null>,
+  sideQuestionImpl?: (question: string) => Promise<string>,
+) {
   const fake = {
     sessionId: sid,
     generateSessionTitle: vi.fn(impl),
+    ...(sideQuestionImpl ? { askSideQuestion: vi.fn(sideQuestionImpl) } : {}),
     detach: () => {},
     kill: () => {},
   };
@@ -88,8 +81,6 @@ beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   resetTaskManager();
   __resetAutoTitleState(10); // shrink the in-dispatch retry pause for tests
-  rewriteSendMock.mockReset();
-  bgDisabled = true;
 });
 
 afterEach(async () => {
@@ -248,45 +239,64 @@ describe('sessionAutoTitleHook', () => {
       expect((await getTask(task.id)).title).toBe('Fix login issue');
     });
 
-    it('rewrites with the fast model when the CLI titler ignores the feedback (layer 3)', async () => {
+    it('rewrites via side_question when the CLI titler ignores the feedback (layer 3)', async () => {
       const sid = nextSid();
       const task = await makePluginTaskAndSession(sid);
-      const fake = registerFakeSession(sid, async () => '还是中文标题'); // both rounds violate
-      bgDisabled = false;
-      rewriteSendMock.mockImplementation(async (args: { system: string }) => {
-        expect(args.system).toContain(RULE); // plugin rule reaches the rewrite SYSTEM prompt
-        return { content: [{ type: 'text', text: 'Still a Chinese title, translated' }], stopReason: 'end_turn' };
-      });
+      const fake = registerFakeSession(
+        sid,
+        async () => '还是中文标题', // both titler rounds violate
+        async (question) => {
+          expect(question).toContain(RULE); // plugin rule reaches the side question
+          expect(question).toContain('还是中文标题'); // and so does the rejected title
+          return '"Still a Chinese title, translated"\n(quotes stripped, first line taken)';
+        },
+      );
 
       await sessionAutoTitleHook.handler(payloadFor(sid, task, '登录页面一直重定向'));
 
       expect(fake.generateSessionTitle).toHaveBeenCalledTimes(2);
-      expect(rewriteSendMock).toHaveBeenCalledTimes(1);
+      expect(fake.askSideQuestion).toHaveBeenCalledTimes(1);
       expect((await getTask(task.id)).title).toBe('Still a Chinese title, translated');
     });
 
     it('keeps the placeholder when every layer fails (no infinite loop, no bad write)', async () => {
       const sid = nextSid();
       const task = await makePluginTaskAndSession(sid);
-      const fake = registerFakeSession(sid, async () => '还是中文标题');
-      bgDisabled = false;
-      rewriteSendMock.mockResolvedValue({ content: [{ type: 'text', text: '翻译失败还是中文' }], stopReason: 'end_turn' });
+      const fake = registerFakeSession(
+        sid,
+        async () => '还是中文标题',
+        async () => '翻译失败还是中文', // side question violates too
+      );
 
       await sessionAutoTitleHook.handler(payloadFor(sid, task, '登录页面一直重定向'));
 
       expect(fake.generateSessionTitle).toHaveBeenCalledTimes(2);
+      expect(fake.askSideQuestion).toHaveBeenCalledTimes(1);
       expect((await getTask(task.id)).title).toBe(PLACEHOLDER);
     });
 
-    it('keeps the placeholder when the rewrite model is gated off (test/disabled envs)', async () => {
+    it('keeps the placeholder when the session has no side-question support', async () => {
       const sid = nextSid();
       const task = await makePluginTaskAndSession(sid);
+      // No sideQuestionImpl → live.askSideQuestion is undefined (ACP/older CLI).
       registerFakeSession(sid, async () => '还是中文标题');
-      // bgDisabled stays true → rewriteTitleForRule returns null
 
       await sessionAutoTitleHook.handler(payloadFor(sid, task, '登录页面一直重定向'));
 
-      expect(rewriteSendMock).not.toHaveBeenCalled();
+      expect((await getTask(task.id)).title).toBe(PLACEHOLDER);
+    });
+
+    it('keeps the placeholder when the side question throws (timeout)', async () => {
+      const sid = nextSid();
+      const task = await makePluginTaskAndSession(sid);
+      registerFakeSession(
+        sid,
+        async () => '还是中文标题',
+        async () => { throw new Error('side question timed out'); },
+      );
+
+      await sessionAutoTitleHook.handler(payloadFor(sid, task, '登录页面一直重定向'));
+
       expect((await getTask(task.id)).title).toBe(PLACEHOLDER);
     });
   });
