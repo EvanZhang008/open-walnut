@@ -570,6 +570,123 @@ describe('start_session tool', () => {
     expect(result).toContain('<session-ref id="mock-session-id-12345" label="Mock Session Title"/>');
     expect(result).not.toContain('<task-ref');
   });
+
+  // Regression: 2026-08-07 — a project with default_host=<remote> made session_start
+  // unusable for local repos: an explicit local working_directory was rejected, and the
+  // error's own advice (host=null / empty host) didn't work because falsy host params
+  // fell through to project inheritance. More specific sources must win.
+  describe('local cwd vs inherited project default_host arbitration', () => {
+    const setRemoteProject = async (name: string) => {
+      await executeTool('task_update', {
+        type: 'project',
+        project: name,
+        default_host: 'remote-dev',
+        default_cwd: '/workplace/remote-checkout',
+      });
+    };
+
+    it('explicit local working_directory overrides inherited project default_host → runs locally', async () => {
+      await setRemoteProject('RemoteProj');
+      const addResult = await executeTool('task_create', { title: 'Local repo task', project: 'RemoteProj' });
+      const idMatch = addResult.match(/id="([^"]+)"/);
+
+      const result = await executeTool('session_start', {
+        task_id: idMatch![1],
+        working_directory: '/Users/someone/code/local-repo',
+        prompt: 'plan work',
+      });
+
+      expect(result).not.toContain('Error:');
+      expect(startSessionSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: '/Users/someone/code/local-repo',
+          host: undefined,
+        }),
+      );
+    });
+
+    it('task-level local cwd overrides inherited project default_host → runs locally', async () => {
+      await setRemoteProject('RemoteProj2');
+      const addResult = await executeTool('task_create', { title: 'Task with local cwd', project: 'RemoteProj2' });
+      const idMatch = addResult.match(/id="([^"]+)"/);
+      await executeTool('task_update', { id: idMatch![1], cwd: '/Users/someone/code/task-repo' });
+
+      const result = await executeTool('session_start', {
+        task_id: idMatch![1],
+        prompt: 'plan work',
+      });
+
+      expect(result).not.toContain('Error:');
+      expect(startSessionSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: '/Users/someone/code/task-repo',
+          host: undefined,
+        }),
+      );
+    });
+
+    it.each(['', 'local', 'LOCAL', 'none', 'null'])(
+      'host sentinel %j forces local execution, skipping project default_host',
+      async (sentinel) => {
+        await setRemoteProject(`SentinelProj-${sentinel || 'empty'}`);
+        const addResult = await executeTool('task_create', {
+          title: `Sentinel test ${sentinel || 'empty'}`,
+          project: `SentinelProj-${sentinel || 'empty'}`,
+        });
+        const idMatch = addResult.match(/id="([^"]+)"/);
+
+        const result = await executeTool('session_start', {
+          task_id: idMatch![1],
+          host: sentinel,
+          working_directory: '/Users/someone/code/local-repo',
+          prompt: 'plan work',
+        });
+
+        expect(result).not.toContain('Error:');
+        expect(startSessionSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ host: undefined, cwd: '/Users/someone/code/local-repo' }),
+        );
+      },
+    );
+
+    it('still errors when the host was an explicit param and cwd is local', async () => {
+      const addResult = await executeTool('task_create', { title: 'Explicit host conflict' });
+      const idMatch = addResult.match(/id="([^"]+)"/);
+
+      const result = await executeTool('session_start', {
+        task_id: idMatch![1],
+        host: 'remote-dev',
+        working_directory: '/Users/someone/code/local-repo',
+        prompt: 'work',
+      });
+
+      expect(result).toContain('Error:');
+      expect(result).toContain('explicit host param');
+      expect(result).toContain('host: "local"');
+      expect(startSessionSpy).not.toHaveBeenCalled();
+    });
+
+    it('errors on self-contradictory project config (remote default_host + local default_cwd)', async () => {
+      await executeTool('task_update', {
+        type: 'project',
+        project: 'BrokenProj',
+        default_host: 'remote-dev',
+        default_cwd: '/Users/someone/code/local-repo',
+      });
+      const addResult = await executeTool('task_create', { title: 'Contradiction test', project: 'BrokenProj' });
+      const idMatch = addResult.match(/id="([^"]+)"/);
+
+      const result = await executeTool('session_start', {
+        task_id: idMatch![1],
+        prompt: 'work',
+      });
+
+      expect(result).toContain('Error:');
+      expect(result).toContain('self-contradictory');
+      expect(result).toContain("default_host:''");
+      expect(startSessionSpy).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('config tools', () => {

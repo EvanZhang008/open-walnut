@@ -149,21 +149,41 @@ function json(data: unknown): string {
   return JSON.stringify(data, null, 2);
 }
 
+/** Where a resolved host/cwd value came from — used to arbitrate conflicts (more specific wins). */
+type HostSource = 'param' | 'project' | 'none';
+type CwdSource = 'param' | 'task' | 'project' | 'memory' | 'none';
+
+/** Explicit "run locally" sentinels for the host param — block project default_host inheritance. */
+function isLocalHostSentinel(host: string | null | undefined): boolean {
+  if (host === null) return true;
+  if (typeof host !== 'string') return false;
+  return ['', 'local', '__local__', 'none', 'null'].includes(host.trim().toLowerCase());
+}
+
 /**
  * Resolve host and working directory for a session via the 5-priority inheritance chain.
  * Shared by session_start and session_import.
  *
  * Resolution chain:
  *   CWD:  ① explicit param → ② task.cwd → ③ parent chain walk → ④ project metadata (default_cwd) → ⑤ project memory dir
- *   Host: ① explicit param → ② project metadata (default_host)
+ *   Host: ① explicit param (empty string / "local" / null = force local, no inheritance) → ② project metadata (default_host)
  */
 async function resolveSessionContext(
   task: Task | null,
-  explicitHost?: string,
+  explicitHost?: string | null,
   explicitCwd?: string,
-): Promise<{ resolvedHost: string | undefined; resolvedCwd: string | undefined }> {
-  let resolvedHost = explicitHost;
+): Promise<{
+  resolvedHost: string | undefined;
+  resolvedCwd: string | undefined;
+  hostSource: HostSource;
+  cwdSource: CwdSource;
+}> {
+  // host was explicitly set to a local sentinel → never inherit project default_host
+  const forceLocal = explicitHost !== undefined && isLocalHostSentinel(explicitHost);
+  let resolvedHost = forceLocal ? undefined : (explicitHost ?? undefined);
+  let hostSource: HostSource = resolvedHost ? 'param' : 'none';
   let resolvedCwd = explicitCwd;
+  let cwdSource: CwdSource = resolvedCwd ? 'param' : 'none';
 
   // Priority 2 & 3: task cwd → walk up parent chain
   if (!resolvedCwd && task) {
@@ -172,6 +192,7 @@ async function resolveSessionContext(
     while (current && !resolvedCwd) {
       if (current.cwd) {
         resolvedCwd = current.cwd;
+        cwdSource = 'task';
         break;
       }
       if (!current.parent_task_id || seen.has(current.parent_task_id)) break;
@@ -181,11 +202,17 @@ async function resolveSessionContext(
   }
 
   // Priority 4: project metadata
-  if (task && (!resolvedHost || !resolvedCwd)) {
+  if (task && ((!resolvedHost && !forceLocal) || !resolvedCwd)) {
     const metadata = await getProjectMetadata(task.project || '');
     if (metadata) {
-      if (!resolvedHost) resolvedHost = metadata.default_host as string | undefined;
-      if (!resolvedCwd) resolvedCwd = metadata.default_cwd as string | undefined;
+      if (!resolvedHost && !forceLocal && metadata.default_host) {
+        resolvedHost = metadata.default_host as string;
+        hostSource = 'project';
+      }
+      if (!resolvedCwd && metadata.default_cwd) {
+        resolvedCwd = metadata.default_cwd as string;
+        cwdSource = 'project';
+      }
     }
   }
 
@@ -198,9 +225,10 @@ async function resolveSessionContext(
     const projectDir = path.join(PROJECTS_MEMORY_DIR, (task.project || 'inbox').toLowerCase());
     fs.mkdirSync(projectDir, { recursive: true });
     resolvedCwd = projectDir;
+    cwdSource = 'memory';
   }
 
-  return { resolvedHost, resolvedCwd };
+  return { resolvedHost, resolvedCwd, hostSource, cwdSource };
 }
 
 /** Build a blocked response for session concurrency limit. */
@@ -1319,7 +1347,7 @@ and is always allowed.`,
         title: { type: 'string', description: 'Short human-readable title for this session (e.g. "Fix login validation", "Add API endpoint"). Required.' },
         prompt: { type: 'string', description: 'Prompt/message to send. Required.' },
         working_directory: { type: 'string', description: 'Absolute path to working directory (required for CLI sessions). For remote sessions, this is the path on the remote machine. If not specified, uses project defaults (see task_update type=\'project\').' },
-        host: { type: 'string', description: 'SSH host alias for remote execution (matches keys in config.hosts). If not specified, uses the project default_host from project settings. Omit for local execution.' },
+        host: { type: 'string', description: 'SSH host alias for remote execution (matches keys in config.hosts). If not specified, uses the project default_host from project settings. Pass "local" (or an empty string) to force local execution and skip project default_host inheritance.' },
         mode: { type: 'string', enum: ['plan', 'bypass'], description: "Session permission mode (CLI only). 'plan' = read-only, 'bypass' = no prompts." },
         fork_session_id: { type: 'string', description: 'Fork from an existing session: copies its conversation context into a new session on a different task. When set, working_directory/host/mode are inherited from the source session and must NOT be provided.' },
         runner: { type: 'string', enum: ['embedded', 'cli'], description: "Runner type. 'cli' = Claude Code process (default if no agent_id). 'embedded' = in-process subagent (default if agent_id is set)." },
@@ -1505,9 +1533,9 @@ and is always allowed.`,
         }
 
         // CLI runner — resolve host and cwd via shared resolution chain
-        const { resolvedHost, resolvedCwd } = await resolveSessionContext(
+        let { resolvedHost, resolvedCwd, hostSource, cwdSource } = await resolveSessionContext(
           task,
-          params.host as string | undefined,
+          params.host as string | null | undefined,
           params.working_directory as string | undefined,
         );
 
@@ -1516,24 +1544,40 @@ and is always allowed.`,
           return `Error: Remote host "${resolvedHost}" specified but no working directory. Set working_directory or configure via task_update(type:'project', ...).`;
         }
 
+        // Local-looking paths can never run on a remote host. Arbitration: the more
+        // specific source wins. A cwd given explicitly (param) or set on the task beats
+        // a host that was merely INHERITED from the project default → run locally.
+        // Only a genuinely explicit host param, or a self-contradictory project config
+        // (remote default_host + local default_cwd), remains an error.
+        // (Runs before the config.hosts check — a dropped host needn't exist in config.)
+        if (resolvedHost && resolvedCwd && /^\/Users\//.test(resolvedCwd)) {
+          if (hostSource === 'project' && (cwdSource === 'param' || cwdSource === 'task')) {
+            log.agent.info('session_start: local cwd overrides inherited project default_host — running locally', {
+              taskId: task?.id, project: task?.project, cwd: resolvedCwd, droppedHost: resolvedHost, cwdSource,
+            });
+            resolvedHost = undefined;
+            hostSource = 'none';
+          } else if (hostSource === 'param') {
+            return `Error: Local path "${resolvedCwd}" cannot be used on remote host "${resolvedHost}" (explicit host param). ` +
+              `The cwd must exist on the remote machine. Either:\n` +
+              `  1. Provide a remote path as working_directory (e.g. /workplace/...)\n` +
+              `  2. Pass host: "local" to run on this machine instead of "${resolvedHost}"`;
+          } else {
+            // Both host and cwd inherited from the project — the project config contradicts itself.
+            return `Error: Project "${task?.project}" config is self-contradictory: default_host "${resolvedHost}" is remote but default_cwd "${resolvedCwd}" is a local Mac path. ` +
+              `Fix the project settings:\n` +
+              `  1. If this project runs locally: task_update(type:'project', project:'${task?.project}', default_host:'') to clear the host\n` +
+              `  2. If it runs on "${resolvedHost}": task_update(type:'project', project:'${task?.project}', default_cwd:'/remote/path')\n` +
+              `Or override for this session only: pass host: "local" or a remote working_directory.`;
+          }
+        }
+
         // Validate host exists in config
         if (resolvedHost) {
           const config = await getConfig();
           if (!config.hosts?.[resolvedHost]) {
             return `Error: Unknown host "${resolvedHost}". Configure it in config.yaml under hosts.${resolvedHost}`;
           }
-        }
-
-        // Validate: local-looking paths should not be sent to remote hosts.
-        // Common mistake: the project has default_host but cwd is a local Mac path.
-        if (resolvedHost && resolvedCwd && /^\/Users\//.test(resolvedCwd)) {
-          const hostSource = params.host ? 'explicit host param' : 'inherited from project default_host';
-          return `Error: Local path "${resolvedCwd}" cannot be used on remote host "${resolvedHost}" (${hostSource}). ` +
-            `The cwd must exist on the remote machine. Either:\n` +
-            `  1. Provide a remote path as working_directory (e.g. /workplace/...)\n` +
-            `  2. Set host=null to run locally instead of on "${resolvedHost}"\n` +
-            `  3. Update the task cwd: task_update(id:'${task?.id ?? '...'}', cwd:'/remote/path')\n` +
-            `Note: host "${resolvedHost}" was resolved via: ${hostSource}`;
         }
 
         // Local sessions still require a cwd — give actionable guidance
