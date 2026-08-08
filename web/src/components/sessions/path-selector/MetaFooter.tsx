@@ -11,6 +11,7 @@ import { PRIORITY_OPTIONS, DEFAULT_META, rememberPinTier } from '../task-meta-co
 import type { QuickStartTaskMeta } from '../SessionPathSelector';
 import { PinTierPicker } from '@/components/common/PinTierPicker';
 import { useHostModelCatalog } from '@/hooks/useModelCatalog';
+import { formatModelName } from '@/hooks/useSessionUsage';
 
 interface Props {
   meta: QuickStartTaskMeta;
@@ -24,15 +25,27 @@ interface Props {
 /** Model dropdown rows: the host's last-known CLI catalog (values = full
  *  provider IDs, sent verbatim to spawn) — falling back to the static registry
  *  only when this host has never produced a catalog. The catalog 'default' row
- *  is folded into the Auto option (Auto = no --model = CLI default). */
-function useModelOptions(host?: string | null): Array<{ value: string; label: string }> {
+ *  is folded into the Auto option (Auto = no --model = CLI default) — but its
+ *  resolvedModel is surfaced in the Auto label ("Auto (Opus 5 1M)") so the
+ *  user knows WHAT Auto launches before starting. */
+function useModelOptions(host?: string | null): {
+  options: Array<{ value: string; label: string }>;
+  /** Short display name of the model Auto resolves to on this host ('' = unknown). */
+  autoResolved: string;
+} {
   const catalog = useHostModelCatalog(host);
   if (catalog) {
-    return catalog.models
-      .filter((m) => m.value !== 'default' && !m.disabled)
-      .map((m) => ({ value: m.value, label: m.displayName }));
+    return {
+      options: catalog.models
+        .filter((m) => m.value !== 'default' && !m.disabled)
+        .map((m) => ({ value: m.value, label: m.displayName })),
+      autoResolved: formatModelName(catalog.models.find((m) => m.value === 'default')?.resolvedModel),
+    };
   }
-  return SESSION_MODELS.map((sm) => ({ value: sm.id, label: sm.label }));
+  return {
+    options: SESSION_MODELS.map((sm) => ({ value: sm.id, label: sm.label })),
+    autoResolved: '',
+  };
 }
 
 /** Segmented Claude | Codex engine toggle. Codex is ACP-backed and local-only
@@ -92,7 +105,7 @@ export function MetaFooter({ meta, onChange, compact, host }: Props) {
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
   const moreBtnRef = useRef<HTMLButtonElement>(null);
-  const modelOptions = useModelOptions(host);
+  const { options: modelOptions, autoResolved } = useModelOptions(host);
   // A previously-picked model that isn't in the current host's rows (host tab
   // switched, catalog updated) still renders — selected, clearly marked — so
   // the <select> never silently shows Auto while meta.model is set.
@@ -151,7 +164,7 @@ export function MetaFooter({ meta, onChange, compact, host }: Props) {
             title="Session model — Auto lets Claude/config pick the default"
             aria-label="Session model"
           >
-            <option value="">Auto</option>
+            <option value="">{autoResolved ? `Auto (${autoResolved})` : 'Auto'}</option>
             {modelOptions.map(o => (
               <option key={o.value} value={o.value}>{o.label}</option>
             ))}

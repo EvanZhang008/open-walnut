@@ -464,3 +464,67 @@ class SessionStreamBuffer {
 }
 
 export const sessionStreamBuffer = new SessionStreamBuffer()
+
+// ── Snapshot byte budget (phone attach frame) ──
+//
+// The /api/v1 session stream sends the attach snapshot as ONE SSE `data:`
+// line. Nothing bounded it: a whale in-flight turn (field incident: a 206MB
+// live region) serialized wholesale, and the iOS client hard-caps a single
+// SSE line at 4MB — it killed the connection, reconnected, got the SAME
+// snapshot re-sent, forever (silent livelock, ~4MB burned per cycle, no
+// events ever delivered). The phone renders only the newest ~96K chars of
+// live text anyway (LiveMarkdownWindow), so serving more than that is pure
+// waste. This trims OLDEST blocks first and clips a single oversized text/
+// thinking block's HEAD (the tail is what the live window shows).
+// Applied on the v1 phone route only — the desktop web snapshot
+// (routes/session-chat.ts) keeps full fidelity.
+
+/** ~640KB of block content per snapshot — several times the phone's 96K-char
+ *  render cap (CJK is 3 bytes/char), a couple hundred KB of JSON overhead
+ *  still keeps the SSE line far below the client's 4MB frame cap. */
+export const SNAPSHOT_BYTE_BUDGET = 640_000
+
+/** Pure: trim a snapshot's blocks to ~`budget` content bytes, newest-first.
+ *  `completedLen` is re-based onto the surviving prefix drop. */
+export function budgetSnapshotBlocks(
+  snapshot: StreamSnapshot, budget: number = SNAPSHOT_BYTE_BUDGET
+): StreamSnapshot {
+  const blocks = snapshot.blocks
+  let total = 0
+  // Walk from the END: keep the newest blocks (the live region the phone
+  // shows); stop once the budget is spent.
+  let start = blocks.length
+  while (start > 0) {
+    const b = blocks[start - 1]
+    const content = (b as { content?: string }).content
+      ?? (b as { result?: string }).result ?? ''
+    const cost = Buffer.byteLength(content) + 64 // block JSON overhead floor
+    if (total + cost > budget && start < blocks.length) break
+    total += cost
+    start--
+  }
+  let kept = start === 0 ? blocks : blocks.slice(start)
+  // A SINGLE giant block can still blow the frame (one 200MB text run is one
+  // block) — clip its head, keeping the newest `budget` bytes of content.
+  kept = kept.map((b) => {
+    const content = (b as { content?: string }).content
+    if ((b.type !== 'text' && b.type !== 'thinking') || !content) return b
+    if (Buffer.byteLength(content) <= budget) return b
+    // Byte-safe tail: cut on a char boundary via the string API (approximate
+    // chars-from-bytes is fine — the phone re-trims to its own cap anyway).
+    const approxChars = Math.floor(budget / 3)
+    return { ...b, content: content.slice(-approxChars) }
+  })
+  if (kept.length === blocks.length) {
+    return { ...snapshot, blocks: kept }
+  }
+  const dropped = blocks.length - kept.length
+  log.ws.info('snapshot byte-budget trim', {
+    dropped, kept: kept.length, budget,
+  })
+  return {
+    ...snapshot,
+    blocks: kept,
+    completedLen: Math.max(0, snapshot.completedLen - dropped),
+  }
+}

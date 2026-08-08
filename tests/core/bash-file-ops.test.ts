@@ -15,8 +15,8 @@ describe('parseBashFileOps — renames (mv / git mv)', () => {
   });
 
   it('handles quoted paths with spaces', () => {
-    const ops = parseBashFileOps('git mv "Areas/Career/Immigration H1b" "Projects/Immigration H1b"', CWD);
-    expect(ops).toEqual([{ kind: 'rename', from: `${CWD}/Areas/Career/Immigration H1b`, path: `${CWD}/Projects/Immigration H1b` }]);
+    const ops = parseBashFileOps('git mv "Areas/Career/Marina Renewal" "Projects/Marina Renewal"', CWD);
+    expect(ops).toEqual([{ kind: 'rename', from: `${CWD}/Areas/Career/Marina Renewal`, path: `${CWD}/Projects/Marina Renewal` }]);
   });
 
   it('follows the `git mv ... || mv ...` fallback idiom (both statements → two renames of the same move)', () => {

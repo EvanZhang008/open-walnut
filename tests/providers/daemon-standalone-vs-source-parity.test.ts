@@ -429,8 +429,11 @@ describe('L1/L2 daemon-standalone vs daemon-source parity (versioned events + ta
   })
 
   // L2 — both define the task-state helpers with identical terminal set + transition cap.
-  it('both define the BG terminal status set (completed/failed/stopped/cancelled)', () => {
-    const re = /BG_TERMINAL_STATUSES\s*=\s*new Set\(\[['"]completed['"],\s*['"]failed['"],\s*['"]stopped['"],\s*['"]cancelled['"]\]\)/
+  // 'killed' is in the set: the CLI fork emits task_updated {patch:{status:'killed'}}
+  // right after the task_notification 'stopped' bookend (inc-1786222771315) — without
+  // it, the kill's own patch REVIVES the task as non-terminal (phantom derivedRunning).
+  it("both define the BG terminal status set (completed/failed/stopped/cancelled/killed)", () => {
+    const re = /BG_TERMINAL_STATUSES\s*=\s*new Set\(\[['"]completed['"],\s*['"]failed['"],\s*['"]stopped['"],\s*['"]cancelled['"],\s*['"]killed['"]\]\)/
     expect(standaloneSrc).toMatch(re)
     expect(templateSrc).toMatch(re)
   })
@@ -496,6 +499,25 @@ describe('L1/L2 daemon-standalone vs daemon-source parity (versioned events + ta
     // assignment from the patch value that could carry a `false` through.
     expect(standaloneSrc).not.toMatch(/isBackgrounded\s*=\s*patch\??\.\s*is_backgrounded\s*[^=]/)
     expect(templateSrc).not.toMatch(/isBackgrounded\s*=\s*parsed\.patch\s*&&\s*parsed\.patch\.is_backgrounded\s*[^=]/)
+  })
+
+  // inc-1786222771315 — the idle reaper must not kill a session whose OWN
+  // taskState still counts a running background task (wait-style bash tasks
+  // write to output_file, not the JSONL, so the stream goes silent for the
+  // task's whole lifetime). Same shape as the cron guard: extended threshold
+  // (24h), never disabled.
+  it('both extend the idle-kill threshold when a background task is running (bgActive)', () => {
+    const constRe = /SESSION_BG_IDLE_KILL_MS\s*=\s*24\s*\*\s*60\s*\*\s*60\s*\*\s*1000/
+    expect(standaloneSrc).toMatch(constRe)
+    expect(templateSrc).toMatch(constRe)
+    // bgActive derives from the daemon's own fold, not a cached flag
+    const deriveRe = /taskState.*derivedRunning\s*>\s*0/
+    expect(standaloneSrc).toMatch(deriveRe)
+    expect(templateSrc).toMatch(deriveRe)
+    // and it must participate in the kill-threshold selection
+    const killRe = /bgActive\s*\?\s*SESSION_BG_IDLE_KILL_MS/
+    expect(standaloneSrc).toMatch(killRe)
+    expect(templateSrc).toMatch(killRe)
   })
 })
 

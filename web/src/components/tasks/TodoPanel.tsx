@@ -2408,13 +2408,27 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Declared BEFORE every task-visibility memo below (pinned tiers, Recent, the main
   // list): each of those filters drops done tasks, so they ALL must consult the grace
   // window or a completed task disappears instantly in that surface.
-  // 3s still + 150ms slack so the 450ms exit animation (delay 2550ms, see
-  // .todo-panel-item-vanishing) finishes BEFORE the row unmounts — otherwise the
-  // fade-out is cut off mid-way and the removal still reads as a pop.
+  //
+  // The window is SHARED, not per-task: completing another task while earlier ones
+  // are still in grace pushes ONE deadline forward (latest completion + GRACE_MS) and
+  // the whole in-grace batch exits together at that deadline. Per-task timers made
+  // rows vanish one by one under the user's cursor while they were still checking off
+  // the rest of the list. Timeline per batch: rows sit still (green tint) until
+  // deadline − 600ms, fade out over 450ms, then unmount together at the deadline
+  // (150ms slack so the exit animation finishes BEFORE the rows unmount — otherwise
+  // the removal still reads as a pop).
   const GRACE_MS = 3_150;
+  const EXIT_ANIM_MS = 450;
+  const EXIT_SLACK_MS = 150;
   const recentlyCompletedRef = useRef<Set<string>>(new Set());
-  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const graceDeadlineRef = useRef(0);
+  const graceExitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const graceClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [recentTick, setRecentTick] = useState(0);
+  // True only during the batch's final fade window — gates the exit-animation class
+  // so a held row doesn't start (and finish) its CSS exit long before the shared
+  // deadline when a later completion extended it.
+  const [graceExiting, setGraceExiting] = useState(false);
 
   /** True while `completed_at` is inside the grace window. Checked INLINE during
    *  render (not only via recentlyCompletedRef): the ref is populated by an effect
@@ -2434,40 +2448,66 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     [isInCompletionGrace],
   );
 
+  /** (Re)arm the two shared batch timers against the current deadline. Called on
+   *  every deadline extension — a batch mid-fade snaps back to fully visible and
+   *  holds again, which is exactly the "wait for the latest one" contract. */
+  const armGraceTimers = useCallback(() => {
+    if (graceExitTimerRef.current) clearTimeout(graceExitTimerRef.current);
+    if (graceClearTimerRef.current) clearTimeout(graceClearTimerRef.current);
+    const untilDeadline = Math.max(0, graceDeadlineRef.current - Date.now());
+    setGraceExiting(false);
+    graceExitTimerRef.current = setTimeout(() => {
+      setGraceExiting(true);
+    }, Math.max(0, untilDeadline - (EXIT_ANIM_MS + EXIT_SLACK_MS)));
+    graceClearTimerRef.current = setTimeout(() => {
+      recentlyCompletedRef.current.clear();
+      graceDeadlineRef.current = 0;
+      graceExitTimerRef.current = null;
+      graceClearTimerRef.current = null;
+      setGraceExiting(false);
+      setRecentTick((n) => n + 1);
+    }, untilDeadline);
+  }, []);
+
   useEffect(() => {
-    let added = false;
+    let extended = false;
     for (const task of tasks) {
       if (task.status === 'done' && task.completed_at && !recentlyCompletedRef.current.has(task.id)) {
-        const elapsed = Date.now() - new Date(task.completed_at).getTime();
+        const completedAt = new Date(task.completed_at).getTime();
+        const elapsed = Date.now() - completedAt;
         if (elapsed >= 0 && elapsed < GRACE_MS) {
           recentlyCompletedRef.current.add(task.id);
-          added = true;
-          const timerId = setTimeout(() => {
-            recentlyCompletedRef.current.delete(task.id);
-            timersRef.current.delete(task.id);
-            setRecentTick((n) => n + 1);
-          }, GRACE_MS - elapsed);
-          timersRef.current.set(task.id, timerId);
+          // ONE shared deadline for the whole batch: latest completion + GRACE_MS.
+          graceDeadlineRef.current = Math.max(graceDeadlineRef.current, completedAt + GRACE_MS);
+          extended = true;
         }
       }
     }
-    // Trigger re-render so the filters re-run with the new grace entries
-    if (added) setRecentTick((n) => n + 1);
-    // Clean up timers for tasks that are no longer done (reopened)
-    for (const [taskId, timerId] of timersRef.current) {
+    // Reopened tasks leave the batch immediately (they're visible again anyway).
+    let removed = false;
+    for (const taskId of recentlyCompletedRef.current) {
       const task = tasks.find((t) => t.id === taskId);
       if (!task || task.status !== 'done') {
-        clearTimeout(timerId);
-        timersRef.current.delete(taskId);
         recentlyCompletedRef.current.delete(taskId);
+        removed = true;
       }
     }
-  }, [tasks]);
+    if (extended) armGraceTimers();
+    else if (removed && recentlyCompletedRef.current.size === 0) {
+      // Batch emptied by reopens — disarm so the stale timers don't flash graceExiting.
+      if (graceExitTimerRef.current) { clearTimeout(graceExitTimerRef.current); graceExitTimerRef.current = null; }
+      if (graceClearTimerRef.current) { clearTimeout(graceClearTimerRef.current); graceClearTimerRef.current = null; }
+      graceDeadlineRef.current = 0;
+      setGraceExiting(false);
+    }
+    // Trigger re-render so the filters re-run with the new grace entries
+    if (extended || removed) setRecentTick((n) => n + 1);
+  }, [tasks, armGraceTimers]);
 
-  // Cleanup all timers on unmount
-  useEffect(() => {
-    const timers = timersRef.current;
-    return () => { for (const id of timers.values()) clearTimeout(id); };
+  // Cleanup shared timers on unmount
+  useEffect(() => () => {
+    if (graceExitTimerRef.current) clearTimeout(graceExitTimerRef.current);
+    if (graceClearTimerRef.current) clearTimeout(graceClearTimerRef.current);
   }, []);
 
   // ── Sticky pin membership during the grace window ──
@@ -4777,7 +4817,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
       out.push(
         <SortableTierCard key={task.id} task={task} tier={tier} isFocused={focusedTaskId === task.id}
-          isVanishing={keepWhileCompleting(task)}
+          isVanishing={keepWhileCompleting(task) && graceExiting}
           isSessionOpen={openSessionTaskIds?.has(task.id) ?? false}
           isDetailOpen={focusedTaskId === task.id && !suppressDetail}
           onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask}
@@ -4790,7 +4830,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       );
     }
     return out;
-  }, [pinnedTaskMap, taskGroups, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, handleExpandDetail, onClearFocus, onOpenSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick]);
+  }, [pinnedTaskMap, taskGroups, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, handleExpandDetail, onClearFocus, onOpenSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting]);
 
   // The regular task list gets its own PINNED/RECENT-style collapsible bar.
   // Outside the stacked view the Tasks tab IS the list — it can't be folded away.
@@ -5148,7 +5188,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         key={task.id}
                         task={task}
                         isFocused={focusedTaskId === task.id}
-                        isVanishing={keepWhileCompleting(task) && !showCompleted}
+                        isVanishing={keepWhileCompleting(task) && !showCompleted && graceExiting}
                         isSessionOpen={openSessionTaskIds?.has(task.id) ?? false}
                         isDetailOpen={focusedTaskId === task.id && !suppressDetail}
                         onClick={handlePinnedCardClick}
@@ -5298,7 +5338,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     isFocused={focusedTaskId === task.id}
                     isDetailOpen={focusedTaskId === task.id && !suppressDetail}
                     isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                    isVanishing={recentlyCompletedRef.current.has(task.id) && completedWillHide}
+                    isVanishing={recentlyCompletedRef.current.has(task.id) && completedWillHide && graceExiting}
                     isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
                     depth={depthMap.get(task.id) ?? 0}
                     childCount={searchChildCount.get(task.id)}
@@ -5348,7 +5388,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   isFocused={focusedTaskId === task.id}
                   isDetailOpen={focusedTaskId === task.id && !suppressDetail}
                   isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                  isVanishing={recentlyCompletedRef.current.has(task.id) && completedWillHide}
+                  isVanishing={recentlyCompletedRef.current.has(task.id) && completedWillHide && graceExiting}
                   isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
                   depth={depthMap.get(task.id) ?? 0}
                   childCount={trueChildCountMap.get(task.id)}
@@ -5439,7 +5479,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 isFocused={focusedTaskId === task.id}
                                 isDetailOpen={focusedTaskId === task.id && !suppressDetail}
                                 isRecentlyDone={recentlyCompletedRef.current.has(task.id)}
-                                isVanishing={recentlyCompletedRef.current.has(task.id) && completedWillHide}
+                                isVanishing={recentlyCompletedRef.current.has(task.id) && completedWillHide && graceExiting}
                                 isNestTarget={nestTargetId === task.id} isGroupTarget={groupTargetId === task.id}
                                 depth={depthMap.get(task.id) ?? 0}
                                 childCount={trueChildCountMap.get(task.id)}

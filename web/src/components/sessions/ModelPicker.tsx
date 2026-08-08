@@ -82,7 +82,15 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, host, onSw
     if (!sessionId || hostCatalog) return; // cache hit → no round-trip needed
     let cancelled = false;
     fetchSessionModelCatalog(sessionId)
-      .then((c) => { if (!cancelled && c.source !== 'fallback') setFetched(c); })
+      .then((c) => {
+        if (cancelled || c.source === 'fallback') return;
+        setFetched(c);
+        // Seed the shared host store too (manual refresh already does): on a
+        // cold host the one-shot eager init fetch can miss, and this repair
+        // fetch is then the FIRST real catalog — without seeding, the quick-
+        // session dropdown and the "Auto (<resolved>)" labels stay unresolved.
+        if (c.source === 'cli') seedHostCatalog(host, c.models, c.fetchedAt);
+      })
       .catch(() => { /* keep fallback rows — degraded, never broken */ });
     return () => { cancelled = true; };
   }, [sessionId, hostCatalog]);

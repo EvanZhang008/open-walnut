@@ -50,6 +50,33 @@ describe('file paths with spaces (plain text pass — filePathsToHtml)', () => {
     const out = filePathsToHtml(`见 ${p}`);
     expect(out).toContain(`data-file-path="${p}"`);
   });
+
+  it('linkifies sentence-style note titles: dash separators, lowercase connectors, (draft) tags', () => {
+    // Real butler-written note shape that broke 2026-08-08: en-dash chunk,
+    // lowercase "to" connector, parenthesized "(draft)" tag.
+    const p = '/Users/me/.open-walnut/notes/Projects/Marina Renewal/2026-08-08 – Status Ping to Acme (draft).md';
+    const out = filePathsToHtml(`草稿已存: ${p}`);
+    expect(out).toContain(`data-file-path="${p}"`);
+    expect(out).toContain(`>${p}</a>`);
+  });
+
+  it('linkifies ASCII-dash + version-tag note names', () => {
+    const p = '/n/p/Draft - Reply to IT (v2).md';
+    const out = filePathsToHtml(`saved ${p} ok`);
+    expect(out).toContain(`data-file-path="${p}"`);
+  });
+
+  it('does not swallow prose after .ext even when a dash follows', () => {
+    const out = filePathsToHtml('moved /x/y/z.md - see notes elsewhere');
+    expect(out).toContain('data-file-path="/x/y/z.md"');
+    expect(out).not.toContain('data-file-path="/x/y/z.md -');
+  });
+
+  it('lowercase connector cannot end a filename (still stops at first .ext)', () => {
+    const out = filePathsToHtml('renamed /a/b/c.md to keep things tidy');
+    expect(out).toContain('data-file-path="/a/b/c.md"');
+    expect(out).not.toContain('data-file-path="/a/b/c.md to');
+  });
 });
 
 describe('file paths with spaces inside inline code (post-marked pass)', () => {
@@ -77,5 +104,12 @@ describe('file paths with spaces inside inline code (post-marked pass)', () => {
   it('leaves URLs intact (no path linkification inside them)', () => {
     const html = renderMarkdownWithRefs('`https://host/a/b/task.md`');
     expect(html).not.toContain('data-file-path');
+  });
+
+  it('linkifies a sentence-style note title inside backticks as one anchor', () => {
+    const p = '/Users/me/.open-walnut/notes/Projects/Marina Renewal/2026-08-08 – Status Ping to Acme (draft).md';
+    const html = renderMarkdownWithRefs(`草稿已存: \`${p}\``);
+    expect(html).toContain(`data-file-path="${p}"`);
+    expect(html).not.toMatch(/<a[^>]*>[^<]*<a /);
   });
 });

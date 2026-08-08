@@ -39,6 +39,7 @@ import { TaskQuickActions } from './TaskQuickActions';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useSessionUsage, formatModelName, getContextWindowSize } from '@/hooks/useSessionUsage';
+import { useHostModelCatalog } from '@/hooks/useModelCatalog';
 import { useHeightVar } from '@/hooks/useHeightVar';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
 import { PlanContentContext } from '@/contexts/PlanContentContext';
@@ -244,6 +245,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     ? [...historyMessages].reverse().find(m => m.role === 'assistant' && m.model)
     : undefined;
   const rawModel = liveUsage.model || session?.model || lastAssistant?.model;
+  // Auto launch before the CLI reports its model (idle todo-launcher session):
+  // the host catalog's 'default' row already knows what Auto resolves to on
+  // this host — show "Auto (Opus 5 1M)" instead of a bare "Auto" so the user
+  // knows what they're running from second zero.
+  const hostCatalog = useHostModelCatalog(session?.host);
+  const autoResolved = !rawModel
+    ? formatModelName(hostCatalog?.models.find((m) => m.value === 'default')?.resolvedModel)
+    : '';
   const displayModel = formatModelName(rawModel);
   let contextPercent = liveUsage.contextPercent;
   if (contextPercent == null && lastAssistant?.usage) {
@@ -367,6 +376,17 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     if (d.sessionId === sessionId) {
       if (d.phase) {
         setSessionTask(prev => prev ? { ...prev, phase: d.phase as import('@open-walnut/core').Task['phase'] } : prev);
+      }
+      // Model backfill for idle launches (todo-launcher quick start): quick-start
+      // pre-seeds the record model-less (Auto) and returns before the CLI's init
+      // event writes the real model onto it. The status snapshot doesn't carry
+      // model, and an idle session (empty first message) never produces the
+      // assistant turn whose usage-update would deliver it — so without this
+      // refetch the record's model stays invisible until the first real turn.
+      // status-changed fires right after the init-model write; refetch while the
+      // record is still model-less (self-limiting: stops once model is present).
+      if (session && !session.model && session.engine !== 'codex') {
+        fetchSession(sessionId).then((s) => { if (s) setSession(s); }).catch(() => {});
       }
     }
   });
@@ -734,14 +754,18 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
         setSession((previous) => previous ? { ...previous, acpModel } : previous);
       }}
     />
-  ) : displayModel ? (
+  ) : (
+    // No rawModel yet ≠ no pill: a todo-launcher quick start (empty first
+    // message) idles with a model-less record until its first real turn, and
+    // hiding the pill hides the ONLY model/effort entry point ("model option
+    // doesn't show"). Render "Auto" — the picker itself live-pulls the truth.
     <button
       type="button"
       className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill"
-      title={`${rawModel || ''} — click to switch model / effort`}
+      title={`${rawModel || (autoResolved ? `Auto — CLI default resolves to ${autoResolved} on this host` : 'Model not reported yet (Auto)')} — click to switch model / effort`}
       onClick={() => setModelPickerOpen((v) => !v)}
     >
-      {displayModel}
+      {displayModel || (autoResolved ? `Auto (${autoResolved})` : 'Auto')}
       {contextPercent != null && (
         <span
           className="session-detail-context-pct"
@@ -776,7 +800,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
         );
       })()}
     </button>
-  ) : null;
+  );
 
   return (
     <PlanContentContext.Provider value={planContentValue}>

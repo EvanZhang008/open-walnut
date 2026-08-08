@@ -864,7 +864,7 @@ describe('L2: daemon-authoritative PULL reconcile (reconcileFromDaemon)', () => 
       tasks: Object.fromEntries(Object.entries(daemonTasks).map(([id, t]) => [id, { ...t, t: 0 }])),
       resourceVersion: Math.max(0, ...Object.values(daemonTasks).map(t => t.v)),
       updatedAt: 0,
-      derivedRunning: Object.values(daemonTasks).filter(t => !['completed', 'failed', 'stopped', 'cancelled'].includes(t.status)).length,
+      derivedRunning: Object.values(daemonTasks).filter(t => !['completed', 'failed', 'stopped', 'cancelled', 'killed'].includes(t.status)).length,
       recentTransitions: [],
     }
     ;(session as unknown as { _transport: Record<string, unknown> })._transport.getState = async () => taskState

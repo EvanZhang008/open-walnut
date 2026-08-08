@@ -25,7 +25,7 @@ export function isAgentTask(t: BackgroundTask): boolean {
 /** Above this many agents in a phase, collapse to a density bar (Level-of-Detail). */
 export const DENSITY_THRESHOLD = 6;
 /** Terminal statuses (count toward "done"). */
-export const TERMINAL = new Set(['completed', 'failed', 'stopped', 'killed']);
+export const TERMINAL = new Set(['completed', 'failed', 'stopped', 'killed', 'cancelled']);
 /** Sentinel for an agent with no phaseIndex (mirrors WorkflowProgress's original). */
 export const NO_PHASE = -1;
 

@@ -26,7 +26,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { bus } from '../../core/event-bus.js'
 import { emitSse, attachSse, sseConnCount } from '../sse-channels.js'
-import { sessionStreamBuffer } from '../session-stream-buffer.js'
+import { sessionStreamBuffer, budgetSnapshotBlocks } from '../session-stream-buffer.js'
 import { log } from '../../logging/index.js'
 
 export const sessionStreamV1Router = Router()
@@ -368,7 +368,7 @@ export async function buildTranscriptViaBridge(sessionId: string): Promise<Recor
     }
   }
 
-  const messages: Array<{ role: string; text: string; timestamp: string; kind?: 'tool' | 'thinking'; detail?: string; resultPreview?: string }> = []
+  const messages: Array<{ role: string; text: string; timestamp: string; kind?: 'tool' | 'thinking'; detail?: string; resultPreview?: string; agent?: string }> = []
   for (const parsed of lines) {
     if (parsed.parent_tool_use_id) continue // subagent lane
     // CLI-injected user lines (skill dumps, compaction summaries) — same skip
@@ -410,10 +410,20 @@ export async function buildTranscriptViaBridge(sessionId: string): Promise<Recor
         } else if (b.type === 'tool_use') {
           const detail = toolDetail(b.name ?? '', b.input)
           const result = typeof b.id === 'string' ? resultsById.get(b.id) : undefined
+          // Subagent attribution (additive) — parity with the primary path
+          // (session-projection.ts buildSessionTranscript): Task/Agent rows
+          // carry the subagent's name/subagent_type as `agent`.
+          let agent: string | undefined
+          if ((b.name === 'Task' || b.name === 'Agent') && b.input) {
+            const input = b.input as Record<string, unknown>
+            agent = (typeof input.name === 'string' && input.name ? input.name : undefined)
+              ?? (typeof input.subagent_type === 'string' && input.subagent_type ? input.subagent_type : undefined)
+          }
           messages.push({
             role: 'assistant', text: b.name ?? 'tool', timestamp, kind: 'tool',
             ...(detail ? { detail } : {}),
             ...(result ? { resultPreview: toolResultPreview(result) } : {}),
+            ...(agent ? { agent } : {}),
           })
         }
       }
@@ -555,7 +565,11 @@ sessionStreamV1Router.get('/sessions/:id/stream', async (req: Request, res: Resp
       return
     }
 
-    const snapshot = sessionStreamBuffer.getSnapshot(sessionId)
+    // Byte-budget the attach frame: the snapshot rides ONE SSE `data:` line
+    // and the phone hard-caps a line at 4MB — an unbounded whale-turn
+    // snapshot livelocked the client in a reconnect→same-snapshot loop
+    // (audit IO-3). The phone renders only the newest ~96K chars anyway.
+    const snapshot = budgetSnapshotBlocks(sessionStreamBuffer.getSnapshot(sessionId))
     addInterest(sessionId)
     attachSse(channelKey(sessionId), req, res, {
       onAttach: (write) => {

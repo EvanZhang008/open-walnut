@@ -336,16 +336,21 @@ const CODE_EXTENSIONS = new Set([
 // A segment is word-chunks joined by single spaces (CJK chars allowed — note
 // filenames are often Chinese). Space-joined chunks are only trusted when:
 //  - the whole match is anchored by a final `.ext`, AND
-//  - each chunk after a space starts with an uppercase letter / digit / CJK char
-//    (Title Case or year-prefixed note names), AND
+//  - each chunk after a space is one of: uppercase/digit/CJK-started word (Title
+//    Case or year-prefixed note names), a dash separator (- – —), a parenthesized
+//    tag like "(draft)", or a short lowercase connector ("to", "of", "vs" — ≤3
+//    letters, and it must be followed by another chunk so it can never end the
+//    filename). Butler-written notes use sentence-style titles like
+//    "2026-08-08 – Status Ping to Acme (draft).md" — all four shapes occur.
 //  - the chunk quantifier is LAZY: the shortest match that still reaches `.ext`
 //    wins, so a real path followed by Title-Case prose ("see /a/b.md See
 //    Section 2.5") stops at `b.md` instead of swallowing the sentence.
-const PATH_CH = '[\\w@.+\\-\\u4e00-\\u9fff\\u3040-\\u30ff]';
+const PATH_CH = '[\\w@.+\\-\\u2013\\u2014\\u4e00-\\u9fff\\u3040-\\u30ff]';
 const PATH_SEG = `${PATH_CH}+`;
-// {0,6} bounds backtracking (a 7+-word segment is prose, not a filename); lazy so
-// the shortest expansion that reaches `.ext` wins.
-const PATH_SEG_SP = `${PATH_SEG}(?: (?=[A-Z0-9\\u4e00-\\u9fff\\u3040-\\u30ff])${PATH_SEG}){0,6}?`;
+const PATH_SP_CHUNK = `(?:(?=[A-Z0-9\\u4e00-\\u9fff\\u3040-\\u30ff])${PATH_SEG}|[-\\u2013\\u2014]+|\\(${PATH_CH}+\\)|[a-z]{1,3}(?= ))`;
+// {0,9} bounds backtracking (a 10+-word segment is prose, not a filename); lazy
+// so the shortest expansion that reaches `.ext` wins.
+const PATH_SEG_SP = `${PATH_SEG}(?: ${PATH_SP_CHUNK}){0,9}?`;
 /** Absolute FILE path source, spaces allowed: /dir/My Dir/H1 2026 File.md(:line).
  * Build a fresh `new RegExp(ABS_FILE_RE_SRC, 'g')` per use — shared global regexes
  * carry lastIndex state across callers. */

@@ -9866,33 +9866,25 @@ body.walnut-dragging {
   background: rgba(52, 199, 89, 0.06);
   animation: todo-recently-done-flash 360ms ease-out;
 }
-/* Both classes land on the same element when a completed row is also on its way out.
-   `animation` is a single shorthand — declaring it twice would drop the flash — so the
-   combined case lists BOTH animations explicitly. */
-.todo-panel-item-recently-done.todo-panel-item-vanishing {
-  animation: todo-recently-done-flash 360ms ease-out,
-             todo-recently-done-out 450ms ease-in 2550ms forwards;
-}
-/* Completed grace period: the row must sit COMPLETELY STILL for ~2.55s (so the
-   check-mark flip is what you notice), then fade + collapse away in 450ms, timed so
-   it unmounts exactly as the collapse ends (GRACE_MS = 3s in TodoPanel).
-
-   The stillness comes from `animation-delay`, NOT from early keyframes: properties
-   listed only in the 100% frame (padding/margin/transform/border-width) get an
-   implicit 0% frame from the current computed value, so a 3s animation interpolates
-   them across the WHOLE 3s — the row visibly squeezes from the first frame and reads
-   as "it never waited". A delayed 450ms animation leaves the row untouched until the
-   exit actually begins. Keep the delay + duration summing to GRACE_MS. */
+/* Completed grace period: the row sits COMPLETELY STILL (green tint, check-mark flip
+   is what you notice), then fades + collapses away in 450ms. The stillness is timed
+   in JS, not CSS: TodoPanel holds a SHARED batch deadline (latest completion +
+   GRACE_MS) and only applies the -vanishing class during the final 600ms window
+   (450ms anim + 150ms slack before unmount) — so a run of completions exits
+   TOGETHER instead of one by one. The animation therefore starts immediately when
+   the class lands (no animation-delay; the old per-task delay-based hold is gone).
+   Adding this class replaces the finished recently-done flash animation — harmless,
+   the tint's end value is the static background on .todo-panel-item-recently-done. */
 @keyframes todo-recently-done-out {
   from { opacity: 1; max-height: 240px; transform: translateX(0); }
   to   { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; margin-top: 0; margin-bottom: 0; transform: translateX(24px); border-width: 0; }
 }
 .todo-panel-item-vanishing,
-/* Same hold-then-vanish for the card-shaped surfaces (Focus / Satellite / Backlog / Wait tier
+/* Same vanish for the card-shaped surfaces (Focus / Satellite / Backlog / Wait tier
    cards + Recent cards) — one rule so the timing can't drift between surfaces. */
 .todo-card-vanishing {
   overflow: hidden;
-  animation: todo-recently-done-out 450ms ease-in 2550ms forwards;
+  animation: todo-recently-done-out 450ms ease-in forwards;
 }
 .todo-panel-item-recently-done::after {
   content: '';
