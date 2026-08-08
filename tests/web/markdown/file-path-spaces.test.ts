@@ -77,6 +77,18 @@ describe('file paths with spaces (plain text pass — filePathsToHtml)', () => {
     expect(out).toContain('data-file-path="/a/b/c.md"');
     expect(out).not.toContain('data-file-path="/a/b/c.md to');
   });
+
+  it('spaced leaf stops at its own .ext when prose with another .ext follows', () => {
+    const out = filePathsToHtml('read /a/b/H1 2026 Overview.md and Other Notes.md later');
+    expect(out).toContain('data-file-path="/a/b/H1 2026 Overview.md"');
+    expect(out).not.toContain('data-file-path="/a/b/H1 2026 Overview.md and');
+  });
+
+  it('connector + Title Case prose after a space-free path is not swallowed', () => {
+    const out = filePathsToHtml('then run /a/b/c.md and Other Steps.md later');
+    expect(out).toContain('data-file-path="/a/b/c.md"');
+    expect(out).not.toContain('data-file-path="/a/b/c.md and');
+  });
 });
 
 describe('file paths with spaces inside inline code (post-marked pass)', () => {
