@@ -16,7 +16,17 @@
  * We recompute the *expected* version at boot using the same algorithm as
  * scripts/build-daemon.sh (sha256 of daemon source files, truncated to 12
  * chars) and compare it against the .version sidecar. On mismatch we log
- * loudly and auto-rebuild; if rebuild fails we refuse to start.
+ * loudly and auto-rebuild.
+ *
+ * ⚠️ THIS GUARD MUST NEVER KILL THE SERVER. It used to return false on
+ * non-remediable drift and the caller did `process.exit(1)`. A cosmetic
+ * disagreement between the two hash-source lists (this file vs.
+ * scripts/build-daemon.sh) then made the rebuild unable to ever converge,
+ * turning a purely cosmetic bug into a restart-loop total outage (the guard's
+ * own error text says the failure means *the guard* is broken — and it killed
+ * the process anyway). Now: non-convergence logs loudly and continues, and the
+ * caller never exits. A drifted daemon binary degrades remote sessions; a dead
+ * server takes down everything.
  */
 
 import { createHash } from 'node:crypto'
@@ -25,13 +35,17 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { log } from '../logging/index.js'
-import { DAEMON_BINARIES_DIR } from '../constants.js'
+import { CLOUD_MODE, DAEMON_BINARIES_DIR } from '../constants.js'
 
 const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-standalone.ts',
   'src/providers/daemon-core.ts',
   'src/providers/daemon-fold.ts',
   'src/providers/daemon-source.ts',
+  // Agent gateway (peer sessions): shared protocol logic + the wn CLI, both
+  // bundled into the daemon binary. Same order as scripts/build-daemon.sh.
+  'src/providers/gateway-core.ts',
+  'src/providers/wn-cli.ts',
   // ACP worker stack — compiled into the daemon deploy unit (worker artifact
   // ships with the daemon; version skew impossible by construction).
   'src/providers/acp-daemon.ts',
@@ -108,10 +122,21 @@ function readBuiltVersions(): Map<string, string> {
  *
  * On mismatch, runs `bash scripts/build-daemon.sh` synchronously to rebuild.
  *
- * @returns `true` if versions are consistent (or rebuild succeeded),
- *          `false` if out of sync and rebuild failed.
+ * @returns `true` when startup should continue (which is now ALWAYS the case —
+ *          the return value is kept for tests/telemetry, and `false` is only
+ *          produced by paths that no longer gate startup). Callers must NOT
+ *          exit on `false`; see the file header.
  */
 export function verifyDaemonBinaryVersion(): boolean {
+  // Cloud REPLICA never deploys daemon binaries to exec hosts — it proxies to
+  // Mac/remote daemons over the /bridge WS. The guard protects nothing here,
+  // and its rebuild path needs bun + the full source tree, neither of which is
+  // guaranteed on the cloud box. Skip it entirely.
+  if (CLOUD_MODE) {
+    log.session.info('cloud mode: skipping daemon binary version check (no local daemon deploys)')
+    return true
+  }
+
   const expected = computeExpectedDaemonVersion()
   if (!expected) {
     // Can't locate daemon sources (e.g. installed npm package). Trust the
@@ -167,7 +192,7 @@ function handleMismatch(ctx: {
   const repoRoot = findRepoRoot()
   if (!repoRoot) {
     // eslint-disable-next-line no-console
-    console.error('    Cannot auto-rebuild (no repo root). Refusing to start.\n')
+    console.error('    Cannot auto-rebuild (no repo root). Continuing WITHOUT guard.\n')
     return false
   }
 
@@ -182,32 +207,52 @@ function handleMismatch(ctx: {
     timeout: 120_000,
   })
   if (res.status === null) {
+    log.session.error('daemon rebuild timed out — continuing WITHOUT guard', { expected: ctx.expected })
     // eslint-disable-next-line no-console
-    console.error('\n⚠️  Daemon rebuild timed out after 120s — is bun installed and on PATH?\n')
+    console.error('\n⚠️  Daemon rebuild timed out after 120s — is bun installed and on PATH?'
+      + '\n    Continuing startup WITHOUT the guard (remote sessions may be degraded).\n')
     return false
   }
   if (res.status !== 0) {
+    log.session.error('daemon rebuild failed — continuing WITHOUT guard', {
+      expected: ctx.expected,
+      exitCode: res.status,
+    })
     // eslint-disable-next-line no-console
-    console.error('\n⚠️  Daemon rebuild FAILED. Refusing to start — remote sessions would be broken.\n')
+    console.error('\n⚠️  Daemon rebuild FAILED. Continuing startup WITHOUT the guard —'
+      + '\n    remote sessions may be degraded until the binaries are rebuilt.\n')
     return false
   }
 
-  // Re-verify after rebuild
+  // Re-verify after rebuild. If the rebuild produced a DIFFERENT hash than we
+  // expect, the two hash-source lists have drifted — i.e. the guard itself is
+  // broken, not the binaries. That is a cosmetic bug and MUST NOT be fatal:
+  // exiting here crash-looped a production server 41 times. Log loudly (so it
+  // gets fixed) and continue without the guard.
   const builtAfter = readBuiltVersions()
-  for (const [arch, v] of builtAfter) {
-    if (v !== ctx.expected) {
-      // eslint-disable-next-line no-console
-      console.error(
-        `\n⚠️  Rebuild completed but ${arch} version is still ${v}, expected ${ctx.expected}.`
-        + `\n    This almost certainly means the shell hash algorithm in`
-        + `\n    scripts/build-daemon.sh has drifted from computeExpectedDaemonVersion()`
-        + `\n    in daemon-version-check.ts. They must compute the SAME hash over:`
-        + `\n      files: ${DAEMON_SOURCE_FILES.join(', ')}`
-        + `\n      algorithm: sha256, per-file path + NUL + content + NUL, truncate to 12 hex chars`
-        + `\n`,
-      )
-      return false
-    }
+  const stillOff = [...builtAfter].filter(([, v]) => v !== ctx.expected)
+  if (stillOff.length > 0) {
+    log.session.error(
+      'daemon version guard cannot converge — hash lists have drifted; continuing WITHOUT guard',
+      {
+        expected: ctx.expected,
+        got: stillOff.map(([arch, v]) => `${arch}=${v}`).join(', '),
+        sourceFiles: [...DAEMON_SOURCE_FILES],
+      },
+    )
+    // eslint-disable-next-line no-console
+    console.error(
+      `\n⚠️  DAEMON VERSION GUARD CANNOT CONVERGE — continuing WITHOUT guard.`
+      + `\n    Rebuild completed but versions are still ${stillOff.map(([a, v]) => `${a}=${v}`).join(', ')},`
+      + `\n    expected ${ctx.expected}.`
+      + `\n    This almost certainly means the shell hash algorithm in`
+      + `\n    scripts/build-daemon.sh has drifted from computeExpectedDaemonVersion()`
+      + `\n    in daemon-version-check.ts. They must compute the SAME hash over:`
+      + `\n      files: ${DAEMON_SOURCE_FILES.join(', ')}`
+      + `\n      algorithm: sha256, per-file path + NUL + content + NUL, truncate to 12 hex chars`
+      + `\n    This is a guard bug, NOT a reason to kill the server — startup continues.\n`,
+    )
+    return true
   }
   log.session.info('daemon binaries rebuilt after version drift', { expected: ctx.expected })
   // eslint-disable-next-line no-console

@@ -50,12 +50,22 @@ export async function runWeb(options: {
   // before any derived paths are computed). See resolveWalnutHome() there.
 
   // Sanity check: dist/daemon-binaries/*.version must match current daemon source.
-  // If not, auto-rebuild; refuse to start if rebuild fails. This is the belt to
-  // the suspenders of `npm run build` auto-building daemon — catches someone
-  // running `node dist/cli.js web` directly after editing daemon source.
+  // If not, auto-rebuild. This is the belt to the suspenders of `npm run build`
+  // auto-building daemon — catches someone running `node dist/cli.js web`
+  // directly after editing daemon source.
+  //
+  // ⚠️ ADVISORY ONLY — NEVER exit on the result. This used to `process.exit(1)`
+  // on a failed/non-converging rebuild, which crash-looped a production server
+  // 41 times over a cosmetic hash-list disagreement. The guard reports; startup
+  // continues regardless. Never reintroduce an exit here.
   const { verifyDaemonBinaryVersion } = await import('../providers/daemon-version-check.js')
-  if (!verifyDaemonBinaryVersion()) {
-    process.exit(1)
+  try {
+    verifyDaemonBinaryVersion()
+  } catch (err) {
+    // A throw from the guard (fs/spawn surprise) must not be fatal either.
+    process.stderr.write(
+      `daemon version check errored (continuing): ${err instanceof Error ? err.message : String(err)}\n`,
+    )
   }
 
   const { startServer } = await import('../web/server.js')

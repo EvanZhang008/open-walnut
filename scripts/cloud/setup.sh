@@ -153,6 +153,47 @@ fi
 # auth before any pack ever reaches the repo.
 as_walnut git -C "$HUB_REPO" config http.receivepack true
 
+# ── Hub self-maintenance (2026-08-06 incident hardening) ────────────────────
+# A bare repo receives one new pack per push and NOTHING ever consolidates
+# them by default (`gc --auto` only fires after porcelain commands, which a
+# bare hub never runs). With the Mac pushing every 30–60s the incident hub
+# reached 32 packs / 9.9GB; every fetch's object walk then ran slower than
+# the Mac's 15s client timeout, and the abort→retry loop stacked orphaned
+# git processes until this 2-vCPU box sat at 99.85% CPU for a week (phone
+# showed "offline" — TLS handshakes starved; even SSM couldn't run).
+#
+# Two layers, both must exist:
+#   1. git-http.ts spawns `gc --auto` after each successful receive-pack
+#      (in-band, catches growth as it happens).
+#   2. This systemd timer (out-of-band backstop): catches the case where the
+#      server-side gc is never reached — old server build, crash loops, or
+#      pushes arriving through some future non-walnut path.
+# gc.auto=0 on purpose: the timer/hook own gc; git's own heuristics must not
+# compete with them (same policy as the Mac-side data repo).
+as_walnut git -C "$HUB_REPO" config gc.auto 0
+as_walnut git -C "$HUB_REPO" config maintenance.auto false
+cat > /etc/systemd/system/walnut-hub-gc.service <<UNIT
+[Unit]
+Description=GC the walnut data hub bare repo (defense against pack accumulation)
+[Service]
+Type=oneshot
+User=$WALNUT_USER
+ExecStart=/usr/bin/git -C $HUB_REPO -c gc.auto=6700 -c gc.autoPackLimit=8 -c repack.writeBitmaps=true gc --auto --quiet
+Nice=10
+UNIT
+cat > /etc/systemd/system/walnut-hub-gc.timer <<UNIT
+[Unit]
+Description=Periodic walnut data hub gc
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=6h
+RandomizedDelaySec=15min
+[Install]
+WantedBy=timers.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now walnut-hub-gc.timer
+
 # post-receive: a push from the Mac materializes into the working tree
 # near-realtime. flock serializes overlapping pushes.
 cat > "$HUB_REPO/hooks/post-receive" <<EOF
