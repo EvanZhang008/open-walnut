@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import os
 
 /// Device-token store. Prefers the Keychain (kSecClassGenericPassword); falls
 /// back to UserDefaults when the Keychain is unavailable.
@@ -41,7 +42,16 @@ enum KeychainHelper {
         }
     }
 
+    #if DEBUG
+    /// Keychain-read counter for LifecycleHygieneTests: proves AppConfig's
+    /// in-process token cache actually spares the SecItemCopyMatching XPC.
+    static let keychainReads = OSAllocatedUnfairLock(initialState: 0)
+    #endif
+
     static func get(_ key: String) -> String? {
+        #if DEBUG
+        keychainReads.withLock { $0 += 1 }
+        #endif
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

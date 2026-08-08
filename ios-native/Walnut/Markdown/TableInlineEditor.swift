@@ -143,7 +143,11 @@ final class TableInlineEditor: UIView, UITextFieldDelegate {
         guard let textView else { return }
         let range = NSRange(location: charIndex, length: 1)
         let layout = textView.layoutManager
-        layout.ensureLayout(for: textView.textContainer)
+        // Range-bounded (audit GEO-7, pairs with the liveResize call site in
+        // WysiwygEditor): boundingRect below only needs THIS attachment's
+        // glyph laid out — the old full-container ensureLayout re-laid-out
+        // everything after the table on every live-resize repin.
+        layout.ensureLayout(forCharacterRange: range)
         let glyphRange = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
         var rect = layout.boundingRect(forGlyphRange: glyphRange, in: textView.textContainer)
         rect.origin.x += textView.textContainerInset.left

@@ -1,5 +1,6 @@
 import AVFoundation
 import Observation
+import os
 
 /// Voice-input recorder: mic → m4a (AAC 16kHz mono) → server transcription.
 /// The server routes to the best engine (Mac whisper via bridge when
@@ -14,6 +15,21 @@ final class VoiceRecorder: NSObject {
         case transcribing
     }
 
+    /// Which input the recorder binds to. `.automatic` = system routing
+    /// (AirPods / headset mic when connected); `.builtInMic` = always the
+    /// phone's own mic, even with a headset on. Persisted in UserDefaults,
+    /// surfaced in Settings.
+    enum MicRoute: String, CaseIterable {
+        case automatic
+        case builtInMic
+    }
+
+    static let micRouteKey = "walnut.voice.micRoute"
+
+    static var micRoute: MicRoute {
+        MicRoute(rawValue: UserDefaults.standard.string(forKey: micRouteKey) ?? "") ?? .automatic
+    }
+
     private(set) var state: State = .idle
     private(set) var elapsed: TimeInterval = 0
     var errorMessage: String?
@@ -23,10 +39,31 @@ final class VoiceRecorder: NSObject {
     private var fileURL: URL?
     /// In-flight transcription upload; cancelled on background suspension.
     @ObservationIgnored private var transcriptionTask: Task<String, Error>?
-    private let api = WalnutAPI()
+    /// Lazy (audit OBS-5): this recorder is a `@State` default value in
+    /// ComposerBar, whose initial-value expression runs on EVERY struct init
+    /// — SwiftUI keeps only the first instance, but each throwaway used to
+    /// allocate a full WalnutAPI (fresh URLSession) at body-eval rate.
+    /// Everything with real cost is deferred to first actual use.
+    @ObservationIgnored private lazy var api = WalnutAPI()
+
+    #if DEBUG
+    /// Instance counter for ComposerFreezeTests: throwaway @State default
+    /// values must stay CHEAP (no URLSession, no side effects beyond this).
+    static let initCount = OSAllocatedUnfairLock(initialState: 0)
+    #endif
 
     override init() {
         super.init()
+        #if DEBUG
+        Self.initCount.withLock { $0 += 1 }
+        #endif
+    }
+
+    /// Registration deferred to first start() (audit OBS-5): registering in
+    /// init meant every throwaway @State instance mutated the hub's
+    /// participant array. Lifecycle only matters once a recording/upload can
+    /// exist, which is only after start(). Idempotent (hub dedups).
+    private func ensureRegistered() {
         LifecycleHub.shared.register(self)
     }
 
@@ -40,6 +77,7 @@ final class VoiceRecorder: NSObject {
     /// unavailable (permission denied / session failure) — the caller shows
     /// `errorMessage`.
     func start() async -> Bool {
+        ensureRegistered()
         errorMessage = nil
         guard await Self.requestPermission() else {
             errorMessage = "Microphone access denied — enable it in Settings"
@@ -103,15 +141,31 @@ final class VoiceRecorder: NSObject {
     private func activateSession() async throws {
         let session = AVAudioSession.sharedInstance()
         try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        let wantBuiltIn = Self.micRoute == .builtInMic
         var lastError: NSError?
         for attempt in 0...2 {
             do {
-                if attempt < 2 {
+                if attempt < 2 && !wantBuiltIn {
                     try session.setCategory(.record, mode: .default, options: .allowBluetoothHFP)
                 } else {
+                    // Built-in-mic route: omit .allowBluetoothHFP so AirPods /
+                    // BT headsets never become eligible inputs at all — the
+                    // category shape alone excludes them (wired headsets are
+                    // handled by setPreferredInput below).
                     try session.setCategory(.record, mode: .default)
                 }
                 try session.setActive(true)
+                if wantBuiltIn {
+                    // Pin the built-in mic even when a wired headset is
+                    // plugged in. Best-effort: an unavailable port (should
+                    // never happen — every iPhone has one) must not kill the
+                    // recording, so failures just log.
+                    if let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
+                        do { try session.setPreferredInput(builtIn) } catch {
+                            AppLog.error("voice", "setPreferredInput failed", Self.diagnosticMeta(error, stage: "prefer-builtin"))
+                        }
+                    }
+                }
                 return
             } catch let error as NSError {
                 lastError = error
@@ -164,6 +218,10 @@ final class VoiceRecorder: NSObject {
                 return nil
             }
             AppLog.info("voice", "transcribed", ["chars": "\(trimmed.count)", "bytes": "\(data.count)"])
+            // Freeze-report breadcrumb: a field freeze fired ~5s after a
+            // transcription landed 148 chars in the draft and re-focused the
+            // keyboard, so this edge must be visible in the trail.
+            FreezeContext.shared.note("voice-transcribed", trimmed.utf8.count)
             return trimmed
         } catch let error as APIError {
             // Backgrounding cancels the upload — that's lifecycle, not an

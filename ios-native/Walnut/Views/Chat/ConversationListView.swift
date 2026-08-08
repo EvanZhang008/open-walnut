@@ -74,18 +74,21 @@ struct ConversationListView: View {
         }
     }
 
+    /// Shared formatter (audit IO-7): this runs per ROW per render, and an
+    /// ISO8601DateFormatter allocation alone is ~133µs — the parse itself
+    /// rides WalnutTask.parseISO's memo cache (Models.swift).
+    private static let relative: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f
+    }()
+
     static func relativeTime(_ iso: String) -> String {
-        let parser = ISO8601DateFormatter()
-        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        guard let date = parser.date(from: iso)
-            ?? ISO8601DateFormatter().date(from: iso)
-        else { return "" }
+        guard let date = WalnutTask.parseISO(iso) else { return "" }
         // The active conversation's timestamp can be ~now or slightly ahead
         // (server clock skew) — RelativeDateTimeFormatter renders that as the
         // future tense "in 0s". Clamp anything under a minute to "now".
         if abs(date.timeIntervalSinceNow) < 60 { return "now" }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: date, relativeTo: .now)
+        return Self.relative.localizedString(for: date, relativeTo: .now)
     }
 }

@@ -156,10 +156,15 @@ final class ConnectionStore {
             // REST hiccup flipped the whole app offline (and disabled the chat
             // composer) with no second sample.
             if !isSSE || !oldState { consecutiveFailures = 0 }
-            online = true
+            // Equality-gated (audit OBS-6): every successful REST call lands
+            // here, and `online` is read by 7+ views across stores. The
+            // @Observable macro happens to suppress same-value scalar writes
+            // on this SDK (see ObservationSemanticsProbeTests), but the gate
+            // makes the invariant structural, not toolchain-dependent.
+            if !online { online = true }
         } else if !isSSE {
             consecutiveFailures += 1
-            if consecutiveFailures >= 2 { online = false }
+            if consecutiveFailures >= 2, online { online = false }
         }
 
         let transitioned = oldState != online

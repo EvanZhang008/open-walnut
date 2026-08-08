@@ -1,4 +1,5 @@
 import SwiftUI
+import CoreTransferable
 
 /// A local draft saved when a final save couldn't complete (backgrounded
 /// mid-PUT). `baseHash` is the server hash the draft was derived FROM: adopting
@@ -7,6 +8,26 @@ import SwiftUI
 struct NoteDraft: Codable {
     let content: String
     let baseHash: String?
+}
+
+/// Lazy share payload (audit MAIN-6): `ShareLink(item: currentMarkdown())`
+/// serialized the ENTIRE note on every body evaluation — and the editor
+/// flips `attributedText` per keystroke, so typing paid an O(note) markdown
+/// serialization per key. This defers the serialize to the moment the user
+/// actually shares; construction is two reference copies.
+/// @unchecked Sendable: NSAttributedString is immutable here (the editor
+/// pushes fresh snapshots; nothing mutates a pushed instance).
+struct NoteShareText: Transferable, @unchecked Sendable {
+    let frontmatter: String?
+    let attributed: NSAttributedString
+
+    var markdown: String {
+        MarkdownSerializer.serialize(frontmatter: frontmatter, attributed: attributed)
+    }
+
+    static var transferRepresentation: some TransferRepresentation {
+        ProxyRepresentation(exporting: \.markdown)
+    }
 }
 
 /// Note screen — Apple Notes-style: the WYSIWYG editor IS the note, always.
@@ -196,7 +217,13 @@ struct NoteDetailView: View {
                     } label: {
                         Label("View Markdown Source", systemImage: "text.alignleft")
                     }
-                    ShareLink(item: currentMarkdown(), subject: Text(title)) {
+                    // Lazy export (audit MAIN-6): serializing here ran an
+                    // O(note) markdown serialize per body eval = per keystroke.
+                    ShareLink(
+                        item: NoteShareText(frontmatter: frontmatter, attributed: attributedText),
+                        subject: Text(title),
+                        preview: SharePreview(title)
+                    ) {
                         Label("Share", systemImage: "square.and.arrow.up")
                     }
                     Divider()
@@ -291,15 +318,26 @@ struct NoteDetailView: View {
         }
     }
 
-    /// Serialized: a flush that lands while another save is in flight waits for
-    /// it, then re-checks. Two concurrent PUTs would race the same expectedHash
-    /// and the loser would surface a bogus "Server Changed" conflict.
+    /// Tail of the serial save chain (see flushSave). Holding a completed
+    /// task is fine — it's one small allocation, replaced by the next flush.
+    @State private var saveChain: Task<Void, Never>?
+
+    /// Serialized: a flush that lands while another save is in flight CHAINS
+    /// after it (await the previous task), then re-checks `dirty`. Two
+    /// concurrent PUTs would race the same expectedHash and the loser would
+    /// surface a bogus "Server Changed" conflict. Chaining replaces the old
+    /// `while saving { sleep(100ms) }` form — a 10Hz MainActor wakeup loop
+    /// for the whole duration of a slow PUT (up to 30s), and unfair under
+    /// several waiters (audit TMR-10).
     private func flushSave() async {
-        while saving {
-            try? await Task.sleep(for: .milliseconds(100))
+        let previous = saveChain
+        let task = Task { @MainActor in
+            _ = await previous?.value
+            guard dirty else { return }
+            await save(text: currentMarkdown(), hash: contentHash)
         }
-        guard dirty else { return }
-        await save(text: currentMarkdown(), hash: contentHash)
+        saveChain = task
+        await task.value
     }
 
     private func save(text: String, hash: String?) async {

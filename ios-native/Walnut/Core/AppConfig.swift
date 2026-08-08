@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Connection configuration — server URL + device name in UserDefaults,
 /// device token in the Keychain. Read synchronously by the API client.
@@ -6,6 +7,15 @@ struct AppConfig {
     private static let urlKey = "walnut.serverUrl"
     private static let nameKey = "walnut.deviceName"
     private static let tokenKey = "walnut.deviceToken"
+
+    /// In-process token cache (audit IO-6): `token` is read on EVERY API
+    /// request, every image load, and every SSE connect, and each read was a
+    /// synchronous `SecItemCopyMatching` XPC round-trip to securityd
+    /// (~0.1-2ms, worst-case seconds when securityd is busy at cold start) —
+    /// often on the main thread. The token only changes through save()/
+    /// clear() in this process, so one Keychain read per launch is enough.
+    /// `.none` = not yet read; `.some(nil)` = read, no token stored.
+    private static let cachedToken = OSAllocatedUnfairLock<String??>(initialState: .none)
 
     static var serverURL: URL? {
         guard let raw = UserDefaults.standard.string(forKey: urlKey) else { return nil }
@@ -17,7 +27,18 @@ struct AppConfig {
     }
 
     static var token: String? {
-        KeychainHelper.get(tokenKey)
+        if let cached = cachedToken.withLock({ $0 }) { return cached }
+        // First read of the process — the one real securityd XPC. Timed into
+        // LaunchTrace (audit TMR-2): it can run before the first frame (via
+        // ConnectionStore.init → isConfigured) and can block for seconds when
+        // securityd is busy at cold boot, yet was invisible to the first-frame
+        // budget proof, which only counted DiskCache reads.
+        let t0 = Date()
+        let read = KeychainHelper.get(tokenKey)
+        let elapsedMs = Date().timeIntervalSince(t0) * 1000
+        LaunchTrace.mark(String(format: "keychain token read %.1fms", elapsedMs))
+        cachedToken.withLock { $0 = .some(read) }
+        return read
     }
 
     static var isConfigured: Bool {
@@ -30,13 +51,22 @@ struct AppConfig {
             UserDefaults.standard.set(deviceName, forKey: nameKey)
         }
         KeychainHelper.set(token, forKey: tokenKey)
+        cachedToken.withLock { $0 = .some(token) }
     }
 
     static func clear() {
         UserDefaults.standard.removeObject(forKey: urlKey)
         UserDefaults.standard.removeObject(forKey: nameKey)
         KeychainHelper.delete(tokenKey)
+        cachedToken.withLock { $0 = .some(nil) }
     }
+
+    #if DEBUG
+    /// Tests only — force the next `token` read back to the Keychain.
+    static func resetTokenCacheForTesting() {
+        cachedToken.withLock { $0 = .none }
+    }
+    #endif
 
     /// Normalize a user-entered server URL: add https scheme, strip trailing slashes.
     static func normalize(_ input: String) -> String {

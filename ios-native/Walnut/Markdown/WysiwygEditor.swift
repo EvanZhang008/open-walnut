@@ -41,7 +41,11 @@ struct WysiwygEditor: UIViewRepresentable {
         // The accessory bar lives in the system keyboard window. If the app
         // backgrounds while editing, that window can survive and float over
         // the wallpaper — resign focus so it tears down with the keyboard.
-        NotificationCenter.default.addObserver(
+        // Token kept on the Coordinator and removed in dismantleUIView:
+        // block observers do NOT auto-unregister, so the old token-dropped
+        // form leaked one observer per note ever opened (audit GEO-4) —
+        // each backgrounding then ran the whole accumulated pile.
+        context.coordinator.resignObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.willResignActiveNotification,
             object: nil, queue: .main
         ) { [weak textView] _ in
@@ -88,9 +92,20 @@ struct WysiwygEditor: UIViewRepresentable {
         Coordinator(self)
     }
 
+    static func dismantleUIView(_ textView: WalnutTextView, coordinator: Coordinator) {
+        if let token = coordinator.resignObserver {
+            NotificationCenter.default.removeObserver(token)
+            coordinator.resignObserver = nil
+        }
+    }
+
     @MainActor
     final class Coordinator: NSObject, UITextViewDelegate {
         var parent: WysiwygEditor
+        /// willResignActive block-observer token — registered in makeUIView,
+        /// removed in dismantleUIView (and defensively in deinit; block
+        /// observers never auto-unregister).
+        var resignObserver: NSObjectProtocol?
         /// True while we're pushing a programmatic edit into the text view, so
         /// `updateUIView` doesn't fight the cursor mid-keystroke.
         var isInternalUpdate = false
@@ -112,6 +127,14 @@ struct WysiwygEditor: UIViewRepresentable {
         var stickyTypingAttrs: [NSAttributedString.Key: Any]?
         init(_ parent: WysiwygEditor) {
             self.parent = parent
+        }
+
+        deinit {
+            // Defensive: dismantleUIView is the primary removal path, but a
+            // coordinator torn down without it must still not leak.
+            if let token = resignObserver {
+                NotificationCenter.default.removeObserver(token)
+            }
         }
 
         func imageWidth(for textView: UITextView) -> CGFloat {
@@ -454,7 +477,14 @@ struct WysiwygEditor: UIViewRepresentable {
                 textView.layoutManager.invalidateLayout(
                     forCharacterRange: NSRange(location: index, length: 1), actualCharacterRange: nil
                 )
-                textView.layoutManager.ensureLayout(for: textView.textContainer)
+                // Range-bounded (audit GEO-7): a full-container ensureLayout
+                // here re-laid-out everything AFTER the table on every
+                // add/remove row tap — O(note) when the table sits near the
+                // top. The overlay only needs the attachment's own glyph
+                // geometry; content below reflows lazily as it's displayed.
+                textView.layoutManager.ensureLayout(
+                    forCharacterRange: NSRange(location: index, length: 1)
+                )
                 self.isInternalUpdate = false
             }
             let editor = TableInlineEditor(
