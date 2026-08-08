@@ -67,8 +67,14 @@ final class ChatStore {
     var sending = false
     /// A turn is running on the active conversation (composer disabled).
     var streaming = false
-    /// Accumulated live assistant text for the in-flight turn.
+    /// Accumulated live assistant text for the in-flight turn. Bounded like
+    /// SessionConversationStore.liveText (LiveMarkdownWindow.boundedTail in
+    /// flushPendingDelta) — retaining an unbounded reply makes every append +
+    /// segments() O(reply), the 0x8BADF00D saturation mechanism.
     var streamText = ""
+    /// True when streamText dropped its head to stay under the retention cap
+    /// (drives the live row's "earlier output hidden" chip).
+    private(set) var streamTextTruncated = false
     /// Delta coalescing (freeze fix): applying every SSE text-delta straight
     /// to `streamText` re-rendered the live markdown row PER DELTA — a full
     /// MarkdownParser.parse of the ever-growing reply on the main thread,
@@ -211,6 +217,7 @@ final class ChatStore {
         pendingDelta = ""
         streaming = false
         streamText = ""
+        streamTextTruncated = false
         activity = nil
         errorMessage = nil
         initialPaintDone = false
@@ -267,7 +274,11 @@ final class ChatStore {
             let wasAtBottom = bottomPinned
             let changed = fetched.count + localOnly.count != messages.count
                 || fetched.last?.id != messages.dropLast(localOnly.count).last?.id
-            messages = Self.reattachSentImages(to: fetched, from: sentImages) + localOnly
+            MainWork.track("chat.loadMessages", count: fetched.count) {
+                messages = Self.reattachSentImages(to: fetched, from: sentImages) + localOnly
+            }
+            // Freeze-report context: rows handed to SwiftUI for layout.
+            FreezeContext.shared.setHistoryRows(messages.count)
             hasOlder = fetched.count >= Self.pageSize
             // Replacing rows with canonical ids/heights displaces the viewport
             // once the bottom anchor's auto-pin has lapsed (any manual scroll)
@@ -395,6 +406,7 @@ final class ChatStore {
             sending = false
             streaming = true
             streamText = ""
+            streamTextTruncated = false
             activity = nil
             watchedUserText = text
             startTurnWatchdog(conversationID: convID)
@@ -545,35 +557,63 @@ final class ChatStore {
     private struct EndPayload: Codable { let turnId: String; let fullText: String }
     private struct ErrorPayload: Codable { let message: String }
 
+    /// Equality-gated writes for the per-SSE-event flags — same fix as
+    /// SessionConversationStore.setStreaming/setActivity (build-36 field
+    /// freeze): @Observable has no same-value suppression, and the butler
+    /// stream repeats `thinking` at whatever rate the agent emits, so an
+    /// unconditional `activity = "Thinking"` invalidates every body that
+    /// reads it (ChatView reads `streaming` in its ScrollView body) at
+    /// event rate. Route ALL streaming/activity writes through these.
+    private func setStreaming(_ value: Bool) {
+        if streaming != value { streaming = value }
+    }
+
+    private func setActivity(_ value: String?) {
+        if activity != value { activity = value }
+    }
+
+    /// Test seam: WalnutTests drives the REAL handler (it is private because
+    /// its guard needs activeID; tests set that up first). Production code
+    /// must keep calling `handle` via the SSE callback only.
+    func handleForTesting(_ event: SSEEvent, conversationID: String) {
+        handle(event, conversationID: conversationID)
+    }
+
     private func handle(_ event: SSEEvent, conversationID: String) {
         guard isActive, conversationID == activeID else { return }
         lastSSEEventAt = Date()
         let data = Data(event.data.utf8)
         switch event.event {
         case "message-start":
-            streaming = true
+            setStreaming(true)
             streamText = ""
+            streamTextTruncated = false
             pendingDelta = ""
-            activity = nil
+            setActivity(nil)
         case "text-delta":
             if let payload = try? JSONDecoder().decode(DeltaPayload.self, from: data) {
                 appendDelta(payload.delta)
             }
         case "tool":
             if let payload = try? JSONDecoder().decode(ToolPayload.self, from: data) {
-                activity = payload.detail.map { "\(payload.name) · \($0)" } ?? payload.name
+                setActivity(payload.detail.map { "\(payload.name) · \($0)" } ?? payload.name)
             }
         case "thinking":
-            activity = "Thinking"
+            setActivity("Thinking")
         case "queued":
             // Another turn holds the agent right now — the wait before
             // message-start is expected, not a stall. Tell the user.
-            streaming = true
-            activity = "Waiting for another task"
+            setStreaming(true)
+            setActivity("Waiting for another task")
         case "message-end":
             let payload = try? JSONDecoder().decode(EndPayload.self, from: data)
             flushPendingDelta() // the streamText fallback must include the tail
-            finalizeTurn(conversationID: conversationID, fullText: payload?.fullText ?? streamText)
+            // A truncated streamText lost the reply's head — as a provisional
+            // bubble it would render a mid-sentence fragment. Skip it and let
+            // loadMessages paint the canonical row (fullText, when present,
+            // is server-authoritative and unaffected).
+            let fallback = streamTextTruncated ? "" : streamText
+            finalizeTurn(conversationID: conversationID, fullText: payload?.fullText ?? fallback)
         case "error":
             let payload = try? JSONDecoder().decode(ErrorPayload.self, from: data)
             AppLog.error("chat", "turn failed", ["message": payload?.message ?? "?"])
@@ -616,10 +656,28 @@ final class ChatStore {
 
     private func flushPendingDelta() {
         guard !pendingDelta.isEmpty else { return }
+        MainWork.track("chat.deltaFlush", count: pendingDelta.utf8.count) {
+            flushPendingDeltaTracked()
+        }
+    }
+
+    private func flushPendingDeltaTracked() {
+        // Trim before appending so the append never copies a giant string
+        // (same bound as SessionConversationStore.flushPendingDelta).
+        let (bounded, trimmed) = streamTextBound.bound(streamText)
+        if trimmed {
+            streamText = bounded
+            streamTextTruncated = true
+        }
         streamText += pendingDelta
         pendingDelta = ""
+        // Freeze-report context (counts only, O(1) utf8 length; ~8Hz flush rate).
+        FreezeContext.shared.setLiveText(chars: streamText.utf8.count, truncated: streamTextTruncated)
         reassertPinnedFollow()
     }
+
+    /// Hysteresis state for the streamText retention cap (see TailBound).
+    @ObservationIgnored private var streamTextBound = LiveMarkdownWindow.TailBound()
 
     /// Last time a streaming flush re-asserted the bottom edge — throttles the
     /// re-assert so it can't run at the full 8Hz flush rate.
@@ -697,6 +755,7 @@ final class ChatStore {
                     ])
                     self.streaming = false
                     self.streamText = ""
+                    self.streamTextTruncated = false
                     self.activity = nil
                     return
                 }
@@ -715,7 +774,10 @@ final class ChatStore {
         let wasAtBottom = bottomPinned
         streaming = false
         streamText = ""
+        streamTextTruncated = false
         activity = nil
+        FreezeContext.shared.setLiveText(chars: 0, truncated: false)
+        FreezeContext.shared.note("turn-end")
         if !fullText.isEmpty {
             // Provisional bubble; replaced by canonical history right after.
             let isDuplicate = messages.last.map { $0.role == "assistant" && $0.text == fullText } ?? false

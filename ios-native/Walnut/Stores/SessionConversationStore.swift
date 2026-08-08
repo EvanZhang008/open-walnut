@@ -75,13 +75,43 @@ final class SessionConversationStore {
 
     /// Live turn accumulation (mirrors ChatStore.streamText / .activity).
     var streaming = false
+    /// Bounded at ~LiveMarkdownWindow.liveTextCap Characters (see
+    /// flushPendingDelta / seedFromSnapshot): the render window fix bounded
+    /// per-tick RENDER cost, but retaining the whole in-flight reply here kept
+    /// every append + segments() O(reply) — at tens of MB that alone
+    /// saturated the main thread (build-34 0x8BADF00D field crashes).
     var liveText = ""
+    /// True when liveText dropped its head to stay under the cap. The window's
+    /// omitted-prefix chip stays visible for free (cap = 2x windowMax, so a
+    /// truncated liveText is always past the window threshold); the flag's job
+    /// is finalizeTurn: a PREFIX clip of a tail-trimmed string no longer equals
+    /// the reply's start, so the provisional row must be skipped.
+    private(set) var liveTextTruncated = false
     var activity: String?
     /// Delta coalescing (freeze fix, mirrors ChatStore): re-rendering the live
     /// markdown row per SSE delta saturated the main thread on long replies.
     /// Deltas buffer here and flush to `liveText` on a ~8Hz cadence.
     @ObservationIgnored private var pendingDelta = ""
     @ObservationIgnored private var deltaFlushTask: Task<Void, Never>?
+
+    /// Equality-gated writes for the per-SSE-event flags (build-36 field
+    /// freeze, 2026-08-08). @Observable has NO same-value suppression: every
+    /// `streaming = true` / `activity = "Thinking"` fires objectWillChange
+    /// even when the value is unchanged — and the conversation page's
+    /// messageList body reads `streaming`, so each write invalidates the
+    /// WHOLE LazyVStack (105-150 rows), not just the live row. The cloud
+    /// bridge forwards CLI thinking_deltas 1:1 with no coalescing (measured
+    /// 10.7 ev/s sustained, microbursts to ~700/s on a fable plan session),
+    /// so redundant writes at event rate became an unbounded full-page
+    /// layout storm — the 0x8BADF00D compute-loop fingerprint. Deltas were
+    /// already coalesced (8Hz flush); these two flags were the leak.
+    private func setStreaming(_ value: Bool) {
+        if streaming != value { streaming = value }
+    }
+
+    private func setActivity(_ value: String?) {
+        if activity != value { activity = value }
+    }
 
     var processStatus: String
     /// Sticky USER intent, independent of transient geometry changes from
@@ -176,10 +206,18 @@ final class SessionConversationStore {
         // page comes back permanently dead (guards block every reconnect).
         viewClosed = false
         isActive = true
+        // Open-sequence timeline on the tape: all three "enter a session page,
+        // freeze 5-20s later" field kills die INSIDE this window, so each step
+        // gets a crumb — the next report shows exactly how far open() got and
+        // how long each leg took, instead of only "screen: session:xxxx".
+        let openedAt = FreezeContext.uptimeNow()
+        FreezeContext.shared.note("sc-open")
         adoptLaunchStash()
         connectStream()
         await loadTranscript(fresh: false)
+        FreezeContext.shared.note("sc-open-cached", Int((FreezeContext.uptimeNow() - openedAt) * 1_000))
         await loadTranscript(fresh: true)
+        FreezeContext.shared.note("sc-open-fresh", Int((FreezeContext.uptimeNow() - openedAt) * 1_000))
     }
 
     /// View-close is TERMINAL until the next open(): unlike a background
@@ -202,6 +240,10 @@ final class SessionConversationStore {
         deltaFlushTask?.cancel()
         deltaFlushTask = nil
         pendingDelta = ""
+        snapshotDecodeTask?.cancel()
+        snapshotDecodeTask = nil
+        snapshotDecodeGen += 1 // invalidate any in-flight decode completion
+        queuedWhileDecoding = []
         cancelTrackedTasks()
         streaming = false
         activity = nil
@@ -243,8 +285,22 @@ final class SessionConversationStore {
     /// visible rows (heavy tool output) or even zero. Adopting a shorter
     /// fresh result wholesale ERASED already-rendered history (blank page).
     /// Keep existing rows older than the incoming window, append the rest.
-    private func reconcile(_ transcript: SessionTranscript) {
+    ///
+    /// Internal (not private) for WalnutTests: the event-storm and first-paint
+    /// regression tests seed a store with a field-scale transcript through the
+    /// REAL merge path instead of poking historyMessages directly.
+    func reconcile(_ transcript: SessionTranscript) {
         guard isActive else { return }
+        // Forensics: reconcile is the page's biggest single main-thread apply
+        // (rebuild + merge + stable-id pass + the SwiftUI diff its writes
+        // schedule). Every field freeze so far died in an anonymous layout
+        // stack; the ledger names this site and its row count in the report.
+        MainWork.track("sc.reconcile", count: transcript.messages.count) {
+            reconcileTracked(transcript)
+        }
+    }
+
+    private func reconcileTracked(_ transcript: SessionTranscript) {
         let wasPinned = bottomPinned
         let incoming = transcript.messages.map { m in
             ChatMessage(
@@ -254,7 +310,8 @@ final class SessionConversationStore {
                 createdAt: m.timestamp,
                 kind: Self.mapKind(m.kind),
                 detail: m.detail,
-                resultPreview: m.resultPreview
+                resultPreview: m.resultPreview,
+                agent: m.agent
             )
         }
         var merged: [ChatMessage]
@@ -284,7 +341,19 @@ final class SessionConversationStore {
         let next = Self.assignStableIDs(merged)
         let changed = next.count != historyMessages.count || next.last?.id != historyMessages.last?.id
         let firstPaint = !loadedOnce
-        historyMessages = next
+        // Equality-gated reassignment (build-36 freeze battle, measured): the
+        // @Observable macro suppresses same-VALUE scalar writes, but a whole-
+        // array reassignment with EQUAL content still fires objectWillChange —
+        // so every 5s poll (bridge-offline fallback) re-diffed the entire
+        // 150-row ForEach even when nothing changed. Stable ids make unchanged
+        // polls literally equal; one O(n) compare (~150 rows) buys skipping a
+        // full-page invalidation. ChatMessage is Equatable.
+        if next != historyMessages {
+            historyMessages = next
+        }
+        // Freeze-report context: row count of what SwiftUI is being asked to
+        // lay out. Written per reconcile (transcript fetch / 5s poll), not per row.
+        FreezeContext.shared.setHistoryRows(next.count)
         // Polling-fallback path (no SSE turn events): the CLI's reply landing
         // in the transcript is the proof the first turn ran — retire the
         // Starting-session row here or it would shimmer forever.
@@ -306,12 +375,19 @@ final class SessionConversationStore {
         // transcript row — exact-match alone left the message on screen twice
         // forever. A clipped row (trailing "…") whose body prefixes the bubble
         // is the same message.
-        pendingUser.removeAll { bubble in
-            guard bubble.failed != true else { return false }
-            if seen.contains(bubble.text) { return true }
-            return seen.contains { row in
+        // Check-before-mutate: a mutating method on an @Observable array
+        // registers a mutation even when it removes nothing, so an
+        // unconditional removeAll re-invalidated `messages` readers on every
+        // 5s poll. Compute the survivors first; write only on a real change.
+        let survivors = pendingUser.filter { bubble in
+            guard bubble.failed != true else { return true }
+            if seen.contains(bubble.text) { return false }
+            return !seen.contains { row in
                 row.hasSuffix("…") && bubble.text.hasPrefix(row.dropLast())
             }
+        }
+        if survivors.count != pendingUser.count {
+            pendingUser = survivors
         }
     }
 
@@ -326,8 +402,17 @@ final class SessionConversationStore {
             counts[base] = n + 1
             return ChatMessage(id: "\(base)#\(n)", role: m.role, text: m.text,
                                createdAt: m.createdAt, kind: m.kind,
-                               detail: m.detail, resultPreview: m.resultPreview)
+                               detail: m.detail, resultPreview: m.resultPreview,
+                               agent: m.agent)
         }
+    }
+
+    /// Mirror of the server transcript clip (session-projection TEXT_MAX):
+    /// keep the FIRST 4K chars + "…" so the provisional row is byte-identical
+    /// to the canonical row the refetch swaps in (identical text → identical
+    /// stable id → no visible flash).
+    static func clipProvisional(_ text: String) -> String {
+        text.count > 4_000 ? String(text.prefix(4_000)) + "…" : text
     }
 
     private static func mapKind(_ raw: String?) -> ChatMessage.Kind? {
@@ -481,35 +566,69 @@ final class SessionConversationStore {
         let parentToolUseId: String?
     }
 
-    private func handle(_ event: SSEEvent) {
+    /// Payloads at or above this many JSON bytes decode OFF the MainActor
+    /// (handle → decodeSnapshotAsync). Below it the fully synchronous path is
+    /// kept — zero behavior change for normal-size sessions.
+    private static let asyncSnapshotBytes = 262_144
+
+    /// Non-nil while a large snapshot decodes off-main. Internal (not
+    /// private(set)-only) so WalnutTests can await deterministic completion.
+    @ObservationIgnored private(set) var snapshotDecodeTask: Task<Void, Never>?
+    /// Generation gate for decode completions: a task cancelled by suspend()
+    /// must not, on late completion, clear a NEWER task's pointer or replay
+    /// its queue (same late-arrival-needs-a-generation lesson as turnGen).
+    @ObservationIgnored private var snapshotDecodeGen = 0
+    /// Events that arrive mid-decode. The snapshot RESETS the live region, so
+    /// a delta must never apply before the snapshot it follows — buffering
+    /// everything and replaying after application preserves arrival order.
+    @ObservationIgnored private var queuedWhileDecoding: [SSEEvent] = []
+
+    /// Internal (not private) for WalnutTests: WatchdogRegressionTests drives
+    /// the store with scripted SSE events (snapshot / text-delta) to measure
+    /// main-thread cost of the attach + live-tick paths against real payloads.
+    func handle(_ event: SSEEvent) {
         guard isActive else { return }
+        if snapshotDecodeTask != nil {
+            queuedWhileDecoding.append(event)
+            return
+        }
+        // Giant in-flight live regions (the build-34 field crash attached to
+        // a 206MB one) made the synchronous decode the single biggest
+        // main-thread stall of the attach path — push it off-main. Checked
+        // BEFORE the Data conversion below: even that copy is O(payload).
+        // (utf8.count is O(1) on Swift-native strings.)
+        if event.event == "snapshot", event.data.utf8.count >= Self.asyncSnapshotBytes {
+            decodeSnapshotAsync(event.data)
+            return
+        }
         let data = Data(event.data.utf8)
         switch event.event {
         case "snapshot":
             if let snap = try? JSONDecoder().decode(SnapshotPayload.self, from: data) {
-                seedFromSnapshot(snap)
+                applySeed(Self.computeSeed(snap))
             }
         case "turn-start":
             awaitingFirstTurn = false // the real turn takes over the indicator
-            streaming = true
+            setStreaming(true)
             liveText = ""
+            liveTextTruncated = false
             pendingDelta = ""
-            activity = nil
+            setActivity(nil)
         case "text-delta":
             if let p = try? JSONDecoder().decode(DeltaPayload.self, from: data) {
-                streaming = true
+                setStreaming(true)
                 appendDelta(p.delta)
             }
         case "thinking":
-            streaming = true
-            activity = "Thinking"
+            setStreaming(true)
+            setActivity("Thinking")
         case "tool":
             if let p = try? JSONDecoder().decode(ToolPayload.self, from: data) {
-                streaming = true
-                activity = p.detail.map { "\(p.name) · \($0)" } ?? p.name
+                setStreaming(true)
+                setActivity(p.detail.map { "\(p.name) · \($0)" } ?? p.name)
             }
         case "tool-result":
-            activity = nil
+            setActivity(nil)
         case "status":
             if let p = try? JSONDecoder().decode(StatusPayload.self, from: data) {
                 applyStatus(p.processStatus)
@@ -538,26 +657,80 @@ final class SessionConversationStore {
         }
     }
 
-    /// Seed the live turn from the buffer snapshot. Only the region after
-    /// `completedLen` is the in-flight turn — the rest is already in the
-    /// transcript, so rendering it here would duplicate history.
-    private func seedFromSnapshot(_ snap: SnapshotPayload) {
+    /// Pure result of digesting a snapshot payload — everything applySeed
+    /// needs, computed WITHOUT touching MainActor state so the giant-payload
+    /// path can run it off-main.
+    private struct SnapshotSeed {
+        let liveText: String
+        let liveTextTruncated: Bool
+        let activityName: String?
+        let isStreaming: Bool
+        let processStatus: String
+        let hasBlocks: Bool
+    }
+
+    /// Digest a snapshot into a seed. Only the region after `completedLen` is
+    /// the in-flight turn — the rest is already in the transcript, so seeding
+    /// it would duplicate history. nonisolated + pure: safe to run detached.
+    ///
+    /// Bounded join: walk the live text blocks from the END and keep only
+    /// enough to fill the liveText cap — a 200MB live region must never be
+    /// joined into one giant string just to throw most of it away.
+    private nonisolated static func computeSeed(_ snap: SnapshotPayload) -> SnapshotSeed {
+        // completedLen is server-supplied — clamp both ends so a malformed
+        // (negative / oversized) value can't index-crash the slice.
+        let liveStart = max(0, min(snap.completedLen, snap.blocks.count))
+        let live = snap.blocks[liveStart...]
+        // Main lane only (no parentToolUseId) — subagent lanes aren't shown here.
+        let texts = live
+            .filter { $0.type == "text" && $0.parentToolUseId == nil }
+            .compactMap { $0.content }
+        var kept: [String] = []
+        var keptBytes = 0
+        let budget = LiveMarkdownWindow.liveTextCap + LiveMarkdownWindow.liveTextTrimSlack
+        for t in texts.reversed() {
+            kept.append(t)
+            keptBytes += t.utf8.count + 2
+            if keptBytes > budget { break }
+        }
+        let (joined, trimmed) = LiveMarkdownWindow.boundedTail(kept.reversed().joined(separator: "\n\n"))
+        let activityName = live.last(where: {
+            $0.type == "tool_call" && $0.parentToolUseId == nil && $0.status == "calling"
+        })?.name
+        return SnapshotSeed(
+            liveText: joined,
+            liveTextTruncated: trimmed || kept.count < texts.count,
+            activityName: activityName,
+            isStreaming: snap.isStreaming,
+            processStatus: snap.processStatus,
+            hasBlocks: !snap.blocks.isEmpty
+        )
+    }
+
+    /// Apply a digested snapshot to the live region (MainActor).
+    private func applySeed(_ seed: SnapshotSeed) {
+        MainWork.track("sc.applySeed", count: seed.liveText.utf8.count) {
+            applySeedTracked(seed)
+        }
+    }
+
+    private func applySeedTracked(_ seed: SnapshotSeed) {
         // Snapshot content is PROOF a turn ran — retire the pre-spawn wait
         // BEFORE applyStatus so a terminal status in the same snapshot (app
         // backgrounded through the whole spawn→run→idle-reap arc) doesn't
         // synthesize the died-before-start banner over a finished session,
-        // and so the blocks below actually seed instead of the early-return.
-        if awaitingFirstTurn && !snap.blocks.isEmpty {
+        // and so the seed below actually applies instead of the early-return.
+        if awaitingFirstTurn && seed.hasBlocks {
             awaitingFirstTurn = false
         }
-        applyStatus(snap.processStatus)
+        applyStatus(seed.processStatus)
         // Pre-spawn gap of a just-created session: the buffer truthfully says
         // "not streaming" because the CLI isn't up yet — but the first turn IS
         // coming (the launch message rode SESSION_START). Keep the Starting-
         // session row instead of letting the snapshot blank the page.
-        if awaitingFirstTurn && !snap.isStreaming {
-            streaming = true
-            if activity == nil { activity = Self.startingActivity }
+        if awaitingFirstTurn && !seed.isStreaming {
+            setStreaming(true)
+            if activity == nil { setActivity(Self.startingActivity) }
             return
         }
         // Gate on liveness, not the buffer flag alone: a CLI that dies MID-turn
@@ -565,27 +738,56 @@ final class SessionConversationStore {
         // forever. Trusting it painted an eternal "Thinking…" row on a session
         // whose nav bar already said "Ended" (applyStatus above cleared
         // streaming; the unguarded assignment put it right back).
-        streaming = snap.isStreaming && SessionStatus(snap.processStatus).isAlive
+        setStreaming(seed.isStreaming && SessionStatus(seed.processStatus).isAlive)
         pendingDelta = "" // snapshot resets the live region wholesale
-        // completedLen is server-supplied — clamp both ends so a malformed
-        // (negative / oversized) value can't index-crash the slice.
-        let liveStart = max(0, min(snap.completedLen, snap.blocks.count))
-        let live = Array(snap.blocks[liveStart...])
-        // Main lane only (no parentToolUseId) — subagent lanes aren't shown here.
-        liveText = live
-            .filter { $0.type == "text" && $0.parentToolUseId == nil }
-            .compactMap { $0.content }
-            .joined(separator: "\n\n")
-        if let calling = live.last(where: { $0.type == "tool_call" && $0.parentToolUseId == nil && $0.status == "calling" }) {
-            activity = calling.name
-        } else {
-            activity = nil
+        liveText = seed.liveText
+        liveTextTruncated = seed.liveTextTruncated
+        setActivity(seed.activityName)
+        FreezeContext.shared.setLiveText(chars: liveText.utf8.count, truncated: liveTextTruncated)
+        FreezeContext.shared.note("snapshot-seeded", liveText.utf8.count)
+    }
+
+    /// Large-payload attach: JSON decode + block join run OFF the MainActor;
+    /// only applySeed (cheap, bounded) hops back. Events arriving mid-decode
+    /// are queued and replayed after application so a delta can never land
+    /// before the snapshot that resets the live region (arrival order holds).
+    private func decodeSnapshotAsync(_ json: String) {
+        snapshotDecodeGen += 1
+        let gen = snapshotDecodeGen
+        snapshotDecodeTask = Task { [weak self] in
+            // nonisolated async → runs on the global executor, off-main
+            // (including the String→Data copy, itself O(payload)).
+            let seed = await Self.decodeSeed(json)
+            guard let self, self.snapshotDecodeGen == gen else { return }
+            self.snapshotDecodeTask = nil
+            if self.isActive, !Task.isCancelled, let seed { self.applySeed(seed) }
+            self.replayQueuedEvents()
+        }
+    }
+
+    private nonisolated static func decodeSeed(_ json: String) async -> SnapshotSeed? {
+        guard let snap = try? JSONDecoder().decode(SnapshotPayload.self, from: Data(json.utf8)) else { return nil }
+        return computeSeed(snap)
+    }
+
+    /// Drain the mid-decode queue in order. handle() re-queues (and this loop
+    /// stops) if a replayed event starts another async decode.
+    private func replayQueuedEvents() {
+        guard !queuedWhileDecoding.isEmpty else { return }
+        MainWork.track("sc.replayQueued", count: queuedWhileDecoding.count) {
+            while snapshotDecodeTask == nil, !queuedWhileDecoding.isEmpty {
+                handle(queuedWhileDecoding.removeFirst())
+            }
+            if snapshotDecodeTask == nil { queuedWhileDecoding = [] }
         }
     }
 
     private func applyStatus(_ status: String) {
         guard !status.isEmpty else { return }
-        processStatus = status
+        // Same-value gate: the daemon re-emits session_state on every bridge
+        // reconcile, and processStatus feeds the nav-bar subtitle — redundant
+        // writes invalidate that view for free.
+        if processStatus != status { processStatus = status }
         if !SessionStatus(status).isAlive {
             // Terminal status ends the pre-spawn wait too: a failed spawn must
             // not leave "Starting session" shimmering forever. And since 201 =
@@ -603,8 +805,8 @@ final class SessionConversationStore {
                 errorMessage = "The session ended before it could start — open it on your desktop to see why."
             }
             awaitingFirstTurn = false
-            streaming = false
-            activity = nil
+            setStreaming(false)
+            setActivity(nil)
         }
     }
 
@@ -621,12 +823,37 @@ final class SessionConversationStore {
         }
     }
 
-    private func flushPendingDelta() {
+    /// Internal (not private) for WalnutTests — lets the watchdog repro tests
+    /// flush deterministically instead of waiting on the 120ms coalesce timer.
+    ///
+    /// Trims BEFORE appending: a giant retained liveText (e.g. seeded by an
+    /// old code path, or grown past the cap) is cut to the bounded tail first,
+    /// so the append never copy-on-writes a multi-MB string. boundedTail's
+    /// fast path is O(1), so per-flush overhead is nil until a trim is due.
+    func flushPendingDelta() {
         guard !pendingDelta.isEmpty else { return }
+        MainWork.track("sc.deltaFlush", count: pendingDelta.utf8.count) {
+            flushPendingDeltaTracked()
+        }
+    }
+
+    private func flushPendingDeltaTracked() {
+        let (bounded, trimmed) = liveTextBound.bound(liveText)
+        if trimmed {
+            liveText = bounded
+            liveTextTruncated = true
+        }
         liveText += pendingDelta
         pendingDelta = ""
+        // Freeze-report context (counts only, O(1) utf8 length): the live turn's
+        // size is the single most useful number for a layout/text-measurement
+        // freeze. Runs at the coalesced ~8Hz flush rate, not per delta.
+        FreezeContext.shared.setLiveText(chars: liveText.utf8.count, truncated: liveTextTruncated)
         reassertPinnedFollow()
     }
+
+    /// Hysteresis state for the liveText retention cap (see TailBound).
+    @ObservationIgnored private var liveTextBound = LiveMarkdownWindow.TailBound()
 
     @ObservationIgnored private var lastPinReassertAt: Date?
     /// Above the view's 250ms programmatic-geometry freeze — see the long note on
@@ -654,6 +881,12 @@ final class SessionConversationStore {
     /// "message appears all at once" feel). Keeping the text on screen makes the
     /// live bubble settle in place; the refetch quietly swaps in canonical rows.
     private func finalizeTurn() {
+        MainWork.track("sc.finalizeTurn", count: liveText.utf8.count) {
+            finalizeTurnTracked()
+        }
+    }
+
+    private func finalizeTurnTracked() {
         awaitingFirstTurn = false // covers a turn-end with no observed turn-start
         flushPendingDelta() // `finished` below must include the delta tail
         deltaFlushTask?.cancel()
@@ -661,8 +894,22 @@ final class SessionConversationStore {
         let wasPinned = bottomPinned
         streaming = false
         activity = nil
-        let finished = liveText
+        // Clip to the transcript's own row limit (session-projection TEXT_MAX =
+        // 4KB + "…"): the refetch below replaces this row with the clipped
+        // canonical version anyway, and parsing a multi-MB reply as ONE static
+        // markdown row here was the second unbounded main-thread parse on the
+        // page (the windowed live row being the first).
+        // Truncated liveText lost the reply's HEAD — clipProvisional takes a
+        // PREFIX, which would no longer match the canonical transcript row
+        // (server clips the FIRST 4K), so the stable-id swap would flash a
+        // mismatched bubble. Skip the provisional row and let the refetch
+        // below paint the canonical one (a brief gap on multi-100KB replies
+        // is acceptable; a wrong-text flash is not).
+        let finished = liveTextTruncated ? "" : Self.clipProvisional(liveText)
         liveText = ""
+        liveTextTruncated = false
+        FreezeContext.shared.setLiveText(chars: 0, truncated: false)
+        FreezeContext.shared.note("turn-end")
         if !finished.isEmpty {
             let dup = historyMessages.last.map { $0.role == "assistant" && $0.text == finished } ?? false
             if !dup {

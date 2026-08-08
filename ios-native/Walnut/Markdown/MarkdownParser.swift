@@ -43,17 +43,69 @@ enum MarkdownParser {
     private final class Parsed { let blocks: [MarkdownBlock]; init(_ b: [MarkdownBlock]) { blocks = b } }
     private static let cache: NSCache<NSString, Parsed> = {
         let c = NSCache<NSString, Parsed>()
-        c.countLimit = 256
-        // countLimit alone is not enough: streaming feeds a fresh (growing) string
-        // each tick, so 256 entries can each hold a near-full parse of a long
-        // message — unbounded in bytes. Cost = source UTF-16 length (proxy for the
-        // parsed blocks' retained size); 4M chars ≈ 8MB of source keeps the cache
-        // far below memory-pressure territory while still covering every visible row.
-        c.totalCostLimit = 4_000_000
+        // Must cover a full rendered page WITH HEADROOM: SessionConversationStore
+        // renders up to hardMaxRenderedRows = 400, and at 256 a 400-row
+        // all-assistant page THRASHED the cache — every re-render re-parsed
+        // ~150 rows from scratch (measured 760ms/pass in the perf harness).
+        // 512 "barely fit" one page: NSCache's eviction order under count
+        // pressure is UNDEFINED, so a page plus a few hundred incidental
+        // entries (a previous page, notes previews) could evict the visible
+        // rows themselves — the round-trip-scroll re-parse freeze. 1024 =
+        // page + churn; bytes are bounded by the cost cap below either way.
+        c.countLimit = 1024
+        // countLimit alone is not enough — cost bounds the bytes. With
+        // clipOversized capping every shared entry at ~oversizedRowClipLimit
+        // chars, the cap is sized so a FULL 400-row page of worst-case
+        // (clip-limit CJK) rows always fits: cost-cap eviction on a coverable
+        // page was the "round-trip scroll re-parses everything" freeze
+        // mechanism (2026-08-07 repro: 400x64KB rows = 25s round trip).
+        // Realistic pages (4KB server-clipped rows) use <1M of this budget;
+        // memory pressure still purges via NSCache.
+        c.totalCostLimit = 8_000_000
         return c
     }()
 
-    static func parse(_ content: String) -> [MarkdownBlock] {
+    /// Cache routing for `parse`. `.skip` exists for the STREAMING tail
+    /// (LiveMarkdownBody): every ~120ms tick parses a fresh unique string, and
+    /// pushing those one-shot entries through the shared cache evicted the
+    /// visible history rows (countLimit) — the next scroll re-parsed the whole
+    /// page (the "scrolling a streaming session freezes" mechanism).
+    enum CacheMode { case shared, skip }
+
+    /// Defensive clip for oversized rows (Characters). Transcript rows are
+    /// server-clipped at 4KB, so anything past this is legacy/foreign data —
+    /// clip to keep one row's parse cost AND its cache cost bounded. Above
+    /// LiveMarkdownWindow.windowKeep would defeat the point; live segments
+    /// opt out instead (clipOversized: false) since the window already bounds
+    /// them.
+    static let oversizedRowClipLimit = 16_000
+
+    /// Test hook: cache-behavior tests (ScrollPerfTests) need a KNOWN cache
+    /// population; entries left by earlier suites otherwise make count-based
+    /// eviction (undefined order in NSCache) nondeterministic.
+    static func resetCacheForTesting() {
+        cache.removeAllObjects()
+    }
+
+    /// `clipOversized`: defends against oversized legacy rows (see
+    /// oversizedRowClipLimit). Live window segments pass false — the window
+    /// bounds them already, and clipping the live head would visibly drop
+    /// mid-reply content. Clipping BEFORE keying means all >16K variants of
+    /// the same prefix share one cache entry (render is a pure function of
+    /// the clipped text, so collisions are correct by construction).
+    static func parse(_ content: String, cache mode: CacheMode = .shared,
+                      clipOversized: Bool = true) -> [MarkdownBlock] {
+        var content = content
+        // O(1) byte pre-check (bytes >= Characters), then an O(clipLimit)
+        // forward index walk — never an O(n) full count on a giant row.
+        // nil / endIndex from the walk = under the limit in Characters.
+        if clipOversized, content.utf8.count > oversizedRowClipLimit,
+           let cut = content.index(content.startIndex, offsetBy: oversizedRowClipLimit,
+                                   limitedBy: content.endIndex),
+           cut < content.endIndex {
+            content = String(content[..<cut]) + "…"
+        }
+        guard mode == .shared else { return parseUncached(content) }
         let key = content as NSString
         if let hit = cache.object(forKey: key) { return hit.blocks }
         let blocks = parseUncached(content)
@@ -443,18 +495,26 @@ enum MarkdownParser {
         var pieces: [TextOrImage] = []
         var cursor = 0
         for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
-            // Boundary guard (mirrors the web console's IMAGE_PATH_RE check):
-            // only fire at start-of-text or after whitespace/backtick. Without
-            // it the path portion of "https://example.com/logo.png" matches
-            // (the URL's "//" supplies the leading "/") and a valid remote
-            // image link becomes a broken local /api/v1/media request.
+            // Boundary guard: the ONLY thing this must reject is a path that is
+            // really the tail of a URL/longer token ("https://example.com/x.png"
+            // — the "//" supplies the leading "/"), where the preceding char is
+            // URL-ish (letter, digit, ':', '/', '.', '-', '%'). The old
+            // allowlist (whitespace/backtick/paren only) also rejected CJK
+            // punctuation — "截图:`/tmp/shot.png`" and "、`/tmp/x.png`" are how
+            // agents actually write, and those images silently rendered as text
+            // on the phone while the web console (no boundary check on its
+            // absolute-path regex) inlined them fine.
+            // (No ':' in the set: a URL's path can never match at its leading
+            // "//" — the regex needs a word char after "/" — so any URL-tail
+            // match is already guarded by the '/' or alphanumeric before it,
+            // while "截图:`/tmp/x.png`" has ':' before the backtick and must pass.)
             if match.range.location > 0 {
                 let prev = ns.character(at: match.range.location - 1)
-                let prevScalar = Unicode.Scalar(prev)
-                let isBoundary = prevScalar.map {
-                    CharacterSet.whitespacesAndNewlines.contains($0) || $0 == "`" || $0 == "(" || $0 == "["
-                } ?? false
-                if !isBoundary { continue }
+                let urlish = Unicode.Scalar(prev).map {
+                    CharacterSet.alphanumerics.contains($0)
+                        || $0 == "/" || $0 == "." || $0 == "-" || $0 == "%"
+                } ?? true
+                if urlish { continue }
             }
             if match.range.location > cursor {
                 let before = ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor))

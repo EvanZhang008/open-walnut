@@ -40,6 +40,10 @@ struct ComposerBar: View {
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var imageNotice: String?
     @FocusState private var focused: Bool
+    /// Focus for the long-draft editor. A `UIViewRepresentable` cannot ride
+    /// `@FocusState` dependably, so its focus is a plain two-way `@State` the
+    /// representable syncs with its first-responder status.
+    @State private var longDraftFocused = false
     @State private var drafts = ComposerDrafts.shared
 
     private static let maxImages = 5
@@ -49,7 +53,14 @@ struct ComposerBar: View {
     private var draft: Binding<String> {
         Binding(
             get: { drafts.draft(draftKey) },
-            set: { drafts.setDraft($0, key: draftKey) }
+            set: {
+                drafts.setDraft($0, key: draftKey)
+                // Freeze-report context. Runs per keystroke, so it must stay
+                // O(1): utf8.count is a stored length on native Swift strings
+                // (String.count walks graphemes — do NOT use it here), and the
+                // push itself is one Int write under a lock.
+                FreezeContext.shared.setDraftChars($0.utf8.count)
+            }
         )
     }
 
@@ -97,26 +108,82 @@ struct ComposerBar: View {
             guard !items.isEmpty else { return }
             Task { await loadPicked(items) }
         }
+        // Focus edges are a freeze-report breadcrumb: the build-35 field freeze
+        // fired ~5s after a transcription focused the keyboard, and focus churn
+        // is what drives keyboard show/hide.
+        .onChange(of: focused) { _, isFocused in
+            FreezeContext.shared.note(isFocused ? "focus" : "blur")
+        }
+        .onChange(of: longDraftFocused) { _, isFocused in
+            FreezeContext.shared.note(isFocused ? "focus" : "blur")
+        }
+        // Crossing the long-draft threshold swaps the field, which drops focus
+        // with it. Hand focus over so a paste or a dictation that trips the swap
+        // doesn't dismiss the keyboard mid-compose.
+        .onChange(of: useLongDraftEditor) { _, isLong in
+            if isLong, focused { focused = false; longDraftFocused = true }
+            if !isLong, longDraftFocused { longDraftFocused = false; focused = true }
+        }
     }
 
     // MARK: - Rows
+
+    /// Above this many UTF-8 bytes the field switches to `LongDraftEditor`.
+    ///
+    /// Chosen from the measured curve on the real hosted composer (see
+    /// `ComposerFreezeTests` / `LongDraftEditor`'s header): one relayout costs
+    /// 1.65ms at 148 chars but 62.7ms at 5,000 and 2,353ms at 50,000 — and a
+    /// relayout happens per keystroke, per focus edge, and per keyboard-geometry
+    /// change. 2,000 sits above every ordinary typed message (so the everyday
+    /// path is the untouched SwiftUI TextField) and below the region where a
+    /// single relayout stops fitting a frame.
+    ///
+    /// UTF-8 bytes, not characters: `String.count` walks grapheme clusters (O(n))
+    /// and this is evaluated on every body pass. NOTE the unit conversion this
+    /// implies — the measured curve above is char-indexed while this gate is
+    /// byte-indexed, and CJK runs ~3 bytes/char, so CJK drafts switch at ~667
+    /// characters (ASCII at 2,000). That earlier switchover for CJK is
+    /// DELIBERATE, not a slip: CJK glyph runs do more TextKit work per
+    /// character, the bounded editor is visually near-identical (sim-verified
+    /// with a 1,500-char CJK draft), and long dictation bursts — the field
+    /// ignition scenario — are exactly the drafts we want off the O(n) path.
+    static let longDraftThreshold = 2_000
+
+    private var useLongDraftEditor: Bool {
+        draft.wrappedValue.utf8.count > Self.longDraftThreshold
+    }
 
     private var inputRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
             photoButton
 
-            TextField(busy ? "Waiting for reply…" : placeholder, text: draft, axis: .vertical)
-                .lineLimit(1...6)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 9)
-                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 19, style: .continuous))
-                .focused($focused)
-                .accessibilityIdentifier("chat.composer")
+            // Long drafts (a big paste, or several dictations appended together)
+            // move to a viewport-bounded UITextView. The plain TextField must lay
+            // the WHOLE string out to apply `lineLimit(1...6)`, so its cost grows
+            // with the draft and there is no cap on the draft; the editor's cost
+            // is constant. Text is never truncated either way — only the
+            // MEASUREMENT is bounded.
+            Group {
+                if useLongDraftEditor {
+                    LongDraftEditor(text: draft, isFocused: $longDraftFocused)
+                        .frame(maxWidth: .infinity)
+                } else {
+                    TextField(busy ? "Waiting for reply…" : placeholder, text: draft, axis: .vertical)
+                        .lineLimit(1...6)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 9)
+                        .focused($focused)
+                        .accessibilityIdentifier("chat.composer")
+                }
+            }
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 19, style: .continuous))
 
+            // Mic is ALWAYS present — transcription appends to the draft, so
+            // voice input composes with typed text instead of replacing it.
+            // The send button joins it once there's something to send.
+            micButton
             if hasContent {
                 sendButton
-            } else {
-                micButton
             }
         }
         .padding(.horizontal, 12)
@@ -254,6 +321,8 @@ struct ComposerBar: View {
         let images = selectedImages
         guard !text.isEmpty || !images.isEmpty else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        FreezeContext.shared.note("send", text.utf8.count)
+        FreezeContext.shared.setDraftChars(0)
         drafts.clear(draftKey)
         pickerItems = []
         // Failure keeps the text AND images as a failed bubble in the timeline
@@ -305,8 +374,15 @@ struct ComposerBar: View {
 
     private func appendToDraft(_ text: String) {
         let existing = draft.wrappedValue
+        // Breadcrumb BEFORE the mutation: the append + focus pair is the
+        // suspected trigger of the build-35 freeze, so the trail must show it
+        // even if the very next layout pass is the one that wedges.
+        FreezeContext.shared.note("append-draft", text.utf8.count)
         draft.wrappedValue = existing.isEmpty ? text : existing + " " + text
-        focused = true
+        // Focus whichever field the (now longer) draft renders in. Repeated
+        // dictations are exactly how a draft crosses the threshold, so this
+        // append may be the very mutation that swaps the field.
+        if useLongDraftEditor { longDraftFocused = true } else { focused = true }
     }
 
     private func noticeRow(_ text: String, icon: String, onDismiss: (() -> Void)? = nil) -> some View {

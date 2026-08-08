@@ -108,69 +108,37 @@ struct ChatView: View {
     }
 }
 
-/// Scrollable message list whose ScrollPosition is the sole bottom authority.
-/// Sticky user intent prevents canonical reconciles from yanking history readers.
+/// Butler chat message list on the UIKit timeline engine (Timeline/):
+/// parsing/measurement on a background actor, O(visible) main-thread attach.
+/// Replaced the ScrollView+LazyVStack body — same structural fix as
+/// SessionConversationView (0x8BADF00D full-tree-diff class). The
+/// KeyboardRepinMachine stays as the behavior layer; its repin pulses the
+/// timeline's scroll signal.
 private struct MessageListView: View {
     @Environment(ChatStore.self) private var chat
-    @State private var scrollPos = ScrollPosition(edge: .bottom)
     @State private var keyboardGeometryFrozen = false
     @State private var programmaticGeometryFrozen = false
     @State private var programmaticFreezeTask: Task<Void, Never>?
+    @State private var repinSignal = 0
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-                if chat.hasOlder {
-                    Button("Load earlier messages") {
-                        Task { await chat.loadOlder() }
-                    }
-                    .font(.footnote)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
+        ChatTimelineBody(
+            chat: chat,
+            repinSignal: repinSignal,
+            keyboardGeometryFrozen: { keyboardGeometryFrozen || programmaticGeometryFrozen },
+            onRefresh: {
+                if let id = chat.activeID {
+                    await chat.loadMessages(id)
                 }
-                if chat.messages.isEmpty && !chat.loadingMessages && !chat.streaming {
-                    emptyState
-                }
-                ForEach(chat.messages) { message in
-                    MessageRow(
-                        message: message,
-                        onRetry: { Task { await chat.retry(message) } },
-                        onDiscard: { chat.discardFailed(message) }
-                    )
-                }
-                if chat.streaming {
-                    // Leaf view so the 8Hz streamText/activity flush
-                    // re-renders ONLY this row — reading those @Observable
-                    // fields inside LiveTurnRow (not here) keeps them off
-                    // MessageListView's dependency set, so the ForEach of
-                    // stable history rows is never rebuilt mid-stream.
-                    LiveTurnRow()
-                }
+                await chat.refreshConversations()
             }
-            .padding(.vertical, 12)
-        }
-        .scrollPosition($scrollPos, anchor: .bottom)
-        .redacted(reason: chat.loadingMessages && chat.messages.isEmpty ? .placeholder : [])
-        .scrollDismissesKeyboard(.interactively)
-        .modifier(ScrollBottomTracking(
-            isPinned: { chat.bottomPinned },
-            setPinned: { chat.bottomPinned = $0 },
-            geometryFrozen: { keyboardGeometryFrozen || programmaticGeometryFrozen }
-        ))
+        )
         .modifier(KeyboardBottomRepin(
             keyboardGeometryFrozen: $keyboardGeometryFrozen,
             isPinned: { chat.bottomPinned },
+            programmaticFrozen: { programmaticGeometryFrozen },
             repin: { scrollToBottom() }
         ))
-        .refreshable {
-            if let id = chat.activeID {
-                await chat.loadMessages(id)
-            }
-            await chat.refreshConversations()
-        }
-        .onChange(of: chat.scrollToBottomSignal) {
-            scrollToBottom()
-        }
         .onDisappear {
             // Clear the flag too: cancelling the reset task alone would leave
             // a retained (tab-switched) view permanently geometry-frozen.
@@ -181,45 +149,12 @@ private struct MessageListView: View {
 
     private func scrollToBottom() {
         programmaticGeometryFrozen = true
-        scrollPos.scrollTo(edge: .bottom)
+        repinSignal += 1
         programmaticFreezeTask?.cancel()
         programmaticFreezeTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
             programmaticGeometryFrozen = false
-        }
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "bubble.left.and.text.bubble.right")
-                .font(.system(size: 40))
-                .foregroundStyle(.tertiary)
-            Text("Your butler is listening")
-                .font(.headline)
-            Text("Ask anything — tasks, notes, or what happened today.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 120)
-    }
-}
-
-/// Live turn: streamed text so far + the current tool/thinking activity.
-/// A standalone leaf so the high-frequency streamText/activity updates
-/// re-render only this row, never the sibling ForEach of history rows.
-private struct LiveTurnRow: View {
-    @Environment(ChatStore.self) private var chat
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if !chat.streamText.isEmpty {
-                MessageRow(message: ChatMessage(
-                    id: "__live__", role: "assistant", text: chat.streamText, createdAt: "", kind: nil
-                ))
-            }
-            ThinkingRow(activity: chat.activity)
         }
     }
 }

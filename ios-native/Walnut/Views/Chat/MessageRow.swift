@@ -73,11 +73,16 @@ struct MessageRow: View {
     let message: ChatMessage
     var onRetry: (() -> Void)? = nil
     var onDiscard: (() -> Void)? = nil
+    /// Live row only: the store dropped the head of liveText to stay under its
+    /// retention cap, so the "earlier output hidden" chip must show even when
+    /// the RETAINED text alone wouldn't cross the render window's threshold.
+    var liveTextTruncated: Bool = false
 
     var body: some View {
         switch message.kind {
         case .tool:
-            ToolChip(name: message.text, detail: message.detail, resultPreview: message.resultPreview)
+            ToolChip(name: message.text, detail: message.detail,
+                     resultPreview: message.resultPreview, agent: message.agent)
         case .thinking:
             chip(icon: "sparkles", text: message.text)
         case .notification:
@@ -91,19 +96,77 @@ struct MessageRow: View {
         }
     }
 
+    /// Server-augmented image send, as it comes back in the TRANSCRIPT. Two
+    /// wire formats (keep in sync with their emitters):
+    ///  - "[Images attached — use the Read tool to view them]\n- /path.png\n\n<text>"
+    ///    (src/web/routes/session-chat.ts + session-stream-v1.ts)
+    ///  - "The user attached N images. Read these files for visual context:\n/path.png\n\n<text>"
+    ///    (src/web/routes/images.ts buildSessionImageContext — older sends)
+    /// Rendered raw these were machine-y text bubbles and NO image ever
+    /// mounted — the whole reason historical image sends looked blank on the
+    /// phone. Parse the path list into remote image views (they ride
+    /// /api/v1/media with the session scope) + the human's own text.
+    /// Non-image sends (nil here) render unchanged.
+    private var imageSendParts: (paths: [String], text: String)? {
+        Self.imageSendParts(message.text)
+    }
+
+    /// Pure parse of the two wire formats above. `internal` (not private) so
+    /// WalnutTests can exercise the real logic instead of a copied replica.
+    static func imageSendParts(_ text: String) -> (paths: [String], text: String)? {
+        let dashed = text.hasPrefix("[Images attached")
+        let bare = text.hasPrefix("The user attached")
+            && text.contains("for visual context:")
+        guard dashed || bare else { return nil }
+        let lines = text.components(separatedBy: "\n")
+        var paths: [String] = []
+        var bodyStart = lines.count
+        for (i, line) in lines.enumerated() where i > 0 {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let candidate = trimmed.hasPrefix("- ") ? String(trimmed.dropFirst(2)) : trimmed
+            if candidate.hasPrefix("/"), MarkdownParser.isImagePath(candidate) {
+                paths.append(candidate)
+                continue
+            }
+            if trimmed.isEmpty { bodyStart = i + 1; break }
+            // Unexpected line inside the header — not the known format; bail.
+            return nil
+        }
+        guard !paths.isEmpty else { return nil }
+        let body = lines[min(bodyStart, lines.count)...].joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (paths, body)
+    }
+
+    /// Render cap for a user bubble (audit MAIN-10): the optimistic bubble
+    /// carries the FULL sent text (retry needs it — never clip the model),
+    /// and canonical chat-tab user rows are unclipped server-side too. A
+    /// single SwiftUI Text is one CoreText layout of the whole string, so a
+    /// 100K+ paste stalls the page per pass. Mirrors the session transcript's
+    /// own 4K+"…" clip; the full text stays a Copy away (context menu copies
+    /// `message.text`, not the display string).
+    static func clipBubbleText(_ text: String) -> String {
+        text.count > 4_000 ? String(text.prefix(4_000)) + "…" : text
+    }
+
     /// Soft-tint bubble with primary text (Claude-app style) — the old
     /// saturated brown block read as a wall of color on long messages and
     /// crushed CJK legibility in dark mode.
     private var userBubble: some View {
         let failed = message.failed == true
+        let imageSend = imageSendParts
+        let displayText = Self.clipBubbleText(imageSend?.text ?? message.text)
         return VStack(alignment: .trailing, spacing: 4) {
             if let images = message.localImages, !images.isEmpty {
                 attachedImages(images, dimmed: message.pending == true)
             }
-            if !message.text.isEmpty {
+            if let imageSend {
+                remoteImages(imageSend.paths)
+            }
+            if !displayText.isEmpty {
                 HStack {
                     Spacer(minLength: 48)
-                    Text(message.text)
+                    Text(displayText)
                         .font(.body)
                         .lineSpacing(3)
                         .foregroundStyle(.primary)
@@ -170,12 +233,34 @@ struct MessageRow: View {
         .opacity(dimmed ? 0.65 : 1)
     }
 
+    /// Thumbnails for a HISTORICAL image send (paths parsed off the server's
+    /// "[Images attached …]" transcript prefix). Fetched through the same
+    /// AttachmentImageView pipeline as inline assistant images — /api/v1/media
+    /// with the current MediaContext session, so they resolve on the primary,
+    /// over the daemon channel, or across the cloud bridge alike. Capped like
+    /// attachedImages so a tall screenshot can't dominate the timeline.
+    private func remoteImages(_ paths: [String]) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Spacer(minLength: 48)
+            ForEach(paths, id: \.self) { path in
+                AttachmentImageView(raw: path, alt: (path as NSString).lastPathComponent)
+                    .frame(maxWidth: 200, maxHeight: 200)
+            }
+        }
+    }
+
     /// Assistant replies render as full block markdown (headings, lists, code,
     /// tables) via the same parser the Notes reader uses — not inline-only.
+    /// The streaming row (id "__live__") takes the windowed body — the only
+    /// unbounded text in the app must not re-parse wholesale per delta flush.
     private var assistantText: some View {
         HStack {
-            ChatMarkdownBody(text: message.text)
-                .equatable()
+            if message.id == "__live__" {
+                LiveMarkdownBody(text: message.text, storeTruncated: liveTextTruncated)
+            } else {
+                ChatMarkdownBody(text: message.text)
+                    .equatable()
+            }
             Spacer(minLength: 32)
         }
         .padding(.horizontal, 16)
@@ -206,6 +291,10 @@ struct ToolChip: View {
     let name: String
     let detail: String?
     let resultPreview: String?
+    /// Subagent name for Task/Agent delegation rows (additive) — rendered as a
+    /// tinted leading badge so delegated work is visually distinct from plain
+    /// tool calls.
+    var agent: String? = nil
 
     @State private var expanded = false
 
@@ -214,7 +303,21 @@ struct ToolChip: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 5) {
-                Image(systemName: "wrench.and.screwdriver")
+                if let agent, !agent.isEmpty {
+                    HStack(spacing: 3) {
+                        Image(systemName: "person.2.fill")
+                            .font(.system(size: 8, weight: .semibold))
+                        Text(agent)
+                            .font(.caption2.weight(.semibold))
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(.indigo)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.indigo.opacity(0.14), in: Capsule())
+                    .accessibilityIdentifier("tool.agentBadge")
+                }
+                Image(systemName: agent == nil ? "wrench.and.screwdriver" : "arrow.triangle.branch")
                     .font(.caption2)
                 Text(name)
                     .font(.caption.weight(.medium))
@@ -268,6 +371,15 @@ struct ToolChip: View {
 /// on long threads and tripped the 0x8BADF00D watchdog kill.
 struct ChatMarkdownBody: View, Equatable {
     let text: String
+    /// Cache routing (see MarkdownParser.CacheMode). History rows use the
+    /// shared cache; the STREAMING tail (unique bytes every tick) must skip it
+    /// or its one-shot entries evict the visible page (scroll-freeze thrash).
+    var cache: MarkdownParser.CacheMode = .shared
+    /// History rows clip oversized (>16K chars) legacy text defensively; live
+    /// window segments pass false — LiveMarkdownWindow already bounds them and
+    /// a clip would drop mid-reply content. Both params are CONSTANT per call
+    /// site, so the text-only == below stays a correct Equatable.
+    var clipOversized: Bool = true
 
     static func == (lhs: ChatMarkdownBody, rhs: ChatMarkdownBody) -> Bool {
         lhs.text == rhs.text
@@ -275,7 +387,7 @@ struct ChatMarkdownBody: View, Equatable {
 
     var body: some View {
         if Self.isBlockMarkdown(text) || Self.containsImageRef(text) {
-            MarkdownView(blocks: MarkdownParser.parse(text))
+            MarkdownView(blocks: MarkdownParser.parse(text, cache: cache, clipOversized: clipOversized))
         } else {
             Text(inline: text)
                 .textSelection(.enabled)
@@ -306,6 +418,59 @@ struct ChatMarkdownBody: View, Equatable {
             if lower.contains(ext) { return true }
         }
         return false
+    }
+}
+
+/// Markdown body for the LIVE (streaming) turn row — the one text in the app
+/// with no upper bound (transcript rows are server-clipped at 4KB).
+///
+/// Rendering the whole in-flight reply through ChatMarkdownBody re-parsed and
+/// re-laid-out ALL of it on every ~8Hz delta flush (the parse cache can't hit:
+/// each flush is a brand-new string). On long research turns that made each
+/// tick cost O(reply) on the main thread; past ~1-2MB of markdown the stall
+/// crossed the 5s watchdog line and iOS killed the app (0x8BADF00D, SwiftUI/
+/// AttributeGraph stacks — reproduced deterministically in the simulator).
+///
+/// LiveMarkdownWindow splits the newest window of the text into a STABLE head
+/// (byte-identical across many ticks → EquatableView + parse cache skip it)
+/// and a small tail — so a tick re-parses only the tail, O(2-10KB) instead of
+/// O(reply). Older output beyond the window collapses into a chip; the full
+/// text lands in history at turn-end via the transcript refetch.
+struct LiveMarkdownBody: View {
+    let text: String
+    /// True when the store itself dropped older liveText (retention cap) —
+    /// the chip must stay on even if the retained text is under windowMax.
+    var storeTruncated: Bool = false
+
+    var body: some View {
+        let seg = LiveMarkdownWindow.segments(text)
+        VStack(alignment: .leading, spacing: 6) {
+            if seg.omittedPrefix || storeTruncated {
+                HStack(spacing: 5) {
+                    Image(systemName: "ellipsis")
+                        .font(.caption2)
+                    Text("Earlier output hidden while streaming")
+                        .font(.caption)
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Color(.tertiarySystemFill), in: Capsule())
+            }
+            // Live segments never clip: the window bounds them already, and a
+            // 16K clip inside the head would silently drop mid-reply content.
+            if !seg.head.isEmpty {
+                // Head is byte-stable across many ticks → shared cache HITS.
+                ChatMarkdownBody(text: seg.head, cache: .shared, clipOversized: false)
+                    .equatable()
+            }
+            if !seg.tail.isEmpty {
+                // Tail is a fresh unique string every tick — caching it would
+                // evict the visible history page (scroll-freeze mechanism).
+                ChatMarkdownBody(text: seg.tail, cache: .skip, clipOversized: false)
+                    .equatable()
+            }
+        }
     }
 }
 

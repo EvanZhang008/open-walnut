@@ -13,14 +13,27 @@ struct SessionConversationView: View {
 
     @State private var store: SessionConversationStore
     @State private var showInfo = false
-    @State private var scrollPos = ScrollPosition(edge: .bottom)
+    @State private var showControls = false
+    /// Non-nil pushes the forked session's conversation onto the enclosing stack.
+    @State private var forkedSession: WalnutSession?
     @State private var keyboardGeometryFrozen = false
     @State private var programmaticGeometryFrozen = false
     @State private var programmaticFreezeTask: Task<Void, Never>?
+    /// Extra scroll-to-bottom pulses (keyboard repins) fed into the timeline
+    /// engine alongside the store's own scrollToBottomSignal.
+    @State private var repinSignal = 0
 
     init(session: WalnutSession) {
         self.session = session
         _store = State(initialValue: SessionConversationStore(session: session))
+    }
+
+    /// WalnutTests seam: host the REAL page around a pre-seeded store (event-
+    /// storm and first-paint freeze gates drive the store directly). Product
+    /// code always uses init(session:).
+    init(session: WalnutSession, store: SessionConversationStore) {
+        self.session = session
+        _store = State(initialValue: store)
     }
 
     var body: some View {
@@ -58,6 +71,16 @@ struct SessionConversationView: View {
                 .frame(maxWidth: 240)
             }
             ToolbarItem(placement: .topBarTrailing) {
+                // Model / effort / fork — the mobile mirror of the console's
+                // session controls (additive /api/v1 endpoints).
+                Button {
+                    showControls = true
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                }
+                .accessibilityIdentifier("session.controls")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     showInfo = true
                 } label: {
@@ -71,6 +94,21 @@ struct SessionConversationView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
+        .sheet(isPresented: $showControls) {
+            SessionControlsSheet(session: session) { forked in
+                forkedSession = forked
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        // A successful fork pushes the new session's conversation on top of
+        // this one (the enclosing stack already knows WalnutSession pages).
+        .navigationDestination(item: $forkedSession) { forked in
+            SessionConversationView(session: forked)
+        }
+        // Freeze reports name THIS session (8-char prefix of the uuid) so a
+        // field freeze can be tied back to a specific giant transcript.
+        .freezeScreen("session:\(session.id.prefix(8))")
         .task {
             // Route image fetches (/api/v1/media) to this session's exec host.
             MediaContext.currentSessionID = session.id
@@ -86,7 +124,9 @@ struct SessionConversationView: View {
         }
     }
 
-    /// Nav-bar subtitle: live status + where it runs ("Running · clouddev").
+    /// Nav-bar subtitle: live status + where it runs + the model when known
+    /// ("Running · clouddev · Opus 4.8") — the model half doubles as the
+    /// visible current-model indicator for the controls sheet.
     private var navSubtitle: String {
         let status: String
         switch SessionStatus(store.processStatus) {
@@ -97,115 +137,45 @@ struct SessionConversationView: View {
         case .unknown: status = ""
         }
         let host = session.isLocal ? "Mac" : session.host
-        return status.isEmpty ? host : "\(status) · \(host)"
+        var parts = status.isEmpty ? [host] : [status, host]
+        if let model = session.model, !model.isEmpty {
+            parts.append(WalnutSession.shortModelName(model))
+        }
+        return parts.joined(separator: " · ")
     }
 
-    /// ScrollPosition is the sole authority: its bottom edge association follows
-    /// streaming growth while sticky user intent decides mutation re-pins.
+    /// UIKit timeline engine (Timeline/): all parsing/measurement happens on
+    /// a background actor; the main thread only attaches pre-laid-out rows.
+    /// This replaced the ScrollView+LazyVStack body — the structural fix for
+    /// the 0x8BADF00D full-tree-diff watchdog kills (builds 34-36). The
+    /// KeyboardRepinMachine stays: it is behavior, not rendering; its repin
+    /// feeds the timeline's scroll signal instead of a ScrollPosition.
     private var messageList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-                if store.messages.isEmpty && !store.streaming {
-                    // Loading until the first transcript answer; empty state
-                    // for BOTH "no tail exported" (404) and "tail exists but
-                    // has zero renderable rows" — otherwise a 200-with-empty
-                    // transcript painted a fully blank page.
-                    if store.loadedOnce || store.transcriptMissing {
-                        emptyState
-                    } else {
-                        loadingState
-                    }
-                }
-                ForEach(store.messages) { message in
-                    MessageRow(
-                        message: message,
-                        onRetry: { Task { await store.retry(message) } },
-                        onDiscard: { store.discardFailed(message) }
-                    )
-                }
-                if store.streaming {
-                    // Leaf view so the 8Hz liveText/activity flush
-                    // re-renders ONLY this row, never the sibling ForEach
-                    // of stable history rows (see ChatView.LiveTurnRow).
-                    SessionLiveTurnRow(store: store)
-                }
-            }
-            .padding(.vertical, 12)
-        }
-        .scrollPosition($scrollPos, anchor: .bottom)
-        .scrollDismissesKeyboard(.interactively)
-        .refreshable { await store.open() }
-        .modifier(ScrollBottomTracking(
-            isPinned: { store.bottomPinned },
-            setPinned: { store.bottomPinned = $0 },
-            geometryFrozen: { keyboardGeometryFrozen || programmaticGeometryFrozen }
-        ))
+        SessionTimelineBody(
+            store: store,
+            repinSignal: repinSignal,
+            keyboardGeometryFrozen: { keyboardGeometryFrozen || programmaticGeometryFrozen },
+            onRefresh: { await store.open() }
+        )
         .modifier(KeyboardBottomRepin(
             keyboardGeometryFrozen: $keyboardGeometryFrozen,
             isPinned: { store.bottomPinned },
+            programmaticFrozen: { programmaticGeometryFrozen },
             repin: { scrollToBottom() }
         ))
-        .onChange(of: store.scrollToBottomSignal) {
-            scrollToBottom()
-        }
     }
 
     /// Freeze geometry briefly so this programmatic move cannot masquerade as
-    /// a user drag and clear the sticky bottom intent.
+    /// a user drag and clear the sticky bottom intent. (The timeline engine
+    /// also holds its own internal 250ms freeze around the scroll.)
     private func scrollToBottom() {
         programmaticGeometryFrozen = true
-        scrollPos.scrollTo(edge: .bottom)
+        repinSignal += 1
         programmaticFreezeTask?.cancel()
         programmaticFreezeTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
             programmaticGeometryFrozen = false
-        }
-    }
-
-    private var loadingState: some View {
-        VStack(spacing: 12) {
-            ProgressView()
-            Text("Loading conversation…")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 120)
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "terminal")
-                .font(.system(size: 40))
-                .foregroundStyle(.tertiary)
-            Text("No transcript yet")
-                .font(.headline)
-            Text("Send a message to pick up where this session left off.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 100)
-        .padding(.horizontal, 32)
-    }
-}
-
-/// Live turn for a session: streamed text so far + current tool/thinking
-/// activity. Standalone leaf so the high-frequency liveText/activity updates
-/// re-render only this row, never the sibling ForEach of history rows.
-private struct SessionLiveTurnRow: View {
-    let store: SessionConversationStore
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if !store.liveText.isEmpty {
-                MessageRow(message: ChatMessage(
-                    id: "__live__", role: "assistant", text: store.liveText, createdAt: "", kind: nil
-                ))
-            }
-            ThinkingRow(activity: store.activity)
         }
     }
 }
