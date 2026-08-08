@@ -1,7 +1,7 @@
 /**
  * CalendarContextMenu — right-click menu for the calendar surfaces, replacing
  * the browser menu with regular calendar actions:
- *   task chip   → Open task · Unschedule (clear that date)
+ *   task chip   → Open task · Complete · Unschedule (clear that date) · Delete
  *   event chip  → Delete event (writable calendars only)
  *   empty slot  → New task… · New event… (seeds the quick-create popover)
  * Anchored at the pointer via useMenuPlacement's anchorPoint mode.
@@ -25,6 +25,10 @@ interface Props {
   onClose: () => void;
   /** Clear the date the chip stands for (task-start → start_date, task-due → due_date). */
   onUnscheduleTask?: (item: CalendarItem) => void;
+  /** Mark the task COMPLETE (human action — the calendar is a human surface). */
+  onCompleteTask?: (item: CalendarItem) => void;
+  /** Delete the task entirely (two-step confirm, same as event delete). */
+  onDeleteTask?: (item: CalendarItem) => void;
   onDeleteEvent?: (item: CalendarItem) => void;
   /** Open the quick-create popover on the given tab. */
   onCreate?: (seed: CreateSeed, tab: 'task' | 'event') => void;
@@ -36,6 +40,8 @@ export function CalendarContextMenu({
   target,
   onClose,
   onUnscheduleTask,
+  onCompleteTask,
+  onDeleteTask,
   onDeleteEvent,
   onCreate,
   canCreateEvent,
@@ -74,9 +80,23 @@ export function CalendarContextMenu({
             <button role="menuitem" onClick={run(() => window.open(`/tasks/${item.task.id}`, '_self'))}>
               Open task
             </button>
+            {onCompleteTask && (
+              <button role="menuitem" onClick={run(() => onCompleteTask(item))}>
+                Complete task
+              </button>
+            )}
             {onUnscheduleTask && (
               <button role="menuitem" onClick={run(() => onUnscheduleTask(item))}>
                 {item.kind === 'task-due' ? 'Clear due date' : 'Unschedule'}
+              </button>
+            )}
+            {onDeleteTask && (
+              <button
+                role="menuitem"
+                className="cal-ctx-danger"
+                onClick={confirmDelete ? run(() => onDeleteTask(item)) : () => setConfirmDelete(true)}
+              >
+                {confirmDelete ? 'Delete — are you sure?' : 'Delete task'}
               </button>
             )}
           </>

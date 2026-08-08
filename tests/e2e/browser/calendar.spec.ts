@@ -406,7 +406,7 @@ test.describe('Calendar view', () => {
     await expect(popover.locator('button:has-text("Open task")')).toBeVisible()
 
     // Change the time to 06:30 and save
-    await popover.locator('input[type="time"]').fill('06:30')
+    await popover.locator('input[type="time"]').first().fill('06:30')
     await popover.locator('.cal-item-save').click()
     await expect
       .poll(async () => (await getTaskViaApi(task.id)).start_date, { timeout: 5000 })
@@ -939,6 +939,92 @@ test.describe('Calendar view', () => {
     // The in-panel drop semantics must have been skipped: no group/reorder
     // artifacts — the task still renders as a plain row (now scheduled).
     await expect(panel.locator(`.cal-chip[data-item-id="task-start:${task.id}"]`)).toBeVisible()
+  })
+
+  test('task block: end_date spans the chip, bottom-edge resize writes it back', async ({ page }) => {
+    const today = localDay(0)
+    // 02:00–04:00, far from other tests' chips (overlap halves chip width).
+    const task = await createTaskViaApi('CalEndSpan', {
+      start_date: `${today}T02:00:00`,
+      end_date: `${today}T04:00:00`,
+    })
+    await page.goto(`/calendar?view=day&d=${today}`)
+    await page.waitForLoadState('networkidle')
+
+    const chip = page.locator(`.cal-chip[data-item-id="task-start:${task.id}"]`)
+    await chip.scrollIntoViewIfNeeded()
+    const box = await chip.boundingBox()
+    if (!box) throw new Error('chip not visible')
+    // 2h at 48px/hour = 96px (not the point-in-time 24px slot).
+    expect(box.height).toBeGreaterThan(90)
+
+    // Drag the bottom resize handle +1h → end_date 05:00.
+    const handle = chip.locator('.cal-chip-resize-handle')
+    const hb = await handle.boundingBox()
+    if (!hb) throw new Error('resize handle not visible')
+    await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2 + 48, { steps: 8 })
+    await page.mouse.up()
+    await expect
+      .poll(async () => (await getTaskViaApi(task.id)).end_date, { timeout: 5000 })
+      .toBe(`${today}T05:00:00`)
+
+    // Moving the block keeps its duration: +2h → 04:00–07:00.
+    const box2 = await chip.boundingBox()
+    if (!box2) throw new Error('chip not visible after resize')
+    await page.mouse.move(box2.x + box2.width / 2, box2.y + 6)
+    await page.mouse.down()
+    await page.mouse.move(box2.x + box2.width / 2, box2.y + 6 + 96, { steps: 10 })
+    await page.mouse.up()
+    await expect
+      .poll(async () => (await getTaskViaApi(task.id)).start_date, { timeout: 5000 })
+      .toBe(`${today}T04:00:00`)
+    expect((await getTaskViaApi(task.id)).end_date).toBe(`${today}T07:00:00`)
+  })
+
+  test('chip right-click menu completes and deletes the task', async ({ page }) => {
+    const today = localDay(0)
+    const task = await createTaskViaApi('CalCtxDelete', { start_date: `${today}T01:00:00` })
+    await page.goto(`/calendar?view=day&d=${today}`)
+    await page.waitForLoadState('networkidle')
+
+    const chip = page.locator(`.cal-chip[data-item-id="task-start:${task.id}"]`)
+    await chip.scrollIntoViewIfNeeded()
+    await chip.click({ button: 'right' })
+    const menu = page.locator('[data-testid="cal-ctx-menu"]')
+    await expect(menu).toBeVisible()
+    await expect(menu.locator('button:has-text("Complete task")')).toBeVisible()
+
+    // Delete is two-step (misclick protection), then the task is really gone.
+    await menu.locator('button:has-text("Delete task")').click()
+    await menu.locator('button:has-text("are you sure")').click()
+    await expect
+      .poll(async () => (await fetch(`${API}/api/tasks/${task.id}`)).status, { timeout: 5000 })
+      .toBe(404)
+  })
+
+  test('drag-selected range seeds Start+End (never a Due) in the composer', async ({ page }) => {
+    const today = localDay(0)
+    await page.goto(`/calendar?view=day&d=${today}`)
+    await page.waitForLoadState('networkidle')
+
+    const col = await page.locator(`.cal-day-col[data-day="${today}"]`).boundingBox()
+    const scroll = await page.locator('.cal-grid-scroll').boundingBox()
+    if (!col || !scroll) throw new Error('grid not visible')
+    await page.mouse.move(col.x + col.width / 2, scroll.y + 100)
+    await page.mouse.down()
+    await page.mouse.move(col.x + col.width / 2, scroll.y + 196, { steps: 8 })
+    await page.mouse.up()
+
+    const chips = page.locator('.cal-create-popover .qtc-chip')
+    await expect(chips.first()).toBeVisible()
+    const labels = await chips.allTextContents()
+    expect(labels.some((l) => l.startsWith('Start '))).toBe(true)
+    expect(labels.some((l) => l.startsWith('End '))).toBe(true)
+    // The due chip must be the EMPTY ghost — a range is a working block, not a deadline.
+    expect(labels.some((l) => l.includes('+ Due'))).toBe(true)
+    await page.keyboard.press('Escape')
   })
 
   test('homepage calendar panel resizes by dragging its right edge and persists', async ({ page }) => {

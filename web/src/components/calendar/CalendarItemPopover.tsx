@@ -21,12 +21,14 @@ interface Props {
   onDeleteEvent?: (ev: CalendarEvent) => void;
   /** Persist the task date this chip represents; '' clears it (unschedule). */
   onSaveTaskWhen?: (item: CalendarItem, newWhen: string) => void;
+  /** Persist the task's end_date (task-start chips only); '' clears it. */
+  onSaveTaskEnd?: (item: CalendarItem, newEnd: string) => void;
 }
 
 const datePart = (iso: string) => iso.slice(0, 10);
 const timePart = (iso: string, fallback = '09:00') => (iso.includes('T') ? iso.slice(11, 16) : fallback);
 
-export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDeleteEvent, onSaveTaskWhen }: Props) {
+export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDeleteEvent, onSaveTaskWhen, onSaveTaskEnd }: Props) {
   const anchorRef = useRef<HTMLElement | null>(anchorEl);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const placement = useMenuPlacement(true, anchorRef, menuRef);
@@ -43,6 +45,10 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
   const [startTime, setStartTime] = useState(timePart(item.when));
   const [endDate, setEndDate] = useState(isEvent ? datePart(item.event.end || item.event.start) : '');
   const [endTime, setEndTime] = useState(isEvent ? timePart(item.event.end || item.event.start, '10:00') : '');
+  // Task working-block end (task-start chips): optional — '' means "no end".
+  const isTaskStart = item.kind === 'task-start';
+  const taskEnd = isTaskStart ? item.task.end_date : undefined;
+  const [taskEndTime, setTaskEndTime] = useState(taskEnd?.includes('T') ? taskEnd.slice(11, 16) : '');
 
   const composeStart = () => (allDay ? startDate : `${startDate}T${startTime}:00`);
   const composeEnd = () => (allDay ? (endDate || startDate) : `${endDate || startDate}T${endTime}:00`);
@@ -62,9 +68,12 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
       Number.isFinite(Date.parse(iso.includes('T') ? iso : `${iso}T00:00:00`))
     );
   };
+  // Optional task end: '' = no end. When set it must land after the start.
+  const composeTaskEnd = () => (taskEndTime && !allDay ? `${startDate}T${taskEndTime}:00` : '');
   const malformed = !saneWhen(composeStart()) || (isEvent && !saneWhen(composeEnd()));
   const misordered =
-    isEvent && !malformed && (allDay ? composeEnd() < composeStart() : composeEnd() <= composeStart());
+    (isEvent && !malformed && (allDay ? composeEnd() < composeStart() : composeEnd() <= composeStart())) ||
+    (isTaskStart && !malformed && !!composeTaskEnd() && composeTaskEnd() <= composeStart());
   const invalid = malformed || misordered;
 
   const save = () => {
@@ -75,6 +84,12 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
       onSaveEvent?.(item.event, { start: composeStart(), end: composeEnd(), title: title.trim() });
     } else {
       onSaveTaskWhen?.(item, composeStart());
+      // Persist the end only when it changed (all-day always clears it).
+      if (isTaskStart && onSaveTaskEnd) {
+        const newEnd = composeTaskEnd();
+        const oldEnd = taskEnd?.includes('T') ? taskEnd : '';
+        if (newEnd !== oldEnd) onSaveTaskEnd(item, newEnd);
+      }
     }
     onClose();
   };
@@ -192,6 +207,12 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
         onClick={(e) => {
           if (e.detail <= 1) onClose();
         }}
+        // Right-click with the popover open must not surface the browser menu
+        // (it reads as "the calendar has no right-click") — close instead.
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onClose();
+        }}
       />
       <div
         className="cal-item-popover"
@@ -232,6 +253,13 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
             <input type="date" value={startDate} min="1900-01-01" max="2999-12-31" disabled={readonly} onChange={(e) => setEventDate(e.target.value)} />
             {!allDay && !isEvent && (
               <input type="time" value={startTime} disabled={readonly} onChange={(e) => setStartTime(e.target.value)} />
+            )}
+            {!allDay && isTaskStart && (
+              <>
+                <span className="cal-item-dash">–</span>
+                {/* Optional end of the working block; clearing it removes the span. */}
+                <input type="time" value={taskEndTime} aria-label="End time (optional)" onChange={(e) => setTaskEndTime(e.target.value)} />
+              </>
             )}
           </div>
           {isEvent && !allDay && (

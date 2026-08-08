@@ -53,7 +53,7 @@ export type TaskOp =
  */
 const UPDATE_WHITELIST: (keyof Task)[] = [
   'title', 'status', 'phase', 'priority', 'project',
-  'due_date', 'start_date', 'completed_at', 'starred', 'pinned', 'tags', 'summary',
+  'due_date', 'start_date', 'end_date', 'completed_at', 'starred', 'pinned', 'tags', 'summary',
   'description', 'note', 'sprint', 'needs_attention', 'updated_at',
 ];
 
@@ -201,6 +201,7 @@ export async function applyOutboxOnPrimary(): Promise<number> {
             // otherwise a cleared date silently survives on the primary.
             if (snapshot.due_date === undefined) (patch as Record<string, unknown>).due_date = null;
             if (snapshot.start_date === undefined) (patch as Record<string, unknown>).start_date = null;
+            if (snapshot.end_date === undefined) (patch as Record<string, unknown>).end_date = null;
             const { changed, task } = await tm.updateTaskRaw(existing.id, patch, {
               emitEvent: true, push: true, source: 'cloud-outbox',
             });
@@ -273,6 +274,7 @@ export async function importProjectionOnCloud(): Promise<number> {
         updated_at: p.updated_at,
         ...(p.due_date ? { due_date: p.due_date } : {}),
         ...(p.start_date ? { start_date: p.start_date } : {}),
+        ...(p.end_date ? { end_date: p.end_date } : {}),
         ...(p.completed_at ? { completed_at: p.completed_at } : {}),
         ...(p.starred ? { starred: true } : {}),
         ...(p.pinned ? { pinned: true } : {}),
@@ -293,6 +295,7 @@ export async function importProjectionOnCloud(): Promise<number> {
           // taskToRow writes through as SQL NULL.
           due_date: (p.due_date ?? null) as Task['due_date'],
           start_date: (p.start_date ?? null) as Task['start_date'],
+          end_date: (p.end_date ?? null) as Task['end_date'],
           completed_at: p.completed_at,
           starred: p.starred,
           pinned: p.pinned,

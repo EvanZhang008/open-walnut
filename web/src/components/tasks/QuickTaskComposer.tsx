@@ -11,17 +11,19 @@ interface Props {
   /** Flat list of existing project names, for the form's datalist. */
   projectOptions: string[];
   /**
-   * Pre-seeded dates (e.g. the calendar slot the user clicked). They pre-fill
-   * the form; an AI-parsed date still overwrites them — typing "call mom
-   * tomorrow 3pm" beats the clicked slot. Never badged as AI.
+   * Pre-seeded dates (e.g. the calendar slot the user clicked, or a drag-
+   * selected start→end range). They pre-fill the form; an AI-parsed date still
+   * overwrites them — typing "call mom tomorrow 3pm" beats the clicked slot.
+   * Never badged as AI.
    */
-  initialDates?: { start?: string; due?: string };
+  initialDates?: { start?: string; end?: string; due?: string };
   onCreate: (input: {
     title: string;
     priority: string;
     project?: string;
     due_date?: string;
     start_date?: string;
+    end_date?: string;
     starred?: boolean;
     pinnedTier?: PinTier;
   }) => Promise<unknown>;
@@ -44,6 +46,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
     starred: false,
     aiFields: new Set(),
     start: initialDatesRef.current?.start,
+    end: initialDatesRef.current?.end,
     due: initialDatesRef.current?.due,
   }), []);
 
@@ -120,6 +123,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
       }
       if (result.due_date && !edited.has('due')) { next.due = result.due_date; next.aiFields.add('due'); }
       if (result.start_date && !edited.has('start')) { next.start = result.start_date; next.aiFields.add('start'); }
+      if (result.end_date && !edited.has('end')) { next.end = result.end_date; next.aiFields.add('end'); }
       if (result.pinTier && !edited.has('pin')) { next.pin = result.pinTier; next.aiFields.add('pin'); }
       if (result.priority && !edited.has('priority')) { next.priority = result.priority; next.aiFields.add('priority'); }
       if (result.starred !== undefined && !edited.has('star')) { next.starred = !!result.starred; next.aiFields.add('star'); }
@@ -173,6 +177,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
       if (ai.size) {
         if (ai.has('due') && !edited.has('due')) next.due = seed?.due;
         if (ai.has('start') && !edited.has('start')) next.start = seed?.start;
+        if (ai.has('end') && !edited.has('end')) next.end = seed?.end;
         if (ai.has('pin') && !edited.has('pin')) next.pin = undefined;
         if (ai.has('priority') && !edited.has('priority')) next.priority = undefined;
         if (ai.has('star') && !edited.has('star')) next.starred = false;
@@ -218,6 +223,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
       priority: source.priority ?? 'none',
       ...(source.due ? { due_date: source.due } : {}),
       ...(source.start ? { start_date: source.start } : {}),
+      ...(source.end && source.start ? { end_date: source.end } : {}),
       ...(source.pin ? { pinnedTier: source.pin } : {}),
       ...(source.starred ? { starred: true } : {}),
       ...(project ? { project } : {}),

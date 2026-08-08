@@ -437,6 +437,7 @@ export const tools: ToolDefinition[] = [
         if (t.needs_attention) entry.needs_attention = true;
         if (t.due_date) entry.due_date = t.due_date;
         if (t.start_date) entry.start_date = t.start_date;
+        if (t.end_date) entry.end_date = t.end_date;
         if (t.sprint) entry.sprint = t.sprint;
         if (t.tags?.length) entry.tags = t.tags;
         if (t.depends_on?.length) entry.depends_on = t.depends_on;
@@ -551,6 +552,7 @@ export const tools: ToolDefinition[] = [
         project: { type: 'string', description: 'Project — the single grouping layer (e.g. Walnut, HomeLab, Costco). Omit or pass "" to file the task in Inbox.' },
         due_date: { type: 'string', description: 'Due date — the deadline (YYYY-MM-DD, or ISO datetime for a specific time)' },
         start_date: { type: 'string', description: 'Start date — when to begin working (YYYY-MM-DD, or ISO datetime). Tasks with a future start_date are hidden from the "Now" view until that time arrives.' },
+        end_date: { type: 'string', description: 'End of the working block (YYYY-MM-DD, or ISO datetime). With start_date it gives the task a duration on the calendar; independent of due_date (the deadline).' },
         parent_task_id: { type: 'string', description: 'Create as child of this task. Child inherits project and source from parent.' },
         description: { type: 'string', description: 'What & why context for the task (pre-action). Synced to configured plugins on creation.' },
         tags: { type: 'array', items: { type: 'string' }, description: 'Initial tags. Convention: "key:value" for structured data (e.g. "team:backend", "blocked").' },
@@ -629,6 +631,7 @@ export const tools: ToolDefinition[] = [
           project,
           due_date: params.due_date as string | undefined,
           start_date: params.start_date as string | undefined,
+          end_date: params.end_date as string | undefined,
           parent_task_id: parentTaskId,
           description: params.description as string | undefined,
           tags: params.tags as string[] | undefined,
@@ -655,7 +658,7 @@ export const tools: ToolDefinition[] = [
     name: 'task_update',
     description: `Update a task or a project. Supports multiple fields in a single call.
 
-For tasks (type='task'): update structural fields (priority, phase, project, starred, needs_attention, due_date, start_date, title, pinned, focus_tier) and/or text fields (description, summary, note, append_note) in one call. Use phase='AGENT_COMPLETE' to mark a task done (only humans can set COMPLETE). Use pinned + focus_tier to pin/unpin tasks for the Focus Bar. Pass project='' to move a task to Inbox.
+For tasks (type='task'): update structural fields (priority, phase, project, starred, needs_attention, due_date, start_date, end_date, title, pinned, focus_tier) and/or text fields (description, summary, note, append_note) in one call. Use phase='AGENT_COMPLETE' to mark a task done (only humans can set COMPLETE). Use pinned + focus_tier to pin/unpin tasks for the Focus Bar. Pass project='' to move a task to Inbox.
 
 For projects (type='project'): set default_host and default_cwd for session defaults, or rename the project across all its tasks (old_name + new_name; renaming onto an existing project merges them).`,
     input_schema: {
@@ -670,6 +673,7 @@ For projects (type='project'): set default_host and default_cwd for session defa
         project: { type: 'string', description: 'New project for the task (empty string moves it to Inbox). For type=project: the project to update settings on.' },
         due_date: { type: 'string', description: 'New due date — the deadline (YYYY-MM-DD, or ISO datetime). Empty string clears.' },
         start_date: { type: 'string', description: 'New start date — when to begin working (YYYY-MM-DD, or ISO datetime). Tasks with a future start_date are hidden from the "Now" view until then. Empty string clears.' },
+        end_date: { type: 'string', description: 'New end of the working block (YYYY-MM-DD, or ISO datetime). With start_date it gives the task a duration on the calendar; independent of due_date. Empty string clears.' },
         starred: { type: 'boolean', description: 'Star or unstar the task.' },
         needs_attention: { type: 'boolean', description: 'Flag task as needing human attention (red dot in UI). Set true when human review/decision is required.' },
         parent_task_id: { type: 'string', description: 'Set or change the parent task. Pass empty string to remove parent.' },
@@ -776,7 +780,7 @@ For projects (type='project'): set default_host and default_cwd for session defa
         const hasStructural = params.title !== undefined || params.priority !== undefined ||
           params.phase !== undefined ||
           params.project !== undefined || params.due_date !== undefined ||
-          params.start_date !== undefined ||
+          params.start_date !== undefined || params.end_date !== undefined ||
           params.starred !== undefined || params.needs_attention !== undefined ||
           params.parent_task_id !== undefined || params.sprint !== undefined ||
           params.add_tags !== undefined || params.remove_tags !== undefined ||
@@ -793,6 +797,7 @@ For projects (type='project'): set default_host and default_cwd for session defa
               phase: params.phase as TaskPhase | undefined,
               due_date: params.due_date as string | undefined,
               start_date: params.start_date as string | undefined,
+              end_date: params.end_date as string | undefined,
               // Trim at the boundary like task_create does ('' stays '', = Inbox).
               project: params.project === undefined ? undefined : String(params.project).trim(),
               starred: (params.starred === true || params.starred === 'true') ? true : (params.starred === false || params.starred === 'false') ? false : undefined,

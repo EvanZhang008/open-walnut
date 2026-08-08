@@ -16,6 +16,8 @@ export interface QuickTaskParse {
   title: string;
   due_date?: string;
   start_date?: string;
+  /** End of the working block ("3-5pm" → start+end). Only meaningful with start_date. */
+  end_date?: string;
   pinTier?: string;  // built-in 'focus' | 'satellite' | 'backlog' | 'wait', or a custom tier id ('ct_*')
   priority?: Exclude<TaskPriority, 'none'>;
   starred?: boolean;
@@ -516,6 +518,10 @@ export interface Task {
    *  view: a task with a future start_date is deferred (hidden) until that time
    *  arrives. due_date is the deadline; start_date is the activation time. */
   start_date?: string;
+  /** When the working block ENDS (ISO date or datetime). Paired with start_date
+   *  it gives the task a duration on calendar surfaces; independent of due_date
+   *  (the deadline). Meaningless without a start_date. */
+  end_date?: string;
   starred?: boolean;
   pinned?: boolean;
   pin_order?: number;  // lower = higher in list, undefined = not pinned

@@ -702,6 +702,7 @@ export interface AddTaskInput {
   project?: string;
   due_date?: string;
   start_date?: string;
+  end_date?: string;
   parent_task_id?: string;
   description?: string;
   tags?: string[];
@@ -1804,6 +1805,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       updated_at: now,
       due_date: input.due_date,
       ...(input.start_date ? { start_date: input.start_date } : {}),
+      ...(input.end_date ? { end_date: input.end_date } : {}),
       ...(parentTask ? { parent_task_id: parentTask.id } : {}),
       ...(input.tags?.length ? { tags: [...new Set(input.tags)] } : {}),
       ...(input.cwd ? { cwd: input.cwd } : {}),
@@ -2390,6 +2392,7 @@ export interface UpdateTaskInput {
   phase?: TaskPhase;
   due_date?: string;
   start_date?: string;      // When to start working (empty string clears)
+  end_date?: string;        // When the working block ends (empty string clears)
   /** Move the task to another project. '' moves it to Inbox. */
   project?: string;
   starred?: boolean;
@@ -2595,6 +2598,7 @@ export async function updateTask(
   // holds an empty string (downstream code checks truthiness AND !== undefined).
   if (updates.due_date !== undefined) task.due_date = updates.due_date || undefined;
   if (updates.start_date !== undefined) task.start_date = updates.start_date || undefined;
+  if (updates.end_date !== undefined) task.end_date = updates.end_date || undefined;
   if (updates.starred !== undefined) task.starred = updates.starred;
   if (updates.needs_attention !== undefined) task.needs_attention = updates.needs_attention;
   // Track parent change for plugin notification (fired after writeStore)
@@ -4446,6 +4450,10 @@ export async function addTaskFull(taskData: Omit<Task, 'id'>): Promise<Task> {
           !isDayPrecisionEcho(existing.start_date, taskData.start_date)) {
         existing.start_date = taskData.start_date;
       }
+      if (taskData.end_date !== undefined &&
+          !isDayPrecisionEcho(existing.end_date, taskData.end_date)) {
+        existing.end_date = taskData.end_date;
+      }
       if (taskData.completed_at !== undefined) existing.completed_at = taskData.completed_at;
       if (taskData.external_url) existing.external_url = taskData.external_url;
       existing.updated_at = taskData.updated_at ?? new Date().toISOString();
@@ -4614,6 +4622,9 @@ function prepareRawUpdate(task: Task, updates: Partial<Task>): Partial<Task> | n
   }
   if (isDayPrecisionEcho(task.start_date, safeUpdates.start_date)) {
     delete safeUpdates.start_date;
+  }
+  if (isDayPrecisionEcho(task.end_date, safeUpdates.end_date)) {
+    delete safeUpdates.end_date;
   }
   // Terminal phase guard: sync pull cannot overwrite COMPLETE/HUMAN_VERIFIED
   // (only humans can reopen completed tasks, via updateTask with source='api')

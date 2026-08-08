@@ -25,7 +25,7 @@ export interface CalendarChipProps {
   /** The view is previewing this chip elsewhere — render the original ghosted. */
   ghosted?: boolean;
   onMovePointerDown?: (e: ReactPointerEvent, item: CalendarItem) => void;
-  /** Bottom-edge resize (events only). */
+  /** Bottom-edge resize (events + timed task-start chips). */
   onResizePointerDown?: (e: ReactPointerEvent, item: CalendarItem) => void;
   onClick?: (item: CalendarItem, el: HTMLElement) => void;
   /** Right-click → calendar context menu (replaces the browser menu). */
@@ -93,7 +93,7 @@ export const CalendarChip = memo(function CalendarChip({
       {isEvent && !compact && item.event.location && (
         <span className="cal-chip-location">{item.event.location}</span>
       )}
-      {isEvent && !compact && !readonly && onResizePointerDown && (
+      {(isEvent || item.kind === 'task-start') && !item.allDay && !compact && !readonly && onResizePointerDown && (
         <div
           className="cal-chip-resize-handle"
           onPointerDown={(e) => {

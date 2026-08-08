@@ -51,7 +51,7 @@ function parseDroppableId(id: string): { zone: 'day' | 'allday' | 'col'; day: st
 
 export function CalendarPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { tasks, update, create } = useTasksContext();
+  const { tasks, update, create, setPhase, deleteTask } = useTasksContext();
 
   const rawView = searchParams.get('view') as CalendarViewKind | null;
   const view: CalendarViewKind = rawView && VALID_VIEWS.has(rawView) ? rawView : 'week';
@@ -209,7 +209,26 @@ export function CalendarPage() {
       const sep = itemId.indexOf(':');
       const kind = itemId.slice(0, sep);
       const rest = itemId.slice(sep + 1);
-      if (kind === 'task-start') update(rest, { start_date: newWhen });
+      if (kind === 'task-start') {
+        // Moving a spanned task keeps its duration — end_date shifts with the
+        // start (macOS-Calendar behavior, same as events below). A drop into
+        // the all-day row / a month cell drops the block shape entirely.
+        const task = tasks.find((t) => t.id === rest);
+        const patch: { start_date: string; end_date?: string } = { start_date: newWhen };
+        if (task?.end_date?.includes('T') && task.start_date?.includes('T')) {
+          if (newWhen.includes('T')) {
+            const durMs = parseDateLocal(task.end_date).getTime() - parseDateLocal(task.start_date).getTime();
+            if (durMs > 0) {
+              const end = new Date(parseDateLocal(newWhen).getTime() + durMs);
+              const pad = (n: number) => String(n).padStart(2, '0');
+              patch.end_date = `${end.getFullYear()}-${pad(end.getMonth() + 1)}-${pad(end.getDate())}T${pad(end.getHours())}:${pad(end.getMinutes())}:00`;
+            }
+          } else {
+            patch.end_date = '';
+          }
+        }
+        update(rest, patch);
+      }
       else if (kind === 'task-due') update(rest, { due_date: newWhen });
       else if (kind === 'event') {
         const ev = calendar.events.find((e) => e.id === rest);
@@ -235,14 +254,20 @@ export function CalendarPage() {
     [update, calendar]
   );
 
-  const resizeEvent = useCallback(
+  const resizeItem = useCallback(
     (itemId: string, newEnd: string) => {
-      const rest = itemId.slice(itemId.indexOf(':') + 1);
+      const sep = itemId.indexOf(':');
+      const kind = itemId.slice(0, sep);
+      const rest = itemId.slice(sep + 1);
+      if (kind === 'task-start') {
+        update(rest, { end_date: newEnd });
+        return;
+      }
       const ev = calendar.events.find((e) => e.id === rest);
       if (!ev) return;
       calendar.moveEvent(rest, { start: ev.start, end: newEnd });
     },
-    [calendar]
+    [calendar, update]
   );
 
   const openCreate = useCallback((seed: CreateSeed) => setCreateSeed(seed), []);
@@ -267,9 +292,10 @@ export function CalendarPage() {
   const unscheduleTask = useCallback(
     (item: CalendarItem) => {
       if (item.kind === 'event') return;
-      // '' clears the date through the web update path.
+      // '' clears the date through the web update path. Unscheduling the start
+      // also clears end_date — a dangling end without a start means nothing.
       if (item.kind === 'task-due') update(item.task.id, { due_date: '' });
-      else update(item.task.id, { start_date: '' });
+      else update(item.task.id, { start_date: '', ...(item.task.end_date ? { end_date: '' } : {}) });
     },
     [update]
   );
@@ -280,6 +306,22 @@ export function CalendarPage() {
       calendar.removeEvent(item.event.id);
     },
     [calendar]
+  );
+
+  const completeTaskItem = useCallback(
+    (item: CalendarItem) => {
+      if (item.kind === 'event') return;
+      setPhase(item.task.id, 'COMPLETE');
+    },
+    [setPhase]
+  );
+
+  const deleteTaskItem = useCallback(
+    (item: CalendarItem) => {
+      if (item.kind === 'event') return;
+      deleteTask(item.task.id);
+    },
+    [deleteTask]
   );
 
   const openItemPopover = useCallback(
@@ -339,7 +381,7 @@ export function CalendarPage() {
                 dropPreview={dropPreview}
                 metricsRef={gridMetricsRef}
                 onMoveItem={moveItem}
-                onResizeEvent={resizeEvent}
+                onResizeItem={resizeItem}
                 onChipDragging={setChipDragging}
                 onCreate={openCreate}
                 onContextMenu={openContextMenu}
@@ -366,6 +408,8 @@ export function CalendarPage() {
           target={ctxTarget}
           onClose={() => setCtxTarget(null)}
           onUnscheduleTask={unscheduleTask}
+          onCompleteTask={completeTaskItem}
+          onDeleteTask={deleteTaskItem}
           onDeleteEvent={deleteEventItem}
           onCreate={(seed, tab) => setCreateSeed({ ...seed, tab })}
           canCreateEvent={canCreateEvent}
@@ -379,6 +423,9 @@ export function CalendarPage() {
           onSaveEvent={(ev, patch) => calendar.moveEvent(ev.id, patch)}
           onDeleteEvent={(ev) => calendar.removeEvent(ev.id)}
           onSaveTaskWhen={saveTaskWhen}
+          onSaveTaskEnd={(item, newEnd) => {
+            if (item.kind !== 'event') update(item.task.id, { end_date: newEnd });
+          }}
         />
       )}
     </div>

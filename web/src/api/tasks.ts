@@ -77,6 +77,7 @@ export interface CreateTaskInput {
   project?: string;
   due_date?: string;
   start_date?: string;
+  end_date?: string;
   sprint?: string;
   /** Explicit platform/source for the new task (e.g. 'local', 'ms-todo'). Used by
    *  quick-add so a task lands on the user's configured Default Platform. NOTE: a
@@ -94,6 +95,7 @@ export interface UpdateTaskInput {
   project?: string;
   due_date?: string | null;
   start_date?: string | null;
+  end_date?: string | null;
   /** Idempotent star set (unlike POST /:id/star which toggles). */
   starred?: boolean;
   needs_attention?: boolean;

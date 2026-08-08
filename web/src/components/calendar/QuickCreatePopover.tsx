@@ -91,8 +91,10 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
     return [...seen.values()].sort((a, b) => a.localeCompare(b));
   }, [tasks, projectRegistry.projectNames]);
 
+  // A drag-selected range is the task's working block (start→end), NOT a
+  // deadline — seeding it as due_date invented a due the user never asked for.
   const initialDates = useMemo(
-    () => ({ start: seed.start, due: seed.end }),
+    () => ({ start: seed.start, end: seed.end }),
     [seed.start, seed.end]
   );
 
@@ -113,6 +115,11 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
         }}
         onClick={(e) => {
           if (e.detail <= 1) onClose();
+        }}
+        // Same as CalendarItemPopover: no browser menu on the backdrop.
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onClose();
         }}
       />
       <div className="cal-create-popover" ref={menuRef} style={menuPlacementStyle(placement)}>
@@ -149,6 +156,7 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
                 project: input.project,
                 due_date: input.due_date,
                 start_date: input.start_date,
+                end_date: input.end_date,
               });
               if (input.starred && task?.id) star(task.id);
               onClose();

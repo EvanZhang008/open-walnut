@@ -29,7 +29,8 @@ export type CalendarItem =
       day: string;
       /** Minutes since local midnight (0 for allDay). */
       startMin: number;
-      /** Visual block length — tasks are point-in-time, so one slot tall. */
+      /** Visual block length. task-start spans to the task's end_date when set
+       *  (same-day); otherwise tasks are point-in-time, one slot tall. */
       endMin: number;
     }
   | {
@@ -48,6 +49,15 @@ const DONE_PHASES = new Set(['COMPLETE', 'CANCELLED']);
 function taskItem(kind: 'task-start' | 'task-due', task: Task, when: string): CalendarItem {
   const allDay = !when.includes('T');
   const startMin = allDay ? 0 : minutesOfDay(when);
+  // A start chip with a same-day timed end_date spans start→end like an event;
+  // an end on a LATER day clamps to midnight (per-day chip render). Anything
+  // else (no end, misordered, all-day) stays the point-in-time single slot.
+  let endMin = Math.min(startMin + SLOT_MINUTES, 24 * 60);
+  if (kind === 'task-start' && !allDay && task.end_date?.includes('T')) {
+    const endsToday = dayOf(task.end_date) === dayOf(when);
+    const e = endsToday ? minutesOfDay(task.end_date) : 24 * 60;
+    if (dayOf(task.end_date) >= dayOf(when) && (endsToday ? e > startMin : true)) endMin = Math.max(e, startMin + 15);
+  }
   return {
     kind,
     id: `${kind}:${task.id}`,
@@ -56,7 +66,7 @@ function taskItem(kind: 'task-start' | 'task-due', task: Task, when: string): Ca
     allDay,
     day: dayOf(when),
     startMin,
-    endMin: Math.min(startMin + SLOT_MINUTES, 24 * 60),
+    endMin,
   };
 }
 

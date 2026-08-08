@@ -65,7 +65,8 @@ interface Props {
   /** The page reads column rects from here to compute dnd-kit drop slots. */
   metricsRef: MutableRefObject<GridMetrics | null>;
   onMoveItem: (itemId: string, newWhen: string) => void;
-  onResizeEvent?: (itemId: string, newEnd: string) => void;
+  /** Bottom-edge resize: events → new end; task-start chips → new end_date. */
+  onResizeItem?: (itemId: string, newEnd: string) => void;
   onChipDragging: (dragging: boolean) => void;
   onCreate: (seed: CreateSeed) => void;
   /** Right-click on a chip or empty slot → calendar context menu. */
@@ -236,7 +237,7 @@ export const TimeGrid = memo(function TimeGrid({
   dropPreview,
   metricsRef,
   onMoveItem,
-  onResizeEvent,
+  onResizeItem,
   onChipDragging,
   onCreate,
   onContextMenu,
@@ -388,7 +389,7 @@ export const TimeGrid = memo(function TimeGrid({
       onChipDragging(true);
       moveGesture.onPointerDown(e);
     },
-    [moveGesture, minAtY, onChipDragging, onResizeEvent, publishMetrics]
+    [moveGesture, minAtY, onChipDragging, publishMetrics]
   );
 
   const handleChipClick = useCallback(
@@ -402,7 +403,7 @@ export const TimeGrid = memo(function TimeGrid({
     [onItemClick]
   );
 
-  // ---- event resize gesture (bottom edge; events only) -------------------------
+  // ---- resize gesture (bottom edge; events + task-start chips) -----------------
   const resizeRef = useRef<{ item: CalendarItem; endMin: number } | null>(null);
   const [resizeGhost, setResizeGhost] = useState<{ itemId: string; day: string; startMin: number; endMin: number } | null>(null);
 
@@ -419,16 +420,20 @@ export const TimeGrid = memo(function TimeGrid({
       const rs = resizeRef.current;
       resizeRef.current = null;
       setResizeGhost(null);
-      if (!rs || canceled || !onResizeEvent) return;
+      // The resize pointerup also fires a trailing click on the chip — without
+      // this it opened the item popover right after every resize (and its
+      // backdrop then swallowed the next drag's pointerdown).
+      justDraggedRef.current = true;
+      if (!rs || canceled || !onResizeItem) return;
       if (rs.endMin === rs.item.endMin) return;
       const end = `${rs.item.day}T${String(Math.floor(rs.endMin / 60)).padStart(2, '0')}:${String(rs.endMin % 60).padStart(2, '0')}:00`;
-      onResizeEvent(rs.item.id, end);
+      onResizeItem(rs.item.id, end);
     },
   });
 
   const handleResizePointerDown = useCallback(
     (e: ReactPointerEvent, item: CalendarItem) => {
-      if (item.kind !== 'event' || item.event.readonly) return;
+      if (item.kind === 'event' ? item.event.readonly : item.kind !== 'task-start' || item.allDay) return;
       publishMetrics();
       resizeRef.current = { item, endMin: item.endMin };
       resizeGesture.onPointerDown(e);
@@ -582,7 +587,7 @@ export const TimeGrid = memo(function TimeGrid({
               items={timedByDay.get(d) ?? []}
               ghostItemId={moveGhost?.itemId ?? null}
               onChipPointerDown={handleChipPointerDown}
-              onResizePointerDown={onResizeEvent ? handleResizePointerDown : undefined}
+              onResizePointerDown={onResizeItem ? handleResizePointerDown : undefined}
               onChipClick={handleChipClick}
               onChipContextMenu={onContextMenu ? handleChipContextMenu : undefined}
               onEmptyPointerDown={handleEmptyPointerDown}

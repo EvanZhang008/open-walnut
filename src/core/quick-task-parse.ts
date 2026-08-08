@@ -44,6 +44,7 @@ Fields:
 - title: cleaned task title. Remove date/time/priority/pin phrases; keep the action. Fix obvious typos. Preserve the user's language (Chinese stays Chinese). Never empty.
 - due_date: only if the note states a DEADLINE (by/before/due/截止). Date-only -> YYYY-MM-DD. With a time of day -> LOCAL ISO 8601 datetime WITHOUT timezone suffix (e.g. 2026-07-15T10:00:00) — copy the wall-clock time the user said; never convert timezones. Resolve relative dates (tomorrow, next friday, 明天, 下周三) against the current datetime given below.
 - start_date: only if the note states when to START or defer the work (start/begin/from/after/开始/之后再/等到). Same format rules as due_date. A bare date with no deadline wording ("call mom friday", "下周三处理") is a start_date, not a due_date — it says when to do it, not when it's due.
+- end_date: only if the note states a time RANGE for the work ("3-5pm", "from 2 to 4", "下午3点到5点") — the range's end, same format rules. Requires start_date (the range's start). Never use it for deadlines; those are due_date.
 ${buildPinTierRule(customTiers)}
 - priority: immediate|important|backlog — only when urgency is stated (urgent/asap -> immediate, important/重要 -> important, later/someday -> backlog).
 - starred: true only when the note explicitly says star it.
@@ -181,6 +182,9 @@ export async function parseQuickTask(
     if (dueDate) output.due_date = dueDate;
     const startDate = validLocalDueDate(parsed.start_date);
     if (startDate) output.start_date = startDate;
+    const endDate = validLocalDueDate(parsed.end_date);
+    // An end without a start is meaningless — drop it rather than invent a block.
+    if (endDate && startDate) output.end_date = endDate;
     if (parsed.pinTier === 'focus' || parsed.pinTier === 'satellite' || parsed.pinTier === 'backlog' || parsed.pinTier === 'wait') {
       output.pinTier = parsed.pinTier;
     } else if (typeof parsed.pinTier === 'string' && opts.customTiers?.length) {

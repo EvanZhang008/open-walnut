@@ -28,7 +28,7 @@ interface Props {
 }
 
 export function CalendarSidePanel({ onClose, width, panelRef: externalPanelRef }: Props) {
-  const { tasks, update, create } = useTasksContext();
+  const { tasks, update, create, setPhase, deleteTask } = useTasksContext();
   const [day, setDay] = useState(() => formatDateOnly(new Date()));
   const anchor = useMemo(() => parseDateLocal(day), [day]);
 
@@ -91,7 +91,24 @@ export function CalendarSidePanel({ onClose, width, panelRef: externalPanelRef }
       const sep = itemId.indexOf(':');
       const kind = itemId.slice(0, sep);
       const rest = itemId.slice(sep + 1);
-      if (kind === 'task-start') update(rest, { start_date: newWhen });
+      if (kind === 'task-start') {
+        // Same duration-preserving move as CalendarPage.moveItem.
+        const task = tasks.find((t) => t.id === rest);
+        const patch: { start_date: string; end_date?: string } = { start_date: newWhen };
+        if (task?.end_date?.includes('T') && task.start_date?.includes('T')) {
+          if (newWhen.includes('T')) {
+            const durMs = parseDateLocal(task.end_date).getTime() - parseDateLocal(task.start_date).getTime();
+            if (durMs > 0) {
+              const end = new Date(parseDateLocal(newWhen).getTime() + durMs);
+              const pad = (n: number) => String(n).padStart(2, '0');
+              patch.end_date = `${end.getFullYear()}-${pad(end.getMonth() + 1)}-${pad(end.getDate())}T${pad(end.getHours())}:${pad(end.getMinutes())}:00`;
+            }
+          } else {
+            patch.end_date = '';
+          }
+        }
+        update(rest, patch);
+      }
       else if (kind === 'task-due') update(rest, { due_date: newWhen });
       else if (kind === 'event') {
         const ev = calendar.events.find((e) => e.id === rest);
@@ -115,7 +132,7 @@ export function CalendarSidePanel({ onClose, width, panelRef: externalPanelRef }
     (item: CalendarItem) => {
       if (item.kind === 'event') return;
       if (item.kind === 'task-due') update(item.task.id, { due_date: '' });
-      else update(item.task.id, { start_date: '' });
+      else update(item.task.id, { start_date: '', ...(item.task.end_date ? { end_date: '' } : {}) });
     },
     [update]
   );
@@ -175,6 +192,15 @@ export function CalendarSidePanel({ onClose, width, panelRef: externalPanelRef }
             dropPreview={busPreview}
             metricsRef={metricsRef}
             onMoveItem={moveItem}
+            onResizeItem={(itemId, newEnd) => {
+              const sep = itemId.indexOf(':');
+              if (itemId.slice(0, sep) === 'task-start') update(itemId.slice(sep + 1), { end_date: newEnd });
+              else {
+                const rest = itemId.slice(sep + 1);
+                const ev = calendar.events.find((e) => e.id === rest);
+                if (ev) calendar.moveEvent(rest, { start: ev.start, end: newEnd });
+              }
+            }}
             onChipDragging={setChipDragging}
             onCreate={setCreateSeed}
             onContextMenu={(point, target) => setCtxTarget({ point, ...target })}
@@ -195,6 +221,8 @@ export function CalendarSidePanel({ onClose, width, panelRef: externalPanelRef }
           target={ctxTarget}
           onClose={() => setCtxTarget(null)}
           onUnscheduleTask={unscheduleTask}
+          onCompleteTask={(item) => { if (item.kind !== 'event') setPhase(item.task.id, 'COMPLETE'); }}
+          onDeleteTask={(item) => { if (item.kind !== 'event') deleteTask(item.task.id); }}
           // Context menu hands back the ITEM (id "event:<real-id>"), not the
           // event — passing item.id to the API 404s and the chip resurrects.
           onDeleteEvent={(item) => {
@@ -212,6 +240,9 @@ export function CalendarSidePanel({ onClose, width, panelRef: externalPanelRef }
           onSaveEvent={(ev, patch) => calendar.moveEvent(ev.id, patch)}
           onDeleteEvent={(ev) => calendar.removeEvent(ev.id)}
           onSaveTaskWhen={saveTaskWhen}
+          onSaveTaskEnd={(item, newEnd) => {
+            if (item.kind !== 'event') update(item.task.id, { end_date: newEnd });
+          }}
         />
       )}
     </div>

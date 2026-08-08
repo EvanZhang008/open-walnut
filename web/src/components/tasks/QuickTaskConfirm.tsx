@@ -7,12 +7,14 @@ import {
   nextValue,
 } from '@/components/sessions/task-meta-constants';
 
-export type ConfirmField = 'title' | 'due' | 'start' | 'pin' | 'priority' | 'star' | 'project';
+export type ConfirmField = 'title' | 'due' | 'start' | 'end' | 'pin' | 'priority' | 'star' | 'project';
 
 export interface ConfirmDraft {
   title: string;
   due?: string;
   start?: string;
+  /** End of the working block (start→end). Independent of the due deadline. */
+  end?: string;
   /** Built-in tier name or a custom tier id (`ct_*`). */
   pin?: string;
   priority?: 'immediate' | 'important' | 'backlog';
@@ -59,6 +61,7 @@ export function QuickTaskConfirm({
 }: Props) {
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [startPickerOpen, setStartPickerOpen] = useState(false);
+  const [endPickerOpen, setEndPickerOpen] = useState(false);
 
   const priorityOption = PRIORITY_OPTIONS.find((option) => option.value === draft.priority);
   const priorityLabel = priorityOption ? `${priorityOption.icon} ${priorityOption.label}` : 'No priority';
@@ -72,11 +75,12 @@ export function QuickTaskConfirm({
     <div
       className="qtc-confirm-panel"
       onKeyDown={(event) => {
-        if (event.key === 'Escape' && (datePickerOpen || startPickerOpen)) {
+        if (event.key === 'Escape' && (datePickerOpen || startPickerOpen || endPickerOpen)) {
           event.preventDefault();
           event.stopPropagation();
           setDatePickerOpen(false);
           setStartPickerOpen(false);
+          setEndPickerOpen(false);
         }
       }}
     >
@@ -105,15 +109,23 @@ export function QuickTaskConfirm({
             type="button"
             className={`qtc-chip${draft.aiFields.has('start') ? ' qtc-chip-ai' : ''}`}
             disabled={submitting}
-            onClick={() => { setDatePickerOpen(false); setStartPickerOpen((open) => !open); }}
+            onClick={() => { setDatePickerOpen(false); setEndPickerOpen(false); setStartPickerOpen((open) => !open); }}
           >
             {draft.start ? `Start ${formatDateTimeDisplay(draft.start)}` : 'No start'} <AiBadge visible={draft.aiFields.has('start')} />
           </button>
           <button
             type="button"
+            className={`qtc-chip${draft.aiFields.has('end') ? ' qtc-chip-ai' : ''}${!draft.end ? ' qtc-chip-ghost' : ''}`}
+            disabled={submitting}
+            onClick={() => { setDatePickerOpen(false); setStartPickerOpen(false); setEndPickerOpen((open) => !open); }}
+          >
+            {draft.end ? `End ${formatDateTimeDisplay(draft.end)}` : '+ End'} <AiBadge visible={draft.aiFields.has('end')} />
+          </button>
+          <button
+            type="button"
             className={`qtc-chip${draft.aiFields.has('due') ? ' qtc-chip-ai' : ''}${!draft.due ? ' qtc-chip-ghost' : ''}`}
             disabled={submitting}
-            onClick={() => { setStartPickerOpen(false); setDatePickerOpen((open) => !open); }}
+            onClick={() => { setStartPickerOpen(false); setEndPickerOpen(false); setDatePickerOpen((open) => !open); }}
           >
             {draft.due ? `Due ${formatDateTimeDisplay(draft.due)}` : '+ Due'} <AiBadge visible={draft.aiFields.has('due')} />
           </button>
@@ -142,6 +154,11 @@ export function QuickTaskConfirm({
         {startPickerOpen && (
           <div className="qtc-date-picker">
             <DatePicker inline date={draft.start} onChange={(start) => onChange({ start: start ?? undefined })} />
+          </div>
+        )}
+        {endPickerOpen && (
+          <div className="qtc-date-picker">
+            <DatePicker inline date={draft.end} onChange={(end) => onChange({ end: end ?? undefined })} />
           </div>
         )}
       </div>
