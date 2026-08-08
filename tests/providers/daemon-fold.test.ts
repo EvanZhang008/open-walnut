@@ -568,6 +568,76 @@ describe('foldLine — team markers', () => {
   })
 })
 
+// ── cron markers (/loop keep-alive — incident 2026-08-07) ──
+
+function cronCreate(toolUseId = 'tu_cron_1'): string {
+  return JSON.stringify({
+    type: 'assistant', session_id: SID,
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: toolUseId, name: 'CronCreate', input: { cron: '*/5 * * * *', prompt: '/status' } }] },
+  })
+}
+function cronCreateResult(toolUseId = 'tu_cron_1', jobId = 'job-1', isError = false): string {
+  return JSON.stringify({
+    type: 'user', session_id: SID,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, is_error: isError, content: isError ? 'Invalid cron' : `Scheduled recurring job ${jobId}` }] },
+    ...(isError ? {} : { tool_use_result: { id: jobId, humanSchedule: 'Every 5 minutes', recurring: true, durable: false } }),
+  })
+}
+function cronDelete(jobId = 'job-1'): string {
+  return JSON.stringify({
+    type: 'assistant', session_id: SID,
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tu_cron_del', name: 'CronDelete', input: { id: jobId } }] },
+  })
+}
+
+describe('foldLine — cron markers', () => {
+  it('CronCreate + successful tool_result arms cronActive; CronDelete disarms', () => {
+    const armed = fold([userEvent(), cronCreate(), cronCreateResult(), resultEvent(), stateEvent('idle')])
+    expect(Object.keys(armed.cronIds)).toEqual(['job-1'])
+    const snap = assembleSnapshot({ foldState: armed, pendingCtrl: null, dead: false, pid: 1, exitCode: null })
+    expect(snap.cronActive).toBe(true)
+
+    const disarmed = foldLine(armed, cronDelete('job-1'), armed.v + 500)
+    expect(Object.keys(disarmed.cronIds)).toEqual([])
+    expect(assembleSnapshot({ foldState: disarmed, pendingCtrl: null, dead: false, pid: 1, exitCode: null }).cronActive).toBe(false)
+  })
+
+  it('error tool_result does NOT arm (validation-rejected create)', () => {
+    const s = fold([userEvent(), cronCreate(), cronCreateResult('tu_cron_1', 'job-1', true)])
+    expect(Object.keys(s.cronIds)).toEqual([])
+    expect(Object.keys(s.pendingCronCreates)).toEqual([])
+  })
+
+  it('cronActive does NOT gate turn settle (a /loop session idles between fires)', () => {
+    const s = fold([userEvent(), cronCreate(), cronCreateResult(), resultEvent(), stateEvent('idle')])
+    expect(s.turnActive).toBe(false)
+  })
+
+  it('cronIds survive a new real-user-line anchor (crons span turns by design)', () => {
+    const s = fold([
+      userEvent(), cronCreate(), cronCreateResult(), resultEvent(), stateEvent('idle'),
+      userEvent(), resultEvent(), stateEvent('idle'),
+    ])
+    expect(Object.keys(s.cronIds)).toEqual(['job-1'])
+  })
+
+  it('falls back to the tool_use id when tool_use_result.id is missing', () => {
+    const line = JSON.stringify({
+      type: 'user', session_id: SID,
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_cron_1', content: 'Scheduled' }] },
+    })
+    const s = fold([userEvent(), cronCreate()])
+    const armed = foldLine(s, line, s.v + Buffer.byteLength(line, 'utf8') + 1)
+    expect(Object.keys(armed.cronIds)).toEqual(['tu_cron_1'])
+  })
+
+  it('CronDelete of an unknown id is a no-op', () => {
+    const armed = fold([userEvent(), cronCreate(), cronCreateResult()])
+    const after = foldLine(armed, cronDelete('job-999'), armed.v + 400)
+    expect(Object.keys(after.cronIds)).toEqual(['job-1'])
+  })
+})
+
 // ── v coordinate / unknown lines / purity ──
 
 describe('foldLine — v coordinate and unknown lines', () => {
@@ -843,7 +913,7 @@ describe('property — batch foldLines matches foldSessionTail verdict (3000 see
     const taskIds = ['bg-1', 'bg-2', 'bg-3']
     // Terminal AND non-terminal statuses, so any ordering (terminal → running,
     // running → terminal, status-less patch) is reachable.
-    const statuses = ['completed', 'failed', 'stopped', 'cancelled', 'running', 'pending', 'queued']
+    const statuses = ['completed', 'failed', 'stopped', 'cancelled', 'killed', 'running', 'pending', 'queued']
     const n = 2 + Math.floor(rand() * 14)
     for (let i = 0; i < n; i++) {
       const roll = rand()

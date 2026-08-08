@@ -1085,6 +1085,20 @@ export class RemoteSessionManager implements SessionManager {
                 error: err instanceof Error ? err.message : String(err),
               })
             })
+          // Cron sync (independent of the snapshot-status mode): the daemon's
+          // full-file fold is the cron authority — walnut's own attach fold is
+          // tail-window-bounded, so a CronCreate hours back is invisible to it.
+          // One-way arm (never dis-arm from a push: snapshotDiffers may
+          // suppress an unchanged-cron push, so absence proves nothing; the
+          // live CronDelete handler is the dis-arm path).
+          if ((event.snapshot as { cronActive?: boolean }).cronActive === true) {
+            import('./claude-code-session.js')
+              .then(({ sessionRunner }) => {
+                const live = sessionRunner.findSessionByClaudeId(sid!)
+                if (live) live.setCronArmedFromSnapshot()
+              })
+              .catch(() => { /* runner not loaded — attach-only */ })
+          }
         }
         break
 

@@ -62,7 +62,7 @@ import type { SessionRecord, ProcessStatus, TaskPhase } from './types.js'
 // ── Stream-file tail fold (pure) ──
 
 /** Terminal bg-task statuses — mirrors ClaudeCodeSession._BG_TERMINAL_STATUSES. */
-const BG_TERMINAL = new Set(['completed', 'failed', 'stopped', 'cancelled'])
+const BG_TERMINAL = new Set(['completed', 'failed', 'stopped', 'cancelled', 'killed'])
 
 export interface SessionTailFold {
   /** A real (non-tool-result, non-subagent) user line was found in the window.
@@ -99,6 +99,12 @@ export interface SessionTailFold {
   gatingBgCount: number
   /** TeamCreate seen after the anchor without a closing TeamDelete. */
   teamActive: boolean
+  /** CronCreate seen in the window without a closing CronDelete. Best-effort
+   *  (a create in an EARLIER turn is outside the window — the daemon's
+   *  full-file fold is the authority); used to re-arm the live session's
+   *  cron idle-kill protection on attach. Does NOT gate turn settle: a /loop
+   *  session goes legitimately idle between fires. */
+  cronActive?: boolean
   /** R1 verdict: the turn provably ended. */
   turnEnded: boolean
   /** Set only when turnEnded: 'error' | 'agent_complete'. */
@@ -379,6 +385,13 @@ export function foldSessionTail(
           const name = (b as { name?: string }).name
           if (name === 'TeamCreate') fold.teamActive = true
           else if (name === 'TeamDelete') fold.teamActive = false
+          // Cron: window-scoped best-effort. Arm on create; only an
+          // EMPTY-input-tracking delete clears (job-id matching needs the
+          // full-file fold — the daemon owns that; here any delete after the
+          // last create un-arms, which errs toward re-killable = the
+          // direction that merely restores the old behavior).
+          else if (name === 'CronCreate') fold.cronActive = true
+          else if (name === 'CronDelete') fold.cronActive = false
         }
       }
     }

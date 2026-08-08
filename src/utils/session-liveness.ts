@@ -31,6 +31,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { SESSION_STREAMS_DIR } from '../constants.js'
+import { daemonStreamPath } from '../core/session-reconcile.js'
 import type { SessionRecord } from '../core/types.js'
 
 /**
@@ -56,13 +57,30 @@ export function isLocalJsonlFresh(session: SessionRecord, windowMs: number): boo
   // Remote sessions have no local streams file (RemoteSessionManager.outputFile is
   // null); their liveness is the daemon's concern, not a local mtime.
   if (session.host) return 'unknown'
-  try {
-    const jsonlPath = path.join(SESSION_STREAMS_DIR, `${session.claudeSessionId}.jsonl`)
-    const st = fs.statSync(jsonlPath)
-    return (Date.now() - st.mtimeMs) < windowMs
-  } catch {
-    return 'unknown'
+  // Since the daemon-uniform migration, local CLI sessions stream through the
+  // LOCAL DAEMON, which writes its jsonl under WALNUT_STREAMS_DIR (the
+  // `…-streams` sibling of the daemon dir — daemonStreamPath). The legacy
+  // SESSION_STREAMS_DIR (LOG_DIR/streams) is only written by the pre-daemon
+  // LocalIO path, which no longer runs in production (verified live: 0 files
+  // there vs 53 in the daemon dir). Statting only the legacy dir returned
+  // 'unknown' for every live local session — the false-zombie kill veto was
+  // structurally dead. Check both; the FRESHEST mtime wins (a stale legacy
+  // leftover must not out-vote the live daemon file).
+  const candidates = [
+    daemonStreamPath(session.claudeSessionId, null),
+    path.join(SESSION_STREAMS_DIR, `${session.claudeSessionId}.jsonl`),
+  ]
+  let newestMtime = -1
+  for (const p of candidates) {
+    try {
+      const st = fs.statSync(p)
+      if (st.mtimeMs > newestMtime) newestMtime = st.mtimeMs
+    } catch {
+      // candidate missing — try the next
+    }
   }
+  if (newestMtime < 0) return 'unknown'
+  return (Date.now() - newestMtime) < windowMs
 }
 
 export async function isSessionProcessAlive(session: SessionRecord): Promise<boolean> {

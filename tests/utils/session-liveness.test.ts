@@ -32,17 +32,25 @@ vi.mock('../../src/providers/daemon-connection.js', () => ({
 import { isLocalJsonlFresh, isSessionProcessAlive } from '../../src/utils/session-liveness.js'
 import { SESSION_STREAMS_DIR } from '../../src/constants.js'
 import type { SessionRecord } from '../../src/core/types.js'
+import os from 'node:os'
 
 const WINDOW_MS = 2 * 60 * 1000
+
+// Isolated DAEMON streams dir (the dir local daemon sessions actually write —
+// daemonStreamPath reads this env at call time, same pattern as
+// tests/core/session-reconcile.test.ts). NEVER let tests stat the production
+// /tmp/open-walnut-streams.
+const daemonStreamsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-liveness-streams-'))
+process.env.WALNUT_STREAMS_DIR = daemonStreamsDir
 
 function localSession(sid: string): SessionRecord {
   // Only the fields isLocalJsonlFresh reads.
   return { claudeSessionId: sid, host: undefined } as unknown as SessionRecord
 }
 
-async function writeJsonl(sid: string, ageMs: number): Promise<void> {
-  await fsp.mkdir(SESSION_STREAMS_DIR, { recursive: true })
-  const p = path.join(SESSION_STREAMS_DIR, `${sid}.jsonl`)
+async function writeJsonl(sid: string, ageMs: number, dir: string = SESSION_STREAMS_DIR): Promise<void> {
+  await fsp.mkdir(dir, { recursive: true })
+  const p = path.join(dir, `${sid}.jsonl`)
   await fsp.writeFile(p, '{"type":"assistant"}\n', 'utf-8')
   if (ageMs > 0) {
     const t = (Date.now() - ageMs) / 1000
@@ -52,10 +60,12 @@ async function writeJsonl(sid: string, ageMs: number): Promise<void> {
 
 beforeEach(async () => {
   await fsp.rm(SESSION_STREAMS_DIR, { recursive: true, force: true })
+  await fsp.rm(daemonStreamsDir, { recursive: true, force: true })
 })
 
 afterEach(async () => {
   await fsp.rm(SESSION_STREAMS_DIR, { recursive: true, force: true })
+  await fsp.rm(daemonStreamsDir, { recursive: true, force: true })
 })
 
 describe('isLocalJsonlFresh', () => {
@@ -96,6 +106,29 @@ describe('isLocalJsonlFresh', () => {
     const unknownVerdict = isLocalJsonlFresh(localSession('absent'), WINDOW_MS)
     expect(aliveVerdict === true).toBe(true)    // vetoes the kill (process alive)
     expect(unknownVerdict === true).toBe(false) // does NOT veto (no proof of life → kill proceeds)
+  })
+
+  // REPRODUCE (directory-split regression, 2026-08 census): since the
+  // daemon-uniform migration, local CLI sessions write their stream jsonl via
+  // the LOCAL DAEMON into WALNUT_STREAMS_DIR (the `…-streams` sibling dir,
+  // daemonStreamPath in session-reconcile.ts) — the legacy SESSION_STREAMS_DIR
+  // (LOG_DIR/streams) stays EMPTY (verified live: 0 files vs 53). Statting only
+  // the legacy dir made this veto return 'unknown' for every live local
+  // session — the false-zombie kill guard was structurally dead.
+  it('a fresh jsonl in the DAEMON streams dir vetoes the kill (directory-split regression)', async () => {
+    await writeJsonl('daemon-fresh', 0, daemonStreamsDir)
+    expect(isLocalJsonlFresh(localSession('daemon-fresh'), WINDOW_MS)).toBe(true)
+  })
+
+  it('a stale jsonl in the daemon streams dir is consistent with a dead process', async () => {
+    await writeJsonl('daemon-stale', 10 * 60 * 1000, daemonStreamsDir)
+    expect(isLocalJsonlFresh(localSession('daemon-stale'), WINDOW_MS)).toBe(false)
+  })
+
+  it('daemon-dir verdict wins over the legacy dir when both exist (daemon file is the live one)', async () => {
+    await writeJsonl('both-dirs', 0, daemonStreamsDir)            // fresh — real write location
+    await writeJsonl('both-dirs', 10 * 60 * 1000)                 // stale legacy leftover
+    expect(isLocalJsonlFresh(localSession('both-dirs'), WINDOW_MS)).toBe(true)
   })
 })
 

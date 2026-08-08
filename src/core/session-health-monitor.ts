@@ -41,6 +41,8 @@ const HEALTH_V2 = process.env.WALNUT_HEALTH_V2 !== '0'
  */
 const DEFAULT_LOCAL_IDLE_TIMEOUT_MS = 60 * 60 * 1000
 const DEFAULT_REMOTE_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000
+/** Cron-armed (/loop) sessions: matches the CLI's 7-day recurring-cron auto-expiry. */
+const CRON_ARMED_IDLE_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1000
 /**
  * Ceiling on ONE session's daemon probe inside a per-session loop.
  *
@@ -749,8 +751,8 @@ export class SessionHealthMonitor {
 
     const { getRegisteredSessionManager } = await import('../providers/session-manager.js')
 
-    // Import sessionRunner for team-active + background-work + permission checks (lazy, cached by Node module system)
-    let runner: { isTeamActive(id: string): boolean; isBackgroundWorkActive?(id: string): boolean | Promise<boolean>; hasPendingPermission?(id: string): boolean } | undefined
+    // Import sessionRunner for team-active + cron-armed + background-work + permission checks (lazy, cached by Node module system)
+    let runner: { isTeamActive(id: string): boolean; isCronArmed?(id: string): boolean; isBackgroundWorkActive?(id: string): boolean | Promise<boolean>; hasPendingPermission?(id: string): boolean } | undefined
     try {
       const { sessionRunner } = await import('../providers/claude-code-session.js')
       runner = sessionRunner
@@ -768,8 +770,17 @@ export class SessionHealthMonitor {
       }
       // Per-session threshold: config override wins; otherwise remote gets 2h, local gets 1h.
       const isRemote = !!session.host
-      const idleTimeoutMs = configOverrideMs
+      let idleTimeoutMs = configOverrideMs
         ?? (isRemote ? DEFAULT_REMOTE_IDLE_TIMEOUT_MS : DEFAULT_LOCAL_IDLE_TIMEOUT_MS)
+      // Cron-armed sessions (/loop): the CLI's in-process scheduler only looks
+      // idle between fires, and killing the process silently kills the loop
+      // (session-only crons are never on disk — incident 2026-08-07: a 5-min
+      // /loop died at the 2h idle kill with no error anywhere). Extended, not
+      // disabled: the CLI auto-expires recurring crons after 7 days, so a
+      // session idle beyond that has a dead scheduler and is safe to reclaim.
+      if (runner?.isCronArmed?.(session.claudeSessionId)) {
+        idleTimeoutMs = Math.max(idleTimeoutMs, CRON_ARMED_IDLE_TIMEOUT_MS)
+      }
 
       // Skip sessions whose task is awaiting human action — they're waiting for user input, not truly idle
       const taskPhase = session.taskId ? taskMap.get(session.taskId)?.phase : undefined

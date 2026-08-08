@@ -34,6 +34,10 @@ export interface SessionSnapshot {
   /** Non-backgrounded, non-terminal background tasks (#870 semantics). */
   gatingBgCount: number
   teamActive: boolean
+  /** A CronCreate succeeded and no CronDelete removed it — the CLI's in-process
+   *  cron scheduler (/loop) is armed. Session-only crons die with the process,
+   *  so idle reapers must treat this session as deliberately long-running. */
+  cronActive: boolean
   lastResult: { isError: boolean; numTurns?: number; endOffset: number } | null
   pid: number | null
   /** Normalized via isTurnCompleteExit by the daemon when dead. */
@@ -65,6 +69,21 @@ export interface FoldState {
    *  (a live sync subagent is legitimately absent from every level payload). */
   seenInLevel: Record<string, 1>
   teamActive: boolean
+  /** Live cron job ids: CronCreate confirmed by a non-error tool_result adds
+   *  (keyed by the job id from tool_use_result, or the tool_use id when that
+   *  is missing), CronDelete removes. UNLIKE bgTasks/teamActive this is NOT
+   *  reset by a real user anchor — cron jobs deliberately span turns (that is
+   *  the whole point of /loop). Does NOT participate in turn settle: a loop
+   *  session goes legitimately idle between fires. Consumers: idle reapers,
+   *  which must not kill a session whose in-process scheduler is armed
+   *  (session-only crons die with the CLI process). Over-report is the safe
+   *  direction (mirrors teamActive) — a CLI-side 7-day auto-expiry the fold
+   *  cannot observe is backstopped by the reapers' extended-not-disabled
+   *  threshold. */
+  cronIds: Record<string, 1>
+  /** CronCreate tool_use ids awaiting their tool_result (error results must
+   *  not arm cronIds — a validation-rejected create schedules nothing). */
+  pendingCronCreates: Record<string, 1>
 }
 
 export function initialFoldState(baseV?: number): FoldState {
@@ -77,6 +96,8 @@ export function initialFoldState(baseV?: number): FoldState {
     bgTasks: {},
     seenInLevel: {},
     teamActive: false,
+    cronIds: {},
+    pendingCronCreates: {},
   }
 }
 
@@ -93,7 +114,7 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
   // purpose so a malformed non-string status behaves the same there and here
   // (Set.has of a non-member is false, i.e. non-terminal).
   const isTerminalStatus = (s: unknown): boolean =>
-    s === 'completed' || s === 'failed' || s === 'stopped' || s === 'cancelled'
+    s === 'completed' || s === 'failed' || s === 'stopped' || s === 'cancelled' || s === 'killed'
   // Port of isRealUserLine (session-reconcile.ts): accepts walnut-injected
   // delivery markers (the only trace a plain-text FIFO send leaves — the CLI
   // never echoes stdin user messages); rejects tool_result echoes and inline
@@ -130,6 +151,8 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
     bgTasks: state.bgTasks,
     seenInLevel: state.seenInLevel,
     teamActive: state.teamActive,
+    cronIds: state.cronIds,
+    pendingCronCreates: state.pendingCronCreates,
   }
 
   let parsed: { [k: string]: unknown }
@@ -155,6 +178,9 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
   //     INSIDE an assistant tool_use line, so an '"type":"assistant"' needle
   //     would be required otherwise — and that matches every assistant line,
   //     defeating the filter. Match the tool names directly instead.
+  //   'CronCreate' / 'CronDelete' → cron gate, same in-assistant-line shape as
+  //     the team markers (the CronCreate confirmation tool_result rides a
+  //     '"type":"user"' line, already a needle).
   // The skip is gated on '"type":"' so it only applies to lines we positively
   // recognize as compact-typed JSON — what JSON.stringify emits, which is what
   // both the CLI's stream-json stdout and appendUserMarker write. A
@@ -165,12 +191,43 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
     && rawLine.indexOf('"type":"system"') === -1
     && rawLine.indexOf('"type":"result"') === -1
     && rawLine.indexOf('TeamCreate') === -1
-    && rawLine.indexOf('TeamDelete') === -1) return next
+    && rawLine.indexOf('TeamDelete') === -1
+    && rawLine.indexOf('CronCreate') === -1
+    && rawLine.indexOf('CronDelete') === -1) return next
   try { parsed = JSON.parse(rawLine) as { [k: string]: unknown } } catch { return next }
   if (!parsed || typeof parsed !== 'object') return next
   const type = parsed.type as string | undefined
 
   if (type === 'user') {
+    // CronCreate confirmation: the tool_result echo (type:user) for a pending
+    // CronCreate tool_use. Only a NON-error result arms cronIds — a
+    // validation-rejected create (bad cron expr, job cap) schedules nothing.
+    // Checked BEFORE the anchor reset below: a tool_result-only line is never
+    // a real user line, and a mixed line (real text + tool_result) must both
+    // arm the cron and reset the turn window.
+    if (Object.keys(state.pendingCronCreates).length > 0) {
+      const msg = parsed.message as { content?: unknown } | undefined
+      const content = msg ? msg.content : undefined
+      if (Array.isArray(content)) {
+        for (const b of content) {
+          if (!b || typeof b !== 'object') continue
+          const blk = b as { type?: string; tool_use_id?: string; is_error?: boolean }
+          if (blk.type !== 'tool_result' || !blk.tool_use_id) continue
+          if (!state.pendingCronCreates[blk.tool_use_id]) continue
+          next.pendingCronCreates = { ...next.pendingCronCreates }
+          delete next.pendingCronCreates[blk.tool_use_id]
+          if (blk.is_error !== true) {
+            // Prefer the CLI's job id (tool_use_result.id — what CronDelete
+            // takes as input); fall back to the tool_use id so an armed cron
+            // is never dropped just because the result shape changed.
+            const tur = parsed.tool_use_result as { id?: unknown } | undefined
+            const jobId = tur && typeof tur.id === 'string' ? tur.id : blk.tool_use_id
+            next.cronIds = { ...next.cronIds }
+            next.cronIds[jobId] = 1
+          }
+        }
+      }
+    }
     if (isRealUserLine(parsed)) {
       // Turn anchor: a new turn began — a prior result can no longer be the
       // current turn's verdict.
@@ -197,6 +254,7 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
       // Only a real user line resets: NOT init (auto-continuation of the same
       // work) and NOT state:running (mid-turn re-activation), both of which
       // are anchor-EQUIVALENT for sawAnchor but do not open a new user turn.
+      // cronIds is deliberately NOT reset — cron jobs span turns by design.
       next.bgTasks = {}
       next.seenInLevel = {}
       next.teamActive = false
@@ -320,6 +378,26 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
         const name = (b as { name?: string }).name
         if (name === 'TeamCreate') next.teamActive = true
         else if (name === 'TeamDelete') next.teamActive = false
+        else if (name === 'CronCreate') {
+          // Arm on the tool_result confirmation (user-line branch above), not
+          // here — the create can still be validation-rejected.
+          const id = (b as { id?: string }).id
+          if (id) {
+            next.pendingCronCreates = { ...next.pendingCronCreates }
+            next.pendingCronCreates[id] = 1
+          }
+        } else if (name === 'CronDelete') {
+          // Optimistic removal on tool_use (before the result echo): the only
+          // failure mode is "no such job", in which case the id was not in
+          // cronIds anyway. Under-arming is acceptable here because the model
+          // itself asked to cancel; the reaper resumes normal thresholds.
+          const input = (b as { input?: { id?: unknown } }).input
+          const id = input && typeof input.id === 'string' ? input.id : undefined
+          if (id && next.cronIds[id]) {
+            next.cronIds = { ...next.cronIds }
+            delete next.cronIds[id]
+          }
+        }
       }
     }
   }
@@ -367,6 +445,7 @@ export function assembleSnapshot(input: {
       : null,
     gatingBgCount: gating,
     teamActive: s.teamActive,
+    cronActive: Object.keys(s.cronIds).length > 0,
     lastResult: s.lastResult ? { ...s.lastResult } : null,
     pid: input.pid,
     exitCode: input.exitCode,
@@ -385,6 +464,7 @@ export function assembleSnapshot(input: {
 export function snapshotDiffers(a: SessionSnapshot, b: SessionSnapshot): boolean {
   if (a.cliState !== b.cliState || a.turnActive !== b.turnActive
     || a.gatingBgCount !== b.gatingBgCount || a.teamActive !== b.teamActive
+    || a.cronActive !== b.cronActive
     || a.pid !== b.pid || a.exitCode !== b.exitCode) return true
   const ap = a.pendingPermission, bp = b.pendingPermission
   if (!!ap !== !!bp) return true

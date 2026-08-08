@@ -583,6 +583,24 @@ export class ClaudeCodeSession {
   private _teamIdleTimer: ReturnType<typeof setTimeout> | null = null
   private static readonly TEAM_IDLE_TIMEOUT_MS = 120_000 // 2 min
 
+  // ── Cron (/loop) tracking ──
+  /** True when a CronCreate was seen and not every cron has been CronDelete'd.
+   *  The CLI's cron scheduler lives in-process (session-only crons are never
+   *  on disk), so the health monitor's idle timeout must use the extended
+   *  cron threshold instead of killing the CLI between fires. Deliberately
+   *  NOT cleared by turn end or user anchor — crons span turns by design. */
+  private _cronArmed = false
+  /** CronCreate tool_use ids seen (used to resolve job ids from tool_results). */
+  private _cronToolUseIds = new Set<string>()
+  /** Live cron job ids (from CronCreate tool_use_result.id); CronDelete removes. */
+  private _cronJobIds = new Set<string>()
+  /** Public getter for the health monitor — extend idle timeout while armed. */
+  get cronArmed(): boolean { return this._cronArmed }
+  /** One-way arm from a daemon snapshot push ({cronActive:true}). The daemon's
+   *  full-file fold sees a CronCreate that walnut's tail-window attach fold
+   *  missed; dis-arm stays with the live CronDelete handler only. */
+  setCronArmedFromSnapshot(): void { this._cronArmed = true }
+
   // ── Background task / dynamic-workflow tracking ──
   // A dynamic-workflow turn (or any background subagent) fans out N tasks that
   // outlive the agent's text turn. The CLI emits a `result` as soon as the main
@@ -648,7 +666,7 @@ export class ClaudeCodeSession {
   private _workflowAgents = new Map<string, WorkflowAgentInfo>()
 
   /** Terminal task statuses — a task in any of these is no longer in flight. */
-  private static readonly _BG_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled'])
+  private static readonly _BG_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled', 'killed'])
 
   /** Number of background tasks still running. DERIVED from the authoritative task set on
    *  every read — never an accumulated counter, so no event can desync it.
@@ -1936,6 +1954,11 @@ export class ClaudeCodeSession {
       // timeout (_maybeClearTeamActive) remains the safety net against a stuck
       // true — a fold that ends on TeamCreate can only ever over-report.
       if (fold.teamActive) session._teamActive = true
+      // cronActive: re-arm the idle-kill protection across a walnut restart.
+      // Window-scoped best-effort (a create in an earlier turn is outside the
+      // tail window); the daemon's own full-file fold guards its reaper
+      // independently, so a miss here only exposes the health-monitor path.
+      if (fold.cronActive) session._cronArmed = true
       // If the fold shows non-backgrounded bg work still in flight, the turn is
       // genuinely live — mirror the canonical-recovery branch's running upgrade.
       if (session.hasActiveBackgroundWork() && session._processStatus !== 'running') {
@@ -3673,6 +3696,30 @@ export class ClaudeCodeSession {
               })
             }
 
+            // Cron detection — CronCreate/CronDelete tool_use. A cron-armed
+            // session's /loop lives INSIDE the CLI process; the health
+            // monitor's idle-timeout must not kill it between fires.
+            // Optimistic arm on tool_use (before the result): over-report is
+            // the safe direction — a validation-rejected create merely
+            // extends the idle threshold, never blocks a kill forever.
+            if (block.name === 'CronCreate' && block.id) {
+              this._cronToolUseIds.add(block.id)
+              this._cronArmed = true
+              log.session.info('cron created — extending idle-kill protection', {
+                sessionId: this.claudeSessionId, taskId: this.taskId, toolUseId: block.id,
+              })
+            }
+            if (block.name === 'CronDelete') {
+              const cronJobId = (block.input as Record<string, unknown>)?.id
+              if (typeof cronJobId === 'string') this._cronJobIds.delete(cronJobId)
+              if (this._cronJobIds.size === 0 && this._cronToolUseIds.size === 0) {
+                this._cronArmed = false
+                log.session.info('last cron deleted — resuming normal idle-kill thresholds', {
+                  sessionId: this.claudeSessionId, taskId: this.taskId,
+                })
+              }
+            }
+
             // Capture plan file path and content (Claude writes plan to ~/.claude/plans/{slug}.md)
             if (block.name === 'Write' && typeof block.input?.file_path === 'string') {
               if (block.input.file_path.includes('.claude/plans/')) {
@@ -3883,6 +3930,20 @@ export class ClaudeCodeSession {
         const userParentToolUseId = msg.parent_tool_use_id ?? undefined
         for (const block of msg.message.content) {
           if (block.type === 'tool_result') {
+            // Resolve a pending CronCreate: adopt the CLI's job id (what
+            // CronDelete takes) on success; on an error result drop the
+            // optimistic arm so a rejected create doesn't extend thresholds.
+            if (block.tool_use_id && this._cronToolUseIds.has(block.tool_use_id)) {
+              this._cronToolUseIds.delete(block.tool_use_id)
+              const isErr = (block as { is_error?: boolean }).is_error === true
+              if (!isErr) {
+                const tur = (msg as unknown as { tool_use_result?: { id?: unknown } }).tool_use_result
+                // Fall back to the tool_use id so a shape change never drops an armed cron.
+                this._cronJobIds.add(typeof tur?.id === 'string' ? tur.id : block.tool_use_id)
+              } else if (this._cronJobIds.size === 0 && this._cronToolUseIds.size === 0) {
+                this._cronArmed = false
+              }
+            }
             let resultContent: string
             // If the tool_result has image content blocks, use the cached file path
             // from the tool_use input instead of the base64 data. This keeps the
@@ -4778,6 +4839,20 @@ export class ClaudeCodeSession {
 
       default: {
         const unknownType = (event as { type?: string }).type ?? 'null'
+        // The control_* family is stream-json RPC plumbing, not conversation
+        // content — surfacing it through the unknown-event catch-all rendered a
+        // PERMANENT "control_request_progress" system block pinned under the
+        // chat (inc-1786165723472: the CLI heartbeats in-flight side_question
+        // requests). The daemon already strips control lines on replay for the
+        // same reason. Known members are handled by their cases above; anything
+        // else with the prefix is a future protocol variant — log, never render.
+        if (unknownType.startsWith('control_')) {
+          log.session.debug('unhandled control-protocol line (not surfaced to UI)', {
+            sessionId: this.claudeSessionId, taskId: this.taskId,
+            eventType: unknownType, linePreview: line.slice(0, 200),
+          })
+          break
+        }
         this.emitUnknownEventOnce('top_level', unknownType, line)
         break
       }
@@ -6556,6 +6631,14 @@ export class SessionRunner {
   isTeamActive(claudeSessionId: string): boolean {
     const session = this.findSessionByClaudeId(claudeSessionId)
     return session?.teamActive ?? false
+  }
+
+  /** Check if a session has an armed in-process cron (/loop). Used by the health
+   *  monitor: a cron-armed session looks idle between fires, but killing the CLI
+   *  silently kills the loop (session-only crons are never on disk). */
+  isCronArmed(claudeSessionId: string): boolean {
+    const session = this.findSessionByClaudeId(claudeSessionId)
+    return session?.cronArmed ?? false
   }
 
   /** Check if a session has background workflow/subagent tasks still running.

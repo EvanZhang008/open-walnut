@@ -86,10 +86,19 @@ function jsonlTurnComplete(sid: string): string[] {
 let streamsDir: string
 let savedStreamsEnv: string | undefined
 
-/** Write the DAEMON STREAM fixture — the file reconcile actually reads. */
-async function writeStreamFile(sid: string, lines: string[]): Promise<void> {
+/** Write the DAEMON STREAM fixture — the file reconcile actually reads.
+ *  Aged by default: a genuinely STUCK session's stream stopped long ago (the
+ *  result line was the last write). Since the directory-split fix,
+ *  isLocalJsonlFresh sees this same file, so a fresh mtime correctly trips the
+ *  activity gate ("events just flowed — skip the reconcile read this tick"). */
+async function writeStreamFile(sid: string, lines: string[], ageMs = 10 * 60 * 1000): Promise<void> {
   await fsp.mkdir(streamsDir, { recursive: true })
-  await fsp.writeFile(path.join(streamsDir, `${sid}.jsonl`), lines.join('\n') + '\n')
+  const p = path.join(streamsDir, `${sid}.jsonl`)
+  await fsp.writeFile(p, lines.join('\n') + '\n')
+  if (ageMs > 0) {
+    const t = (Date.now() - ageMs) / 1000
+    await fsp.utimes(p, t, t)
+  }
 }
 
 /** Stuck-'running' record: alive PID (this process) so the orphan dead-pool
@@ -155,10 +164,22 @@ describe('health monitor → reconcileStuckRunningSessions wiring', () => {
 
   it('does NOT touch a running session with fresh stream activity (activity gate)', async () => {
     const sid = 'hm-fresh-activity'
-    await writeStreamFile(sid, jsonlTurnComplete(sid))
+    // Fresh mtime on the DAEMON stream file (the dir local sessions actually
+    // write — directory-split fix) = the session is visibly producing output
+    // right now, even though the file content happens to end in a result.
+    await writeStreamFile(sid, jsonlTurnComplete(sid), 0)
     await stuckRunning(sid)
-    // Fresh LOCAL stream capture (SESSION_STREAMS_DIR — the isLocalJsonlFresh gate's
-    // source) = the session is visibly producing output right now.
+
+    const monitor = new SessionHealthMonitor()
+    await monitor.check()
+
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('running')
+  })
+
+  it('activity gate also honors a fresh LEGACY streams-capture file (old writers)', async () => {
+    const sid = 'hm-fresh-legacy'
+    await writeStreamFile(sid, jsonlTurnComplete(sid)) // aged daemon file
+    await stuckRunning(sid)
     await fsp.mkdir(SESSION_STREAMS_DIR, { recursive: true })
     await fsp.writeFile(path.join(SESSION_STREAMS_DIR, `${sid}.jsonl`), '{"type":"assistant"}\n')
 

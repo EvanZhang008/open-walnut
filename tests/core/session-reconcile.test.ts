@@ -290,6 +290,27 @@ describe('foldSessionTail — turn-end evidence semantics', () => {
     expect(fold.turnEnded).toBe(false)
   })
 
+  it('CronCreate arms cronActive without blocking the verdict (/loop idles between fires)', () => {
+    const cronCreate = JSON.stringify({
+      type: 'assistant', session_id: sid,
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tu_c1', name: 'CronCreate', input: { cron: '*/5 * * * *', prompt: '/status' } }] },
+    })
+    const fold = foldSessionTail([
+      userEvent(sid), cronCreate, resultEvent(sid), stateEvent(sid, 'idle'),
+    ].join('\n'))
+    expect(fold.cronActive).toBe(true)
+    expect(fold.turnEnded).toBe(true)
+
+    const cronDelete = JSON.stringify({
+      type: 'assistant', session_id: sid,
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'tu_c2', name: 'CronDelete', input: { id: 'job-1' } }] },
+    })
+    const disarmed = foldSessionTail([
+      userEvent(sid), cronCreate, cronDelete, resultEvent(sid), stateEvent(sid, 'idle'),
+    ].join('\n'))
+    expect(disarmed.cronActive).toBe(false)
+  })
+
   it('torn/partial lines are skipped without aborting the fold', () => {
     const fold = foldSessionTail([
       '{"type":"user","message":{"content":[{"ty', // torn line
