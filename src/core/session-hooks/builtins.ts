@@ -833,6 +833,54 @@ export function __resetAutoTitleState(retryDelayMs = 4_000): void {
 }
 
 /**
+ * Last-resort title rewrite with Walnut's OWN fast model when the CLI titler
+ * keeps violating a plugin content rule. The CLI titler only lets us shape the
+ * USER prompt (its system prompt says nothing about language, and Haiku
+ * mirrors the message language more strongly than it follows an in-prompt
+ * instruction — 2026-08-08 incident: two feedback rounds, Chinese title both
+ * times). Here we own the SYSTEM prompt, so the rule is authoritative. Still
+ * generic: the plugin's own rejection reason is the only rule shipped.
+ * Returns null on any failure (model gated off, timeout, empty output).
+ */
+async function rewriteTitleForRule(
+  rejectedTitle: string, message: string, rule: string,
+): Promise<string | null> {
+  try {
+    const { backgroundAiDisabled, fastModelFor } = await import('../cheap-model.js');
+    if (backgroundAiDisabled()) return null;
+    const { getConfig } = await import('../config-manager.js');
+    const { sendMessage } = await import('../../agent/model.js');
+    const model = fastModelFor(await getConfig());
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const result = await sendMessage({
+        system: `You fix a session title that violated a task-system rule. THE RULE IS ABSOLUTE: ${rule}\nRewrite the title so it satisfies the rule while keeping its meaning (translate rather than transliterate when the rule demands another language). Reply with ONLY the corrected title — no quotes, no commentary.`,
+        messages: [{
+          role: 'user',
+          content: `Rejected title: ${rejectedTitle}\nSession's first message (context): ${message.slice(0, 500)}`,
+        }],
+        // maxTokens stays small: Haiku catalog default (64K) trips the SDK's
+        // "streaming required" guard on the non-streaming path.
+        config: { maxTokens: 128, ...(model ? { model } : {}) },
+        signal: controller.signal,
+      });
+      const text = (result.content ?? [])
+        .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))
+        .join('').trim().replace(/^["']|["']$/g, '');
+      return text ? text.slice(0, 200) : null;
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (err) {
+    log.session.warn('session-auto-title: rule rewrite failed', {
+      errorKind: err instanceof Error ? err.name : typeof err,
+    });
+    return null;
+  }
+}
+
+/**
  * Shared titling core — ask the session's own CLI for a title and apply it
  * while the placeholder still holds. Used by both the onMessageSend hook
  * (path-first) and autoTitleFromLaunch (text-first). Returns true when a
@@ -859,28 +907,34 @@ async function askAndApplyTitle(
     if (((await getTask(taskId)).title ?? '') !== placeholder) return false;
 
     autoTitleAttempts.set(sessionId, (autoTitleAttempts.get(sessionId) ?? 0) + 1);
-    const { ContentValidationError } = await import('../task-manager.js');
-    // When a sync plugin's validateContent rejects the generated title (e.g.
-    // an English-only rule on an externally-synced task — 2026-08-06 incident:
-    // a Chinese first message → Chinese title → rejected → placeholder stuck
-    // forever), we re-ask ONCE with the plugin's own rejection message as
-    // feedback. Generic on purpose: whatever rule any plugin enforces, its
-    // human-readable reason is the constraint the titler needs — no rule is
-    // hardcoded here. `constraint` carries that reason into round 2.
+    const { ContentValidationError, validatePluginContent } = await import('../task-manager.js');
+    // When a sync plugin's validateContent would reject the generated title
+    // (e.g. an English-only rule on an externally-synced task — 2026-08-06
+    // incident: a Chinese first message → Chinese title → rejected →
+    // placeholder stuck forever), we re-ask ONCE with the plugin's own
+    // rejection message as feedback. Generic on purpose: whatever rule any
+    // plugin enforces, its human-readable reason is the constraint the titler
+    // needs — no rule is hardcoded here. `constraint` carries that reason
+    // into round 2. Validation runs BEFORE the write (validatePluginContent)
+    // so a rejection never costs a failed updateTask.
     let constraint: string | undefined;
     let title: string | null | undefined;
-    for (let round = 0; round < 2; round++) {
+    let written = false;
+    for (let round = 0; round < 2 && !written; round++) {
       // The CLI passes `description` VERBATIM to its Haiku titler (fork
       // sessionTitle.ts: userPrompt = description) — so ship context, not just
       // the raw message. The current (placeholder) title carries the directory
       // name; the titler keeps it when it matters ("Fix walnut session titles")
       // and drops it when it doesn't. slice(2000): the titler only needs the
       // opening of the message, and the envelope rides the FIFO — no point
-      // shipping a pasted wall of text.
-      const description = `Current session title: ${placeholder}\nUser's first message: ${message.slice(0, 2000)}`
-        + (constraint
-          ? `\nIMPORTANT: your previous title was rejected by the task system — ${constraint}\nGenerate a title that satisfies this rule.`
-          : '');
+      // shipping a pasted wall of text. On the feedback round the constraint
+      // leads and the language warning is explicit — the titler mirrors the
+      // user's language by default, and a trailing one-liner loses to a
+      // Chinese message (2026-08-08 incident: round 2 returned Chinese again).
+      const description = (constraint
+        ? `MANDATORY RULE — the task system rejected your previous title: ${constraint}\nObey this rule even if it conflicts with the language or style of the user's message below (translate, don't mirror).\n\n`
+        : '')
+        + `Current session title: ${placeholder}\nUser's first message: ${message.slice(0, 2000)}`;
       // Two tries on the first round: the send that triggered us may be
       // cold-resuming a dead CLI, in which case the first control write fails
       // before the FIFO exists. The feedback round gets ONE ask with a much
@@ -910,7 +964,8 @@ async function askAndApplyTitle(
 
       // Re-read before writing — the user (or the butler) may have renamed the
       // task while the CLI was thinking; the placeholder check must hold at
-      // write time, not just at dispatch time.
+      // write time, not just at dispatch time. (Also refreshes `source`:
+      // auto-organize may have just moved the task under a sync plugin.)
       const current = await getTask(taskId);
       if ((current.title ?? '') !== placeholder) {
         log.session.info('session-auto-title: skipped — title changed during generation', {
@@ -918,23 +973,49 @@ async function askAndApplyTitle(
         });
         return false;
       }
-      try {
-        // updateTask's central emit covers web-ui; main-agent rides extraTargets
-        // (a second manual emit would double-process the task in every frontend).
-        await updateTask(taskId, { title }, { source: 'session-auto-title', extraTargets: ['main-agent'] });
-      } catch (err) {
-        if (err instanceof ContentValidationError && round === 0) {
-          constraint = err.message;
+
+      // Validate BEFORE writing — a plugin rejection must not cost a failed
+      // updateTask, and we need the reason to drive the next layer.
+      const violation = validatePluginContent(current, 'title', title);
+      if (violation) {
+        if (round === 0) {
+          constraint = violation;
           log.session.info('session-auto-title: title rejected by plugin rule — retrying with feedback', {
-            sessionId, taskId, rejectedTitle: title, rule: err.message,
+            sessionId, taskId, rejectedTitle: title, rule: violation,
           });
           continue;
         }
+        // Layer 3: the CLI titler ignored the feedback (Haiku mirrors the
+        // message language more strongly than it follows instructions).
+        // Rewrite with Walnut's own fast model, whose SYSTEM prompt we fully
+        // control — still generic, the plugin's reason is the only rule.
+        title = await rewriteTitleForRule(title, message, violation);
+        const still = title ? validatePluginContent(current, 'title', title) : 'rewrite unavailable';
+        if (!title || still) {
+          log.session.warn('session-auto-title: no compliant title after rewrite — placeholder kept', {
+            sessionId, taskId, rule: violation, rewriteFailure: still ?? undefined,
+          });
+          return false;
+        }
+      }
+      try {
+        // updateTask's central emit covers web-ui; main-agent rides extraTargets
+        // (a second manual emit would double-process the task in every frontend).
+        // ContentValidationError is still possible here (auto-organize can move
+        // the task under a plugin between our check and the write) — final, no loop.
+        await updateTask(taskId, { title }, { source: 'session-auto-title', extraTargets: ['main-agent'] });
+        written = true;
+      } catch (err) {
+        if (err instanceof ContentValidationError) {
+          log.session.warn('session-auto-title: write rejected by plugin rule — placeholder kept', {
+            sessionId, taskId, rejectedTitle: title, rule: err.message, round,
+          });
+          return false;
+        }
         throw err;
       }
-      break; // written
     }
-    if (!title) return false; // unreachable (loop breaks/returns/throws) — narrows the type for the mirror below
+    if (!written || !title) return false;
     autoTitleAttempts.delete(sessionId); // done — free the entry
 
     // Mirror onto the session record (same placeholder guard) so the session

@@ -30,8 +30,12 @@ export class ContentValidationError extends Error {
   }
 }
 
-/** Ask the task's plugin to validate content before writing. Throws on rejection. */
-function runPluginContentValidation(task: { source: string; id?: string }, field: string, value: string): void {
+/** Non-throwing plugin content check — returns the plugin's human-readable
+ *  rejection reason, or null when the content is acceptable (or no plugin /
+ *  no validator). Exported so AI writers (session-auto-title) can check a
+ *  candidate value BEFORE writing and regenerate, instead of learning about
+ *  the rule from a thrown write. */
+export function validatePluginContent(task: { source: string; id?: string }, field: string, value: string): string | null {
   const plugin = registry.get(task.source);
   if (!plugin) {
     // Loophole detector: plugin failed to load → silent-pass means content guards
@@ -46,10 +50,15 @@ function runPluginContentValidation(task: { source: string; id?: string }, field
       preview: typeof value === 'string' ? value.slice(0, 200) : undefined,
       stack: hasCJK ? new Error().stack : undefined,
     });
-    return;
+    return null;
   }
-  if (!plugin.sync.validateContent) return;
-  const error = plugin.sync.validateContent(task as Task, field, value);
+  if (!plugin.sync.validateContent) return null;
+  return plugin.sync.validateContent(task as Task, field, value) ?? null;
+}
+
+/** Ask the task's plugin to validate content before writing. Throws on rejection. */
+function runPluginContentValidation(task: { source: string; id?: string }, field: string, value: string): void {
+  const error = validatePluginContent(task, field, value);
   if (error) {
     log.task.info('content validation rejected', { source: task.source, field, taskId: (task as Task).id, error });
     throw new ContentValidationError(error, field);

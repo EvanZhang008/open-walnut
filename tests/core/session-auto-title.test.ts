@@ -23,6 +23,18 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-auto-title'));
 
+// Layer-3 rewrite dependencies (rewriteTitleForRule). Default: gated off, as
+// in real test runs — individual tests opt in by flipping bgDisabled.
+const rewriteSendMock = vi.fn();
+let bgDisabled = true;
+vi.mock('../../src/agent/model.js', () => ({
+  sendMessage: (...args: unknown[]) => rewriteSendMock(...args),
+}));
+vi.mock('../../src/core/cheap-model.js', () => ({
+  backgroundAiDisabled: () => bgDisabled,
+  fastModelFor: () => undefined,
+}));
+
 import { WALNUT_HOME } from '../../src/constants.js';
 import { sessionRunner } from '../../src/providers/claude-code-session.js';
 import { addTask, getTask, updateTask, _resetForTesting as resetTaskManager } from '../../src/core/task-manager.js';
@@ -76,6 +88,8 @@ beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   resetTaskManager();
   __resetAutoTitleState(10); // shrink the in-dispatch retry pause for tests
+  rewriteSendMock.mockReset();
+  bgDisabled = true;
 });
 
 afterEach(async () => {
@@ -234,14 +248,45 @@ describe('sessionAutoTitleHook', () => {
       expect((await getTask(task.id)).title).toBe('Fix login issue');
     });
 
-    it('keeps the placeholder when the feedback round is rejected too (no infinite loop)', async () => {
+    it('rewrites with the fast model when the CLI titler ignores the feedback (layer 3)', async () => {
       const sid = nextSid();
       const task = await makePluginTaskAndSession(sid);
-      const fake = registerFakeSession(sid, async () => '还是中文标题');
+      const fake = registerFakeSession(sid, async () => '还是中文标题'); // both rounds violate
+      bgDisabled = false;
+      rewriteSendMock.mockImplementation(async (args: { system: string }) => {
+        expect(args.system).toContain(RULE); // plugin rule reaches the rewrite SYSTEM prompt
+        return { content: [{ type: 'text', text: 'Still a Chinese title, translated' }], stopReason: 'end_turn' };
+      });
 
       await sessionAutoTitleHook.handler(payloadFor(sid, task, '登录页面一直重定向'));
 
       expect(fake.generateSessionTitle).toHaveBeenCalledTimes(2);
+      expect(rewriteSendMock).toHaveBeenCalledTimes(1);
+      expect((await getTask(task.id)).title).toBe('Still a Chinese title, translated');
+    });
+
+    it('keeps the placeholder when every layer fails (no infinite loop, no bad write)', async () => {
+      const sid = nextSid();
+      const task = await makePluginTaskAndSession(sid);
+      const fake = registerFakeSession(sid, async () => '还是中文标题');
+      bgDisabled = false;
+      rewriteSendMock.mockResolvedValue({ content: [{ type: 'text', text: '翻译失败还是中文' }], stopReason: 'end_turn' });
+
+      await sessionAutoTitleHook.handler(payloadFor(sid, task, '登录页面一直重定向'));
+
+      expect(fake.generateSessionTitle).toHaveBeenCalledTimes(2);
+      expect((await getTask(task.id)).title).toBe(PLACEHOLDER);
+    });
+
+    it('keeps the placeholder when the rewrite model is gated off (test/disabled envs)', async () => {
+      const sid = nextSid();
+      const task = await makePluginTaskAndSession(sid);
+      registerFakeSession(sid, async () => '还是中文标题');
+      // bgDisabled stays true → rewriteTitleForRule returns null
+
+      await sessionAutoTitleHook.handler(payloadFor(sid, task, '登录页面一直重定向'));
+
+      expect(rewriteSendMock).not.toHaveBeenCalled();
       expect((await getTask(task.id)).title).toBe(PLACEHOLDER);
     });
   });
