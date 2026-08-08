@@ -209,12 +209,24 @@ export type ReadSessionResult = {
 };
 
 /**
- * Append synthetic walnut-injected user events (from the local streams capture
- * file) to canonical JSONL content. Local sessions write synthetic events to
- * their streams file, but the canonical JSONL (owned by Claude Code) never sees
- * them. Remote sessions have no local streams file — content returns unmodified.
- * Exported for the incremental/tail history readers, which re-read only a byte
- * range of the canonical file and must re-apply the same merge.
+ * Append synthetic walnut-injected user events (from the LEGACY local streams
+ * capture file) to canonical JSONL content.
+ *
+ * ⚠️ LEGACY-ONLY, effectively a no-op in production (2026-08 census). Since the
+ * daemon-uniform migration, turn-start markers are written by the DAEMON into
+ * its own stream file (appendUserMarker → daemonStreamPath's `…-streams` dir),
+ * not into SESSION_STREAMS_DIR (LOG_DIR/streams — verified live: 0 files).
+ * Do NOT "fix" this by pointing it at the daemon stream file:
+ *   1. Those files reach 100-200 MB (they hold the full stream-json event log);
+ *      scanning one on every history fetch is the CPU-starvation family.
+ *   2. The merge would contribute NOTHING anyway — parseSessionMessages DELETES
+ *      every user row carrying walnutMessageId (synthetic-duplicate strip in
+ *      session-history.ts), so merged markers never reach the output. History
+ *      identity comes from bindEchoClaims; turn anchoring reads the daemon
+ *      stream file directly (session-reconcile.ts fetchStreamTailFold).
+ * Kept for old on-disk content and the embedded-* legacy writers. Exported for
+ * the incremental/tail history readers, which re-read only a byte range of the
+ * canonical file and re-apply the same (no-op) merge for consistency.
  */
 export async function mergeSyntheticUserEvents(sessionId: string, content: string): Promise<string> {
   const { SESSION_STREAMS_DIR } = await import('../constants.js');

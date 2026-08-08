@@ -176,7 +176,11 @@ async function setIncidentBundlePath(id: string, bundlePath: string): Promise<vo
  * violations of the same sid+rule can't both slip past the check and double-open.
  * Guards against notification spam from a flapping session.
  */
-async function createIncidentIfNotRecent(
+/** De-dupe + create atomically (same sid+label within DEDUPE_WINDOW_MS → null).
+ *  Exported for client-originated detectors (routes/client-evidence.ts) so a
+ *  browser-side divergence storm collapses into one durable incident, same as
+ *  the server-side invariant sink. */
+export async function createIncidentIfNotRecent(
   partial: Omit<Incident, 'id' | 'createdAt' | 'updatedAt' | 'status'>,
 ): Promise<Incident | null> {
   return withWriteLock(() => withStore((store) => {

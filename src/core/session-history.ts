@@ -153,6 +153,26 @@ function setResolvedRemotePath(sessionId: string, host: string, fullPath: string
   }
 }
 
+/**
+ * Parses that came from a BOUNDED SLIDING WINDOW rather than the whole file.
+ *
+ * A transcript over DaemonFileReader's byte ceiling degrades to the last 4 MiB
+ * (readSessionHistoryTailWindow), so the resulting array is a moving window: its
+ * LENGTH is not a cursor space — it can shrink between reads while the turn appends
+ * at the tail. `GET /history?since=N` used to treat that length as a monotonic
+ * cursor and `slice(since)` then omitted the newest messages (inc-1785993576822:
+ * measured 1773 → 1764 → … → 1753 on a 55.8 MB session).
+ *
+ * Marked on the ARRAY ITSELF, not by session id, so the answer can never be raced
+ * by a concurrent read of the same session: the caller asks about the exact object
+ * it was handed. Callers that concatenate (fork ancestors) must therefore read the
+ * flag BEFORE building the combined array and propagate it.
+ */
+const windowedParses = new WeakSet<object>();
+function markWindowedRead(messages: object): void { windowedParses.add(messages); }
+/** True when `messages` is a bounded sliding window — never a valid cursor space. */
+export function isWindowedHistory(messages: object): boolean { return windowedParses.has(messages); }
+
 /** Compose cache key so local and remote entries for the same sessionId don't collide. */
 function cacheKey(sessionId: string, host?: string): string {
   return host ? `${sessionId}@${host}` : sessionId;
@@ -290,6 +310,12 @@ export interface SessionHistoryMessage {
   /** Walnut-generated message ID for deterministic dedup of optimistic user messages.
    *  Present on synthetic user events written by writeSyntheticUserEvent(). */
   walnutMessageId?: string;
+  /** Set by the /history route (never by the parser): this row's CONTENT can still
+   *  change — an Agent/Task row awaiting its late `bgTaskFinished`, or a tool row
+   *  awaiting its result. The client re-asks for these ids on its next delta, which
+   *  is the only way a prefix synced mid-flight ever gets corrected
+   *  (inc-1785965937858). See src/core/history-delta.ts. */
+  unsettled?: boolean;
   /** True for CLI-injected user lines the human did NOT type (skill content
    *  dumps, compaction continuation summaries, image-read metadata, auto
    *  "Continue" prompts). Detected via the CLI's own flags — canonical JSONL
@@ -1370,7 +1396,19 @@ async function readSessionHistoryTailWindow(
       windowText = nl >= 0 ? res.content.slice(nl + 1) : '';
     }
     const merged = await mergeSyntheticUserEvents(sessionId, windowText);
-    return parseSessionMessages(merged);
+    const parsed = parseSessionMessages(merged);
+    // Echo-claim binding — same as the full-read path (:1572). Its absence here
+    // silently killed the STRONGEST absorption evidence on exactly the sessions
+    // that need it most: a whale transcript always degrades to this window, so
+    // `walnutMessageId` was null on every message (verified live: 0 of 1752), and
+    // the frontend's id-exact dedup pass was dead code for the entire session
+    // (inc-1785993576822).
+    try {
+      const { bindEchoClaims } = await import('./echo-claims.js');
+      bindEchoClaims(sessionId, parsed);
+    } catch { /* best-effort — text dedup remains the fallback */ }
+    markWindowedRead(parsed);
+    return parsed;
   } catch (err) {
     log.session.debug('tail window read failed', {
       sessionId, host: daemonHost,
@@ -1893,7 +1931,7 @@ export async function recoverStateFromJsonl(sessionId: string, cwd?: string, hos
     // Tasks the CLI flagged is_backgrounded — excluded from the gating count (sticky: no
     // event un-backgrounds a task). Mirrors the live handler in claude-code-session.ts.
     const bgBackgrounded = new Set<string>();
-    const BG_TERMINAL = new Set(['completed', 'failed', 'stopped', 'cancelled']);
+    const BG_TERMINAL = new Set(['completed', 'failed', 'stopped', 'cancelled', 'killed']);
 
     for (const line of lines) {
       let parsed: Record<string, unknown>;

@@ -591,7 +591,7 @@ describe('WS: session:batch-completed', () => {
     });
 
     fireEvent('session:batch-completed', { sessionId: 'sid' });
-    expect(mockFetchHistory).toHaveBeenCalledWith('sid', { since: 0 });
+    expect(mockFetchHistory).toHaveBeenCalledWith('sid', expect.objectContaining({ since: 0 }));
 
     // Wait for async fetch to complete
     await vi.waitFor(() => {
@@ -614,7 +614,7 @@ describe('WS: session:batch-completed', () => {
     });
 
     fireEvent('session:batch-completed', { sessionId: 'sid' });
-    expect(mockFetchHistory).toHaveBeenCalledWith('sid', { since: 2 });
+    expect(mockFetchHistory).toHaveBeenCalledWith('sid', expect.objectContaining({ since: 2 }));
 
     await vi.waitFor(() => {
       const cached = getHistoryCache('sid');
@@ -648,7 +648,7 @@ describe('WS: session:batch-completed', () => {
       });
 
     fireEvent('session:batch-completed', { sessionId: 'sid' });
-    expect(mockFetchHistory).toHaveBeenNthCalledWith(1, 'sid', { since: 2 });
+    expect(mockFetchHistory).toHaveBeenNthCalledWith(1, 'sid', expect.objectContaining({ since: 2 }));
 
     await vi.waitFor(() => {
       // Rebuilt from the full fetch (5 msgs), NOT the blind append (which would be 3 with a dup).
@@ -711,8 +711,8 @@ describe('WS: _ws:reconnected', () => {
 
     // Delta fetch: since = cached msgCount (5 for sid-a, 0 for uncached sid-b).
     // Full parallel fetches on reconnect were a measured 40-60s freeze.
-    expect(mockFetchHistory).toHaveBeenCalledWith('sid-a', { since: 5 });
-    expect(mockFetchHistory).toHaveBeenCalledWith('sid-b', { since: 0 });
+    expect(mockFetchHistory).toHaveBeenCalledWith('sid-a', expect.objectContaining({ since: 5 }));
+    expect(mockFetchHistory).toHaveBeenCalledWith('sid-b', expect.objectContaining({ since: 0 }));
   });
 
   it('coalesces rapid reconnect flaps into one sweep', async () => {
@@ -955,7 +955,7 @@ describe('edge cases', () => {
 
     fireEvent('session:batch-completed', { sessionId: 'sid' });
     // No stream state to clear — just fires the delta fetch (since=0, no cache).
-    expect(mockFetchHistory).toHaveBeenCalledWith('sid', { since: 0 });
+    expect(mockFetchHistory).toHaveBeenCalledWith('sid', expect.objectContaining({ since: 0 }));
   });
 
   it('rapid tool-use back-to-back (concurrent tools)', () => {

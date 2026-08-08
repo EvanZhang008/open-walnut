@@ -19,10 +19,11 @@ import {
   updateSessionRecord,
   updateSessionRecordConditionally,
 } from '../../core/session-tracker.js'
-import { readSessionHistory, readSingleSubagentHistory, reconstructWorkflowProgress, extractPlanContent, rewriteHistoryRemoteImages } from '../../core/session-history.js'
+import { readSessionHistory, readSingleSubagentHistory, reconstructWorkflowProgress, extractPlanContent, rewriteHistoryRemoteImages, isWindowedHistory } from '../../core/session-history.js'
+import { resolveDeltaStart, deltaCursor, collectRequestedRevisions, isUnsettledRow } from '../../core/history-delta.js'
 import { computeSessionChanges } from '../../core/session-changes.js'
 import { computeSessionGitDiff, type GitDiffBase } from '../../core/session-git-diff.js'
-import { listTasksByIds, getTask, addTask, updateTask, togglePin, setFocusTier, getCustomTiers, linkSession, groupTasks, addToGroup, renameGroup } from '../../core/task-manager.js'
+import { listTasksByIds, getTask, addTask, getCustomTiers, linkSession } from '../../core/task-manager.js'
 import { getConfig } from '../../core/config-manager.js'
 import { bus, EventNames, eventData } from '../../core/event-bus.js'
 import fsp from 'node:fs/promises'
@@ -34,7 +35,7 @@ import { injectCompactBoundary, buildCompactSummary } from '../../utils/compact-
 import { findLocalJsonlPath } from '../../core/session-file-reader.js'
 import { getFrequentDirs, compileFromSessions, recordLaunchPrefs, scoreFrequentDir } from '../../core/frequent-dirs.js'
 import type { SessionRecord, SessionMode, Task, SessionEffort } from '../../core/types.js'
-import { VALID_SESSION_MODEL_IDS, SESSION_MODEL_CLI_MAP, VALID_SESSION_EFFORT_IDS, modelSupportsEffort, modelSupportsXhighEffort, modelSupportsMaxEffort, matchSessionModelCatalogEntry, resolveModelSwitchValue, sessionModelsAsCatalog } from '../../core/types.js'
+import { VALID_SESSION_MODEL_IDS, VALID_SESSION_EFFORT_IDS, resolveModelSwitchValue, sessionModelsAsCatalog } from '../../core/types.js'
 import { getHostModelCatalog, listHostModelCatalogs } from '../../core/host-model-catalog.js'
 import type { SessionHistoryMessage } from '../../core/session-history.js'
 import { processAndSaveImages, buildSessionImageContext } from './images.js'
@@ -604,10 +605,10 @@ async function readProviderSessionHistory(
   record: SessionRecord | null | undefined,
   nativeHost: string | null | undefined,
   skipSubagents = true,
-): Promise<{ messages: SessionHistoryMessage[]; sourceAvailable: boolean }> {
+): Promise<{ messages: SessionHistoryMessage[]; sourceAvailable: boolean; windowed: boolean }> {
   if (record?.engine === 'codex') {
     const state = await readAcpSessionHistoryState(record)
-    return { messages: state.messages, sourceAvailable: state.journalExists }
+    return { messages: state.messages, sourceAvailable: state.journalExists, windowed: false }
   }
   const messages = await readSessionHistory(
     sessionId,
@@ -616,7 +617,23 @@ async function readProviderSessionHistory(
     record?.outputFile,
     { skipSubagents },
   )
-  return { messages, sourceAvailable: messages.length > 0 }
+  // `windowed` must be read HERE, while we still hold the exact array the reader
+  // returned — the flag lives on that object (see isWindowedHistory). A bounded
+  // sliding window's length is not a cursor space, so the ?since= delta path must
+  // refuse to slice it by count.
+  return { messages, sourceAvailable: messages.length > 0, windowed: isWindowedHistory(messages) }
+}
+
+/**
+ * Stamp `unsettled: true` on rows whose content can still change (an Agent row awaiting
+ * its late `bgTaskFinished`, a tool row awaiting its result).
+ *
+ * The client uses this to know WHICH rows to re-ask for on the next delta. Keeping the
+ * predicate server-side means the client never re-implements it — it just reads a flag —
+ * and the server stays the single definition of "settled" (inc-1785965937858).
+ */
+function markUnsettled(messages: readonly SessionHistoryMessage[]): SessionHistoryMessage[] {
+  return messages.map(m => (isUnsettledRow(m) ? { ...m, unsettled: true } : m))
 }
 
 function unavailableHistoryReason(record: SessionRecord): string {
@@ -1187,11 +1204,17 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     // Full path: reads from source of truth (SSH for remote sessions)
     let messages: Awaited<ReturnType<typeof readSessionHistory>>
     let historySourceAvailable = false
+    // Whale transcript served from a bounded sliding tail — captured here, before
+    // image rewriting / fork concatenation replace the array, because the flag
+    // lives on the object the reader returned. Sticky through those transforms:
+    // a derived array is windowed iff its own-session part was.
+    let historyWindowed = false
     try {
       // skipSubagents: frontend lazy-loads each subagent via /subagent/:agentId/history on demand
       const history = await readProviderSessionHistory(sessionId, record, record?.host)
       messages = history.messages
       historySourceAvailable = history.sourceAvailable
+      historyWindowed = history.windowed
     } catch (err) {
       // Surface remote read errors (SSH auth, daemon connection, etc.) to the frontend
       const msg = err instanceof Error ? err.message : String(err)
@@ -1301,19 +1324,23 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         const ordered = [...ancestors].reverse()
         const fetched = await Promise.all(
           ordered.map(async (sourceRecord) => {
-            let { messages: sourceMessages } = await readProviderSessionHistory(
+            const src = await readProviderSessionHistory(
               sourceRecord.claudeSessionId,
               sourceRecord,
               sourceRecord.host,
             )
+            let sourceMessages = src.messages
             if (sourceRecord.host) {
               sourceMessages = await rewriteHistoryRemoteImages(sourceMessages, sourceRecord.host, sourceRecord.claudeSessionId, sourceRecord.cwd)
             }
-            return sourceMessages
+            return { messages: sourceMessages, windowed: src.windowed }
           }),
         )
 
-        const allSourceMessages = fetched.flat()
+        // A windowed ANCESTOR poisons the combined cursor space just as badly as a
+        // windowed own-session read: the prefix length shifts under the client.
+        if (fetched.some(f => f.windowed)) historyWindowed = true
+        const allSourceMessages = fetched.flatMap(f => f.messages)
         if (allSourceMessages.length > 0) {
           messages = [...allSourceMessages, ...messages]
           forkBoundaryIndex = allSourceMessages.length
@@ -1330,9 +1357,14 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     const total = messages.length
 
     // ── Delta mode (?since=<N>) — the turn-boundary incremental path ──
-    // N = count of combined messages the client has already rendered. Native
-    // history messages are immutable by the time this endpoint exposes them, so
-    // slicing messages[N..] is a lossless "what's new since you last synced".
+    // The client sends the count it holds PLUS the identity (`anchorMsgId`) of its
+    // newest uniquely-identified message. Identity picks the split point; the count
+    // is only a fallback, because the parsed-message array is NOT the append-only
+    // space a count assumes — a /compact rewrite, the retroactive subagent
+    // regrouping, and a whale session's 4 MiB sliding tail all shift or shrink it.
+    // Slicing by a stale count then silently omits the NEWEST messages, which is how
+    // a user's own echo went missing and left their bubble pinned at the bottom
+    // forever (inc-1785993576822). See src/core/history-delta.ts for the rules.
     //
     // ACP journals are different: several text chunks project into one assistant
     // message. A client can therefore mint cursor N after the first chunk, then
@@ -1341,16 +1373,22 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     // Codex cursor requests consequently fall through to a full replacement.
     //
     // Contract:
-    //   native + since valid (0 <= since <= total)
-    //     → { messages: slice(since), cursor: total, delta: true }
+    //   native + resolvable split point
+    //     → { messages: slice(start), cursor, delta: true }
     //     · slice is empty when nothing new yet (archive hasn't flushed the turn) —
     //       client treats empty delta as "not caught up", keeps streaming blocks, retries.
-    //   Codex, or since > total (file rewritten/rotated, or client ahead)
-    //     → full payload + delta:false
-    //     so the client rebuilds from scratch. Never silently drop.
+    //   Codex, anchor missing/ambiguous, client ahead, or a windowed read with no
+    //   anchor → full payload + delta:false so the client rebuilds. Never silently drop.
     const sinceRaw = req.query.since as string | undefined
     if (sinceRaw !== undefined) {
       const since = parseInt(sinceRaw, 10)
+      const anchorMsgId = typeof req.query.anchorMsgId === 'string' ? req.query.anchorMsgId : undefined
+      const anchorTailRaw = req.query.anchorTail as string | undefined
+      const anchorTail = anchorTailRaw !== undefined ? parseInt(anchorTailRaw, 10) : 0
+      // msgIds the client holds an UNSETTLED copy of and wants re-served.
+      const reviseIds = typeof req.query.revise === 'string'
+        ? req.query.revise.split(',').map(s => s.trim()).filter(Boolean)
+        : []
       // forkLoadFailed guard: the client's cursor was minted against
       // (ancestorLen + ownLen). If the ancestor read failed transiently (SSH
       // flap), `total` here is just ownLen — a since computed in the combined
@@ -1363,20 +1401,44 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         res.status(503).json({ error: 'fork ancestor history unavailable (transient) — retry' })
         return
       }
-      if (record?.engine !== 'codex'
-        && Number.isFinite(since) && since >= 0 && since <= total) {
-        res.json({
-          messages: messages.slice(since),
-          cursor: total,
-          total,
-          delta: true,
-          // Fork fields are static after first load; client already has them.
-          ...(forkedFromSessionId ? { forkedFromSessionId } : {}),
-          ...(forkBoundaryIndex != null ? { forkBoundaryIndex } : {}),
-        })
-        return
+      if (record?.engine !== 'codex') {
+        const anchorReq = {
+          since,
+          anchorMsgId,
+          anchorTail: Number.isFinite(anchorTail) ? anchorTail : 0,
+        }
+        const resolved = resolveDeltaStart(messages, anchorReq, { windowed: historyWindowed })
+        if (resolved.kind === 'delta') {
+          const slice = messages.slice(resolved.start)
+          // The client re-asks for rows it holds an UNSETTLED copy of (an Agent row
+          // still awaiting its late `bgTaskFinished`, a tool row awaiting its result).
+          // Serving those again by identity is what un-freezes a prefix the client
+          // synced mid-flight (inc-1785965937858). Ambiguous/unanswerable → rebuild,
+          // which also stops the client from re-asking forever.
+          const { revised, ambiguous } = collectRequestedRevisions(messages, reviseIds)
+          if (!ambiguous) {
+            res.json({
+              messages: markUnsettled(slice),
+              ...(revised.length > 0 ? { revisedMessages: markUnsettled(revised) } : {}),
+              cursor: deltaCursor(anchorReq, slice.length, total),
+              total,
+              delta: true,
+              // Fork fields are static after first load; client already has them.
+              ...(forkedFromSessionId ? { forkedFromSessionId } : {}),
+              ...(forkBoundaryIndex != null ? { forkBoundaryIndex } : {}),
+            })
+            return
+          }
+          log.web.info('history delta declined — revision request unanswerable', {
+            sessionId, since, total, requested: reviseIds.length,
+          })
+        } else {
+          log.web.info('history delta declined — serving full rebuild', {
+            sessionId, reason: resolved.reason, since, anchorMsgId, total, windowed: historyWindowed,
+          })
+        }
       }
-      // Fall through to full payload (since out of range → rebuild).
+      // Fall through to full payload (unresolvable split point → rebuild).
     }
 
     const sliced = tail && tail > 0 ? messages.slice(-tail) : messages
@@ -1385,7 +1447,9 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       ? (forkBoundaryIndex >= total - tail ? forkBoundaryIndex - (total - tail) : undefined)
       : forkBoundaryIndex
     res.json({
-      messages: sliced,
+      // Full payloads carry the flag too — a client that first loads mid-flight must
+      // know which rows to re-ask for on its next delta.
+      messages: markUnsettled(sliced),
       total,
       cursor: total,
       delta: false,
@@ -1431,11 +1495,30 @@ sessionsRouter.get('/:sessionId/subagent/:agentId/history', async (req: Request,
 // GET /api/sessions/:sessionId/workflow — reconstruct the dynamic-workflow progress
 // panel from the on-disk run manifest. Lets the panel survive page reload / server
 // restart, when the live in-memory session state is gone. 204 = no workflow ran.
+//
+// Route-level deadline: every session panel mount fetches this unconditionally,
+// and for a remote session the manifest read rides the daemon connection — a
+// wedged/reconnecting daemon (which may trigger the full auto-redeploy chain)
+// held this request for minutes, pinning one of the browser's 6 connections
+// (measured: 382s worst case; every "FAILED after 15s" cluster on 2026-08-06
+// traced here). Timing out answers 204 ("no workflow to restore") — the panel
+// merely skips reload-restore; a live run is driven by the event stream, not
+// this route.
+const WORKFLOW_RECONSTRUCT_TIMEOUT_MS = 5_000
 sessionsRouter.get('/:sessionId/workflow', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const sessionId = req.params.sessionId as string
     const record = await getSessionByClaudeId(sessionId)
-    const payload = await reconstructWorkflowProgress(sessionId, record?.cwd, record?.host)
+    const payload = await Promise.race([
+      reconstructWorkflowProgress(sessionId, record?.cwd, record?.host),
+      new Promise<null>((resolve) => {
+        const t = setTimeout(() => {
+          log.web.warn('workflow reconstruct timed out — answering 204', { sessionId, host: record?.host })
+          resolve(null)
+        }, WORKFLOW_RECONSTRUCT_TIMEOUT_MS)
+        t.unref?.()
+      }),
+    ])
     if (!payload) {
       res.status(204).end()
       return
@@ -1650,188 +1733,46 @@ sessionsRouter.post('/:sessionId/permission', async (req: Request, res: Response
 // transcript. See ClaudeCodeSession.askSideQuestion + side-questions.ts store.
 
 // POST /api/sessions/:sessionId/effort — change reasoning effort mid-session.
-// Delivers via apply_flag_settings control_request (no respawn) when the CLI is live;
-// always persists record.effort so the badge reflects it and a cold --resume re-applies
-// --effort. Validates the level (the CLI itself silently accepts an invalid `max`, so
-// the guard MUST live here — verified against 2.1.170). Capability authority order:
-// (1) the LIVE catalog row's supportedEffortLevels when present, (2) its
-// supportsEffort boolean (can veto, but xhigh/max still need the static
-// per-family gate), (3) the static model-family tables as the last resort when
-// no live capability data exists.
+// Core logic (validation, capability authority order, persist-first, live
+// apply + read-back) lives in core/sessions/session-controls.ts — shared with
+// the /api/v1 mobile route and the daemon control relay.
 sessionsRouter.post('/:sessionId/effort', async (req: Request, res: Response, next: NextFunction) => {
   const sessionId = req.params.sessionId as string
   const { effort: rawEffort } = req.body as { effort?: string }
   try {
-    if (typeof rawEffort !== 'string' || !VALID_SESSION_EFFORT_IDS.has(rawEffort)) {
-      res.status(400).json({ error: `effort must be one of low/medium/high/xhigh/max` })
-      return
-    }
-    const effort = rawEffort as SessionEffort
-
-    const record = await getSessionByClaudeId(sessionId)
-    if (!record) {
-      res.status(404).json({ error: 'session not found' })
-      return
-    }
-    const session = await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined)
-    const recordModel = record.cliModel || record.model
-    let model = recordModel
-    let liveRow: ReturnType<typeof matchSessionModelCatalogEntry> = null
-    if (session) {
-      const [settings, catalog] = await Promise.all([
-        session.getSettingsSnapshot().catch(() => null),
-        session.getModelCatalog().catch(() => null),
-      ])
-      model = settings?.applied.model || recordModel
-      liveRow = matchSessionModelCatalogEntry(catalog?.models ?? [], model)
-    }
-    if (!liveRow) {
-      // Live catalog unavailable (dead session / CLI timeout): consult the
-      // persisted host catalog — the SAME source the picker renders from — so
-      // a level the UI shows enabled can't 409 here on static-table grounds.
-      const hostCatalog = await getHostModelCatalog(record.host).catch(() => null)
-      liveRow = matchSessionModelCatalogEntry(hostCatalog?.models ?? [], model)
-    }
-
-    // Effort-capability authority, most→least trusted: (1) the catalog row's
-    // explicit supportedEffortLevels list, (2) its supportsEffort boolean (can
-    // veto but not grant xhigh/max — those need the static per-family gate too),
-    // (3) the static model tables as last resort (no catalog row anywhere).
-    // Simplifying this nesting either rejects new provider models or allows
-    // levels the CLI will silently downgrade.
-    const liveLevels = liveRow?.supportedEffortLevels
-    const supported = liveLevels !== undefined
-      ? liveLevels.includes(effort)
-      : effort === 'xhigh'
-        ? liveRow?.supportsEffort !== false && modelSupportsXhighEffort(model)
-        : effort === 'max'
-          ? liveRow?.supportsEffort !== false && modelSupportsMaxEffort(model)
-          : liveRow?.supportsEffort ?? modelSupportsEffort(model)
-    if (!supported) {
-      res.status(409).json({ error: `Model "${model ?? 'unknown'}" does not support "${effort}" reasoning effort` })
-      return
-    }
-
-    // Persist first so the badge + cold-resume fallback reflect the choice even if
-    // the session isn't live right now (idle-reaped → next spawn re-applies --effort).
-    await updateSessionRecord(sessionId, { effort })
-
-    // If the CLI is live, push the change now via control_request (no respawn).
-    // Attach-on-demand (same as the side-question route) so a genuinely-alive session
-    // the reconciler didn't map doesn't falsely report "not live".
-    let applied = false
-    let effectiveEffort: string | undefined
-    if (session) {
-      try {
-        applied = await session.applyEffort(effort)
-        // VERIFY: the apply_flag_settings ACK returns success even when the CLI
-        // silently overrides (env CLAUDE_CODE_EFFORT_LEVEL) or downgrades the level.
-        // So we don't trust the ACK — read back the CLI's true effort and report it.
-        // null (old CLI / read failed) ⇒ leave effectiveEffort undefined, no clobber.
-        if (applied) {
-          effectiveEffort = (await session.refreshEffectiveEffort('effort-change').catch(() => null)) ?? undefined
-        }
-      } catch (err) {
-        // Non-fatal: the persisted effort still applies on the next (re)spawn.
-        log.web.warn('applyEffort control_request failed — persisted for next spawn', {
-          sessionId, effort, error: err instanceof Error ? err.message : String(err),
-        })
+    const { applySessionEffortChange, SessionControlError } = await import('../../core/sessions/session-controls.js')
+    try {
+      res.json(await applySessionEffortChange(sessionId, rawEffort))
+    } catch (err) {
+      if (err instanceof SessionControlError) {
+        res.status(err.statusCode).json({ error: err.message, ...(err.extra ?? {}) })
+        return
       }
+      throw err
     }
-
-    // overridden = the CLI is actually using a DIFFERENT level than requested (env
-    // override or model downgrade). Only assert it when we got a trusted read-back.
-    const overridden = effectiveEffort !== undefined && effectiveEffort !== effort
-    log.web.info('session effort changed', { sessionId, effort, appliedLive: applied, effectiveEffort, overridden })
-    res.json({ effort, appliedLive: applied, effectiveEffort, overridden })
   } catch (err) {
     next(err)
   }
 })
 
 // POST /api/sessions/:sessionId/model — change the model mid-session.
-// Same mechanism as /effort: apply_flag_settings control_request (no respawn, the
-// running turn is untouched) + get_settings read-back for the true applied model.
-// Persists record.cliModel so a cold --resume respawns with the new --model.
-// Accepts BOTH a legacy picker alias ('sonnet-1m' → mapped to 'sonnet[1m]') and
-// a catalog value from GET /:id/models ('global.anthropic.claude-fable-5[1m]',
-// 'default' — passed through verbatim; the CLI is the authority on validity).
+// Core logic (alias/catalog resolution, ACP path, persist-first, live apply +
+// read-back verification) lives in core/sessions/session-controls.ts — shared
+// with the /api/v1 mobile route and the daemon control relay.
 sessionsRouter.post('/:sessionId/model', async (req: Request, res: Response, next: NextFunction) => {
   const sessionId = req.params.sessionId as string
   const { model: rawModel } = req.body as { model?: string }
   try {
-    if (typeof rawModel !== 'string' || !rawModel.trim()) {
-      res.status(400).json({ error: 'model must be a non-empty string' })
-      return
-    }
-
-    const record = await getSessionByClaudeId(sessionId)
-    if (!record) {
-      res.status(404).json({ error: 'session not found' })
-      return
-    }
-
-    if (record.engine === 'codex') {
-      const session = await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined)
-      const applied = session
-        ? await session.setModel(rawModel).catch((err) => {
-            log.web.warn('ACP session model switch failed', {
-              sessionId,
-              model: rawModel,
-              error: err instanceof Error ? err.message : String(err),
-            })
-            return false
-          })
-        : false
-      if (!applied) {
-        res.status(409).json({ error: 'model switch failed' })
+    const { applySessionModelChange, SessionControlError } = await import('../../core/sessions/session-controls.js')
+    try {
+      res.json(await applySessionModelChange(sessionId, rawModel))
+    } catch (err) {
+      if (err instanceof SessionControlError) {
+        res.status(err.statusCode).json({ error: err.message, ...(err.extra ?? {}) })
         return
       }
-      log.web.info('ACP session model changed', { sessionId, model: rawModel })
-      res.json({ applied: true, model: rawModel })
-      return
+      throw err
     }
-
-    const cliModel = resolveModelSwitchValue(rawModel)
-    if (!cliModel) {
-      res.status(400).json({ error: `model must be a catalog value from GET /:sessionId/models or one of: ${[...VALID_SESSION_MODEL_IDS].join('/')}` })
-      return
-    }
-
-    // Persist first — the durable cold-resume fallback (apply_flag_settings is
-    // in-memory only).
-    await updateSessionRecord(sessionId, { cliModel })
-
-    // If the CLI is live, push the change now via control_request (no respawn).
-    let applied = false
-    let effectiveModel: string | undefined
-    const session = await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined)
-    if (session) {
-      try {
-        applied = await session.applyModel(cliModel)
-        // VERIFY: the ACK is success even for a silently-ignored value (verified on
-        // 2.1.170 with a garbage model). Read back applied.model as the truth.
-        if (applied) {
-          effectiveModel = (await session.refreshAppliedSettings('model-change').catch(() => null))?.model ?? undefined
-          // Read-back disagrees with what we asked for ⇒ the CLI rejected or
-          // silently substituted it (allowlist / wire-level fallback). Our
-          // cached catalog is evidently stale — drop it so the picker's next
-          // open refetches, and tell the caller the switch did NOT take.
-          if (effectiveModel && !modelReadBackMatches(cliModel, effectiveModel)) {
-            applied = false
-            session.invalidateModelCatalog()
-          }
-        }
-      } catch (err) {
-        // Non-fatal: the persisted cliModel still applies on the next (re)spawn.
-        log.web.warn('applyModel control_request failed — persisted for next spawn', {
-          sessionId, model: cliModel, error: err instanceof Error ? err.message : String(err),
-        })
-      }
-    }
-
-    log.web.info('session model changed', { sessionId, model: rawModel, cliModel, appliedLive: applied, effectiveModel })
-    res.json({ model: rawModel, cliModel, appliedLive: applied, effectiveModel })
   } catch (err) {
     next(err)
   }
@@ -1866,23 +1807,7 @@ sessionsRouter.get('/:sessionId/model-catalog', async (req: Request, res: Respon
   }
 })
 
-/** Does the get_settings read-back string plausibly equal what we switched to?
- *  Tolerates decoration differences: 'global.anthropic.claude-opus-4-6-v1[1m]'
- *  vs 'claude-opus-4-6[1m]' vs 'opus[1m]' all describe the same runtime model.
- *  Aliases ('opus', 'sonnet[1m]') can't be compared literally — for those we
- *  only require family containment. 'default' can resolve to anything → always
- *  matches (the CLI decides what default means). */
-function modelReadBackMatches(requested: string, effective: string): boolean {
-  if (requested === 'default') return true
-  const strip = (s: string) => s.toLowerCase().replace(/\[1m\]$/, '').replace(/[-_]v\d+(:\d+)?$/, '')
-  const req = strip(requested)
-  const eff = strip(effective)
-  if (req === eff || eff.includes(req) || req.includes(eff)) return true
-  // Alias forms: compare family + [1m]-ness instead of the raw strings.
-  const fam = (s: string) => ['haiku', 'sonnet', 'fable', 'opus', 'mythos'].find((f) => s.includes(f))
-  const is1m = (s: string) => /\[1m\]$/.test(s.toLowerCase())
-  return fam(req) !== undefined && fam(req) === fam(eff) && is1m(requested) === is1m(effective)
-}
+// modelReadBackMatches moved to core/sessions/session-controls.ts (shared with v1 + relay).
 
 // GET /api/sessions/:sessionId/models — the session's TRUE selectable model
 // catalog, fetched from the CLI's `initialize` control response (already
@@ -2689,7 +2614,12 @@ sessionsRouter.post('/:sessionId/terminate', async (req: Request, res: Response,
   }
 })
 
-// POST /api/sessions/:sessionId/fork — fork a session to a different task
+// POST /api/sessions/:sessionId/fork — fork a session to a different task.
+// Core logic (sibling-task creation, grouping, title refinement, 1-session-
+// per-task guard, record seed + SESSION_START emit) lives in
+// core/sessions/session-controls.ts — shared with the /api/v1 mobile route and
+// the daemon control relay. This route only handles the web-specific extras:
+// image uploads (saved to disk → path annotation in the fork message).
 sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const sourceSessionId = req.params.sessionId as string
@@ -2703,293 +2633,31 @@ sessionsRouter.post('/:sessionId/fork', async (req: Request, res: Response, next
       images?: ImagePayload[]
     }
 
-    if (!task_id && !create_child_task) {
-      res.status(400).json({ error: 'Either task_id or create_child_task is required' })
-      return
-    }
-    if (task_id && create_child_task) {
-      res.status(400).json({ error: 'task_id and create_child_task are mutually exclusive' })
-      return
-    }
-
-    // Look up source session
-    const sourceRecord = await getSessionByClaudeId(sourceSessionId)
-    if (!sourceRecord) {
-      res.status(404).json({ error: 'Source session not found' })
-      return
-    }
-
-    // Codex sessions run through ACP. The installed adapter does not advertise
-    // ACP session.fork, and falling through to Claude's native --fork-session
-    // creates an orphan task before failing to find the conversation. Fail
-    // before validating or mutating any target task.
-    if (sourceRecord.engine === 'codex') {
-      res.status(409).json({
-        code: 'ACP_FORK_UNSUPPORTED',
-        error: 'Fork is unavailable for this Codex session',
-      })
-      return
-    }
-
-    // Validate source session has a working directory BEFORE creating any child tasks
-    if (!sourceRecord.cwd) {
-      res.status(400).json({ error: 'Source session has no working directory — cannot fork' })
-      return
-    }
-
-    let task: Task | undefined
-    let childTaskCreated = false
-
-    if (create_child_task) {
-      // Fork = create a SIBLING task and visually group it with the source task
-      // (NOT a parent/subtask — they have independent lifecycles). The new task
-      // inherits the source task's project/source but has NO parent; we
-      // then put both the source task and the fork into a lightweight virtual
-      // group (reusing the source task's existing group if it already has one).
-      if (!sourceRecord.taskId) {
-        res.status(400).json({ error: 'Source session has no task — cannot create fork task' })
-        return
-      }
-      let sourceTask: Task
-      try {
-        sourceTask = await getTask(sourceRecord.taskId)
-      } catch {
-        res.status(404).json({ error: `Source task "${sourceRecord.taskId}" not found` })
-        return
-      }
-      // When the caller didn't supply an explicit child_title, we use a plain
-      // `Fork of <source>` placeholder now and (below, after addTask) refine it
-      // asynchronously into `<2-4 word summary of the fork prompt> - fork of <source>`.
-      // Use `||` (not `??`) so an empty-string child_title also falls back to the
-      // placeholder — consistent with `autoTitle = !child_title` below.
-      //
-      // Fork-of-a-fork: strip any existing fork decoration from the source title
-      // first, otherwise titles compound without bound ("X - fork of Y - fork of
-      // Z - …" reached 290+ chars in practice and permanently failed external
-      // sync plugins with title-length limits).
-      const sourceBaseTitle = sourceTask.title
-        .replace(/^Fork of\s+/i, '')
-        .replace(/\s+-\s+fork of\s+.*$/i, '')
-        .trim() || sourceTask.title
-      const autoTitle = !child_title
-      const newTitle = child_title || `Fork of ${sourceBaseTitle}`
-      // No _skipPluginOps: a fork inherits the source's source (e.g. an external
-      // sync plugin) and must pass the same content validation + push as any
-      // other task. addTask throws on CJK → surfaced via next(err).
-      const { task: newFork } = await addTask({
-        title: newTitle,
-        project: sourceTask.project || '',
-        source: sourceTask.source,
-      })
-      // Inherit the source's pin/tier so a fork of a Focus task lands in Focus
-      // too — addTask() never sets focus_tier. Best-effort, non-fatal on failure.
-      if (sourceTask.pinned && sourceTask.focus_tier) {
-        try {
-          await togglePin(newFork.id)
-          await setFocusTier(newFork.id, sourceTask.focus_tier)
-        } catch (err) {
-          log.web.warn('fork: failed to inherit pin/tier from source', {
-            taskId: newFork.id,
-            sourceTaskId: sourceTask.id,
-            tier: sourceTask.focus_tier,
-            error: err instanceof Error ? err.message : String(err),
-          })
-        }
-      }
-      // Visually group the source task + fork. Reuse the source task's existing
-      // group if it already belongs to one (continuous forks accrete into one
-      // group: source + fork1 + fork2…). Best-effort: a grouping failure must not
-      // abort the fork — the fork task still exists standalone.
-      let forkGroupId: string | undefined
-      try {
-        if (sourceTask.group_id) {
-          const r = await addToGroup(sourceTask.group_id, [newFork.id])
-          forkGroupId = r.group_id
-        } else {
-          // Seed label with the source title; refined to an AI group name below.
-          const r = await groupTasks([sourceTask.id, newFork.id], sourceTask.title)
-          forkGroupId = r.group_id
-        }
-      } catch (err) {
-        log.web.warn('fork: failed to group source + fork', {
-          sourceTaskId: sourceTask.id,
-          forkTaskId: newFork.id,
-          error: err instanceof Error ? err.message : String(err),
-        })
-      }
-
-      // Emit task:created with the FINAL persisted state, not the stale addTask()
-      // reference: togglePin/setFocusTier/grouping above all mutated store clones,
-      // so `newFork` still says pinned=false / no focus_tier / no group_id. The UI
-      // treats task:created as authoritative for a new task — emitting the stale
-      // object made forks of Focus tasks render in Satellite until a full refetch.
-      try {
-        task = await getTask(newFork.id)
-      } catch {
-        task = newFork // re-read is best-effort; stale beats no event
-      }
-      bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui', 'main-agent'], { source: 'fork' })
-      childTaskCreated = true
-
-      // Refine the auto-generated title in the background: summarize the fork's new
-      // prompt into a few English words → `<words> - fork of <source>`. Fire-and-forget
-      // so the fork response is not blocked; failures keep the `Fork of <source>`
-      // placeholder. Only runs when the title was auto-generated AND a custom fork
-      // message was provided (no point summarizing the "Continue working on:" default).
-      if (autoTitle && message?.trim()) {
-        const forkId = newFork.id
-        const sourceTitle = sourceBaseTitle
-        const placeholderTitle = newTitle
-        void (async () => {
-          try {
-            const { summarizeForkPrompt } = await import('../../core/fork-title.js')
-            const label = await summarizeForkPrompt(message)
-            if (!label) return
-            // Don't clobber a concurrent user rename: only refine if the title is
-            // still the `Fork of <source>` placeholder we created moments ago.
-            const current = await getTask(forkId)
-            if (current.title !== placeholderTitle) {
-              log.web.info('fork title refine skipped — title changed since fork', { taskId: forkId })
-              return
-            }
-            const refinedTitle = `${label} - fork of ${sourceTitle}`
-            const { task: updated } = await updateTask(forkId, { title: refinedTitle }, { source: 'fork-title' })
-            bus.emit(EventNames.TASK_UPDATED, { task: updated }, ['web-ui', 'main-agent'], { source: 'fork-title' })
-            log.web.info('fork title refined', { taskId: forkId, title: refinedTitle })
-          } catch (err) {
-            // Best-effort: a failed refine just leaves the `Fork of <source>` title.
-            log.web.warn('fork title refine failed', {
-              taskId: forkId,
-              error: err instanceof Error ? err.message : String(err),
-            })
-          }
-        })()
-      }
-
-      // Refine the GROUP name in the background from both task titles (only when
-      // we created a fresh group — an existing group keeps its established name).
-      // Best-effort, fire-and-forget; failures keep the source-title placeholder.
-      if (forkGroupId && !sourceTask.group_id) {
-        const gid = forkGroupId
-        const seedTitles = [sourceTask.title, newTitle]
-        void (async () => {
-          try {
-            const { summarizeGroupLabel } = await import('../../core/fork-title.js')
-            const label = await summarizeGroupLabel(seedTitles)
-            if (!label) return
-            await renameGroup(gid, label)
-            bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: gid, label }, ['web-ui', 'main-agent'], { source: 'fork' })
-            log.web.info('fork group label refined', { groupId: gid, label })
-          } catch (err) {
-            log.web.warn('fork group label refine failed', {
-              groupId: gid,
-              error: err instanceof Error ? err.message : String(err),
-            })
-          }
-        })()
-      }
-    } else {
-      // Look up target task by provided task_id
-      task = await getTask(task_id!)
-      if (!task) {
-        res.status(404).json({ error: `Task "${task_id}" not found` })
-        return
-      }
-    }
-
-    // Check 1-session-per-task
-    const existingSessions = await getSessionsForTask(task.id)
-    const activeSessions = existingSessions.filter(s => !s.archived)
-    if (activeSessions.length > 0) {
-      res.status(409).json({
-        error: 'Target task already has a session',
-        existing_session_id: activeSessions[0].claudeSessionId,
-      })
-      return
-    }
-
-    // A fork inherits the full parent conversation via --resume, so the model tends
-    // to keep grinding on the parent's task. Lead with a focus directive so it treats
-    // the fork message as the new mission and only revisits prior work on request.
-    const userRequest = message?.trim() || `Continue working on: ${task.title}`
-    const FORK_FOCUS_PREFIX =
-      'This is a forked session. Focus on the NEW request below — treat it as your primary task. ' +
-      'Do not resume or continue the parent session\'s previous work unless the user explicitly asks you to.\n\n'
-
-    // Attached images: save to disk + build a "read these files" annotation (same
-    // path-based flow as quick-start, so the CLI can read them as files). The image
-    // context sits AFTER the focus directive but BEFORE the request, so the directive
-    // stays the first thing the model anchors on.
+    // Attached images: save to disk + build a "read these files" annotation
+    // (same path-based flow as quick-start). The image context sits AFTER the
+    // focus directive but BEFORE the request inside the core fork message.
     let imageContext = ''
     if (images && images.length > 0) {
       const processed = await processAndSaveImages(images)
       if (processed) imageContext = buildSessionImageContext(processed.savedImages)
     }
-    const forkMessage = `${FORK_FOCUS_PREFIX}${imageContext}New request:\n${userRequest}`
 
-    // Mint the fork's session id up front (verified: --session-id composes with
-    // --resume --fork-session, so the fork gets THIS id while still inheriting the
-    // parent conversation). Returning it lets the UI open the real forked panel
-    // immediately instead of showing a "Forking session..." placeholder and polling.
-    const forkSessionId = randomUUID()
-
-    // Seed the record before the spawn — same reason as quick-start: the UI opens
-    // the real panel on this response, and its first GET /api/sessions/:id must
-    // not 404 (a 404 reads as "no such session" and sticks the panel in its empty
-    // state). The spawn's persistSessionRecord updates this same row in place.
+    const { forkSessionToTask, SessionControlError } = await import('../../core/sessions/session-controls.js')
     try {
-      const { createSessionRecord } = await import('../../core/session-tracker.js')
-      await createSessionRecord(forkSessionId, task.id, task.project ?? '', sourceRecord.cwd, {
-        title: title ?? `Fork of ${sourceRecord.title ?? sourceSessionId.slice(0, 16)}`,
-        mode: sourceRecord.mode !== 'default' ? sourceRecord.mode : undefined,
-        host: sourceRecord.host,
-        forkedFromSessionId: sourceSessionId,
-        initialProcessStatus: 'idle',
-        initialStatusReason: 'awaiting_spawn',
-      })
+      const result = await forkSessionToTask(sourceSessionId, {
+        task_id, create_child_task, child_title, message, title, model,
+        ...(imageContext ? { imageContext } : {}),
+      }, 'web-api')
+      // Web and mobile now share the SAME core result shape (including the
+      // additive `title` field); clients ignore fields they don't know.
+      res.json(result)
     } catch (err) {
-      log.web.warn('fork: pre-spawn session record seed failed', {
-        sessionId: forkSessionId, taskId: task.id,
-        error: err instanceof Error ? err.message : String(err),
-      })
+      if (err instanceof SessionControlError) {
+        res.status(err.statusCode).json({ error: err.message, ...(err.extra ?? {}) })
+        return
+      }
+      throw err
     }
-
-    // Emit SESSION_START with forkedFromSessionId — handleStart() uses Claude Code's
-    // native --resume + --fork-session to transfer conversation context efficiently.
-    // No need to read source history or wait for session start; return immediately.
-    bus.emit(EventNames.SESSION_START, {
-      preassignedSessionId: forkSessionId,
-      taskId: task.id,
-      message: forkMessage,
-      cwd: sourceRecord.cwd,
-      project: task.project ?? '',
-      mode: sourceRecord.mode !== 'default' ? sourceRecord.mode : undefined,
-      // Fork must resume on the EXACT same model as the parent — the CLI does NOT
-      // inherit a session's model on --resume/--fork-session (it falls back to the
-      // account/config default), so an unspecified model would mismatch the parent
-      // and invalidate the prompt cache the fork is reusing. `cliModel` is the parent's
-      // original --model arg verbatim (e.g. "opus[1m]", incl. the 1M context marker) —
-      // persisted on every session start (persistSessionRecord), so this is the exact
-      // string, not an approximation. We deliberately do NOT fall back to the reported
-      // `model` (a resolved id like "…claude-opus-4-6-v1" that has LOST the [1m] marker)
-      // — using it would silently drop to 200K context, i.e. a DIFFERENT model than the
-      // parent. On the rare pre-cliModel legacy record, leave model undefined and let
-      // send() apply the default (same as quick-start) rather than send a mismatched id.
-      // An explicit request-body `model` still wins as an override.
-      model: model ?? sourceRecord.cliModel,
-      title: title ?? `Fork of ${sourceRecord.title ?? sourceSessionId.slice(0, 16)}`,
-      host: sourceRecord.host,
-      forkedFromSessionId: sourceSessionId,
-    }, ['session-runner'], { source: 'web-api' })
-
-    res.json({
-      status: 'pending',
-      sourceSessionId,
-      sessionId: forkSessionId,
-      taskId: task.id,
-      ...(childTaskCreated ? { childTaskCreated: true } : {}),
-      ...(sourceRecord.host ? { host: sourceRecord.host } : {}),
-    })
   } catch (err) {
     next(err)
   }

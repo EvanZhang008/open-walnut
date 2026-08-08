@@ -91,7 +91,7 @@ export interface InvariantViolation {
 }
 
 /** How an incident came to exist. */
-export type IncidentTrigger = 'invariant' | 'manual' | 'canary';
+export type IncidentTrigger = 'invariant' | 'manual' | 'canary' | 'client';
 
 /** Lifecycle status of an incident. */
 export type IncidentStatus = 'open' | 'investigating' | 'resolved' | 'dismissed';

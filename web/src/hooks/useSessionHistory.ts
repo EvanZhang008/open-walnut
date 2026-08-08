@@ -8,6 +8,8 @@ import {
   getHistoryCache,
   setHistoryCache,
 } from '@/cache/session-cache';
+import { computeHistoryAnchor, collectUnsettledIds } from './history-anchor';
+import { planDeltaMerge } from './history-merge';
 
 interface UseSessionHistoryReturn {
   messages: SessionHistoryMessage[];
@@ -111,54 +113,63 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       setPhase2Pending(true);
       const endP2 = perf.start(`session:delta:${sid}`);
       const since = cursorRef.current;
-      fetchSessionHistory(sessionId, { since, signal: controller.signal })
+      // Identity anchor: `since` alone is not a safe split point — the server's
+      // parsed array can shrink or slide (compact rewrite, subagent regrouping,
+      // whale-session bounded tail), and slicing by a stale count drops the NEWEST
+      // messages (inc-1785993576822). The anchor lets the server slice after a
+      // specific message instead, and rebuild when it can't find it.
+      const anchor = computeHistoryAnchor(messagesRef.current);
+      // Re-ask for the rows we hold an unsettled copy of. The server can't infer these
+      // (its own copy is already settled by now), so the client must name them.
+      const reviseIds = collectUnsettledIds(messagesRef.current);
+      fetchSessionHistory(sessionId, {
+        since,
+        anchorMsgId: anchor.anchorMsgId,
+        anchorTail: anchor.anchorTail,
+        reviseIds,
+        signal: controller.signal,
+      })
         .then((result) => {
           if (cancelled) return;
           endP2(`+${result.messages.length} msgs (delta=${result.delta})`);
           if (result.delta) {
-            // Incremental: append the new turn's messages.
-            if (result.messages.length > 0) {
-              const base = messagesRef.current;
-              const merged = [...base, ...result.messages];
-              // Consistency guard against duplication: the delta is server.messages.slice(since),
-              // so a correct append yields exactly `cursor` messages. If it doesn't, our cached
-              // prefix diverged from the server's current parse — this happens when a COMPACTION
-              // rewrote history (the JSONL gains summary lines and the parse shifts), so `since`
-              // no longer lines up with the same message boundary. Blindly appending then renders
-              // the overlap TWICE (the "compact still shows old messages below" bug, client side).
-              // On mismatch, re-fetch the FULL history to rebuild from a clean base instead.
-              const expected = result.cursor ?? merged.length;
-              if (result.cursor != null && merged.length !== expected) {
-                log.warn('session-history', `delta merge length mismatch — rebuilding (had=${base.length} +delta=${result.messages.length} → ${merged.length}, server cursor=${expected})`, { sessionId });
-                fetchSessionHistory(sessionId, { signal: controller.signal })
-                  .then((full) => {
-                    if (cancelled) return;
-                    // Stale rebuild would replace a fresher local view with the
-                    // server's old parse AND corrupt the cursor — skip; the next
-                    // healthy turn retries the rebuild.
-                    if (full.stale) { setStale(full.staleReason ?? 'live read failed'); return; }
-                    setStale(null);
-                    setMessages(full.messages);
-                    setForkBoundaryIndex(full.forkBoundaryIndex);
-                    cursorRef.current = full.cursor ?? full.messages.length;
-                    setHistoryCache(sessionId, {
-                      messages: full.messages,
-                      forkBoundaryIndex: full.forkBoundaryIndex,
-                      msgCount: full.cursor ?? full.messages.length,
-                    });
-                  })
-                  .catch(() => { /* keep current view; next turn retries */ });
-                return;
-              }
-              setMessages(merged);
+            // Fold the delta via the SHARED merge planner (history-merge.ts) —
+            // session-cache uses the same function, so the two mirrors can't
+            // drift apart again (drifted guards are how the sliding-window bug
+            // survived undetected; inc-1785993576822).
+            const plan = planDeltaMerge(messagesRef.current, result, cursorRef.current);
+            if (plan.kind === 'rebuild') {
+              log.warn('session-history', `delta merge inconsistent — rebuilding (${plan.reason}, had=${messagesRef.current.length} +delta=${result.messages.length})`, { sessionId });
+              fetchSessionHistory(sessionId, { signal: controller.signal })
+                .then((full) => {
+                  if (cancelled) return;
+                  // Stale rebuild would replace a fresher local view with the
+                  // server's old parse AND corrupt the cursor — skip; the next
+                  // healthy turn retries the rebuild.
+                  if (full.stale) { setStale(full.staleReason ?? 'live read failed'); return; }
+                  setStale(null);
+                  setMessages(full.messages);
+                  setForkBoundaryIndex(full.forkBoundaryIndex);
+                  cursorRef.current = full.cursor ?? full.messages.length;
+                  setHistoryCache(sessionId, {
+                    messages: full.messages,
+                    forkBoundaryIndex: full.forkBoundaryIndex,
+                    msgCount: full.cursor ?? full.messages.length,
+                  });
+                })
+                .catch(() => { /* keep current view; next turn retries */ });
+              return;
+            }
+            if (plan.kind === 'merged') {
+              setMessages(plan.messages);
               setHistoryCache(sessionId, {
-                messages: merged,
+                messages: plan.messages,
                 forkBoundaryIndex: result.forkBoundaryIndex ?? forkBoundaryIndex,
-                msgCount: result.cursor ?? merged.length,
+                msgCount: plan.cursor,
               });
             }
             // Advance cursor even on an empty delta (nothing new yet — archive lagging).
-            cursorRef.current = result.cursor ?? cursorRef.current;
+            cursorRef.current = plan.cursor;
           } else {
             // Server rebuilt (since out of range) → full replace.
             diagnoseOrdering('refetch-full', sid, result.messages);

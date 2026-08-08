@@ -29,6 +29,9 @@ import {
 import type { SessionHistoryMessage } from '@/types/session';
 import { fetchSessionHistory } from '@/api/sessions';
 import { promoteCompletedBlocks, buildIdOnlyEvidence, type DeltaEvidence } from './promote-blocks';
+import { computeHistoryAnchor, collectUnsettledIds } from '@/hooks/history-anchor';
+import { planDeltaMerge } from '@/hooks/history-merge';
+import { recordFlight, trimStreamEvent } from '@/stream/flight-recorder';
 import { log } from '@/utils/log';
 
 const MAX_CACHED = 20;
@@ -197,8 +200,19 @@ function ensureState(sid: string): StreamState {
 const inflightBgFetches = new Set<string>();
 
 function registerGlobalListeners(): void {
+  // Every session event is flight-recorded BEFORE its handler runs — the ring
+  // buffer is the replay input for tests/web/chat-lab/ when the render-filter
+  // tripwire fires (see flight-recorder.ts).
+  function onSessionEvent(name: string, cb: (data: unknown) => void): void {
+    wsClient.onEvent(name, (data: unknown) => {
+      const sid = (data as { sessionId?: string })?.sessionId;
+      if (sid && trackedSessions.has(sid)) recordFlight(sid, name, trimStreamEvent(data));
+      cb(data);
+    });
+  }
+
   // ── text-delta ──
-  wsClient.onEvent('session:text-delta', (data: unknown) => {
+  onSessionEvent('session:text-delta', (data: unknown) => {
     const { sessionId: sid, delta, msgId, parentToolUseId, subagentType, taskDescription } = data as {
       sessionId: string;
       delta: string;
@@ -226,7 +240,7 @@ function registerGlobalListeners(): void {
   });
 
   // ── tool-use ──
-  wsClient.onEvent('session:tool-use', (data: unknown) => {
+  onSessionEvent('session:tool-use', (data: unknown) => {
     const { sessionId: sid, toolName, toolUseId, input, planContent, parentToolUseId, subagentType, taskDescription } =
       data as {
         sessionId: string;
@@ -253,7 +267,7 @@ function registerGlobalListeners(): void {
   });
 
   // ── tool-result ──
-  wsClient.onEvent('session:tool-result', (data: unknown) => {
+  onSessionEvent('session:tool-result', (data: unknown) => {
     const { sessionId: sid, toolUseId, result } = data as {
       sessionId: string;
       toolUseId: string;
@@ -265,7 +279,7 @@ function registerGlobalListeners(): void {
   });
 
   // ── system-event ──
-  wsClient.onEvent('session:system-event', (data: unknown) => {
+  onSessionEvent('session:system-event', (data: unknown) => {
     const { sessionId: sid, variant, message, detail } = data as {
       sessionId: string;
       variant: 'compact' | 'error' | 'info';
@@ -280,7 +294,7 @@ function registerGlobalListeners(): void {
   });
 
   // ── thinking-delta ──
-  wsClient.onEvent('session:thinking-delta', (data: unknown) => {
+  onSessionEvent('session:thinking-delta', (data: unknown) => {
     const { sessionId: sid, delta, msgId, parentToolUseId } = data as {
       sessionId: string; delta: string; msgId?: string; parentToolUseId?: string;
     };
@@ -298,7 +312,7 @@ function registerGlobalListeners(): void {
   });
 
   // ── unknown-event (surface as info system block so no event is silently lost) ──
-  wsClient.onEvent('session:unknown-event', (data: unknown) => {
+  onSessionEvent('session:unknown-event', (data: unknown) => {
     const { sessionId: sid, scope, eventType, snippet } = data as {
       sessionId: string; scope: string; eventType: string; snippet: string;
     };
@@ -310,7 +324,7 @@ function registerGlobalListeners(): void {
   });
 
   // ── result (streaming done, turn finished successfully) ──
-  wsClient.onEvent('session:result', (data: unknown) => {
+  onSessionEvent('session:result', (data: unknown) => {
     const { sessionId: sid } = data as { sessionId: string };
     if (!sid || !trackedSessions.has(sid)) return;
     const state = ensureState(sid);
@@ -324,7 +338,7 @@ function registerGlobalListeners(): void {
   });
 
   // ── error (streaming done with error) ──
-  wsClient.onEvent('session:error', (data: unknown) => {
+  onSessionEvent('session:error', (data: unknown) => {
     const { sessionId: sid, error } = data as {
       sessionId: string;
       error?: string;
@@ -352,25 +366,36 @@ function registerGlobalListeners(): void {
     inflightBgFetches.add(sid);
     const cached = historyCache.get(sid);
     const since = cached?.msgCount ?? 0;
-    return fetchSessionHistory(sid, { since })
+    // Identity anchor + unsettled re-ask — the SAME request shape as
+    // useSessionHistory. This path used to send a bare count, which is exactly
+    // the lossy contract that dropped the newest messages on whale sessions
+    // (inc-1785993576822) and froze mid-flight Agent rows (inc-1785965937858).
+    const anchor = computeHistoryAnchor(cached?.messages ?? []);
+    const reviseIds = collectUnsettledIds(cached?.messages ?? []);
+    return fetchSessionHistory(sid, {
+      since,
+      anchorMsgId: anchor.anchorMsgId,
+      anchorTail: anchor.anchorTail,
+      reviseIds,
+    })
       .then((r) => {
+        // Fold via the SHARED merge planner (history-merge.ts) — same function
+        // as useSessionHistory, so the two mirrors can't drift apart again.
+        const plan = r.delta && cached ? planDeltaMerge(cached.messages, r, cached.msgCount) : undefined;
+
         // GC streaming blocks proven present in history (memory bound for
         // background sessions — correctness lives in the render filter).
-        // Cached prefix + delta ≈ full history → ID-ONLY evidence for old-turn
-        // twins and finished-background-agent lane blocks (inc-1783612454903).
-        const fullEv = buildIdOnlyEvidence([...(cached?.messages ?? []), ...r.messages]);
-        gcAbsorbedBlocks(sid, r.messages, fullEv);
+        // Evidence prefers the MERGED array (revisions folded in) — a late
+        // bgTaskFinished revision must free its lane blocks THIS round, not the
+        // next. Fallback: cached prefix + delta (rebuild pending / no cache).
+        const evBase = plan?.kind === 'merged'
+          ? plan.messages
+          : [...(cached?.messages ?? []), ...r.messages];
+        gcAbsorbedBlocks(sid, r.messages, buildIdOnlyEvidence(evBase));
 
-        if (r.delta && cached) {
-          // Append the increment to the cached history.
-          const merged = [...cached.messages, ...r.messages];
-          // Consistency guard (same as useSessionHistory): a correct delta append yields
-          // exactly `cursor` messages. A mismatch means the cached prefix diverged from the
-          // server's current parse (e.g. compaction rewrote history), so appending would
-          // DUPLICATE the overlap. Rebuild the cache from a full fetch instead of appending.
-          const expected = r.cursor ?? merged.length;
-          if (r.cursor != null && merged.length !== expected) {
-            log.warn('session-cache', `bg delta length mismatch for ${sid.substring(0, 8)} — rebuilding (had=${cached.messages.length} +${r.messages.length} → ${merged.length}, cursor=${expected})`);
+        if (plan && cached) {
+          if (plan.kind === 'rebuild') {
+            log.warn('session-cache', `bg delta inconsistent for ${sid.substring(0, 8)} — rebuilding (${plan.reason})`);
             fetchSessionHistory(sid)
               .then((full) => historyCacheSet(sid, {
                 messages: full.messages,
@@ -378,13 +403,16 @@ function registerGlobalListeners(): void {
                 msgCount: full.cursor ?? full.messages.length,
               }))
               .catch(() => { /* keep current cache; next turn retries */ });
-          } else {
+          } else if (plan.kind === 'merged') {
             historyCacheSet(sid, {
-              messages: merged,
+              messages: plan.messages,
               forkBoundaryIndex: r.forkBoundaryIndex ?? cached.forkBoundaryIndex,
-              msgCount: r.cursor ?? merged.length,
+              msgCount: plan.cursor,
             });
-            log.info('session-cache', `bg delta for ${sid.substring(0, 8)}: +${r.messages.length} → ${merged.length}`);
+            log.info('session-cache', `bg delta for ${sid.substring(0, 8)}: +${r.messages.length} → ${plan.messages.length}`);
+          } else {
+            // unchanged — still record the advanced cursor (empty delta).
+            historyCacheSet(sid, { ...cached, msgCount: plan.cursor });
           }
         } else {
           // Full payload (no cache yet, or since out of range → rebuild).
@@ -401,7 +429,7 @@ function registerGlobalListeners(): void {
   }
 
   // ── batch-completed (turn wrote to JSONL, streaming blocks are now history) ──
-  wsClient.onEvent('session:batch-completed', (data: unknown) => {
+  onSessionEvent('session:batch-completed', (data: unknown) => {
     const sid = (data as { sessionId?: string })?.sessionId;
     if (!sid || !trackedSessions.has(sid)) return;
     void deltaRefreshHistory(sid);

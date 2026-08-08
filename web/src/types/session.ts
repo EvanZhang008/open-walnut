@@ -114,6 +114,11 @@ export interface SessionHistoryMessage {
   msgId?: string;
   /** Walnut-generated message ID for deterministic dedup of optimistic user messages. */
   walnutMessageId?: string;
+  /** Server-stamped: this row's content can still change (an Agent row awaiting its
+   *  late `bgTaskFinished`, a tool row awaiting its result). We re-ask for these ids
+   *  on the next delta — otherwise a prefix synced mid-flight stays frozen and that
+   *  agent's lane blocks never get absorption proof (inc-1785965937858). */
+  unsettled?: boolean;
   /** True for CLI-injected user lines the human did NOT type (skill content
    *  dumps, compaction continuation summaries, image-read metadata). Rendered
    *  as a collapsed context row, never a "You" bubble. */

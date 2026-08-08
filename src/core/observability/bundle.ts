@@ -144,6 +144,17 @@ export async function captureBundle(
     // 7. process-health.txt — fd count / memory / uptime of THIS process at
     //    capture time. An exhausted fd table explains EBADF-class failures.
     writeArtifact('process-health.txt', await captureProcessHealth(), 'process-health.txt: unavailable');
+
+    // 8. client-evidence.json — the browser's UNTRUNCATED divergence payload
+    //    (full flight trace + unmatched blocks + state summaries), uploaded via
+    //    POST /api/client-evidence. The console-log forwarder truncates args at
+    //    1000 chars, so server.log.txt alone cannot answer "what did the client
+    //    consume" (inc-1786165723472's forensics gap) — this file can.
+    writeArtifact(
+      'client-evidence.json',
+      await captureClientEvidence(sessionId),
+      `client-evidence.json: no client divergence uploads for ${sessionId}`,
+    );
   } catch (err) {
     // Even the mkdir/orchestration failing must not throw on the incident path.
     meta.notesIfMissing.push(`bundle capture error: ${errMsg(err)}`);
@@ -271,6 +282,18 @@ function captureCliJsonl(sessionId: string, meta: BundleMeta): string {
 function streamDirs(): string[] {
   const dirs = [SESSION_STREAMS_DIR, '/tmp/open-walnut-streams'];
   return [...new Set(dirs)];
+}
+
+/** Latest browser-uploaded divergence evidence for the session (routes/
+ *  client-evidence.ts writes one JSON file per tripwire fire). Lazy import so
+ *  bundle capture never hard-depends on the web layer being loadable. */
+async function captureClientEvidence(sessionId: string): Promise<string> {
+  try {
+    const { latestClientEvidence } = await import('../../web/routes/client-evidence.js');
+    return latestClientEvidence(sessionId) ?? '';
+  } catch {
+    return '';
+  }
 }
 
 /** Concatenate sid-mentioning lines from every daemon-d-*.log, labelled by file. */

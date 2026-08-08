@@ -70,6 +70,13 @@ export type { SessionHistoryMessage } from '@/types/session';
 
 export interface SessionHistoryResult {
   messages: SessionHistoryMessage[];
+  /** Prefix rows whose CONTENT changed after we synced them — upsert by msgId, do
+   *  NOT append. An Agent/Task row gains `bgTaskFinished` from a task-notification
+   *  the CLI writes long after the row itself (74s in the measured incident), and a
+   *  tool row gains its `result` late. Without applying these, the client's prefix
+   *  is frozen mid-flight and the agent's lane blocks never get absorption proof —
+   *  a phantom Agent box sits at the bottom of the timeline (inc-1785965937858). */
+  revisedMessages?: SessionHistoryMessage[];
   forkBoundaryIndex?: number;
   /** Combined-message count at the source of truth = the cursor for the NEXT delta fetch. */
   cursor?: number;
@@ -87,7 +94,15 @@ export interface SessionHistoryResult {
 
 export async function fetchSessionHistory(
   sessionId: string,
-  opts?: { source?: 'streams'; signal?: AbortSignal; since?: number },
+  opts?: {
+    source?: 'streams'; signal?: AbortSignal; since?: number;
+    /** Identity of the newest uniquely-identified message we hold (+ rows after it).
+     *  The server slices after THAT message rather than after `since` messages —
+     *  see web/src/hooks/history-anchor.ts. */
+    anchorMsgId?: string; anchorTail?: number;
+    /** msgIds we hold an UNSETTLED copy of and want re-served (see collectUnsettledIds). */
+    reviseIds?: string[];
+  },
 ): Promise<SessionHistoryResult> {
   const params: Record<string, string> = {};
   if (opts?.source) params.source = opts.source;
@@ -95,6 +110,11 @@ export async function fetchSessionHistory(
   // small slice (usually 1-5 messages) + the new cursor. Empty slice = archive
   // hasn't caught up yet (turn not flushed); caller keeps streaming blocks & retries.
   if (opts?.since !== undefined) params.since = String(opts.since);
+  if (opts?.anchorMsgId) {
+    params.anchorMsgId = opts.anchorMsgId;
+    params.anchorTail = String(opts.anchorTail ?? 0);
+  }
+  if (opts?.reviseIds && opts.reviseIds.length > 0) params.revise = opts.reviseIds.join(',');
   // Remote sessions + fork chains can take 20-30s on first load (SSH pulls 3+ MB JSONL
   // serially through a corporate proxy). Streams path is local-only and fast; full path may be
   // slow — and a WHALE session (>10MB JSONL, chunked fs.readRange server-side, 120s
@@ -103,6 +123,7 @@ export async function fetchSessionHistory(
   const timeoutMs = opts?.source === 'streams' ? 15_000 : 150_000;
   const res = await apiGet<{
     messages: SessionHistoryMessage[];
+    revisedMessages?: SessionHistoryMessage[];
     forkBoundaryIndex?: number;
     cursor?: number;
     delta?: boolean;
@@ -115,8 +136,19 @@ export async function fetchSessionHistory(
   if (res.historyUnavailable) {
     throw new Error(`HISTORY_UNAVAILABLE:${res.historyUnavailable}`);
   }
+  // Flight-record what THIS client received (request shape + response shape,
+  // no content) — the replay input for the chat lab when a tripwire fires.
+  try {
+    const { recordFlight } = await import('@/stream/flight-recorder');
+    recordFlight(sessionId, 'history:fetch', {
+      since: opts?.since, anchor: opts?.anchorMsgId, revise: opts?.reviseIds?.length ?? 0,
+      delta: res.delta ?? false, got: res.messages.length,
+      revised: res.revisedMessages?.length ?? 0, cursor: res.cursor,
+    });
+  } catch { /* recorder is diagnostics-only — never block the fetch */ }
   return {
     messages: res.messages,
+    revisedMessages: res.revisedMessages,
     forkBoundaryIndex: res.forkBoundaryIndex,
     cursor: res.cursor,
     delta: res.delta,
@@ -659,7 +691,7 @@ export interface Incident {
   id: string;
   sessionId: string;
   taskId?: string;
-  trigger: 'invariant' | 'manual' | 'canary';
+  trigger: 'invariant' | 'manual' | 'canary' | 'client';
   label: string;
   summary: string;
   severity: 'warn' | 'error';

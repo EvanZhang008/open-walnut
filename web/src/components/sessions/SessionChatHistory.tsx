@@ -730,17 +730,42 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       log.warn('stream', `render-filter: ${unmatchedBlocks.length} completed block(s) had no delta twin — kept, not deleted`, {
         sessionId, unmatched: unmatchedBlocks.slice(0, 5),
       });
-      // Dump the flight trace alongside — the exact WS/fetch inputs this client
-      // consumed, i.e. the replay script for a tests/web/chat-lab/ scenario.
-      // Rides the browser-log forwarder into /tmp/open-walnut/ and the incident
-      // bundle. Async import: recorder is diagnostics-only, never on hot path.
+      // Ship the UNTRUNCATED evidence to POST /api/client-evidence — the
+      // console-log forwarder caps args at 1000 chars, which reduced a
+      // 200-entry flight trace to ~12 entries and 78 unmatched blocks to 5
+      // (inc-1786165723472's forensics gap). The endpoint persists the payload
+      // verbatim AND opens a deduped incident, so divergences become queryable
+      // data points instead of grep targets. Fire-and-forget; the log.warn
+      // above stays as the greppable breadcrumb.
       void import('@/stream/flight-recorder').then(({ flightTrace }) => {
         const trace = flightTrace(sessionId);
-        if (trace.length > 0) {
-          log.warn('stream', `flight trace for ${sessionId} (${trace.length} entries)`, {
-            sessionId, trace: JSON.stringify(trace),
-          });
-        }
+        void fetch('/api/client-evidence', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            kind: 'render-filter-no-twin',
+            summary: `${unmatchedBlocks.length} completed block(s) had no history twin at quiescence`,
+            flightTrace: trace,
+            unmatched: unmatchedBlocks,
+            blocksSummary: blocks.map((b, i) => ({
+              i,
+              type: b.type,
+              name: b.type === 'tool_call' ? b.name : undefined,
+              msgId: (b as { msgId?: string }).msgId,
+              toolUseId: b.type === 'tool_call' ? b.toolUseId : undefined,
+              parent: (b as { parentToolUseId?: string }).parentToolUseId,
+              len: b.type === 'text' || b.type === 'thinking' ? b.content.length : undefined,
+              hidden: hiddenBlocks.has(i),
+            })),
+            messagesSummary: messages.slice(-40).map(m => ({
+              role: m.role,
+              msgId: m.msgId,
+              textLen: m.text?.length,
+              tools: m.tools?.map(t => ({ id: t.toolUseId, name: t.name, bg: t.bgTaskFinished })),
+            })),
+          }),
+        }).catch(() => {});
       }).catch(() => {});
     }
     lastUnmatchedLogged.current = unmatchedBlocks.length;
