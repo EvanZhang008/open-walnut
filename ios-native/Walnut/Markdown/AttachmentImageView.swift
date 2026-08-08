@@ -411,6 +411,14 @@ struct AttachmentImageView: View {
         }
         .task(id: raw) {
             if let loaded = await AttachmentLoader.shared.image(for: raw) {
+                // Forensic crumb: a remote image landing swaps a fixed-height
+                // placeholder for real content — a row-height change that can
+                // arrive many SECONDS after the page settled (cloud-bridge
+                // media fetches are slow), i.e. exactly inside the 5-20s
+                // window where the field freezes strike. If the next kill's
+                // trail shows img-landed right before the stall, the delayed
+                // relayout path is the trigger.
+                FreezeContext.shared.note("img-landed", Int(loaded.size.width * loaded.size.height))
                 image = loaded
             } else {
                 failed = true
