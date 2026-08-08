@@ -215,9 +215,9 @@ export class SessionHookDispatcher {
       case EventNames.SESSION_SEND: {
         const state = this.getOrCreateState(sessionId);
         state.awaitingFirstResponse = true;
-        // Skip onMessageSend for automated sources (triage session_send, subagent-runner).
-        // User-initiated sources (web-ui, cli, web-api) fire hooks normally.
-        if (event.source !== 'agent' && event.source !== 'subagent-runner') {
+        // Skip onMessageSend for automated sources (triage session_send, subagent-runner,
+        // peer-session gateway sends). User-initiated sources (web-ui, cli, web-api) fire hooks normally.
+        if (event.source !== 'agent' && event.source !== 'subagent-runner' && event.source !== 'peer') {
           results.push({
             hookPoint: 'onMessageSend',
             extraPayload: {

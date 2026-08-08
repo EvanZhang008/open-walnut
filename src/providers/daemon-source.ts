@@ -212,11 +212,95 @@ const DAEMON_SOURCE = `#!/usr/bin/env node
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const http = require('http');
+const net = require('net');
 const { spawn, execSync } = require('child_process');
 const crypto = require('crypto');
 
 process.umask(0o077);
+
+// ── wn: minimal peer-session CLI (agent gateway) ──
+// Source-deploy twin of src/providers/wn-cli.ts — hand-inlined MINIMAL subset
+// (this template cannot import). Invoked from the argv dispatch in Main below
+// (async: the socket handlers call process.exit). Keep exit codes + command
+// surface in sync with wn-cli.ts and daemon-standalone.ts.
+function runWnMinimal(argv) {
+  var out = function (s) { process.stdout.write(s + '\\n'); };
+  var errOut = function (s) { process.stderr.write(s + '\\n'); };
+  var usage = 'usage: wn peers list [--json] | wn peers send <target> <text...>';
+  if (argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help') { out(usage); process.exit(0); }
+  if (argv[0] !== 'peers') { errOut('wn: unknown command; ' + usage); process.exit(2); }
+  // Mirror wn-cli.ts: --json is recognized only BEFORE positional args, so
+  // message text can legitimately contain the token '--json'.
+  var json = false;
+  var rest = argv.slice(1);
+  while (rest.length && rest[0] === '--json') { json = true; rest.shift(); }
+  var sub = rest.shift();
+  while (rest.length && rest[0] === '--json') { json = true; rest.shift(); }
+  var op, args;
+  if (sub === 'list' && rest.length === 0) { op = 'peers.list'; args = {}; }
+  else if (sub === 'send' && rest.length >= 2) {
+    op = 'peers.send';
+    args = { target: rest[0], text: rest.slice(1).join(' ') };
+  } else { errOut('wn: ' + usage); process.exit(2); }
+  var sockPath = process.env.WALNUT_AGENT_SOCKET;
+  var sid = process.env.WALNUT_SESSION_ID;
+  if (!sockPath || !sid) {
+    errOut('wn: not running inside a Walnut-managed session (WALNUT_AGENT_SOCKET / WALNUT_SESSION_ID not set)');
+    process.exit(6);
+  }
+  // Exit-code table mirrors wn-cli.ts errorToExitCode (plan §4).
+  var exitFor = function (code) {
+    if (code === 'unknown_peer' || code === 'ambiguous_peer' || code === 'self_send') return 3;
+    if (code === 'throttled' || code === 'queue_full') return 4;
+    if (code === 'hub_unreachable' || code === 'hub_timeout') return 5;
+    if (code === 'unknown_caller') return 6;
+    return 1;
+  };
+  var sock = net.connect(sockPath);
+  var buf = '';
+  var finished = false;
+  var finish = function (fn) { if (finished) return; finished = true; clearTimeout(timer); sock.destroy(); fn(); };
+  var timer = setTimeout(function () {
+    finish(function () { errOut('wn: hub_timeout: no reply from the Walnut daemon within 30s'); process.exit(5); });
+  }, 30000);
+  sock.on('connect', function () { sock.write(JSON.stringify({ v: 1, op: op, sid: sid, args: args }) + '\\n'); });
+  sock.on('error', function (e) {
+    finish(function () { errOut('wn: not running inside a Walnut-managed session (agent socket unreachable: ' + e.message + ')'); process.exit(6); });
+  });
+  sock.on('close', function () {
+    finish(function () { errOut('wn: agent socket closed without a response'); process.exit(6); });
+  });
+  sock.on('data', function (chunk) {
+    buf += chunk.toString('utf-8');
+    var nl = buf.indexOf('\\n');
+    if (nl === -1) return;
+    var line = buf.slice(0, nl);
+    finish(function () {
+      var resp;
+      try { resp = JSON.parse(line); } catch (e) { errOut('wn: malformed response from agent socket'); process.exit(1); }
+      if (json) { out(JSON.stringify(resp)); process.exit(resp.ok ? 0 : exitFor(resp.error && resp.error.code)); }
+      if (!resp.ok) {
+        var err = resp.error || {};
+        errOut('wn: ' + (err.code || 'internal') + ': ' + (err.message || 'gateway request failed'));
+        process.exit(exitFor(err.code));
+      }
+      if (op === 'peers.list') {
+        var peers = (resp.result && resp.result.peers) || [];
+        if (peers.length === 0) { out('(no peer sessions)'); process.exit(0); }
+        for (var i = 0; i < peers.length; i++) {
+          var p = peers[i];
+          out((p.self ? '*' : ' ') + ' ' + p.shortId + '  ' + (p.title || '(untitled)') + '  ' + (p.host || 'local') + '  ' + (p.status || '?'));
+        }
+      } else {
+        var r = resp.result || {};
+        out('sent to ' + String(r.targetSid || '').slice(0, 8) + ' "' + (r.targetTitle || '') + '" (queue depth ' + (r.queueDepth || 0) + ')');
+      }
+      process.exit(0);
+    });
+  });
+}
 
 // ── PATH setup ──
 // Same logic the compiled binary uses: bun/node may launch the daemon with a
@@ -624,7 +708,7 @@ function startOrphanPoll(sid) {
 // terminal-is-terminal rules Walnut uses, served on the getState RPC so Walnut can reconcile a
 // lost-terminal event without guessing liveness. resourceVersion = the event byte offset v
 // (monotonic, rebuildable from the jsonl). MUST stay byte-equivalent to daemon-standalone.ts.
-const BG_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled']);
+const BG_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled', 'killed']);
 const BG_TRANSITION_CAP = 50;
 
 function emptyTaskState() {
@@ -1257,6 +1341,10 @@ var BRIDGE_ALLOWED_COMMANDS = new Set([
   // the daemon spawns NOTHING from this command. NOT the raw spawn command:
   // a compromised cloud box must never hand this daemon arbitrary argv.
   'session.launch',
+  // Narrow control relay (model/effort/fork/model-options): same forward-to-
+  // walnut-server shape as session.launch — the daemon executes NOTHING
+  // itself, the primary re-validates everything.
+  'session.control',
 ]);
 
 function handleCommand(ws, msg) {
@@ -1313,6 +1401,15 @@ function handleCommand(ws, msg) {
     case 'stt-result': return cmdSttResult(ws, id, cmd);
     case 'session.launch': return cmdLaunchRelay(ws, id, cmd);
     case 'launch-result': return cmdLaunchResult(ws, id, cmd);
+    case 'session.control': return cmdControlRelay(ws, id, cmd);
+    case 'control-result': return cmdControlResult(ws, id, cmd);
+    // NOT in BRIDGE_ALLOWED_COMMANDS: only the trusted SSH-tunneled walnut
+    // client may answer agent-gateway relays (see the gateway section).
+    case 'gateway-result': return cmdGatewayResult(ws, id, cmd);
+    // NOT in BRIDGE_ALLOWED_COMMANDS: reverse direction — the trusted walnut
+    // server pushes slim mobile feed events DOWN, the daemon relays them to
+    // the cloud bridge (see cmdMobileEvent).
+    case 'mobile-event': return cmdMobileEvent(ws, id, cmd);
     // ACP worker commands: not implemented in the source-template daemon yet
     // (MVP = local Mac binary daemon only). Answer with a structured errorKind
     // so walnut can distinguish "host can't do ACP" from a transient failure.
@@ -1520,6 +1617,283 @@ function cmdLaunchResult(ws, id, cmd) {
   sendOk(ws, id, {});
 }
 
+// ── Control relay: bridge session-control request → the connected walnut server ──
+// Mirror of the launch relay above (same trusted-client pick, same timeout
+// map, same errorKind passthrough) for model/effort/fork/model-options. The
+// daemon executes NOTHING here — the walnut server re-validates and runs the
+// shared session-controls core, answering with a control-result command
+// carrying the same relayId. Keep in sync with daemon-standalone.ts.
+
+var CONTROL_RELAY_TIMEOUT_MS = 45000;
+var controlRelayCounter = 0;
+var controlRelayPending = new Map();
+
+function cmdControlRelay(ws, id, cmd) {
+  var action = cmd.action, params = cmd.params;
+  var targetSid = cmd.sessionId || cmd.sid;
+  if (!action) {
+    return sendError(ws, id, 'session.control: missing action');
+  }
+  if (!targetSid) {
+    return sendError(ws, id, 'session.control: missing sessionId');
+  }
+  var target = null;
+  for (const client of wsClients) {
+    if (client.origin !== 'bridge') { target = client; break; }
+  }
+  if (!target) {
+    return sendError(ws, id, 'session.control: no primary server connected');
+  }
+  controlRelayCounter += 1;
+  var relayId = controlRelayCounter;
+  var timer = setTimeout(function () {
+    controlRelayPending.delete(relayId);
+    sendError(ws, id, 'session.control: primary server timed out');
+  }, CONTROL_RELAY_TIMEOUT_MS);
+  controlRelayPending.set(relayId, { ws: ws, id: id, timer: timer });
+  logMsg('info', 'session.control: relaying to primary server', { relayId: relayId, action: action, sid: targetSid });
+  sendEvent(target, 'control-request', { relayId: relayId, action: action, sessionId: targetSid, params: params || {} });
+}
+
+function cmdControlResult(ws, id, cmd) {
+  var relayId = cmd.relayId, result = cmd.result, error = cmd.error, errorKind = cmd.errorKind;
+  var pending = typeof relayId === 'number' ? controlRelayPending.get(relayId) : undefined;
+  if (!pending) {
+    // Late result after timeout — ack and drop.
+    return sendOk(ws, id, { stale: true });
+  }
+  controlRelayPending.delete(relayId);
+  clearTimeout(pending.timer);
+  if (result && !error) {
+    logMsg('info', 'session.control: relay complete', { relayId: relayId });
+    sendOk(pending.ws, pending.id, { result: result });
+  } else {
+    // Carry errorKind through so the cloud route maps the precise 4xx.
+    try {
+      pending.ws.send(JSON.stringify({
+        id: pending.id, ok: false,
+        error: error || 'control failed',
+        errorKind: errorKind || 'internal',
+      }));
+    } catch {}
+  }
+  sendOk(ws, id, {});
+}
+
+// ── Agent gateway: on-host unix socket → Mac hub relay ──
+// Keep in sync with daemon-standalone.ts gateway section. The pure protocol
+// logic (parse/validate/alias resolution) from gateway-core.ts is hand-inlined
+// here — this template cannot import. A wn CLI writes one NDJSON request line
+// to the daemon dir's agent-gateway.sock; the daemon resolves the caller's
+// CURRENT sid via gatewaySidAliases and relays to the Mac hub with the same
+// reverse-RPC shape as cmdLaunchRelay/cmdLaunchResult (relayId + pending map +
+// gateway-request event / gateway-result command).
+
+var GATEWAY_SOCK_PATH = path.join(DAEMON_DIR, 'agent-gateway.sock');
+var GATEWAY_SHIM_DIR = path.join(DAEMON_DIR, 'bin');
+var GATEWAY_SHIM_PATH = path.join(GATEWAY_SHIM_DIR, 'wn');
+var GATEWAY_MAX_LINE_BYTES = 256 * 1024;
+var GATEWAY_OPS = ['peers.list', 'peers.send'];
+// 20s default (shorter than the 45s launch relay — peers ops have no long
+// validation chain); WALNUT_GATEWAY_TIMEOUT_MS overrides (tests only).
+var GATEWAY_HUB_TIMEOUT_MS = (function () {
+  var n = Number(process.env.WALNUT_GATEWAY_TIMEOUT_MS || '');
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 20000;
+})();
+
+// oldSid → newSid, maintained by cmdRename (a CLI's WALNUT_SESSION_ID env is
+// frozen at spawn; fresh spawns use a tmp sid that rename re-keys).
+var gatewaySidAliases = new Map();
+
+var gatewayRelayCounter = 0;
+var gatewayRelayPending = new Map();
+
+function gatewayError(code, message) {
+  return { ok: false, error: { code: code, message: message } };
+}
+
+// Mirror of gateway-core.ts parseGatewayLine — same checks, same error codes.
+function parseGatewayLine(line) {
+  if (Buffer.byteLength(line, 'utf8') > GATEWAY_MAX_LINE_BYTES) {
+    return gatewayError('bad_request', 'request line exceeds ' + GATEWAY_MAX_LINE_BYTES + ' bytes');
+  }
+  var parsed;
+  try { parsed = JSON.parse(line); } catch (e) {
+    return gatewayError('bad_request', 'request is not valid JSON');
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return gatewayError('bad_request', 'request must be a JSON object');
+  }
+  if (parsed.v !== 1) {
+    return gatewayError('unsupported_version', 'unsupported protocol version: ' + JSON.stringify(parsed.v));
+  }
+  if (typeof parsed.op !== 'string' || GATEWAY_OPS.indexOf(parsed.op) === -1) {
+    return gatewayError('bad_request', 'unsupported op: ' + JSON.stringify(parsed.op));
+  }
+  if (typeof parsed.sid !== 'string' || parsed.sid.length === 0) {
+    return gatewayError('bad_request', 'missing sid');
+  }
+  var args = {};
+  if (parsed.args !== undefined) {
+    if (typeof parsed.args !== 'object' || parsed.args === null || Array.isArray(parsed.args)) {
+      return gatewayError('bad_request', 'args must be an object');
+    }
+    args = parsed.args;
+  }
+  return { ok: true, request: { v: 1, op: parsed.op, sid: parsed.sid, args: args } };
+}
+
+// Mirror of gateway-core.ts resolveCallerSid — chase the alias chain (max 5
+// hops so a corrupt/cyclic table terminates); null = unknown_caller.
+function resolveCallerSid(sid) {
+  var cur = sid;
+  for (var hop = 0; hop <= 5; hop++) {
+    if (sessions.has(cur)) return cur;
+    var next = gatewaySidAliases.get(cur);
+    if (next === undefined || next === cur) return null;
+    cur = next;
+  }
+  return null;
+}
+
+function sendGatewayRequest(capability, callerSid, payload, respond) {
+  // Pick any trusted client (never the bridge adapter) — same rule as
+  // cmdLaunchRelay.
+  var target = null;
+  for (const client of wsClients) {
+    if (client.origin !== 'bridge') { target = client; break; }
+  }
+  if (!target) {
+    return respond(gatewayError('hub_unreachable', 'no primary server connected'));
+  }
+  gatewayRelayCounter += 1;
+  var relayId = gatewayRelayCounter;
+  var timer = setTimeout(function () {
+    gatewayRelayPending.delete(relayId);
+    respond(gatewayError('hub_timeout', 'primary server timed out'));
+  }, GATEWAY_HUB_TIMEOUT_MS);
+  gatewayRelayPending.set(relayId, { respond: respond, timer: timer });
+  logMsg('info', 'gateway: relaying to primary server', { relayId: relayId, capability: capability, callerSid: callerSid });
+  sendEvent(target, 'gateway-request', { relayId: relayId, capability: capability, callerSid: callerSid, payload: payload });
+}
+
+// gateway-result is deliberately NOT in BRIDGE_ALLOWED_COMMANDS — only a
+// trusted (SSH-tunneled) walnut client may answer a gateway relay.
+function cmdGatewayResult(ws, id, cmd) {
+  var relayId = cmd.relayId, result = cmd.result, error = cmd.error, errorCode = cmd.errorCode, detail = cmd.detail;
+  var pending = typeof relayId === 'number' ? gatewayRelayPending.get(relayId) : undefined;
+  if (!pending) {
+    // Late result after timeout — ack and drop (same as cmdLaunchResult).
+    return sendOk(ws, id, { stale: true });
+  }
+  gatewayRelayPending.delete(relayId);
+  clearTimeout(pending.timer);
+  if (result && !error) {
+    pending.respond({ ok: true, result: result });
+  } else {
+    var errObj = gatewayError(errorCode || 'internal', error || 'gateway request failed');
+    if (detail !== undefined) {
+      errObj.error.detail = detail;
+      if (detail && typeof detail.retryAfterMs === 'number') errObj.error.retryAfterMs = detail.retryAfterMs;
+    }
+    pending.respond(errObj);
+  }
+  sendOk(ws, id, {});
+}
+
+// One parsed NDJSON line from the agent socket → local reject or hub relay.
+function handleGatewayLine(line, respond) {
+  var parsed = parseGatewayLine(line);
+  if (parsed.ok !== true) return respond(parsed);
+  var req = parsed.request;
+  var callerSid = resolveCallerSid(req.sid);
+  if (!callerSid) {
+    // Unknown sid (CLI adopted from before a daemon restart) — refuse locally,
+    // the request never leaves this host. A respawn self-heals.
+    return respond(gatewayError('unknown_caller', 'session is not tracked by this daemon (a respawn self-heals)'));
+  }
+  sendGatewayRequest(req.op, callerSid, req.args, respond);
+}
+
+// Second listener: owner-only unix socket, raw NDJSON, one request per conn.
+function startGatewayListener() {
+  // Unlink a stale socket from a crashed predecessor — bind fails EADDRINUSE
+  // otherwise (the file outlives the process).
+  try { fs.unlinkSync(GATEWAY_SOCK_PATH); } catch {}
+  try {
+    var server = net.createServer(function (socket) {
+      var buf = '';
+      var done = false;
+      var reply = function (resp) {
+        if (done) return;
+        done = true;
+        try { socket.end(JSON.stringify(resp) + '\\n'); } catch {}
+      };
+      socket.on('data', function (chunk) {
+        if (done) return;
+        buf += chunk.toString('utf-8');
+        if (Buffer.byteLength(buf, 'utf8') > GATEWAY_MAX_LINE_BYTES) {
+          return reply(gatewayError('bad_request', 'request line too large'));
+        }
+        var nl = buf.indexOf('\\n');
+        if (nl === -1) return;
+        handleGatewayLine(buf.slice(0, nl), reply);
+      });
+      socket.on('error', function () { /* client went away — pending timer self-cleans */ });
+    });
+    server.on('error', function (err) {
+      logMsg('warn', 'agent gateway listener error', { error: err.message });
+    });
+    server.listen(GATEWAY_SOCK_PATH, function () {
+      // Owner-only IS the credential: don't rely on umask, chmod explicitly.
+      try { fs.chmodSync(GATEWAY_SOCK_PATH, 0o600); } catch {}
+      logMsg('info', 'agent gateway listening', { sock: GATEWAY_SOCK_PATH });
+    });
+  } catch (err) {
+    // The gateway is additive — never fail daemon startup over it.
+    logMsg('warn', 'agent gateway listener failed', { error: err.message });
+  }
+}
+
+// PATH shim so wn inside spawned sessions reaches this daemon's wn dispatch.
+// Source-deploy branch: exec node <this daemon.cjs> wn "$@".
+function writeWnShim() {
+  try {
+    fs.mkdirSync(GATEWAY_SHIM_DIR, { recursive: true, mode: 0o700 });
+    var q = function (s) { return "'" + String(s).replace(/'/g, "'\\\\''") + "'"; };
+    var shim = '#!/bin/sh\\nexec ' + q(process.execPath) + ' ' + q(process.argv[1]) + ' wn "$@"\\n';
+    fs.writeFileSync(GATEWAY_SHIM_PATH, shim, { mode: 0o755 });
+    fs.chmodSync(GATEWAY_SHIM_PATH, 0o755);
+  } catch (err) {
+    logMsg('warn', 'wn shim write failed', { error: err.message });
+  }
+}
+
+// ── Mobile events relay: walnut server → cloud bridge (reverse direction) ──
+// The primary's mobile events feed (src/web/routes/events-v1.ts) pushes slim
+// {kind, data} frames here; the daemon forwards them verbatim to the cloud
+// bridge as {ev:'mobile-event', ...} so phones connected to the cloud box
+// get the same live feed. Fire-and-forget: no bridge = ack-and-drop (the
+// phone's snapshot frame on reconnect heals the gap). Trusted clients only —
+// this case is deliberately NOT in BRIDGE_ALLOWED_COMMANDS (a compromised
+// cloud box must not be able to inject fake feed events back at itself, and
+// the direction is walnut → daemon → bridge, never bridge → daemon).
+// Keep in sync with daemon-standalone.ts.
+
+function cmdMobileEvent(ws, id, cmd) {
+  var kind = cmd.kind, data = cmd.data;
+  if (typeof kind !== 'string' || !kind) {
+    return sendError(ws, id, 'mobile-event: missing kind');
+  }
+  if (!bridgeAdapter) {
+    return sendOk(ws, id, { relayed: false });
+  }
+  try {
+    bridgeAdapter.send(JSON.stringify({ ev: 'mobile-event', kind: kind, data: data == null ? null : data }));
+  } catch {}
+  sendOk(ws, id, { relayed: true });
+}
+
 // ── Start a Claude session ──
 function cmdStart(ws, id, cmd) {
   const { sid, args, cwd, message, resume, mode } = cmd;
@@ -1680,6 +2054,15 @@ function cmdStart(ws, id, cmd) {
       MCP_CONNECTION_NONBLOCKING: '1',
       CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
       CLAUDE_CODE_MAX_RETRIES: cliMaxRetries,
+      // Agent gateway (peer sessions): the wn CLI inside this session reads
+      // these two to reach the on-host gateway socket. The sid may be a fresh
+      // spawn's tmp id — gatewaySidAliases (cmdRename) resolves it to the
+      // current sid on every request. PATH append puts the wn shim on the
+      // session's PATH (this twin spawns claude directly, no shell preamble).
+      // Keep in sync with daemon-standalone.ts.
+      WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
+      WALNUT_SESSION_ID: sid,
+      PATH: (process.env.PATH || '') + ':' + GATEWAY_SHIM_DIR,
       // Never let OUR watchdog pid leak into the CLI's env — a CLI session that
       // runs a dev:prod deploy would hand this stale pid to the PRODUCTION
       // daemon, whose watchdog would trip and (with the isolated-dir reap) kill
@@ -2134,8 +2517,11 @@ function addSubscriber(ws, sid, fromOffset) {
         // them resurrects stale permission prompts in the UI. A genuinely-pending
         // request is recovered out-of-band via pendingCtrl (returned on attach),
         // NOT via replay — so dropping all control lines here loses nothing.
+        // Prefix match: '"control_request"' misses control_request_progress
+        // (heartbeats for in-flight side_question requests, inc-1786165723472)
+        // and any future control_* variant — the whole family is plumbing.
         // Keep in sync with daemon-standalone.ts addSubscriber (CLAUDE.md).
-        if (line.includes('"control_request"') || line.includes('"control_response"')) continue;
+        if (line.includes('"type":"control_')) continue;
         try { sendEvent(ws, 'jsonl', { sid, line, v }); } catch {}
       }
     } catch {}
@@ -2558,6 +2944,10 @@ function cmdRename(ws, id, cmd) {
 
     sessions.delete(oldSid);
     sessions.set(newSid, session);
+    // Agent gateway: the CLI's WALNUT_SESSION_ID env still carries the OLD sid
+    // (env is frozen at spawn). Record the alias so resolveCallerSid can chase
+    // the chain to the current sid. Keep in sync with daemon-standalone.ts.
+    gatewaySidAliases.set(oldSid, newSid);
 
     ensureWatcher(newSid);
 
@@ -3483,7 +3873,42 @@ const SESSION_IDLE_WARNING_MS = 5 * 60 * 1000;     // 5 minutes
 // 2hr: conservative — gives plenty of time for legitimate background work (builds,
 // long MCP ops, await_human_action), but eventually reclaims resources.
 const SESSION_IDLE_KILL_MS = 2 * 60 * 60 * 1000;   // 2 hours
+// Cron-armed sessions (/loop): the CLI's in-process scheduler lives in THIS
+// process's memory — killing it silently kills the loop. Extended, not
+// disabled: the CLI auto-expires recurring crons after 7 days.
+const SESSION_CRON_IDLE_KILL_MS = 7 * 24 * 60 * 60 * 1000;   // 7 days
+// Sessions with a running background task: wait-style bash tasks write to
+// output_file, not the JSONL, so the session looks idle for the task's whole
+// lifetime (incident inc-1786222771315). Extended, not disabled — capped at
+// 24h so a lost terminal event can't make the process immortal.
+const SESSION_BG_IDLE_KILL_MS = 24 * 60 * 60 * 1000;   // 24 hours
 const SESSION_SCAN_INTERVAL_MS = 60000;             // every 60s
+
+// Last-resort cron evidence: the CLI scheduler's own debug log in HOME
+// (survives /tmp wipes). See daemon-standalone.ts for the full rationale.
+const CRON_DEBUG_TAIL_BYTES = 64 * 1024;
+function hasRecentSchedulerFiring(sid, withinMs) {
+  const debugPath = path.join(os.homedir(), '.claude', 'debug', sid + '.txt');
+  let fd;
+  try { fd = fs.openSync(debugPath, 'r'); } catch { return false; }
+  try {
+    const size = fs.fstatSync(fd).size;
+    const readLen = Math.min(size, CRON_DEBUG_TAIL_BYTES);
+    const buf = Buffer.alloc(readLen);
+    fs.readSync(fd, buf, 0, readLen, size - readLen);
+    const text = buf.toString('utf-8');
+    const cutoff = Date.now() - withinMs;
+    const re = /^(\S+) \[DEBUG\] \[ScheduledTasks\] (?:firing|scheduled) /gm;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      const t = Date.parse(m[1]);
+      if (!Number.isNaN(t) && t >= cutoff) return true;
+    }
+    return false;
+  } catch { return false; } finally {
+    try { fs.closeSync(fd); } catch {}
+  }
+}
 
 function scanIdleSessions() {
   const now = Date.now();
@@ -3509,6 +3934,11 @@ function scanIdleSessions() {
       continue;
     }
 
+    // Feed the age-cleaner watchdog: .pgid is written once at spawn; systemd-
+    // tmpfiles' 10-day /tmp age rule would delete it under a long-lived
+    // session, breaking re-adopt on daemon restart. Touch it every scan.
+    try { const t = new Date(); fs.utimesSync(session.pgidPath, t, t); } catch {}
+
     // 2. Has at least one subscribed ws? Skip idle check — someone cares.
     if (session.subscribers.size > 0) continue;
 
@@ -3517,14 +3947,31 @@ function scanIdleSessions() {
     try { mtimeMs = fs.statSync(session.jsonlPath).mtimeMs; } catch { continue; }
 
     const idleMs = now - mtimeMs;
+    // A CronCreate'd /loop lives in the CLI process — killing it silently
+    // kills the loop (session-only crons are never on disk). Extend to the
+    // CLI's own 7-day cron auto-expiry instead of disabling the reaper.
+    const cronArmed = Object.keys(session.foldState.cronIds || {}).length > 0;
+    // A running background task (daemon's OWN taskState) also outlives JSONL
+    // silence — see daemon-standalone.ts for the full rationale (inc-1786222771315).
+    const bgActive = (session.taskState && session.taskState.derivedRunning > 0) === true;
+    const killMs = cronArmed ? SESSION_CRON_IDLE_KILL_MS
+      : bgActive ? SESSION_BG_IDLE_KILL_MS
+      : SESSION_IDLE_KILL_MS;
     if (idleMs < SESSION_IDLE_WARNING_MS) {
       continue;
-    } else if (idleMs < SESSION_IDLE_KILL_MS) {
+    } else if (idleMs < killMs) {
       const idleMinutes = Math.round(idleMs / 60000);
-      logMsg('warn', 'idle scan: session idle with no subscribers', { sid, pid, idleMinutes, threshold: '2hr' });
+      logMsg('warn', 'idle scan: session idle with no subscribers', { sid, pid, idleMinutes, threshold: cronArmed ? '7d (cron active)' : bgActive ? '24h (bg task running)' : '2hr' });
     } else {
+      // FINAL CHECK before the irreversible kill: the CLI scheduler's own
+      // debug log (HOME, survives /tmp wipes). A recent firing means a live
+      // loop the fold failed to see (stream file wiped + rebuild) — refuse.
+      if (!cronArmed && hasRecentSchedulerFiring(sid, SESSION_IDLE_KILL_MS)) {
+        logMsg('warn', 'idle scan: kill vetoed — CLI scheduler debug log shows recent cron firing', { sid, pid, idleMinutes: Math.round(idleMs / 60000) });
+        continue;
+      }
       const idleMinutes = Math.round(idleMs / 60000);
-      logMsg('warn', 'idle scan: killing idle session (no subscribers, no output)', { sid, pid, idleMinutes });
+      logMsg('warn', 'idle scan: killing idle session (no subscribers, no output)', { sid, pid, idleMinutes, cronArmed, bgActive });
       killSessionProcessGroup(pid, sid);
     }
   }
@@ -3665,12 +4112,25 @@ function cleanup() {
     try { fs.unlinkSync(PID_FILE); } catch {}
     try { fs.unlinkSync(INSTANCE_ID_FILE); } catch {}
     try { fs.unlinkSync(VERSION_FILE); } catch {}
+    // Agent gateway artifacts — a zombie must never delete its successor's
+    // live socket/shim, hence inside the ownsFiles guard. Keep in sync with
+    // daemon-standalone.ts cleanup().
+    try { fs.unlinkSync(GATEWAY_SOCK_PATH); } catch {}
+    try { fs.unlinkSync(GATEWAY_SHIM_PATH); } catch {}
   }
   logMsg('info', 'daemon cleanup complete', { uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000) });
 }
 
 // ── Main ──
 const action = process.argv[2];
+
+// wn mode: the deployed daemon.cjs doubles as the peer-session CLI (the
+// on-PATH wn is a 2-line shim exec'ing node + this file). Async — the socket
+// handlers inside runWnMinimal call process.exit; the final usage branch
+// below must NOT fire for this action. Keep in sync with daemon-standalone.ts.
+if (action === 'wn') {
+  runWnMinimal(process.argv.slice(3));
+}
 
 if (action === '--stop') {
   try {
@@ -3775,6 +4235,12 @@ if (action === '--start') {
     });
   });
 
+  // Agent gateway: second (unix-socket) listener + on-PATH wn shim. Both
+  // additive — failures log a warning and never abort daemon startup.
+  // Keep in sync with daemon-standalone.ts --start.
+  startGatewayListener();
+  writeWnShim();
+
   // Listen on random port (localhost only)
   httpServer.listen(0, '127.0.0.1', () => {
     const port = httpServer.address().port;
@@ -3844,8 +4310,9 @@ if (action === '--start') {
     process.stdin.resume();
     process.stdin.on('end', () => {}); // Don't exit on stdin close
   }
-} else {
-  console.error('Usage: node daemon.js --start | --stop | --status');
+} else if (action !== 'wn') {
+  // 'wn' is handled above (async — must not fall into this usage error).
+  console.error('Usage: node daemon.js --start | --stop | --status | wn <args...>');
   process.exit(1);
 }
 `;

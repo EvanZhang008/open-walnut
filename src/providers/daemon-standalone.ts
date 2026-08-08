@@ -47,6 +47,15 @@ import {
 } from './daemon-fold.js'
 import { createAcpDaemon, type AcpStartParams } from './acp-daemon.js'
 import { computeGitDiff, GitDiffError, type GitDiffBase } from './git-diff-core.js'
+import {
+  GATEWAY_SOCKET_FILENAME,
+  GATEWAY_MAX_LINE_BYTES,
+  gatewayHubTimeoutMs,
+  parseGatewayLine,
+  resolveCallerSid,
+  type GatewayErrorCode,
+  type GatewayResponse,
+} from './gateway-core.js'
 import { execFile as execFileCb } from 'node:child_process'
 
 process.umask(0o077)
@@ -55,7 +64,9 @@ process.umask(0o077)
 // Baked in at compile time via `bun build --define` (see scripts/build-daemon.sh).
 const DAEMON_VERSION = process.env.DAEMON_VERSION || 'dev'
 
-if (process.argv.includes('--version')) {
+// `wn ...` argv is user text (peer messages) — it must never trigger the
+// version fast-path (e.g. `wn peers send abc "--version"`).
+if (process.argv.includes('--version') && process.argv[2] !== 'wn') {
   console.log(DAEMON_VERSION)
   process.exit(0)
 }
@@ -322,6 +333,10 @@ const BRIDGE_ALLOWED_COMMANDS = new Set([
   // the daemon spawns NOTHING from this command. NOT the raw spawn command:
   // a compromised cloud box must never hand this daemon arbitrary argv.
   'session.launch',
+  // Narrow control relay (model/effort/fork/model-options): same forward-to-
+  // walnut-server shape as session.launch — the daemon executes NOTHING
+  // itself, the primary re-validates everything.
+  'session.control',
 ])
 
 // DUP-DEBUG: per-process counter and lookup map for stable ws ids.
@@ -534,7 +549,11 @@ function buildSpawnPreamble(): string {
     // causing "Not logged in · Please run /login". The sourced RC above already
     // sets the user's intended PATH order; these dirs only fill gaps when claude
     // /node aren't on the RC PATH at all.
-    'export PATH="$PATH:$HOME/.toolbox/bin:$HOME/.local/bin:$HOME/.npm-global/bin"',
+    // GATEWAY_SHIM_DIR is appended at runtime (string concat, not a $HOME
+    // template) so `wn` — the peer-session CLI shim — is on every session's
+    // PATH. Keep in sync with daemon-source.ts.
+    'export PATH="$PATH:$HOME/.toolbox/bin:$HOME/.local/bin:$HOME/.npm-global/bin:'
+      + GATEWAY_SHIM_DIR + '"',
     'node -v >/dev/null 2>&1 || {'
       + ' if [ -s "$HOME/.nvm/nvm.sh" ]; then'
       + '   . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1;'
@@ -630,7 +649,7 @@ function statSizeOrZero(p: string): number {
 // byte offset `v` — monotonic, and rebuildable from the jsonl after a daemon restart.
 // MUST stay byte-for-byte equivalent to daemon-source.ts (CLAUDE.md). See
 // docs/plan/daemon-source-of-truth-versioned-events.md.
-const BG_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled'])
+const BG_TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'cancelled', 'killed'])
 const BG_TRANSITION_CAP = 50 // recentTransitions ring buffer bound
 
 function emptyTaskState(): TaskState {
@@ -1089,6 +1108,15 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     case 'stt-result': return cmdSttResult(ws, id as number, cmd)
     case 'session.launch': return cmdLaunchRelay(ws, id as number, cmd)
     case 'launch-result': return cmdLaunchResult(ws, id as number, cmd)
+    case 'session.control': return cmdControlRelay(ws, id as number, cmd)
+    case 'control-result': return cmdControlResult(ws, id as number, cmd)
+    // NOT in BRIDGE_ALLOWED_COMMANDS: reverse direction — the trusted walnut
+    // server pushes slim mobile feed events DOWN, the daemon relays them to
+    // the cloud bridge (see cmdMobileEvent).
+    case 'mobile-event': return cmdMobileEvent(ws, id as number, cmd)
+    // NOT in BRIDGE_ALLOWED_COMMANDS: only the trusted SSH-tunneled walnut
+    // client may answer agent-gateway relays (see the gateway section).
+    case 'gateway-result': return cmdGatewayResult(ws, id as number, cmd)
     case 'acpStart': return cmdAcpStart(ws, id as number, cmd)
     case 'acpSend': return cmdAcpOp(ws, id as number, cmd, 'prompt')
     case 'acpCancel': return cmdAcpOp(ws, id as number, cmd, 'cancel')
@@ -1317,6 +1345,261 @@ function cmdLaunchResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     }))
   }
   sendOk(ws, id, {})
+}
+
+// ── Control relay: bridge session-control request → the connected walnut server ──
+// Mirror of the launch relay above (same trusted-client pick, same timeout
+// map, same errorKind passthrough) for model/effort/fork/model-options. The
+// daemon executes NOTHING here — the walnut server re-validates and runs the
+// shared session-controls core, answering with a `control-result` command
+// carrying the same relayId. Keep in sync with daemon-source.ts.
+
+const CONTROL_RELAY_TIMEOUT_MS = 45_000
+let controlRelayCounter = 0
+const controlRelayPending = new Map<number, {
+  ws: ServerWebSocket<WsData>; id: number; timer: ReturnType<typeof setTimeout>
+}>()
+
+function cmdControlRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { action, sid, sessionId, params } = cmd as {
+    action?: string; sid?: string; sessionId?: string; params?: Record<string, unknown>
+  }
+  if (!action) {
+    return sendError(ws, id, 'session.control: missing action')
+  }
+  const targetSid = sessionId ?? sid
+  if (!targetSid) {
+    return sendError(ws, id, 'session.control: missing sessionId')
+  }
+  // Pick any trusted client (never the bridge adapter — that would bounce the
+  // request straight back to the cloud). Normally there is exactly one: the
+  // walnut server's DaemonConnection.
+  let target: ServerWebSocket<WsData> | null = null
+  for (const client of wsClients) {
+    if (client.data?.origin !== 'bridge') { target = client; break }
+  }
+  if (!target) {
+    return sendError(ws, id, 'session.control: no primary server connected')
+  }
+  const relayId = ++controlRelayCounter
+  const timer = setTimeout(() => {
+    controlRelayPending.delete(relayId)
+    sendError(ws, id, 'session.control: primary server timed out')
+  }, CONTROL_RELAY_TIMEOUT_MS)
+  controlRelayPending.set(relayId, { ws, id, timer })
+  logMsg('info', 'session.control: relaying to primary server', { relayId, action, sid: targetSid })
+  sendEvent(target, 'control-request', { relayId, action, sessionId: targetSid, params: params ?? {} })
+}
+
+function cmdControlResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { relayId, result, error, errorKind } = cmd as {
+    relayId?: number; result?: Record<string, unknown>; error?: string; errorKind?: string
+  }
+  const pending = typeof relayId === 'number' ? controlRelayPending.get(relayId) : undefined
+  if (!pending) {
+    // Late result after timeout — ack and drop.
+    return sendOk(ws, id, { stale: true })
+  }
+  controlRelayPending.delete(relayId as number)
+  clearTimeout(pending.timer)
+  if (result && !error) {
+    logMsg('info', 'session.control: relay complete', { relayId })
+    sendOk(pending.ws, pending.id, { result })
+  } else {
+    // Carry errorKind through so the cloud route maps the precise 4xx.
+    safeSend(pending.ws, JSON.stringify({
+      id: pending.id, ok: false,
+      error: error ?? 'control failed',
+      errorKind: errorKind ?? 'internal',
+    }))
+  }
+  sendOk(ws, id, {})
+}
+
+// ── Mobile events relay: walnut server → cloud bridge (reverse direction) ──
+// The primary's mobile events feed (src/web/routes/events-v1.ts) pushes slim
+// `{kind, data}` frames here; the daemon forwards them verbatim to the cloud
+// bridge as `{ev:'mobile-event', ...}` so phones connected to the cloud box
+// get the same live feed. Fire-and-forget: no bridge = ack-and-drop (the
+// phone's snapshot frame on reconnect heals the gap). Trusted clients only —
+// this case is deliberately NOT in BRIDGE_ALLOWED_COMMANDS (a compromised
+// cloud box must not be able to inject fake feed events back at itself, and
+// the direction is walnut → daemon → bridge, never bridge → daemon).
+// Keep in sync with daemon-source.ts.
+
+function cmdMobileEvent(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { kind, data } = cmd as { kind?: string; data?: unknown }
+  if (typeof kind !== 'string' || !kind) {
+    return sendError(ws, id, 'mobile-event: missing kind')
+  }
+  if (!bridgeAdapter) {
+    return sendOk(ws, id, { relayed: false })
+  }
+  safeSend(bridgeAdapter, JSON.stringify({ ev: 'mobile-event', kind, data: data ?? null }))
+  sendOk(ws, id, { relayed: true })
+}
+
+// ── Agent gateway: on-host unix socket → Mac hub relay ──
+// A `wn` CLI inside a Walnut-spawned claude session writes one NDJSON request
+// line to ${DAEMON_DIR}/agent-gateway.sock; the daemon resolves the caller's
+// CURRENT sid (env sid is only a lookup key — fresh spawns use a tmp sid that
+// cmdRename re-keys) and relays the request to the Mac hub with the same
+// reverse-RPC shape as cmdLaunchRelay/cmdLaunchResult: relayId + pending map +
+// `gateway-request` event answered by a `gateway-result` command. Shared pure
+// logic (parse/validate/alias resolution) lives in gateway-core.ts.
+// Keep in sync with daemon-source.ts gateway section (hand-inlined there).
+
+const GATEWAY_SOCK_PATH = path.join(DAEMON_DIR, GATEWAY_SOCKET_FILENAME)
+const GATEWAY_SHIM_DIR = path.join(DAEMON_DIR, 'bin')
+const GATEWAY_SHIM_PATH = path.join(GATEWAY_SHIM_DIR, 'wn')
+
+// oldSid → newSid, maintained by cmdRename. resolveCallerSid follows the
+// chain (max 5 hops) to map a CLI's spawn-time WALNUT_SESSION_ID to the sid
+// the daemon currently tracks.
+const gatewaySidAliases = new Map<string, string>()
+
+let gatewayRelayCounter = 0
+const gatewayRelayPending = new Map<number, {
+  respond: (resp: GatewayResponse) => void; timer: ReturnType<typeof setTimeout>
+}>()
+
+function gatewayError(code: GatewayErrorCode, message: string): GatewayResponse {
+  return { ok: false, error: { code, message } }
+}
+
+function sendGatewayRequest(
+  capability: string,
+  callerSid: string,
+  payload: Record<string, unknown>,
+  respond: (resp: GatewayResponse) => void,
+) {
+  // Pick any trusted client (never the bridge adapter) — same rule as
+  // cmdLaunchRelay: normally exactly one, the walnut server's DaemonConnection.
+  let target: ServerWebSocket<WsData> | null = null
+  for (const client of wsClients) {
+    if (client.data?.origin !== 'bridge') { target = client; break }
+  }
+  if (!target) {
+    return respond(gatewayError('hub_unreachable', 'no primary server connected'))
+  }
+  const relayId = ++gatewayRelayCounter
+  const timer = setTimeout(() => {
+    gatewayRelayPending.delete(relayId)
+    respond(gatewayError('hub_timeout', 'primary server timed out'))
+  }, gatewayHubTimeoutMs())
+  gatewayRelayPending.set(relayId, { respond, timer })
+  logMsg('info', 'gateway: relaying to primary server', { relayId, capability, callerSid })
+  sendEvent(target, 'gateway-request', { relayId, capability, callerSid, payload })
+}
+
+// `gateway-result` is deliberately NOT in BRIDGE_ALLOWED_COMMANDS — only a
+// trusted (SSH-tunneled) walnut client may answer a gateway relay.
+function cmdGatewayResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { relayId, result, error, errorCode, detail } = cmd as {
+    relayId?: number; result?: Record<string, unknown>; error?: string
+    errorCode?: string; detail?: unknown
+  }
+  const pending = typeof relayId === 'number' ? gatewayRelayPending.get(relayId) : undefined
+  if (!pending) {
+    // Late result after timeout — ack and drop (same as cmdLaunchResult).
+    return sendOk(ws, id, { stale: true })
+  }
+  gatewayRelayPending.delete(relayId as number)
+  clearTimeout(pending.timer)
+  if (result && !error) {
+    pending.respond({ ok: true, result })
+  } else {
+    const errObj: GatewayResponse & { ok: false } = {
+      ok: false,
+      error: {
+        code: (errorCode as GatewayErrorCode) || 'internal',
+        message: error || 'gateway request failed',
+      },
+    }
+    if (detail !== undefined) {
+      errObj.error.detail = detail
+      const ra = (detail as { retryAfterMs?: unknown } | null)?.retryAfterMs
+      if (typeof ra === 'number') errObj.error.retryAfterMs = ra
+    }
+    pending.respond(errObj)
+  }
+  sendOk(ws, id, {})
+}
+
+/** One parsed NDJSON line from the agent socket → local reject or hub relay. */
+function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => void) {
+  const parsed = parseGatewayLine(line)
+  if (!parsed.ok) return respond({ ok: false, error: parsed.error })
+  const req = parsed.request
+  const callerSid = resolveCallerSid(req.sid, sessions, gatewaySidAliases)
+  if (!callerSid) {
+    // Unknown sid (CLI adopted from before a daemon restart) — refuse locally,
+    // the request never leaves this host. A respawn self-heals (plan §5).
+    return respond(gatewayError('unknown_caller', 'session is not tracked by this daemon (a respawn self-heals)'))
+  }
+  sendGatewayRequest(req.op, callerSid, req.args, respond)
+}
+
+/** Second listener: owner-only unix socket, raw NDJSON, one request per conn. */
+function startGatewayListener() {
+  // Unlink a stale socket from a crashed predecessor — bind fails on EADDRINUSE
+  // otherwise (the file outlives the process).
+  try { fs.unlinkSync(GATEWAY_SOCK_PATH) } catch {}
+  try {
+    type GwSockData = { buf: string; done: boolean }
+    const reply = (socket: { write(s: string): number; end(): void }, resp: GatewayResponse) => {
+      try { socket.write(JSON.stringify(resp) + '\n') } catch {}
+      try { socket.end() } catch {}
+    }
+    Bun.listen<GwSockData>({
+      unix: GATEWAY_SOCK_PATH,
+      socket: {
+        open(socket) { socket.data = { buf: '', done: false } },
+        data(socket, chunk) {
+          const d = socket.data
+          if (d.done) return
+          d.buf += chunk.toString('utf-8')
+          if (Buffer.byteLength(d.buf, 'utf8') > GATEWAY_MAX_LINE_BYTES) {
+            d.done = true
+            reply(socket, gatewayError('bad_request', 'request line too large'))
+            return
+          }
+          const nl = d.buf.indexOf('\n')
+          if (nl === -1) return
+          d.done = true
+          handleGatewayLine(d.buf.slice(0, nl), (resp) => reply(socket, resp))
+        },
+        error() { /* client went away — pending timer self-cleans */ },
+      },
+    })
+    // Owner-only IS the credential: don't rely on umask, chmod explicitly.
+    fs.chmodSync(GATEWAY_SOCK_PATH, 0o600)
+    logMsg('info', 'agent gateway listening', { sock: GATEWAY_SOCK_PATH })
+  } catch (err) {
+    // The gateway is additive — never fail daemon startup over it.
+    logMsg('warn', 'agent gateway listener failed', { error: (err as Error).message })
+  }
+}
+
+/** PATH shim so `wn` inside spawned sessions reaches this daemon's wn dispatch. */
+function writeWnShim() {
+  try {
+    fs.mkdirSync(GATEWAY_SHIM_DIR, { recursive: true, mode: 0o700 })
+    // Compiled binary: argv[1] is a bunfs VIRTUAL path (embedded, must never
+    // leak into the shim) → exec the binary itself, argv[2]='wn'. Dev run
+    // (`bun daemon-standalone.ts`): argv[1] is the real script on disk → keep
+    // it so the shim reaches the same code.
+    const entry = process.argv[1] || ''
+    const isVirtualEntry = entry.includes('$bunfs') || entry.includes('~BUN')
+    const script = entry && !isVirtualEntry && entry !== process.execPath && fs.existsSync(entry)
+      ? ' ' + shellQuote(entry)
+      : ''
+    const shim = '#!/bin/sh\nexec ' + shellQuote(process.execPath) + script + ' wn "$@"\n'
+    fs.writeFileSync(GATEWAY_SHIM_PATH, shim, { mode: 0o755 })
+    fs.chmodSync(GATEWAY_SHIM_PATH, 0o755)
+  } catch (err) {
+    logMsg('warn', 'wn shim write failed', { error: (err as Error).message })
+  }
 }
 
 // ── ACP session commands (engine=codex etc; see acp-daemon.ts) ──
@@ -1557,6 +1840,12 @@ function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
       MCP_CONNECTION_NONBLOCKING: '1',
       CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
       CLAUDE_CODE_MAX_RETRIES: cliMaxRetries,
+      // Agent gateway (peer sessions): the `wn` CLI inside this session reads
+      // these two to reach the on-host gateway socket. The sid may be a fresh
+      // spawn's tmp id — gatewaySidAliases (cmdRename) resolves it to the
+      // current sid on every request. Keep in sync with daemon-source.ts.
+      WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
+      WALNUT_SESSION_ID: sid,
       // Never let OUR watchdog pid leak into the CLI's env. A CLI session that
       // runs `npm run dev:prod` would otherwise hand this stale pid to the
       // PRODUCTION daemon, whose watchdog would trip on the long-dead pid and
@@ -2063,8 +2352,11 @@ function addSubscriber(ws: ServerWebSocket<WsData>, sid: string, fromOffset: num
         // them resurrects stale permission prompts in the UI. A genuinely-pending
         // request is recovered out-of-band via `pendingCtrl` (returned on attach),
         // NOT via replay — so dropping all control lines here loses nothing.
+        // Prefix match: '"control_request"' misses control_request_progress
+        // (heartbeats for in-flight side_question requests, inc-1786165723472)
+        // and any future control_* variant — the whole family is plumbing.
         // Keep in sync with daemon-source.ts addSubscriber (CLAUDE.md).
-        if (line.includes('"control_request"') || line.includes('"control_response"')) continue
+        if (line.includes('"type":"control_')) continue
         try { sendEvent(ws, 'jsonl', { sid, line, v }) } catch {}
       }
     } catch {}
@@ -2388,6 +2680,10 @@ function cmdRename(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
 
     sessions.delete(oldSid)
     sessions.set(newSid, session)
+    // Agent gateway: the CLI's WALNUT_SESSION_ID env still carries the OLD sid
+    // (env is frozen at spawn). Record the alias so resolveCallerSid can chase
+    // the chain to the current sid. Keep in sync with daemon-source.ts.
+    gatewaySidAliases.set(oldSid, newSid)
 
     ensureWatcher(newSid)
 
@@ -3045,7 +3341,56 @@ const SESSION_IDLE_WARNING_MS = 5 * 60 * 1000     // 5 minutes
 // 2hr: conservative — gives plenty of time for legitimate background work (builds,
 // long MCP ops, await_human_action), but eventually reclaims resources.
 const SESSION_IDLE_KILL_MS = 2 * 60 * 60 * 1000   // 2 hours
+// Cron-armed sessions (/loop): the CLI's in-process scheduler lives in THIS
+// process's memory — killing it silently kills the loop. Extended, not
+// disabled: the CLI auto-expires recurring crons after 7 days, so a session
+// idle beyond that has a dead scheduler and is safe to reclaim.
+const SESSION_CRON_IDLE_KILL_MS = 7 * 24 * 60 * 60 * 1000   // 7 days
+// Sessions with a running background task (local_bash / local_agent /
+// local_workflow): a wait-style bash task polls silently — its output goes to
+// the task's output_file, NOT the JSONL — so the session looks "idle" for the
+// task's whole lifetime (incident inc-1786222771315: a "wait for QA phase"
+// bash task was killed at the 2h mark while derivedRunning was 1). Extended,
+// not disabled: a genuinely lost terminal event would otherwise make the
+// process immortal, so cap the grace at 24h of total JSONL silence.
+const SESSION_BG_IDLE_KILL_MS = 24 * 60 * 60 * 1000   // 24 hours
 const SESSION_SCAN_INTERVAL_MS = 60_000            // every 60s
+
+// ── Last-resort cron evidence: the CLI scheduler's own debug log ──
+// The fold's cronIds is a replay of the /tmp stream file — /tmp can be
+// age-cleaned (systemd-tmpfiles `v /tmp 10d`) or hand-wiped, and a rebuild
+// from a missing file yields an EMPTY fold that would strip a live loop's
+// protection. The CLI writes `[ScheduledTasks] firing <id>` to
+// ~/.claude/debug/<sid>.txt (HOME, not /tmp) in real time on every fire —
+// first-hand, process-independent evidence. Before killing, check the tail
+// of that file for a recent firing line; recent = within the kill threshold
+// (a firing inside the window means the scheduler is alive regardless of
+// what the fold thinks). Read is bounded (last 64KB) and only runs on the
+// rare kill path, never on the per-minute scan of healthy sessions.
+const CRON_DEBUG_TAIL_BYTES = 64 * 1024
+function hasRecentSchedulerFiring(sid: string, withinMs: number): boolean {
+  const debugPath = path.join(os.homedir(), '.claude', 'debug', sid + '.txt')
+  let fd: number
+  try { fd = fs.openSync(debugPath, 'r') } catch { return false }
+  try {
+    const size = fs.fstatSync(fd).size
+    const readLen = Math.min(size, CRON_DEBUG_TAIL_BYTES)
+    const buf = Buffer.alloc(readLen)
+    fs.readSync(fd, buf, 0, readLen, size - readLen)
+    const text = buf.toString('utf-8')
+    const cutoff = Date.now() - withinMs
+    // Lines look like: 2026-08-08T01:43:58.502Z [DEBUG] [ScheduledTasks] firing 018e22e9 (recurring)
+    const re = /^(\S+) \[DEBUG\] \[ScheduledTasks\] (?:firing|scheduled) /gm
+    let m: RegExpExecArray | null
+    while ((m = re.exec(text)) !== null) {
+      const t = Date.parse(m[1])
+      if (!Number.isNaN(t) && t >= cutoff) return true
+    }
+    return false
+  } catch { return false } finally {
+    try { fs.closeSync(fd) } catch {}
+  }
+}
 
 function scanIdleSessions() {
   const now = Date.now()
@@ -3074,6 +3419,14 @@ function scanIdleSessions() {
       continue
     }
 
+    // Feed the age-cleaner watchdog: .pgid is written once at spawn and never
+    // touched again, so systemd-tmpfiles' 10-day /tmp age rule (`v /tmp 10d`
+    // on typical Linux dev hosts) deletes it out from under a long-lived
+    // session — the jsonl self-refreshes on every output, the pgid does not,
+    // and without it a daemon restart cannot re-adopt the live CLI. Touch it
+    // on every scan (60s) for every live session.
+    try { const t = new Date(); fs.utimesSync(session.pgidPath, t, t) } catch {}
+
     // 2. Has at least one subscribed ws? Skip idle check — someone cares.
     if (session.subscribers.size > 0) continue
 
@@ -3088,20 +3441,46 @@ function scanIdleSessions() {
 
     const idleMs = now - mtimeMs
 
+    // A CronCreate'd /loop lives in the CLI process — the loop only looks
+    // "idle" between fires, and killing the process kills the loop silently
+    // (session-only crons are never on disk). Extend the threshold to the
+    // CLI's own 7-day cron auto-expiry instead of disabling the reaper.
+    const cronArmed = Object.keys(session.foldState.cronIds).length > 0
+    // A running background task (daemon's OWN taskState — same fold the
+    // watcher feeds) also outlives JSONL silence: wait-style bash tasks write
+    // to output_file, not the stream. Killing the CLI kills the task
+    // (incident inc-1786222771315). Same pattern as cron: extended, not
+    // disabled. isBackgrounded tasks are already excluded by runningTaskCount.
+    const bgActive = session.taskState.derivedRunning > 0
+    const killMs = cronArmed ? SESSION_CRON_IDLE_KILL_MS
+      : bgActive ? SESSION_BG_IDLE_KILL_MS
+      : SESSION_IDLE_KILL_MS
+
     if (idleMs < SESSION_IDLE_WARNING_MS) {
       // Active — skip
       continue
-    } else if (idleMs < SESSION_IDLE_KILL_MS) {
-      // Warning zone (5min - 2hr) — log but don't kill
+    } else if (idleMs < killMs) {
+      // Warning zone — log but don't kill
       const idleMinutes = Math.round(idleMs / 60_000)
       logMsg('warn', 'idle scan: session idle with no subscribers', {
-        sid, pid, idleMinutes, threshold: '2hr',
+        sid, pid, idleMinutes,
+        threshold: cronArmed ? '7d (cron active)' : bgActive ? '24h (bg task running)' : '2hr',
       })
     } else {
-      // Kill zone (> 2hr) — no subscribers + 2hr no output → kill
+      // Kill zone — no subscribers + no output past threshold. FINAL CHECK
+      // before the irreversible kill: the CLI scheduler's own debug log
+      // (HOME, survives /tmp wipes). A recent firing/scheduled line means a
+      // live loop the fold failed to see (stream file wiped + rebuild, or a
+      // tool_result shape change) — refuse to kill, re-check next scan.
+      if (!cronArmed && hasRecentSchedulerFiring(sid, SESSION_IDLE_KILL_MS)) {
+        logMsg('warn', 'idle scan: kill vetoed — CLI scheduler debug log shows recent cron firing', {
+          sid, pid, idleMinutes: Math.round(idleMs / 60_000),
+        })
+        continue
+      }
       const idleMinutes = Math.round(idleMs / 60_000)
       logMsg('warn', 'idle scan: killing idle session (no subscribers, no output)', {
-        sid, pid, idleMinutes,
+        sid, pid, idleMinutes, cronArmed, bgActive,
       })
       killSessionProcessGroup(pid, sid)
     }
@@ -3271,6 +3650,11 @@ function cleanup() {
     try { fs.unlinkSync(PID_FILE) } catch {}
     try { fs.unlinkSync(INSTANCE_ID_FILE) } catch {}
     try { fs.unlinkSync(VERSION_FILE) } catch {}
+    // Agent gateway artifacts — a zombie must never delete its successor's
+    // live socket/shim, hence inside the ownsFiles guard. Keep in sync with
+    // daemon-source.ts cleanup().
+    try { fs.unlinkSync(GATEWAY_SOCK_PATH) } catch {}
+    try { fs.unlinkSync(GATEWAY_SHIM_PATH) } catch {}
   }
   logMsg('info', 'daemon cleanup complete', { uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000) })
 }
@@ -3565,6 +3949,15 @@ function dialBridge(gen: number): void {
 // ── Main ──
 const action = process.argv[2]
 
+// `wn` mode: the same binary doubles as the peer-session CLI (zero extra
+// deploy artifacts — the on-PATH `wn` is a 2-line shim exec'ing this binary).
+// Dynamic import keeps the daemon startup path free of CLI code; bun bundles
+// the literal specifier into the compiled binary.
+if (action === 'wn') {
+  const { runWnCli } = await import('./wn-cli.js')
+  process.exit(await runWnCli(process.argv.slice(3)))
+}
+
 if (action === '--stop') {
   try {
     const pid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim(), 10)
@@ -3675,6 +4068,11 @@ if (action === '--start') {
     },
   })
 
+  // Agent gateway: second (unix-socket) listener + on-PATH `wn` shim. Both
+  // additive — failures log a warning and never abort daemon startup.
+  startGatewayListener()
+  writeWnShim()
+
   const port = server.port
   fs.writeFileSync(PORT_FILE, String(port))
   fs.writeFileSync(PID_FILE, String(process.pid))
@@ -3759,6 +4157,6 @@ if (action === '--start') {
     process.stdin.on('end', () => {}) // Don't exit on stdin close
   }
 } else {
-  console.error('Usage: bun daemon-standalone.ts --start | --stop | --status | --version')
+  console.error('Usage: bun daemon-standalone.ts --start | --stop | --status | --version | wn <args...>')
   process.exit(1)
 }

@@ -47,6 +47,7 @@ export const SLOW_TEST_FILES = [
   'tests/providers/session-background-workflow.test.ts', // 0.3s (was 5s — afterEach sleep was 90% of it)
   'tests/providers/daemon-transport-unit.test.ts', // 3s
   'tests/providers/remote-session-manager-session-state.test.ts', // 2s
+  'tests/integration/agent-gateway.test.ts', // ~10s — real daemon per test + a 2s hub timeout
 
   // ── Real git subprocesses (repo creation, history rewrite, packing) ─────────
   'tests/integrations/git-compaction.test.ts', // 67s

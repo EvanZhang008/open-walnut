@@ -42,6 +42,8 @@ SOURCES=(
   src/providers/daemon-core.ts
   src/providers/daemon-fold.ts
   src/providers/daemon-source.ts
+  src/providers/gateway-core.ts
+  src/providers/wn-cli.ts
   src/providers/acp-daemon.ts
   src/providers/acp-worker/worker.ts
   src/providers/acp-worker/worker-main.ts
