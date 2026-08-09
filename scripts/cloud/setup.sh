@@ -92,11 +92,62 @@ mkdir -p /etc/caddy
 cat > /etc/caddy/env <<EOF
 WALNUT_DOMAIN=$DOMAIN
 EOF
+# ── Global options: issuer failover for sslip.io hostnames ──────────────────
+# Only emitted for *.sslip.io names; an operator's own domain keeps the exact
+# Caddyfile it had before (no global block at all).
+#
+# Why sslip.io needs this: it is a wildcard-DNS service (<dashed-ip>.sslip.io
+# resolves to that IP with no registrar involved) and it is NOT on the Public
+# Suffix List. Let's Encrypt therefore treats `sslip.io` itself as the
+# registered domain, so every sslip.io user on the internet shares ONE
+# "50 certificates per registered domain per 7 days" bucket — which strangers
+# can exhaust, and a domain-less operator cannot do anything about.
+#
+# The fix is a contact email, which is what actually buys the failover.
+# Verified in Caddy's source, not guessed: modules/caddytls/automation.go
+# `DefaultIssuers(userEmail)` appends the ZeroSSL ACME issuer ONLY when an
+# email is non-empty, and caddyconfig/httpcaddyfile/tlsapp.go feeds the global
+# `email` option into it. With no email Caddy runs a single (Let's Encrypt)
+# issuer and has nothing to fail over to. With one, Caddy auto-negotiates
+# ZeroSSL's EAB credentials (acmeissuer.go generateZeroSSLEABCredentials), so
+# no account signup or stored key is needed.
+#
+# Deliberately NOT used: a `cert_issuer zerossl { … }` block. In Caddy 2.x that
+# names the ZeroSSL *API* issuer (module tls.issuance.zerossl), which REQUIRES a
+# paid `api_key` and is explicitly distinct from ZeroSSL's ACME endpoint — it
+# would fail here. `email` is the supported way to get the dual ACME chain, so
+# that is all we write; issuer ordering stays Caddy's default (LE, then ZeroSSL).
+#
+# The address must be syntactically deliverable even though nothing is sent to
+# it: Let's Encrypt's Boulder validates contacts (policy.ValidEmail → the domain
+# must be a valid hostname ending in an ICANN TLD, and must not be example.com/
+# .net/.org). So `walnut@localhost` or an example.com address would be REJECTED
+# at account creation. `invalid` is the RFC 2606 reserved TLD, which parses as a
+# hostname and is not on Boulder's forbidden list.
+# LIVE SMOKE MUST VERIFY (not checkable at lint/synth time):
+#   1. `caddy validate --config /etc/caddy/Caddyfile` accepts the global block.
+#   2. A cert is really issued for <dashed-ip>.sslip.io (curl the https origin).
+#   3. `journalctl -u caddy | grep -i certificate` names the issuer, and LE
+#      accepted the placeholder contact (watch for an InvalidEmail problem
+#      document — if it appears, switch to a real operator address).
+#   4. If LE is rate-limited, confirm the retry actually reaches ZeroSSL rather
+#      than only backing off against LE.
+CADDY_GLOBAL_BLOCK=""
+case "$DOMAIN" in
+  *.sslip.io)
+    echo "    (sslip.io hostname — enabling Caddy's Let's Encrypt → ZeroSSL issuer failover)"
+    CADDY_GLOBAL_BLOCK=$'{\n\t# Turns on Caddy\'s redundant LE→ZeroSSL issuer chain (see setup.sh).\n\temail walnut@walnut.invalid\n}\n\n'
+    ;;
+esac
+
 # reverse_proxy tuned for SSE/WebSocket long-lived streams:
 #   flush_interval -1              → flush immediately, never buffer responses
 #   transport read/write_timeout 0 → no idle timeout on the upstream conn
 # (read_timeout/write_timeout are valid Caddy v2.6+ http transport options.)
-cat > /etc/caddy/Caddyfile <<'EOF'
+# printf '%s' for the global block so no backslash/escape in it is reinterpreted;
+# the site block stays a quoted heredoc so {$WALNUT_DOMAIN} reaches Caddy intact.
+printf '%s' "$CADDY_GLOBAL_BLOCK" > /etc/caddy/Caddyfile
+cat >> /etc/caddy/Caddyfile <<'EOF'
 {$WALNUT_DOMAIN} {
 	reverse_proxy 127.0.0.1:3456 {
 		flush_interval -1

@@ -15,6 +15,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { WALNUT_INSTALL_DIR } from '../../../constants.js'
 import { log } from '../../../logging/index.js'
+import { sslipHostname } from '../user-data.js'
 import type {
   CloudProviderDriver,
   CreateVMParams,
@@ -166,10 +167,8 @@ async function readOutputs(file: string): Promise<StackOutputs> {
 }
 
 async function createVM(params: CreateVMParams, onLog: (line: string) => void): Promise<CreateVMResult> {
-  if (params.domainMode === 'sslip') {
-    throw new Error('sslip mode for AWS lands with the infra changes (PR3)')
-  }
-  if (!params.domain) {
+  const sslip = params.domainMode === 'sslip'
+  if (!sslip && !params.domain) {
     throw new Error('AWS provisioning in own-domain mode requires a domain')
   }
   const cwd = infraDir()
@@ -186,9 +185,10 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   const deployArgs = [
     'cdk', 'deploy', STACK_NAME,
     '--require-approval', 'never',
-    '-c', `domain=${params.domain}`,
-    // userDataB64 is consumed by the stack in PR3; CDK context is free-form, so
-    // passing it against an older stack is inert.
+    // sslip mode has no hostname to pass: the boot script derives it from the
+    // instance's own public IP, and `-c sslip=1` is what makes the stack accept
+    // a missing domain. Passing both would be contradictory, so it's either/or.
+    ...(sslip ? ['-c', 'sslip=1'] : ['-c', `domain=${params.domain}`]),
     '-c', `userDataB64=${Buffer.from(params.userData, 'utf-8').toString('base64')}`,
     '--outputs-file', outputsFile,
   ]
@@ -219,22 +219,33 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   await fsp.rm(path.dirname(outputsFile), { recursive: true, force: true }).catch(() => {})
   if (!outputs.ElasticIp) throw new Error('cdk deploy succeeded but produced no ElasticIp output')
   log.web.info('cloud-setup: aws stack deployed', { instanceId: outputs.InstanceId })
+  // In sslip mode the stack's Domain output is the literal 'sslip-auto'
+  // (CloudFormation can't build `<dashed-ip>.sslip.io` from an IP token), so the
+  // hostname is derived here from the Elastic IP with the same helper the boot
+  // script and the job's await-vm step use — one definition, no drift.
   return {
     ip: outputs.ElasticIp,
     instanceRef: outputs.InstanceId ?? STACK_NAME,
-    domain: outputs.Domain ?? params.domain,
+    domain: sslip ? sslipHostname(outputs.ElasticIp) : (outputs.Domain ?? params.domain as string),
   }
 }
 
 function instructions(params: InstructionsParams): DriverInstructions {
   const region = params.region ? ` (region ${params.region})` : ''
+  // Mirror createVM's either/or: sslip mode passes no domain at all, and needs
+  // no DNS step because the hostname is derived from the instance's own IP.
+  const sslip = params.domainMode === 'sslip'
+  const contextFlag = sslip ? '-c sslip=1' : `-c domain=${params.domain}`
+  const dnsStep = sslip
+    ? 'No DNS record to create — the box serves itself at `<dashed-ip>.sslip.io`, derived from the stack\'s ElasticIp output.'
+    : 'Point an A record for the domain at the stack\'s ElasticIp output (DNS-only, no CDN proxy — Caddy terminates TLS itself).'
   return {
     steps: [
       `Make sure the aws CLI is signed in${region}: \`aws sts get-caller-identity\` must succeed.`,
       'From a Walnut source checkout: `cd infra && npm ci`.',
       'First time in this account/region only: `npx cdk bootstrap`.',
-      `Deploy: \`npx cdk deploy ${STACK_NAME} --require-approval never -c domain=${params.domain}\`.`,
-      'Point an A record for the domain at the stack\'s ElasticIp output (DNS-only, no CDN proxy — Caddy terminates TLS itself).',
+      `Deploy: \`npx cdk deploy ${STACK_NAME} --require-approval never ${contextFlag}\`.`,
+      dnsStep,
       'First boot takes 5-15 minutes; follow it over SSM with `aws ssm start-session --target <InstanceId>` then `tail -f /var/log/walnut-setup.log`.',
     ],
     userData: params.userData,

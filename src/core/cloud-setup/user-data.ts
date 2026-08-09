@@ -17,6 +17,16 @@
  */
 export const SSLIP_AUTO = 'SSLIP_AUTO'
 
+/**
+ * `<dashed-ip>.sslip.io` — resolves to the IP without any registrar. Lives here
+ * next to the sentinel, not in steps.ts, so provider drivers can derive the same
+ * hostname the boot script does: steps.ts imports the driver registry, so a
+ * driver importing steps.ts would close an import cycle.
+ */
+export function sslipHostname(ip: string): string {
+  return `${ip.replace(/\./g, '-')}.sslip.io`
+}
+
 export const DEFAULT_REPO_URL = 'https://github.com/EvanZhang008/open-walnut.git'
 export const DEFAULT_BRANCH = 'main'
 

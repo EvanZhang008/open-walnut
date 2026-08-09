@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest'
 import {
   buildUserData,
   manualUserDataSteps,
+  sslipHostname,
   DEFAULT_REPO_URL,
   SSLIP_AUTO,
 } from '../../../src/core/cloud-setup/user-data.js'
@@ -49,6 +50,21 @@ describe('buildUserData shape', () => {
     expect(script).toContain('for _ in $(seq 1 36); do')
     // The sentinel itself must never survive into the script.
     expect(script).not.toContain(SSLIP_AUTO)
+  })
+
+  it('reads the metadata service IMDSv2-first: the token PUT precedes the IP GET', () => {
+    // The AWS stack sets requireImdsv2, so an IMDSv1-style (tokenless) read
+    // would 401 and strand the box with no hostname. Assert the ordering and
+    // that the public-ipv4 GET always carries the token header.
+    const script = buildUserData({ domain: SSLIP_AUTO, pairingCode: CODE, flavor: 'al2023' })
+    const put = script.indexOf('-X PUT http://169.254.169.254/latest/api/token')
+    const get = script.indexOf('http://169.254.169.254/latest/meta-data/public-ipv4')
+    expect(put).toBeGreaterThan(-1)
+    expect(put).toBeLessThan(get)
+    // No tokenless curl to public-ipv4 anywhere.
+    expect(script).not.toMatch(/curl(?![^\n]*metadata-token)[^\n]*public-ipv4/)
+    // ifconfig.me is only the non-AWS fallback, taken when no token came back.
+    expect(script).toMatch(/if \[ -n "\$token" \]; then/)
   })
 
   it('honours a custom repoUrl and branch', () => {
@@ -125,6 +141,20 @@ describe('input validation (shell injection)', () => {
   it('rejects an unsafe branch', () => {
     expect(() => buildUserData({ domain: 'wn.example.com', pairingCode: CODE, flavor: 'al2023', branch: 'main; id' }))
       .toThrow(/Invalid branch/)
+  })
+})
+
+describe('sslipHostname', () => {
+  it('dashes an IPv4 address into the sslip.io wildcard-DNS form', () => {
+    expect(sslipHostname('203.0.113.77')).toBe('203-0-113-77.sslip.io')
+  })
+
+  it('agrees with the hostname the generated boot script derives on the box', () => {
+    // One definition, two consumers (the boot script's shell `tr . -`, and the
+    // provider drivers). If these ever diverge, a deploy claims the wrong name.
+    const script = buildUserData({ domain: SSLIP_AUTO, pairingCode: CODE, flavor: 'al2023' })
+    expect(script).toContain('DOMAIN="$(echo "$IP" | tr . -).sslip.io"')
+    expect(sslipHostname('10.0.0.1')).toBe('10-0-0-1.sslip.io')
   })
 })
 

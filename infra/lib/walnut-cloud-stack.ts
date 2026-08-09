@@ -27,12 +27,20 @@ export class WalnutCloudStack extends cdk.Stack {
 
     // ── Context parameters ──────────────────────────────────────────────
     const domain = this.node.tryGetContext('domain') as string | undefined
-    if (!domain) {
+    // `sslip=1` means "derive the hostname from the Elastic IP at first boot"
+    // (`<dashed-ip>.sslip.io`), for operators who own no domain. It makes
+    // `domain` optional — and only then; a deploy with neither still throws,
+    // so a forgotten -c domain can never silently produce a nameless box.
+    const sslip = this.node.tryGetContext('sslip') === '1'
+    if (!domain && !sslip) {
       throw new Error(
         'Missing required context "domain" — the public HTTPS hostname for this instance.\n'
-        + 'Pass it with: cdk deploy -c domain=wn.example.com',
+        + 'Pass it with: cdk deploy -c domain=wn.example.com\n'
+        + 'Or, with no domain of your own: cdk deploy -c sslip=1',
       )
     }
+    /** Human-readable stand-in for `domain` in descriptions that always need one. */
+    const domainLabel = domain ?? 'the sslip.io auto-hostname'
     const repoUrl = (this.node.tryGetContext('repoUrl') as string | undefined) ?? DEFAULT_REPO_URL
     const branch = (this.node.tryGetContext('branch') as string | undefined) ?? 'main'
     const alertEmail = this.node.tryGetContext('alertEmail') as string | undefined
@@ -107,13 +115,51 @@ export class WalnutCloudStack extends cdk.Stack {
     }))
 
     // ── User data: minimal bootstrap, real logic lives in the repo ──────
+    // Two shapes, on purpose:
+    //
+    //  - `userDataB64` present: Walnut's one-click provisioner built the whole
+    //    first-boot script itself (src/core/cloud-setup/user-data.ts) and
+    //    passes it base64-encoded. We only decode and run it — the script owns
+    //    git install, hostname resolution (incl. the sslip.io case), the clone,
+    //    and the pairing code it drops in /etc/walnut/setup-token.
+    //  - absent: the default lines below, unchanged, so anyone deploying this
+    //    CDK app by hand keeps exactly the behavior they had before.
+    //
+    // On secrecy: EC2 user-data is readable by any principal in this account
+    // holding ec2:DescribeInstanceAttribute, so the embedded pairing code is
+    // NOT protected from the account owner. That is the same trust domain as
+    // the instance's own SSM /walnut/* secrets, which the instance role can
+    // read anyway — and the pairing code is single-use and dead the moment the
+    // operator's Mac claims the box, so a later read yields nothing usable.
+    const userDataB64 = this.node.tryGetContext('userDataB64') as string | undefined
     const userData = ec2.UserData.forLinux()
-    userData.addCommands(
-      'set -o pipefail',
-      'dnf install -y git',
-      `git clone --branch ${branch} ${repoUrl} /opt/walnut`,
-      `bash /opt/walnut/scripts/cloud/setup.sh ${domain} 2>&1 | tee /var/log/walnut-setup.log`,
-    )
+    if (userDataB64) {
+      userData.addCommands(
+        `echo ${userDataB64} | base64 -d > /run/walnut-bootstrap.sh`,
+        'bash /run/walnut-bootstrap.sh',
+      )
+    } else {
+      // IMDSv2 only — the instance sets requireImdsv2, so a tokenless (v1) read
+      // of the metadata service returns 401 and would leave $DOMAIN empty.
+      // Walnut's generated script has a more patient version of this (it polls
+      // until two reads agree, since the EIP association can land after
+      // cloud-init starts); these lines are the minimal equivalent for someone
+      // deploying the CDK app by hand with -c sslip=1.
+      const resolveHost = [
+        'TOKEN=$(curl -4 -sS -m 5 -X PUT http://169.254.169.254/latest/api/token'
+        + ' -H "X-aws-ec2-metadata-token-ttl-seconds: 300")',
+        'IP=$(curl -4 -sS -m 5 -H "X-aws-ec2-metadata-token: $TOKEN"'
+        + ' http://169.254.169.254/latest/meta-data/public-ipv4)',
+        'DOMAIN="$(echo "$IP" | tr . -).sslip.io"',
+      ]
+      userData.addCommands(
+        'set -o pipefail',
+        'dnf install -y git',
+        `git clone --branch ${branch} ${repoUrl} /opt/walnut`,
+        ...(domain ? [`DOMAIN=${domain}`] : resolveHost),
+        'bash /opt/walnut/scripts/cloud/setup.sh "$DOMAIN" 2>&1 | tee /var/log/walnut-setup.log',
+      )
+    }
 
     // ── EC2 instance ────────────────────────────────────────────────────
     const instance = new ec2.Instance(this, 'Instance', {
@@ -194,7 +240,7 @@ export class WalnutCloudStack extends cdk.Stack {
       alertTopic.addSubscription(new subscriptions.EmailSubscription(alertEmail))
     }
     const statusAlarm = new cloudwatch.Alarm(this, 'StatusCheckAlarm', {
-      alarmDescription: `Walnut cloud instance failing EC2 status checks (${domain})`,
+      alarmDescription: `Walnut cloud instance failing EC2 status checks (${domainLabel})`,
       metric: new cloudwatch.Metric({
         namespace: 'AWS/EC2',
         metricName: 'StatusCheckFailed',
@@ -216,8 +262,13 @@ export class WalnutCloudStack extends cdk.Stack {
     })
     new cdk.CfnOutput(this, 'ElasticIp', {
       value: eip.attrPublicIp,
-      description: `Point the DNS A record for ${domain} at this IP (DNS-only / grey cloud)`,
+      description: domain
+        ? `Point the DNS A record for ${domain} at this IP (DNS-only / grey cloud)`
+        : 'Public IP of the instance; the sslip.io hostname is derived from it (no DNS record needed)',
     })
-    new cdk.CfnOutput(this, 'Domain', { value: domain })
+    // Informational only in sslip mode: the real hostname is derived from the
+    // Elastic IP on the box (and by the caller, from the ElasticIp output) —
+    // CloudFormation cannot compute `<dashed-ip>.sslip.io` from a token here.
+    new cdk.CfnOutput(this, 'Domain', { value: domain ?? 'sslip-auto' })
   }
 }

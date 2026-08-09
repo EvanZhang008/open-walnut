@@ -30,6 +30,12 @@ npx cdk deploy \
   --profile <your-profile>
 ```
 
+No domain of your own? Swap `-c domain=…` for `-c sslip=1` and the box serves itself at
+`<dashed-ip>.sslip.io` with no DNS record to create. Caveat: `sslip.io` is not on the
+Public Suffix List, so Let's Encrypt counts every sslip.io user against one shared
+rate-limit bucket — `scripts/cloud/setup.sh` therefore turns on Caddy's Let's
+Encrypt → ZeroSSL issuer failover for those hostnames.
+
 Account and region come from the profile (`CDK_DEFAULT_ACCOUNT` / `CDK_DEFAULT_REGION`).
 Nothing personal is hardcoded — this repo is public; keep it that way. `cdk.context.json`
 is gitignored on purpose (CDK caches account-specific lookups there).
@@ -38,7 +44,9 @@ is gitignored on purpose (CDK caches account-specific lookups there).
 
 | Param | Required | Default | Meaning |
 |---|---|---|---|
-| `domain` | **yes** | — | Public HTTPS hostname, e.g. `wn.example.com`. Caddy obtains the cert for it. |
+| `domain` | yes, unless `sslip=1` | — | Public HTTPS hostname, e.g. `wn.example.com`. Caddy obtains the cert for it. |
+| `sslip` | no | *(off)* | `1` = no domain of your own: the box serves itself at `<dashed-ip>.sslip.io`, derived from its public IP at boot. Makes `domain` optional; the `Domain` output then reads `sslip-auto` (the real hostname comes from `ElasticIp`). |
+| `userDataB64` | no | *(none)* | Base64 first-boot script, supplied by Walnut's one-click cloud setup. When present it fully **replaces** the built-in bootstrap lines. Deploying by hand? Leave it off. |
 | `alertEmail` | no | *(none)* | Email subscribed to the alarm SNS topic. Skipped if omitted. |
 | `repoUrl` | no | `https://github.com/EvanZhang008/open-walnut.git` | Repo cloned to `/opt/walnut` on first boot. |
 | `branch` | no | `main` | Branch to clone. |

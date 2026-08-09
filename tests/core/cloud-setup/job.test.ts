@@ -62,6 +62,7 @@ import {
   startCloudSetupJob,
 } from '../../../src/core/cloud-setup/job.js'
 import { CLOUD_SETUP_TIMINGS } from '../../../src/core/cloud-setup/steps.js'
+import { sslipHostname } from '../../../src/core/cloud-setup/user-data.js'
 import { _setCloudProviderDriverForTesting } from '../../../src/core/cloud-setup/providers/index.js'
 import type { CloudProviderDriver, CreateVMParams } from '../../../src/core/cloud-setup/providers/types.js'
 import type { CloudSetupJobState } from '../../../src/core/cloud-setup/job-types.js'
@@ -119,7 +120,14 @@ function makeAutoDriver(opts: { ip?: string; failFirst?: boolean } = {}): FakeDr
       calls.push(params)
       onLog('fake: creating VM')
       if (opts.failFirst && failures === 0) { failures++; throw new Error('quota exceeded') }
-      return { ip: opts.ip ?? '203.0.113.10', instanceRef: 'i-fake', domain: params.domain as string }
+      const ip = opts.ip ?? '203.0.113.10'
+      // Mirrors the real drivers' contract: in sslip mode there is no domain to
+      // echo back, so the driver derives one from the IP it just got.
+      return {
+        ip,
+        instanceRef: 'i-fake',
+        domain: params.domainMode === 'sslip' ? sslipHostname(ip) : (params.domain as string),
+      }
     },
     instructions: ({ userData }) => ({ steps: ['fake'], userData }),
   }
@@ -321,6 +329,28 @@ describe('manual driver (awaiting-input)', () => {
     await waitFor((s) => s.status === 'awaiting-input', 'awaiting-input')
     await provideCloudSetupInput({ ip: '203.0.113.77' })
     const state = await waitFor((s) => s.domain != null, 'a derived domain')
+    expect(state.domain).toBe('203-0-113-77.sslip.io')
+    await cancelCloudSetupJob()
+  })
+
+  it('sslip mode hands an auto driver a SSLIP_AUTO boot script, not a literal hostname', async () => {
+    // The box resolves its own hostname at boot, so the generated script must
+    // carry the resolver block — a driver that got a literal hostname here would
+    // bake in the wrong name (or "undefined") for every sslip deploy.
+    const driver = makeAutoDriver({ ip: '203.0.113.77' })
+    useDriver(driver)
+    box.bootedAfter = 0
+    await startCloudSetupJob({ provider: 'aws', domainMode: 'sslip' })
+    const state = await waitFor((s) => s.domain != null, 'a derived domain')
+    expect(driver.createVMCalls).toHaveLength(1)
+    const { userData, domainMode, domain } = driver.createVMCalls[0]
+    expect(domainMode).toBe('sslip')
+    expect(domain).toBeUndefined()
+    // The resolver block, and never the raw sentinel.
+    expect(userData).toContain('.sslip.io')
+    expect(userData).toContain('169.254.169.254/latest/meta-data/public-ipv4')
+    expect(userData).not.toContain('SSLIP_AUTO')
+    // The fake driver echoes the sslip hostname back; the job keeps it.
     expect(state.domain).toBe('203-0-113-77.sslip.io')
     await cancelCloudSetupJob()
   })

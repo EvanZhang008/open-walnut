@@ -22,7 +22,7 @@ import { getCloudRemoteCredentials, gitSafeAsync, initSync, sync } from '../../i
 import { log } from '../../logging/index.js'
 import type { CloudSetupAwaitingInput, CloudSetupJobState, CloudSetupStepId } from './job-types.js'
 import { getDriver } from './providers/index.js'
-import { buildUserData, SSLIP_AUTO } from './user-data.js'
+import { buildUserData, sslipHostname, SSLIP_AUTO } from './user-data.js'
 
 /** Poll intervals and budgets. Mutable so tests can shrink them. */
 export const CLOUD_SETUP_TIMINGS = {
@@ -89,10 +89,12 @@ function isLiteralHost(hostname: string): boolean {
   return net.isIP(hostname) !== 0 || hostname === 'localhost' || hostname.endsWith('.localhost')
 }
 
-/** `<dashed-ip>.sslip.io` — resolves to the IP without any registrar. */
-export function sslipHostname(ip: string): string {
-  return `${ip.replace(/\./g, '-')}.sslip.io`
-}
+/**
+ * `<dashed-ip>.sslip.io`. Defined in user-data.ts (next to the SSLIP_AUTO
+ * sentinel) so provider drivers can reuse it without importing this module and
+ * closing a cycle through the driver registry; re-exported here for callers.
+ */
+export { sslipHostname }
 
 /** Device name for this Mac's own row on the companion. */
 export function selfDeviceName(): string {

@@ -17,6 +17,6 @@
     "resolveJsonModule": true,
     "typeRoots": ["./node_modules/@types"]
   },
-  "include": ["bin/**/*", "lib/**/*"],
+  "include": ["bin/**/*", "lib/**/*", "test/**/*", "vitest.config.ts"],
   "exclude": ["node_modules", "cdk.out"]
 }
