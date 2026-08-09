@@ -267,6 +267,7 @@ If it has an API, you can sync Walnut tasks with it.
 - **QR-code pairing** — scan a code from the web console to connect; no manual tokens to type
 - **Live sessions on the go** — open any machine's Claude Code session, watch it stream, and chat with the agent from your phone
 - **Optional self-hosted cloud companion** — a small EC2 relay (AWS CDK infra included) bridges your phone to your machines over HTTPS; you own it, opt-in
+- **One-click cloud setup** — Settings → Cloud Companion (or just ask your butler to set it up) provisions the box, waits for first boot, and wires sync for you; see [cloud sync](docs/reference/cloud-sync.md)
 
 ## Multi-Agent — But Human-Centered
 

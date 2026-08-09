@@ -28,6 +28,25 @@ Mac ~/.open-walnut  ──push/pull https://<domain>/git/data──▶  Caddy :4
 
 ## Mac-side setup
 
+**Primary path: let Walnut do it.** One-click cloud setup provisions the box,
+waits for it to boot, claims it, and configures this remote for you — including
+the `chmod 600` and the first verification push. Two entry points, one
+resumable job behind both (`/api/cloud-setup`, driven by
+`src/core/cloud-setup/job.ts`):
+
+- **Settings → Cloud Companion** — the wizard.
+- **Ask your butler** — "set up my cloud companion" routes to the shipped
+  `setup-cloud-companion` skill.
+
+The claim step is what mints the device token: the box boots holding a one-shot
+setup token, and `POST /api/v1/setup/claim` trades it for the long-lived device
+token that ends up in the remote URL below. After that, the only manual step
+left is scanning the pairing QR for your phone.
+
+The rest of this section is the **manual equivalent**, useful for a box you
+provisioned yourself, for re-pointing an existing remote, or for understanding
+what the automated path produced.
+
 Add the cloud hub as a remote of the data repo, with the device token embedded
 in the URL:
 

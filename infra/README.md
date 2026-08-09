@@ -10,6 +10,29 @@ Mac (source of truth) ──git smart HTTP over 443──▶ bare hub repo ─�
 Data sync setup (Mac-side remote + credentials): see
 [cloud sync](../docs/reference/cloud-sync.md).
 
+## One-click setup (recommended)
+
+You do not have to run any of the CDK commands below by hand. Walnut can deploy
+this stack, wait for first boot, claim the box, and wire data sync for you:
+
+- **Settings → Cloud Companion** — a wizard that picks a provider, takes a domain
+  (or a free auto-address), and shows live progress. It survives a tab reload and
+  a server restart.
+- **Ask your butler** — "set up my cloud companion". The shipped
+  `setup-cloud-companion` skill drives the same resumable job over
+  `/api/cloud-setup`, so both surfaces do exactly the same thing.
+
+No domain of your own? Both paths offer an automatic `<dashed-ip>.sslip.io`
+address with no DNS record to create.
+
+Either way, the last step is yours: scan the pairing QR under Settings →
+Cloud Companion → "Connect your phone".
+
+Everything below is the **advanced / DIY route** — deploying the stack yourself
+with the CDK CLI. It stays supported and is the right choice when you want full
+control over the deploy, or you are running Walnut somewhere the one-click path
+cannot reach a checkout of `infra/`.
+
 - **Ingress: 443 + 80 only.** No SSH, no port 22, no key pair. Port 80 exists solely
   for the Let's Encrypt ACME HTTP-01 challenge (Caddy answers it and redirects the rest).
 - **Ops access is SSM Session Manager**: `aws ssm start-session --target <instance-id>`.
@@ -18,7 +41,7 @@ Data sync setup (Mac-side remote + credentials): see
 - Instance role can invoke Bedrock models (incl. cross-region inference profiles) — the
   offline chat brain needs no stored credentials.
 
-## One-command deploy
+## One-command deploy (manual route)
 
 ```bash
 cd infra
