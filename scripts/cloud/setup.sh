@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
-# Open Walnut cloud companion — one-shot bootstrap for Amazon Linux 2023 (arm64).
+# Open Walnut cloud companion — one-shot bootstrap.
 #
-# Invoked by the EC2 user-data (see infra/lib/walnut-cloud-stack.ts):
+# Supported images (both arm64 and x86_64):
+#   Amazon Linux 2023  (dnf)  — what the AWS CDK stack boots
+#   Ubuntu 24.04 LTS   (apt)  — what the Hetzner driver boots
+# The package manager is autodetected, so any dnf- or apt-based image with
+# systemd should work; only these two are exercised.
+#
+# Invoked by the VM's user-data (see src/core/cloud-setup/user-data.ts and
+# infra/lib/walnut-cloud-stack.ts):
 #   bash /opt/walnut/scripts/cloud/setup.sh <domain>
 #
 # Run as root. Idempotent — safe to re-run (e.g. via SSM after a repo update):
@@ -27,32 +34,98 @@ DATA_HOME="$WALNUT_LIB/.open-walnut"
 HUB_REPO="$WALNUT_LIB/git/walnut-data.git"
 CADDY_BIN=/usr/local/bin/caddy
 
+# ── Platform detection (done once; every step below branches on $PKG) ────────
+if command -v dnf >/dev/null 2>&1; then
+  PKG=dnf
+elif command -v apt-get >/dev/null 2>&1; then
+  PKG=apt
+else
+  echo "FATAL: no supported package manager (need dnf or apt-get)" >&2
+  exit 1
+fi
+
+# nologin lives in different places: /usr/sbin on Debian/Ubuntu, /sbin on
+# AL2023 (which also symlinks /sbin → /usr/sbin, but don't rely on that).
+NOLOGIN=/usr/sbin/nologin
+[ -x "$NOLOGIN" ] || NOLOGIN=/sbin/nologin
+[ -x "$NOLOGIN" ] || NOLOGIN=/bin/false
+
+case "$(uname -m)" in
+  aarch64|arm64) CADDY_ARCH=arm64 ;;
+  x86_64|amd64)  CADDY_ARCH=amd64 ;;
+  *) echo "FATAL: unsupported architecture $(uname -m) — no Caddy build to fetch" >&2; exit 1 ;;
+esac
+
+# runuser is util-linux, but it lives in /usr/sbin on Debian/Ubuntu and is only
+# on PATH for root — and the post-receive hook below runs with git's own thin
+# environment, so resolve it to an absolute path once and use that everywhere.
+RUNUSER="$(command -v runuser || true)"
+[ -n "$RUNUSER" ] || for c in /usr/sbin/runuser /sbin/runuser; do
+  [ -x "$c" ] && RUNUSER="$c" && break
+done
+[ -n "$RUNUSER" ] || { echo "FATAL: runuser not found (install util-linux)" >&2; exit 1; }
+
+echo "==> platform: $PKG, $(uname -m) (caddy linux_$CADDY_ARCH), nologin $NOLOGIN"
+
+# apt needs an index refresh before the first install, and exactly once.
+APT_UPDATED=0
+pkg_install() {
+  if [ "$PKG" = dnf ]; then
+    dnf install -y "$@"
+  else
+    if [ "$APT_UPDATED" = 0 ]; then
+      DEBIAN_FRONTEND=noninteractive apt-get update -y
+      APT_UPDATED=1
+    fi
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "$@"
+  fi
+}
+
 # Run a command as the walnut user. HOME is set explicitly — runuser's
 # env-reset behavior varies across util-linux versions and a git command
 # writing to the wrong ~/.gitconfig is a miserable first-boot failure.
 as_walnut() {
-  runuser -u "$WALNUT_USER" -- env HOME="$WALNUT_LIB" "$@"
+  "$RUNUSER" -u "$WALNUT_USER" -- env HOME="$WALNUT_LIB" "$@"
 }
 
 echo "==> [1/9] System packages"
-# gcc-c++/make/python3: insurance for native npm modules if a prebuild is missing.
-dnf install -y git tar nodejs22 gcc-c++ make python3
-# npm ships separately for versioned node packages on AL2023.
-dnf install -y nodejs22-npm || true
+if [ "$PKG" = dnf ]; then
+  # gcc-c++/make/python3: insurance for native npm modules if a prebuild is missing.
+  pkg_install git tar nodejs22 gcc-c++ make python3
+  # npm ships separately for versioned node packages on AL2023.
+  dnf install -y nodejs22-npm || true
 
-# AL2023 ships node/npm/npx as versioned binaries (node-22 etc). Make sure the
-# unversioned names resolve — symlink into /usr/local/bin if alternatives
-# didn't wire them up.
-for tool in node npm npx; do
-  if ! command -v "$tool" >/dev/null 2>&1 && [ -x "/usr/bin/${tool}-22" ]; then
-    ln -sf "/usr/bin/${tool}-22" "/usr/local/bin/${tool}"
+  # AL2023 ships node/npm/npx as versioned binaries (node-22 etc). Make sure the
+  # unversioned names resolve — symlink into /usr/local/bin if alternatives
+  # didn't wire them up. (dnf-only: apt's nodejs package installs plain names.)
+  for tool in node npm npx; do
+    if ! command -v "$tool" >/dev/null 2>&1 && [ -x "/usr/bin/${tool}-22" ]; then
+      ln -sf "/usr/bin/${tool}-22" "/usr/local/bin/${tool}"
+    fi
+  done
+else
+  # build-essential is the apt equivalent of gcc-c++/make; ca-certificates so
+  # the NodeSource fetch below can verify TLS on a minimal image.
+  pkg_install git tar build-essential python3 curl ca-certificates gnupg
+  # Ubuntu 24.04's own nodejs is 18.x — too old (package.json wants >=20), so
+  # take Node 22 from NodeSource. Skipped when a good enough node is present,
+  # which is what makes a re-run cheap.
+  NODE_MAJOR="$(node --version 2>/dev/null | sed -n 's/^v\([0-9]*\).*/\1/p' || true)"
+  if [ -z "$NODE_MAJOR" ] || [ "$NODE_MAJOR" -lt 20 ]; then
+    echo "    (installing Node 22 from NodeSource; found '${NODE_MAJOR:-none}')"
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    # The setup script already refreshed the index for its own repo.
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
   fi
-done
+fi
 command -v npm >/dev/null 2>&1 || { echo "FATAL: npm not found after install"; exit 1; }
 NODE_BIN="$(command -v node)"
-echo "node: $NODE_BIN ($(node --version)), npm $(npm --version)"
+# systemd units take absolute paths, and git is /usr/bin/git on both images —
+# resolve it rather than assume, since a NodeSource-style repo can shadow it.
+GIT_BIN="$(command -v git)"
+echo "node: $NODE_BIN ($(node --version)), npm $(npm --version), git $GIT_BIN"
 
-echo "==> [2/9] Swap (t4g.small has 2GB RAM; vite/tsup builds need headroom)"
+echo "==> [2/9] Swap (a 2GB box — t4g.small, CX22 — needs headroom for vite/tsup)"
 if [ ! -f /swapfile ]; then
   # dd, not fallocate — swapon rejects fallocate'd files on some filesystems.
   dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
@@ -69,16 +142,16 @@ if ! command -v bun >/dev/null 2>&1; then
   ln -sf /opt/bun/bin/bun /usr/local/bin/bun
 fi
 
-echo "==> [4/9] Caddy (static binary — AL2023 dnf does not ship caddy)"
+echo "==> [4/9] Caddy (static binary — neither AL2023 nor Ubuntu ships a current caddy)"
 if ! id -u caddy >/dev/null 2>&1; then
   useradd --system --home-dir /var/lib/caddy --create-home \
-    --shell /usr/sbin/nologin caddy
+    --shell "$NOLOGIN" caddy
 fi
 if [ ! -x "$CADDY_BIN" ]; then
   tmp="$(mktemp -d)"
   url="$(curl -fsSL https://api.github.com/repos/caddyserver/caddy/releases/latest \
-    | grep -o 'https://[^"]*linux_arm64\.tar\.gz' | head -1)"
-  [ -n "$url" ] || { echo "FATAL: could not resolve latest Caddy linux_arm64 release"; exit 1; }
+    | grep -o "https://[^\"]*linux_${CADDY_ARCH}\\.tar\\.gz" | head -1)"
+  [ -n "$url" ] || { echo "FATAL: could not resolve latest Caddy linux_$CADDY_ARCH release"; exit 1; }
   echo "downloading $url"
   curl -fsSL "$url" -o "$tmp/caddy.tar.gz"
   tar -xzf "$tmp/caddy.tar.gz" -C "$tmp" caddy
@@ -187,7 +260,7 @@ EOF
 echo "==> [5/9] walnut service user"
 if ! id -u "$WALNUT_USER" >/dev/null 2>&1; then
   useradd --system --home-dir "$WALNUT_LIB" --create-home \
-    --shell /usr/sbin/nologin "$WALNUT_USER"
+    --shell "$NOLOGIN" "$WALNUT_USER"
 fi
 as_walnut git config --global user.name "walnut"
 as_walnut git config --global user.email "walnut@localhost"
@@ -229,7 +302,7 @@ Description=GC the walnut data hub bare repo (defense against pack accumulation)
 [Service]
 Type=oneshot
 User=$WALNUT_USER
-ExecStart=/usr/bin/git -C $HUB_REPO -c gc.auto=6700 -c gc.autoPackLimit=8 -c repack.writeBitmaps=true gc --auto --quiet
+ExecStart=$GIT_BIN -C $HUB_REPO -c gc.auto=6700 -c gc.autoPackLimit=8 -c repack.writeBitmaps=true gc --auto --quiet
 Nice=10
 UNIT
 cat > /etc/systemd/system/walnut-hub-gc.timer <<UNIT
@@ -258,9 +331,11 @@ unset GIT_DIR GIT_WORK_TREE
 exec 9>"$WALNUT_LIB/git/.post-receive.lock"
 flock 9
 if [ "\$(id -un)" = "$WALNUT_USER" ]; then
-  git -C "$DATA_HOME" pull --ff-only origin main
+  $GIT_BIN -C "$DATA_HOME" pull --ff-only origin main
 else
-  runuser -u "$WALNUT_USER" -- env HOME="$WALNUT_LIB" git -C "$DATA_HOME" pull --ff-only origin main
+  # Absolute paths: a git hook inherits git's own thin PATH, which on Ubuntu
+  # does not include /usr/sbin (where runuser lives).
+  $RUNUSER -u "$WALNUT_USER" -- env HOME="$WALNUT_LIB" $GIT_BIN -C "$DATA_HOME" pull --ff-only origin main
 fi
 EOF
 chmod 755 "$HUB_REPO/hooks/post-receive"
@@ -375,12 +450,25 @@ WantedBy=multi-user.target
 EOF
 
 echo "==> [9/9] Enable services + unattended security updates"
-dnf install -y dnf-automatic
-sed -i 's/^upgrade_type.*/upgrade_type = security/' /etc/dnf/automatic.conf
-sed -i 's/^apply_updates.*/apply_updates = yes/' /etc/dnf/automatic.conf
+if [ "$PKG" = dnf ]; then
+  pkg_install dnf-automatic
+  sed -i 's/^upgrade_type.*/upgrade_type = security/' /etc/dnf/automatic.conf
+  sed -i 's/^apply_updates.*/apply_updates = yes/' /etc/dnf/automatic.conf
+  AUTO_UPDATE_TIMER=dnf-automatic.timer
+else
+  pkg_install unattended-upgrades
+  # Ubuntu's cloud images ship unattended-upgrades but not always the periodic
+  # config that actually fires it, so write it rather than assuming. The
+  # security-only origin list is the package's own default (50unattended-upgrades).
+  cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+EOF
+  AUTO_UPDATE_TIMER=apt-daily-upgrade.timer
+fi
 
 systemctl daemon-reload
-systemctl enable --now dnf-automatic.timer
+systemctl enable --now "$AUTO_UPDATE_TIMER"
 systemctl enable caddy.service walnut.service
 systemctl restart caddy.service walnut.service
 

@@ -8,6 +8,7 @@
  */
 
 import type { CloudSetupDomainMode, CloudSetupProviderId } from '../job-types.js'
+import type { UserDataFlavor } from '../user-data.js'
 
 export interface CreateVMParams {
   /** First-boot script from buildUserData(). Drivers base64 it if needed. */
@@ -60,6 +61,12 @@ export interface CloudProviderDriver {
   label: string
   /** Rough monthly cost, e.g. '~$15/mo (t4g.small + 30 GB gp3)'. */
   costHint: string
+  /**
+   * Base image family the driver boots, so the caller builds a matching
+   * first-boot script (buildUserData tries that package manager first). Absent
+   * = 'al2023', which is what the aws stack and the manual path assume.
+   */
+  userDataFlavor?: UserDataFlavor
   detectCreds(): Promise<DetectCredsResult>
   createVM?(params: CreateVMParams, onLog: (line: string) => void): Promise<CreateVMResult>
   instructions(params: InstructionsParams): DriverInstructions

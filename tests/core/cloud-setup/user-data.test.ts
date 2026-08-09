@@ -7,6 +7,11 @@
  * the printf that writes /etc/walnut/setup-token.
  */
 import { describe, it, expect } from 'vitest'
+import { execFile } from 'node:child_process'
+import fsp from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { promisify } from 'node:util'
 import {
   buildUserData,
   manualUserDataSteps,
@@ -16,6 +21,7 @@ import {
 } from '../../../src/core/cloud-setup/user-data.js'
 
 const CODE = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'
+const execFileAsync = promisify(execFile)
 
 describe('buildUserData shape', () => {
   it('al2023 + own domain: bash header, dnf-first git install, clone, token file, setup.sh', () => {
@@ -43,7 +49,7 @@ describe('buildUserData shape', () => {
     const script = buildUserData({ domain: SSLIP_AUTO, pairingCode: CODE, flavor: 'al2023' })
     expect(script).toContain('X-aws-ec2-metadata-token-ttl-seconds')
     expect(script).toContain('http://169.254.169.254/latest/meta-data/public-ipv4')
-    expect(script).toContain('curl -4 -s -m 5 ifconfig.me')
+    expect(script).toContain('curl -4 -sf -m 5 ifconfig.me')
     expect(script).toContain('DOMAIN="$(echo "$IP" | tr . -).sslip.io"')
     // Stability check (two agreeing reads) and a bounded loop, not `while true`.
     expect(script).toContain('[ "$cur" = "$prev" ]')
@@ -61,10 +67,46 @@ describe('buildUserData shape', () => {
     const get = script.indexOf('http://169.254.169.254/latest/meta-data/public-ipv4')
     expect(put).toBeGreaterThan(-1)
     expect(put).toBeLessThan(get)
-    // No tokenless curl to public-ipv4 anywhere.
-    expect(script).not.toMatch(/curl(?![^\n]*metadata-token)[^\n]*public-ipv4/)
-    // ifconfig.me is only the non-AWS fallback, taken when no token came back.
+    // No tokenless curl to the AWS public-ipv4 path anywhere.
+    expect(script).not.toMatch(/curl(?![^\n]*metadata-token)[^\n]*latest\/meta-data\/public-ipv4/)
+    // AWS is tried first, and only its success short-circuits the rest.
     expect(script).toMatch(/if \[ -n "\$token" \]; then/)
+  })
+
+  it('probes Hetzner\'s NATIVE metadata path, then ifconfig.me — its AWS-compat aliases are gone', () => {
+    // Hetzner serves its own metadata at the same link-local address under
+    // /hetzner/v1/metadata/…, and REMOVED its AWS-compatible /latest/meta-data/…
+    // aliases on 2026-08-01. So on Hetzner an AWS-shaped read is not merely
+    // redundant — it is the only thing that used to work and now 404s. Without
+    // this native probe a Hetzner box would never resolve a hostname at all.
+    const script = buildUserData({ domain: SSLIP_AUTO, pairingCode: CODE, flavor: 'ubuntu' })
+    const aws = script.indexOf('/latest/meta-data/public-ipv4')
+    const hetzner = script.indexOf('http://169.254.169.254/hetzner/v1/metadata/public-ipv4')
+    const generic = script.indexOf('ifconfig.me')
+    expect(hetzner).toBeGreaterThan(-1)
+    expect(hetzner).toBeGreaterThan(aws)
+    expect(generic).toBeGreaterThan(hetzner)
+    // The native path needs no auth header — don't send an AWS token to it.
+    const hetznerLine = script.split('\n').find((l) => l.includes('/hetzner/v1/metadata'))!
+    expect(hetznerLine).not.toMatch(/metadata-token/)
+  })
+
+  it('validates every probe result as an IPv4 and uses curl -f, so a 404 body cannot become the "IP"', () => {
+    // The two guards that make sharing 169.254.169.254 with a non-AWS provider
+    // safe: -f turns any non-2xx into empty output, and is_ipv4 gates every
+    // candidate. Without them Hetzner's 404 body would be captured as a token
+    // and then as an address, and the box would ask Caddy for a garbage name.
+    const script = buildUserData({ domain: SSLIP_AUTO, pairingCode: CODE, flavor: 'ubuntu' })
+    expect(script).toContain('is_ipv4() {')
+    expect(script).toMatch(/\^\(\[0-9\]\{1,3\}\\\.\)\{3\}\[0-9\]\{1,3\}\$/)
+    // Every metadata/IP curl is fail-on-error.
+    for (const line of script.split('\n')) {
+      if (!/curl/.test(line)) continue
+      if (!/169\.254\.169\.254|ifconfig\.me/.test(line)) continue
+      expect(line, line).toMatch(/curl -4 -sf/)
+    }
+    // Each candidate passes through is_ipv4 before it is accepted.
+    expect(script.match(/if is_ipv4 "\$ip"; then printf/g) ?? []).toHaveLength(3)
   })
 
   it('honours a custom repoUrl and branch', () => {
@@ -155,6 +197,27 @@ describe('sslipHostname', () => {
     const script = buildUserData({ domain: SSLIP_AUTO, pairingCode: CODE, flavor: 'al2023' })
     expect(script).toContain('DOMAIN="$(echo "$IP" | tr . -).sslip.io"')
     expect(sslipHostname('10.0.0.1')).toBe('10-0-0-1.sslip.io')
+  })
+})
+
+describe('the generated script is valid bash', () => {
+  // The resolver is hand-assembled shell inside a TS string array — a stray
+  // quote there strands every box that boots it, and no unit assertion on
+  // substrings would catch it. `bash -n` parses without executing.
+  it.each([
+    ['al2023', 'wn.example.com'],
+    ['al2023', SSLIP_AUTO],
+    ['ubuntu', 'wn.example.com'],
+    ['ubuntu', SSLIP_AUTO],
+  ] as const)('parses under bash -n (%s / %s)', async (flavor, domain) => {
+    const script = buildUserData({ domain, pairingCode: CODE, flavor })
+    const file = path.join(await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-userdata-')), 'boot.sh')
+    await fsp.writeFile(file, script, 'utf-8')
+    try {
+      await execFileAsync('bash', ['-n', file])
+    } finally {
+      await fsp.rm(path.dirname(file), { recursive: true, force: true })
+    }
   })
 })
 

@@ -103,19 +103,43 @@ function installGitBlock(flavor: UserDataFlavor): string {
  * Resolve the public IP and derive `<dashed-ip>.sslip.io`. Polls until two
  * consecutive reads 5s apart agree — an Elastic IP association can land after
  * cloud-init starts, so the first read may be the ephemeral address.
+ *
+ * Three probes tried in order, each fail-safe, because 169.254.169.254 is NOT
+ * AWS-only. Hetzner serves its OWN metadata at that same link-local address
+ * under `/hetzner/v1/metadata/…`, and it REMOVED its AWS-compatible
+ * `/latest/meta-data/…` aliases on 2026-08-01 — so an AWS-shaped read is not
+ * merely redundant there, it is the only thing that would have worked and no
+ * longer does. Hence the explicit Hetzner path.
+ *
+ * The AWS handshake against a non-AWS box does not time out either; it 404s,
+ * and a 404 BODY would otherwise be captured as the "token" and then as the
+ * "IP". Two guards make that impossible: `curl -f` turns any non-2xx into empty
+ * output, and every candidate must pass is_ipv4() before it is accepted. A
+ * provider we have never heard of falls through to the generic ifconfig.me read.
  */
 function sslipResolverBlock(): string {
   return [
+    'is_ipv4() {',
+    '  printf \'%s\' "$1" | grep -Eq \'^([0-9]{1,3}\\.){3}[0-9]{1,3}$\'',
+    '}',
+    '',
     'public_ip() {',
-    '  local token',
-    '  token="$(curl -4 -s -m 5 -X PUT http://169.254.169.254/latest/api/token \\',
+    '  local token ip',
+    '  # AWS: IMDSv2 (the stack sets requireImdsv2, so a tokenless read would 401).',
+    '  token="$(curl -4 -sf -m 5 -X PUT http://169.254.169.254/latest/api/token \\',
     '    -H "X-aws-ec2-metadata-token-ttl-seconds: 60" || true)"',
     '  if [ -n "$token" ]; then',
-    '    curl -4 -s -m 5 -H "X-aws-ec2-metadata-token: $token" \\',
-    '      http://169.254.169.254/latest/meta-data/public-ipv4 || true',
-    '  else',
-    '    curl -4 -s -m 5 ifconfig.me || true',
+    '    ip="$(curl -4 -sf -m 5 -H "X-aws-ec2-metadata-token: $token" \\',
+    '      http://169.254.169.254/latest/meta-data/public-ipv4 || true)"',
+    '    if is_ipv4 "$ip"; then printf \'%s\' "$ip"; return 0; fi',
     '  fi',
+    '  # Hetzner: same link-local address, different path (no token handshake).',
+    '  ip="$(curl -4 -sf -m 5 http://169.254.169.254/hetzner/v1/metadata/public-ipv4 || true)"',
+    '  if is_ipv4 "$ip"; then printf \'%s\' "$ip"; return 0; fi',
+    '  # Anything else: ask the internet what our source address looks like.',
+    '  ip="$(curl -4 -sf -m 5 ifconfig.me || true)"',
+    '  if is_ipv4 "$ip"; then printf \'%s\' "$ip"; return 0; fi',
+    '  return 0',
     '}',
     '',
     'IP=""',

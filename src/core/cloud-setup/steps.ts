@@ -22,7 +22,7 @@ import { getCloudRemoteCredentials, gitSafeAsync, initSync, sync } from '../../i
 import { log } from '../../logging/index.js'
 import type { CloudSetupAwaitingInput, CloudSetupJobState, CloudSetupStepId } from './job-types.js'
 import { getDriver } from './providers/index.js'
-import { buildUserData, sslipHostname, SSLIP_AUTO } from './user-data.js'
+import { buildUserData, sslipHostname, SSLIP_AUTO, type UserDataFlavor } from './user-data.js'
 
 /** Poll intervals and budgets. Mutable so tests can shrink them. */
 export const CLOUD_SETUP_TIMINGS = {
@@ -150,12 +150,25 @@ function bootScriptDomain(state: CloudSetupJobState): string {
   return resolveTarget(state.domain).hostname
 }
 
+/**
+ * Base image the provider boots, so the script's package-manager order matches
+ * (Hetzner is Ubuntu, the aws stack and the manual path are AL2023). The
+ * generator autodetects either way, so this only decides which is tried first.
+ */
+function bootScriptFlavor(state: CloudSetupJobState): UserDataFlavor {
+  return getDriver(state.provider)?.userDataFlavor ?? 'al2023'
+}
+
 async function generate(ctx: StepContext): Promise<StepOutcome> {
   const { state } = ctx
   // Reuse on resume/retry: the code may already be baked into a booting VM.
   state.pairingCode ??= crypto.randomBytes(16).toString('hex')
   // Validates the inputs and throws on anything shell-unsafe.
-  buildUserData({ domain: bootScriptDomain(state), pairingCode: state.pairingCode, flavor: 'al2023' })
+  buildUserData({
+    domain: bootScriptDomain(state),
+    pairingCode: state.pairingCode,
+    flavor: bootScriptFlavor(state),
+  })
   ctx.log('generated the first-boot script and a fresh pairing code')
   return {}
 }
@@ -183,7 +196,7 @@ async function provision(ctx: StepContext): Promise<StepOutcome> {
   const userData = buildUserData({
     domain: bootScriptDomain(state),
     pairingCode: state.pairingCode,
-    flavor: 'al2023',
+    flavor: bootScriptFlavor(state),
   })
   const result = await driver.createVM({
     userData,

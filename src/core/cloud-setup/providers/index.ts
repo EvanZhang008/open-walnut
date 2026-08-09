@@ -1,7 +1,7 @@
 /**
  * Provider driver registry.
  *
- * Only aws + manual are registered in this version; the CloudSetupProviderId
+ * aws + hetzner + manual are registered in this version; the CloudSetupProviderId
  * union already covers the providers that land later, so adding one is a single
  * register() call plus its driver file.
  *
@@ -13,11 +13,13 @@
 import type { CloudSetupProviderId } from '../job-types.js'
 import { awsDriver } from './aws.js'
 import { fakeDriver, FAKE_DRIVER_ENV } from './fake.js'
+import { hetznerDriver } from './hetzner.js'
 import { manualDriver } from './manual.js'
 import type { CloudProviderDriver } from './types.js'
 
 const drivers = new Map<string, CloudProviderDriver>([
   [awsDriver.id, awsDriver],
+  [hetznerDriver.id, hetznerDriver],
   [manualDriver.id, manualDriver],
 ])
 
