@@ -114,6 +114,66 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | GET/POST | `/api/v1/notes/attachment` | Read / paste-upload a vault attachment |
 | POST | `/api/v1/notes/move` | Rename/move a note or attachment |
 | POST | `/api/v1/notes/folder` | Create a vault folder |
+| GET | `/api/v1/routines?includeDisabled=` | List routines (cloud relays) |
+| GET | `/api/v1/routines/actions` | Registered action catalog (cloud relays) |
+| GET | `/api/v1/routines/status` | Scheduler status (cloud relays) |
+| GET | `/api/v1/routines/executors` | Executor definitions + form options (cloud relays) |
+| GET | `/api/v1/routines/:id` | One routine (cloud relays) |
+| POST | `/api/v1/routines` | Create a routine (cloud relays) |
+| PATCH | `/api/v1/routines/:id` | Edit a routine (cloud relays) |
+| DELETE | `/api/v1/routines/:id` | Delete a routine — 404 on unknown id (cloud relays) |
+| POST | `/api/v1/routines/:id/toggle` | Enable/disable (cloud relays) |
+| POST | `/api/v1/routines/:id/run` | Run now, forced (cloud relays) |
+| GET | `/api/v1/projects` | Project registry + counts + favorite flags + Inbox |
+| POST | `/api/v1/projects` | Idempotent create (201 new / 200 existing) |
+| PATCH | `/api/v1/projects/:name` | Rename, merge-on-collision (501 on REPLICA) |
+| DELETE | `/api/v1/projects/:name?remote=1` | Delete; ?remote=1 = provider cascade (501 on REPLICA) |
+| GET | `/api/v1/ordering` | Project display order |
+| PUT | `/api/v1/ordering/projects` | Replace the project order |
+| POST/DELETE | `/api/v1/favorites/projects/:name` | Add/remove a project favorite (case-insensitive) |
+| GET | `/api/v1/tasks/meta/tags` | Unique task tags with counts |
+| GET | `/api/v1/tasks/groups` | Virtual task groups (501 writes on REPLICA) |
+| POST | `/api/v1/tasks/groups` | Create a group from ≥2 tasks (501 on REPLICA) |
+| POST | `/api/v1/tasks/groups/:groupId/add` | Add tasks to a group (501 on REPLICA) |
+| POST | `/api/v1/tasks/groups/remove` | Remove tasks from their group(s) (501 on REPLICA) |
+| PATCH | `/api/v1/tasks/groups/:groupId` | Rename a group (501 on REPLICA) |
+| PATCH | `/api/v1/tasks/groups/:groupId/hidden` | Show/hide a group in Focus (501 on REPLICA) |
+| POST | `/api/v1/tasks/quick-parse` | NL → task metadata parse (works on both boxes) |
+| POST | `/api/v1/focus/tiers` | Create a custom focus tier (501 on REPLICA) |
+| PUT | `/api/v1/focus/tiers/:id` | Rename a custom tier (501 on REPLICA) |
+| DELETE | `/api/v1/focus/tiers/:id` | Delete a custom tier, members → satellite (501 on REPLICA) |
+| GET | `/api/v1/sessions/list-dirs` | Host directory listing for the path picker (cloud relays) |
+| GET/POST | `/api/v1/sessions/:id/controls` | Provider-neutral controls read/apply (cloud relays) |
+| GET | `/api/v1/sessions/:id/settings?details=1` | Requested vs applied settings snapshot (cloud relays) |
+| GET | `/api/v1/sessions/:id/side-questions` | Side-question history (cloud relays) |
+| POST | `/api/v1/sessions/:id/side-question` | Ask the live CLI a side question (cloud relays) |
+| POST | `/api/v1/sessions/:id/side-question/:qid/promote` | Promote a Q&A to a task (cloud relays) |
+| DELETE | `/api/v1/sessions/:id/side-question/:qid` | Remove a Q&A (cloud relays) |
+| GET | `/api/v1/sessions/:id/workflow` | Dynamic-workflow progress; 204 = none (cloud relays) |
+| GET | `/api/v1/sessions/:id/plan` | Plan content for a plan session (cloud relays) |
+| GET | `/api/v1/sessions/:id/subagent/:agentId/history` | One subagent lane's history (cloud relays) |
+| POST | `/api/v1/sessions/:id/execute-compact` | Execute a plan after a compact boundary (cloud relays) |
+| GET | `/api/v1/sessions/:id/queue` | Queued messages (cloud relays) |
+| PATCH | `/api/v1/sessions/:id/queue/:messageId` | Edit a queued message (cloud relays) |
+| DELETE | `/api/v1/sessions/:id/queue/:messageId` | Delete a queued message (cloud relays) |
+| GET | `/api/v1/files/list?path=&host=` | One directory level of a session file tree (cloud relays) |
+| GET | `/api/v1/files/resolve-path?rel=&cwd=&host=` | Resolve a transcript-mentioned path (cloud relays) |
+| GET | `/api/v1/file-content?path=&host=` | FileViewer text payload (REPLICA: local safe roots only; `host=` → 501) |
+| GET | `/api/v1/config` | Read-only allowlist config projection + box diagnostics |
+| GET | `/api/v1/usage/overview` | Usage aggregates under one filter (501 on REPLICA) |
+| GET | `/api/v1/slash-commands?cwd=&host=&fresh=1` | Composer slash-command palette (cloud relays) |
+| GET | `/api/v1/skills` | All skills, content stripped |
+| GET | `/api/v1/skills/:dirName` | One skill with full content |
+| GET/PUT | `/api/v1/notes/global` | Global scratchpad (optimistic locking) |
+| GET | `/api/v1/notes/backlinks/*path` | Inbound links of a note |
+| GET | `/api/v1/notes/links/*path` | Outbound links of a note |
+| GET | `/api/v1/notes/tags` | All note tags, frequency-ranked |
+| GET | `/api/v1/notes/tags/:tag/notes` | Notes carrying a tag |
+| DELETE | `/api/v1/notes/attachment/*path` | Delete a binary attachment |
+| DELETE | `/api/v1/notes/folder/*path` | Recursive folder delete (client must confirm) |
+| PUT | `/api/v1/conversations/active` | Switch the butler's active conversation pointer |
+| GET | `/api/v1/chat/stats` | Conversation size stats (messages + token estimate) |
+| POST | `/api/v1/chat/clear` | Clear a butler conversation |
 
 ### GET /api/v1/status
 
@@ -727,6 +787,229 @@ like the other conversation endpoints (absent → `general`).
     rename/move a note or attachment (id-keyed links survive).
     Destination exists → `409 conflict`; source missing → `404 not_found`.
   - `POST /api/v1/notes/folder` body `{ "path" }` → `{ "ok": true }`.
+
+### Routines (additive, Wave 2 2026-08)
+
+Full routine (cron) management. Class B everywhere: the PRIMARY's scheduler
+is the single writer of the routine store, so a REPLICA relays every call
+over the bridge via `server.routines.*` actions on the existing
+`session.control` command (standard failure ladder:
+`session_control_needs_upgrade` / `bridge_offline` / verbatim error
+passthrough). The natural-language draft endpoint is deliberately NOT in v1
+(Wave 3 — it is an LLM call).
+
+- `GET /api/v1/routines?includeDisabled=true` → `200 { "jobs": [CronJob…] }`.
+- `GET /api/v1/routines/actions` → `{ "actions" }` — the registered action
+  catalog for building forms.
+- `GET /api/v1/routines/status` → scheduler status (enabled, next wakeups).
+- `GET /api/v1/routines/executors` → `{ "executors", "options": { hosts,
+  models } }` — executor definitions + dropdown options.
+- `GET /api/v1/routines/:id` → `{ "job" }`; unknown id → `404 not_found`.
+- `POST /api/v1/routines` body = the normalized job shape (at minimum
+  `schedule` + `payload`/`executor`) → `201 { "job" }`; invalid input →
+  `400 bad_request`.
+- `PATCH /api/v1/routines/:id` → `{ "job" }`.
+- `DELETE /api/v1/routines/:id` → `204`; unknown id → `404 not_found`
+  (unlike the tolerant legacy web route — a phone delete fails loudly).
+- `POST /api/v1/routines/:id/toggle` → `{ "job" }` with `enabled` flipped.
+- `POST /api/v1/routines/:id/run` → `{ "result" }` — forced immediate run.
+- Engine still booting → `503 { error: { code: "internal", message:
+  "Routines engine is not running" } }`.
+
+### Projects, ordering, project favorites (additive, Wave 2 2026-08)
+
+- `GET /api/v1/projects` → `200 { "projects": [ { name, source,
+  order_index?, metadata?, favorite, counts: { todo, active, done } } ],
+  "inbox": { "counts" } }`. Class A (the REPLICA reads its local store).
+- `POST /api/v1/projects` body `{ "name", "source"? }` → idempotent create:
+  `201 { name, source, created: true }` for a new row, `200 { …, created:
+  false }` with the EXISTING row's source when the name is taken (a second
+  caller can never steal a provider claim). Unknown source →
+  `400 bad_request`; a source conflict → `409 conflict` with
+  `project` / `intended_source` / `existing_source` extras.
+- `PATCH /api/v1/projects/:name` body `{ "name" }` → rename
+  (merge-on-collision, case-insensitive; favorites + ordering follow).
+  **REPLICA: `501 not_supported_cloud`** — the registry has no replica
+  write-back channel, so a local rename would be silently reverted by the
+  next projection import.
+- `DELETE /api/v1/projects/:name[?remote=1]` → drop the registry row; tasks
+  fall back to the Inbox. A provider-claimed project refuses a plain DELETE
+  (`409 conflict` + `cascade_available`); `?remote=1` opts into the
+  irreversible provider cascade. **REPLICA: `501 not_supported_cloud`**
+  (cascade needs the primary's provider plugins).
+- `GET /api/v1/ordering` → `{ "projects": [names in display order] }`;
+  `PUT /api/v1/ordering/projects` body `{ "order": [names] }` → same shape.
+  Class A (config rides git-sync).
+- `POST /api/v1/favorites/projects/:name` / `DELETE …/:name` →
+  `{ "projects" }` — case-insensitive, idempotent; stored under the
+  registry's canonical spelling. Completes the Wave-1 note-favorites pair.
+
+### Task extras: tags, groups, quick-parse, focus tiers (additive, Wave 2 2026-08)
+
+- `GET /api/v1/tasks/meta/tags` → `200 { "tags": [ { tag, count } ] }` —
+  autocomplete catalog. Class A.
+- Virtual task groups — **all writes answer `501 not_supported_cloud` on a
+  REPLICA** (`group_id` and the group registry are not in the outbox update
+  whitelist, so replica-local writes would silently revert; an honest error
+  beats a silent revert):
+  - `GET /api/v1/tasks/groups` → `{ "groups" }` (reads work on both boxes).
+  - `POST /api/v1/tasks/groups` body `{ "task_ids": [≥2], "label"? }` →
+    `201 { group_id, label, … }`. Unlike the web route, no async AI label
+    refinement fires — mobile reads the response synchronously.
+  - `POST /api/v1/tasks/groups/:groupId/add` body `{ "task_ids" }`.
+  - `POST /api/v1/tasks/groups/remove` body `{ "task_ids" }` →
+    `{ removed_ids, dissolved_group_ids }`.
+  - `PATCH /api/v1/tasks/groups/:groupId` body `{ "label" }`;
+    `PATCH …/:groupId/hidden` body `{ "hidden": boolean }`.
+- `POST /api/v1/tasks/quick-parse` body `{ "text" (≤500 chars), "timeZone"
+  (IANA) }` → the structured quick-task parse (title/dates/priority/tier/
+  project hints). Stateless — works on BOTH boxes (the replica has its own
+  model credentials). Invalid text/timezone → `400 bad_request`.
+- Custom focus tiers (Wave 1 shipped the tier read + pin management; this
+  completes CRUD — **`501 not_supported_cloud` on a REPLICA**, same
+  outbox-whitelist reason as groups):
+  - `POST /api/v1/focus/tiers` body `{ "label" }` → `201 { tier, tiers }`.
+  - `PUT /api/v1/focus/tiers/:id` body `{ "label" }` → `{ tier, tiers }`.
+  - `DELETE /api/v1/focus/tiers/:id` → `{ tiers, moved }` (members move to
+    satellite). Built-in tiers → `400 bad_request`.
+
+### Session extras (additive, Wave 2 2026-08) — controls / settings / side questions / workflow / plan / subagent history / execute-compact / queue / list-dirs
+
+All Class B: session records + live CLIs live on the primary, so a REPLICA
+relays each endpoint as a NEW action on the existing `session.control`
+command (the daemon forwards action strings opaquely — no daemon upgrade
+needed; an old primary answers `400 session_control_needs_upgrade`).
+
+- `GET /api/v1/sessions/list-dirs?prefix=&host=&depth=` → `{ "dirs",
+  "parent", "exists" }` — subdirectory autocomplete for the path picker
+  (relays as the box-level `server.list-dirs` action).
+- `GET /api/v1/sessions/:id/controls` → `{ "engine": "claude"|"codex",
+  "controls": [ { id, name, type, currentValue, options } ] }` —
+  provider-neutral selectable controls (the mode select for Claude sessions;
+  the native control set for Codex/ACP sessions).
+- `POST /api/v1/sessions/:id/controls` body `{ "id", "value" }` → the same
+  payload with the control applied. Unknown control/value →
+  `400 bad_request`; a live CLI that rejects the switch → `409 conflict`.
+- `GET /api/v1/sessions/:id/settings?details=1` → `{ "live", "requested",
+  "applied", "effective", "details"? }` — requested vs actually-applied
+  model/effort/mode; `details=1` adds context usage + CLI binary version
+  when the CLI is live.
+- Side questions (ask the live CLI something WITHOUT injecting into its main
+  conversation):
+  - `GET /api/v1/sessions/:id/side-questions` → `{ "sideQuestions" }`.
+  - `POST /api/v1/sessions/:id/side-question` body `{ "question" }` →
+    `200 { "sideQuestion" }` — synchronous; the response carries the answer
+    (can take tens of seconds). Dead/unreachable CLI → `502`.
+  - `POST /api/v1/sessions/:id/side-question/:qid/promote` →
+    `{ "taskId", "parentTaskId"? }` — Q&A becomes a (sub)task.
+  - `DELETE /api/v1/sessions/:id/side-question/:qid` → `{ "status":
+    "deleted" }`.
+- `GET /api/v1/sessions/:id/workflow` → the dynamic-workflow progress
+  payload, or **`204` when the session never ran a workflow**.
+- `GET /api/v1/sessions/:id/plan` → `{ "content", "planFile"?,
+  "sourceSessionId"? }`; no plan → `404 not_found`.
+- `GET /api/v1/sessions/:id/subagent/:agentId/history?workflow=1` →
+  `{ "messages" }` — one subagent lane's rich history.
+- `POST /api/v1/sessions/:id/execute-compact` body `{ "task_id"?,
+  "working_directory"?, "instructions"?, "mode"? }` → `{ "status":
+  "started", … }` — execute a completed plan in the SAME session after
+  injecting a compact boundary (pairs with Wave 1's execute-continue).
+- Queued messages (REST twins of the web console's WS RPCs):
+  - `GET /api/v1/sessions/:id/queue` → `{ "messages" }`; unknown session →
+    `404`.
+  - `PATCH /api/v1/sessions/:id/queue/:messageId` body `{ "text" }` →
+    `{ "ok" }`; already processing/gone → `409 conflict`.
+  - `DELETE /api/v1/sessions/:id/queue/:messageId` → `{ "ok" }`.
+
+### File browsing (additive, Wave 2 2026-08) — list / resolve-path / file-content
+
+Same sandbox guards as the web console (shared implementation): directory
+traversal (`..`) rejected, absolute paths required, shell metacharacters
+rejected, 4096-char cap.
+
+- `GET /api/v1/files/list?path=/abs/dir&host=&showHidden=1` →
+  `{ "path", "selectedFile"?, "entries": [ { name, path, type: "dir"|"file",
+    size?, hasChildren? } ] }` — one directory level (lazy tree), dirs before
+  files. REPLICA: relays as the box-level `server.files.list` action
+  (names-only metadata).
+- `GET /api/v1/files/resolve-path?rel=&cwd=&host=` → `{ "path", "resolved" }`
+  — resolves a transcript-mentioned (possibly package-relative) path against
+  the session cwd; unresolvable → `resolved: false` with the cwd-joined
+  fallback. REPLICA: relays as `server.files.resolve`.
+- `GET /api/v1/file-content?path=&host=` → `{ "content", "size",
+  "truncated", "binary", "extension", "error"? }` — the FileViewer JSON
+  payload (text, truncated at 512 KB, binary-detected). A missing file is a
+  `200` with `error` set (the viewer contract), not a 404.
+  **REPLICA threat model:** file CONTENT never rides the bridge — the daemon
+  channel deliberately has no arbitrary-read command, so `host=` on a
+  REPLICA answers `501 not_supported_cloud`, and replica-LOCAL reads are
+  confined to the safe `/tmp/open-walnut*` roots with secret-path denials
+  (`403` mapped to `not_supported_cloud`).
+
+### Console reads (additive, Wave 2 2026-08) — config / usage / slash-commands / skills
+
+- `GET /api/v1/config` → `200 { "config", "cloud", "processNice",
+  "memory" }`. The `config` object is a **whitelist-field projection** — the
+  inverse of a redact-passthrough: only explicitly allowlisted fields ever
+  appear (`user.name`, `defaults`, `provider.type/model/bedrock_region`,
+  `agent` model fields, `hosts` as `{ label, enabled }` only, `session`
+  timeout/modes). Credentials, API keys, host connection details, and any
+  future secret-bearing field are structurally absent, not masked. Works on
+  both boxes (`cloud: true` on a REPLICA). Read-only by design — config
+  WRITE is desktop-only (Class D).
+- `GET /api/v1/usage/overview?start=&end=&source=&model=&agent=&limit=` →
+  every usage aggregate under one cross-filter. **REPLICA: `501
+  not_supported_cloud`** (the usage DB lives on the primary).
+- `GET /api/v1/slash-commands?cwd=&host=&fresh=1` → `{ "items",
+  "degraded"? }` — the composer palette (skills + command templates +
+  built-ins; remote hosts discovered over the daemon, cached per host).
+  REPLICA: relays as the box-level `server.slash-commands` action.
+- `GET /api/v1/skills` → `{ "skills" }` with `content` stripped;
+  `GET /api/v1/skills/:dirName` → `{ "skill" }` with full content;
+  unknown → `404 not_found`. Class A (skills ride git-sync). Skill WRITE
+  is Wave 3.
+
+### Notes extras (additive, Wave 2 2026-08) — global / links / tags / deletes
+
+Class A everywhere (git-synced vault; the structural index rebuilds locally
+on each box) — identical behavior on a REPLICA.
+
+- `GET /api/v1/notes/global` → `{ "content", "contentHash" }` (empty string
+  before first write). `PUT /api/v1/notes/global` body `{ "content",
+  "expectedHash"? }` → `{ "ok", "contentHash" }`; a stale `expectedHash` →
+  `409 conflict` + top-level `currentHash` so the client can rebase;
+  >2 MB → `413 too_large`.
+- `GET /api/v1/notes/backlinks/*path` → `{ "backlinks": [ { id, path,
+  title, name, snippet, status, candidates? } ] }` — id-keyed inbound links
+  incl. ambiguous edges.
+- `GET /api/v1/notes/links/*path` → `{ "links": [ { dstId, dstName, status,
+  title?, path? } ] }` — outbound links.
+- `GET /api/v1/notes/tags` → `{ "tags": [ { tag, count } ] }`;
+  `GET /api/v1/notes/tags/:tag/notes` → `{ "notes": [ { id, title, path,
+  snippet, modified } ] }`.
+- `DELETE /api/v1/notes/attachment/*path` → `{ "ok" }` — binary attachments
+  only (`.md` paths → `400`; use the note delete).
+- `DELETE /api/v1/notes/folder/*path` → `{ "ok", "deletedNotes" }` —
+  **recursive and irreversible**; clients MUST gate it behind an explicit
+  confirm (the web console uses a typed-confirm dialog). The vault root and
+  traversal paths refuse with `400`.
+
+### Butler additions (additive, Wave 2 2026-08) — active pointer + chat stats/clear
+
+Class A (the REPLICA runs its own butler). `agentId` as usual (absent →
+`general`).
+
+- `PUT /api/v1/conversations/active` body `{ "conversationId", "agentId"? }`
+  → `200 { "activeConversationId" }`. This is SERVER state, not client UI
+  state: cron results and background notifications route into the active
+  conversation.
+- `GET /api/v1/chat/stats?agentId=&conversationId=` →
+  `{ "apiMessageCount", "estimatedTokens", "systemTokens", "toolsTokens",
+  "estimatedTotalTokens", "compacted", "contextWindow" }` — real
+  conversation size (cached between turns). No `conversationId` = the active
+  conversation.
+- `POST /api/v1/chat/clear?agentId=&conversationId=` → `{ "ok": true }` —
+  clears the conversation history.
 
 ### GET /api/v1/events (SSE, additive, 2026-08) — live task + session feed
 
