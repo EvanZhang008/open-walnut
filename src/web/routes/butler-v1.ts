@@ -8,6 +8,12 @@
  *   DELETE /conversations/:id                      → 204 (main conversation → 409)
  *   POST   /conversations/:id/stop                 → { stopped, questionCancelled }
  *   POST   /conversations/:id/answer { answers }   → { ok: true }
+ *   PUT    /conversations/active { conversationId } → { activeConversationId }
+ *   GET    /chat/stats?agentId&conversationId      → conversation size stats
+ *   POST   /chat/clear?agentId&conversationId      → { ok: true }
+ *
+ * The active pointer matters server-side (not just client UI state): cron
+ * results and background notifications route into the ACTIVE conversation.
  *
  * Cloud companion (REPLICA): Class A — the replica runs its OWN butler agent
  * (the v1 chat endpoints already work there), so these operate on the local
@@ -70,6 +76,81 @@ async function resolveConversation(req: Request, res: Response): Promise<{ agent
   }
   return { agentId, conversationId }
 }
+
+// PUT /api/v1/conversations/active { conversationId, agentId? } — switch the
+// ACTIVE conversation pointer. Server-side state, not client UI state: cron
+// results + background notifications route into the active conversation.
+// Registered before the :id routes (different method, but keep the shape
+// obvious): 'active' is never treated as a conversation id.
+butlerV1Router.put('/conversations/active', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const agentId = requestAgentId(req)
+    if (!agentId || !(await consoleAgentExists(agentId))) {
+      sendError(res, 404, 'not_found', `Agent not found: ${req.query.agentId ?? req.body?.agentId}`)
+      return
+    }
+    const conversationId = req.body?.conversationId
+    if (typeof conversationId !== 'string' || !(await conversationExists(agentId, conversationId))) {
+      sendError(res, 404, 'not_found', `Conversation not found: ${conversationId}`)
+      return
+    }
+    const { setActiveConversationId } = await import('../../core/conversations.js')
+    await setActiveConversationId(agentId, conversationId)
+    // Same event shape as the internal PUT /api/agents/:agentId/conversations/active.
+    broadcastEvent(EventNames.CONVERSATION_UPDATED, { agentId, activeConversationId: conversationId })
+    res.json({ activeConversationId: conversationId })
+  } catch (err) {
+    next(err)
+  }
+})
+
+/** agentId + conversationId for the chat/* routes (explicit conv id wins; else the active pointer). */
+async function resolveChatTarget(req: Request, res: Response): Promise<{ agentId: string; conversationId: string } | null> {
+  const agentId = requestAgentId(req)
+  if (!agentId || !(await consoleAgentExists(agentId))) {
+    sendError(res, 404, 'not_found', `Agent not found: ${req.query.agentId ?? req.body?.agentId}`)
+    return null
+  }
+  const rawConvId = (typeof req.query.conversationId === 'string' && req.query.conversationId)
+    || (typeof req.body?.conversationId === 'string' && req.body.conversationId)
+    || ''
+  if (rawConvId) {
+    if (!(await conversationExists(agentId, rawConvId))) {
+      sendError(res, 404, 'not_found', `Conversation not found: ${rawConvId}`)
+      return null
+    }
+    return { agentId, conversationId: rawConvId }
+  }
+  const { getActiveConversationId } = await import('../../core/conversations.js')
+  return { agentId, conversationId: await getActiveConversationId(agentId) }
+}
+
+// GET /api/v1/chat/stats?agentId&conversationId — real conversation size
+// (API message count + token estimate incl. system/tools), cached between turns.
+butlerV1Router.get('/chat/stats', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const ids = await resolveChatTarget(req, res)
+    if (!ids) return
+    const { computeChatStats } = await import('./chat-history.js')
+    res.json(await computeChatStats(ids.agentId, ids.conversationId))
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/v1/chat/clear?agentId&conversationId — clear the conversation.
+butlerV1Router.post('/chat/clear', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const ids = await resolveChatTarget(req, res)
+    if (!ids) return
+    const chatHistory = await import('../../core/chat-history.js')
+    await chatHistory.clear(ids.agentId, ids.conversationId)
+    log.web.info('butler conversation cleared via api-v1', ids)
+    res.json({ ok: true })
+  } catch (err) {
+    next(err)
+  }
+})
 
 // PATCH /api/v1/conversations/:id { title? | pinned? } → { conversation }
 butlerV1Router.patch('/conversations/:id', async (req: Request, res: Response, next: NextFunction) => {

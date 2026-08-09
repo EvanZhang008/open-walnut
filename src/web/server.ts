@@ -99,6 +99,13 @@ import { searchMemoryV1Router } from './routes/search-memory-v1.js'
 import { eventsV1Router, startMobileEventsFeed, stopMobileEventsFeed } from './routes/events-v1.js'
 import { sttV1Router } from './routes/stt-v1.js'
 import { mediaV1Router } from './routes/media-v1.js'
+import { routinesV1Router } from './routes/routines-v1.js'
+import { projectsV1Router } from './routes/projects-v1.js'
+import { taskExtrasV1Router } from './routes/task-extras-v1.js'
+import { sessionExtrasV1Router } from './routes/session-extras-v1.js'
+import { filesV1Router } from './routes/files-v1.js'
+import { consoleV1Router } from './routes/console-v1.js'
+import { notesExtrasV1Router } from './routes/notes-extras-v1.js'
 import { incidentsRouter } from './routes/incidents.js'
 import { clientEvidenceRouter } from './routes/client-evidence.js'
 import { notificationsRouter } from './routes/notifications.js'
@@ -886,6 +893,28 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', sttV1Router)
   // Image bytes for mobile (additive): local file, daemon, or bridge proxy.
   app.use('/api/v1', mediaV1Router)
+  // Routines/cron (additive, Wave 2): full CRUD + toggle/run-now — B-class
+  // relay on a REPLICA (the primary's cron engine is the single writer).
+  app.use('/api/v1', routinesV1Router)
+  // Projects registry (additive, Wave 2): list/create/ordering/favorites A;
+  // rename/delete 501 on a REPLICA (no registry write-back channel).
+  app.use('/api/v1', projectsV1Router)
+  // Task extras (additive, Wave 2): tags/groups/quick-parse/focus tiers —
+  // groups + tier CRUD 501 on a REPLICA (outbox whitelist lacks them).
+  app.use('/api/v1', taskExtrasV1Router)
+  // Session extras (additive, Wave 2): controls/settings/side-questions/
+  // workflow/plan/subagent-history/execute-compact/queue + list-dirs — all
+  // B-class relay on a REPLICA.
+  app.use('/api/v1', sessionExtrasV1Router)
+  // File browsing (additive, Wave 2): list/resolve relay on a REPLICA;
+  // file-content never rides the bridge (see files-v1.ts threat model).
+  app.use('/api/v1', filesV1Router)
+  // Console reads (additive, Wave 2): config allowlist projection (A),
+  // usage overview (C: 501 on replica), slash-commands (B), skills read (A).
+  app.use('/api/v1', consoleV1Router)
+  // Notes extras (additive, Wave 2): global notes, backlinks/links, tags,
+  // attachment/folder delete — all A-class (git-synced vault).
+  app.use('/api/v1', notesExtrasV1Router)
   app.use('/api/browser-logs', browserLogsRouter)
   // One-shot diagnostic bundle (Settings → Bug Report; also curl-able).
   app.use('/api/bug-report', bugReportRouter)

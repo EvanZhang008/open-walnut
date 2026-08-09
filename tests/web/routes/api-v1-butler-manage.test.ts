@@ -171,3 +171,55 @@ describe('POST /api/v1/conversations/:id/answer', () => {
     }
   })
 })
+
+// ─── Wave 2 additions: active pointer + chat stats/clear ─────────────────────
+
+describe('PUT /api/v1/conversations/active', () => {
+  it('switches the active pointer and broadcasts', async () => {
+    const meta = await createConversation('general', 'Switch target')
+    const res = await request(createApp())
+      .put('/api/v1/conversations/active')
+      .send({ conversationId: meta.id })
+    expect(res.status).toBe(200)
+    expect(res.body.activeConversationId).toBe(meta.id)
+    const { getActiveConversationId } = await import('../../../src/core/conversations.js')
+    expect(await getActiveConversationId('general')).toBe(meta.id)
+    expect(broadcastMock).toHaveBeenCalled()
+  })
+
+  it('404 for an unknown conversation id', async () => {
+    const res = await request(createApp())
+      .put('/api/v1/conversations/active')
+      .send({ conversationId: 'conv-does-not-exist' })
+    expect(res.status).toBe(404)
+    expect(res.body.error.code).toBe('not_found')
+  })
+})
+
+describe('GET /api/v1/chat/stats + POST /api/v1/chat/clear', () => {
+  it('stats returns the conversation-size shape for the active conversation', async () => {
+    await getMainConversationId('general')
+    const res = await request(createApp()).get('/api/v1/chat/stats')
+    expect(res.status).toBe(200)
+    for (const key of ['apiMessageCount', 'estimatedTokens', 'estimatedTotalTokens', 'compacted', 'contextWindow']) {
+      expect(res.body).toHaveProperty(key)
+    }
+  })
+
+  it('clear empties an explicit conversation', async () => {
+    const meta = await createConversation('general', 'To clear')
+    const chatHistory = await import('../../../src/core/chat-history.js')
+    await chatHistory.addNotification({ role: 'user', content: 'hello there', agentId: 'general', conversationId: meta.id })
+
+    const res = await request(createApp()).post(`/api/v1/chat/clear?conversationId=${meta.id}`)
+    expect(res.status).toBe(200)
+    expect(res.body.ok).toBe(true)
+    const entries = await chatHistory.getDisplayEntries(1, 50, 'general', meta.id)
+    expect(entries.messages.length).toBe(0)
+  })
+
+  it('404 for an unknown explicit conversation', async () => {
+    const res = await request(createApp()).get('/api/v1/chat/stats?conversationId=conv-ghost')
+    expect(res.status).toBe(404)
+  })
+})
