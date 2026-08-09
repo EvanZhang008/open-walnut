@@ -24204,6 +24204,136 @@ a.file-link:hover {
   padding: 6px 8px; background: var(--bg-secondary); border-radius: 6px; margin-top: 6px;
 }
 
+/* ── Cloud Companion section (Settings → Cloud Companion, setup wizard) ── */
+.cloud-section { display: flex; flex-direction: column; gap: 14px; }
+.cloud-hint { font-size: 12px; color: var(--text-secondary); margin: 0; }
+.cloud-hero { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.cloud-hero-title { margin: 0; font-size: 15px; font-weight: 650; }
+.cloud-hero-body { margin: 0; font-size: 13px; color: var(--text-secondary); max-width: 62ch; }
+.cloud-validation { margin: 0; font-size: 12px; color: var(--warning, #b8860b); }
+.cloud-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Provider cards — same visual family as .devices-target, one per driver. */
+.cloud-provider-grid {
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+.cloud-provider-card {
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px;
+  background: transparent; cursor: pointer; text-align: left;
+}
+.cloud-provider-card:hover { background: var(--bg-secondary); }
+.cloud-provider-active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.cloud-provider-head { display: flex; align-items: center; gap: 8px; width: 100%; justify-content: space-between; }
+.cloud-provider-label { font-size: 14px; font-weight: 600; }
+.cloud-provider-cost { font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.cloud-provider-detail { font-size: 12px; color: var(--text-secondary); }
+.cloud-provider-fallback { font-size: 11px; color: var(--text-secondary); opacity: 0.8; font-style: italic; }
+.cloud-pill {
+  padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 600;
+  letter-spacing: 0.02em; white-space: nowrap; flex-shrink: 0;
+}
+.cloud-pill-ready { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
+.cloud-pill-manual { background: var(--bg-secondary); color: var(--text-secondary); }
+.cloud-pill-token { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.cloud-pill-warn { background: color-mix(in srgb, var(--warning, #b8860b) 18%, transparent); color: var(--warning, #b8860b); }
+
+/* Configure screen. */
+.cloud-configure { display: flex; flex-direction: column; gap: 14px; }
+.cloud-configure-provider { margin: 0; font-size: 13px; }
+.cloud-configure-note { margin: 0; font-size: 12px; color: var(--text-secondary); max-width: 62ch; }
+.cloud-fieldset {
+  display: flex; flex-direction: column; gap: 10px; margin: 0;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px;
+}
+.cloud-fieldset legend { font-size: 12px; font-weight: 600; color: var(--text-secondary); padding: 0 4px; }
+.cloud-radio { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+.cloud-radio input { margin-top: 3px; flex-shrink: 0; }
+.cloud-radio > span { display: flex; flex-direction: column; gap: 2px; }
+.cloud-radio-label { font-size: 13px; font-weight: 600; }
+.cloud-radio-note { font-size: 12px; color: var(--text-secondary); max-width: 62ch; }
+.cloud-radio-note code { font-size: 11px; }
+.cloud-domain-input { margin-left: 26px; max-width: 340px; }
+.cloud-field { display: flex; flex-direction: column; gap: 4px; max-width: 340px; }
+.cloud-field-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.cloud-advanced > summary { font-size: 12px; color: var(--text-secondary); cursor: pointer; }
+.cloud-advanced > summary:hover { color: var(--text); }
+.cloud-advanced-body { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+
+/* Step checklist — mirrors the STT setup progress idiom. */
+.cloud-live-head { margin: 0; font-size: 13px; }
+.cloud-steps { display: flex; flex-direction: column; gap: 6px; }
+.cloud-step { padding: 8px 10px; border: 1px solid transparent; border-radius: 8px; }
+.cloud-step-running { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.cloud-step-error { border-color: var(--danger, #d33); }
+.cloud-step-header { display: flex; align-items: center; gap: 8px; }
+.cloud-step-indicator { width: 16px; text-align: center; flex-shrink: 0; color: var(--text-secondary); }
+.cloud-step-done .cloud-step-indicator { color: var(--success); }
+.cloud-step-error .cloud-step-indicator { color: var(--danger, #d33); }
+.cloud-step-running .cloud-step-indicator { color: var(--accent); }
+.cloud-step-label { font-size: 13px; }
+.cloud-step-done .cloud-step-label,
+.cloud-step-skipped .cloud-step-label { color: var(--text-secondary); }
+.cloud-step-tag { font-size: 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; }
+.cloud-step-errmsg { margin: 4px 0 0 24px; font-size: 12px; color: var(--danger, #d33); }
+.cloud-step-detail { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 4px 24px; }
+.cloud-step-note, .cloud-step-prompt { margin: 0; font-size: 12px; color: var(--text-secondary); max-width: 62ch; }
+.cloud-step-prompt { color: var(--text); }
+.cloud-step-waiting { margin: 0; font-size: 12px; color: var(--accent); }
+.cloud-step-awaiting { padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; margin-left: 24px; }
+.cloud-job-error { margin: 0; font-size: 13px; color: var(--danger, #d33); }
+
+/* Copyable A-record rows + the user-data blob. */
+.cloud-copy-row { display: flex; align-items: center; gap: 8px; }
+.cloud-copy-label { font-size: 11px; color: var(--text-secondary); min-width: 44px; }
+.cloud-copy-value {
+  flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap;
+  font-size: 12px; padding: 4px 8px; background: var(--bg-secondary); border-radius: 6px;
+}
+.cloud-copy-btn {
+  flex-shrink: 0; background: transparent; color: var(--text-secondary);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 4px 10px; font-size: 12px; cursor: pointer;
+}
+.cloud-copy-btn:hover { color: var(--text); border-color: var(--text-secondary); }
+.cloud-log > summary { font-size: 12px; color: var(--text-secondary); cursor: pointer; }
+.cloud-log > summary:hover { color: var(--text); }
+.cloud-log-body {
+  margin: 8px 0 0; padding: 10px 12px; max-height: 260px; overflow: auto;
+  background: var(--bg-secondary); border-radius: 8px;
+  font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+}
+
+/* Manual paste path. */
+.cloud-manual {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px; border: 1px solid var(--border); border-radius: 10px;
+}
+.cloud-manual-title { margin: 0; font-size: 14px; font-weight: 650; }
+.cloud-manual-steps { margin: 0; padding-left: 22px; font-size: 12px; color: var(--text-secondary); }
+.cloud-manual-steps li { margin-bottom: 4px; }
+.cloud-manual-console { margin: 0; font-size: 12px; }
+.cloud-userdata { display: flex; flex-direction: column; gap: 6px; }
+.cloud-userdata-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cloud-userdata-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.cloud-userdata-warn { margin: 0; font-size: 11px; color: var(--warning, #b8860b); }
+.cloud-userdata-box {
+  width: 100%; font-family: var(--font-mono, monospace); font-size: 11px; line-height: 1.5;
+  padding: 10px 12px; background: var(--bg-secondary);
+  border: 1px solid var(--border); border-radius: 8px; resize: vertical;
+}
+
+/* Done / already-configured. */
+.cloud-done, .cloud-configured { display: flex; flex-direction: column; gap: 12px; }
+.cloud-done-body { margin: 0; font-size: 13px; color: var(--text-secondary); max-width: 62ch; }
+.cloud-pair-card {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px; border: 1px solid var(--border); border-radius: 10px;
+}
+.cloud-pair-title { margin: 0; font-size: 14px; font-weight: 650; }
+.cloud-pair-note { margin: 0; font-size: 12px; color: var(--text-secondary); max-width: 62ch; }
+
 /* ── Focus Tiers section (Settings → Focus Tiers, custom tier CRUD) ── */
 .focus-tiers-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .focus-tiers-row {

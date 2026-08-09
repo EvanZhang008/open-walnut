@@ -45,11 +45,12 @@ import { HooksSection } from '@/components/settings/sections/HooksSection';
 import { UsageSection } from '@/components/settings/sections/UsageSection';
 import { TimelineSection } from '@/components/settings/sections/TimelineSection';
 import { DevicesSection } from '@/components/settings/sections/DevicesSection';
+import { CloudSection } from '@/components/settings/sections/CloudSection';
 import { BugReportSection } from '@/components/settings/sections/BugReportSection';
 
 const SECTION_IDS = [
   'providers', 'general', 'sessions', 'focus-tiers',
-  'integrations', 'calendar', 'plugin-store', 'search', 'memory', 'stt', 'audio-capture', 'heartbeat', 'remote-hosts', 'devices', 'advanced',
+  'integrations', 'calendar', 'plugin-store', 'search', 'memory', 'stt', 'audio-capture', 'heartbeat', 'remote-hosts', 'devices', 'cloud', 'advanced',
   'repositories', 'hooks', 'usage', 'timeline', 'bug-report',
 ];
 
@@ -139,6 +140,7 @@ export function SettingsPage() {
           <SectionErrorBoundary name="Heartbeat"><HeartbeatSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Remote Hosts"><RemoteHostsSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Devices"><DevicesSection /></SectionErrorBoundary>
+          <SectionErrorBoundary name="Cloud Companion"><CloudSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Advanced"><AdvancedSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Repositories"><ReposSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Hooks"><HooksSection /></SectionErrorBoundary>

@@ -12,6 +12,7 @@
 
 import type { CloudSetupProviderId } from '../job-types.js'
 import { awsDriver } from './aws.js'
+import { fakeDriver, FAKE_DRIVER_ENV } from './fake.js'
 import { manualDriver } from './manual.js'
 import type { CloudProviderDriver } from './types.js'
 
@@ -19,6 +20,13 @@ const drivers = new Map<string, CloudProviderDriver>([
   [awsDriver.id, awsDriver],
   [manualDriver.id, manualDriver],
 ])
+
+// Fixture-only provisioning driver, so the browser wizard test can drive a real
+// job through the real state machine without a cloud account. Gated on an env
+// flag the Playwright fixture sets — never present in a normal build.
+if (process.env[FAKE_DRIVER_ENV] === '1') {
+  drivers.set(fakeDriver.id, fakeDriver)
+}
 
 /** Registered driver, or undefined for an id this build does not support yet. */
 export function getDriver(id: string): CloudProviderDriver | undefined {

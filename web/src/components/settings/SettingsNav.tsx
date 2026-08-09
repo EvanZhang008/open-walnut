@@ -19,6 +19,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'heartbeat', label: 'Heartbeat' },
   { id: 'remote-hosts', label: 'Remote Hosts' },
   { id: 'devices', label: 'Devices' },
+  { id: 'cloud', label: 'Cloud Companion' },
   { id: 'advanced', label: 'Advanced' },
   { id: 'repositories', label: 'Repositories', divider: true },
   { id: 'hooks', label: 'Hooks' },

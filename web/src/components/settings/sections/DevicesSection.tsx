@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import QRCode from 'qrcode';
 import { SectionCard } from '../inputs/SectionCard';
-import { apiGet, apiPost, apiDelete } from '@/api/client';
+import { apiGet, apiDelete } from '@/api/client';
 import { log } from '@/utils/log';
+import { PairingQrBlock } from './cloud/PairingQrBlock';
+import { usePairDevice, type PairingTarget, type PairTargetKind } from './cloud/usePairDevice';
 
 /** Self-reported hardware identity — absent until the phone checks in once. */
 interface DeviceSelfInfo {
@@ -35,26 +36,15 @@ const ROLE_NOTE: Record<'simulator' | 'self', string> = {
   simulator: 'iOS Simulator on this computer (development).',
 };
 
-/** Where a scanned QR points the phone. `cloud` works off Wi-Fi. */
-type TargetKind = 'lan' | 'cloud';
+/**
+ * Where a scanned QR points the phone. `cloud` works off Wi-Fi. Defined in
+ * cloud/usePairDevice.ts — the Cloud Companion section pairs the same way.
+ */
+type TargetKind = PairTargetKind;
 
 /** Re-pair via cloud when the device has one — it keeps working off Wi-Fi. */
 function preferredKind(kinds: TargetKind[]): TargetKind {
   return kinds.includes('cloud') ? 'cloud' : 'lan';
-}
-
-interface PairingTarget {
-  kind: TargetKind;
-  origin: string;
-  label: string;
-}
-
-interface CreatedDevice {
-  name: string;
-  token: string;
-  pairingURI: string;
-  target?: TargetKind;
-  server?: string;
 }
 
 /**
@@ -74,10 +64,8 @@ export function DevicesSection() {
   const [targets, setTargets] = useState<PairingTarget[]>([]);
   const [target, setTarget] = useState<TargetKind>('lan');
   const [newName, setNewName] = useState('');
-  const [created, setCreated] = useState<CreatedDevice | null>(null);
-  const [qrDataURL, setQrDataURL] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  // Minting + QR rendering is shared with the Cloud Companion section.
+  const { created, qrDataURL, error, busy, mint, dismiss, setError } = usePairDevice();
 
   const refresh = useCallback(async () => {
     try {
@@ -112,61 +100,21 @@ export function DevicesSection() {
     if (!window.confirm(
       `Show a new QR code for "${name}"?\n\nIts current token stops working immediately — scan the new code on that phone.`,
     )) return;
-    setBusy(true);
-    setError(null);
     // Keep the picker on the device's OWN target — re-pairing a cloud phone
     // must not silently flip the UI back to the Wi-Fi default.
     setTarget(kind);
-    try {
-      const res = await apiPost<CreatedDevice>(
-        '/api/devices',
-        { name, target: kind, replace: true },
-        kind === 'cloud' ? { timeoutMs: 45_000 } : undefined,
-      );
-      setCreated(res);
-      const dataURL = await QRCode.toDataURL(res.pairingURI, {
-        errorCorrectionLevel: 'M', width: 260, margin: 2,
-      });
-      setQrDataURL(dataURL);
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
+    if (await mint({ name, target: kind, replace: true })) await refresh();
   };
 
   const addDevice = async () => {
     const name = newName.trim();
     if (!name || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      // Only send an explicit target when one was actually offered — otherwise
-      // let the server pick (it falls back to a token-only QR).
-      const chosen = targets.some((t) => t.kind === target) ? target : undefined;
-      // Cloud pairing mints ON the cloud box — an internet round-trip that can
-      // include a revoke+re-mint retry. The 15s default would abort while the
-      // server succeeds, orphaning a device nobody has the token for.
-      const res = await apiPost<CreatedDevice>(
-        '/api/devices',
-        { name, target: chosen },
-        chosen === 'cloud' ? { timeoutMs: 45_000 } : undefined,
-      );
-      setCreated(res);
+    // Only send an explicit target when one was actually offered — otherwise
+    // let the server pick (it falls back to a token-only QR).
+    const chosen = targets.some((t) => t.kind === target) ? target : undefined;
+    if (await mint({ name, target: chosen })) {
       setNewName('');
-      // High error correction — phones scan glossy screens at an angle.
-      const dataURL = await QRCode.toDataURL(res.pairingURI, {
-        errorCorrectionLevel: 'M',
-        width: 260,
-        margin: 2,
-      });
-      setQrDataURL(dataURL);
       await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -316,8 +264,16 @@ export function DevicesSection() {
         {targets.length === 0 && (
           <p className="devices-hint">
             No auto-detectable address for this machine — the QR will carry only the token, so
-            you'll type the server address in the app. For one-tap pairing from anywhere, set up
-            cloud sync (Settings → Repositories).
+            you'll type the server address in the app. For one-tap pairing from anywhere,{' '}
+            <a
+              href="#cloud"
+              onClick={(e) => {
+                e.preventDefault();
+                document.getElementById('cloud')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+            >
+              set up a cloud companion
+            </a>.
           </p>
         )}
 
@@ -350,30 +306,7 @@ export function DevicesSection() {
         {error && <p className="devices-error">{error}</p>}
 
         {created && qrDataURL && (
-          <div className="devices-qr-block">
-            <img src={qrDataURL} alt={`Pairing QR code for ${created.name}`} width={260} height={260} />
-            <p className="devices-qr-hint">
-              Scan with the Walnut iOS app (Setup → Scan QR). Shown once — the
-              server keeps only a hash.
-              {created.server && (
-                <>
-                  <br />
-                  Points at <code>{created.server.replace(/^https?:\/\//, '')}</code>
-                </>
-              )}
-            </p>
-            <details>
-              <summary>Manual token</summary>
-              <code className="devices-token">{created.token}</code>
-            </details>
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={() => { setCreated(null); setQrDataURL(null); }}
-            >
-              Done
-            </button>
-          </div>
+          <PairingQrBlock created={created} qrDataURL={qrDataURL} onDismiss={dismiss} />
         )}
       </div>
     </SectionCard>

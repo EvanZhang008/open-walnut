@@ -33,6 +33,10 @@ process.env.WALNUT_DISABLE_BACKGROUND_AI = '1'
 // SSH aliases and can even project unrelated ~/.claude journals.
 process.env.HOME = tmpBase
 process.env.USERPROFILE = tmpBase
+// Register the fixture-only cloud-setup provisioning driver so the Cloud
+// Companion wizard spec can start a REAL job (real state machine, real SSE) that
+// parks at `provision` instead of deploying anything. See providers/fake.ts.
+process.env.WALNUT_CLOUD_SETUP_FAKE = '1'
 process.argv.push('--_ephemeral-child')
 
 // Ensure directories exist
