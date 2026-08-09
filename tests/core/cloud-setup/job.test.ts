@@ -65,7 +65,7 @@ import { CLOUD_SETUP_TIMINGS } from '../../../src/core/cloud-setup/steps.js'
 import { sslipHostname } from '../../../src/core/cloud-setup/user-data.js'
 import { _setCloudProviderDriverForTesting } from '../../../src/core/cloud-setup/providers/index.js'
 import type { CloudProviderDriver, CreateVMParams } from '../../../src/core/cloud-setup/providers/types.js'
-import type { CloudSetupJobState } from '../../../src/core/cloud-setup/job-types.js'
+import type { CloudSetupJobState, CloudSetupProviderId } from '../../../src/core/cloud-setup/job-types.js'
 
 // ── Fake box: answers /api/v1/setup/status + /claim over a stubbed fetch ─────
 
@@ -657,7 +657,22 @@ describe('job lifecycle', () => {
   })
 
   it('an unknown provider is rejected at start', async () => {
-    await expect(startCloudSetupJob({ provider: 'gcp', domainMode: 'sslip' })).rejects.toThrow(/Unknown provider/)
+    // Every id in CloudSetupProviderId now has a registered driver, so the only
+    // way to reach this guard is an id from outside the union — which is exactly
+    // what it defends against: a hand-rolled POST /start, or a persisted job from
+    // a newer build being resumed by an older one.
+    await expect(startCloudSetupJob({
+      provider: 'not-a-provider' as CloudSetupProviderId,
+      domainMode: 'sslip',
+    })).rejects.toThrow(/Unknown provider/)
+  })
+
+  it('every provider in the id union resolves to a registered driver', async () => {
+    // The complement of the test above: an id the wizard can legitimately send
+    // must never hit the guard. This is what caught 'gcp' having no driver.
+    const ids: CloudSetupProviderId[] = ['aws', 'hetzner', 'azure', 'gcp', 'manual']
+    const { getDriver } = await import('../../../src/core/cloud-setup/providers/index.js')
+    for (const id of ids) expect(getDriver(id), id).toBeDefined()
   })
 
   it('cancel stops the runner and DELETE clears the record', async () => {

@@ -1,9 +1,14 @@
 /**
  * Provider driver registry.
  *
- * aws + hetzner + manual are registered in this version; the CloudSetupProviderId
- * union already covers the providers that land later, so adding one is a single
- * register() call plus its driver file.
+ * Every provider in the CloudSetupProviderId union is registered here, so adding
+ * one is a single map entry plus its driver file.
+ *
+ * Order is display order in the provider picker, and it is deliberate: the two
+ * drivers that can provision with no credential typed (aws, hetzner) come first,
+ * then the two that depend on a vendor CLI being installed and signed in (azure,
+ * gcp — which degrade to "CLI missing or signed out" and the manual path), then
+ * the universal paste fallback.
  *
  * Tests inject a fake driver via _setCloudProviderDriverForTesting rather than
  * mocking this module: the job runner resolves drivers through getDriver() on
@@ -12,7 +17,9 @@
 
 import type { CloudSetupProviderId } from '../job-types.js'
 import { awsDriver } from './aws.js'
+import { azureDriver } from './azure.js'
 import { fakeDriver, FAKE_DRIVER_ENV } from './fake.js'
+import { gcpDriver } from './gcp.js'
 import { hetznerDriver } from './hetzner.js'
 import { manualDriver } from './manual.js'
 import type { CloudProviderDriver } from './types.js'
@@ -20,6 +27,8 @@ import type { CloudProviderDriver } from './types.js'
 const drivers = new Map<string, CloudProviderDriver>([
   [awsDriver.id, awsDriver],
   [hetznerDriver.id, hetznerDriver],
+  [azureDriver.id, azureDriver],
+  [gcpDriver.id, gcpDriver],
   [manualDriver.id, manualDriver],
 ])
 
