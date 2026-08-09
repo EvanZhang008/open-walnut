@@ -611,6 +611,12 @@ async function runApiV1Turn(
     // Lazy import to avoid loading the agent at server startup (same as chat.ts).
     const { runAgentLoop } = await import('../../agent/loop.js')
 
+    // Agent-level abort registration so POST /v1/conversations/:id/stop can
+    // cancel this turn (REST clients have no per-socket AbortController).
+    const { registerAgentTurnAbort } = await import('../../core/agent-abort-registry.js')
+    const abortController = new AbortController()
+    const unregisterAbort = registerAgentTurnAbort(agentId, abortController)
+
     // Non-General console agents get their own system prompt + filtered tool
     // set — the same construction the WS chat performs (chat.ts).
     let agentSystem: string | undefined
@@ -701,6 +707,7 @@ async function runApiV1Turn(
           } catch { /* non-critical */ }
         },
       }, {
+        signal: abortController.signal,
         source: agentId === DEFAULT_AGENT_ID ? 'api-v1' : `api-v1:${agentId}`,
         agentId,
         conversationId,
@@ -744,6 +751,8 @@ async function runApiV1Turn(
         conversationId,
       })
       broadcastEvent(EventNames.AGENT_ERROR, { error: errMsg, agentId, conversationId })
+    } finally {
+      unregisterAbort()
     }
   })
 }
@@ -785,6 +794,20 @@ apiV1Router.get('/tasks', async (req: Request, res: Response, next: NextFunction
     let tasks = projection.tasks
     const status = typeof req.query.status === 'string' ? req.query.status : undefined
     if (status) tasks = tasks.filter((t) => t.status === status)
+    // Additive filters (Wave 1): project ('' = Inbox, case-insensitive like the
+    // registry), tag (exact), q (substring on title, case-insensitive).
+    if (typeof req.query.project === 'string') {
+      const p = req.query.project.toLowerCase()
+      tasks = tasks.filter((t) => (t.project ?? '').toLowerCase() === p)
+    }
+    if (typeof req.query.tag === 'string' && req.query.tag) {
+      const tag = req.query.tag
+      tasks = tasks.filter((t) => Array.isArray(t.tags) && t.tags.includes(tag))
+    }
+    if (typeof req.query.q === 'string' && req.query.q.trim()) {
+      const q = req.query.q.trim().toLowerCase()
+      tasks = tasks.filter((t) => t.title.toLowerCase().includes(q))
+    }
     // The projection is project-only (v2): `project` is the single grouping
     // field, with NO `category` alias. The iOS app — v1's only consumer —
     // decodes `project` and ships in the same release as this projection.
@@ -888,13 +911,19 @@ const V1_TASK_STATUSES = new Set(['todo', 'in_progress', 'done'])
 apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = paramStr(req.params.id)
-    const { status, priority, due_date: dueDate, project, title, description } = (req.body ?? {}) as {
+    // PATCH /v1/tasks/reorder lives in task-v1.ts (mounted after this router);
+    // without this forward the :id param would swallow it as a task id. Task
+    // ids are hex-ish and can never be the literal word "reorder".
+    if (id === 'reorder') { next(); return }
+    const { status, priority, due_date: dueDate, start_date: startDate, project, title, description, tags } = (req.body ?? {}) as {
       status?: unknown
       priority?: unknown
       due_date?: unknown
+      start_date?: unknown
       project?: unknown
       title?: unknown
       description?: unknown
+      tags?: unknown
     }
 
     if (status !== undefined && !(typeof status === 'string' && V1_TASK_STATUSES.has(status))) {
@@ -927,9 +956,20 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       sendError(res, 400, 'bad_request', 'description must be a string')
       return
     }
+    // Additive (Wave 1): start_date (same clear-with-'' semantics as due_date)
+    // and tags (full replace — mirrors updateTask's set_tags).
+    if (startDate !== undefined && !(typeof startDate === 'string' && (startDate === '' || isValidIsoDate(startDate)))) {
+      sendError(res, 400, 'bad_request', 'start_date must be an ISO-8601 date string (YYYY-MM-DD or full datetime) or "" to clear')
+      return
+    }
+    if (tags !== undefined && !(Array.isArray(tags) && tags.every((t) => typeof t === 'string'))) {
+      sendError(res, 400, 'bad_request', 'tags must be an array of strings')
+      return
+    }
     if (status === undefined && priority === undefined && dueDate === undefined
-        && project === undefined && title === undefined && description === undefined) {
-      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/priority/due_date/project/title/description)')
+        && startDate === undefined && project === undefined && title === undefined
+        && description === undefined && tags === undefined) {
+      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/priority/due_date/start_date/project/title/description/tags)')
       return
     }
 
@@ -941,8 +981,10 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         ...(status !== undefined ? { status: status as import('../../core/types.js').TaskStatus } : {}),
         ...(priority !== undefined ? { priority: priority as TaskPriority } : {}),
         ...(dueDate !== undefined ? { due_date: dueDate as string } : {}),
+        ...(startDate !== undefined ? { start_date: startDate as string } : {}),
         ...(project !== undefined ? { project: project as string } : {}),
         ...(title !== undefined ? { title: (title as string).trim() } : {}),
+        ...(tags !== undefined ? { set_tags: tags as string[] } : {}),
       }
       // description FIRST (not atomic with the main patch — two separate
       // writes). Ordering rationale: updateDescription resolves the same task

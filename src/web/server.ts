@@ -92,6 +92,10 @@ import { apiV1Router, closeApiV1Streams } from './routes/api-v1.js'
 import { sessionStreamV1Router } from './routes/session-stream-v1.js'
 import { sessionLaunchV1Router } from './routes/session-launch-v1.js'
 import { sessionControlV1Router } from './routes/session-control-v1.js'
+import { sessionLifecycleV1Router } from './routes/session-lifecycle-v1.js'
+import { taskV1Router } from './routes/task-v1.js'
+import { butlerV1Router } from './routes/butler-v1.js'
+import { searchMemoryV1Router } from './routes/search-memory-v1.js'
 import { eventsV1Router, startMobileEventsFeed, stopMobileEventsFeed } from './routes/events-v1.js'
 import { sttV1Router } from './routes/stt-v1.js'
 import { mediaV1Router } from './routes/media-v1.js'
@@ -859,6 +863,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Session control endpoints (additive): model/effort switch, fork, and the
   // picker's model-options — relayed over the daemon bridge on a REPLICA.
   app.use('/api/v1', sessionControlV1Router)
+  // Session lifecycle endpoints (additive, Wave 1): detail/patch/terminate/
+  // restart/retry/permission/execute-continue/changes/history — B-class
+  // relay on a REPLICA (new actions on the same session.control command).
+  app.use('/api/v1', sessionLifecycleV1Router)
+  // Task + focus endpoints (additive, Wave 1): detail/delete/star/notes/
+  // reorder/batch + pin/tier — A-class (local store; replica rides the outbox).
+  app.use('/api/v1', taskV1Router)
+  // Butler conversation management (additive, Wave 1): rename/delete/stop/
+  // answer — A-class (the replica runs its own butler).
+  app.use('/api/v1', butlerV1Router)
+  // Search/memory/notifications/favorites/notes utilities (additive, Wave 1).
+  // Mixed classes: search 501 on replica, notifications B-relay, rest A.
+  app.use('/api/v1', searchMemoryV1Router)
   // Live events feed (additive): one SSE stream of slim task/session updates
   // for mobile — bus-fed on the primary, bridge-fed on a REPLICA. Started
   // unconditionally (one lifecycle-interest bus subscription — cheap even on

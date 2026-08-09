@@ -743,6 +743,10 @@ export function registerChatRpc(): void {
       const abortController = new AbortController()
       const aKey = abortKey(client, agentId)
       activeAbortControllers.set(aKey, abortController)
+      // Agent-level registry: lets the REST stop endpoint (mobile, no WS
+      // identity) abort this turn too. Unregistered on every exit path below.
+      const { registerAgentTurnAbort } = await import('../../core/agent-abort-registry.js')
+      const unregisterAbort = registerAgentTurnAbort(agentId, abortController)
 
       // Resolve console agent definition + build system/tools for non-General agents
       let agentSystem: string | undefined
@@ -887,6 +891,7 @@ export function registerChatRpc(): void {
         })
 
         activeAbortControllers.delete(aKey)
+        unregisterAbort()
 
         // Handle aborted turn: persist partial response but skip compaction.
         // User message is already on disk (eagerly persisted above).
@@ -1045,6 +1050,7 @@ export function registerChatRpc(): void {
         triggerBackgroundCompaction('chat', { agentId, conversationId })
       } catch (err) {
         activeAbortControllers.delete(aKey)
+        unregisterAbort()
         const errMsg = err instanceof Error ? err.message : String(err)
         log.web.error('chat turn error', { taskId: taskContext?.id, source: 'chat', error: errMsg, agentId })
 

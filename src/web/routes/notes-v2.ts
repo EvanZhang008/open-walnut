@@ -63,6 +63,19 @@ export const MAX_NOTE_SIZE = 2_000_000 // 2 MB
 
 export const notesV2Router = Router()
 
+/**
+ * Error with an HTTP status, thrown by the extracted note-op functions below
+ * (attachment upload, move, folder create) so BOTH route layers — this
+ * router's `{error: string}` shape and /api/v1's `{error:{code,message}}` —
+ * can map it without duplicating the operation logic.
+ */
+export class NotesOpError extends Error {
+  constructor(message: string, public statusCode: number) {
+    super(message)
+    this.name = 'NotesOpError'
+  }
+}
+
 // ── One-time structural index bootstrap + in-process reconcile subscription ──
 // Honors the DO-NOT-TOUCH on server.ts: we don't wire boot there. The index
 // initializes off-loop on first router use; the in-process fast path reconciles
@@ -250,75 +263,69 @@ function rfc5987Encode(s: string): string {
 
 const MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024 // 50 MB (mirror local-image)
 
+/**
+ * Resolve + read a vault attachment for streaming. Shared by this router's
+ * GET /attachment and GET /api/v1/notes/attachment. Throws NotesOpError for
+ * every failure; the caller writes the headers/body.
+ *
+ * Resolution handles the three Obsidian `![[...]]` embed forms (see
+ * resolveAttachmentPath): a vault-relative path, a legacy `Notion/`-rooted
+ * path, or a bare shortest-unique attachment name searched across the vault.
+ * resolveAttachmentPath enforces the same traversal/escape guard + NOTES_DIR
+ * containment as resolveSafePath, and only returns an existing regular file.
+ */
+export async function readNoteAttachment(raw: unknown): Promise<{
+  buffer: Buffer
+  mime: string
+  /** Browser-renderable → serve inline; Office docs → download. */
+  contentDisposition: string
+}> {
+  if (!raw || typeof raw !== 'string') throw new NotesOpError('path required', 400)
+
+  // Reject a disallowed extension up-front (before any fs touch). No SVG.
+  const reqExt = path.extname(raw).slice(1).toLowerCase()
+  if (!ATTACHMENT_MIME[reqExt]) throw new NotesOpError('File type not allowed', 400)
+
+  const fullPath = await resolveAttachmentPath(raw)
+  if (!fullPath) throw new NotesOpError('Attachment not found', 404)
+
+  const ext = path.extname(fullPath).slice(1).toLowerCase()
+  const mime = ATTACHMENT_MIME[ext]
+  if (!mime) throw new NotesOpError('File type not allowed', 400)
+
+  let stat: import('fs').Stats
+  try {
+    stat = await fsp.stat(fullPath)
+  } catch (err: any) {
+    if (err.code === 'ENOENT') throw new NotesOpError('Attachment not found', 404)
+    throw err
+  }
+  if (!stat.isFile()) throw new NotesOpError('Attachment not found', 404)
+  if (stat.size > MAX_ATTACHMENT_SIZE) throw new NotesOpError('File too large', 400)
+
+  const buffer = await fsp.readFile(fullPath)
+  const contentDisposition = INLINE_EXTS.has(ext)
+    ? 'inline'
+    : `attachment; filename*=UTF-8''${rfc5987Encode(path.basename(fullPath))}`
+  return { buffer, mime, contentDisposition }
+}
+
 // GET /api/notes-v2/attachment?path=<vault-relative path under NOTES_DIR>
 notesV2Router.get('/attachment', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const raw = req.query.path
-    if (!raw || typeof raw !== 'string') {
-      res.status(400).json({ error: 'path required' })
-      return
-    }
-
-    // Reject a disallowed extension up-front (before any fs touch). No SVG.
-    const reqExt = path.extname(raw).slice(1).toLowerCase()
-    if (!ATTACHMENT_MIME[reqExt]) {
-      res.status(400).json({ error: 'File type not allowed' })
-      return
-    }
-
-    // Resolution handles the three Obsidian `![[...]]` embed forms (see
-    // resolveAttachmentPath): a vault-relative path, a legacy `Notion/`-rooted
-    // path, or a bare shortest-unique attachment name searched across the vault.
-    // It also keeps the FE contract simple — the editor just sends the raw inner
-    // `![[...]]` text and never has to know where attachments physically live.
-    // resolveAttachmentPath enforces the same traversal/escape guard + NOTES_DIR
-    // containment as resolveSafePath, and only returns an existing regular file.
-    const fullPath = await resolveAttachmentPath(raw)
-    if (!fullPath) {
-      res.status(404).json({ error: 'Attachment not found' })
-      return
-    }
-
-    const ext = path.extname(fullPath).slice(1).toLowerCase()
-    const mime = ATTACHMENT_MIME[ext]
-    if (!mime) {
-      res.status(400).json({ error: 'File type not allowed' })
-      return
-    }
-
-    let stat: import('fs').Stats
-    try {
-      stat = await fsp.stat(fullPath)
-    } catch (err: any) {
-      if (err.code === 'ENOENT') {
-        res.status(404).json({ error: 'Attachment not found' })
-        return
-      }
-      throw err
-    }
-    if (!stat.isFile()) {
-      res.status(404).json({ error: 'Attachment not found' })
-      return
-    }
-    if (stat.size > MAX_ATTACHMENT_SIZE) {
-      res.status(400).json({ error: 'File too large' })
-      return
-    }
-
-    const buffer = await fsp.readFile(fullPath)
+    const { buffer, mime, contentDisposition } = await readNoteAttachment(req.query.path)
     res.setHeader('Content-Type', mime)
     res.setHeader('Content-Length', buffer.length)
     res.setHeader('Cache-Control', 'public, max-age=3600')
     // Inline so the browser renders PDF/images in-page; Office docs download
     // (with their real filename) since the browser can't render them.
-    res.setHeader(
-      'Content-Disposition',
-      INLINE_EXTS.has(ext)
-        ? 'inline'
-        : `attachment; filename*=UTF-8''${rfc5987Encode(path.basename(fullPath))}`,
-    )
+    res.setHeader('Content-Disposition', contentDisposition)
     res.send(buffer)
   } catch (err) {
+    if (err instanceof NotesOpError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })
@@ -401,56 +408,64 @@ const PASTE_MIME_TO_EXT: Record<string, string> = {
 }
 const MAX_UPLOAD_BASE64 = 10_000_000 // ~7.5 MB decoded (mirror images.ts)
 
+/**
+ * Save a pasted-image attachment into the vault. Shared by this router's
+ * POST /attachment and POST /api/v1/notes/attachment — throws NotesOpError
+ * for every validation failure so each edge maps its own error shape.
+ */
+export async function saveNoteAttachment(
+  notePath: unknown, data: unknown, mediaType: unknown,
+): Promise<{ ok: true; path: string; name: string }> {
+  if (typeof notePath !== 'string' || typeof data !== 'string' || typeof mediaType !== 'string') {
+    throw new NotesOpError('notePath, data (base64) and mediaType are required', 400)
+  }
+  const ext = PASTE_MIME_TO_EXT[mediaType]
+  if (!ext) throw new NotesOpError(`Unsupported media type: ${mediaType}`, 400)
+  if (data.length > MAX_UPLOAD_BASE64) throw new NotesOpError('Image too large (max 10MB base64)', 413)
+
+  const fullPath = resolveSafePath(notePath)
+  if (!fullPath) throw new NotesOpError('invalid path', 400)
+  const noteFile = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
+
+  const buffer = Buffer.from(data, 'base64')
+  if (buffer.length === 0) throw new NotesOpError('empty image data', 400)
+
+  // Timestamped name plus a short content hash so two pastes in the same
+  // second (or the same image twice) never collide/overwrite. NO SPACES —
+  // spaces %20-encode in obsidian:// deep links and shell one-liners, which
+  // breaks/uglifies them (user-reported).
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const ts =
+    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+    `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+  const hash = createHash('sha256').update(buffer).digest('hex').slice(0, 6)
+  const filename = `pasted-image-${ts}-${hash}.${ext}`
+
+  const attachmentDir = path.join(path.dirname(noteFile), '_attachment')
+  await fsp.mkdir(attachmentDir, { recursive: true })
+  const filePath = path.join(attachmentDir, filename)
+  await fsp.writeFile(filePath, buffer)
+
+  const relPath = toRelPath(filePath)
+  log.memory.info('Note attachment saved', { notePath, path: relPath, bytes: buffer.length })
+  // The tree only refetches on explicit create/delete/move or this event —
+  // a new _attachment/ folder + file appeared outside that path, so without
+  // this the sidebar file explorer never shows the pasted image until the
+  // user manually does something that happens to trigger a refresh.
+  bus.emit(EventNames.NOTES_TREE_CHANGED, { path: relPath }, ['web-ui'])
+  return { ok: true, path: relPath, name: filename }
+}
+
 notesV2Router.post('/attachment', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { notePath, data, mediaType } = req.body ?? {}
-    if (typeof notePath !== 'string' || typeof data !== 'string' || typeof mediaType !== 'string') {
-      res.status(400).json({ error: 'notePath, data (base64) and mediaType are required' })
-      return
-    }
-    const ext = PASTE_MIME_TO_EXT[mediaType]
-    if (!ext) {
-      res.status(400).json({ error: `Unsupported media type: ${mediaType}` })
-      return
-    }
-    if (data.length > MAX_UPLOAD_BASE64) {
-      res.status(413).json({ error: 'Image too large (max 10MB base64)' })
-      return
-    }
-
-    const fullPath = resolveSafePath(notePath)
-    if (!fullPath) { res.status(400).json({ error: 'invalid path' }); return }
-    const noteFile = fullPath.endsWith('.md') ? fullPath : fullPath + '.md'
-
-    const buffer = Buffer.from(data, 'base64')
-    if (buffer.length === 0) { res.status(400).json({ error: 'empty image data' }); return }
-
-    // Timestamped name plus a short content hash so two pastes in the same
-    // second (or the same image twice) never collide/overwrite. NO SPACES —
-    // spaces %20-encode in obsidian:// deep links and shell one-liners, which
-    // breaks/uglifies them (user-reported).
-    const now = new Date()
-    const pad = (n: number) => String(n).padStart(2, '0')
-    const ts =
-      `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
-      `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
-    const hash = createHash('sha256').update(buffer).digest('hex').slice(0, 6)
-    const filename = `pasted-image-${ts}-${hash}.${ext}`
-
-    const attachmentDir = path.join(path.dirname(noteFile), '_attachment')
-    await fsp.mkdir(attachmentDir, { recursive: true })
-    const filePath = path.join(attachmentDir, filename)
-    await fsp.writeFile(filePath, buffer)
-
-    const relPath = toRelPath(filePath)
-    log.memory.info('Note attachment saved', { notePath, path: relPath, bytes: buffer.length })
-    // The tree only refetches on explicit create/delete/move or this event —
-    // a new _attachment/ folder + file appeared outside that path, so without
-    // this the sidebar file explorer never shows the pasted image until the
-    // user manually does something that happens to trigger a refresh.
-    bus.emit(EventNames.NOTES_TREE_CHANGED, { path: relPath }, ['web-ui'])
-    res.json({ ok: true, path: relPath, name: filename })
+    res.json(await saveNoteAttachment(notePath, data, mediaType))
   } catch (err) {
+    if (err instanceof NotesOpError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })
@@ -699,67 +714,75 @@ notesV2Router.delete('/folder/*path', async (req: Request, res: Response, next: 
 // id-keyed links survive a rename because the edge keys on the target's
 // frontmatter id, not the basename. Move = file rename + one-row path update
 // in the index + one QMD virtual-path remap (handled by reconcile of both paths).
+/**
+ * Move/rename a note or attachment. Shared by this router's POST /move and
+ * POST /api/v1/notes/move — throws NotesOpError so each edge maps its shape.
+ */
+export async function moveNote(from: unknown, to: unknown): Promise<{ ok: true }> {
+  ensureIndexBootstrap()
+  if (typeof from !== 'string' || typeof to !== 'string') {
+    throw new NotesOpError('from and to (strings) are required', 400)
+  }
+
+  const fromFull = resolveSafePath(from)
+  const toFull = resolveSafePath(to)
+  if (!fromFull || !toFull) throw new NotesOpError('invalid path', 400)
+
+  // Attachments (png/pdf/docx/…) move verbatim; only NOTE paths get the
+  // legacy `.md` suffix convention. Without this branch, dragging an
+  // attachment stat'ed `img.png.md` → always 404 (tree drag was a silent no-op).
+  const isAttachment = isAttachmentFile(path.basename(fromFull))
+  const fromFile = isAttachment || fromFull.endsWith('.md') ? fromFull : fromFull + '.md'
+  const toFile = isAttachment || toFull.endsWith('.md') ? toFull : toFull + '.md'
+
+  // Check source exists
+  try {
+    await fsp.stat(fromFile)
+  } catch (err: any) {
+    if (err.code === 'ENOENT') throw new NotesOpError('Source note not found', 404)
+    throw err
+  }
+
+  // Check destination does not already exist — prevent silent overwrite
+  try {
+    await fsp.stat(toFile)
+    throw new NotesOpError('Destination note already exists', 409)
+  } catch (err: any) {
+    if (err instanceof NotesOpError) throw err
+    if (err.code !== 'ENOENT') throw err
+    // ENOENT is expected — destination is free, proceed
+  }
+
+  // Move file
+  await fsp.mkdir(path.dirname(toFile), { recursive: true })
+  await fsp.rename(fromFile, toFile)
+
+  const fromRel = toRelPath(fromFile)
+  const toRel = toRelPath(toFile)
+  // Index bookkeeping is notes-only — attachments aren't in the structural
+  // index, and reconciling a binary file would just churn.
+  if (!isAttachment) {
+    // Fast path: a one-row path update keeps the id (and all edges) intact.
+    updateNotePath(fromRel, toRel)
+    // Then reconcile both paths: the old path's QMD doc deactivates (file gone),
+    // the new path indexes (and re-points the QMD virtual path).
+    scheduleNotesIndexUpdate(fromRel)
+    scheduleNotesIndexUpdate(toRel)
+  }
+
+  log.memory.info('Note moved', { from, to })
+  return { ok: true }
+}
+
 notesV2Router.post('/move', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    ensureIndexBootstrap()
-    const { from, to } = req.body
-    if (typeof from !== 'string' || typeof to !== 'string') {
-      res.status(400).json({ error: 'from and to (strings) are required' })
-      return
-    }
-
-    const fromFull = resolveSafePath(from)
-    const toFull = resolveSafePath(to)
-    if (!fromFull || !toFull) { res.status(400).json({ error: 'invalid path' }); return }
-
-    // Attachments (png/pdf/docx/…) move verbatim; only NOTE paths get the
-    // legacy `.md` suffix convention. Without this branch, dragging an
-    // attachment stat'ed `img.png.md` → always 404 (tree drag was a silent no-op).
-    const isAttachment = isAttachmentFile(path.basename(fromFull))
-    const fromFile = isAttachment || fromFull.endsWith('.md') ? fromFull : fromFull + '.md'
-    const toFile = isAttachment || toFull.endsWith('.md') ? toFull : toFull + '.md'
-
-    // Check source exists
-    try {
-      await fsp.stat(fromFile)
-    } catch (err: any) {
-      if (err.code === 'ENOENT') {
-        res.status(404).json({ error: 'Source note not found' })
-        return
-      }
-      throw err
-    }
-
-    // Check destination does not already exist — prevent silent overwrite
-    try {
-      await fsp.stat(toFile)
-      res.status(409).json({ error: 'Destination note already exists' })
-      return
-    } catch (err: any) {
-      if (err.code !== 'ENOENT') throw err
-      // ENOENT is expected — destination is free, proceed
-    }
-
-    // Move file
-    await fsp.mkdir(path.dirname(toFile), { recursive: true })
-    await fsp.rename(fromFile, toFile)
-
-    const fromRel = toRelPath(fromFile)
-    const toRel = toRelPath(toFile)
-    // Index bookkeeping is notes-only — attachments aren't in the structural
-    // index, and reconciling a binary file would just churn.
-    if (!isAttachment) {
-      // Fast path: a one-row path update keeps the id (and all edges) intact.
-      updateNotePath(fromRel, toRel)
-      // Then reconcile both paths: the old path's QMD doc deactivates (file gone),
-      // the new path indexes (and re-points the QMD virtual path).
-      scheduleNotesIndexUpdate(fromRel)
-      scheduleNotesIndexUpdate(toRel)
-    }
-
-    log.memory.info('Note moved', { from, to })
-    res.json({ ok: true })
+    const { from, to } = req.body ?? {}
+    res.json(await moveNote(from, to))
   } catch (err) {
+    if (err instanceof NotesOpError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })
@@ -897,23 +920,37 @@ const FOLDER_ONLY_CAP = 5
  */
 const SEMANTIC_RRF_FLOOR = 1 / 6
 
-// GET /api/notes-v2/search?q&mode&limit — hybrid string+semantic, deduped, labeled
-notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    ensureIndexBootstrap()
-    const q = ((req.query.q as string) || '').trim()
-    if (!q) { res.json({ results: [] }); return }
+export interface NotesSearchPayload {
+  results: SearchResultRow[]
+  folders?: FolderGroupRow[]
+  degraded?: 'semantic-unavailable'
+}
 
-    const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 30))
-    const mode = ((req.query.mode as string) || 'hybrid') as 'hybrid' | 'string' | 'semantic'
+/**
+ * The hybrid notes search, req/res-free — shared by the internal
+ * GET /api/notes-v2/search route below and GET /api/v1/notes/search
+ * (search-memory-v1.ts). One implementation, two error shapes at the edges.
+ */
+export async function performNotesSearch(opts: {
+  q: string
+  limit?: number
+  mode?: 'hybrid' | 'string' | 'semantic'
+  includeAll?: boolean
+}): Promise<NotesSearchPayload> {
+  ensureIndexBootstrap()
+  const q = opts.q.trim()
+  if (!q) return { results: [] }
 
-    await ensureNotesDir()
+  const limit = Math.max(1, Math.min(100, opts.limit || 30))
+  const mode = opts.mode || 'hybrid'
+
+  await ensureNotesDir()
 
     // User-configured folder exclusion (settings → search.excluded_folders,
     // e.g. ['archive']). Query-time view filter — the index keeps everything,
     // so toggling the setting needs no reindex. `all=1` searches everything
     // (the UI's "include excluded folders" escape hatch).
-    const includeAll = req.query.all === '1' || req.query.all === 'true'
+    const includeAll = opts.includeAll === true
     let excludeFolders: string[] = []
     if (!includeAll) {
       try {
@@ -1077,13 +1114,21 @@ notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunct
       if (capped.length >= limit) break
     }
 
-    const payload: {
-      results: SearchResultRow[]
-      folders?: FolderGroupRow[]
-      degraded?: 'semantic-unavailable'
-    } = { results: capped }
+    const payload: NotesSearchPayload = { results: capped }
     if (folders.length > 0) payload.folders = folders
     if (degraded) payload.degraded = degraded
+    return payload
+}
+
+// GET /api/notes-v2/search?q&mode&limit — hybrid string+semantic, deduped, labeled
+notesV2Router.get('/search', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const payload = await performNotesSearch({
+      q: (req.query.q as string) || '',
+      limit: Number(req.query.limit) || 30,
+      mode: ((req.query.mode as string) || 'hybrid') as 'hybrid' | 'string' | 'semantic',
+      includeAll: req.query.all === '1' || req.query.all === 'true',
+    })
     res.json(payload)
   } catch (err) {
     next(err)
@@ -1188,21 +1233,27 @@ notesV2Router.get('/links/*path', async (req: Request, res: Response, next: Next
 
 // ─── Folder CRUD ─────────────────────────────────────────────────────────
 
+/**
+ * Create a vault folder. Shared by this router's POST /folder and
+ * POST /api/v1/notes/folder — throws NotesOpError for validation failures.
+ */
+export async function createNotesFolder(folderPath: unknown): Promise<{ ok: true }> {
+  if (typeof folderPath !== 'string') throw new NotesOpError('path (string) is required', 400)
+  const fullPath = resolveSafePath(folderPath)
+  if (!fullPath) throw new NotesOpError('invalid path', 400)
+  await fsp.mkdir(fullPath, { recursive: true })
+  return { ok: true }
+}
+
 // POST /api/notes-v2/folder — create folder
 notesV2Router.post('/folder', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { path: folderPath } = req.body
-    if (typeof folderPath !== 'string') {
-      res.status(400).json({ error: 'path (string) is required' })
+    res.json(await createNotesFolder((req.body ?? {}).path))
+  } catch (err) {
+    if (err instanceof NotesOpError) {
+      res.status(err.statusCode).json({ error: err.message })
       return
     }
-
-    const fullPath = resolveSafePath(folderPath)
-    if (!fullPath) { res.status(400).json({ error: 'invalid path' }); return }
-
-    await fsp.mkdir(fullPath, { recursive: true })
-    res.json({ ok: true })
-  } catch (err) {
     next(err)
   }
 })

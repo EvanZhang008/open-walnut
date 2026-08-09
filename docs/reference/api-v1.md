@@ -39,9 +39,11 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `images_need_daemon_upgrade` | 400 | Session-talk images sent via the cloud companion to a host whose daemon predates `image.save` — self-heals on the next primary-box reconnect (auto-deploy) |
 | `image_upload_failed` | 400 | Session-talk image save failed on the session's host (daemon refused the payload or the write errored) |
 | `session_launch_needs_upgrade` | 400 | Session creation via the cloud companion when the primary's daemon predates the `session.launch` relay — self-heals on the next primary-box reconnect (auto-deploy) |
-| `session_control_needs_upgrade` | 400 | Session model/effort/fork/model-options via the cloud companion when the primary's daemon predates the `session.control` relay — self-heals on the next primary-box reconnect (auto-deploy) |
+| `session_control_needs_upgrade` | 400 | Any `session.control`-relayed action (model/effort/fork/lifecycle/notifications) via the cloud companion when the primary's daemon OR server predates that action — self-heals on the next primary-box upgrade/reconnect |
 | `bridge_offline` | 503 | Cloud companion has no live bridge to the needed host (or the primary's server is disconnected from its daemon) |
-| `too_large` | 413 | Note content exceeds 2 MB |
+| `not_supported_cloud` | 501 | The endpoint cannot run on a cloud REPLICA at all (e.g. global search needs the primary's semantic index) |
+| `cron_owner` | 409 | `POST /sessions/:id/terminate` refused: the session owns armed recurring crons — delete them first or pass `force: true` |
+| `too_large` | 413 | Note content exceeds 2 MB (or an attachment upload exceeds its cap) |
 | `internal` | 500 | Unhandled server error |
 
 ## Endpoints
@@ -68,6 +70,50 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | PUT | `/api/v1/notes/content/*path` | Update a note (optimistic locking) |
 | POST | `/api/v1/notes` | Create a note |
 | DELETE | `/api/v1/notes/*path` | Delete a note |
+| GET | `/api/v1/tasks/:id` | Full task detail (description/note readback + deps) |
+| DELETE | `/api/v1/tasks/:id?force=true` | Delete a task (409 on active sessions unless forced) |
+| POST | `/api/v1/tasks/:id/star` | Toggle star |
+| POST | `/api/v1/tasks/:id/notes` | Append a timestamped note entry |
+| PUT | `/api/v1/tasks/:id/note` | Replace the whole note |
+| PUT | `/api/v1/tasks/:id/description` | Set the description |
+| PUT | `/api/v1/tasks/:id/summary` | Set the summary |
+| PUT | `/api/v1/tasks/:id/depends-on` | Replace dependencies |
+| PATCH | `/api/v1/tasks/reorder` | Reorder tasks within one project group |
+| POST | `/api/v1/tasks/batch/phase` | Set the phase of many tasks (partial success) |
+| POST | `/api/v1/tasks/batch/delete` | Delete many tasks (partial success) |
+| GET | `/api/v1/focus/tasks` | Pinned tasks + tier split |
+| POST | `/api/v1/focus/tasks/:id` | Pin a task |
+| DELETE | `/api/v1/focus/tasks/:id` | Unpin a task |
+| PUT | `/api/v1/focus/reorder` | Reorder pins (returns the full tier snapshot) |
+| PUT | `/api/v1/focus/tasks/:id/tier` | Move a pinned task between tiers |
+| GET | `/api/v1/focus/tiers` | Custom tier registry |
+| GET | `/api/v1/sessions/:id` | Session detail + pending permission prompts (cloud relays) |
+| PATCH | `/api/v1/sessions/:id` | Rename/archive/mode/human_note (cloud relays) |
+| POST | `/api/v1/sessions/:id/terminate` | Kill the CLI process (cloud relays) |
+| POST | `/api/v1/sessions/:id/restart` | Respawn a fresh CLI — wakes a dead session (cloud relays) |
+| POST | `/api/v1/sessions/:id/retry` | Retry a failed/stopped session (cloud relays) |
+| POST | `/api/v1/sessions/:id/permission` | Answer a CLI tool-permission prompt (cloud relays) |
+| POST | `/api/v1/sessions/:id/execute-continue` | Execute a completed plan with bypass (cloud relays) |
+| GET | `/api/v1/sessions/:id/changes` | Changed-files data for the session (cloud relays) |
+| GET | `/api/v1/sessions/:id/history` | Full rich-block history, tail-windowed (cloud relays) |
+| PATCH | `/api/v1/conversations/:id` | Rename/pin a butler conversation |
+| DELETE | `/api/v1/conversations/:id` | Delete a conversation (main is protected) |
+| POST | `/api/v1/conversations/:id/stop` | Stop the agent's active turn(s) |
+| POST | `/api/v1/conversations/:id/answer` | Answer a pending structured question |
+| GET | `/api/v1/search` | Global search: tasks/memory/sessions (501 on REPLICA) |
+| GET | `/api/v1/notes/search` | Hybrid notes search (string leg only on REPLICA) |
+| GET | `/api/v1/memory/browse` | Memory source tree (metadata only) |
+| GET | `/api/v1/memory?category=` | List memory entries |
+| GET/PUT | `/api/v1/memory/global` | Read/write MEMORY.md |
+| GET/PUT | `/api/v1/memory/user` | Read/write USER.md |
+| GET | `/api/v1/notifications` | Notification feed + unread count (cloud relays) |
+| POST | `/api/v1/notifications/mark-read` | Mark some/all read (cloud relays) |
+| POST | `/api/v1/notifications/dismiss` | Dismiss some/all (cloud relays) |
+| GET | `/api/v1/favorites` | Favorite projects + notes |
+| POST/DELETE | `/api/v1/favorites/notes` | Add/remove a note favorite |
+| GET/POST | `/api/v1/notes/attachment` | Read / paste-upload a vault attachment |
+| POST | `/api/v1/notes/move` | Rename/move a note or attachment |
+| POST | `/api/v1/notes/folder` | Create a vault folder |
 
 ### GET /api/v1/status
 
@@ -271,6 +317,59 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
     a task-outbox op rides git-sync back to the primary (LWW-guarded there);
     the `200` response is the locally-updated row — render it optimistically,
     same as `POST /tasks`.
+  - Additive fields (Wave 1, 2026-08): `start_date` (ISO date/datetime or `""`
+    to clear — same gate as `due_date`) and `tags` (array of strings — a FULL
+    replace of the task's tags; `[]` clears them).
+- `GET /api/v1/tasks` additive filters (Wave 1, 2026-08): `project=` (exact,
+  case-insensitive; `""` = Inbox), `tag=` (exact member match), `q=`
+  (case-insensitive substring on the title). Combinable with `status=`.
+
+### Task actions (additive, Wave 1 2026-08) — detail / delete / field setters / batch / focus
+
+All Class A: same task-manager core as the web console; on a cloud REPLICA
+each mutation writes the local store and a task-outbox op rides git-sync back
+to the primary (no bridge). Task ids accept unique prefixes; an ambiguous
+prefix → `400 bad_request`, unknown → `404 not_found`.
+
+- `GET /api/v1/tasks/:id` → `200 { "task": {…} }` — the FULL task row
+  (including `description`, `note`, `summary`, `session_ids` — this is the
+  description/note **readback** the slim list omits), decorated with:
+  `is_blocked` + `resolved_dependencies` (when `depends_on` is set),
+  `dependents`, `children`, `parent` (each a slim `{ id, title, phase, … }`).
+- `DELETE /api/v1/tasks/:id[?force=true]` → `204`. With active sessions:
+  `409 conflict` + `active_session_ids` unless `force=true` (query or body),
+  which stops the sessions first, then deletes.
+- `POST /api/v1/tasks/:id/star` → `200 { "task", "starred" }` (toggle).
+- `POST /api/v1/tasks/:id/notes` body `{ "content" }` → `200 { "task" }` —
+  appends a timestamped note entry.
+- `PUT /api/v1/tasks/:id/note` | `/description` | `/summary` body
+  `{ "content" }` → `200 { "task" }` — replaces that field.
+- `PUT /api/v1/tasks/:id/depends-on` body `{ "depends_on": [ids] }` →
+  `200 { "task" }`; a cycle → `409 conflict` + `task_id`/`dep_id`.
+- `PATCH /api/v1/tasks/reorder` body `{ "project", "taskIds" }` →
+  `200 { "ok": true }` — permutes the given tasks within ONE project group
+  (`project: ""` = Inbox; it's a type check, not a truthiness check).
+- `POST /api/v1/tasks/batch/phase` body `{ "task_ids", "phase" }` →
+  `200 { "changed": [Task], "failed": [{id, ok, error}], "syncFailed" }` —
+  PARTIAL SUCCESS by design: one blocked task never voids the rest. `phase`
+  is a task phase (`TODO`…`COMPLETE`). `syncFailed` rows DID change locally
+  (only the external push failed) — don't roll them back client-side.
+- `POST /api/v1/tasks/batch/delete` body `{ "task_ids", "force"? }` →
+  `200 { "deleted": [Task], "failed": [{id, ok, error}] }` — same
+  partial-success contract (POST, not DELETE, because the ids ride the body).
+- Focus bar (pin state lives on the task):
+  - `GET /api/v1/focus/tasks` → `TierResult`: `{ "pinned_tasks": [ids],
+    "focus_tasks", "satellite_tasks", "backlog_tasks", "wait_tasks",
+    "custom_tier_tasks": { "<ct_id>": [ids] } }`.
+  - `POST /api/v1/focus/tasks/:id` → `200 { "pinned_tasks" }` (idempotent;
+    pinning a completed task → `409 conflict`).
+  - `DELETE /api/v1/focus/tasks/:id` → `200 { "pinned_tasks" }` (idempotent).
+  - `PUT /api/v1/focus/reorder` body `{ "task_ids" }` → the FULL `TierResult`
+    (never a pinned-only payload — clients apply it as a lossless snapshot).
+  - `PUT /api/v1/focus/tasks/:id/tier` body `{ "tier" }` → `TierResult`.
+    `tier` ∈ `focus|satellite|backlog|wait` or a registered `ct_*` id;
+    anything else → `400 bad_request`.
+  - `GET /api/v1/focus/tiers` → `{ "tiers": [ { "id": "ct_…", "label" } ] }`.
 
 ### Sessions (read-only)
 
@@ -488,6 +587,146 @@ BOTH boxes:
     no cwd/task), `404 not_found` (unknown source session / target task),
     `409 conflict` (target task already has a session — the response carries
     `existing_session_id`; or a Codex source session, which cannot fork).
+
+### Session lifecycle (additive, Wave 1 2026-08) — detail / patch / terminate / restart / retry / permission / execute-continue / changes / history
+
+Same shared core as the web console (`src/core/sessions/session-lifecycle.ts`).
+All Class B on a cloud REPLICA: each endpoint relays over the `/bridge` WS as a
+new action on the existing `session.control` daemon command (the daemon
+forwards actions opaquely, so no daemon upgrade is needed; an old PRIMARY
+server that predates an action answers `400 session_control_needs_upgrade`).
+Failure ladder and error passthrough identical to the session-control section
+above. All paths `404 not_found` for an unknown session, `400 bad_request` for
+an id outside `[A-Za-z0-9_-]`.
+
+- `GET /api/v1/sessions/:id` → `200 { "session": SessionRecord,
+  "pendingPermissions": [ { "requestId", "toolName"?, "input"?, "reason"? } ] }`
+  — the full liveness-corrected record plus any live tool-permission prompts
+  (pair each with `POST …/permission`).
+- `PATCH /api/v1/sessions/:id` body — any subset of `{ "title" (≤500 chars),
+  "archived" (boolean), "mode" ("default"|"plan"|"bypass"|"accept"),
+  "human_note" (≤50000 chars) }` → `200 { "session" }`. At least one field
+  required. Archiving clears the owning task's session slots; archiving a
+  terminal-state session is tolerated; a live mode switch that the CLI rejects
+  → `409 conflict`.
+- `POST /api/v1/sessions/:id/terminate` body `{ "force"? }` →
+  `200 { "status": "terminated", "sessionId", "tookMs"? }` — kills the running
+  CLI, no respawn, pending queue preserved. If the session owns armed
+  recurring crons → `409` `{ "error": { "code": "cron_owner", … } }` unless
+  `force: true` (killing it would NOT stop the crons — they'd fire into any
+  other session sharing the directory).
+- `POST /api/v1/sessions/:id/restart` → `200 { "status": "restarted",
+  "sessionId", "pendingMessages" }` — respawns a fresh `claude -p --resume` so
+  the session re-initializes (reloads CLAUDE.md/skills/MCP; **this is how the
+  phone wakes an idle-reaped/dead session**). In-flight messages are reverted
+  to pending and re-delivered. Archived session → `400 bad_request`.
+- `POST /api/v1/sessions/:id/retry` → one of
+  `200 { "status": "reconnected", "sessionId" }` (process was alive — error
+  state cleared), `200 { "status": "resuming", "sessionId",
+  "restoredMessages"? }` (dead process — resumed via the queue), or
+  `200 { "status": "pending", "taskId", "oldSessionId" }` (never initialized —
+  archived + a new session started on the task). Only `error`/`stopped`
+  sessions are retryable (`400` otherwise; `400` when no task is linked).
+- `POST /api/v1/sessions/:id/permission` body `{ "requestId", "allow",
+  "message"? }` → `200 { "status": "resolved", "requestId", "allow" }` —
+  answers a live CLI tool prompt (`message` = optional deny reason).
+  `404 not_found` when the request is gone/already resolved or no live
+  session holds it.
+- `POST /api/v1/sessions/:id/execute-continue` → `200 { "status": "started",
+  "sessionId" }` — resumes a completed plan session with bypass permissions
+  ("Continue" on a finished plan). Non-plan session → `400 bad_request`.
+- `GET /api/v1/sessions/:id/changes?base=&scope=&light=1&refresh=1` →
+  `200` the same payload as the web Changed tab: `{ "groups": [ { files:
+  [ { path, before, after, … } ] } ], … }`. `base` ∈ `session` (default) |
+  `uncommitted` | `previous` | `remote`; `scope` ∈ `session` (default) |
+  `all`; `light=1` strips `before`/`after` content (names/roots only — sized
+  for a phone list); `refresh=1` bypasses the cache. Unreachable host / git
+  failure → `502` with the underlying message.
+- `GET /api/v1/sessions/:id/history?tail=N` → `200 { "messages": [rich
+  blocks], "total", "forkedFromSessionId"?, "forkBoundaryIndex"?,
+  "historyUnavailable"? }` — the FULL rich-block history (tool detail +
+  results, subagent-lane markers, fork-ancestor prefix in chain order),
+  tail-windowed (`tail` ≤ 2000). This supersedes `transcript`'s slim 100-row
+  tail for full parity chat rendering; `transcript` remains frozen and
+  untouched. Snapshot API: no delta cursors — live rendering rides the SSE
+  stream. Rows whose content can still change carry `unsettled: true`. When
+  the JSONL/journal is unreachable, `200` with `messages: []` +
+  `historyUnavailable` (a human-readable reason) rather than an error.
+
+### Butler conversation management (additive, Wave 1 2026-08)
+
+Class A everywhere (the REPLICA runs its own butler). `agentId` is accepted
+like the other conversation endpoints (absent → `general`).
+
+- `PATCH /api/v1/conversations/:id` body `{ "title"? | "pinned"? }` →
+  `200 { "conversation" }`. At least one field required.
+- `DELETE /api/v1/conversations/:id` → `204`. The MAIN conversation (receives
+  notifications + cron) is never deletable → `409 conflict`.
+- `POST /api/v1/conversations/:id/stop` → `200 { "stopped": N,
+  "questionCancelled": boolean }` — aborts ALL of the agent's active turns
+  (WS- and REST-initiated; REST clients have no per-socket identity, and for
+  a single-user butler that is what "stop" means) and cancels any pending
+  structured question. Harmless no-op (`stopped: 0`) when nothing is running.
+- `POST /api/v1/conversations/:id/answer` body `{ "answers": { "<header>":
+  "<value>", … } }` → `200 { "ok": true }` — answers a pending structured
+  question (the `user_ask` tool), unblocking the agent's turn. Mirrors the
+  web `chat:answer-question`: the answers are persisted as a user entry and
+  broadcast live. No pending question → `409 conflict`.
+
+### Search, memory, notifications, favorites (additive, Wave 1 2026-08)
+
+- `GET /api/v1/search?q=&types=task,memory,session&limit=` →
+  `200 { "results": [ { type, id?, title, snippet?, score, … } ] }` — the
+  console's global search (string + semantic legs). **REPLICA: `501
+  not_supported_cloud`** (the semantic index lives on the primary only).
+- `GET /api/v1/notes/search?q=&mode=hybrid|string|semantic&limit=&all=1` →
+  `200 { "results": [ { id, path, title, snippet, matchType, … } ],
+  "folders"?, "degraded"? }` — the notes panel's hybrid search. Works on BOTH
+  boxes: the semantic leg self-disables on a REPLICA (string/FTS answers;
+  `degraded: "semantic-unavailable"` may appear). Snippets carry
+  `<mark>…</mark>` highlights.
+- Memory (Class A — files ride git-sync, so a REPLICA reads/writes its local
+  copy):
+  - `GET /api/v1/memory/browse` → `{ "tree": { global, user, daily, projects,
+    sessions, knowledge, repos, topics, compaction, special } }` (metadata
+    only: `{ path, title, updatedAt }` rows).
+  - `GET /api/v1/memory?category=project|session|knowledge` → `{ "memories" }`.
+  - `GET /api/v1/memory/global` | `/memory/user` → `200 { "memory": { path,
+    title, category, content, createdAt, updatedAt } }`; `404 not_found` when
+    the file doesn't exist yet.
+  - `PUT /api/v1/memory/global` | `/memory/user` body `{ "content" }` →
+    `200 { "ok": true, "updatedAt" }` — human-edit provenance (telemetry +
+    immediate prompt-snapshot refresh, same as the web editor).
+- Notifications (Class B — the durable store lives on the primary; a REPLICA
+  relays via the `session.control` command's `server.*` actions, same failure
+  ladder as session lifecycle):
+  - `GET /api/v1/notifications` → `{ "feed": [ { id, kind, severity, title,
+    body?, timestamp, read, … } ], "unreadCount" }` (bodies clipped to 600
+    chars).
+  - `POST /api/v1/notifications/mark-read` body `{ "ids"? }` →
+    `{ "unreadCount" }` (no ids = mark ALL read).
+  - `POST /api/v1/notifications/dismiss` body `{ "ids"?, "dedupKeys"? }` →
+    `{ "unreadCount", "removed" }` (no filter = dismiss ALL).
+- Favorites (Class A, config-backed — these formalize paths the iOS app
+  previously called out-of-contract on `/api/favorites`):
+  - `GET /api/v1/favorites` → `{ "projects": [names], "notes": [paths] }`.
+  - `POST /api/v1/favorites/notes` body `{ "path" }` → `{ "notes" }`
+    (idempotent add). `DELETE /api/v1/favorites/notes` (body or `?path=`) →
+    `{ "notes" }`.
+- Notes utilities (Class A — formalizing the `/api/notes-v2` paths iOS
+  already calls; same vault semantics):
+  - `GET /api/v1/notes/attachment?path=` → attachment bytes with correct
+    `Content-Type` (png/jpg/gif/webp/pdf inline; Office formats download).
+    Accepts a vault-relative path or a bare `![[name]]` target. No SVG.
+    `404 not_found` / `400 bad_request` in the frozen shape.
+  - `POST /api/v1/notes/attachment` body `{ "notePath", "data": "<base64>",
+    "mediaType" }` → `200 { "ok", "path", "name" }` — saves a pasted image
+    into `_attachment/` beside the note; the returned `path` is the
+    `![[…]]` embed target. >10 MB base64 → `413 too_large`.
+  - `POST /api/v1/notes/move` body `{ "from", "to" }` → `{ "ok": true }` —
+    rename/move a note or attachment (id-keyed links survive).
+    Destination exists → `409 conflict`; source missing → `404 not_found`.
+  - `POST /api/v1/notes/folder` body `{ "path" }` → `{ "ok": true }`.
 
 ### GET /api/v1/events (SSE, additive, 2026-08) — live task + session feed
 

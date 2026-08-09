@@ -30,7 +30,7 @@ export const memoryRouter = Router()
  * provenance — strictly stronger evidence than anything the agent wrote itself.
  * Best-effort: telemetry must never fail the save the user just made.
  */
-async function recordBoundedStoreEdit(target: MemoryTarget, before: string, after: string): Promise<void> {
+export async function recordBoundedStoreEdit(target: MemoryTarget, before: string, after: string): Promise<void> {
   try {
     await recordMemoryWrite({
       target,
@@ -61,8 +61,24 @@ interface BrowseDailyItem extends BrowseItem {
   date: string
 }
 
-memoryRouter.get('/browse', async (_req: Request, res: Response, next: NextFunction) => {
-  try {
+export interface MemoryBrowseTree {
+  global: BrowseItem | null
+  user: BrowseItem | null
+  daily: BrowseDailyItem[]
+  projects: BrowseItem[]
+  sessions: BrowseItem[]
+  knowledge: BrowseItem[]
+  repos: BrowseItem[]
+  topics: BrowseItem[]
+  compaction: BrowseItem[]
+  special: BrowseItem[]
+}
+
+/**
+ * Lightweight metadata tree of all memory sources. Shared by GET /api/memory/browse
+ * and GET /api/v1/memory/browse (search-memory-v1.ts).
+ */
+export async function buildMemoryBrowseTree(): Promise<MemoryBrowseTree> {
     // Global MEMORY.md
     let global: BrowseItem | null = null
     try {
@@ -154,32 +170,81 @@ memoryRouter.get('/browse', async (_req: Request, res: Response, next: NextFunct
       } catch { /* file not present */ }
     }
 
-    res.json({ tree: { global, user, daily, projects, sessions, knowledge, repos, topics, compaction, special } })
+    return { global, user, daily, projects, sessions, knowledge, repos, topics, compaction, special }
+}
+
+memoryRouter.get('/browse', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json({ tree: await buildMemoryBrowseTree() })
   } catch (err) {
     next(err)
   }
 })
 
-// ── Global MEMORY.md dedicated endpoint ──
+// ── Global MEMORY.md / USER.md shared read+write (also used by /api/v1) ──
+
+export interface MemoryDoc {
+  path: string
+  title: string
+  category: 'global'
+  content: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** Read global MEMORY.md as a doc payload; null when the file doesn't exist. */
+export async function readGlobalMemoryDoc(): Promise<MemoryDoc | null> {
+  const result = getMemoryFile()
+  if (!result) return null
+  const stat = await fsp.stat(MEMORY_FILE)
+  return {
+    path: 'MEMORY.md', title: 'Global Memory', category: 'global',
+    content: result.content,
+    createdAt: stat.birthtime.toISOString(),
+    updatedAt: stat.mtime.toISOString(),
+  }
+}
+
+/** Read USER.md as a doc payload; null when the file doesn't exist. */
+export async function readUserMemoryDoc(): Promise<MemoryDoc | null> {
+  let content: string
+  try {
+    content = await fsp.readFile(USER_FILE, 'utf-8')
+  } catch {
+    return null
+  }
+  const stat = await fsp.stat(USER_FILE)
+  return {
+    path: 'USER.md', title: 'User Profile', category: 'global',
+    content,
+    createdAt: stat.birthtime.toISOString(),
+    updatedAt: stat.mtime.toISOString(),
+  }
+}
+
+/**
+ * Write MEMORY.md or USER.md with human-edit telemetry + prompt-snapshot thaw
+ * (see recordBoundedStoreEdit). Shared by the web PUT routes and /api/v1.
+ */
+export async function writeMemoryDoc(target: 'memory' | 'user', content: string): Promise<{ ok: true; updatedAt: string }> {
+  const file = target === 'memory' ? MEMORY_FILE : USER_FILE
+  await fsp.mkdir(path.dirname(file), { recursive: true })
+  const previous = await fsp.readFile(file, 'utf-8').catch(() => '')
+  await fsp.writeFile(file, content, 'utf-8')
+  await recordBoundedStoreEdit(target, previous, content)
+  const stat = await fsp.stat(file)
+  log.memory.info(`${target === 'memory' ? 'Global MEMORY.md' : 'USER.md'} updated via editor`, { size: content.length })
+  return { ok: true, updatedAt: stat.mtime.toISOString() }
+}
 
 memoryRouter.get('/global', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const result = getMemoryFile()
-    if (!result) {
+    const memory = await readGlobalMemoryDoc()
+    if (!memory) {
       res.status(404).json({ error: 'Global MEMORY.md not found' })
       return
     }
-    const stat = await fsp.stat(MEMORY_FILE)
-    res.json({
-      memory: {
-        path: 'MEMORY.md',
-        title: 'Global Memory',
-        category: 'global',
-        content: result.content,
-        createdAt: stat.birthtime.toISOString(),
-        updatedAt: stat.mtime.toISOString(),
-      },
-    })
+    res.json({ memory })
   } catch (err) {
     next(err)
   }
@@ -194,13 +259,7 @@ memoryRouter.put('/global', async (req: Request, res: Response, next: NextFuncti
       res.status(400).json({ error: 'content (string) is required' })
       return
     }
-    await fsp.mkdir(path.dirname(MEMORY_FILE), { recursive: true })
-    const previous = await fsp.readFile(MEMORY_FILE, 'utf-8').catch(() => '')
-    await fsp.writeFile(MEMORY_FILE, content, 'utf-8')
-    await recordBoundedStoreEdit('memory', previous, content)
-    const stat = await fsp.stat(MEMORY_FILE)
-    log.memory.info('Global MEMORY.md updated via browser', { size: content.length })
-    res.json({ ok: true, updatedAt: stat.mtime.toISOString() })
+    res.json(await writeMemoryDoc('memory', content))
   } catch (err) {
     next(err)
   }
@@ -211,24 +270,12 @@ memoryRouter.put('/global', async (req: Request, res: Response, next: NextFuncti
 
 memoryRouter.get('/user', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    let content: string
-    try {
-      content = await fsp.readFile(USER_FILE, 'utf-8')
-    } catch {
+    const memory = await readUserMemoryDoc()
+    if (!memory) {
       res.status(404).json({ error: 'USER.md not found' })
       return
     }
-    const stat = await fsp.stat(USER_FILE)
-    res.json({
-      memory: {
-        path: 'USER.md',
-        title: 'User Profile',
-        category: 'global',
-        content,
-        createdAt: stat.birthtime.toISOString(),
-        updatedAt: stat.mtime.toISOString(),
-      },
-    })
+    res.json({ memory })
   } catch (err) {
     next(err)
   }
@@ -241,13 +288,7 @@ memoryRouter.put('/user', async (req: Request, res: Response, next: NextFunction
       res.status(400).json({ error: 'content (string) is required' })
       return
     }
-    await fsp.mkdir(path.dirname(USER_FILE), { recursive: true })
-    const previous = await fsp.readFile(USER_FILE, 'utf-8').catch(() => '')
-    await fsp.writeFile(USER_FILE, content, 'utf-8')
-    await recordBoundedStoreEdit('user', previous, content)
-    const stat = await fsp.stat(USER_FILE)
-    log.memory.info('USER.md updated via browser', { size: content.length })
-    res.json({ ok: true, updatedAt: stat.mtime.toISOString() })
+    res.json(await writeMemoryDoc('user', content))
   } catch (err) {
     next(err)
   }

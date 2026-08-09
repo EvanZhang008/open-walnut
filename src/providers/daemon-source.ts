@@ -1656,7 +1656,7 @@ function cmdControlRelay(ws, id, cmd) {
 }
 
 function cmdControlResult(ws, id, cmd) {
-  var relayId = cmd.relayId, result = cmd.result, error = cmd.error, errorKind = cmd.errorKind;
+  var relayId = cmd.relayId, result = cmd.result, error = cmd.error, errorKind = cmd.errorKind, errorCode = cmd.errorCode;
   var pending = typeof relayId === 'number' ? controlRelayPending.get(relayId) : undefined;
   if (!pending) {
     // Late result after timeout — ack and drop.
@@ -1668,13 +1668,15 @@ function cmdControlResult(ws, id, cmd) {
     logMsg('info', 'session.control: relay complete', { relayId: relayId });
     sendOk(pending.ws, pending.id, { result: result });
   } else {
-    // Carry errorKind through so the cloud route maps the precise 4xx.
+    // Carry errorKind/errorCode through so the cloud route maps the precise 4xx.
+    var failPayload = {
+      id: pending.id, ok: false,
+      error: error || 'control failed',
+      errorKind: errorKind || 'internal',
+    };
+    if (errorCode) failPayload.errorCode = errorCode;
     try {
-      pending.ws.send(JSON.stringify({
-        id: pending.id, ok: false,
-        error: error || 'control failed',
-        errorKind: errorKind || 'internal',
-      }));
+      pending.ws.send(JSON.stringify(failPayload));
     } catch {}
   }
   sendOk(ws, id, {});

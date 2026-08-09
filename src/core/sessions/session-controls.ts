@@ -608,7 +608,23 @@ export async function forkSessionToTask(
 
 // ── Daemon control relay entry (cloud companion path) ───────────────────────
 
-export type SessionControlAction = 'model' | 'effort' | 'fork' | 'model-options';
+/**
+ * Actions the `session.control` relay understands. The daemon forwards the
+ * action string OPAQUELY (its allowlist gates the command name, not the
+ * action), so extending this set needs no daemon protocol change — an OLD
+ * PRIMARY simply answers `Unknown control action` (400) for actions it
+ * predates, which the phone surfaces as a version-skew error.
+ *
+ * The `server.*` family are box-level requests (notifications feed) that ride
+ * the same narrow relay; they ignore the sessionId (callers pass '__server__').
+ */
+export type SessionControlAction =
+  | 'model' | 'effort' | 'fork' | 'model-options'
+  // Wave 1 lifecycle family (2026-08):
+  | 'patch' | 'terminate' | 'restart' | 'retry' | 'permission'
+  | 'execute-continue' | 'changes' | 'history' | 'detail'
+  // Box-level family (sessionId ignored):
+  | 'server.notifications' | 'server.notifications.mark-read' | 'server.notifications.dismiss';
 
 /**
  * Entry point for the daemon control relay (phone → cloud → bridge →
@@ -621,7 +637,10 @@ export async function handleSessionControlRelay(
   action: string,
   sessionId: unknown,
   params: unknown,
-): Promise<{ ok: true; result: Record<string, unknown> } | { ok: false; error: string; errorKind: string }> {
+): Promise<
+  | { ok: true; result: Record<string, unknown> }
+  | { ok: false; error: string; errorKind: string; errorCode?: string }
+> {
   try {
     if (typeof sessionId !== 'string' || !sessionId) {
       return { ok: false, error: 'sessionId is required', errorKind: 'bad_request' };
@@ -648,13 +667,92 @@ export async function handleSessionControlRelay(
       case 'model-options':
         result = await computeModelOptions(sessionId) as unknown as Record<string, unknown>;
         break;
+      // ── Wave 1 lifecycle family — same shared core the web routes use ──
+      case 'patch': {
+        const { patchSession } = await import('./session-lifecycle.js');
+        const session = await patchSession(sessionId, p);
+        result = { session } as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'terminate': {
+        const { terminateSession } = await import('./session-lifecycle.js');
+        result = await terminateSession(sessionId, { force: p.force === true }) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'restart': {
+        const { restartSession } = await import('./session-lifecycle.js');
+        result = await restartSession(sessionId) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'retry': {
+        const { retrySession } = await import('./session-lifecycle.js');
+        result = await retrySession(sessionId) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'permission': {
+        const { respondSessionPermission } = await import('./session-lifecycle.js');
+        result = await respondSessionPermission(sessionId, p.requestId, p.allow, p.message) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'execute-continue': {
+        const { executeContinueSession } = await import('./session-lifecycle.js');
+        result = await executeContinueSession(sessionId) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'changes': {
+        const { getSessionChanges } = await import('./session-lifecycle.js');
+        result = await getSessionChanges(sessionId, {
+          base: p.base, scope: p.scope,
+          light: p.light === true, refresh: p.refresh === true,
+        });
+        break;
+      }
+      case 'history': {
+        const { readSessionRichHistory } = await import('./session-lifecycle.js');
+        const tail = typeof p.tail === 'number' && p.tail > 0 ? Math.floor(p.tail) : undefined;
+        result = await readSessionRichHistory(sessionId, tail) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'detail': {
+        const { getSessionDetail } = await import('./session-lifecycle.js');
+        result = await getSessionDetail(sessionId) as unknown as Record<string, unknown>;
+        break;
+      }
+      // ── Box-level family (sessionId ignored — notifications live on the primary) ──
+      case 'server.notifications': {
+        const { listNotifications } = await import('../notifications/store.js');
+        result = await listNotifications() as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'server.notifications.mark-read': {
+        const { markRead } = await import('../notifications/store.js');
+        const ids = Array.isArray(p.ids) && p.ids.every((v) => typeof v === 'string')
+          ? p.ids as string[] : undefined;
+        result = await markRead(ids) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'server.notifications.dismiss': {
+        const { dismissNotifications } = await import('../notifications/store.js');
+        const ids = Array.isArray(p.ids) && p.ids.every((v) => typeof v === 'string')
+          ? p.ids as string[] : undefined;
+        const dedupKeys = Array.isArray(p.dedupKeys) && p.dedupKeys.every((v) => typeof v === 'string')
+          ? p.dedupKeys as string[] : undefined;
+        result = await dismissNotifications({ ids, dedupKeys }) as unknown as Record<string, unknown>;
+        break;
+      }
       default:
         return { ok: false, error: `Unknown control action: ${action}`, errorKind: 'bad_request' };
     }
     return { ok: true, result };
   } catch (err) {
     if (err instanceof SessionControlError) {
-      return { ok: false, error: err.message, errorKind: controlErrorKind(err.statusCode) };
+      // Domain error codes (e.g. terminate's 'cron_owner') ride along so the
+      // cloud route can surface the same v1 error code as the local path.
+      const errorCode = typeof err.extra?.code === 'string' ? err.extra.code : undefined;
+      return {
+        ok: false, error: err.message, errorKind: controlErrorKind(err.statusCode),
+        ...(errorCode ? { errorCode } : {}),
+      };
     }
     const message = err instanceof Error ? err.message : String(err);
     log.session.error('session control relay failed', { action, error: message });

@@ -44,12 +44,14 @@ const reinitializeMock = vi.fn(async (sessionId: string) => {
   await updateSessionRecord(sessionId, { process_status: 'running', errorMessage: undefined } as Record<string, unknown>);
 });
 const settleInFlightTurnMock = vi.fn(() => {});
+const isCronArmedMock = vi.fn(() => false);
 vi.mock('../../../src/providers/claude-code-session.js', () => ({
   sessionRunner: {
     reinitialize: (sid: string) => reinitializeMock(sid),
     findAcpSession: () => null,
     findSessionByClaudeId: () => null,
     settleInFlightTurn: (sid: string) => settleInFlightTurnMock(sid),
+    isCronArmed: (sid: string) => isCronArmedMock(sid),
   },
 }));
 
@@ -480,6 +482,49 @@ describe('POST /api/sessions/:sessionId/terminate', () => {
       .send({});
 
     expect(res.status).toBe(404);
+  });
+
+  // Cron-owner guard (incident 2026-08-09): the CLI's scheduler lock is
+  // directory-scoped, so killing a cron-owning session doesn't stop its crons —
+  // they migrate to whichever session in the same cwd next holds the lock and
+  // fire there with no provenance. terminate must refuse without force.
+  it('refuses to terminate a cron-owning session without force (409 cron_owner)', async () => {
+    const task = await createTestTask('Cron Owner Task');
+    await createSessionRecord('term-cron-1', task.id, 'proj', '/tmp');
+    await updateSessionRecord('term-cron-1', { process_status: 'running', pid: 12346 });
+    isCronArmedMock.mockReturnValueOnce(true);
+
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((() => true) as never);
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/sessions/term-cron-1/terminate')
+      .send({});
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('cron_owner');
+    expect(killSpy).not.toHaveBeenCalled();
+    killSpy.mockRestore();
+
+    const after = await getSessionByClaudeId('term-cron-1');
+    expect(after!.process_status).toBe('running'); // untouched
+  });
+
+  it('force=true terminates a cron-owning session', async () => {
+    const task = await createTestTask('Cron Owner Force Task');
+    await createSessionRecord('term-cron-2', task.id, 'proj', '/tmp');
+    await updateSessionRecord('term-cron-2', { process_status: 'running', pid: 12347 });
+    isCronArmedMock.mockReturnValueOnce(true);
+
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((() => true) as never);
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/sessions/term-cron-2/terminate')
+      .send({ force: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('terminated');
+    expect(killSpy).toHaveBeenCalledWith(-12347, 'SIGTERM');
+    killSpy.mockRestore();
   });
 });
 

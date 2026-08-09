@@ -1392,8 +1392,8 @@ function cmdControlRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
 }
 
 function cmdControlResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
-  const { relayId, result, error, errorKind } = cmd as {
-    relayId?: number; result?: Record<string, unknown>; error?: string; errorKind?: string
+  const { relayId, result, error, errorKind, errorCode } = cmd as {
+    relayId?: number; result?: Record<string, unknown>; error?: string; errorKind?: string; errorCode?: string
   }
   const pending = typeof relayId === 'number' ? controlRelayPending.get(relayId) : undefined
   if (!pending) {
@@ -1406,11 +1406,12 @@ function cmdControlResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
     logMsg('info', 'session.control: relay complete', { relayId })
     sendOk(pending.ws, pending.id, { result })
   } else {
-    // Carry errorKind through so the cloud route maps the precise 4xx.
+    // Carry errorKind/errorCode through so the cloud route maps the precise 4xx.
     safeSend(pending.ws, JSON.stringify({
       id: pending.id, ok: false,
       error: error ?? 'control failed',
       errorKind: errorKind ?? 'internal',
+      ...(errorCode ? { errorCode } : {}),
     }))
   }
   sendOk(ws, id, {})

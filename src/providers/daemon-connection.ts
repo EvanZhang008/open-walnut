@@ -788,7 +788,10 @@ export class DaemonConnection {
         log.session.warn('DaemonConnection: control relay refused', {
           host: this.hostKey, relayId, action, sessionId, error: outcome.error, errorKind: outcome.errorKind,
         })
-        reply = { relayId, error: outcome.error, errorKind: outcome.errorKind }
+        reply = {
+          relayId, error: outcome.error, errorKind: outcome.errorKind,
+          ...(outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

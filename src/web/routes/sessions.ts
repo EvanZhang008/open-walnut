@@ -75,121 +75,9 @@ function logMessageOrdering(phase: string, sessionId: string, messages: SessionH
   })
 }
 
-/** Route-level ceiling on one liveness probe. A remote probe rides
- *  conn.send('status') whose own timeout is 30s — a wedged daemon would hold
- *  the sessions-list response (and one of the browser's 6 connections) that
- *  whole time, on one of the hottest endpoints in the app. Local PID checks
- *  are a sync syscall and never hit this. Timing out resolves `true`
- *  ("assume alive"): remote corrections are skipped anyway (transport
- *  uncertainty ≠ death), and the health monitor owns authoritative
- *  reconciliation on its own 30s cycle. */
-const LIVENESS_PROBE_TIMEOUT_MS = 2_500
-
-function probeWithDeadline(p: Promise<boolean>): Promise<boolean> {
-  return Promise.race([
-    p,
-    new Promise<boolean>((resolve) => {
-      const t = setTimeout(() => resolve(true), LIVENESS_PROBE_TIMEOUT_MS)
-      t.unref?.()
-    }),
-  ])
-}
-
-/** Recompute process_status live via PID check (for GET responses).
- *  Runs all PID checks in parallel to avoid blocking the event loop. */
-async function enrichWithLiveStatus(sessions: SessionRecord[]): Promise<SessionRecord[]> {
-  // Parallel liveness checks via unified session liveness utility.
-  // Routes to local PID check for local sessions, daemon connection check for remote.
-  const needsCheck: number[] = []
-  for (let i = 0; i < sessions.length; i++) {
-    const s = sessions[i]
-    if (s.process_status === 'running' || s.process_status === 'idle') {
-      needsCheck.push(i)
-    }
-  }
-
-  if (needsCheck.length > 0) {
-    const results = await Promise.allSettled(
-      needsCheck.map(i => probeWithDeadline(isSessionProcessAlive(sessions[i])))
-    )
-    const corrections: Promise<void>[] = []
-    for (let j = 0; j < needsCheck.length; j++) {
-      const r = results[j]
-      const alive = r.status === 'fulfilled' && r.value === true
-      if (!alive) {
-        const index = needsCheck[j]
-        const checked = sessions[index]
-        // A failed remote liveness check can mean only that the daemon/tunnel
-        // is unreachable. GET must not turn transport uncertainty into durable
-        // process death; the health monitor owns remote reconciliation.
-        if (checked.host) continue
-        // Not-yet-spawned session: the start routes seed the record BEFORE the CLI
-        // exists (so the UI can open the real panel on the id it just got back),
-        // so for a moment there is legitimately no pid to probe. For those rows
-        // "no pid" is absence of evidence, not evidence of death — persisting
-        // 'stopped' here would render a session the user just launched as already
-        // dead. Keyed off the explicit `status_reason` the seed writes rather than
-        // `pid == null` in general, because a pid-less row with any OTHER reason
-        // really is dead (e.g. a record whose process was reaped) and must still
-        // be corrected. The window mirrors the health monitor's ORPHAN_GRACE_MS,
-        // which reaps a still-pid-less row afterwards, so nothing leaks.
-        const SPAWN_GRACE_MS = 2 * 60 * 1000
-        if (checked.pid == null && checked.status_reason === 'awaiting_spawn') {
-          const since = new Date(checked.last_status_change ?? checked.startedAt ?? 0).getTime()
-          if (Date.now() - since < SPAWN_GRACE_MS) continue
-        }
-        const checkedStatus = toSessionStatusSnapshot(checked)
-        corrections.push((async () => {
-          const updated = await updateSessionRecordConditionally(
-            checked.claudeSessionId,
-            {
-              process_status: 'stopped',
-              activity: undefined,
-              last_status_change: new Date().toISOString(),
-              status_reason: 'liveness_check_failed',
-              status_changed_by: 'system',
-            },
-            (current) => {
-              const status = toSessionStatusSnapshot(current)
-              return status.statusRevision === checkedStatus.statusRevision
-                && status.process_status === checkedStatus.process_status
-                && (status.process_status === 'running' || status.process_status === 'idle')
-            },
-          )
-          if (!updated) return
-          sessions[index] = updated
-          emitSessionStatusChanged(updated, {}, ['*'], {
-            source: 'sessions-route:liveness',
-            urgency: 'urgent',
-          })
-        })())
-      }
-    }
-    await Promise.all(corrections)
-  }
-
-  return sessions
-}
-
-/** Resolve host aliases to full hostnames from config (for tooltip display). */
-async function enrichWithHostnames(sessions: SessionRecord[]): Promise<SessionRecord[]> {
-  const hostsNeeded = sessions.some(s => s.host && !s.hostname)
-  if (!hostsNeeded) return sessions
-  try {
-    const config = await getConfig()
-    const hosts = config.hosts
-    if (!hosts) return sessions
-    for (const s of sessions) {
-      if (s.host && !s.hostname) {
-        const def = hosts[s.host]
-        if (def) {
-          s.hostname = def.hostname
-        }
-      }
-    }
-  } catch { /* config read failure — non-critical */ }
-  return sessions
-}
+// Liveness correction + hostname resolution moved to
+// core/sessions/session-enrich.ts (shared with the /api/v1 mobile routes).
+import { enrichWithLiveStatus, enrichWithHostnames } from '../../core/sessions/session-enrich.js'
 
 export const sessionsRouter = Router()
 
@@ -600,29 +488,23 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
   }
 })
 
-async function readProviderSessionHistory(
-  sessionId: string,
-  record: SessionRecord | null | undefined,
-  nativeHost: string | null | undefined,
-  skipSubagents = true,
-): Promise<{ messages: SessionHistoryMessage[]; sourceAvailable: boolean; windowed: boolean }> {
-  if (record?.engine === 'codex') {
-    const state = await readAcpSessionHistoryState(record)
-    return { messages: state.messages, sourceAvailable: state.journalExists, windowed: false }
-  }
-  const messages = await readSessionHistory(
-    sessionId,
-    record?.cwd,
-    nativeHost ?? undefined,
-    record?.outputFile,
-    { skipSubagents },
-  )
-  // `windowed` must be read HERE, while we still hold the exact array the reader
-  // returned — the flag lives on that object (see isWindowedHistory). A bounded
-  // sliding window's length is not a cursor space, so the ?since= delta path must
-  // refuse to slice it by count.
-  return { messages, sourceAvailable: messages.length > 0, windowed: isWindowedHistory(messages) }
-}
+// readProviderSessionHistory moved to core/sessions/session-lifecycle.ts
+// (shared with the /api/v1 rich-history endpoint + daemon control relay).
+import {
+  readProviderSessionHistory,
+  clearArchivedSessionTaskLinks,
+  persistSessionModeChange,
+  changeSessionMode,
+  patchSession,
+  terminateSession,
+  restartSession,
+  retrySession,
+  respondSessionPermission,
+  executeContinueSession,
+  getSessionChanges,
+  CLAUDE_SESSION_MODES,
+} from '../../core/sessions/session-lifecycle.js'
+import { SessionControlError } from '../../core/sessions/session-controls.js'
 
 /**
  * Stamp `unsettled: true` on rows whose content can still change (an Agent row awaiting
@@ -842,116 +724,14 @@ sessionsRouter.get('/:sessionId', async (req: Request, res: Response, next: Next
   }
 })
 
-async function clearArchivedSessionTaskLinks(
-  sessionId: string,
-  taskId: string,
-  eventSource: string,
-  requireAuthoritativeArchive = false,
-): Promise<boolean> {
-  if (requireAuthoritativeArchive) {
-    const authoritative = await getSessionByClaudeId(sessionId)
-    if (!authoritative?.archived) return false
-  }
-
-  const { clearSession, clearSessionSlot } = await import('../../core/task-manager.js')
-  await clearSession(taskId, sessionId)
-  const { task } = await clearSessionSlot(taskId, sessionId)
-  bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: eventSource })
-  return true
-}
+// clearArchivedSessionTaskLinks / mode-change helpers moved to
+// core/sessions/session-lifecycle.ts (shared with /api/v1 + daemon relay).
 
 function sendSessionNotFound(res: Response): void {
   res.status(404).json({
     code: 'SESSION_NOT_FOUND',
     error: 'session not found',
   })
-}
-
-const CLAUDE_SESSION_MODES = ['default', 'plan', 'bypass', 'accept'] as const
-
-async function applySessionModeControl(
-  record: SessionRecord,
-  sessionId: string,
-  mode: SessionMode,
-): Promise<void> {
-  if (record.engine === 'codex') {
-    const session = await sessionRunner.findOrAttachAcpSession(sessionId).catch((err) => {
-      log.web.warn('Codex mode compatibility update could not attach; persisting record only', {
-        sessionId,
-        mode,
-        error: err instanceof Error ? err.message : String(err),
-      })
-      return undefined
-    })
-    if (!session) return
-    const collaborationMode = mode === 'plan' ? 'plan' : 'default'
-    if (!await session.setConfigOption('collaboration_mode', collaborationMode)) {
-      throw new Error('Codex collaboration mode change was rejected')
-    }
-    return
-  }
-
-  const application = await sessionRunner.changePermissionMode(sessionId, mode)
-  const expectedLive = record.pid != null
-    && record.process_status !== 'stopped'
-    && record.process_status !== 'error'
-  if (application === 'not-live' && expectedLive) {
-    throw new Error('Live session is unavailable; permission mode was not changed')
-  }
-}
-
-async function persistSessionModeChange(
-  existingRecord: SessionRecord,
-  sessionId: string,
-  mode: SessionMode,
-  updates: Partial<SessionRecord> = {},
-): Promise<SessionRecord> {
-  const updated = await updateSessionRecord(sessionId, { ...updates, mode })
-  emitSessionStatusChanged(updated, {}, ['*'])
-
-  if (updated.taskId && existingRecord.mode !== mode) {
-    try {
-      const { getTask, linkSessionSlot, clearSessionSlot } = await import('../../core/task-manager.js')
-      const task = await getTask(updated.taskId)
-      if (mode === 'plan') {
-        if (!task.plan_session_id || task.plan_session_id === sessionId) {
-          if (task.exec_session_id === sessionId) await clearSessionSlot(updated.taskId, sessionId, 'exec')
-          await linkSessionSlot(updated.taskId, sessionId, 'plan')
-          const updatedTask = await getTask(updated.taskId)
-          bus.emit(EventNames.TASK_UPDATED, { task: updatedTask }, ['web-ui'], { source: 'session-mode-change' })
-        }
-      } else if (task.plan_session_id === sessionId) {
-        await clearSessionSlot(updated.taskId, sessionId, 'plan')
-        if (!task.exec_session_id) await linkSessionSlot(updated.taskId, sessionId, 'exec')
-        const updatedTask = await getTask(updated.taskId)
-        bus.emit(EventNames.TASK_UPDATED, { task: updatedTask }, ['web-ui'], { source: 'session-mode-change' })
-      }
-
-      const compensated = await clearArchivedSessionTaskLinks(
-        sessionId,
-        updated.taskId,
-        'session-mode-archive-compensation',
-        true,
-      )
-      if (compensated) {
-        log.web.info('cleared task slots relinked during session archive', {
-          sessionId,
-          taskId: updated.taskId,
-        })
-      }
-    } catch { /* task not found or lock contention — ignore */ }
-  }
-  return updated
-}
-
-async function changeSessionMode(
-  existingRecord: SessionRecord,
-  sessionId: string,
-  mode: SessionMode,
-  updates: Partial<SessionRecord> = {},
-): Promise<SessionRecord> {
-  await applySessionModeControl(existingRecord, sessionId, mode)
-  return persistSessionModeChange(existingRecord, sessionId, mode, updates)
 }
 
 // GET /api/sessions/:sessionId/controls — provider-neutral selectable session controls.
@@ -1061,89 +841,30 @@ sessionsRouter.post('/:sessionId/controls', async (req: Request, res: Response, 
   }
 })
 
-// PATCH /api/sessions/:sessionId
+// PATCH /api/sessions/:sessionId — core logic (validation, terminal-state
+// archive guard, live mode apply, task-slot clearing) lives in
+// core/sessions/session-lifecycle.ts, shared with the /api/v1 mobile route
+// and the daemon control relay.
 sessionsRouter.patch('/:sessionId', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { title, activity, human_note, archived, archive_reason, mode } = req.body as { title?: string; activity?: string; human_note?: string; archived?: boolean; archive_reason?: string; mode?: string }
-
-    if (title !== undefined && (typeof title !== 'string' || title.length > 500)) {
-      res.status(400).json({ error: 'title must be a string (max 500 chars)' })
-      return
-    }
-
-    if (human_note !== undefined && (typeof human_note !== 'string' || human_note.length > 50000)) {
-      res.status(400).json({ error: 'human_note must be a string (max 50000 chars)' })
-      return
-    }
-
-    if (archived !== undefined && typeof archived !== 'boolean') {
-      res.status(400).json({ error: 'archived must be a boolean' })
-      return
-    }
-
-    const VALID_MODES = ['bypass', 'accept', 'default', 'plan'] as const
-    if (mode !== undefined && !VALID_MODES.includes(mode as typeof VALID_MODES[number])) {
-      res.status(400).json({ error: `mode must be one of: ${VALID_MODES.join(', ')}` })
-      return
-    }
-
     const sessionId = String(req.params.sessionId)
     // Route IDs are provider session IDs. ACP runtime IDs are transport-local
     // identities and must never select or implicitly create a durable record.
-    const existingRecord = await getSessionByClaudeId(sessionId)
-    if (!existingRecord) {
-      sendSessionNotFound(res)
-      return
-    }
-
-    // Archive/unarchive: validate session is in a terminal state before archiving
-    if (archived === true) {
-      if (existingRecord.process_status !== 'stopped' && existingRecord.process_status !== 'error') {
-        res.status(400).json({ error: 'Stop session before archiving' })
+    try {
+      const session = await patchSession(sessionId, (req.body ?? {}) as Record<string, unknown>)
+      log.web.info('session updated via REST', { sessionId, fields: Object.keys(req.body ?? {}) })
+      res.json({ session })
+    } catch (err) {
+      if (err instanceof SessionControlError) {
+        if (err.statusCode === 404) {
+          sendSessionNotFound(res)
+          return
+        }
+        res.status(err.statusCode).json({ error: err.message })
         return
       }
+      throw err
     }
-
-    const updates: Partial<SessionRecord> = {}
-    if (title !== undefined) updates.title = title
-    if (activity !== undefined) updates.activity = activity
-    if (human_note !== undefined) updates.human_note = human_note
-    if (archived !== undefined) {
-      updates.archived = archived
-      if (archived && archive_reason) updates.archive_reason = archive_reason
-      if (!archived) updates.archive_reason = undefined  // clear reason on unarchive
-    }
-
-    let updated: SessionRecord
-    if (mode !== undefined) {
-      try {
-        updated = await changeSessionMode(existingRecord, sessionId, mode as SessionMode, updates)
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        log.web.warn('live permission mode change rejected', { sessionId, mode, error: message })
-        res.status(409).json({ error: message })
-        return
-      }
-    } else {
-      updated = await updateSessionRecord(sessionId, updates)
-    }
-    log.web.info('session updated via REST', { sessionId, fields: Object.keys(updates) })
-
-    // Emit status change so frontend updates in real time
-    if (archived !== undefined && mode === undefined) {
-      emitSessionStatusChanged(updated, {}, ['*'])
-    }
-
-    // Archive: clear task session slot to free it for new sessions
-    if (archived === true && updated.taskId) {
-      try {
-        await clearArchivedSessionTaskLinks(sessionId, updated.taskId, 'session-archived')
-      } catch { /* task may not exist */ }
-    }
-
-    // Task-slot work can await behind a concurrent PATCH. Return current state
-    // so the caller cannot optimistically merge stale archive/mode fields.
-    res.json({ session: await getSessionByClaudeId(sessionId) ?? updated })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     if (/^Session not found:/.test(message)) {
@@ -1549,49 +1270,25 @@ sessionsRouter.get('/:sessionId/workflow', async (req: Request, res: Response, n
 //       scope=all               → every change in those touched repos.
 // scope is ignored for base=session (already session-scoped by definition).
 // ?refresh=1 bypasses the mtime cache.
-const GIT_BASES: ReadonlySet<string> = new Set(['uncommitted', 'previous', 'remote'])
+// Core logic lives in core/sessions/session-lifecycle.ts (getSessionChanges) —
+// shared with the /api/v1 mobile route and the daemon control relay.
 sessionsRouter.get('/:sessionId/changes', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const sessionId = req.params.sessionId as string
-    const record = await getSessionByClaudeId(sessionId)
-    if (!record) {
-      res.status(404).json({ error: 'Session not found' })
-      return
-    }
-    const base = typeof req.query.base === 'string' ? req.query.base : 'session'
-    const scope = req.query.scope === 'all' ? 'all' : 'session'
-    const noCache = req.query.refresh === '1' || req.query.refresh === 'true'
-    let result
     try {
-      if (GIT_BASES.has(base)) {
-        // Repo universe + (for scope=session) file set both come from the session's
-        // own edits — computeSessionGitDiff diffs only the repos it touched.
-        result = await computeSessionGitDiff(sessionId, base as GitDiffBase, record.cwd, record.host, scope, record.outputFile, { noCache })
-      } else {
-        result = await computeSessionChanges(sessionId, record.cwd, record.host, record.outputFile, { noCache })
-      }
+      res.json(await getSessionChanges(sessionId, {
+        base: req.query.base,
+        scope: req.query.scope,
+        light: req.query.light === '1',
+        refresh: req.query.refresh === '1' || req.query.refresh === 'true',
+      }))
     } catch (err) {
-      // Surface remote read errors (SSH/daemon) + git failures to the frontend like /history does.
-      const msg = err instanceof Error ? err.message : String(err)
-      log.web.warn('session changes read failed', { sessionId, host: record.host, base, scope, error: msg })
-      res.status(502).json({ error: msg })
-      return
+      if (err instanceof SessionControlError) {
+        res.status(err.statusCode).json({ error: err.message })
+        return
+      }
+      throw err
     }
-    // ?light=1 → names/roots only (quick-access lists, e.g. the Files tab's
-    // changed-repo shortcuts). Same compute + cache; just strips the heavy
-    // reconstructed before/after payload.
-    if (req.query.light === '1') {
-      const light = result as unknown as { groups?: Array<{ files: Array<Record<string, unknown>> }> }
-      res.json({
-        ...result,
-        groups: (light.groups ?? []).map((g) => ({
-          ...g,
-          files: g.files.map((f) => ({ ...f, before: '', after: '' })),
-        })),
-      })
-      return
-    }
-    res.json(result)
   } catch (err) {
     next(err)
   }
@@ -1649,79 +1346,46 @@ sessionsRouter.get('/:sessionId/plan', async (req: Request, res: Response, next:
   }
 })
 
-// POST /api/sessions/:sessionId/execute-continue — resume a completed plan session with bypass permissions
+// POST /api/sessions/:sessionId/execute-continue — resume a completed plan
+// session with bypass permissions. Core logic lives in
+// core/sessions/session-lifecycle.ts (shared with /api/v1 + daemon relay).
 sessionsRouter.post('/:sessionId/execute-continue', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const sessionId = req.params.sessionId as string
-    const session = await getSessionByClaudeId(sessionId)
-    if (!session) {
-      res.status(404).json({ error: 'Session not found' })
-      return
+    try {
+      res.json(await executeContinueSession(sessionId))
+    } catch (err) {
+      if (err instanceof SessionControlError) {
+        res.status(err.statusCode).json({ error: err.message })
+        return
+      }
+      throw err
     }
-    // Allows plan sessions (planCompleted=true) and execution sessions (fromPlanSessionId set, planCompleted never true on exec records)
-    if (!session.planCompleted && !session.fromPlanSessionId) {
-      res.status(400).json({ error: 'Not a plan or execution session' })
-      return
-    }
-    // Update mode to bypass for execution
-    await updateSessionRecord(session.claudeSessionId, { mode: 'bypass' })
-
-    // If session process is alive (running or idle), stop it first
-    // so it restarts with bypass permissions via --resume
-    const needsInterrupt = session.process_status !== 'stopped'
-
-    const message = 'Execute the plan. Implement all steps as planned.'
-    const { sendMessageToSession } = await import('../../core/session-message-queue.js')
-    await sendMessageToSession(session.claudeSessionId, message, {
-      source: 'web-api',
-      taskId: session.taskId,
-      mode: 'bypass',
-      interrupt: needsInterrupt || undefined,
-    })
-
-    log.web.info('execute-continue: resuming plan session with bypass', { sessionId: session.claudeSessionId })
-
-    res.json({ status: 'started', sessionId: session.claudeSessionId })
   } catch (err) {
     next(err)
   }
 })
 
-// POST /api/sessions/:sessionId/permission — resolve a pending permission request
+// POST /api/sessions/:sessionId/permission — resolve a pending permission
+// request. Core logic lives in core/sessions/session-lifecycle.ts (shared
+// with /api/v1 + daemon relay).
 sessionsRouter.post('/:sessionId/permission', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const sessionId = req.params.sessionId as string
     const { requestId, allow, message: denyMessage } = req.body as {
-      requestId: string
-      allow: boolean
-      message?: string
+      requestId?: unknown
+      allow?: unknown
+      message?: unknown
     }
-    if (!requestId || typeof allow !== 'boolean') {
-      res.status(400).json({ error: 'requestId (string) and allow (boolean) are required' })
-      return
-    }
-    // ACP sessions answer permissions via the daemon acpRespond RPC (async).
-    const acpSession = sessionRunner.findAcpSession(sessionId)
-    if (acpSession) {
-      const ok = await acpSession.resolvePermissionRequest(requestId, allow)
-      if (!ok) {
-        res.status(404).json({ error: 'Permission request not found or already resolved' })
+    try {
+      res.json(await respondSessionPermission(sessionId, requestId, allow, denyMessage))
+    } catch (err) {
+      if (err instanceof SessionControlError) {
+        res.status(err.statusCode).json({ error: err.message })
         return
       }
-      res.json({ status: 'resolved', requestId, allow })
-      return
+      throw err
     }
-    const session = sessionRunner.findByClaudeId(sessionId)
-    if (!session) {
-      res.status(404).json({ error: 'Live session not found' })
-      return
-    }
-    const resolved = session.resolvePermissionRequest(requestId, allow, denyMessage)
-    if (!resolved) {
-      res.status(404).json({ error: 'Permission request not found or already resolved' })
-      return
-    }
-    res.json({ status: 'resolved', requestId, allow })
   } catch (err) {
     next(err)
   }
@@ -2345,105 +2009,17 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
 // POST /api/sessions/:sessionId/retry — retry a failed session
 // Two paths: (1) resume via --resume if claudeSessionId exists (preserves history),
 // (2) fallback to archive+new if no claudeSessionId (session failed before init).
+// Logic lives in core/sessions/session-lifecycle.ts (shared with /api/v1 + relay).
 sessionsRouter.post('/:sessionId/retry', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const sessionId = req.params.sessionId as string
-    const record = await getSessionByClaudeId(sessionId)
-    if (!record) {
-      res.status(404).json({ error: 'Session not found' })
-      return
-    }
-
-    // Only allow retry on failed/stopped sessions
-    if (record.process_status !== 'error' && record.process_status !== 'stopped') {
-      res.status(400).json({ error: `Session is ${record.process_status}, not retryable` })
-      return
-    }
-    if (!record.taskId) {
-      res.status(400).json({ error: 'Session has no associated task' })
-      return
-    }
-
-    // ── Resume path: session has claudeSessionId → check if process is alive ──
-    if (record.claudeSessionId) {
-      const alive = await isSessionProcessAlive(record)
-
-      if (alive) {
-        // Case 2 — process alive, connection dropped: just clear error state
-        const updated = await updateSessionRecord(sessionId, {
-          process_status: 'running',
-          errorMessage: undefined,
-          status_reason: 'retry_reconnect',
-          status_changed_by: 'user',
-        } as any)
-        emitSessionStatusChanged(updated, {}, ['*'])
-        log.web.info('session retry: reconnected (process alive)', { sessionId, taskId: record.taskId })
-        res.json({ status: 'reconnected', sessionId })
-        return
-      }
-
-      // Case 1 — process dead: resume via --resume.
-      // If the pending queue already holds the user's original message (reverted by
-      // settleResumeFailure after a failed spawn), just re-trigger processNext which
-      // picks up pending messages. This sends the ORIGINAL text, not "continue".
-      // Only fall back to "continue" if the queue is empty (pure idle-dead process).
-      const { sendMessageToSession, getQueue } = await import('../../core/session-message-queue.js')
-      const pendingMsgs = await getQueue(sessionId)
-      if (pendingMsgs.length > 0) {
-        // Queue has the user's original message(s) — just kick processNext via SESSION_SEND
-        bus.emit(EventNames.SESSION_SEND, {
-          sessionId,
-          taskId: record.taskId,
-        }, ['session-runner'], { source: 'retry' })
-        log.web.info('session retry: re-processing pending queue messages', { sessionId, taskId: record.taskId, count: pendingMsgs.length })
-        res.json({ status: 'resuming', sessionId, restoredMessages: pendingMsgs.length })
-      } else {
-        await sendMessageToSession(sessionId, 'continue', {
-          source: 'retry',
-          taskId: record.taskId,
-        })
-        log.web.info('session retry: resuming via --resume (no pending messages)', { sessionId, taskId: record.taskId })
-        res.json({ status: 'resuming', sessionId })
-      }
-      return
-    }
-
-    // ── Fallback: no claudeSessionId (failed before init) → archive + start new ──
-    const task = await getTask(record.taskId)
-    if (!task) {
-      res.status(404).json({ error: 'Associated task not found' })
-      return
-    }
-
-    await updateSessionRecord(sessionId, { archived: true, archive_reason: 'retry' })
-    try {
-      const { clearSession, clearSessionSlot } = await import('../../core/task-manager.js')
-      await clearSession(task.id, sessionId)
-      await clearSessionSlot(task.id, sessionId)
-    } catch { /* task may not exist */ }
-
-    let retryMessage = 'Retry session'
-    try {
-      const { messages } = await readProviderSessionHistory(sessionId, record, record.host, false)
-      const firstUser = messages.find(m => m.role === 'user')
-      if (firstUser?.text) retryMessage = firstUser.text
-    } catch { /* history may be unavailable */ }
-
-    bus.emit(EventNames.SESSION_START, {
-      taskId: task.id,
-      message: retryMessage,
-      cwd: record.cwd,
-      project: task.project ?? '',
-      mode: record.mode !== 'default' ? record.mode : undefined,
-      model: record.model,
-      host: record.host,
-    }, ['session-runner'], { source: 'retry' })
-
-    log.web.info('session retry: no claudeSessionId, started new session', {
-      oldSessionId: sessionId, taskId: task.id,
-    })
-    res.json({ status: 'pending', taskId: task.id, oldSessionId: sessionId })
+    const result = await retrySession(sessionId)
+    res.json(result)
   } catch (err) {
+    if (err instanceof SessionControlError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })
@@ -2462,62 +2038,24 @@ sessionsRouter.post('/:sessionId/retry', async (req: Request, res: Response, nex
 // BEFORE spawning (suppressing the dying process's exit → no phantom error) and
 // spawns with no message (init + hook fire, no turn → costs no tokens, no
 // conversation pollution). Any pending queue is untouched and drains on next send.
+// Logic lives in core/sessions/session-lifecycle.ts (shared with /api/v1 + relay).
 sessionsRouter.post('/:sessionId/restart', async (req: Request, res: Response, next: NextFunction) => {
   const sessionId = req.params.sessionId as string
   const startedAt = Date.now()
   log.web.info('session restart: request received', { sessionId })
   try {
-    const record = await getSessionByClaudeId(sessionId)
-    if (!record) {
-      log.web.warn('session restart: session not found', { sessionId })
-      res.status(404).json({ error: 'Session not found' })
-      return
-    }
-    if (record.archived) {
-      res.status(400).json({ error: 'Cannot restart an archived session' })
-      return
-    }
-
-    log.web.info('session restart: record loaded', {
-      sessionId,
-      recordPid: record.pid,
-      processStatus: record.process_status,
-      host: record.host,
-      isRemote: !!record.host,
-      taskId: record.taskId,
-    })
-
-    // Revert any in-flight 'processing' messages back to 'pending' — if the old CLI
-    // was mid-send when we respawn, those messages must survive and re-deliver.
-    const { getQueue, revertToPending } = await import('../../core/session-message-queue.js')
-    const queue = await getQueue(sessionId)
-    const stuck = queue.filter((m) => m.status === 'processing')
-    if (stuck.length > 0) {
-      await revertToPending(stuck)
-      log.web.info('session restart: reverted processing → pending', { sessionId, count: stuck.length })
-    }
-
-    // Respawn a fresh CLI (idle — no turn). reinitialize() owns the graceful
-    // transport swap that suppresses the old process's exit.
-    const { sessionRunner } = await import('../../providers/claude-code-session.js')
-    await sessionRunner.reinitialize(sessionId)
-
-    // If messages are pending after the revert, kick processNext so the fresh CLI
-    // drains them (reinitialize itself delivers nothing).
-    const pendingAfterRevert = queue.filter((m) => m.status === 'pending').length + stuck.length
-    if (pendingAfterRevert > 0) {
-      const { bus, EventNames } = await import('../../core/event-bus.js')
-      bus.emit(EventNames.SESSION_SEND, { sessionId, taskId: record.taskId, message: '' }, ['session-runner'], { source: 'restart' })
-      log.web.info('session restart: kicked pending queue after reinit', { sessionId, pendingMessages: pendingAfterRevert })
-    }
-
+    const result = await restartSession(sessionId)
     log.web.info('session restart: complete', {
       sessionId,
       durationMs: Date.now() - startedAt,
-      pendingMessages: pendingAfterRevert,
+      pendingMessages: result.pendingMessages,
     })
-    res.json({ status: 'restarted', sessionId, pendingMessages: pendingAfterRevert })
+    res.json(result)
   } catch (err) {
+    if (err instanceof SessionControlError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     log.web.error('session restart: failed', {
       sessionId,
       durationMs: Date.now() - startedAt,
@@ -2535,76 +2073,27 @@ sessionsRouter.post('/:sessionId/restart', async (req: Request, res: Response, n
 // intentional kill is suppressed the same way restart suppresses it (via the
 // live session's interrupt(), which sets resultEmitted so the daemon's reap is
 // not surfaced as "exited with code -1"). Pending messages are left in the queue.
+// Logic lives in core/sessions/session-lifecycle.ts (shared with /api/v1 + relay),
+// including the cron-owner guard (409 unless force) — see terminateSession.
 sessionsRouter.post('/:sessionId/terminate', async (req: Request, res: Response, next: NextFunction) => {
   const sessionId = req.params.sessionId as string
   const startedAt = Date.now()
   log.web.info('session terminate: request received', { sessionId })
   try {
-    const record = await getSessionByClaudeId(sessionId)
-    if (!record) {
-      res.status(404).json({ error: 'Session not found' })
-      return
-    }
-
-    // Prefer the live session object's interrupt() — it sets resultEmitted (so the
-    // exit is suppressed, not reported as an error), stops monitoring, closes the
-    // FIFO and marks the process stopped. Falls back to a raw process-group SIGTERM
-    // if no in-memory session/manager is registered (e.g. after a server restart).
-    const { sessionRunner } = await import('../../providers/claude-code-session.js')
-    const acpLive = sessionRunner.findAcpSession(sessionId)
-    if (acpLive) {
-      log.web.info('session terminate: stopping ACP session', { sessionId })
-      await acpLive.gracefulStop()
-      await updateSessionRecord(sessionId, {
-        process_status: 'stopped', activity: undefined,
-        last_status_change: new Date().toISOString(),
-        status_reason: 'user_stopped', status_changed_by: 'user',
-      }).catch(() => {})
-      res.json({ status: 'terminated', sessionId, tookMs: Date.now() - startedAt })
-      return
-    }
-    const live = sessionRunner.findSessionByClaudeId(sessionId)
-    if (live) {
-      log.web.info('session terminate: interrupting live session', { sessionId, host: record.host })
-      await live.interrupt()
-    } else {
-      const { getRegisteredSessionManager } = await import('../../providers/session-manager.js')
-      const mgr = getRegisteredSessionManager(sessionId)
-      if (mgr) {
-        log.web.info('session terminate: killing via SessionManager', { sessionId, managerKind: mgr.constructor.name })
-        mgr.kill()
-      } else if (record.pid != null && !record.host) {
-        // Local session, no manager — SIGTERM the process group directly.
-        try {
-          process.kill(-record.pid, 'SIGTERM')
-          log.web.info('session terminate: SIGTERM sent to process group', { sessionId, pgid: record.pid })
-        } catch (err) {
-          log.web.warn('session terminate: process.kill failed (likely already dead)', { sessionId, error: err instanceof Error ? err.message : String(err) })
-        }
-      } else {
-        log.web.info('session terminate: no live session/manager to kill', { sessionId, host: record.host })
-      }
-    }
-
-    // Settle any killed mid-turn batch so the UI stops the streaming spinner /
-    // "Running" state immediately instead of waiting out the 60s safety timeout.
-    // No-op when the session wasn't processing a turn.
-    sessionRunner.settleInFlightTurn(sessionId)
-
-    // Persist stopped state + notify the UI so the status flips immediately.
-    const updated = await updateSessionRecord(sessionId, {
-      process_status: 'stopped',
-      errorMessage: undefined,
-      activity: undefined,
-      pid: undefined,
-      status_reason: 'user_terminated',
-      status_changed_by: 'user',
-    } as Record<string, unknown>)
-    emitSessionStatusChanged(updated, {}, ['*'], { source: 'terminate' })
-
+    const force = req.body?.force === true || req.query?.force === '1'
+    const result = await terminateSession(sessionId, { force })
     log.web.info('session terminate: complete', { sessionId, durationMs: Date.now() - startedAt })
-    res.json({ status: 'terminated', sessionId })
+    res.json(result)
   } catch (err) {
+    if (err instanceof SessionControlError) {
+      if (err.extra?.code === 'cron_owner') {
+        // Preserve the web contract's exact 409 body shape.
+        res.status(409).json({ error: 'cron_owner', message: err.message, sessionId })
+        return
+      }
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     log.web.error('session terminate: failed', {
       sessionId,
       durationMs: Date.now() - startedAt,

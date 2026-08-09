@@ -200,6 +200,9 @@ describe('PATCH /api/v1/tasks/:id', () => {
       { priority: 'high' },                // invalid priority
       { due_date: 'not-a-date' },
       { due_date: '2030-02-30' },          // calendar rollover
+      { start_date: 'not-a-date' },        // additive field, same date gate
+      { tags: 'not-an-array' },
+      { tags: [1, 2] },
       { title: '' },
       { title: '   ' },
       { title: 'x'.repeat(501) },
@@ -212,5 +215,57 @@ describe('PATCH /api/v1/tasks/:id', () => {
       const json = await res.json() as { error: { code: string } }
       expect(json.error.code).toBe('bad_request')
     }
+  })
+
+  // ── Wave-1 additive fields + list filters ──
+
+  it('updates start_date and tags (additive fields); "" clears start_date', async () => {
+    const task = await createTask({ title: 'Additive fields' })
+    const res = await patchTask(task.id, { start_date: '2030-03-01', tags: ['deep', 'work'] })
+    expect(res.status).toBe(200)
+    const { task: updated } = await res.json() as { task: Record<string, unknown> }
+    expect(updated.start_date).toBe('2030-03-01')
+    expect(updated.tags).toEqual(['deep', 'work'])
+
+    const cleared = await patchTask(task.id, { start_date: '', tags: [] })
+    expect(cleared.status).toBe(200)
+    const { task: after } = await cleared.json() as { task: Record<string, unknown> }
+    expect(after.start_date).toBeUndefined()
+    expect(after.tags).toBeUndefined() // slim projection omits empty tags
+  })
+
+  it('PATCH /v1/tasks/reorder falls through apiV1Router\'s /tasks/:id to task-v1.ts', async () => {
+    // apiV1Router (mounted first) owns PATCH /tasks/:id and must next() the
+    // literal id "reorder" so the later-mounted task-v1 router serves it.
+    const a = await createTask({ title: 'Reorder A', project: 'acme' })
+    const b = await createTask({ title: 'Reorder B', project: 'acme' })
+    const res = await fetch(apiUrl('/api/v1/tasks/reorder'), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'acme', taskIds: [b.id, a.id] }),
+    })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true })
+  })
+
+  it('GET /v1/tasks filters by project, tag, and q (additive)', async () => {
+    await createTask({ title: 'Marina dock work', project: 'marina' })
+    const tagged = await createTask({ title: 'Tag bearer', project: 'marina' })
+    await patchTask(tagged.id, { tags: ['w1filter'] })
+    await createTask({ title: 'Elsewhere', project: 'acme' })
+
+    const byProject = await fetch(apiUrl('/api/v1/tasks?project=marina'))
+    const projBody = await byProject.json() as { tasks: Array<{ project: string }> }
+    expect(projBody.tasks.length).toBeGreaterThanOrEqual(2)
+    expect(projBody.tasks.every((t) => t.project.toLowerCase() === 'marina')).toBe(true)
+
+    const byTag = await fetch(apiUrl('/api/v1/tasks?tag=w1filter'))
+    const tagBody = await byTag.json() as { tasks: Array<{ id: string }> }
+    expect(tagBody.tasks.map((t) => t.id)).toEqual([tagged.id])
+
+    const byQ = await fetch(apiUrl('/api/v1/tasks?q=dock'))
+    const qBody = await byQ.json() as { tasks: Array<{ title: string }> }
+    expect(qBody.tasks.length).toBe(1)
+    expect(qBody.tasks[0].title).toBe('Marina dock work')
   })
 })
