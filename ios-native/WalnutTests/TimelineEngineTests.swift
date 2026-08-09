@@ -239,6 +239,137 @@ final class TimelineEngineTests: XCTestCase {
             "ledger must account for all rows")
     }
 
+    // MARK: - Unpinned viewport anchoring (build-37 field bug gate)
+
+    /// Host a REAL controller in a window (mirror of TimelinePerfGateTests).
+    private func hostController() -> (UIWindow, TimelineCollectionController) {
+        let controller = TimelineCollectionController()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+        window.rootViewController = controller
+        window.isHidden = false
+        controller.view.frame = window.bounds
+        controller.view.layoutIfNeeded()
+        return (window, controller)
+    }
+
+    /// Apply and drain budgeter continuations — PLUS extra spins after the
+    /// final slice: UIKit's automatic contentOffset clamp (contentSize shrank
+    /// under the offset) runs as an ANIMATED scroll across later run-loop
+    /// turns, and the anchor gate must prove the offset is stable after it.
+    private func applyFully(_ controller: TimelineCollectionController,
+                            _ snapshot: TimelineSnapshot) {
+        controller.apply(snapshot)
+        for _ in 0..<100 {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+            if controller.rows.count == snapshot.rows.count { break }
+        }
+        // Let any in-flight automatic scroll animation play out (or be
+        // cancelled by the fix) before the caller asserts the offset.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.35))
+        controller.collectionView.layoutIfNeeded()
+    }
+
+    private func snapshotRows(_ n: Int, gen: Int, idPrefix: String = "r") -> TimelineSnapshot {
+        let rows = (0..<n).map {
+            TimelineRow(id: "\(idPrefix)\($0)", revision: 0, content: .truncationChip, height: 44)
+        }
+        return TimelineSnapshot(rows: rows, width: 393, generation: gen)
+    }
+
+    /// FIELD BUG GATE (build 37): while the reader is UNPINNED and scrolled
+    /// into history, applying a large structural diff (100 appended rows →
+    /// progressive-fill reloadData path) must NOT move the visible anchor
+    /// row — the viewport stays glued to what the user was reading, never
+    /// re-anchored to the bottom.
+    func testUnpinnedLargeDiffKeepsVisibleAnchorRow() {
+        var pinned = true
+        let (window, controller) = hostController()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        controller.isPinned = { pinned }
+        controller.setPinned = { pinned = $0 }
+
+        applyFully(controller, snapshotRows(300, gen: 1))
+        let cv = controller.collectionView!
+
+        // Reader scrolls up into history and unpins (product semantics: the
+        // store's bottomPinned flips false once they leave the bottom zone).
+        pinned = false
+        let historyOffset = CGPoint(x: 0, y: cv.contentSize.height / 2)
+        cv.setContentOffset(historyOffset, animated: false)
+        cv.layoutIfNeeded()
+        let anchorRowID = controller.rows[150].id
+        let anchorFrameBefore = cv.layoutAttributesForItem(
+            at: IndexPath(item: 150, section: 0))!.frame
+        let anchorScreenY = anchorFrameBefore.minY - cv.contentOffset.y
+
+        // New reply lands: 160 appended rows — over the budgeter slice size
+        // (120), so this exercises the PROGRESSIVE-FILL path (multi-batch
+        // reloadData), the branch that bottom-anchored unpinned readers.
+        applyFully(controller, snapshotRows(460, gen: 2))
+
+        XCTAssertFalse(pinned, "a large apply must not re-pin an unpinned reader")
+        let anchorIndex = controller.rows.firstIndex { $0.id == anchorRowID }
+        XCTAssertNotNil(anchorIndex, "anchor row must survive an append-only diff")
+        let frameAfter = cv.layoutAttributesForItem(
+            at: IndexPath(item: anchorIndex!, section: 0))!.frame
+        let screenYAfter = frameAfter.minY - cv.contentOffset.y
+        XCTAssertEqual(screenYAfter, anchorScreenY, accuracy: 1.0,
+            "apply moved the anchor row on screen (before \(anchorScreenY), after \(screenYAfter)) — unpinned viewport must not shift")
+        // And explicitly: nowhere near the bottom.
+        let distanceFromBottom = cv.contentSize.height + cv.adjustedContentInset.bottom
+            - cv.bounds.maxY
+        XCTAssertGreaterThan(distanceFromBottom, 1_000,
+            "viewport was dragged toward the bottom (distance \(distanceFromBottom))")
+    }
+
+    /// Companion gate: the same large apply WITH pinned intent must still
+    /// follow to the bottom (the fix must not break auto-follow).
+    func testPinnedLargeDiffStillFollowsBottom() {
+        var pinned = true
+        let (window, controller) = hostController()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        controller.isPinned = { pinned }
+        controller.setPinned = { pinned = $0 }
+
+        applyFully(controller, snapshotRows(300, gen: 1))
+        applyFully(controller, snapshotRows(460, gen: 2)) // progressive-fill path
+        let cv = controller.collectionView!
+        let distanceFromBottom = cv.contentSize.height + cv.adjustedContentInset.bottom
+            - cv.bounds.maxY
+        XCTAssertLessThan(abs(distanceFromBottom), 1.0,
+            "pinned reader must follow a large apply to the bottom (distance \(distanceFromBottom))")
+        XCTAssertTrue(pinned)
+    }
+
+    /// Streaming steady state (reload-only diff) must not move an unpinned
+    /// reader either — covers the targeted-update branch.
+    func testUnpinnedReloadOnlyDiffKeepsOffset() {
+        var pinned = true
+        let (window, controller) = hostController()
+        defer { window.isHidden = true; window.rootViewController = nil }
+        controller.isPinned = { pinned }
+        controller.setPinned = { pinned = $0 }
+
+        applyFully(controller, snapshotRows(300, gen: 1))
+        let cv = controller.collectionView!
+        pinned = false
+        let historyOffset = CGPoint(x: 0, y: cv.contentSize.height / 3)
+        cv.setContentOffset(historyOffset, animated: false)
+        cv.layoutIfNeeded()
+
+        // Live-tail tick: same ids, one row's revision+height changes (the
+        // streaming reload path — under the slice threshold).
+        var rows = (0..<300).map {
+            TimelineRow(id: "r\($0)", revision: 0, content: .truncationChip, height: 44)
+        }
+        rows[299] = TimelineRow(id: "r299", revision: 1, content: .truncationChip, height: 80)
+        applyFully(controller, TimelineSnapshot(rows: rows, width: 393, generation: 2))
+
+        XCTAssertEqual(cv.contentOffset.y, historyOffset.y, accuracy: 1.0,
+            "a live-tail reload moved an unpinned reader (offset \(cv.contentOffset.y) vs \(historyOffset.y))")
+        XCTAssertFalse(pinned)
+    }
+
     /// A newer snapshot arriving mid-split abandons the stale one's remaining
     /// slices (latest wins — stale rows must never land after fresh ones).
     func testBudgeterLatestWinsAcrossGenerations() {

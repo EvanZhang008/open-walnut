@@ -43,6 +43,15 @@ final class TimelineCollectionController: UIViewController {
     /// the SwiftUI pages' programmaticGeometryFrozen).
     private var programmaticFreezeUntil: CFTimeInterval = 0
 
+    /// The user's finger (or its momentum) currently owns the scroll position.
+    /// Programmatic scrolls never set these flags, so this is the authoritative
+    /// "a human is scrolling" signal — every follow/pin action must yield to it.
+    private var userScrollActive: Bool {
+        guard let collectionView else { return false }
+        return collectionView.isTracking || collectionView.isDragging
+            || collectionView.isDecelerating
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: layout)
@@ -103,7 +112,12 @@ final class TimelineCollectionController: UIViewController {
 
         let diff = TimelineDiff.compute(old: rows, new: snapshot.rows)
         if diff.isEmpty { return }
-        let pinned = isPinned()
+        // History readers get anchored to the row they are looking at BEFORE
+        // any mutation — a structural reloadData / head trim must not move
+        // their viewport. Intent is re-read LIVE at every application point
+        // below (never captured once): a multi-batch progressive fill outlives
+        // any flag captured here, and the user can unpin mid-fill.
+        let anchor = isPinned() ? nil : captureAnchor()
 
         if rows.isEmpty || diff.changeCount > TimelineApplyBudgeter.sliceRows {
             // Progressive fill: budgeted slices, reloadData per batch (cheap:
@@ -119,10 +133,7 @@ final class TimelineCollectionController: UIViewController {
                 self.layout.rowHeights = self.rows.map(\.height)
                 self.collectionView.reloadData()
                 self.layout.invalidateLayout()
-                if pinned {
-                    self.collectionView.layoutIfNeeded()
-                    self.pinToBottom(animated: false)
-                }
+                self.followOrRestore(anchor: anchor)
                 _ = isFinal
             }
         } else {
@@ -154,12 +165,74 @@ final class TimelineCollectionController: UIViewController {
                     collectionView.reloadData()
                     layout.invalidateLayout()
                 }
-                if pinned {
-                    collectionView.layoutIfNeeded()
-                    pinToBottom(animated: false)
-                }
+                followOrRestore(anchor: anchor)
             }
         }
+    }
+
+    /// Post-mutation scroll policy — the ONE place a snapshot apply may move
+    /// the viewport. A pinned reader follows the bottom; an unpinned reader
+    /// stays glued to the row they were reading (bottom-anchoring an unpinned
+    /// viewport was the build-37 field bug). Never fights an active gesture.
+    private func followOrRestore(anchor: ViewportAnchor?) {
+        collectionView.layoutIfNeeded()
+        // A live gesture (finger down OR deceleration) owns the position in
+        // BOTH branches. Restoring the anchor mid-deceleration is not benign:
+        // setContentOffset kills the momentum, so a reader flicking back
+        // toward the bottom got their flick cancelled by every ~8Hz apply and
+        // could never reach the repin zone. Appends land below the viewport,
+        // so skipping the restore during a gesture doesn't visibly shift rows.
+        guard !userScrollActive else { return }
+        if isPinned() {
+            pinToBottom(animated: false)
+        } else if let anchor {
+            restoreAnchor(anchor)
+        }
+    }
+
+    // MARK: - Viewport anchoring (unpinned readers)
+
+    /// Identity of the row at the viewport top + how far the offset sits into
+    /// it. Row ids are stable across snapshot generations, so this survives
+    /// structural changes that shift indices (head trim, giant reconcile).
+    struct ViewportAnchor {
+        let rowID: String
+        let offsetDelta: CGFloat
+    }
+
+    private func captureAnchor() -> ViewportAnchor? {
+        guard let cv = collectionView, !rows.isEmpty else { return nil }
+        let y = cv.contentOffset.y + cv.adjustedContentInset.top
+        guard let i = layout.rowIndex(at: max(0, y)), i < rows.count,
+              let minY = layout.rowMinY(i) else { return nil }
+        return ViewportAnchor(rowID: rows[i].id, offsetDelta: cv.contentOffset.y - minY)
+    }
+
+    /// Reposition so the anchor row sits where it was. Anchor row gone
+    /// (trimmed / mid-progressive-fill prefix): leave the clamped offset —
+    /// the final slice of a fill restores it once the row lands.
+    private func restoreAnchor(_ anchor: ViewportAnchor) {
+        guard let cv = collectionView else { return }
+        guard let i = rows.firstIndex(where: { $0.id == anchor.rowID }),
+              let minY = layout.rowMinY(i) else {
+            // Anchor row not landed yet (mid-progressive-fill prefix). Kill
+            // any in-flight AUTOMATIC animated adjustment anyway: when the
+            // first fill slice shrinks contentSize below the reader's offset,
+            // UIKit clamps via an ANIMATED UIScrollViewScrollAnimation that
+            // keeps advancing frames across run-loop turns — left alive, it
+            // drags the offset away after the fill finishes. An unanimated
+            // set of the current offset cancels it.
+            cv.setContentOffset(cv.contentOffset, animated: false)
+            return
+        }
+        let minOffset = -cv.adjustedContentInset.top
+        let maxOffset = max(minOffset, cv.contentSize.height - cv.bounds.height
+                            + cv.adjustedContentInset.bottom)
+        let target = min(max(minY + anchor.offsetDelta, minOffset), maxOffset)
+        // ALWAYS set, no epsilon short-circuit: even a no-op-looking set must
+        // run to cancel the automatic animated clamp described above (skipping
+        // it when cur == target left the animation alive → offset drift).
+        cv.setContentOffset(CGPoint(x: 0, y: target), animated: false)
     }
 
     // MARK: - Bottom pin
@@ -186,18 +259,35 @@ final class TimelineCollectionController: UIViewController {
             collectionView.contentSize.height - collectionView.bounds.height
                 + collectionView.adjustedContentInset.bottom
         )
-        programmaticFreezeUntil = CACurrentMediaTime() + 0.25
+        // Deliberately NOT extending programmaticFreezeUntil here. This runs
+        // per apply (~8Hz while streaming) — extending a 250ms freeze from it
+        // kept intent sampling frozen for the WHOLE stream, so a reader's
+        // upward drag could never unpin and every apply yanked them back to
+        // the bottom (build-37 field bug). The freeze is not needed for
+        // correctness either: this scroll's own didScroll is already excluded
+        // by updateIntent's isTracking/isDecelerating gate (programmatic
+        // scrolls never set those), and followOrRestore never calls this
+        // while a user gesture owns the scroll position.
         collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: animated)
-    }
-
-    private var intentFrozen: Bool {
-        geometryFrozen() || CACurrentMediaTime() < programmaticFreezeUntil
     }
 
     fileprivate func updateIntent() {
         // User-driven phases only (mirror of onScrollPhaseChange gating).
         guard collectionView.isTracking || collectionView.isDecelerating else { return }
-        guard !intentFrozen else { return }
+        // Keyboard transitions own geometry outright (inset jitter mid-
+        // animation produces false distances) — same rule as the SwiftUI
+        // ScrollBottomTracking.
+        guard !geometryFrozen() else { return }
+        // The programmatic freeze only guards against a scrollToBottom's own
+        // momentum masquerading as user intent. A physical finger on the
+        // screen (isTracking) can never be programmatic, so it must sample
+        // through the freeze — dropping those samples is what deadlocked the
+        // unpin on device (streaming re-asserts every ~700ms chained 250ms
+        // freeze windows, so a reader's drag was discarded and every apply
+        // yanked them back to the bottom). Deceleration samples still honor
+        // the freeze: a programmatic scroll can land mid-flick.
+        guard collectionView.isTracking
+            || CACurrentMediaTime() >= programmaticFreezeUntil else { return }
         let distance = max(
             0,
             collectionView.contentSize.height + collectionView.adjustedContentInset.bottom

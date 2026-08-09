@@ -63,4 +63,26 @@ final class TimelineLayout: UICollectionViewLayout {
     override func shouldInvalidateLayout(forBoundsChange newBounds: CGRect) -> Bool {
         newBounds.width != width
     }
+
+    // MARK: - Anchor queries (viewport restoration for unpinned readers)
+
+    /// Index of the first row whose bottom edge reaches `y` (binary search on
+    /// the prefix sums). nil when the layout is empty.
+    func rowIndex(at y: CGFloat) -> Int? {
+        guard !yOffsets.isEmpty else { return nil }
+        var lo = 0
+        var hi = yOffsets.count - 1
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if yOffsets[mid] + rowHeights[mid] < y { lo = mid + 1 } else { hi = mid }
+        }
+        return lo
+    }
+
+    /// Top y of row `i` in content coordinates (nil out of range). Reads the
+    /// CURRENT prepared offsets — call after invalidate+layout.
+    func rowMinY(_ i: Int) -> CGFloat? {
+        guard i >= 0, i < yOffsets.count else { return nil }
+        return yOffsets[i]
+    }
 }
