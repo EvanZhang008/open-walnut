@@ -235,13 +235,13 @@ describe('PATCH /api/cron/:id', () => {
     expect(res.status).toBe(400);
   });
 
-  it('returns error for non-existent id', async () => {
+  it('returns 404 for non-existent id', async () => {
     const app = createApp(service);
     const res = await request(app)
       .patch('/api/cron/nonexistent')
       .send({ name: 'Nope' });
-    // The service.update throws, which the error handler catches
-    expect(res.status).toBe(500);
+    // The shared routines core maps "unknown cron job id" onto 404.
+    expect(res.status).toBe(404);
   });
 });
 
@@ -348,10 +348,11 @@ describe('POST /api/cron/:id/run', () => {
     expect(broadcastFn).toHaveBeenCalled();
   });
 
-  it('returns error for non-existent job', async () => {
+  it('returns 404 for non-existent job', async () => {
     const app = createApp(service);
     const res = await request(app).post('/api/cron/nonexistent/run');
-    expect(res.status).toBe(500);
+    // The shared routines core maps "unknown cron job id" onto 404.
+    expect(res.status).toBe(404);
   });
 });
 

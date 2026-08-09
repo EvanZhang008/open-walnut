@@ -223,6 +223,126 @@ function isBinaryContent(buffer: Buffer): boolean {
   return false
 }
 
+/** Validation failure with an HTTP-ish status — each edge maps its own shape. */
+export class FileContentError extends Error {
+  constructor(message: string, public statusCode = 400) {
+    super(message)
+    this.name = 'FileContentError'
+  }
+}
+
+export interface FileContentPayload {
+  content: string | null
+  size: number
+  truncated: boolean
+  binary: boolean
+  extension: string
+  error?: string
+}
+
+/**
+ * Read a file's text content as the FileViewer JSON payload — the ONE
+ * implementation shared by the internal route and GET /api/v1/file-content.
+ * ALL the security guards live here so every edge gets the identical sandbox:
+ * traversal rejection, absolute-path requirement, and (cloud mode) the
+ * safe-root allowlist + secret-path denylist.
+ *
+ * Missing/unreadable files come back as a payload with `error` set (never a
+ * throw) — the legacy viewer contract. Throws FileContentError only for
+ * invalid/forbidden requests.
+ */
+export async function readFileContentPayload(
+  rawPath: unknown,
+  host: string | undefined,
+): Promise<FileContentPayload> {
+  if (!rawPath || typeof rawPath !== 'string') {
+    throw new FileContentError('Missing or invalid path parameter', 400)
+  }
+  // No directory traversal
+  if (rawPath.includes('..')) {
+    throw new FileContentError('Invalid path', 400)
+  }
+
+  // Expand `~`/`~/…` for local reads; remote keeps `~` (daemon expands it).
+  let filePath = rawPath
+  const isRemote = typeof host === 'string' && host.length > 0
+  if (!isRemote && (filePath === '~' || filePath.startsWith('~/'))) {
+    filePath = os.homedir() + filePath.slice(1)
+  }
+  if (!isRemote && !path.isAbsolute(filePath)) {
+    throw new FileContentError('Path must be absolute', 400)
+  }
+  // Cloud box: confine local reads to safe roots and never serve secret files.
+  if (!isRemote && CLOUD_MODE && (isSecretPath(filePath) || !cloudLocalReadAllowed(filePath))) {
+    throw new FileContentError('Path not permitted', 403)
+  }
+
+  const ext = path.extname(filePath).slice(1).toLowerCase()
+
+  if (isRemote) {
+    // Remote file via SSH daemon
+    try {
+      const reader = await createFileReader(host as string)
+      const content = await reader.readFile(filePath)
+      if (content === null) {
+        return { content: null, size: 0, truncated: false, binary: false, error: 'File not found', extension: ext }
+      }
+      const truncated = content.length > MAX_FILE_SIZE
+      return {
+        content: truncated ? content.slice(0, MAX_FILE_SIZE) : content,
+        size: content.length,
+        truncated,
+        binary: false,
+        extension: ext,
+      }
+    } catch (err) {
+      return {
+        content: null,
+        size: 0,
+        truncated: false,
+        binary: false,
+        error: `Cannot reach remote host: ${err instanceof Error ? err.message : String(err)}`,
+        extension: ext,
+      }
+    }
+  }
+
+  // Local file
+  let stat
+  try {
+    stat = await fsp.stat(filePath)
+  } catch {
+    return { content: null, size: 0, truncated: false, binary: false, error: 'File not found', extension: ext }
+  }
+  if (!stat.isFile()) {
+    return { content: null, size: 0, truncated: false, binary: false, error: 'Not a regular file', extension: ext }
+  }
+
+  // Binary detection
+  const fd = await fsp.open(filePath, 'r')
+  try {
+    const probe = Buffer.alloc(Math.min(8192, stat.size))
+    await fd.read(probe, 0, probe.length, 0)
+    if (isBinaryContent(probe)) {
+      return { content: null, size: stat.size, truncated: false, binary: true, extension: ext }
+    }
+  } finally {
+    await fd.close()
+  }
+
+  const truncated = stat.size > MAX_FILE_SIZE
+  const buffer = truncated
+    ? await readPartial(filePath, MAX_FILE_SIZE)
+    : await fsp.readFile(filePath)
+  return {
+    content: buffer.toString('utf-8'),
+    size: stat.size,
+    truncated,
+    binary: false,
+    extension: ext,
+  }
+}
+
 fileContentRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const rawPath = req.query.path
@@ -314,83 +434,13 @@ fileContentRouter.get('/', async (req: Request, res: Response, next: NextFunctio
       return
     }
 
-    if (typeof host === 'string' && host) {
-      // Remote file via SSH daemon
-      try {
-        const reader = await createFileReader(host)
-        const content = await reader.readFile(filePath)
-        if (content === null) {
-          res.json({ content: null, size: 0, truncated: false, binary: false, error: 'File not found', extension: ext })
-          return
-        }
-        const truncated = content.length > MAX_FILE_SIZE
-        const displayContent = truncated ? content.slice(0, MAX_FILE_SIZE) : content
-        res.json({
-          content: displayContent,
-          size: content.length,
-          truncated,
-          binary: false,
-          extension: ext,
-        })
-      } catch (err) {
-        res.json({
-          content: null,
-          size: 0,
-          truncated: false,
-          binary: false,
-          error: `Cannot reach remote host: ${err instanceof Error ? err.message : String(err)}`,
-          extension: ext,
-        })
-      }
-      return
-    }
-
-    // Local file
-    let stat
-    try {
-      stat = await fsp.stat(filePath)
-    } catch {
-      res.json({ content: null, size: 0, truncated: false, binary: false, error: 'File not found', extension: ext })
-      return
-    }
-
-    if (!stat.isFile()) {
-      res.json({ content: null, size: 0, truncated: false, binary: false, error: 'Not a regular file', extension: ext })
-      return
-    }
-
-    // Binary detection
-    const fd = await fsp.open(filePath, 'r')
-    try {
-      const probe = Buffer.alloc(Math.min(8192, stat.size))
-      await fd.read(probe, 0, probe.length, 0)
-      if (isBinaryContent(probe)) {
-        res.json({
-          content: null,
-          size: stat.size,
-          truncated: false,
-          binary: true,
-          extension: ext,
-        })
-        return
-      }
-    } finally {
-      await fd.close()
-    }
-
-    const truncated = stat.size > MAX_FILE_SIZE
-    const buffer = truncated
-      ? await readPartial(filePath, MAX_FILE_SIZE)
-      : await fsp.readFile(filePath)
-
-    res.json({
-      content: buffer.toString('utf-8'),
-      size: stat.size,
-      truncated,
-      binary: false,
-      extension: ext,
-    })
+    // JSON viewer payload — the shared core (also serves /api/v1/file-content).
+    res.json(await readFileContentPayload(rawPath, isRemote ? (host as string) : undefined))
   } catch (err) {
+    if (err instanceof FileContentError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })

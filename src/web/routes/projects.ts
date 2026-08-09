@@ -76,28 +76,40 @@ async function collectCounts(): Promise<{ byProject: Map<string, Counts>; inbox:
   return { byProject, inbox }
 }
 
-// GET /api/projects — registry rows + task counts + favorite flag, plus Inbox counts.
-// Envelope (NOT a bare array — Inbox has no registry row and needs its own slot):
-//   { projects: [{ name, source, order_index?, metadata?, favorite, counts }], inbox: { counts } }
+/**
+ * Build the projects listing payload — registry rows + task counts + favorite
+ * flag, plus Inbox counts. Envelope (NOT a bare array — Inbox has no registry
+ * row and needs its own slot):
+ *   { projects: [{ name, source, order_index?, metadata?, favorite, counts }], inbox: { counts } }
+ * Shared by GET /api/projects and GET /api/v1/projects.
+ */
+export async function buildProjectsPayload(): Promise<{
+  projects: Array<Record<string, unknown>>
+  inbox: { counts: Counts }
+}> {
+  const [storeProjects, { byProject, inbox }, config] = await Promise.all([
+    getStoreProjects(),
+    collectCounts(),
+    getConfig(),
+  ])
+  const favorites = new Set((config.favorites?.projects ?? []).map((p) => p.toLowerCase()))
+
+  const projects = Object.entries(storeProjects).map(([name, record]) => ({
+    name,
+    source: record.source,
+    ...(record.order_index !== undefined ? { order_index: record.order_index } : {}),
+    ...(record.metadata ? { metadata: record.metadata } : {}),
+    favorite: favorites.has(name.toLowerCase()),
+    counts: byProject.get(name.toLowerCase()) ?? emptyCounts(),
+  }))
+
+  return { projects, inbox: { counts: inbox } }
+}
+
+// GET /api/projects
 projectsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const [storeProjects, { byProject, inbox }, config] = await Promise.all([
-      getStoreProjects(),
-      collectCounts(),
-      getConfig(),
-    ])
-    const favorites = new Set((config.favorites?.projects ?? []).map((p) => p.toLowerCase()))
-
-    const projects = Object.entries(storeProjects).map(([name, record]) => ({
-      name,
-      source: record.source,
-      ...(record.order_index !== undefined ? { order_index: record.order_index } : {}),
-      ...(record.metadata ? { metadata: record.metadata } : {}),
-      favorite: favorites.has(name.toLowerCase()),
-      counts: byProject.get(name.toLowerCase()) ?? emptyCounts(),
-    }))
-
-    res.json({ projects, inbox: { counts: inbox } })
+    res.json(await buildProjectsPayload())
   } catch (err) {
     next(err)
   }

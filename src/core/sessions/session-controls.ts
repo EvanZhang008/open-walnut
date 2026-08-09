@@ -623,8 +623,27 @@ export type SessionControlAction =
   // Wave 1 lifecycle family (2026-08):
   | 'patch' | 'terminate' | 'restart' | 'retry' | 'permission'
   | 'execute-continue' | 'changes' | 'history' | 'detail'
+  // Wave 2 session-extras family (2026-08): provider controls, settings
+  // snapshot, side questions, workflow/plan reads, subagent lanes,
+  // execute-compact, and queued-message management.
+  | 'controls' | 'controls.apply' | 'settings'
+  | 'side-questions' | 'side-question.ask' | 'side-question.promote' | 'side-question.delete'
+  | 'workflow' | 'plan' | 'subagent-history' | 'execute-compact'
+  | 'queue' | 'queue.edit' | 'queue.delete'
   // Box-level family (sessionId ignored):
-  | 'server.notifications' | 'server.notifications.mark-read' | 'server.notifications.dismiss';
+  | 'server.notifications' | 'server.notifications.mark-read' | 'server.notifications.dismiss'
+  // Wave 2 box-level family: routines CRUD/control (single-writer: the
+  // PRIMARY's cron engine owns cron-jobs.json — replicas never write it
+  // locally, avoiding the dual-engine blind-write storms), the launcher's
+  // host directory listing, and the composer's slash-command palette.
+  | 'server.routines' | 'server.routines.actions' | 'server.routines.status'
+  | 'server.routines.executors' | 'server.routines.get' | 'server.routines.create'
+  | 'server.routines.patch' | 'server.routines.delete' | 'server.routines.toggle'
+  | 'server.routines.run'
+  | 'server.list-dirs' | 'server.slash-commands'
+  // Wave 2 box-level family: file-explorer metadata (names/types only — file
+  // CONTENT never rides the bridge; see files-v1.ts for the threat model).
+  | 'server.files.list' | 'server.files.resolve';
 
 /**
  * Entry point for the daemon control relay (phone → cloud → bridge →
@@ -718,6 +737,86 @@ export async function handleSessionControlRelay(
         result = await getSessionDetail(sessionId) as unknown as Record<string, unknown>;
         break;
       }
+      // ── Wave 2 session-extras family — same shared core the web routes use ──
+      case 'controls': {
+        const { getSessionControls } = await import('./session-extras.js');
+        result = await getSessionControls(sessionId) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'controls.apply': {
+        const { applySessionControl } = await import('./session-extras.js');
+        result = await applySessionControl(sessionId, p.id, p.value) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'settings': {
+        const { getSessionSettings } = await import('./session-extras.js');
+        result = await getSessionSettings(sessionId, p.details === true) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'side-questions': {
+        const { listSessionSideQuestions } = await import('./session-extras.js');
+        result = await listSessionSideQuestions(sessionId) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'side-question.ask': {
+        const { askSessionSideQuestion } = await import('./session-extras.js');
+        result = await askSessionSideQuestion(sessionId, p.question) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'side-question.promote': {
+        const { promoteSessionSideQuestion } = await import('./session-extras.js');
+        result = await promoteSessionSideQuestion(sessionId, String(p.id ?? '')) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'side-question.delete': {
+        const { removeSessionSideQuestion } = await import('./session-extras.js');
+        result = await removeSessionSideQuestion(sessionId, String(p.id ?? '')) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'workflow': {
+        const { getSessionWorkflowPayload } = await import('./session-extras.js');
+        // null (no workflow ran) rides the relay as { workflow: null } so the
+        // ok/result envelope stays an object.
+        result = { workflow: await getSessionWorkflowPayload(sessionId) };
+        break;
+      }
+      case 'plan': {
+        const { getSessionPlanPayload } = await import('./session-extras.js');
+        result = await getSessionPlanPayload(sessionId) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'subagent-history': {
+        const { getSubagentHistoryPayload } = await import('./session-extras.js');
+        result = await getSubagentHistoryPayload(
+          sessionId, String(p.agentId ?? ''), p.workflow === true,
+        ) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'execute-compact': {
+        const { executeCompactSession } = await import('./session-extras.js');
+        result = await executeCompactSession(sessionId, {
+          task_id: typeof p.task_id === 'string' ? p.task_id : undefined,
+          working_directory: typeof p.working_directory === 'string' ? p.working_directory : undefined,
+          instructions: typeof p.instructions === 'string' ? p.instructions : undefined,
+          mode: typeof p.mode === 'string' ? p.mode : undefined,
+        }) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'queue': {
+        const { getSessionQueuePayload } = await import('./session-extras.js');
+        result = await getSessionQueuePayload(sessionId) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'queue.edit': {
+        const { editSessionQueuedMessage } = await import('./session-extras.js');
+        result = await editSessionQueuedMessage(sessionId, String(p.messageId ?? ''), p.text) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'queue.delete': {
+        const { deleteSessionQueuedMessage } = await import('./session-extras.js');
+        result = await deleteSessionQueuedMessage(sessionId, String(p.messageId ?? '')) as unknown as Record<string, unknown>;
+        break;
+      }
       // ── Box-level family (sessionId ignored — notifications live on the primary) ──
       case 'server.notifications': {
         const { listNotifications } = await import('../notifications/store.js');
@@ -738,6 +837,61 @@ export async function handleSessionControlRelay(
         const dedupKeys = Array.isArray(p.dedupKeys) && p.dedupKeys.every((v) => typeof v === 'string')
           ? p.dedupKeys as string[] : undefined;
         result = await dismissNotifications({ ids, dedupKeys }) as unknown as Record<string, unknown>;
+        break;
+      }
+      // ── Wave 2 box-level family: routines (PRIMARY's engine is the single writer) ──
+      case 'server.routines':
+      case 'server.routines.actions':
+      case 'server.routines.status':
+      case 'server.routines.executors':
+      case 'server.routines.get':
+      case 'server.routines.create':
+      case 'server.routines.patch':
+      case 'server.routines.delete':
+      case 'server.routines.toggle':
+      case 'server.routines.run': {
+        const { handleRoutinesRelayAction } = await import('../routines/routines-core.js');
+        result = await handleRoutinesRelayAction(action.slice('server.routines'.length).replace(/^\./, '') || 'list', p);
+        break;
+      }
+      case 'server.list-dirs': {
+        const { listSessionDirs } = await import('./session-extras.js');
+        result = await listSessionDirs(
+          p.prefix, typeof p.host === 'string' && p.host ? p.host : undefined, p.depth,
+        ) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'server.slash-commands': {
+        const { buildSlashCommandItems } = await import('../../web/routes/slash-commands.js');
+        result = await buildSlashCommandItems({
+          cwd: typeof p.cwd === 'string' ? p.cwd : undefined,
+          host: typeof p.host === 'string' && p.host ? p.host : undefined,
+          fresh: p.fresh === true,
+        }) as unknown as Record<string, unknown>;
+        break;
+      }
+      case 'server.files.list': {
+        const { listSessionFiles, FilesOpError } = await import('../../web/routes/files.js');
+        try {
+          result = await listSessionFiles(
+            p.path, typeof p.host === 'string' && p.host ? p.host : undefined, p.showHidden === true,
+          ) as unknown as Record<string, unknown>;
+        } catch (err) {
+          if (err instanceof FilesOpError) throw new SessionControlError(err.message, err.statusCode);
+          throw err;
+        }
+        break;
+      }
+      case 'server.files.resolve': {
+        const { resolveSessionPath, FilesOpError } = await import('../../web/routes/files.js');
+        try {
+          result = await resolveSessionPath(
+            p.rel, p.cwd, typeof p.host === 'string' && p.host ? p.host : undefined,
+          ) as unknown as Record<string, unknown>;
+        } catch (err) {
+          if (err instanceof FilesOpError) throw new SessionControlError(err.message, err.statusCode);
+          throw err;
+        }
         break;
       }
       default:

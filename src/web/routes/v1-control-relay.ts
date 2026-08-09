@@ -45,20 +45,20 @@ function relayErrorStatus(errorKind: string): number {
 }
 
 /**
- * Drive one control-relay action over the bridge and translate the reply into
- * the frozen v1 response. Never throws — every failure is a precise HTTP error.
+ * Drive one control-relay action over the bridge and return the raw reply, or
+ * null after answering a bridge-offline error. Callers that need to reshape a
+ * successful result (e.g. workflow's 204-on-null) use this; everyone else
+ * uses relayControlAction below.
  */
-export async function relayControlAction(
+export async function driveControlRelay(
   res: Response,
   action: SessionControlAction,
   sessionId: string,
   params: Record<string, unknown> | undefined,
-  successStatus: number,
-): Promise<void> {
+): Promise<Record<string, unknown> | null> {
   const { bridgeRequest, BridgeOfflineError } = await import('../ws/bridge-registry.js')
-  let reply: Record<string, unknown>
   try {
-    reply = await bridgeRequest(
+    return await bridgeRequest(
       PRIMARY_BRIDGE_ALIAS,
       'session.control',
       { action, sessionId, ...(params !== undefined ? { params } : {}) },
@@ -67,15 +67,18 @@ export async function relayControlAction(
   } catch (err) {
     if (err instanceof BridgeOfflineError) {
       sendV1Error(res, 503, 'bridge_offline', 'No live bridge to the primary box — try again when it reconnects')
-      return
+      return null
     }
     sendV1Error(res, 503, 'bridge_offline', err instanceof Error ? err.message : String(err))
-    return
+    return null
   }
-  if (reply.ok === true && reply.result && typeof reply.result === 'object') {
-    res.status(successStatus).json(reply.result)
-    return
-  }
+}
+
+/**
+ * Map a failed relay reply onto the frozen v1 error response (needs_upgrade
+ * ladder / bridge-down / verbatim error passthrough).
+ */
+export function sendRelayReplyError(res: Response, reply: Record<string, unknown>): void {
   const reason = String(reply.error ?? 'unknown')
   // Pre-session.control daemon OR a primary server that predates this action —
   // both self-heal on the next primary upgrade/reconnect.
@@ -99,4 +102,24 @@ export async function relayControlAction(
   // phone sees the same v1 code the local path produces.
   const errorCode = typeof reply.errorCode === 'string' && reply.errorCode ? reply.errorCode : errorKind
   sendV1Error(res, relayErrorStatus(errorKind), errorCode, reason)
+}
+
+/**
+ * Drive one control-relay action over the bridge and translate the reply into
+ * the frozen v1 response. Never throws — every failure is a precise HTTP error.
+ */
+export async function relayControlAction(
+  res: Response,
+  action: SessionControlAction,
+  sessionId: string,
+  params: Record<string, unknown> | undefined,
+  successStatus: number,
+): Promise<void> {
+  const reply = await driveControlRelay(res, action, sessionId, params)
+  if (!reply) return
+  if (reply.ok === true && reply.result && typeof reply.result === 'object') {
+    res.status(successStatus).json(reply.result)
+    return
+  }
+  sendRelayReplyError(res, reply)
 }

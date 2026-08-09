@@ -218,66 +218,85 @@ async function buildRemoteItems(host: string, cwd?: string): Promise<SlashComman
   return mergeAndSort([remoteProjectCmds, openWalnutCmds, remoteSkills, BUILTIN_COMMANDS])
 }
 
+export interface SlashCommandsPayload {
+  items: SlashCommandItem[]
+  degraded?: boolean
+}
+
+/**
+ * Build the palette payload for a session composer — the ONE implementation
+ * shared by the internal route, the /api/v1 mobile route, and the cloud
+ * control relay. Encapsulates the per-host cache, the stale-while-revalidate
+ * behavior, and the degraded fallback (never local skills for a remote host).
+ */
+export async function buildSlashCommandItems(opts: {
+  cwd?: string
+  host?: string
+  /** Force a re-scan, bypassing the per-host cache (manual palette refresh). */
+  fresh?: boolean
+}): Promise<SlashCommandsPayload> {
+  const { cwd, host, fresh } = opts
+
+  // ── Local session ──
+  if (!host) {
+    return { items: await buildLocalItems(cwd) }
+  }
+
+  // ── Remote session ──
+  const cacheKey = `${host}::${cwd ?? ''}`
+  if (!fresh) {
+    const cached = remoteCache.get(cacheKey)
+    if (cached && Date.now() - cached.time < REMOTE_CACHE_TTL_MS) {
+      return { items: cached.items }
+    }
+    // Stale-while-revalidate: an EXPIRED entry still answers instantly while a
+    // background re-scan refreshes it. The awaited path held a browser
+    // connection for the full 7-9s SSH scan on every TTL expiry; a few of
+    // those saturate the browser's 6-per-origin pool and cascade into client
+    // timeouts (2026-07-31). Staleness is bounded by scan time, and `fresh`
+    // still forces a blocking re-scan.
+    if (cached && !revalidating.has(cacheKey)) {
+      revalidating.add(cacheKey)
+      void buildRemoteItems(host, cwd)
+        .then((items) => { remoteCache.set(cacheKey, { time: Date.now(), items }) })
+        .catch((err) => {
+          log.session.warn('slash-commands: background revalidation failed (stale cache kept)', {
+            host, error: err instanceof Error ? err.message : String(err),
+          })
+        })
+        .finally(() => { revalidating.delete(cacheKey) })
+      return { items: cached.items }
+    }
+  }
+
+  try {
+    const items = await buildRemoteItems(host, cwd)
+    remoteCache.set(cacheKey, { time: Date.now(), items })
+    return { items }
+  } catch (err) {
+    // Degrade: never silently fall back to LOCAL skills (they'd misrepresent the
+    // remote host). Return only Walnut + built-in commands, flagged degraded.
+    log.session.warn('slash-commands: remote discovery failed, degrading', {
+      host,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    const openWalnutCmds = await localWalnutCommands()
+    return { items: mergeAndSort([openWalnutCmds, BUILTIN_COMMANDS]), degraded: true }
+  }
+}
+
 export function createSlashCommandsRouter(): Router {
   const router = Router()
 
   // GET /api/slash-commands?cwd=/path/to/project&host=optional-ssh-host
   router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const cwd = typeof req.query.cwd === 'string' ? req.query.cwd : undefined
-      const host = typeof req.query.host === 'string' && req.query.host ? req.query.host : undefined
-      // `fresh=1` forces a re-scan, bypassing the per-host cache (manual palette refresh).
-      const fresh = req.query.fresh === '1' || req.query.fresh === 'true'
-
-      // ── Local session ──
-      if (!host) {
-        res.json({ items: await buildLocalItems(cwd) })
-        return
-      }
-
-      // ── Remote session ──
-      const cacheKey = `${host}::${cwd ?? ''}`
-      if (!fresh) {
-        const cached = remoteCache.get(cacheKey)
-        if (cached && Date.now() - cached.time < REMOTE_CACHE_TTL_MS) {
-          res.json({ items: cached.items })
-          return
-        }
-        // Stale-while-revalidate: an EXPIRED entry still answers instantly while a
-        // background re-scan refreshes it. The awaited path held a browser
-        // connection for the full 7-9s SSH scan on every TTL expiry; a few of
-        // those saturate the browser's 6-per-origin pool and cascade into client
-        // timeouts (2026-07-31). Staleness is bounded by scan time, and `?fresh=1`
-        // still forces a blocking re-scan.
-        if (cached && !revalidating.has(cacheKey)) {
-          revalidating.add(cacheKey)
-          void buildRemoteItems(host, cwd)
-            .then((items) => { remoteCache.set(cacheKey, { time: Date.now(), items }) })
-            .catch((err) => {
-              log.session.warn('slash-commands: background revalidation failed (stale cache kept)', {
-                host, error: err instanceof Error ? err.message : String(err),
-              })
-            })
-            .finally(() => { revalidating.delete(cacheKey) })
-          res.json({ items: cached.items })
-          return
-        }
-      }
-
-      try {
-        const items = await buildRemoteItems(host, cwd)
-        remoteCache.set(cacheKey, { time: Date.now(), items })
-        res.json({ items })
-      } catch (err) {
-        // Degrade: never silently fall back to LOCAL skills (they'd misrepresent the
-        // remote host). Return only Walnut + built-in commands, flagged degraded.
-        log.session.warn('slash-commands: remote discovery failed, degrading', {
-          host,
-          error: err instanceof Error ? err.message : String(err),
-        })
-        const openWalnutCmds = await localWalnutCommands()
-        res.json({ items: mergeAndSort([openWalnutCmds, BUILTIN_COMMANDS]), degraded: true })
-      }
+      const payload = await buildSlashCommandItems({
+        cwd: typeof req.query.cwd === 'string' ? req.query.cwd : undefined,
+        host: typeof req.query.host === 'string' && req.query.host ? req.query.host : undefined,
+        fresh: req.query.fresh === '1' || req.query.fresh === 'true',
+      })
+      res.json(payload)
     } catch (err) {
       next(err)
     }

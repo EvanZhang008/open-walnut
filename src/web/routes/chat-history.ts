@@ -36,8 +36,99 @@ async function resolveChatRef(req: Request): Promise<{ agentId: string | undefin
 
 // Per-agent cache for stats endpoint — avoids rebuilding system prompt + tool schemas.
 // Invalidated automatically when file mtime changes (any chat history write).
-const cachedStatsMap = new Map<string, { apiMessageCount: number; estimatedTokens: number; systemTokens: number; toolsTokens: number; estimatedTotalTokens: number; compacted: boolean; contextWindow: number }>()
+export interface ChatStatsPayload {
+  apiMessageCount: number
+  estimatedTokens: number
+  systemTokens: number
+  toolsTokens: number
+  estimatedTotalTokens: number
+  compacted: boolean
+  contextWindow: number
+}
+const cachedStatsMap = new Map<string, ChatStatsPayload>()
 const cachedMtimeMap = new Map<string, string>()
+
+/**
+ * Real conversation size stats (API msg count + token estimate), cached
+ * between turns. Shared by GET /api/chat/stats and GET /api/v1/chat/stats.
+ */
+export async function computeChatStats(
+  agentId: string | undefined,
+  conversationId: string,
+): Promise<ChatStatsPayload> {
+  const cacheKey = `${agentId || 'general'}:${conversationId || '_'}`
+
+  // Check if cached stats are still valid (chat history hasn't changed)
+  const lastUpdated = await chatHistory.getLastUpdated(agentId, conversationId)
+  const cachedStats = cachedStatsMap.get(cacheKey)
+  const cachedMtime = cachedMtimeMap.get(cacheKey)
+  if (cachedStats && cachedMtime === lastUpdated) {
+    return cachedStats
+  }
+
+  // Full computation (first call or after new messages/compaction)
+  const modelContext = await chatHistory.getModelContext(agentId, conversationId)
+  const messageTokens = estimateMessagesTokens(modelContext)
+  const summary = await chatHistory.getCompactionSummary(agentId, conversationId)
+
+  // Compute full payload estimate (system + tools + messages)
+  let systemTokens = 0
+  let toolsTokens = 0
+  if (!agentId || agentId === 'general') {
+    // General agent: use full system prompt + tools
+    try {
+      const { buildSystemPrompt } = await import('../../agent/context.js')
+      const { getToolSchemas } = await import('../../agent/tools.js')
+      const systemPrompt = await buildSystemPrompt(agentId, conversationId)
+      const tools = getToolSchemas()
+      const breakdown = estimateFullPayload({ system: systemPrompt, tools, messages: modelContext })
+      systemTokens = breakdown.system
+      toolsTokens = breakdown.tools
+    } catch (err) {
+      log.web.warn('chat stats: full payload estimation failed', { error: String(err) })
+    }
+  } else {
+    // Non-General: estimate from agent def system prompt + filtered tools
+    try {
+      const { getConsoleAgent } = await import('../../core/agent-registry.js')
+      const { buildSubagentToolSet } = await import('../../agent/subagent-context.js')
+      const { estimateTokens } = await import('../../core/daily-log.js')
+      const agentDef = await getConsoleAgent(agentId)
+      if (agentDef) {
+        systemTokens = estimateTokens(agentDef.system_prompt ?? '')
+        const agentTools = await buildSubagentToolSet(agentDef)
+        toolsTokens = estimateTokens(JSON.stringify(agentTools))
+      }
+    } catch (err) {
+      log.web.warn('chat stats: agent payload estimation failed', { agentId, error: String(err) })
+    }
+  }
+
+  // Read model from config for context window detection
+  let contextWindow: number
+  try {
+    const { getConfig } = await import('../../core/config-manager.js')
+    const config = await getConfig()
+    contextWindow = getContextWindowSize(config.agent?.main_model)
+  } catch {
+    contextWindow = getContextWindowSize(undefined)
+  }
+
+  const result: ChatStatsPayload = {
+    apiMessageCount: modelContext.length,
+    estimatedTokens: messageTokens,
+    systemTokens,
+    toolsTokens,
+    estimatedTotalTokens: systemTokens + toolsTokens + messageTokens,
+    compacted: !!summary,
+    contextWindow,
+  }
+
+  // Cache for subsequent calls
+  cachedStatsMap.set(cacheKey, result)
+  cachedMtimeMap.set(cacheKey, lastUpdated)
+  return result
+}
 
 // GET /api/chat/history?page=1&pageSize=100&agentId=general
 chatHistoryRouter.get('/history', async (req: Request, res: Response, next: NextFunction) => {
@@ -56,80 +147,7 @@ chatHistoryRouter.get('/history', async (req: Request, res: Response, next: Next
 chatHistoryRouter.get('/stats', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { agentId, conversationId } = await resolveChatRef(req)
-    const cacheKey = `${agentId || 'general'}:${conversationId || '_'}`
-
-    // Check if cached stats are still valid (chat history hasn't changed)
-    const lastUpdated = await chatHistory.getLastUpdated(agentId, conversationId)
-    const cachedStats = cachedStatsMap.get(cacheKey)
-    const cachedMtime = cachedMtimeMap.get(cacheKey)
-    if (cachedStats && cachedMtime === lastUpdated) {
-      res.json(cachedStats)
-      return
-    }
-
-    // Full computation (first call or after new messages/compaction)
-    const modelContext = await chatHistory.getModelContext(agentId, conversationId)
-    const messageTokens = estimateMessagesTokens(modelContext)
-    const summary = await chatHistory.getCompactionSummary(agentId, conversationId)
-
-    // Compute full payload estimate (system + tools + messages)
-    let systemTokens = 0
-    let toolsTokens = 0
-    if (!agentId || agentId === 'general') {
-      // General agent: use full system prompt + tools
-      try {
-        const { buildSystemPrompt } = await import('../../agent/context.js')
-        const { getToolSchemas } = await import('../../agent/tools.js')
-        const systemPrompt = await buildSystemPrompt(agentId, conversationId)
-        const tools = getToolSchemas()
-        const breakdown = estimateFullPayload({ system: systemPrompt, tools, messages: modelContext })
-        systemTokens = breakdown.system
-        toolsTokens = breakdown.tools
-      } catch (err) {
-        log.web.warn('chat stats: full payload estimation failed', { error: String(err) })
-      }
-    } else {
-      // Non-General: estimate from agent def system prompt + filtered tools
-      try {
-        const { getConsoleAgent } = await import('../../core/agent-registry.js')
-        const { buildSubagentToolSet } = await import('../../agent/subagent-context.js')
-        const { estimateTokens } = await import('../../core/daily-log.js')
-        const agentDef = await getConsoleAgent(agentId)
-        if (agentDef) {
-          systemTokens = estimateTokens(agentDef.system_prompt ?? '')
-          const agentTools = await buildSubagentToolSet(agentDef)
-          toolsTokens = estimateTokens(JSON.stringify(agentTools))
-        }
-      } catch (err) {
-        log.web.warn('chat stats: agent payload estimation failed', { agentId, error: String(err) })
-      }
-    }
-
-    // Read model from config for context window detection
-    let contextWindow: number
-    try {
-      const { getConfig } = await import('../../core/config-manager.js')
-      const config = await getConfig()
-      contextWindow = getContextWindowSize(config.agent?.main_model)
-    } catch {
-      contextWindow = getContextWindowSize(undefined)
-    }
-
-    const result = {
-      apiMessageCount: modelContext.length,
-      estimatedTokens: messageTokens,
-      systemTokens,
-      toolsTokens,
-      estimatedTotalTokens: systemTokens + toolsTokens + messageTokens,
-      compacted: !!summary,
-      contextWindow,
-    }
-
-    // Cache for subsequent calls
-    cachedStatsMap.set(cacheKey, result)
-    cachedMtimeMap.set(cacheKey, lastUpdated)
-
-    res.json(result)
+    res.json(await computeChatStats(agentId, conversationId))
   } catch (err) {
     next(err)
   }

@@ -4,15 +4,25 @@
  * Mounted at BOTH /api/routines (canonical) and /api/cron (back-compat alias).
  * "Routine" is the product name for a scheduled job with an executor; the
  * underlying engine and WS event names (cron:job-*) are unchanged.
+ *
+ * Thin shell: all list/CRUD/toggle/run/status/executors logic lives in the
+ * shared core (src/core/routines/routines-core.ts), reused verbatim by the
+ * /api/v1 mobile router and the cloud control relay. Only the NL draft route
+ * (LLM call) stays here — it is primary-web-only.
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import type { CronService } from '../../core/cron/index.js'
-import { normalizeCronJobCreate, normalizeCronJobPatch, listActions } from '../../core/cron/index.js'
+import { SessionControlError } from '../../core/sessions/session-controls.js'
+import {
+  listRoutines, getRoutine, createRoutine, patchRoutine, deleteRoutine,
+  toggleRoutine, runRoutineNow, getRoutinesStatus, listRoutineActions,
+  listRoutineExecutors,
+} from '../../core/routines/routines-core.js'
 import { getConfig } from '../../core/config-manager.js'
 
-// ── Module-level service accessor (for agent tools) ──
+// ── Module-level service accessor (for agent tools + the shared core) ──
 
 let _cronService: CronService | null = null
 
@@ -26,62 +36,55 @@ export function getCronService(): CronService | null {
 
 // ── Router factory ──
 
-export function createCronRouter(cronService: CronService): Router {
+/** Map shared-core errors onto this router's legacy `{ error }` shape. */
+function handleCoreError(res: Response, next: NextFunction, err: unknown): void {
+  if (err instanceof SessionControlError) {
+    res.status(err.statusCode).json({ error: err.message })
+    return
+  }
+  next(err)
+}
+
+export function createCronRouter(cronServiceArg: CronService): Router {
+  // Register the instance so the shared core (and agent tools) resolve the
+  // same service this router serves — callers (server.ts, tests) don't have
+  // to remember a separate setCronService step.
+  setCronService(cronServiceArg)
   const router = Router()
 
   // GET /api/cron — list jobs
   router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const includeDisabled = req.query.includeDisabled === 'true'
-      const jobs = await cronService.list({ includeDisabled })
-      res.json({ jobs })
+      res.json(await listRoutines(req.query.includeDisabled === 'true'))
     } catch (err) {
-      next(err)
+      handleCoreError(res, next, err)
     }
   })
 
   // GET /api/cron/actions — list registered actions (for frontend dropdowns)
   router.get('/actions', async (_req: Request, res: Response, next: NextFunction) => {
     try {
-      const actions = await listActions()
-      res.json({ actions })
+      res.json(await listRoutineActions())
     } catch (err) {
-      next(err)
+      handleCoreError(res, next, err)
     }
   })
 
   // GET /api/cron/status — scheduler status
   router.get('/status', async (_req: Request, res: Response, next: NextFunction) => {
     try {
-      const status = await cronService.status()
-      res.json(status)
+      res.json(await getRoutinesStatus())
     } catch (err) {
-      next(err)
+      handleCoreError(res, next, err)
     }
   })
 
   // GET /api/routines/executors — executor definitions + dynamic form options
   router.get('/executors', async (_req: Request, res: Response, next: NextFunction) => {
     try {
-      const { listExecutors } = await import('../../core/routines/index.js')
-      const config = await getConfig()
-      const hosts = Object.entries(config.hosts ?? {}).map(([alias, def]) => ({
-        value: alias,
-        label: (def as { label?: string })?.label ?? alias,
-      }))
-      const { SESSION_MODELS } = await import('../../core/types.js')
-      const models = SESSION_MODELS.map((m) => ({ value: m.id, label: m.label }))
-      res.json({
-        executors: listExecutors().map((e) => ({
-          type: e.type,
-          label: e.label,
-          description: e.description,
-          configSchema: e.configSchema,
-        })),
-        options: { hosts, models },
-      })
+      res.json(await listRoutineExecutors())
     } catch (err) {
-      next(err)
+      handleCoreError(res, next, err)
     }
   })
 
@@ -114,84 +117,61 @@ export function createCronRouter(cronService: CronService): Router {
   // GET /api/cron/:id — single job
   router.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const id = req.params.id as string
-      const jobs = await cronService.list({ includeDisabled: true })
-      const job = jobs.find((j) => j.id === id)
-      if (!job) {
-        res.status(404).json({ error: `Cron job not found: ${id}` })
-        return
-      }
-      res.json({ job })
+      res.json(await getRoutine(req.params.id as string))
     } catch (err) {
-      next(err)
+      handleCoreError(res, next, err)
     }
   })
 
   // POST /api/cron — create job
   router.post('/', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const input = normalizeCronJobCreate(req.body)
-      if (!input) {
-        res.status(400).json({ error: 'Invalid input. Provide at least schedule and payload.' })
-        return
-      }
-      const job = await cronService.add(input)
-      log.web.info('cron job created via REST', { jobId: job.id, name: job.name })
-      res.status(201).json({ job })
+      const result = await createRoutine(req.body)
+      res.status(201).json(result)
     } catch (err) {
-      next(err)
+      handleCoreError(res, next, err)
     }
   })
 
   // PATCH /api/cron/:id — update job
   router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const id = req.params.id as string
-      const patch = normalizeCronJobPatch(req.body)
-      if (!patch) {
-        res.status(400).json({ error: 'Invalid patch input.' })
-        return
-      }
-      const job = await cronService.update(id, patch)
-      log.web.info('cron job updated via REST', { jobId: id })
-      res.json({ job })
+      res.json(await patchRoutine(req.params.id as string, req.body))
     } catch (err) {
-      next(err)
+      handleCoreError(res, next, err)
     }
   })
 
   // DELETE /api/cron/:id — delete job
   router.delete('/:id', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const id = req.params.id as string
-      await cronService.remove(id)
-      log.web.info('cron job deleted via REST', { jobId: id })
+      await deleteRoutine(req.params.id as string)
       res.status(204).end()
     } catch (err) {
-      next(err)
+      // Legacy behavior: DELETE was tolerant of unknown ids (204 either way).
+      if (err instanceof SessionControlError && err.statusCode === 404) {
+        res.status(204).end()
+        return
+      }
+      handleCoreError(res, next, err)
     }
   })
 
   // POST /api/cron/:id/toggle — toggle enabled/disabled
   router.post('/:id/toggle', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const id = req.params.id as string
-      const job = await cronService.toggle(id)
-      res.json({ job })
+      res.json(await toggleRoutine(req.params.id as string))
     } catch (err) {
-      next(err)
+      handleCoreError(res, next, err)
     }
   })
 
   // POST /api/cron/:id/run — manual trigger
   router.post('/:id/run', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const id = req.params.id as string
-      const result = await cronService.run(id, 'force')
-      log.web.info('cron job triggered via REST', { jobId: id })
-      res.json({ result })
+      res.json(await runRoutineNow(req.params.id as string))
     } catch (err) {
-      next(err)
+      handleCoreError(res, next, err)
     }
   })
 

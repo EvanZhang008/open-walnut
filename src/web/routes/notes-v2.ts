@@ -624,86 +624,110 @@ notesV2Router.delete('/content/*path', async (req: Request, res: Response, next:
   }
 })
 
+/**
+ * Delete a binary attachment (the note-delete path force-appends .md, so
+ * attachments need their own op). Shared by this router's
+ * DELETE /attachment/*path and DELETE /api/v1/notes/attachment/*path.
+ */
+export async function deleteNoteAttachment(relPath: unknown): Promise<{ ok: true }> {
+  if (typeof relPath !== 'string' || !relPath) throw new NotesOpError('path required', 400)
+  const fullPath = resolveSafePath(relPath)
+  if (!fullPath || fullPath.endsWith('.md')) throw new NotesOpError('invalid path', 400)
+  try {
+    await fsp.unlink(fullPath)
+  } catch (err: any) {
+    if (err.code === 'ENOENT') throw new NotesOpError('Attachment not found', 404)
+    throw err
+  }
+  try {
+    const { deleteAttachmentText } = await import('../../core/notes-index.js')
+    deleteAttachmentText(toRelPath(fullPath))
+  } catch { /* best-effort */ }
+  log.memory.info('Attachment deleted', { path: relPath })
+  return { ok: true }
+}
+
 // DELETE /api/notes-v2/attachment/*path — delete a binary attachment. The
 // note-delete route force-appends .md, so attachments need their own route.
 notesV2Router.delete('/attachment/*path', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const relPath = getWildcardPath(req)
-    if (!relPath) { res.status(400).json({ error: 'path required' }); return }
-    const fullPath = resolveSafePath(relPath)
-    if (!fullPath || fullPath.endsWith('.md')) { res.status(400).json({ error: 'invalid path' }); return }
-    try {
-      await fsp.unlink(fullPath)
-    } catch (err: any) {
-      if (err.code === 'ENOENT') { res.status(404).json({ error: 'Attachment not found' }); return }
-      throw err
-    }
-    try {
-      const { deleteAttachmentText } = await import('../../core/notes-index.js')
-      deleteAttachmentText(toRelPath(fullPath))
-    } catch { /* best-effort */ }
-    log.memory.info('Attachment deleted', { path: relPath })
-    res.json({ ok: true })
+    res.json(await deleteNoteAttachment(getWildcardPath(req)))
   } catch (err) {
+    if (err instanceof NotesOpError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })
 
+/**
+ * Recursively delete a vault folder (notes, attachments, subfolders). Index
+ * rows for every contained note reconcile away; extracted attachment text
+ * rows drop. Shared by this router's DELETE /folder/*path and
+ * DELETE /api/v1/notes/folder/*path. Destructive — both edges gate it behind
+ * an explicit client confirm.
+ */
+export async function deleteNotesFolder(folderPath: unknown): Promise<{ ok: true; deletedNotes: number }> {
+  ensureIndexBootstrap()
+  if (typeof folderPath !== 'string' || !folderPath) throw new NotesOpError('path required', 400)
+
+  const fullPath = resolveSafePath(folderPath)
+  // Root guard: resolveSafePath('') maps to NOTES_DIR itself — never rm that.
+  if (!fullPath || path.resolve(fullPath) === path.resolve(NOTES_DIR)) {
+    throw new NotesOpError('invalid path', 400)
+  }
+
+  let stat
+  try {
+    stat = await fsp.stat(fullPath)
+  } catch (err: any) {
+    if (err.code === 'ENOENT') throw new NotesOpError('Folder not found', 404)
+    throw err
+  }
+  if (!stat.isDirectory()) throw new NotesOpError('not a folder', 400)
+
+  // Snapshot contained notes BEFORE rm so we can reconcile their index rows
+  // (the post-delete reconcile hits the ENOENT branch per note).
+  const relPrefix = toRelPath(fullPath).replace(/\/+$/, '') + '/'
+  const containedNotes: string[] = []
+  const collect = async (dir: string): Promise<void> => {
+    let entries
+    try { entries = await fsp.readdir(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      const full = path.join(dir, e.name)
+      if (e.isDirectory()) await collect(full)
+      else if (e.name.endsWith('.md')) containedNotes.push(toRelPath(full))
+    }
+  }
+  await collect(fullPath)
+
+  await fsp.rm(fullPath, { recursive: true })
+
+  for (const rel of containedNotes) scheduleNotesIndexUpdate(rel)
+  // Drop extracted-text rows for attachments that lived under the folder.
+  try {
+    const { listAttachmentMeta, deleteAttachmentText } = await import('../../core/notes-index.js')
+    for (const row of listAttachmentMeta()) {
+      if (row.path.startsWith(relPrefix)) deleteAttachmentText(row.path)
+    }
+  } catch { /* best-effort */ }
+
+  log.memory.info('Folder deleted', { path: folderPath, notes: containedNotes.length })
+  return { ok: true, deletedNotes: containedNotes.length }
+}
+
 // DELETE /api/notes-v2/folder/*path — recursively delete a folder (notes,
 // attachments, subfolders). Destructive: FE gates it behind a typed-confirm
-// dialog. Index rows for every contained note are reconciled away; extracted
-// attachment text rows are dropped.
+// dialog.
 notesV2Router.delete('/folder/*path', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    ensureIndexBootstrap()
-    const folderPath = getWildcardPath(req)
-    if (!folderPath) { res.status(400).json({ error: 'path required' }); return }
-
-    const fullPath = resolveSafePath(folderPath)
-    // Root guard: resolveSafePath('') maps to NOTES_DIR itself — never rm that.
-    if (!fullPath || path.resolve(fullPath) === path.resolve(NOTES_DIR)) {
-      res.status(400).json({ error: 'invalid path' })
+    res.json(await deleteNotesFolder(getWildcardPath(req)))
+  } catch (err) {
+    if (err instanceof NotesOpError) {
+      res.status(err.statusCode).json({ error: err.message })
       return
     }
-
-    let stat
-    try {
-      stat = await fsp.stat(fullPath)
-    } catch (err: any) {
-      if (err.code === 'ENOENT') { res.status(404).json({ error: 'Folder not found' }); return }
-      throw err
-    }
-    if (!stat.isDirectory()) { res.status(400).json({ error: 'not a folder' }); return }
-
-    // Snapshot contained notes BEFORE rm so we can reconcile their index rows
-    // (the post-delete reconcile hits the ENOENT branch per note).
-    const relPrefix = toRelPath(fullPath).replace(/\/+$/, '') + '/'
-    const containedNotes: string[] = []
-    const collect = async (dir: string): Promise<void> => {
-      let entries
-      try { entries = await fsp.readdir(dir, { withFileTypes: true }) } catch { return }
-      for (const e of entries) {
-        const full = path.join(dir, e.name)
-        if (e.isDirectory()) await collect(full)
-        else if (e.name.endsWith('.md')) containedNotes.push(toRelPath(full))
-      }
-    }
-    await collect(fullPath)
-
-    await fsp.rm(fullPath, { recursive: true })
-
-    for (const rel of containedNotes) scheduleNotesIndexUpdate(rel)
-    // Drop extracted-text rows for attachments that lived under the folder.
-    try {
-      const { listAttachmentMeta, deleteAttachmentText } = await import('../../core/notes-index.js')
-      for (const row of listAttachmentMeta()) {
-        if (row.path.startsWith(relPrefix)) deleteAttachmentText(row.path)
-      }
-    } catch { /* best-effort */ }
-
-    log.memory.info('Folder deleted', { path: folderPath, notes: containedNotes.length })
-    res.json({ ok: true, deletedNotes: containedNotes.length })
-  } catch (err) {
     next(err)
   }
 })
@@ -1153,54 +1177,90 @@ interface BacklinkResult {
   candidates?: string[]
 }
 
+/**
+ * Index-backed backlinks for a note (id-keyed; includes ambiguous inbound
+ * edges). Shared by this router's GET /backlinks/*path and
+ * GET /api/v1/notes/backlinks/*path — throws NotesOpError for bad paths.
+ */
+export async function getNoteBacklinks(notePath: unknown): Promise<{ backlinks: BacklinkResult[] }> {
+  ensureIndexBootstrap()
+  if (typeof notePath !== 'string' || !notePath) throw new NotesOpError('path required', 400)
+  const fullPath = resolveSafePath(notePath)
+  if (!fullPath) throw new NotesOpError('invalid path', 400)
+  const relPath = toRelPath(fullPath.endsWith('.md') ? fullPath : fullPath + '.md')
+
+  let dstId = getNoteIdByPath(relPath)
+  if (!dstId) {
+    // Not yet indexed — reconcile now so backlinks are correct on first view.
+    await reconcileNoteNow(relPath).catch(() => {})
+    dstId = getNoteIdByPath(relPath)
+  }
+
+  const backlinks: BacklinkResult[] = []
+  if (dstId) {
+    for (const r of backlinksForId(dstId)) {
+      backlinks.push({
+        id: r.id,
+        path: r.path,
+        title: r.title,
+        name: path.basename(r.path, '.md'),
+        snippet: r.context,
+        status: r.status,
+      })
+    }
+    // Ambiguous inbound edges that list this id among candidates.
+    for (const r of ambiguousBacklinksForId(dstId)) {
+      let candidates: string[] | undefined
+      try { candidates = JSON.parse(r.candidates || '[]') } catch { candidates = undefined }
+      backlinks.push({
+        id: r.id,
+        path: r.path,
+        title: r.title,
+        name: path.basename(r.path, '.md'),
+        snippet: r.context,
+        status: 'ambiguous',
+        candidates,
+      })
+    }
+  }
+  return { backlinks }
+}
+
+/**
+ * Forward links of a note. Shared by this router's GET /links/*path and
+ * GET /api/v1/notes/links/*path — throws NotesOpError for bad paths.
+ */
+export function getNoteForwardLinks(notePath: unknown): {
+  links: Array<{ dstId: string | null; dstName: string; status: LinkStatus; title?: string; path?: string }>
+} {
+  ensureIndexBootstrap()
+  if (typeof notePath !== 'string' || !notePath) throw new NotesOpError('path required', 400)
+  const fullPath = resolveSafePath(notePath)
+  if (!fullPath) throw new NotesOpError('invalid path', 400)
+  const relPath = toRelPath(fullPath.endsWith('.md') ? fullPath : fullPath + '.md')
+
+  const srcId = getNoteIdByPath(relPath)
+  const links = srcId
+    ? forwardLinksForId(srcId).map((l) => ({
+        dstId: l.dst_id,
+        dstName: l.dst_name,
+        status: l.status,
+        ...(l.title ? { title: l.title } : {}),
+        ...(l.path ? { path: l.path } : {}),
+      }))
+    : []
+  return { links }
+}
+
 // GET /api/notes-v2/backlinks/*path — index-backed, id-keyed, returns status
 notesV2Router.get('/backlinks/*path', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    ensureIndexBootstrap()
-    const notePath = getWildcardPath(req)
-    if (!notePath) { res.status(400).json({ error: 'path required' }); return }
-
-    const fullPath = resolveSafePath(notePath)
-    if (!fullPath) { res.status(400).json({ error: 'invalid path' }); return }
-    const relPath = toRelPath(fullPath.endsWith('.md') ? fullPath : fullPath + '.md')
-
-    let dstId = getNoteIdByPath(relPath)
-    if (!dstId) {
-      // Not yet indexed — reconcile now so backlinks are correct on first view.
-      await reconcileNoteNow(relPath).catch(() => {})
-      dstId = getNoteIdByPath(relPath)
-    }
-
-    const backlinks: BacklinkResult[] = []
-    if (dstId) {
-      for (const r of backlinksForId(dstId)) {
-        backlinks.push({
-          id: r.id,
-          path: r.path,
-          title: r.title,
-          name: path.basename(r.path, '.md'),
-          snippet: r.context,
-          status: r.status,
-        })
-      }
-      // Ambiguous inbound edges that list this id among candidates.
-      for (const r of ambiguousBacklinksForId(dstId)) {
-        let candidates: string[] | undefined
-        try { candidates = JSON.parse(r.candidates || '[]') } catch { candidates = undefined }
-        backlinks.push({
-          id: r.id,
-          path: r.path,
-          title: r.title,
-          name: path.basename(r.path, '.md'),
-          snippet: r.context,
-          status: 'ambiguous',
-          candidates,
-        })
-      }
-    }
-
-    res.json({ backlinks })
+    res.json(await getNoteBacklinks(getWildcardPath(req)))
   } catch (err) {
+    if (err instanceof NotesOpError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })
@@ -1208,25 +1268,12 @@ notesV2Router.get('/backlinks/*path', async (req: Request, res: Response, next: 
 // GET /api/notes-v2/links/*path — forward links of a note (optional)
 notesV2Router.get('/links/*path', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    ensureIndexBootstrap()
-    const notePath = getWildcardPath(req)
-    if (!notePath) { res.status(400).json({ error: 'path required' }); return }
-    const fullPath = resolveSafePath(notePath)
-    if (!fullPath) { res.status(400).json({ error: 'invalid path' }); return }
-    const relPath = toRelPath(fullPath.endsWith('.md') ? fullPath : fullPath + '.md')
-
-    const srcId = getNoteIdByPath(relPath)
-    const links = srcId
-      ? forwardLinksForId(srcId).map((l) => ({
-          dstId: l.dst_id,
-          dstName: l.dst_name,
-          status: l.status,
-          ...(l.title ? { title: l.title } : {}),
-          ...(l.path ? { path: l.path } : {}),
-        }))
-      : []
-    res.json({ links })
+    res.json(getNoteForwardLinks(getWildcardPath(req)))
   } catch (err) {
+    if (err instanceof NotesOpError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })

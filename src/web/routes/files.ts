@@ -28,6 +28,14 @@ export const filesRouter = Router()
 const MAX_ENTRIES = 1000
 const REMOTE_TIMEOUT_MS = 15_000
 
+/** Validation/lookup failure with an HTTP-ish status — each edge maps its own shape. */
+export class FilesOpError extends Error {
+  constructor(message: string, public statusCode = 400) {
+    super(message)
+    this.name = 'FilesOpError'
+  }
+}
+
 export interface DirEntry {
   name: string
   type: 'dir' | 'file'
@@ -108,271 +116,276 @@ async function findDownwardLocal(root: string, rel: string): Promise<string | nu
  * `base/rel` exists. Stops one level past a dir containing `.git` (repo root).
  * Falls back to cwd/rel (resolved:false) when nothing exists.
  */
+/**
+ * Resolve a session-relative path against a cwd/host. Shared by the internal
+ * route and GET /api/v1/files/resolve-path. Throws FilesOpError on invalid
+ * input; unresolvable paths return `{ path: fallback, resolved: false }`.
+ */
+export async function resolveSessionPath(
+  rel: unknown,
+  cwd: unknown,
+  host: string | undefined,
+): Promise<{ path: string; resolved: boolean }> {
+  if (!rel || typeof rel !== 'string' || !cwd || typeof cwd !== 'string') {
+    throw new FilesOpError('Missing rel or cwd parameter', 400)
+  }
+  if (rel.includes('..') || cwd.includes('..')) {
+    throw new FilesOpError('Invalid path', 400)
+  }
+  if (/[;&|`$(){}!<>]/.test(rel) || /[;&|`$(){}!<>]/.test(cwd)) {
+    throw new FilesOpError('invalid characters in path', 400)
+  }
+  // Absolute rel needs no resolution — pass through.
+  if (rel.startsWith('/')) {
+    return { path: rel, resolved: true }
+  }
+
+  const cleanRel = rel.replace(/^\.\//, '').replace(/\/+$/, '')
+  const bases = candidateBases(cwd)
+  const fallback = path.posix.join(cwd.replace(/\/+$/, ''), cleanRel)
+
+  if (host) {
+    // ── Remote: stat each candidate via daemon fs.stat ──
+    const config = await getConfig()
+    const hostDef = config.hosts?.[host]
+    if (!hostDef?.hostname) {
+      return { path: fallback, resolved: false }
+    }
+    const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
+    const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }
+    let conn
+    try {
+      let timeoutId: ReturnType<typeof setTimeout>
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('timeout')), REMOTE_TIMEOUT_MS)
+      })
+      conn = await Promise.race([getDaemonConnection(host, sshTarget), timeoutPromise])
+        .finally(() => clearTimeout(timeoutId!))
+    } catch {
+      return { path: fallback, resolved: false }
+    }
+    // Total time budget across the walk-up stats + the downward find: the
+    // loop is up to 2 serial RPCs per ancestor level (~18 on a deep path),
+    // and per-RPC timeouts alone don't bound the SUM. Expiring falls back to
+    // the naive cwd-joined path — a click still does something.
+    const resolveDeadline = Date.now() + 10_000
+    let remoteRepoRoot: string | null = null
+    for (const base of bases) {
+      if (Date.now() >= resolveDeadline) {
+        return { path: fallback, resolved: false }
+      }
+      const candidate = path.posix.join(base, cleanRel)
+      const st = await conn.send('fs.stat', { path: candidate })
+      if (st.ok && st.exists) {
+        return { path: candidate, resolved: true }
+      }
+      // Stop at the repo root (one .git up), remember it for downward search.
+      const git = await conn.send('fs.stat', { path: path.posix.join(base, '.git') })
+      if (git.ok && git.exists) { remoteRepoRoot = base; break }
+    }
+    if (Date.now() >= resolveDeadline) {
+      return { path: fallback, resolved: false }
+    }
+    // Downward: one fs.find RPC by basename under the repo root, then keep the
+    // first hit whose full path ends with the requested rel (server-side walk
+    // avoids a round-trip per directory). Only locates files, not bare dirs.
+    const downRoot = remoteRepoRoot ?? bases[bases.length - 1]
+    const baseName = cleanRel.split('/').pop() ?? cleanRel
+    const find = await conn.send('fs.find', { path: downRoot, name: baseName, maxDepth: MAX_DOWNWARD_DEPTH })
+    if (find.ok && Array.isArray(find.files)) {
+      const suffix = '/' + cleanRel
+      const hit = (find.files as string[])
+        .filter((f) => f === path.posix.join(downRoot, cleanRel) || f.endsWith(suffix))
+        .sort((a, b) => a.split('/').length - b.split('/').length)[0]
+      if (hit) {
+        return { path: hit, resolved: true }
+      }
+    }
+    return { path: fallback, resolved: false }
+  }
+
+  // ── Local: walk up first, then search down from the repo root ──
+  let repoRoot: string | null = null
+  for (const base of bases) {
+    const candidate = path.posix.join(base, cleanRel)
+    try {
+      await fsp.stat(candidate)
+      return { path: candidate, resolved: true }
+    } catch { /* not here, keep walking up */ }
+    try {
+      await fsp.stat(path.join(base, '.git'))
+      repoRoot = base
+      break // reached repo root — stop walking up
+    } catch { /* not a repo root, continue */ }
+  }
+  // Nothing upward — Claude may have shown a path relative to a deeper dir
+  // (e.g. cwd=repo but the file lives in repo/a/b/<rel>). Search downward from
+  // the repo root if known, else from cwd itself — NEVER from an ancestor
+  // above cwd (that could mean scanning from / across the whole filesystem).
+  const downRoot = repoRoot ?? cwd.replace(/\/+$/, '')
+  const downHit = await findDownwardLocal(downRoot, cleanRel)
+  if (downHit) {
+    return { path: downHit, resolved: true }
+  }
+  return { path: fallback, resolved: false }
+}
+
 filesRouter.get('/resolve-path', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const rel = req.query.rel
-    const cwd = req.query.cwd
-    const host = req.query.host as string | undefined
-
-    if (!rel || typeof rel !== 'string' || !cwd || typeof cwd !== 'string') {
-      res.status(400).json({ error: 'Missing rel or cwd parameter' })
-      return
-    }
-    if (rel.includes('..') || cwd.includes('..')) {
-      res.status(400).json({ error: 'Invalid path' })
-      return
-    }
-    if (/[;&|`$(){}!<>]/.test(rel) || /[;&|`$(){}!<>]/.test(cwd)) {
-      res.status(400).json({ error: 'invalid characters in path' })
-      return
-    }
-    // Absolute rel needs no resolution — pass through.
-    if (rel.startsWith('/')) {
-      res.json({ path: rel, resolved: true })
-      return
-    }
-
-    const cleanRel = rel.replace(/^\.\//, '').replace(/\/+$/, '')
-    const bases = candidateBases(cwd)
-    const fallback = path.posix.join(cwd.replace(/\/+$/, ''), cleanRel)
-
-    if (host) {
-      // ── Remote: stat each candidate via daemon fs.stat ──
-      const config = await getConfig()
-      const hostDef = config.hosts?.[host]
-      if (!hostDef?.hostname) {
-        res.json({ path: fallback, resolved: false })
-        return
-      }
-      const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
-      const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }
-      let conn
-      try {
-        let timeoutId: ReturnType<typeof setTimeout>
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => reject(new Error('timeout')), REMOTE_TIMEOUT_MS)
-        })
-        conn = await Promise.race([getDaemonConnection(host, sshTarget), timeoutPromise])
-          .finally(() => clearTimeout(timeoutId!))
-      } catch {
-        res.json({ path: fallback, resolved: false })
-        return
-      }
-      // Total time budget across the walk-up stats + the downward find: the
-      // loop is up to 2 serial RPCs per ancestor level (~18 on a deep path),
-      // and per-RPC timeouts alone don't bound the SUM. Expiring falls back to
-      // the naive cwd-joined path — a click still does something.
-      const resolveDeadline = Date.now() + 10_000
-      let remoteRepoRoot: string | null = null
-      for (const base of bases) {
-        if (Date.now() >= resolveDeadline) {
-          res.json({ path: fallback, resolved: false })
-          return
-        }
-        const candidate = path.posix.join(base, cleanRel)
-        const st = await conn.send('fs.stat', { path: candidate })
-        if (st.ok && st.exists) {
-          res.json({ path: candidate, resolved: true })
-          return
-        }
-        // Stop at the repo root (one .git up), remember it for downward search.
-        const git = await conn.send('fs.stat', { path: path.posix.join(base, '.git') })
-        if (git.ok && git.exists) { remoteRepoRoot = base; break }
-      }
-      if (Date.now() >= resolveDeadline) {
-        res.json({ path: fallback, resolved: false })
-        return
-      }
-      // Downward: one fs.find RPC by basename under the repo root, then keep the
-      // first hit whose full path ends with the requested rel (server-side walk
-      // avoids a round-trip per directory). Only locates files, not bare dirs.
-      const downRoot = remoteRepoRoot ?? bases[bases.length - 1]
-      const baseName = cleanRel.split('/').pop() ?? cleanRel
-      const find = await conn.send('fs.find', { path: downRoot, name: baseName, maxDepth: MAX_DOWNWARD_DEPTH })
-      if (find.ok && Array.isArray(find.files)) {
-        const suffix = '/' + cleanRel
-        const hit = (find.files as string[])
-          .filter((f) => f === path.posix.join(downRoot, cleanRel) || f.endsWith(suffix))
-          .sort((a, b) => a.split('/').length - b.split('/').length)[0]
-        if (hit) {
-          res.json({ path: hit, resolved: true })
-          return
-        }
-      }
-      res.json({ path: fallback, resolved: false })
-      return
-    }
-
-    // ── Local: walk up first, then search down from the repo root ──
-    let repoRoot: string | null = null
-    for (const base of bases) {
-      const candidate = path.posix.join(base, cleanRel)
-      try {
-        await fsp.stat(candidate)
-        res.json({ path: candidate, resolved: true })
-        return
-      } catch { /* not here, keep walking up */ }
-      try {
-        await fsp.stat(path.join(base, '.git'))
-        repoRoot = base
-        break // reached repo root — stop walking up
-      } catch { /* not a repo root, continue */ }
-    }
-    // Nothing upward — Claude may have shown a path relative to a deeper dir
-    // (e.g. cwd=repo but the file lives in repo/a/b/<rel>). Search downward from
-    // the repo root (or the topmost base we reached) for the first match.
-    // Search downward from the repo root if known, else from cwd itself — NEVER
-    // from an ancestor above cwd (that could mean scanning from / across the whole
-    // filesystem). The repo root is always at or below cwd's ancestors but bounded
-    // by .git; without it, cwd is the safe floor.
-    const downRoot = repoRoot ?? cwd.replace(/\/+$/, '')
-    const downHit = await findDownwardLocal(downRoot, cleanRel)
-    if (downHit) {
-      res.json({ path: downHit, resolved: true })
-      return
-    }
-    res.json({ path: fallback, resolved: false })
+    const host = typeof req.query.host === 'string' && req.query.host ? req.query.host : undefined
+    res.json(await resolveSessionPath(req.query.rel, req.query.cwd, host))
   } catch (err) {
+    if (err instanceof FilesOpError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })
 
+export interface FileListResult {
+  path: string
+  selectedFile?: string
+  entries: DirEntry[]
+}
+
+/**
+ * List a single directory's entries on a host. Shared by the internal route
+ * and GET /api/v1/files/list. Path-traversal and shell-metacharacter guards
+ * live HERE so every edge gets identical sandboxing. Throws FilesOpError.
+ */
+export async function listSessionFiles(
+  rawPath: unknown,
+  host: string | undefined,
+  showHidden: boolean,
+): Promise<FileListResult> {
+  if (!rawPath || typeof rawPath !== 'string') {
+    throw new FilesOpError('Missing or invalid path parameter', 400)
+  }
+  if (rawPath.length > 4096) {
+    throw new FilesOpError('path too long', 400)
+  }
+  // No directory traversal
+  if (rawPath.includes('..')) {
+    throw new FilesOpError('Invalid path', 400)
+  }
+  // No shell metacharacters (defense in depth — remote path is passed to daemon)
+  if (/[;&|`$(){}!<>]/.test(rawPath)) {
+    throw new FilesOpError('invalid characters in path', 400)
+  }
+
+  // Expand ~ for local; remote keeps ~ (daemon's fs.ls expands on the remote host)
+  let dirPath = rawPath
+  if (!host && (dirPath === '~' || dirPath.startsWith('~/'))) {
+    dirPath = os.homedir() + dirPath.slice(1)
+  }
+
+  if (!host && !path.isAbsolute(dirPath)) {
+    throw new FilesOpError('Path must be absolute', 400)
+  }
+
+  if (host) {
+    // ── Remote ──
+    const config = await getConfig()
+    const hostDef = config.hosts?.[host]
+    if (!hostDef) throw new FilesOpError(`Unknown host: ${host}`, 400)
+    const hostname = hostDef.hostname
+    if (!hostname) throw new FilesOpError(`Host "${host}" has no hostname`, 400)
+
+    const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
+    const sshTarget = { hostname, user: hostDef.user, port: hostDef.port }
+
+    let timeoutId: ReturnType<typeof setTimeout>
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new FilesOpError(`Remote connection to ${host} timed out`, 400)), REMOTE_TIMEOUT_MS)
+    })
+    const conn = await Promise.race([
+      getDaemonConnection(host, sshTarget),
+      timeoutPromise,
+    ]).finally(() => clearTimeout(timeoutId!))
+
+    let result = await conn.send('fs.ls', { path: dirPath })
+    let remoteSelectedFile: string | undefined
+    // If the path is a file (not a dir), the daemon's readdir fails with ENOTDIR.
+    // Behave like VS Code: list the parent dir and flag the file for preview.
+    // (Detect via the error string — the daemon's fs.stat doesn't report dir-ness,
+    // so this avoids a daemon binary rebuild/redeploy.)
+    if (!result.ok && /ENOTDIR/.test(String(result.error))) {
+      const parent = path.posix.dirname(dirPath)
+      remoteSelectedFile = path.posix.basename(dirPath)
+      result = await conn.send('fs.ls', { path: parent })
+    }
+    if (!result.ok) {
+      throw new FilesOpError(`Cannot list directory: ${result.error ?? dirPath}`, 400)
+    }
+    const resolvedPath = (typeof result.resolvedPath === 'string' && result.resolvedPath)
+      ? result.resolvedPath
+      : dirPath
+    const lsEntries = (result.entries as Array<{ name: string; type: string; size?: number }>) ?? []
+    const entries: DirEntry[] = []
+    for (const e of lsEntries) {
+      if (!showHidden && e.name.startsWith('.')) continue
+      // Daemon fs.ls reports 'dir' | 'file' | 'other' (sockets/FIFOs/symlinks) and
+      // never includes size — anything non-dir is shown as a (sizeless) file.
+      entries.push({
+        name: e.name,
+        type: e.type === 'dir' ? 'dir' : 'file',
+        ...(typeof e.size === 'number' ? { size: e.size } : {}),
+      })
+    }
+    return { path: resolvedPath, selectedFile: remoteSelectedFile, entries: sortEntries(entries).slice(0, MAX_ENTRIES) }
+  }
+
+  // ── Local ──
+  // If the path points at a file (not a dir), behave like VS Code: list its
+  // parent directory and flag the file so the UI can select/preview it, instead
+  // of failing with ENOTDIR on scandir.
+  let listDir = dirPath
+  let selectedFile: string | undefined
+  try {
+    const st = await fsp.stat(dirPath)
+    if (!st.isDirectory()) {
+      listDir = path.dirname(dirPath)
+      selectedFile = path.basename(dirPath)
+    }
+  } catch {
+    // stat failed (missing path / perms) — let readdir below produce the error
+  }
+  let dirents
+  try {
+    dirents = await fsp.readdir(listDir, { withFileTypes: true })
+  } catch (err) {
+    throw new FilesOpError(`Cannot list directory: ${err instanceof Error ? err.message : String(err)}`, 400)
+  }
+  const visible = dirents.filter((d) => showHidden || !d.name.startsWith('.'))
+  // stat() (follows symlinks) in parallel so a symlink-to-dir is classified as a
+  // dir (readdir's withFileTypes uses lstat → symlinked dirs would look like files),
+  // and to avoid N sequential round-trips on large/networked dirs. stat also yields
+  // the file size. Falls back to the dirent type if stat fails (broken symlink/perm).
+  const entries: DirEntry[] = await Promise.all(
+    visible.map(async (dirent): Promise<DirEntry> => {
+      try {
+        const st = await fsp.stat(path.join(dirPath, dirent.name))
+        if (st.isDirectory()) return { name: dirent.name, type: 'dir' }
+        return { name: dirent.name, type: 'file', size: st.size }
+      } catch {
+        return { name: dirent.name, type: dirent.isDirectory() ? 'dir' : 'file' }
+      }
+    }),
+  )
+  return { path: listDir, selectedFile, entries: sortEntries(entries).slice(0, MAX_ENTRIES) }
+}
+
 filesRouter.get('/list', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const rawPath = req.query.path
-    const host = req.query.host as string | undefined
+    const host = typeof req.query.host === 'string' && req.query.host ? req.query.host : undefined
     const showHidden = req.query.showHidden === '1' || req.query.showHidden === 'true'
-
-    if (!rawPath || typeof rawPath !== 'string') {
-      res.status(400).json({ error: 'Missing or invalid path parameter' })
-      return
-    }
-    if (rawPath.length > 4096) {
-      res.status(400).json({ error: 'path too long' })
-      return
-    }
-    // No directory traversal
-    if (rawPath.includes('..')) {
-      res.status(400).json({ error: 'Invalid path' })
-      return
-    }
-    // No shell metacharacters (defense in depth — remote path is passed to daemon)
-    if (/[;&|`$(){}!<>]/.test(rawPath)) {
-      res.status(400).json({ error: 'invalid characters in path' })
-      return
-    }
-
-    // Expand ~ for local; remote keeps ~ (daemon's fs.ls expands on the remote host)
-    let dirPath = rawPath
-    if (!host && (dirPath === '~' || dirPath.startsWith('~/'))) {
-      dirPath = os.homedir() + dirPath.slice(1)
-    }
-
-    if (!host && !path.isAbsolute(dirPath)) {
-      res.status(400).json({ error: 'Path must be absolute' })
-      return
-    }
-
-    if (host) {
-      // ── Remote ──
-      const config = await getConfig()
-      const hostDef = config.hosts?.[host]
-      if (!hostDef) {
-        res.status(400).json({ error: `Unknown host: ${host}` })
-        return
-      }
-      const hostname = hostDef.hostname
-      if (!hostname) {
-        res.status(400).json({ error: `Host "${host}" has no hostname` })
-        return
-      }
-
-      const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
-      const sshTarget = { hostname, user: hostDef.user, port: hostDef.port }
-
-      let timeoutId: ReturnType<typeof setTimeout>
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error(`Remote connection to ${host} timed out`)), REMOTE_TIMEOUT_MS)
-      })
-      const conn = await Promise.race([
-        getDaemonConnection(host, sshTarget),
-        timeoutPromise,
-      ]).finally(() => clearTimeout(timeoutId!))
-
-      let result = await conn.send('fs.ls', { path: dirPath })
-      let remoteSelectedFile: string | undefined
-      // If the path is a file (not a dir), the daemon's readdir fails with ENOTDIR.
-      // Behave like VS Code: list the parent dir and flag the file for preview.
-      // (Detect via the error string — the daemon's fs.stat doesn't report dir-ness,
-      // so this avoids a daemon binary rebuild/redeploy.)
-      if (!result.ok && /ENOTDIR/.test(String(result.error))) {
-        const parent = path.posix.dirname(dirPath)
-        remoteSelectedFile = path.posix.basename(dirPath)
-        result = await conn.send('fs.ls', { path: parent })
-      }
-      if (!result.ok) {
-        res.status(400).json({ error: `Cannot list directory: ${result.error ?? dirPath}` })
-        return
-      }
-      const resolvedPath = (typeof result.resolvedPath === 'string' && result.resolvedPath)
-        ? result.resolvedPath
-        : dirPath
-      const lsEntries = (result.entries as Array<{ name: string; type: string; size?: number }>) ?? []
-      const entries: DirEntry[] = []
-      for (const e of lsEntries) {
-        if (!showHidden && e.name.startsWith('.')) continue
-        // Daemon fs.ls reports 'dir' | 'file' | 'other' (sockets/FIFOs/symlinks) and
-        // never includes size — anything non-dir is shown as a (sizeless) file.
-        entries.push({
-          name: e.name,
-          type: e.type === 'dir' ? 'dir' : 'file',
-          ...(typeof e.size === 'number' ? { size: e.size } : {}),
-        })
-      }
-      res.json({ path: resolvedPath, selectedFile: remoteSelectedFile, entries: sortEntries(entries).slice(0, MAX_ENTRIES) })
-      return
-    }
-
-    // ── Local ──
-    // If the path points at a file (not a dir), behave like VS Code: list its
-    // parent directory and flag the file so the UI can select/preview it, instead
-    // of failing with ENOTDIR on scandir.
-    let listDir = dirPath
-    let selectedFile: string | undefined
-    try {
-      const st = await fsp.stat(dirPath)
-      if (!st.isDirectory()) {
-        listDir = path.dirname(dirPath)
-        selectedFile = path.basename(dirPath)
-      }
-    } catch {
-      // stat failed (missing path / perms) — let readdir below produce the error
-    }
-    let dirents
-    try {
-      dirents = await fsp.readdir(listDir, { withFileTypes: true })
-    } catch (err) {
-      res.status(400).json({ error: `Cannot list directory: ${err instanceof Error ? err.message : String(err)}` })
-      return
-    }
-    const visible = dirents.filter((d) => showHidden || !d.name.startsWith('.'))
-    // stat() (follows symlinks) in parallel so a symlink-to-dir is classified as a
-    // dir (readdir's withFileTypes uses lstat → symlinked dirs would look like files),
-    // and to avoid N sequential round-trips on large/networked dirs. stat also yields
-    // the file size. Falls back to the dirent type if stat fails (broken symlink/perm).
-    const entries: DirEntry[] = await Promise.all(
-      visible.map(async (dirent): Promise<DirEntry> => {
-        try {
-          const st = await fsp.stat(path.join(dirPath, dirent.name))
-          if (st.isDirectory()) return { name: dirent.name, type: 'dir' }
-          return { name: dirent.name, type: 'file', size: st.size }
-        } catch {
-          return { name: dirent.name, type: dirent.isDirectory() ? 'dir' : 'file' }
-        }
-      }),
-    )
-    res.json({ path: listDir, selectedFile, entries: sortEntries(entries).slice(0, MAX_ENTRIES) })
+    res.json(await listSessionFiles(req.query.path, host, showHidden))
   } catch (err) {
+    if (err instanceof FilesOpError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })

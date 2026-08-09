@@ -19,11 +19,11 @@ import {
   updateSessionRecord,
   updateSessionRecordConditionally,
 } from '../../core/session-tracker.js'
-import { readSessionHistory, readSingleSubagentHistory, reconstructWorkflowProgress, extractPlanContent, rewriteHistoryRemoteImages, isWindowedHistory } from '../../core/session-history.js'
+import { readSessionHistory, extractPlanContent, rewriteHistoryRemoteImages, isWindowedHistory } from '../../core/session-history.js'
 import { resolveDeltaStart, deltaCursor, collectRequestedRevisions, isUnsettledRow } from '../../core/history-delta.js'
 import { computeSessionChanges } from '../../core/session-changes.js'
 import { computeSessionGitDiff, type GitDiffBase } from '../../core/session-git-diff.js'
-import { listTasksByIds, getTask, addTask, getCustomTiers, linkSession } from '../../core/task-manager.js'
+import { listTasksByIds, getTask, getCustomTiers } from '../../core/task-manager.js'
 import { getConfig } from '../../core/config-manager.js'
 import { bus, EventNames, eventData } from '../../core/event-bus.js'
 import fsp from 'node:fs/promises'
@@ -31,8 +31,6 @@ import { randomUUID } from 'node:crypto'
 import path from 'path'
 import { isSessionProcessAlive } from '../../utils/session-liveness.js'
 import { readPlanFromSession, buildPlanExecutionMessage } from '../../utils/plan-message.js'
-import { injectCompactBoundary, buildCompactSummary } from '../../utils/compact-inject.js'
-import { findLocalJsonlPath } from '../../core/session-file-reader.js'
 import { getFrequentDirs, compileFromSessions, recordLaunchPrefs, scoreFrequentDir } from '../../core/frequent-dirs.js'
 import type { SessionRecord, SessionMode, Task, SessionEffort } from '../../core/types.js'
 import { VALID_SESSION_MODEL_IDS, VALID_SESSION_EFFORT_IDS, resolveModelSwitchValue, sessionModelsAsCatalog } from '../../core/types.js'
@@ -41,12 +39,16 @@ import type { SessionHistoryMessage } from '../../core/session-history.js'
 import { processAndSaveImages, buildSessionImageContext } from './images.js'
 import { sessionRunner } from '../../providers/claude-code-session.js'
 import { readAcpSessionHistoryState } from '../../providers/acp-session-history.js'
-import { listSideQuestions, addSideQuestion, getSideQuestion, markPromoted, deleteSideQuestion } from '../../core/side-questions.js'
 import type { ImagePayload } from './images.js'
 import { quickStartSession, QuickStartError } from '../../core/sessions/quick-start.js'
 import { ensureCwd } from '../../core/sessions/ensure-cwd.js'
 import { buildSessionVscodeUri, SessionVscodeUriError } from '../../core/session-vscode-uri.js'
-import { listLocalDirs, listRemoteDirs } from '../../core/sessions/dir-listing.js'
+import {
+  listSessionDirs, getSessionControls, applySessionControl, getSessionSettings,
+  listSessionSideQuestions, askSessionSideQuestion, promoteSessionSideQuestion,
+  removeSessionSideQuestion, getSessionWorkflowPayload, getSessionPlanPayload,
+  getSubagentHistoryPayload, executeCompactSession,
+} from '../../core/sessions/session-extras.js'
 import { filterSessionsByQuery } from '../../core/session-search.js'
 import { QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
 
@@ -166,100 +168,17 @@ sessionsRouter.post('/working-dirs/recompile', async (_req: Request, res: Respon
   }
 })
 
-// In-memory cache for SSH directory listings (avoid re-SSHing for 60s)
-const dirCache = new Map<string, { dirs: string[]; exists: boolean; ts: number }>()
-const DIR_CACHE_TTL = 60_000
-
 // GET /api/sessions/list-dirs — list subdirectories on a host (local or daemon) for path auto-complete
 // Remote hosts use DaemonConnection for fast directory listing.
-sessionsRouter.get('/list-dirs', async (req: Request, res: Response, next: NextFunction) => {
+sessionsRouter.get('/list-dirs', async (req: Request, res: Response) => {
+  // Core logic lives in core/sessions/session-extras.ts (listSessionDirs) —
+  // shared with the /api/v1 mobile route and the daemon control relay.
   try {
-    const prefix = String(req.query.prefix ?? '/')
-    const host = req.query.host as string | undefined
-    const depth = Math.min(Number(req.query.depth) || 2, 4) // preload depth, default 2, max 4
-
-    if (prefix.length > 4096) {
-      res.status(400).json({ error: 'prefix too long' })
-      return
-    }
-
-    // Sanitize: no shell metacharacters allowed in prefix
-    if (/[;&|`$(){}!<>]/.test(prefix)) {
-      res.status(400).json({ error: 'invalid characters in prefix' })
-      return
-    }
-
-    // Expand ~ to home directory
-    let expandedPrefix = prefix
-    if (expandedPrefix === '~' || expandedPrefix.startsWith('~/')) {
-      if (host) {
-        // Remote: keep ~ as-is — the daemon's fs.ls handles ~ expansion on the remote host
-      } else {
-        const os = await import('node:os')
-        const home = os.homedir()
-        // Preserve trailing slash: ~/ → /Users/me/, ~/foo → /Users/me/foo
-        expandedPrefix = home + expandedPrefix.slice(1)
-      }
-    }
-
-    // Find the parent directory to list.
-    // Partial matching is handled by the frontend's filterChildren — backend returns all entries.
-    const dir = expandedPrefix.endsWith('/') ? expandedPrefix : path.dirname(expandedPrefix)
-
-    if (host) {
-      // Remote: resolve host from config and use DaemonConnection for directory listing
-      const config = await getConfig()
-      const hostDef = config.hosts?.[host]
-      if (!hostDef) {
-        res.status(400).json({ error: `Unknown host: ${host}` })
-        return
-      }
-      const hostname = hostDef.hostname
-      if (!hostname) {
-        res.status(400).json({ error: `Host "${host}" has no hostname` })
-        return
-      }
-
-      // Check in-memory cache first
-      const cacheKey = `${host}::${dir}::${depth}`
-      const cached = dirCache.get(cacheKey)
-      if (cached && Date.now() - cached.ts < DIR_CACHE_TTL) {
-        res.json({ dirs: cached.dirs, parent: dir, exists: cached.exists, cached: true })
-        return
-      }
-
-      const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
-      const sshTarget = { hostname, user: hostDef.user, port: hostDef.port }
-      // Race against a 15s timeout to cap HTTP request wait time.
-      // The failure cache in daemon-connection.ts prevents retries for 60s after a failure.
-      let timeoutId: ReturnType<typeof setTimeout>
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error(`Remote connection to ${host} timed out`)), 15_000)
-      })
-      const conn = await Promise.race([
-        getDaemonConnection(host, sshTarget),
-        timeoutPromise,
-      ]).finally(() => clearTimeout(timeoutId!))
-
-      // BFS listing via daemon fs.ls (dir-listing.ts). ENOENT → exists:false (200);
-      // other daemon/SSH errors throw and map to 400 below.
-      const listing = await listRemoteDirs(conn, dir, depth)
-
-      // Cache results (also under the resolved path — the daemon may have expanded ~)
-      const resolvedCacheKey = `${host}::${listing.parent}::${depth}`
-      dirCache.set(cacheKey, { dirs: listing.dirs, exists: listing.exists, ts: Date.now() })
-      if (resolvedCacheKey !== cacheKey) {
-        dirCache.set(resolvedCacheKey, { dirs: listing.dirs, exists: listing.exists, ts: Date.now() })
-      }
-
-      res.json({ dirs: listing.dirs, parent: listing.parent, exists: listing.exists })
-    } else {
-      const listing = await listLocalDirs(dir, depth)
-      res.json({ dirs: listing.dirs, parent: listing.parent, exists: listing.exists })
-    }
+    const host = typeof req.query.host === 'string' && req.query.host ? req.query.host : undefined
+    res.json(await listSessionDirs(req.query.prefix, host, req.query.depth))
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    // SSH failures return 400, not 500
+    // SSH failures return 400, not 500 (SessionControlError carries 400 too)
     res.status(400).json({ error: msg })
   }
 })
@@ -493,8 +412,6 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
 import {
   readProviderSessionHistory,
   clearArchivedSessionTaskLinks,
-  persistSessionModeChange,
-  changeSessionMode,
   patchSession,
   terminateSession,
   restartSession,
@@ -502,7 +419,6 @@ import {
   respondSessionPermission,
   executeContinueSession,
   getSessionChanges,
-  CLAUDE_SESSION_MODES,
 } from '../../core/sessions/session-lifecycle.js'
 import { SessionControlError } from '../../core/sessions/session-controls.js'
 
@@ -734,107 +650,36 @@ function sendSessionNotFound(res: Response): void {
   })
 }
 
-// GET /api/sessions/:sessionId/controls — provider-neutral selectable session controls.
+// GET /api/sessions/:sessionId/controls — provider-neutral selectable session
+// controls. Core logic lives in core/sessions/session-extras.ts (shared with
+// the /api/v1 mobile route and the daemon control relay).
 sessionsRouter.get('/:sessionId/controls', async (req: Request, res: Response, next: NextFunction) => {
   const sessionId = String(req.params.sessionId)
   try {
-    const record = await getSessionByClaudeId(sessionId)
-    if (!record) {
-      sendSessionNotFound(res)
-      return
-    }
-    if (record.engine === 'codex') {
-      const session = await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined)
-      if (!session) {
-        res.status(409).json({ error: 'Codex ACP session is not available' })
-        return
-      }
-      res.json({
-        engine: 'codex',
-        controls: session.sessionControls.filter((control) => control.id !== 'model'),
-      })
-      return
-    }
-    res.json({
-      engine: 'claude',
-      controls: [{
-        id: 'mode',
-        name: 'Mode',
-        type: 'select',
-        currentValue: record.mode || 'default',
-        options: CLAUDE_SESSION_MODES.map((value) => ({
-          value,
-          name: value[0].toUpperCase() + value.slice(1),
-        })),
-      }],
-    })
+    res.json(await getSessionControls(sessionId))
   } catch (err) {
+    if (err instanceof SessionControlError) {
+      if (err.statusCode === 404) { sendSessionNotFound(res); return }
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })
 
 // POST /api/sessions/:sessionId/controls — apply one provider-advertised control.
-sessionsRouter.post('/:sessionId/controls', async (req: Request, res: Response, next: NextFunction) => {
+sessionsRouter.post('/:sessionId/controls', async (req: Request, res: Response) => {
   const sessionId = String(req.params.sessionId)
   const { id, value } = req.body as { id?: unknown; value?: unknown }
   try {
-    if (typeof id !== 'string' || typeof value !== 'string' || !id || !value) {
-      res.status(400).json({ error: 'id and value must be non-empty strings' })
-      return
-    }
-    const record = await getSessionByClaudeId(sessionId)
-    if (!record) {
-      sendSessionNotFound(res)
-      return
-    }
-
-    if (record.engine === 'codex') {
-      const session = await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined)
-      if (!session) {
-        res.status(409).json({ error: 'Codex ACP session is not available' })
-        return
-      }
-      const control = session.sessionControls.find((candidate) => candidate.id === id)
-      if (!control || !control.options.some((option) => option.value === value)) {
-        res.status(400).json({ error: 'unknown control or value' })
-        return
-      }
-      if (!await session.setConfigOption(id, value)) {
-        res.status(409).json({ error: 'Codex ACP control change failed' })
-        return
-      }
-      if (id === 'collaboration_mode') {
-        const mirroredMode: SessionMode = value === 'plan'
-          ? 'plan'
-          : record.mode === 'plan' ? 'default' : record.mode
-        await persistSessionModeChange(record, sessionId, mirroredMode)
-      }
-      res.json({
-        engine: 'codex',
-        controls: session.sessionControls.filter((candidate) => candidate.id !== 'model'),
-      })
-      return
-    }
-
-    if (id !== 'mode' || !CLAUDE_SESSION_MODES.includes(value as typeof CLAUDE_SESSION_MODES[number])) {
-      res.status(400).json({ error: 'Claude sessions only support the mode control' })
-      return
-    }
-    const updated = await changeSessionMode(record, sessionId, value as SessionMode)
-    res.json({
-      engine: 'claude',
-      controls: [{
-        id: 'mode',
-        name: 'Mode',
-        type: 'select',
-        currentValue: updated.mode,
-        options: CLAUDE_SESSION_MODES.map((optionValue) => ({
-          value: optionValue,
-          name: optionValue[0].toUpperCase() + optionValue.slice(1),
-        })),
-      }],
-    })
+    res.json(await applySessionControl(sessionId, id, value))
   } catch (err) {
+    if (err instanceof SessionControlError) {
+      if (err.statusCode === 404) { sendSessionNotFound(res); return }
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
+    // Legacy behavior: any other failure surfaces as a 409 rejection.
     const message = err instanceof Error ? err.message : String(err)
     log.web.warn('session control change rejected', { sessionId, id, value, error: message })
     res.status(409).json({ error: message })
@@ -1183,32 +1028,19 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
 })
 
 // GET /api/sessions/:sessionId/subagent/:agentId/history — lazy-load a single subagent's messages
+// Core logic lives in core/sessions/session-extras.ts (getSubagentHistoryPayload)
+// — shared with the /api/v1 mobile route and the daemon control relay.
+// ?workflow=1 → scan the nested subagents/workflows/<runId>/ layout (dynamic
+// workflow subagents); otherwise the flat Task/Team layout.
 sessionsRouter.get('/:sessionId/subagent/:agentId/history', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const sessionId = req.params.sessionId as string
-    const agentId = req.params.agentId as string
-
-    // Validate agentId format: hex strings (Task subagents) or name@team (Team agents)
-    if (!/^[a-zA-Z0-9_@.-]+$/.test(agentId)) {
-      res.status(400).json({ error: 'Invalid agentId format' })
+    const isWorkflow = req.query.workflow === '1' || req.query.workflow === 'true'
+    res.json(await getSubagentHistoryPayload(String(req.params.sessionId), String(req.params.agentId), isWorkflow))
+  } catch (err) {
+    if (err instanceof SessionControlError) {
+      res.status(err.statusCode).json({ error: err.message })
       return
     }
-
-    const record = await getSessionByClaudeId(sessionId)
-    const cwd = record?.cwd
-    // ?workflow=1 → scan the nested subagents/workflows/<runId>/ layout (dynamic
-    // workflow subagents); otherwise the flat Task/Team layout.
-    const isWorkflow = req.query.workflow === '1' || req.query.workflow === 'true'
-
-    let messages = await readSingleSubagentHistory(sessionId, agentId, cwd, record?.host, isWorkflow)
-
-    // Rewrite remote image paths for remote sessions
-    if (record?.host && messages.length > 0) {
-      messages = await rewriteHistoryRemoteImages(messages, record.host, sessionId, record.cwd)
-    }
-
-    res.json({ messages })
-  } catch (err) {
     next(err)
   }
 })
@@ -1216,30 +1048,11 @@ sessionsRouter.get('/:sessionId/subagent/:agentId/history', async (req: Request,
 // GET /api/sessions/:sessionId/workflow — reconstruct the dynamic-workflow progress
 // panel from the on-disk run manifest. Lets the panel survive page reload / server
 // restart, when the live in-memory session state is gone. 204 = no workflow ran.
-//
-// Route-level deadline: every session panel mount fetches this unconditionally,
-// and for a remote session the manifest read rides the daemon connection — a
-// wedged/reconnecting daemon (which may trigger the full auto-redeploy chain)
-// held this request for minutes, pinning one of the browser's 6 connections
-// (measured: 382s worst case; every "FAILED after 15s" cluster on 2026-08-06
-// traced here). Timing out answers 204 ("no workflow to restore") — the panel
-// merely skips reload-restore; a live run is driven by the event stream, not
-// this route.
-const WORKFLOW_RECONSTRUCT_TIMEOUT_MS = 5_000
+// Core logic (incl. the 5s route-level deadline that saved the browser's
+// connection pool from wedged daemons) lives in core/sessions/session-extras.ts.
 sessionsRouter.get('/:sessionId/workflow', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const sessionId = req.params.sessionId as string
-    const record = await getSessionByClaudeId(sessionId)
-    const payload = await Promise.race([
-      reconstructWorkflowProgress(sessionId, record?.cwd, record?.host),
-      new Promise<null>((resolve) => {
-        const t = setTimeout(() => {
-          log.web.warn('workflow reconstruct timed out — answering 204', { sessionId, host: record?.host })
-          resolve(null)
-        }, WORKFLOW_RECONSTRUCT_TIMEOUT_MS)
-        t.unref?.()
-      }),
-    ])
+    const payload = await getSessionWorkflowPayload(String(req.params.sessionId))
     if (!payload) {
       res.status(204).end()
       return
@@ -1294,54 +1107,18 @@ sessionsRouter.get('/:sessionId/changes', async (req: Request, res: Response, ne
   }
 })
 
-// GET /api/sessions/:sessionId/plan — read plan content for a plan session (or its source plan session)
+// GET /api/sessions/:sessionId/plan — read plan content for a plan session
+// (or its source plan session). Core logic lives in
+// core/sessions/session-extras.ts (getSessionPlanPayload) — shared with the
+// /api/v1 mobile route and the daemon control relay.
 sessionsRouter.get('/:sessionId/plan', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const sessionId = req.params.sessionId as string
-    const record = await getSessionByClaudeId(sessionId)
-    if (!record) {
-      res.status(404).json({ error: 'Session not found' })
-      return
-    }
-
-    // Exec sessions can re-enter plan mode via execute-continue, creating their own plan.
-    // When that happens, the session's own plan is newer/fresher and takes priority over
-    // the original source plan (which is now stale). planCompleted alone is sufficient —
-    // planFile may be absent if the plan was only in ExitPlanMode.input.plan (no Write to
-    // ~/.claude/plans/), but readPlanFromSession's JSONL slug and extractPlanContent
-    // strategies can still find it.
-    // See also: POST /execute-continue which uses the same !planCompleted check (~line 1009).
-    const hasOwnPlan = !!record.planCompleted
-    const planSessionId = hasOwnPlan ? sessionId : (record.fromPlanSessionId ?? sessionId)
-    const isFollowedLink = planSessionId !== sessionId
-
-    // Strategy 1: readPlanFromSession (planFile on disk, or JSONL slug → file)
-    const planResult = await readPlanFromSession(planSessionId)
-    if (!('error' in planResult)) {
-      res.json({
-        content: planResult.content,
-        planFile: planResult.planFile,
-        sourceSessionId: isFollowedLink ? planSessionId : undefined,
-      })
-      return
-    }
-
-    // Strategy 2: extractPlanContent from JSONL (Write to plans/ or ExitPlanMode.input.plan)
-    const planRecord = isFollowedLink ? await getSessionByClaudeId(planSessionId) : record
-    if (planRecord) {
-      const extracted = await extractPlanContent(planSessionId, planRecord.cwd, planRecord.host)
-      if (extracted) {
-        res.json({
-          content: extracted,
-          planFile: planRecord.planFile ?? undefined,
-          sourceSessionId: isFollowedLink ? planSessionId : undefined,
-        })
-        return
-      }
-    }
-
-    res.status(404).json({ error: 'No plan content found for this session' })
+    res.json(await getSessionPlanPayload(String(req.params.sessionId)))
   } catch (err) {
+    if (err instanceof SessionControlError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })
@@ -1538,60 +1315,16 @@ sessionsRouter.get('/:sessionId/models', async (req: Request, res: Response, nex
 //   • get_binary_version
 // All three run in parallel with the settings read; each degrades to null
 // independently (same untrusted-read contract).
+// Core logic lives in core/sessions/session-extras.ts (getSessionSettings) —
+// shared with the /api/v1 mobile route and the daemon control relay.
 sessionsRouter.get('/:sessionId/settings', async (req: Request, res: Response, next: NextFunction) => {
-  const sessionId = req.params.sessionId as string
-  const wantDetails = req.query.details === '1'
   try {
-    const record = await getSessionByClaudeId(sessionId)
-    if (!record) {
-      res.status(404).json({ error: 'session not found' })
+    res.json(await getSessionSettings(String(req.params.sessionId), req.query.details === '1'))
+  } catch (err) {
+    if (err instanceof SessionControlError) {
+      res.status(err.statusCode).json({ error: err.message })
       return
     }
-    const requested = {
-      model: record.cliModel ?? record.model,
-      effort: record.effort,
-      mode: record.mode,
-    }
-    // Attach-on-demand (same as /effort and /model) so a live-but-unmapped session
-    // still answers. getSettings() resolves null on timeout/old CLI — never throws.
-    let applied: { model: string | null; effort: string | null; mode: string | null } | null = null
-    let effective: { effortLevel: SessionEffort | null } | null = null
-    let details: {
-      contextUsage: import('../../providers/claude-code-session.js').CliContextUsage | null
-      usage: Record<string, unknown> | null
-      binaryVersion: { version?: string; buildTime?: string } | null
-    } | undefined
-    const session = await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined)
-    if (session) {
-      const [settingsSnapshot, contextUsage, usage, binaryVersion] = await Promise.all([
-        session.getSettingsSnapshot().catch(() => null),
-        wantDetails ? session.getContextUsage().catch(() => null) : Promise.resolve(null),
-        wantDetails ? session.getUsage().catch(() => null) : Promise.resolve(null),
-        wantDetails ? session.getBinaryVersion().catch(() => null) : Promise.resolve(null),
-      ])
-      if (settingsSnapshot) {
-        const settings = settingsSnapshot.applied
-        // Mode has no field in get_settings' applied block — the live session's
-        // _mode IS the runtime truth (reconciled from the CLI's system/status
-        // events, incl. our set_permission_mode echoes and in-CLI EnterPlanMode).
-        applied = { model: settings.model ?? null, effort: settings.effort ?? null, mode: session.mode ?? null }
-        const configuredEffort = settingsSnapshot.effective?.effortLevel
-        effective = {
-          effortLevel: typeof configuredEffort === 'string' && VALID_SESSION_EFFORT_IDS.has(configuredEffort)
-            ? configuredEffort as SessionEffort
-            : null,
-        }
-        // Opportunistically reconcile record/badge state from this same read —
-        // one round-trip serves both the picker and the persisted truth
-        // (pass the snapshot so refresh doesn't issue a second get_settings).
-        void session.refreshAppliedSettings('picker-pull', settingsSnapshot.applied).catch(() => null)
-      }
-      if (wantDetails) details = { contextUsage, usage, binaryVersion }
-    } else if (wantDetails) {
-      details = { contextUsage: null, usage: null, binaryVersion: null }
-    }
-    res.json({ live: applied !== null, requested, applied, effective, ...(details !== undefined ? { details } : {}) })
-  } catch (err) {
     next(err)
   }
 })
@@ -1599,72 +1332,36 @@ sessionsRouter.get('/:sessionId/settings', async (req: Request, res: Response, n
 // GET /api/sessions/:sessionId/side-questions — history list for the drawer
 sessionsRouter.get('/:sessionId/side-questions', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const list = await listSideQuestions(req.params.sessionId as string)
-    res.json({ sideQuestions: list })
+    res.json(await listSessionSideQuestions(String(req.params.sessionId)))
   } catch (err) {
     next(err)
   }
 })
 
-// POST /api/sessions/:sessionId/side-question — ask + persist + broadcast
+// POST /api/sessions/:sessionId/side-question — ask + persist + broadcast.
+// Core logic (attach-on-demand, DONE/ERROR bus events) lives in session-extras.ts.
 sessionsRouter.post('/:sessionId/side-question', async (req: Request, res: Response, next: NextFunction) => {
-  const sessionId = req.params.sessionId as string
-  const { question } = req.body as { question?: string }
   try {
-    if (!question || typeof question !== 'string' || !question.trim()) {
-      res.status(400).json({ error: 'question (non-empty string) is required' })
-      return
-    }
-    // Attach-on-demand: findByClaudeId only sees the in-memory map (≈ the sessions
-    // the startup reconciler flagged), so a genuinely-alive session the user can
-    // chat with would falsely 404 here. getOrAttachLiveSession rehydrates via
-    // attachToExisting — same resolution a normal send turn gets in processNext.
-    const session = await sessionRunner.getOrAttachLiveSession(sessionId)
-    if (!session) {
-      res.status(404).json({ error: 'Live session not found' })
-      return
-    }
-    const answer = await session.askSideQuestion(question.trim())
-    const entry = await addSideQuestion(sessionId, question.trim(), answer)
-    bus.emit(EventNames.SESSION_SIDE_QUESTION_DONE, {
-      sessionId, id: entry.id, question: entry.question, answer: entry.answer, createdAt: entry.createdAt,
-    }, ['*'], { source: 'session-runner' })
-    res.json({ sideQuestion: entry })
+    res.json(await askSessionSideQuestion(String(req.params.sessionId), (req.body ?? {}).question))
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    log.web.warn('side question failed', { sessionId, error: msg })
-    bus.emit(EventNames.SESSION_SIDE_QUESTION_ERROR, {
-      sessionId, question: question ?? '', error: msg,
-    }, ['*'], { source: 'session-runner' })
-    res.status(502).json({ error: msg })
+    if (err instanceof SessionControlError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
+    next(err)
   }
 })
 
 // POST /api/sessions/:sessionId/side-question/:id/promote — turn a Q&A into a task
 sessionsRouter.post('/:sessionId/side-question/:id/promote', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const sessionId = req.params.sessionId as string
-    const id = req.params.id as string
-    const entry = await getSideQuestion(sessionId, id)
-    if (!entry) {
-      res.status(404).json({ error: 'Side question not found' })
+    const result = await promoteSessionSideQuestion(String(req.params.sessionId), String(req.params.id))
+    res.json({ taskId: result.taskId, parentTaskId: result.parentTaskId })
+  } catch (err) {
+    if (err instanceof SessionControlError) {
+      res.status(err.statusCode).json({ error: err.message })
       return
     }
-    // If this session is working on a task, file the promoted Q&A as a SUBTASK of
-    // it (addTask inherits the parent's project/source). Ad-hoc sessions with no
-    // originating task fall back to a top-level task in Inbox.
-    const sessionRecord = await getSessionByClaudeId(sessionId)
-    const parentTaskId = sessionRecord?.taskId?.trim() || undefined
-    const { task } = await addTask({
-      title: entry.question,
-      description: entry.answer,
-      ...(parentTaskId ? { parent_task_id: parentTaskId } : {}),
-    })
-    // Link the task back to the session so it shows under that session's history.
-    await linkSession(task.id, sessionId)
-    await markPromoted(sessionId, id, task.id)
-    res.json({ taskId: task.id, parentTaskId: task.parent_task_id })
-  } catch (err) {
     next(err)
   }
 })
@@ -1672,129 +1369,37 @@ sessionsRouter.post('/:sessionId/side-question/:id/promote', async (req: Request
 // DELETE /api/sessions/:sessionId/side-question/:id — remove a Q&A from history
 sessionsRouter.delete('/:sessionId/side-question/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const ok = await deleteSideQuestion(req.params.sessionId as string, req.params.id as string)
-    if (!ok) {
-      res.status(404).json({ error: 'Side question not found' })
+    res.json(await removeSessionSideQuestion(String(req.params.sessionId), String(req.params.id)))
+  } catch (err) {
+    if (err instanceof SessionControlError) {
+      res.status(err.statusCode).json({ error: err.message })
       return
     }
-    res.json({ status: 'deleted' })
-  } catch (err) {
     next(err)
   }
 })
 
-// POST /api/sessions/:sessionId/execute-compact — execute plan by injecting compact boundary
-// into the SAME session (clears plan conversation but preserves session ID, slug, and plan file).
-// This avoids the "new session loses codebase context" problem while clearing the 200+ plan messages.
+// POST /api/sessions/:sessionId/execute-compact — execute plan by injecting a
+// compact boundary into the SAME session (clears plan conversation but
+// preserves session ID, slug, and plan file). Core logic lives in
+// core/sessions/session-extras.ts (executeCompactSession) — shared with the
+// /api/v1 mobile route and the daemon control relay.
 sessionsRouter.post('/:sessionId/execute-compact', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const planSessionId = req.params.sessionId as string
-    const { task_id, working_directory, instructions, mode, host } = req.body as {
+    const { task_id, working_directory, instructions, mode } = (req.body ?? {}) as {
       task_id?: string
       working_directory?: string
       instructions?: string
       mode?: string
-      host?: string
     }
-
-    const sourceRecord = await getSessionByClaudeId(planSessionId)
-    if (!sourceRecord) {
-      res.status(404).json({ error: 'Session not found' })
-      return
-    }
-
-    // Follow one hop to the source plan session
-    let actualPlanSessionId = planSessionId
-    if (sourceRecord.fromPlanSessionId && !sourceRecord.planCompleted) {
-      actualPlanSessionId = sourceRecord.fromPlanSessionId
-    }
-
-    // Read plan content
-    let planResult = await readPlanFromSession(actualPlanSessionId)
-    if ('error' in planResult) {
-      const planRecord = actualPlanSessionId !== planSessionId
-        ? await getSessionByClaudeId(actualPlanSessionId)
-        : sourceRecord
-      if (planRecord) {
-        const extracted = await extractPlanContent(actualPlanSessionId, planRecord.cwd, planRecord.host)
-        if (extracted?.trim()) {
-          planResult = { content: extracted, planFile: planRecord.planFile ?? `(extracted from session ${actualPlanSessionId} JSONL)` }
-        }
-      }
-    }
-    if ('error' in planResult) {
-      const status = planResult.error.includes('not found') ? 404 : 400
-      res.status(status).json({ error: planResult.error })
-      return
-    }
-
-    const taskId = task_id ?? sourceRecord?.taskId
-    const cwd = working_directory ?? sourceRecord?.cwd
-    if (!cwd) {
-      res.status(400).json({ error: 'working_directory is required' })
-      return
-    }
-
-    const validModes = ['bypass', 'accept', 'default', 'plan']
-    if (mode && !validModes.includes(mode)) {
-      res.status(400).json({ error: `Invalid mode: ${mode}. Must be one of: ${validModes.join(', ')}` })
-      return
-    }
-    const execMode = (mode ?? 'bypass') as 'bypass' | 'accept' | 'default' | 'plan'
-
-    // ── Find the session's JSONL file ──
-    const jsonlPath = await findLocalJsonlPath(actualPlanSessionId, cwd)
-    if (!jsonlPath) {
-      log.web.warn('execute-compact: JSONL not found, use /execute instead', { planSessionId: actualPlanSessionId, cwd })
-      res.status(400).json({ error: 'Could not find session JSONL file. Use /execute instead.' })
-      return
-    }
-
-    // ── Stop the session process if alive (must stop before JSONL injection) ──
-    if (sourceRecord.process_status !== 'stopped') {
-      log.web.info('execute-compact: stopping session process before injection', { planSessionId: actualPlanSessionId })
-      const liveSession = sessionRunner.findByClaudeId(actualPlanSessionId)
-      if (liveSession) {
-        liveSession.interrupt()
-        await new Promise(resolve => setTimeout(resolve, 1000))
-      }
-    }
-
-    // ── Inject compact boundary + plan summary into JSONL ──
-    const summary = buildCompactSummary(planResult.content, planResult.planFile)
-    const injectResult = await injectCompactBoundary(jsonlPath, summary)
-    if (!injectResult) {
-      res.status(500).json({ error: 'Failed to inject compact boundary into session JSONL' })
-      return
-    }
-
-    // ── Update session mode and send execute message ──
-    await updateSessionRecord(actualPlanSessionId, { mode: execMode })
-
-    const planMessage = buildPlanExecutionMessage(planResult.planFile, planResult.content, instructions)
-    const { sendMessageToSession } = await import('../../core/session-message-queue.js')
-    await sendMessageToSession(actualPlanSessionId, planMessage, {
-      source: 'web-api',
-      taskId,
-      mode: execMode,
-    })
-
-    log.web.info('execute-compact: injected boundary and sent execute message', {
-      sessionId: actualPlanSessionId,
-      boundaryUuid: injectResult.boundaryUuid,
-      planFile: planResult.planFile,
-    })
-
-    res.json({
-      status: 'started',
-      sessionId: actualPlanSessionId,
-      strategy: 'compact',
-      planSessionId: actualPlanSessionId,
-      taskId,
-      mode: execMode,
-      boundaryUuid: injectResult.boundaryUuid,
-    })
+    res.json(await executeCompactSession(String(req.params.sessionId), {
+      task_id, working_directory, instructions, mode,
+    }))
   } catch (err) {
+    if (err instanceof SessionControlError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })
