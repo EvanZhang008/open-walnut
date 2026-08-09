@@ -77,6 +77,7 @@ import { syncReconciler } from '../core/sync-reconciler.js'
 import { integrationsRouter } from './routes/integrations.js'
 import { createPluginSourcesRouter } from './routes/plugin-sources.js'
 import { systemRouter } from './routes/system.js'
+import { cloudSetupRouter } from './routes/cloud-setup.js'
 import { qmdRouter } from './routes/qmd.js'
 import { notesRouter } from './routes/notes.js'
 import { notesV2Router } from './routes/notes-v2.js'
@@ -854,6 +855,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/plugins', pluginRouter)
 
   app.use('/api/system', systemRouter)
+  // One-click cloud-companion provisioning (Mac-side job engine).
+  app.use('/api/cloud-setup', cloudSetupRouter)
   app.use('/api/qmd', qmdRouter)
   app.use('/api/push', pushRouter)
   app.use('/api/auth', authRouter)
@@ -1081,6 +1084,17 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   {
     const { resetQmdRouteState } = await import('./routes/qmd.js')
     resetQmdRouteState()
+  }
+
+  // -- Cloud-companion setup job: resume one that was mid-flight when the Mac
+  //    restarted. A cdk deploy or a 15-minute first boot easily outlives a
+  //    server restart, and the job is the only thing holding the pairing code
+  //    that will claim the box. Mac-side only (guarded inside). --
+  {
+    const { resumeCloudSetupJobIfAny } = await import('../core/cloud-setup/job.js')
+    resumeCloudSetupJobIfAny().catch((err) => {
+      log.web.warn('cloud-setup: resume failed', { error: err instanceof Error ? err.message : String(err) })
+    })
   }
   registerAuthRpc()
   registerBrowserLogsRpc()

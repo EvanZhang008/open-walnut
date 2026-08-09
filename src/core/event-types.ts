@@ -598,6 +598,20 @@ export interface SystemHealthEvent {
   };
 }
 
+// ── Cloud-companion setup events ──
+
+/**
+ * Coarse "the setup job moved" ping for the console. Deliberately carries no
+ * detail beyond status/step: the pairing code must never reach a bus event, and
+ * the full (redacted) state is one GET /api/cloud-setup/job away. Fine-grained
+ * progress rides the replayable 'cloud-setup' SSE channel instead.
+ */
+export interface CloudSetupUpdateEvent {
+  jobId: string;
+  status: import('./cloud-setup/job-types.js').CloudSetupJobStatus;
+  currentStep: import('./cloud-setup/job-types.js').CloudSetupStepId;
+}
+
 // ── Cron events (emitted via broadcastEvent, consumed by git-versioning) ──
 
 export interface CronJobEvent {
@@ -765,6 +779,8 @@ export interface EventPayloadMap {
   'audio:chunk-saved': AudioChunkSavedEvent;
   'audio:error': AudioErrorEvent;
   'audio:transcription-complete': AudioTranscriptionCompleteEvent;
+
+  'cloud-setup:update': CloudSetupUpdateEvent;
 
   'cron:job-added': CronJobEvent;
   'cron:job-updated': CronJobEvent;
