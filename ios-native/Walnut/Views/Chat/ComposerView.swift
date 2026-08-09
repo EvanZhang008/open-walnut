@@ -450,8 +450,12 @@ struct ComposerView: View {
 
     var body: some View {
         ComposerBar(
-            placeholder: "Message \(chat.activeAgentName)",
-            busy: chat.sending || chat.streaming,
+            // A pending structured question re-opens the composer: the send
+            // routes to the answer endpoint (ChatStore.send intercepts).
+            placeholder: chat.pendingQuestion
+                ? "Answer \(chat.activeAgentName)'s question"
+                : "Message \(chat.activeAgentName)",
+            busy: (chat.sending || chat.streaming) && !chat.pendingQuestion,
             disabled: !connection.online,
             disabledNotice: connection.online ? nil : "Offline — reconnecting…",
             // Per-conversation draft. A brand-new (unsaved) conversation shares
@@ -498,5 +502,33 @@ struct ErrorBanner: View {
         .padding(.vertical, 6)
         .background(Theme.danger.opacity(0.12))
         .foregroundStyle(.primary)
+    }
+}
+
+/// Green success line for lifecycle confirmations ("Session restarted").
+struct ConfirmationBanner: View {
+    let text: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack {
+            Label(text, systemImage: "checkmark.circle.fill")
+                .font(.footnote)
+                .lineLimit(2)
+            Spacer()
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.caption)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(Theme.success.opacity(0.12))
+        .foregroundStyle(.primary)
+        .task {
+            // Self-dismiss: success lines are transient by nature.
+            try? await Task.sleep(for: .seconds(5))
+            onDismiss()
+        }
     }
 }

@@ -12,8 +12,16 @@ struct SessionConversationView: View {
     let session: WalnutSession
 
     @State private var store: SessionConversationStore
+    /// Wave-1 lifecycle control plane (permissions / restart / terminate /
+    /// rename / archive) — separate from the conversation store on purpose:
+    /// zero writes into the timeline rendering path.
+    @State private var lifecycle: SessionLifecycleController
     @State private var showInfo = false
     @State private var showControls = false
+    @State private var showRename = false
+    @State private var renameDraft = ""
+    /// Non-nil = terminate hit 409 cron_owner; confirm to force.
+    @State private var forceTerminateMessage: String?
     /// Non-nil pushes the forked session's conversation onto the enclosing stack.
     @State private var forkedSession: WalnutSession?
     @State private var keyboardGeometryFrozen = false
@@ -26,6 +34,7 @@ struct SessionConversationView: View {
     init(session: WalnutSession) {
         self.session = session
         _store = State(initialValue: SessionConversationStore(session: session))
+        _lifecycle = State(initialValue: SessionLifecycleController(sessionId: session.id))
     }
 
     /// WalnutTests seam: host the REAL page around a pre-seeded store (event-
@@ -34,6 +43,7 @@ struct SessionConversationView: View {
     init(session: WalnutSession, store: SessionConversationStore) {
         self.session = session
         _store = State(initialValue: store)
+        _lifecycle = State(initialValue: SessionLifecycleController(sessionId: session.id))
     }
 
     var body: some View {
@@ -43,6 +53,20 @@ struct SessionConversationView: View {
             }
             if let error = store.errorMessage {
                 ErrorBanner(text: error) { store.errorMessage = nil }
+            }
+            if let error = lifecycle.errorMessage {
+                ErrorBanner(text: error) { lifecycle.errorMessage = nil }
+            }
+            if let confirmation = lifecycle.confirmation {
+                ConfirmationBanner(text: confirmation) { lifecycle.confirmation = nil }
+            }
+            ForEach(lifecycle.pendingPermissions) { request in
+                PermissionRequestCard(
+                    request: request,
+                    answering: lifecycle.answeringIds.contains(request.requestId)
+                ) { allow in
+                    Task { await lifecycle.respondPermission(request, allow: allow) }
+                }
             }
             messageList
         }
@@ -88,6 +112,9 @@ struct SessionConversationView: View {
                 }
                 .accessibilityIdentifier("session.info")
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                lifecycleMenu
+            }
         }
         .sheet(isPresented: $showInfo) {
             SessionInfoSheet(session: session, processStatus: store.processStatus)
@@ -106,12 +133,36 @@ struct SessionConversationView: View {
         .navigationDestination(item: $forkedSession) { forked in
             SessionConversationView(session: forked)
         }
+        // Rename prompt (PATCH title) — a plain alert keeps this lightweight.
+        .alert("Rename Session", isPresented: $showRename) {
+            TextField("Title", text: $renameDraft)
+            Button("Cancel", role: .cancel) {}
+            Button("Rename") {
+                let title = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !title.isEmpty else { return }
+                Task { await lifecycle.rename(title) }
+            }
+        }
+        // 409 cron_owner ladder: confirm, then force-terminate.
+        .alert("Session owns scheduled routines", isPresented: Binding(
+            get: { forceTerminateMessage != nil },
+            set: { if !$0 { forceTerminateMessage = nil } }
+        )) {
+            Button("Cancel", role: .cancel) { forceTerminateMessage = nil }
+            Button("Force Terminate", role: .destructive) {
+                forceTerminateMessage = nil
+                Task { _ = await lifecycle.terminate(force: true) }
+            }
+        } message: {
+            Text(forceTerminateMessage ?? "")
+        }
         // Freeze reports name THIS session (8-char prefix of the uuid) so a
         // field freeze can be tied back to a specific giant transcript.
         .freezeScreen("session:\(session.id.prefix(8))")
         .task {
             // Route image fetches (/api/v1/media) to this session's exec host.
             MediaContext.currentSessionID = session.id
+            lifecycle.start()
             await store.open()
         }
         .onDisappear {
@@ -120,8 +171,65 @@ struct SessionConversationView: View {
             // a retained (nav-stacked) view permanently geometry-frozen.
             programmaticFreezeTask?.cancel()
             programmaticGeometryFrozen = false
+            lifecycle.stop()
             store.close()
         }
+    }
+
+    /// Lifecycle actions menu — Restart / Retry / Rename / Archive / Terminate.
+    /// Retry only shows for error/stopped sessions (the server 400s otherwise).
+    private var lifecycleMenu: some View {
+        Menu {
+            Button {
+                Task {
+                    if await lifecycle.restart() {
+                        // Fresh CLI: reattach the stream + reload the transcript.
+                        await store.open()
+                    }
+                }
+            } label: {
+                Label("Restart", systemImage: "arrow.clockwise")
+            }
+            .accessibilityIdentifier("session.restart")
+            if SessionStatus(store.processStatus) == .error || SessionStatus(store.processStatus) == .stopped {
+                Button {
+                    Task {
+                        if await lifecycle.retry() { await store.open() }
+                    }
+                } label: {
+                    Label("Retry", systemImage: "arrow.uturn.forward")
+                }
+                .accessibilityIdentifier("session.retry")
+            }
+            Button {
+                renameDraft = session.title ?? session.rowTitle
+                showRename = true
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+            .accessibilityIdentifier("session.rename")
+            Button {
+                Task { await lifecycle.setArchived(true) }
+            } label: {
+                Label("Archive", systemImage: "archivebox")
+            }
+            .accessibilityIdentifier("session.archive")
+            Divider()
+            Button(role: .destructive) {
+                Task {
+                    if case .needsForce(let message) = await lifecycle.terminate() {
+                        forceTerminateMessage = message
+                    }
+                }
+            } label: {
+                Label("Terminate", systemImage: "stop.circle")
+            }
+            .accessibilityIdentifier("session.terminate")
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .disabled(lifecycle.acting)
+        .accessibilityIdentifier("session.lifecycleMenu")
     }
 
     /// Nav-bar subtitle: live status + where it runs + the model when known

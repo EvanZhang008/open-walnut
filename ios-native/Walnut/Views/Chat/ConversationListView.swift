@@ -1,9 +1,15 @@
 import SwiftUI
 
 /// Conversation switcher sheet — recent conversations plus "New conversation".
+/// Long-press a row for management: rename / pin / delete (Wave-1 endpoints).
 struct ConversationListView: View {
     @Environment(ChatStore.self) private var chat
     @Environment(\.dismiss) private var dismiss
+
+    @State private var renameTarget: ConversationSummary?
+    @State private var renameDraft = ""
+    @State private var deleteTarget: ConversationSummary?
+    @State private var actionError: String?
 
     var body: some View {
         NavigationStack {
@@ -30,6 +36,8 @@ struct ConversationListView: View {
                         row(conversation)
                     }
                     .foregroundStyle(.primary)
+                    .contextMenu { rowMenu(conversation) }
+                    .accessibilityIdentifier("chat.conversation.\(conversation.id)")
                 }
             }
             .listStyle(.plain)
@@ -52,6 +60,70 @@ struct ConversationListView: View {
                     )
                 }
             }
+            .alert("Rename Conversation", isPresented: Binding(
+                get: { renameTarget != nil },
+                set: { if !$0 { renameTarget = nil } }
+            )) {
+                TextField("Title", text: $renameDraft)
+                Button("Cancel", role: .cancel) { renameTarget = nil }
+                Button("Rename") {
+                    let target = renameTarget
+                    let title = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    renameTarget = nil
+                    guard let target, !title.isEmpty else { return }
+                    Task { actionError = await chat.renameConversation(target.id, title: title) }
+                }
+            }
+            .alert("Delete Conversation?", isPresented: Binding(
+                get: { deleteTarget != nil },
+                set: { if !$0 { deleteTarget = nil } }
+            )) {
+                Button("Cancel", role: .cancel) { deleteTarget = nil }
+                Button("Delete", role: .destructive) {
+                    let target = deleteTarget
+                    deleteTarget = nil
+                    guard let target else { return }
+                    Task { actionError = await chat.deleteConversation(target.id) }
+                }
+            } message: {
+                Text("This permanently deletes \"\(deleteTarget?.title ?? "this conversation")\" and its history.")
+            }
+            .alert("Couldn't update conversation", isPresented: Binding(
+                get: { actionError != nil },
+                set: { if !$0 { actionError = nil } }
+            )) {
+                Button("OK", role: .cancel) { actionError = nil }
+            } message: {
+                Text(actionError ?? "")
+            }
+        }
+    }
+
+    /// Long-press actions: rename / pin / delete. The v1 list has no pinned
+    /// flag, so both pin directions are offered (idempotent server-side).
+    @ViewBuilder
+    private func rowMenu(_ conversation: ConversationSummary) -> some View {
+        Button {
+            renameDraft = conversation.title ?? ""
+            renameTarget = conversation
+        } label: {
+            Label("Rename", systemImage: "pencil")
+        }
+        Button {
+            Task { actionError = await chat.setConversationPinned(conversation.id, pinned: true) }
+        } label: {
+            Label("Pin", systemImage: "pin")
+        }
+        Button {
+            Task { actionError = await chat.setConversationPinned(conversation.id, pinned: false) }
+        } label: {
+            Label("Unpin", systemImage: "pin.slash")
+        }
+        Divider()
+        Button(role: .destructive) {
+            deleteTarget = conversation
+        } label: {
+            Label("Delete", systemImage: "trash")
         }
     }
 

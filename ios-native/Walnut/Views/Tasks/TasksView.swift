@@ -23,6 +23,15 @@ struct TasksView: View {
     /// adds must not yank the scroll position / filter out from under the
     /// keyboard (Reminders keeps you anchored on the field).
     @State private var inlineAddActive = false
+    /// Multi-select edit mode (Wave 1): batch complete / delete over the
+    /// partial-success batch endpoints.
+    @State private var editMode: EditMode = .inactive
+    @State private var selectedIds = Set<String>()
+    @State private var batchBusy = false
+    @State private var batchError: String?
+    @State private var confirmBatchDelete = false
+
+    private var isEditing: Bool { editMode == .active }
 
     var body: some View {
         NavigationStack(path: $navPath) {
@@ -37,6 +46,20 @@ struct TasksView: View {
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search tasks & sessions")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { StatusBadge() }
+                // Multi-select entry — task filters only (sessions aren't
+                // batch-actionable). "Select" → edit mode with a bottom bar.
+                if activeFilter != .sessions {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button(isEditing ? "Done" : "Select") {
+                            let entering = !isEditing
+                            withAnimation {
+                                editMode = entering ? .active : .inactive
+                                if entering { selectedIds.removeAll() }
+                            }
+                        }
+                        .accessibilityIdentifier("tasks.select")
+                    }
+                }
                 // BOTH create entries show on BOTH server modes (2026-08).
                 // TASK creation: the replica writes its local store and the
                 // task outbox syncs it back to the primary. SESSION creation:
@@ -179,6 +202,12 @@ struct TasksView: View {
                 // Sessions filter, which shows the full Pinned/Active/Recent list).
                 if activeFilter != .sessions {
                     activeSessionsSection
+                    // Pinned tasks float above the project sections (mirrors
+                    // the desktop focus bar). Rows keep full swipe/menu/detail
+                    // behavior; hidden while searching (results replace it).
+                    if trimmedQuery.isEmpty {
+                        pinnedTasksSection
+                    }
                 }
 
                 if activeFilter == .sessions {
@@ -196,45 +225,7 @@ struct TasksView: View {
                     ForEach(sections, id: \.project) { section in
                         Section(section.project) {
                             ForEach(section.tasks) { task in
-                                Button { selected = task } label: {
-                                    TaskRow(task: task)
-                                }
-                                .buttonStyle(.plain)
-                                .id("task-\(task.id)")
-                                // Locate-me flash for a just-created task.
-                                .listRowBackground(
-                                    task.id == highlightedTaskId ? Theme.tintSoft : nil
-                                )
-                                .accessibilityIdentifier("tasks.row.\(task.id)")
-                                // Quick status toggle without opening the sheet:
-                                // leading swipe = todo↔done (Reminders muscle
-                                // memory); long-press menu mirrors it.
-                                .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                    Button {
-                                        toggleDone(task)
-                                    } label: {
-                                        Label(
-                                            task.isDone ? "Reopen" : "Done",
-                                            systemImage: task.isDone ? "arrow.uturn.backward.circle" : "checkmark.circle.fill"
-                                        )
-                                    }
-                                    .tint(task.isDone ? .secondary : Theme.success)
-                                }
-                                .contextMenu {
-                                    Button {
-                                        toggleDone(task)
-                                    } label: {
-                                        Label(
-                                            task.isDone ? "Mark as To Do" : "Mark as Done",
-                                            systemImage: task.isDone ? "circle" : "checkmark.circle.fill"
-                                        )
-                                    }
-                                    Button {
-                                        selected = task
-                                    } label: {
-                                        Label("Details", systemImage: "info.circle")
-                                    }
-                                }
+                                taskRowButton(task)
                             }
                         }
                     }
@@ -251,6 +242,17 @@ struct TasksView: View {
                     }
                 }
 
+                // Server-side global search augments the local matches while
+                // a query is typed (tasks/memory/sessions; 501 on cloud →
+                // a degradation notice).
+                if !trimmedQuery.isEmpty {
+                    GlobalSearchSection(query: trimmedQuery) { taskId in
+                        if let hit = tasks.tasks.first(where: { $0.id == taskId || $0.id.hasPrefix(taskId) }) {
+                            selected = hit
+                        }
+                    }
+                }
+
                 if let synced = tasks.syncedAt {
                     Section {
                         Text("Synced \(synced.formatted(.relative(presentation: .named)))")
@@ -264,6 +266,10 @@ struct TasksView: View {
             }
             .listStyle(.insetGrouped)
             .accessibilityIdentifier("tasks.list")
+            // Batch action bar rides the bottom while selecting.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if isEditing { batchActionBar }
+            }
             // Failed quick-toggle: the optimistic row already rolled back —
             // tell the user why (sync-source conflict, offline, …).
             .alert("Couldn't update task", isPresented: Binding(
@@ -273,6 +279,23 @@ struct TasksView: View {
                 Button("OK", role: .cancel) { toggleError = nil }
             } message: {
                 Text(toggleError ?? "")
+            }
+            // Batch results: partial failures surface with counts + reason.
+            .alert("Batch action incomplete", isPresented: Binding(
+                get: { batchError != nil },
+                set: { if !$0 { batchError = nil } }
+            )) {
+                Button("OK", role: .cancel) { batchError = nil }
+            } message: {
+                Text(batchError ?? "")
+            }
+            .confirmationDialog(
+                "Delete \(selectedIds.count) task(s)?",
+                isPresented: $confirmBatchDelete, titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    runBatch { await tasks.batchDelete(Array(selectedIds)) }
+                }
             }
             .refreshable {
                 async let t: Void = tasks.loadTasks()
@@ -315,6 +338,98 @@ struct TasksView: View {
         }
     }
 
+    /// One row of the task list: edit mode = selection toggle; normal = detail
+    /// sheet + swipe/context quick actions.
+    @ViewBuilder
+    private func taskRowButton(_ task: WalnutTask) -> some View {
+        Button {
+            if isEditing {
+                if selectedIds.contains(task.id) { selectedIds.remove(task.id) }
+                else { selectedIds.insert(task.id) }
+            } else {
+                selected = task
+            }
+        } label: {
+            HStack(spacing: 10) {
+                if isEditing {
+                    Image(systemName: selectedIds.contains(task.id) ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(selectedIds.contains(task.id) ? Theme.tint : Color(.systemGray3))
+                }
+                TaskRow(task: task)
+            }
+        }
+        .buttonStyle(.plain)
+        .id("task-\(task.id)")
+        // Locate-me flash for a just-created task; selection tint in edit mode.
+        .listRowBackground(
+            isEditing && selectedIds.contains(task.id)
+                ? Theme.tintSoft
+                : (task.id == highlightedTaskId ? Theme.tintSoft : nil)
+        )
+        .accessibilityIdentifier("tasks.row.\(task.id)")
+        // Quick status toggle without opening the sheet: leading swipe =
+        // todo↔done (Reminders muscle memory); long-press menu mirrors it.
+        .swipeActions(edge: .leading, allowsFullSwipe: !isEditing) {
+            if !isEditing {
+                Button {
+                    toggleDone(task)
+                } label: {
+                    Label(
+                        task.isDone ? "Reopen" : "Done",
+                        systemImage: task.isDone ? "arrow.uturn.backward.circle" : "checkmark.circle.fill"
+                    )
+                }
+                .tint(task.isDone ? .secondary : Theme.success)
+            }
+        }
+        // Trailing swipe: pin/unpin (focus endpoints, optimistic + rollback).
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if !isEditing {
+                Button {
+                    togglePin(task)
+                } label: {
+                    Label(task.pinned == true ? "Unpin" : "Pin",
+                          systemImage: task.pinned == true ? "pin.slash" : "pin")
+                }
+                .tint(Theme.tint)
+            }
+        }
+        .contextMenu {
+            if !isEditing {
+                Button {
+                    toggleDone(task)
+                } label: {
+                    Label(
+                        task.isDone ? "Mark as To Do" : "Mark as Done",
+                        systemImage: task.isDone ? "circle" : "checkmark.circle.fill"
+                    )
+                }
+                Button {
+                    togglePin(task)
+                } label: {
+                    Label(task.pinned == true ? "Unpin" : "Pin",
+                          systemImage: task.pinned == true ? "pin.slash" : "pin")
+                }
+                Button {
+                    selected = task
+                } label: {
+                    Label("Details", systemImage: "info.circle")
+                }
+            }
+        }
+    }
+
+    /// Pin/unpin from a row (swipe / context menu). Optimistic via the store.
+    private func togglePin(_ task: WalnutTask) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Task {
+            if let error = await tasks.setPinned(task, pinned: !(task.pinned == true)) {
+                toggleError = error
+            }
+        }
+    }
+
     /// One-tap todo↔done from a row (swipe / context menu). Optimistic via the
     /// store; a failure surfaces as a transient alert-style banner row is
     /// overkill here — reuse the store's error line on next refresh instead.
@@ -325,6 +440,53 @@ struct TasksView: View {
             if let error = await tasks.toggleDone(task) {
                 toggleError = error
             }
+        }
+    }
+
+    /// Bottom bar in edit mode: Complete / Delete over the selection.
+    private var batchActionBar: some View {
+        HStack(spacing: 12) {
+            Text("\(selectedIds.count) selected")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button {
+                runBatch { await tasks.batchSetDone(Array(selectedIds), done: true) }
+            } label: {
+                Label("Complete", systemImage: "checkmark.circle.fill")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .accessibilityIdentifier("tasks.batchComplete")
+            Button(role: .destructive) {
+                confirmBatchDelete = true
+            } label: {
+                Label("Delete", systemImage: "trash")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .accessibilityIdentifier("tasks.batchDelete")
+        }
+        .disabled(selectedIds.isEmpty || batchBusy)
+        .overlay(alignment: .center) {
+            if batchBusy { ProgressView().controlSize(.small) }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    /// Shared batch runner: busy-gate, run, exit edit mode, surface failures.
+    private func runBatch(_ operation: @escaping () async -> String?) {
+        guard !batchBusy, !selectedIds.isEmpty else { return }
+        batchBusy = true
+        Task {
+            defer { batchBusy = false }
+            let failure = await operation()
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            withAnimation {
+                editMode = .inactive
+                selectedIds.removeAll()
+            }
+            if let failure { batchError = failure }
         }
     }
 
@@ -346,6 +508,23 @@ struct TasksView: View {
         case .sessions: return "No agent sessions."
         case .allOpen: return "No open tasks."
         case .done: return "No recent completions."
+        }
+    }
+
+    // MARK: - Pinned tasks (top of every task filter)
+
+    /// Open pinned tasks, capped at 8 — the phone mirror of the desktop
+    /// focus bar. Uses the projection's pinned flag (live via the feed).
+    @ViewBuilder
+    private var pinnedTasksSection: some View {
+        let pinned = tasks.tasks(for: activeFilter == .done ? .done : .allOpen)
+            .filter { $0.pinned == true && !$0.isDone }
+        if !pinned.isEmpty && activeFilter != .done {
+            Section("Pinned") {
+                ForEach(Array(pinned.prefix(8))) { task in
+                    taskRowButton(task)
+                }
+            }
         }
     }
 

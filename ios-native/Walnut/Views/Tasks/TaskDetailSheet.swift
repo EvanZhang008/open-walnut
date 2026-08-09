@@ -20,6 +20,13 @@ struct TaskDetailSheet: View {
     @State private var dueDraft = Date()
     @State private var editingProject = false
     @State private var projectDraft = ""
+    /// Wave-1 detail plane: full-row readback + star/pin/delete/field edits.
+    @State private var detailController: TaskDetailController
+
+    init(task: WalnutTask) {
+        self.task = task
+        _detailController = State(initialValue: TaskDetailController(taskId: task.id))
+    }
 
     /// Live row (feed-updated) when available, else the presented snapshot.
     private var current: WalnutTask {
@@ -57,10 +64,18 @@ struct TaskDetailSheet: View {
                                 .foregroundStyle(.primary)
                         }
                     }
+                    // Wave-1 detail plane: star/pin/delete + description/note
+                    // readback with editing + blocked/children/parent relations.
+                    TaskDetailExtras(controller: detailController) {
+                        // Deleted server-side — reflect locally and close.
+                        Task { await tasks.loadTasks() }
+                        dismiss()
+                    }
                 }
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .task { await detailController.load() }
             .navigationTitle("Task")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

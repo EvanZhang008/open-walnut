@@ -315,75 +315,49 @@ struct WalnutAPI {
         let _: OK = try await send("DELETE", "/notes/\(escapePath(path))", body: nil as [String: String]?)
     }
 
-    // MARK: - Notes search + favorites (non-v1 endpoints, same Bearer auth)
+    // MARK: - Notes search + favorites (formalized /api/v1 paths, Wave 1)
+    // These previously called out-of-contract internal routes (/api/notes-v2/*,
+    // /api/favorites); Wave 1 formalized them under /api/v1 with the frozen
+    // error envelope, so they now ride the standard send()/decode() funnel.
 
     /// Hybrid string+semantic search. The semantic leg can stall on a cold
     /// server, so callers pass a short timeout and fall back to string mode.
+    /// On a REPLICA the semantic leg self-disables (degraded flag set).
     func searchNotes(query: String, limit: Int = 30, mode: String = "hybrid", timeout: TimeInterval? = nil) async throws -> NoteSearchResponse {
         let q = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
-        return try await sendAbsolute(
-            "GET", "/api/notes-v2/search?q=\(q)&limit=\(limit)&mode=\(mode)",
+        return try await send(
+            "GET", "/notes/search?q=\(q)&limit=\(limit)&mode=\(mode)",
             body: nil as [String: String]?, timeout: timeout
         )
     }
 
     func favoriteNotes() async throws -> [String] {
-        let response: FavoritesResponse = try await sendAbsolute("GET", "/api/favorites", body: nil as [String: String]?)
+        let response: FavoritesResponse = try await get("/favorites")
         return response.notes
     }
 
     /// Returns the updated pinned list.
     func addFavoriteNote(path: String) async throws -> [String] {
-        let response: FavoritesResponse = try await sendAbsolute("POST", "/api/favorites/notes", body: ["path": path])
+        let response: FavoritesResponse = try await send("POST", "/favorites/notes", body: ["path": path])
         return response.notes
     }
 
     /// Returns the updated pinned list.
     func removeFavoriteNote(path: String) async throws -> [String] {
-        let response: FavoritesResponse = try await sendAbsolute("DELETE", "/api/favorites/notes", body: ["path": path])
+        let response: FavoritesResponse = try await send("DELETE", "/favorites/notes", body: ["path": path])
         return response.notes
     }
 
     /// Uploads pasted/picked image bytes into the vault's `_attachment/`
-    /// folder. Unlike every other endpoint here, errors come back as a FLAT
-    /// `{error: string}` — not the v1 envelope — so this bypasses `decode()`.
+    /// folder. The v1 route answers the frozen error envelope, so this rides
+    /// the shared funnel; base64+JSON encoding stays off the MainActor.
     func uploadAttachment(notePath: String, data: Data, mediaType: String) async throws -> AttachmentUploadResult {
-        guard let base = AppConfig.serverURL, let token = AppConfig.token else {
-            throw APIError.notConfigured
-        }
-        guard let url = URL(string: base.absoluteString + "/api/notes-v2/attachment") else {
-            throw APIError.notConfigured
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // Base64 + JSON encode off the MainActor — callers are editor views.
-        request.httpBody = try await Task.detached(priority: .userInitiated) {
-            let body = AttachmentUploadBody(
+        let body = await Task.detached(priority: .userInitiated) {
+            AttachmentUploadBody(
                 notePath: notePath, data: data.base64EncodedString(), mediaType: mediaType
             )
-            return try JSONEncoder().encode(body)
         }.value
-
-        let (responseData, response) = try await perform(request)
-        guard let http = response as? HTTPURLResponse else { throw APIError.badResponse }
-        switch http.statusCode {
-        case 200...299:
-            guard let result = try? JSONDecoder().decode(AttachmentUploadResult.self, from: responseData) else {
-                throw APIError.badResponse
-            }
-            return result
-        case 401:
-            NotificationCenter.default.post(name: Self.unauthorizedNotification, object: nil)
-            throw APIError.unauthorized
-        case 429:
-            throw APIError.rateLimited
-        default:
-            let message = (try? JSONDecoder().decode(FlatErrorEnvelope.self, from: responseData))?.error
-                ?? "Upload failed (\(http.statusCode))"
-            throw APIError.server(status: http.statusCode, code: "upload_error", message: message, serverHash: nil, serverContent: nil)
-        }
+        return try await send("POST", "/notes/attachment", body: body, timeout: 120)
     }
 
     /// Authenticated URL for a note attachment. `raw` is the inner text of an
@@ -392,7 +366,7 @@ struct WalnutAPI {
     static func attachmentURL(rawPath: String) -> URL? {
         guard let base = AppConfig.serverURL else { return nil }
         var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
-        components?.path = "/api/notes-v2/attachment"
+        components?.path = "/api/v1/notes/attachment"
         components?.queryItems = [URLQueryItem(name: "path", value: rawPath)]
         return components?.url
     }
@@ -414,18 +388,20 @@ struct WalnutAPI {
     }
 
     // MARK: - Plumbing
+    // Internal (not private): the Wave-1 endpoint extension (WalnutAPIWave1.swift)
+    // rides the same request/decode funnel.
 
-    private func get<T: Decodable>(_ path: String) async throws -> T {
+    func get<T: Decodable>(_ path: String) async throws -> T {
         try await send("GET", path, body: nil as [String: String]?)
     }
 
-    private func send<T: Decodable, B: Encodable>(
+    func send<T: Decodable, B: Encodable>(
         _ method: String, _ path: String, body: B?, timeout: TimeInterval? = nil
     ) async throws -> T {
         try await sendAbsolute(method, "/api/v1" + path, body: body, timeout: timeout)
     }
 
-    private func sendAbsolute<T: Decodable, B: Encodable>(
+    func sendAbsolute<T: Decodable, B: Encodable>(
         _ method: String, _ path: String, body: B?, timeout: TimeInterval? = nil
     ) async throws -> T {
         guard let base = AppConfig.serverURL, let token = AppConfig.token else {
@@ -446,7 +422,7 @@ struct WalnutAPI {
         return try Self.decode(T.self, data: data, response: response)
     }
 
-    private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
+    func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
         let started = Date()
         do {
             let result = try await session.data(for: request)
@@ -547,7 +523,7 @@ struct WalnutAPI {
         }
     }
 
-    private func escape(_ component: String) -> String {
+    func escape(_ component: String) -> String {
         component.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? component
     }
 

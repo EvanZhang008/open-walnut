@@ -468,6 +468,79 @@ final class TasksStore {
         )
     }
 
+    // MARK: - Pin toggle (Wave 1 — POST/DELETE /focus/tasks/:id)
+
+    /// Pin/unpin with optimistic row update + rollback. Returns an error
+    /// message on failure (409 = pinning a completed task), nil on success.
+    func setPinned(_ task: WalnutTask, pinned: Bool) async -> String? {
+        // Optimistic: flip the row's pinned flag in place.
+        let apply = { (value: Bool?) in
+            if let idx = self.tasks.firstIndex(where: { $0.id == task.id }) {
+                let t = self.tasks[idx]
+                self.tasks[idx] = WalnutTask(
+                    id: t.id, title: t.title, status: t.status, phase: t.phase,
+                    priority: t.priority, project: t.project, dueDate: t.dueDate,
+                    createdAt: t.createdAt, updatedAt: t.updatedAt,
+                    completedAt: t.completedAt, starred: t.starred,
+                    pinned: value, tags: t.tags, summary: t.summary
+                )
+            }
+        }
+        apply(pinned)
+        do {
+            _ = pinned
+                ? try await api.pinTask(id: task.id)
+                : try await api.unpinTask(id: task.id)
+            // Authoritative refresh (pin state is exported on the projection).
+            await loadTasks()
+            return nil
+        } catch {
+            apply(task.pinned) // rollback
+            if let apiError = error as? APIError, apiError.isConflict {
+                return "Completed tasks can't be pinned."
+            }
+            return error.localizedDescription
+        }
+    }
+
+    // MARK: - Batch actions (Wave 1 — POST /tasks/batch/phase|delete)
+
+    /// Batch-complete (or reopen). PARTIAL SUCCESS by contract: returns a
+    /// human summary line on any failure, nil when everything succeeded.
+    /// The server emits per-task events, so the list converges via the feed;
+    /// a REST refresh covers the no-feed fallback.
+    func batchSetDone(_ taskIds: [String], done: Bool) async -> String? {
+        guard !taskIds.isEmpty else { return nil }
+        do {
+            let result = try await api.batchSetPhase(taskIds: taskIds, phase: done ? "COMPLETE" : "TODO")
+            await loadTasks()
+            if result.failed.isEmpty { return nil }
+            let reason = result.failed.first?.error ?? "unknown error"
+            return "\(result.changed.count) updated, \(result.failed.count) failed — \(reason)"
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// Batch-delete. Same partial-success contract as batchSetDone.
+    func batchDelete(_ taskIds: [String], force: Bool = false) async -> String? {
+        guard !taskIds.isEmpty else { return nil }
+        do {
+            let result = try await api.batchDeleteTasks(taskIds: taskIds, force: force)
+            let deletedIds = Set(result.deleted.map(\.id))
+            if !deletedIds.isEmpty {
+                tasks.removeAll { deletedIds.contains($0.id) }
+                DiskCache.save(tasks, key: "tasks-list")
+            }
+            await loadTasks()
+            if result.failed.isEmpty { return nil }
+            let reason = result.failed.first?.error ?? "unknown error"
+            return "\(result.deleted.count) deleted, \(result.failed.count) failed — \(reason)"
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
     /// One-tap todo↔done toggle for list rows (swipe / long-press).
     func toggleDone(_ task: WalnutTask) async -> String? {
         let next = task.statusKind == .done ? "todo" : "done"

@@ -19,6 +19,9 @@ struct ChatView: View {
                 if let error = chat.errorMessage {
                     ErrorBanner(text: error) { chat.errorMessage = nil }
                 }
+                if chat.pendingQuestion {
+                    questionBanner
+                }
                 MessageListView()
             }
             // safeAreaInset (not a VStack sibling) so the bar rides the
@@ -44,6 +47,19 @@ struct ChatView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     StatusBadge()
+                }
+                // Stop rides the toolbar only while a turn is running — aborts
+                // the agent's active turn(s) via POST /conversations/:id/stop.
+                if chat.streaming || chat.sending {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            Task { await chat.stopTurn() }
+                        } label: {
+                            Image(systemName: "stop.circle.fill")
+                                .foregroundStyle(Theme.danger)
+                        }
+                        .accessibilityIdentifier("chat.stop")
+                    }
                 }
             }
             .sheet(isPresented: $showConversations) {
@@ -96,6 +112,25 @@ struct ChatView: View {
         }
         .disabled(chat.agents.count <= 1)
         .accessibilityIdentifier("chat.agentMenu")
+    }
+
+    /// Banner shown while the agent is blocked on a user_ask question. The
+    /// composer doubles as the answer field (send routes to POST /answer);
+    /// this banner explains the state and offers a one-tap skip.
+    private var questionBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "questionmark.bubble.fill")
+                .font(.subheadline)
+                .foregroundStyle(Theme.tint)
+            Text("\(chat.activeAgentName) has a question — reply below to answer.")
+                .font(.footnote)
+                .lineLimit(2)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(Theme.tint.opacity(0.10))
+        .accessibilityIdentifier("chat.questionBanner")
     }
 
     /// The conversation's own title, when it differs from the agent name.

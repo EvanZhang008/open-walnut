@@ -118,7 +118,7 @@ struct NoteWriteResult: Codable {
     let updatedAt: String
 }
 
-// MARK: - Notes search (/api/notes-v2/search)
+// MARK: - Notes search (GET /api/v1/notes/search)
 
 struct NoteSearchResult: Codable, Identifiable, Equatable {
     let id: String
@@ -134,13 +134,13 @@ struct NoteSearchResponse: Codable {
     let degraded: String?
 }
 
-// MARK: - Favorites (/api/favorites — the bookmark store shared with the web UI)
+// MARK: - Favorites (GET /api/v1/favorites — the bookmark store shared with the web UI)
 
 struct FavoritesResponse: Codable {
     let notes: [String]
 }
 
-// MARK: - Attachment upload (/api/notes-v2/attachment — flat error shape, not v1)
+// MARK: - Attachment upload (POST /api/v1/notes/attachment)
 
 struct AttachmentUploadBody: Codable {
     let notePath: String
@@ -152,11 +152,6 @@ struct AttachmentUploadResult: Codable {
     let ok: Bool
     let path: String
     let name: String
-}
-
-/// This endpoint's error body is `{error: string}`, not the v1 `{error:{code,message}}` envelope.
-struct FlatErrorEnvelope: Codable {
-    let error: String
 }
 
 // MARK: - Tasks (read-only /api/v1/tasks projection)

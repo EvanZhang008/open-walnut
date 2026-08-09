@@ -93,6 +93,12 @@ final class ChatStore {
     /// Latest tool/thinking status, e.g. "Read" — shown as an activity row.
     var activity: String?
     var errorMessage: String?
+    /// True while the agent is blocked on a user_ask structured question.
+    /// Set when the SSE `tool` event names user_ask; cleared on answer/stop/
+    /// turn end. CONTRACT GAP: the v1 stream carries only the tool NAME — no
+    /// question text or options — so the phone renders a generic answer card
+    /// (free text) instead of option buttons.
+    var pendingQuestion = false
 
     private static let pageSize = 50
     private static let cacheTail = 60
@@ -317,6 +323,12 @@ final class ChatStore {
     /// torn down.
     @discardableResult
     func send(_ text: String, images: [SelectedImage] = []) async -> Bool {
+        // Agent blocked on a structured question: route the composer text to
+        // the answer endpoint (mirrors the web chat's interception — posting
+        // a new message would 409 turn_active and deadlock the flow).
+        if pendingQuestion, !text.isEmpty {
+            return await answerQuestion(text)
+        }
         guard isActive, !sending, !streaming else { return false }
         let id = UUID()
         let task = Task { @MainActor [weak self] in
@@ -597,6 +609,10 @@ final class ChatStore {
         case "tool":
             if let payload = try? JSONDecoder().decode(ToolPayload.self, from: data) {
                 setActivity(payload.detail.map { "\(payload.name) · \($0)" } ?? payload.name)
+                // The agent is now blocked on a structured question — surface
+                // the answer card. (The stream carries only the tool name; the
+                // question text/options are not on the v1 wire.)
+                if payload.name == "user_ask" { pendingQuestion = true }
             }
         case "thinking":
             setActivity("Thinking")
@@ -619,6 +635,7 @@ final class ChatStore {
             AppLog.error("chat", "turn failed", ["message": payload?.message ?? "?"])
             streaming = false
             activity = nil
+            pendingQuestion = false
             errorMessage = Self.readableTurnError(payload?.message)
         default:
             break
@@ -776,6 +793,7 @@ final class ChatStore {
         streamText = ""
         streamTextTruncated = false
         activity = nil
+        pendingQuestion = false
         FreezeContext.shared.setLiveText(chars: 0, truncated: false)
         FreezeContext.shared.note("turn-end")
         if !fullText.isEmpty {
@@ -796,6 +814,104 @@ final class ChatStore {
         trackTask { [weak self] in
             await self?.loadMessages(conversationID)
             await self?.refreshConversations()
+        }
+    }
+
+    // MARK: - Conversation management (Wave 1 — stop / rename / pin / delete)
+
+    /// Stop the agent's active turn(s). The server aborts ALL turns for this
+    /// agent and cancels any pending structured question; the SSE `error`
+    /// event (or watchdog reconcile) settles the local streaming state, but
+    /// clear it optimistically so the composer unfreezes at once.
+    func stopTurn() async {
+        guard let id = activeID else { return }
+        do {
+            let result = try await api.stopConversation(id: id, agentID: activeAgentID)
+            AppLog.info("chat", "turn stopped", ["conversationID": id, "stopped": String(result.stopped)])
+            streaming = false
+            streamText = ""
+            streamTextTruncated = false
+            activity = nil
+            pendingQuestion = false
+            turnWatchdog?.cancel()
+            turnWatchdog = nil
+            // Reconcile: the interrupted turn's partial output persists at abort.
+            trackTask { [weak self] in await self?.loadMessages(id) }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Answer the pending structured question with free text. The blocked
+    /// turn resumes and its continuation streams over the SAME SSE turn.
+    /// CONTRACT GAP: /answer wants header-keyed answers but no v1 surface
+    /// exposes the pending question's headers — send the text under BOTH
+    /// default header spellings ("Answer" = single question, "Q1" = first of
+    /// several); extra keys are ignored server-side. An agent-custom header
+    /// resolves to "(no answer)" but still unblocks the turn (the agent can
+    /// re-ask), which beats a deadlocked composer.
+    func answerQuestion(_ text: String) async -> Bool {
+        guard let id = activeID, pendingQuestion else { return false }
+        do {
+            try await api.answerConversationQuestion(
+                id: id, agentID: activeAgentID, answers: ["Answer": text, "Q1": text]
+            )
+            pendingQuestion = false
+            setActivity(nil)
+            // The answer is persisted server-side as a user entry; reload so
+            // it appears in history right away.
+            trackTask { [weak self] in await self?.loadMessages(id) }
+            return true
+        } catch let error as APIError where error.isConflict {
+            // Question already answered/cancelled elsewhere.
+            pendingQuestion = false
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    /// Rename a conversation (PATCH title). Optimistic list update + reload.
+    func renameConversation(_ id: String, title: String) async -> String? {
+        do {
+            _ = try await api.patchConversation(id: id, agentID: activeAgentID, title: title)
+            await refreshConversations()
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// Pin/unpin a conversation. The v1 list projection carries no pinned
+    /// flag (server sorts by recency), so this is fire-and-refresh.
+    func setConversationPinned(_ id: String, pinned: Bool) async -> String? {
+        do {
+            _ = try await api.patchConversation(id: id, agentID: activeAgentID, pinned: pinned)
+            await refreshConversations()
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// Delete a conversation. The MAIN conversation answers 409 conflict —
+    /// surfaced as a readable error. Deleting the active one falls back to
+    /// the most recent remaining conversation.
+    func deleteConversation(_ id: String) async -> String? {
+        do {
+            try await api.deleteConversation(id: id, agentID: activeAgentID)
+            conversations.removeAll { $0.id == id }
+            DiskCache.save(conversations, key: conversationsCacheKey)
+            if activeID == id {
+                select(conversations.first?.id)
+            }
+            await refreshConversations()
+            return nil
+        } catch let error as APIError where error.isConflict {
+            return "The main conversation can't be deleted — it receives notifications and scheduled routines."
+        } catch {
+            return error.localizedDescription
         }
     }
 
