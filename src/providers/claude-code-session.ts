@@ -3162,6 +3162,21 @@ export class ClaudeCodeSession {
                 totalTokens: cu.totalTokens, maxTokens: cu.maxTokens,
               })
             }).catch(() => {})
+          } else if (sys.subtype === 'scheduled_task_fire') {
+            // Daemon-appended marker (checkCronFires): a CLI cron fired into
+            // this session. Foreign fires (cron_foreign) mean the directory-
+            // scoped scheduler lock adopted ANOTHER session's task — surface
+            // loudly so the user knows the turn wasn't started by them.
+            const foreign = sys.cron_foreign === true
+            bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
+              sessionId: sid, taskId: this.taskId,
+              variant: foreign ? 'error' as const : 'info' as const,
+              message: String(sys.content || 'Scheduled task fired'),
+            }, ['main-ai'], { source: 'session-runner', urgency: foreign ? 'urgent' : undefined })
+            log.session[foreign ? 'warn' : 'info']('scheduled task fired into session', {
+              sessionId: sid, taskId: this.taskId,
+              cronTaskId: sys.cron_task_id, createdBy: sys.cron_created_by, foreign,
+            })
           } else if (sys.subtype === 'error_during_execution') {
             bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
               sessionId: sid, taskId: this.taskId,
@@ -3926,7 +3941,25 @@ export class ClaudeCodeSession {
         // Only process Claude Code's canonical user events (content is an array
         // of tool_result blocks). Synthetic events exist in the streams file for
         // history reads — emitting them here would duplicate the optimistic copy.
-        if (!Array.isArray(msg.message?.content)) break
+        if (!Array.isArray(msg.message?.content)) {
+          // Delivery-path-independent auto-title trigger: the daemon appends a
+          // walnut-injected marker for EVERY injected message — including sends
+          // that bypass this server's pipeline entirely (phone → cloud replica →
+          // bridge → daemon FIFO write), which never emit SESSION_SEND and so
+          // never reach the onMessageSend hook. Tailing the JSONL is the one
+          // vantage point every path shares. Fire-and-forget; all placeholder/
+          // attempt guards live inside.
+          if (isWalnutInjected && this.claudeSessionId && this.taskId
+              && typeof msg.message?.content === 'string') {
+            const sid = this.claudeSessionId
+            const tid = this.taskId
+            const content = msg.message.content
+            import('../core/session-hooks/builtins.js')
+              .then(({ autoTitleFromObservedMessage }) => autoTitleFromObservedMessage(sid, tid, content))
+              .catch(() => { /* titling is best-effort */ })
+          }
+          break
+        }
         const userParentToolUseId = msg.parent_tool_use_id ?? undefined
         for (const block of msg.message.content) {
           if (block.type === 'tool_result') {

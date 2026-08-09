@@ -1089,6 +1089,47 @@ export async function autoTitleFromLaunch(
   await askAndApplyTitle(sessionId, taskId, trimmed, placeholder);
 }
 
+/**
+ * Delivery-path-INDEPENDENT title trigger, called by the session provider when
+ * it tails a `walnut-injected` synthetic user event from the session JSONL.
+ * This is the architectural fix for the local/cloud asymmetry: the primary
+ * onMessageSend trigger rides SESSION_SEND, which only THIS server's send
+ * pipeline emits — a phone-through-cloud send writes the FIFO via the bridge/
+ * daemon and never surfaces there (2026-08-09 incident: 7-minute first turn →
+ * 7 minutes of placeholder, because only the turn-complete safety net was
+ * left). The daemon writes a walnut-injected JSONL event for EVERY injected
+ * message regardless of who wrote the FIFO, and the provider tails that file
+ * for local and remote sessions alike — one source of truth, all paths.
+ * Idempotent with the other triggers via askAndApplyTitle's guards.
+ */
+export async function autoTitleFromObservedMessage(
+  sessionId: string, taskId: string, rawMessage: string,
+): Promise<void> {
+  // Strip the "[Images attached …]\n- <path>…" prefix the send routes prepend —
+  // file paths carry no titling signal. An image-only message leaves nothing.
+  const message = rawMessage
+    .replace(/^\[Images attached[^\]]*\]\n(?:- \S[^\n]*\n)*\n?/, '')
+    .trim();
+  if (!message) return;
+  if (/^\/[a-z][\w-]*(\s|$)/i.test(message)) return; // slash command
+
+  // Cheap placeholder gate before spending anything (same both-cwds logic as
+  // the hook — cwd-rename-detector can move cwd after launch).
+  const { getTask } = await import('../task-manager.js');
+  let task;
+  try { task = await getTask(taskId); } catch { return; }
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const record = await getSessionByClaudeId(sessionId).catch(() => undefined);
+  const { defaultSessionTaskTitle } = await import('../sessions/quick-start.js');
+  const placeholder = [record?.cwd, task.cwd]
+    .filter((c): c is string => !!c)
+    .map(defaultSessionTaskTitle)
+    .find((ph) => (task.title ?? '') === ph);
+  if (!placeholder) return;
+
+  await askAndApplyTitle(sessionId, taskId, message, placeholder);
+}
+
 export const sessionAutoTitleHook: SessionHookDefinition = {
   id: 'session-auto-title',
   name: 'Session Auto Title (onMessageSend)',

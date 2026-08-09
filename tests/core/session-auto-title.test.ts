@@ -34,7 +34,7 @@ import { WALNUT_HOME } from '../../src/constants.js';
 import { sessionRunner } from '../../src/providers/claude-code-session.js';
 import { addTask, getTask, updateTask, _resetForTesting as resetTaskManager } from '../../src/core/task-manager.js';
 import { createSessionRecord, getSessionByClaudeId } from '../../src/core/session-tracker.js';
-import { sessionAutoTitleHook, sessionAutoTitleTurnCompleteHook, __resetAutoTitleState } from '../../src/core/session-hooks/builtins.js';
+import { sessionAutoTitleHook, sessionAutoTitleTurnCompleteHook, autoTitleFromObservedMessage, __resetAutoTitleState } from '../../src/core/session-hooks/builtins.js';
 import { defaultSessionTaskTitle } from '../../src/core/sessions/quick-start.js';
 import type { OnMessageSendPayload } from '../../src/core/session-hooks/types.js';
 import type { Task } from '../../src/core/types.js';
@@ -235,6 +235,53 @@ describe('sessionAutoTitleHook', () => {
 
       expect(fake.askSideQuestion).not.toHaveBeenCalled();
       expect((await getTask(task.id)).title).toBe(PLACEHOLDER);
+    });
+  });
+
+  describe('observed-message trigger (JSONL walnut-injected tail — all delivery paths)', () => {
+    it('titles from a message observed on the JSONL, mid-turn, regardless of send path', async () => {
+      const sid = nextSid();
+      const task = await makeTaskAndSession(sid);
+      const fake = registerFakeSession(sid, async () => null, async (question) => {
+        expect(question).toContain('trace the fertility invoice emails');
+        return 'Fertility invoice email trace';
+      });
+
+      await autoTitleFromObservedMessage(sid, task.id, 'trace the fertility invoice emails');
+
+      expect(fake.askSideQuestion).toHaveBeenCalledTimes(1);
+      expect((await getTask(task.id)).title).toBe('Fertility invoice email trace');
+    });
+
+    it('strips the images-attached prefix and skips image-only messages', async () => {
+      const sid = nextSid();
+      const task = await makeTaskAndSession(sid);
+      const fake = registerFakeSession(sid, async () => null, async (question) => {
+        expect(question).not.toContain('/tmp/imgs/a.png');
+        expect(question).toContain('look at this bill');
+        return 'Medical bill review';
+      });
+
+      // Image-only → nothing to title from.
+      await autoTitleFromObservedMessage(sid, task.id,
+        '[Images attached — use the Read tool to view them]\n- /tmp/imgs/a.png\n\n');
+      expect(fake.askSideQuestion).not.toHaveBeenCalled();
+
+      // Image + text → title from the text alone.
+      await autoTitleFromObservedMessage(sid, task.id,
+        '[Images attached — use the Read tool to view them]\n- /tmp/imgs/a.png\n\nlook at this bill');
+      expect((await getTask(task.id)).title).toBe('Medical bill review');
+    });
+
+    it('is a no-op once the task is titled (idempotent with other triggers)', async () => {
+      const sid = nextSid();
+      const task = await makeTaskAndSession(sid, 'Already titled');
+      const fake = registerFakeSession(sid, async () => null, async () => 'Nope');
+
+      await autoTitleFromObservedMessage(sid, task.id, 'another message');
+
+      expect(fake.askSideQuestion).not.toHaveBeenCalled();
+      expect((await getTask(task.id)).title).toBe('Already titled');
     });
   });
 
