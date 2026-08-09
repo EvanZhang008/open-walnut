@@ -210,7 +210,7 @@ function buildFixWalnutMessage(userReport: string): string {
 sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: NextFunction) => {
   const requestTs = Date.now()
   try {
-    const { cwd, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta, intent, createCwd, engine } = req.body as {
+    const { cwd, host, message, model: rawModel, mode, images, taskId: existingTaskId, taskMeta, project, intent, createCwd, engine } = req.body as {
       cwd: string
       host?: string
       message: string
@@ -218,6 +218,8 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       mode?: string
       images?: ImagePayload[]
       taskId?: string // retry mode: reuse existing task instead of creating a new one
+      /** File the new task under this project (created if unknown). Omitted/empty = Inbox. */
+      project?: string
       taskMeta?: {
         starred?: boolean
         needs_attention?: boolean
@@ -245,6 +247,14 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     }
     if (intent !== undefined && intent !== 'fix-walnut') {
       res.status(400).json({ error: `Invalid intent: ${intent}. Must be 'fix-walnut'` })
+      return
+    }
+    if (project !== undefined && typeof project !== 'string') {
+      res.status(400).json({ error: 'project must be a string' })
+      return
+    }
+    if (typeof project === 'string' && project.length > 256) {
+      res.status(400).json({ error: 'project too long (max 256 chars)' })
       return
     }
 
@@ -336,8 +346,11 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     const fixWalnutTaskMeta = isFixWalnut && taskMeta?.pinTier === undefined
       ? { ...taskMeta, pinTier: 'satellite' as const }
       : taskMeta
+    // Repairs file under the real 'Walnut' project (recognizable via the title
+    // prefix), NOT a parallel 'Fix Walnut' project — that split scattered the
+    // same product's work across two projects (user-reported 2026-08-09).
     const fixWalnutExtras = isFixWalnut
-      ? { taskTitle: `Fix Walnut: ${reportSnippet}`, project: 'Fix Walnut' }
+      ? { taskTitle: `Fix Walnut: ${reportSnippet}`, project: 'Walnut' }
       : {}
 
     // Shared core (also used by the claude-code routine executor): task create/
@@ -373,6 +386,9 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         existingTaskId, taskMeta: fixWalnutTaskMeta, source: 'quick-start', requestTs,
         engine: engine === 'codex' ? 'codex' : undefined,
         preassignedSessionId,
+        // Client project seed (project-header "+ → Add session"). fixWalnutExtras
+        // spreads AFTER so a repair launch always files under 'Walnut'.
+        ...(project?.trim() ? { project: project.trim() } : {}),
         ...fixWalnutExtras,
       })
       // Remember this folder's launch config for next time (fire-and-forget).

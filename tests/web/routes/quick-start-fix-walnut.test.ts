@@ -101,7 +101,7 @@ describe('POST /api/sessions/quick-start — intent=fix-walnut', () => {
       expect(res.status).toBe(200);
       const task = await getTask(res.body.taskId);
       expect(task!.title).toBe('Fix Walnut: sessions panel keeps spinning');
-      expect(task!.project).toBe('Fix Walnut');
+      expect(task!.project).toBe('Walnut');
 
       const started = capture.get();
       expect(started).not.toBeNull();

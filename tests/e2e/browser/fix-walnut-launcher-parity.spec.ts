@@ -60,7 +60,7 @@ test('fix walnut pill inherits the sticky launcher tier instead of forcing Focus
     const res = await fetch(`${API}/api/tasks?limit=200`)
     if (!res.ok) return null
     const body = (await res.json()) as { tasks?: Array<{ id: string; title?: string; project?: string }> }
-    return body.tasks?.find(t => t.project === 'Fix Walnut' && t.title?.includes(titleNeedle)) ?? null
+    return body.tasks?.find(t => t.project === 'Walnut' && t.title?.includes(titleNeedle)) ?? null
   }
   await expect.poll(findTask, { timeout: 20_000, message: 'fix-walnut task was never created' })
     .not.toBeNull()
