@@ -72,12 +72,19 @@ export interface DeviceInfo {
 }
 
 const SETUP_TOKEN_TTL_MS = 15 * 60 * 1000
+/**
+ * A provisioned token (a pairing code burned into the VM's cloud-init) gets a
+ * far longer window than a printed one: the operator generated it BEFORE the
+ * box existed, and first boot — image pull, npm ci, a full build, Let's Encrypt
+ * — routinely outlives 15 minutes.
+ */
+const PROVISIONED_SETUP_TOKEN_TTL_MS = 24 * 60 * 60 * 1000
 /** Persist lastUsedAt at most once per device per this window (avoid write amplification). */
 const LAST_USED_WRITE_THROTTLE_MS = 60_000
 
 // Module-level setup-token state. Regenerated on process restart (module reload)
 // and on expiry. Only meaningful while the device list is empty.
-let setupToken: { token: string; expiresAt: number } | null = null
+let setupToken: { token: string; expiresAt: number; provisioned: boolean } | null = null
 // Per-device throttle for lastUsedAt disk writes.
 const lastUsedWriteAt = new Map<string, number>()
 
@@ -349,23 +356,81 @@ export async function isClaimed(): Promise<boolean> {
 }
 
 /**
+ * Read a setup token supplied by provisioning (the "pairing code" the operator's
+ * Walnut generated locally and burned into this box's cloud-init), instead of
+ * having the box mint one and print it to the journal.
+ *
+ * Two shapes, env wins: `WALNUT_SETUP_TOKEN` (value) or `WALNUT_SETUP_TOKEN_FILE`
+ * (path). The file path is NEVER defaulted in code — it always arrives via the
+ * env var that scripts/cloud/setup.sh sets, so a dev Mac never reads a stray
+ * file and tests stay hermetic.
+ */
+async function readProvisionedSetupToken(): Promise<{ token: string; source: 'env' | 'file' } | null> {
+  let candidate: string | undefined
+  let source: 'env' | 'file' = 'env'
+  const fromEnv = process.env.WALNUT_SETUP_TOKEN
+  if (fromEnv) {
+    candidate = fromEnv
+  } else {
+    const file = process.env.WALNUT_SETUP_TOKEN_FILE
+    if (file) {
+      source = 'file'
+      try {
+        candidate = await fs.readFile(file, 'utf-8')
+      } catch {
+        return null // absent/unreadable file is the normal non-provisioned case
+      }
+    }
+  }
+  if (candidate === undefined) return null
+  const token = candidate.trim()
+  if (!/^[0-9a-f]{32}$/.test(token)) {
+    // The operator holds a pairing code that will NEVER work — say so loudly
+    // rather than silently falling back to a token only the journal knows.
+    log.web.error('device-auth: provisioned setup token is malformed (expected 32 lowercase hex chars) — falling back to a random setup token, so the pairing code will NOT claim this instance', {
+      source,
+      length: token.length,
+    })
+    return null
+  }
+  return { token, source }
+}
+
+/**
  * Get the current setup token — ONLY while zero devices exist. Lazily generates
  * (and regenerates on expiry). Returns null once the instance is claimed.
- * Callers that surface it to the operator should use printSetupTokenBanner().
+ * Callers that surface it to the operator should use printSetupTokenBanner()
+ * — but only when `provisioned` is false; a provisioned token must never be
+ * echoed, the operator already has it.
  */
-export async function getSetupTokenIfUnclaimed(): Promise<{ token: string; expiresAt: number } | null> {
+export async function getSetupTokenIfUnclaimed(): Promise<{ token: string; expiresAt: number; provisioned: boolean } | null> {
   if (await isClaimed()) {
     setupToken = null
     return null
   }
   if (!setupToken || Date.now() > setupToken.expiresAt) {
-    setupToken = {
-      token: crypto.randomBytes(16).toString('hex'),
-      expiresAt: Date.now() + SETUP_TOKEN_TTL_MS,
+    const provisioned = await readProvisionedSetupToken()
+    if (provisioned) {
+      setupToken = {
+        token: provisioned.token,
+        expiresAt: Date.now() + PROVISIONED_SETUP_TOKEN_TTL_MS,
+        provisioned: true,
+      }
+      // Deliberately omits the token value, like the random-path log below.
+      log.web.warn('device-auth: adopted provisioned setup token', {
+        source: provisioned.source,
+        expiresAt: new Date(setupToken.expiresAt).toISOString(),
+      })
+    } else {
+      setupToken = {
+        token: crypto.randomBytes(16).toString('hex'),
+        expiresAt: Date.now() + SETUP_TOKEN_TTL_MS,
+        provisioned: false,
+      }
+      log.web.warn('device-auth: setup token generated (instance unclaimed)', {
+        expiresAt: new Date(setupToken.expiresAt).toISOString(),
+      })
     }
-    log.web.warn('device-auth: setup token generated (instance unclaimed)', {
-      expiresAt: new Date(setupToken.expiresAt).toISOString(),
-    })
   }
   return setupToken
 }
@@ -417,6 +482,14 @@ export async function claimInstance(candidateToken: string, deviceName: string):
   }
   const { name, token } = await createDevice(deviceName)
   setupToken = null // closed — createDevice made isClaimed() true anyway
+  // A provisioned pairing code must not linger on disk once it has been spent.
+  // Best-effort: the claim already succeeded, so a failed unlink is not an error
+  // worth failing on. (Any env-var copy of the token in the systemd unit is inert
+  // from here on — the claim path is closed forever.)
+  const tokenFile = process.env.WALNUT_SETUP_TOKEN_FILE
+  if (tokenFile) {
+    try { await fs.unlink(tokenFile) } catch { /* already gone / read-only FS */ }
+  }
   log.web.info('device-auth: instance claimed', { deviceName: name })
   return { name, token }
 }

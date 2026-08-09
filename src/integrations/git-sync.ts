@@ -268,6 +268,9 @@ sessions/streams/
 sync/ms-todo-tokens.json
 auth.json
 auth.json.bak
+# Cloud-provisioning job state — holds the pairing code (a live setup token)
+# until the new instance claims itself. Never syncs, never reaches a remote.
+cloud-setup-job.json
 
 # Machine-local settings — MUST stay out of the sync history. These hold the STT
 # engine, SSH hosts and provider credentials, which differ per box. Keep in sync
@@ -318,12 +321,15 @@ node_modules/
  *    Syncing it echoes a stale due time back from the other box and re-fires
  *    jobs (2026-08-04 storm). Pre-existing repos' .gitignore predates this
  *    file, so it needs both the append and the untrack self-heal.
+ *  - cloud-setup-job.json — in-flight cloud provisioning state, including the
+ *    pairing code that doubles as the new instance's setup token. A live secret
+ *    must never reach the sync history.
  *
  * These are also actively untracked (see ensureMachineLocalUntracked): being
  * gitignored on THIS box while still tracked in the index is the dangerous
  * state — see that function for the incident this prevents.
  */
-const CRITICAL_IGNORES = ['auth.json', 'auth.json.bak', 'config.yaml', 'config.yaml.bak', 'cron-state.json'];
+const CRITICAL_IGNORES = ['auth.json', 'auth.json.bak', 'cloud-setup-job.json', 'config.yaml', 'config.yaml.bak', 'cron-state.json'];
 
 /**
  * Ignore-only patterns: kept out of the .gitignore drift, but NOT fed to the

@@ -1008,7 +1008,24 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     try {
       const { getSetupTokenIfUnclaimed, printSetupTokenBanner } = await import('../core/device-auth.js')
       const setup = await getSetupTokenIfUnclaimed()
-      if (setup) {
+      if (setup?.provisioned) {
+        // Provisioning supplied the token (a pairing code from the operator's
+        // own Walnut). Printing it would put a live secret in the journal for
+        // no benefit — whoever provisioned the box already holds it.
+        process.stdout.write([
+          '',
+          '==============================================================',
+          '  WALNUT CLOUD SETUP — instance is UNCLAIMED',
+          '',
+          '  Setup token provisioned via pairing code (not shown).',
+          `  Valid until: ${new Date(setup.expiresAt).toISOString()}`,
+          '',
+          '  Claim from your Walnut app, or read the token from your',
+          '  provisioning input.',
+          '==============================================================',
+          '',
+        ].join('\n'))
+      } else if (setup) {
         printSetupTokenBanner(setup.token, setup.expiresAt)
       } else {
         log.web.info('cloud mode: instance already claimed (device tokens active)')

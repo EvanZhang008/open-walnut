@@ -253,27 +253,44 @@ echo "==> [8/9] walnut.service"
 # feature stays off.
 mkdir -p /etc/walnut
 touch /etc/walnut/walnut.env
-if OPENAI_KEY=$(aws ssm get-parameter --name /walnut/openai-api-key \
-    --with-decryption --query Parameter.Value --output text 2>/dev/null); then
-  grep -q '^OPENAI_API_KEY=' /etc/walnut/walnut.env \
-    && sed -i "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=$OPENAI_KEY|" /etc/walnut/walnut.env \
-    || echo "OPENAI_API_KEY=$OPENAI_KEY" >> /etc/walnut/walnut.env
+# Non-AWS providers (and a hand-run of this script off-instance) have no aws CLI;
+# every SSM lookup below is optional, so skip the whole block rather than eating
+# a `command not found` per parameter.
+if command -v aws >/dev/null 2>&1; then
+  if OPENAI_KEY=$(aws ssm get-parameter --name /walnut/openai-api-key \
+      --with-decryption --query Parameter.Value --output text 2>/dev/null); then
+    grep -q '^OPENAI_API_KEY=' /etc/walnut/walnut.env \
+      && sed -i "s|^OPENAI_API_KEY=.*|OPENAI_API_KEY=$OPENAI_KEY|" /etc/walnut/walnut.env \
+      || echo "OPENAI_API_KEY=$OPENAI_KEY" >> /etc/walnut/walnut.env
+  else
+    echo "    (no /walnut/openai-api-key in SSM — voice STT cloud fallback disabled)"
+  fi
+  # web_search (Tavily) — same pattern: config.yaml is machine-local and never
+  # carries secrets, so the key rides SSM → env. web-search-tool falls back to
+  # TAVILY_API_KEY when tools.web_search.api_key is absent from config.
+  if TAVILY_KEY=$(aws ssm get-parameter --name /walnut/tavily-api-key \
+      --with-decryption --query Parameter.Value --output text 2>/dev/null); then
+    grep -q '^TAVILY_API_KEY=' /etc/walnut/walnut.env \
+      && sed -i "s|^TAVILY_API_KEY=.*|TAVILY_API_KEY=$TAVILY_KEY|" /etc/walnut/walnut.env \
+      || echo "TAVILY_API_KEY=$TAVILY_KEY" >> /etc/walnut/walnut.env
+  else
+    echo "    (no /walnut/tavily-api-key in SSM — web_search disabled on the companion)"
+  fi
 else
-  echo "    (no /walnut/openai-api-key in SSM — voice STT cloud fallback disabled)"
-fi
-# web_search (Tavily) — same pattern: config.yaml is machine-local and never
-# carries secrets, so the key rides SSM → env. web-search-tool falls back to
-# TAVILY_API_KEY when tools.web_search.api_key is absent from config.
-if TAVILY_KEY=$(aws ssm get-parameter --name /walnut/tavily-api-key \
-    --with-decryption --query Parameter.Value --output text 2>/dev/null); then
-  grep -q '^TAVILY_API_KEY=' /etc/walnut/walnut.env \
-    && sed -i "s|^TAVILY_API_KEY=.*|TAVILY_API_KEY=$TAVILY_KEY|" /etc/walnut/walnut.env \
-    || echo "TAVILY_API_KEY=$TAVILY_KEY" >> /etc/walnut/walnut.env
-else
-  echo "    (no /walnut/tavily-api-key in SSM — web_search disabled on the companion)"
+  echo "    (no aws CLI — skipping SSM secrets)"
 fi
 chown "$WALNUT_USER:$WALNUT_USER" /etc/walnut/walnut.env
 chmod 600 /etc/walnut/walnut.env
+
+# Pairing code (a pre-generated setup token) if provisioning burned one in via
+# cloud-init. cloud-init writes it as root before this script runs, so the
+# service user cannot read it yet. The value itself never enters the unit file —
+# only the path — so `systemctl show walnut` cannot leak it.
+if [ -s /etc/walnut/setup-token ]; then
+  chown "$WALNUT_USER:$WALNUT_USER" /etc/walnut/setup-token
+  chmod 600 /etc/walnut/setup-token
+  echo "    (provisioned setup token present — claim from your Walnut app)"
+fi
 
 # Port note: the server takes its port from the --port CLI flag (default 3456
 # in src/web/server.ts DEFAULT_PORT) — there is no PORT env var.
@@ -292,6 +309,9 @@ Environment=NODE_ENV=production
 Environment=OPEN_WALNUT_HOME=$DATA_HOME
 Environment=WALNUT_GIT_HUB_DIR=$WALNUT_LIB/git
 Environment=HOME=$WALNUT_LIB
+# Path, not value — the pairing code stays out of 'systemctl show'. Absent file
+# = no provisioned token, and the server mints+prints a random one as before.
+Environment=WALNUT_SETUP_TOKEN_FILE=/etc/walnut/setup-token
 # Optional secrets (SSM-materialized above); '-' = absent file is fine.
 EnvironmentFile=-/etc/walnut/walnut.env
 ExecStart=$NODE_BIN $REPO_DIR/dist/cli.js web --port 3456

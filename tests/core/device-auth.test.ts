@@ -5,6 +5,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
@@ -25,13 +26,26 @@ import {
 
 const authFile = () => path.join(WALNUT_HOME, 'auth.json');
 
+// The provisioned-token path reads two env vars. Snapshot/restore them around
+// EVERY case (not just the provisioning block) so an ambient value on the box
+// can't turn the random-token assertions into false failures, and so the
+// provisioning cases can't leak into the ones after them.
+const SETUP_ENV_VARS = ['WALNUT_SETUP_TOKEN', 'WALNUT_SETUP_TOKEN_FILE'] as const;
+let savedEnv: Record<string, string | undefined> = {};
+
 beforeEach(async () => {
+  savedEnv = Object.fromEntries(SETUP_ENV_VARS.map((k) => [k, process.env[k]]));
+  for (const k of SETUP_ENV_VARS) delete process.env[k];
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   await fs.mkdir(WALNUT_HOME, { recursive: true });
   _resetDeviceAuthForTesting();
 });
 
 afterEach(async () => {
+  for (const k of SETUP_ENV_VARS) {
+    if (savedEnv[k] === undefined) delete process.env[k];
+    else process.env[k] = savedEnv[k];
+  }
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   _resetDeviceAuthForTesting();
 });
@@ -256,5 +270,147 @@ describe('self-reported device info (model/OS backfill)', () => {
     await setDeviceInfo('phone', { model: 'iPhone17,1', appVersion: '1.0 (26)' });
     await setDeviceInfo('phone', { model: 'iPhone17,1', appVersion: '1.1 (30)' });
     expect((await listDevices())[0].info?.appVersion).toBe('1.1 (30)');
+  });
+});
+
+// ── Reversed pairing: the operator's Walnut generates the code and burns it into
+// the new box's cloud-init, so nothing has to read it back out of the journal.
+describe('provisioned setup token (pairing code)', () => {
+  const PAIRING_CODE = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+  let tokenDir: string;
+
+  const tokenFile = () => path.join(tokenDir, 'setup-token');
+
+  beforeEach(async () => {
+    tokenDir = await fs.mkdtemp(path.join(os.tmpdir(), 'walnut-setup-token-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tokenDir, { recursive: true, force: true });
+  });
+
+  it('adopts WALNUT_SETUP_TOKEN and claims with it', async () => {
+    process.env.WALNUT_SETUP_TOKEN = PAIRING_CODE;
+
+    const setup = await getSetupTokenIfUnclaimed();
+    expect(setup!.token).toBe(PAIRING_CODE);
+    expect(setup!.provisioned).toBe(true);
+
+    const { token } = await claimInstance(PAIRING_CODE, 'provisioned-phone');
+    expect(await verifyDeviceToken(token)).toEqual({ name: 'provisioned-phone' });
+  });
+
+  it('adopts a token from WALNUT_SETUP_TOKEN_FILE', async () => {
+    await fs.writeFile(tokenFile(), PAIRING_CODE, 'utf-8');
+    process.env.WALNUT_SETUP_TOKEN_FILE = tokenFile();
+
+    const setup = await getSetupTokenIfUnclaimed();
+    expect(setup!.token).toBe(PAIRING_CODE);
+    expect(setup!.provisioned).toBe(true);
+  });
+
+  it('trims whitespace/newline from the token file (cloud-init writes a trailing \\n)', async () => {
+    await fs.writeFile(tokenFile(), `  ${PAIRING_CODE}\n`, 'utf-8');
+    process.env.WALNUT_SETUP_TOKEN_FILE = tokenFile();
+
+    const setup = await getSetupTokenIfUnclaimed();
+    expect(setup!.token).toBe(PAIRING_CODE);
+    // …and the trimmed value is what actually claims.
+    await claimInstance(PAIRING_CODE, 'phone');
+    expect(await isClaimed()).toBe(true);
+  });
+
+  it('env wins over the file when both are set', async () => {
+    await fs.writeFile(tokenFile(), 'f'.repeat(32), 'utf-8');
+    process.env.WALNUT_SETUP_TOKEN_FILE = tokenFile();
+    process.env.WALNUT_SETUP_TOKEN = PAIRING_CODE;
+
+    expect((await getSetupTokenIfUnclaimed())!.token).toBe(PAIRING_CODE);
+  });
+
+  it('gives a provisioned token a 24h window, not 15 min', async () => {
+    process.env.WALNUT_SETUP_TOKEN = PAIRING_CODE;
+    const before = Date.now();
+    const setup = await getSetupTokenIfUnclaimed();
+    const after = Date.now();
+    // expiresAt was computed between the two stamps, so bound it by both.
+    expect(setup!.expiresAt).toBeGreaterThanOrEqual(before + 24 * 60 * 60 * 1000);
+    expect(setup!.expiresAt).toBeLessThanOrEqual(after + 24 * 60 * 60 * 1000);
+  });
+
+  it('claiming with a provisioned token closes the path forever', async () => {
+    process.env.WALNUT_SETUP_TOKEN = PAIRING_CODE;
+    await getSetupTokenIfUnclaimed();
+
+    const { name } = await claimInstance(PAIRING_CODE, 'first-phone');
+    expect(name).toBe('first-phone');
+    expect(await isClaimed()).toBe(true);
+    // The env var is still set — it must NOT reopen the claim path.
+    expect(await getSetupTokenIfUnclaimed()).toBeNull();
+    await expect(claimInstance(PAIRING_CODE, 'second-phone')).rejects.toThrow(/already claimed/);
+  });
+
+  it('deletes the token file after a successful claim (secret must not linger)', async () => {
+    await fs.writeFile(tokenFile(), PAIRING_CODE, 'utf-8');
+    process.env.WALNUT_SETUP_TOKEN_FILE = tokenFile();
+    await getSetupTokenIfUnclaimed();
+
+    await claimInstance(PAIRING_CODE, 'phone');
+    await expect(fs.readFile(tokenFile(), 'utf-8')).rejects.toThrow();
+  });
+
+  it('a claim that FAILS leaves the token file in place (retryable)', async () => {
+    await fs.writeFile(tokenFile(), PAIRING_CODE, 'utf-8');
+    process.env.WALNUT_SETUP_TOKEN_FILE = tokenFile();
+    await getSetupTokenIfUnclaimed();
+
+    await expect(claimInstance('f'.repeat(32), 'phone')).rejects.toThrow(/Invalid or expired/);
+    expect((await fs.readFile(tokenFile(), 'utf-8')).trim()).toBe(PAIRING_CODE);
+  });
+
+  describe('malformed provisioned tokens fall back to a random one', () => {
+    // The operator's pairing code is dead in these cases — the point of the
+    // assertion is that the box stays claimable rather than adopting garbage.
+    const cases: Array<[string, string]> = [
+      ['too short', 'abc123'],
+      ['too long', 'a'.repeat(40)],
+      ['non-hex', 'z'.repeat(32)],
+      ['uppercase hex', 'A1B2C3D4E5F60718293A4B5C6D7E8F90'],
+      ['empty', ''],
+    ];
+
+    for (const [label, bad] of cases) {
+      it(`${label} → random 32-hex token with the 15-min window`, async () => {
+        process.env.WALNUT_SETUP_TOKEN = bad;
+        const setup = await getSetupTokenIfUnclaimed();
+        const after = Date.now();
+
+        expect(setup!.provisioned).toBe(false);
+        expect(setup!.token).toMatch(/^[0-9a-f]{32}$/);
+        expect(setup!.token).not.toBe(bad);
+        // Anchor on a stamp taken AFTER the call: expiresAt was computed at some
+        // point in between, so this cannot be off by the elapsed millisecond.
+        expect(setup!.expiresAt).toBeLessThanOrEqual(after + 15 * 60 * 1000);
+        // The malformed value must not claim anything.
+        await expect(claimInstance(bad, 'phone')).rejects.toThrow(/Invalid or expired/);
+      });
+    }
+
+    it('an unreadable/absent token file → random token', async () => {
+      process.env.WALNUT_SETUP_TOKEN_FILE = path.join(tokenDir, 'does-not-exist');
+      const setup = await getSetupTokenIfUnclaimed();
+      expect(setup!.provisioned).toBe(false);
+      expect(setup!.token).toMatch(/^[0-9a-f]{32}$/);
+    });
+  });
+
+  it('no env, no file → unchanged legacy behavior (random token, 15-min window)', async () => {
+    const before = Date.now();
+    const setup = await getSetupTokenIfUnclaimed();
+    const after = Date.now();
+    expect(setup!.provisioned).toBe(false);
+    expect(setup!.token).toMatch(/^[0-9a-f]{32}$/);
+    expect(setup!.expiresAt).toBeGreaterThanOrEqual(before + 15 * 60 * 1000);
+    expect(setup!.expiresAt).toBeLessThanOrEqual(after + 15 * 60 * 1000);
   });
 });
