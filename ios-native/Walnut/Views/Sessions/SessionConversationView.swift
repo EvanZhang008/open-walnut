@@ -18,6 +18,11 @@ struct SessionConversationView: View {
     @State private var lifecycle: SessionLifecycleController
     @State private var showInfo = false
     @State private var showControls = false
+    // Wave-2 extras — presented from the lifecycle menu.
+    @State private var showQueue = false
+    @State private var showPlan = false
+    @State private var showSideQuestions = false
+    @State private var showFiles = false
     @State private var showRename = false
     @State private var renameDraft = ""
     /// Non-nil = terminate hit 409 cron_owner; confirm to force.
@@ -128,6 +133,23 @@ struct SessionConversationView: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
+        // Wave-2 extras: queue / plan / side questions / files.
+        .sheet(isPresented: $showQueue) {
+            SessionQueueSheet(sessionId: session.id)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showPlan) {
+            SessionPlanSheet(sessionId: session.id)
+        }
+        .sheet(isPresented: $showSideQuestions) {
+            SideQuestionsSheet(sessionId: session.id)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showFiles) {
+            SessionFilesSheet(session: session)
+        }
         // A successful fork pushes the new session's conversation on top of
         // this one (the enclosing stack already knows WalnutSession pages).
         .navigationDestination(item: $forkedSession) { forked in
@@ -201,6 +223,34 @@ struct SessionConversationView: View {
                 }
                 .accessibilityIdentifier("session.retry")
             }
+            Divider()
+            // Wave-2 extras — read/withdraw the send queue, view the plan,
+            // ask side questions, browse the working directory.
+            Button {
+                showQueue = true
+            } label: {
+                Label("Queued Messages", systemImage: "tray.full")
+            }
+            .accessibilityIdentifier("session.queue")
+            Button {
+                showPlan = true
+            } label: {
+                Label("View Plan", systemImage: "list.bullet.clipboard")
+            }
+            .accessibilityIdentifier("session.plan")
+            Button {
+                showSideQuestions = true
+            } label: {
+                Label("Side Questions", systemImage: "questionmark.bubble")
+            }
+            .accessibilityIdentifier("session.sideQuestions")
+            Button {
+                showFiles = true
+            } label: {
+                Label("Browse Files", systemImage: "folder")
+            }
+            .accessibilityIdentifier("session.files")
+            Divider()
             Button {
                 renameDraft = session.title ?? session.rowTitle
                 showRename = true

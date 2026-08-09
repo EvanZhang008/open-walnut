@@ -1,6 +1,12 @@
 import SwiftUI
 
-/// Settings tab — connection status card, pairing, disconnect, app version.
+/// Typed navigation targets inside the Settings stack.
+enum SettingsRoute: Hashable {
+    case routines
+}
+
+/// Settings tab — connection status card, server info (Wave 2 /v1/config),
+/// routines management entry, pairing, disconnect, app version.
 struct SettingsView: View {
     @Environment(ConnectionStore.self) private var connection
     @Environment(ChatStore.self) private var chat
@@ -12,10 +18,17 @@ struct SettingsView: View {
     @State private var diagnosticsResult: String?
     @AppStorage(VoiceRecorder.micRouteKey) private var micRoute = VoiceRecorder.MicRoute.automatic.rawValue
 
+    /// Wave-2 server info (GET /v1/config projection + chat stats). Best-effort:
+    /// an old server without the endpoints just hides the block.
+    @State private var serverInfo: ServerConfigInfo?
+    @State private var chatStats: ChatStats?
+
     var body: some View {
         NavigationStack {
             List {
                 serverSection
+                serverInfoSection
+                automationSection
                 voiceSection
                 diagnosticsSection
                 actionsSection
@@ -24,6 +37,13 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .refreshable {
                 await connection.refreshStatus()
+                await loadServerInfo()
+            }
+            .task { await loadServerInfo() }
+            .navigationDestination(for: SettingsRoute.self) { route in
+                switch route {
+                case .routines: RoutinesView()
+                }
             }
             .confirmationDialog(
                 "Disconnect from this server?",
@@ -54,6 +74,49 @@ struct SettingsView: View {
                     LabeledContent("Last sync", value: ConversationListView.relativeTime(lastSync))
                 }
             }
+        }
+    }
+
+    /// Server info block from GET /v1/config — provider/model/hosts, plus the
+    /// butler conversation size from GET /v1/chat/stats. Hidden entirely when
+    /// the endpoint isn't there yet (older server).
+    @ViewBuilder
+    private var serverInfoSection: some View {
+        if let serverInfo {
+            Section("Server Info") {
+                if let provider = serverInfo.config.provider?.type {
+                    LabeledContent("Provider", value: providerLine(provider))
+                }
+                if let model = serverInfo.config.agent?.mainModel ?? serverInfo.config.provider?.model {
+                    LabeledContent("Model", value: WalnutSession.shortModelName(model))
+                }
+                let hosts = serverInfo.enabledHostLabels
+                if !hosts.isEmpty {
+                    LabeledContent("Hosts", value: hosts.joined(separator: ", "))
+                }
+                if serverInfo.cloud == true {
+                    LabeledContent("Mode", value: "Cloud companion")
+                }
+                if let uptime = serverInfo.memory?.uptimeSec {
+                    LabeledContent("Uptime", value: Self.uptimeText(uptime))
+                }
+                if let stats = chatStats, let count = stats.apiMessageCount {
+                    LabeledContent("Butler chat") {
+                        Text(chatStatsLine(stats, count: count))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .accessibilityIdentifier("settings.serverInfo")
+        }
+    }
+
+    private var automationSection: some View {
+        Section("Automation") {
+            NavigationLink(value: SettingsRoute.routines) {
+                Label("Routines", systemImage: "calendar.badge.clock")
+            }
+            .accessibilityIdentifier("settings.routines")
         }
     }
 
@@ -143,6 +206,40 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity)
             .padding(.top, 12)
         }
+    }
+
+    // MARK: - Server info helpers
+
+    private func loadServerInfo() async {
+        // Best-effort, independently: chat stats failing must not hide config.
+        if let info = try? await WalnutAPI().serverConfig() {
+            serverInfo = info
+        }
+        if let stats = try? await WalnutAPI().chatStats() {
+            chatStats = stats
+        }
+    }
+
+    private func providerLine(_ type: String) -> String {
+        var line = type.capitalized
+        if let region = serverInfo?.config.provider?.bedrockRegion {
+            line += " · \(region)"
+        }
+        return line
+    }
+
+    private func chatStatsLine(_ stats: ChatStats, count: Int) -> String {
+        var line = "\(count) messages"
+        if let percent = stats.contextPercent {
+            line += " · \(percent)% of context"
+        }
+        return line
+    }
+
+    static func uptimeText(_ seconds: Int) -> String {
+        if seconds < 3600 { return "\(seconds / 60)m" }
+        if seconds < 86_400 { return "\(seconds / 3600)h \((seconds % 3600) / 60)m" }
+        return "\(seconds / 86_400)d \((seconds % 86_400) / 3600)h"
     }
 
     private static var appVersion: String {

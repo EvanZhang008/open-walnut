@@ -374,6 +374,12 @@ final class TasksStore {
         return created
     }
 
+    /// NL quick-parse (Wave 2) — stateless pass-through to the API so views
+    /// don't hold their own client. Throws on failure; caller shows the error.
+    func quickParse(_ text: String) async throws -> QuickParsedTask {
+        try await api.quickParseTask(text: text)
+    }
+
     // MARK: - Task editing (PATCH /tasks/:id — optimistic, rollback on failure)
 
     /// One optimistic edit. Non-nil fields apply; `dueDate` "" = clear.

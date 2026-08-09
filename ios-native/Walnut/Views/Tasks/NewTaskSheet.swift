@@ -39,6 +39,15 @@ struct NewTaskSheet: View {
     @State private var createError: String?
     @FocusState private var titleFocused: Bool
 
+    // NL quick-parse (Wave 2): a sentence like "remind me to file the report
+    // at 9am tomorrow" backfills the form below — the AI fills, the human
+    // confirms; the manual form always stays usable.
+    @State private var nlText = ""
+    @State private var parsing = false
+    @State private var parseError: String?
+    /// Set when the parse invented a new project name (badge in the form).
+    @State private var parsedNewProject = false
+
     /// Existing project names from the loaded task list, A→Z (Inbox excluded —
     /// it's the empty default, not a pickable name).
     private var knownProjects: [String] {
@@ -54,6 +63,7 @@ struct NewTaskSheet: View {
     var body: some View {
         NavigationStack {
             Form {
+                quickParseSection
                 titleSection
                 projectSection
                 prioritySection
@@ -89,6 +99,71 @@ struct NewTaskSheet: View {
     }
 
     // MARK: - Sections
+
+    /// NL capture row: type a sentence → Parse → the form below fills in.
+    /// Never blocks manual entry; a parse failure leaves the form untouched.
+    private var quickParseSection: some View {
+        Section {
+            HStack(spacing: 8) {
+                TextField("Describe it… \"file the report 9am tomorrow\"", text: $nlText, axis: .vertical)
+                    .lineLimit(1...3)
+                    .disabled(parsing)
+                    .accessibilityIdentifier("newTask.nlText")
+                Button {
+                    Task { await parseNL() }
+                } label: {
+                    if parsing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "wand.and.stars")
+                            .foregroundStyle(Theme.tint)
+                    }
+                }
+                .disabled(parsing || nlText.trimmingCharacters(in: .whitespaces).isEmpty)
+                .accessibilityIdentifier("newTask.parse")
+            }
+            if let parseError {
+                Text(parseError)
+                    .font(.caption)
+                    .foregroundStyle(Theme.danger)
+            }
+        } header: {
+            Text("Quick Add")
+        } footer: {
+            Text(parsedNewProject
+                 ? "Parsed — \"\(project)\" is a new project and will be created."
+                 : "AI fills the form below — review, then Add.")
+        }
+    }
+
+    /// POST /v1/tasks/quick-parse — backfill title/project/priority/due date.
+    /// The parse only OVERWRITES fields it produced; everything else stays.
+    private func parseNL() async {
+        let text = nlText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !parsing else { return }
+        parsing = true
+        parseError = nil
+        parsedNewProject = false
+        defer { parsing = false }
+        do {
+            let parsed = try await tasks.quickParse(text)
+            title = parsed.title
+            if let p = parsed.project { project = p }
+            parsedNewProject = parsed.projectIsNew == true
+            if let raw = parsed.priority, let p = Priority(rawValue: raw) { priority = p }
+            if let due = QuickParsedTask.parseLocalDate(parsed.dueDate) {
+                hasDueDate = true
+                dueDate = due
+            }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            AppLog.info("tasks", "quick-parse filled form", ["textLen": String(text.count)])
+        } catch let error as APIError where error.isCancelled {
+            return
+        } catch {
+            parseError = "Couldn't parse that — fill the form manually or try rewording."
+            AppLog.warn("tasks", "quick-parse failed", ["error": error.localizedDescription])
+        }
+    }
 
     private var titleSection: some View {
         Section {

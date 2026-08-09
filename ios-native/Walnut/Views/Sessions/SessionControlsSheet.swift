@@ -20,6 +20,10 @@ struct SessionControlsSheet: View {
     /// Read-back confirmation after a successful switch ("Applied live", …).
     @State private var confirmation: String?
 
+    /// Wave-2 provider-neutral controls (mode select for Claude; native set
+    /// for Codex/ACP). Best-effort: an old server just hides the section.
+    @State private var controls: SessionControlsPayload?
+
     // Fork
     @State private var forkMessage = ""
     @State private var forking = false
@@ -49,6 +53,7 @@ struct SessionControlsSheet: View {
                 }
                 modelSection
                 effortSection
+                providerControlsSection
                 forkSection
             }
             .navigationTitle("Session Controls")
@@ -75,6 +80,9 @@ struct SessionControlsSheet: View {
             options = nil
             loadError = Self.friendlyControlError(error)
         }
+        // Wave-2 controls are additive: a 404 from an older server (or a 409
+        // from an unattached Codex session) just hides the section.
+        controls = try? await api.sessionControls(id: session.id)
     }
 
     // MARK: - Model
@@ -227,6 +235,69 @@ struct SessionControlsSheet: View {
                     : "Effort set to \(result.effort) — takes effect when the session next wakes."
             }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        } catch {
+            errorMessage = Self.friendlyControlError(error)
+        }
+    }
+
+    // MARK: - Provider controls (Wave 2 — mode select etc.)
+
+    /// One section per select-type control from GET /sessions/:id/controls.
+    /// For Claude sessions this is the permission-mode switch; Codex/ACP
+    /// sessions surface their native control set.
+    @ViewBuilder
+    private var providerControlsSection: some View {
+        if let controls {
+            ForEach(controls.controls.filter { $0.type == "select" && !($0.options ?? []).isEmpty }) { control in
+                Section {
+                    ForEach(control.options ?? []) { option in
+                        Button {
+                            Task { await applyControl(control, option) }
+                        } label: {
+                            HStack {
+                                Text(option.label)
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                if applying && pendingControlValue == "\(control.id)|\(option.value)" {
+                                    ProgressView().controlSize(.small)
+                                } else if option.value == control.currentValue {
+                                    Image(systemName: "checkmark")
+                                        .font(.body.weight(.semibold))
+                                        .foregroundStyle(Theme.tint)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(applying || forking)
+                        .accessibilityIdentifier("session.control.\(control.id).\(option.value)")
+                    }
+                } header: {
+                    Text(control.name ?? control.id.capitalized)
+                }
+            }
+        }
+    }
+
+    @State private var pendingControlValue: String?
+
+    private func applyControl(_ control: SessionControlsPayload.Control, _ option: SessionControlsPayload.Option) async {
+        guard !applying, option.value != control.currentValue else { return }
+        applying = true
+        pendingControlValue = "\(control.id)|\(option.value)"
+        errorMessage = nil
+        confirmation = nil
+        defer { applying = false; pendingControlValue = nil }
+        do {
+            let updated = try await api.applySessionControl(
+                id: session.id, controlId: control.id, value: option.value
+            )
+            controls = updated
+            confirmation = "\(control.name ?? control.id.capitalized) set to \(option.label)."
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            AppLog.info("session", "applied session control", [
+                "sessionId": session.id, "controlId": control.id, "value": option.value,
+            ])
         } catch {
             errorMessage = Self.friendlyControlError(error)
         }
