@@ -87,6 +87,34 @@ describe('GET /api/v1/sessions/:id/model-options', () => {
     expect(res.body.currentEffort).toBe('high')
   })
 
+  // Regression (same root cause as the web pill / picker mismatch): the level
+  // frequently lives in the CLI's OWN settings.json, so nothing ever REQUESTED
+  // it and `record.effort` stays undefined. Reading only that field made the
+  // sheet highlight a different level than the session actually runs — the
+  // read-back value (record.effectiveEffort, CLI truth) must win.
+  it('currentEffort prefers the CLI read-back over the requested value', async () => {
+    await createSessionRecord('ctl-options-eff', 'task-oe', 'proj', '/tmp', {
+      initialProcessStatus: 'stopped',
+    })
+    const { updateSessionRecord } = await import('../../../src/core/session-tracker.js')
+    // Nothing requested; the CLI reported xhigh at session start.
+    await updateSessionRecord('ctl-options-eff', { effectiveEffort: 'xhigh' })
+
+    const res = await request(createApp()).get('/api/v1/sessions/ctl-options-eff/model-options')
+    expect(res.status).toBe(200)
+    expect(res.body.currentEffort).toBe('xhigh')
+  })
+
+  it('currentEffort still falls back to the requested value when no read-back exists', async () => {
+    await createSessionRecord('ctl-options-eff2', 'task-oe2', 'proj', '/tmp', {
+      initialProcessStatus: 'stopped',
+      effort: 'low',
+    })
+    const res = await request(createApp()).get('/api/v1/sessions/ctl-options-eff2/model-options')
+    expect(res.status).toBe(200)
+    expect(res.body.currentEffort).toBe('low')
+  })
+
   it('404 not_found for an unknown session', async () => {
     const res = await request(createApp()).get('/api/v1/sessions/no-such-session/model-options')
     expect(res.status).toBe(404)

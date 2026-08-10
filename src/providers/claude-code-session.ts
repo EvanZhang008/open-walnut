@@ -5649,6 +5649,24 @@ export class ClaudeCodeSession {
         sessionId: sid, error: err instanceof Error ? err.message : String(err),
       })
     }
+    // Push the read-back to the browser. Persisting alone is NOT enough: the
+    // panel fetches the record ONCE at mount, and this read-back lands ~1.5s
+    // AFTER session start (the CLI must finish wiring its ask() loop first), so
+    // the composer's effort badge would keep rendering its stale/default guess
+    // until something unrelated refetched — while the picker, which live-pulls
+    // get_settings on open, showed the true level. That's the two-surfaces-one-
+    // truth mismatch (user report: picker says X-High, composer pill says High).
+    // effectiveEffort is not part of SessionStatusSnapshot, so the status store
+    // can't carry it — this dedicated event is the delivery path.
+    // Destination 'web-ui' ⇒ broadcast to every client (no stream subscription
+    // needed: the pill renders wherever a session row does).
+    bus.emit(EventNames.SESSION_SETTINGS_APPLIED, {
+      sessionId: sid,
+      ...(this.taskId ? { taskId: this.taskId } : {}),
+      effectiveEffort: next ?? null,
+      requestedEffort: this._effort ?? null,
+      ...(appliedModel ? { model: appliedModel } : {}),
+    }, ['web-ui'], { source: 'session-runner' })
     return { effort: next ?? null, model: appliedModel ?? null }
   }
 

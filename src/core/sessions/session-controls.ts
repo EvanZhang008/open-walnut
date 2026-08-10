@@ -265,6 +265,11 @@ export interface ModelOptionsResult {
   /** Row id the picker should highlight (live applied model when readable,
    *  else the record's requested model). Null when unknown. */
   current: string | null;
+  /** Effort level the picker should highlight. The CLI's TRUE applied effort when
+   *  the live read succeeded, else the record's requested/last-known value. Must
+   *  prefer live truth for the same reason the web pill does: the level often
+   *  lives in the CLI's own settings.json, so `record.effort` is undefined and
+   *  reading it alone made the sheet show a different level than the session runs. */
   currentEffort: string | null;
 }
 
@@ -283,6 +288,7 @@ export async function computeModelOptions(sessionId: string): Promise<ModelOptio
 
   let entries: SessionModelCatalogEntry[] | null = null;
   let liveModel: string | null = null;
+  let liveEffort: string | null = null;
   const session = await sessionRunner.getOrAttachLiveSession(sessionId).catch(() => undefined);
   if (session) {
     const [settings, catalog] = await Promise.all([
@@ -290,7 +296,18 @@ export async function computeModelOptions(sessionId: string): Promise<ModelOptio
       session.getModelCatalog().catch(() => null),
     ]);
     liveModel = settings?.applied.model ?? null;
+    // applied.effort is the CLI's runtime truth (already reflects env overrides
+    // and unsupported-level downgrades). Validate before trusting it so an
+    // unknown future level can't reach the client as a selectable id.
+    const rawEffort = settings?.applied.effort;
+    liveEffort = typeof rawEffort === 'string' && VALID_SESSION_EFFORT_IDS.has(rawEffort)
+      ? rawEffort
+      : null;
     if (catalog && catalog.models.length > 0) entries = catalog.models;
+    // Same reconcile the web picker's live pull does: one round-trip serves both
+    // the sheet and the persisted record, so effectiveEffort stops being stale
+    // for every other reader too.
+    if (settings) void session.refreshAppliedSettings('model-options-pull', settings.applied).catch(() => null);
   }
   if (!entries) {
     const hostCatalog = await getHostModelCatalog(record.host).catch(() => null);
@@ -316,7 +333,9 @@ export async function computeModelOptions(sessionId: string): Promise<ModelOptio
   return {
     models,
     current: activeRow?.value ?? runtimeModel,
-    currentEffort: record.effort ?? null,
+    // Live truth first (see the field's doc comment) — the record is only the
+    // fallback for a session the CLI couldn't answer for.
+    currentEffort: liveEffort ?? record.effectiveEffort ?? record.effort ?? null,
   };
 }
 

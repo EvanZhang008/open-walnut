@@ -64,6 +64,7 @@ export const EventNames = {
   SESSION_SYSTEM_EVENT: 'session:system-event',
   SESSION_BACKGROUND_TASKS: 'session:background-tasks',
   SESSION_USAGE_UPDATE: 'session:usage-update',
+  SESSION_SETTINGS_APPLIED: 'session:settings-applied',
   SESSION_MODEL_CATALOG: 'session:model-catalog',
   SESSION_PERMISSION_REQUEST: 'session:permission-request',
   SESSION_PERMISSION_RESOLVED: 'session:permission-resolved',

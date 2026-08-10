@@ -2572,6 +2572,64 @@ describe('ClaudeCodeSession.getSettings (effort read-back)', () => {
     expect((session as any)._effectiveEffort).toBe('high');
     // requested xhigh ≠ effective high ⇒ this is the "overridden" case the badge flags
   });
+
+  // Regression: the read-back must be PUSHED to the browser, not only persisted.
+  // The panel fetches the session record once at mount, but the session-start
+  // read-back lands ~1.5s later — with no event, the composer's effort pill kept
+  // rendering its own guess while the picker (which live-pulls get_settings on
+  // open) showed the CLI's real level. Two surfaces, one truth: the event is the
+  // delivery path (effectiveEffort is not part of SessionStatusSnapshot).
+  it('emits session:settings-applied with the read-back so the composer pill matches the picker', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any).claudeSessionId = 'sid-push';
+    // No requested effort — the real-world case: the level lives in the CLI's own
+    // settings.json (effortLevel: xhigh), which Walnut never asked for.
+    const pushed: BusEvent[] = [];
+    bus.subscribe('web-ui', (event: BusEvent) => {
+      if (event.name === EventNames.SESSION_SETTINGS_APPLIED) pushed.push(event);
+    });
+    const promise = session.refreshAppliedSettings('session-start');
+    await new Promise((r) => setTimeout(r, 5));
+    const gs = writes.map(w => JSON.parse(w)).find(e => e.request?.subtype === 'get_settings');
+    feed(session, {
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: gs.request_id,
+        response: { applied: { model: 'global.anthropic.claude-fable-5[1m]', effort: 'xhigh' } },
+      },
+    });
+    await promise;
+    expect(pushed.length).toBe(1);
+    expect(pushed[0]!.data).toMatchObject({
+      sessionId: 'sid-push',
+      effectiveEffort: 'xhigh',      // what the pill must now render
+      requestedEffort: null,         // nothing was requested — the guess had no basis
+      model: 'global.anthropic.claude-fable-5[1m]',
+    });
+  });
+
+  // An UNTRUSTED read (old CLI / timeout / error) must not emit: pushing a null
+  // here would clobber a known-good badge with "unknown" on every hiccup.
+  it('does not emit session:settings-applied when the read is untrusted', async () => {
+    const { session, writes } = makeSessionWithStubTransport();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any).claudeSessionId = 'sid-untrusted';
+    const pushed: BusEvent[] = [];
+    bus.subscribe('web-ui', (event: BusEvent) => {
+      if (event.name === EventNames.SESSION_SETTINGS_APPLIED) pushed.push(event);
+    });
+    const promise = session.refreshAppliedSettings('session-start');
+    await new Promise((r) => setTimeout(r, 5));
+    const gs = writes.map(w => JSON.parse(w)).find(e => e.request?.subtype === 'get_settings');
+    feed(session, {
+      type: 'control_response',
+      response: { subtype: 'error', request_id: gs.request_id, error: 'unsupported' },
+    });
+    await expect(promise).resolves.toBeNull();
+    expect(pushed).toEqual([]);
+  });
 });
 
 // Verifies the per-session model catalog: getModelCatalog() sends ONE

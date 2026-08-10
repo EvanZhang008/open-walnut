@@ -34,7 +34,7 @@ import { SessionForkButton } from './SessionForkButton';
 import { SessionKebabSection } from './SessionKebabSection';
 import { ModelPicker } from './ModelPicker';
 import { CodexModelPicker } from './CodexModelPicker';
-import { modelSupportsEffort, DEFAULT_SESSION_EFFORT } from '@open-walnut/core';
+import { modelSupportsEffort, SESSION_EFFORTS } from '@open-walnut/core';
 import { TaskQuickActions } from './TaskQuickActions';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
@@ -454,6 +454,31 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     }
   });
 
+  // Applied-settings read-back (server pulled the CLI's get_settings). This is the
+  // ONLY live delivery path for effectiveEffort: the panel fetches the record once
+  // at mount, but the session-start read-back lands ~1.5s LATER, so without this
+  // the composer's effort pill kept showing its default guess ('High') while the
+  // picker — which live-pulls on open — showed the truth ('X-High'). Same event
+  // also carries the true model, keeping the pill's model text honest after an
+  // out-of-band switch.
+  useEvent('session:settings-applied', (data) => {
+    const d = data as {
+      sessionId?: string;
+      effectiveEffort?: import('@open-walnut/core').SessionEffort | null;
+      requestedEffort?: import('@open-walnut/core').SessionEffort | null;
+      model?: string;
+    };
+    if (d.sessionId !== sessionId) return;
+    setSession(prev => prev ? {
+      ...prev,
+      // null = "CLI reports no effort set" ⇒ clear the stale value so the badge
+      // falls back to the documented API default instead of a dead reading.
+      effectiveEffort: d.effectiveEffort ?? undefined,
+      ...(d.requestedEffort ? { effort: d.requestedEffort } : {}),
+      ...(d.model ? { model: d.model } : {}),
+    } : prev);
+  });
+
   // Re-fetch session state on WebSocket reconnect.
   // Events during disconnect (e.g. session:status-changed, session:result) are lost;
   // without this, the UI can show stale "Resuming session..." indefinitely.
@@ -781,21 +806,32 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
       )}
       {modelSupportsEffort(rawModel) && (() => {
         // Badge shows the CLI's TRUE effort (effectiveEffort, read back via
-        // get_settings) — falling back to the requested level, then the API
-        // default. When the CLI overrode the request (env / downgrade), flag it.
-        const shown = session?.effectiveEffort ?? session?.effort ?? DEFAULT_SESSION_EFFORT;
+        // get_settings) — falling back to the requested level. When the CLI
+        // overrode the request (env / downgrade), flag it.
+        //
+        // NO fabricated default. This used to fall back to DEFAULT_SESSION_EFFORT
+        // ('high') and render it exactly like a confirmed reading — which is how
+        // the pill came to say "High" while the picker said "X-High" for the same
+        // session: the user's level lives in the CLI's OWN settings.json
+        // (effortLevel), which Walnut never requests, so record.effort is
+        // undefined and the guess was simply wrong. An honest gap beats a
+        // confident wrong number: render nothing until a real value exists (the
+        // session-start read-back fills it in ~1.5s via session:settings-applied).
+        const shown = session?.effectiveEffort ?? session?.effort;
+        if (!shown) return null;
         const overridden = session?.effectiveEffort != null && session?.effort != null
           && session.effectiveEffort !== session.effort;
         const title = overridden
           ? `Reasoning effort: ${session!.effectiveEffort} (requested ${session!.effort}, overridden by env/model)`
           : session?.effectiveEffort
           ? `Reasoning effort: ${session.effectiveEffort} (confirmed by CLI)`
-          : session?.effort
-          ? `Reasoning effort: ${session.effort} (requested)`
-          : `Reasoning effort: ${DEFAULT_SESSION_EFFORT} (default)`;
+          : `Reasoning effort: ${shown} (requested — not yet confirmed by the CLI)`;
+        // Same label table the picker's segments use, so one truth reads the same
+        // on both surfaces ("X-High", not the raw id "xhigh").
+        const label = SESSION_EFFORTS.find((e) => e.id === shown)?.label ?? shown;
         return (
           <span className="session-detail-effort-badge" title={title}>
-            {' · '}{shown}{overridden ? ' ⚠' : ''}
+            {' · '}{label}{overridden ? ' ⚠' : ''}
           </span>
         );
       })()}

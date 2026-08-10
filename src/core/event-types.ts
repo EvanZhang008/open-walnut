@@ -416,6 +416,29 @@ export interface SessionUsageUpdateEvent {
   inputTokens?: number;
 }
 
+/** Applied-settings read-back push: emitted whenever refreshAppliedSettings()
+ *  learns the CLI's TRUE runtime model/effort (session start, turn end, after an
+ *  effort/model switch, picker pull). Exists because `effectiveEffort` is NOT part
+ *  of SessionStatusSnapshot and no other event carries it — without this push the
+ *  composer's effort badge kept rendering the DEFAULT_SESSION_EFFORT guess ('High')
+ *  until something else refetched the record, while the picker (which live-pulls
+ *  get_settings on open) showed the real value. That mismatch is the bug this
+ *  event fixes: two surfaces, one truth.
+ *
+ *  `effectiveEffort: null` is MEANINGFUL — the CLI answered "no effort set", i.e.
+ *  the API default applies. Absent/undefined is only used for an untrusted read,
+ *  which never emits at all. */
+export interface SessionSettingsAppliedEvent {
+  sessionId: string;
+  taskId?: string;
+  /** TRUE runtime effort the CLI reports (null = none set ⇒ API default). */
+  effectiveEffort: import('./types.js').SessionEffort | null;
+  /** REQUESTED effort at read-back time (null = never requested ⇒ CLI default). */
+  requestedEffort: import('./types.js').SessionEffort | null;
+  /** TRUE runtime model (full provider ID) — undefined when the read carried none. */
+  model?: string;
+}
+
 /** Eager model-catalog push: emitted after the CLI answers list_models (on init
  *  and on invalidation refetches) so pickers render CLI truth without a
  *  per-open round-trip. Rows are post-allowlist/post-overrides — `value` is
@@ -733,6 +756,7 @@ export interface EventPayloadMap {
   'session:system-event': SessionSystemEventPayload;
   'session:background-tasks': SessionBackgroundTasksPayload;
   'session:usage-update': SessionUsageUpdateEvent;
+  'session:settings-applied': SessionSettingsAppliedEvent;
   'session:model-catalog': SessionModelCatalogEvent;
   'session:side-question-done': SessionSideQuestionDoneEvent;
   'session:side-question-error': SessionSideQuestionErrorEvent;
