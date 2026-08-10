@@ -70,10 +70,19 @@ async function runLocal(
 
 // ── Routes ───────────────────────────────────────────────────────────────────
 
+/**
+ * Collection-level subpaths served by LATER-mounted v1 routers. This router's
+ * GET /sessions/:id is the first :id catch-all under /api/v1, so without this
+ * forward it would swallow them as session ids (SID_RE happily matches
+ * "list-dirs") and answer 404 "session not found".
+ */
+const RESERVED_SESSION_SUBPATHS = new Set(['list-dirs', 'recent', 'summaries'])
+
 // GET /api/v1/sessions/:id — full session detail: the liveness-corrected
 // record + live pending permission prompts (pair with POST …/permission).
 sessionLifecycleV1Router.get('/sessions/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    if (RESERVED_SESSION_SUBPATHS.has(String(req.params.id))) { next(); return }
     const sessionId = validSid(req, res)
     if (!sessionId) return
     if (CLOUD_MODE) {

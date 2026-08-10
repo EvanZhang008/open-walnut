@@ -142,6 +142,33 @@ export async function listRoutineExecutors(): Promise<Record<string, unknown>> {
 }
 
 /**
+ * NL → routine draft (one LLM call). Wave 3: shared by the internal web
+ * route, the v1 mobile route (primary path) and the `server.routines.draft`
+ * relay action. Throws 400 on empty text, 422 when the model produced an
+ * unusable draft (the UI degrades to a manually-filled form).
+ */
+export async function draftRoutineFromText(text: unknown): Promise<{ draft: unknown }> {
+  if (typeof text !== 'string' || !text.trim()) {
+    throw new SessionControlError('text is required', 400);
+  }
+  const { draftRoutine } = await import('./draft.js');
+  const { getConfig } = await import('../config-manager.js');
+  const config = await getConfig();
+  const { SESSION_MODELS } = await import('../types.js');
+  const result = await draftRoutine(text, {
+    hosts: Object.keys(config.hosts ?? {}),
+    models: SESSION_MODELS.map((m) => m.id),
+  });
+  if (!result.ok) {
+    log.web.warn('routine draft failed', { error: result.error });
+    // `raw` (the unparseable LLM output) rides `extra` so the internal web
+    // route can keep serving it for debugging; v1 serves the message only.
+    throw new SessionControlError(result.error, 422, result.raw ? { raw: result.raw } : undefined);
+  }
+  return { draft: result.draft };
+}
+
+/**
  * Relay dispatcher for the `server.routines[.*]` control actions (cloud
  * REPLICA → primary). `sub` is the action suffix ('list' for the bare name).
  */
@@ -161,6 +188,7 @@ export async function handleRoutinesRelayAction(
     case 'delete': return await deleteRoutine(id) as unknown as Record<string, unknown>;
     case 'toggle': return await toggleRoutine(id) as unknown as Record<string, unknown>;
     case 'run': return await runRoutineNow(id) as unknown as Record<string, unknown>;
+    case 'draft': return await draftRoutineFromText(p.text) as unknown as Record<string, unknown>;
     default: throw new SessionControlError(`Unknown routines action: ${sub}`, 400);
   }
 }

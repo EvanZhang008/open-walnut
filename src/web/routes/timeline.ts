@@ -93,50 +93,118 @@ function parseTimelineFromMemory(content: string): { entries: TimelineEntry[]; s
  *  asserted without booting the HTTP server. */
 export const __parseTimelineFromMemoryForTest = parseTimelineFromMemory
 
+/** Typed error so both route shells (internal + /api/v1) map statuses identically. */
+export class TimelineOpError extends Error {
+  constructor(message: string, public statusCode: number) {
+    super(message)
+    this.name = 'TimelineOpError'
+  }
+}
+
+/** Build the timeline payload for one day (shared by /api and /api/v1). */
+export async function getTimelineForDate(rawDate: unknown): Promise<TimelineResponse> {
+  const date = typeof rawDate === 'string' && rawDate ? rawDate : new Date().toISOString().slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new TimelineOpError('Invalid date format. Use YYYY-MM-DD.', 400)
+  }
+
+  // Read the Life Tracker's MEMORY.md
+  const memFile = path.join(PROJECTS_MEMORY_DIR, LIFE_TRACKER_MEMORY_PROJECT, 'MEMORY.md')
+  let memoryContent = ''
+  try {
+    memoryContent = await fsp.readFile(memFile, 'utf-8')
+  } catch (err) {
+    log.web.debug('no life tracker memory file yet', { error: err instanceof Error ? err.message : String(err) })
+  }
+
+  // Parse the YAML description from MEMORY.md — the agent's working memory
+  const descMatch = memoryContent.match(/^---\n[\s\S]*?description:\s*([\s\S]*?)\n---/)
+  const description = descMatch ? descMatch[1] : memoryContent
+
+  const { entries, summary } = parseTimelineFromMemory(description || memoryContent)
+
+  // Check if tracking is enabled (look for a matching cron job)
+  let tracking = false
+  try {
+    const cronService = getCronService()
+    if (cronService) {
+      const jobs = await cronService.list({ includeDisabled: true })
+      const trackerJob = jobs.find(
+        (j) => j.initProcessor?.actionId === 'screenshot-track',
+      )
+      tracking = trackerJob?.enabled ?? false
+    }
+  } catch (err) {
+    log.web.debug('cron service not available for tracking status', { error: err instanceof Error ? err.message : String(err) })
+  }
+
+  return { date, entries, summary, tracking }
+}
+
+/** List dates with thumbnail data, newest first (shared by /api and /api/v1). */
+export async function listTimelineDates(): Promise<{ dates: string[] }> {
+  const dates: string[] = []
+  try {
+    const entries = await fsp.readdir(TIMELINE_DIR, { withFileTypes: true })
+    for (const entry of entries) {
+      // Only directories matching YYYY-MM-DD
+      if (entry.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(entry.name)) {
+        dates.push(entry.name)
+      }
+    }
+  } catch (err) {
+    log.web.debug('timeline directory not available', { error: err instanceof Error ? err.message : String(err) })
+  }
+  dates.sort().reverse()
+  return { dates }
+}
+
+/** Read one thumbnail JPG (validated). Shared by /api and /api/v1. */
+export async function readTimelineImage(rawDate: unknown, rawFile: unknown): Promise<Buffer> {
+  const date = String(rawDate)
+  const file = String(rawFile)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new TimelineOpError('Invalid date', 400)
+  // Only allow JPG files
+  if (!file.endsWith('.jpg') && !file.endsWith('.jpeg')) throw new TimelineOpError('Only JPEG files allowed', 400)
+  // No directory traversal
+  if (file.includes('..') || file.includes('/')) throw new TimelineOpError('Invalid path', 400)
+
+  const filePath = path.join(TIMELINE_DIR, date, 'thumbnails', file)
+  let stat
+  try {
+    stat = await fsp.stat(filePath)
+  } catch (err) {
+    log.web.debug('timeline image not found', { filePath, error: err instanceof Error ? err.message : String(err) })
+    throw new TimelineOpError('Image not found', 404)
+  }
+  if (!stat.isFile()) throw new TimelineOpError('Not a file', 400)
+  return await fsp.readFile(filePath)
+}
+
+/** Enable/disable the Life Tracker cron job. Shared by /api and /api/v1. */
+export async function toggleLifeTracker(): Promise<{ enabled: boolean; jobId: string }> {
+  const cronService = getCronService()
+  if (!cronService) throw new TimelineOpError('Cron service not available', 503)
+
+  const jobs = await cronService.list({ includeDisabled: true })
+  const trackerJob = jobs.find(
+    (j) => j.initProcessor?.actionId === 'screenshot-track',
+  )
+  if (!trackerJob) throw new TimelineOpError('Life Tracker cron job not found. Create one first.', 404)
+
+  const updated = await cronService.toggle(trackerJob.id)
+  return { enabled: updated.enabled, jobId: updated.id }
+}
+
 // GET /api/timeline?date=YYYY-MM-DD → timeline data for a specific day
 timelineRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const date = typeof req.query.date === 'string' ? req.query.date : new Date().toISOString().slice(0, 10)
-
-    // Validate date format
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      res.status(400).json({ error: 'Invalid date format. Use YYYY-MM-DD.' })
+    res.json(await getTimelineForDate(req.query.date))
+  } catch (err) {
+    if (err instanceof TimelineOpError) {
+      res.status(err.statusCode).json({ error: err.message })
       return
     }
-
-    // Read the Life Tracker's MEMORY.md
-    const memFile = path.join(PROJECTS_MEMORY_DIR, LIFE_TRACKER_MEMORY_PROJECT, 'MEMORY.md')
-    let memoryContent = ''
-    try {
-      memoryContent = await fsp.readFile(memFile, 'utf-8')
-    } catch (err) {
-      log.web.debug('no life tracker memory file yet', { error: err instanceof Error ? err.message : String(err) })
-    }
-
-    // Parse the YAML description from MEMORY.md — the agent's working memory
-    const descMatch = memoryContent.match(/^---\n[\s\S]*?description:\s*([\s\S]*?)\n---/)
-    const description = descMatch ? descMatch[1] : memoryContent
-
-    const { entries, summary } = parseTimelineFromMemory(description || memoryContent)
-
-    // Check if tracking is enabled (look for a matching cron job)
-    let tracking = false
-    try {
-      const cronService = getCronService()
-      if (cronService) {
-        const jobs = await cronService.list({ includeDisabled: true })
-        const trackerJob = jobs.find(
-          (j) => j.initProcessor?.actionId === 'screenshot-track',
-        )
-        tracking = trackerJob?.enabled ?? false
-      }
-    } catch (err) {
-      log.web.debug('cron service not available for tracking status', { error: err instanceof Error ? err.message : String(err) })
-    }
-
-    const response: TimelineResponse = { date, entries, summary, tracking }
-    res.json(response)
-  } catch (err) {
     next(err)
   }
 })
@@ -144,20 +212,7 @@ timelineRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
 // GET /api/timeline/dates → list dates that have thumbnail data
 timelineRouter.get('/dates', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const dates: string[] = []
-    try {
-      const entries = await fsp.readdir(TIMELINE_DIR, { withFileTypes: true })
-      for (const entry of entries) {
-        // Only directories matching YYYY-MM-DD
-        if (entry.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(entry.name)) {
-          dates.push(entry.name)
-        }
-      }
-    } catch (err) {
-      log.web.debug('timeline directory not available', { error: err instanceof Error ? err.message : String(err) })
-    }
-    dates.sort().reverse()
-    res.json({ dates })
+    res.json(await listTimelineDates())
   } catch (err) {
     next(err)
   }
@@ -166,49 +221,16 @@ timelineRouter.get('/dates', async (_req: Request, res: Response, next: NextFunc
 // GET /api/timeline/images/:date/:file → serve thumbnail JPGs
 timelineRouter.get('/images/:date/:file', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const date = String(req.params.date)
-    const file = String(req.params.file)
-
-    // Validate date format
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      res.status(400).json({ error: 'Invalid date' })
-      return
-    }
-
-    // Only allow JPG files
-    if (!file.endsWith('.jpg') && !file.endsWith('.jpeg')) {
-      res.status(400).json({ error: 'Only JPEG files allowed' })
-      return
-    }
-
-    // No directory traversal
-    if (file.includes('..') || file.includes('/')) {
-      res.status(400).json({ error: 'Invalid path' })
-      return
-    }
-
-    const filePath = path.join(TIMELINE_DIR, date, 'thumbnails', file)
-
-    let stat
-    try {
-      stat = await fsp.stat(filePath)
-    } catch (err) {
-      log.web.debug('timeline image not found', { filePath, error: err instanceof Error ? err.message : String(err) })
-      res.status(404).json({ error: 'Image not found' })
-      return
-    }
-
-    if (!stat.isFile()) {
-      res.status(400).json({ error: 'Not a file' })
-      return
-    }
-
-    const buffer = await fsp.readFile(filePath)
+    const buffer = await readTimelineImage(req.params.date, req.params.file)
     res.setHeader('Content-Type', 'image/jpeg')
     res.setHeader('Cache-Control', 'public, max-age=86400')
     res.setHeader('Content-Length', buffer.length)
     res.send(buffer)
   } catch (err) {
+    if (err instanceof TimelineOpError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })
@@ -216,25 +238,12 @@ timelineRouter.get('/images/:date/:file', async (req: Request, res: Response, ne
 // POST /api/timeline/toggle → enable/disable the Life Tracker cron job
 timelineRouter.post('/toggle', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const cronService = getCronService()
-    if (!cronService) {
-      res.status(503).json({ error: 'Cron service not available' })
-      return
-    }
-
-    const jobs = await cronService.list({ includeDisabled: true })
-    const trackerJob = jobs.find(
-      (j) => j.initProcessor?.actionId === 'screenshot-track',
-    )
-
-    if (!trackerJob) {
-      res.status(404).json({ error: 'Life Tracker cron job not found. Create one first.' })
-      return
-    }
-
-    const updated = await cronService.toggle(trackerJob.id)
-    res.json({ enabled: updated.enabled, jobId: updated.id })
+    res.json(await toggleLifeTracker())
   } catch (err) {
+    if (err instanceof TimelineOpError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })

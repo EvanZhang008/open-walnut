@@ -301,40 +301,46 @@ memoryRouter.put('/user', async (req: Request, res: Response, next: NextFunction
 // count to report — only write-path facts (age, revision churn, provenance).
 // Side effect is confined to the telemetry SIDECAR: opening this view bootstraps
 // records for entries that predate tracking, so their age clock starts.
+
+/** Build the telemetry payload (shared by /api/memory/telemetry and /api/v1). */
+export async function buildMemoryTelemetryPayload(): Promise<{ stores: Record<string, unknown>; note: string }> {
+  const targets: Array<{ target: MemoryTarget; file: string }> = [
+    { target: 'memory', file: MEMORY_FILE },
+    { target: 'user', file: USER_FILE },
+  ]
+  const stores: Record<string, unknown> = {}
+
+  for (const { target, file } of targets) {
+    const raw = await fsp.readFile(file, 'utf-8').catch(() => '')
+    const { entries } = parseMemoryContent(raw)
+    // Guard: never observe an EMPTY parse — a transient read failure looks the
+    // same as "store is empty", and observing would prune every record.
+    if (entries.length > 0) await observeMemoryEntries({ target, entries }).catch(() => {})
+    const telemetry = loadMemoryTelemetry()
+    const evidence = getEntryEvidence(entries, { target })
+    stores[target] = {
+      entryCount: entries.length,
+      entries: entries.map((entry, i) => ({
+        title: entryTitle(entry),
+        chars: entry.length,
+        evidence: evidence[i] ?? null,
+        ...(telemetry[`${target}:${entryTitle(entry)}`] ?? {}),
+      })),
+    }
+  }
+
+  return {
+    stores,
+    note:
+      'Write-path telemetry only. Memory is injected into every turn, so no per-entry ' +
+      '"used" count exists or can be inferred — age, revision churn, and provenance are ' +
+      'the honest signals.',
+  }
+}
+
 memoryRouter.get('/telemetry', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const targets: Array<{ target: MemoryTarget; file: string }> = [
-      { target: 'memory', file: MEMORY_FILE },
-      { target: 'user', file: USER_FILE },
-    ]
-    const stores: Record<string, unknown> = {}
-
-    for (const { target, file } of targets) {
-      const raw = await fsp.readFile(file, 'utf-8').catch(() => '')
-      const { entries } = parseMemoryContent(raw)
-      // Guard: never observe an EMPTY parse — a transient read failure looks the
-      // same as "store is empty", and observing would prune every record.
-      if (entries.length > 0) await observeMemoryEntries({ target, entries }).catch(() => {})
-      const telemetry = loadMemoryTelemetry()
-      const evidence = getEntryEvidence(entries, { target })
-      stores[target] = {
-        entryCount: entries.length,
-        entries: entries.map((entry, i) => ({
-          title: entryTitle(entry),
-          chars: entry.length,
-          evidence: evidence[i] ?? null,
-          ...(telemetry[`${target}:${entryTitle(entry)}`] ?? {}),
-        })),
-      }
-    }
-
-    res.json({
-      stores,
-      note:
-        'Write-path telemetry only. Memory is injected into every turn, so no per-entry ' +
-        '"used" count exists or can be inferred — age, revision churn, and provenance are ' +
-        'the honest signals.',
-    })
+    res.json(await buildMemoryTelemetryPayload())
   } catch (err) {
     next(err)
   }
@@ -350,68 +356,66 @@ memoryRouter.get('/', (_req: Request, res: Response, next: NextFunction) => {
   }
 })
 
+// ── Manual daily-log compaction (shared by /api and /api/v1) ──
+
+/** Typed error so both route shells map statuses identically. */
+export class MemoryOpError extends Error {
+  constructor(message: string, public statusCode: number, public extra?: Record<string, unknown>) {
+    super(message)
+    this.name = 'MemoryOpError'
+  }
+}
+
+/**
+ * Manually compact one day's daily log with the extractive (no-LLM)
+ * summarizer. `summarizer` must be the literal 'extract' — LLM-powered
+ * compaction goes through the chat /compact path, which has model access.
+ */
+export async function compactDailyLogManual(body: { date?: unknown; threshold?: unknown; summarizer?: unknown }): Promise<Record<string, unknown>> {
+  const dateKey = (typeof body.date === 'string' && body.date) || formatDateKey()
+
+  // Check if the file exists and report current size
+  const dailyResult = getDailyLog(dateKey)
+  if (!dailyResult) throw new MemoryOpError(`No daily log found for ${dateKey}`, 404)
+
+  const tokens = estimateTokens(dailyResult.content)
+  const threshold = (typeof body.threshold === 'number' && body.threshold) || 8000
+
+  if (tokens < threshold) {
+    return { compacted: false, reason: `${tokens} tokens < ${threshold} threshold`, dateKey, tokens }
+  }
+
+  // Use a simple extractive summarizer (no LLM) for the REST endpoint.
+  if (body.summarizer !== 'extract') {
+    throw new MemoryOpError(
+      'Summarizer required. Use { "summarizer": "extract" } for heading-only extraction, or trigger via /compact chat command for LLM-powered compaction.',
+      400,
+      { dateKey, tokens, threshold },
+    )
+  }
+  const summarizer = async (c: string) => {
+    // Simple extractive: keep headings and first line of each entry
+    const kept: string[] = []
+    for (const line of c.split('\n')) {
+      if (line.startsWith('# ') || line.startsWith('## ')) kept.push(line)
+    }
+    return kept.join('\n')
+  }
+
+  const compacted = await compactDailyLog(dateKey, threshold, summarizer)
+  log.memory.info('Daily log manual compaction', { dateKey, compacted, tokensBefore: tokens })
+  return { compacted, dateKey, tokensBefore: tokens }
+}
+
 // POST /api/memory/daily-log/compact — manually trigger daily log compaction
 memoryRouter.post('/daily-log/compact', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const dateKey = (req.body?.date as string) || formatDateKey()
-
-    // Check if the file exists and report current size
-    const dailyResult = getDailyLog(dateKey)
-    if (!dailyResult) {
-      res.status(404).json({ error: `No daily log found for ${dateKey}` })
-      return
-    }
-
-    const tokens = estimateTokens(dailyResult.content)
-    const threshold = (req.body?.threshold as number) || 8000
-
-    if (tokens < threshold) {
-      res.json({
-        compacted: false,
-        reason: `${tokens} tokens < ${threshold} threshold`,
-        dateKey,
-        tokens,
-      })
-      return
-    }
-
-    // Use a simple extractive summarizer (no LLM) for the REST endpoint.
-    // For LLM-powered compaction, use the chat compaction path which has
-    // access to the model. This endpoint provides a manual override.
-    const summarizer = req.body?.summarizer === 'extract'
-      ? async (c: string) => {
-          // Simple extractive: keep headings and first line of each entry
-          const lines = c.split('\n')
-          const kept: string[] = []
-          for (const line of lines) {
-            if (line.startsWith('# ') || line.startsWith('## ')) {
-              kept.push(line)
-            }
-          }
-          return kept.join('\n')
-        }
-      : undefined
-
-    if (!summarizer) {
-      res.status(400).json({
-        error: 'Summarizer required. Use { "summarizer": "extract" } for heading-only extraction, or trigger via /compact chat command for LLM-powered compaction.',
-        dateKey,
-        tokens,
-        threshold,
-      })
-      return
-    }
-
-    const compacted = await compactDailyLog(dateKey, threshold, summarizer)
-
-    log.memory.info('Daily log manual compaction', { dateKey, compacted, tokensBefore: tokens })
-
-    res.json({
-      compacted,
-      dateKey,
-      tokensBefore: tokens,
-    })
+    res.json(await compactDailyLogManual(req.body ?? {}))
   } catch (err) {
+    if (err instanceof MemoryOpError) {
+      res.status(err.statusCode).json({ error: err.message, ...(err.extra ?? {}) })
+      return
+    }
     next(err)
   }
 })

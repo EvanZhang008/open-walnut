@@ -16,6 +16,7 @@
 
 import { SessionControlError } from './session-controls.js';
 import { bus, EventNames } from '../event-bus.js';
+import { safeKillProcessGroup } from '../process-group-kill.js';
 import { log } from '../../logging/index.js';
 import type { SessionRecord, SessionMode } from '../types.js';
 import { SESSION_MODE_IDS } from '../types.js';
@@ -42,7 +43,7 @@ export async function readProviderSessionHistory(
     const state = await readAcpSessionHistoryState(record);
     return { messages: state.messages, sourceAvailable: state.journalExists, windowed: false };
   }
-  const { readSessionHistory, isWindowedHistory } = await import('../session-history.js');
+  const { readSessionHistory, isWindowedHistory, isSourceFoundHistory } = await import('../session-history.js');
   const messages = await readSessionHistory(
     sessionId,
     record?.cwd,
@@ -50,9 +51,21 @@ export async function readProviderSessionHistory(
     record?.outputFile,
     { skipSubagents },
   );
-  // `windowed` must be read HERE, while we still hold the exact array the reader
-  // returned — the flag lives on that object (see isWindowedHistory).
-  return { messages, sourceAvailable: messages.length > 0, windowed: isWindowedHistory(messages) };
+  // `windowed` and `sourceAvailable` must be read HERE, while we still hold the
+  // exact array the reader returned — both flags live on that object (see
+  // isWindowedHistory / isSourceFoundHistory).
+  //
+  // sourceAvailable = "the transcript file EXISTS", NOT "the parse produced rows".
+  // A just-spawned session's JSONL holds only system/hook lines for its first
+  // seconds, so `messages.length > 0` (the old proxy) reported the file missing on
+  // a perfectly healthy session and the UI rendered "History unavailable — Session
+  // history file not found" on every task launch. Fall back to the length proxy
+  // only when the reader gave us no verdict at all (fake/mocked readers in tests).
+  return {
+    messages,
+    sourceAvailable: isSourceFoundHistory(messages) || messages.length > 0,
+    windowed: isWindowedHistory(messages),
+  };
 }
 
 /**
@@ -316,12 +329,11 @@ export async function terminateSession(
       mgr.kill();
     } else if (record.pid != null && !record.host) {
       // Local session, no manager — SIGTERM the process group directly.
-      try {
-        process.kill(-record.pid, 'SIGTERM');
+      if (safeKillProcessGroup(record.pid, 'SIGTERM')) {
         log.session.info('session terminate: SIGTERM sent to process group', { sessionId, pgid: record.pid });
-      } catch (err) {
-        log.session.warn('session terminate: process.kill failed (likely already dead)', {
-          sessionId, error: err instanceof Error ? err.message : String(err),
+      } else {
+        log.session.warn('session terminate: group kill not delivered (dead, or pid failed the safety floor)', {
+          sessionId, pgid: record.pid,
         });
       }
     } else {
@@ -663,6 +675,42 @@ export interface RichHistoryResult {
 /** Backstop against pathological/cyclic fork chains. */
 const MAX_FORK_DEPTH = 5;
 
+/**
+ * Grace window for "the transcript doesn't exist YET". Matches the two other
+ * clocks that govern a pid-less/just-spawned row — api-v1's SPAWN_GRACE_MS and
+ * the health monitor's ORPHAN_GRACE_MS — so a wedged record stops qualifying on
+ * all three at once instead of one masking the others.
+ */
+const HISTORY_STARTUP_GRACE_MS = 2 * 60 * 1000;
+
+/**
+ * True when this session is still in its STARTUP window, i.e. an absent
+ * transcript file is the expected state rather than a fault.
+ *
+ * Why this exists: creating a task launches a session, and the UI opens its panel
+ * and fetches history IMMEDIATELY. The CLI needs a few seconds to boot and write
+ * the first JSONL line (measured on a real launch: history fetched at +0.77s, the
+ * first JSONL line at +4.8s). During that gap "file not found" is TRUE but not a
+ * problem — reporting it made every task creation flash "History unavailable —
+ * Session history file not found", which is exactly what the user reported.
+ *
+ * The window is bounded on purpose: after it, a genuinely missing transcript
+ * (spawn failed, file deleted) must still surface. Terminal rows never qualify —
+ * a stopped/errored session that never produced a transcript is a real fault the
+ * user should see immediately, not after a 2-minute silence.
+ */
+export function isHistoryStartupWindow(record: SessionRecord, nowMs = Date.now()): boolean {
+  if (record.process_status === 'stopped' || record.process_status === 'error') return false;
+  // Anchor on the LATER of the two clocks: startedAt is the launch instant, and
+  // last_status_change moves as the row progresses (awaiting_spawn → running), so
+  // taking the max keeps the window measured from the most recent lifecycle beat.
+  const started = new Date(record.startedAt ?? 0).getTime();
+  const changed = new Date(record.last_status_change ?? 0).getTime();
+  const anchor = Math.max(Number.isFinite(started) ? started : 0, Number.isFinite(changed) ? changed : 0);
+  if (anchor <= 0) return false;
+  return nowMs - anchor < HISTORY_STARTUP_GRACE_MS;
+}
+
 function unavailableHistoryReason(record: SessionRecord): string {
   if (record.engine === 'codex') {
     if (!record.acpRuntimeId) {
@@ -699,7 +747,16 @@ export async function readSessionRichHistory(sessionId: string, tail?: number): 
     throw new SessionControlError(err instanceof Error ? err.message : String(err), 502);
   }
 
-  if (messages.length === 0 && !sourceAvailable) {
+  // "Nothing to show" may ONLY be decided after the fork ancestors are consulted
+  // (see the fork-aware block below). A fresh fork's OWN transcript is legitimately
+  // empty — its whole value is the inherited parent conversation — so returning
+  // here would answer "History unavailable" on a fork that has plenty of history to
+  // show. Skip the short-circuit whenever an ancestor might supply the content.
+  if (messages.length === 0 && !sourceAvailable && !record.forkedFromSessionId) {
+    // Still booting: an absent transcript is expected, not a fault. Answer a plain
+    // empty history so the client shows its normal "starting…" empty state instead
+    // of a scary "History unavailable" card (see isHistoryStartupWindow).
+    if (isHistoryStartupWindow(record)) return { messages: [], total: 0 };
     return { messages: [], total: 0, historyUnavailable: unavailableHistoryReason(record) };
   }
 
@@ -755,6 +812,14 @@ export async function readSessionRichHistory(sessionId: string, tail?: number): 
       });
       forkedFromSessionId = undefined;
     }
+  }
+
+  // Deferred verdict for forks: the short-circuit above was skipped so the
+  // ancestors got their chance. If they produced nothing either, THIS is the
+  // point where "nothing to show" becomes true, so report it here instead.
+  if (messages.length === 0 && !sourceAvailable && record.forkedFromSessionId) {
+    if (isHistoryStartupWindow(record)) return { messages: [], total: 0 };
+    return { messages: [], total: 0, historyUnavailable: unavailableHistoryReason(record) };
   }
 
   const total = messages.length;

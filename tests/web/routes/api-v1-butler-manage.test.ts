@@ -223,3 +223,17 @@ describe('GET /api/v1/chat/stats + POST /api/v1/chat/clear', () => {
     expect(res.status).toBe(404)
   })
 })
+
+describe('POST /api/v1/chat/compact (Wave 3)', () => {
+  it('answers fire-and-forget for the active conversation; 404 for a ghost', async () => {
+    await getMainConversationId('general')
+    const res = await request(createApp()).post('/api/v1/chat/compact')
+    expect(res.status).toBe(200)
+    expect(res.body.ok).toBe(true)
+    // Either freshly triggered (async) or already in flight from the trigger above.
+    expect(res.body.async === true || res.body.alreadyRunning === true).toBe(true)
+
+    const ghost = await request(createApp()).post('/api/v1/chat/compact?conversationId=conv-ghost')
+    expect(ghost.status).toBe(404)
+  })
+})

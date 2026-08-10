@@ -37,7 +37,6 @@ import { registerBrowserLogsRpc, browserLogsRouter } from './routes/browser-logs
 import { bugReportRouter } from './routes/bug-report.js'
 import { usageRouter } from './routes/usage.js'
 import { imagesRouter } from './routes/images.js'
-import { pastesRouter } from './routes/pastes.js'
 import { localImageRouter } from './routes/local-image.js'
 import { fileContentRouter } from './routes/file-content.js'
 import { calendarRouter } from './routes/calendar.js'
@@ -70,7 +69,7 @@ import type { Task } from '../core/types.js'
 import { log } from '../logging/index.js'
 import { usageTracker } from '../core/usage/index.js'
 import * as chatHistory from '../core/chat-history.js'
-import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize } from '../integrations/git-sync.js'
+import { gitPullWalnut, ensureRepo, commitIfDirty, autoSync, isGitAvailable, isLockContention, checkRepoSize, getSyncGuardState } from '../integrations/git-sync.js'
 import { registry } from '../core/integration-registry.js'
 import { loadPlugins, migrateConfigToPlugins, runPluginMigrations, getUnconfiguredPlugins } from '../core/integration-loader.js'
 import type { SyncPollContext } from '../core/integration-types.js'
@@ -108,6 +107,8 @@ import { sessionExtrasV1Router } from './routes/session-extras-v1.js'
 import { filesV1Router } from './routes/files-v1.js'
 import { consoleV1Router } from './routes/console-v1.js'
 import { notesExtrasV1Router } from './routes/notes-extras-v1.js'
+import { libraryV1Router } from './routes/library-v1.js'
+import { consoleExtrasV1Router } from './routes/console-extras-v1.js'
 import { incidentsRouter } from './routes/incidents.js'
 import { clientEvidenceRouter } from './routes/client-evidence.js'
 import { notificationsRouter } from './routes/notifications.js'
@@ -252,6 +253,107 @@ let claudeSettingsWatcherStop: (() => void) | null = null
 // server has already stopped serving.
 const deferredMarkDoneTimers: Set<ReturnType<typeof setTimeout>> = new Set()
 
+// ── Fatal-signal ownership ──
+//
+// startServer() installs a SIGTERM/SIGHUP handler that ALWAYS terminates the
+// process (see the fatalSignal() comment below for the 2026-08-09 zombie-server
+// incident this prevents). A long-running owner that wants graceful teardown
+// instead — commands/web.ts, which awaits stopServer() — calls
+// armGracefulSignalExit() once its own handler is registered. Until then the
+// signal is honoured immediately, so a SIGTERM during the multi-second boot
+// window can never be swallowed into an unkillable server.
+let signalExitArmed = false
+
+/**
+ * Declare that the caller has registered its own SIGTERM/SIGHUP handler which
+ * WILL terminate the process (normally after awaiting stopServer()). Call this
+ * AFTER registering that handler. Idempotent.
+ */
+export function armGracefulSignalExit(): void {
+  signalExitArmed = true
+}
+
+/** Test/embedding escape hatch: revert to self-terminating on signal. */
+export function disarmGracefulSignalExit(): void {
+  signalExitArmed = false
+}
+
+let exitDiagnosticsInstalled = false
+
+/**
+ * Install process-level exit diagnostics + the always-fatal signal handlers.
+ *
+ * Called at the very TOP of startServer(), BEFORE any await. This placement is
+ * the fix for the 2026-08-09 zombie-server incident and is load-bearing:
+ *
+ *   - Node semantics: registering ANY 'SIGTERM' listener REPLACES the OS default
+ *     disposition. A listener that only logs makes the process IMMUNE to SIGTERM.
+ *   - These handlers used to be registered ~1900 lines of `await` into boot, and
+ *     were log-only, while the real terminating handler in commands/web.ts was
+ *     registered only after `await startServer()` RESOLVED. A `kill -15` landing
+ *     in that window — exactly what every dev-prod.sh deploy sends to the
+ *     outgoing listener — was logged as "SERVER EXIT: SIGTERM" and then ignored.
+ *   - Result measured on 2026-08-09: 62 unkillable servers, median survival 107
+ *     minutes past their own SIGTERM, peak 43 alive at once, each running its own
+ *     health monitor, cron, git auto-commit and plugin polling. Load average
+ *     reached 94 on 14 cores; macOS then SIGTERM/SIGKILLed the user's GUI apps
+ *     and relaunched the login session — experienced as "all my applications
+ *     suddenly quit with no warning".
+ *
+ * So: handlers first, always fatal by default, graceful only when an owner has
+ * explicitly armed itself via armGracefulSignalExit(). Idempotent — repeated
+ * startServer() calls in one process (tests) must not stack listeners.
+ */
+function installExitDiagnostics(): void {
+  if (exitDiagnosticsInstalled) return
+  exitDiagnosticsInstalled = true
+
+  // Log WHY the server dies so we can diagnose silent crashes
+  const exitLog = (reason: string, detail?: unknown) => {
+    const msg = `SERVER EXIT: ${reason}`
+    const meta = { pid: process.pid, uptime: process.uptime(), detail: detail instanceof Error ? detail.message : detail }
+    log.web.error(msg, meta)
+    console.error(`[${new Date().toISOString()}] ${msg}`, JSON.stringify(meta))
+  }
+
+  const fatalSignal = (name: NodeJS.Signals, reason: string) => {
+    exitLog(reason)
+    if (signalExitArmed) return // owner runs stopServer() then exits
+    // No owner (still booting, or embedded without a handler): honour the signal.
+    // Release the instance lock explicitly — otherwise the next server sees a
+    // live-looking lock and refuses to start.
+    try { releaseInstanceLockOnSignal() } catch { /* best-effort */ }
+    // Re-raise with the default disposition so the exit status reflects the
+    // signal (128+n) exactly as an unhandled signal would.
+    process.removeAllListeners(name)
+    try {
+      process.kill(process.pid, name)
+    } catch {
+      process.exit(1) // signal delivery refused — must still die
+    }
+  }
+
+  process.on('SIGTERM', () => fatalSignal('SIGTERM', 'SIGTERM (killed by another process)'))
+  process.on('SIGHUP', () => fatalSignal('SIGHUP', 'SIGHUP (terminal closed or parent died)'))
+  process.on('uncaughtException', (err) => { exitLog('uncaughtException', err); process.exit(1) })
+  process.on('unhandledRejection', (reason) => { exitLog('unhandledRejection', reason) })
+  process.on('beforeExit', (code) => { exitLog(`beforeExit code=${code}`) })
+  process.on('exit', (code) => {
+    // Sync-only: last chance to log (no async allowed)
+    const msg = `[${new Date().toISOString()}] SERVER EXIT: code=${code} pid=${process.pid} uptime=${process.uptime()}s`
+    try { fs.appendFileSync('/tmp/open-walnut-exit.log', msg + '\n') } catch { /* ignore */ }
+  })
+}
+
+// Captured when the instance lock is acquired, so the fatal-signal path can
+// release it synchronously — a signal handler must not await a dynamic import.
+let releaseInstanceLockSync: (() => void) | null = null
+
+/** Best-effort synchronous instance-lock release on the fatal-signal path. */
+function releaseInstanceLockOnSignal(): void {
+  releaseInstanceLockSync?.()
+}
+
 // ── Git auto-commit health state ──
 
 interface GitAutoCommitHealth {
@@ -259,6 +361,8 @@ interface GitAutoCommitHealth {
   error?: string
   lastCommitAt?: string
   consecutiveFailures: number
+  /** True while git-sync refuses auto-commits (mass-revert / torn-worktree guard). */
+  safeMode?: boolean
 }
 
 // ── Pending cron notifications for next-cycle delivery ──
@@ -371,6 +475,12 @@ async function resolveCredentialHealth(): Promise<{
  */
 export async function startServer(options: ServerOptions = {}): Promise<HttpServer> {
   if (httpServer) throw new Error('Server already running. Call stopServer() first.')
+
+  // FIRST, before any await: install exit diagnostics + always-fatal SIGTERM/
+  // SIGHUP handlers. A `kill -15` during the multi-second boot below must kill
+  // this process — a boot-window signal that gets logged and ignored is how 43
+  // unkillable servers accumulated and starved the machine on 2026-08-09.
+  installExitDiagnostics()
 
   // Ensure ~/.open-walnut/ directory structure exists and seed config defaults
   const { initDirectories } = await import('../core/init.js')
@@ -500,9 +610,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   //   3. watchdog       — a rogue writer arriving AFTER startup raises a
   //                       notification-center error within ~2 ticks.
   {
-    const { acquireInstanceLock, assertNoForeignDbHolders, startForeignWriterWatchdog } =
+    const { acquireInstanceLock, assertNoForeignDbHolders, startForeignWriterWatchdog, releaseInstanceLock } =
       await import('../core/instance-lock.js')
     acquireInstanceLock(port)
+    // Capture for the fatal-signal path (which cannot await an import).
+    releaseInstanceLockSync = releaseInstanceLock
     if (!CLOUD_MODE) {
       await assertNoForeignDbHolders()
       foreignWriterWatchdog = startForeignWriterWatchdog()
@@ -828,7 +940,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/context', contextInspectorRouter)
   app.use('/api/usage', usageRouter)
   app.use('/api/images', imagesRouter)
-  app.use('/api/pastes', pastesRouter)
   app.use('/api/local-image', localImageRouter)
   app.use('/api/file-content', fileContentRouter)
   app.use('/api/calendar', calendarRouter)
@@ -920,6 +1031,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Notes extras (additive, Wave 2): global notes, backlinks/links, tags,
   // attachment/folder delete — all A-class (git-synced vault).
   app.use('/api/v1', notesExtrasV1Router)
+  // Library (additive, Wave 3): agents CRUD (writes 501 on a REPLICA —
+  // machine-local config), commands, skills write (walnut-managed dir only;
+  // ~/.claude/skills stays read-only), repositories — mostly A-class.
+  app.use('/api/v1', libraryV1Router)
+  // Console extras (additive, Wave 3): usage breakdowns, provider status
+  // (key_hint stripped), qmd status, integrations read, timeline, heartbeat —
+  // primary-bound stores answer 501 on a REPLICA.
+  app.use('/api/v1', consoleExtrasV1Router)
   app.use('/api/browser-logs', browserLogsRouter)
   // One-shot diagnostic bundle (Settings → Bug Report; also curl-able).
   app.use('/api/bug-report', bugReportRouter)
@@ -2860,25 +2979,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   })
 
   // -- Process exit diagnostics --
-  // Log WHY the server dies so we can diagnose silent crashes
-  const exitLog = (reason: string, detail?: unknown) => {
-    const msg = `SERVER EXIT: ${reason}`
-    const meta = { pid: process.pid, uptime: process.uptime(), detail: detail instanceof Error ? detail.message : detail }
-    log.web.error(msg, meta)
-    console.error(`[${new Date().toISOString()}] ${msg}`, JSON.stringify(meta))
-  }
-  // SIGTERM/SIGHUP: log but do NOT process.exit() — let web.ts's handler call stopServer() first.
-  // If no handler catches it (e.g. running from tests), the default signal behavior terminates anyway.
-  process.on('SIGTERM', () => { exitLog('SIGTERM (killed by another process)') })
-  process.on('SIGHUP', () => { exitLog('SIGHUP (terminal closed or parent died)') })
-  process.on('uncaughtException', (err) => { exitLog('uncaughtException', err); process.exit(1) })
-  process.on('unhandledRejection', (reason) => { exitLog('unhandledRejection', reason) })
-  process.on('beforeExit', (code) => { exitLog(`beforeExit code=${code}`) })
-  process.on('exit', (code) => {
-    // Sync-only: last chance to log (no async allowed)
-    const msg = `[${new Date().toISOString()}] SERVER EXIT: code=${code} pid=${process.pid} uptime=${process.uptime()}s`
-    try { require('node:fs').appendFileSync('/tmp/open-walnut-exit.log', msg + '\n') } catch { /* ignore */ }
-  })
+  // Installed at the TOP of startServer() (see installExitDiagnostics), not here.
+  // Keeping it here left the whole multi-second boot without a SIGTERM handler.
 
   // -- Start post-listen services (port already bound above) --
   cronService.start().catch((err) => {
@@ -2929,20 +3031,34 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
 
   health.protected = true
 
-  // Commit any leftover dirty state from a previous crash (async, fire-and-forget)
-  commitIfDirty().then((committed) => {
-    if (committed) {
-      health.lastCommitAt = new Date().toISOString()
-      log.git.info('committed leftover dirty state on startup')
-    }
-  }).catch((err) => {
-    log.git.warn('startup commit failed', { error: String(err) })
-  })
-
-  // Pull remote if configured
-  try { gitPullWalnut() } catch (err) {
-    log.git.warn('startup git pull failed', { error: String(err) })
-  }
+  // Commit any leftover dirty state from a previous crash, THEN pull.
+  //
+  // These two used to be fired independently: commitIfDirty() ran detached and
+  // gitPullWalnut() was called on the next line, so a boot ran `add -A` and
+  // `pull` against the same repo concurrently — the pull could move HEAD and
+  // rewrite the worktree while the commit was mid-`add`, photographing a
+  // half-checked-out tree (the same torn-worktree shape as the 2026-08-04
+  // incident, just self-inflicted at startup instead of by a human rebase).
+  // Chained, the pull only starts once the commit has settled.
+  //
+  // Still non-blocking: this is a detached promise chain, so server listen and
+  // the rest of startup are not gated on git.
+  void commitIfDirty()
+    .then((committed) => {
+      if (committed) {
+        health.lastCommitAt = new Date().toISOString()
+        log.git.info('committed leftover dirty state on startup')
+      }
+    })
+    .catch((err) => {
+      log.git.warn('startup commit failed', { error: String(err) })
+    })
+    // .then (not .finally): runs after either outcome above, and a failed
+    // startup commit must not block the pull — receiving upstream is still safe.
+    .then(() => gitPullWalnut())
+    .catch((err) => {
+      log.git.warn('startup git pull failed', { error: String(err) })
+    })
 
   let syncTick = 0
   // setTimeout self-reschedule (not setInterval): the next tick is armed only
@@ -2990,6 +3106,21 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
           body: sizeWarning,
           dedupScope: 'git:repo-size',
         })
+      }
+      // Mass-revert / torn-worktree safe mode: surface the refusal to the
+      // human (health + one notification per episode) — commits are paused
+      // until the anomaly clears, so silence here would hide data-loss risk.
+      const guardState = getSyncGuardState()
+      if (guardState.safeMode !== health.safeMode) {
+        health.safeMode = guardState.safeMode
+        emitStatus()
+        if (guardState.safeMode) {
+          void publishErrorNotification({
+            title: 'Data Sync Paused (Safe Mode)',
+            body: 'git-sync detected a suspicious mass change (possible stale-worktree revert) and stopped auto-committing. Pull-only mode is active. Check open-walnut logs -s git.',
+            dedupScope: 'git:safe-mode',
+          })
+        }
       }
     } catch (err) {
       if (isLockContention(err)) {

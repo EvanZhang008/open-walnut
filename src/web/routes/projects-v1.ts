@@ -11,6 +11,9 @@
  *   PUT    /ordering/projects { order }  → { projects }
  *   POST   /favorites/projects/:name     → { projects }
  *   DELETE /favorites/projects/:name     → { projects }
+ *   GET    /projects/:name/metadata      → detail-pane payload    (Wave 3)
+ *   PUT    /projects/:name/metadata      → merged settings blob   (Wave 3; REPLICA 501)
+ *   POST   /projects/:name/summary/regenerate → { summary, summary_task_count } (Wave 3; REPLICA 501)
  *
  * Replica classes:
  * - Listing/create: Class A. The replica has a real local task store; a new
@@ -182,6 +185,94 @@ projectsV1Router.delete('/projects/:name', async (req: Request, res: Response, n
       if (await sendProjectError(res, err)) return
       throw err
     }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ─── Project metadata + AI summary (Wave 3) ──────────────────────────────────
+
+// GET /api/v1/projects/:name/metadata — the project detail-pane payload
+// (registry settings + memory summary + task counts + claim). Works on both
+// boxes (the replica reads its local store copy).
+projectsV1Router.get('/projects/:name/metadata', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const name = String(req.params.name ?? '')
+    if (!name.trim()) {
+      sendError(res, 400, 'bad_request', 'Inbox has no project settings')
+      return
+    }
+    const { buildProjectMetadataPayload } = await import('./projects.js')
+    res.json(await buildProjectMetadataPayload(name))
+  } catch (err) {
+    next(err)
+  }
+})
+
+// PUT /api/v1/projects/:name/metadata — MERGE settings into the registry row
+// (default_cwd / default_host / …); a field is cleared by sending JSON null.
+// REPLICA: 501 — registry writes have no write-back channel (same rule as
+// rename/delete above).
+projectsV1Router.put('/projects/:name/metadata', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (CLOUD_MODE) {
+      sendError(res, 501, 'not_supported_cloud', 'Project settings live in the primary box\'s registry (no replica write-back channel)')
+      return
+    }
+    const name = String(req.params.name ?? '')
+    const settings = req.body as Record<string, unknown>
+    if (!name.trim()) {
+      sendError(res, 400, 'bad_request', 'Inbox has no project settings')
+      return
+    }
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+      sendError(res, 400, 'bad_request', 'body must be a JSON object')
+      return
+    }
+    // null → undefined = delete-key semantics on the merge (matches the web route).
+    const normalized: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(settings)) {
+      normalized[key] = value === null ? undefined : value
+    }
+    const tm = await import('../../core/task-manager.js')
+    try {
+      res.json(await tm.setProjectMetadata(name, normalized))
+    } catch (err) {
+      if (await sendProjectError(res, err)) return
+      throw err
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/v1/projects/:name/summary/regenerate — rebuild the fast-model
+// project summary on demand. REPLICA: 501 (needs the primary's model
+// credentials AND writes the registry). An unusable result (no tasks / model
+// unavailable) → 422.
+projectsV1Router.post('/projects/:name/summary/regenerate', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (CLOUD_MODE) {
+      sendError(res, 501, 'not_supported_cloud', 'Project summaries are generated on the primary box (model + registry write)')
+      return
+    }
+    const name = String(req.params.name ?? '')
+    if (!name.trim()) {
+      sendError(res, 400, 'bad_request', 'Inbox has no AI summary')
+      return
+    }
+    const { refreshProjectSummary } = await import('../../core/project-summary.js')
+    const ok = await refreshProjectSummary(name)
+    if (!ok) {
+      sendError(res, 422, 'unprocessable', 'summary generation produced nothing (no tasks, or model unavailable)')
+      return
+    }
+    const tm = await import('../../core/task-manager.js')
+    const metadata = await tm.getProjectMetadata(name)
+    res.json({
+      summary: metadata?.summary ?? null,
+      summary_task_count: metadata?.summary_task_count ?? null,
+    })
   } catch (err) {
     next(err)
   }

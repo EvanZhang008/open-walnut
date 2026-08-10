@@ -167,6 +167,23 @@ describe('routines reads', () => {
   })
 })
 
+describe('POST /routines/draft (Wave 3)', () => {
+  it('400 bad_request on empty text — validated BEFORE any LLM call', async () => {
+    const res = await request(createApp(service)).post('/api/v1/routines/draft').send({ text: '   ' })
+    expect(res.status).toBe(400)
+    expect(res.body.error.code).toBe('bad_request')
+  })
+
+  it('surfaces a draft failure as 422 in the frozen shape (no model creds in tests)', async () => {
+    // No provider credentials exist in this harness, so the underlying LLM
+    // call fails — the route must map that to 422, not 500.
+    const res = await request(createApp(service)).post('/api/v1/routines/draft').send({ text: 'every morning say hi' })
+    expect(res.status).toBe(422)
+    expect(res.body.error.code).toBeTruthy()
+    expect(res.body.error.message).toBeTruthy()
+  }, 40_000)
+})
+
 describe('engine not running', () => {
   it('503 in the frozen shape when no cron service is registered', async () => {
     setCronService(null)

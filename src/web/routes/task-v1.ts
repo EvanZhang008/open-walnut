@@ -69,11 +69,22 @@ function sendTaskManagerError(res: Response, err: unknown): boolean {
 
 // ─── Task detail / delete / field setters ───────────────────────────────────
 
+/**
+ * Collection-level subpaths served by LATER-mounted v1 routers (task-extras'
+ * GET /tasks/groups, console-extras' GET /tasks/enriched). This GET /tasks/:id
+ * is the first single-segment catch-all under /api/v1/tasks, so without this
+ * forward it swallows them as task-id prefixes and answers 404 — which is
+ * exactly what happened to GET /v1/tasks/groups in Wave 2 (its test mounted
+ * only the extras router, hiding the shadowing).
+ */
+const RESERVED_TASK_SUBPATHS = new Set(['groups', 'enriched'])
+
 // GET /api/v1/tasks/:id — FULL task detail (description/note/summary readback
 // — the slim list projection is write-only for those fields). Adds the same
 // dependency/children/parent decorations the web detail endpoint serves.
 taskV1Router.get('/tasks/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    if (RESERVED_TASK_SUBPATHS.has(String(req.params.id))) { next(); return }
     const id = paramStr(req.params.id)
     const tm = await import('../../core/task-manager.js')
     let task: Task

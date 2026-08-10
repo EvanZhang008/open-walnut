@@ -168,3 +168,40 @@ describe('project favorites', () => {
     expect(removed.body.projects).toEqual([])
   })
 })
+
+describe('project metadata (Wave 3)', () => {
+  it('GET answers the detail-pane payload; PUT merges and null clears', async () => {
+    await ensureProject('marina', 'local')
+    await addTask({ title: 'one', project: 'marina' })
+    const app = createApp()
+
+    const before = await request(app).get('/api/v1/projects/marina/metadata')
+    expect(before.status).toBe(200)
+    expect(before.body).toMatchObject({ name: 'marina', source: 'local', metadata: {} })
+    // Task rows from earlier tests in this file share the sqlite handle —
+    // assert at-least, not exactly-one.
+    expect(before.body.counts.todo).toBeGreaterThanOrEqual(1)
+
+    const put = await request(app).put('/api/v1/projects/marina/metadata')
+      .send({ default_cwd: '/tmp/marina', default_host: 'devbox' })
+    expect(put.status).toBe(200)
+    expect(put.body.metadata ?? put.body).toBeTruthy()
+
+    const after = await request(app).get('/api/v1/projects/marina/metadata')
+    expect(after.body.metadata.default_cwd).toBe('/tmp/marina')
+
+    // JSON null = delete-key semantics.
+    await request(app).put('/api/v1/projects/marina/metadata').send({ default_host: null })
+    const cleared = await request(app).get('/api/v1/projects/marina/metadata')
+    expect(cleared.body.metadata.default_host).toBeUndefined()
+    expect(cleared.body.metadata.default_cwd).toBe('/tmp/marina')
+  })
+
+  it('validates: Inbox has no settings; body must be an object', async () => {
+    const app = createApp()
+    const inbox = await request(app).get('/api/v1/projects/%20/metadata')
+    expect(inbox.status).toBe(400)
+    const badBody = await request(app).put('/api/v1/projects/marina/metadata').send([1, 2])
+    expect(badBody.status).toBe(400)
+  })
+})

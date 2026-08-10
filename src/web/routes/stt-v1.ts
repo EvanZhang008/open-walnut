@@ -3,6 +3,8 @@
  *
  *   POST /stt/transcribe  { audio: base64, format, language? }
  *     → 200 { text, durationMs, via: 'primary' | 'bridge' | 'openai' }
+ *   GET  /stt/vocab             → { words }            (Wave 3, A)
+ *   POST /stt/vocab { word }    → { added, word, reason? }
  *
  * Primary box (!CLOUD_MODE): run the configured local engine directly
  * (whisper-server / whisper-cpp / sherpa / openai — src/core/stt).
@@ -112,6 +114,37 @@ sttV1Router.post('/stt/transcribe', async (req: Request, res: Response, next: Ne
       log.web.warn('stt openai fallback failed', { message })
       sendError(res, 503, 'stt_unavailable', message)
     }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── Custom vocabulary (Wave 3) ───────────────────────────────────────────────
+// Class A: the vocab file lives in the git-synced data dir, so each box serves
+// its own copy. The internal route's absolute `path` field is dropped — a host
+// filesystem path has no business on a paired device.
+
+// GET /api/v1/stt/vocab — the custom vocabulary word list.
+sttV1Router.get('/stt/vocab', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { readSttVocab } = await import('./stt.js')
+    const { words } = await readSttVocab()
+    res.json({ words })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/v1/stt/vocab { word } — add one word (case-insensitive dedup).
+sttV1Router.post('/stt/vocab', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { word } = (req.body ?? {}) as { word?: unknown }
+    if (!word || typeof word !== 'string' || !word.trim()) {
+      sendError(res, 400, 'bad_request', 'word (non-empty string) is required')
+      return
+    }
+    const { addSttVocabWord } = await import('./stt.js')
+    res.json(await addSttVocabWord(word))
   } catch (err) {
     next(err)
   }

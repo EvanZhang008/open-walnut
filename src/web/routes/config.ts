@@ -58,7 +58,12 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
       externalMb: Math.round(mem.external / 1048576),
       uptimeSec: Math.round(process.uptime()),
     }
-    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory })
+    // canRevealLocalFiles: whether POST /api/files/reveal can hand a path to the
+    // desktop (`open`) — macOS console only, never a cloud replica. The UI hides
+    // its "Reveal in Finder / Open in default app" items when false instead of
+    // offering menu entries that always 400.
+    const canRevealLocalFiles = !CLOUD_MODE && process.platform === 'darwin'
+    res.json({ config: CLOUD_MODE ? redactConfig(config) : config, envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles })
   } catch (err) {
     next(err)
   }
@@ -246,9 +251,21 @@ async function fetchOllamaModels(baseUrl?: string): Promise<ModelEntry[]> {
   }
 }
 
-// GET /api/config/providers — list all providers with status
-configRouter.get('/providers', async (_req: Request, res: Response, next: NextFunction) => {
-  try {
+/**
+ * Build the providers status payload (shared by GET /api/config/providers and
+ * the /api/v1 read — v1 strips `key_hint` before serving).
+ */
+export async function buildProvidersPayload(): Promise<{
+  providers: Record<string, {
+    api: string
+    base_url?: string
+    status: 'ready' | 'no_key' | 'not_implemented'
+    key_hint?: string
+    auto_detected: boolean
+    models: ModelEntry[]
+    credential_source?: string
+  }>
+}> {
     const config = await getConfig()
     const merged = buildProviderMap(config.providers)
 
@@ -397,7 +414,13 @@ configRouter.get('/providers', async (_req: Request, res: Response, next: NextFu
       }
     }
 
-    res.json({ providers })
+    return { providers }
+}
+
+// GET /api/config/providers — list all providers with status
+configRouter.get('/providers', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json(await buildProvidersPayload())
   } catch (err) {
     next(err)
   }

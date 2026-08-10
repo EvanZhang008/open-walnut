@@ -9,7 +9,10 @@
  *
  *   GET /files/list?path=&host=&showHidden=1  → { path, selectedFile?, entries }
  *   GET /files/resolve-path?rel=&cwd=&host=   → { path, resolved }
- *   GET /file-content?path=&host=             → { content, size, truncated, binary, extension, error? }
+ *   GET /file-content?path=&host=             → { content, size, truncated, binary, extension, error?, contentHash? }
+ *   PUT /file-content { path, host?, content, expectedHash? } → { ok, size, contentHash }
+ *   POST /files/record-dir { path, host? }    → { status } (Wave 3, A)
+ *   GET /files/recent-dirs                    → { dirs }   (Wave 3, A)
  *
  * Cloud companion (REPLICA):
  * - list / resolve-path relay to the PRIMARY via the box-level
@@ -114,6 +117,93 @@ filesV1Router.get('/file-content', async (req: Request, res: Response, next: Nex
       }
       throw err
     }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// PUT /api/v1/file-content { path, host?, content, expectedHash? } — save an
+// edit. Same shared core (and therefore the same sandbox + optimistic lock) as
+// the console's PUT /api/file-content.
+filesV1Router.put('/file-content', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { path: rawPath, host: rawHost, content, expectedHash } = req.body ?? {}
+    const host = typeof rawHost === 'string' && rawHost ? rawHost : undefined
+    // REPLICA: same reasoning as the read above — the bridge has no
+    // arbitrary-WRITE channel to an exec host, and by design never will.
+    if (CLOUD_MODE && host) {
+      sendError(res, 501, 'not_supported_cloud', 'Remote file writes are not available through the cloud companion (the bridge has no arbitrary-write channel)')
+      return
+    }
+    const { writeFileContentPayload, FileContentError, FileConflictError } = await import('./file-content.js')
+    try {
+      res.json(await writeFileContentPayload(rawPath, host, content, expectedHash))
+    } catch (err) {
+      if (err instanceof FileConflictError) {
+        res.status(409).json({
+          error: { code: 'conflict', message: err.message },
+          currentHash: err.currentHash,
+        })
+        return
+      }
+      if (err instanceof FileContentError) {
+        sendError(res, err.statusCode, err.statusCode === 403 ? 'not_supported_cloud' : 'bad_request', err.message)
+        return
+      }
+      throw err
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── "@" picker recents (Wave 3) ──────────────────────────────────────────────
+// Class A: both stores (frequent-directories.json + mention-directories.json)
+// live in the git-synced data dir, so recents recorded on either box converge.
+
+// POST /api/v1/files/record-dir { path, host? } — record a folder browsed in
+// the "@" file picker (separate store from session working dirs on purpose —
+// ad-hoc browsing must not pollute the /session path picker).
+filesV1Router.post('/files/record-dir', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { path: dirPath, host } = (req.body ?? {}) as { path?: unknown; host?: unknown }
+    const path = await import('node:path')
+    if (!dirPath || typeof dirPath !== 'string' || !path.isAbsolute(dirPath)) {
+      sendError(res, 400, 'bad_request', 'path must be an absolute string')
+      return
+    }
+    // Reject traversal by SEGMENT, not substring (same rule as the web route).
+    if (dirPath.length > 4096 || dirPath.split('/').some((seg) => seg === '..' || seg === '.')) {
+      sendError(res, 400, 'bad_request', 'Invalid path')
+      return
+    }
+    const { recordMentionDir } = await import('../../core/mention-dirs.js')
+    await recordMentionDir(dirPath, typeof host === 'string' && host ? host : null)
+    res.json({ status: 'ok' })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/v1/files/recent-dirs — union of session working dirs + "@"-browsed
+// folders, deduped by cwd+host, most-recent first. Same merge as the web route.
+filesV1Router.get('/files/recent-dirs', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { getFrequentDirs } = await import('../../core/frequent-dirs.js')
+    const { getMentionDirs } = await import('../../core/mention-dirs.js')
+    const [freq, mention] = await Promise.all([getFrequentDirs(), getMentionDirs()])
+    // Dedup by cwd+host, keeping the MOST-RECENT lastUsed across both stores.
+    const byKey = new Map<string, { cwd: string; host: string | null; lastUsed: string }>()
+    for (const d of [...mention, ...freq]) {
+      const key = `${d.cwd}::${d.host ?? '__local__'}`
+      const existing = byKey.get(key)
+      if (!existing || new Date(d.lastUsed).getTime() > new Date(existing.lastUsed).getTime()) {
+        byKey.set(key, { cwd: d.cwd, host: d.host, lastUsed: d.lastUsed })
+      }
+    }
+    const merged = [...byKey.values()]
+    merged.sort((a, b) => new Date(b.lastUsed).getTime() - new Date(a.lastUsed).getTime())
+    res.json({ dirs: merged.map(({ cwd, host }) => ({ cwd, host })) })
   } catch (err) {
     next(err)
   }

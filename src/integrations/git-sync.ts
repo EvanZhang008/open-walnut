@@ -6,6 +6,7 @@ import path from 'node:path';
 import { WALNUT_HOME } from '../constants.js';
 import { bus, EventNames } from '../core/event-bus.js';
 import { markCriticalSection } from '../core/event-loop-monitor.js';
+import { safeKillProcessGroup } from '../core/process-group-kill.js';
 import { log } from '../logging/index.js';
 
 export interface SyncStatus {
@@ -14,10 +15,24 @@ export interface SyncStatus {
   lastSyncAt: string | null;
   pendingChanges: number;
   branch: string;
+  /** True while the mass-revert guard holds sync in pull-only safe mode. */
+  safeMode: boolean;
 }
 
 const LOCAL_TIMEOUT = 30_000;
+/** Fetch/push/ls-remote — pure network transfers, fail fast. */
 const NETWORK_TIMEOUT = 15_000;
+/**
+ * Pull = fetch + CHECKOUT. On a fat data repo a checkout can easily exceed 15s
+ * (especially on a CPU-starved box), and execGitGroup kills the whole process
+ * group on timeout — which is how the 2026-08-03 hub ended up with a TORN
+ * worktree: HEAD moved to the new tip but the checkout died halfway, leaving
+ * 2000+ files stale on disk. The next `add -A` then snapshotted that stale
+ * tree as a mass revert. Give checkout-bearing ops room to finish.
+ */
+export const PULL_TIMEOUT = 60_000;
+/** Exported for tests pinning the fetch/pull timeout split. */
+export const FETCH_TIMEOUT = NETWORK_TIMEOUT;
 /** Grace period between SIGTERM and SIGKILL when reaping a git process group. */
 const KILL_GRACE_MS = 3_000;
 
@@ -179,8 +194,7 @@ async function execGitGroup(
     // Escalate SIGTERM → SIGKILL on the GROUP (negative pid). `git` traps TERM
     // and can take a while to unwind a large pack, so don't trust it to exit.
     const killGroup = (signal: NodeJS.Signals): void => {
-      if (child.pid === undefined) return;
-      try { process.kill(-child.pid, signal); } catch { /* already gone */ }
+      safeKillProcessGroup(child.pid, signal);
     };
 
     const timer = setTimeout(() => {
@@ -258,6 +272,9 @@ images/
 media/
 timeline/
 sessions/streams/
+# Ephemeral working area — daemon stream files (multi-MB, constantly appended).
+# Syncing them would be the 15 GB data-repo starvation incident all over again.
+tmp/
 
 # SQLite (binary, self-managed)
 *.sqlite
@@ -339,7 +356,7 @@ const CRITICAL_IGNORES = ['auth.json', 'auth.json.bak', 'cloud-setup-job.json', 
  * rollback artifacts, rewritten on every memory mutation; they have never been
  * tracked, so there is no index state to repair, only churn to keep out.
  */
-const EXTRA_IGNORE_PATTERNS = ['memory/**/*.bak.*'];
+const EXTRA_IGNORE_PATTERNS = ['memory/**/*.bak.*', 'tmp/'];
 
 /**
  * Append missing CRITICAL_IGNORES / EXTRA_IGNORE_PATTERNS to an existing
@@ -495,6 +512,328 @@ export function hardenGitConfigPerms(url: string, repoDir?: string): void {
   }
 }
 
+// ── Mass-revert circuit breaker + pull-only safe mode ───────────────────────
+// Root cause guard for the 2026-08-03 data-repo incident: the hub box's
+// fetch/pull timed out for ~8h (its worktree froze on an old tree), then a
+// pull finally moved HEAD but the checkout was killed mid-way (15s timeout,
+// process group reaped) — leaving a TORN worktree: HEAD at the new tip, disk
+// still holding the old tree. The next `commitIfDirty` ran `add -A` BEFORE any
+// pull and committed the entire stale tree (2233 renames reverted + deleted
+// files resurrected) as one commit, silently undoing 8h of the user's work,
+// with a commit message claiming "(1 files)". The guards below attack each
+// link of that chain.
+
+/**
+ * Dirty-file count above which a snapshot is suspicious and gets vetted.
+ * This is the FLOOR only — the live threshold is effectiveMassDirtyThreshold(),
+ * which scales with repo size (a flat 300 is ~1% of a 30k-file repo, i.e. a
+ * legitimate bulk edit trips it, while on a 200-file repo 300 can never trip).
+ * Still exported: callers/tests pin the floor, and it is the documented minimum.
+ */
+export const MASS_DIRTY_THRESHOLD = 300;
+/** Share of the tracked file count that also counts as a "mass" dirty set. */
+const MASS_DIRTY_TRACKED_FRACTION = 0.05;
+/** How long one `git ls-files` count is reused before recounting. */
+const TRACKED_COUNT_TTL_MS = 10 * 60_000;
+let trackedCountCache: { count: number; at: number } | null = null;
+
+/**
+ * Tracked-file count, cached for TRACKED_COUNT_TTL_MS. `git ls-files` on a
+ * 30k-file repo is cheap but not free, and this is consulted from every tick
+ * (twice: commitIfDirty + syncInner). On failure the last known count is reused
+ * rather than collapsing to 0 — a transient git error must not silently lower
+ * the breaker's sensitivity floor.
+ */
+async function trackedFileCount(): Promise<number> {
+  const now = Date.now();
+  if (trackedCountCache && now - trackedCountCache.at < TRACKED_COUNT_TTL_MS) {
+    return trackedCountCache.count;
+  }
+  const out = await gitSafeAsync('ls-files');
+  if (out === null) return trackedCountCache?.count ?? 0;
+  const count = out.split('\n').filter((l) => l.trim().length > 0).length;
+  trackedCountCache = { count, at: now };
+  return count;
+}
+
+/**
+ * Live mass-dirty threshold: max(MASS_DIRTY_THRESHOLD, 5% of tracked files).
+ * Scales the circuit breaker with the repo so it keeps meaning "a suspiciously
+ * large share of the repo changed at once" instead of a fixed file count.
+ */
+export async function effectiveMassDirtyThreshold(): Promise<number> {
+  const tracked = await trackedFileCount();
+  return Math.max(MASS_DIRTY_THRESHOLD, Math.ceil(tracked * MASS_DIRTY_TRACKED_FRACTION));
+}
+
+/** Test hook: drop the cached tracked-file count. */
+export function resetTrackedCountCacheForTest(): void {
+  trackedCountCache = null;
+}
+
+/** Consecutive fetch/pull failures after which the worktree is presumed stale. */
+export const FAILURE_STREAK_FOR_PULL_FIRST = 3;
+/**
+ * Untracked dirty files that upstream's recent history deleted/renamed away —
+ * at or above this count a huge dirty set is treated as a mass resurrection.
+ */
+export const RESURRECTION_TRIP_COUNT = 25;
+/** How many recent commits to scan for deleted paths in the resurrection check. */
+const RESURRECTION_LOG_DEPTH = 50;
+
+interface SyncGuardState {
+  safeMode: boolean;
+  safeModeReason: string | null;
+  safeModeSince: string | null;
+  consecutiveNetworkFailures: number;
+}
+
+const guard: SyncGuardState = {
+  safeMode: false,
+  safeModeReason: null,
+  safeModeSince: null,
+  consecutiveNetworkFailures: 0,
+};
+
+/** Re-log the ongoing safe-mode refusal at most this often (first hit is always loud). */
+const SAFE_MODE_RELOG_MS = 10 * 60_000;
+let lastSafeModeRefusalLog = 0;
+
+/** Read-only view of the guard, for status endpoints and tests. */
+export function getSyncGuardState(): Readonly<SyncGuardState> {
+  return { ...guard };
+}
+
+/**
+ * Human-visible escape hatch: stand down from pull-only safe mode. Called
+ * automatically when the anomaly disappears (dirty set shrinks/clears), or
+ * manually after a human has repaired the worktree.
+ */
+export function clearSyncSafeMode(reason = 'manual'): void {
+  if (!guard.safeMode) return;
+  log.git.warn('git-sync leaving pull-only safe mode — auto-commits resume', {
+    reason,
+    enteredFor: guard.safeModeReason,
+    since: guard.safeModeSince,
+  });
+  guard.safeMode = false;
+  guard.safeModeReason = null;
+  guard.safeModeSince = null;
+}
+
+function enterSafeMode(reason: string, detail: Record<string, unknown>): void {
+  const firstEntry = !guard.safeMode;
+  if (firstEntry) {
+    guard.safeMode = true;
+    guard.safeModeReason = reason;
+    guard.safeModeSince = new Date().toISOString();
+  }
+  // Loud on purpose — this is a refused data-destroying commit, not a hiccup.
+  log.git.error(
+    'git-sync entered PULL-ONLY SAFE MODE — refusing to auto-commit a suspicious mass change. '
+    + 'Local files are untouched but will NOT be committed until the anomaly clears '
+    + '(dirty set shrinks below threshold) or a human clears safe mode.',
+    { reason, firstEntry, since: guard.safeModeSince, ...detail },
+  );
+}
+
+/** Record a fetch/pull network failure; returns the current streak. */
+export function noteNetworkFailure(): number {
+  return ++guard.consecutiveNetworkFailures;
+}
+
+/** Record a successful fetch/pull — resets the failure streak. */
+export function noteNetworkSuccess(): void {
+  guard.consecutiveNetworkFailures = 0;
+}
+
+/** Test hook: reset all guard state between tests. */
+export function resetSyncGuardForTest(): void {
+  guard.safeMode = false;
+  guard.safeModeReason = null;
+  guard.safeModeSince = null;
+  guard.consecutiveNetworkFailures = 0;
+  lastSafeModeRefusalLog = 0;
+  lastSurgeryWarnLog = 0;
+  // The tracked-file count is per-repo and cached for 10 minutes; tests rebuild
+  // the fixture repo between cases, so a carried-over count would size the
+  // breaker against the previous repo.
+  resetTrackedCountCacheForTest();
+}
+
+/**
+ * True while the data repo is mid-surgery: a rebase, an am-session, or an
+ * unfinished merge. In every one of those states the worktree is a TRANSIENT
+ * intermediate — a partially replayed tree, or a merge with unresolved paths —
+ * and `add -A` + commit snapshots it as real user intent. That is the
+ * 2026-08-04 incident: the data repo's 30s auto-save fired while a rebase was
+ * in progress and committed the mid-replay tree, resurrecting 2233 files.
+ *
+ * Cheap on purpose (three fs.existsSync calls, no git subprocess) because the
+ * sync tick calls it twice every 30s.
+ */
+export function isGitSurgeryInProgress(repoDir = WALNUT_HOME): boolean {
+  const gitDir = path.join(repoDir, '.git');
+  return (
+    fs.existsSync(path.join(gitDir, 'rebase-merge'))     // interactive/merge rebase
+    || fs.existsSync(path.join(gitDir, 'rebase-apply'))  // `rebase --apply` / `git am`
+    || fs.existsSync(path.join(gitDir, 'MERGE_HEAD'))    // merge with unresolved paths
+  );
+}
+
+/** Re-log the ongoing surgery refusal at most this often (first hit is always loud). */
+const SURGERY_RELOG_MS = 10 * 60_000;
+let lastSurgeryWarnLog = 0;
+
+/**
+ * Log the surgery skip, throttled like the safe-mode re-log — a human rebase can
+ * take minutes and the tick fires twice per 30s.
+ */
+function logSurgerySkip(context: string): void {
+  const now = Date.now();
+  if (now - lastSurgeryWarnLog < SURGERY_RELOG_MS) return;
+  lastSurgeryWarnLog = now;
+  log.git.warn(
+    'git-sync skipping auto-commit — a git rebase/merge/am is IN PROGRESS in the data repo. '
+    + 'Committing a mid-surgery worktree is the 2026-08-04 mass-resurrection incident. '
+    + 'Pulls continue; commits resume once the surgery finishes or is aborted.',
+    { context, repo: WALNUT_HOME },
+  );
+}
+
+/** Strip the porcelain XY prefix; keep git's C-style quoting as-is (it is
+ * consistent with `log --name-only` output, so set-matching still works). */
+function porcelainPath(line: string): string {
+  return line.slice(3).trim();
+}
+
+/**
+ * Resurrection heuristic: untracked dirty paths that upstream's recent history
+ * deleted (or renamed away — `--no-renames` splits renames into D+A). A stale
+ * worktree snapshotted after upstream reorganized shows up as exactly this:
+ * hundreds of "new" files at paths the fresh HEAD recently deleted. A LEGIT
+ * local reorg looks different — its untracked paths are brand new, not
+ * recently-deleted ones. Cost: one `git log` over the last 50 commits.
+ */
+async function countResurrections(
+  dirtyLines: string[],
+): Promise<{ resurrected: number; untracked: number; sample: string[] }> {
+  const untracked = dirtyLines.filter((l) => l.startsWith('??')).map(porcelainPath);
+  if (untracked.length === 0) return { resurrected: 0, untracked: 0, sample: [] };
+  const deletedLog = await gitSafeAsync(
+    `log -${RESURRECTION_LOG_DEPTH} --no-renames --diff-filter=D --name-only --format=`,
+  );
+  if (!deletedLog) return { resurrected: 0, untracked: untracked.length, sample: [] };
+  const deleted = new Set(deletedLog.split('\n').map((s) => s.trim()).filter(Boolean));
+  const hits = untracked.filter((p) => deleted.has(p));
+  return { resurrected: hits.length, untracked: untracked.length, sample: hits.slice(0, 10) };
+}
+
+/**
+ * Decide whether a dirty snapshot is safe to `add -A` + commit. Cheap by
+ * design: counts + one recent-history scan, never content diffs.
+ *
+ * Two independent trip conditions:
+ *
+ *  1. MASS: dirty count ≥ effectiveMassDirtyThreshold() AND at least one revert
+ *     signal — a fetch/pull failure streak (worktree presumed stale) or a mass
+ *     resurrection of recently-deleted upstream paths. A huge dirty set with NO
+ *     revert signal (e.g. a legitimate bulk import) is allowed with a loud warn.
+ *  2. RESURRECTION ALONE: ≥ RESURRECTION_TRIP_COUNT untracked files sitting at
+ *     paths upstream recently deleted, EVEN BELOW the mass threshold. Nothing
+ *     legitimate re-creates 25 just-deleted paths; tying this signal to the mass
+ *     count meant a partial revert (say 80 resurrected files on a small repo)
+ *     sailed straight through.
+ *
+ * Cost bound: countResurrections (one `git log` over 50 commits) runs only when
+ * the dirty set is already at least RESURRECTION_TRIP_COUNT lines.
+ */
+export async function assessCommitSafety(
+  dirtyLines: string[],
+): Promise<{ ok: boolean; reason?: string }> {
+  const massThreshold = await effectiveMassDirtyThreshold();
+  const isMass = dirtyLines.length >= massThreshold;
+  // Below the resurrection floor nothing can trip — skip the `git log` entirely.
+  const worthChecking = dirtyLines.length >= RESURRECTION_TRIP_COUNT;
+
+  if (guard.safeMode) {
+    // Stay latched while EITHER anomaly is still visible. The mass count alone
+    // used to gate this, so a resurrection-triggered latch (which can sit well
+    // below the mass threshold) would have been released on the very next tick
+    // and committed the thing it just refused.
+    const stillResurrecting = !isMass && worthChecking
+      && (await countResurrections(dirtyLines)).resurrected >= RESURRECTION_TRIP_COUNT;
+    if (!isMass && !stillResurrecting) {
+      // Anomaly gone (human repaired the tree, or the mass change vanished).
+      clearSyncSafeMode('dirty set shrank below threshold');
+      return { ok: true };
+    }
+    // The tick runs every 30s and calls this from both commitIfDirty and
+    // syncInner — throttle the repeat noise; entry + periodic re-log stay loud.
+    const now = Date.now();
+    if (now - lastSafeModeRefusalLog >= SAFE_MODE_RELOG_MS) {
+      lastSafeModeRefusalLog = now;
+      log.git.error(
+        'git-sync SAFE MODE active — auto-commit refused (pull-only). '
+        + 'Repair the worktree or clear safe mode to resume commits.',
+        { reason: guard.safeModeReason, since: guard.safeModeSince, dirtyCount: dirtyLines.length },
+      );
+    }
+    return { ok: false, reason: guard.safeModeReason ?? 'safe-mode' };
+  }
+
+  if (!worthChecking) return { ok: true };
+
+  const streak = guard.consecutiveNetworkFailures;
+  const res = await countResurrections(dirtyLines);
+  const massResurrection = res.resurrected >= RESURRECTION_TRIP_COUNT;
+  const staleAfterOutage = isMass && streak >= FAILURE_STREAK_FOR_PULL_FIRST;
+  if (staleAfterOutage || massResurrection) {
+    enterSafeMode('mass-revert-suspect', {
+      dirtyCount: dirtyLines.length,
+      massThreshold,
+      consecutiveNetworkFailures: streak,
+      resurrectedCount: res.resurrected,
+      untrackedCount: res.untracked,
+      resurrectedSample: res.sample,
+      dirtySample: dirtyLines.slice(0, 10),
+      trigger: massResurrection ? 'resurrection' : 'stale-after-outage',
+    });
+    return { ok: false, reason: 'mass-revert-suspect' };
+  }
+
+  if (isMass) {
+    log.git.warn('git-sync committing an unusually large dirty set (no revert signals — allowing)', {
+      dirtyCount: dirtyLines.length,
+      massThreshold,
+      dirtySample: dirtyLines.slice(0, 10),
+    });
+  }
+  return { ok: true };
+}
+
+/**
+ * Torn-worktree sentinel: right after a pull/merge/reset applied cleanly, the
+ * worktree should be near-clean (syncInner commits everything first; only
+ * files the app wrote DURING the pull may be dirty). A massive disagreement
+ * means the checkout half of the pull died (e.g. killed on timeout) while the
+ * ref half landed — the exact torn state that produced the 2026-08-03 mass
+ * revert. Enter pull-only safe mode so no `add -A` can snapshot it.
+ */
+export async function verifyWorktreeAfterPull(context: string): Promise<boolean> {
+  const status = await gitSafeAsync('status --porcelain -uall');
+  const lines = (status ?? '').split('\n').filter((l) => l.trim().length > 0);
+  const massThreshold = await effectiveMassDirtyThreshold();
+  if (lines.length < massThreshold) return true;
+  enterSafeMode('torn-worktree', {
+    context,
+    dirtyCount: lines.length,
+    massThreshold,
+    dirtySample: lines.slice(0, 10),
+  });
+  return false;
+}
+
 /**
  * Single-flight latch for sync(). The 30s tick used to rely on setTimeout
  * self-rescheduling for serialization ("the next tick is armed only AFTER the
@@ -528,50 +867,158 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
   let pushed = 0;
   let conflicts = 0;
 
-  // Commit everything BEFORE pulling/merging so no local edit is ever
-  // unrecorded — even if it loses an LWW conflict it stays in history.
-  await gitAsync('add -A');
-
-  // …but never let `add -A` leave a machine-local file tracked: the pull below
-  // would then be able to apply a remote deletion of it straight to disk.
-  // Runs after add, before pull — the only point where the check matters.
-  await ensureMachineLocalUntrackedAsync();
-
-  // Check for staged changes
-  const diff = await gitSafeAsync('diff --cached --stat');
-  if (diff && diff.length > 0) {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    await gitSafeAsync(`commit -m "open-walnut sync ${timestamp}"`);
-    pushed = 1;
+  // Surgery-in-progress: a rebase/merge/am is mid-flight in the data repo, so
+  // this whole cycle stands down. Checked FIRST, before any git call — mid-rebase
+  // HEAD is detached, so getBranch() below would report "HEAD" rather than a
+  // branch. Committing the transient tree is the incident (see
+  // isGitSurgeryInProgress); pulling would be safe in isolation, but the pull
+  // path is NOT surgery-safe either — pullFromRemote runs `rebase --abort`
+  // whenever `pull --rebase` fails, which would destroy the human's in-flight
+  // rebase (verified: abort succeeds against a conflicted rebase-merge). And git
+  // itself refuses to pull mid-rebase anyway, so there is nothing to gain.
+  if (isGitSurgeryInProgress()) {
+    logSurgerySkip('sync');
+    return { pulled: 0, pushed: 0, conflicts: 0 };
   }
 
-  // Pull if remote is configured. Clean case: rebase (keeps history linear).
-  // Conflict case: abort the rebase and do a TRUE MERGE with per-file LWW
-  // resolution — a merge commit preserves BOTH parents, so the losing side
-  // of every conflict remains recoverable from git history (rebase would
-  // rewrite the local commits and destroy that guarantee).
-  if (hasRemote()) {
-    const branch = getBranch();
-    const pullResult = await gitSafeAsync(`pull --rebase origin ${branch}`, { timeout: NETWORK_TIMEOUT });
-    if (pullResult === null) {
-      // Rebase failed — could be a content conflict or a network error.
-      // Abort any half-applied rebase (no-op if none), then take the merge path.
-      await gitSafeAsync('rebase --abort');
-      const merge = await lwwMerge(branch);
-      conflicts = merge.conflicts;
-      if (merge.merged) pulled = 1;
-    } else if (pullResult.includes('Updating') || pullResult.includes('Fast-forward')) {
-      pulled = 1;
+  const remote = hasRemote();
+  const branch = remote ? getBranch() : 'main';
+
+  // Never let a machine-local file stay tracked: any pull below could apply a
+  // remote deletion of it straight to disk. Runs unconditionally every cycle
+  // (the dangerous state can appear at runtime); its `rm --cached` staging is
+  // picked up by the dirty check and committed like the old flow did.
+  await ensureMachineLocalUntrackedAsync();
+
+  // -uall: an entirely-untracked directory otherwise collapses to one `?? dir/`
+  // line, hiding a mass resurrection from both the threshold and the heuristic.
+  const preStatus = await gitSafeAsync('status --porcelain -uall');
+  const preLines = (preStatus ?? '').split('\n').filter((l) => l.trim().length > 0);
+
+  // ── Order inversion after an outage ──
+  // Normally we commit BEFORE pulling so no local edit is ever unrecorded.
+  // But after a fetch/pull failure streak the worktree is presumed STALE
+  // (frozen on an old tree while upstream moved) — exactly the state where
+  // `add -A` snapshots a mass revert (2026-08-03 incident). One-shot: refresh
+  // the worktree from upstream FIRST, then let the commit see honest dirt.
+  // Only when no TRACKED file is modified: git refuses to rebase/merge over
+  // tracked changes anyway, and a frozen-then-recovered worktree is clean.
+  const trackedDirty = preLines.filter((l) => !l.startsWith('??'));
+  const pullFirst = remote
+    && guard.consecutiveNetworkFailures >= FAILURE_STREAK_FOR_PULL_FIRST
+    && trackedDirty.length === 0;
+  if (pullFirst) {
+    log.git.warn(
+      'git-sync recovering from a fetch/pull failure streak — pulling BEFORE commit this cycle so a stale worktree cannot be snapshotted',
+      { consecutiveNetworkFailures: guard.consecutiveNetworkFailures, branch },
+    );
+    const first = await pullFromRemote(branch);
+    pulled = first.pulled;
+    conflicts += first.conflicts;
+  }
+
+  // ── Commit local changes (guarded) ──
+  // Re-read after a possible pull; the pull may have absorbed or changed dirt.
+  const status = pullFirst ? await gitSafeAsync('status --porcelain -uall') : preStatus;
+  const dirtyLines = pullFirst
+    ? (status ?? '').split('\n').filter((l) => l.trim().length > 0)
+    : preLines;
+  if (dirtyLines.length === 0 && guard.safeMode) {
+    // Tree is clean again (e.g. a human reset it) — the anomaly is gone.
+    clearSyncSafeMode('worktree clean');
+  }
+  // Second layer, not redundant: the pull-first branch above can run for up to
+  // PULL_TIMEOUT (60s), and a human can start a rebase inside that window. Three
+  // existsSync calls are free relative to the failure they prevent. Bail on the
+  // rest of the cycle (commit AND pull) for the reasons at the top of syncInner.
+  if (isGitSurgeryInProgress()) {
+    logSurgerySkip('syncInner:commit');
+    return { pulled, pushed: 0, conflicts };
+  }
+  if (dirtyLines.length > 0) {
+    const safety = await assessCommitSafety(dirtyLines);
+    if (safety.ok) {
+      await gitAsync('add -A');
+
+      // …and re-check: `add -A` itself can re-track a machine-local file the
+      // instant before a pull could carry its remote deletion to disk.
+      await ensureMachineLocalUntrackedAsync();
+
+      // Count from what is ACTUALLY staged at commit time. The old code
+      // counted a pre-add snapshot elsewhere, which is how the 2026-08-03
+      // 2233-rename mass revert got committed as "(1 files)".
+      const staged = await gitSafeAsync('diff --cached --name-only');
+      const stagedCount = (staged ?? '').split('\n').filter((l) => l.trim().length > 0).length;
+      if (stagedCount > 0) {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        await gitSafeAsync(`commit -m "open-walnut sync ${timestamp} (${stagedCount} files)"`);
+        pushed = 1;
+      }
+    }
+    // safety.ok === false → pull-only safe mode: skip commit, still pull below
+    // so the box keeps receiving upstream (assessCommitSafety already logged).
+  }
+
+  // ── Pull + push ──
+  if (remote) {
+    if (!pullFirst) {
+      const result = await pullFromRemote(branch);
+      pulled = result.pulled;
+      conflicts += result.conflicts;
     }
 
-    // Push
-    const pushResult = await gitSafeAsync(`push origin ${branch}`, { timeout: NETWORK_TIMEOUT });
-    if (pushResult === null) {
-      pushed = 0; // push failed
+    // Push (skipped in safe mode: nothing new was committed, and a torn/stale
+    // box must not publish anything until a human or a clean cycle clears it).
+    if (!guard.safeMode) {
+      const pushResult = await gitSafeAsync(`push origin ${branch}`, { timeout: NETWORK_TIMEOUT });
+      if (pushResult === null) {
+        pushed = 0; // push failed
+      }
     }
   }
 
   return { pulled, pushed, conflicts };
+}
+
+/**
+ * Pull with linear-history preference and LWW-merge fallback, plus the
+ * incident guards: pull gets the LONG timeout (it checks out files, not just
+ * transfers), success/failure feeds the outage-streak tracker, and a
+ * completed pull is verified against a torn worktree.
+ *
+ * Clean case: rebase (keeps history linear). Conflict case: abort the rebase
+ * and do a TRUE MERGE with per-file LWW resolution — a merge commit preserves
+ * BOTH parents, so the losing side of every conflict remains recoverable from
+ * git history (rebase would rewrite the local commits and destroy that).
+ */
+async function pullFromRemote(branch: string): Promise<{ pulled: number; conflicts: number }> {
+  let pulled = 0;
+  let conflicts = 0;
+
+  const pullResult = await gitSafeAsync(`pull --rebase origin ${branch}`, { timeout: PULL_TIMEOUT });
+  if (pullResult === null) {
+    // Rebase failed — could be a content conflict or a network error.
+    // Abort any half-applied rebase (no-op if none), then take the merge path.
+    // lwwMerge's fetch outcome updates the network failure streak.
+    await gitSafeAsync('rebase --abort');
+    const merge = await lwwMerge(branch);
+    conflicts = merge.conflicts;
+    if (merge.merged) pulled = 1;
+  } else {
+    noteNetworkSuccess();
+    if (pullResult.includes('Updating') || pullResult.includes('Fast-forward')) {
+      pulled = 1;
+    }
+  }
+
+  // Torn-worktree sentinel: if the checkout half of the pull died while the
+  // ref half landed, the tree now massively disagrees with HEAD — flag it
+  // BEFORE any later `add -A` can snapshot the stale files as a revert.
+  if (pulled === 1) {
+    await verifyWorktreeAfterPull(`pull origin/${branch}`);
+  }
+
+  return { pulled, conflicts };
 }
 
 /**
@@ -626,16 +1073,21 @@ async function lwwMerge(branch: string): Promise<{ merged: boolean; conflicts: n
 
     if (fetchError) {
       const detail = fetchError instanceof Error ? fetchError.message : String(fetchError);
+      // Feed the outage tracker: a long streak means the worktree is frozen on
+      // an old tree, and the first recovered cycle must pull BEFORE committing.
+      const streak = noteNetworkFailure();
       log.git.warn('git-sync fetch failed — skipping merge this cycle', {
         branch,
         // Surface WHY. 246 consecutive failures were logged without ever naming
         // the cause, which is why a 2.5-day-old lock went unnoticed.
         error: detail.slice(0, 400),
         lockContention: isLockContention(fetchError),
+        consecutiveNetworkFailures: streak,
       });
       return { merged: false, conflicts: 0 };
     }
   }
+  noteNetworkSuccess();
 
   const localHead = await gitSafeAsync('rev-parse HEAD');
   const remoteHead = await gitSafeAsync(`rev-parse ${remoteRef}`);
@@ -679,7 +1131,7 @@ async function lwwMerge(branch: string): Promise<{ merged: boolean; conflicts: n
       'git-sync merge failed with a NON-conflict error — falling back to `pull -X theirs` (REMOTE WINS unconditionally). Investigate!',
       { branch, localHead, remoteHead },
     );
-    const fallback = await gitSafeAsync(`pull -X theirs origin ${branch}`, { timeout: NETWORK_TIMEOUT });
+    const fallback = await gitSafeAsync(`pull -X theirs origin ${branch}`, { timeout: PULL_TIMEOUT });
     return { merged: fallback !== null, conflicts: fallback !== null ? 1 : 0 };
   }
 
@@ -710,7 +1162,7 @@ async function lwwMerge(branch: string): Promise<{ merged: boolean; conflicts: n
       'git-sync LWW resolution left unmerged paths — aborted merge, falling back to `pull -X theirs` (REMOTE WINS). Investigate!',
       { branch, unresolved: stillUnmerged.split('\n') },
     );
-    await gitSafeAsync(`pull -X theirs origin ${branch}`, { timeout: NETWORK_TIMEOUT });
+    await gitSafeAsync(`pull -X theirs origin ${branch}`, { timeout: PULL_TIMEOUT });
     return { merged: true, conflicts: files.length };
   }
 
@@ -787,8 +1239,15 @@ export async function gitPullWalnut(): Promise<void> {
       clearStaleLock();
       // gitSafeAsync applies the credential-helper guard itself (pull is a
       // network subcommand) and swallows errors — same best-effort semantics
-      // as the old execSync version, minus the event-loop block.
-      await gitSafeAsync('pull --ff-only', { timeout: NETWORK_TIMEOUT });
+      // as the old execSync version, minus the event-loop block. PULL_TIMEOUT:
+      // a pull checks out files, and killing it mid-checkout is what tears a
+      // worktree (2026-08-03 incident) — give it room to finish.
+      const pullOut = await gitSafeAsync('pull --ff-only', { timeout: PULL_TIMEOUT });
+      // Same torn-worktree sentinel as the sync tick: if this pull moved HEAD
+      // but died mid-checkout, flag it before any add -A can snapshot it.
+      if (pullOut !== null && (pullOut.includes('Updating') || pullOut.includes('Fast-forward'))) {
+        await verifyWorktreeAfterPull('gitPullWalnut --ff-only');
+      }
     } catch {
       // Best-effort — don't fail callers
     } finally {
@@ -949,12 +1408,30 @@ export function resetRepoSizeCheckForTest(): void {
  */
 export async function commitIfDirty(): Promise<boolean> {
   if (compactionInProgress) return false;
+  // Surgery-in-progress guard: a rebase/merge/am leaves a transient tree that
+  // `add -A` must never snapshot (2026-08-04 incident). Bail BEFORE clearing
+  // locks — a live rebase's locks are not ours to sweep.
+  if (isGitSurgeryInProgress()) {
+    logSurgerySkip('commitIfDirty');
+    return false;
+  }
   clearStaleLock();
-  const status = await gitSafeAsync('status --porcelain');
-  if (!status || status.trim().length === 0) return false;
+  // -uall: see syncInner — collapsed `?? dir/` lines would hide a mass
+  // resurrection from the circuit breaker.
+  const status = await gitSafeAsync('status --porcelain -uall');
+  if (!status || status.trim().length === 0) {
+    // Clean tree while in safe mode = the anomaly is gone (human repaired it).
+    if (guard.safeMode) clearSyncSafeMode('worktree clean');
+    return false;
+  }
 
   const lines = status.split('\n').filter((l) => l.trim());
-  const timestamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+  // Mass-revert circuit breaker: this exact function committed the 2026-08-03
+  // incident — `add -A` on a worktree frozen 8h behind upstream snapshotted a
+  // 2200-file revert of the user's reorg. Refuse suspicious mass snapshots.
+  const safety = await assessCommitSafety(lines);
+  if (!safety.ok) return false;
 
   try {
     await gitAsync('add -A');
@@ -966,7 +1443,15 @@ export async function commitIfDirty(): Promise<boolean> {
     await gitAsync('add -A');
   }
 
-  await gitSafeAsync(`commit -m "auto-save ${timestamp} (${lines.length} files)"`);
+  // Honest count: from what is ACTUALLY staged at commit time, not the
+  // pre-add status snapshot. The incident commit reverted 2233 renames while
+  // its message claimed "(1 files)" because the count predated the add.
+  const staged = await gitSafeAsync('diff --cached --name-only');
+  const stagedCount = (staged ?? '').split('\n').filter((l) => l.trim().length > 0).length;
+  if (stagedCount === 0) return false; // e.g. everything dirty was gitignored/untracked-only noise
+
+  const timestamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  await gitSafeAsync(`commit -m "auto-save ${timestamp} (${stagedCount} files)"`);
   return true;
 }
 
@@ -1050,6 +1535,7 @@ export function getSyncStatus(): SyncStatus {
       lastSyncAt: null,
       pendingChanges: 0,
       branch: 'main',
+      safeMode: guard.safeMode,
     };
   }
 
@@ -1075,5 +1561,6 @@ export function getSyncStatus(): SyncStatus {
     lastSyncAt,
     pendingChanges,
     branch,
+    safeMode: guard.safeMode,
   };
 }

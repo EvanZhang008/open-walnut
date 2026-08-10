@@ -13,6 +13,7 @@
 import fsp from 'node:fs/promises'
 import { log } from '../logging/index.js'
 import { isProcessAliveAsync } from '../utils/process.js'
+import { safeKillProcessGroup } from './process-group-kill.js'
 import { isSessionProcessAlive, isLocalJsonlFresh } from '../utils/session-liveness.js'
 import { bus, EventNames } from './event-bus.js'
 import { runPeriodic, type PeriodicHandle, type TickContext } from './periodic-task.js'
@@ -887,15 +888,17 @@ export class SessionHealthMonitor {
       } else {
         const pid = session.pid
         if (pid == null) continue  // No PID — can't signal; skip to next session
-        // Kill entire process group (-pid) to also clean up MCP child processes
-        try { process.kill(-pid, 'SIGINT') } catch { /* already dead */ }
+        // Kill entire process group (-pid) to also clean up MCP child processes.
+        // safeKillProcessGroup refuses pid ≤ 1 — a corrupted pid here would
+        // otherwise broadcast the kill to the whole user session (2026-08-09).
+        safeKillProcessGroup(pid, 'SIGINT')
         // Deferred SIGTERM/SIGKILL fallback — fire-and-forget, doesn't block health check loop
         setTimeout(() => {
           isProcessAliveAsync(pid, 'claude').then((alive) => {
             if (alive) {
-              try { process.kill(-pid, 'SIGTERM') } catch { /* already dead */ }
+              safeKillProcessGroup(pid, 'SIGTERM')
               setTimeout(() => {
-                try { process.kill(-pid, 'SIGKILL') } catch {}
+                safeKillProcessGroup(pid, 'SIGKILL')
               }, 2_000)
             }
           }).catch(() => {})
@@ -1280,7 +1283,7 @@ export class SessionHealthMonitor {
         })
 
         // Kill entire process group (-pid) to also clean up MCP child processes
-        try { process.kill(-s.pid, 'SIGTERM') } catch { /* already dead */ }
+        safeKillProcessGroup(s.pid, 'SIGTERM')
 
         // Remote process cleanup is handled by daemon transport when the local tunnel dies.
 

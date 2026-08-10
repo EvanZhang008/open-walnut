@@ -78,6 +78,43 @@ taskExtrasV1Router.get('/tasks/meta/tags', async (_req: Request, res: Response, 
   }
 })
 
+// GET /api/v1/tasks/meta/sprints (Wave 3) — unique sprint names with task
+// counts, most-used first. Class A.
+taskExtrasV1Router.get('/tasks/meta/sprints', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { listTasks } = await import('../../core/task-manager.js')
+    const tasks = (await listTasks({})).filter((t) => !t.title.startsWith('.metadata'))
+    const sprintCounts = new Map<string, number>()
+    for (const t of tasks) {
+      if (t.sprint) sprintCounts.set(t.sprint, (sprintCounts.get(t.sprint) ?? 0) + 1)
+    }
+    const sprints = [...sprintCounts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+    res.json({ sprints })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/v1/tasks/enriched (Wave 3) — full task rows + computed fields
+// (currently `overdue`). Class A. NOTE: task-v1's GET /tasks/:id forwards the
+// literal "enriched" here (RESERVED_TASK_SUBPATHS).
+taskExtrasV1Router.get('/tasks/enriched', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { listTasks } = await import('../../core/task-manager.js')
+    const tasks = (await listTasks({})).filter((t) => !t.title.startsWith('.metadata'))
+    const now = Date.now()
+    const enriched = tasks.map((t) => ({
+      ...t,
+      overdue: t.due_date ? new Date(t.due_date).getTime() < now && t.status !== 'done' : false,
+    }))
+    res.json({ tasks: enriched })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // ─── Virtual task groups ─────────────────────────────────────────────────────
 // Registration order matters (same rule as tasks.ts): the explicit /groups
 // paths must never be shadowed by an /:id route — this router has none.

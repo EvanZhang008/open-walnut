@@ -11,6 +11,8 @@
  *   GET    /notes/links/*path             → { links }
  *   GET    /notes/tags                    → { tags }
  *   GET    /notes/tags/:tag/notes         → { notes }
+ *   GET    /notes/list                    → { notes }         (Wave 3)
+ *   POST   /notes/tags/rename { from, to } → { ok, updated }  (Wave 3)
  *   DELETE /notes/attachment/*path        → { ok }
  *   DELETE /notes/folder/*path            → { ok, deletedNotes }
  *
@@ -142,6 +144,20 @@ notesExtrasV1Router.get('/notes/tags/:tag/notes', async (req: Request, res: Resp
   } catch (err) {
     next(err)
   }
+})
+
+// GET /api/v1/notes/list (Wave 3) — flat note list with ids (feeds [[
+// autocomplete; falls back to a file walk while the index is cold).
+notesExtrasV1Router.get('/notes/list', async (_req: Request, res: Response, next: NextFunction) => {
+  const { listNotesFlat } = await import('./notes-v2.js')
+  await runNotesOp(res, next, () => listNotesFlat())
+})
+
+// POST /api/v1/notes/tags/rename { from, to } (Wave 3) — rename a tag across
+// every carrying note (frontmatter + inline; targeted by the tag index).
+notesExtrasV1Router.post('/notes/tags/rename', async (req: Request, res: Response, next: NextFunction) => {
+  const { renameNoteTag } = await import('./notes-v2.js')
+  await runNotesOp(res, next, () => renameNoteTag(req.body?.from, req.body?.to))
 })
 
 // ── Destructive vault deletes ────────────────────────────────────────────────

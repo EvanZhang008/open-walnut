@@ -24,8 +24,8 @@ import {
   remoteJsonlPath,
   type ReadSessionResult,
 } from './session-file-reader.js';
-import { sessionModeFromCli } from './types.js';
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from './workflow-progress.js';
+import { sessionModeFromCli } from './types.js';
 import type { SessionBackgroundTasksPayload, WorkflowPhaseInfo, WorkflowAgentInfo } from './event-types.js';
 import os from 'node:os';
 import path from 'node:path';
@@ -173,6 +173,26 @@ const windowedParses = new WeakSet<object>();
 function markWindowedRead(messages: object): void { windowedParses.add(messages); }
 /** True when `messages` is a bounded sliding window — never a valid cursor space. */
 export function isWindowedHistory(messages: object): boolean { return windowedParses.has(messages); }
+
+/**
+ * Parses whose transcript SOURCE was proven to exist (a successful stat, or the
+ * reader returning content) — as opposed to "the parse yielded 0 messages".
+ *
+ * Those two are NOT the same, and conflating them is what made a healthy
+ * just-launched session render "History unavailable — Session history file not
+ * found": for the first seconds a session's JSONL holds only `system`/hook lines,
+ * so it exists and is growing while parseSessionMessages legitimately returns [].
+ * Callers deciding "missing file" vs "nothing to show yet" must ask THIS, not the
+ * message count (Codex's branch already had the real signal, `journalExists`).
+ *
+ * Marked on the ARRAY ITSELF for the same reason as windowedParses above: the
+ * answer can't be raced by a concurrent read of the same session, because the
+ * caller asks about the exact object it was handed.
+ */
+const sourceFoundParses = new WeakSet<object>();
+function markSourceFound(messages: object): void { sourceFoundParses.add(messages); }
+/** True when the transcript source behind `messages` was proven to exist. */
+export function isSourceFoundHistory(messages: object): boolean { return sourceFoundParses.has(messages); }
 
 /** Compose cache key so local and remote entries for the same sessionId don't collide. */
 function cacheKey(sessionId: string, host?: string): string {
@@ -1486,6 +1506,14 @@ export function readSessionHistory(sessionId: string, cwd?: string, host?: strin
 
 async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: string, outputFile?: string, options?: ReadHistoryOptions): Promise<SessionHistoryMessage[]> {
   let messages: SessionHistoryMessage[] | null = null;
+  // Did we PROVE the transcript source exists (successful stat / reader returned
+  // content)? Independent of how many messages the parse produced — see
+  // markSourceFound. Every `return` below must stamp the array it hands back.
+  let sourceFound = false;
+  const handOff = (msgs: SessionHistoryMessage[]): SessionHistoryMessage[] => {
+    if (sourceFound) markSourceFound(msgs);
+    return msgs;
+  };
 
   // Server-side mtime cache: check if JSONL hasn't changed since last parse.
   // Primarily benefits completed/historical sessions viewed repeatedly.
@@ -1516,11 +1544,14 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
         const statResult = await reader.stat(statPath);
         if (statResult) {
           mtimeMs = statResult.mtimeMs;
+          // The stat SUCCEEDED — the transcript file exists on disk, whatever the
+          // parse yields. Every return below this point inherits that fact.
+          sourceFound = true;
           const cached = cacheGet(sessionId, host);
           if (cached && cached.mtimeMs === mtimeMs) {
             // Cache hit — return cached messages (skipSubagents is the common path
             // now, so cached messages don't include childMessages; no mutation concern).
-            return cached.messages;
+            return handOff(cached.messages);
           }
           // In-memory miss (e.g. server just restarted) but the DISK cache may
           // still be current: validate its stored mtime against the live stat.
@@ -1542,7 +1573,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
                   mtimeMs, messages: disk.messages,
                   approxChars: statResult.size,
                 }, host);
-                return disk.messages;
+                return handOff(disk.messages);
               }
             } catch { /* disk cache unusable — fall through to full read */ }
           }
@@ -1552,7 +1583,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
             const incMessages = await tryIncrementalHistoryRead(
               sessionId, host, cached, statResult.mtimeMs, reader,
             );
-            if (incMessages) return incMessages;
+            if (incMessages) return handOff(incMessages);
             // Incremental failed (rewrite detected / transport) — state was
             // dropped; fall through to a normal full read that re-seeds.
           } else if (cached?.inc && statResult.size < cached.inc.parsedBytes) {
@@ -1586,14 +1617,19 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     log.session.warn('history read hit the byte ceiling — serving a bounded tail instead', {
       sessionId, host: host ?? '__local__', error: msg,
     });
+    // A byte-ceiling rejection is itself proof the file exists (and is huge).
+    sourceFound = true;
     const tail = await readSessionHistoryTailWindow(sessionId, cwd, host);
-    if (tail) return tail;
+    if (tail) return handOff(tail);
     // Tail unavailable too — last resort is the previous parse, else empty.
-    return getCachedSessionHistory(sessionId, host) ?? [];
+    return handOff(getCachedSessionHistory(sessionId, host) ?? []);
   }
   // Raw JSONL length — the cache's byte-budget proxy for the parsed messages.
   const sourceChars = result?.content.length ?? 0;
   if (result) {
+    // The reader returned CONTENT — the source exists even if the stat fast-path
+    // above never ran (unresolvable path, old daemon without fs.stat).
+    sourceFound = true;
     // Remember the resolved path so the next read can use the mtime fast-path
     // even when cwd is unsafe for our canonical path encoding. Keyed by the
     // daemon host (__local__ for local) so local reads get the same fast-path.
@@ -1641,7 +1677,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     }
   }
 
-  if (!messages) return [];
+  if (!messages) return handOff([]);
 
   // Attach subagent child messages (works for both local and remote sessions).
   // When skipSubagents is true, Task tools retain agentId but childMessages stays
@@ -1721,7 +1757,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     }).catch(() => {});
   }
 
-  return messages;
+  return handOff(messages);
 }
 
 /**

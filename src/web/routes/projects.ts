@@ -251,6 +251,26 @@ projectsRouter.delete('/:name', async (req: Request, res: Response, next: NextFu
   }
 })
 
+/**
+ * Everything the project detail pane needs in one call: registry settings,
+ * memory summary, task counts, claim. Shared by GET /api/projects/:name/metadata
+ * and GET /api/v1/projects/:name/metadata.
+ */
+export async function buildProjectMetadataPayload(name: string): Promise<Record<string, unknown>> {
+  const record = await getProjectRecord(name)
+  const canonical = record?.name ?? name
+  const { byProject } = await collectCounts()
+  return {
+    name: canonical,
+    source: record?.source ?? 'local',
+    metadata: record?.metadata ?? {},
+    // MEMORY.md header for memory/projects/<project>/ — a FLAT one-segment
+    // path (memory-dir-migration flattened the old two-segment layout).
+    memorySummary: getProjectSummary(canonical)?.description ?? null,
+    counts: byProject.get(canonical.toLowerCase()) ?? emptyCounts(),
+  }
+}
+
 // GET /api/projects/:name/metadata — everything the project detail pane needs
 // in one call: registry settings, memory summary, task counts, claim.
 projectsRouter.get('/:name/metadata', async (req: Request, res: Response, next: NextFunction) => {
@@ -260,18 +280,7 @@ projectsRouter.get('/:name/metadata', async (req: Request, res: Response, next: 
       res.status(400).json({ error: 'Inbox has no project settings' })
       return
     }
-    const record = await getProjectRecord(name)
-    const canonical = record?.name ?? name
-    const { byProject } = await collectCounts()
-    res.json({
-      name: canonical,
-      source: record?.source ?? 'local',
-      metadata: record?.metadata ?? {},
-      // MEMORY.md header for memory/projects/<project>/ — a FLAT one-segment
-      // path (memory-dir-migration flattened the old two-segment layout).
-      memorySummary: getProjectSummary(canonical)?.description ?? null,
-      counts: byProject.get(canonical.toLowerCase()) ?? emptyCounts(),
-    })
+    res.json(await buildProjectMetadataPayload(name))
   } catch (err) {
     next(err)
   }

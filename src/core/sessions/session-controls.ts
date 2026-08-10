@@ -659,6 +659,9 @@ export type SessionControlAction =
   | 'server.routines.executors' | 'server.routines.get' | 'server.routines.create'
   | 'server.routines.patch' | 'server.routines.delete' | 'server.routines.toggle'
   | 'server.routines.run'
+  // Wave 3: NL routine draft — an LLM call, so it runs where the model
+  // credentials live (the answering box); a REPLICA relays to the primary.
+  | 'server.routines.draft'
   | 'server.list-dirs' | 'server.slash-commands'
   // Wave 2 box-level family: file-explorer metadata (names/types only — file
   // CONTENT never rides the bridge; see files-v1.ts for the threat model).
@@ -868,7 +871,8 @@ export async function handleSessionControlRelay(
       case 'server.routines.patch':
       case 'server.routines.delete':
       case 'server.routines.toggle':
-      case 'server.routines.run': {
+      case 'server.routines.run':
+      case 'server.routines.draft': {
         const { handleRoutinesRelayAction } = await import('../routines/routines-core.js');
         result = await handleRoutinesRelayAction(action.slice('server.routines'.length).replace(/^\./, '') || 'list', p);
         break;

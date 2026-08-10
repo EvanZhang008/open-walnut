@@ -1307,31 +1307,40 @@ notesV2Router.post('/folder', async (req: Request, res: Response, next: NextFunc
 
 // ─── List (for wiki-link autocomplete) ─────────────────────────────────────
 
-// GET /api/notes-v2/list — flat note list. Now returns id per note (feeds [[ authoring).
-notesV2Router.get('/list', async (_req: Request, res: Response, next: NextFunction) => {
-  try {
-    ensureIndexBootstrap()
-    await ensureNotesDir()
-    const rows = listNotes()
-    if (rows.length > 0) {
-      const notes = rows.map((r) => ({
+/**
+ * Flat note list with ids (feeds [[ authoring / autocomplete). Shared by
+ * GET /api/notes-v2/list and GET /api/v1/notes/list.
+ */
+export async function listNotesFlat(): Promise<{ notes: Array<{ id: string; title: string; path: string; name: string }> }> {
+  ensureIndexBootstrap()
+  await ensureNotesDir()
+  const rows = listNotes()
+  if (rows.length > 0) {
+    return {
+      notes: rows.map((r) => ({
         id: r.id,
         title: r.title,
         path: r.path,
         name: path.basename(r.path, '.md'),
-      }))
-      res.json({ notes })
-      return
+      })),
     }
-    // Index empty (cold start before first rebuild) — fall back to a file walk so
-    // [[ autocomplete works immediately; ids fill in once the index settles.
-    const allFiles = await getAllMdFilesFallback(NOTES_DIR)
-    const notes = allFiles.map((f) => {
+  }
+  // Index empty (cold start before first rebuild) — fall back to a file walk so
+  // [[ autocomplete works immediately; ids fill in once the index settles.
+  const allFiles = await getAllMdFilesFallback(NOTES_DIR)
+  return {
+    notes: allFiles.map((f) => {
       const relPath = toRelPath(f)
       const name = path.basename(relPath, '.md')
       return { id: '', title: name, path: relPath, name }
-    })
-    res.json({ notes })
+    }),
+  }
+}
+
+// GET /api/notes-v2/list — flat note list. Now returns id per note (feeds [[ authoring).
+notesV2Router.get('/list', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json(await listNotesFlat())
   } catch (err) {
     next(err)
   }
@@ -1368,74 +1377,87 @@ notesV2Router.get('/tags/:tag/notes', async (req: Request, res: Response, next: 
   }
 })
 
-// POST /api/notes-v2/tags/rename — targeted rewrite (carrying notes only)
-notesV2Router.post('/tags/rename', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    ensureIndexBootstrap()
-    const from = normalizeTag(String(req.body?.from || ''))
-    const to = normalizeTag(String(req.body?.to || ''))
-    if (!from || !to) { res.status(400).json({ error: 'from and to (strings) are required' }); return }
-    if (from === to) { res.json({ ok: true, updated: 0 }); return }
+/**
+ * Rename a tag across every carrying note (frontmatter tags[] + inline #tag).
+ * Shared by POST /api/notes-v2/tags/rename and POST /api/v1/notes/tags/rename.
+ * Throws NotesOpError(400) on missing/invalid input.
+ */
+export async function renameNoteTag(rawFrom: unknown, rawTo: unknown): Promise<{ ok: true; updated: number }> {
+  ensureIndexBootstrap()
+  const from = normalizeTag(String(rawFrom || ''))
+  const to = normalizeTag(String(rawTo || ''))
+  if (!from || !to) throw new NotesOpError('from and to (strings) are required', 400)
+  if (from === to) return { ok: true, updated: 0 }
 
-    // Targeted by the tag index — NOT a vault scan.
-    const paths = notePathsForTag(from)
-    let updated = 0
-    // Negative lookahead on the FULL tag charset (see INLINE_TAG_RE): `\b`
-    // treats `-`/`/` as boundaries, so renaming #work also hit #work-log.
-    const inlineRe = new RegExp(`(^|[\\s(])#${escapeRegExp(from)}(?![A-Za-z0-9/_-])`, 'g')
+  // Targeted by the tag index — NOT a vault scan.
+  const paths = notePathsForTag(from)
+  let updated = 0
+  // Negative lookahead on the FULL tag charset (see INLINE_TAG_RE): `\b`
+  // treats `-`/`/` as boundaries, so renaming #work also hit #work-log.
+  const inlineRe = new RegExp(`(^|[\\s(])#${escapeRegExp(from)}(?![A-Za-z0-9/_-])`, 'g')
 
-    for (const relPath of paths) {
-      const abs = resolveSafePath(relPath)
-      if (!abs) continue
-      const filePath = abs.endsWith('.md') ? abs : abs + '.md'
-      let content: string
-      try {
-        content = await fsp.readFile(filePath, 'utf-8')
-      } catch { continue }
+  for (const relPath of paths) {
+    const abs = resolveSafePath(relPath)
+    if (!abs) continue
+    const filePath = abs.endsWith('.md') ? abs : abs + '.md'
+    let content: string
+    try {
+      content = await fsp.readFile(filePath, 'utf-8')
+    } catch { continue }
 
-      const { data, body, raw } = parseFrontmatter(content)
-      let changed = false
+    const { data, body, raw } = parseFrontmatter(content)
+    let changed = false
 
-      // 1) frontmatter tags[]
-      let newRaw = raw
-      if (raw && Array.isArray(data.tags)) {
-        const replaced = (data.tags as unknown[]).map((t) =>
-          typeof t === 'string' && normalizeTag(t) === from ? to : t,
-        )
-        if (JSON.stringify(replaced) !== JSON.stringify(data.tags)) {
-          // Rewrite only the tag tokens, and ONLY on lines that belong to the
-          // `tags:` key (inline array or block list) — an unscoped rewrite also
-          // hit bare words in other fields (`title: my work notes`).
-          const tokenRe = new RegExp(`(^|[\\s,\\[])#?${escapeRegExp(from)}(?=$|[\\s,\\]])`, 'g')
-          let inTagsBlock = false
-          newRaw = raw
-            .split('\n')
-            .map((line) => {
-              const key = line.match(/^([A-Za-z_][\w-]*):/)
-              if (key) inTagsBlock = key[1] === 'tags'
-              else if (!/^\s*(-\s|#)/.test(line) && line.trim() !== '') inTagsBlock = false
-              const isTagsLine = inTagsBlock || /^tags:/.test(line)
-              return isTagsLine ? line.replace(tokenRe, (_m, pre) => `${pre}${to}`) : line
-            })
-            .join('\n')
-          changed = changed || newRaw !== raw
-        }
-      }
-
-      // 2) inline #from → #to in body
-      const newBody = body.replace(inlineRe, (_m, pre) => `${pre}#${to}`)
-      if (newBody !== body) changed = true
-
-      if (changed) {
-        const next = (newRaw || raw) + newBody
-        await fsp.writeFile(filePath, next, 'utf-8')
-        updated++
-        scheduleNotesIndexUpdate(relPath)
+    // 1) frontmatter tags[]
+    let newRaw = raw
+    if (raw && Array.isArray(data.tags)) {
+      const replaced = (data.tags as unknown[]).map((t) =>
+        typeof t === 'string' && normalizeTag(t) === from ? to : t,
+      )
+      if (JSON.stringify(replaced) !== JSON.stringify(data.tags)) {
+        // Rewrite only the tag tokens, and ONLY on lines that belong to the
+        // `tags:` key (inline array or block list) — an unscoped rewrite also
+        // hit bare words in other fields (`title: my work notes`).
+        const tokenRe = new RegExp(`(^|[\\s,\\[])#?${escapeRegExp(from)}(?=$|[\\s,\\]])`, 'g')
+        let inTagsBlock = false
+        newRaw = raw
+          .split('\n')
+          .map((line) => {
+            const key = line.match(/^([A-Za-z_][\w-]*):/)
+            if (key) inTagsBlock = key[1] === 'tags'
+            else if (!/^\s*(-\s|#)/.test(line) && line.trim() !== '') inTagsBlock = false
+            const isTagsLine = inTagsBlock || /^tags:/.test(line)
+            return isTagsLine ? line.replace(tokenRe, (_m, pre) => `${pre}${to}`) : line
+          })
+          .join('\n')
+        changed = changed || newRaw !== raw
       }
     }
 
-    res.json({ ok: true, updated })
+    // 2) inline #from → #to in body
+    const newBody = body.replace(inlineRe, (_m, pre) => `${pre}#${to}`)
+    if (newBody !== body) changed = true
+
+    if (changed) {
+      const next = (newRaw || raw) + newBody
+      await fsp.writeFile(filePath, next, 'utf-8')
+      updated++
+      scheduleNotesIndexUpdate(relPath)
+    }
+  }
+
+  return { ok: true, updated }
+}
+
+// POST /api/notes-v2/tags/rename — targeted rewrite (carrying notes only)
+notesV2Router.post('/tags/rename', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json(await renameNoteTag(req.body?.from, req.body?.to))
   } catch (err) {
+    if (err instanceof NotesOpError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     next(err)
   }
 })

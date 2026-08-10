@@ -20,7 +20,6 @@ import {
   toggleRoutine, runRoutineNow, getRoutinesStatus, listRoutineActions,
   listRoutineExecutors,
 } from '../../core/routines/routines-core.js'
-import { getConfig } from '../../core/config-manager.js'
 
 // ── Module-level service accessor (for agent tools + the shared core) ──
 
@@ -91,25 +90,14 @@ export function createCronRouter(cronServiceArg: CronService): Router {
   // POST /api/routines/draft — natural language → populated routine draft
   router.post('/draft', async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const text = typeof req.body?.text === 'string' ? req.body.text : ''
-      if (!text.trim()) {
-        res.status(400).json({ error: 'text is required' })
-        return
-      }
-      const { draftRoutine } = await import('../../core/routines/draft.js')
-      const config = await getConfig()
-      const { SESSION_MODELS } = await import('../../core/types.js')
-      const result = await draftRoutine(text, {
-        hosts: Object.keys(config.hosts ?? {}),
-        models: SESSION_MODELS.map((m) => m.id),
-      })
-      if (!result.ok) {
-        log.web.warn('routine draft failed', { error: result.error })
-        res.status(422).json({ error: result.error, raw: result.raw })
-        return
-      }
-      res.json({ draft: result.draft })
+      const { draftRoutineFromText } = await import('../../core/routines/routines-core.js')
+      res.json(await draftRoutineFromText(req.body?.text))
     } catch (err) {
+      if (err instanceof SessionControlError) {
+        // Keep the legacy debug field: `raw` (unparseable LLM output) rides extra.
+        res.status(err.statusCode).json({ error: err.message, ...(err.extra ?? {}) })
+        return
+      }
       next(err)
     }
   })

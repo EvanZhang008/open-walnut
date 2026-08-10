@@ -22,6 +22,7 @@ Goal: give `/api/v1` (the frozen, mobile-facing surface) a 1:1 mapping of the in
 - **v1?**: ✅ = exists, ◐ = partial equivalent exists (noted), ✗ = none.
 - **Class**: A local data / B bridge relay / C primary-only / D excluded.
 - **Wave**: 1, 2, 3, or `—` (excluded / already shipped).
+- **Status (2026-08): all three waves are SHIPPED.** A `1`/`2`/`3` in a Wave column now reads as "implemented in that wave"; the sole in-flight exception during Wave 3 was calendar, which was excluded instead (see its section). Final tallies: "Final coverage record" at the bottom.
 
 ---
 
@@ -266,13 +267,15 @@ Replica note: all Wave-1/2 B rows reuse the `session.control` relay pattern (nar
 | GET `/api/commands` + CRUD (5) | command templates | R/W | ✗ | 3 |
 | GET `/api/slash-commands?host=` | composer palette | R | ✗ | 2 (B for remote hosts) |
 
-### calendar.ts (`/api/calendar`) — 7 endpoints — Class C (EventKit = macOS-only; v1 primary-direct, replica 501)
+### calendar.ts (`/api/calendar`) — 7 endpoints — Class D (DECIDED Wave 3: iOS uses native EventKit; excluded from v1)
 
 | Method+Path | Web UI use | R/W | v1? | Wave |
 |---|---|---|---|---|
-| GET `/events`, GET `/sources` | calendar view | R | ✗ | 3 |
-| PUT `/sources/eventkit`, POST `/refresh` | calendar settings | W | ✗ | 3 |
-| PATCH/POST/DELETE `/events*` (3) | event edit | W | ✗ | 3 (note: iOS could use native EventKit instead — decide before building) |
+| GET `/events`, GET `/sources` | calendar view | R | ✗ | — (excluded) |
+| PUT `/sources/eventkit`, POST `/refresh` | calendar settings | W | ✗ | — (excluded) |
+| PATCH/POST/DELETE `/events*` (3) | event edit | W | ✗ | — (excluded) |
+
+Decision (Wave 3, 2026-08): the phone already holds its own system calendar permission and EventKit gives it the SAME calendars natively (read/write, offline, with OS-level UI). Routing calendar traffic Mac-ward through v1 would be a strictly worse copy — an extra network hop, a replica that can never answer (EventKit is macOS-process-local, so every replica response would be 501), and a second write path racing the phone's native one. All 7 endpoints move to the exclusion table; iOS integrates EventKit directly.
 
 ### timeline.ts + heartbeat.ts + dashboard.ts + context-inspector.ts + incidents.ts + bug-report.ts
 
@@ -346,13 +349,37 @@ Theme: everything a user does daily on the console that the phone cannot do toda
 
 Routines/cron (11), config read-only projection (1), usage overview (1 composite), favorites projects (2), projects CRUD + ordering (6), focus tier CRUD (3), task groups + meta/tags + quick-parse (8), files list/resolve + file-content (3), slash-commands palette (1), skills read (2), session controls GET/POST + settings + side-questions (7) + subagent history + workflow + plan (3) + execute-compact (1) + queue RPC→REST (3), notes global/backlinks/links/tags/attachment-delete/folder-delete (7), conversations active pointer + chat stats/clear (3).
 
-### Wave 3 — long tail (~58 endpoints, effort M; most are thin passthroughs)
+### Wave 3 — long tail (SHIPPED 2026-08 — 59 endpoints implemented, calendar's 7 excluded)
 
-Agents CRUD (8), commands (5), skills write + references (6), repositories (4), integrations read (2), calendar (7 — or decide native EventKit on iOS and drop), timeline (4), heartbeat (4), memory telemetry + compact (2), usage detail breakdowns (7), stt vocab (2), chat compact (1), notes list/tags-rename (2), sessions recent/summaries (2), providers read (1), project metadata/summary (3).
+Shipped: agents meta ×3 + detail/create/patch/delete/clone ×5 (8), commands (5), skills write + references (6), repositories (4), integrations read (2), routines NL draft (1 — confirmed a thin core passthrough, one LLM call; replica relays `server.routines.draft`), timeline (4), heartbeat + checklist (4), memory telemetry + compact (2), usage detail breakdowns + pricing (7), config providers read (1), qmd status (1), stt vocab (2), chat compact (1), notes list/tags-rename (2), sessions recent/summaries (2), tasks enriched/sprints (2), files record-dir/recent-dirs (2), project metadata GET/PUT + summary regenerate (3), plus a fix for a latent Wave-2 route-shadowing bug (`/tasks/groups` was swallowed by `GET /tasks/:id`).
 
-### Explicitly excluded (Class D, ~45 endpoints — restated reasons)
+Decisions recorded during implementation:
+- **calendar (7) → excluded** (see the calendar.ts section above — iOS uses native EventKit).
+- **`key_hint` stripped** from `GET /v1/config/providers` — even a last-4 key fragment doesn't belong at the paired-device trust level (test-pinned).
+- **skills scope rule**: v1 writes only the Walnut-managed skills dir; the Claude CLI's own global store is read-only through v1 (`403 forbidden` on update/delete; enable/disable allowed since it only touches Walnut's settings file).
+- **agent writes = 501 on a replica**: agent definitions live in the machine-local config.yaml (never git-synced), so replica writes would silently diverge.
+- **stt vocab `path` field dropped** from the v1 response (absolute host path).
 
-Dev/admin maintenance (`working-dirs/recompile`, notes index ops, qmd download/reindex/rebuild, stt model management, plugin-sources), desktop-only actions (`vscode-uri`, notes `reveal`, audio capture of the Mac), security boundaries (auth key CRUD, device admin/QR mint, config write/test/credential-trace, bug-report bundle), web-client-specific plumbing (browser-logs, client-evidence, ui-prefs), machine-to-machine channels (git-http), developer diagnostics (context inspector, chat triage, incidents forensics), and `dashboard` (phone composes its home from v1 lists — a server aggregate would duplicate the events feed).
+### Explicitly excluded (Class D, ~52 endpoints — restated reasons)
+
+Dev/admin maintenance (`working-dirs/recompile`, notes index ops, qmd download/reindex/rebuild, stt model management, plugin-sources), desktop-only actions (`vscode-uri`, notes `reveal`, audio capture of the Mac), **calendar (7 — iOS uses native EventKit; see the calendar.ts section)**, security boundaries (auth key CRUD, device admin/QR mint, config write/test/credential-trace, bug-report bundle), web-client-specific plumbing (browser-logs, client-evidence, ui-prefs), machine-to-machine channels (git-http), developer diagnostics (context inspector, chat triage, incidents forensics), and `dashboard` (phone composes its home from v1 lists — a server aggregate would duplicate the events feed).
+
+---
+
+## Final coverage record (all three waves shipped, 2026-08)
+
+| Bucket | Endpoints | Notes |
+|---|---|---|
+| Internal console surface (baseline) | 267 | 46 route files, enumerated in the gap matrix |
+| Already v1 before the plan | 29 | chat, task R/W, session talk/launch/control, notes CRUD, events |
+| Wave 1 shipped | ~40 | task edits/batch, focus, session control + rich history, butler manage, search, memory, notifications, iOS leak formalization |
+| Wave 2 shipped | ~52 | routines, config read, usage overview, projects + ordering + favorites, focus tiers, groups, files, slash-commands, skills read, session controls/side-questions/queue, notes extras, conversations active + chat stats/clear |
+| Wave 3 shipped | 59 | this wave — see above |
+| **Total v1 surface** | **~180 endpoints** | ~67% of the internal surface, 100% of the phone-meaningful surface |
+| Excluded (Class D, deliberate) | ~52 | dangerous / desktop-only / web-plumbing / calendar→EventKit — every row states why |
+| Remaining (unplanned) | ~35 | rows the matrix maps to an existing v1 equivalent (◐/✅ dispositions) or WS-only plumbing; no open TODO rows remain |
+
+Every Wave-3 endpoint's replica class is documented per-row in `docs/reference/api-v1.md` (the contract doc); the plan is now a historical record.
 
 ---
 

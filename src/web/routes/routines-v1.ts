@@ -14,6 +14,7 @@
  *   DELETE /routines/:id                 → 204
  *   POST   /routines/:id/toggle          → { job }
  *   POST   /routines/:id/run             → { result }
+ *   POST   /routines/draft { text }      → { draft } (Wave 3 — one LLM call)
  *
  * Cloud companion (REPLICA): Class B — the PRIMARY's cron engine is the
  * single writer of cron-jobs.json (a replica-local write would recreate the
@@ -22,8 +23,10 @@
  * Failure ladder identical to the Wave-1 relays (needs_upgrade /
  * bridge_offline / verbatim error passthrough).
  *
- * The NL draft route (POST /api/routines/draft) is deliberately NOT here —
- * it is an LLM call classified Wave 3.
+ * The NL draft (Wave 3) is one LLM call on the box holding the model
+ * credentials: primary answers directly; a REPLICA relays
+ * (`server.routines.draft`) so the draft uses the same model/config the
+ * created routine will run under.
  *
  * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
  */
@@ -126,6 +129,28 @@ routinesV1Router.get('/routines/executors', async (_req: Request, res: Response,
     }
     const { listRoutineExecutors } = await import('../../core/routines/routines-core.js')
     await runLocal(res, next, 200, () => listRoutineExecutors())
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/v1/routines/draft { text } — natural language → populated routine
+// draft (one LLM call; the form is prefilled, never auto-created). Runs where
+// the model credentials live: primary answers directly, a REPLICA relays.
+// A failed draft is 422 — the client degrades to the manual form.
+routinesV1Router.post('/routines/draft', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const text = typeof req.body?.text === 'string' ? req.body.text : ''
+    if (!text.trim()) {
+      sendError(res, 400, 'bad_request', 'text is required')
+      return
+    }
+    if (CLOUD_MODE) {
+      await relayControlAction(res, 'server.routines.draft', SERVER_RELAY_SID, { text }, 200)
+      return
+    }
+    const { draftRoutineFromText } = await import('../../core/routines/routines-core.js')
+    await runLocal(res, next, 200, () => draftRoutineFromText(text))
   } catch (err) {
     next(err)
   }

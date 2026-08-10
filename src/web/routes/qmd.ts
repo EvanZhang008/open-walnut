@@ -161,18 +161,22 @@ function getModelInfo(modelUri: string): {
   }
 }
 
+/** Build the status payload (shared by GET /api/qmd/status and /api/v1/qmd/status). */
+export async function buildQmdStatusPayload(): Promise<Record<string, unknown>> {
+  const model = getModelInfo(await resolveConfiguredQmdModel())
+  return {
+    model,
+    stores: currentStoreStats,
+    status: currentStatus,
+    error: currentError,
+    progress: currentStatus === 'indexing' ? currentProgress : null,
+  }
+}
+
 // GET /api/qmd/status
 qmdRouter.get('/status', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const model = getModelInfo(await resolveConfiguredQmdModel())
-
-    res.json({
-      model,
-      stores: currentStoreStats,
-      status: currentStatus,
-      error: currentError,
-      progress: currentStatus === 'indexing' ? currentProgress : null,
-    })
+    res.json(await buildQmdStatusPayload())
   } catch (err) {
     next(err)
   }

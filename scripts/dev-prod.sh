@@ -174,12 +174,56 @@ if [[ -n "$existing_pids" ]]; then
     fi
     sleep 0.5
   done
+  # Port released is NOT proof the process died — verify each PID, and SIGKILL
+  # any survivor. A server that ignores SIGTERM keeps its health monitor, cron,
+  # git auto-commit and plugin polling running forever (2026-08-09: 62 such
+  # zombies, peak 43 concurrent, load average 94 → macOS killed the user's GUI
+  # apps). The server-side fix makes SIGTERM always fatal; this is the belt to
+  # that suspenders, and also covers OLD binaries still on disk.
+  for zpid in $existing_pids; do
+    kill -0 "$zpid" 2>/dev/null || continue
+    echo "Server PID $zpid survived SIGTERM — sending SIGKILL." >&2
+    kill -9 "$zpid" 2>/dev/null || true
+  done
 fi
 
 if lsof -tiTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   echo "Existing server did not stop; refusing to start a competing process." >&2
   exit 1
 fi
+
+# ── Zombie sweep: servers that never reached listen() ───────────────────────
+# The port check above can only see a server that BOUND the port. A server
+# SIGTERMed mid-boot (before listen()) held no port, so it stayed invisible to
+# every guard while still running its background loops — that is exactly how the
+# 2026-08-09 pile-up went unnoticed for hours. Match this repo's own server
+# command line, exclude ourselves and any --ephemeral/test server, and reap.
+# macOS ships bash 3.2 — no `mapfile`/`readarray`. Plain word-splitting on a
+# newline-separated pgrep result is the portable form.
+self_pid=$$
+stray_pids="$(pgrep -f 'dist/cli\.js web' 2>/dev/null || true)"
+for spid in $stray_pids; do
+  [[ -n "$spid" && "$spid" != "$self_pid" ]] || continue
+  kill -0 "$spid" 2>/dev/null || continue
+  cmd="$(ps -o command= -p "$spid" 2>/dev/null || true)"
+  # Only OUR repo's production server; never an ephemeral/test instance.
+  [[ "$cmd" == *"$REPO_ROOT/dist/cli.js"* ]] || continue
+  # `[[ … ]] && continue` would return 1 when it does NOT match, and under
+  # `set -e` that aborts the deploy — the 2026-07-25 lesson about guards that
+  # kill the script they protect. Use an explicit if/continue.
+  if [[ "$cmd" == *"--_ephemeral-child"* || "$cmd" == *"--ephemeral"* ]]; then
+    continue
+  fi
+  echo "Reaping stray Walnut server PID $spid (never bound :$PORT): $cmd" >&2
+  kill -15 "$spid" 2>/dev/null || true
+  for _ in {1..6}; do
+    kill -0 "$spid" 2>/dev/null || break
+    sleep 0.5
+  done
+  if kill -0 "$spid" 2>/dev/null; then
+    kill -9 "$spid" 2>/dev/null || true
+  fi
+done
 
 pid=""
 if (( use_launchd )); then

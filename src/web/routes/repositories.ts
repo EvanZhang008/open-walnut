@@ -1,5 +1,9 @@
 /**
  * Repositories routes — CRUD for repository YAML profiles.
+ *
+ * The operation functions (listRepositories / readRepository / writeRepository /
+ * deleteRepository) are exported and shared with the /api/v1 mobile router
+ * (library-v1.ts) — one implementation, two thin route shells.
  */
 
 import fs from 'node:fs'
@@ -12,120 +16,144 @@ import { log } from '../../logging/index.js'
 const MAX_REPO_SIZE = 100_000 // 100 KB
 const SLUG_RE = /^[a-z0-9][a-z0-9._-]*$/i
 
-/**
- * Validate a repo slug and send 400 if invalid.
- * Applied to ALL routes (GET/POST/DELETE) — Express decodes %2F in params,
- * so without this, path traversal via e.g. /api/repositories/..%2F..%2Fetc is possible.
- */
-function validateSlug(name: string | string[], res: Response): name is string {
-  if (typeof name !== 'string' || !SLUG_RE.test(name)) {
-    res.status(400).json({ error: 'Invalid repository name. Use alphanumeric, hyphens, dots, underscores.' })
-    return false
+/** Typed error for repository ops so both route shells map status codes identically. */
+export class RepositoryOpError extends Error {
+  constructor(message: string, public statusCode: number) {
+    super(message)
+    this.name = 'RepositoryOpError'
   }
-  return true
+}
+
+/**
+ * Validate a repo slug (throws 400). Applied to ALL ops — Express decodes %2F
+ * in params, so without this, path traversal via e.g. ..%2F..%2Fetc is possible.
+ */
+function requireSlug(name: unknown): string {
+  if (typeof name !== 'string' || !SLUG_RE.test(name)) {
+    throw new RepositoryOpError('Invalid repository name. Use alphanumeric, hyphens, dots, underscores.', 400)
+  }
+  return name
+}
+
+export interface RepositoryListItem {
+  slug: string
+  name: string
+  description: string
+  tech_stack: string
+  hosts: Record<string, { path?: string; ssh_host?: string }>
+  modified: string
+  size: number
+}
+
+/** List all repository profiles (parsed YAML headers, no full content). */
+export async function listRepositories(): Promise<{ repositories: RepositoryListItem[] }> {
+  await fsp.mkdir(REPOSITORIES_DIR, { recursive: true })
+  const files = (await fsp.readdir(REPOSITORIES_DIR))
+    .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
+    .sort()
+
+  const repositories = await Promise.all(files.map(async (f) => {
+    const slug = f.replace(/\.ya?ml$/, '')
+    const fullPath = path.join(REPOSITORIES_DIR, f)
+    const content = await fsp.readFile(fullPath, 'utf-8')
+    const stat = await fsp.stat(fullPath)
+    const header = parseYamlHeader(content)
+    return {
+      slug,
+      name: header.name || slug,
+      description: header.description || '',
+      tech_stack: header.tech_stack || '',
+      hosts: header.hosts,
+      modified: stat.mtime.toISOString(),
+      size: stat.size,
+    }
+  }))
+
+  return { repositories }
+}
+
+/** Read one repository profile's full YAML content. */
+export async function readRepository(name: unknown): Promise<{ slug: string; content: string; modified: string }> {
+  const slug = requireSlug(name)
+  const filePath = path.join(REPOSITORIES_DIR, `${slug}.yaml`)
+  try {
+    const content = await fsp.readFile(filePath, 'utf-8')
+    const stat = await fsp.stat(filePath)
+    return { slug, content, modified: stat.mtime.toISOString() }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new RepositoryOpError(`Repository "${slug}" not found`, 404)
+    }
+    throw err
+  }
+}
+
+/** Create or update a repository profile. */
+export async function writeRepository(name: unknown, content: unknown): Promise<{ ok: true; status: 'created' | 'updated' }> {
+  if (typeof content !== 'string') {
+    throw new RepositoryOpError('content (string) is required', 400)
+  }
+  if (content.length > MAX_REPO_SIZE) {
+    throw new RepositoryOpError(`Content too large (max ${MAX_REPO_SIZE} bytes)`, 413)
+  }
+  const slug = requireSlug(name)
+  await fsp.mkdir(REPOSITORIES_DIR, { recursive: true })
+  const filePath = path.join(REPOSITORIES_DIR, `${slug}.yaml`)
+  const existed = fs.existsSync(filePath)
+  await fsp.writeFile(filePath, content, 'utf-8')
+  log.memory.info(`Repository ${existed ? 'updated' : 'created'} via UI`, { name: slug })
+  return { ok: true, status: existed ? 'updated' : 'created' }
+}
+
+/** Delete a repository profile. */
+export async function deleteRepository(name: unknown): Promise<{ ok: true }> {
+  const slug = requireSlug(name)
+  const filePath = path.join(REPOSITORIES_DIR, `${slug}.yaml`)
+  try {
+    await fsp.unlink(filePath)
+    log.memory.info('Repository deleted via UI', { name: slug })
+    return { ok: true }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new RepositoryOpError(`Repository "${slug}" not found`, 404)
+    }
+    throw err
+  }
 }
 
 export const repositoriesRouter = Router()
 
-// GET /api/repositories — list all repos
-repositoriesRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
+/** Route shell: run an op, map RepositoryOpError to the legacy { error } shape. */
+async function run(res: Response, next: NextFunction, fn: () => Promise<unknown>): Promise<void> {
   try {
-    await fsp.mkdir(REPOSITORIES_DIR, { recursive: true })
-    const files = (await fsp.readdir(REPOSITORIES_DIR))
-      .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
-      .sort()
-
-    const repos = await Promise.all(files.map(async (f) => {
-      const slug = f.replace(/\.ya?ml$/, '')
-      const fullPath = path.join(REPOSITORIES_DIR, f)
-      const content = await fsp.readFile(fullPath, 'utf-8')
-      const stat = await fsp.stat(fullPath)
-      const header = parseYamlHeader(content)
-      return {
-        slug,
-        name: header.name || slug,
-        description: header.description || '',
-        tech_stack: header.tech_stack || '',
-        hosts: header.hosts,
-        modified: stat.mtime.toISOString(),
-        size: stat.size,
-      }
-    }))
-
-    res.json({ repositories: repos })
+    res.json(await fn())
   } catch (err) {
+    if (err instanceof RepositoryOpError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
     next(err)
   }
+}
+
+// GET /api/repositories — list all repos
+repositoriesRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
+  await run(res, next, () => listRepositories())
 })
 
 // GET /api/repositories/:name — read single repo
 repositoriesRouter.get('/:name', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { name } = req.params
-    if (!validateSlug(name, res)) return
-    const filePath = path.join(REPOSITORIES_DIR, `${name}.yaml`)
-    try {
-      const content = await fsp.readFile(filePath, 'utf-8')
-      const stat = await fsp.stat(filePath)
-      res.json({ slug: name, content, modified: stat.mtime.toISOString() })
-    } catch (err: any) {
-      if (err.code === 'ENOENT') {
-        res.status(404).json({ error: `Repository "${name}" not found` })
-        return
-      }
-      throw err
-    }
-  } catch (err) {
-    next(err)
-  }
+  await run(res, next, () => readRepository(req.params.name))
 })
 
 // POST /api/repositories/:name — create or update repo
 repositoriesRouter.post('/:name', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { name } = req.params
-    const { content } = req.body
-    if (typeof content !== 'string') {
-      res.status(400).json({ error: 'content (string) is required' })
-      return
-    }
-    if (content.length > MAX_REPO_SIZE) {
-      res.status(413).json({ error: `Content too large (max ${MAX_REPO_SIZE} bytes)` })
-      return
-    }
-    if (!validateSlug(name, res)) return
-
-    await fsp.mkdir(REPOSITORIES_DIR, { recursive: true })
-    const filePath = path.join(REPOSITORIES_DIR, `${name}.yaml`)
-    const existed = fs.existsSync(filePath)
-    await fsp.writeFile(filePath, content, 'utf-8')
-    log.memory.info(`Repository ${existed ? 'updated' : 'created'} via UI`, { name })
-    res.json({ ok: true, status: existed ? 'updated' : 'created' })
-  } catch (err) {
-    next(err)
-  }
+  await run(res, next, () => writeRepository(req.params.name, req.body?.content))
 })
 
 // DELETE /api/repositories/:name — delete repo
 repositoriesRouter.delete('/:name', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { name } = req.params
-    if (!validateSlug(name, res)) return
-    const filePath = path.join(REPOSITORIES_DIR, `${name}.yaml`)
-    try {
-      await fsp.unlink(filePath)
-      log.memory.info('Repository deleted via UI', { name })
-      res.json({ ok: true })
-    } catch (err: any) {
-      if (err.code === 'ENOENT') {
-        res.status(404).json({ error: `Repository "${name}" not found` })
-        return
-      }
-      throw err
-    }
-  } catch (err) {
-    next(err)
-  }
+  await run(res, next, () => deleteRepository(req.params.name))
 })
 
 /**

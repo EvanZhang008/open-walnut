@@ -5,7 +5,7 @@
 import express, { Router, type Request, type Response, type NextFunction } from 'express';
 import { unlink, stat, readFile, appendFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { WALNUT_HOME } from '../../constants.js';
 import { getConfig, updateConfig } from '../../core/config-manager.js';
 import { transcribeAudio, createEngine, getOrCreateEngine, type SttEngine, type SttResult } from '../../core/stt/index.js';
 import { saveRecordingAudio, writeRecordingResult, listRecordings, readRecordingAudio } from '../../core/stt/recordings.js';
@@ -169,7 +169,41 @@ sttRouter.post('/recordings/:id/transcribe', express.json(), async (req: Request
 });
 
 // ── Vocabulary management ──
-const VOCAB_PATH = join(homedir(), '.open-walnut', 'stt-vocab.txt');
+// Derived from WALNUT_HOME (NOT a hardcoded homedir join) so ephemeral
+// servers and tests with a redirected data dir never touch the real file.
+const VOCAB_PATH = join(WALNUT_HOME, 'stt-vocab.txt');
+
+/** Read the custom vocabulary file. Shared by /api/stt/vocab and /api/v1. */
+export async function readSttVocab(): Promise<{ words: string[]; path: string }> {
+  let raw = '';
+  try { raw = await readFile(VOCAB_PATH, 'utf-8'); } catch { /* file doesn't exist yet */ }
+  const words = raw.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+  return { words, path: VOCAB_PATH };
+}
+
+/**
+ * Add one word to the vocabulary file (case-insensitive dedup). Shared by
+ * /api/stt/vocab and /api/v1. Returns added:false when already present.
+ */
+export async function addSttVocabWord(word: string): Promise<{ added: boolean; word: string; reason?: string }> {
+  const trimmed = word.trim();
+
+  // Read existing file
+  let raw = '';
+  try { raw = await readFile(VOCAB_PATH, 'utf-8'); } catch { /* file doesn't exist yet */ }
+
+  // Check for duplicate
+  const existing = raw.split('\n').map(l => l.trim().toLowerCase());
+  if (existing.includes(trimmed.toLowerCase())) {
+    return { added: false, word: trimmed, reason: 'already exists' };
+  }
+
+  // Append (ensure newline before)
+  const prefix = raw.endsWith('\n') || raw === '' ? '' : '\n';
+  await appendFile(VOCAB_PATH, `${prefix}${trimmed}\n`);
+  log.stt.info(`Added vocab word: "${trimmed}"`);
+  return { added: true, word: trimmed };
+}
 
 /**
  * GET /api/stt/vocab
@@ -177,10 +211,7 @@ const VOCAB_PATH = join(homedir(), '.open-walnut', 'stt-vocab.txt');
  */
 sttRouter.get('/vocab', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    let raw = '';
-    try { raw = await readFile(VOCAB_PATH, 'utf-8'); } catch { /* file doesn't exist yet */ }
-    const words = raw.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
-    res.json({ words, path: VOCAB_PATH });
+    res.json(await readSttVocab());
   } catch (err) {
     next(err);
   }
@@ -198,24 +229,7 @@ sttRouter.post('/vocab', express.json(), async (req: Request, res: Response, nex
       res.status(400).json({ error: 'Missing "word" field' });
       return;
     }
-    const trimmed = word.trim();
-
-    // Read existing file
-    let raw = '';
-    try { raw = await readFile(VOCAB_PATH, 'utf-8'); } catch { /* file doesn't exist yet */ }
-
-    // Check for duplicate
-    const existing = raw.split('\n').map(l => l.trim().toLowerCase());
-    if (existing.includes(trimmed.toLowerCase())) {
-      res.json({ added: false, word: trimmed, reason: 'already exists' });
-      return;
-    }
-
-    // Append (ensure newline before)
-    const prefix = raw.endsWith('\n') || raw === '' ? '' : '\n';
-    await appendFile(VOCAB_PATH, `${prefix}${trimmed}\n`);
-    log.stt.info(`Added vocab word: "${trimmed}"`);
-    res.json({ added: true, word: trimmed });
+    res.json(await addSttVocabWord(word));
   } catch (err) {
     next(err);
   }

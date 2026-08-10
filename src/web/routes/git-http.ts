@@ -31,6 +31,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { Router, type Request, type Response, type NextFunction } from 'express'
+import { isSafeGroupPid } from '../../core/process-group-kill.js'
 import { validateBearerCredential } from '../middleware/auth.js'
 import { recordAuthFailure, isAuthRateLimited } from '../middleware/auth-rate-limit.js'
 import { log } from '../../logging/index.js'
@@ -178,7 +179,7 @@ function runHttpBackend(req: Request, res: Response, pathInfo: string): void {
 
   /** SIGKILL the backend's whole process group (falls back to the child alone). */
   const killTree = (): void => {
-    if (child.pid === undefined) return
+    if (!isSafeGroupPid(child.pid)) return
     try { process.kill(-child.pid, 'SIGKILL') } catch { child.kill('SIGKILL') }
   }
 

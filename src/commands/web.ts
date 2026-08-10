@@ -68,18 +68,32 @@ export async function runWeb(options: {
     )
   }
 
-  const { startServer } = await import('../web/server.js')
+  const { startServer, stopServer, armGracefulSignalExit } = await import('../web/server.js')
 
   const port = options.port ? parseInt(options.port, 10) : undefined
-  await startServer({ port, dev: !!options.dev })
 
-  // Keep the process alive — the server runs until SIGINT/SIGTERM
+  // Keep the process alive — the server runs until SIGINT/SIGTERM.
+  //
+  // ⚠️ Registered BEFORE `await startServer()`, and armed only once registered.
+  // startServer() installs its own always-fatal SIGTERM handler early in boot
+  // (see fatalSignal() in web/server.ts): a `kill -15` arriving mid-boot — which
+  // every dev-prod.sh deploy sends to the outgoing listener — must kill the
+  // process, not be logged and ignored. Registering our graceful handler after
+  // startServer() resolved left a multi-second window where the ONLY listener was
+  // a log-only one, which in Node overrides the OS default and made the booting
+  // server immune to SIGTERM: 62 unkillable servers accumulated on 2026-08-09
+  // (peak 43 concurrent) until the Mac starved and macOS killed the user's GUI
+  // apps. Handler first, then arm, then boot.
+  let shuttingDown = false
   const shutdown = async () => {
+    if (shuttingDown) return // a second signal must not race a teardown in flight
+    shuttingDown = true
     // Safety timeout: force-exit if stopServer hangs (e.g. audio save stuck)
     const bail = setTimeout(() => process.exit(1), 4000)
     try {
-      const { stopServer } = await import('../web/server.js')
       await stopServer()
+    } catch {
+      // A failed teardown must still terminate — never leave an immune process.
     } finally {
       clearTimeout(bail)
     }
@@ -88,6 +102,10 @@ export async function runWeb(options: {
 
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
+  process.on('SIGHUP', shutdown)
+  armGracefulSignalExit()
+
+  await startServer({ port, dev: !!options.dev })
 }
 
 // ── Ephemeral Launcher (parent — exits quickly) ──────────────────────────

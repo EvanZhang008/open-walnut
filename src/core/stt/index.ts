@@ -6,7 +6,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { WALNUT_HOME } from '../../constants.js';
 import type { Config } from '../types.js';
 import type { SttEngine, SttRequest, SttResult } from './types.js';
 import { resolveSecret } from '../../agent/providers/secret.js';
@@ -101,9 +101,11 @@ export function getOrCreateEngine(config: Config): SttEngine | null {
 }
 
 // ── Vocabulary file ──
-// ~/.open-walnut/stt-vocab.txt — one word per line, # comments.
+// <data dir>/stt-vocab.txt — one word per line, # comments.
 // Read on each transcription so edits take effect immediately.
-const VOCAB_PATH = join(homedir(), '.open-walnut', 'stt-vocab.txt');
+// Derived from WALNUT_HOME (NOT a hardcoded homedir join) so ephemeral
+// servers and tests with a redirected data dir never touch the real file.
+const VOCAB_PATH = join(WALNUT_HOME, 'stt-vocab.txt');
 
 async function loadVocabPrompt(): Promise<string> {
   try {

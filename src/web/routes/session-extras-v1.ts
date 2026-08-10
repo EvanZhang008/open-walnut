@@ -7,6 +7,8 @@
  * core/sessions/session-extras.ts.
  *
  *   GET    /sessions/list-dirs?prefix&host&depth → { dirs, parent, exists }
+ *   GET    /sessions/recent?limit=10             → { sessions, syncedAt } (Wave 3)
+ *   GET    /sessions/summaries?limit=10          → { summaries }          (Wave 3)
  *   GET    /sessions/:id/controls               → { engine, controls }
  *   POST   /sessions/:id/controls { id, value } → { engine, controls }
  *   GET    /sessions/:id/settings?details=1     → { live, requested, applied, effective, details? }
@@ -94,6 +96,48 @@ sessionExtrasV1Router.get('/sessions/list-dirs', async (req: Request, res: Respo
     }
     const { listSessionDirs } = await import('../../core/sessions/session-extras.js')
     await runLocal(res, next, 200, () => listSessionDirs(input.prefix, host, input.depth))
+  } catch (err) {
+    next(err)
+  }
+})
+
+// ── Recent sessions + summaries (Wave 3) ─────────────────────────────────────
+
+// GET /api/v1/sessions/recent?limit=10 (Wave 3) — most-recently-active
+// sessions in the SAME slim projection shape as the frozen GET /v1/sessions
+// (one v1 session shape everywhere; the web's raw-record shape stays
+// internal). Works on both boxes: the primary refreshes the projection
+// inline, a REPLICA serves the git-synced file. Registered BEFORE the :id
+// routes (and forwarded by session-lifecycle's RESERVED_SESSION_SUBPATHS).
+sessionExtrasV1Router.get('/sessions/recent', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit), 10) || 10, 1), 100)
+    const { readSessionProjection, exportSessionProjection } = await import('../../core/session-projection.js')
+    if (!CLOUD_MODE) {
+      await exportSessionProjection().catch(() => { /* serve last good file below */ })
+    }
+    const projection = await readSessionProjection()
+    if (!projection) {
+      sendError(res, 503, 'unavailable', 'Session projection not synced yet')
+      return
+    }
+    const sessions = [...projection.sessions]
+      .sort((a, b) => (b.last_active_at ?? '').localeCompare(a.last_active_at ?? ''))
+      .slice(0, limit)
+    res.json({ sessions, syncedAt: projection.exportedAt })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/v1/sessions/summaries?limit=10 (Wave 3) — parsed session summary
+// markdown files. Class A: the summaries dir (memory/sessions) rides git-sync,
+// so both boxes serve their local copy.
+sessionExtrasV1Router.get('/sessions/summaries', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit), 10) || 10, 1), 100)
+    const { getSessionSummaries } = await import('../../core/session-tracker.js')
+    res.json({ summaries: await getSessionSummaries(limit) })
   } catch (err) {
     next(err)
   }

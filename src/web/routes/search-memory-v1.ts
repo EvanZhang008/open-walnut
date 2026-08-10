@@ -9,6 +9,8 @@
  *   GET  /memory?category=            → { memories }
  *   GET  /memory/global | /memory/user       → { memory } | 404
  *   PUT  /memory/global | /memory/user { content } → { ok, updatedAt }
+ *   GET  /memory/telemetry            → { stores, note }          (Wave 3, A)
+ *   POST /memory/daily-log/compact    → compaction result         (Wave 3, A)
  *   GET  /notifications               → { feed, unreadCount }    (B: relay on replica)
  *   POST /notifications/mark-read { ids? }        → { unreadCount }
  *   POST /notifications/dismiss { ids?, dedupKeys? } → { unreadCount, removed }
@@ -98,6 +100,38 @@ searchMemoryV1Router.get('/memory/browse', async (_req: Request, res: Response, 
   try {
     const { buildMemoryBrowseTree } = await import('./memory.js')
     res.json({ tree: await buildMemoryBrowseTree() })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/v1/memory/telemetry (Wave 3) — write-path evidence per memory entry
+// (age, revision churn, provenance). A: reads git-synced files; the sidecar
+// bootstrap side effect is confined to the answering box's telemetry file.
+searchMemoryV1Router.get('/memory/telemetry', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { buildMemoryTelemetryPayload } = await import('./memory.js')
+    res.json(await buildMemoryTelemetryPayload())
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/v1/memory/daily-log/compact { date?, threshold?, summarizer } —
+// manual daily-log compaction with the extractive (no-LLM) summarizer.
+// Wave 3, Class A (daily logs ride git-sync).
+searchMemoryV1Router.post('/memory/daily-log/compact', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { compactDailyLogManual, MemoryOpError } = await import('./memory.js')
+    try {
+      res.json(await compactDailyLogManual(req.body ?? {}))
+    } catch (err) {
+      if (err instanceof MemoryOpError) {
+        sendError(res, err.statusCode, err.statusCode === 404 ? 'not_found' : 'bad_request', err.message, err.extra)
+        return
+      }
+      throw err
+    }
   } catch (err) {
     next(err)
   }

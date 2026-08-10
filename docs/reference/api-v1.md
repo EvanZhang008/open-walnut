@@ -158,7 +158,8 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | DELETE | `/api/v1/sessions/:id/queue/:messageId` | Delete a queued message (cloud relays) |
 | GET | `/api/v1/files/list?path=&host=` | One directory level of a session file tree (cloud relays) |
 | GET | `/api/v1/files/resolve-path?rel=&cwd=&host=` | Resolve a transcript-mentioned path (cloud relays) |
-| GET | `/api/v1/file-content?path=&host=` | FileViewer text payload (REPLICA: local safe roots only; `host=` → 501) |
+| GET | `/api/v1/file-content?path=&host=` | FileViewer text payload + `contentHash` (REPLICA: local safe roots only; `host=` → 501) |
+| PUT | `/api/v1/file-content` | Save a file edit; optimistic lock via `expectedHash` → 409 (REPLICA: 403/501) |
 | GET | `/api/v1/config` | Read-only allowlist config projection + box diagnostics |
 | GET | `/api/v1/usage/overview` | Usage aggregates under one filter (501 on REPLICA) |
 | GET | `/api/v1/slash-commands?cwd=&host=&fresh=1` | Composer slash-command palette (cloud relays) |
@@ -174,6 +175,55 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | PUT | `/api/v1/conversations/active` | Switch the butler's active conversation pointer |
 | GET | `/api/v1/chat/stats` | Conversation size stats (messages + token estimate) |
 | POST | `/api/v1/chat/clear` | Clear a butler conversation |
+| POST | `/api/v1/chat/compact` | Fire-and-forget background compaction |
+| GET | `/api/v1/agents/meta/tools\|skills\|models` | Agent-editor dropdown catalogs |
+| GET | `/api/v1/agents/:id` | One agent definition (full editor payload) |
+| POST | `/api/v1/agents` | Create a config agent (501 on REPLICA) |
+| PATCH | `/api/v1/agents/:id` | Edit a config agent (501 on REPLICA) |
+| DELETE | `/api/v1/agents/:id` | Delete a config agent (501 on REPLICA) |
+| POST | `/api/v1/agents/:id/clone` | Clone any agent as a config agent (501 on REPLICA) |
+| GET | `/api/v1/commands` | Command templates (user + builtin) |
+| GET | `/api/v1/commands/:name` | One command with content |
+| POST | `/api/v1/commands` | Create a user command |
+| PUT | `/api/v1/commands/:name` | Edit a user command (builtins → 403) |
+| DELETE | `/api/v1/commands/:name` | Delete a user command (builtins → 403) |
+| POST | `/api/v1/skills` | Create a skill in the Walnut-managed dir |
+| PUT | `/api/v1/skills/:dirName` | Rewrite SKILL.md (CLI-store skills → 403) |
+| PATCH | `/api/v1/skills/:dirName` | Enable/disable a skill (any source) |
+| DELETE | `/api/v1/skills/:dirName` | Delete a skill dir (CLI-store skills → 403) |
+| GET | `/api/v1/skills/:dirName/references` | Reference files of a skill |
+| GET | `/api/v1/skills/:dirName/references/:file` | One reference file's content |
+| GET | `/api/v1/repositories` | Repository YAML profiles (parsed headers) |
+| GET | `/api/v1/repositories/:name` | One profile's full YAML |
+| POST | `/api/v1/repositories/:name` | Create/update a profile |
+| DELETE | `/api/v1/repositories/:name` | Delete a profile |
+| POST | `/api/v1/routines/draft` | NL → populated routine draft, one LLM call (cloud relays) |
+| GET | `/api/v1/tasks/enriched` | Full task rows + computed fields (overdue) |
+| GET | `/api/v1/tasks/meta/sprints` | Sprint names with task counts |
+| GET | `/api/v1/sessions/recent?limit=` | Most-recent sessions, v1 projection shape |
+| GET | `/api/v1/sessions/summaries?limit=` | Parsed session summary markdown files |
+| GET | `/api/v1/notes/list` | Flat note list with ids ([[ autocomplete) |
+| POST | `/api/v1/notes/tags/rename` | Rename a tag across carrying notes |
+| GET | `/api/v1/memory/telemetry` | Memory-entry write-path evidence |
+| POST | `/api/v1/memory/daily-log/compact` | Manual extractive daily-log compaction |
+| GET/POST | `/api/v1/stt/vocab` | Read / add custom STT vocabulary words |
+| POST | `/api/v1/files/record-dir` | Record an "@"-picker folder |
+| GET | `/api/v1/files/recent-dirs` | Union of session + "@"-picker recents |
+| GET | `/api/v1/usage/summary\|daily\|by-source\|by-model\|by-agent\|recent\|pricing` | Usage detail breakdowns (501 on REPLICA; pricing works everywhere) |
+| GET | `/api/v1/config/providers` | Provider readiness, key hints stripped |
+| GET | `/api/v1/qmd/status` | Semantic search index health (501 on REPLICA) |
+| GET | `/api/v1/integrations` | Registered plugin display metadata |
+| GET | `/api/v1/integrations/settings` | Plugin settings metadata, secrets masked |
+| GET | `/api/v1/timeline?date=` | Life Tracker day timeline (501 on REPLICA) |
+| GET | `/api/v1/timeline/dates` | Dates with capture data (501 on REPLICA) |
+| GET | `/api/v1/timeline/images/:date/:file` | Thumbnail JPG (501 on REPLICA) |
+| POST | `/api/v1/timeline/toggle` | Enable/disable the Life Tracker job (501 on REPLICA) |
+| GET | `/api/v1/heartbeat` | Heartbeat runner status (501 on REPLICA) |
+| POST | `/api/v1/heartbeat/trigger` | Manual heartbeat, debounced (501 on REPLICA) |
+| GET/PUT | `/api/v1/heartbeat/checklist` | Read/write HEARTBEAT.md |
+| GET | `/api/v1/projects/:name/metadata` | Project detail-pane payload |
+| PUT | `/api/v1/projects/:name/metadata` | Merge project settings (501 on REPLICA) |
+| POST | `/api/v1/projects/:name/summary/regenerate` | Rebuild the AI project summary (501 on REPLICA) |
 
 ### GET /api/v1/status
 
@@ -331,11 +381,15 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   `{ "tasks": [ProjectedTask], "syncedAt": "<ISO>" }`
 - `ProjectedTask`: `{ id, title, status, phase, priority, project,
   due_date?, start_date?, created_at, updated_at, completed_at?, starred?,
-  pinned?, tags?, summary? }` — `summary` is truncated to ~500 chars.
+  pinned?, unread?, tags?, summary? }` — `summary` is truncated to ~500 chars.
   `category` was removed in projection v2 (2026-08); `project` is the single
   grouping layer (`""` = Inbox).
   `start_date` (added 2026-07) is the "when to begin" time that defers a task
   out of the web Now view; additive and optional, so older clients ignore it.
+  `unread` (added 2026-08-09) is the read/unread marker — present and `true` only
+  when the agent produced output the human hasn't opened; omitted otherwise.
+  Additive and optional. `PATCH /api/v1/tasks/:id` accepts it (and the retired
+  `needs_attention` spelling) to mark a task read from the phone.
 - Scope: all open tasks + tasks completed in the last 14 days (older
   completions are excluded from the projection).
 - Provenance: `syncedAt` is when the primary box exported the snapshot. On the
@@ -928,23 +982,44 @@ traversal (`..`) rejected, absolute paths required, shell metacharacters
 rejected, 4096-char cap.
 
 - `GET /api/v1/files/list?path=/abs/dir&host=&showHidden=1` →
-  `{ "path", "selectedFile"?, "entries": [ { name, path, type: "dir"|"file",
+  `{ "path", "selectedFile"?, "entries": [ { name, type: "dir"|"file",
     size?, hasChildren? } ] }` — one directory level (lazy tree), dirs before
-  files. REPLICA: relays as the box-level `server.files.list` action
-  (names-only metadata).
+  files. Entries carry `name` only (no `path` field) — join with the response's
+  top-level `path` to build absolute child paths. REPLICA: relays as the
+  box-level `server.files.list` action (names-only metadata).
 - `GET /api/v1/files/resolve-path?rel=&cwd=&host=` → `{ "path", "resolved" }`
   — resolves a transcript-mentioned (possibly package-relative) path against
   the session cwd; unresolvable → `resolved: false` with the cwd-joined
   fallback. REPLICA: relays as `server.files.resolve`.
 - `GET /api/v1/file-content?path=&host=` → `{ "content", "size",
-  "truncated", "binary", "extension", "error"? }` — the FileViewer JSON
-  payload (text, truncated at 512 KB, binary-detected). A missing file is a
-  `200` with `error` set (the viewer contract), not a 404.
+  "truncated", "binary", "extension", "error"?, "contentHash"? }` — the
+  FileViewer JSON payload (text, truncated at 512 KB, binary-detected). A
+  missing file is a `200` with `error` set (the viewer contract), not a 404.
+  `contentHash` is the optimistic-lock token for the write below; it is
+  **absent for a truncated or binary read**, which is exactly what marks those
+  files non-editable (hashing a served 512 KB prefix would let a save
+  round-trip it back over the whole file and delete the tail).
   **REPLICA threat model:** file CONTENT never rides the bridge — the daemon
   channel deliberately has no arbitrary-read command, so `host=` on a
   REPLICA answers `501 not_supported_cloud`, and replica-LOCAL reads are
   confined to the safe `/tmp/open-walnut*` roots with secret-path denials
   (`403` mapped to `not_supported_cloud`).
+- `PUT /api/v1/file-content` `{ path, host?, content, expectedHash? }` →
+  `{ "ok", "size", "contentHash" }` — save an edit made in the Files-panel
+  editor. Shares the read path's sandbox verbatim (one `assertPathAllowed` for
+  both verbs), so a path the read refuses the write refuses identically.
+  Additional write-only refusals, each because the editor could not have held
+  the file faithfully: `409` + `{ code: "conflict", currentHash }` when
+  `expectedHash` no longer matches disk (an agent, another tab, or a
+  `git checkout` wrote first — the other writer's bytes are kept, never
+  clobbered); `409` when the target is larger than the 512 KB read cap;
+  `415` when the target reads as binary; `413` when the submitted content
+  exceeds the cap; `404` when the parent directory does not exist (parents are
+  never created — that's a typo, not an intent). Creating a NEW file is
+  allowed: a missing target with no `expectedHash` is not a conflict.
+  **REPLICA:** writes never ride the bridge either — `host=` answers `501
+  not_supported_cloud`, and replica-LOCAL writes are refused outright
+  (`403`), since the only roots a replica can read ARE its live session state.
 
 ### Console reads (additive, Wave 2 2026-08) — config / usage / slash-commands / skills
 
@@ -1010,6 +1085,137 @@ Class A (the REPLICA runs its own butler). `agentId` as usual (absent →
   conversation.
 - `POST /api/v1/chat/clear?agentId=&conversationId=` → `{ "ok": true }` —
   clears the conversation history.
+
+### Library (additive, Wave 3 2026-08) — agents / commands / skills write / repositories
+
+- Agents (definitions live in the primary's machine-local config.yaml, which
+  never git-syncs — **every agent WRITE answers `501 not_supported_cloud` on
+  a REPLICA**; reads answer with the replica's own registry):
+  - `GET /api/v1/agents/meta/tools` → `{ "tools": [names] }`;
+    `…/meta/skills` → `{ "skills": [{ dirName, name, description }] }`;
+    `…/meta/models` → `{ "models": [ids] }` — the agent-editor dropdowns.
+  - `GET /api/v1/agents/:id` → `{ "agent" }` — the FULL definition (the
+    frozen `GET /v1/agents` list stays the slim chat-picker projection).
+  - `POST /api/v1/agents` body `{ "id" (lowercase slug), "name", … }` →
+    `201 { "agent" }`; duplicate id → `409 conflict`; a model outside
+    `available_models` → `400`.
+  - `PATCH /api/v1/agents/:id` → `{ "agent" }` (id/source immutable).
+  - `DELETE /api/v1/agents/:id` → `204`; builtins refuse with `400`.
+  - `POST /api/v1/agents/:id/clone` body `{ "id", "name"? }` →
+    `201 { "agent" }` — clones ANY agent (incl. a builtin) as a config agent.
+- Commands (markdown slash-command templates; git-synced dir — Class A):
+  - `GET /api/v1/commands` → `{ "commands" }`; `GET …/:name` → `{ "command" }`.
+  - `POST /api/v1/commands` body `{ "name", "content", "description"? }` →
+    `201 { "command" }`; reserved/invalid names → `400`; duplicates → `409`.
+  - `PUT …/:name` / `DELETE …/:name` — user commands only; builtins →
+    `403 forbidden`.
+- Skills write (read list/detail shipped in Wave 2). **Scope rule:** v1 only
+  writes the WALNUT-managed skills dir (`~/.open-walnut/skills`, git-synced).
+  The Claude CLI's own global store (`~/.claude/skills`) is READ-only through
+  v1 — update/delete of a CLI-store skill answer `403 forbidden`, and create
+  has no `target` parameter (always lands in the Walnut dir):
+  - `POST /api/v1/skills` body `{ "dirName", "content", "category"? }` →
+    `201 { "skill" }`; existing name anywhere → `409`.
+  - `PUT /api/v1/skills/:dirName` body `{ "content" }` → `{ "skill" }`.
+  - `PATCH /api/v1/skills/:dirName` body `{ "enabled": boolean }` →
+    `{ "skill" }` — allowed for ANY source (it only writes Walnut's own
+    skill-settings.json, never the skill's directory).
+  - `DELETE /api/v1/skills/:dirName` → `204`.
+  - `GET …/:dirName/references` → `{ "files": [{ name, size }] }`;
+    `GET …/:dirName/references/:file` → `{ "content" }`.
+- Repositories (YAML profiles; git-synced dir — Class A):
+  - `GET /api/v1/repositories` → `{ "repositories": [{ slug, name,
+    description, tech_stack, hosts, modified, size }] }`.
+  - `GET /api/v1/repositories/:name` → `{ "slug", "content", "modified" }`.
+  - `POST /api/v1/repositories/:name` body `{ "content" }` →
+    `{ "ok", "status": "created"|"updated" }`; >100 KB → `413 too_large`;
+    non-slug names (traversal probes) → `400`.
+  - `DELETE /api/v1/repositories/:name` → `{ "ok": true }`.
+
+### Console extras (additive, Wave 3 2026-08) — usage detail / providers / qmd / integrations / timeline / heartbeat
+
+- Usage detail breakdowns (complete the Wave-2 composite `/usage/overview`;
+  **`501 not_supported_cloud` on a REPLICA** — the usage DB lives on the
+  primary — except `pricing`, which is a static table served everywhere):
+  - `GET /api/v1/usage/summary` → all period summaries.
+  - `GET /api/v1/usage/daily?days=30` → `{ "daily" }` time series.
+  - `GET /api/v1/usage/by-source|by-model|by-agent?period=today|7d|30d|all`
+    → `{ "sources"|"models"|"agents" }`.
+  - `GET /api/v1/usage/recent?limit=50` → `{ "records" }`.
+  - `GET /api/v1/usage/pricing` → `{ "models", "version" }`.
+- `GET /api/v1/config/providers` → `{ "providers", "cloud" }` — provider
+  readiness for the ANSWERING box (api/base_url/status/auto_detected/models/
+  credential_source). Same builder as the desktop settings screen, with
+  `key_hint` (last-4 of a key) **stripped**: even a key fragment doesn't
+  belong at the paired-device trust level. Works on both boxes; the replica
+  describes its own credentials.
+- `GET /api/v1/qmd/status` → semantic-search index health (model, store
+  stats, state machine, progress). **REPLICA: 501** (no QMD store on the
+  companion). The maintenance actions (download/reindex) stay desktop-only.
+- `GET /api/v1/integrations` → `[{ id, name, description, badge, … }]`;
+  `GET /api/v1/integrations/settings` → per-plugin configSchema + uiHints +
+  current values with secret-ish keys masked (`••••••`). Class A.
+- Life Tracker timeline (**REPLICA: 501** — the capture dir holds screenshots
+  of the primary Mac and is deliberately excluded from git-sync):
+  - `GET /api/v1/timeline?date=YYYY-MM-DD` → `{ date, entries, summary,
+    tracking }`; bad date → `400`.
+  - `GET /api/v1/timeline/dates` → `{ "dates" }` newest first.
+  - `GET /api/v1/timeline/images/:date/:file` → JPEG bytes (jpg/jpeg only,
+    traversal rejected).
+  - `POST /api/v1/timeline/toggle` → `{ "enabled", "jobId" }`; no tracker
+    job yet → `404`.
+- Heartbeat:
+  - `GET /api/v1/heartbeat` → `{ enabled, state }` — **REPLICA: 501** (the
+    runner lives on the primary; a replica answering "disabled" would lie).
+  - `POST /api/v1/heartbeat/trigger` body `{ "context"? }` → `{ "ok" }`
+    (debounced ~250ms). REPLICA: 501; not enabled → `400`.
+  - `GET/PUT /api/v1/heartbeat/checklist` → `{ "content" }` / `{ "ok" }` —
+    HEARTBEAT.md rides git-sync (Class A, both boxes).
+
+### Long-tail additions (additive, Wave 3 2026-08) — folded into existing domains
+
+- `POST /api/v1/routines/draft` body `{ "text" }` → `{ "draft" }` — natural
+  language → fully-populated routine draft (ONE LLM call; the client prefills
+  the create form, nothing is auto-created). Runs where the model credentials
+  live: the primary answers directly, a REPLICA relays
+  (`server.routines.draft`). Empty text → `400`; an unusable model output →
+  `422` with the failure message (degrade to the manual form).
+- `GET /api/v1/tasks/enriched` → `{ "tasks" }` — full task rows + computed
+  `overdue`. `GET /api/v1/tasks/meta/sprints` → `{ "sprints": [{ name,
+  count }] }`. Class A.
+- `GET /api/v1/sessions/recent?limit=10` → `{ "sessions", "syncedAt" }` —
+  most-recently-active sessions in the SAME slim projection shape as the
+  frozen `GET /v1/sessions` (not the web's raw-record shape). Works on both
+  boxes (projection file). `GET /api/v1/sessions/summaries?limit=10` →
+  `{ "summaries" }` — parsed session summary markdown (Class A, git-synced).
+- `GET /api/v1/notes/list` → `{ "notes": [{ id, title, path, name }] }` —
+  flat list for `[[` autocomplete (file-walk fallback while the index is
+  cold). `POST /api/v1/notes/tags/rename` body `{ "from", "to" }` →
+  `{ "ok", "updated" }` — targeted rewrite of carrying notes (frontmatter +
+  inline). Class A.
+- `POST /api/v1/chat/compact?agentId=&conversationId=` → `{ "ok",
+  "async": true }` or `{ "ok", "alreadyRunning": true }` — fire-and-forget
+  background compaction. Class A (the replica compacts its own butler).
+- `GET /api/v1/memory/telemetry` → `{ "stores", "note" }` — write-path
+  evidence per memory entry (age, revision churn, provenance).
+  `POST /api/v1/memory/daily-log/compact` body `{ "date"?, "threshold"?,
+  "summarizer": "extract" }` → compaction result; no log for the date →
+  `404`; missing/unknown summarizer above threshold → `400`. Class A.
+- `GET /api/v1/stt/vocab` → `{ "words" }` (the internal route's absolute
+  `path` field is deliberately dropped); `POST /api/v1/stt/vocab` body
+  `{ "word" }` → `{ "added", "word", "reason"? }` (case-insensitive dedup).
+  Class A — each box serves its own git-synced vocab file.
+- `POST /api/v1/files/record-dir` body `{ "path" (absolute), "host"? }` →
+  `{ "status": "ok" }` — record an "@"-picker folder (separate store from
+  session working dirs). `GET /api/v1/files/recent-dirs` → `{ "dirs":
+  [{ cwd, host }] }` — the deduped union, most-recent first. Class A.
+- `GET /api/v1/projects/:name/metadata` → `{ name, source, metadata,
+  memorySummary, counts }` — the project detail-pane payload (works on both
+  boxes). `PUT /api/v1/projects/:name/metadata` → merged settings blob;
+  JSON `null` clears a key. **REPLICA: 501** (registry writes have no
+  write-back channel). `POST /api/v1/projects/:name/summary/regenerate` →
+  `{ "summary", "summary_task_count" }`; nothing to summarize → `422`.
+  **REPLICA: 501**.
 
 ### GET /api/v1/events (SSE, additive, 2026-08) — live task + session feed
 

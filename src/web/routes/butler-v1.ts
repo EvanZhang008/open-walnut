@@ -11,6 +11,7 @@
  *   PUT    /conversations/active { conversationId } → { activeConversationId }
  *   GET    /chat/stats?agentId&conversationId      → conversation size stats
  *   POST   /chat/clear?agentId&conversationId      → { ok: true }
+ *   POST   /chat/compact?agentId&conversationId    → { ok, async|alreadyRunning } (Wave 3)
  *
  * The active pointer matters server-side (not just client UI state): cron
  * results and background notifications route into the ACTIVE conversation.
@@ -147,6 +148,27 @@ butlerV1Router.post('/chat/clear', async (req: Request, res: Response, next: Nex
     await chatHistory.clear(ids.agentId, ids.conversationId)
     log.web.info('butler conversation cleared via api-v1', ids)
     res.json({ ok: true })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/v1/chat/compact?agentId&conversationId (Wave 3) — fire-and-forget
+// background compaction (the same trigger the web console uses). Answers
+// immediately: { ok, async: true }, or { ok, alreadyRunning: true } when a
+// compaction is already in flight. Class A (the replica compacts its own
+// butler's conversation with its own model credentials).
+butlerV1Router.post('/chat/compact', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const ids = await resolveChatTarget(req, res)
+    if (!ids) return
+    const { isCompactionInProgress, triggerBackgroundCompaction } = await import('../background-compaction.js')
+    if (isCompactionInProgress(ids.agentId, ids.conversationId)) {
+      res.json({ ok: true, alreadyRunning: true })
+      return
+    }
+    triggerBackgroundCompaction('api-v1', { force: true, agentId: ids.agentId, conversationId: ids.conversationId })
+    res.json({ ok: true, async: true })
   } catch (err) {
     next(err)
   }
