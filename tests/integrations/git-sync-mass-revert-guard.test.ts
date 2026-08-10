@@ -97,8 +97,13 @@ async function startConflictedRebase(repo: string): Promise<void> {
  * (one blob, N paths, one subprocess) instead of creating N real files.
  * NOTE: the worktree then lacks those paths, so `git status` reports them all
  * as deletions — only use this for tests that pass dirtyLines in explicitly.
+ *
+ * Returns the resulting TOTAL tracked count, which is `count` plus whatever the
+ * repo already tracked (initSync commits a .gitignore) — assertions derive the
+ * expected threshold from this rather than hardcoding, so adding another
+ * bootstrap file cannot turn a real regression into an off-by-one test failure.
  */
-function seedIndexWithTrackedPaths(repo: string, count: number): void {
+function seedIndexWithTrackedPaths(repo: string, count: number): number {
   const sha = execSync('git hash-object -w --stdin', {
     cwd: repo, input: 'x\n', encoding: 'utf-8', timeout: 30_000,
   }).trim();
@@ -107,6 +112,12 @@ function seedIndexWithTrackedPaths(repo: string, count: number): void {
     cwd: repo, input: `${lines.join('\n')}\n`, encoding: 'utf-8', timeout: 30_000,
   });
   resetTrackedCountCacheForTest(); // the count was cached before this seeding
+  return run('git ls-files', repo).split('\n').filter((l) => l.trim()).length;
+}
+
+/** The threshold effectiveMassDirtyThreshold() should report for a given repo size. */
+function expectedThreshold(tracked: number): number {
+  return Math.max(MASS_DIRTY_THRESHOLD, Math.ceil(tracked * 0.05));
 }
 
 beforeEach(async () => {
@@ -236,20 +247,23 @@ describe('effectiveMassDirtyThreshold', () => {
 
   it('scales to 5% of tracked files on a large repo', async () => {
     initSync();
-    seedIndexWithTrackedPaths(tmpDir, 20_000);
+    const tracked = seedIndexWithTrackedPaths(tmpDir, 20_000);
 
-    // 5% of 20k = 1000, well above the 300 floor.
-    await expect(effectiveMassDirtyThreshold()).resolves.toBe(1_000);
+    // ~5% of 20k ≈ 1000, well above the 300 floor.
+    const threshold = await effectiveMassDirtyThreshold();
+    expect(threshold).toBe(expectedThreshold(tracked));
+    expect(threshold).toBeGreaterThan(MASS_DIRTY_THRESHOLD);
   });
 
   it('caches the tracked count (a second call does not re-measure)', async () => {
     initSync();
-    seedIndexWithTrackedPaths(tmpDir, 20_000);
-    await expect(effectiveMassDirtyThreshold()).resolves.toBe(1_000);
+    const tracked = seedIndexWithTrackedPaths(tmpDir, 20_000);
+    const scaled = expectedThreshold(tracked);
+    await expect(effectiveMassDirtyThreshold()).resolves.toBe(scaled);
 
     // Index shrinks, but the cached count keeps the threshold where it was.
     run('git read-tree --empty', tmpDir);
-    await expect(effectiveMassDirtyThreshold()).resolves.toBe(1_000);
+    await expect(effectiveMassDirtyThreshold()).resolves.toBe(scaled);
 
     resetTrackedCountCacheForTest();
     await expect(effectiveMassDirtyThreshold()).resolves.toBe(MASS_DIRTY_THRESHOLD);
