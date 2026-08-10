@@ -1,4 +1,14 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { ProjectSourceBadge } from './ProjectSourceBadge';
 
 export interface RailProjectItem {
@@ -19,10 +29,54 @@ interface TasksPageRailProps {
   activeKey: string | null;
   onSelect: (key: string | null) => void;
   onCreateProject: (name: string) => void | Promise<void>;
+  /** Persist a new full project order after a rail drag. */
+  onReorderProjects: (order: string[]) => void;
 }
 
-/** Left rail of the /tasks workspace: All Tasks → projects → Inbox, with a
- *  pinned "＋ New Project" inline-create affordance at the bottom. */
+const LS_RAIL_WIDTH = 'walnut-tasks-rail-width';
+const RAIL_MIN = 160;
+const RAIL_MAX = 420;
+
+function readRailWidth(): number {
+  try {
+    const v = Number(localStorage.getItem(LS_RAIL_WIDTH));
+    if (Number.isFinite(v) && v >= RAIL_MIN && v <= RAIL_MAX) return v;
+  } catch { /* ignore */ }
+  return 220;
+}
+
+/** One draggable project row. Drag activates after 6px so plain clicks select. */
+function SortableRailItem({ p, active, onSelect }: {
+  p: RailProjectItem;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: `railproj:${p.name}`,
+    data: { type: 'rail-project', project: p.name },
+  });
+  return (
+    <button
+      ref={setNodeRef}
+      type="button"
+      className={`tp-rail-item${active ? ' active' : ''}${isDragging ? ' dragging' : ''}`}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      onClick={onSelect}
+      title={p.name}
+      {...attributes}
+      {...listeners}
+    >
+      <span className="tp-ri-icon">📁</span>
+      <span className="tp-ri-name">{p.name}</span>
+      <ProjectSourceBadge source={p.source} />
+      {p.favorite && <span className="tp-ri-fav">★</span>}
+      <span className="tp-ri-count">{p.openCount}</span>
+    </button>
+  );
+}
+
+/** Left rail of the /tasks workspace: All Tasks → projects (drag to reorder) →
+ *  Inbox, a pinned "＋ New Project" affordance, and a drag-resizable width. */
 export function TasksPageRail({
   projects,
   allOpenCount,
@@ -30,10 +84,61 @@ export function TasksPageRail({
   activeKey,
   onSelect,
   onCreateProject,
+  onReorderProjects,
 }: TasksPageRailProps) {
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // ── resizable width ──
+  const [width, setWidth] = useState(readRailWidth);
+  const [resizing, setResizing] = useState(false);
+  const resizeRef = useRef<{ startX: number; startW: number } | null>(null);
+
+  const startResize = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    resizeRef.current = { startX: e.clientX, startW: width };
+    setResizing(true);
+  }, [width]);
+
+  useEffect(() => {
+    if (!resizing) return;
+    const move = (e: PointerEvent) => {
+      const s = resizeRef.current;
+      if (!s) return;
+      const w = Math.min(RAIL_MAX, Math.max(RAIL_MIN, s.startW + (e.clientX - s.startX)));
+      setWidth(w);
+    };
+    const up = () => {
+      setResizing(false);
+      resizeRef.current = null;
+      setWidth((w) => {
+        try { localStorage.setItem(LS_RAIL_WIDTH, String(w)); } catch { /* ignore */ }
+        return w;
+      });
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    return () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+  }, [resizing]);
+
+  // ── project drag reorder — 6px activation keeps plain clicks as selects ──
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const names = projects.map((p) => p.name);
+    const from = names.indexOf(String(active.id).slice('railproj:'.length));
+    const to = names.indexOf(String(over.id).slice('railproj:'.length));
+    if (from === -1 || to === -1) return;
+    const next = [...names];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    onReorderProjects(next);
+  }, [projects, onReorderProjects]);
 
   useEffect(() => {
     if (creating) inputRef.current?.focus();
@@ -61,7 +166,7 @@ export function TasksPageRail({
     `tp-rail-item${activeKey === key ? ' active' : ''}`;
 
   return (
-    <aside className="tp-rail" data-testid="tasks-rail">
+    <aside className="tp-rail" data-testid="tasks-rail" style={{ width }}>
       <div className="tp-rail-title">Projects</div>
       <div className="tp-rail-scroll">
         <button type="button" className={itemClass(null)} onClick={() => onSelect(null)}>
@@ -69,21 +174,21 @@ export function TasksPageRail({
           <span className="tp-ri-name">All Tasks</span>
           <span className="tp-ri-count">{allOpenCount}</span>
         </button>
-        {projects.map((p) => (
-          <button
-            key={p.name}
-            type="button"
-            className={itemClass(p.name)}
-            onClick={() => onSelect(p.name)}
-            title={p.name}
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext
+            items={projects.map((p) => `railproj:${p.name}`)}
+            strategy={verticalListSortingStrategy}
           >
-            <span className="tp-ri-icon">📁</span>
-            <span className="tp-ri-name">{p.name}</span>
-            <ProjectSourceBadge source={p.source} />
-            {p.favorite && <span className="tp-ri-fav">★</span>}
-            <span className="tp-ri-count">{p.openCount}</span>
-          </button>
-        ))}
+            {projects.map((p) => (
+              <SortableRailItem
+                key={p.name}
+                p={p}
+                active={activeKey === p.name}
+                onSelect={() => onSelect(p.name)}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
         <button type="button" className={itemClass('')} onClick={() => onSelect('')}>
           <span className="tp-ri-icon">📥</span>
           <span className="tp-ri-name">Inbox</span>
@@ -108,6 +213,13 @@ export function TasksPageRail({
           </button>
         )}
       </div>
+
+      {/* resize handle — right edge of the rail */}
+      <div
+        className={`tp-rail-resizer${resizing ? ' active' : ''}`}
+        onPointerDown={startResize}
+        title="Drag to resize"
+      />
     </aside>
   );
 }

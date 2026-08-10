@@ -22,6 +22,7 @@ import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useConfirm, useAlert } from '@/hooks/useConfirm';
 import { openPopout } from '@/popout/openPopout';
+import { openSessionOnHome } from '@/utils/open-session';
 import { ICON_NEW_TAB } from '@/components/common/Icons';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
 import { resolveSessionRecordStatus } from '@/stores/session-status-store';
@@ -318,40 +319,39 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
   if (!task) return <div className="empty-state"><p>Task not found</p></div>;
 
   return (
-    <div>
-      {/* Back button is meaningless in a pop-out window (no in-app history). */}
-      {!isPopout && (
-        <button className="btn mb-4" onClick={handleBack}>&larr; Back</button>
-      )}
+    <div className="task-detail-v2">
+      {/* One-line header: back / ★ / title / status / actions — no scrolling to act. */}
+      <div className="tdv2-head">
+        {/* Back button is meaningless in a pop-out window (no in-app history). */}
+        {!isPopout && (
+          <button className="btn tdv2-back" onClick={handleBack}>&larr;</button>
+        )}
+        <StarButton starred={!!task.starred} onClick={handleStar} />
+        <h1 className="tdv2-title" title={task.title}>{task.title}</h1>
+        <StatusBadge status={task.status} phase={task.phase} />
+        {!isPopout && (
+          <button
+            className="btn btn-icon"
+            title="Open in new tab"
+            aria-label="Open in new tab"
+            onClick={() => openPopout('task', { id: task.id })}
+          >
+            {ICON_NEW_TAB}
+          </button>
+        )}
+        <button className="btn btn-primary" onClick={handleComplete}>
+          {task.status === 'done' ? 'Reopen' : 'Complete'}
+        </button>
+        <button className="btn" onClick={handleDelete} style={{ color: 'var(--danger, #ff3b30)' }}>
+          Delete
+        </button>
+      </div>
 
-      <div className="card mb-4">
-        <div className="flex items-center gap-3 mb-2">
-          <StarButton starred={!!task.starred} onClick={handleStar} />
-          <h1 className="page-title" style={{ flex: 1 }}>{task.title}</h1>
-          {/* Open in a standalone browser tab. Hidden when already in one. */}
-          {!isPopout && (
-            <button
-              className="btn btn-icon"
-              title="Open in new tab"
-              aria-label="Open in new tab"
-              onClick={() => openPopout('task', { id: task.id })}
-            >
-              {ICON_NEW_TAB}
-            </button>
-          )}
-        </div>
-        <div className="flex gap-2 items-center mb-4">
-          <StatusBadge status={task.status} phase={task.phase} />
-          <PriorityBadge priority={task.priority} />
-          <span className="text-sm text-muted">{task.project || 'Inbox'}</span>
-          <DatePicker date={task.start_date} onChange={handleStartDateChange} label="Start" />
-          {/* Calendar semantics: start is the primary date, the end/due is
-              usually empty — collapse it to a "+ Due" ghost until set. */}
-          <DatePicker date={task.due_date} onChange={handleDateChange} label="Due" ghostWhenEmpty />
-          <SprintPicker sprint={task.sprint} onSprintChange={handleSprintChange} />
-        </div>
+      <div className="tdv2-body">
+      <div className="tdv2-main">
         {/* Dependencies */}
-        <div style={{ marginBottom: '1rem' }}>
+        <div className="card mb-4" style={{ display: task.is_blocked || showDepPicker || (task.depends_on?.length ?? 0) > 0 || (task.dependents?.length ?? 0) > 0 ? undefined : 'none' }}>
+        <div style={{ marginBottom: '0' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
             <h3 style={{ margin: 0, fontSize: '0.85rem', fontWeight: 600, opacity: 0.7 }}>Dependencies</h3>
             {task.is_blocked && (
@@ -449,47 +449,6 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
             </div>
           ) : null}
         </div>
-        <div className="mb-3">
-          <TagEditor
-            tags={task.tags ?? []}
-            onAdd={async (tag) => {
-              const updated = await addTag(task.id, tag);
-              setTask(updated);
-            }}
-            onRemove={async (tag) => {
-              const updated = await removeTag(task.id, tag);
-              setTask(updated);
-            }}
-          />
-        </div>
-        {task.source === 'local' ? (
-          <div className="mb-4">
-            <span className="text-sm text-muted">Local only — not synced to any service</span>
-          </div>
-        ) : task.external_url ? (
-          <div className="mb-4">
-            <a
-              href={task.external_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="task-detail-external-link"
-            >
-              Open in {getIntegrationMeta(integrations, task.source)?.externalLinkLabel ?? getIntegrationMeta(integrations, task.source)?.name ?? 'External'} &#x2197;
-            </a>
-          </div>
-        ) : null}
-        <div className="flex gap-2">
-          <button className="btn btn-primary" onClick={handleComplete}>
-            {task.status === 'done' ? 'Reopen' : 'Complete'}
-          </button>
-          <button
-            className="btn"
-            onClick={handleDelete}
-            style={{ color: 'var(--danger, #ff3b30)' }}
-          >
-            Delete
-          </button>
-        </div>
       </div>
 
       {/* Parent Task */}
@@ -565,9 +524,9 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
         </div>
       ) : null}
 
-      {/* Active Sessions — inline chat (always first) */}
+      {/* Active Sessions — inline chat (always first via .tdv2-sessions order) */}
       {activeSessionIds.length > 0 && (
-        <div className="card mb-4">
+        <div className="card mb-4 tdv2-sessions">
           <h2 className="mb-2" style={{ fontSize: '16px', fontWeight: 600 }}>
             Active Sessions
             <span className="task-session-pill task-session-pill-running" style={{ marginLeft: 8 }}>
@@ -637,15 +596,14 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
               const label = record?.title || sid.slice(0, 12) + '\u2026';
               const dotClass = record?.process_status === 'error' ? 'dot-error' : 'dot-completed';
               return (
-                <div key={sid} className="flex items-center gap-2">
+                <div
+                  key={sid}
+                  className="tdv2-session-row"
+                  title={sid}
+                  onClick={() => openSessionOnHome(sid, navigate)}
+                >
                   <span className={`session-pill-status-dot ${dotClass}`} />
-                  <span
-                    className="session-id-pill"
-                    title={sid}
-                    onClick={() => navigate(`/sessions?id=${sid}`)}
-                  >
-                    {label}
-                  </span>
+                  <span className="tdv2-session-label">{label}</span>
                   {record?.process_status && (
                     <span className="text-xs text-muted">{record.process_status}</span>
                   )}
@@ -653,11 +611,12 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
                     <button
                       className="btn btn-sm"
                       style={{ fontSize: '0.7rem', padding: '1px 6px', opacity: 0.7 }}
-                      onClick={() => updateSession(sid, { archived: true }).then(loadTask)}
+                      onClick={(e) => { e.stopPropagation(); void updateSession(sid, { archived: true }).then(loadTask); }}
                     >
                       Archive
                     </button>
                   )}
+                  <span className="tdv2-session-open">Open session \u2192</span>
                 </div>
               );
             })}
@@ -689,7 +648,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
                         <span
                           className="session-id-pill"
                           title={sid}
-                          onClick={() => navigate(`/sessions?id=${sid}`)}
+                          onClick={() => openSessionOnHome(sid, navigate)}
                         >
                           {label}
                         </span>
@@ -767,6 +726,65 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
           <button className="btn btn-sm" onClick={handleAddNote}>Add</button>
         </div>
       </div>
+      </div>{/* /tdv2-main */}
+
+      {/* Right meta rail — every attribute inline-editable, no scrolling hunt. */}
+      <aside className="tdv2-side">
+        <div className="tdv2-kv">
+          <span className="tdv2-k">Project</span>
+          <span className="tdv2-v">{task.project || 'Inbox'}</span>
+        </div>
+        <div className="tdv2-kv">
+          <span className="tdv2-k">Priority</span>
+          <span className="tdv2-v"><PriorityBadge priority={task.priority} /></span>
+        </div>
+        <div className="tdv2-kv">
+          <span className="tdv2-k">Start</span>
+          <span className="tdv2-v"><DatePicker date={task.start_date} onChange={handleStartDateChange} label="Start" ghostWhenEmpty /></span>
+        </div>
+        <div className="tdv2-kv">
+          <span className="tdv2-k">Due</span>
+          <span className="tdv2-v"><DatePicker date={task.due_date} onChange={handleDateChange} label="Due" ghostWhenEmpty /></span>
+        </div>
+        <div className="tdv2-kv">
+          <span className="tdv2-k">Sprint</span>
+          <span className="tdv2-v"><SprintPicker sprint={task.sprint} onSprintChange={handleSprintChange} /></span>
+        </div>
+        <div className="tdv2-kv tdv2-kv-block">
+          <span className="tdv2-k">Tags</span>
+          <TagEditor
+            tags={task.tags ?? []}
+            onAdd={async (tag) => {
+              const updated = await addTag(task.id, tag);
+              setTask(updated);
+            }}
+            onRemove={async (tag) => {
+              const updated = await removeTag(task.id, tag);
+              setTask(updated);
+            }}
+          />
+        </div>
+        <div className="tdv2-kv">
+          <span className="tdv2-k">Source</span>
+          <span className="tdv2-v">
+            {task.source === 'local' ? (
+              <span className="text-sm text-muted" title="Local only — not synced to any service">Local</span>
+            ) : task.external_url ? (
+              <a
+                href={task.external_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="task-detail-external-link"
+              >
+                {getIntegrationMeta(integrations, task.source)?.externalLinkLabel ?? getIntegrationMeta(integrations, task.source)?.name ?? 'External'} &#x2197;
+              </a>
+            ) : (
+              <span className="text-sm text-muted">{task.source}</span>
+            )}
+          </span>
+        </div>
+      </aside>
+      </div>{/* /tdv2-body */}
     </div>
   );
 }

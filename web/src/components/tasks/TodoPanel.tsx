@@ -418,7 +418,7 @@ function clusterTierByGroup(tasks: Task[]): string[] {
  * (idempotent), and NEVER applied mid-drag — during a drag the user's live
  * order is authority (same contract as group clustering).
  */
-function clusterTierByProject(ids: string[], tasks: Task[]): string[] {
+function clusterTierByProject(ids: string[], tasks: Task[], projectOrder?: string[]): string[] {
   const taskById = new Map(tasks.map((t) => [t.id, t]));
   // 1. Blocks: same-group contiguous runs collapse into one block; everything
   //    else is a single-id block. Unknown ids (group: sentinels shouldn't reach
@@ -455,6 +455,22 @@ function clusterTierByProject(ids: string[], tasks: Task[]): string[] {
     let arr = byKey.get(b.key);
     if (!arr) { arr = []; byKey.set(b.key, arr); keyOrder.push(b.key); }
     arr.push(...b.ids);
+  }
+  // 3. Optional global project order (ordering.projects, case-insensitive):
+  // listed projects rank by their position, unlisted keep first-occurrence
+  // order after them, Inbox ('') stays wherever occurrence put it relative to
+  // other unlisted keys. Stable sort → ties keep occurrence order.
+  if (projectOrder && projectOrder.length > 0) {
+    const rank = new Map(projectOrder.map((name, idx) => [name.toLowerCase(), idx]));
+    const occurrence = new Map(keyOrder.map((k, idx) => [k, idx]));
+    keyOrder.sort((a, b) => {
+      const ra = rank.get(a.toLowerCase());
+      const rb = rank.get(b.toLowerCase());
+      if (ra !== undefined && rb !== undefined) return ra - rb;
+      if (ra !== undefined) return -1;
+      if (rb !== undefined) return 1;
+      return occurrence.get(a)! - occurrence.get(b)!;
+    });
   }
   return keyOrder.flatMap((k) => byKey.get(k)!);
 }
@@ -2946,18 +2962,18 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // it re-applies once the drag lands.
   // Project clustering layers on top of group clustering (folder labels render
   // per project run in renderTierItems). Both skip mid-drag for the same reason.
-  const focusIds_arr = useMemo(() => dragTierIds?.get('focus') ?? clusterTierByProject(clusterTierByGroup(focusTasksLocal), focusTasksLocal), [dragTierIds, focusTasksLocal]);
-  const satelliteIds_arr = useMemo(() => dragTierIds?.get('satellite') ?? clusterTierByProject(clusterTierByGroup(satelliteTasksLocal), satelliteTasksLocal), [dragTierIds, satelliteTasksLocal]);
-  const backlogIds_arr = useMemo(() => dragTierIds?.get('backlog') ?? clusterTierByProject(clusterTierByGroup(backlogTasksLocal), backlogTasksLocal), [dragTierIds, backlogTasksLocal]);
-  const waitIds_arr = useMemo(() => dragTierIds?.get('wait') ?? clusterTierByProject(clusterTierByGroup(waitTasksLocal), waitTasksLocal), [dragTierIds, waitTasksLocal]);
+  const focusIds_arr = useMemo(() => dragTierIds?.get('focus') ?? clusterTierByProject(clusterTierByGroup(focusTasksLocal), focusTasksLocal, ordering?.projectOrder), [dragTierIds, focusTasksLocal, ordering?.projectOrder]);
+  const satelliteIds_arr = useMemo(() => dragTierIds?.get('satellite') ?? clusterTierByProject(clusterTierByGroup(satelliteTasksLocal), satelliteTasksLocal, ordering?.projectOrder), [dragTierIds, satelliteTasksLocal, ordering?.projectOrder]);
+  const backlogIds_arr = useMemo(() => dragTierIds?.get('backlog') ?? clusterTierByProject(clusterTierByGroup(backlogTasksLocal), backlogTasksLocal, ordering?.projectOrder), [dragTierIds, backlogTasksLocal, ordering?.projectOrder]);
+  const waitIds_arr = useMemo(() => dragTierIds?.get('wait') ?? clusterTierByProject(clusterTierByGroup(waitTasksLocal), waitTasksLocal, ordering?.projectOrder), [dragTierIds, waitTasksLocal, ordering?.projectOrder]);
   const customIds_arr = useMemo(() => {
     const map: Record<string, string[]> = {};
     for (const def of customTiers ?? []) {
       const tierTasks = customTasksLocal[def.id] ?? [];
-      map[def.id] = dragTierIds?.get(def.id) ?? clusterTierByProject(clusterTierByGroup(tierTasks), tierTasks);
+      map[def.id] = dragTierIds?.get(def.id) ?? clusterTierByProject(clusterTierByGroup(tierTasks), tierTasks, ordering?.projectOrder);
     }
     return map;
-  }, [dragTierIds, customTiers, customTasksLocal]);
+  }, [dragTierIds, customTiers, customTasksLocal, ordering?.projectOrder]);
 
   const pinnedTaskMap = useMemo(() => new Map(pinnedTasks.map((t) => [t.id, t])), [pinnedTasks]);
 
@@ -3028,13 +3044,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // frozen refs match the rendered list and grouped members sit contiguously (a
     // prerequisite for the collapse below). One entry per tier, render order.
     const tierArrays = new Map<FocusTier, string[]>();
-    tierArrays.set('focus', clusterTierByProject(clusterTierByGroup(focusTasksLocal), focusTasksLocal));
-    tierArrays.set('satellite', clusterTierByProject(clusterTierByGroup(satelliteTasksLocal), satelliteTasksLocal));
-    tierArrays.set('backlog', clusterTierByProject(clusterTierByGroup(backlogTasksLocal), backlogTasksLocal));
-    tierArrays.set('wait', clusterTierByProject(clusterTierByGroup(waitTasksLocal), waitTasksLocal));
+    tierArrays.set('focus', clusterTierByProject(clusterTierByGroup(focusTasksLocal), focusTasksLocal, ordering?.projectOrder));
+    tierArrays.set('satellite', clusterTierByProject(clusterTierByGroup(satelliteTasksLocal), satelliteTasksLocal, ordering?.projectOrder));
+    tierArrays.set('backlog', clusterTierByProject(clusterTierByGroup(backlogTasksLocal), backlogTasksLocal, ordering?.projectOrder));
+    tierArrays.set('wait', clusterTierByProject(clusterTierByGroup(waitTasksLocal), waitTasksLocal, ordering?.projectOrder));
     for (const def of customTiers ?? []) {
       const tierTasks = customTasksLocal[def.id] ?? [];
-      tierArrays.set(def.id, clusterTierByProject(clusterTierByGroup(tierTasks), tierTasks));
+      tierArrays.set(def.id, clusterTierByProject(clusterTierByGroup(tierTasks), tierTasks, ordering?.projectOrder));
     }
     const rArr = recentDraggableIds;
     dragStartSnapshot.current = { tiers: tierArrays, recent: rArr };
@@ -4284,6 +4300,33 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
   }, [allCollapsed, allGroupKeys]);
 
+  // ── Mini-bar "Running (n)" — tasks whose linked session is actively running.
+  // Cycles through them on repeated clicks (focus-scroll each in turn).
+  const runningTaskIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const t of rawTasks) {
+      if (t.status === 'done') continue;
+      const status = t.session_status?.process_status
+        ?? t.exec_session_status?.process_status
+        ?? t.plan_session_status?.process_status;
+      if (status === 'running') ids.push(t.id);
+    }
+    return ids;
+  }, [rawTasks]);
+
+  const runningJumpCursor = useRef(0);
+  const jumpToNextRunning = useCallback(() => {
+    if (runningTaskIds.length === 0) return;
+    const idx = runningJumpCursor.current % runningTaskIds.length;
+    runningJumpCursor.current = idx + 1;
+    const id = runningTaskIds[idx];
+    // Same entry point a task-ref click uses (expands groups, switches tab,
+    // scrolls + flashes); plain scroll as fallback.
+    const task = rawTasks.find((t) => t.id === id);
+    if (task && onFocusTask) onFocusTask(task, { openDetail: false });
+    else scrollToTask(id);
+  }, [runningTaskIds, rawTasks, onFocusTask, scrollToTask]);
+
   const handleDragStart = useCallback((event: DragStartEvent) => {
     const id = String(event.active.id);
     setActiveDragId(id);
@@ -4914,6 +4957,41 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (onUpdate) onUpdate(id, { title });
   }, [onUpdate]);
 
+  // ── Project label drag-reorder (Pinned tiers) ── Native HTML5 DnD on the
+  // folder labels, deliberately OUTSIDE dnd-kit: labels never enter a
+  // SortableContext (React #185 history), and drag events don't collide with
+  // dnd-kit's PointerSensor. Dropping label A onto label B moves A's project
+  // before B in the global `ordering.projects` list — the same list the Tasks
+  // tab groups and the /tasks rail use, so all surfaces re-order together.
+  const [labelDragProj, setLabelDragProj] = useState<string | null>(null);
+  const [labelDropProj, setLabelDropProj] = useState<string | null>(null);
+  const handleLabelDrop = useCallback((active: string, target: string) => {
+    setLabelDragProj(null);
+    setLabelDropProj(null);
+    if (!ordering || active === target || active === '' || target === '') return;
+    const current = ordering.projectOrder ?? [];
+    // Visible projects (this panel's grouped view order) supply names missing
+    // from the explicit order.
+    const visible: string[] = [];
+    const seen = new Set<string>();
+    for (const t of tasks) {
+      const p = t.project || '';
+      if (p && !seen.has(p.toLowerCase())) { seen.add(p.toLowerCase()); visible.push(p); }
+    }
+    const lower = new Set(current.map((n) => n.toLowerCase()));
+    const merged = [...current];
+    for (const p of visible) {
+      if (!lower.has(p.toLowerCase())) { merged.push(p); lower.add(p.toLowerCase()); }
+    }
+    const from = merged.findIndex((n) => n.toLowerCase() === active.toLowerCase());
+    const to = merged.findIndex((n) => n.toLowerCase() === target.toLowerCase());
+    if (from === -1 || to === -1 || from === to) return;
+    const next = [...merged];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    void ordering.reorderProjects(next);
+  }, [ordering, tasks]);
+
   // Render one tier's items from its ID array (NOT its Task array): a `group:*`
   // sentinel id — present only while that group is being dragged (the drag start
   // collapses its member run to this single id) — has no Task in the map, so we must
@@ -4953,7 +5031,31 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const proj = task.project || '';
       if (showFolders && proj !== prevProject) {
         out.push(
-          <div key={`projlabel:${tier}:${proj}`} className="tier-project-label">
+          <div
+            key={`projlabel:${tier}:${proj}`}
+            className={`tier-project-label${proj ? ' tier-project-label-draggable' : ''}${labelDropProj === proj && labelDragProj !== proj ? ' tier-project-label-dropover' : ''}`}
+            draggable={!!proj}
+            onDragStart={(e) => {
+              e.dataTransfer.setData('text/walnut-project', proj);
+              e.dataTransfer.effectAllowed = 'move';
+              setLabelDragProj(proj);
+            }}
+            onDragEnd={() => { setLabelDragProj(null); setLabelDropProj(null); }}
+            onDragOver={(e) => {
+              if (labelDragProj !== null && proj && labelDragProj !== proj) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                setLabelDropProj(proj);
+              }
+            }}
+            onDragLeave={() => { if (labelDropProj === proj) setLabelDropProj(null); }}
+            onDrop={(e) => {
+              e.preventDefault();
+              const active = e.dataTransfer.getData('text/walnut-project') || labelDragProj;
+              if (active && proj) handleLabelDrop(active, proj);
+            }}
+            title={proj ? 'Drag to reorder projects' : undefined}
+          >
             <span className="tier-project-label-icon">{ICONS.ICON_FOLDER}</span>
             <span className="tier-project-label-name">{proj || 'Inbox'}</span>
           </div>
@@ -4983,7 +5085,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       );
     }
     return out;
-  }, [pinnedTaskMap, taskGroups, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, handleExpandDetail, onClearFocus, onOpenSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive]);
+  }, [pinnedTaskMap, taskGroups, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, handleExpandDetail, onClearFocus, onOpenSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop]);
 
   // The regular task list gets its own PINNED/RECENT-style collapsible bar.
   // Outside the stacked view the Tasks tab IS the list — it can't be folded away.
@@ -5070,6 +5172,62 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
       {/* Section tabs — one section owns the panel at a time (see TodoSectionTabs). */}
       <TodoSectionTabs active={effectiveSection} onChange={handleSectionChange} counts={sectionCounts} customTiers={customTiers} />
+
+      {/* Mini-bar: high-frequency verbs that used to hide in the View dropdown.
+          Always visible; Collapse/expand all only renders where project groups
+          exist (Tasks tab / stacked All view). */}
+      {!isSearchMode && (
+        <div className="todo-minibar">
+          {(isAll || showSection('tasks')) && (
+            <>
+              <button
+                type="button"
+                className="todo-minibar-btn"
+                title={allCollapsed ? 'Expand all projects' : 'Collapse all projects'}
+                onClick={handleCollapseExpandAll}
+              >
+                {allCollapsed ? '⌃⌃ Expand all' : '⌄⌄ Collapse all'}
+              </button>
+              <span className="todo-minibar-sep" />
+            </>
+          )}
+          <button
+            type="button"
+            className={`todo-minibar-btn${showCompleted ? ' on' : ''}`}
+            title={showCompleted ? 'Hide completed tasks' : 'Show completed tasks'}
+            onClick={() => { setShowCompleted(!showCompleted); clearFocusOverride(); }}
+          >
+            ✓ Done
+          </button>
+          <button
+            type="button"
+            className="todo-minibar-btn"
+            title="Cycle sort: manual → priority → date → updated"
+            onClick={() => {
+              const cycle: SortBy[] = ['manual', 'priority', 'date', 'updated'];
+              const next = cycle[(cycle.indexOf(sortBy) + 1) % cycle.length];
+              setSortBy(next);
+              persistSortBy(next);
+            }}
+          >
+            ↕ {sortBy === 'manual' ? 'Manual' : sortBy === 'priority' ? 'Priority' : sortBy === 'date' ? 'Date' : 'Updated'}
+          </button>
+          {runningTaskIds.length > 0 && (
+            <>
+              <span className="todo-minibar-sep" />
+              <button
+                type="button"
+                className="todo-minibar-btn todo-minibar-running"
+                title="Jump to the next task with a running session"
+                onClick={jumpToNextRunning}
+              >
+                <span className="todo-minibar-running-dot" />
+                Running ({runningTaskIds.length})
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Unified DndContext wrapping both Pinned + Recent — enables drag from Recent to Pin */}
       {(anyTierVisible || recentVisible) && (visiblePinnedTasks.length > 0 || visibleRecentTasks.length > 0 || hiddenPinnedGroups.length > 0) && (

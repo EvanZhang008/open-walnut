@@ -7,12 +7,39 @@ import { TasksPageRail, type RailProjectItem } from '@/components/tasks/TasksPag
 import { TasksPageTable } from '@/components/tasks/TasksPageTable';
 import { TaskForm, type TaskFormData } from '@/components/tasks/TaskForm';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import type { TpSort } from '@/components/tasks/tasks-page-sort';
 import '@/styles/tasks-page.css';
+
+const LS_SORT = 'walnut-tasks-page-sort';
+const LS_GROUPED = 'walnut-tasks-page-grouped';
+const LS_COLLAPSED = 'walnut-tasks-page-collapsed';
+
+function readSort(): TpSort | null {
+  try {
+    const raw = localStorage.getItem(LS_SORT);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as TpSort;
+    if (v && typeof v.key === 'string' && (v.dir === 'asc' || v.dir === 'desc')) return v;
+  } catch { /* ignore */ }
+  return null;
+}
+
+function readGrouped(): boolean {
+  try { return localStorage.getItem(LS_GROUPED) !== '0'; } catch { return true; }
+}
+
+function readCollapsed(): Set<string> {
+  try {
+    const raw = localStorage.getItem(LS_COLLAPSED);
+    if (raw) return new Set(JSON.parse(raw) as string[]);
+  } catch { /* ignore */ }
+  return new Set();
+}
 
 /** /tasks — dense two-pane workspace: project rail (left) + task table (right). */
 export function DashboardPage() {
-  const { tasks, loading, error, toggleComplete, create, deleteTask } = useTasksContext();
-  const { projectOrder } = useOrdering();
+  const { tasks, loading, error, toggleComplete, create, deleteTask, update, star } = useTasksContext();
+  const { projectOrder, reorderProjects } = useOrdering();
   const { projectNames, sourceByName, favoriteByName, refresh: refreshRegistry } = useProjectRegistry();
 
   // null = All Tasks, '' = Inbox, otherwise a project name.
@@ -23,6 +50,40 @@ export function DashboardPage() {
   const [filterP1, setFilterP1] = useState(false);
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
+
+  // ── table view state (persisted) ──
+  const [sort, setSort] = useState<TpSort | null>(readSort);
+  const [grouped, setGrouped] = useState(readGrouped);
+  const [collapsed, setCollapsed] = useState<Set<string>>(readCollapsed);
+
+  const handleSortChange = useCallback((s: TpSort | null) => {
+    setSort(s);
+    try {
+      if (s) localStorage.setItem(LS_SORT, JSON.stringify(s));
+      else localStorage.removeItem(LS_SORT);
+    } catch { /* ignore */ }
+  }, []);
+
+  const handleGroupedToggle = useCallback(() => {
+    setGrouped((v) => {
+      try { localStorage.setItem(LS_GROUPED, v ? '0' : '1'); } catch { /* ignore */ }
+      return !v;
+    });
+  }, []);
+
+  const persistCollapsed = (next: Set<string>) => {
+    try { localStorage.setItem(LS_COLLAPSED, JSON.stringify([...next])); } catch { /* ignore */ }
+  };
+
+  const handleToggleGroup = useCallback((project: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(project)) next.delete(project);
+      else next.add(project);
+      persistCollapsed(next);
+      return next;
+    });
+  }, []);
 
   // ── rail data: registry projects (incl. zero-task ones) ∪ task-derived names,
   //    ordered projectOrder-first then alphabetical. Inbox is separate/last. ──
@@ -68,6 +129,27 @@ export function DashboardPage() {
     [tasks],
   );
 
+  // All projects currently visible in the grouped table ('' excluded) — the
+  // Collapse-all target set and the reorder baseline.
+  const visibleProjectKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const t of tasks) keys.add(t.project || '');
+    return keys;
+  }, [tasks]);
+
+  const allGroupsCollapsed = useMemo(
+    () => [...visibleProjectKeys].every((k) => collapsed.has(k)),
+    [visibleProjectKeys, collapsed],
+  );
+
+  const handleCollapseExpandAll = useCallback(() => {
+    setCollapsed(() => {
+      const next = allGroupsCollapsed ? new Set<string>() : new Set(visibleProjectKeys);
+      persistCollapsed(next);
+      return next;
+    });
+  }, [allGroupsCollapsed, visibleProjectKeys]);
+
   // ── right pane data ──
   const inScope = useMemo(() => {
     if (activeProject === null) return tasks;
@@ -107,8 +189,11 @@ export function DashboardPage() {
     }
   }, [showTodo, showDone]);
 
-  const handleGhostCreate = useCallback(async (title: string) => {
-    await create({ title, priority: 'none', project: activeProject || undefined });
+  const handleGhostCreate = useCallback(async (title: string, project?: string) => {
+    // Grouped ghost rows pass their own project; the top ghost falls back to
+    // the rail selection. '' stays '' (Inbox).
+    const target = project !== undefined ? project : (activeProject || '');
+    await create({ title, priority: 'none', project: target || undefined });
   }, [create, activeProject]);
 
   const handleCreateProject = useCallback(async (name: string) => {
@@ -130,10 +215,15 @@ export function DashboardPage() {
     setShowForm(false);
   }, [create]);
 
+  const handleReorderProjects = useCallback((order: string[]) => {
+    void reorderProjects(order);
+  }, [reorderProjects]);
+
   if (loading) return <LoadingSpinner />;
   if (error) return <div className="empty-state"><p>Error: {error}</p></div>;
 
   const boardTitle = activeProject === null ? 'All Tasks' : (activeProject || 'Inbox');
+  const isAll = activeProject === null;
 
   return (
     <div className="tasks-page">
@@ -144,6 +234,7 @@ export function DashboardPage() {
         activeKey={activeProject}
         onSelect={setActiveProject}
         onCreateProject={handleCreateProject}
+        onReorderProjects={handleReorderProjects}
       />
 
       <main className="tp-board">
@@ -162,6 +253,28 @@ export function DashboardPage() {
           <button type="button" className={`tp-chip${filterP1 ? ' on' : ''}`} onClick={() => setFilterP1((v) => !v)}>
             <span className="tp-p-dot p1" />P1
           </button>
+          {isAll && (
+            <>
+              <button
+                type="button"
+                className={`tp-chip${grouped ? ' on' : ''}`}
+                title={grouped ? 'Grouped by project — click for a flat list' : 'Flat list — click to group by project'}
+                onClick={handleGroupedToggle}
+              >
+                ⊟ Group
+              </button>
+              {grouped && (
+                <button
+                  type="button"
+                  className="tp-chip"
+                  title={allGroupsCollapsed ? 'Expand all projects' : 'Collapse all projects'}
+                  onClick={handleCollapseExpandAll}
+                >
+                  {allGroupsCollapsed ? '⌃⌃ Expand all' : '⌄⌄ Collapse all'}
+                </button>
+              )}
+            </>
+          )}
           <input
             className="tp-search"
             type="search"
@@ -179,6 +292,14 @@ export function DashboardPage() {
           onToggleComplete={toggleComplete}
           onDelete={deleteTask}
           onCreate={handleGhostCreate}
+          onUpdate={update}
+          onStar={star}
+          sort={sort}
+          onSortChange={handleSortChange}
+          grouped={grouped}
+          collapsed={collapsed}
+          onToggleGroup={handleToggleGroup}
+          projectOrder={projectOrder}
         />
       </main>
 

@@ -8951,6 +8951,52 @@ body.walnut-dragging {
   container-type: inline-size;
 }
 
+/* ── Mini-bar: high-frequency verbs under the section tabs ── */
+.todo-minibar {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 26px;
+  padding: 0 10px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+.todo-minibar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-family: inherit;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.todo-minibar-btn:hover { background: var(--bg-hover); color: var(--fg); }
+.todo-minibar-btn.on { color: var(--accent); background: var(--accent-subtle); }
+.todo-minibar-sep {
+  width: 1px;
+  height: 13px;
+  background: var(--border);
+  margin: 0 3px;
+  flex: none;
+}
+.todo-minibar-running { color: var(--success, #34c759); }
+.todo-minibar-running-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success, #34c759);
+  flex: none;
+}
+
 .todo-section-tab {
   display: flex;
   align-items: center;
@@ -11965,6 +12011,21 @@ body.walnut-dragging {
   user-select: none;
 }
 
+/* Draggable variant (named projects): re-enable pointer events for HTML5 DnD.
+   Inbox labels stay inert — Inbox never enters ordering.projects. */
+.tier-project-label-draggable {
+  pointer-events: auto;
+  cursor: grab;
+  border-radius: 6px;
+}
+.tier-project-label-draggable:hover { background: var(--bg-hover); color: var(--fg); }
+.tier-project-label-draggable:active { cursor: grabbing; }
+.tier-project-label-dropover {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
 .tier-project-label-icon {
   display: inline-flex;
   opacity: 0.7;
@@ -12394,6 +12455,100 @@ body.walnut-dragging {
   background: rgba(0, 122, 255, 0.15);
   text-decoration: none;
 }
+
+/* ===== Task detail page v2 — compact two-column layout ===== */
+
+.task-detail-v2 .tdv2-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0 12px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+}
+.tdv2-back { flex: none; }
+.tdv2-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 17px;
+  font-weight: 700;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tdv2-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 250px;
+  gap: 16px;
+  align-items: start;
+}
+/* stack on narrow windows / pop-outs */
+@media (max-width: 860px) {
+  .tdv2-body { grid-template-columns: 1fr; }
+}
+
+.tdv2-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* Sessions card renders first regardless of DOM order (chat is the main read). */
+.tdv2-main > * { order: 1; }
+.tdv2-main > .tdv2-sessions { order: 0; }
+
+.tdv2-side {
+  position: sticky;
+  top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-secondary);
+  padding: 10px 14px;
+  font-size: 12.5px;
+}
+.tdv2-kv {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px dashed color-mix(in srgb, var(--border) 70%, transparent);
+}
+.tdv2-side .tdv2-kv:last-child { border-bottom: none; }
+.tdv2-kv-block { flex-direction: column; align-items: stretch; }
+.tdv2-k { color: var(--fg-muted); flex: none; }
+.tdv2-v { min-width: 0; display: inline-flex; align-items: center; }
+
+/* whole-row clickable session entries */
+.tdv2-session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.tdv2-session-row:hover {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+.tdv2-session-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.tdv2-session-open {
+  margin-left: auto;
+  flex: none;
+  color: var(--accent);
+  font-size: 11.5px;
+  opacity: 0;
+}
+.tdv2-session-row:hover .tdv2-session-open { opacity: 1; }
 
 /* ===== Task Source Badge ===== */
 

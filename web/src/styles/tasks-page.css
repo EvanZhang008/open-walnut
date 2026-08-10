@@ -27,14 +27,32 @@
 /* ───────── left rail ───────── */
 
 .tp-rail {
-  width: 220px;
+  width: 220px; /* default — inline style from the resizer overrides */
   flex: none;
   display: flex;
   flex-direction: column;
   min-height: 0;
   border-right: 1px solid var(--border);
   padding: 12px 8px 10px;
+  position: relative;
 }
+
+/* drag-to-resize handle on the rail's right edge */
+.tp-rail-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+}
+.tp-rail-resizer:hover,
+.tp-rail-resizer.active {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.tp-rail-item.dragging { opacity: 0.4; }
 
 .tp-rail-title {
   font-size: 11px;
@@ -224,17 +242,36 @@
 
 .tp-thead {
   height: 32px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
   background: var(--bg);
   z-index: 1;
 }
+
+/* sortable column header — click cycles asc → desc → off */
+.tp-th {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  justify-content: flex-start;
+  text-align: left;
+  user-select: none;
+}
+.tp-th:hover { color: var(--fg); }
+.tp-th.on { color: var(--accent); }
+.tp-th-arrow { font-size: 8px; }
 
 .tp-row {
   height: 36px;
@@ -337,31 +374,158 @@
   white-space: nowrap;
 }
 
-/* hover-revealed row delete. Absolutely positioned, but ALSO pinned to grid
-   cell 1/row 1 — without that, CSS Grid gives this 6th child its own implicit
-   row, which only renders correctly because .tp-row has a fixed height. */
-.tp-row-del {
-  grid-column: 1 / -1;
-  grid-row: 1;
-  justify-self: end;
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: 6px;
-  background: none;
-  color: var(--fg-muted);
-  font-size: 14px;
-  cursor: pointer;
+/* hover quick actions — star / delete, revealed at the title cell's right edge */
+.tp-row-acts {
+  margin-left: auto;
   display: none;
   align-items: center;
-  justify-content: center;
+  gap: 2px;
+  flex: none;
 }
-.tp-row:hover .tp-row-del { display: inline-flex; }
-.tp-row-del:hover { background: var(--bg-tertiary); color: var(--fg); }
+.tp-row:hover .tp-row-acts { display: inline-flex; }
+.tp-act-btn {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.tp-act-btn:hover { background: var(--bg-tertiary); color: var(--fg); }
+.tp-act-btn.tp-act-del:hover { color: var(--tp-p0); }
+
+/* inline-editable cells (priority / project) — dashed affordance on hover */
+.tp-cell-edit-btn {
+  border: none;
+  background: none;
+  padding: 2px 6px;
+  margin-left: -6px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+.tp-cell-edit-btn:hover { background: var(--bg-tertiary); }
+
+/* priority picker popover */
+.tp-pri-popover {
+  position: fixed;
+  z-index: 9500;
+  background: var(--bg-elevated, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+}
+.tp-pri-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  font-family: inherit;
+  color: var(--fg);
+  cursor: pointer;
+  text-align: left;
+}
+.tp-pri-opt:hover { background: var(--bg-hover); }
+.tp-pri-opt.active { color: var(--accent); font-weight: 600; }
+.tp-pri-opt .tp-p-dot.none {
+  background: none;
+  border: 1px dashed var(--border-strong);
+}
+
+/* project picker popover — same shell as the priority one, plus a filter */
+.tp-proj-popover {
+  position: fixed;
+  z-index: 9500;
+  background: var(--bg-elevated, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  max-width: 280px;
+  overflow-y: auto;
+}
+.tp-proj-filter {
+  margin: 2px 2px 4px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  flex: none;
+}
+.tp-proj-filter:focus { border-color: var(--accent); }
+.tp-proj-empty {
+  padding: 8px 10px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+/* due cell hosts the shared DatePicker trigger — keep it row-height compact */
+.tp-due-picker .dp-trigger {
+  font-size: 12px;
+  padding: 2px 6px;
+  margin-left: -6px;
+}
+
+/* project group headers (All Tasks grouped view) */
+.tp-group-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 20px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  position: sticky;
+  top: 32px; /* below the sticky thead */
+  z-index: 1;
+}
+.tp-group-header:hover { background: var(--bg-hover); }
+.tp-group-chevron {
+  font-size: 10px;
+  color: var(--fg-muted);
+  transition: transform 0.12s ease;
+  flex: none;
+}
+.tp-group-header.closed .tp-group-chevron { transform: rotate(-90deg); }
+.tp-group-icon { flex: none; font-size: 12px; }
+.tp-group-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tp-group-count { color: var(--fg-muted); font-weight: 400; font-size: 11.5px; }
 
 /* ghost "＋ New task…" row at the very top of the body */
 .tp-ghost {
