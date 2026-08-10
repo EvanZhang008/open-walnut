@@ -668,7 +668,7 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
     // server's old post-triage fallback (which ran after EVERY triage result). The
     // session has been quiet for the debounce window and the turn is over, so the
     // ball is in the human's court: AGENT_COMPLETE → AWAIT_HUMAN_ACTION
-    // (+ needs_attention). applySessionPhase's 'triage-sync' trigger only fires from
+    // (which keeps the task unread). applySessionPhase's 'triage-sync' only fires from
     // AGENT_COMPLETE, so an in-progress or human-verified task is never touched.
     try {
       const { applySessionPhase } = await import('../phase.js');
@@ -847,6 +847,30 @@ interface TitleCapableSession {
   generateSessionTitle?: (description: string, timeoutMs?: number) => Promise<string | null>;
 }
 
+/** The shared "hidden main-model prompt" question. One prompt for every
+ *  provider — the provider-specific part is only HOW it's delivered. */
+function buildTitleQuestion(message: string, placeholder: string, requirement: string | null): string {
+  return [
+    'Generate a title for this session (it appears in the user\'s session list).',
+    'Concise, 3-7 words, sentence case. Capture the main topic or goal.',
+    ...(requirement ? [
+      `MANDATORY RULE from the task system: ${requirement}`,
+      'Obey this rule even if it conflicts with the language or style of the message below (translate, don\'t mirror).',
+    ] : []),
+    `Current placeholder title: ${placeholder}`,
+    `User's first message: ${message.slice(0, 2000)}`,
+    'Reply with ONLY the title — no quotes, no commentary.',
+  ].join('\n');
+}
+
+/** Main models sometimes wrap the answer — take the first non-empty line,
+ *  strip quotes, cap like every other title write. */
+function cleanTitleAnswer(answer: string): string | null {
+  const firstLine = answer.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
+  const cleaned = firstLine.replace(/^["']|["']$/g, '').trim();
+  return cleaned ? cleaned.slice(0, 200) : null;
+}
+
 /**
  * PRIMARY title channel: side_question, answered by the session's MAIN model
  * with a prompt we fully author. The plugin's content requirement (if any)
@@ -863,17 +887,7 @@ async function titleViaSideQuestion(
 ): Promise<string | null> {
   if (!live.askSideQuestion) return null;
   try {
-    const question = [
-      'Generate a title for this session (it appears in the user\'s session list).',
-      'Concise, 3-7 words, sentence case. Capture the main topic or goal.',
-      ...(requirement ? [
-        `MANDATORY RULE from the task system: ${requirement}`,
-        'Obey this rule even if it conflicts with the language or style of the message below (translate, don\'t mirror).',
-      ] : []),
-      `Current placeholder title: ${placeholder}`,
-      `User's first message: ${message.slice(0, 2000)}`,
-      'Reply with ONLY the title — no quotes, no commentary.',
-    ].join('\n');
+    const question = buildTitleQuestion(message, placeholder, requirement);
     // 60s: a side question is answered by the main model and may queue behind
     // the turn the CLI is currently running (same FIFO) — measured 22s+ on a
     // cold remote session; all failure modes resolve to null.
@@ -891,13 +905,38 @@ async function titleViaSideQuestion(
       await new Promise((r) => setTimeout(r, autoTitleRetryDelayMs));
       answer = (await live.askSideQuestion(question, 60_000)).trim();
     }
-    // Main models sometimes wrap the answer — take the first non-empty line,
-    // strip quotes, cap like every other title write.
-    const firstLine = answer.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
-    const cleaned = firstLine.replace(/^["']|["']$/g, '').trim();
-    return cleaned ? cleaned.slice(0, 200) : null;
+    return cleanTitleAnswer(answer);
   } catch (err) {
     log.session.warn('session-auto-title: side-question title failed', {
+      errorKind: err instanceof Error ? err.name : typeof err,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+/**
+ * ACP (codex engine) title channel — the provider-shaped twin of
+ * titleViaSideQuestion. Same authored prompt, same main-model answer, but
+ * delivered over the ACP worker's control-tagged self-report frames (the only
+ * hidden-prompt mechanism the ACP protocol offers; frames are invisible to the
+ * live/history projector). Two constraints native sessions don't have:
+ *   - one control prompt at a time, and NEVER during an active user turn —
+ *     the worker rejects it. Callers should prefer turn boundaries.
+ *   - answered by the session's full main model (no cheap-titler fallback
+ *     exists for ACP — its result must satisfy the plugin rule or nothing).
+ */
+async function titleViaAcpSelfReport(
+  acp: { activity?: 'processing' | 'idle'; requestTurnCompleteSelfReport: (prompt: string, timeoutMs: number) => Promise<string> },
+  message: string, placeholder: string, requirement: string | null,
+): Promise<string | null> {
+  if (acp.activity === 'processing') return null; // worker would reject; the turn-complete trigger retries at the boundary
+  try {
+    const answer = (await acp.requestTurnCompleteSelfReport(
+      buildTitleQuestion(message, placeholder, requirement), 60_000)).trim();
+    return cleanTitleAnswer(answer);
+  } catch (err) {
+    log.session.warn('session-auto-title: acp self-report title failed', {
       errorKind: err instanceof Error ? err.name : typeof err,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -945,10 +984,21 @@ async function askAndApplyTitle(
 
   try {
     const { sessionRunner } = await import('../../providers/claude-code-session.js');
-    const live = sessionRunner.findSessionByClaudeId(sessionId);
-    // No live native session (ACP/codex engine, or record-only) → nothing to
-    // ask. Deliberately does NOT burn an attempt: the CLI may attach later.
-    if (!live || (!live.askSideQuestion && !live.generateSessionTitle)) return false;
+    // Provider resolution: ACP (codex) FIRST, then native CLI. ACP first for
+    // two reasons: findOrAttachAcpSession consults the durable record (engine
+    // === 'codex'), so a codex sid can never be misrouted into the native
+    // side_question channel even if a stray native wrapper also holds the sid
+    // (2026-08-10 incident: startup recovery attached codex records as native
+    // sessions and titling dispatched side_questions into them — guaranteed
+    // write failures); and it lazily re-attaches after a server restart, when
+    // the live map is empty but the worker is still alive. For native sids the
+    // ACP lookup is one cheap record read that misses. Both providers expose a
+    // hidden main-model prompt — the ONE capability titling actually needs.
+    // No live session of either kind → nothing to ask (deliberately does NOT
+    // burn an attempt: the process may attach later).
+    const acp = await sessionRunner.findOrAttachAcpSession(sessionId).catch(() => undefined);
+    const live = acp ? undefined : sessionRunner.findSessionByClaudeId(sessionId);
+    if (!acp && (!live || (!live.askSideQuestion && !live.generateSessionTitle))) return false;
 
     // The caller's task snapshot can be stale (hook payload cache is up to
     // 10s old) — re-read before spending a CLI round-trip, so a send that
@@ -969,15 +1019,22 @@ async function askAndApplyTitle(
     // authors both the requirement and the validator.
     const requirement = pluginContentRequirement(await getTask(taskId), 'title');
 
-    let title = await titleViaSideQuestion(live, message, placeholder, requirement);
-    let channel = 'side_question';
-    if (!title) {
-      title = await titleViaCliTitler(live, message, placeholder, requirement);
-      channel = 'cli_titler';
+    let title: string | null;
+    let channel: string;
+    if (acp) {
+      title = await titleViaAcpSelfReport(acp, message, placeholder, requirement);
+      channel = 'acp_self_report';
+    } else {
+      title = await titleViaSideQuestion(live!, message, placeholder, requirement);
+      channel = 'side_question';
+      if (!title) {
+        title = await titleViaCliTitler(live!, message, placeholder, requirement);
+        channel = 'cli_titler';
+      }
     }
     if (!title) {
       log.session.warn('session-auto-title: no title from any channel — placeholder kept', {
-        sessionId, taskId,
+        sessionId, taskId, provider: acp ? 'acp' : 'native',
       });
       return false;
     }
@@ -1138,6 +1195,11 @@ export const sessionAutoTitleHook: SessionHookDefinition = {
   priority: 55,
   source: 'builtin',
   enabled: true,
+  // Titling legitimately outlives the 30s dispatcher default: the side question
+  // window alone is 60s (+4s pause +60s retry on a cold FIFO). The dispatcher
+  // timeout doesn't cancel the work — it just logs a spurious "hook failed"
+  // while the title still lands afterwards (observed live 2026-08-10).
+  timeoutMs: 180_000,
   handler: async (payload) => {
     const p = payload as OnMessageSendPayload;
     if (!p.taskId || !p.task) return;
@@ -1193,6 +1255,8 @@ export const sessionAutoTitleTurnCompleteHook: SessionHookDefinition = {
   priority: 56,
   source: 'builtin',
   enabled: true,
+  timeoutMs: 180_000, // same rationale as session-auto-title above
+
   handler: async (payload) => {
     const p = payload as OnTurnCompletePayload;
     if (!p.taskId || !p.task) return;
@@ -1207,15 +1271,23 @@ export const sessionAutoTitleTurnCompleteHook: SessionHookDefinition = {
     if (!placeholder) return;
 
     // The turn payload carries the ASSISTANT result, not the user's message —
-    // pull the first real user message from the session's JSONL (tail is
+    // pull the first real user message from the session's history (tail is
     // plenty: this fires on the FIRST turn; walnut-injected synthetic user
-    // events are already filtered by the history reader).
+    // events are already filtered by the history reader). Provider-shaped
+    // read: ACP history lives in the worker journal, native in the JSONL —
+    // both return the same SessionHistoryMessage DTO.
     let message = '';
     try {
-      const { readSessionHistoryTail } = await import('../session-history.js');
-      const history = await readSessionHistoryTail(
-        p.sessionId, p.session?.cwd ?? p.task.cwd, p.session?.host, p.session?.outputFile);
-      message = history?.find((m) => m.role === 'user' && m.text.trim())?.text.trim() ?? '';
+      if (p.session?.engine === 'codex') {
+        const { readAcpSessionHistory } = await import('../../providers/acp-session-history.js');
+        const history = await readAcpSessionHistory(p.session);
+        message = history.find((m) => m.role === 'user' && m.text.trim())?.text.trim() ?? '';
+      } else {
+        const { readSessionHistoryTail } = await import('../session-history.js');
+        const history = await readSessionHistoryTail(
+          p.sessionId, p.session?.cwd ?? p.task.cwd, p.session?.host, p.session?.outputFile);
+        message = history?.find((m) => m.role === 'user' && m.text.trim())?.text.trim() ?? '';
+      }
     } catch { /* no history → nothing to title from */ }
     if (!message) return;
     if (/^\/[a-z][\w-]*(\s|$)/i.test(message)) return; // same slash-command gate

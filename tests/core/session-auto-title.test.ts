@@ -285,6 +285,61 @@ describe('sessionAutoTitleHook', () => {
     });
   });
 
+  describe('ACP (codex) provider channel', () => {
+    function registerFakeAcpSession(sid: string, impl: (prompt: string) => Promise<string>, activity: 'processing' | 'idle' = 'idle') {
+      const fake = {
+        sessionId: sid,
+        runtimeId: `rt-${sid}`,
+        activity,
+        requestTurnCompleteSelfReport: vi.fn(impl),
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (sessionRunner as any).acpSessions.set(sid, fake);
+      return fake;
+    }
+    afterEach(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const map = (sessionRunner as any).acpSessions as Map<string, unknown>;
+      for (const key of [...map.keys()]) if (String(key).startsWith('auto-title-sid-')) map.delete(key);
+    });
+
+    it('titles a codex session via the ACP self-report control prompt', async () => {
+      const sid = nextSid();
+      const task = await makeTaskAndSession(sid);
+      // No native session registered — provider resolution must find the ACP one.
+      const fake = registerFakeAcpSession(sid, async (prompt) => {
+        expect(prompt).toContain('rewrite the marketing site copy');
+        return 'Marketing site copy rewrite';
+      });
+
+      await sessionAutoTitleHook.handler(payloadFor(sid, task, 'rewrite the marketing site copy'));
+
+      expect(fake.requestTurnCompleteSelfReport).toHaveBeenCalledTimes(1);
+      expect((await getTask(task.id)).title).toBe('Marketing site copy rewrite');
+    });
+
+    it('defers while an ACP turn is active (worker would reject the control prompt)', async () => {
+      const sid = nextSid();
+      const task = await makeTaskAndSession(sid);
+      const fake = registerFakeAcpSession(sid, async () => 'Nope', 'processing');
+
+      await sessionAutoTitleHook.handler(payloadFor(sid, task, 'do the thing'));
+
+      expect(fake.requestTurnCompleteSelfReport).not.toHaveBeenCalled();
+      expect((await getTask(task.id)).title).toBe(PLACEHOLDER);
+    });
+
+    it('keeps the placeholder when the ACP self-report fails (no fallback titler exists)', async () => {
+      const sid = nextSid();
+      const task = await makeTaskAndSession(sid);
+      registerFakeAcpSession(sid, async () => { throw new Error('worker gone'); });
+
+      await sessionAutoTitleHook.handler(payloadFor(sid, task, 'do the thing'));
+
+      expect((await getTask(task.id)).title).toBe(PLACEHOLDER);
+    });
+  });
+
   describe('plugin content requirement (generic — the plugin authors rule + validator)', () => {
     // A sync plugin that only accepts ASCII titles — stand-in for any external
     // system's content rule (2026-08-06/07/08 incident chain: an English-only

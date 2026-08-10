@@ -6067,6 +6067,12 @@ export class SessionRunner {
       // Phase 1: reconnect to surviving sessions
       if (reconnectable?.length) {
         for (const record of reconnectable) {
+          // ACP (codex) sessions are NOT native CLI processes — attachToExisting
+          // here would register a native wrapper that shadows the ACP registry
+          // for this sid (2026-08-10: title side_questions were dispatched into
+          // a codex session through such a wrapper and could only ever fail).
+          // They re-attach lazily via maybeAttachAcpSession on first use.
+          if (record.engine === 'codex') continue
           try {
             const session = await ClaudeCodeSession.attachToExisting(record, this.cliCommand, this._testDaemonUrl)
             const mapKey = record.taskId || `reconnected-${record.claudeSessionId}`
