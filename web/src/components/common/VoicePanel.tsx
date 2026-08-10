@@ -3,7 +3,7 @@
  * pattern as NotificationPanel).
  *
  * The ALWAYS-PRESENT recovery surface for voice input: every transcription is
- * persisted server-side (~/.open-walnut/stt-debug via /api/stt/recordings),
+ * persisted server-side (~/.open-walnut/tmp/stt-recordings via /api/stt/recordings),
  * so even when the browser dropped the response (starvation/tab close), the
  * text is here. Each row: time + status + text preview, with
  *   Insert — put the text into the last-focused chat input (clipboard fallback)

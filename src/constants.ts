@@ -317,7 +317,19 @@ export function workingMemoryFile(agentId: string, conversationId: string): stri
   return path.join(conversationDir(agentId), `${validateConversationId(conversationId)}.working-memory.md`);
 }
 export const TIMELINE_DIR = path.join(WALNUT_HOME, 'timeline');
-export const RECORDINGS_DIR = path.join(WALNUT_HOME, 'recordings');
+/**
+ * The ONE place app-generated scratch may live. Gitignored (`tmp/` is in the
+ * .gitignore template AND in EXTRA_IGNORE_PATTERNS, so pre-existing installs
+ * self-heal), so nothing written here can ever reach the sync history.
+ *
+ * Rule for new code: anything regenerable, machine-local, or binary goes under
+ * TMP_DIR — never at WALNUT_HOME root. Root-level scratch is how this repo grew
+ * to 15 GB / 1,958 commits per day (2026-07-25) and how a stale
+ * ms-todo-tokens.json copy with a live MS Graph access token got committed.
+ */
+export const TMP_DIR = path.join(WALNUT_HOME, 'tmp');
+/** Audio-capture WAV chunks (date-subdir per day). Under tmp/: large, binary, machine-local. */
+export const RECORDINGS_DIR = path.join(TMP_DIR, 'recordings');
 export const LOG_PREFIX = 'open-walnut-';
 /** Directory containing pre-compiled daemon binaries (built by scripts/build-daemon.sh). */
 /**

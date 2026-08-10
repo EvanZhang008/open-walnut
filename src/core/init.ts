@@ -14,6 +14,7 @@ import {
   REPOSITORIES_DIR,
   TIMELINE_DIR,
   RECORDINGS_DIR,
+  TMP_DIR,
   COMMANDS_DIR,
   GLOBAL_SKILLS_DIR,
   SESSION_STREAMS_DIR,
@@ -26,6 +27,7 @@ import fsp from 'node:fs/promises';
 import fs from 'node:fs';
 import { ensureMemoryFile } from './memory-file.js';
 import { seedConfigDefaults } from './config-manager.js';
+import { sweepOrphanAtomicTmpFiles } from './tmp-sweep.js';
 import { log } from '../logging/index.js';
 
 /**
@@ -70,6 +72,9 @@ export async function initDirectories(): Promise<void> {
   // them here resurrected empty PARA dirs on every boot after the migration.
   await ensureDir(REPOSITORIES_DIR);
   await ensureDir(TIMELINE_DIR);
+  // tmp/ is the ONE sanctioned home for app-generated scratch (gitignored).
+  // Created before anything that writes into it (RECORDINGS_DIR lives inside).
+  await ensureDir(TMP_DIR);
   await ensureDir(RECORDINGS_DIR);
   await ensureDir(COMMANDS_DIR);
   await ensureDir(GLOBAL_SKILLS_DIR);
@@ -79,4 +84,8 @@ export async function initDirectories(): Promise<void> {
   await migrateLegacyMemoryFile();
   ensureMemoryFile();
   await seedConfigDefaults();
+  // Fire-and-forget: clear atomic-write orphans left by a crashed/killed write.
+  // Never awaited (a slow disk must not delay boot) and never throws — see
+  // tmp-sweep.ts for why these repeatedly broke the auto-commit loop.
+  void sweepOrphanAtomicTmpFiles();
 }

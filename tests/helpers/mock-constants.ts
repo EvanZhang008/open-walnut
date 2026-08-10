@@ -102,7 +102,8 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
     COMPACTION_DIR: path.join(tmpBase, 'memory', 'compaction'),
     MEMORY_INDEX_FILE: path.join(tmpBase, 'memory', 'index.md'),
     WORKING_MEMORY_FILE: path.join(tmpBase, 'memory', 'working-memory.md'),
-    RECORDINGS_DIR: path.join(tmpBase, 'recordings'),
+    TMP_DIR: path.join(tmpBase, 'tmp'),
+    RECORDINGS_DIR: path.join(tmpBase, 'tmp', 'recordings'),
     // Non-path scalar constants — must be mirrored here too, otherwise any
     // module under test that imports them sees `undefined` (vitest throws on
     // unmocked named exports of a mocked module).

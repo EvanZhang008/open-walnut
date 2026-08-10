@@ -7,19 +7,28 @@
  * fetch), the text still exists here and the UI can list/re-insert/re-transcribe
  * it later via /api/stt/recordings.
  *
- * Layout (kept at the historical stt-debug path for compat):
- *   ~/.open-walnut/stt-debug/<iso-ts>.<format>   raw audio
- *   ~/.open-walnut/stt-debug/<iso-ts>.json       metadata + result/error
+ * Layout:
+ *   <WALNUT_HOME>/tmp/stt-recordings/<iso-ts>.<format>   raw audio
+ *   <WALNUT_HOME>/tmp/stt-recordings/<iso-ts>.json       metadata + result/error
+ *
+ * Under tmp/ because these are machine-local binary blobs (capped at
+ * MAX_RECORDINGS): regenerable-by-recording, never worth syncing. The old
+ * location was `homedir()/.open-walnut/stt-debug` — a hardcoded home that
+ * ignored WALNUT_HOME, so test runs and ephemeral child servers wrote into the
+ * REAL user directory. tmp/ is gitignored, so nothing here reaches sync.
+ * Pre-existing stt-debug/ dirs are left alone (also gitignored); old recordings
+ * simply stop being listed.
  */
 
 import { mkdir, writeFile, readFile, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { TMP_DIR } from '../../constants.js';
 import type { SttResult } from './types.js';
 
-// Computed lazily (not at module load) so tests can swap homedir().
+// Computed lazily (not at module load) so a test that redirects WALNUT_HOME
+// — or mocks constants.js — is honoured rather than frozen at import time.
 function dir(): string {
-  return join(homedir(), '.open-walnut', 'stt-debug');
+  return join(TMP_DIR, 'stt-recordings');
 }
 const MAX_RECORDINGS = 100;
 

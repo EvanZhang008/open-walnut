@@ -661,5 +661,5 @@ sttRouter.post('/auto-config', express.json(), async (_req: Request, res: Respon
 });
 
 // Audio persistence lives in src/core/stt/recordings.ts — every transcription
-// (and its result/error) is stored under ~/.open-walnut/stt-debug/ and exposed
-// via GET /api/stt/recordings for recovery.
+// (and its result/error) is stored under <WALNUT_HOME>/tmp/stt-recordings/ and
+// exposed via GET /api/stt/recordings for recovery.

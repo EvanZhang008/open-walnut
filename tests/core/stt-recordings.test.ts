@@ -7,10 +7,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 let dir: string;
-vi.mock('node:os', async (importOriginal) => {
-  const os = await importOriginal<typeof import('node:os')>();
-  return { ...os, homedir: () => dir };
-});
+// The store resolves its directory from TMP_DIR lazily, so mocking the constant
+// is enough — no homedir() shim (the old hardcoded homedir() was the bug this
+// relocation fixed: it ignored WALNUT_HOME entirely).
+vi.mock('../../src/constants.js', () => ({
+  get TMP_DIR() { return join(dir, 'tmp'); },
+}));
 
 import {
   saveRecordingAudio,
@@ -83,7 +85,7 @@ describe('stt recordings store', () => {
         result: { text: `t${i}`, durationMs: 1 },
       });
     }
-    const files = await readdir(join(dir, '.open-walnut', 'stt-debug'));
+    const files = await readdir(join(dir, 'tmp', 'stt-recordings'));
     const jsons = files.filter(f => f.endsWith('.json'));
     expect(jsons.length).toBeLessThanOrEqual(100);
     // The newest survives

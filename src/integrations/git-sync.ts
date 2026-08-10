@@ -324,6 +324,98 @@ cron-state.json
 hook-errors.log
 .DS_Store
 node_modules/
+
+# ── Crash residue, dead stores, machine-local runtime state ─────────────────
+# Every rule below was found TRACKED in a real data repo and removed in the
+# 2026-08-09 cleanup. They existed ONLY in that box's hand-edited .gitignore, so
+# a FRESH install re-leaked all of it — hence this block. Note the anchoring: a
+# leading / means root-level only, and each one below that has it needs it.
+
+# Atomic-write temp files. writeJsonFile() writes .open-walnut-<hex>.tmp beside
+# the target then renames; a crash mid-write orphans the .tmp. NOT anchored —
+# orphans appear in every dir that holds a JSON store. Nine were tracked, and one
+# was a stale copy of sync/ms-todo-tokens.json with a live MS Graph accessToken.
+# (src/core/tmp-sweep.ts deletes the stale ones on boot; this keeps them out of
+# the index in the window before that runs.)
+.open-walnut-*.tmp
+
+# Dead pre-SQLite stores (0-byte sessions.db / tasks.db leftovers). ROOT-LEVEL
+# ONLY: memory/history.db is live chat data and must stay tracked — a blanket
+# *.db would silence it.
+/*.db
+
+# One-shot migration output (e.g. chat-history.json.migrated, 1.8MB).
+*.migrated
+
+# Ad-hoc backup snapshots — git history already IS the backup.
+*.backup.json
+# ROOT-LEVEL only: notes/ may legitimately contain a note whose name has .bak.
+/*.bak.*
+
+# Parsed-history disk cache — rebuilt from the session JSONL on demand.
+cache/
+
+# Obsidian semantic index — chunks plus a ~71MB embeddings blob, both regenerable
+# from notes/. Binary, so git stores a FULL copy per change (no delta).
+.walnut-obsidian-search/
+
+# Plugin-store clones. The source of truth is config.yaml plugin_sources, and
+# these are nested git repos — never tracked by the data repo.
+plugin-stores/
+
+# Voice recordings + transcripts (machine-local binary). Pre-1a location; new
+# writes go to tmp/stt-recordings/, but old installs still have this dir.
+stt-debug/
+
+# Audio capture. Both moved under tmp/ in phase 1a; kept here for older installs.
+recordings/
+recording-state.json
+
+# Server singleton lock — holds THIS machine's pid/port; syncing it makes the
+# other box think a dead pid owns the repo.
+/server.lock.json
+
+# History-compaction watermark — a per-machine progress marker.
+/.last-compaction
+
+# UI state (open panels, widths, last-viewed ids). Rewritten constantly; was
+# worth ~45 commits/day on its own.
+/ui-prefs.json
+
+# Prebuilt dtach binary (pre-1a location; now tmp/bin/). A platform-specific
+# compiled artifact — rebuildable, and wrong for any other architecture.
+/bin/
+
+# Obsidian "new file" scratch names left at the vault root by an accidental
+# Cmd-N. ROOT-LEVEL only — a real note deeper in notes/ must be unaffected
+# (notes/_attachment/Untitled 1.png is genuine user data).
+/Untitled*
+/Pasted image *
+/未命名*
+
+# Obsidian's own state. .obsidian/ holds PLUGIN CONFIG, which in a real vault
+# contained S3 credentials; .smart-env is the Smart Connections embeddings store
+# (large, binary, regenerable). Neither is user content — notes/ is.
+.obsidian/
+.smart-env
+secrets/
+
+# Dead pre-SQLite session store. sessions.sqlite is the source of truth (ignored
+# above). session-db-migration.ts still reads sessions.json and writes
+# sessions.json.migrated-from-json.backup next to it, so a fresh install CAN
+# recreate both. Its history was once 906GB across 112,725 versions.
+sessions.json
+sessions.json.*
+
+# Ad-hoc backup snapshots at the WALNUT_HOME root (config.yaml.backup-<ts>,
+# config.yaml.backup-preheal-<ts>, …) — git history already IS the backup.
+# ROOT-ANCHORED on purpose: the hand-written rules these mirror were bare
+# *.bak / *.backup, which would also silence any note in notes/ whose filename
+# happens to contain .bak.
+/*.bak
+/*.bak-*
+/*.backup
+/*.backup-*
 `;
 
 /**

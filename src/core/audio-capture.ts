@@ -9,14 +9,17 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { randomBytes } from 'node:crypto'
-import { RECORDINGS_DIR, WALNUT_HOME } from '../constants.js'
+import { RECORDINGS_DIR, TMP_DIR } from '../constants.js'
 import { bus, EventNames } from './event-bus.js'
 import { getConfig } from './config-manager.js'
 import { log } from '../logging/index.js'
 
 // Persistent state file — if this file exists, recording should be active.
 // Written on start(), deleted on stop(). Server reads it on startup to auto-resume.
-const RECORDING_STATE_FILE = path.join(WALNUT_HOME, 'recording-state.json')
+// Under tmp/ (not the WALNUT_HOME root): this is per-machine runtime state
+// describing what THIS box is recording. Syncing it would make the other box try
+// to resume a recording it never started.
+const RECORDING_STATE_FILE = path.join(TMP_DIR, 'recording-state.json')
 
 // Native addons (.node files) can only be loaded via require(), not ESM import().
 // Since tsup bundles as ESM, we create a require function for loading the native addon.
@@ -726,6 +729,9 @@ class AudioCaptureService {
 
   private saveState(options: RecordingOptions): void {
     try {
+      // tmp/ is created by initDirectories(), but this class is also used from
+      // CLI paths that never boot the server — mkdir keeps it self-sufficient.
+      fs.mkdirSync(path.dirname(RECORDING_STATE_FILE), { recursive: true })
       fs.writeFileSync(RECORDING_STATE_FILE, JSON.stringify(options))
     } catch (err) {
       log.audio.warn('failed to save recording state', { error: (err as Error).message })

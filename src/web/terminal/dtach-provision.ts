@@ -10,8 +10,14 @@
  * builds cleanly on both macOS and Linux (verified). The compiled binary is
  * cached so this cost is paid once per host.
  *
- *   - local:  cached at  <WALNUT_HOME>/bin/walnut-dtach
+ *   - local:  cached at  <WALNUT_HOME>/tmp/bin/walnut-dtach
  *   - remote: cached at  ~/.local/bin/walnut-dtach   (on the remote host)
+ *
+ * The local cache lives under tmp/ because it is a platform-specific COMPILED
+ * artifact: rebuildable in ~1s from the embedded source, and actively wrong for
+ * any other architecture. It used to sit at <WALNUT_HOME>/bin/, inside the synced
+ * data repo, so a Mac-built arm64 binary reached a Linux box as an exec-format
+ * error. A missing cache just recompiles, so the move costs nothing.
  *
  * If compilation is impossible (no compiler), provisioning fails and the caller
  * surfaces a NO_DTACH install-hint card — never a silent state-losing shell.
@@ -21,7 +27,7 @@ import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs/promises'
 import { execFile } from 'node:child_process'
-import { WALNUT_HOME } from '../../constants.js'
+import { TMP_DIR } from '../../constants.js'
 import { shellQuote } from '../../providers/session-io.js'
 import { resolveSshTarget, sshControlMasterArgs } from './spawn.js'
 import { DTACH_SOURCES, DTACH_VERSION } from './dtach-sources.js'
@@ -30,8 +36,8 @@ import { log } from '../../logging/index.js'
 const PROVISION_TIMEOUT_MS = 30_000
 /** Remote cache path (under the remote user's home). */
 const REMOTE_BIN = '.local/bin/walnut-dtach'
-/** Local cache path. */
-const LOCAL_BIN = path.join(WALNUT_HOME, 'bin', 'walnut-dtach')
+/** Local cache path — under tmp/ (gitignored): a compiled, per-arch artifact. */
+const LOCAL_BIN = path.join(TMP_DIR, 'bin', 'walnut-dtach')
 
 /** dtach source filenames, in link order (headers excluded from the gcc line). */
 const C_FILES = ['attach.c', 'main.c', 'master.c']
