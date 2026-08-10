@@ -48,13 +48,19 @@ export type EventEmitter = (name: SessionEventName, data: unknown) => void
 /**
  * Walnut mode id → SDK PermissionMode. Mirrors SESSION_MODE_CLI_MAP in
  * core/types.ts (the SDK's `PermissionMode` union is the same vocabulary as the
- * CLI's `--permission-mode`). 'default' maps to itself, so it's omitted.
+ * CLI's `--permission-mode`).
+ *
+ * `auto` is deliberately ABSENT. The installed SDK's PermissionMode union is
+ * 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk' — no
+ * 'auto'. Sending it anyway would be laundered through a cast and then silently
+ * coerced back to 'default' by the SDK's own parser, so the runtime would be
+ * Default while the record said Auto. See applySdkPermissionMode: an unmapped
+ * mode is REJECTED loudly instead of guessed at.
  */
 const SDK_PERMISSION_MODE: Readonly<Record<string, PermissionMode>> = {
   bypass: 'bypassPermissions' as PermissionMode,
   accept: 'acceptEdits' as PermissionMode,
   plan: 'plan' as PermissionMode,
-  auto: 'auto' as unknown as PermissionMode,
   dontAsk: 'dontAsk' as PermissionMode,
   default: 'default' as PermissionMode,
 }
@@ -62,10 +68,21 @@ const SDK_PERMISSION_MODE: Readonly<Record<string, PermissionMode>> = {
 /**
  * Apply a Walnut mode onto SDK query Options. `bypass` additionally needs
  * allowDangerouslySkipPermissions — without it the SDK refuses the mode.
+ *
+ * Throws on a mode this SDK cannot express (today: 'auto'). Falling back to a
+ * neighbouring mode is exactly the class of bug this whole change fixed — a
+ * visible failure beats a session whose real permissions differ from its label.
  */
 function applySdkPermissionMode(options: Options, mode: string | undefined): void {
-  const resolved = mode ? SDK_PERMISSION_MODE[mode] : undefined
-  if (!resolved) return
+  if (!mode) return
+  const resolved = SDK_PERMISSION_MODE[mode]
+  if (!resolved) {
+    throw new Error(
+      `Permission mode "${mode}" is not supported by the SDK session server ` +
+      `(supported: ${Object.keys(SDK_PERMISSION_MODE).join(', ')}). ` +
+      `Use a CLI session for this mode.`,
+    )
+  }
   options.permissionMode = resolved
   if (mode === 'bypass') options.allowDangerouslySkipPermissions = true
 }

@@ -27,6 +27,7 @@
  */
 
 import type { SshTarget } from './session-io.js'
+import type { SessionMode } from '../core/types.js'
 import { RemoteSessionManager } from './remote-session-manager.js'
 import { localDaemon } from './local-daemon.js'
 import type { DaemonTaskState } from './daemon-connection.js'
@@ -88,8 +89,11 @@ export interface TransportStartOptions {
    * the upload and avoids regex-scraping the message body.
    */
   spillFile?: { localPath: string }
-  /** Permission mode — daemon uses this to auto-respond to control_request. */
-  mode?: 'bypass' | 'plan' | 'accept' | 'default'
+  /** Permission mode — daemon uses this to auto-respond to control_request.
+   *  Uses the registry type (core/types.ts): re-declaring a narrow union here
+   *  forced `as`-casts at the call sites, which erased exactly the mismatch a
+   *  spawn path had (an unmapped mode silently becoming bypass). */
+  mode?: SessionMode
 }
 
 // ── Attach Options ──
@@ -103,8 +107,8 @@ export interface TransportAttachOptions {
   onOutput: (event: OutputEvent) => void
   /** Callback when the Claude process exits. stderr is included for remote sessions. */
   onExit: (code: number, stderr?: string) => void
-  /** Permission mode — daemon updates session mode on reattach. */
-  mode?: 'bypass' | 'plan' | 'accept' | 'default'
+  /** Permission mode — daemon updates session mode on reattach. See above. */
+  mode?: SessionMode
 }
 
 // ── Start Result ──

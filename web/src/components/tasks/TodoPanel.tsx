@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, useRef, memo, Fragment, type FormEvent, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { SESSION_MODE_LABELS } from '@open-walnut/core';
 import type { Task as CoreTask, SessionRecord } from '@open-walnut/core';
 import { renderNoteMarkdown } from '@/utils/markdown';
 import { fetchSessionsForTask } from '@/api/sessions';
@@ -1349,7 +1350,11 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
                 const label = record?.title || 'Untitled session';
                 const ago = timeAgo(record?.lastActiveAt || record?.startedAt || '');
                 const isPlan = record?.mode === 'plan' || !!record?.planCompleted;
-                const modeLabel = record?.mode && record.mode !== 'default' && record.mode !== 'plan' && !record?.planCompleted ? record.mode : null;
+                // Registry label, not the raw id — otherwise 'dontAsk' leaks
+                // its camelCase id into the UI.
+                const modeLabel = record?.mode && record.mode !== 'default' && record.mode !== 'plan' && !record?.planCompleted
+                  ? (SESSION_MODE_LABELS[record.mode] ?? record.mode)
+                  : null;
                 const statusLabel = (PHASE_LABELS[sessionPhase] ?? sessionPhase) + (modeLabel ? ` · ${modeLabel}` : '');
                 return (
                   <div

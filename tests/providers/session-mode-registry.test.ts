@@ -142,6 +142,26 @@ describe('spawn flags: bypass capability must not hijack the requested mode', ()
     // so `auto`/`dontAsk` would have spawned as bypass — worse than rejected.
     expect(src).not.toContain("args.push('--permission-mode', 'bypassPermissions')")
   })
+
+  it('the SDK spawn path passes the mode through instead of collapsing it to bypass', () => {
+    // The 5th spawn site, and the one the argv assertions above CANNOT see (it
+    // takes no argv). It held a hand-rolled chain that fell through to 'bypass'
+    // for everything except plan/accept — so a `dontAsk` SDK session ran with
+    // full write+shell trust while its record said "dontAsk". Same defect shape
+    // as the bare capability flag, different mechanism.
+    const src = read('src/providers/claude-code-session.ts')
+    expect(src).not.toMatch(/const sdkMode = mode === 'plan' \? 'plan'/)
+    expect(src).toMatch(/const sdkMode: SessionMode = \(mode && VALID_SESSION_MODE_IDS\.has\(mode\)\)/)
+  })
+
+  it('the SDK session server rejects an inexpressible mode instead of substituting one', () => {
+    // The installed SDK's PermissionMode union has no 'auto'. Mapping it anyway
+    // would be silently coerced back to 'default' by the SDK's own parser — a
+    // session labelled Auto actually running as Default. Fail loudly instead.
+    const src = read('src/session-server/sdk-session.ts')
+    expect(src).not.toMatch(/auto:\s*'auto'/)
+    expect(src).toMatch(/is not supported by the SDK session server/)
+  })
 })
 
 describe('daemon twins agree on the mode vocabulary', () => {
@@ -184,6 +204,31 @@ describe('validators and pickers all derive from the registry', () => {
       expect(src).not.toMatch(/\['bypass',\s*'accept',\s*'default',\s*'plan'\]/)
       expect(src).not.toMatch(/\['default',\s*'plan',\s*'bypass',\s*'accept'\]/)
     }
+  })
+
+  it('task-card pills label every mode, not just Plan-or-Bypass', () => {
+    // These rendered `isPlanSession ? 'Plan' : 'Bypass'`, so a dontAsk session —
+    // the STRICTEST non-plan mode — was labelled with the LOOSEST one on the
+    // task card. Wrong-and-confident is worse than a raw id.
+    const pill = read('web/src/components/tasks/SessionPill.tsx')
+    expect(pill).toContain('SESSION_MODE_LABELS')
+    expect(pill).toMatch(/function modeLabelFor\(/)
+    // Match the ASSIGNMENT, not the bare expression — a comment explaining the
+    // old code legitimately quotes it.
+    expect(pill).not.toMatch(/modeLabel = isPlanSession \? 'Plan' : 'Bypass'/)
+    expect(pill).not.toMatch(/legacyModeLabel = legacyMode === 'plan' \? 'Plan' : 'Bypass'/)
+    // TodoPanel leaked the raw camelCase id ('dontAsk') instead of a label.
+    expect(read('web/src/components/tasks/TodoPanel.tsx')).toContain('SESSION_MODE_LABELS[record.mode]')
+  })
+
+  it('the transport mode field uses the registry type, not a re-declared union', () => {
+    // A narrow re-declared union here forced `as`-casts at the call sites, and
+    // those casts are why the SDK spawn path's mode collapse passed tsc.
+    const src = read('src/providers/session-manager.ts')
+    expect(src).toMatch(/mode\?: SessionMode/)
+    expect(src).not.toMatch(/mode\?: 'bypass' \| 'plan' \| 'accept' \| 'default'/)
+    expect(read('src/providers/claude-code-session.ts'))
+      .not.toMatch(/as 'bypass' \| 'plan' \| 'accept' \| 'default'/)
   })
 
   it("the web mode cycle defaults to every mode, not the old ['bypass','plan']", () => {

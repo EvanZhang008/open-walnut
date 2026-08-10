@@ -1565,7 +1565,7 @@ export class ClaudeCodeSession {
       resume: isResume,
       fork: forkSession,
       spillFile,
-      mode: this._mode as 'bypass' | 'plan' | 'accept' | 'default',
+      mode: this._mode,
       onOutput: (event) => this.handleStreamLine(event.line, event.v),
       onExit: (code, stderr) => {
         this._exitCode = code
@@ -2102,7 +2102,7 @@ export class ClaudeCodeSession {
         const attachResult = await session._transport.attach({
           sessionId: record.claudeSessionId,
           fromOffset,
-          mode: session._mode as 'bypass' | 'plan' | 'accept' | 'default',
+          mode: session._mode,
           onOutput: (event) => session.handleStreamLine(event.line, event.v),
           onExit: (code, stderr) => {
             session._exitCode = code
@@ -6550,7 +6550,14 @@ export class SessionRunner {
     try {
       const confirmed = await live.applyPermissionMode(mode)
       if (!confirmed) {
-        throw new Error(`Claude Code did not confirm permission mode "${mode}"`)
+        // A non-echo means the CLI declined the mode without erroring. The known
+        // cause is a mode gated behind a provider/feature check — `auto` is
+        // first-party-only today, so on Bedrock/Vertex the CLI simply won't take
+        // it. Say so: a bare "did not confirm" reads like a Walnut bug.
+        const hint = mode === 'auto'
+          ? ' — "Auto" may not be available for this session\'s model or API provider'
+          : ''
+        throw new Error(`Claude Code did not confirm permission mode "${mode}"${hint}`)
       }
       return 'applied'
     } catch (err) {
@@ -7680,11 +7687,19 @@ export class SessionRunner {
       }
     }
 
-    // Map session server mode to SDK permission mode.
-    // Default (no mode): 'bypass' — matches CLI spawn semantics.
-    const sdkMode = mode === 'plan' ? 'plan'
-      : mode === 'accept' ? 'accept'
-        : 'bypass'
+    // Pass the requested mode through UNCHANGED — the session server maps it to
+    // the SDK vocabulary via the same registry (see applySdkPermissionMode).
+    //
+    // This used to be an if-chain that fell through to 'bypass' for everything
+    // that wasn't plan/accept. That is the SAME defect as the bare
+    // --dangerously-skip-permissions flag: a session launched as 'dontAsk' (the
+    // STRICTEST non-plan mode) ran with full write+shell trust while its record
+    // — written a few lines below from `mode`, not from `sdkMode` — said
+    // "dontAsk". Never re-narrow this to a hardcoded subset; add modes to
+    // SESSION_MODES in core/types.ts and they arrive here for free.
+    const sdkMode: SessionMode = (mode && VALID_SESSION_MODE_IDS.has(mode))
+      ? mode as SessionMode
+      : 'bypass'
 
     // Start via session server client
     const result = await this.sdkClient.startSession({

@@ -12,10 +12,18 @@
  */
 import { PHASE_LABELS, PROCESS_LABELS, pillPhaseClassSuffix } from '@/utils/session-status';
 import type { TaskPhase, ProcessStatus } from '@/types/session';
+import { SESSION_MODE_LABELS } from '@open-walnut/core';
+import type { SessionMode } from '@open-walnut/core';
 import type { Task } from '@open-walnut/core';
 import { ICON_ROBOT } from '@/components/common/Icons';
 import { useCanonicalSessionId, useSessionStatus } from '@/hooks/useSessionStatus';
 import { resolveTaskSessionId } from '@/utils/session-status';
+
+/** Registry label for a mode id that arrives as a loose string off the wire. */
+function modeLabelFor(mode: string | undefined, fallback: string): string {
+  if (!mode) return fallback;
+  return SESSION_MODE_LABELS[mode as SessionMode] ?? mode;
+}
 
 interface SessionStatus {
   process_status: string;
@@ -93,13 +101,17 @@ export function SessionPill({ sessionId, sessionStatus, phase, planSessionId, ex
   const activeClass = isActive ? ' task-session-pill-active' : '';
   const handleClick = clickable ? (e: React.MouseEvent) => { e.stopPropagation(); onClick!(e); } : undefined;
 
-  // Resolve mode label: Plan or Bypass (only these two matter to the user)
-  // planCompleted on the session_status indicates a plan was produced even if mode !== 'plan'
+  // Mode label comes from the registry (core/types.ts) — this used to be a
+  // binary `isPlanSession ? 'Plan' : 'Bypass'`, which labelled a 'dontAsk'
+  // session (the STRICTEST non-plan mode) as "Bypass" (the loosest).
+  // planCompleted means a plan was produced even if mode !== 'plan'.
   const resolvedMode = resolvedSessionStatus?.mode ?? resolvedPlanStatus?.mode ?? mode;
   const isPlanSession = resolvedMode === 'plan'
     || !!resolvedSessionStatus?.planCompleted
     || !!resolvedPlanStatus?.planCompleted;
-  const modeLabel = isPlanSession ? 'Plan' : 'Bypass';
+  const modeLabel = isPlanSession
+    ? 'Plan'
+    : modeLabelFor(resolvedMode, 'Bypass');
 
   // New single-slot model: prefer sessionId + sessionStatus
   if (sessionId || sessionStatus) {
@@ -146,9 +158,11 @@ export function SessionPill({ sessionId, sessionStatus, phase, planSessionId, ex
   // Detect embedded provider
   const isEmbedded = primary?.provider === 'embedded';
 
-  // Resolve legacy mode label from slot presence
+  // Resolve legacy mode label from slot presence (registry-backed — see above)
   const legacyMode = hasPlan ? 'plan' : resolvedMode;
-  const legacyModeLabel = legacyMode === 'plan' ? 'Plan' : 'Bypass';
+  const legacyModeLabel = legacyMode === 'plan'
+    ? 'Plan'
+    : modeLabelFor(legacyMode, 'Bypass');
 
   // Build title with full details for both slots
   const titleParts: string[] = [];

@@ -1871,6 +1871,12 @@ export async function extractPlanContent(sessionId: string, cwd?: string, host?:
  * understands every mode the CLI can write — incl. 'auto' and 'dontAsk'; before
  * that, an auto/dontAsk session recovered as "mode unknown" and kept whatever
  * stale mode the record held.
+ *
+ * ⚠️ Do NOT re-wire this as a source of truth for a session's mode. Every
+ * transcript recorded before 2026-08 carries `bypassPermissions` on every line
+ * regardless of the requested mode (the bare --dangerously-skip-permissions
+ * flag hijacked it), so recovering from an old JSONL would relabel a plan
+ * session as bypass. The one production caller was deliberately removed.
  */
 function mapPermissionModeFromJsonl(permMode: string): string | null {
   return sessionModeFromCli(permMode);
