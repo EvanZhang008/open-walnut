@@ -172,7 +172,13 @@ async function navigateToTasks(page: Page, mobile = false): Promise<void> {
     await expect(page.locator('.sidebar-overlay')).toHaveCount(0)
     await expect(page.locator('.sidebar')).not.toHaveClass(/\bopen\b/)
   }
-  await expect(page.locator('.task-list')).toBeVisible()
+  await expect(page.getByTestId('tasks-table')).toBeVisible()
+}
+
+/** Show every status on the /tasks table (Todo on by default; turn Done on too). */
+async function showAllStatusesOnTasksPage(page: Page): Promise<void> {
+  const doneChip = page.locator('.tp-chip', { hasText: 'Done' })
+  if (!/\bon\b/.test((await doneChip.getAttribute('class')) ?? '')) await doneChip.click()
 }
 
 test('rejects delayed REST N after WS N+1 across every desktop status surface', async ({ page }) => {
@@ -287,10 +293,10 @@ test('rejects delayed REST N after WS N+1 across every desktop status surface', 
   await modal.getByRole('button', { name: 'Close detail panel' }).click()
 
   await navigateToTasks(page)
-  await page.getByLabel('Filter by status').selectOption('')
-  const taskCard = page.locator(`.task-card[data-task-id="${taskId}"]`)
-  await expect(taskCard).toBeVisible()
-  await expect(taskCard.locator('.task-session-pill')).toContainText('Running')
+  await showAllStatusesOnTasksPage(page)
+  const taskRow = page.locator(`.tp-row[data-task-id="${taskId}"]`)
+  await expect(taskRow).toBeVisible()
+  await expect(taskRow.locator('.task-session-pill')).toContainText('Running')
 
   await page.getByRole('link', { name: 'Home', exact: true }).click()
   await expect(page).toHaveURL(/\/$/)
@@ -419,10 +425,10 @@ test('keeps the same provider identity and running state on mobile surfaces', as
   await modal.getByRole('button', { name: 'Close detail panel' }).click()
 
   await navigateToTasks(page, true)
-  await page.getByLabel('Filter by status').selectOption('')
-  const taskCard = page.locator(`.task-card[data-task-id="${taskId}"]`)
-  await expect(taskCard).toBeVisible()
-  await expect(taskCard.locator('.task-session-pill')).toContainText('Running')
+  await showAllStatusesOnTasksPage(page)
+  const taskRow = page.locator(`.tp-row[data-task-id="${taskId}"]`)
+  await expect(taskRow).toBeVisible()
+  await expect(taskRow.locator('.task-session-pill')).toContainText('Running')
   await page.screenshot({
     path: `${SCREENSHOT_DIR}/mobile-running-parity.png`,
     fullPage: true,
@@ -434,6 +440,6 @@ test('keeps the same provider identity and running state on mobile surfaces', as
   ).toBe('idle')
   const completed = await statusFor(page, sessionId)
   expect(completed.statusRevision).toBeGreaterThan(running.statusRevision)
-  await expect(taskCard.locator('.task-session-pill')).toContainText('Idle')
+  await expect(taskRow.locator('.task-session-pill')).toContainText('Idle')
   await audit.assertClean()
 })

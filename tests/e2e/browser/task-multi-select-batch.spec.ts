@@ -207,11 +207,14 @@ test('a done selection offers Reopen instead of Complete', async ({ page }) => {
   await page.keyboard.press('Escape')
 })
 
-// ── Second surface: the /tasks page (TaskList cards) ──
-// TodoPanel and TaskList each own their OWN selection bar, so a fix to one does not
-// fix the other. Before this change the /tasks bar had ONLY "Group" — same bug.
+// ── Second surface: the /tasks page ──
+// 2026-08-09: the /tasks page was reworked into a dense rail+table workspace
+// (TasksPageTable) which does NOT have multi-select yet — TaskList (kept in the
+// tree as the reference implementation) still passes the wiring tests in
+// tests/web/task-list-grouping.test.ts. Re-enable this spec against .tp-row when
+// the selection verbs are ported to the table.
 
-test('/tasks page selection bar can complete and delete a multi-selection', async ({ page }) => {
+test.skip('/tasks page selection bar can complete and delete a multi-selection', async ({ page }) => {
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   const titles = [`Cards batch A ${stamp}`, `Cards batch B ${stamp}`]
   const tasks = []

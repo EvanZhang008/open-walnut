@@ -9,7 +9,7 @@
 
 import path from 'node:path';
 import { log } from '../../logging/index.js';
-import { addTask, getTask, updateTask, togglePin, setFocusTier } from '../task-manager.js';
+import { addTask, getTask, updateTask, togglePin, setFocusTier, InvalidProjectNameError, ProjectSourceConflictError } from '../task-manager.js';
 import { getSessionsForTask, updateSessionRecord } from '../session-tracker.js';
 import { bus, EventNames } from '../event-bus.js';
 import type { Task, SessionEngine } from '../types.js';
@@ -146,11 +146,21 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   } else {
     // Normal mode: create new task
     const title = params.taskTitle?.trim() || defaultSessionTaskTitle(cwd);
-    const { task } = await addTask({
-      title,
-      project,
-      source: 'local',
-    });
+    let task: Task;
+    try {
+      ({ task } = await addTask({
+        title,
+        project,
+        source: 'local',
+      }));
+    } catch (err) {
+      // Client-supplied project seed the registry rejects — a caller error, not
+      // a server fault. Name gate (path separators etc.) → 400; provider-claimed
+      // project → 409, same mapping as every other addTask route.
+      if (err instanceof InvalidProjectNameError) throw new QuickStartError(err.message, 400);
+      if (err instanceof ProjectSourceConflictError) throw new QuickStartError(err.message, 409);
+      throw err;
+    }
     // Merge taskMeta into initial update; `starred` defaults to true for quick-start.
     const updates: Partial<Task> = {
       starred: taskMeta?.starred ?? true,

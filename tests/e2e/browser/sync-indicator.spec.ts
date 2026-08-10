@@ -20,13 +20,15 @@ test.describe('TaskCard SyncIndicator', () => {
   async function showAllStatuses(page: import('@playwright/test').Page) {
     await page.goto('/tasks')
     await page.waitForLoadState('networkidle')
-    await page.getByLabel('Filter by status').selectOption('')
+    // The /tasks table shows Todo-only by default — turn the Done chip on too.
+    const doneChip = page.locator('.tp-chip', { hasText: 'Done' })
+    if (!/\bon\b/.test((await doneChip.getAttribute('class')) ?? '')) await doneChip.click()
   }
 
   test('synced plugin-a task shows badge with sync-synced class', async ({ page }) => {
     await showAllStatuses(page)
 
-    const taskCard = page.locator('.task-card', { hasText: 'PluginA synced task' })
+    const taskCard = page.locator('.tp-row', { hasText: 'PluginA synced task' })
     await expect(taskCard).toBeVisible({ timeout: 5000 })
 
     const indicator = taskCard.locator('.sync-indicator')
@@ -38,7 +40,7 @@ test.describe('TaskCard SyncIndicator', () => {
   test('unsynced plugin-a task shows badge with sync-unsynced class', async ({ page }) => {
     await showAllStatuses(page)
 
-    const taskCard = page.locator('.task-card', { hasText: 'PluginA unsynced task' })
+    const taskCard = page.locator('.tp-row', { hasText: 'PluginA unsynced task' })
     await expect(taskCard).toBeVisible({ timeout: 5000 })
 
     const indicator = taskCard.locator('.sync-indicator')
@@ -50,7 +52,7 @@ test.describe('TaskCard SyncIndicator', () => {
   test('unsynced MS To-Do task shows unsynced indicator', async ({ page }) => {
     await showAllStatuses(page)
 
-    const taskCard = page.locator('.task-card', { hasText: 'Playwright test task' })
+    const taskCard = page.locator('.tp-row', { hasText: 'Playwright test task' })
     await expect(taskCard).toBeVisible({ timeout: 5000 })
 
     const indicator = taskCard.locator('.sync-indicator')

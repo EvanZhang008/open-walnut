@@ -14,6 +14,12 @@
  * → DashboardPage → TaskList), and the two stale ones just needed re-pointing at the
  * current rules. A source-text guard is a weak test, but weak beats absent for
  * frontend wiring that the node test env cannot render.
+ *
+ * 2026-08-09: the /tasks page was reworked into a two-pane workspace (TasksPageRail +
+ * TasksPageTable) and no longer mounts TaskList — the DashboardPage test now guards
+ * the NEW wiring. The TaskList/TaskCard tests stay: the components still exist (the
+ * dense table doesn't cover multi-select/grouping yet, so they're the reference
+ * implementation for porting those verbs to the new surface).
  */
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
@@ -87,11 +93,15 @@ describe('TaskList grouping wiring', () => {
     expect(TASK_CARD_SRC).toContain('onSelectToggle(task.id)');
   });
 
-  it('DashboardPage passes the group context down to TaskList', () => {
-    expect(DASHBOARD_SRC).toMatch(/taskGroups,\s*groupTasks,\s*ungroupTasks,\s*renameGroup/);
-    expect(DASHBOARD_SRC).toContain('onGroupTasks={groupTasks}');
-    expect(DASHBOARD_SRC).toContain('onUngroupTask={(taskId) => ungroupTasks([taskId])}');
-    expect(DASHBOARD_SRC).toContain('onRenameGroup={renameGroup}');
+  it('DashboardPage mounts the two-pane workspace (rail + dense table)', () => {
+    // 2026-08 rework: /tasks is TasksPageRail + TasksPageTable, no TaskList mount.
+    // Guard the replacement wiring so the page can't silently lose either pane or
+    // the create paths (ghost row + New Project).
+    expect(DASHBOARD_SRC).toContain('<TasksPageRail');
+    expect(DASHBOARD_SRC).toContain('<TasksPageTable');
+    expect(DASHBOARD_SRC).toContain('onCreateProject={handleCreateProject}');
+    expect(DASHBOARD_SRC).toContain('onCreate={handleGhostCreate}');
+    expect(DASHBOARD_SRC).not.toContain('<TaskList');
   });
 
   it('CSS shares the rail/selection styles between the panel and the /tasks card', () => {

@@ -9,7 +9,7 @@ import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { useConfirm } from '@/hooks/useConfirm';
 import { ICON_TRASH } from '../common/Icons';
 
-type TaskListProjection = Task & {
+export type TaskListProjection = Task & {
   /** Precomputed by fields=list because that projection intentionally omits ext. */
   has_synced?: boolean;
   /** Legacy MS To-Do sync marker retained for pre-ext task records. */
@@ -52,7 +52,7 @@ function isSynced(task: TaskListProjection): boolean {
   return source === 'ms-todo' && Boolean(task.ms_todo_id);
 }
 
-function SyncIndicator({ task }: { task: TaskListProjection }) {
+export function SyncIndicator({ task }: { task: TaskListProjection }) {
   const integrations = useIntegrations();
   const source = task.source;
   const meta = getIntegrationMeta(integrations, source);

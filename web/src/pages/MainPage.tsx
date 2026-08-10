@@ -34,6 +34,7 @@ import { freshLauncherMeta } from '@/components/sessions/task-meta-constants';
 import { QuestionPopover, parseAskQuestionInput } from '@/components/chat/QuestionPopover';
 import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchSession, fetchSessionsForTask, fetchWorkingDirs, quickStartSession } from '@/api/sessions';
+import { fetchProjectDetail } from '@/api/projects';
 import { deleteTask as deleteTaskApi } from '@/api/tasks';
 import { fetchConfig, fetchInstallDir } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
@@ -221,7 +222,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const { mode: chatMode, toggleMode, getPlanPayload } = usePlanMode();
   const { connectionState } = useWebSocket();
   const { notify } = useNotifications();
-  const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, toggleComplete, setPhase, star, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, clearOperationError, showOperationError, taskGroups, hiddenGroups, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden } = useTasksContext();
+  const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, toggleComplete, setPhase, star, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, showOperationError, taskGroups, hiddenGroups, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden } = useTasksContext();
   const favorites = useFavorites();
   const focusBar = useFocusBarContext();
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
@@ -456,6 +457,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // column hidden; the CLI spawns with an empty first message and idles).
   const [launcherAnchor, setLauncherAnchor] = useState<'chat' | 'todo'>('chat');
   const [quickStartPath, setQuickStartPath] = useState<QuickStartPath | null>(null);
+  // Project header "+ → Add session" seed: the new task is filed under this
+  // project, and the launcher's path prefills from the project's default
+  // cwd/host (when set). Cleared on every launcher open/select so a stale seed
+  // never leaks into an unrelated launch.
+  const [launcherProject, setLauncherProject] = useState<{ project: string; path?: { cwd: string; host: string | null } } | null>(null);
+  // Ref mirror for async/select callbacks (same pattern as quickStartPathRef).
+  const launcherProjectRef = useRef(launcherProject);
+  launcherProjectRef.current = launcherProject;
   // Walnut's own source checkout (null on npm installs / cloud) — drives the
   // fix-walnut pill. Fetched once; the API layer caches for the page lifetime.
   const [walnutInstallDir, setWalnutInstallDir] = useState<string | null>(null);
@@ -1025,8 +1034,29 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // the chat column stays hidden.
   const handleToolbarOpenLauncher = useCallback(() => {
     setLauncherAnchor('todo');
+    setLauncherProject(null);    // plain "+" carries no project seed
     setQuickTaskOpen(false);
     setPathSelectorOpen(true);   // Session tab is the default
+  }, []);
+  // Project header "+ → Add session (with task)": same todo-anchored launcher,
+  // but the resulting task files under the project and the path picker seeds
+  // from the project's default cwd/host. The detail fetch is best-effort — no
+  // defaults just means the picker opens on its usual recents.
+  const handleOpenLauncherForProject = useCallback(async (project: string) => {
+    setLauncherAnchor('todo');
+    setQuickTaskOpen(false);
+    // Resolve the project's default cwd/host BEFORE opening: the picker reads
+    // initialPath only in its open effect, so seeding after open would need a
+    // remount that discards whatever the user typed meanwhile. The fetch is one
+    // small metadata read — a beat of delay beats losing in-flight state.
+    let path: { cwd: string; host: string | null } | undefined;
+    try {
+      const detail = await fetchProjectDetail(project);
+      const cwd = detail.metadata?.default_cwd;
+      if (cwd) path = { cwd, host: detail.metadata?.default_host ?? null };
+    } catch { /* no defaults → picker opens on recents */ }
+    setLauncherProject({ project, ...(path ? { path } : {}) });
+    setPathSelectorOpen(true);
   }, []);
   // fix-walnut pill → skip the path picker entirely: the target is Walnut's own
   // checkout (server-authoritative), the user only describes what's broken.
@@ -1424,7 +1454,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // API call. Deliberately does NOT touch chat state/visibility: the todo-panel
   // "+" entry point starts sessions while the chat column stays hidden (the CLI
   // spawns with an empty first message and idles on stdin).
-  const launchQuickStart = useCallback((qsp: QuickStartPath, metaSnapshot: QuickStartTaskMeta | null, text: string, images?: ImageAttachment[]) => {
+  const launchQuickStart = useCallback((qsp: QuickStartPath, metaSnapshot: QuickStartTaskMeta | null, text: string, images?: ImageAttachment[], project?: string) => {
       // Set pending ref BEFORE the async call so WS events that arrive
       // during the HTTP round-trip can still match via taskId
       const tempTaskId = `pending-${Date.now()}`;
@@ -1463,6 +1493,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         taskMeta,
         model,
         engine,
+        project,
         intent: qsp.intent,
         createCwd: qsp.createCwd,
       }).then((result) => {
@@ -1507,7 +1538,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // session column that opens.
   const handleTodoPathSelect = useCallback((path: QuickStartPath, taskMeta: QuickStartTaskMeta) => {
     setPathSelectorOpen(false);
-    launchQuickStart(path, taskMeta, '');
+    // Consume the project-header seed (if any) — the launched task files under
+    // that project. Clear it so the next plain launch doesn't inherit it.
+    const seededProject = launcherProjectRef.current?.project;
+    setLauncherProject(null);
+    launchQuickStart(path, taskMeta, '', undefined, seededProject);
   }, [launchQuickStart]);
 
   const handleSendMessage = useCallback((text: string, images?: ImageAttachment[]) => {
@@ -1656,11 +1691,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           customTiersLoaded={focusBar.customTiersLoaded}
           customTierIds={customTierIdSets}
           suppressDetail={suppressDetail}
-          onClearOperationError={clearOperationError}
           onOperationError={showOperationError}
           externalProject={activeProject}
           onProjectChange={setActiveProject}
           onOpenLauncher={handleToolbarOpenLauncher}
+          onOpenLauncherForProject={handleOpenLauncherForProject}
         />
         {/* Todo-anchored launcher popover — the SAME components as the chat
             column's, wrapped in a Session | Task tab header and dropping DOWN
@@ -1686,10 +1721,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 Task
               </button>
             </div>
+            {/* Project seed (initialPath) is resolved BEFORE open (see
+                handleOpenLauncherForProject), so the open effect reads it — no
+                remount, no lost in-flight state. */}
             <SessionPathSelector
               open={pathSelectorOpen}
-              onClose={() => setPathSelectorOpen(false)}
+              onClose={() => { setPathSelectorOpen(false); setLauncherProject(null); }}
               onSelect={handleTodoPathSelect}
+              initialPath={launcherProject?.path}
               confirmOnDismiss={false}
             />
             <QuickTaskComposer

@@ -573,6 +573,8 @@ export async function quickStartSession(opts: {
   images?: ImageAttachment[];
   taskId?: string; // retry mode: reuse existing task
   taskMeta?: QuickStartTaskMeta;
+  /** File the new task under this project (created if unknown). Omitted = Inbox / server default. */
+  project?: string;
   /** Launch intent — 'fix-walnut' makes the server wrap the message in a repair briefing. */
   intent?: 'fix-walnut';
   /** User opted into "create & start": server mkdirs the cwd before starting. */
@@ -667,8 +669,9 @@ export async function respondToPermission(
   requestId: string,
   allow: boolean,
   message?: string,
+  optionId?: string,
 ): Promise<{ status: string; requestId: string; allow: boolean }> {
-  return apiPost(`/api/sessions/${sessionId}/permission`, { requestId, allow, message });
+  return apiPost(`/api/sessions/${sessionId}/permission`, { requestId, allow, message, optionId });
 }
 
 export async function forkSessionInWalnut(

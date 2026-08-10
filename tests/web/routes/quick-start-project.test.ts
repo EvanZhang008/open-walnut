@@ -109,6 +109,22 @@ describe('POST /api/sessions/quick-start — project param', () => {
     expect(res.body.error).toMatch(/path separators/i);
   });
 
+  it('canonicalizes to the existing registry spelling (case-insensitive identity)', async () => {
+    const app = createApp();
+    // First create establishes the canonical spelling…
+    await request(app).post('/api/sessions/quick-start')
+      .send({ cwd: '/tmp', message: 'go', project: 'Marina' });
+    // …a later differently-cased seed must land on it, not fork a twin.
+    const res = await request(app).post('/api/sessions/quick-start')
+      .send({ cwd: '/tmp', message: 'go again', project: 'marina' });
+
+    expect(res.status).toBe(200);
+    const task = await getTask(res.body.taskId);
+    expect(task.project).toBe('Marina');
+    const projects = await getStoreProjects();
+    expect(Object.keys(projects).filter((k) => k.toLowerCase() === 'marina')).toEqual(['Marina']);
+  });
+
   it('fix-walnut intent overrides a client project seed', async () => {
     const app = createApp();
     const res = await request(app).post('/api/sessions/quick-start')

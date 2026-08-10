@@ -1,0 +1,407 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   /tasks page — Linear/Asana-style dense two-pane workspace.
+   ALL rules are scoped under .tasks-page (imported by DashboardPage.tsx).
+   Do NOT move these into globals.css.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* Full-bleed: zero the container's padding instead of a -24px margin hack —
+   the mobile breakpoint changes the padding (16px / 52px top), so a fixed
+   negative margin would over-pull there. */
+.app-content-area:has(> .tasks-page) {
+  padding: 0;
+}
+
+.tasks-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  font-size: 13px;
+  background: var(--bg);
+  --tp-row-border: color-mix(in srgb, var(--border) 55%, transparent);
+  --tp-p0: #ff3b30;
+  --tp-p1: #ff9500;
+  --tp-p2: #c7c7cc;
+}
+
+/* ───────── left rail ───────── */
+
+.tp-rail {
+  width: 220px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  padding: 12px 8px 10px;
+}
+
+.tp-rail-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  padding: 2px 10px 8px;
+}
+
+.tp-rail-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.tp-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border: none;
+  background: none;
+  border-radius: 8px;
+  color: var(--fg);
+  font-size: 13px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tp-rail-item:hover { background: var(--bg-hover); }
+.tp-rail-item.active { background: var(--bg-hover); font-weight: 600; }
+
+.tp-ri-icon { width: 16px; flex: none; text-align: center; color: var(--fg-muted); font-size: 12px; }
+.tp-rail-item.active .tp-ri-icon { color: var(--accent); }
+.tp-ri-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tp-ri-fav { color: #ffcc00; font-size: 10px; flex: none; }
+.tp-ri-count { font-size: 11px; color: var(--fg-muted); flex: none; }
+
+/* pinned New Project region below a hairline */
+.tp-rail-newproj-wrap {
+  flex: none;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+  padding-top: 8px;
+}
+.tp-rail-newproj-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 10px;
+  border: none;
+  background: none;
+  border-radius: 8px;
+  color: var(--fg-muted);
+  font-size: 12.5px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tp-rail-newproj-btn:hover { color: var(--accent); background: var(--bg-hover); }
+.tp-rail-newproj-input {
+  width: 100%;
+  height: 32px;
+  border: 1.5px solid var(--accent);
+  border-radius: 9px;
+  padding: 0 10px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+/* one-letter provider badge: base sizing lives in globals.css (.project-src-badge);
+   no per-page override — one definition, every surface. */
+
+/* ───────── right pane: toolbar ───────── */
+
+.tp-board {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tp-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.tp-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-right: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+.tp-stats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  margin-right: 6px;
+}
+
+.tp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  flex: none;
+}
+.tp-chip:hover { background: var(--bg-hover); }
+.tp-chip.on { border-color: var(--accent); color: var(--accent); background: var(--accent-subtle); }
+
+.tp-search {
+  margin-left: auto;
+  width: 190px;
+  min-width: 110px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+}
+.tp-search::placeholder { color: var(--fg-muted); }
+.tp-search:focus { border-color: var(--accent); background: var(--bg); }
+
+.tp-newtask-btn {
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  flex: none;
+}
+.tp-newtask-btn:hover { background: var(--accent-hover); }
+
+/* ───────── table ───────── */
+
+.tp-table-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.tp-thead,
+.tp-row,
+.tp-ghost {
+  display: grid;
+  align-items: center;
+  padding: 0 20px;
+}
+.tp-cols-5 { grid-template-columns: minmax(280px, 1fr) 120px 90px 170px 140px; }
+.tp-cols-4 { grid-template-columns: minmax(280px, 1fr) 120px 90px 170px; }
+
+.tp-thead {
+  height: 32px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 1;
+}
+
+.tp-row {
+  height: 36px;
+  border-bottom: 1px solid var(--tp-row-border);
+  position: relative;
+  cursor: default;
+}
+.tp-row:hover { background: var(--bg-hover); }
+
+.tp-cell-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding-right: 16px;
+}
+.tp-row-title {
+  font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  /* it's a real <button> for keyboard/AT semantics — strip chrome */
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: inherit;
+  color: var(--fg);
+  text-align: left;
+}
+.tp-row.done .tp-row-title { color: var(--fg-muted); text-decoration: line-through; }
+.tp-row-star { color: var(--tp-p1); font-size: 11px; flex: none; }
+
+.tp-status-circle {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  line-height: 1;
+  color: #fff;
+}
+.tp-status-circle:hover { border-color: var(--accent); }
+.tp-row.done .tp-status-circle { background: var(--accent); border-color: var(--accent); }
+
+.tp-cell-pri {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.tp-p-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.tp-p-dot.p0 { background: var(--tp-p0); }
+.tp-p-dot.p1 { background: var(--tp-p1); }
+.tp-p-dot.p2 { background: var(--tp-p2); }
+.tp-cell-pri.lp0 { color: var(--tp-p0); }
+.tp-cell-pri.lp1 { color: var(--tp-p1); }
+
+.tp-cell-due { font-size: 12px; color: var(--fg-muted); }
+.tp-cell-due.overdue { color: var(--tp-p0); }
+
+.tp-cell-empty { color: var(--fg-muted); opacity: 0.45; font-size: 12px; }
+
+/* session cell hosts the shared .task-session-pill — just clip it to the column */
+.tp-cell-session {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.tp-cell-session .task-session-pill {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tp-proj-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  color: var(--fg-muted);
+  font-size: 11px;
+  max-width: 120px;
+  overflow: hidden;
+}
+.tp-proj-pill .tp-proj-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* hover-revealed row delete. Absolutely positioned, but ALSO pinned to grid
+   cell 1/row 1 — without that, CSS Grid gives this 6th child its own implicit
+   row, which only renders correctly because .tp-row has a fixed height. */
+.tp-row-del {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  justify-self: end;
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 14px;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+.tp-row:hover .tp-row-del { display: inline-flex; }
+.tp-row-del:hover { background: var(--bg-tertiary); color: var(--fg); }
+
+/* ghost "＋ New task…" row at the very top of the body */
+.tp-ghost {
+  height: 34px;
+  color: var(--fg-muted);
+  opacity: 0.75;
+  cursor: text;
+  border-bottom: 1px solid var(--tp-row-border);
+}
+.tp-ghost:hover { background: var(--bg-hover); opacity: 1; }
+.tp-ghost.editing { background: var(--bg-hover); cursor: default; opacity: 1; }
+.tp-gplus {
+  width: 15px;
+  flex: 0 0 15px;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1;
+}
+.tp-ghost.editing .tp-gplus { color: var(--accent); }
+.tp-ghost-text {
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tp-ghost-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--fg);
+}
+.tp-ghost-input::placeholder { color: var(--fg-muted); }
+
+.tp-empty {
+  padding: 40px;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 13px;
+}

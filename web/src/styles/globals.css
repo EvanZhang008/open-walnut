@@ -1569,105 +1569,6 @@ input:focus, textarea:focus, select:focus {
   color: var(--warning);
 }
 
-/* ===== Task Stats ===== */
-
-.task-stats {
-  display: flex;
-  gap: 24px;
-  margin-bottom: 20px;
-  padding: 16px 20px;
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--card-shadow);
-}
-
-.task-stat {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-}
-
-.task-stat-value {
-  font-size: 24px;
-  font-weight: 700;
-  font-family: 'SF Mono', 'Fira Code', monospace;
-}
-
-.task-stat-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  color: var(--fg-muted);
-  letter-spacing: 0.5px;
-  font-weight: 500;
-}
-
-/* ===== Project Tabs ===== */
-
-.project-tabs {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 16px;
-  overflow-x: auto;
-  padding-bottom: 4px;
-}
-
-.project-tab {
-  padding: 6px 14px;
-  border-radius: 20px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--fg-muted);
-  background: transparent;
-  border: 1px solid var(--border-strong);
-  white-space: nowrap;
-  transition: all 0.15s;
-}
-
-.project-tab:hover {
-  color: var(--fg);
-  background: var(--bg-secondary);
-  border-color: var(--border-strong);
-}
-
-.project-tab-active {
-  color: #fff;
-  background: var(--accent);
-  border-color: var(--accent);
-}
-
-/* ===== Task Filters ===== */
-
-.task-filters {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-}
-
-.task-filters select {
-  font: inherit;
-  color: var(--fg);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  padding: 8px 12px;
-  font-size: 13px;
-  outline: none;
-  transition: border-color 0.2s;
-}
-
-.task-filters select:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-subtle);
-}
-
-.task-filter-search {
-  flex: 1;
-  min-width: 150px;
-}
-
 /* ===== Task List / Groups ===== */
 
 .task-group {
@@ -9746,6 +9647,37 @@ body.walnut-dragging {
 .focus-inline-add {
   margin-top: 2px;
 }
+
+/* Project-group variant of the ghost add row: EXACTLY title-column aligned.
+   Task rows in a group are `padding-left: 30px` + 18px phase icon + 4px gap,
+   so the + glyph sits in the icon column (18px, centered) and the label text
+   starts at the title x-position. Quiet row (no dashed box) — the box style
+   stays for the pinned tiers, where rows are cards, not list lines. */
+.todo-group-project .focus-inline-add-trigger {
+  padding: 4px 6px 4px 30px;
+  gap: 4px;
+  margin-top: 0;
+  border-color: transparent;
+  border-radius: 0;
+}
+
+.todo-group-project .focus-inline-add-trigger:hover {
+  background: var(--bg-hover);
+  border-color: transparent;
+}
+
+.todo-group-project .focus-inline-add-plus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  flex-shrink: 0;
+}
+
+.todo-group-project .focus-inline-add {
+  margin-top: 0;
+  padding: 2px 6px 2px 52px; /* 30 row indent + 18 icon + 4 gap = title column */
+}
 .focus-inline-add input {
   width: 100%;
   padding: 4px 8px;
@@ -11005,157 +10937,6 @@ body.walnut-dragging {
   font-style: italic;
 }
 
-.todo-panel-add {
-  display: flex;
-  gap: 6px;
-  padding: 10px 16px;
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.todo-panel-add > input[type="text"]:not(.quick-add-project) {
-  flex: 1;
-  min-width: 200px;
-  font-size: 13px;
-  padding: 6px 10px;
-}
-
-.todo-panel-add .btn {
-  padding: 6px 12px;
-  font-size: 13px;
-}
-
-.todo-panel-add .quick-add-select,
-.todo-panel-add .quick-add-project {
-  font-size: 12px;
-  padding: 5px 6px;
-  max-width: 130px;
-  min-width: 80px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg);
-  color: inherit;
-}
-
-.todo-panel-add .quick-add-toggle {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 2px 8px;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  height: 28px;
-  color: inherit;
-}
-
-.todo-panel-add .quick-add-toggle:hover {
-  background: var(--hover-bg, rgba(0, 0, 0, 0.05));
-}
-
-.todo-panel-add .quick-add-toggle.is-active {
-  background: var(--accent-bg, #ffe58a);
-  border-color: var(--accent, #d4a017);
-  color: var(--accent-fg, #6b4a00);
-}
-
-.todo-panel-add .quick-add-pin.is-active {
-  background: var(--accent-bg, #ffe58a);
-  border-color: var(--accent, #d4a017);
-  color: var(--accent-fg, #6b4a00);
-  font-weight: 500;
-}
-
-/* Quick Add — single ⋮ menu (matches task kebab menu styling) */
-.todo-panel-add .quick-add-more-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-
-.todo-panel-add .quick-add-more-btn {
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1;
-  /* Override .task-kebab-btn's opacity:0 (which only reveals on task-row hover) —
-     this button lives in the add bar, not a task row, so it must always be visible. */
-  opacity: 1;
-  color: var(--fg-muted);
-  padding: 0;
-}
-
-.todo-panel-add .quick-add-more-btn:hover {
-  background: var(--hover-bg, rgba(0, 0, 0, 0.05));
-}
-
-.todo-panel-add .quick-add-more-btn.has-selections {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.quick-add-menu {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  right: 0;
-  z-index: 999;
-  min-width: 240px;
-}
-
-.quick-add-menu-select {
-  flex: 1;
-  font-size: 12px;
-  padding: 4px 6px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg);
-  color: inherit;
-  cursor: pointer;
-  max-width: 160px;
-}
-
-@media (max-width: 720px) {
-  .todo-panel-add > input[type="text"]:not(.quick-add-project) {
-    flex-basis: 100%;
-  }
-}
-
-.todo-panel-add-error {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 6px 16px;
-  font-size: 12px;
-  color: #ff3b30;
-  border-top: 1px solid #ff3b30;
-  flex-shrink: 0;
-}
-
-.todo-panel-error-dismiss {
-  margin-left: auto;
-  background: none;
-  border: none;
-  color: #ff3b30;
-  font-size: 16px;
-  cursor: pointer;
-  padding: 0 4px;
-  line-height: 1;
-  opacity: 0.7;
-}
-
-.todo-panel-error-dismiss:hover {
-  opacity: 1;
-}
 
 /* ===== Global Notes Section (TodoPanel bottom) ===== */
 
@@ -12052,6 +11833,154 @@ body.walnut-dragging {
   color: var(--warning);
 }
 
+/* "+" and "⋮" hover actions on project group headers */
+.todo-group-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.todo-group-action-wrap {
+  display: inline-flex;
+}
+
+.todo-group-action-btn {
+  font-size: 13px;
+  line-height: 1;
+  color: var(--fg-muted);
+  padding: 2px 5px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+}
+
+.todo-group-project-header:hover .todo-group-action-btn,
+.todo-group-action-wrap[data-menu-open] .todo-group-action-btn {
+  opacity: 1;
+}
+
+.todo-group-action-btn:hover {
+  color: var(--fg-primary);
+  background: var(--bg-hover);
+}
+
+/* One-letter provider badge next to a project name (no badge = local).
+   Brand tints via color-mix against the theme background, so they survive
+   the dark theme instead of rendering as bright light-mode rectangles. */
+.project-src-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+  user-select: none;
+  cursor: default;
+}
+.project-src-badge--ms-todo {
+  background: color-mix(in srgb, #2564cf 14%, var(--bg));
+  color: color-mix(in srgb, #2564cf 80%, var(--fg));
+}
+.project-src-badge--jira {
+  background: color-mix(in srgb, #1868db 14%, var(--bg));
+  color: color-mix(in srgb, #1868db 80%, var(--fg));
+}
+.project-src-badge--generic {
+  background: var(--bg-tertiary);
+  color: var(--fg-muted);
+}
+
+/* "＋ New Project" — container creation at the list bottom, visually apart
+   from task rows: hairline above + dashed outline, folder icon. */
+.todo-new-project-wrap {
+  margin-top: 8px;
+  padding: 8px 8px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.todo-new-project-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px dashed color-mix(in srgb, var(--border) 80%, var(--fg-muted));
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.todo-new-project-btn:hover {
+  color: var(--fg-primary);
+  border-color: var(--fg-muted);
+  background: var(--bg-hover);
+}
+
+.todo-new-project-icon {
+  display: inline-flex;
+  opacity: 0.75;
+}
+
+.todo-new-project-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+}
+
+.todo-new-project-input-row input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 12px;
+  color: var(--fg-primary);
+  padding: 3px 0;
+}
+
+/* Minimal project folder labels inside Pinned tiers — slim, non-interactive,
+   deliberately NOT a sortable/droppable element (DnD must ignore them). */
+.tier-project-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 8px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  letter-spacing: 0.01em;
+  pointer-events: none;
+  user-select: none;
+}
+
+.tier-project-label-icon {
+  display: inline-flex;
+  opacity: 0.7;
+}
+
+.tier-project-label-icon svg {
+  width: 12px;
+  height: 12px;
+}
+
+.tier-project-label-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Starred tab golden accent */
 .todo-panel-tab-starred {
   color: var(--warning);
@@ -12714,20 +12643,18 @@ body.walnut-dragging {
 }
 
 /* Height cap + internal scrolling, scoped to the FIXED-positioned kebab menus
-   (the ones useMenuPlacement measures and places). Four components share the
-   .task-kebab-menu class, but only these two are viewport-anchored:
-     · TaskQuickActions  (session panel — task actions + Session section)
-     · TaskKebabMenu     (task rows, click and right-click)
-   The other two are deliberately EXCLUDED because `100vh` is the wrong frame of
-   reference for them and neither can overflow the way the bug did:
-     · .quick-add-menu     — position:absolute, bottom:calc(100% + 6px), short
-     · .task-batch-dropdown — position:fixed but anchored by `bottom`, so it
-                              grows upward from the selection bar
+   (the ones useMenuPlacement measures and places). The .task-kebab-menu class is
+   shared by TaskQuickActions (session panel), TaskKebabMenu (task rows), and the
+   two ProjectHeaderMenus menus ("+"/"⋮" on project group headers) — all four are
+   viewport-anchored via useMenuPlacement, so the cap applies to all of them.
+   The one EXCLUSION is .task-batch-dropdown: `100vh` is the wrong frame of
+   reference for it (position:fixed but anchored by `bottom`, growing upward from
+   the selection bar) and it can't overflow the way the bug did.
    `overflow-y` is the actual fix: a position:fixed menu sits in NO scroll
    container, so without it the items past the viewport edge aren't merely
    scrolled away — they're unreachable (no scrollbar, no wheel target).
    Keep the 16px in step with useMenuPlacement's `margin = 8` (8px per edge). */
-.task-kebab-menu:not(.quick-add-menu):not(.task-batch-dropdown) {
+.task-kebab-menu:not(.task-batch-dropdown) {
   max-height: calc(100vh - 16px);
   overflow-y: auto;
   /* Structural, not cosmetic: `overflow-y: auto` alone makes overflow-x compute

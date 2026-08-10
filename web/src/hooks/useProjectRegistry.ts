@@ -11,6 +11,15 @@ export interface UseProjectRegistryReturn {
   projectNames: string[];
   /** Case-insensitive membership test (project identity is NOCASE server-side). */
   isKnownProject: (name: string) => boolean;
+  /** lowercased name → provider source ('local' | 'ms-todo' | 'jira' | …). Drives the one-letter badges. */
+  sourceByName: Map<string, string>;
+  /** lowercased names of favorited projects (server folds config.favorites.projects in). */
+  favoriteByName: Set<string>;
+  /** True once the first fetch has resolved — consumers that reconcile against the
+   *  registry (e.g. pruning stale session-local names) must wait for this. */
+  loaded: boolean;
+  /** Re-fetch the registry now (e.g. right after createProject). */
+  refresh: () => void;
 }
 
 /**
@@ -26,16 +35,18 @@ export interface UseProjectRegistryReturn {
  * a datalist, and the create path is idempotent either way.
  */
 export function useProjectRegistry(): UseProjectRegistryReturn {
-  const [projectNames, setProjectNames] = useState<string[]>([]);
+  const [rows, setRows] = useState<Array<{ name: string; source: string; favorite: boolean }>>([]);
+  const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(() => {
     fetchProjects()
       .then((data) => {
-        setProjectNames(
+        setRows(
           (data.projects ?? [])
-            .map((p) => p.name)
-            .sort((a, b) => a.localeCompare(b)),
+            .map((p) => ({ name: p.name, source: p.source, favorite: p.favorite }))
+            .sort((a, b) => a.name.localeCompare(b.name)),
         );
+        setLoaded(true);
       })
       .catch(() => { /* non-critical — callers fall back to task-derived names */ });
   }, []);
@@ -44,9 +55,21 @@ export function useProjectRegistry(): UseProjectRegistryReturn {
 
   useEvent('project:created', refresh);
 
+  const projectNames = useMemo(() => rows.map((r) => r.name), [rows]);
+
   const lowerSet = useMemo(
-    () => new Set(projectNames.map((n) => n.toLowerCase())),
-    [projectNames],
+    () => new Set(rows.map((r) => r.name.toLowerCase())),
+    [rows],
+  );
+
+  const sourceByName = useMemo(
+    () => new Map(rows.map((r) => [r.name.toLowerCase(), r.source])),
+    [rows],
+  );
+
+  const favoriteByName = useMemo(
+    () => new Set(rows.filter((r) => r.favorite).map((r) => r.name.toLowerCase())),
+    [rows],
   );
 
   const isKnownProject = useCallback(
@@ -54,5 +77,8 @@ export function useProjectRegistry(): UseProjectRegistryReturn {
     [lowerSet],
   );
 
-  return useMemo(() => ({ projectNames, isKnownProject }), [projectNames, isKnownProject]);
+  return useMemo(
+    () => ({ projectNames, isKnownProject, sourceByName, favoriteByName, loaded, refresh }),
+    [projectNames, isKnownProject, sourceByName, favoriteByName, loaded, refresh],
+  );
 }

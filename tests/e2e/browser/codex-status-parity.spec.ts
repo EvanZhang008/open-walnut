@@ -40,7 +40,13 @@ async function navigateToTasks(page: Page): Promise<void> {
   if (await other.getAttribute('aria-expanded') !== 'true') await other.click()
   await page.locator('a[href="/tasks"]').click()
   await expect(page).toHaveURL(/\/tasks$/)
-  await expect(page.locator('.task-list')).toBeVisible()
+  await expect(page.getByTestId('tasks-table')).toBeVisible()
+}
+
+/** Show every status on the /tasks table (Todo on by default; turn Done on too). */
+async function showAllStatusesOnTasksPage(page: Page): Promise<void> {
+  const doneChip = page.locator('.tp-chip', { hasText: 'Done' })
+  if (!/\bon\b/.test((await doneChip.getAttribute('class')) ?? '')) await doneChip.click()
 }
 
 async function processStatus(page: Page, sessionId: string): Promise<string> {
@@ -112,10 +118,10 @@ test('broadcasts active Codex status across Home, task pill, and reload', async 
   })
 
   await navigateToTasks(page)
-  await page.getByLabel('Filter by status').selectOption('')
-  const activeTaskCard = page.locator(`.task-card[data-task-id="${taskId}"]`)
-  await expect(activeTaskCard).toBeVisible()
-  await expect(activeTaskCard.locator('.task-session-pill')).toContainText('Running')
+  await showAllStatusesOnTasksPage(page)
+  const activeTaskRow = page.locator(`.tp-row[data-task-id="${taskId}"]`)
+  await expect(activeTaskRow).toBeVisible()
+  await expect(activeTaskRow.locator('.task-session-pill')).toContainText('Running')
   await page.screenshot({
     path: `${SCREENSHOT_DIR}/tasks-running-pill.png`,
     fullPage: true,
@@ -157,10 +163,10 @@ test('broadcasts active Codex status across Home, task pill, and reload', async 
   })
 
   await navigateToTasks(page)
-  await page.getByLabel('Filter by status').selectOption('')
-  const finalTaskCard = page.locator(`.task-card[data-task-id="${taskId}"]`)
-  await expect(finalTaskCard).toBeVisible()
-  await expect(finalTaskCard.locator('.task-session-pill')).toContainText('Idle')
+  await showAllStatusesOnTasksPage(page)
+  const finalTaskRow = page.locator(`.tp-row[data-task-id="${taskId}"]`)
+  await expect(finalTaskRow).toBeVisible()
+  await expect(finalTaskRow.locator('.task-session-pill')).toContainText('Idle')
 
   await audit.assertClean({
     requestFailure: (failure) => {

@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useRef, memo, Fragment, type FormEvent, type CSSProperties, type ReactNode } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef, memo, Fragment, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
 import type { Task as CoreTask, SessionRecord } from '@open-walnut/core';
@@ -21,6 +21,11 @@ import * as ICONS from '../common/Icons';
 import type { TaskPriority } from '@open-walnut/core';
 import { TodoSearchBar } from './TodoSearchBar';
 import { NewLauncherButton } from './NewLauncherButton';
+import { ProjectPlusMenu, ProjectKebabMenu } from './ProjectHeaderMenus';
+import { ProjectSourceBadge } from './ProjectSourceBadge';
+import { useProjectRegistry } from '@/hooks/useProjectRegistry';
+import { createProject } from '@/api/projects';
+import { log } from '@/utils/log';
 import {
   mapServerTaskSearchResults,
   taskReferenceMatchField,
@@ -145,8 +150,7 @@ interface TodoPanelProps {
   /** Set of task IDs whose session is open on the home page — highlights their cards. */
   openSessionTaskIds?: Set<string>;
   // operationError VALUE is surfaced globally via the unified notification toaster
-  // (AppShell), so TodoPanel only needs the callbacks to report/clear, not the value.
-  onClearOperationError?: () => void;
+  // (AppShell), so TodoPanel only needs the report callback, not the value.
   onOperationError?: (msg: string) => void;
   /** Externally-set project (e.g. from URL deep link). When it changes from undefined to a value, the tab switches. */
   externalProject?: string;
@@ -155,6 +159,9 @@ interface TodoPanelProps {
   /** Toolbar "+" — opens the todo-anchored launcher popover (Session | Task
    *  tabs, Session default) rendered by MainPage inside the task panel. */
   onOpenLauncher?: () => void;
+  /** Project header "+ → Add session": open the launcher's Session tab seeded
+   *  with this project (path prefilled from the project's default cwd/host). */
+  onOpenLauncherForProject?: (project: string) => void;
   /** Virtual-group name registry: group_id → label. */
   taskGroups?: Record<string, string>;
   /** Group ids hidden from the Focus (pinned) area — their cards are skipped there. */
@@ -400,6 +407,56 @@ function clusterTierByGroup(tasks: Task[]): string[] {
     }
   }
   return out;
+}
+
+/**
+ * Cluster a tier's id order into project runs (first-seen anchor order), so the
+ * pinned area can render a minimal folder label per project — same folder
+ * structure as the main task list. Runs AFTER clusterTierByGroup and treats a
+ * contiguous same-group run as ONE atomic block keyed by its lead task's
+ * project (a group must never be split across folders). Pure + order-stable
+ * (idempotent), and NEVER applied mid-drag — during a drag the user's live
+ * order is authority (same contract as group clustering).
+ */
+function clusterTierByProject(ids: string[], tasks: Task[]): string[] {
+  const taskById = new Map(tasks.map((t) => [t.id, t]));
+  // 1. Blocks: same-group contiguous runs collapse into one block; everything
+  //    else is a single-id block. Unknown ids (group: sentinels shouldn't reach
+  //    here outside a drag, but be safe) inherit the previous block's key.
+  type Block = { key: string; ids: string[] };
+  const blocks: Block[] = [];
+  let i = 0;
+  while (i < ids.length) {
+    const t = taskById.get(ids[i]);
+    if (!t) {
+      const key = blocks.length > 0 ? blocks[blocks.length - 1].key : '';
+      blocks.push({ key, ids: [ids[i]] });
+      i++;
+      continue;
+    }
+    if (t.group_id) {
+      const run = [ids[i]];
+      let j = i + 1;
+      while (j < ids.length && taskById.get(ids[j])?.group_id === t.group_id) {
+        run.push(ids[j]);
+        j++;
+      }
+      blocks.push({ key: t.project || '', ids: run });
+      i = j;
+    } else {
+      blocks.push({ key: t.project || '', ids: [ids[i]] });
+      i++;
+    }
+  }
+  // 2. Stable-partition blocks by key, anchored at each key's first occurrence.
+  const byKey = new Map<string, string[]>();
+  const keyOrder: string[] = [];
+  for (const b of blocks) {
+    let arr = byKey.get(b.key);
+    if (!arr) { arr = []; byKey.set(b.key, arr); keyOrder.push(b.key); }
+    arr.push(...b.ids);
+  }
+  return keyOrder.flatMap((k) => byKey.get(k)!);
 }
 
 /**
@@ -1569,13 +1626,27 @@ function CustomTierSubgroup({ def, isAll, folded, collapsed, onToggle, visibleId
 }
 
 // ── InlineAdd — "+" row at the bottom of a tier or project group to add a task
-// directly into that context. Reuses the parent onCreate (optimistic + tier-correct path). ──
-function InlineAdd({ onAdd, label = 'Add to Focus…' }: { onAdd: (title: string) => void | Promise<unknown>; label?: string }) {
+// directly into that context. Reuses the parent onCreate (optimistic + tier-correct path).
+// `openSignal`: bump to force-open + focus from outside (project header "+ → Add task"). ──
+function InlineAdd({ onAdd, label = 'Add to Focus…', openSignal, onOpenSignalConsumed }: { onAdd: (title: string) => void | Promise<unknown>; label?: string; openSignal?: number; onOpenSignalConsumed?: () => void }) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
+  useEffect(() => {
+    if (openSignal !== undefined && openSignal > 0) {
+      setOpen(true);
+      // Focus after this render commits the input (the open-effect above only
+      // fires on open's false→true edge; a re-signal while already open needs
+      // an explicit refocus).
+      requestAnimationFrame(() => inputRef.current?.focus());
+      // Consume-once: the parent clears the signal so a REMOUNT of this row
+      // (collapse/expand toggles the group subtree) doesn't replay it and pop
+      // the input open after the user already Escaped out.
+      onOpenSignalConsumed?.();
+    }
+  }, [openSignal, onOpenSignalConsumed]);
 
   const submit = () => {
     const title = value.trim();
@@ -1618,6 +1689,74 @@ function InlineAdd({ onAdd, label = 'Add to Focus…' }: { onAdd: (title: string
         }}
         onBlur={() => { if (!value.trim()) setOpen(false); }}
       />
+    </div>
+  );
+}
+
+// ── NewProjectRow — "＋ New Project" at the very bottom of the grouped list.
+// Visually separated from task rows (hairline + dashed outline, folder icon):
+// this creates a CONTAINER, not a task. On create the caller re-renders the
+// group list; the row itself never moves (it's static DOM below the groups), so
+// no scroll compensation is needed here — the new empty group appears above it. ──
+function NewProjectRow({ onCreated, onError }: { onCreated: (name: string) => void; onError?: (msg: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { if (open) inputRef.current?.focus(); }, [open]);
+
+  const submit = async () => {
+    const name = value.trim();
+    if (!name || busy) return;
+    setBusy(true);
+    try {
+      const res = await createProject(name);
+      setValue('');
+      setOpen(false);
+      onCreated(res.name); // canonical spelling from the server (NOCASE registry)
+    } catch (err) {
+      // Keep the input open with the text so the user can fix the name (e.g.
+      // path separators are rejected by the registry gate) — and TELL the user
+      // why via the panel's operation-error toast, not just a silent log.
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn('todo', 'create project failed', { name, error: msg });
+      onError?.(`Create project failed: ${msg}`);
+      inputRef.current?.focus();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <div className="todo-new-project-wrap">
+        <button type="button" className="todo-new-project-btn" onClick={() => setOpen(true)}>
+          <span className="todo-new-project-icon">{ICONS.ICON_FOLDER}</span>
+          <span>New Project</span>
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="todo-new-project-wrap">
+      <div className="todo-new-project-input-row">
+        <span className="todo-new-project-icon">{ICONS.ICON_FOLDER}</span>
+        <input
+          ref={inputRef}
+          type="text"
+          value={value}
+          disabled={busy}
+          placeholder="Project name — Enter to create, Esc to cancel"
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+            if (e.key === 'Enter') { e.preventDefault(); void submit(); }
+            if (e.key === 'Escape') { e.preventDefault(); setValue(''); setOpen(false); }
+          }}
+          onBlur={() => { if (!value.trim()) setOpen(false); }}
+        />
+      </div>
     </div>
   );
 }
@@ -1817,7 +1956,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, openSessionIds, openSessionTaskIds, onClearOperationError, onOperationError, externalProject, onProjectChange, onOpenLauncher, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, openSessionIds, openSessionTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden }: TodoPanelProps) {
   // TEMP drag-flash trace — remove after diagnosis
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
@@ -1902,24 +2041,24 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, []);
 
   const integrations = useIntegrations();
-  const [newTitle, setNewTitle] = useState('');
-  const [quickProject, setQuickProject] = useState<string>('');
-  const [quickStarred, setQuickStarred] = useState(false);
-  const [quickPinnedTier, setQuickPinnedTier] = useState<FocusTier | null>(null);
-  const [quickMoreOpen, setQuickMoreOpen] = useState(false);
-  const quickMoreBtnRef = useRef<HTMLButtonElement | null>(null);
-  const quickMoreMenuRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!quickMoreOpen) return;
-    const handleClick = (e: MouseEvent) => {
-      if (quickMoreBtnRef.current?.contains(e.target as Node)) return;
-      if (quickMoreMenuRef.current?.contains(e.target as Node)) return;
-      setQuickMoreOpen(false);
-    };
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [quickMoreOpen]);
+  // Registry projects (incl. zero-task ones) + provider source for the badges.
+  const projectRegistry = useProjectRegistry();
+  // Project header "+ → Add task": open that group's ghost add row (the group's
+  // own inline editor — creation stays physically IN the group, so "where does
+  // it land" needs no explanation). Nonce so re-clicks re-open after an Escape.
+  const [headerAddSignal, setHeaderAddSignal] = useState<{ project: string; nonce: number } | null>(null);
+  const handleHeaderAddTask = useCallback((project: string) => {
+    setCollapsedProjects((prev) => {
+      if (!prev.has(project)) return prev;
+      const next = new Set(prev);
+      next.delete(project);
+      persistSet(LS_COLLAPSED_PROJS_KEY, next);
+      return next;
+    });
+    setHeaderAddSignal((prev) => ({ project, nonce: (prev?.nonce ?? 0) + 1 }));
+  }, []);
+  // Consume-once acknowledgment from the target InlineAdd (see its effect).
+  const clearHeaderAddSignal = useCallback(() => setHeaderAddSignal(null), []);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => readSetFromStorage(LS_COLLAPSED_SECTIONS_KEY));
   // True while a search query is active (assigned during render below). A live
   // search force-expands every region, so chevron clicks are ignored — otherwise
@@ -2805,14 +2944,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Pure + order-stable → idempotent. We do NOT cluster mid-drag (dragXxxIds present):
   // during a drag the user's live order is authority and clustering would fight it;
   // it re-applies once the drag lands.
-  const focusIds_arr = useMemo(() => dragTierIds?.get('focus') ?? clusterTierByGroup(focusTasksLocal), [dragTierIds, focusTasksLocal]);
-  const satelliteIds_arr = useMemo(() => dragTierIds?.get('satellite') ?? clusterTierByGroup(satelliteTasksLocal), [dragTierIds, satelliteTasksLocal]);
-  const backlogIds_arr = useMemo(() => dragTierIds?.get('backlog') ?? clusterTierByGroup(backlogTasksLocal), [dragTierIds, backlogTasksLocal]);
-  const waitIds_arr = useMemo(() => dragTierIds?.get('wait') ?? clusterTierByGroup(waitTasksLocal), [dragTierIds, waitTasksLocal]);
+  // Project clustering layers on top of group clustering (folder labels render
+  // per project run in renderTierItems). Both skip mid-drag for the same reason.
+  const focusIds_arr = useMemo(() => dragTierIds?.get('focus') ?? clusterTierByProject(clusterTierByGroup(focusTasksLocal), focusTasksLocal), [dragTierIds, focusTasksLocal]);
+  const satelliteIds_arr = useMemo(() => dragTierIds?.get('satellite') ?? clusterTierByProject(clusterTierByGroup(satelliteTasksLocal), satelliteTasksLocal), [dragTierIds, satelliteTasksLocal]);
+  const backlogIds_arr = useMemo(() => dragTierIds?.get('backlog') ?? clusterTierByProject(clusterTierByGroup(backlogTasksLocal), backlogTasksLocal), [dragTierIds, backlogTasksLocal]);
+  const waitIds_arr = useMemo(() => dragTierIds?.get('wait') ?? clusterTierByProject(clusterTierByGroup(waitTasksLocal), waitTasksLocal), [dragTierIds, waitTasksLocal]);
   const customIds_arr = useMemo(() => {
     const map: Record<string, string[]> = {};
     for (const def of customTiers ?? []) {
-      map[def.id] = dragTierIds?.get(def.id) ?? clusterTierByGroup(customTasksLocal[def.id] ?? []);
+      const tierTasks = customTasksLocal[def.id] ?? [];
+      map[def.id] = dragTierIds?.get(def.id) ?? clusterTierByProject(clusterTierByGroup(tierTasks), tierTasks);
     }
     return map;
   }, [dragTierIds, customTiers, customTasksLocal]);
@@ -2886,12 +3028,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // frozen refs match the rendered list and grouped members sit contiguously (a
     // prerequisite for the collapse below). One entry per tier, render order.
     const tierArrays = new Map<FocusTier, string[]>();
-    tierArrays.set('focus', clusterTierByGroup(focusTasksLocal));
-    tierArrays.set('satellite', clusterTierByGroup(satelliteTasksLocal));
-    tierArrays.set('backlog', clusterTierByGroup(backlogTasksLocal));
-    tierArrays.set('wait', clusterTierByGroup(waitTasksLocal));
+    tierArrays.set('focus', clusterTierByProject(clusterTierByGroup(focusTasksLocal), focusTasksLocal));
+    tierArrays.set('satellite', clusterTierByProject(clusterTierByGroup(satelliteTasksLocal), satelliteTasksLocal));
+    tierArrays.set('backlog', clusterTierByProject(clusterTierByGroup(backlogTasksLocal), backlogTasksLocal));
+    tierArrays.set('wait', clusterTierByProject(clusterTierByGroup(waitTasksLocal), waitTasksLocal));
     for (const def of customTiers ?? []) {
-      tierArrays.set(def.id, clusterTierByGroup(customTasksLocal[def.id] ?? []));
+      const tierTasks = customTasksLocal[def.id] ?? [];
+      tierArrays.set(def.id, clusterTierByProject(clusterTierByGroup(tierTasks), tierTasks));
     }
     const rArr = recentDraggableIds;
     dragStartSnapshot.current = { tiers: tierArrays, recent: rArr };
@@ -3937,6 +4080,27 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeProject, favorites, isDescendantVisibleInStarred]);
 
+  // Projects created THIS session via the bottom "New Project" row. They have
+  // zero tasks so the task-derived grouping below wouldn't show them — surface
+  // them as empty groups (with their ghost add row ready) so creation lands
+  // exactly where the user is looking. Deliberately session-local: OLD empty
+  // registry projects stay hidden (the panel is a work list, not a registry
+  // browser — the /tasks rail shows the full registry).
+  const [freshProjects, setFreshProjects] = useState<string[]>([]);
+  // Prune against the registry: a fresh project later renamed/deleted (kebab)
+  // must not resurrect as a phantom empty group. Only after the first fetch
+  // resolves — pruning against a still-empty registry would wipe a name the
+  // very refresh() that follows createProject is about to confirm.
+  const registryLoaded = projectRegistry.loaded;
+  const isKnownProject = projectRegistry.isKnownProject;
+  useEffect(() => {
+    if (!registryLoaded) return;
+    setFreshProjects((prev) => {
+      const kept = prev.filter((p) => isKnownProject(p));
+      return kept.length === prev.length ? prev : kept;
+    });
+  }, [registryLoaded, isKnownProject]);
+
   // Flat project groups (skipped in flat mode). '' = Inbox, rendered last so the
   // named projects (the meaningful grouping) lead the list.
   const grouped = useMemo(() => {
@@ -3947,10 +4111,24 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (!map.has(proj)) map.set(proj, []);
       map.get(proj)!.push(task);
     }
-    const named = orderedSort(Array.from(map.keys()).filter((p) => p !== ''), ordering?.projectOrder ?? []);
-    const order = map.has('') ? [...named, ''] : named;
+    // Freshly created empty projects (case-insensitive match against real groups).
+    const lower = new Set(Array.from(map.keys(), (k) => k.toLowerCase()));
+    const freshEmpty: string[] = [];
+    for (const fp of freshProjects) {
+      if (!lower.has(fp.toLowerCase())) { map.set(fp, []); lower.add(fp.toLowerCase()); freshEmpty.push(fp); }
+    }
+    const freshSet = new Set(freshEmpty);
+    const named = orderedSort(
+      Array.from(map.keys()).filter((p) => p !== '' && !freshSet.has(p)),
+      ordering?.projectOrder ?? [],
+    );
+    // Fresh empty groups pin to the END (just above Inbox / the New Project row):
+    // the group must appear where the user just typed the name, not jump away to
+    // its alphabetical slot. Once it has tasks it leaves freshEmpty and sorts
+    // normally on the next mount.
+    const order = map.has('') ? [...named, ...freshEmpty, ''] : [...named, ...freshEmpty];
     return order.map((project) => ({ project, tasks: map.get(project)! }));
-  }, [sorted, groupBy, ordering?.projectOrder]);
+  }, [sorted, groupBy, ordering?.projectOrder, freshProjects]);
 
   // Child task maps: parentId → count, set of child task IDs, and child→parent mapping
   // Only tasks whose parent is VISIBLE in the current list are treated as children.
@@ -4060,60 +4238,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     for (const g of grouped) for (const t of g.tasks) m.set(t.id, g.project);
     return m;
   }, [grouped]);
-
-  /** Existing project names for the quick-add picker (Inbox = leave empty). */
-  const quickAddProjects = useMemo(() => {
-    const set = new Set<string>();
-    for (const t of tasks) if (t.project) set.add(t.project);
-    return [...set].sort((a, b) => a.localeCompare(b));
-  }, [tasks]);
-
-  /** Where a bare quick-add lands: the explicit picker, else the active project tab, else Inbox. */
-  const effectiveDefaultProject = useMemo(() => {
-    if (quickProject) return quickProject;
-    if (activeProject && activeProject !== STARRED_TAB && activeProject !== INBOX_TAB) return activeProject;
-    return '';
-  }, [quickProject, activeProject]);
-
-  const handleAdd = useCallback(async (e: FormEvent) => {
-    e.preventDefault();
-    const title = newTitle.trim();
-    if (!title) return;
-    const project = effectiveDefaultProject;
-    try {
-      const result = await onCreate({
-        title,
-        priority: 'none',
-        project: project || undefined,
-        starred: quickStarred,
-        pinnedTier: quickPinnedTier ?? undefined,
-      });
-      setNewTitle('');
-      setQuickProject('');
-      setQuickStarred(false);
-      setQuickPinnedTier(null);
-      if (onClearOperationError) onClearOperationError();
-      const newTask = result as Task | undefined;
-      if (newTask?.id) {
-        // Jump to the tab where the task actually landed (Inbox = the INBOX_TAB
-        // chip). Read the project off the CREATED task, not the requested name:
-        // project identity is case-insensitive, so the server canonicalizes
-        // "homelab" → the registry's "HomeLab", and jumping to the requested
-        // spelling would select a tab id that no chip has → an empty list.
-        const landedTab = (newTask.project || '') || INBOX_TAB;
-        if (activeProject !== '' && activeProject !== landedTab) {
-          setActiveProject(landedTab);
-          persistTab(landedTab);
-          onProjectChange?.(landedTab);
-        }
-        // Auto-focus triggers scroll-into-view via SortableTaskItem
-        onFocusTask?.(newTask);
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to add task';
-      if (onOperationError) onOperationError(msg);
-    }
-  }, [newTitle, quickStarred, quickPinnedTier, effectiveDefaultProject, onCreate, onClearOperationError, onOperationError, onFocusTask, activeProject, onProjectChange]);
 
   const toggleProject = (key: string) => {
     setCollapsedProjects((prev) => {
@@ -4800,6 +4924,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // idle→collapsed handoff — dnd-kit's active node must not remount mid-drag.
   const renderTierItems = useCallback((ids: string[], tier: FocusTier, groupMeta: Map<string, GroupRenderInfo>) => {
     const out: ReactNode[] = [];
+    // Minimal project folder labels — a slim 📁-style row above each project run
+    // (ids are pre-clustered by project). PLAIN DOM, deliberately NOT a sortable
+    // item: it never enters the SortableContext ids, so DnD indices/frozen refs
+    // are untouched (React #185 history). Suppressed while a pinned drag is live
+    // (labels would jump around under the pointer) and when the tier holds fewer
+    // than 2 DISTINCT projects — a single label (incl. a lone "Inbox") separates
+    // nothing and is pure noise.
+    const distinctProjects = new Set<string>();
+    for (const id of ids) {
+      const t = pinnedTaskMap.get(id);
+      if (t) distinctProjects.add(t.project || '');
+    }
+    const showFolders = !isPinnedDragActive && distinctProjects.size >= 2;
+    let prevProject: string | null = null;
     for (const id of ids) {
       if (id.startsWith('group:')) {
         const gid = parseGroupSentinelGid(id);
@@ -4812,6 +4950,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
       const task = pinnedTaskMap.get(id);
       if (!task) continue;
+      const proj = task.project || '';
+      if (showFolders && proj !== prevProject) {
+        out.push(
+          <div key={`projlabel:${tier}:${proj}`} className="tier-project-label">
+            <span className="tier-project-label-icon">{ICONS.ICON_FOLDER}</span>
+            <span className="tier-project-label-name">{proj || 'Inbox'}</span>
+          </div>
+        );
+      }
+      prevProject = proj;
       const gi = groupMeta.get(id);
       if (gi?.isLead) {
         out.push(
@@ -4835,7 +4983,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       );
     }
     return out;
-  }, [pinnedTaskMap, taskGroups, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, handleExpandDetail, onClearFocus, onOpenSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting]);
+  }, [pinnedTaskMap, taskGroups, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, handleExpandDetail, onClearFocus, onOpenSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive]);
 
   // The regular task list gets its own PINNED/RECENT-style collapsible bar.
   // Outside the stacked view the Tasks tab IS the list — it can't be folded away.
@@ -5458,6 +5606,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                               {/* Inbox is the ABSENCE of a project — no registry row, so no detail pane and no favorite star. */}
                               <button className="todo-group-name-btn" onClick={() => showProjectDetail(project)} disabled={!project} title={project ? 'View project details' : 'Tasks with no project'}>
                                 <span className="todo-group-project-name">{project || 'Inbox'}</span>
+                                <ProjectSourceBadge source={projectRegistry.sourceByName.get(project.toLowerCase())} />
                                 <span className="todo-group-count text-xs text-muted">{projTasks.length}</span>
                               </button>
                             </div>
@@ -5470,6 +5619,26 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 {favorites.isProjectFavorite(project) ? '\u2605' : '\u2606'}
                               </button>
                             )}
+                            <span className="todo-group-header-actions">
+                              {/* Inbox gets "+" too (Add task is meaningful there — the
+                                  bottom quick-add bar this replaced served Inbox); the
+                                  kebab stays named-projects-only (no registry row to
+                                  rename/delete/detail). Session launch seeds a project
+                                  default cwd, so it's also named-only. */}
+                              <ProjectPlusMenu
+                                project={project}
+                                onAddTask={handleHeaderAddTask}
+                                onAddSession={project ? onOpenLauncherForProject : undefined}
+                              />
+                              {project && (
+                                <ProjectKebabMenu
+                                  project={project}
+                                  isFavorite={favorites?.isProjectFavorite(project)}
+                                  onToggleFavorite={favorites ? favorites.toggleFavoriteProject : undefined}
+                                  onViewDetails={showProjectDetail}
+                                />
+                              )}
+                            </span>
                           </div>
                         )}
                       </DroppableHeader>
@@ -5523,12 +5692,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                               />
                             );
                           })}
-                          <InlineAdd label={`Add to ${project || 'Inbox'}\u2026`} onAdd={async (title) => {
-                            const result = await onCreate({ title, priority: 'none', project: project || undefined });
-                            const newTask = result as Task | undefined;
-                            // openDetail:false — quick-add just scrolls to the new card; don't pop the detail panel.
-                            if (newTask?.id) onFocusTask?.(newTask, { openDetail: false });
-                          }} />
+                          <InlineAdd
+                            label={`Add to ${project || 'Inbox'}\u2026`}
+                            openSignal={headerAddSignal?.project === project ? headerAddSignal.nonce : undefined}
+                            onOpenSignalConsumed={clearHeaderAddSignal}
+                            onAdd={async (title) => {
+                              const result = await onCreate({ title, priority: 'none', project: project || undefined });
+                              const newTask = result as Task | undefined;
+                              // openDetail:false — quick-add just scrolls to the new card; don't pop the detail panel.
+                              if (newTask?.id) onFocusTask?.(newTask, { openDetail: false });
+                            }}
+                          />
                         </SortableContext>
                       )}
                     </div>
@@ -5548,6 +5722,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                 <TaskItemOverlay task={draggedTask} />
               ) : null}
             </DragOverlay>
+
+            {/* Container creation, clearly apart from task rows (hairline + dashed
+                outline). The new empty group appears directly above this row —
+                see freshProjects in the grouped memo. */}
+            <NewProjectRow
+              onError={onOperationError}
+              onCreated={(name) => {
+                setFreshProjects((prev) => (prev.includes(name) ? prev : [...prev, name]));
+                projectRegistry.refresh();
+                // Open the new group's ghost add row so the very next keystroke
+                // is the first task's title.
+                handleHeaderAddTask(name);
+              }}
+            />
           </DndContext>
         )}
       </div>
@@ -5566,100 +5754,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       )}
 
       {/* operationError is surfaced globally via the unified notification toaster (AppShell). */}
-      {/* Quick add belongs to the Tasks section — folds away with it, and is absent
-          from the other tabs (each tier has its own "Add to <tier>…" inline row). */}
-      {tasksVisible && !tasksCollapsed && (
-      <form className="todo-panel-add" onSubmit={handleAdd}>
-        <input
-          type="text"
-          value={newTitle}
-          onChange={(e) => setNewTitle(e.target.value)}
-          onKeyDown={(e) => {
-            // Todo-app convention: Escape abandons the draft (clear + blur).
-            // Reset the SAME state handleAdd resets after a create — leaving
-            // project/star/pin selections behind would silently apply them to
-            // the next, unrelated quick-add.
-            if (e.key === 'Escape') {
-              e.preventDefault();
-              setNewTitle('');
-              setQuickProject('');
-              setQuickStarred(false);
-              setQuickPinnedTier(null);
-              (e.target as HTMLInputElement).blur();
-            }
-          }}
-          placeholder="Quick add task..."
-          aria-label="New task title"
-        />
-        <div className="quick-add-more-wrap">
-          <button
-            ref={quickMoreBtnRef}
-            type="button"
-            className={`task-kebab-btn quick-add-more-btn${quickStarred || quickPinnedTier || quickProject ? ' has-selections' : ''}`}
-            onClick={() => setQuickMoreOpen(v => !v)}
-            aria-label="More options"
-            aria-expanded={quickMoreOpen}
-            title="More options"
-          >
-            ⋮
-          </button>
-          {quickMoreOpen && (
-            <div ref={quickMoreMenuRef} className="task-kebab-menu quick-add-menu" role="menu">
-              {/* Single project picker — the default follows the active project tab
-                  (Inbox when on All/★), so the default option means "same as the tab". */}
-              <div className="task-kebab-tier">
-                <span className="task-kebab-tier-label">Project</span>
-                <select
-                  className="quick-add-menu-select"
-                  value={quickProject}
-                  onChange={(e) => setQuickProject(e.target.value)}
-                  aria-label="Project"
-                >
-                  <option value="">{effectiveDefaultProject || 'Inbox'} (default)</option>
-                  {quickAddProjects.map((pr) => <option key={pr} value={pr}>{pr}</option>)}
-                </select>
-              </div>
-              <div className="task-kebab-divider" />
-              <button
-                type="button"
-                className={`task-kebab-item${quickStarred ? ' task-kebab-item-active' : ''}`}
-                onClick={() => setQuickStarred(v => !v)}
-              >
-                <span className="task-kebab-icon">{quickStarred ? '★' : '☆'}</span>
-                <span>{quickStarred ? 'Starred' : 'Star'}</span>
-              </button>
-              <div className="task-kebab-divider" />
-              <div className="task-kebab-tier">
-                <span className="task-kebab-tier-label">Pin to</span>
-                <div className="task-kebab-tier-options">
-                  {([
-                    ...(['focus', 'satellite', 'backlog', 'wait'] as FocusTier[]).map((t) => ({ tier: t, label: t.charAt(0).toUpperCase() + t.slice(1) })),
-                    ...(customTiers ?? []).map((t) => ({ tier: t.id, label: t.label })),
-                  ]).map(({ tier: t, label }) => {
-                    const colors: Record<string, string> = { focus: 'var(--accent)', satellite: 'var(--fg-muted)', backlog: 'var(--tier-backlog, #30b0c7)', wait: 'var(--tier-wait, #ff9f0a)' };
-                    return (
-                      <button
-                        key={t}
-                        type="button"
-                        className={`task-kebab-tier-btn${quickPinnedTier === t ? ' active' : ''}`}
-                        style={{ color: colors[t] ?? 'var(--tier-custom)' }}
-                        title={label}
-                        onClick={() => setQuickPinnedTier(quickPinnedTier === t ? null : t)}
-                      >
-                        {label}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-        <button type="submit" className="btn btn-primary btn-sm" disabled={!newTitle.trim()}>
-          Add
-        </button>
-      </form>
-      )}
+      {/* The old bottom "Quick add task..." bar is gone (2026-08-09): a creation
+          input detached from the list couldn't answer "which project does this
+          land in". Creation now lives IN the list — each group's ghost add row
+          (title-aligned) — plus the header "+" composer for richer input. */}
       {/* Notes — a bottom drawer in the stacked view, the whole panel on its own tab
           (`fill`: no header row, no drag handle, editor takes the remaining height). */}
       {showSection('notes') && (
