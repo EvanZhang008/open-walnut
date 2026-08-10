@@ -245,6 +245,7 @@ let gitAutoCommitHandle: { stop: () => void; health: GitAutoCommitHealth } | nul
 let taskProjectionHandle: { stop: () => void } | null = null
 let foreignWriterWatchdog: { stop: () => void } | null = null
 let sessionProjectionHandle: { stop: () => void } | null = null
+let projectionSelfHealHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
 let claudeSettingsWatcherStop: (() => void) | null = null
 // Pending deferred-markDone timers from the session:status-changed handler.
@@ -1558,9 +1559,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if (!isEphemeral) {
     gitAutoCommitHandle = startGitAutoCommit()
 
-    // Task projection export (primary box only): tasks.sqlite is gitignored,
-    // so a slim tasks/projection.json rides git-sync to the cloud companion,
-    // which serves it at GET /api/v1/tasks. Cloud mode only reads the file.
+    // Task projection export (primary box only): tasks.sqlite is machine-
+    // local, so a slim projection is written to cache/projections/ and
+    // bridge-pushed to the cloud companion, which serves it at
+    // GET /api/v1/tasks (legacy git-synced tasks/projection.json rides along
+    // while sync.legacy_projection_files is on). Cloud mode only reads.
     if (!CLOUD_MODE) {
       // Model catalog freshness: settings.json edits invisibly change the CLI
       // model menu (live CLIs hot-reload it). Watch the file and force one
@@ -1574,10 +1577,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const { startTaskProjectionExport } = await import('../core/task-projection.js')
       taskProjectionHandle = startTaskProjectionExport()
       // Session projection rides the same pipeline: sessions.json is
-      // machine-local, so a slim sessions/projection.json syncs to the
-      // companion for the read-only GET /api/v1/sessions.
+      // machine-local, so a slim session projection reaches the companion
+      // (cache write + bridge push; legacy git file while
+      // sync.legacy_projection_files is on) for the read-only GET /api/v1/sessions.
       const { startSessionProjectionExport } = await import('../core/session-projection.js')
       sessionProjectionHandle = startSessionProjectionExport()
+      // Self-heal: every 5 min re-push both projections + alive-session
+      // transcript tails from the local cache files, bounding cloud staleness
+      // after a bridge outage (per-write pushes are fire-and-forget).
+      const { startProjectionCacheSelfHeal } = await import('../core/projection-cache.js')
+      projectionSelfHealHandle = startProjectionCacheSelfHeal()
 
       // Auto-continue: recover a turn that died to upstream retry exhaustion by
       // scheduling one delayed `continue` nudge (b12 retry hardening). Primary box
@@ -3726,6 +3735,10 @@ export async function stopServer(): Promise<void> {
   if (sessionProjectionHandle) {
     sessionProjectionHandle.stop()
     sessionProjectionHandle = null
+  }
+  if (projectionSelfHealHandle) {
+    projectionSelfHealHandle.stop()
+    projectionSelfHealHandle = null
   }
   stopMobileEventsFeed()
   if (autoContinueHandle) {

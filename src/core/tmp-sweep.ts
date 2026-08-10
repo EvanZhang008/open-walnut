@@ -35,6 +35,8 @@ import {
   MEMORY_DIR,
   DAILY_DIR,
   CONVERSATIONS_DIR,
+  PROJECTION_CACHE_DIR,
+  TRANSCRIPT_CACHE_DIR,
 } from '../constants.js';
 import { log } from '../logging/index.js';
 
@@ -67,6 +69,10 @@ function sweepDirs(): string[] {
     CONVERSATIONS_DIR,
     MEMORY_DIR,
     DAILY_DIR,
+    // Projection cache (Phase 3) — gitignored, but a crashed rename still
+    // leaves an orphan the read path never cleans up.
+    PROJECTION_CACHE_DIR,
+    TRANSCRIPT_CACHE_DIR,
   ];
 }
 

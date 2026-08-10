@@ -171,6 +171,40 @@ describe('GET /api/v1/events on a REPLICA', () => {
     }
   })
 
+  it('projection/transcript cache frames land on disk and never reach phone SSE', async () => {
+    const bridge = connectFakeBridge('__local__', 'bridge-local')
+    const sse = await connectSse(apiUrl('/api/v1/events'))
+    try {
+      await sse.waitFor((e) => e.event === 'snapshot')
+      const before = sse.events.length
+
+      const envelope = {
+        version: 1, exportedAt: '2026-08-10T00:00:00.000Z',
+        sessions: [{ id: 'pushed-s1', host: '', process_status: 'running', started_at: 'x', last_active_at: 'y', message_count: 1 }],
+      }
+      const tail = { version: 1, sessionId: 'pushed-s1', exportedAt: 'z', truncated: false, messages: [] }
+      bridge.inbound({ ev: 'mobile-event', kind: 'projection-upsert', data: { which: 'sessions', data: envelope } })
+      bridge.inbound({ ev: 'mobile-event', kind: 'transcript-upsert', data: { sid: 'pushed-s1', data: tail } })
+
+      // Async fire-and-forget writes — poll for the cache files.
+      const { readSessionProjection, readSessionTranscript } = await import('../../../src/core/session-projection.js')
+      const deadline = Date.now() + 5_000
+      let projection = null
+      while (!projection && Date.now() < deadline) {
+        projection = await readSessionProjection()
+        if (!projection) await new Promise((r) => setTimeout(r, 100))
+      }
+      expect(projection?.sessions[0]?.id).toBe('pushed-s1')
+      expect((await readSessionTranscript('pushed-s1'))?.sessionId).toBe('pushed-s1')
+
+      // Cache frames are NOT feed events — nothing new on the SSE stream.
+      expect(sse.events.length).toBe(before)
+    } finally {
+      sse.close()
+      bridge.close()
+    }
+  })
+
   it('drops unknown kinds and frames from non-primary bridges', async () => {
     const primary = connectFakeBridge('__local__', 'bridge-local')
     const remote = connectFakeBridge('devbox', 'bridge-devbox')

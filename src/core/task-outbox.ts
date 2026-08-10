@@ -15,8 +15,11 @@
  *   projection re-export + bus events all fire), then DELETES the op file.
  *   The deletion syncs back and clears the op on the cloud side too.
  * Cloud box (reader):  importProjectionOnCloud() upserts the Mac-exported
- *   projection into the local sqlite after each pull, so the butler can see
- *   Mac-created tasks. Upsert-only — it never deletes local rows.
+ *   projection into the local sqlite, so the butler can see Mac-created
+ *   tasks. Upsert-only — it never deletes local rows. Since Phase 3 the
+ *   projection arrives primarily as a bridge push into the projection cache
+ *   (events-v1 invokes the import right after the cache write); the git-pull
+ *   trigger remains for the legacy transition file.
  *
  * Corruption defenses (each op is a FULL post-write snapshot):
  *   1. One file per op — git never has to merge two writers in one file.
@@ -235,10 +238,20 @@ let lastProjectionMtimeMs = 0;
 export async function importProjectionOnCloud(): Promise<number> {
   if (!CLOUD_MODE) return 0;
   const { readTaskProjection, PROJECTION_FILE } = await import('./task-projection.js');
-  // Cheap skip: nothing to do until git-sync delivers a new projection file.
-  const st = await fsp.stat(PROJECTION_FILE).catch(() => null);
-  if (!st) return 0;
-  if (st.mtimeMs === lastProjectionMtimeMs) return 0;
+  const { projectionCachePath } = await import('./projection-cache.js');
+  // Cheap skip: nothing to do until a new projection lands from EITHER source
+  // — the bridge-pushed cache file (events-v1 invokes this right after
+  // writing it) or the legacy git-synced file (transition fallback). Gate on
+  // the NEWER of the two mtimes so a git pull can't be shadowed by an older
+  // cache file and vice versa; readTaskProjection() arbitrates content the
+  // same way (fresher exportedAt wins).
+  const [cacheSt, legacySt] = await Promise.all([
+    fsp.stat(projectionCachePath('tasks')).catch(() => null),
+    fsp.stat(PROJECTION_FILE).catch(() => null),
+  ]);
+  const mtimeMs = Math.max(cacheSt?.mtimeMs ?? 0, legacySt?.mtimeMs ?? 0);
+  if (mtimeMs === 0) return 0;
+  if (mtimeMs === lastProjectionMtimeMs) return 0;
   const projection = await readTaskProjection();
   if (!projection) return 0;
 
@@ -309,7 +322,7 @@ export async function importProjectionOnCloud(): Promise<number> {
 
   if (toInsert.length) await tm.addTasksBulk(toInsert);
   if (toUpdate.length) await tm.updateTasksBulk(toUpdate);
-  lastProjectionMtimeMs = st.mtimeMs;
+  lastProjectionMtimeMs = mtimeMs;
   const changed = toInsert.length + toUpdate.length;
   if (changed > 0) {
     log.task.info('task-outbox: projection imported on cloud', {

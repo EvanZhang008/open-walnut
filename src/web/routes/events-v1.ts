@@ -21,9 +21,12 @@
  * Cloud companion (REPLICA): the primary's same subscription ALSO forwards
  * each slim event to its local daemon (`mobile-event` command, trusted
  * clients only), which relays it over the /bridge WS to the cloud box, where
- * bridge-registry hands it to this module → same SSE fan-out. The snapshot
- * frame on cloud comes from the git-synced session projection + the local
- * task store. Bridge down / old daemon → the stream degrades to
+ * bridge-registry hands it to this module → same SSE fan-out. The same lane
+ * additionally carries CACHE frames ('projection-upsert'/'transcript-upsert',
+ * pushed by core/projection-cache.ts) that are persisted to WALNUT_HOME/cache/
+ * and never fanned out. The snapshot frame on cloud comes from the pushed
+ * session projection cache (legacy git-synced file as transition fallback) +
+ * the local task store. Bridge down / old daemon → the stream degrades to
  * snapshot + heartbeats (no error; the phone's pull paths still work).
  *
  * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
@@ -176,10 +179,46 @@ async function handleBusEvent(name: string, data: unknown): Promise<void> {
 
 // ── Cloud inbound (bridge → this box) ───────────────────────────────────────
 
+/** Persist a pushed projection/transcript payload into the local cache
+ *  (WALNUT_HOME/cache/…) — these are CACHE frames, not feed events, so they
+ *  must NEVER fan out to phone SSE. A tasks projection additionally triggers
+ *  the outbox's projection import (mtime-gated internally) so the replica's
+ *  sqlite learns Mac-side tasks without waiting for a git pull. */
+function handleBridgeCacheFrame(kind: 'projection-upsert' | 'transcript-upsert', data: unknown): void {
+  void (async () => {
+    try {
+      const cache = await import('../../core/projection-cache.js')
+      if (kind === 'projection-upsert') {
+        const d = data as { which?: unknown; data?: unknown } | null
+        if (!d || (d.which !== 'sessions' && d.which !== 'tasks') || d.data == null) return
+        await cache.writeProjectionCache(d.which, d.data)
+        if (d.which === 'tasks') {
+          const { importProjectionOnCloud } = await import('../../core/task-outbox.js')
+          await importProjectionOnCloud()
+        }
+      } else {
+        const d = data as { sid?: unknown; data?: unknown } | null
+        if (!d || typeof d.sid !== 'string' || !d.sid || d.data == null) return
+        await cache.writeTranscriptCache(d.sid, d.data)
+      }
+    } catch (err) {
+      log.web.warn('mobile-events: cache frame write failed', {
+        kind, error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  })()
+}
+
 /** Called by bridge-registry when a `mobile-event` frame arrives from the
- *  primary's daemon. Shape is already slim — fan out verbatim. */
+ *  primary's daemon. Feed kinds fan out verbatim (shape is already slim);
+ *  cache kinds are persisted to disk only. */
 export function handleBridgeMobileEvent(kind: unknown, data: unknown): void {
   if (typeof kind !== 'string' || !kind) return
+  // Projection/transcript pushes → local cache, never the SSE feed.
+  if (kind === 'projection-upsert' || kind === 'transcript-upsert') {
+    handleBridgeCacheFrame(kind, data)
+    return
+  }
   // Only the three known event kinds — a compromised/buggy sender must not
   // inject arbitrary SSE event names into phones.
   if (kind !== 'session-upsert' && kind !== 'task-upsert' && kind !== 'task-delete') return
@@ -239,7 +278,8 @@ async function buildSnapshot(): Promise<{ sessions: unknown[]; tasks: unknown[] 
   let tasks: unknown[] = []
   try {
     if (CLOUD_MODE) {
-      // Sessions: the git-synced projection file is the replica's best truth.
+      // Sessions: the bridge-pushed projection cache (legacy git-synced file
+      // as transition fallback) is the replica's best truth.
       const { readSessionProjection } = await import('../../core/session-projection.js')
       sessions = (await readSessionProjection())?.sessions ?? []
     } else {

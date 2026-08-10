@@ -357,7 +357,11 @@ node_modules/
 # ROOT-LEVEL only: notes/ may legitimately contain a note whose name has .bak.
 /*.bak.*
 
-# Parsed-history disk cache — rebuilt from the session JSONL on demand.
+# Local disk caches — cache/history (rebuilt from session JSONLs on demand)
+# and cache/projections + cache/transcripts (the projection cache: written by
+# the exporters on the primary, bridge-pushed to the cloud; see
+# src/core/projection-cache.ts). Machine-local by definition — the bridge is
+# their transport, never git.
 cache/
 
 # Obsidian semantic index — chunks plus a ~71MB embeddings blob, both regenerable

@@ -136,6 +136,10 @@ export const PLUGIN_STORES_DIR = path.join(WALNUT_HOME, 'plugin-stores');
 export const SESSIONS_FILE = path.join(WALNUT_HOME, 'sessions.json');
 export const CLAUDE_HOME = path.join(os.homedir(), '.claude');
 export const HISTORY_CACHE_DIR = path.join(WALNUT_HOME, 'cache', 'history');
+/** Projection cache (NON-git): session/task list snapshots pushed Mac → cloud over the bridge. See core/projection-cache.ts. */
+export const PROJECTION_CACHE_DIR = path.join(WALNUT_HOME, 'cache', 'projections');
+/** Transcript-tail cache (NON-git) — same push lane as the projections. */
+export const TRANSCRIPT_CACHE_DIR = path.join(WALNUT_HOME, 'cache', 'transcripts');
 /** Last-known model catalog per host (from any session's list_models) — feeds pickers before/without a live CLI. */
 export const HOST_MODEL_CATALOG_FILE = path.join(WALNUT_HOME, 'cache', 'host-model-catalogs.json');
 export const HOOK_LOG_FILE = path.join(WALNUT_HOME, 'hook-errors.log');

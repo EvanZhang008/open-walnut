@@ -1,16 +1,23 @@
 /**
- * Task projection — a slim JSON snapshot of the task list exported to
- * `tasks/projection.json` inside the data repo, so it rides the 30s git-sync
- * to the cloud companion (tasks.sqlite itself is gitignored/binary).
+ * Task projection — a slim JSON snapshot of the task list, kept in the
+ * NON-git projection cache (`cache/projections/tasks.json`) and PUSHED to the
+ * cloud companion over the daemon bridge (see core/projection-cache.ts;
+ * tasks.sqlite itself is machine-local and gitignored/binary).
  *
- * Primary box: exportTaskProjection() rewrites the file when tasks change
- * (debounced off task:* bus events) and once at startup.
- * Cloud box: readTaskProjection() serves GET /api/v1/tasks from the synced
- * file — the projection IS the replica, no SQLite involved.
+ * Primary box: exportTaskProjection() rewrites the cache + pushes a
+ * `projection-upsert` bridge frame when tasks change (debounced off task:*
+ * bus events) and once at startup. While the config knob
+ * `sync.legacy_projection_files` is true (default), it ALSO writes the
+ * legacy git-tracked `tasks/projection.json` for cloud boxes still running
+ * pre-cache code.
+ * Cloud box: the pushed frames land in the same cache path (events-v1 →
+ * projection-cache, which also triggers task-outbox's projection import);
+ * readTaskProjection() serves GET /api/v1/tasks from the cache (legacy git
+ * file as transition fallback) — the pushed projection IS the replica.
  *
  * Scope: everything except done tasks older than DONE_RETENTION_DAYS — recent
  * completions matter for a Reminders-style "Completed" section, ancient ones
- * only bloat the diff.
+ * only bloat the payload.
  */
 
 import fsp from 'node:fs/promises'
@@ -19,8 +26,17 @@ import { TASKS_DIR } from '../constants.js'
 import { writeJsonFile } from '../utils/fs.js'
 import { bus } from './event-bus.js'
 import { log } from '../logging/index.js'
+import {
+  legacyProjectionFilesEnabled,
+  pickFresherEnvelope,
+  pushProjectionToCloud,
+  readProjectionCache,
+  writeProjectionCache,
+} from './projection-cache.js'
 import type { Task } from './types.js'
 
+/** LEGACY git-synced path — dual-written while `sync.legacy_projection_files`
+ *  is on (see projection-cache.ts); cache/projections/tasks.json is the live copy. */
 export const PROJECTION_FILE = path.join(TASKS_DIR, 'projection.json')
 
 const DONE_RETENTION_DAYS = 14
@@ -111,37 +127,56 @@ export async function buildTaskProjection(): Promise<TaskProjection> {
   }
 }
 
-/** Export the current task list to the projection file (atomic write). */
+/**
+ * Export the current task list: write the projection cache (always), push it
+ * to the cloud over the bridge (fire-and-forget), and — while the
+ * `sync.legacy_projection_files` knob is on — also rewrite the legacy
+ * git-synced file (atomic writes throughout).
+ */
 export async function exportTaskProjection(): Promise<number> {
   const projection = await buildTaskProjection()
-  await writeJsonFile(PROJECTION_FILE, projection)
+  await writeProjectionCache('tasks', projection)
+  if (await legacyProjectionFilesEnabled()) {
+    await writeJsonFile(PROJECTION_FILE, projection)
+  }
+  pushProjectionToCloud('projection-upsert', { which: 'tasks', data: projection })
   return projection.tasks.length
 }
 
-/**
- * Read the synced projection file (cloud box). Null when absent/corrupt, and
- * FAIL-CLOSED on a version mismatch: a v1 file (rows keyed by category) must
- * never be handed to v2 readers, and vice versa — an empty list is a visibly
- * degraded state, a mis-parsed one is silent data corruption.
- */
-export async function readTaskProjection(): Promise<TaskProjection | null> {
-  try {
-    const raw = await fsp.readFile(PROJECTION_FILE, 'utf-8')
-    const parsed = JSON.parse(raw) as TaskProjection
-    if (parsed?.version !== PROJECTION_VERSION || !Array.isArray(parsed.tasks)) {
-      // Loud: on a replica this file is written by the PRIMARY, so a version
-      // skew (primary still pre-v5, or rolled back) means every read fails
-      // closed until the primary upgrades — without this line that presents
-      // as "git sync is slow" with no diagnosable cause.
-      log.task.warn('task-projection: version mismatch, failing closed', {
-        found: parsed?.version, expected: PROJECTION_VERSION, file: PROJECTION_FILE,
-      })
-      return null
-    }
-    return parsed
-  } catch {
+/** Envelope gate shared by the cache and legacy sources — FAIL-CLOSED on a
+ *  version mismatch: a v1 file (rows keyed by category) must never be handed
+ *  to v2 readers, and vice versa. An empty list is a visibly degraded state,
+ *  a mis-parsed one is silent data corruption. */
+function parseTaskProjection(raw: unknown, source: string): TaskProjection | null {
+  if (raw == null) return null
+  const parsed = raw as TaskProjection
+  if (parsed?.version !== PROJECTION_VERSION || !Array.isArray(parsed.tasks)) {
+    // Loud: on a replica this payload is written by the PRIMARY, so a version
+    // skew (primary still pre-v5, or rolled back) means every read fails
+    // closed until the primary upgrades — without this line that presents
+    // as "sync is slow" with no diagnosable cause.
+    log.task.warn('task-projection: version mismatch, failing closed', {
+      found: parsed?.version, expected: PROJECTION_VERSION, source,
+    })
     return null
   }
+  return parsed
+}
+
+/**
+ * Read the task projection (both boxes): the projection cache (written
+ * locally on the primary, bridge-pushed on the cloud) vs the legacy
+ * git-synced file (transition fallback), fresher exportedAt wins — a long
+ * bridge outage must not pin a replica to a stale cache while git-sync has
+ * newer data. Null when absent/corrupt.
+ */
+export async function readTaskProjection(): Promise<TaskProjection | null> {
+  const cached = parseTaskProjection(await readProjectionCache('tasks'), 'cache')
+  let legacy: TaskProjection | null = null
+  try {
+    legacy = parseTaskProjection(JSON.parse(await fsp.readFile(PROJECTION_FILE, 'utf-8')), PROJECTION_FILE)
+  } catch { /* absent/corrupt legacy file */ }
+  return pickFresherEnvelope(cached, legacy)
 }
 
 let debounceTimer: NodeJS.Timeout | null = null
