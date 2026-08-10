@@ -1183,9 +1183,14 @@ function cmdBridgeResume(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // Ensure --resume <sid>: fresh-start args lack it (replaying them
     // verbatim would spawn a NEW conversation); stale values get rewritten.
     args = [...session.args]
-    if (!args.includes('--dangerously-skip-permissions')) {
-      args.splice(1, 0, '--dangerously-skip-permissions')
+    // Bypass CAPABILITY only. The bare --dangerously-skip-permissions also
+    // SELECTS bypass and outranks --permission-mode, so injecting it here would
+    // silently resume a plan/accept/default session in full-trust bypass.
+    if (!args.includes('--allow-dangerously-skip-permissions')) {
+      args.splice(1, 0, '--allow-dangerously-skip-permissions')
     }
+    const bare = args.indexOf('--dangerously-skip-permissions')
+    if (bare >= 0) args.splice(bare, 1)
     const ri = args.indexOf('--resume')
     if (ri >= 0 && ri + 1 < args.length) {
       args[ri + 1] = sid
@@ -1199,8 +1204,8 @@ function cmdBridgeResume(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       '--verbose',
       '--include-partial-messages',
       '--debug',
-      '--dangerously-skip-permissions',
-      '--permission-mode', 'default',
+      '--allow-dangerously-skip-permissions',
+      '--permission-mode', session?.mode ? MODE_CLI[session.mode] || 'default' : 'default',
       ...(model ? ['--model', model] : []),
       '--resume', sid,
       '--input-format', 'stream-json',

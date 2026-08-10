@@ -21,7 +21,7 @@ import { CLAUDE_SESSION_MODES, changeSessionMode, persistSessionModeChange } fro
 import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
 import type { SessionEffort, SessionMode } from '../types.js';
-import { VALID_SESSION_EFFORT_IDS } from '../types.js';
+import { VALID_SESSION_EFFORT_IDS, SESSION_MODE_LABELS } from '../types.js';
 import { listLocalDirs, listRemoteDirs } from './dir-listing.js';
 
 // ── Provider controls ────────────────────────────────────────────────────────
@@ -37,9 +37,11 @@ function claudeModeControls(currentValue: string): unknown[] {
     name: 'Mode',
     type: 'select',
     currentValue,
+    // Labels come from the registry, not from capitalizing the id — 'dontAsk'
+    // would otherwise render as "DontAsk" on the phone and in the pill.
     options: CLAUDE_SESSION_MODES.map((value) => ({
       value,
-      name: value[0].toUpperCase() + value.slice(1),
+      name: SESSION_MODE_LABELS[value] ?? value,
     })),
   }];
 }
@@ -99,7 +101,7 @@ export async function applySessionControl(
     };
   }
 
-  if (id !== 'mode' || !CLAUDE_SESSION_MODES.includes(value as typeof CLAUDE_SESSION_MODES[number])) {
+  if (id !== 'mode' || !CLAUDE_SESSION_MODES.includes(value as SessionMode)) {
     throw new SessionControlError('Claude sessions only support the mode control', 400);
   }
   let updated;
@@ -421,9 +423,8 @@ export async function executeCompactSession(
   const cwd = input.working_directory ?? sourceRecord.cwd;
   if (!cwd) throw new SessionControlError('working_directory is required', 400);
 
-  const validModes = ['bypass', 'accept', 'default', 'plan'];
-  if (input.mode && !validModes.includes(input.mode)) {
-    throw new SessionControlError(`Invalid mode: ${input.mode}. Must be one of: ${validModes.join(', ')}`, 400);
+  if (input.mode && !CLAUDE_SESSION_MODES.includes(input.mode as SessionMode)) {
+    throw new SessionControlError(`Invalid mode: ${input.mode}. Must be one of: ${CLAUDE_SESSION_MODES.join(', ')}`, 400);
   }
   const execMode = (input.mode ?? 'bypass') as SessionMode;
 

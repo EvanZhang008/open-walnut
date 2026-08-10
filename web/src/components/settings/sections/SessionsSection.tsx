@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { SESSION_MODES } from '@open-walnut/core';
 import type { Config, SessionMode } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { NumberInput } from '../inputs/NumberInput';
@@ -17,8 +18,11 @@ export function SessionsSection({ config, onSave }: Props) {
   const [sessionLimits, setSessionLimits] = useState<Record<string, string | number>>(config.session_limits ?? {});
   const [permissionPrompt, setPermissionPrompt] = useState(config.session?.permission_prompt ?? true);
   const [autoApproveBypass, setAutoApproveBypass] = useState(config.session?.auto_approve_bypass !== false);
-  const ALL_MODES = ['default', 'bypass', 'plan', 'accept'] as const;
-  const DEFAULT_MODES: SessionMode[] = ['bypass', 'plan'];
+  // Registry-driven (core/types.ts): every CLI permission mode, safest → loosest.
+  // Default is ALL of them — the old ['bypass','plan'] default silently hid
+  // plan/accept/auto/dontAsk from the toggle for anyone without explicit config.
+  const ALL_MODES = SESSION_MODES;
+  const DEFAULT_MODES: SessionMode[] = SESSION_MODES.map(m => m.id);
   const [enabledModes, setEnabledModes] = useState<SessionMode[]>(config.session?.enabled_modes ?? DEFAULT_MODES);
   const [sdkEnabled, setSdkEnabled] = useState(config.session_server?.enabled ?? false);
   const [sdkPort, setSdkPort] = useState<number | undefined>(config.session_server?.port ?? 7890);
@@ -88,7 +92,10 @@ export function SessionsSection({ config, onSave }: Props) {
       sessionLimits: normalizeLimits(config.session_limits ?? {}),
       permissionPrompt: config.session?.permission_prompt ?? true,
       autoApproveBypass: config.session?.auto_approve_bypass !== false,
-      enabledModes: config.session?.enabled_modes ?? ['bypass', 'plan'],
+      // Must match the DEFAULT_MODES used for the live state above, or the
+      // auto-save baseline differs from the rendered value and every visit to
+      // this section writes the config back unchanged.
+      enabledModes: config.session?.enabled_modes ?? DEFAULT_MODES,
       sdkEnabled: config.session_server?.enabled ?? false,
       sdkPort: config.session_server?.port ?? 7890,
       triageNotifyMode: config.agent?.triage?.notify_mode ?? 'off',
@@ -173,12 +180,15 @@ export function SessionsSection({ config, onSave }: Props) {
           Which modes appear in the session mode toggle cycle. At least one must be selected.
         </p>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          {ALL_MODES.map(mode => {
-            const icons: Record<string, string> = { default: '\u2699\uFE0F', bypass: '\u26A1', plan: '\uD83D\uDCCB', accept: '\u2705' };
-            const labels: Record<string, string> = { default: 'Default', bypass: 'Bypass', plan: 'Plan', accept: 'Accept' };
+          {ALL_MODES.map(entry => {
+            const mode = entry.id;
+            const icons: Record<string, string> = {
+              default: '\u2699\uFE0F', bypass: '\u26A1', plan: '\uD83D\uDCCB',
+              accept: '\u2705', auto: '\uD83E\uDD16', dontAsk: '\uD83D\uDEAB',
+            };
             const checked = enabledModes.includes(mode);
             return (
-              <label key={mode} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 13 }}>
+              <label key={mode} title={entry.description} style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 13 }}>
                 <input
                   type="checkbox"
                   checked={checked}
@@ -189,7 +199,7 @@ export function SessionsSection({ config, onSave }: Props) {
                     );
                   }}
                 />
-                {icons[mode]} {labels[mode]}
+                {icons[mode]} {entry.label}
               </label>
             );
           })}

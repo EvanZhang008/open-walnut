@@ -1469,9 +1469,14 @@ function cmdBridgeResume(ws, id, cmd) {
   var args;
   if (session && session.args && session.args.length > 0) {
     args = session.args.slice();
-    if (!args.includes('--dangerously-skip-permissions')) {
-      args.splice(1, 0, '--dangerously-skip-permissions');
+    // Bypass CAPABILITY only. The bare --dangerously-skip-permissions also
+    // SELECTS bypass and outranks --permission-mode, so injecting it here would
+    // silently resume a plan/accept/default session in full-trust bypass.
+    if (!args.includes('--allow-dangerously-skip-permissions')) {
+      args.splice(1, 0, '--allow-dangerously-skip-permissions');
     }
+    var bare = args.indexOf('--dangerously-skip-permissions');
+    if (bare >= 0) { args.splice(bare, 1); }
     var ri = args.indexOf('--resume');
     if (ri >= 0 && ri + 1 < args.length) {
       args[ri + 1] = sid;
@@ -1485,8 +1490,8 @@ function cmdBridgeResume(ws, id, cmd) {
       '--verbose',
       '--include-partial-messages',
       '--debug',
-      '--dangerously-skip-permissions',
-      '--permission-mode', 'default',
+      '--allow-dangerously-skip-permissions',
+      '--permission-mode', (session && session.mode && MODE_CLI[session.mode]) || 'default',
     ];
     if (model) { args.push('--model', model); }
     args.push('--resume', sid, '--input-format', 'stream-json', '--permission-prompt-tool', 'stdio');
@@ -2147,9 +2152,21 @@ function cmdStart(ws, id, cmd) {
 
 // ── Permission policy helpers ──
 
+/** Walnut mode id → claude --permission-mode value. Mirrors daemon-core MODE_CLI. */
+var MODE_CLI = {
+  bypass: 'bypassPermissions',
+  accept: 'acceptEdits',
+  plan: 'plan',
+  default: 'default',
+  auto: 'auto',
+  dontAsk: 'dontAsk',
+};
+
 function shouldAutoRespond(mode, toolName) {
   if (mode === 'bypass') return true;
   if (mode === 'plan') return toolName !== 'ExitPlanMode';
+  // 'auto'/'dontAsk' intentionally fall through: the CLI decides internally and
+  // emits no control_request. Never auto-allow them — see daemon-core.ts.
   return false;
 }
 

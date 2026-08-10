@@ -114,7 +114,9 @@ function cmdStart(ws, id, cmd) {
         if (cmd.args[i + 1]) {
           cliArgs.push(arg, cmd.args[++i])
         }
-      } else if (arg === '--dangerously-skip-permissions') {
+      } else if (arg === '--dangerously-skip-permissions' || arg === '--allow-dangerously-skip-permissions') {
+        // Forward either spelling — see tests/providers/mock-claude.mjs for why
+        // Walnut spawns the `--allow-` form.
         cliArgs.push(arg)
       }
     }

@@ -50,7 +50,12 @@ for (let i = 0; i < args.length; i++) {
     modelFlag = args[++i];
   } else if (args[i] === '--effort' && args[i + 1]) {
     effortFlag = args[++i];
-  } else if (args[i] === '--dangerously-skip-permissions') {
+  } else if (args[i] === '--dangerously-skip-permissions' || args[i] === '--allow-dangerously-skip-permissions') {
+    // Both spellings grant the bypass CAPABILITY. Walnut spawns the `--allow-`
+    // form because the bare flag also SELECTS bypassPermissions and outranks
+    // `--permission-mode`. The bare form is still accepted here so a session
+    // recorded before that fix (whose stored argv has the bare flag) keeps
+    // replaying identically.
     dangerouslySkipPermissions = true;
   } else if (args[i] === '--session-id' && args[i + 1]) {
     // Pre-assigned session id (init-only spawn) — adopt it like --resume does.

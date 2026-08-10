@@ -108,12 +108,15 @@ export async function runInlineSubagent(opts: InlineSubagentOptions): Promise<In
   const startTime = Date.now();
 
   // Build CLI args — claude CLI accepts short model names (opus, sonnet, haiku)
+  // --allow- form grants the bypass capability WITHOUT selecting it; the bare
+  // --dangerously-skip-permissions outranks --permission-mode and would pin
+  // every subagent to bypassPermissions regardless of `permissionMode`.
   const args = [
     '-p',
     '--output-format', 'stream-json',
     '--verbose',
     '--model', model,
-    '--dangerously-skip-permissions',
+    '--allow-dangerously-skip-permissions',
     '--permission-mode', permissionMode,
   ];
   if (systemPrompt) {

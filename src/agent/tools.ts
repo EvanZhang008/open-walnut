@@ -55,6 +55,7 @@ import {
 import type { SessionLimitResult } from '../core/session-tracker.js';
 import { bus, EventNames } from '../core/event-bus.js';
 import { getConfig, updateConfig } from '../core/config-manager.js';
+import { isUnread, SESSION_MODES, SESSION_MODE_IDS } from '../core/types.js';
 import type { Config, SessionRecord, Task, TaskPhase, TaskPriority, TaskSource } from '../core/types.js';
 import path from 'node:path';
 import { log } from '../logging/index.js';
@@ -86,6 +87,18 @@ import { skillViewTool } from './tools/skill-view-tool.js';
 function escAttr(s: string): string {
   return s.replace(/"/g, '&quot;');
 }
+
+/**
+ * Permission-mode enum + description for the butler's session tool schemas,
+ * derived from the SESSION_MODES registry (src/core/types.ts) so a new mode
+ * reaches the butler automatically. These schemas used to hardcode subsets
+ * (['plan','bypass'] and ['bypass','accept','plan']), which made modes the UI
+ * offered un-requestable by the agent.
+ */
+const SESSION_MODE_ENUM: string[] = [...SESSION_MODE_IDS];
+const SESSION_MODE_DESC =
+  'Session permission mode (CLI only). ' +
+  SESSION_MODES.map((m) => `'${m.id}' = ${m.description.toLowerCase()}`).join('; ') + '.';
 
 /** Build a `<session-ref>` XML tag. */
 function sessionRef(id: string, label: string): string {
@@ -282,7 +295,8 @@ export const tools: ToolDefinition[] = [
             project: { type: 'string', description: 'Filter by project name. Pass "" to get Inbox (tasks with no project).' },
             priority: { type: 'string', enum: ['immediate', 'important', 'backlog', 'none'] },
             starred: { type: 'boolean', description: 'Filter starred/favorite tasks (includes individually starred tasks and tasks in favorited projects).' },
-            needs_attention: { type: 'boolean', description: 'Filter to tasks flagged as needing human attention.' },
+            unread: { type: 'boolean', description: 'Filter to UNREAD tasks — the agent produced output the human has not opened yet. Set automatically when a session turn ends; cleared when the human opens the task.' },
+            needs_attention: { type: 'boolean', description: 'Deprecated alias of `unread`.' },
             parent_task_id: { type: 'string', description: 'Filter to children of a parent task (by ID prefix).' },
             group_id: { type: 'string', description: 'Filter to members of a virtual group (exact group id, e.g. "g_xxx").' },
             tags: { type: 'array', items: { type: 'string' }, description: 'Filter to tasks with any of these tags (OR match).' },
@@ -402,10 +416,11 @@ export const tools: ToolDefinition[] = [
         });
       }
 
-      // Apply needs_attention filter
-      if (where.needs_attention !== undefined) {
-        const wantAttention = where.needs_attention === true || where.needs_attention === 'true';
-        tasks = tasks.filter((t) => wantAttention ? !!t.needs_attention : !t.needs_attention);
+      // Apply unread filter (accepts the retired `needs_attention` spelling too)
+      const unreadFilter = where.unread ?? where.needs_attention;
+      if (unreadFilter !== undefined) {
+        const wantUnread = unreadFilter === true || unreadFilter === 'true';
+        tasks = tasks.filter((t) => isUnread(t) === wantUnread);
       }
 
       // Apply parent_task_id filter
@@ -462,7 +477,7 @@ export const tools: ToolDefinition[] = [
           phase: t.phase,
         };
         if (t.starred) entry.starred = true;
-        if (t.needs_attention) entry.needs_attention = true;
+        if (isUnread(t)) entry.unread = true;
         if (t.due_date) entry.due_date = t.due_date;
         if (t.start_date) entry.start_date = t.start_date;
         if (t.end_date) entry.end_date = t.end_date;
@@ -686,7 +701,7 @@ export const tools: ToolDefinition[] = [
     name: 'task_update',
     description: `Update a task or a project. Supports multiple fields in a single call.
 
-For tasks (type='task'): update structural fields (priority, phase, project, starred, needs_attention, due_date, start_date, end_date, title, pinned, focus_tier) and/or text fields (description, summary, note, append_note) in one call. Use phase='AGENT_COMPLETE' to mark a task done (only humans can set COMPLETE). Use pinned + focus_tier to pin/unpin tasks for the Focus Bar. Pass project='' to move a task to Inbox.
+For tasks (type='task'): update structural fields (priority, phase, project, starred, unread, due_date, start_date, end_date, title, pinned, focus_tier) and/or text fields (description, summary, note, append_note) in one call. Use phase='AGENT_COMPLETE' to mark a task done (only humans can set COMPLETE). Use pinned + focus_tier to pin/unpin tasks for the Focus Bar. Pass project='' to move a task to Inbox.
 
 For projects (type='project'): set default_host and default_cwd for session defaults, or rename the project across all its tasks (old_name + new_name; renaming onto an existing project merges them).`,
     input_schema: {
@@ -703,7 +718,8 @@ For projects (type='project'): set default_host and default_cwd for session defa
         start_date: { type: 'string', description: 'New start date — when to begin working (YYYY-MM-DD, or ISO datetime). Tasks with a future start_date are hidden from the "Now" view until then. Empty string clears.' },
         end_date: { type: 'string', description: 'New end of the working block (YYYY-MM-DD, or ISO datetime). With start_date it gives the task a duration on the calendar; independent of due_date. Empty string clears.' },
         starred: { type: 'boolean', description: 'Star or unstar the task.' },
-        needs_attention: { type: 'boolean', description: 'Flag task as needing human attention (red dot in UI). Set true when human review/decision is required.' },
+        unread: { type: 'boolean', description: 'Read/unread marker (red dot in UI). true = there is agent output the human has not seen. Normally managed automatically by the session lifecycle — set it manually only to re-flag a task for review.' },
+        needs_attention: { type: 'boolean', description: 'Deprecated alias of `unread`.' },
         parent_task_id: { type: 'string', description: 'Set or change the parent task. Pass empty string to remove parent.' },
         sprint: { type: 'string', description: 'Set sprint name (e.g. "Feb16-Feb27"). Empty string clears. Plugins map this to platform-specific sprint/iteration fields.' },
         description: { type: 'string', description: 'Set task description (what & why — pre-action context).' },
@@ -809,7 +825,7 @@ For projects (type='project'): set default_host and default_cwd for session defa
           params.phase !== undefined ||
           params.project !== undefined || params.due_date !== undefined ||
           params.start_date !== undefined || params.end_date !== undefined ||
-          params.starred !== undefined || params.needs_attention !== undefined ||
+          params.starred !== undefined || params.unread !== undefined || params.needs_attention !== undefined ||
           params.parent_task_id !== undefined || params.sprint !== undefined ||
           params.add_tags !== undefined || params.remove_tags !== undefined ||
           params.set_tags !== undefined ||
@@ -829,7 +845,11 @@ For projects (type='project'): set default_host and default_cwd for session defa
               // Trim at the boundary like task_create does ('' stays '', = Inbox).
               project: params.project === undefined ? undefined : String(params.project).trim(),
               starred: (params.starred === true || params.starred === 'true') ? true : (params.starred === false || params.starred === 'false') ? false : undefined,
-              needs_attention: (params.needs_attention === true || params.needs_attention === 'true') ? true : (params.needs_attention === false || params.needs_attention === 'false') ? false : undefined,
+              // Accept either spelling; updateTask writes both keys.
+              unread: (() => {
+                const v = params.unread ?? params.needs_attention;
+                return (v === true || v === 'true') ? true : (v === false || v === 'false') ? false : undefined;
+              })(),
               parent_task_id: params.parent_task_id as string | undefined,
               sprint: params.sprint as string | undefined,
               add_tags: params.add_tags as string[] | undefined,
@@ -1348,7 +1368,7 @@ and is always allowed.`,
         prompt: { type: 'string', description: 'Prompt/message to send. Required.' },
         working_directory: { type: 'string', description: 'Absolute path to working directory (required for CLI sessions). For remote sessions, this is the path on the remote machine. If not specified, uses project defaults (see task_update type=\'project\').' },
         host: { type: 'string', description: 'SSH host alias for remote execution (matches keys in config.hosts). If not specified, uses the project default_host from project settings. Pass "local" (or an empty string) to force local execution and skip project default_host inheritance.' },
-        mode: { type: 'string', enum: ['plan', 'bypass'], description: "Session permission mode (CLI only). 'plan' = read-only, 'bypass' = no prompts." },
+        mode: { type: 'string', enum: SESSION_MODE_ENUM, description: SESSION_MODE_DESC },
         fork_session_id: { type: 'string', description: 'Fork from an existing session: copies its conversation context into a new session on a different task. When set, working_directory/host/mode are inherited from the source session and must NOT be provided.' },
         runner: { type: 'string', enum: ['embedded', 'cli'], description: "Runner type. 'cli' = Claude Code process (default if no agent_id). 'embedded' = in-process subagent (default if agent_id is set)." },
         agent_id: { type: 'string', description: 'Agent definition ID (e.g. "general", "researcher"). For embedded runs. Defaults to "general".' },
@@ -1847,7 +1867,7 @@ defaults (same resolution chain as session_start).`,
         session_id: { type: 'string', description: 'Claude session ID to resume (for CLI sessions)' },
         run_id: { type: 'string', description: 'Subagent run ID to resume (for embedded sessions)' },
         message: { type: 'string', description: 'Message to send to the session' },
-        mode: { type: 'string', enum: ['bypass', 'accept', 'plan'], description: 'Override permission mode for this resume. bypass = full permissions, accept = accept edits, plan = read-only.' },
+        mode: { type: 'string', enum: SESSION_MODE_ENUM, description: `Override permission mode for this resume. ${SESSION_MODE_DESC}` },
         interrupt: { type: 'boolean', description: 'Stop the running session turn and send this message as a fresh turn. Use when the session is going in the wrong direction.' },
       },
       required: ['message'],

@@ -24,6 +24,7 @@ import {
   remoteJsonlPath,
   type ReadSessionResult,
 } from './session-file-reader.js';
+import { sessionModeFromCli } from './types.js';
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from './workflow-progress.js';
 import type { SessionBackgroundTasksPayload, WorkflowPhaseInfo, WorkflowAgentInfo } from './event-types.js';
 import os from 'node:os';
@@ -1829,17 +1830,14 @@ export async function extractPlanContent(sessionId: string, cwd?: string, host?:
 // ── State recovery from CloudCode canonical JSONL ──
 
 /**
- * Map Claude CLI permissionMode string to our SessionMode.
- * CloudCode JSONL uses 'bypassPermissions' / 'acceptEdits' / 'plan' / 'default'.
+ * Map a Claude CLI permissionMode string (as recorded in the canonical JSONL)
+ * to our SessionMode. Delegates to the ONE registry in types.ts so recovery
+ * understands every mode the CLI can write — incl. 'auto' and 'dontAsk'; before
+ * that, an auto/dontAsk session recovered as "mode unknown" and kept whatever
+ * stale mode the record held.
  */
 function mapPermissionModeFromJsonl(permMode: string): string | null {
-  switch (permMode) {
-  case 'bypassPermissions': return 'bypass';
-  case 'acceptEdits': return 'accept';
-  case 'plan': return 'plan';
-  case 'default': return 'default';
-  default: return null;
-  }
+  return sessionModeFromCli(permMode);
 }
 
 /** State recovered from CloudCode canonical JSONL for crash recovery. */

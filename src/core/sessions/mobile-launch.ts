@@ -20,10 +20,11 @@ import { QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js';
 import { getConfig } from '../config-manager.js';
 import { getFrequentDirs, scoreFrequentDir } from '../frequent-dirs.js';
 import { quickStartSession, QuickStartError } from './quick-start.js';
-import { resolveModelSwitchValue, VALID_SESSION_MODEL_IDS } from '../types.js';
+import { resolveModelSwitchValue, VALID_SESSION_MODEL_IDS, VALID_SESSION_MODE_IDS } from '../types.js';
 import { log } from '../../logging/index.js';
 
-export const VALID_LAUNCH_MODES = new Set(['bypass', 'accept', 'default', 'plan']);
+/** Launch-time permission modes — the full registry set (core/types.ts). */
+export const VALID_LAUNCH_MODES = VALID_SESSION_MODE_IDS;
 const MAX_SUGGESTED_DIRS = 30;
 
 export interface LaunchOptionsHost { alias: string; label: string }

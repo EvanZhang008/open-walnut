@@ -222,8 +222,17 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
 
   it('both bridge resume paths authorize runtime bypass mode changes', () => {
     const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
-    expect(standaloneSrc).toContain('--dangerously-skip-permissions')
-    expect(templateSrc).toContain('--dangerously-skip-permissions')
+    for (const src of [standaloneSrc, templateSrc]) {
+      // Must inject the capability-only spelling. The BARE flag also *selects*
+      // bypassPermissions and outranks --permission-mode, so a resume that used
+      // it would silently run every mode as bypass.
+      expect(src).toContain('--allow-dangerously-skip-permissions')
+      // And it must strip the bare flag out of a stored argv recorded before
+      // that fix. Substring-safe: drop the --allow- occurrences before looking.
+      const withoutAllow = src.split('--allow-dangerously-skip-permissions').join('')
+      expect(withoutAllow).toMatch(/indexOf\('--dangerously-skip-permissions'\)/)
+      expect(withoutAllow).not.toMatch(/push\('--dangerously-skip-permissions'\)/)
+    }
   })
 
   it('both daemon twins enforce owner-only umask and repair existing storage modes', () => {

@@ -1,4 +1,5 @@
 import type { Task } from '@open-walnut/core';
+import { VALID_SESSION_MODE_IDS } from '@open-walnut/core';
 import type {
   ProcessStatus,
   SessionEngine,
@@ -84,8 +85,19 @@ function isProcessStatus(value: unknown): value is ProcessStatus {
   return value === 'running' || value === 'idle' || value === 'stopped' || value === 'error';
 }
 
+/**
+ * Derived from the ONE mode registry (core/types.ts) — NOT a hand-listed union.
+ *
+ * This validator is load-bearing for the mode pill, and a hardcoded list here
+ * breaks it in a way that looks like "the button is dead": a status snapshot
+ * carrying an unlisted mode fails parse, callers coerce it to 'default'
+ * (see the `?? 'default'` fallbacks below), and resolveSessionRecordStatus then
+ * overwrites the component's optimistic state on the very next WS status push.
+ * The pill visibly snaps back and sticks on "Default" even though the PATCH
+ * returned 200.
+ */
 function isSessionMode(value: unknown): value is SessionMode {
-  return value === 'bypass' || value === 'accept' || value === 'default' || value === 'plan';
+  return typeof value === 'string' && VALID_SESSION_MODE_IDS.has(value);
 }
 
 function isSessionProvider(value: unknown): value is SessionProvider {

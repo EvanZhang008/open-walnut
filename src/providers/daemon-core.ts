@@ -19,7 +19,22 @@ import { execSync } from 'node:child_process'
 
 // ── Shared types ──
 
-export type SessionMode = 'bypass' | 'plan' | 'accept' | 'default'
+/**
+ * Permission modes. Mirrors core/types.ts SessionMode — the daemon can't import
+ * from core/ (it ships as a standalone bun binary), so this is a deliberate
+ * duplicate kept in sync by tests/providers/daemon-standalone-vs-source-parity.
+ */
+export type SessionMode = 'bypass' | 'plan' | 'accept' | 'default' | 'auto' | 'dontAsk'
+
+/** Walnut mode id → `claude --permission-mode` value. Mirrors SESSION_MODE_CLI_MAP. */
+export const MODE_CLI: Readonly<Record<SessionMode, string>> = {
+  bypass: 'bypassPermissions',
+  accept: 'acceptEdits',
+  plan: 'plan',
+  default: 'default',
+  auto: 'auto',
+  dontAsk: 'dontAsk',
+}
 
 export interface RegistryEntry {
   pid: number
@@ -799,6 +814,12 @@ export function shouldAutoRespond(mode: SessionMode, toolName: string | undefine
   // the CLI returns is_error=true for this tool, requiring interactive approval.
   // Auto-allowing would send a false "plan complete" signal.
   if (mode === 'plan') return toolName !== 'ExitPlanMode'
+  // 'auto' and 'dontAsk' fall through to false ON PURPOSE. Measured on CLI
+  // 2.1.220: both decide internally and emit NO control_request at all (auto
+  // auto-allowed a Write and even a piped-curl Bash; dontAsk refused the Write
+  // itself), so this branch is normally unreachable for them. If the auto-mode
+  // classifier ever does escalate to a prompt, the user must see it — silently
+  // auto-allowing would turn "safer YOLO" into full bypass.
   return false
 }
 

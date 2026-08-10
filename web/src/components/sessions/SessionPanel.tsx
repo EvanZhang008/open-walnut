@@ -34,7 +34,7 @@ import { SessionForkButton } from './SessionForkButton';
 import { SessionKebabSection } from './SessionKebabSection';
 import { ModelPicker } from './ModelPicker';
 import { CodexModelPicker } from './CodexModelPicker';
-import { modelSupportsEffort, SESSION_EFFORTS } from '@open-walnut/core';
+import { modelSupportsEffort, SESSION_EFFORTS, SESSION_MODE_LABELS } from '@open-walnut/core';
 import { TaskQuickActions } from './TaskQuickActions';
 import { useFullscreen } from '@/hooks/useFullscreen';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
@@ -947,9 +947,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               // is a separate flag meaning "plan was produced", it shouldn't lock the toggle.
               // Rendered INSIDE the composer card's controls row (D6), between the
               // "+" and the mic/send cluster.
-              const MODE_LABELS: Record<string, string> = {
-                default: 'Default', bypass: 'Bypass', plan: 'Plan', accept: 'Accept',
-              };
+              // Labels come from the ONE mode registry (core/types.ts) so a mode
+              // added there shows a real label instead of its raw id ('dontAsk').
+              const MODE_LABELS: Record<string, string> = SESSION_MODE_LABELS;
               const currentMode = session.mode || 'default';
               const isPlan = currentMode === 'plan';
               const currentIdx = enabledModes.indexOf(currentMode);
@@ -1341,9 +1341,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               // is a separate flag meaning "plan was produced", it shouldn't lock the toggle.
               // Rendered INSIDE the composer card's controls row (D6), between the
               // "+" and the mic/send cluster.
-              const MODE_LABELS: Record<string, string> = {
-                default: 'Default', bypass: 'Bypass', plan: 'Plan', accept: 'Accept',
-              };
+              // Labels come from the ONE mode registry (core/types.ts) so a mode
+              // added there shows a real label instead of its raw id ('dontAsk').
+              const MODE_LABELS: Record<string, string> = SESSION_MODE_LABELS;
               const currentMode = session.mode || 'default';
               const isPlan = currentMode === 'plan';
               const currentIdx = enabledModes.indexOf(currentMode);

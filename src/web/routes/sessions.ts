@@ -275,9 +275,8 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
     }
 
     if (mode) {
-      const validModes = ['bypass', 'accept', 'default', 'plan']
-      if (!validModes.includes(mode)) {
-        res.status(400).json({ error: `Invalid mode: ${mode}. Must be one of: ${validModes.join(', ')}` })
+      if (!CLAUDE_SESSION_MODES.includes(mode as SessionMode)) {
+        res.status(400).json({ error: `Invalid mode: ${mode}. Must be one of: ${CLAUDE_SESSION_MODES.join(', ')}` })
         return
       }
     }
@@ -435,6 +434,7 @@ import {
   respondSessionPermission,
   executeContinueSession,
   getSessionChanges,
+  CLAUDE_SESSION_MODES,
 } from '../../core/sessions/session-lifecycle.js'
 import { SessionControlError } from '../../core/sessions/session-controls.js'
 
@@ -1474,9 +1474,8 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
       return
     }
 
-    const validModes = ['bypass', 'accept', 'default', 'plan']
-    if (mode && !validModes.includes(mode)) {
-      res.status(400).json({ error: `Invalid mode: ${mode}. Must be one of: ${validModes.join(', ')}` })
+    if (mode && !CLAUDE_SESSION_MODES.includes(mode as SessionMode)) {
+      res.status(400).json({ error: `Invalid mode: ${mode}. Must be one of: ${CLAUDE_SESSION_MODES.join(', ')}` })
       return
     }
     const execMode = mode ?? 'bypass'

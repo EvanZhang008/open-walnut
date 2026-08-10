@@ -152,6 +152,63 @@ export const VALID_SESSION_EFFORT_IDS: ReadonlySet<string> = new Set(SESSION_EFF
 /** Effort level the API falls back to when no --effort flag is sent. */
 export const DEFAULT_SESSION_EFFORT: SessionEffort = 'high';
 
+// ── Session permission-mode registry ──────────────────────────────────────
+// Single source of truth for the modes Walnut exposes. `SessionMode` (declared
+// further down, next to the other session-record types) is the Walnut id; the
+// entries here carry the CLI vocabulary + display metadata so the picker, the
+// spawn args, the live `set_permission_mode` switch, and the daemon's
+// auto-respond policy all derive from ONE table.
+
+export interface SessionModeEntry {
+  /** Walnut id — what lands in `record.mode` and rides the wire. */
+  id: SessionMode;
+  /** Value passed to `claude --permission-mode` / `set_permission_mode`. */
+  cli: string;
+  /** Pill / picker label. */
+  label: string;
+  /** Tooltip: what the mode actually does to tool calls. */
+  description: string;
+}
+
+/**
+ * Ordered safest → loosest. Verified against `claude --permission-mode` on CLI
+ * 2.1.199 / 2.1.214 / 2.1.220 (all six accepted at spawn AND echoed back by a
+ * live `set_permission_mode` control_request).
+ *
+ * Note the CLI renamed its own spelling of the 'default' choice to `manual` in
+ * 2.1.214+, but still accepts `default` as an alias (both resolve to
+ * permissionMode=default in the init event) — so `default` stays our wire value
+ * and keeps working on older CLIs too.
+ */
+export const SESSION_MODES: readonly SessionModeEntry[] = [
+  { id: 'plan',    cli: 'plan',              label: 'Plan',     description: 'Explore and plan only — no edits or commands' },
+  { id: 'default', cli: 'default',           label: 'Default',  description: 'Ask before anything sensitive' },
+  { id: 'dontAsk', cli: 'dontAsk',           label: "Don't Ask", description: 'Never prompt — deny whatever is not pre-approved' },
+  { id: 'accept',  cli: 'acceptEdits',       label: 'Accept',   description: 'Auto-accept file edits, still ask for the rest' },
+  { id: 'auto',    cli: 'auto',              label: 'Auto',     description: 'Classify each call and auto-allow the safe ones' },
+  { id: 'bypass',  cli: 'bypassPermissions', label: 'Bypass',   description: 'Full trust — never ask, allow everything' },
+] as const;
+
+/** Ordered mode ids (safest → loosest) — the default toggle cycle order. */
+export const SESSION_MODE_IDS: readonly SessionMode[] = SESSION_MODES.map((m) => m.id);
+
+/** Runtime allowlist for route/relay validation. */
+export const VALID_SESSION_MODE_IDS: ReadonlySet<string> = new Set(SESSION_MODE_IDS);
+
+/** Walnut id → CLI `--permission-mode` value. */
+export const SESSION_MODE_CLI_MAP: Readonly<Record<SessionMode, string>> =
+  Object.fromEntries(SESSION_MODES.map((m) => [m.id, m.cli])) as Record<SessionMode, string>;
+
+/** Walnut id → display label. */
+export const SESSION_MODE_LABELS: Readonly<Record<SessionMode, string>> =
+  Object.fromEntries(SESSION_MODES.map((m) => [m.id, m.label])) as Record<SessionMode, string>;
+
+/** CLI permissionMode string → Walnut id. Unknown values return null (never
+ *  guess: a mode we don't model must not silently masquerade as another). */
+export function sessionModeFromCli(cliMode: string): SessionMode | null {
+  return SESSION_MODES.find((m) => m.cli === cliMode)?.id ?? null;
+}
+
 /**
  * Reasoning-effort capability of a model: whether it accepts an effort level at
  * all, and whether it accepts the higher `xhigh` / top `max` levels specifically.
@@ -526,6 +583,28 @@ export interface Task {
   pinned?: boolean;
   pin_order?: number;  // lower = higher in list, undefined = not pinned
   focus_tier?: string;  // undefined = satellite (default); 'focus' | 'backlog' | 'wait' built-ins, or a custom tier id ('ct_*')
+  /**
+   * UNREAD marker — the read/unread lifecycle for agent work.
+   *
+   * Semantics: "the agent produced something the human has not looked at yet".
+   * Set to true by the phase machine whenever a session hands work back
+   * (AGENT_COMPLETE — turn finished; AWAIT_HUMAN_ACTION — errored / needs a
+   * decision). Cleared to false the moment the human OPENS the task (focus /
+   * session open) — that IS the read event — and on COMPLETE.
+   *
+   * This is a read marker, NOT task content: writing it must never bump
+   * `updated_at` (see updateTask's onlyReadMarker check), or merely selecting a
+   * task would reorder every updated_at-sorted list.
+   *
+   * @see needs_attention — the retired name, still accepted on input and still
+   * mirrored to external sync backends (MS To-Do / Jira headers) and the frozen
+   * /api/v1 contract. `unread` is the single source of truth in-process;
+   * normalizeReadMarker() folds legacy rows forward on read.
+   */
+  unread?: boolean;
+  /** @deprecated Renamed to `unread` (2026-08-09). Kept so legacy rows, external
+   *  sync headers, and older clients keep round-tripping. Reads should go through
+   *  `isUnread(task)`; writes should set `unread`. */
   needs_attention?: boolean;
   /** Last sync error message — set on push failure, cleared on success. */
   sync_error?: string;
@@ -541,6 +620,48 @@ export interface Task {
   _syncedAt?: string;
   /** Plugin-specific extension data. Keys are plugin IDs (e.g. 'ms-todo', 'plugin-a'). */
   ext?: Record<string, unknown>;
+}
+
+// ── Read / unread marker ───────────────────────────────────────────────────
+//
+// `unread` replaced `needs_attention` (2026-08-09). Both keys can appear on a
+// task: legacy rows only carry the old one, external sync round-trips it, and
+// older clients still PATCH it. These three helpers are the ONLY sanctioned way
+// to read or write the marker so no surface can drift back to reading the raw
+// field (that drift is exactly what left the Focus/Satellite cards painted red
+// after the list row's dot had already cleared).
+
+/** Read the marker, honoring the legacy field when `unread` is absent. */
+export function isUnread(task: Pick<Task, 'unread' | 'needs_attention'>): boolean {
+  return task.unread ?? task.needs_attention ?? false;
+}
+
+/**
+ * The patch that sets/clears the marker. Writes BOTH keys so a task never ends
+ * up with the two disagreeing — external sync (MS To-Do / Jira) and the frozen
+ * /api/v1 contract still read `needs_attention`.
+ */
+export function readMarkerPatch(unread: boolean): { unread: boolean; needs_attention: boolean } {
+  return { unread, needs_attention: unread };
+}
+
+/**
+ * Keys that carry the read marker. A patch touching ONLY these must not bump
+ * `updated_at` — see updateTask / applyFieldUpdate. Exported so the server and
+ * the web optimistic layer share one definition.
+ */
+export const READ_MARKER_KEYS: readonly string[] = ['unread', 'needs_attention'] as const;
+
+/**
+ * Fold a legacy row forward: a task carrying only `needs_attention` gets an
+ * equivalent `unread`. Mutates in place and returns the task (call sites read
+ * it inline). Cheap enough for the per-row normalize path.
+ */
+export function normalizeReadMarker<T extends Partial<Task>>(task: T): T {
+  if (task.unread === undefined && task.needs_attention !== undefined) {
+    task.unread = task.needs_attention;
+  }
+  return task;
 }
 
 /**
@@ -824,8 +945,9 @@ export interface Config {
      *  Default: true. Set to false to manually review every permission even in bypass. */
     auto_approve_bypass?: boolean;
     /** Which session modes are available in the mode toggle cycle.
-     *  Default: all four ['default', 'bypass', 'plan', 'accept'].
-     *  Set to e.g. ['bypass', 'plan'] to only cycle between those two. */
+     *  Default: ALL of SESSION_MODE_IDS (plan, default, dontAsk, accept, auto,
+     *  bypass — safest → loosest). Set to e.g. ['bypass', 'plan'] to only cycle
+     *  between those two. Unknown ids are ignored by the UI. */
     enabled_modes?: SessionMode[];
     /** Pass --include-partial-messages to `claude -p` so the CLI emits
      *  Anthropic SSE stream_event records (token-level deltas). With this on,
@@ -1078,7 +1200,21 @@ export interface ConversationIndex {
 }
 
 export type ProcessStatus = 'running' | 'idle' | 'stopped' | 'error';
-export type SessionMode = 'bypass' | 'accept' | 'default' | 'plan';
+/**
+ * Permission mode of a session. One Walnut id per Claude Code permission mode —
+ * the CLI's full set, not a subset (verified against `claude --permission-mode`
+ * on 2.1.199/2.1.214/2.1.220):
+ *
+ *   bypass → bypassPermissions   accept → acceptEdits   plan → plan
+ *   default → default            auto   → auto          dontAsk → dontAsk
+ *
+ * 'auto' classifies each tool call and auto-allows the safe ones (the CLI's
+ * "safer YOLO"); 'dontAsk' never prompts and DENIES anything not pre-approved.
+ * Both are spawn-time AND live-switchable (set_permission_mode echoes them).
+ *
+ * See SESSION_MODE_CLI_MAP for the id → CLI-vocabulary mapping.
+ */
+export type SessionMode = 'bypass' | 'accept' | 'default' | 'plan' | 'auto' | 'dontAsk';
 export type SessionProvider = 'cli' | 'sdk' | 'embedded';
 /** Which coding-agent CLI binary backs a 'cli' session (claude-code vs codex vs future engines). */
 export type SessionEngine = 'claude' | 'codex';
@@ -1279,4 +1415,12 @@ export interface SessionRecord {
    *  Number.MAX_SAFE_INTEGER is a transport-layer sentinel and must NEVER be
    *  persisted here. */
   consumedOffset?: number;
+
+  /** Identity (dev:ino:birthtimeMs) of the stream FILE consumedOffset points
+   *  into, stamped by the daemon on every snapshot. When a snapshot arrives
+   *  with a DIFFERENT epoch, the file was recreated (reboot wiped /tmp, fresh
+   *  spawn) and its byte coordinates restarted at 0 — the stored watermark is
+   *  garbage from a dead file and MUST be reset instead of vetoing the new
+   *  file's evidence (incident 019a7fe5). Spilled into `payload` (no column). */
+  streamEpoch?: string;
 }

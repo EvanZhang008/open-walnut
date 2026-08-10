@@ -45,6 +45,31 @@ export interface SdkSessionOptions {
 
 export type EventEmitter = (name: SessionEventName, data: unknown) => void
 
+/**
+ * Walnut mode id → SDK PermissionMode. Mirrors SESSION_MODE_CLI_MAP in
+ * core/types.ts (the SDK's `PermissionMode` union is the same vocabulary as the
+ * CLI's `--permission-mode`). 'default' maps to itself, so it's omitted.
+ */
+const SDK_PERMISSION_MODE: Readonly<Record<string, PermissionMode>> = {
+  bypass: 'bypassPermissions' as PermissionMode,
+  accept: 'acceptEdits' as PermissionMode,
+  plan: 'plan' as PermissionMode,
+  auto: 'auto' as unknown as PermissionMode,
+  dontAsk: 'dontAsk' as PermissionMode,
+  default: 'default' as PermissionMode,
+}
+
+/**
+ * Apply a Walnut mode onto SDK query Options. `bypass` additionally needs
+ * allowDangerouslySkipPermissions — without it the SDK refuses the mode.
+ */
+function applySdkPermissionMode(options: Options, mode: string | undefined): void {
+  const resolved = mode ? SDK_PERMISSION_MODE[mode] : undefined
+  if (!resolved) return
+  options.permissionMode = resolved
+  if (mode === 'bypass') options.allowDangerouslySkipPermissions = true
+}
+
 interface PendingInteraction {
   resolve: (value: unknown) => void
   reject: (err: Error) => void
@@ -162,15 +187,8 @@ export class SdkSession {
       abortController: this.abortController,
     }
 
-    // Permission mode
-    if (params.mode === 'bypass') {
-      options.permissionMode = 'bypassPermissions' as PermissionMode
-      options.allowDangerouslySkipPermissions = true
-    } else if (params.mode === 'accept') {
-      options.permissionMode = 'acceptEdits' as PermissionMode
-    } else if (params.mode === 'plan') {
-      options.permissionMode = 'plan' as PermissionMode
-    }
+    // Permission mode — all six ride the shared registry mapping.
+    applySdkPermissionMode(options, params.mode)
 
     // System prompt
     if (params.systemPrompt) {
@@ -272,15 +290,8 @@ export class SdkSession {
       resume: this._sessionId,
     }
 
-    // Permission mode
-    if (this._mode === 'bypass') {
-      options.permissionMode = 'bypassPermissions' as PermissionMode
-      options.allowDangerouslySkipPermissions = true
-    } else if (this._mode === 'accept') {
-      options.permissionMode = 'acceptEdits' as PermissionMode
-    } else if (this._mode === 'plan') {
-      options.permissionMode = 'plan' as PermissionMode
-    }
+    // Permission mode — all six ride the shared registry mapping.
+    applySdkPermissionMode(options, this._mode)
 
     options.canUseTool = this.createCanUseTool()
 
@@ -409,6 +420,20 @@ export class SdkSession {
           return { behavior: 'allow' as const }
         }
       }
+
+      // dontAsk = "never prompt, deny whatever isn't pre-approved". Reaching
+      // here means the SDK found no pre-approval, so denying IS the mode's
+      // contract — forwarding to the UI would turn it into an asking mode.
+      if (this._mode === 'dontAsk') {
+        return {
+          behavior: 'deny' as const,
+          message: `Denied by "Don't Ask" mode — ${toolName} is not pre-approved. Switch modes to allow it.`,
+        }
+      }
+
+      // 'auto' deliberately falls through: its classifier auto-allows the safe
+      // calls inside the SDK, so a callback here means it ESCALATED and wants a
+      // human. Auto-allowing would silently turn auto into bypass.
 
       // For other tools, forward permission request to Walnut
       const requestId = `perm-${crypto.randomBytes(4).toString('hex')}`

@@ -1,6 +1,7 @@
 export type ProcessStatus = 'running' | 'idle' | 'stopped' | 'error';
 export type TaskPhase = 'TODO' | 'IN_PROGRESS' | 'AGENT_COMPLETE' | 'AWAIT_HUMAN_ACTION' | 'HUMAN_VERIFIED' | 'POST_WORK_COMPLETED' | 'COMPLETE';
-export type SessionMode = 'bypass' | 'accept' | 'default' | 'plan';
+/** Mirrors SessionMode in src/core/types.ts — all six Claude permission modes. */
+export type SessionMode = 'bypass' | 'accept' | 'default' | 'plan' | 'auto' | 'dontAsk';
 export type SessionProvider = 'cli' | 'sdk' | 'embedded';
 export type SessionEngine = 'claude' | 'codex';
 

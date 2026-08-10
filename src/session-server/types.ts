@@ -41,7 +41,7 @@ export type WireFrame = CommandFrame | ResponseFrame | EventFrame
 export interface SessionStartParams {
   message: string
   cwd?: string
-  mode?: 'bypass' | 'accept' | 'default' | 'plan'
+  mode?: 'bypass' | 'accept' | 'default' | 'plan' | 'auto' | 'dontAsk'
   systemPrompt?: string
   sessionId?: string  // Resume existing session
   permissionMode?: string
@@ -62,7 +62,7 @@ export interface SessionInterruptParams {
 
 export interface SessionSetModeParams {
   sessionId: string
-  mode: 'bypass' | 'accept' | 'default' | 'plan'
+  mode: 'bypass' | 'accept' | 'default' | 'plan' | 'auto' | 'dontAsk'
 }
 
 export interface SessionStopParams {

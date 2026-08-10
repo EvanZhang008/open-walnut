@@ -20,19 +20,27 @@ struct NewSessionSheet: View {
     /// are the wire contract (POST /api/v1/sessions `mode`); `bypass` is the
     /// server default and matches the web launcher's behavior.
     enum PermissionMode: String, CaseIterable, Identifiable {
-        case plan, accept, bypass
+        // Full CLI set. `dontAsk` and `auto` are camelCase on the wire — they are
+        // the CLI's own spellings, so the raw values must not be lowercased.
+        case plan, `default`, dontAsk, accept, auto, bypass
         var id: String { rawValue }
         var label: String {
             switch self {
             case .plan: return "Plan"
+            case .default: return "Default"
+            case .dontAsk: return "Don't Ask"
             case .accept: return "Accept Edits"
+            case .auto: return "Auto"
             case .bypass: return "Bypass"
             }
         }
         var blurb: String {
             switch self {
             case .plan: return "Read-only: the agent proposes a plan first."
+            case .default: return "Asks before anything sensitive."
+            case .dontAsk: return "Never prompts — denies whatever isn't pre-approved."
             case .accept: return "File edits are auto-accepted; commands still ask."
+            case .auto: return "Classifies each action and auto-allows the safe ones."
             case .bypass: return "Full autonomy — no permission prompts."
             }
         }

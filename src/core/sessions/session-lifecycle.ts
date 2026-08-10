@@ -18,11 +18,14 @@ import { SessionControlError } from './session-controls.js';
 import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
 import type { SessionRecord, SessionMode } from '../types.js';
+import { SESSION_MODE_IDS } from '../types.js';
 import type { SessionHistoryMessage } from '../session-history.js';
 
 // ── Shared helpers (moved from src/web/routes/sessions.ts) ──────────────────
 
-export const CLAUDE_SESSION_MODES = ['default', 'plan', 'bypass', 'accept'] as const;
+/** Selectable Claude permission modes, safest → loosest. Derived from the one
+ *  registry (core/types.ts) so adding a mode there reaches every validator. */
+export const CLAUDE_SESSION_MODES: readonly SessionMode[] = SESSION_MODE_IDS;
 
 /**
  * Read one provider's history in its native shape. Codex sessions read the ACP
@@ -198,7 +201,7 @@ export async function patchSession(sessionId: string, input: SessionPatchInput):
   if (archive_reason !== undefined && typeof archive_reason !== 'string') {
     throw new SessionControlError('archive_reason must be a string', 400);
   }
-  if (mode !== undefined && !CLAUDE_SESSION_MODES.includes(mode as typeof CLAUDE_SESSION_MODES[number])) {
+  if (mode !== undefined && !CLAUDE_SESSION_MODES.includes(mode as SessionMode)) {
     throw new SessionControlError(`mode must be one of: ${CLAUDE_SESSION_MODES.join(', ')}`, 400);
   }
   // NOTE: an empty patch is tolerated (no-op update) — the web PATCH has always

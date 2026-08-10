@@ -56,7 +56,10 @@ import { checkCwdExists } from './cwd-check.js'
 import { AcpSession, emitAcpIdentityBoundary } from './acp-session.js'
 import { extractImageFilePathFromInput } from '../core/session-history.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort } from '../core/types.js'
-import { SESSION_MODEL_CLI_MAP, modelSupportsEffort, VALID_SESSION_EFFORT_IDS } from '../core/types.js'
+import {
+  SESSION_MODEL_CLI_MAP, modelSupportsEffort, VALID_SESSION_EFFORT_IDS,
+  SESSION_MODE_CLI_MAP, VALID_SESSION_MODE_IDS, sessionModeFromCli,
+} from '../core/types.js'
 import { classifyStreamEvent, classifyDelta } from './claude-stream-event-map.js'
 import { accumulateWorkflowProgress, sortedPhases, sortedAgents } from '../core/workflow-progress.js'
 import type { WorkflowPhaseInfo, WorkflowAgentInfo } from '../core/event-types.js'
@@ -230,28 +233,21 @@ interface StreamToolProgressEvent {
 type StreamEvent = StreamInitEvent | StreamStatusEvent | StreamMessageEvent | StreamResultEvent | StreamControlRequestEvent | StreamControlResponseEvent | StreamPartialEvent | StreamToolProgressEvent
 
 /**
- * Map CLI permissionMode string to our internal SessionMode.
- *
- * CLI values (from JSONL system events):
- *   "bypassPermissions" → 'bypass'
- *   "acceptEdits"       → 'accept'
- *   "plan"              → 'plan'
- *   "default"           → 'default'
+ * Map a CLI permissionMode string (JSONL/stream system events) to our internal
+ * SessionMode. Delegates to the ONE registry in core/types.ts, so it covers
+ * every mode the CLI can report — incl. `auto` and `dontAsk`. Unknown values
+ * return null: a mode we don't model must never masquerade as another.
  */
 function mapPermissionMode(cliMode: string): SessionMode | null {
-  switch (cliMode) {
-    case 'bypassPermissions': return 'bypass'
-    case 'acceptEdits': return 'accept'
-    case 'plan': return 'plan'
-    case 'default': return 'default'
-    default: return null
-  }
+  return sessionModeFromCli(cliMode)
 }
 
 function isMissingBypassCapabilityError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err)
+  // The CLI names the bare flag in its rejection text even though we launch with
+  // the --allow- form; match the shared stem so both spellings are caught.
   return message.includes('bypassPermissions')
-    && message.includes('--dangerously-skip-permissions')
+    && message.includes('dangerously-skip-permissions')
 }
 
 // ── Helpers for PID-death handler ──
@@ -1359,31 +1355,32 @@ export class ClaudeCodeSession {
       args.push('--debug')
     }
 
-    // This flag authorizes the bypass capability at process startup; it does
-    // not activate bypass by itself. Claude Code rejects a later
-    // set_permission_mode(bypassPermissions) unless the process was launched
-    // with this capability, including processes that start in Plan mode.
-    args.push('--dangerously-skip-permissions')
+    // Authorize the bypass CAPABILITY at startup without ACTIVATING it. Claude
+    // Code rejects a later set_permission_mode(bypassPermissions) unless the
+    // process was launched with the capability, so every session needs it —
+    // including ones that start in Plan mode.
+    //
+    // ⚠️ It MUST be `--allow-dangerously-skip-permissions`, never the bare
+    // `--dangerously-skip-permissions`. The bare flag doesn't just grant the
+    // capability, it *selects the mode*, and it OUTRANKS --permission-mode:
+    // initialPermissionModeFromCLI pushes 'bypassPermissions' onto orderedModes
+    // FIRST and takes the first viable entry, so `--dangerously-skip-permissions
+    // --permission-mode plan` silently starts in bypassPermissions. Measured on
+    // CLI 2.1.220 — with the bare flag ALL SIX requested modes reported
+    // `init permissionMode=bypassPermissions`; with the --allow- form each mode
+    // reported itself. That bug is why plan/accept/default sessions never
+    // actually restricted anything (see the mode-registry tests).
+    args.push('--allow-dangerously-skip-permissions')
 
-    // Store mode and set initial activity.
-    // Default (no mode, or explicit 'bypass'): bypassPermissions — users shouldn't
-    // be prompted to approve every edit. Plan mode must be explicitly requested.
-    if (mode === 'plan') {
-      this._mode = 'plan'
-      this._activity = 'planning'
-      args.push('--permission-mode', 'plan')
-    } else if (mode === 'accept') {
-      this._mode = 'accept'
-      args.push('--permission-mode', 'acceptEdits')
-    } else if (mode === 'default') {
-      this._mode = 'default'
-      this._activity = 'implementing'
-      args.push('--permission-mode', 'default')
-    } else {
-      this._mode = 'bypass'
-      this._activity = 'implementing'
-      args.push('--permission-mode', 'bypassPermissions')
-    }
+    // Requested mode → CLI vocabulary via the one registry (core/types.ts).
+    // No mode = 'bypass': users shouldn't be prompted to approve every edit;
+    // every restrictive mode must be asked for explicitly.
+    const requestedMode: SessionMode = mode && VALID_SESSION_MODE_IDS.has(mode)
+      ? mode as SessionMode
+      : 'bypass'
+    this._mode = requestedMode
+    this._activity = requestedMode === 'plan' ? 'planning' : 'implementing'
+    args.push('--permission-mode', SESSION_MODE_CLI_MAP[requestedMode])
     // Map picker short IDs → CLI model aliases via the SESSION_MODELS registry
     // (single source of truth in core/types.ts). The CLI understands the [1m]
     // suffix for the 1M context window. An unknown id falls through to passthrough
@@ -5157,14 +5154,14 @@ export class ClaudeCodeSession {
    * processNext already falls back to record.mode on a cold --resume
    * (`resumeMode = … ?? record.mode`), so no pendingMode flag is needed.
    *
-   * @param mode  Walnut SessionMode ('bypass'|'accept'|'plan'|'default') —
-   *              mapped to the CLI's permission-mode vocabulary here.
+   * @param mode  Any Walnut SessionMode — mapped to the CLI's permission-mode
+   *              vocabulary through the shared registry. All six (incl. `auto`
+   *              and `dontAsk`) are live-switchable: verified on CLI 2.1.220,
+   *              each one echoed itself back from set_permission_mode.
    */
   async applyPermissionMode(mode: SessionMode, timeoutMs = 15_000): Promise<boolean> {
     if (!this._transport) throw new Error('session not started')
-    const cliMode = mode === 'bypass' ? 'bypassPermissions'
-      : mode === 'accept' ? 'acceptEdits'
-      : mode
+    const cliMode = SESSION_MODE_CLI_MAP[mode] ?? mode
     const payload = await this.readControlPayloadWithRequest(
       `pmode-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
       { subtype: 'set_permission_mode', mode: cliMode }, timeoutMs, true)
