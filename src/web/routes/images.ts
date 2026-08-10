@@ -20,6 +20,22 @@ export interface ImagePayload {
   mediaType: string  // 'image/png', 'image/jpeg', etc.
 }
 
+/**
+ * A pointer to an already-uploaded image (`POST /api/images/upload`).
+ *
+ * Why this exists: base64 image bytes must NOT ride a WebSocket RPC frame. The
+ * WS server caps a single frame at 4MB (`attachWss`, a deliberate
+ * memory-exhaustion guard) and `ws` answers an oversized frame by CLOSING the
+ * connection with code 1009 — before any handler runs. A single phone screenshot
+ * is ~4-6MB in base64, so "send an image" killed the socket and every in-flight
+ * RPC with it ("WebSocket disconnected"), on a loop. Clients upload over HTTP
+ * (15MB express.json limit) and then send this ~60-byte ref instead.
+ */
+export interface ImageRef {
+  /** Filename returned by the upload endpoint, e.g. `1786…-abc123def456.png`. */
+  filename: string
+}
+
 export interface ProcessedImages {
   savedImages: Array<{ filePath: string; filename: string; mediaType: string }>
   imageContentBlocks: Array<{ type: 'image'; source: { type: 'base64'; media_type: string; data: string } }>
@@ -111,6 +127,73 @@ export async function processAndSaveImages(images: ImagePayload[]): Promise<Proc
   }
 }
 
+/** True for a filename the upload endpoint could have produced (no path traversal). */
+export function isSafeImageFilename(name: unknown): name is string {
+  return typeof name === 'string'
+    && /^[\w.-]+$/.test(name)
+    && !name.includes('..')
+    && name.includes('.')
+    && !!EXT_TO_MIME[path.extname(name).slice(1).toLowerCase()]
+}
+
+/**
+ * Resolve `ImageRef[]` (filenames from `POST /api/images/upload`) into the same
+ * shape `processAndSaveImages` returns — no re-encoding, the upload already
+ * compressed and clamped the bytes.
+ *
+ * Refs naming a missing/invalid file are skipped rather than throwing: a send
+ * must never fail wholesale because one attachment went stale.
+ */
+export async function resolveImageRefs(refs: unknown[]): Promise<ProcessedImages | null> {
+  const filenames = refs
+    .map(r => (r && typeof r === 'object' ? (r as { filename?: unknown }).filename : r))
+    .filter(isSafeImageFilename)
+    .slice(0, MAX_IMAGES_PER_MESSAGE)
+
+  if (filenames.length === 0) return null
+
+  const resolved = await Promise.all(filenames.map(async (filename) => {
+    const filePath = path.join(IMAGES_DIR, filename)
+    const image = await readImageAsBase64(filePath)
+    if (!image) {
+      log.web.warn('image ref not found on disk — skipping', { filename })
+      return null
+    }
+    return { filePath, filename, mediaType: image.mediaType, data: image.data }
+  }))
+
+  const saved = resolved.filter((r): r is NonNullable<typeof r> => r !== null)
+  if (saved.length === 0) return null
+
+  return {
+    savedImages: saved.map(s => ({ filePath: s.filePath, filename: s.filename, mediaType: s.mediaType })),
+    imageContentBlocks: saved.map(s => ({
+      type: 'image' as const,
+      source: { type: 'base64' as const, media_type: s.mediaType, data: s.data },
+    })),
+  }
+}
+
+/**
+ * Resolve whatever image form a payload carries.
+ *
+ * `imageRefs` (HTTP-uploaded, the WS-safe path) wins over inline `images`
+ * base64 — REST callers (iOS) still post inline bytes, and both must land on
+ * identical downstream behavior.
+ */
+export async function resolvePayloadImages(
+  images: unknown,
+  imageRefs: unknown,
+): Promise<ProcessedImages | null> {
+  if (Array.isArray(imageRefs) && imageRefs.length > 0) {
+    return resolveImageRefs(imageRefs)
+  }
+  if (Array.isArray(images) && images.length > 0) {
+    return processAndSaveImages(images as ImagePayload[])
+  }
+  return null
+}
+
 /**
  * Build the <attached-images> text annotation for image paths.
  * Used for the main agent (Bedrock API) which understands the tag format.
@@ -148,8 +231,14 @@ imagesRouter.post('/upload', async (req: Request, res: Response, next: NextFunct
       res.status(413).json({ error: 'Image too large (max 10MB base64)' })
       return
     }
-    const { filename } = await saveImageToDisk(data, mediaType)
-    res.json({ url: `/api/images/${filename}` })
+    // Compress/clamp on ingest so an `imageRefs` send behaves exactly like the
+    // inline `images` path (which runs processAndSaveImages). Without this, a
+    // 4000px screenshot uploaded here would reach the model unclamped and
+    // poison the whole conversation (see MAX_IMAGE_DIMENSION).
+    const { buffer, mimeType } = await compressForApi(Buffer.from(data, 'base64'), mediaType)
+    const { filename } = await saveImageToDisk(buffer.toString('base64'), mimeType)
+    // `filename` is what an ImageRef carries; `url` stays for the notes embed path.
+    res.json({ url: `/api/images/${filename}`, filename, mediaType: mimeType })
   } catch (err) {
     next(err)
   }

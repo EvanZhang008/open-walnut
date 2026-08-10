@@ -57,6 +57,20 @@ const WS_CLOSE_CODES: Record<number, string> = {
   1011: 'server error', 1012: 'server restart', 1013: 'try again later',
 };
 
+/**
+ * Largest RPC frame we will put on the wire.
+ *
+ * The server caps a frame at 4MB (`attachWss`) and the `ws` library enforces
+ * that by CLOSING the connection with code 1009 — the frame never reaches a
+ * handler, so the caller gets no error, just "WebSocket disconnected" for this
+ * RPC *and every other one in flight*, followed by a reconnect that re-sends
+ * and dies again. Failing the one oversized RPC locally is strictly better:
+ * the socket survives and the caller sees a real message.
+ *
+ * Kept below the server's 4MB so we reject before it does.
+ */
+const MAX_RPC_FRAME_BYTES = 3.5 * 1024 * 1024;
+
 /** Max RPCs buffered while the socket is still opening before we start rejecting. */
 const PRE_OPEN_QUEUE_CAP = 50;
 /** How long a buffered pre-open RPC waits for the socket before it rejects. */
@@ -260,6 +274,18 @@ class WsClient {
   private dispatchRpc(method: string, payload: unknown, resolve: (v: unknown) => void, reject: (e: Error) => void): void {
     const id = nextReqId();
     const frame: WsReqFrame = { type: 'req', id, method, payload };
+    const body = JSON.stringify(frame);
+    // Oversized frame guard — see MAX_RPC_FRAME_BYTES. Measure encoded bytes,
+    // not string length: non-ASCII text (e.g. Chinese) is up to 3 bytes/char.
+    const frameBytes = new Blob([body]).size;
+    if (frameBytes > MAX_RPC_FRAME_BYTES) {
+      log.error('ws', 'RPC too large — refusing to send', { method, frameBytes, cap: MAX_RPC_FRAME_BYTES });
+      reject(new Error(
+        `Message too large for the live connection (${Math.round(frameBytes / 1024 / 1024 * 10) / 10}MB). `
+        + 'Attachments should be uploaded over HTTP first.',
+      ));
+      return;
+    }
     this.pendingRpc.set(id, { resolve, reject });
     // Extract IDs from payload for traceability
     const rpcLog: Record<string, unknown> = { rpcId: id, method };
@@ -269,7 +295,7 @@ class WsClient {
       if (p.taskId) rpcLog.taskId = p.taskId;
     }
     log.info('ws', `RPC:${id} →`, rpcLog);
-    this.ws!.send(JSON.stringify(frame));
+    this.ws!.send(body);
   }
 
   /** Flush RPCs buffered while the socket was opening. Called from onopen. */

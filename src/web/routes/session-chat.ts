@@ -13,7 +13,7 @@ import type { SessionEffort, SessionMode } from '../../core/types.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
 import { sendMessageToSession, editMessage, deleteMessage, getQueue } from '../../core/session-message-queue.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
-import { saveImageToDisk } from './images.js'
+import { saveImageToDisk, resolveImageRefs } from './images.js'
 import { log } from '../../logging/index.js'
 import { sessionRunner } from '../../providers/claude-code-session.js'
 import { readTeamConfig, findTeammateJsonlPaths, writeToInbox, extractTeamsFromLeadJsonl, findSubagentJsonlByPrompt, getLeadSessionJsonlPath, findAllSubagentJsonlsForAgent, readTeamConfigRemote, extractTeamsFromLeadJsonlRemote, readRemoteSubagentJsonls } from '../../core/team-reader.js'
@@ -63,10 +63,19 @@ export function registerSessionChatRpc(): void {
       throw new Error('session:send requires sessionId (string) and message (string)')
     }
 
-    // Process images: save to disk and embed file paths in the message
+    // Process images: save to disk and embed file paths in the message.
+    //
+    // `imageRefs` (filenames already uploaded via POST /api/images/upload) is the
+    // path web clients take — base64 bytes must never ride a WS frame, which the
+    // server caps at 4MB and enforces by CLOSING the socket with code 1009 before
+    // any handler runs. Inline `images` stays supported for REST/legacy callers.
     let augmentedMessage = data.message as string
+    const savedPaths: string[] = []
 
-    if (Array.isArray(data.images) && data.images.length > 0) {
+    if (Array.isArray(data.imageRefs) && data.imageRefs.length > 0) {
+      const resolved = await resolveImageRefs(data.imageRefs)
+      if (resolved) savedPaths.push(...resolved.savedImages.map(s => s.filePath))
+    } else if (Array.isArray(data.images) && data.images.length > 0) {
       const validImages = (data.images as Array<{ data?: unknown; mediaType?: unknown }>)
         .filter(img =>
           typeof img.data === 'string'
@@ -76,22 +85,19 @@ export function registerSessionChatRpc(): void {
         )
         .slice(0, MAX_SESSION_IMAGES)
 
-      if (validImages.length > 0) {
-        const savedPaths: string[] = []
-        for (const img of validImages) {
-          try {
-            const { filePath } = await saveImageToDisk(img.data as string, img.mediaType as string)
-            savedPaths.push(filePath)
-          } catch (err) {
-            log.web.warn('Failed to save session image', { error: (err as Error).message })
-          }
-        }
-
-        if (savedPaths.length > 0) {
-          const pathList = savedPaths.map(p => `- ${p}`).join('\n')
-          augmentedMessage = `[Images attached — use the Read tool to view them]\n${pathList}\n\n${data.message}`
+      for (const img of validImages) {
+        try {
+          const { filePath } = await saveImageToDisk(img.data as string, img.mediaType as string)
+          savedPaths.push(filePath)
+        } catch (err) {
+          log.web.warn('Failed to save session image', { error: (err as Error).message })
         }
       }
+    }
+
+    if (savedPaths.length > 0) {
+      const pathList = savedPaths.map(p => `- ${p}`).join('\n')
+      augmentedMessage = `[Images attached — use the Read tool to view them]\n${pathList}\n\n${data.message}`
     }
 
     // Check if this is an embedded session — route to SubagentRunner instead of CLI queue

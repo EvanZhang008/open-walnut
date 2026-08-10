@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect, type MutableRefObject } from 'react';
 import { useEvent } from './useWebSocket';
 import { wsClient } from '@/api/ws';
+import { buildImageRefsPayload } from '@/api/image-upload';
 import { perf } from '@/utils/perf-logger';
 import { log } from '@/utils/log';
 import {
@@ -903,9 +904,6 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
     if (taskContext) {
       payload.taskContext = taskContext;
     }
-    if (images?.length) {
-      payload.images = images.map(img => ({ data: img.data, mediaType: img.mediaType }));
-    }
     if (source) {
       payload.source = source;
     }
@@ -916,7 +914,11 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
       payload.planModeOff = true;
     }
 
-    wsClient.sendRpc('chat', payload)
+    // Attachments upload over HTTP first, then the RPC carries only refs —
+    // base64 on a WS frame trips the 4MB cap and `ws` closes the socket (1009).
+    // See api/image-upload.ts. A failed upload lands in the same catch below.
+    buildImageRefsPayload(images)
+      .then((imagePayload) => wsClient.sendRpc('chat', { ...payload, ...imagePayload }))
       .then(() => {
         rpcInFlightRef.current = false;
         drainOrStop();

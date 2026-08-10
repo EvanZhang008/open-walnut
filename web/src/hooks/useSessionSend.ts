@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { wsClient } from '@/api/ws';
+import { buildImageRefsPayload } from '@/api/image-upload';
 import { log } from '@/utils/log';
 import type { OptimisticMessage } from '@/components/sessions/SessionChatHistory';
 import type { ImageAttachment } from '@/api/chat';
@@ -132,11 +133,15 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     };
     setOptimisticMsgs((prev) => [...prev, optimistic]);
 
-    const rpcPayload: Record<string, unknown> = { sessionId, message };
-    if (images && images.length > 0) {
-      rpcPayload.images = images.map(img => ({ data: img.data, mediaType: img.mediaType }));
-    }
     try {
+      // Images upload over HTTP first; the RPC carries only refs. Base64 on a WS
+      // frame trips the server's 4MB cap, which `ws` answers by closing the
+      // socket (1009) — see api/image-upload.ts.
+      const rpcPayload: Record<string, unknown> = {
+        sessionId,
+        message,
+        ...(await buildImageRefsPayload(images)),
+      };
       const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string }>('session:send', rpcPayload);
       if (res?.messageId) {
         // Adopt dedupText when the server augmented the text (image refs) — the
@@ -175,11 +180,13 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     };
     setOptimisticMsgs((prev) => [...prev, optimistic]);
 
-    const rpcPayload: Record<string, unknown> = { sessionId, message, interrupt: true };
-    if (images && images.length > 0) {
-      rpcPayload.images = images.map(img => ({ data: img.data, mediaType: img.mediaType }));
-    }
     try {
+      const rpcPayload: Record<string, unknown> = {
+        sessionId,
+        message,
+        interrupt: true,
+        ...(await buildImageRefsPayload(images)),
+      };
       const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string }>('session:send', rpcPayload);
       if (res?.messageId) {
         setOptimisticMsgs((prev) => prev.map((m) =>
@@ -213,11 +220,11 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
       m.queueId === queueId ? { ...m, queueId: newTempId, status: 'pending' as const, failedError: undefined } : m
     ));
 
-    const rpcPayload: Record<string, unknown> = { sessionId, message: failedMsg.text };
-    if (failedMsg.images?.length) {
-      rpcPayload.images = failedMsg.images.map(img => ({ data: img.data, mediaType: img.mediaType }));
-    }
-    wsClient.sendRpc<{ messageId: string; dedupText?: string }>('session:send', rpcPayload)
+    buildImageRefsPayload(failedMsg.images)
+      .then((imagePayload) => wsClient.sendRpc<{ messageId: string; dedupText?: string }>(
+        'session:send',
+        { sessionId, message: failedMsg.text, ...imagePayload },
+      ))
       .then((res) => {
         if (res?.messageId) {
           setOptimisticMsgs((prev) => prev.map((m) =>

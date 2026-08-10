@@ -24,8 +24,8 @@ import { getTask, appendConversationLog } from '../../core/task-manager.js'
 import { getProjectMemory } from '../../core/project-memory.js'
 import { resolveProjectSkillDir } from '../../core/overview-log.js'
 import { getSessionByClaudeId } from '../../core/session-tracker.js'
-import { processAndSaveImages, buildImageAnnotation } from './images.js'
-import type { ImagePayload } from './images.js'
+import { resolvePayloadImages, buildImageAnnotation } from './images.js'
+import type { ImagePayload, ImageRef } from './images.js'
 import { truncateToTokenBudget } from '../../utils/token-truncate.js'
 import { log } from '../../logging/index.js'
 import { validateAgentId, validateConversationId, GLOBAL_SKILLS_DIR } from '../../constants.js'
@@ -129,7 +129,10 @@ interface TaskContext {
 interface ChatPayload {
   message: string
   taskContext?: TaskContext
+  /** Inline base64 — REST callers only; too big for a WS frame (see ImageRef). */
   images?: ImagePayload[]
+  /** Filenames from POST /api/images/upload — the WS-safe attachment path. */
+  imageRefs?: ImageRef[]
   source?: string
   mode?: 'execution' | 'plan'
   planModeFirst?: boolean
@@ -678,12 +681,12 @@ export function registerChatRpc(): void {
   })
 
   registerMethod('chat', async (payload: unknown, client: WebSocket) => {
-    const { message, taskContext, images, source: payloadSource, mode, planModeFirst, planModeOff, agentId: payloadAgentId, conversationId: payloadConvId } = payload as ChatPayload
+    const { message, taskContext, images, imageRefs, source: payloadSource, mode, planModeFirst, planModeOff, agentId: payloadAgentId, conversationId: payloadConvId } = payload as ChatPayload
     const agentId = payloadAgentId ? validateAgentId(payloadAgentId) : 'general'
     // Resolve the conversation: explicit payload id wins, else the agent's active one.
     const conversationId = payloadConvId ? validateConversationId(payloadConvId) : await getActiveConversationId(agentId)
     const chatSource = payloadSource === 'quick-start' ? 'quick-start' as const : undefined
-    log.web.info('chat message received', { taskId: taskContext?.id, messageLength: message.length, imageCount: images?.length ?? 0, source: payloadSource ?? 'chat', agentId, conversationId })
+    log.web.info('chat message received', { taskId: taskContext?.id, messageLength: message.length, imageCount: (imageRefs?.length ?? 0) || (images?.length ?? 0), source: payloadSource ?? 'chat', agentId, conversationId })
 
     // ── Intercept: if this agent is waiting for a question answer, route here ──
     // The agent loop is blocked on user_ask tool. We must NOT enqueue a new
@@ -725,12 +728,13 @@ export function registerChatRpc(): void {
 
     let savedImages: Array<{ filePath: string; filename: string; mediaType: string }> = []
     let imageContentBlocks: unknown[] | null = null
-    if (images && images.length > 0) {
-      const processed = await processAndSaveImages(images)
-      if (processed) {
-        savedImages = processed.savedImages
-        imageContentBlocks = processed.imageContentBlocks
-      }
+    // `imageRefs` (HTTP-uploaded filenames) is what web clients send — base64 on a
+    // WS frame trips the 4MB cap and the socket is closed with 1009. Inline
+    // `images` remains for REST callers.
+    const processed = await resolvePayloadImages(images, imageRefs)
+    if (processed) {
+      savedImages = processed.savedImages
+      imageContentBlocks = processed.imageContentBlocks
     }
 
     // Enqueue turn for this agent — per-agent queue, no cross-agent blocking
