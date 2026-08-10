@@ -94,6 +94,36 @@
 .tp-ri-fav { color: #ffcc00; font-size: 10px; flex: none; }
 .tp-ri-count { font-size: 11px; color: var(--fg-muted); flex: none; }
 
+/* hover ⋮ on rail rows + table group headers (shared trigger style; the menu
+   itself is the portalled .task-kebab-menu). Swaps with the count on hover so
+   the row doesn't widen. */
+.tp-rail-kebab-wrap,
+.tp-group-kebab-wrap { display: none; flex: none; }
+.tp-group-kebab-wrap { margin-left: auto; }
+.tp-rail-item:hover .tp-rail-kebab-wrap,
+.tp-rail-kebab-wrap[data-menu-open],
+.tp-group-header:hover .tp-group-kebab-wrap,
+.tp-group-kebab-wrap[data-menu-open] { display: inline-flex; }
+.tp-rail-item:hover .tp-ri-count,
+.tp-rail-item:has(.tp-rail-kebab-wrap[data-menu-open]) .tp-ri-count { display: none; }
+.tp-rail-kebab-btn {
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tp-rail-kebab-btn:hover { background: var(--bg-tertiary); color: var(--fg); }
+
 /* pinned New Project region below a hairline */
 .tp-rail-newproj-wrap {
   flex: none;
@@ -374,7 +404,7 @@
   white-space: nowrap;
 }
 
-/* hover quick actions — star / delete, revealed at the title cell's right edge */
+/* hover quick actions — star / delete / ⋮, revealed at the title cell's right edge */
 .tp-row-acts {
   margin-left: auto;
   display: none;
@@ -382,7 +412,14 @@
   gap: 2px;
   flex: none;
 }
-.tp-row:hover .tp-row-acts { display: inline-flex; }
+.tp-row:hover .tp-row-acts,
+/* keep the acts (and so the kebab trigger) laid out while its menu is open —
+   the mouse leaves the row to reach the menu, and a display:none'd trigger
+   reads a zero rect, which useMenuPlacement treats as anchor-lost. */
+.tp-row:has(.task-kebab-wrapper[data-menu-open]) .tp-row-acts { display: inline-flex; }
+/* the shared kebab button ships opacity:0, revealed by home-panel row selectors
+   that don't exist here — the .tp-row-acts display gate is our reveal. */
+.tp-row .task-kebab-btn { opacity: 1; }
 .tp-act-btn {
   width: 22px;
   height: 22px;

@@ -9,6 +9,8 @@ import { ProjectSourceBadge } from './ProjectSourceBadge';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { TaskSessionPill } from './SessionPill';
 import { SyncIndicator, type TaskListProjection } from './TaskCard';
+import { TaskKebabMenu } from './TaskKebabMenu';
+import { ProjectKebabMenu } from './ProjectHeaderMenus';
 import { openSessionOnHome } from '@/utils/open-session';
 import { sortTasks, groupTasksByProject, type TpSort, type TpSortKey } from './tasks-page-sort';
 import * as ICONS from '../common/Icons';
@@ -23,8 +25,13 @@ interface TasksPageTableProps {
   onDelete: (id: string) => void;
   onCreate: (title: string, project?: string) => void | Promise<void>;
   /** Inline cell edits (priority / due / project move) — TasksContext.update. */
-  onUpdate: (id: string, updates: { priority?: string; due_date?: string | null; project?: string }) => void;
+  onUpdate: (id: string, updates: { priority?: string; due_date?: string | null; start_date?: string | null; project?: string }) => void;
   onStar: (id: string) => void;
+  /** lowercased favorite project names — group-header kebab state. */
+  favoriteByName: Set<string>;
+  onToggleFavorite: (project: string) => void;
+  /** A project menu rename/delete landed — host refreshes registry/selection. */
+  onProjectChanged: (kind: 'rename' | 'delete', project: string, newName?: string) => void;
   /** Column sort — null = server/manual order. Lifted so the toolbar can show it. */
   sort: TpSort | null;
   onSortChange: (sort: TpSort | null) => void;
@@ -243,6 +250,9 @@ export function TasksPageTable({
   onCreate,
   onUpdate,
   onStar,
+  favoriteByName,
+  onToggleFavorite,
+  onProjectChanged,
   sort,
   onSortChange,
   grouped,
@@ -280,12 +290,16 @@ export function TasksPageTable({
     }
   };
 
-  const handleDelete = useCallback(async (e: MouseEvent, task: Task) => {
-    e.stopPropagation();
+  const confirmDelete = useCallback(async (task: Task) => {
     if (await confirm({ title: `Delete task “${task.title}”?`, message: 'This cannot be undone.', confirmLabel: 'Delete', danger: true })) {
       onDelete(task.id);
     }
   }, [confirm, onDelete]);
+
+  const handleDelete = useCallback((e: MouseEvent, task: Task) => {
+    e.stopPropagation();
+    void confirmDelete(task);
+  }, [confirmDelete]);
 
   const openSession = useCallback((sessionId: string) => {
     openSessionOnHome(sessionId, navigate);
@@ -351,7 +365,7 @@ export function TasksPageTable({
             {t.title}
           </button>
           <SyncIndicator task={t as TaskListProjection} />
-          {/* hover quick actions — star / delete. Session opens via its pill. */}
+          {/* hover quick actions — star / delete / kebab. Session opens via its pill. */}
           <span className="tp-row-acts">
             <button
               type="button"
@@ -369,6 +383,23 @@ export function TasksPageTable({
             >
               {ICONS.ICON_TRASH}
             </button>
+            {/* Shared task menu — the ⋮ button AND the row's right-click (it
+                self-attaches to the [data-task-id] ancestor, replacing the
+                browser context menu — same one-menu-two-paths pattern as the
+                home panel rows). Only HEAD-stable props are passed. */}
+            <TaskKebabMenu
+              task={t}
+              isFocused={false}
+              isPinned={false}
+              isDone={t.status === 'done'}
+              onExpandDetail={(task) => navigate(`/tasks/${task.id}`)}
+              onSetPriority={(id, p) => onUpdate(id, { priority: p })}
+              onStar={onStar}
+              onOpenSession={openSession}
+              onSetDate={(id, d) => onUpdate(id, { due_date: d ?? '' })}
+              onSetStartDate={(id, d) => onUpdate(id, { start_date: d })}
+              onDelete={() => void confirmDelete(t)}
+            />
           </span>
         </span>
         <span><PriorityCell task={t} onUpdate={onUpdate} /></span>
@@ -405,6 +436,7 @@ export function TasksPageTable({
             className={`tp-group-header${isCollapsed ? ' closed' : ''}`}
             data-testid="tasks-group-header"
             data-project={project}
+            data-group-project={project}
             onClick={() => onToggleGroup(project)}
           >
             <span className="tp-group-chevron">▾</span>
@@ -412,6 +444,19 @@ export function TasksPageTable({
             <span className="tp-group-name">{project || 'Inbox'}</span>
             {project && <ProjectSourceBadge source={sourceByName.get(project.toLowerCase())} />}
             <span className="tp-group-count">{groupTasks.length}</span>
+            {/* Same project menu as the rail (⋮ + right-click). Inbox has no
+                registry row to rename/delete, so named projects only. */}
+            {project && (
+              <ProjectKebabMenu
+                project={project}
+                isFavorite={favoriteByName.has(project.toLowerCase())}
+                onToggleFavorite={onToggleFavorite}
+                onChanged={onProjectChanged}
+                rowSelector="[data-group-project]"
+                wrapClassName="tp-group-kebab-wrap"
+                btnClassName="tp-rail-kebab-btn"
+              />
+            )}
           </div>
           {!isCollapsed && groupTasks.map(row)}
           {!isCollapsed && ghostRow(project, project || '·inbox·')}

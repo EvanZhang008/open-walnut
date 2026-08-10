@@ -8960,7 +8960,8 @@ body.walnut-dragging {
   padding: 0 10px;
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
-  background: var(--bg-secondary);
+  /* same surface as the toolbar/tabs above it — no grey band */
+  background: transparent;
   overflow: hidden;
 }
 .todo-minibar-btn {

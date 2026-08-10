@@ -19,13 +19,21 @@ import { useConfirm, useAlert, usePrompt } from '@/hooks/useConfirm';
 import { fetchProjectDetail, renameProject, deleteProject } from '@/api/projects';
 import * as ICONS from '../common/Icons';
 
-/** Shared open/close + placement shell for one trigger button and its menu. */
+/** Shared open/close + placement shell for one trigger button and its menu.
+ *  Supports two anchor paths (same semantics as TaskKebabMenu): the trigger
+ *  button, or a right-click cursor point (frozen viewport coords — close on
+ *  any outside scroll since the point no longer tracks the row). */
 function useHeaderMenu() {
   const [open, setOpen] = useState(false);
+  const [cursorAnchor, setCursorAnchor] = useState<{ x: number; y: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  const closeMenu = useCallback(() => setOpen(false), []);
-  const menuPos = useMenuPlacement(open, btnRef, menuRef, { onAnchorLost: closeMenu });
+  const closeMenu = useCallback(() => { setOpen(false); setCursorAnchor(null); }, []);
+  const menuPos = useMenuPlacement(open, btnRef, menuRef, { anchorPoint: cursorAnchor, onAnchorLost: closeMenu });
+  const openAtCursor = useCallback((x: number, y: number) => {
+    setCursorAnchor({ x, y });
+    setOpen(true);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -37,6 +45,7 @@ function useHeaderMenu() {
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeMenu(); };
     const handleScroll = (e: Event) => {
       if (menuRef.current?.contains(e.target as Node)) return;
+      if (cursorAnchor) { closeMenu(); return; }
       const r = btnRef.current?.getBoundingClientRect();
       if (r && (r.bottom < 0 || r.top > window.innerHeight)) closeMenu();
     };
@@ -48,9 +57,9 @@ function useHeaderMenu() {
       document.removeEventListener('keydown', handleKey);
       window.removeEventListener('scroll', handleScroll, true);
     };
-  }, [open, closeMenu]);
+  }, [open, closeMenu, cursorAnchor]);
 
-  return { open, setOpen, btnRef, menuRef, menuPos, closeMenu };
+  return { open, setOpen, btnRef, menuRef, menuPos, closeMenu, openAtCursor, setCursorAnchor };
 }
 
 // ── "+" — quick create inside this project ──────────────────────────────────
@@ -104,17 +113,48 @@ export function ProjectPlusMenu({ project, onAddTask, onAddSession }: {
 
 // ── "⋮" — project management ────────────────────────────────────────────────
 
-export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onViewDetails }: {
+export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onViewDetails, onChanged, rowSelector, wrapClassName, btnClassName }: {
   project: string;
   isFavorite?: boolean;
   onToggleFavorite?: (project: string) => void;
-  onViewDetails: (project: string) => void;
+  onViewDetails?: (project: string) => void;
+  /** Fired after a successful rename/delete so hosts without the task:updated
+   *  broadcast in view (the /tasks rail) can refresh their registry copy and
+   *  fix a now-stale selection. */
+  onChanged?: (kind: 'rename' | 'delete', project: string, newName?: string) => void;
+  /** When set, right-clicking the closest ancestor matching this selector opens
+   *  this same menu at the cursor (the row is an app object, not a document, so
+   *  the browser context menu is replaced — same pattern as TaskKebabMenu). */
+  rowSelector?: string;
+  /** Class overrides so non-TodoPanel hosts (the /tasks rail, group headers)
+   *  can restyle the trigger without a second menu definition. */
+  wrapClassName?: string;
+  btnClassName?: string;
 }) {
-  const { open, setOpen, btnRef, menuRef, menuPos, closeMenu } = useHeaderMenu();
+  const { open, setOpen, btnRef, menuRef, menuPos, closeMenu, openAtCursor, setCursorAnchor } = useHeaderMenu();
   const confirm = useConfirm();
   const alert = useAlert();
   const prompt = usePrompt();
   const [busy, setBusy] = useState(false);
+
+  // Right-click on the owning row opens this kebab menu at the cursor.
+  useEffect(() => {
+    if (!rowSelector) return;
+    const row = btnRef.current?.closest<HTMLElement>(rowSelector);
+    if (!row) return;
+    const handleContextMenu = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      // Keep the native menu inside text-editing surfaces.
+      if (target.isContentEditable || target.closest('input, textarea')) return;
+      // Nested/overlapping rows: only the innermost row owns the right-click.
+      if (target.closest(rowSelector) !== row) return;
+      e.preventDefault();
+      openAtCursor(e.clientX, e.clientY);
+    };
+    row.addEventListener('contextmenu', handleContextMenu);
+    return () => row.removeEventListener('contextmenu', handleContextMenu);
+    // btnRef is a stable ref; the row is resolved once per selector.
+  }, [rowSelector, openAtCursor, btnRef]);
 
   const handleRename = useCallback(async () => {
     closeMenu();
@@ -129,13 +169,15 @@ export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onView
     setBusy(true);
     try {
       await renameProject(project, target);
-      // Task rows refresh via the task:updated broadcast; nothing to do here.
+      // Task rows refresh via the task:updated broadcast; onChanged covers
+      // registry-driven hosts (rail selection, project list).
+      onChanged?.('rename', project, target);
     } catch (err) {
       await alert({ title: 'Rename failed', message: err instanceof Error ? err.message : String(err) });
     } finally {
       setBusy(false);
     }
-  }, [project, prompt, alert, closeMenu]);
+  }, [project, prompt, alert, closeMenu, onChanged]);
 
   // Same semantics + copy as ProjectDetailPane.handleDelete: local claim = row
   // drop (tasks → Inbox); provider claim = ?remote=1 CASCADE, which deletes the
@@ -172,19 +214,21 @@ export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onView
     setBusy(true);
     try {
       await deleteProject(project, isClaimed ? { remote: true } : undefined);
+      onChanged?.('delete', project);
     } catch (err) {
       await alert({ title: 'Delete failed', message: err instanceof Error ? err.message : String(err) });
     } finally {
       setBusy(false);
     }
-  }, [project, confirm, alert, closeMenu]);
+  }, [project, confirm, alert, closeMenu, onChanged]);
 
   return (
-    <span className="todo-group-action-wrap" data-menu-open={(open || busy) || undefined}>
+    <span className={wrapClassName ?? 'todo-group-action-wrap'} data-menu-open={(open || busy) || undefined}>
       <button
         ref={btnRef}
-        className="todo-group-action-btn"
-        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        className={btnClassName ?? 'todo-group-action-btn'}
+        onClick={(e) => { e.stopPropagation(); setCursorAnchor(null); setOpen(!open); }}
+        onPointerDown={(e) => e.stopPropagation()}
         title="Project actions"
         aria-label={`Actions for ${project}`}
         aria-expanded={open}
@@ -194,14 +238,24 @@ export function ProjectKebabMenu({ project, isFavorite, onToggleFavorite, onView
         {busy ? '…' : '⋮'}
       </button>
       {open && createPortal(
-        <div ref={menuRef} className="task-kebab-menu" style={menuPlacementStyle(menuPos)}>
-          <button
-            className="task-kebab-item"
-            onClick={(e) => { e.stopPropagation(); closeMenu(); onViewDetails(project); }}
-          >
-            <span className="task-kebab-icon">{ICONS.ICON_INFO}</span>
-            <span>Details</span>
-          </button>
+        <div
+          ref={menuRef}
+          className="task-kebab-menu"
+          style={menuPlacementStyle(menuPos)}
+          // Rail rows are dnd-kit sortables — a pointerdown inside the menu
+          // bubbles through the portal to the row's PointerSensor and arms a
+          // drag. Same guard as TaskKebabMenu.
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          {onViewDetails && (
+            <button
+              className="task-kebab-item"
+              onClick={(e) => { e.stopPropagation(); closeMenu(); onViewDetails(project); }}
+            >
+              <span className="task-kebab-icon">{ICONS.ICON_INFO}</span>
+              <span>Details</span>
+            </button>
+          )}
           {onToggleFavorite && (
             <button
               className={`task-kebab-item${isFavorite ? ' task-kebab-item-active' : ''}`}

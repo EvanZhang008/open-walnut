@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback } from 'react';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useOrdering } from '@/hooks/useOrdering';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
+import { useFavorites } from '@/hooks/useFavorites';
 import { createProject } from '@/api/projects';
 import { TasksPageRail, type RailProjectItem } from '@/components/tasks/TasksPageRail';
 import { TasksPageTable } from '@/components/tasks/TasksPageTable';
@@ -41,6 +42,7 @@ export function DashboardPage() {
   const { tasks, loading, error, toggleComplete, create, deleteTask, update, star } = useTasksContext();
   const { projectOrder, reorderProjects } = useOrdering();
   const { projectNames, sourceByName, favoriteByName, refresh: refreshRegistry } = useProjectRegistry();
+  const { toggleFavoriteProject } = useFavorites();
 
   // null = All Tasks, '' = Inbox, otherwise a project name.
   const [activeProject, setActiveProject] = useState<string | null>(null);
@@ -219,6 +221,22 @@ export function DashboardPage() {
     void reorderProjects(order);
   }, [reorderProjects]);
 
+  const handleToggleFavorite = useCallback((project: string) => {
+    // Registry rows fold the favorite flag in server-side, so refresh after.
+    void toggleFavoriteProject(project).then(refreshRegistry).catch(() => {});
+  }, [toggleFavoriteProject, refreshRegistry]);
+
+  // Rail/table project menu renamed or deleted a project: refresh the registry
+  // and follow the rename (or fall back to All Tasks) so the board doesn't
+  // point at a name that no longer exists.
+  const handleProjectChanged = useCallback((kind: 'rename' | 'delete', project: string, newName?: string) => {
+    refreshRegistry();
+    setActiveProject((prev) => {
+      if (prev === null || prev.toLowerCase() !== project.toLowerCase()) return prev;
+      return kind === 'rename' && newName ? newName : null;
+    });
+  }, [refreshRegistry]);
+
   if (loading) return <LoadingSpinner />;
   if (error) return <div className="empty-state"><p>Error: {error}</p></div>;
 
@@ -235,6 +253,8 @@ export function DashboardPage() {
         onSelect={setActiveProject}
         onCreateProject={handleCreateProject}
         onReorderProjects={handleReorderProjects}
+        onToggleFavorite={handleToggleFavorite}
+        onProjectChanged={handleProjectChanged}
       />
 
       <main className="tp-board">
@@ -294,6 +314,9 @@ export function DashboardPage() {
           onCreate={handleGhostCreate}
           onUpdate={update}
           onStar={star}
+          favoriteByName={favoriteByName}
+          onToggleFavorite={handleToggleFavorite}
+          onProjectChanged={handleProjectChanged}
           sort={sort}
           onSortChange={handleSortChange}
           grouped={grouped}

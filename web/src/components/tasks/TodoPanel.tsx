@@ -5174,23 +5174,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       <TodoSectionTabs active={effectiveSection} onChange={handleSectionChange} counts={sectionCounts} customTiers={customTiers} />
 
       {/* Mini-bar: high-frequency verbs that used to hide in the View dropdown.
-          Always visible; Collapse/expand all only renders where project groups
-          exist (Tasks tab / stacked All view). */}
-      {!isSearchMode && (
+          ONLY on the Tasks section view — the pinned tiers and the stacked All
+          view keep their clean chrome (user ruling 2026-08-10). */}
+      {!isSearchMode && effectiveSection === 'tasks' && (
         <div className="todo-minibar">
-          {(isAll || showSection('tasks')) && (
-            <>
-              <button
-                type="button"
-                className="todo-minibar-btn"
-                title={allCollapsed ? 'Expand all projects' : 'Collapse all projects'}
-                onClick={handleCollapseExpandAll}
-              >
-                {allCollapsed ? '⌃⌃ Expand all' : '⌄⌄ Collapse all'}
-              </button>
-              <span className="todo-minibar-sep" />
-            </>
-          )}
+          <button
+            type="button"
+            className="todo-minibar-btn"
+            title={allCollapsed ? 'Expand all projects' : 'Collapse all projects'}
+            onClick={handleCollapseExpandAll}
+          >
+            {allCollapsed ? '⌃⌃ Expand all' : '⌄⌄ Collapse all'}
+          </button>
+          <span className="todo-minibar-sep" />
           <button
             type="button"
             className={`todo-minibar-btn${showCompleted ? ' on' : ''}`}
