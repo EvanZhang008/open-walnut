@@ -60,14 +60,17 @@ const WS_CLOSE_CODES: Record<number, string> = {
 /**
  * Largest RPC frame we will put on the wire.
  *
- * The server caps a frame at 4MB (`attachWss`) and the `ws` library enforces
- * that by CLOSING the connection with code 1009 — the frame never reaches a
- * handler, so the caller gets no error, just "WebSocket disconnected" for this
- * RPC *and every other one in flight*, followed by a reconnect that re-sends
- * and dies again. Failing the one oversized RPC locally is strictly better:
- * the socket survives and the caller sees a real message.
+ * The server caps a frame (`attachWss` maxPayload, 32MB) and the `ws` library
+ * enforces that by CLOSING the connection with code 1009 — the frame never
+ * reaches a handler, so the caller gets no error, just "WebSocket disconnected"
+ * for this RPC *and every other one in flight*, followed by a reconnect that
+ * re-sends and dies again. Failing the one oversized RPC locally is strictly
+ * better: the socket survives and the caller sees a real message.
  *
- * Kept below the server's 4MB so we reject before it does.
+ * Deliberately MUCH tighter than the server's 32MB: nothing legitimate is this
+ * big — images ride HTTP as refs (image-upload.ts) and oversized pastes spill
+ * to disk (paste-spill.ts) — so a frame past this size is a bug, and a loud
+ * local error beats megabytes of head-of-line blocking on the shared socket.
  */
 const MAX_RPC_FRAME_BYTES = 3.5 * 1024 * 1024;
 

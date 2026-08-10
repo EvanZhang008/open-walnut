@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { wsClient } from '@/api/ws';
 import { buildImageRefsPayload } from '@/api/image-upload';
+import { spillOversizedText } from '@/api/paste-spill';
 import { log } from '@/utils/log';
 import type { OptimisticMessage } from '@/components/sessions/SessionChatHistory';
 import type { ImageAttachment } from '@/api/chat';
@@ -121,6 +122,19 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
   const send = useCallback(async (sessionId: string, message: string, images?: ImageAttachment[]): Promise<boolean> => {
     setSendError(null);
 
+    // Oversized paste → spill to disk over HTTP, send a short file-path pointer
+    // instead (same WS-frame-cap reasoning as image uploads — see paste-spill.ts).
+    // Spill BEFORE the optimistic bubble so display, dedup, and retry all see the
+    // same (small) text the server will echo back.
+    try {
+      message = await spillOversizedText(message);
+    } catch (e) {
+      const err = e as Error;
+      log.error('send', 'paste spill failed', { sessionId, error: err.message });
+      setSendError(`Large paste upload failed: ${err.message}`);
+      return false;
+    }
+
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     log.info('send', 'dispatching', { sessionId, queueId: tempId });
     const optimistic: OptimisticMessage = {
@@ -167,6 +181,15 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
 
   const interruptSend = useCallback(async (sessionId: string, message: string, images?: ImageAttachment[]): Promise<boolean> => {
     setSendError(null);
+
+    try {
+      message = await spillOversizedText(message);
+    } catch (e) {
+      const err = e as Error;
+      log.error('send', 'paste spill failed (interrupt)', { sessionId, error: err.message });
+      setSendError(`Large paste upload failed: ${err.message}`);
+      return false;
+    }
 
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     log.info('send', 'dispatching (interrupt)', { sessionId, queueId: tempId });

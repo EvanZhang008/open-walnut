@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect, type MutableRefObject } from 
 import { useEvent } from './useWebSocket';
 import { wsClient } from '@/api/ws';
 import { buildImageRefsPayload } from '@/api/image-upload';
+import { spillOversizedText } from '@/api/paste-spill';
 import { perf } from '@/utils/perf-logger';
 import { log } from '@/utils/log';
 import {
@@ -916,9 +917,10 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
 
     // Attachments upload over HTTP first, then the RPC carries only refs —
     // base64 on a WS frame trips the 4MB cap and `ws` closes the socket (1009).
-    // See api/image-upload.ts. A failed upload lands in the same catch below.
-    buildImageRefsPayload(images)
-      .then((imagePayload) => wsClient.sendRpc('chat', { ...payload, ...imagePayload }))
+    // See api/image-upload.ts. Oversized pastes spill to disk the same way
+    // (paste-spill.ts). Either failing lands in the same catch below.
+    Promise.all([buildImageRefsPayload(images), spillOversizedText(text)])
+      .then(([imagePayload, finalText]) => wsClient.sendRpc('chat', { ...payload, message: finalText, ...imagePayload }))
       .then(() => {
         rpcInFlightRef.current = false;
         drainOrStop();

@@ -254,6 +254,10 @@ export const SESSION_STREAMS_DIR = path.join(LOG_DIR, 'streams');
 export const SESSION_QUEUE_FILE = path.join(WALNUT_HOME, 'session-message-queue.json');
 export const IMAGES_DIR = path.join(LOG_DIR, 'images');
 export const REMOTE_IMAGES_DIR = path.join(IMAGES_DIR, 'remote');
+// Oversized chat-input pastes spilled to disk (POST /api/pastes); the message
+// then carries the file path instead of megabytes of text. /tmp like
+// IMAGES_DIR: same lifecycle, same remote-transfer treatment.
+export const PASTES_DIR = path.join(LOG_DIR, 'pastes');
 export const HEARTBEAT_FILE = path.join(WALNUT_HOME, 'HEARTBEAT.md');
 export const COMMANDS_DIR = path.join(WALNUT_HOME, 'commands');
 // Resolve builtin commands dir. tsup inlines this into each entry point

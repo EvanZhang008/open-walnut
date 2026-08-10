@@ -261,9 +261,18 @@ async function verifyCloudUpgrade(url: URL, request: IncomingMessage): Promise<{
 export function attachWss(server: HttpServer): WebSocketServer {
   // maxPayload caps a single WS frame. The `ws` default is 100MB — any
   // authenticated /ws client or /bridge daemon could push that and force the
-  // server to buffer it whole before JSON.parse (memory-exhaustion lever). 4MB
-  // comfortably covers real frames (jsonl lines, RPC params) with headroom.
-  wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 })
+  // server to buffer it whole before JSON.parse (memory-exhaustion lever).
+  //
+  // 32MB, not smaller: `ws` enforces this cap by CLOSING the connection with
+  // 1009 — the frame never reaches a handler, so there is no way to answer
+  // with an error. At 4MB one pasted screenshot's base64 crossed the cap and
+  // killed the socket plus every in-flight RPC ("WebSocket disconnected",
+  // 2026-08-09). Big payloads are kept off the socket by design (images ride
+  // HTTP as ImageRefs, oversized pastes spill via /api/pastes) and the client
+  // refuses oversized frames locally (MAX_RPC_FRAME_BYTES in web ws.ts), so
+  // this cap is a last-resort backstop — generous enough that a future bug
+  // degrades to a slow frame instead of a dead connection.
+  wss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024 })
   registerSetInterest()
 
   server.on('upgrade', (request: IncomingMessage, socket, head) => {

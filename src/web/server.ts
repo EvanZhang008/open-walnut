@@ -37,6 +37,7 @@ import { registerBrowserLogsRpc, browserLogsRouter } from './routes/browser-logs
 import { bugReportRouter } from './routes/bug-report.js'
 import { usageRouter } from './routes/usage.js'
 import { imagesRouter } from './routes/images.js'
+import { pastesRouter } from './routes/pastes.js'
 import { localImageRouter } from './routes/local-image.js'
 import { fileContentRouter } from './routes/file-content.js'
 import { calendarRouter } from './routes/calendar.js'
@@ -827,6 +828,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/context', contextInspectorRouter)
   app.use('/api/usage', usageRouter)
   app.use('/api/images', imagesRouter)
+  app.use('/api/pastes', pastesRouter)
   app.use('/api/local-image', localImageRouter)
   app.use('/api/file-content', fileContentRouter)
   app.use('/api/calendar', calendarRouter)

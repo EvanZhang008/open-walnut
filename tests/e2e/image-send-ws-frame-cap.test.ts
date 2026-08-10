@@ -130,14 +130,30 @@ afterAll(async () => {
 describe('WS frame cap (the mechanism behind "WebSocket disconnected")', () => {
   it('closes the connection with 1009 when a frame exceeds maxPayload', async () => {
     const ws = await connectWs();
-    // 5MB of payload — the size of a real phone screenshot in base64, and what
-    // the old `images: [{ data }]` send put on the wire. `set-interest` is used
-    // as an inert carrier: the frame is rejected before any handler runs.
-    const oversized = 'A'.repeat(5 * 1024 * 1024);
+    // Past the 32MB maxPayload backstop (attachWss). This pins the MECHANISM:
+    // `ws` answers an oversized frame by closing with 1009 before any handler
+    // runs — which is exactly why big payloads must never ride the socket
+    // (images → HTTP refs, pastes → /api/pastes). `set-interest` is an inert
+    // carrier: the frame is rejected before any handler runs.
+    const oversized = 'A'.repeat(33 * 1024 * 1024);
     const outcome = await sendRpc(ws, 'set-interest', { mode: 'lightweight', ids: [oversized] });
 
     expect(outcome.kind).toBe('closed');
     if (outcome.kind === 'closed') expect(outcome.code).toBe(1009);
+  }, 30_000);
+
+  it('a screenshot-sized frame (5MB) no longer kills the socket — backstop headroom', async () => {
+    // The 2026-08-09 incident shape: one phone screenshot in base64 (~5MB) on
+    // the wire. With the old 4MB cap this closed the connection; the raised
+    // backstop must absorb it. (Clients still shouldn't SEND frames this big —
+    // web ws.ts rejects at 3.5MB — this guards against the cap regressing.)
+    const ws = await connectWs();
+    const big = 'A'.repeat(5 * 1024 * 1024);
+    const outcome = await sendRpc(ws, 'set-interest', { mode: 'lightweight', ids: [big] });
+
+    expect(outcome.kind).toBe('response');
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    ws.close();
   }, 30_000);
 
   it('an image sent as a ref keeps the frame small and the socket alive', async () => {
