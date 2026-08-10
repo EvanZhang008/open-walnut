@@ -9,13 +9,16 @@ import Observation
 @Observable
 @MainActor
 final class TasksStore {
-    private let api = WalnutAPI()
+    /// Internal (not private) so same-module extensions in other files can
+    /// ride the same client (TasksStoreQuickAdd's backfill PATCH).
+    let api = WalnutAPI()
     weak var connection: ConnectionStore?
 
     /// False while backgrounded — every completion re-checks it before touching
     /// observed state, so a fetch that lands during suspension cannot drive
-    /// SwiftUI updates from a non-active process (P0-3).
-    private var isActive = true
+    /// SwiftUI updates from a non-active process (P0-3). Readable (not
+    /// settable) from same-module extensions (TasksStoreQuickAdd).
+    private(set) var isActive = true
 
     /// Monotonic request sequence — a slow stale list fetch must not overwrite
     /// a newer one (same pattern as the web SessionSearchPanel requestSeq).
@@ -74,6 +77,31 @@ final class TasksStore {
     private func persistPending() {
         DiskCache.save(pendingCreated, key: "tasks-pending-created")
     }
+
+    /// Adopt an upgraded row into the pending overlay (quick-add parse
+    /// backfill) so a REPLICA refresh re-merges the upgraded task, not the
+    /// raw-title original it was created with. No-op when not overlaid.
+    func refreshPendingCreated(_ task: WalnutTask) {
+        guard let idx = pendingCreated.firstIndex(where: { $0.task.id == task.id }) else { return }
+        pendingCreated[idx] = PendingCreated(task: task, createdAt: pendingCreated[idx].createdAt)
+        persistPending()
+    }
+
+    // MARK: - User-touched tracking (quick-add backfill race guard)
+    //
+    // The NL quick-add creates a raw-title task instantly and PATCHes parse
+    // results onto it seconds later (TasksStoreQuickAdd). If the USER edits,
+    // completes, pins, or deletes the row in that window, the late backfill
+    // must never clobber their change — every user-initiated mutation marks
+    // the id here and the backfill skips marked rows entirely.
+
+    @ObservationIgnored private var userTouchedIds: Set<String> = []
+
+    /// Record a user-initiated mutation on a task id.
+    func noteUserTouched(_ id: String) { userTouchedIds.insert(id) }
+
+    /// True when the user has mutated this task since it appeared.
+    func isUserTouched(_ id: String) -> Bool { userTouchedIds.contains(id) }
 
     // Sessions ride the same panel as a smart-list tab (read-only projection).
     var sessions: [WalnutSession] = [] {
@@ -374,6 +402,55 @@ final class TasksStore {
         return created
     }
 
+    // MARK: - Quick-add plumbing (state ops for TasksStoreQuickAdd)
+    //
+    // The NL quick-add flow lives in TasksStoreQuickAdd.swift; these helpers
+    // stay here because they touch the private pendingCreated overlay. All
+    // are pure local-state ops (no network) so WalnutTests can drive them.
+
+    /// Instant local insert of a not-yet-POSTed placeholder row. NOT added to
+    /// the pending overlay (it has no server id yet) — a refresh landing in
+    /// the POST window may briefly drop it; adoptCreated restores it.
+    func insertPlaceholder(_ task: WalnutTask) {
+        guard isActive else { return }
+        tasks.insert(task, at: 0)
+    }
+
+    /// Remove a placeholder row (create POST failed).
+    func removePlaceholder(id: String) {
+        tasks.removeAll { $0.id == id }
+    }
+
+    /// Adopt the server-created row: register the pending overlay (REPLICA
+    /// refreshes must keep it) and swap the placeholder in place. If the SSE
+    /// feed already delivered the created row (it can beat the POST response),
+    /// the placeholder is dropped instead — never two rows for one task.
+    func adoptCreated(_ created: WalnutTask, replacingPlaceholder placeholderId: String?) {
+        guard isActive else { return }
+        pendingCreated.append(PendingCreated(task: created, createdAt: Date()))
+        persistPending()
+        let alreadyPresent = tasks.contains { $0.id == created.id }
+        if let placeholderId, let idx = tasks.firstIndex(where: { $0.id == placeholderId }) {
+            if alreadyPresent { tasks.remove(at: idx) } else { tasks[idx] = created }
+        } else if !alreadyPresent {
+            tasks.insert(created, at: 0)
+        }
+        DiskCache.save(tasks, key: "tasks-list")
+        lastCreatedTaskId = created.id
+    }
+
+    /// Adopt the parse-upgraded row (quick-add backfill PATCH response) —
+    /// unless the user touched the task while the parse was in flight, in
+    /// which case their edit wins and the backfill result is discarded.
+    func adoptBackfilled(_ updated: WalnutTask) {
+        guard isActive, !isUserTouched(updated.id) else { return }
+        if let idx = tasks.firstIndex(where: { $0.id == updated.id }) {
+            tasks[idx] = updated
+        }
+        refreshPendingCreated(updated)
+        DiskCache.save(tasks, key: "tasks-list")
+    }
+
     /// NL quick-parse (Wave 2) — stateless pass-through to the API so views
     /// don't hold their own client. Throws on failure; caller shows the error.
     func quickParse(_ text: String) async throws -> QuickParsedTask {
@@ -434,6 +511,8 @@ final class TasksStore {
     @discardableResult
     func updateTask(id: String, edit: TaskEdit) async throws -> WalnutTask {
         guard !edit.isEmpty else { throw APIError.badResponse }
+        // Human edit — a late quick-add parse backfill must not clobber it.
+        noteUserTouched(id)
         guard let idx = tasks.firstIndex(where: { $0.id == id }) else {
             // Row not in the local list (stale sheet) — go straight to the server.
             return try await patchTask(id: id, edit: edit)
@@ -479,6 +558,7 @@ final class TasksStore {
     /// Pin/unpin with optimistic row update + rollback. Returns an error
     /// message on failure (409 = pinning a completed task), nil on success.
     func setPinned(_ task: WalnutTask, pinned: Bool) async -> String? {
+        noteUserTouched(task.id)
         // Optimistic: flip the row's pinned flag in place.
         let apply = { (value: Bool?) in
             if let idx = self.tasks.firstIndex(where: { $0.id == task.id }) {
@@ -517,6 +597,7 @@ final class TasksStore {
     /// a REST refresh covers the no-feed fallback.
     func batchSetDone(_ taskIds: [String], done: Bool) async -> String? {
         guard !taskIds.isEmpty else { return nil }
+        for id in taskIds { noteUserTouched(id) }
         do {
             let result = try await api.batchSetPhase(taskIds: taskIds, phase: done ? "COMPLETE" : "TODO")
             await loadTasks()
@@ -531,6 +612,7 @@ final class TasksStore {
     /// Batch-delete. Same partial-success contract as batchSetDone.
     func batchDelete(_ taskIds: [String], force: Bool = false) async -> String? {
         guard !taskIds.isEmpty else { return nil }
+        for id in taskIds { noteUserTouched(id) }
         do {
             let result = try await api.batchDeleteTasks(taskIds: taskIds, force: force)
             let deletedIds = Set(result.deleted.map(\.id))

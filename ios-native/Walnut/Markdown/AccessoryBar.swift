@@ -86,7 +86,7 @@ final class AccessoryBar: UIView {
 
         let taskButton = iconButton("checklist", action: #selector(insertTask))
         let tableButton = iconButton("tablecells", action: #selector(insertTable))
-        let photoButton = iconButton("photo", action: #selector(pickPhoto))
+        let photoButton = makePhotoMenuButton()
         [aaButton, taskButton, tableButton, photoButton].forEach { stack.addArrangedSubview($0) }
 
         let doneButton = UIButton(type: .system)
@@ -143,13 +143,50 @@ final class AccessoryBar: UIView {
         coordinator.insertTableSkeleton(in: hostTextView)
     }
 
+    /// Photo entry is a MENU (user-reported gap: no way to shoot a photo, and
+    /// the library pick was single-image only). "Take Photo" is omitted where
+    /// no camera exists (simulators) — an always-disabled item reads as broken.
+    private func makePhotoMenuButton() -> UIButton {
+        let button = UIButton(type: .system)
+        button.setImage(
+            UIImage(systemName: "photo", withConfiguration: UIImage.SymbolConfiguration(pointSize: 19, weight: .regular)),
+            for: .normal
+        )
+        button.tintColor = .label
+        button.accessibilityIdentifier = "editor.photoMenu"
+        var actions: [UIAction] = []
+        if UIImagePickerController.isSourceTypeAvailable(.camera) {
+            actions.append(UIAction(title: "Take Photo", image: UIImage(systemName: "camera")) { [weak self] _ in
+                self?.takePhoto()
+            })
+        }
+        actions.append(UIAction(title: "Choose from Library", image: UIImage(systemName: "photo.on.rectangle")) { [weak self] _ in
+            self?.pickPhoto()
+        })
+        button.menu = UIMenu(children: actions)
+        button.showsMenuAsPrimaryAction = true
+        return button
+    }
+
+    /// Vault attachments are inserted one by one in order; 10 is a generous
+    /// ceiling that still bounds the sequential-upload batch.
+    private static let maxPhotoSelection = 10
+
     @objc private func pickPhoto() {
         var config = PHPickerConfiguration()
         config.filter = .images
-        config.selectionLimit = 1
+        config.selectionLimit = Self.maxPhotoSelection
         let picker = PHPickerViewController(configuration: config)
         picker.delegate = self
         topMostViewController()?.present(picker, animated: true)
+    }
+
+    private func takePhoto() {
+        guard UIImagePickerController.isSourceTypeAvailable(.camera) else { return }
+        let camera = UIImagePickerController()
+        camera.sourceType = .camera
+        camera.delegate = self
+        topMostViewController()?.present(camera, animated: true)
     }
 
     @objc private func dismissKeyboard() {
@@ -169,13 +206,24 @@ final class AccessoryBar: UIView {
 extension AccessoryBar: PHPickerViewControllerDelegate {
     func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
         picker.dismiss(animated: true)
-        guard let provider = results.first?.itemProvider, provider.canLoadObject(ofClass: UIImage.self) else { return }
-        provider.loadObject(ofClass: UIImage.self) { [weak self] object, _ in
-            guard let image = object as? UIImage else { return }
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.coordinator.uploadAndInsert(image, into: self.hostTextView)
-            }
-        }
+        // Providers, not decoded UIImages: the batch uploader loads/downscales
+        // ONE at a time off-main, so a 10-photo pick never holds 10 rasters.
+        let sources = results.map { NotePhotoSource.provider($0.itemProvider) }
+        coordinator.uploadAndInsertBatch(sources, into: hostTextView)
+    }
+}
+
+extension AccessoryBar: UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+    func imagePickerController(
+        _ picker: UIImagePickerController,
+        didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
+    ) {
+        picker.dismiss(animated: true)
+        guard let image = info[.originalImage] as? UIImage else { return }
+        coordinator.uploadAndInsertBatch([.captured(image)], into: hostTextView)
+    }
+
+    func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+        picker.dismiss(animated: true)
     }
 }

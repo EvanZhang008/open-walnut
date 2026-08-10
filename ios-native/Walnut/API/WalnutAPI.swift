@@ -422,7 +422,54 @@ struct WalnutAPI {
         return try Self.decode(T.self, data: data, response: response)
     }
 
-    func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
+    /// Single transport funnel with a one-shot transient retry.
+    ///
+    /// -1200 (TLS handshake failed) means the request never reached the
+    /// server, so ANY method is safe to retry. -1001 (timeout) and -1005
+    /// (connection lost) can fire AFTER the body was delivered, so only
+    /// idempotent GETs — or endpoints explicitly marked `retrySafe` (no
+    /// server-side state, or content-hash dedup) — retry those.
+    /// Field evidence 2026-08-09: two isolated -1200s on POSTs right after
+    /// background→foreground cycles; manual resend succeeded within seconds.
+    func perform(_ request: URLRequest, retrySafe: Bool = false) async throws -> (Data, URLResponse) {
+        do {
+            return try await performOnce(request)
+        } catch let APIError.network(underlying) {
+            let nsError = underlying as NSError
+            guard nsError.domain == NSURLErrorDomain,
+                  Self.shouldRetryTransient(
+                    errorCode: nsError.code,
+                    method: request.httpMethod ?? "GET",
+                    retrySafe: retrySafe
+                  )
+            else { throw APIError.network(underlying: underlying) }
+            AppLog.info("network", "transient retry", [
+                "path": Self.sanitizedPath(request.url),
+                "method": request.httpMethod ?? "GET",
+                "errorCode": String(nsError.code),
+            ])
+            // Brief pause so a mid-transition network (WiFi↔cellular, socket
+            // pool invalidated while backgrounded) has a moment to settle.
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            return try await performOnce(request)
+        }
+    }
+
+    /// Which NSURLError codes get the one-shot retry above. Static + pure so
+    /// the policy is unit-testable without a network.
+    static func shouldRetryTransient(errorCode: Int, method: String, retrySafe: Bool) -> Bool {
+        switch errorCode {
+        case NSURLErrorSecureConnectionFailed:
+            // Handshake failure — the request body was never sent.
+            return true
+        case NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost:
+            return method.uppercased() == "GET" || retrySafe
+        default:
+            return false
+        }
+    }
+
+    private func performOnce(_ request: URLRequest) async throws -> (Data, URLResponse) {
         let started = Date()
         do {
             let result = try await session.data(for: request)

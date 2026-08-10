@@ -11,6 +11,10 @@ import SwiftUI
 struct SessionConversationView: View {
     let session: WalnutSession
 
+    /// Optional on purpose: WalnutTests host this page without the app
+    /// environment; task affordances just hide there (fixture has no taskId).
+    @Environment(TasksStore.self) private var tasksStore: TasksStore?
+
     @State private var store: SessionConversationStore
     /// Wave-1 lifecycle control plane (permissions / restart / terminate /
     /// rename / archive) — separate from the conversation store on purpose:
@@ -18,7 +22,9 @@ struct SessionConversationView: View {
     @State private var lifecycle: SessionLifecycleController
     @State private var showInfo = false
     @State private var showControls = false
-    // Wave-2 extras — presented from the lifecycle menu.
+    /// Full task detail for the linked task — every task capability in place.
+    @State private var showTask = false
+    // Wave-2 extras — presented from the session menu.
     @State private var showQueue = false
     @State private var showPlan = false
     @State private var showSideQuestions = false
@@ -100,25 +106,7 @@ struct SessionConversationView: View {
                 .frame(maxWidth: 240)
             }
             ToolbarItem(placement: .topBarTrailing) {
-                // Model / effort / fork — the mobile mirror of the console's
-                // session controls (additive /api/v1 endpoints).
-                Button {
-                    showControls = true
-                } label: {
-                    Image(systemName: "slider.horizontal.3")
-                }
-                .accessibilityIdentifier("session.controls")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showInfo = true
-                } label: {
-                    Image(systemName: "info.circle")
-                }
-                .accessibilityIdentifier("session.info")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                lifecycleMenu
+                sessionMenu
             }
         }
         .sheet(isPresented: $showInfo) {
@@ -132,6 +120,16 @@ struct SessionConversationView: View {
             }
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
+        }
+        // Every task capability in place — a session IS a task. The sheet's
+        // own controller fetches the full record, so a placeholder row (task
+        // filtered out of the list projection) still opens fully functional.
+        .sheet(isPresented: $showTask) {
+            if let taskId = session.taskId, tasksStore != nil {
+                TaskDetailSheet(task: linkedTask ?? SessionTaskRow.placeholder(id: taskId, title: session.taskTitle))
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+            }
         }
         // Wave-2 extras: queue / plan / side questions / files.
         .sheet(isPresented: $showQueue) {
@@ -198,10 +196,36 @@ struct SessionConversationView: View {
         }
     }
 
-    /// Lifecycle actions menu — Restart / Retry / Rename / Archive / Terminate.
-    /// Retry only shows for error/stopped sessions (the server 400s otherwise).
-    private var lifecycleMenu: some View {
+    /// THE toolbar entry — one ellipsis menu unifying what used to be three
+    /// buttons (controls sliders / info / lifecycle menu). Sections top→down:
+    /// frequent (Controls incl. fork, Info, linked Task), lifecycle
+    /// (Restart/Retry/Rename/Archive), tools (Queue/Plan/Side Questions/
+    /// Files), destructive (Terminate). Retry only shows for error/stopped
+    /// sessions (the server 400s otherwise).
+    private var sessionMenu: some View {
         Menu {
+            // Frequent: the controls sheet (model / effort / mode / fork).
+            Button {
+                showControls = true
+            } label: {
+                Label("Session Controls", systemImage: "slider.horizontal.3")
+            }
+            .accessibilityIdentifier("session.controls")
+            Button {
+                showInfo = true
+            } label: {
+                Label("Session Info", systemImage: "info.circle")
+            }
+            .accessibilityIdentifier("session.info")
+            if session.taskId != nil {
+                Button {
+                    showTask = true
+                } label: {
+                    Label("Task Details", systemImage: "checklist")
+                }
+                .accessibilityIdentifier("session.taskDetails")
+            }
+            Divider()
             Button {
                 Task {
                     if await lifecycle.restart() {
@@ -223,6 +247,19 @@ struct SessionConversationView: View {
                 }
                 .accessibilityIdentifier("session.retry")
             }
+            Button {
+                renameDraft = session.title ?? session.rowTitle
+                showRename = true
+            } label: {
+                Label("Rename", systemImage: "pencil")
+            }
+            .accessibilityIdentifier("session.rename")
+            Button {
+                Task { await lifecycle.setArchived(true) }
+            } label: {
+                Label("Archive", systemImage: "archivebox")
+            }
+            .accessibilityIdentifier("session.archive")
             Divider()
             // Wave-2 extras — read/withdraw the send queue, view the plan,
             // ask side questions, browse the working directory.
@@ -251,20 +288,6 @@ struct SessionConversationView: View {
             }
             .accessibilityIdentifier("session.files")
             Divider()
-            Button {
-                renameDraft = session.title ?? session.rowTitle
-                showRename = true
-            } label: {
-                Label("Rename", systemImage: "pencil")
-            }
-            .accessibilityIdentifier("session.rename")
-            Button {
-                Task { await lifecycle.setArchived(true) }
-            } label: {
-                Label("Archive", systemImage: "archivebox")
-            }
-            .accessibilityIdentifier("session.archive")
-            Divider()
             Button(role: .destructive) {
                 Task {
                     if case .needsForce(let message) = await lifecycle.terminate() {
@@ -279,7 +302,16 @@ struct SessionConversationView: View {
             Image(systemName: "ellipsis.circle")
         }
         .disabled(lifecycle.acting)
-        .accessibilityIdentifier("session.lifecycleMenu")
+        .accessibilityIdentifier("session.menu")
+    }
+
+    /// The linked task's LIVE row from the store (events feed keeps it fresh);
+    /// nil when the session has no task, the store is absent (tests), or the
+    /// row fell out of the list projection (TaskDetailSheet still opens off a
+    /// placeholder — its controller fetches the full record by id).
+    private var linkedTask: WalnutTask? {
+        guard let taskId = session.taskId else { return nil }
+        return tasksStore?.tasks.first { $0.id == taskId }
     }
 
     /// Nav-bar subtitle: live status + where it runs + the model when known

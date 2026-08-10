@@ -19,7 +19,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0.0</string>
 	<key>CFBundleVersion</key>
-	<string>39</string>
+	<string>41</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSAppTransportSecurity</key>
@@ -28,7 +28,7 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Walnut uses the camera to scan the pairing QR code from your Walnut console.</string>
+	<string>Walnut uses the camera to scan the pairing QR code from your Walnut console and to take photos you attach to notes.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Walnut uses the microphone for voice input — speech is transcribed to text by your own Walnut server.</string>
 	<key>UILaunchScreen</key>

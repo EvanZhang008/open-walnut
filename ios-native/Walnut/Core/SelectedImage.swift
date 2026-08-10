@@ -68,7 +68,9 @@ struct SelectedImage: Identifiable {
         return await Task.detached(priority: .userInitiated) { make(from: data) }.value
     }
 
-    private static func make(from data: Data) -> LoadResult {
+    /// Also used by the note editor's photo batch uploader (raw provider
+    /// bytes) — CGImageSource thumbnailing never materializes the full raster.
+    static func make(from data: Data) -> LoadResult {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               withinPixelBudget(source),
               let upload = thumbnail(from: source, maxDimension: maxUploadDimension),

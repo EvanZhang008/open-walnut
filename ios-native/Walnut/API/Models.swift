@@ -654,7 +654,19 @@ enum APIError: Error, LocalizedError {
         switch self {
         case .notConfigured: return "Server not configured"
         case .cancelled: return "Request cancelled"
-        case .network(let underlying): return underlying.localizedDescription
+        case .network(let underlying):
+            // Transient transport hiccups (TLS handshake, timeout, connection
+            // lost) already got one automatic retry in WalnutAPI.perform —
+            // reaching here means it failed twice. Say that in plain words
+            // instead of surfacing Apple's raw "A TLS error caused…" text.
+            let code = (underlying as NSError).code
+            if (underlying as NSError).domain == NSURLErrorDomain,
+               code == NSURLErrorSecureConnectionFailed
+                || code == NSURLErrorTimedOut
+                || code == NSURLErrorNetworkConnectionLost {
+                return "Network hiccup — we retried automatically but it didn't go through. Please try again."
+            }
+            return underlying.localizedDescription
         case .unauthorized: return "Unauthorized — check your device token"
         case .rateLimited: return "Too many requests — try again in a moment"
         case .server(_, _, let message, _, _): return message

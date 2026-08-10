@@ -14,6 +14,9 @@ struct TasksView: View {
     @State private var navPath: [WalnutSession] = []
     @State private var showNewSession = false
     @State private var showNewTask = false
+    /// Sentence carried from the quick-add row into the full NewTaskSheet
+    /// (the expand affordance) — parsed there into the form fields.
+    @State private var newTaskSeedText = ""
     /// Local search — filters tasks (title/project) and sessions
     /// (title/task/host/cwd) in place; no server round-trip.
     @State private var searchText = ""
@@ -107,10 +110,10 @@ struct TasksView: View {
                 }
                 .presentationDetents([.medium, .large])
             }
-            .sheet(isPresented: $showNewTask) {
+            .sheet(isPresented: $showNewTask, onDismiss: { newTaskSeedText = "" }) {
                 // No onCreated action: the store's optimistic insert makes the
                 // new task appear in the list the moment the sheet dismisses.
-                NewTaskSheet()
+                NewTaskSheet(seedText: newTaskSeedText)
                     .presentationDetents([.medium, .large])
             }
             // Session rows push a full-screen conversation page instead of a sheet.
@@ -196,6 +199,20 @@ struct TasksView: View {
                         .listRowInsets(EdgeInsets(top: 4, leading: 12, bottom: 8, trailing: 12))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
+                }
+
+                // Todoist-grade quick add rides the TOP of EVERY filter (the
+                // Sessions tab included — it's the default filter, and "add a
+                // todo" must always be one tap away): type a sentence, hit
+                // return, task appears instantly (the AI parse upgrades it in
+                // place; on the Sessions filter the locate-me handler switches
+                // to All Open so the new row is visible). The expand icon
+                // opens the full form sheet seeded with the sentence.
+                Section {
+                    QuickAddRow(identifier: "tasks.quickAdd") { seed in
+                        newTaskSeedText = seed
+                        showNewTask = true
+                    }
                 }
 
                 // Live sessions ride the top of every task filter (except the
@@ -515,15 +532,18 @@ struct TasksView: View {
 
     /// Open pinned tasks, capped at 8 — the phone mirror of the desktop
     /// focus bar. Uses the projection's pinned flag (live via the feed).
+    /// The section's quick-add row creates a task PRE-PINNED (satellite
+    /// tier default) — add straight into the working set from anywhere.
     @ViewBuilder
     private var pinnedTasksSection: some View {
         let pinned = tasks.tasks(for: activeFilter == .done ? .done : .allOpen)
             .filter { $0.pinned == true && !$0.isDone }
-        if !pinned.isEmpty && activeFilter != .done {
+        if activeFilter != .done {
             Section("Pinned") {
                 ForEach(Array(pinned.prefix(8))) { task in
                     taskRowButton(task)
                 }
+                QuickAddRow(pinSeed: true, identifier: "focus.quickAdd")
             }
         }
     }

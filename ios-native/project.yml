@@ -29,7 +29,7 @@ targets:
       properties:
         CFBundleDisplayName: Walnut
         CFBundleShortVersionString: "1.0.0"
-        CFBundleVersion: "40"
+        CFBundleVersion: "41"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -38,9 +38,9 @@ targets:
         # cloud servers are HTTPS and unaffected.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
-        # QR pairing: the setup screen scans the wn://pair code shown by the
-        # web console (Settings → Devices).
-        NSCameraUsageDescription: Walnut uses the camera to scan the pairing QR code from your Walnut console.
+        # QR pairing (setup screen scans the wn://pair code) + note photo
+        # attachments (editor photo menu → Take Photo).
+        NSCameraUsageDescription: Walnut uses the camera to scan the pairing QR code from your Walnut console and to take photos you attach to notes.
         # Voice input: the composer mic button records speech and transcribes
         # it to text on your Walnut server.
         NSMicrophoneUsageDescription: Walnut uses the microphone for voice input — speech is transcribed to text by your own Walnut server.

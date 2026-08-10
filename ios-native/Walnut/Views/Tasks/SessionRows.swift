@@ -122,7 +122,20 @@ struct SessionInfoSheet: View {
                     }
                 }
 
-                if let taskTitle = session.taskTitle {
+                // A session IS a task: the linked-task row carries the FULL
+                // task capability set in place — inline ○/✓ + pin toggles, tap
+                // → TaskDetailSheet (status/priority/due/description/note/
+                // star/delete). Falls back to the read-only title when the
+                // session predates task linking.
+                if let taskId = session.taskId {
+                    Section("Task") {
+                        SessionTaskRow(
+                            taskId: taskId,
+                            fallbackTitle: session.taskTitle,
+                            project: session.project
+                        )
+                    }
+                } else if let taskTitle = session.taskTitle {
                     Section("Task") {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(taskTitle)

@@ -9,6 +9,10 @@ import SwiftUI
 struct NewTaskSheet: View {
     /// Called with the created task right before dismissal.
     var onCreated: ((WalnutTask) -> Void)? = nil
+    /// Sentence carried in from the quick-add row's expand affordance —
+    /// pre-fills the NL field and fires the parse once on appear. The form
+    /// stays fully manual regardless (parse failure changes nothing).
+    var seedText: String = ""
 
     @Environment(\.dismiss) private var dismiss
     @Environment(TasksStore.self) private var tasks
@@ -93,7 +97,17 @@ struct NewTaskSheet: View {
                     }
                 }
             }
-            .onAppear { titleFocused = true }
+            .onAppear {
+                titleFocused = true
+                // Seeded from the quick-add expand: mirror the sentence into
+                // the title NOW (manual path intact) and parse in background.
+                let seed = seedText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !seed.isEmpty, nlText.isEmpty {
+                    nlText = seed
+                    title = seed
+                    Task { await parseNL() }
+                }
+            }
             .interactiveDismissDisabled(creating)
         }
     }
