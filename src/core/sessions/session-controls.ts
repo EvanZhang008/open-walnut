@@ -665,7 +665,64 @@ export type SessionControlAction =
   | 'server.list-dirs' | 'server.slash-commands'
   // Wave 2 box-level family: file-explorer metadata (names/types only — file
   // CONTENT never rides the bridge; see files-v1.ts for the threat model).
-  | 'server.files.list' | 'server.files.resolve';
+  | 'server.files.list' | 'server.files.resolve'
+  // Phase 4 box-level family: apply ONE cloud task op (create/update/delete
+  // absolute snapshot) on the primary's task store — the synchronous
+  // replacement for the git outbox round trip. See core/task-outbox.ts
+  // (applyTaskOp) + core/task-queue.ts (the cloud's dispatch + fallback).
+  | 'server.tasks.apply';
+
+// ── Task op relay payload validation (server.tasks.apply) ───────────────────
+
+/** A task op crossing the bridge is a FULL task snapshot; a fat description
+ *  plus tags still fits well under this. The cap exists because one oversized
+ *  frame (1009 close) kills every in-flight RPC on the shared bridge socket
+ *  (2026-08-09 incident) — reject early instead of relaying garbage. */
+const TASK_OP_MAX_BYTES = 256 * 1024;
+
+/**
+ * Validate the `server.tasks.apply` payload into a TaskOp, or throw a precise
+ * SessionControlError. The op arrives from the cloud box (semi-trusted: it
+ * holds no sync plugins and builds rows off the slim projection), so the shape
+ * is checked here and the FIELD-level trust boundary stays where it already is
+ * — applyTaskOp's UPDATE_WHITELIST.
+ */
+function parseTaskOpParams(p: Record<string, unknown>): import('../task-outbox.js').TaskOp {
+  const raw = (p.op ?? p) as Record<string, unknown>;
+  let size: number;
+  try {
+    size = Buffer.byteLength(JSON.stringify(raw), 'utf8');
+  } catch {
+    throw new SessionControlError('op is not serializable', 400);
+  }
+  if (size > TASK_OP_MAX_BYTES) {
+    throw new SessionControlError(`op too large (${size} > ${TASK_OP_MAX_BYTES} bytes)`, 400);
+  }
+  const opId = typeof raw.opId === 'string' ? raw.opId.trim() : '';
+  if (!opId) throw new SessionControlError('op.opId is required', 400);
+  const at = typeof raw.at === 'string' && raw.at ? raw.at : new Date().toISOString();
+  if (raw.type === 'delete') {
+    const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+    if (!id) throw new SessionControlError('delete op requires op.id', 400);
+    return { opId, type: 'delete', at, id };
+  }
+  if (raw.type !== 'create' && raw.type !== 'update') {
+    throw new SessionControlError('op.type must be one of: create, update, delete', 400);
+  }
+  const task = raw.task as Partial<Task> | undefined;
+  if (!task || typeof task !== 'object' || Array.isArray(task)) {
+    throw new SessionControlError(`${raw.type} op requires op.task`, 400);
+  }
+  if (typeof task.id !== 'string' || !task.id.trim()) {
+    throw new SessionControlError('op.task.id is required', 400);
+  }
+  // updated_at is the LWW clock — an op without it could silently clobber a
+  // newer primary edit (Date.parse(undefined) is NaN, and NaN <= x is false).
+  if (typeof task.updated_at !== 'string' || Number.isNaN(Date.parse(task.updated_at))) {
+    throw new SessionControlError('op.task.updated_at must be an ISO-8601 timestamp', 400);
+  }
+  return { opId, type: raw.type, at, task: task as Task };
+}
 
 /**
  * Entry point for the daemon control relay (phone → cloud → bridge →
@@ -915,6 +972,18 @@ export async function handleSessionControlRelay(
           if (err instanceof FilesOpError) throw new SessionControlError(err.message, err.statusCode);
           throw err;
         }
+        break;
+      }
+      // ── Phase 4 box-level family: one cloud task op, applied synchronously ──
+      // Replaces the git outbox round trip (3 git hops, 1-3 min) with a ~100ms
+      // RPC. Idempotent by construction — absolute snapshots + LWW + a bounded
+      // recently-applied opId set — so a replayed op (lost response, or the
+      // same op also arriving as a legacy git file) is safe.
+      case 'server.tasks.apply': {
+        const op = parseTaskOpParams(p);
+        const { applyTaskOp } = await import('../task-outbox.js');
+        const outcome = await applyTaskOp(op);
+        result = { ...outcome, opId: op.opId };
         break;
       }
       default:

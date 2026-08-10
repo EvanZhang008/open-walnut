@@ -1,14 +1,18 @@
 /**
  * POST /api/v1/tasks — CLOUD_MODE (REPLICA) behavior. The cloud companion has
- * a real local task store (seeded by the projection import) and a task outbox
- * that ships local mutations back to the primary over git-sync — the same path
- * the web UI's task creation already uses on cloud. So creation answers 201
- * (not the old 503 not_supported_cloud): the task lands in the local store and
- * the TASK_CREATED bus emit makes the outbox subscriber drop an op file.
+ * a real local task store (seeded by the projection import) and dispatches
+ * every local mutation back to the primary over the `server.tasks.apply`
+ * bridge RPC — the same path the web UI's task creation uses on cloud. So
+ * creation answers 201 (not the old 503 not_supported_cloud): the task lands
+ * in the local store and the TASK_CREATED bus emit reaches the dispatcher.
+ *
+ * This harness registers no bridge, so the dispatch takes the offline fallback
+ * and the op is asserted in cache/task-queue/ (NON-git) rather than the retired
+ * tasks/outbox/ git directory.
  *
  * Real startServer({ port: 0, dev: true }) with the constants mock forcing
  * CLOUD_MODE: true (same harness as api-v1-session-talk-cloud.test.ts) — the
- * outbox subscriber only registers inside startServer's cloud branch, so a
+ * dispatch subscriber only registers inside startServer's cloud branch, so a
  * bare express app would miss the very wiring this test exists to verify.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
@@ -20,15 +24,13 @@ import { vi } from 'vitest'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-apiv1-taskcreate-cloud', { CLOUD_MODE: true }))
 
-import { WALNUT_HOME, TASKS_DIR } from '../../../src/constants.js'
+import { WALNUT_HOME, TASK_QUEUE_DIR } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { createDevice, _resetDeviceAuthForTesting } from '../../../src/core/device-auth.js'
 
 let server: HttpServer
 let port: number
 let deviceToken: string
-
-const OUTBOX_DIR = path.join(TASKS_DIR, 'outbox')
 
 function apiUrl(p: string): string {
   return `http://localhost:${port}${p}`
@@ -47,12 +49,12 @@ async function postTask(body: unknown): Promise<Response> {
   })
 }
 
-/** The outbox drop is fire-and-forget off the bus — poll briefly for the file. */
-async function waitForOutboxOps(timeoutMs = 3_000): Promise<string[]> {
+/** Dispatch is fire-and-forget off the bus — poll briefly for the queued file. */
+async function waitForQueuedOps(timeoutMs = 3_000): Promise<string[]> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     try {
-      const names = (await fs.readdir(OUTBOX_DIR)).filter((n) => n.endsWith('.json'))
+      const names = (await fs.readdir(TASK_QUEUE_DIR)).filter((n) => n.endsWith('.json'))
       if (names.length > 0) return names.sort()
     } catch { /* dir not created yet */ }
     if (Date.now() > deadline) return []
@@ -78,7 +80,7 @@ afterAll(async () => {
 })
 
 describe('task creation on a REPLICA', () => {
-  it('POST /tasks → 201, task in the local store, outbox op recorded', async () => {
+  it('POST /tasks → 201, task in the local store, create op dispatched (queued while the bridge is down)', async () => {
     const res = await postTask({ title: 'Born on the cloud box', priority: 'important' })
     expect(res.status).toBe(201)
     const { task } = await res.json() as { task: Record<string, unknown> }
@@ -97,11 +99,12 @@ describe('task creation on a REPLICA', () => {
     const fullBody = await full.json() as { task: { title: string } }
     expect(fullBody.task.title).toBe('Born on the cloud box')
 
-    // The TASK_CREATED emit reached the cloud outbox subscriber: one 'create'
-    // op file is waiting to ride git-sync back to the primary.
-    const ops = await waitForOutboxOps()
+    // The TASK_CREATED emit reached the cloud dispatch subscriber. With no
+    // bridge registered the RPC fails, so one 'create' op waits in the NON-git
+    // queue for the next flush.
+    const ops = await waitForQueuedOps()
     expect(ops.length).toBeGreaterThan(0)
-    const op = JSON.parse(await fs.readFile(path.join(OUTBOX_DIR, ops[ops.length - 1]), 'utf-8')) as {
+    const op = JSON.parse(await fs.readFile(path.join(TASK_QUEUE_DIR, ops[ops.length - 1]), 'utf-8')) as {
       type: string
       task: { id: string; title: string }
     }

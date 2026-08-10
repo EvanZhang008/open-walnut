@@ -37,6 +37,7 @@ import {
   CONVERSATIONS_DIR,
   PROJECTION_CACHE_DIR,
   TRANSCRIPT_CACHE_DIR,
+  TASK_QUEUE_DIR,
 } from '../constants.js';
 import { log } from '../logging/index.js';
 
@@ -73,6 +74,9 @@ function sweepDirs(): string[] {
     // leaves an orphan the read path never cleans up.
     PROJECTION_CACHE_DIR,
     TRANSCRIPT_CACHE_DIR,
+    // Offline task-op queue (Phase 4) — same story: gitignored, but a torn
+    // write leaves a .tmp the flush loop skips forever.
+    TASK_QUEUE_DIR,
   ];
 }
 

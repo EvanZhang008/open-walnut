@@ -1,31 +1,47 @@
 /**
- * Task outbox — two-way task sync between the cloud companion (REPLICA) and
- * the primary box, riding the existing 30s git-sync. No new network channel.
+ * Task op apply core + the LEGACY git outbox lane.
  *
  * Problem: on the cloud box the butler's task tools write to the LOCAL
  * tasks.sqlite, which is gitignored — tasks created from the phone were
  * stranded on EC2 forever (and invisible to the iOS list, which reads the
  * Mac-exported tasks/projection.json).
  *
- * Cloud box (writer):  every task mutation ALSO drops one op file into
- *   tasks/outbox/<opId>.json. Plain JSON files in tasks/ are committed by the
- *   git auto-commit loop and reach the primary via the hub.
- * Primary box (applier): after each git pull, applyOutboxOnPrimary() applies
- *   pending ops through the normal task-manager APIs (so plugin push +
- *   projection re-export + bus events all fire), then DELETES the op file.
- *   The deletion syncs back and clears the op on the cloud side too.
- * Cloud box (reader):  importProjectionOnCloud() upserts the Mac-exported
- *   projection into the local sqlite, so the butler can see Mac-created
- *   tasks. Upsert-only — it never deletes local rows. Since Phase 3 the
- *   projection arrives primarily as a bridge push into the projection cache
- *   (events-v1 invokes the import right after the cache write); the git-pull
- *   trigger remains for the legacy transition file.
+ * SINCE PHASE 4 the primary path is a synchronous bridge RPC:
+ *   cloud bus subscriber → core/task-queue.ts dispatchTaskOp() →
+ *   `session.control` action `server.tasks.apply` → the primary's
+ *   handleSessionControlRelay → applyTaskOp() below. ~100ms instead of the
+ *   1-3 minutes three git round trips used to cost. The cloud's offline
+ *   fallback is a NON-git queue under cache/task-queue/ (task-queue.ts).
+ *
+ * What is left here:
+ *   applyTaskOp()          — apply ONE op (LWW + whitelist + create/update/
+ *                            delete), no file I/O. The single implementation
+ *                            shared by the RPC handler and the file loop.
+ *   applyOutboxOnPrimary() — LEGACY: consume tasks/outbox/<opId>.json files
+ *                            after each git pull. Stays alive until the cloud
+ *                            box is deployed with the RPC code (an old cloud
+ *                            box still writes those files), and it is also the
+ *                            delivery path for the needs_upgrade fallback (an
+ *                            OLD primary that predates server.tasks.apply).
+ *   recordTaskOp()         — LEGACY writer half (mints an op file). Retained
+ *                            for the transition + tests; production dispatch
+ *                            goes through task-queue.ts.
+ *   importProjectionOnCloud() — upserts the Mac-exported projection into the
+ *                            cloud sqlite so the butler sees Mac-side tasks.
+ *                            Upsert-only — it never deletes local rows. Since
+ *                            Phase 3 the projection arrives as a bridge push
+ *                            into the projection cache (events-v1 invokes the
+ *                            import right after the cache write); the git-pull
+ *                            trigger remains for the legacy transition file.
  *
  * Corruption defenses (each op is a FULL post-write snapshot):
- *   1. One file per op — git never has to merge two writers in one file.
- *   2. Idempotent absolute snapshots — re-applying after a crash is safe.
+ *   1. One op per message/file — git never has to merge two writers in one file.
+ *   2. Idempotent absolute snapshots — re-applying after a crash, a lost RPC
+ *      response, or a double delivery (RPC + legacy git file) is safe. A
+ *      bounded recently-applied opId set short-circuits the common replay.
  *   3. LWW guard — a snapshot older than the local row's updated_at is skipped
- *      (a stale phone op can't clobber a newer Mac edit).
+ *      (a stale phone op can't clobber a newer Mac edit). This is what makes
+ *      op ORDER non-load-bearing, so the queue may flush out of order.
  *   4. Field whitelist on update — cloud rows are built from the slim
  *      projection, so fields the cloud can't know (source, ext, external_url,
  *      session ids, group_id) are NEVER written back onto the primary row.
@@ -38,6 +54,15 @@ import { writeJsonFile } from '../utils/fs.js';
 import { log } from '../logging/index.js';
 import type { Task } from './types.js';
 
+/**
+ * LEGACY git outbox directory. RETIREMENT PATH (deliberately NOT done in Phase
+ * 4): once the cloud box runs Phase-4 code and the Mac is confirmed answering
+ * `server.tasks.apply`, this directory goes permanently quiet — then
+ * `git rm -r --cached tasks/outbox` + a gitignore entry, and the consumption
+ * loop below can go with it. Until that deploy it must keep working: an old
+ * cloud box still writes here, and a NEW cloud box writes here when the primary
+ * answers needs_upgrade.
+ */
 export const OUTBOX_DIR = path.join(TASKS_DIR, 'outbox');
 
 export type TaskOp =
@@ -63,10 +88,17 @@ const UPDATE_WHITELIST: (keyof Task)[] = [
 let opSeq = 0;
 
 /**
- * Record a task mutation on the CLOUD box. No-op on the primary.
- * Never throws — the local write already succeeded; a failed outbox drop is
- * logged and the op is lost (surfaced in logs, not silently swallowed as
- * corrupted data).
+ * @deprecated LEGACY git lane. Drops one op FILE into tasks/outbox/ on the
+ * CLOUD box; no-op on the primary. Since Phase 4 nothing in production calls
+ * this — task dispatch goes through core/task-queue.ts (bridge RPC, with the
+ * non-git queue as fallback), and only the needs_upgrade branch there still
+ * writes a git outbox file. Kept as the reference implementation of the file
+ * format the primary's consumption path still reads, and exercised by
+ * tests/core/task-outbox.test.ts. Remove together with tasks/outbox/ once the
+ * git directory is untracked (see the retirement note on OUTBOX_DIR).
+ *
+ * Never throws — the local write already succeeded; a failed drop is logged and
+ * the op is lost (surfaced in logs, not silently swallowed as corrupted data).
  */
 export async function recordTaskOp(
   op: { type: 'create' | 'update'; task: Task } | { type: 'delete'; id: string },
@@ -113,106 +145,172 @@ async function listPendingOps(): Promise<Array<{ file: string; op: TaskOp }>> {
 }
 
 /**
- * PRIMARY box: apply pending cloud ops through the normal task-manager APIs,
- * then delete each applied file. Called after every git pull. Serial + best
- * effort: one failing op is skipped (kept on disk for the next cycle) without
- * blocking the rest.
+ * Recently-applied opIds — the cheap idempotency short-circuit for a REPLAY
+ * (the RPC response was lost so the cloud re-sent it, or the same op arrived
+ * both over RPC and as a legacy git file during the transition). Correctness
+ * does not depend on this: absolute snapshots + LWW already converge. It just
+ * avoids a redundant store write and a duplicate bus event / plugin push.
+ *
+ * Bounded FIFO — an unbounded set would grow with every phone edit forever.
+ */
+const recentOpIds = new Set<string>();
+const RECENT_OP_IDS_MAX = 500;
+
+function rememberOpId(opId: string): void {
+  if (recentOpIds.size >= RECENT_OP_IDS_MAX) {
+    const oldest = recentOpIds.values().next().value;
+    if (oldest !== undefined) recentOpIds.delete(oldest);
+  }
+  recentOpIds.add(opId);
+}
+
+/** Tests only — drop the replay guard. */
+export function _resetAppliedOpIdsForTesting(): void {
+  recentOpIds.clear();
+}
+
+export interface ApplyTaskOpResult {
+  applied: boolean;
+  /** Why an op did NOT change the store (or how it was consumed). */
+  reason?: 'replay' | 'stale' | 'missing' | 'blocked' | 'unchanged' | 'created' | 'updated' | 'deleted';
+}
+
+/**
+ * PRIMARY box: apply ONE task op through the normal task-manager APIs, so
+ * plugin push + projection re-export + bus events all fire exactly as they do
+ * for a local edit. Pure logic — NO file I/O, no queue bookkeeping: the caller
+ * owns the transport (the `server.tasks.apply` RPC handler, or the legacy
+ * outbox file loop below).
+ *
+ * Throws only on an UNEXPECTED store failure — the caller decides whether to
+ * retry (keep the queue file) or drop. Every EXPECTED non-application (replay,
+ * stale snapshot, missing row, delete blocked by a live session) comes back as
+ * `{ applied: false, reason }` and means "consume the op, do not retry".
+ */
+export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
+  if (recentOpIds.has(op.opId)) return { applied: false, reason: 'replay' };
+
+  const tm = await import('./task-manager.js');
+
+  if (op.type === 'delete') {
+    try {
+      const { task } = await tm.deleteTask(op.id);
+      const { bus, EventNames } = await import('./event-bus.js');
+      // Notify UI + projection exporter (deleteTask itself is emit-silent).
+      bus.emit(EventNames.TASK_DELETED, { id: task.id, task }, ['web-ui'], { source: 'cloud-outbox' });
+      rememberOpId(op.opId);
+      return { applied: true, reason: 'deleted' };
+    } catch (err) {
+      const msg = String(err);
+      // Already gone (idempotent) or blocked by active sessions (keep the
+      // task, consume the op — a phone delete must not kill a running session).
+      const missing = /No task found/i.test(msg);
+      if (!missing) {
+        log.task.warn('task-op: delete not applied', { id: op.id, err: msg });
+      }
+      rememberOpId(op.opId);
+      return { applied: false, reason: missing ? 'missing' : 'blocked' };
+    }
+  }
+
+  const snapshot = op.task;
+  const existing = await tm.getTask(snapshot.id).catch(() => undefined);
+
+  if (!existing) {
+    // Born on the cloud box. Insert with the SAME id (prevents dup when
+    // the projection round-trips), then recompute source on the primary:
+    // the cloud has no sync plugins, so it always stamps 'local' — the
+    // primary knows whether this project is claimed by a sync plugin.
+    //
+    // SKEW RULE: an op from an old cloud box may carry `category` with an
+    // empty `project`. The task stays in Inbox ('') — the retired category
+    // must NEVER be revived as a project name (that would invent projects
+    // on the primary and, for a claimed name, hand the task to a provider).
+    let snapshotProject = (snapshot.project ?? '').trim();
+    let primarySource = 'local';
+    if (snapshotProject) {
+      try {
+        const ensured = await tm.ensureProject(snapshotProject, 'local');
+        primarySource = ensured.source;
+      } catch (err) {
+        if (!(err instanceof tm.InvalidProjectNameError)) throw err;
+        // The name came off remote JSON we don't control. Rethrowing would keep
+        // the op queued and retry it forever — fall back to Inbox and consume it.
+        log.task.warn('task-op: invalid project name from cloud op — filing in Inbox', {
+          opId: op.opId, project: snapshotProject, err: String(err),
+        });
+        snapshotProject = '';
+      }
+    }
+    const { id, ...rest } = snapshot;
+    const [created] = await tm.addTasksBulk([
+      { ...rest, id, project: snapshotProject, source: primarySource },
+    ]);
+    rememberOpId(op.opId);
+    if (created) {
+      const { bus, EventNames } = await import('./event-bus.js');
+      bus.emit(EventNames.TASK_CREATED, { task: created }, ['web-ui'], { source: 'cloud-outbox' });
+      if (created.source !== 'local') {
+        tm.autoPushIfConfigured(created).catch(() => { /* sync_error stamped inside */ });
+      }
+      log.task.info('task-op: cloud task created on primary', {
+        id: created.id, title: created.title, source: created.source,
+      });
+    }
+    return { applied: true, reason: 'created' };
+  }
+
+  // LWW: never let an older phone snapshot clobber a newer local edit.
+  if (Date.parse(snapshot.updated_at) <= Date.parse(existing.updated_at)
+      && op.type === 'update') {
+    log.task.info('task-op: stale update skipped (local row newer)', {
+      id: snapshot.id, snapshotAt: snapshot.updated_at, localAt: existing.updated_at,
+    });
+    rememberOpId(op.opId);
+    return { applied: false, reason: 'stale' };
+  }
+
+  const patch: Partial<Task> = {};
+  for (const key of UPDATE_WHITELIST) {
+    if (snapshot[key] !== undefined) (patch as Record<string, unknown>)[key] = snapshot[key];
+  }
+  // The snapshot is the FULL task, so an absent date means "cleared on
+  // the phone/cloud" — write it through as the explicit-clear marker,
+  // otherwise a cleared date silently survives on the primary.
+  if (snapshot.due_date === undefined) (patch as Record<string, unknown>).due_date = null;
+  if (snapshot.start_date === undefined) (patch as Record<string, unknown>).start_date = null;
+  if (snapshot.end_date === undefined) (patch as Record<string, unknown>).end_date = null;
+  const { changed } = await tm.updateTaskRaw(existing.id, patch, {
+    emitEvent: true, push: true, source: 'cloud-outbox',
+  });
+  rememberOpId(op.opId);
+  if (changed) log.task.info('task-op: update applied', { id: existing.id, opId: op.opId });
+  return changed ? { applied: true, reason: 'updated' } : { applied: false, reason: 'unchanged' };
+}
+
+/**
+ * LEGACY (git lane) — PRIMARY box: apply pending op FILES from
+ * tasks/outbox/, then delete each consumed file. Called after every git pull.
+ * A thin loop around applyTaskOp(): serial + best effort, one throwing op is
+ * kept on disk for the next cycle without blocking the rest.
+ *
+ * Still load-bearing for two cases and NOT to be removed yet:
+ *   1. A cloud box on pre-Phase-4 code that still writes these files.
+ *   2. The needs_upgrade fallback — a NEW cloud box talking to an OLD primary
+ *      writes the legacy file so the op still lands (see core/task-queue.ts).
+ *
+ * The return value counts CONSUMED files (an op that was correctly skipped as
+ * stale/replay is consumed too — retrying it would never change the outcome).
  */
 export async function applyOutboxOnPrimary(): Promise<number> {
   if (CLOUD_MODE) return 0;
   const pending = await listPendingOps();
   if (pending.length === 0) return 0;
 
-  const tm = await import('./task-manager.js');
   let applied = 0;
-
   for (const { file, op } of pending) {
     try {
-      if (op.type === 'delete') {
-        try {
-          const { task } = await tm.deleteTask(op.id);
-          const { bus, EventNames } = await import('./event-bus.js');
-          // Notify UI + projection exporter (deleteTask itself is emit-silent).
-          bus.emit(EventNames.TASK_DELETED, { id: task.id, task }, ['web-ui'], { source: 'cloud-outbox' });
-        } catch (err) {
-          const msg = String(err);
-          // Already gone (idempotent) or blocked by active sessions (keep the
-          // task, drop the op — a phone delete must not kill a running session).
-          if (!/No task found/i.test(msg)) {
-            log.task.warn('task-outbox: delete op not applied', { id: op.id, err: msg });
-          }
-        }
-      } else {
-        const snapshot = op.task;
-        const existing = await tm.getTask(snapshot.id).catch(() => undefined);
-
-        if (!existing) {
-          // Born on the cloud box. Insert with the SAME id (prevents dup when
-          // the projection round-trips), then recompute source on the primary:
-          // the cloud has no sync plugins, so it always stamps 'local' — the
-          // primary knows whether this project is claimed by a sync plugin.
-          //
-          // SKEW RULE: an op from an old cloud box may carry `category` with an
-          // empty `project`. The task stays in Inbox ('') — the retired category
-          // must NEVER be revived as a project name (that would invent projects
-          // on the primary and, for a claimed name, hand the task to a provider).
-          let snapshotProject = (snapshot.project ?? '').trim();
-          let primarySource = 'local';
-          if (snapshotProject) {
-            try {
-              const ensured = await tm.ensureProject(snapshotProject, 'local');
-              primarySource = ensured.source;
-            } catch (err) {
-              if (!(err instanceof tm.InvalidProjectNameError)) throw err;
-              // The name came off a remote JSON file we don't control. Rethrowing
-              // would keep the op file and retry it EVERY git-pull cycle forever —
-              // fall back to Inbox and consume the op instead.
-              log.task.warn('task-outbox: invalid project name from cloud op — filing in Inbox', {
-                opId: op.opId, project: snapshotProject, err: String(err),
-              });
-              snapshotProject = '';
-            }
-          }
-          const { id, ...rest } = snapshot;
-          const [created] = await tm.addTasksBulk([
-            { ...rest, id, project: snapshotProject, source: primarySource },
-          ]);
-          if (created) {
-            const { bus, EventNames } = await import('./event-bus.js');
-            bus.emit(EventNames.TASK_CREATED, { task: created }, ['web-ui'], { source: 'cloud-outbox' });
-            if (created.source !== 'local') {
-              tm.autoPushIfConfigured(created).catch(() => { /* sync_error stamped inside */ });
-            }
-            log.task.info('task-outbox: cloud task created on primary', {
-              id: created.id, title: created.title, source: created.source,
-            });
-          }
-        } else {
-          // LWW: never let an older phone snapshot clobber a newer local edit.
-          if (Date.parse(snapshot.updated_at) <= Date.parse(existing.updated_at)
-              && op.type === 'update') {
-            log.task.info('task-outbox: stale update skipped (local row newer)', {
-              id: snapshot.id, snapshotAt: snapshot.updated_at, localAt: existing.updated_at,
-            });
-          } else {
-            const patch: Partial<Task> = {};
-            for (const key of UPDATE_WHITELIST) {
-              if (snapshot[key] !== undefined) (patch as Record<string, unknown>)[key] = snapshot[key];
-            }
-            // The snapshot is the FULL task, so an absent date means "cleared on
-            // the phone/cloud" — write it through as the explicit-clear marker,
-            // otherwise a cleared date silently survives on the primary.
-            if (snapshot.due_date === undefined) (patch as Record<string, unknown>).due_date = null;
-            if (snapshot.start_date === undefined) (patch as Record<string, unknown>).start_date = null;
-            if (snapshot.end_date === undefined) (patch as Record<string, unknown>).end_date = null;
-            const { changed, task } = await tm.updateTaskRaw(existing.id, patch, {
-              emitEvent: true, push: true, source: 'cloud-outbox',
-            });
-            if (changed) log.task.info('task-outbox: update applied', { id: existing.id, opId: op.opId });
-            void task;
-          }
-        }
-      }
+      await applyTaskOp(op);
       await fsp.rm(file, { force: true });
       applied++;
     } catch (err) {

@@ -246,6 +246,8 @@ let taskProjectionHandle: { stop: () => void } | null = null
 let foreignWriterWatchdog: { stop: () => void } | null = null
 let sessionProjectionHandle: { stop: () => void } | null = null
 let projectionSelfHealHandle: { stop: () => void } | null = null
+/** Cloud box only: 60s drain of cache/task-queue/ (see core/task-queue.ts). */
+let taskQueueFlushHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
 let claudeSettingsWatcherStop: (() => void) | null = null
 // Pending deferred-markDone timers from the session:status-changed handler.
@@ -1594,24 +1596,36 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const { startSessionAutoContinue } = await import('../core/session-auto-continue.js')
       autoContinueHandle = startSessionAutoContinue()
     } else {
-      // Cloud box: two-way task sync over git (see task-outbox.ts).
-      // Writer half — every local task mutation drops an op file that rides
-      // git-sync to the primary. Reader half (projection import) runs in
-      // reconcileAfterPull() from the auto-commit loop below.
-      const { recordTaskOp, importProjectionOnCloud } = await import('../core/task-outbox.js')
+      // Cloud box: two-way task sync. Writer half (Phase 4) — every local task
+      // mutation is pushed to the primary SYNCHRONOUSLY over the bridge RPC
+      // (`server.tasks.apply`), NOT written into git. A failed RPC falls back to
+      // the non-git queue under cache/task-queue/ (and, only for an old primary
+      // that predates the action, additionally to the legacy git outbox file);
+      // see core/task-queue.ts for the full ladder. This subscriber is the ONE
+      // interception point for every task write — REST routes, batch phase
+      // endpoints and butler tools alike — so routes stay unaware.
+      //
+      // Reader half (projection import) is triggered by the Phase 3 bridge push
+      // (events-v1) and by reconcileAfterPull() from the auto-commit loop below.
+      const { importProjectionOnCloud } = await import('../core/task-outbox.js')
+      const { dispatchTaskOp, startTaskQueueFlush } = await import('../core/task-queue.js')
       bus.subscribe('task-outbox', (event) => {
-        // Ops the outbox itself produced (import/apply) are event-silent, but
-        // guard on source anyway in case that ever changes.
+        // Ops the apply path itself produced (import/apply) are event-silent, but
+        // guard on source anyway in case that ever changes — echoing an applied
+        // op back to the primary would be an infinite round trip.
         if (event.source === 'cloud-outbox') return
         const data = event.data as { task?: import('../core/types.js').Task; id?: string }
         if (event.name === EventNames.TASK_DELETED) {
-          if (data.id) void recordTaskOp({ type: 'delete', id: data.id })
+          if (data.id) void dispatchTaskOp({ type: 'delete', id: data.id })
         } else if (event.name === EventNames.TASK_CREATED) {
-          if (data.task) void recordTaskOp({ type: 'create', task: data.task })
+          if (data.task) void dispatchTaskOp({ type: 'create', task: data.task })
         } else if (data.task) {
-          void recordTaskOp({ type: 'update', task: data.task })
+          void dispatchTaskOp({ type: 'update', task: data.task })
         }
       }, { global: true, interest: ['task:'] })
+      // Drain ops banked during a bridge outage: every 60s (the floor for a
+      // quiet box) plus opportunistically after any successful RPC.
+      taskQueueFlushHandle = startTaskQueueFlush()
       // Seed the local replica from the synced projection shortly after boot.
       setTimeout(() => { void importProjectionOnCloud() }, 5_000)
     }
@@ -3739,6 +3753,10 @@ export async function stopServer(): Promise<void> {
   if (projectionSelfHealHandle) {
     projectionSelfHealHandle.stop()
     projectionSelfHealHandle = null
+  }
+  if (taskQueueFlushHandle) {
+    taskQueueFlushHandle.stop()
+    taskQueueFlushHandle = null
   }
   stopMobileEventsFeed()
   if (autoContinueHandle) {

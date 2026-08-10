@@ -140,6 +140,9 @@ export const HISTORY_CACHE_DIR = path.join(WALNUT_HOME, 'cache', 'history');
 export const PROJECTION_CACHE_DIR = path.join(WALNUT_HOME, 'cache', 'projections');
 /** Transcript-tail cache (NON-git) — same push lane as the projections. */
 export const TRANSCRIPT_CACHE_DIR = path.join(WALNUT_HOME, 'cache', 'transcripts');
+/** Offline task-op queue (NON-git, cloud box only): ops whose `server.tasks.apply`
+ *  bridge RPC failed, flushed on the next op + a 60s sweep. See core/task-queue.ts. */
+export const TASK_QUEUE_DIR = path.join(WALNUT_HOME, 'cache', 'task-queue');
 /** Last-known model catalog per host (from any session's list_models) — feeds pickers before/without a live CLI. */
 export const HOST_MODEL_CATALOG_FILE = path.join(WALNUT_HOME, 'cache', 'host-model-catalogs.json');
 export const HOOK_LOG_FILE = path.join(WALNUT_HOME, 'hook-errors.log');

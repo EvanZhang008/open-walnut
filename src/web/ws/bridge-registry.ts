@@ -48,6 +48,9 @@ interface BridgeConn {
   lastInbound: number
 }
 
+/** The primary box's daemon always registers under this alias (see
+ *  cloud-bridge-config.ts bridgeDeviceName: 'bridge-local' → '__local__'). */
+const PRIMARY_ALIAS = '__local__'
 /** Close code for "replaced by a newer connection from the same host". */
 const CLOSE_REPLACED = 4000
 /** Close code for a hello whose hostAlias doesn't match the token identity. */
@@ -211,6 +214,20 @@ export function setMobileEventHandler(handler: ((kind: unknown, data: unknown) =
 }
 
 /**
+ * Cloud-side "the primary's bridge just (re)connected" hook, fired after each
+ * successful hello for the PRIMARY alias. Same callback shape and rationale as
+ * mobileEventHandler above: this transport module must not reach into core/ or
+ * the route layer. Phase 4's offline task-op queue hangs on it so a banked op
+ * reaches the Mac the moment the link is back instead of waiting out the 60s
+ * sweep. Handlers must be non-throwing and fire-and-forget.
+ */
+let primaryBridgeConnectedHandler: (() => void) | null = null
+
+export function setPrimaryBridgeConnectedHandler(handler: (() => void) | null): void {
+  primaryBridgeConnectedHandler = handler
+}
+
+/**
  * Wire an authenticated /bridge socket. Registration completes when the
  * daemon's hello arrives (carries the hostAlias).
  */
@@ -311,6 +328,18 @@ function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string,
   // hostInterest) — without this, a redial left every open conversation on
   // "offline" until the user backed out and reopened it.
   void reattachInterestedSessions(conn)
+  // Anything that banked work during the outage gets a chance to drain now
+  // (Phase 4's task-op queue). Guarded: a throwing handler must not abort the
+  // registration that just succeeded.
+  if (hostAlias === PRIMARY_ALIAS && primaryBridgeConnectedHandler) {
+    try {
+      primaryBridgeConnectedHandler()
+    } catch (err) {
+      log.ws.warn('bridge: primary-connected handler threw', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
 }
 
 async function reattachInterestedSessions(conn: BridgeConn): Promise<void> {

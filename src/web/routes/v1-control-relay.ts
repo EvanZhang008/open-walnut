@@ -75,10 +75,22 @@ export async function driveControlRelay(
 }
 
 /**
- * Map a failed relay reply onto the frozen v1 error response (needs_upgrade
- * ladder / bridge-down / verbatim error passthrough).
+ * Why a relay reply failed, in the ONE vocabulary every caller branches on.
+ *
+ *   needs_upgrade  — the primary (or its daemon) predates this action. Self-heals
+ *                    on the next primary deploy/reconnect; a caller with a legacy
+ *                    delivery lane should use it (see core/task-queue.ts).
+ *   bridge_offline — daemon reachable but its walnut server isn't; retry later.
+ *   error          — the action ran and failed for a domain reason.
  */
-export function sendRelayReplyError(res: Response, reply: Record<string, unknown>): void {
+export type RelayFailure =
+  | { kind: 'needs_upgrade'; message: string }
+  | { kind: 'bridge_offline'; message: string }
+  | { kind: 'error'; status: number; code: string; message: string }
+
+/** Classify a failed relay reply. Single source of the needs_upgrade ladder —
+ *  shared by the HTTP responder below and the non-HTTP callPrimaryControl(). */
+export function classifyRelayReply(reply: Record<string, unknown>): RelayFailure {
   const reason = String(reply.error ?? 'unknown')
   // Pre-session.control daemon OR a primary server that predates this action —
   // both self-heal on the next primary upgrade/reconnect.
@@ -87,21 +99,73 @@ export function sendRelayReplyError(res: Response, reply: Record<string, unknown
     || reason.includes('not permitted over bridge')
     || reason.startsWith('Unknown control action')
   ) {
-    sendV1Error(res, 400, 'session_control_needs_upgrade',
-      'The primary box predates this mobile action — it upgrades automatically on the next deploy/reconnect')
-    return
+    return {
+      kind: 'needs_upgrade',
+      message: 'The primary box predates this mobile action — it upgrades automatically on the next deploy/reconnect',
+    }
   }
   // "no primary server connected" = daemon alive but its walnut server is
   // down; nothing can answer. Same user remedy as bridge-down.
   if (reason.includes('no primary server connected')) {
-    sendV1Error(res, 503, 'bridge_offline', 'The primary box\'s server is not connected to its daemon')
-    return
+    return { kind: 'bridge_offline', message: 'The primary box\'s server is not connected to its daemon' }
   }
   const errorKind = typeof reply.errorKind === 'string' ? reply.errorKind : 'bad_request'
   // Domain error codes (e.g. terminate's 'cron_owner') ride the relay so the
   // phone sees the same v1 code the local path produces.
   const errorCode = typeof reply.errorCode === 'string' && reply.errorCode ? reply.errorCode : errorKind
-  sendV1Error(res, relayErrorStatus(errorKind), errorCode, reason)
+  return { kind: 'error', status: relayErrorStatus(errorKind), code: errorCode, message: reason }
+}
+
+/**
+ * Map a failed relay reply onto the frozen v1 error response (needs_upgrade
+ * ladder / bridge-down / verbatim error passthrough).
+ */
+export function sendRelayReplyError(res: Response, reply: Record<string, unknown>): void {
+  const failure = classifyRelayReply(reply)
+  if (failure.kind === 'needs_upgrade') {
+    sendV1Error(res, 400, 'session_control_needs_upgrade', failure.message)
+    return
+  }
+  if (failure.kind === 'bridge_offline') {
+    sendV1Error(res, 503, 'bridge_offline', failure.message)
+    return
+  }
+  sendV1Error(res, failure.status, failure.code, failure.message)
+}
+
+/**
+ * Same round trip as driveControlRelay but WITHOUT an HTTP response — for
+ * background callers (no `res` to answer). Never throws: a dead bridge, a
+ * timeout and a domain error all come back as a classified RelayFailure so the
+ * caller can pick its own fallback lane.
+ */
+export async function callPrimaryControl(
+  action: SessionControlAction,
+  sessionId: string,
+  params: Record<string, unknown> | undefined,
+  timeoutMs = CONTROL_RELAY_TIMEOUT_MS,
+): Promise<{ ok: true; result: Record<string, unknown> } | { ok: false; failure: RelayFailure }> {
+  const { bridgeRequest } = await import('../ws/bridge-registry.js')
+  let reply: Record<string, unknown>
+  try {
+    reply = await bridgeRequest(
+      PRIMARY_BRIDGE_ALIAS,
+      'session.control',
+      { action, sessionId, ...(params !== undefined ? { params } : {}) },
+      timeoutMs,
+    )
+  } catch (err) {
+    // BridgeOfflineError (no socket) and a request timeout are the same story
+    // for a background caller: nothing was delivered, retry later.
+    return {
+      ok: false,
+      failure: { kind: 'bridge_offline', message: err instanceof Error ? err.message : String(err) },
+    }
+  }
+  if (reply.ok === true && reply.result && typeof reply.result === 'object') {
+    return { ok: true, result: reply.result as Record<string, unknown> }
+  }
+  return { ok: false, failure: classifyRelayReply(reply) }
 }
 
 /**
