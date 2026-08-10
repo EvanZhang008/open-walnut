@@ -154,12 +154,12 @@ describe('GET /api/stt/status self-heal', () => {
 
 describe('custom vocabulary in config/share/', () => {
   it('moves a pre-2026-08 root stt-vocab.txt on first read', async () => {
-    await fs.writeFile(LEGACY_VOCAB_FILE, '# my words\nWalnut\nZiqi\n', 'utf-8');
+    await fs.writeFile(LEGACY_VOCAB_FILE, '# my words\nWalnut\nMarina\n', 'utf-8');
 
     const res = await request(makeApp()).get('/api/stt/vocab');
 
     expect(res.status).toBe(200);
-    expect(res.body.words).toEqual(['Walnut', 'Ziqi']);
+    expect(res.body.words).toEqual(['Walnut', 'Marina']);
     // A move, not a copy: the root path must stop being a live location.
     await expect(fs.access(STT_VOCAB_FILE)).resolves.toBeUndefined();
     await expect(fs.access(LEGACY_VOCAB_FILE)).rejects.toThrow();
