@@ -85,6 +85,12 @@ struct ComposerBar: View {
                     self.imageNotice = nil
                 }
             }
+            // Preserved voice takes (failed upload / interruption / crash /
+            // view dismissal) — non-modal retry affordance. Audio is never
+            // deleted until it transcribes or the user explicitly discards.
+            if voice.state == .idle, voice.pendingCount > 0 {
+                pendingVoiceRow
+            }
             if voice.state == .recording {
                 recordingRow
             } else {
@@ -95,14 +101,19 @@ struct ComposerBar: View {
         .background(.bar)
         .onAppear {
             voice.onAutoStopText = { text in appendToDraft(text) }
+            // Crash/relaunch recovery: takes preserved by an earlier run (or
+            // by another composer instance) surface here as the retry row.
+            voice.refreshPending()
         }
         .onDisappear {
             // The recorder is registered app-wide with LifecycleHub but its UI
             // lives in THIS view. Navigating away mid-recording (tab switch,
             // pop, sheet dismiss) hid the recording row while the mic stayed
             // hot — an invisible live recording burning battery and privacy
-            // indicator with no way to stop it. View gone = recording gone.
-            if voice.state == .recording { voice.cancel() }
+            // indicator with no way to stop it. View gone = mic off, but the
+            // audio is PRESERVED (never silently deleted — the field incident)
+            // and resurfaces as the retry row when the composer returns.
+            if voice.state == .recording { voice.preserveAndStop(reason: "view-dismissed") }
         }
         .onChange(of: pickerItems) { _, items in
             guard !items.isEmpty else { return }
@@ -220,6 +231,46 @@ struct ComposerBar: View {
             .padding(.horizontal, 12)
             .padding(.top, 8)
         }
+    }
+
+    /// Saved-but-untranscribed recordings: retry / discard, styled like the
+    /// notice rows (non-modal, dismiss-optional — matches the failed-send
+    /// bubble's Retry pattern).
+    private var pendingVoiceRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "waveform.badge.exclamationmark")
+                .font(.caption2)
+            Text(voice.pendingCount == 1
+                 ? "1 recording saved — transcription pending"
+                 : "\(voice.pendingCount) recordings saved — transcription pending")
+                .font(.caption)
+                .lineLimit(2)
+                // Row marker lives on the TEXT, not the container — a
+                // container-level identifier flattens onto every child in the
+                // accessibility tree and clobbers the buttons' own ids
+                // (Maestro then can't find chat.voiceRetry).
+                .accessibilityIdentifier("chat.voicePendingRow")
+            Spacer(minLength: 0)
+            Button("Retry") {
+                Task {
+                    if let text = await voice.retryPending() {
+                        appendToDraft(text)
+                    }
+                }
+            }
+            .font(.caption.weight(.semibold))
+            .accessibilityIdentifier("chat.voiceRetry")
+            Button {
+                voice.discardPending()
+            } label: {
+                Image(systemName: "trash")
+                    .font(.caption2)
+            }
+            .accessibilityIdentifier("chat.voiceDiscardPending")
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
     }
 
     /// Recording in progress: cancel × — pulsing dot + elapsed — stop ✓.

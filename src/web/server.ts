@@ -98,7 +98,7 @@ import { taskV1Router } from './routes/task-v1.js'
 import { butlerV1Router } from './routes/butler-v1.js'
 import { searchMemoryV1Router } from './routes/search-memory-v1.js'
 import { eventsV1Router, startMobileEventsFeed, stopMobileEventsFeed } from './routes/events-v1.js'
-import { sttV1Router } from './routes/stt-v1.js'
+import { sttV1Router, sttPayloadTooLargeHandler } from './routes/stt-v1.js'
 import { mediaV1Router } from './routes/media-v1.js'
 import { routinesV1Router } from './routes/routines-v1.js'
 import { projectsV1Router } from './routes/projects-v1.js'
@@ -671,6 +671,18 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   if (process.env.WALNUT_HTTP_COMPRESS !== '0') {
     app.use(compression({ threshold: 1024 }))
   }
+  // STT uploads get a higher body cap BEFORE the global parser (express.json
+  // skips an already-parsed body, so first mount wins): voice recordings have
+  // no duration limit (iOS field data-loss incident 2026-08-09) and 16kHz AAC
+  // is ~14.4MB base64/hour — the 15mb default 413'd at ~62 minutes, in the
+  // wrong error shape for the v1 contract. 35mb ≈ the routes' own 25MB-base64
+  // audio cap (~100min) plus JSON envelope headroom; past that the routes
+  // return a contract-shaped 413 themselves.
+  app.use(['/api/v1/stt/transcribe', '/api/stt/transcribe'], express.json({ limit: '35mb' }))
+  // Overflow (>35mb) → contract-shaped 413 (the phone keys preserve/retry UX
+  // off error.code). Must sit at app level right here: the parser above
+  // raises before any router runs, and Express skips routers in error mode.
+  app.use(['/api/v1/stt/transcribe', '/api/stt/transcribe'], sttPayloadTooLargeHandler)
   app.use(express.json({ limit: '15mb' }))
   // Default API responses to no-store so the browser HTTP cache never
   // revalidates/synthesizes them (see the etag note above — same incident).

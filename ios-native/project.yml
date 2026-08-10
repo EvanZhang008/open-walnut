@@ -29,7 +29,7 @@ targets:
       properties:
         CFBundleDisplayName: Walnut
         CFBundleShortVersionString: "1.0.0"
-        CFBundleVersion: "41"
+        CFBundleVersion: "42"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -44,6 +44,11 @@ targets:
         # Voice input: the composer mic button records speech and transcribes
         # it to text on your Walnut server.
         NSMicrophoneUsageDescription: Walnut uses the microphone for voice input — speech is transcribed to text by your own Walnut server.
+        # Keep a live voice recording running across screen lock / app
+        # background. Without this the audio session dies the moment the
+        # phone auto-locks mid-dictation (field data-loss incident 2026-08-09).
+        UIBackgroundModes:
+          - audio
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.openwalnut.ios
