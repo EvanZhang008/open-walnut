@@ -293,6 +293,11 @@ cloud-setup-job.json
 # engine, SSH hosts and provider credentials, which differ per box. Keep in sync
 # with CRITICAL_IGNORES; a fresh install missing these is how a remote deletion
 # reached ~/.open-walnut/config.yaml twice (2026-07-25 / 07-26).
+#
+# EXACT FILENAMES on purpose — do NOT broaden to config* or config/. Its sibling
+# config/share/ (ui-prefs.json, stt-vocab.txt) is the SYNCED half of the config:
+# cross-device user preferences that are supposed to be tracked. A wider pattern
+# here would silently make them device-local again.
 config.yaml
 config.yaml.bak
 
@@ -379,7 +384,10 @@ recording-state.json
 /.last-compaction
 
 # UI state (open panels, widths, last-viewed ids). Rewritten constantly; was
-# worth ~45 commits/day on its own.
+# worth ~45 commits/day on its own. ROOT-ANCHORED: the live copy moved to
+# config/share/ui-prefs.json, which IS synced (cross-device layout), and this
+# rule must not follow it there — it only silences the pre-2026-08 root file that
+# older installs still have until the migration moves it.
 /ui-prefs.json
 
 # Prebuilt dtach binary (pre-1a location; now tmp/bin/). A platform-specific

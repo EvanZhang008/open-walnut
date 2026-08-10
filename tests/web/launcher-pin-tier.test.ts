@@ -63,7 +63,7 @@ describe('session launcher pin tier', () => {
   it('keeps the rest of the launcher defaults intact', () => {
     const meta = freshLauncherMeta();
     expect(meta.starred).toBe(true);
-    expect(meta.needs_attention).toBe(false);
+    expect(meta.unread).toBe(false);
     expect(meta.priority).toBe('none');
     expect(meta.model).toBeUndefined();
     expect(meta.engine).toBeUndefined();
@@ -94,6 +94,13 @@ describe('session launcher pin tier', () => {
     expect(syncable(LAUNCHER_PIN_TIER_KEY)).toBe(true);
     rememberPinTier('wait');
     expect(localStorage.getItem(LAUNCHER_PIN_TIER_KEY)).toBe('wait');
+  });
+
+  it('does NOT sync keys whose name embeds an absolute path', () => {
+    // Same predicate, opposite direction (2026-08 config/share move): ui-prefs
+    // is git-synced now, so a key carrying THIS box's paths must stay local.
+    // Mirrors MACHINE_LOCAL_PREFIXES in src/web/routes/ui-prefs.ts.
+    expect(syncable('open-walnut-file-explorer-selected:local:/Users/me/repo')).toBe(false);
   });
 
   it('falls back to the default when the stored value is garbage', () => {

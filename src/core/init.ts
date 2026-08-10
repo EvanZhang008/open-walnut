@@ -15,6 +15,7 @@ import {
   TIMELINE_DIR,
   RECORDINGS_DIR,
   TMP_DIR,
+  CONFIG_SHARE_DIR,
   COMMANDS_DIR,
   GLOBAL_SKILLS_DIR,
   SESSION_STREAMS_DIR,
@@ -76,6 +77,10 @@ export async function initDirectories(): Promise<void> {
   // Created before anything that writes into it (RECORDINGS_DIR lives inside).
   await ensureDir(TMP_DIR);
   await ensureDir(RECORDINGS_DIR);
+  // config/share/ is tmp/'s opposite: cross-device user preferences, tracked in
+  // git on purpose (ui-prefs.json, stt-vocab.txt). Machine-local config
+  // (config.yaml — credentials, hosts, binary paths) stays at the root, ignored.
+  await ensureDir(CONFIG_SHARE_DIR);
   await ensureDir(COMMANDS_DIR);
   await ensureDir(GLOBAL_SKILLS_DIR);
   await ensureDir(SESSION_STREAMS_DIR);

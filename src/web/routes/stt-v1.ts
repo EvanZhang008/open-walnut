@@ -120,9 +120,10 @@ sttV1Router.post('/stt/transcribe', async (req: Request, res: Response, next: Ne
 })
 
 // ── Custom vocabulary (Wave 3) ───────────────────────────────────────────────
-// Class A: the vocab file lives in the git-synced data dir, so each box serves
-// its own copy. The internal route's absolute `path` field is dropped — a host
-// filesystem path has no business on a paired device.
+// Class A: the vocab file lives in config/share/, which IS synced, so every box
+// converges on the same word list and each serves it locally. The internal
+// route's `path` field is still dropped — where the file sits is the serving
+// box's business, not a paired device's.
 
 // GET /api/v1/stt/vocab — the custom vocabulary word list.
 sttV1Router.get('/stt/vocab', async (_req: Request, res: Response, next: NextFunction) => {
@@ -149,3 +150,20 @@ sttV1Router.post('/stt/vocab', async (req: Request, res: Response, next: NextFun
     next(err)
   }
 })
+
+// Body-parser overflow (PayloadTooLargeError) must come back in the frozen
+// v1 error shape — the phone keys retry/preserve UX off `error.code`, and the
+// generic errorHandler's `{ error: "request entity too large" }` isn't it.
+// Mounted at APP level (server.ts) scoped to /api/v1/stt/transcribe: the
+// overflow fires in the app-level body parser BEFORE this router is entered,
+// and Express skips routers (3-arg layers) entirely while in error mode, so
+// a router-internal error handler would never see it.
+export function sttPayloadTooLargeHandler(
+  err: Error, _req: Request, res: Response, next: NextFunction,
+): void {
+  if ((err as { type?: string }).type === 'entity.too.large') {
+    sendError(res, 413, 'too_large', 'Audio too large for one request (max 35MB body)')
+    return
+  }
+  next(err)
+}

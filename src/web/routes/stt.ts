@@ -3,11 +3,11 @@
  */
 
 import express, { Router, type Request, type Response, type NextFunction } from 'express';
-import { unlink, stat, readFile, appendFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
-import { WALNUT_HOME } from '../../constants.js';
+import { unlink, stat, readFile, appendFile, rm, mkdir } from 'node:fs/promises';
+import { dirname, join, relative } from 'node:path';
+import { WALNUT_HOME, STT_VOCAB_FILE } from '../../constants.js';
 import { getConfig, updateConfig } from '../../core/config-manager.js';
-import { transcribeAudio, createEngine, getOrCreateEngine, type SttEngine, type SttResult } from '../../core/stt/index.js';
+import { transcribeAudio, createEngine, getOrCreateEngine, ensureSttVocabMigrated, type SttEngine, type SttResult } from '../../core/stt/index.js';
 import { saveRecordingAudio, writeRecordingResult, listRecordings, readRecordingAudio } from '../../core/stt/recordings.js';
 import { createWhisperCppEngine } from '../../core/stt/engine-whisper-cpp.js';
 import { detectSystem } from '../../core/stt/detect.js';
@@ -169,16 +169,28 @@ sttRouter.post('/recordings/:id/transcribe', express.json(), async (req: Request
 });
 
 // ── Vocabulary management ──
-// Derived from WALNUT_HOME (NOT a hardcoded homedir join) so ephemeral
-// servers and tests with a redirected data dir never touch the real file.
-const VOCAB_PATH = join(WALNUT_HOME, 'stt-vocab.txt');
+// STT_VOCAB_FILE (config/share/stt-vocab.txt) is derived from WALNUT_HOME, NOT a
+// hardcoded homedir join, so ephemeral servers and tests with a redirected data
+// dir never touch the real file. The one-time move out of the WALNUT_HOME root
+// lives in core/stt/index.ts (ensureSttVocabMigrated) — the same guard the
+// transcription path uses, so whichever runs first does the move.
+
+/**
+ * The vocab file path as shown to a client: RELATIVE to WALNUT_HOME
+ * (`config/share/stt-vocab.txt`). Deliberately not absolute — the UI only needs
+ * to tell the user where the list lives, and a mobile/cloud client displaying
+ * the Mac's `/Users/<name>/…` prefix is both wrong for it and needless
+ * filesystem-layout disclosure over the API.
+ */
+const VOCAB_DISPLAY_PATH = relative(WALNUT_HOME, STT_VOCAB_FILE);
 
 /** Read the custom vocabulary file. Shared by /api/stt/vocab and /api/v1. */
 export async function readSttVocab(): Promise<{ words: string[]; path: string }> {
+  await ensureSttVocabMigrated();
   let raw = '';
-  try { raw = await readFile(VOCAB_PATH, 'utf-8'); } catch { /* file doesn't exist yet */ }
+  try { raw = await readFile(STT_VOCAB_FILE, 'utf-8'); } catch { /* file doesn't exist yet */ }
   const words = raw.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
-  return { words, path: VOCAB_PATH };
+  return { words, path: VOCAB_DISPLAY_PATH };
 }
 
 /**
@@ -187,10 +199,11 @@ export async function readSttVocab(): Promise<{ words: string[]; path: string }>
  */
 export async function addSttVocabWord(word: string): Promise<{ added: boolean; word: string; reason?: string }> {
   const trimmed = word.trim();
+  await ensureSttVocabMigrated();
 
   // Read existing file
   let raw = '';
-  try { raw = await readFile(VOCAB_PATH, 'utf-8'); } catch { /* file doesn't exist yet */ }
+  try { raw = await readFile(STT_VOCAB_FILE, 'utf-8'); } catch { /* file doesn't exist yet */ }
 
   // Check for duplicate
   const existing = raw.split('\n').map(l => l.trim().toLowerCase());
@@ -198,9 +211,11 @@ export async function addSttVocabWord(word: string): Promise<{ added: boolean; w
     return { added: false, word: trimmed, reason: 'already exists' };
   }
 
-  // Append (ensure newline before)
+  // Append (ensure newline before). appendFile won't create config/share/ for
+  // us, and on a box that never had a vocab file it may not exist yet.
+  await mkdir(dirname(STT_VOCAB_FILE), { recursive: true });
   const prefix = raw.endsWith('\n') || raw === '' ? '' : '\n';
-  await appendFile(VOCAB_PATH, `${prefix}${trimmed}\n`);
+  await appendFile(STT_VOCAB_FILE, `${prefix}${trimmed}\n`);
   log.stt.info(`Added vocab word: "${trimmed}"`);
   return { added: true, word: trimmed };
 }

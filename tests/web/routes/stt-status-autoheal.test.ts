@@ -1,4 +1,8 @@
 /**
+ * STT route behaviors that guard past incidents:
+ *  - GET /api/stt/status self-healing a config that lost its `stt:` section;
+ *  - the custom vocabulary file's one-time move into config/share/ (2026-08).
+ *
  * GET /api/stt/status — self-heal when `stt:` is missing from config.
  *
  * 2026-07-25 incident: a git-sync merge carried a remote deletion of a
@@ -23,10 +27,14 @@ vi.mock('../../../src/core/stt/detect.js', () => ({
 import express from 'express';
 import request from 'supertest';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import yaml from 'js-yaml';
 import { sttRouter } from '../../../src/web/routes/stt.js';
-import { CONFIG_FILE, WALNUT_HOME } from '../../../src/constants.js';
+import { CONFIG_FILE, WALNUT_HOME, STT_VOCAB_FILE } from '../../../src/constants.js';
 import { _resetWriteLockForTest } from '../../../src/core/config-manager.js';
+import { _resetSttVocabMigrationForTest } from '../../../src/core/stt/index.js';
+
+const LEGACY_VOCAB_FILE = path.join(WALNUT_HOME, 'stt-vocab.txt');
 
 const MODEL = '/models/ggml-large-v3-turbo.bin';
 
@@ -64,6 +72,9 @@ async function readConfig(): Promise<Record<string, any>> {
 beforeEach(async () => {
   detectSystem.mockReset();
   _resetWriteLockForTest();
+  // The legacy→config/share vocab move is memoized per process; each test starts
+  // from a fresh WALNUT_HOME, so it has to be allowed to run again.
+  _resetSttVocabMigrationForTest();
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   await fs.mkdir(WALNUT_HOME, { recursive: true });
 });
@@ -138,5 +149,45 @@ describe('GET /api/stt/status self-heal', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.engine).toBeNull();
+  });
+});
+
+describe('custom vocabulary in config/share/', () => {
+  it('moves a pre-2026-08 root stt-vocab.txt on first read', async () => {
+    await fs.writeFile(LEGACY_VOCAB_FILE, '# my words\nWalnut\nZiqi\n', 'utf-8');
+
+    const res = await request(makeApp()).get('/api/stt/vocab');
+
+    expect(res.status).toBe(200);
+    expect(res.body.words).toEqual(['Walnut', 'Ziqi']);
+    // A move, not a copy: the root path must stop being a live location.
+    await expect(fs.access(STT_VOCAB_FILE)).resolves.toBeUndefined();
+    await expect(fs.access(LEGACY_VOCAB_FILE)).rejects.toThrow();
+  });
+
+  it('reports the path RELATIVE to the data dir, never the host filesystem path', async () => {
+    const res = await request(makeApp()).get('/api/stt/vocab');
+    // A paired phone / cloud box has no use for the Mac's /Users/... prefix.
+    expect(res.body.path).toBe(path.join('config', 'share', 'stt-vocab.txt'));
+    expect(path.isAbsolute(res.body.path)).toBe(false);
+  });
+
+  it('creates config/share/ when adding the first word (no vocab file yet)', async () => {
+    const res = await request(makeApp()).post('/api/stt/vocab').send({ word: 'Walnut' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ added: true, word: 'Walnut' });
+    expect(await fs.readFile(STT_VOCAB_FILE, 'utf-8')).toBe('Walnut\n');
+  });
+
+  it('leaves an already-migrated file alone (new location wins)', async () => {
+    await fs.mkdir(path.dirname(STT_VOCAB_FILE), { recursive: true });
+    await fs.writeFile(STT_VOCAB_FILE, 'Migrated\n', 'utf-8');
+    await fs.writeFile(LEGACY_VOCAB_FILE, 'Stale\n', 'utf-8');
+
+    const res = await request(makeApp()).get('/api/stt/vocab');
+
+    expect(res.body.words).toEqual(['Migrated']);
+    await expect(fs.access(LEGACY_VOCAB_FILE)).resolves.toBeUndefined();
   });
 });

@@ -3,9 +3,10 @@
  *
  * All layout preferences (section collapse flags, splitter ratios, dragged
  * heights, panel widths) already live in localStorage under stable keys.
- * This module mirrors those keys to the server (WALNUT_HOME/ui-prefs.json)
- * so the layout survives new browsers, other devices, and cleared browser
- * data — without touching any of the ~30 existing call sites:
+ * This module mirrors those keys to the server
+ * (WALNUT_HOME/config/share/ui-prefs.json, which syncs across devices) so the
+ * layout survives new browsers, other devices, and cleared browser data —
+ * without touching any of the ~30 existing call sites:
  *
  *  - boot: GET /api/ui-prefs merges into localStorage BEFORE the app renders
  *    (components read these keys in useState initializers). The merge is
@@ -17,8 +18,9 @@
  *    keepalive flush on pagehide so a quick reload can't lose the last change.
  *
  * Only layout/preference keys sync (open-walnut-* / walnut-todo-*). Device
- * tokens (walnut.deviceToken), chat drafts (draft:*), and per-session diff
- * review state (open-walnut-diff-review:*) never leave the browser.
+ * tokens (walnut.deviceToken), chat drafts (draft:*), per-session diff review
+ * state (open-walnut-diff-review:*), and machine-specific keys that embed an
+ * absolute path (open-walnut-file-explorer-selected:*) never leave the browser.
  */
 
 import { apiGet, apiPut } from '@/api/client';
@@ -26,7 +28,16 @@ import { getDeviceToken } from '@/api/device-token';
 import { SKIP_PREFS_MERGE_FLAG } from './crash-recovery';
 
 const INCLUDE_PREFIXES = ['open-walnut-', 'walnut-todo-'];
-const EXCLUDE_PREFIXES = ['open-walnut-diff-review:'];
+/**
+ * Never mirrored. Two different reasons:
+ *  - `open-walnut-diff-review:` — a per-session blob, too big and too transient.
+ *  - `open-walnut-file-explorer-selected:` — the KEY embeds an absolute
+ *    filesystem path (`…:local:/Users/me/repo`), so the entry means nothing on
+ *    another device. Since ui-prefs.json now lives in the SYNCED
+ *    config/share/ (git-tracked), such a key would export this box's paths to
+ *    every other one.
+ */
+const EXCLUDE_PREFIXES = ['open-walnut-diff-review:', 'open-walnut-file-explorer-selected:'];
 /** Local write timestamps per key — lets boot-merge decide who's newer. */
 const META_KEY = 'open-walnut-ui-prefs-sync-meta';
 const FLUSH_DEBOUNCE_MS = 800;

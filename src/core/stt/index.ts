@@ -4,9 +4,10 @@
  * Factory function creates the appropriate engine based on config.
  */
 
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { WALNUT_HOME } from '../../constants.js';
+import fs from 'node:fs';
+import { readFile, rename, copyFile, rm, mkdir } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { WALNUT_HOME, STT_VOCAB_FILE } from '../../constants.js';
 import type { Config } from '../types.js';
 import type { SttEngine, SttRequest, SttResult } from './types.js';
 import { resolveSecret } from '../../agent/providers/secret.js';
@@ -101,15 +102,63 @@ export function getOrCreateEngine(config: Config): SttEngine | null {
 }
 
 // ── Vocabulary file ──
-// <data dir>/stt-vocab.txt — one word per line, # comments.
+// config/share/stt-vocab.txt — one word per line, # comments.
 // Read on each transcription so edits take effect immediately.
-// Derived from WALNUT_HOME (NOT a hardcoded homedir join) so ephemeral
-// servers and tests with a redirected data dir never touch the real file.
-const VOCAB_PATH = join(WALNUT_HOME, 'stt-vocab.txt');
+// STT_VOCAB_FILE is derived from WALNUT_HOME (NOT a hardcoded homedir join), so
+// ephemeral servers and tests with a redirected data dir never touch the real
+// file. It lives under config/share/ because a user's proper nouns are the same
+// on every device — see the constant's doc comment.
+
+/** Pre-2026-08 location (WALNUT_HOME root, before config/share/ existed). */
+const LEGACY_VOCAB_PATH = join(WALNUT_HOME, 'stt-vocab.txt');
+
+let vocabMigration: Promise<void> | null = null;
+
+/**
+ * One-time move of the root stt-vocab.txt into config/share/. A plain move —
+ * unlike ui-prefs, every line here is portable.
+ *
+ * Same shape as migrateLegacyMemoryFile() in core/init.ts: only when the old
+ * path exists AND the new one doesn't, memoized per process, never throws (a
+ * failed move degrades to "no custom vocabulary this transcription", never to a
+ * failed transcription). Awaited from the reader rather than run at import time
+ * so a test with a redirected WALNUT_HOME still gets its own pass.
+ */
+async function migrateLegacyVocab(): Promise<void> {
+  try {
+    if (!fs.existsSync(LEGACY_VOCAB_PATH) || fs.existsSync(STT_VOCAB_FILE)) return;
+    await mkdir(dirname(STT_VOCAB_FILE), { recursive: true });
+    try {
+      await rename(LEGACY_VOCAB_PATH, STT_VOCAB_FILE);
+    } catch {
+      // EXDEV (separate filesystems) — copy, then drop the original only once
+      // the copy landed.
+      await copyFile(LEGACY_VOCAB_PATH, STT_VOCAB_FILE);
+      await rm(LEGACY_VOCAB_PATH, { force: true });
+    }
+    log.stt.info('Migrated stt-vocab.txt into config/share/');
+  } catch (err) {
+    log.stt.warn('stt-vocab migration into config/share/ failed (retried on next access)', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/** Await before the first read/write of the vocab file. Runs at most once per process. */
+export function ensureSttVocabMigrated(): Promise<void> {
+  vocabMigration ??= migrateLegacyVocab();
+  return vocabMigration;
+}
+
+/** Test hook: forget the memoized migration so a fresh WALNUT_HOME re-runs it. */
+export function _resetSttVocabMigrationForTest(): void {
+  vocabMigration = null;
+}
 
 async function loadVocabPrompt(): Promise<string> {
   try {
-    const raw = await readFile(VOCAB_PATH, 'utf-8');
+    await ensureSttVocabMigrated();
+    const raw = await readFile(STT_VOCAB_FILE, 'utf-8');
     const words = raw
       .split('\n')
       .map(l => l.trim())

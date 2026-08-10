@@ -318,6 +318,35 @@ export function workingMemoryFile(agentId: string, conversationId: string): stri
 }
 export const TIMELINE_DIR = path.join(WALNUT_HOME, 'timeline');
 /**
+ * Cross-device user preferences — the SYNCED half of Walnut's configuration.
+ *
+ * Data-temperature rule: a preference the same human wants on every box is WARM
+ * data and belongs in git (low write rate, real merge value); anything that
+ * describes THIS machine (credentials, ssh hosts, binary paths, absolute file
+ * paths) is COLD and stays ignored. config.yaml is cold as a whole today, which
+ * is why the shareable settings inside it are still stranded (see follow-up:
+ * splitting it into config/share/settings.yaml).
+ *
+ * Deliberately NOT gitignored — that is the whole point of the directory. The
+ * data-repo .gitignore's `config.yaml` / `config.yaml.bak` rules are FILENAME
+ * patterns, so they can never catch anything under here, and `/ui-prefs.json`
+ * is root-anchored for the same reason.
+ */
+export const CONFIG_SHARE_DIR = path.join(WALNUT_HOME, 'config', 'share');
+/**
+ * Browser layout state mirrored server-side (src/web/routes/ui-prefs.ts):
+ * collapse flags, splitter ratios, panel widths. Shared so a second browser or
+ * a second device opens the UI already laid out. Machine-specific entries
+ * (`open-walnut-file-explorer-selected:*`, whose key embeds an absolute path)
+ * are filtered out by the allowlist instead of being synced as noise.
+ */
+export const UI_PREFS_FILE = path.join(CONFIG_SHARE_DIR, 'ui-prefs.json');
+/**
+ * Custom STT vocabulary — one word per line, `#` comments. Shared: the proper
+ * nouns a user needs transcribed correctly are the same on every box.
+ */
+export const STT_VOCAB_FILE = path.join(CONFIG_SHARE_DIR, 'stt-vocab.txt');
+/**
  * The ONE place app-generated scratch may live. Gitignored (`tmp/` is in the
  * .gitignore template AND in EXTRA_IGNORE_PATTERNS, so pre-existing installs
  * self-heal), so nothing written here can ever reach the sync history.
