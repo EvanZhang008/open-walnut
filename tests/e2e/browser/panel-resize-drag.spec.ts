@@ -35,14 +35,10 @@ async function openSessionPanel(page: Page): Promise<Locator> {
   await expect(task).toBeVisible()
   await task.getByRole('button', { name: 'More actions' }).click()
   // The kebab's session entry is the session-status row, whose LABEL depends on
-  // the task's live phase ("Session idle" / "Needs your attention" / "AI is
-  // working..." / "Session error"). Match any of them: a phase drift must not
-  // turn this drag regression test into a false failure about menu wording.
-  await page.locator('.task-kebab-menu:visible')
-    .locator('.task-kebab-item')
-    .filter({ hasText: /Session idle|Needs your attention|AI is working|Session error/ })
-    .first()
-    .click()
+  // live state ("Session idle" / "AI is working…" / "Session error" / "Unread —
+  // open to mark read"). Target it POSITIONALLY: enumerating labels missed the
+  // unread one, which turned this drag regression test into a menu-wording failure.
+  await page.locator('.task-kebab-menu:visible').locator('.task-kebab-item').first().click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
   return panel

@@ -72,6 +72,130 @@ describe('selected file memory (per host + root)', () => {
   });
 });
 
+describe('scope normalization (the 2026-08-09 root cause)', () => {
+  it('a trailing slash is the SAME scope — /repo and /repo/ must not split the memory', async () => {
+    const { saveSelectedFile, loadSelectedFile } = await load();
+    saveSelectedFile(undefined, '/repo/', '/repo/a.md');
+    expect(loadSelectedFile(undefined, '/repo')).toBe('/repo/a.md');
+  });
+
+  it('THE BUG: two entry points keyed by tree root never met; one scope fixes it', async () => {
+    const { saveSelectedFile, loadSelectedFile } = await load();
+    // What used to happen: the chat file-path click rooted the explorer at the
+    // clicked file's PARENT dir and saved under that; the Files chip rooted at the
+    // session cwd and read a different key → empty "Select a file to preview".
+    const sessionCwd = '/repo';
+    const clickRoot = '/repo/src/web';
+    saveSelectedFile(undefined, clickRoot, '/repo/src/web/App.tsx');
+    expect(loadSelectedFile(undefined, sessionCwd)).toBeNull(); // the old, broken keying
+    // With both callers passing the session cwd as the SCOPE, the chip finds it.
+    saveSelectedFile(undefined, sessionCwd, '/repo/src/web/App.tsx');
+    expect(loadSelectedFile(undefined, sessionCwd)).toBe('/repo/src/web/App.tsx');
+  });
+});
+
+describe('back/forward history (browser semantics)', () => {
+  it('pushes visited files in order and points at the newest', async () => {
+    const { pushFileHistory } = await load();
+    let h = { entries: [] as string[], index: -1 };
+    h = pushFileHistory(h, '/repo/a.md');
+    h = pushFileHistory(h, '/repo/b.md');
+    expect(h).toEqual({ entries: ['/repo/a.md', '/repo/b.md'], index: 1 });
+  });
+
+  it('re-opening the file already shown is a no-op (no duplicate stack entries)', async () => {
+    const { pushFileHistory } = await load();
+    const h = pushFileHistory({ entries: ['/repo/a.md'], index: 0 }, '/repo/a.md');
+    expect(h).toEqual({ entries: ['/repo/a.md'], index: 0 });
+  });
+
+  it('re-visiting an EARLIER file still pushes (browsers keep repeat visits)', async () => {
+    const { pushFileHistory } = await load();
+    const h = pushFileHistory({ entries: ['/repo/a.md', '/repo/b.md'], index: 1 }, '/repo/a.md');
+    expect(h).toEqual({ entries: ['/repo/a.md', '/repo/b.md', '/repo/a.md'], index: 2 });
+  });
+
+  it('navigating after Back truncates the forward tail — that future is gone', async () => {
+    const { pushFileHistory } = await load();
+    // a → b → c, then Back twice (index 0), then open d.
+    const h = pushFileHistory({ entries: ['/a', '/b', '/c'], index: 0 }, '/d');
+    expect(h).toEqual({ entries: ['/a', '/d'], index: 1 });
+  });
+
+  it('caps the stack, dropping oldest — the index follows the shift', async () => {
+    const { pushFileHistory, HISTORY_MAX_ENTRIES } = await load();
+    let h = { entries: [] as string[], index: -1 };
+    for (let i = 0; i < HISTORY_MAX_ENTRIES + 10; i++) h = pushFileHistory(h, `/f${i}.md`);
+    expect(h.entries.length).toBe(HISTORY_MAX_ENTRIES);
+    expect(h.index).toBe(HISTORY_MAX_ENTRIES - 1);
+    expect(h.entries[0]).toBe('/f10.md'); // the first 10 were evicted
+    expect(h.entries[h.index]).toBe(`/f${HISTORY_MAX_ENTRIES + 9}.md`);
+  });
+
+  it('round-trips through storage, keyed per host + scope', async () => {
+    const { saveFileHistory, loadFileHistory } = await load();
+    saveFileHistory(undefined, '/repo', { entries: ['/repo/a', '/repo/b'], index: 0 });
+    expect(loadFileHistory(undefined, '/repo')).toEqual({ entries: ['/repo/a', '/repo/b'], index: 0 });
+    expect(loadFileHistory('devbox', '/repo').entries).toEqual([]);
+    expect(loadFileHistory(undefined, '/other').entries).toEqual([]);
+  });
+
+  it('an empty stack clears storage instead of persisting a husk', async () => {
+    const { saveFileHistory } = await load();
+    saveFileHistory(undefined, '/repo', { entries: ['/a'], index: 0 });
+    saveFileHistory(undefined, '/repo', { entries: [], index: -1 });
+    expect(storage.getItem('open-walnut-file-explorer-history:local:/repo')).toBeNull();
+  });
+
+  it('a stored index out of range is clamped, never stranded on a hole', async () => {
+    const { loadFileHistory } = await load();
+    storage.setItem('open-walnut-file-explorer-history:local:/repo', JSON.stringify({ entries: ['/a', '/b'], index: 9 }));
+    expect(loadFileHistory(undefined, '/repo').index).toBe(1);
+    storage.setItem('open-walnut-file-explorer-history:local:/repo', JSON.stringify({ entries: ['/a', '/b'], index: -5 }));
+    expect(loadFileHistory(undefined, '/repo').index).toBe(0);
+  });
+
+  it('corrupt / non-string entries degrade to no history (buttons stay disabled)', async () => {
+    const { loadFileHistory } = await load();
+    for (const bad of ['{not json', '[1,2]', 'null', '{"entries":"nope"}', '{"entries":[]}']) {
+      storage.setItem('open-walnut-file-explorer-history:local:/repo', bad);
+      expect(loadFileHistory(undefined, '/repo')).toEqual({ entries: [], index: -1 });
+    }
+    storage.setItem('open-walnut-file-explorer-history:local:/repo', JSON.stringify({ entries: ['/a', 5, null, '/b'], index: 3 }));
+    expect(loadFileHistory(undefined, '/repo').entries).toEqual(['/a', '/b']);
+  });
+
+  it('a deleted file leaves the stack — Back must not land on a dead file', async () => {
+    const { removeFromFileHistory } = await load();
+    // Deleting the CURRENT entry lands on its predecessor.
+    expect(removeFromFileHistory({ entries: ['/a', '/b', '/c'], index: 1 }, '/b'))
+      .toEqual({ entries: ['/a', '/c'], index: 0 });
+    // Deleting an earlier entry keeps you on the same file (index shifts left).
+    expect(removeFromFileHistory({ entries: ['/a', '/b', '/c'], index: 2 }, '/a'))
+      .toEqual({ entries: ['/b', '/c'], index: 1 });
+    // Every occurrence goes, not just the first.
+    expect(removeFromFileHistory({ entries: ['/a', '/b', '/a'], index: 2 }, '/a'))
+      .toEqual({ entries: ['/b'], index: 0 });
+    // Removing the only entry empties the stack.
+    expect(removeFromFileHistory({ entries: ['/a'], index: 0 }, '/a'))
+      .toEqual({ entries: [], index: -1 });
+    // A path that isn't there returns the SAME object (lets callers skip a write).
+    const h = { entries: ['/a'], index: 0 };
+    expect(removeFromFileHistory(h, '/zzz')).toBe(h);
+  });
+
+  it('a throwing localStorage never propagates out of the history store', async () => {
+    const { saveFileHistory, loadFileHistory } = await load();
+    vi.stubGlobal('localStorage', {
+      getItem() { throw new Error('denied'); },
+      setItem() { throw new Error('quota'); },
+      removeItem() { throw new Error('denied'); },
+    });
+    expect(() => saveFileHistory(undefined, '/repo', { entries: ['/a'], index: 0 })).not.toThrow();
+    expect(loadFileHistory(undefined, '/repo')).toEqual({ entries: [], index: -1 });
+  });
+});
+
 describe('per-file scroll offset', () => {
   it('round-trips an offset for the right file only', async () => {
     const { saveFileScroll, loadFileScroll } = await load();

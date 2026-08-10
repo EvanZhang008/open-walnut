@@ -60,7 +60,11 @@ async function openHomepageSession(page: Page) {
   const task = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`)
   await expect(task).toBeVisible()
   await task.getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-menu:visible').getByText('Session idle', { exact: true }).click()
+  // The kebab's session row is targeted POSITIONALLY (first item), not by label: its
+  // text is derived from live state ("Session idle" / "AI is working…" / "Session
+  // error" / "Unread — open to mark read"), so a label matcher flakes as soon as the
+  // fixture session's state drifts.
+  await page.locator('.task-kebab-menu:visible').locator('.task-kebab-item').first().click()
   const panel = page.locator(`.session-panel[data-session-id="${SESSION_ID}"]`)
   await expect(panel).toBeVisible()
   return panel
@@ -237,7 +241,8 @@ test('the kebab containing an inline calendar still fits the viewport', async ({
   await row.getByRole('button', { name: 'More actions' }).click()
   const kebab = page.locator('.task-kebab-menu:visible')
   await expect(kebab).toBeVisible()
-  await expect(kebab.locator('.dp-content')).toHaveCount(1)
+  // Two inline calendars since start_date landed (2c4d557f): Start + Due.
+  await expect(kebab.locator('.dp-content')).toHaveCount(2)
   const m = await assertFitsViewport(page, kebab, 'kebab with inline date picker')
   expect(m.overflowY).toBe('auto')
 })

@@ -2,15 +2,25 @@
  * Persisted per-file view state for the Files panel (SessionFileExplorer +
  * FileContentView).
  *
- * Two things survive a panel close / reload / session switch:
- *  - which FILE was open in the preview pane, keyed per host+root, so reopening
+ * Three things survive a panel close / reload / session switch:
+ *  - which FILE was open in the preview pane, keyed per host+SCOPE, so reopening
  *    Files lands you back on the file you were reading instead of the empty
  *    "Select a file to preview" pane;
+ *  - the browser-style BACK/FORWARD history of files read under that scope;
  *  - the SCROLL OFFSET (and preview/source mode) of each file, keyed per
  *    host+path, so reopening a long doc resumes where you stopped reading
  *    instead of jumping to the top.
  *
- * Both are pure navigation comfort — a miss just means "start at the top", so
+ * SCOPE, not tree root (root-cause fix, 2026-08-09): the Files panel is entered
+ * two ways that resolve to DIFFERENT tree roots for the same session — the Files
+ * chip roots at the session cwd, while a file-path click in the chat roots at the
+ * clicked file's PARENT dir. Keying this memory by root meant the two entries
+ * never met: the click wrote `…:/repo/src/web`, the chip read `…:/repo`, so the
+ * chip always showed the empty preview pane. Callers pass a stable scope (the
+ * session cwd) and both paths share one key; scope falls back to the root for
+ * callers that have no session (the standalone FileViewer overlay).
+ *
+ * All of it is pure navigation comfort — a miss just means "start at the top", so
  * every read is best-effort and a corrupt/denied localStorage is non-fatal.
  * The scroll map is capped (LRU by write order) so a long-lived browser profile
  * can't grow it without bound.
@@ -18,6 +28,10 @@
 
 const LS_SELECTED_FILE = 'open-walnut-file-explorer-selected';
 const LS_SCROLL = 'open-walnut-file-view-scroll';
+const LS_HISTORY = 'open-walnut-file-explorer-history';
+
+/** Max files remembered in one scope's back/forward history. Oldest drop first. */
+export const HISTORY_MAX_ENTRIES = 50;
 
 /** Max remembered files' scroll offsets. Oldest-written entries are dropped. */
 const SCROLL_MAX_ENTRIES = 300;
@@ -38,29 +52,107 @@ export interface FileScrollState {
   source?: boolean;
 }
 
-function selectedKey(host: string | undefined, root: string): string {
-  return `${LS_SELECTED_FILE}:${host ?? 'local'}:${root}`;
+/** Normalize a scope so `/repo` and `/repo/` share one key. */
+function normScope(scope: string): string {
+  return scope.replace(/\/+$/, '') || '/';
+}
+
+function selectedKey(host: string | undefined, scope: string): string {
+  return `${LS_SELECTED_FILE}:${host ?? 'local'}:${normScope(scope)}`;
+}
+
+function historyKey(host: string | undefined, scope: string): string {
+  return `${LS_HISTORY}:${host ?? 'local'}:${normScope(scope)}`;
 }
 
 function scrollKey(host: string | undefined, path: string): string {
   return `${host ?? 'local'}${KEY_SEP}${path}`;
 }
 
-// ── Selected file (per host + tree root) ──
+// ── Selected file (per host + scope) ──
 
-export function loadSelectedFile(host: string | undefined, root: string): string | null {
+export function loadSelectedFile(host: string | undefined, scope: string): string | null {
   try {
-    return localStorage.getItem(selectedKey(host, root));
+    return localStorage.getItem(selectedKey(host, scope));
   } catch {
     return null; // denied
   }
 }
 
-export function saveSelectedFile(host: string | undefined, root: string, path: string | null): void {
+export function saveSelectedFile(host: string | undefined, scope: string, path: string | null): void {
   try {
-    if (path) localStorage.setItem(selectedKey(host, root), path);
-    else localStorage.removeItem(selectedKey(host, root));
+    if (path) localStorage.setItem(selectedKey(host, scope), path);
+    else localStorage.removeItem(selectedKey(host, scope));
   } catch { /* quota/denied */ }
+}
+
+// ── Back/forward history (per host + scope) ──
+
+/**
+ * A browser-style history stack for the preview pane. `entries` is oldest-first,
+ * `index` points at the currently-shown file. Back = index-1, Forward = index+1.
+ */
+export interface FileHistory {
+  entries: string[];
+  index: number;
+}
+
+const EMPTY_HISTORY: FileHistory = { entries: [], index: -1 };
+
+function sanitizeHistory(raw: unknown): FileHistory {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return EMPTY_HISTORY;
+  const obj = raw as Partial<FileHistory>;
+  if (!Array.isArray(obj.entries)) return EMPTY_HISTORY;
+  const entries = obj.entries.filter((e): e is string => typeof e === 'string' && e.length > 0);
+  if (entries.length === 0) return EMPTY_HISTORY;
+  const idx = typeof obj.index === 'number' && Number.isInteger(obj.index) ? obj.index : entries.length - 1;
+  // A stored index outside the surviving entries would strand Back/Forward on a
+  // hole — clamp it into range instead of trusting the payload.
+  return { entries, index: Math.min(Math.max(idx, 0), entries.length - 1) };
+}
+
+export function loadFileHistory(host: string | undefined, scope: string): FileHistory {
+  try {
+    const raw = localStorage.getItem(historyKey(host, scope));
+    if (!raw) return EMPTY_HISTORY;
+    return sanitizeHistory(JSON.parse(raw) as unknown);
+  } catch {
+    return EMPTY_HISTORY; // corrupt/denied — no history, buttons stay disabled
+  }
+}
+
+export function saveFileHistory(host: string | undefined, scope: string, history: FileHistory): void {
+  try {
+    if (history.entries.length === 0) localStorage.removeItem(historyKey(host, scope));
+    else localStorage.setItem(historyKey(host, scope), JSON.stringify(history));
+  } catch { /* quota/denied */ }
+}
+
+/**
+ * Push a newly-opened file, exactly like a browser address-bar navigation:
+ *  - re-opening the file already shown is a no-op (no duplicate stack entries);
+ *  - navigating after going Back TRUNCATES the forward tail (that future is gone);
+ *  - the stack is capped, dropping oldest entries (index shifts with them).
+ */
+export function pushFileHistory(history: FileHistory, path: string): FileHistory {
+  if (history.entries[history.index] === path) return history;
+  const entries = [...history.entries.slice(0, history.index + 1), path];
+  const overflow = entries.length - HISTORY_MAX_ENTRIES;
+  const trimmed = overflow > 0 ? entries.slice(overflow) : entries;
+  return { entries: trimmed, index: trimmed.length - 1 };
+}
+
+/** Drop every occurrence of a path (file deleted since) and re-clamp the index. */
+export function removeFromFileHistory(history: FileHistory, path: string): FileHistory {
+  if (!history.entries.includes(path)) return history;
+  const removedBeforeIndex = history.entries.slice(0, history.index).filter((e) => e === path).length;
+  const wasCurrent = history.entries[history.index] === path;
+  const entries = history.entries.filter((e) => e !== path);
+  if (entries.length === 0) return EMPTY_HISTORY;
+  // Removing the current entry lands on its predecessor (browser-like); removing
+  // earlier entries just shifts the index left by however many vanished.
+  const index = Math.min(Math.max(history.index - removedBeforeIndex - (wasCurrent ? 1 : 0), 0), entries.length - 1);
+  return { entries, index };
 }
 
 // ── Per-file scroll offset + view mode ──
