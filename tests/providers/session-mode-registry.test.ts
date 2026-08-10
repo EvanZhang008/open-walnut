@@ -231,12 +231,55 @@ describe('validators and pickers all derive from the registry', () => {
       .not.toMatch(/as 'bypass' \| 'plan' \| 'accept' \| 'default'/)
   })
 
-  it("the web mode cycle defaults to every mode, not the old ['bypass','plan']", () => {
+  it("the web mode cycle defaults to plan/auto/bypass, not the old ['bypass','plan']", () => {
     const src = read('web/src/hooks/useEnabledModes.ts')
-    expect(src).toContain('SESSION_MODE_IDS')
+    // Three intents: look / vetted-run / full-trust. A six-item ring is a worse
+    // default than a three-item one even though all six stay available.
+    expect(src).toMatch(/DEFAULT_MODES:\s*SessionMode\[\]\s*=\s*\['plan',\s*'auto',\s*'bypass'\]/)
     // This literal WAS the shipped default, and `session.enabled_modes` is unset
     // for almost every install — so it, not the type, capped the UI at 2 modes.
     expect(src).not.toMatch(/DEFAULT_MODES:\s*SessionMode\[\]\s*=\s*\['bypass',\s*'plan'\]/)
+    // The narrowing is a DEFAULT, not a validator. Config must still be checked
+    // against the whole registry or a user who ticks Accept loses it silently.
+    expect(src).toContain('VALID_SESSION_MODE_IDS.has(mode)')
+    expect(src).not.toMatch(/DEFAULT_MODES\.includes\(mode\)/)
+  })
+
+  it('the settings checkbox default matches the pill-cycle default exactly', () => {
+    // Divergence here is silent and ugly: useAutoSave compares the rendered
+    // value against a baseline built from the same default, so a mismatch makes
+    // merely OPENING Settings write the config back.
+    const hook = read('web/src/hooks/useEnabledModes.ts')
+    const settings = read('web/src/components/settings/sections/SessionsSection.tsx')
+    const grab = (s: string) => s.match(/DEFAULT_MODES:\s*SessionMode\[\]\s*=\s*(\[[^\]]*\])/)?.[1]
+    const a = grab(hook)
+    const b = grab(settings)
+    expect(a).toBeTruthy()
+    expect(b).toBe(a)
+    // ...and the checkbox LIST still offers every mode, only the ticks narrow.
+    expect(settings).toContain('const ALL_MODES = SESSION_MODES')
+  })
+
+  it('nothing branches on provider for auto mode', () => {
+    // `auto` is NOT provider-restricted. Official changelog: 2.1.158 shipped it
+    // on Bedrock/Vertex/Foundry behind CLAUDE_CODE_ENABLE_AUTO_MODE, 2.1.207
+    // dropped the opt-in. Measured on 2.1.220 + Bedrock: init echoed `auto`, and
+    // a Write that `default` refused was auto-allowed under `auto`. A
+    // firstParty-looking branch in the CLI source picks the MODEL ALLOWLIST, not
+    // the feature — a source read alone was misleading here.
+    //
+    // Assert on BEHAVIOR (no provider branch, no auto-specific error copy), not
+    // on the words: the comments deliberately discuss first-party to record why
+    // the naive reading is wrong, and must not trip this.
+    for (const rel of [
+      'src/providers/claude-code-session.ts',
+      'web/src/hooks/useEnabledModes.ts',
+      'src/core/types.ts',
+    ]) {
+      const src = read(rel)
+      expect(src).not.toMatch(/if\s*\([^)]*\bauto\b[^)]*\b(bedrock|vertex|foundry|firstParty)\b/i)
+      expect(src).not.toMatch(/mode === 'auto'\s*\n?\s*\?/)
+    }
   })
 
   it('the iOS launcher offers the full mode set with CLI-exact raw values', () => {

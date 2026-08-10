@@ -6556,14 +6556,26 @@ export class SessionRunner {
     try {
       const confirmed = await live.applyPermissionMode(mode)
       if (!confirmed) {
-        // A non-echo means the CLI declined the mode without erroring. The known
-        // cause is a mode gated behind a provider/feature check — `auto` is
-        // first-party-only today, so on Bedrock/Vertex the CLI simply won't take
-        // it. Say so: a bare "did not confirm" reads like a Walnut bug.
-        const hint = mode === 'auto'
-          ? ' — "Auto" may not be available for this session\'s model or API provider'
-          : ''
-        throw new Error(`Claude Code did not confirm permission mode "${mode}"${hint}`)
+        // A non-echo means the CLI declined the mode without erroring — the
+        // likely cause is a mode gated behind a model/feature check on that CLI
+        // build. Name that possibility: a bare "did not confirm" reads like a
+        // Walnut bug when it's the CLI's own policy.
+        //
+        // NOTE: `auto` is NOT provider-restricted. A firstParty-only-looking
+        // branch in the CLI source selects the MODEL ALLOWLIST, not the feature.
+        // Official changelog: 2.1.158 shipped auto on Bedrock/Vertex/Foundry
+        // behind CLAUDE_CODE_ENABLE_AUTO_MODE; 2.1.207 made it available with no
+        // opt-in. Measured here on 2.1.220 + Bedrock: init echoes `auto`, and a
+        // Write the same session refused under `default` was auto-allowed under
+        // `auto` — the classifier genuinely runs. Don't special-case auto.
+        //
+        // The real constraints, if this ever does fire for auto: the model must
+        // be Sonnet 5 / Opus 4.7+ / Fable 5 on non-first-party providers, and
+        // the classifier is a separate billed model invocation, so the account
+        // must be able to invoke it.
+        throw new Error(
+          `Claude Code did not confirm permission mode "${mode}" — this CLI build may not support it`,
+        )
       }
       return 'applied'
     } catch (err) {

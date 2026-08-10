@@ -18,11 +18,14 @@ export function SessionsSection({ config, onSave }: Props) {
   const [sessionLimits, setSessionLimits] = useState<Record<string, string | number>>(config.session_limits ?? {});
   const [permissionPrompt, setPermissionPrompt] = useState(config.session?.permission_prompt ?? true);
   const [autoApproveBypass, setAutoApproveBypass] = useState(config.session?.auto_approve_bypass !== false);
-  // Registry-driven (core/types.ts): every CLI permission mode, safest → loosest.
-  // Default is ALL of them — the old ['bypass','plan'] default silently hid
-  // plan/accept/auto/dontAsk from the toggle for anyone without explicit config.
+  // The checkbox list offers EVERY registry mode (core/types.ts, safest →
+  // loosest). Only the DEFAULT ticks are narrowed to the three that cover the
+  // three real intents — look / vetted-run / full-trust — so the pill cycle
+  // isn't a six-item ring. Must stay identical to DEFAULT_MODES in
+  // web/src/hooks/useEnabledModes.ts, otherwise the auto-save baseline differs
+  // from the rendered value and merely opening Settings rewrites the config.
   const ALL_MODES = SESSION_MODES;
-  const DEFAULT_MODES: SessionMode[] = SESSION_MODES.map(m => m.id);
+  const DEFAULT_MODES: SessionMode[] = ['plan', 'auto', 'bypass'];
   const [enabledModes, setEnabledModes] = useState<SessionMode[]>(config.session?.enabled_modes ?? DEFAULT_MODES);
   const [sdkEnabled, setSdkEnabled] = useState(config.session_server?.enabled ?? false);
   const [sdkPort, setSdkPort] = useState<number | undefined>(config.session_server?.port ?? 7890);
