@@ -27,10 +27,21 @@ import { buildUserData, sslipHostname, SSLIP_AUTO, type UserDataFlavor } from '.
 /** Poll intervals and budgets. Mutable so tests can shrink them. */
 export const CLOUD_SETUP_TIMINGS = {
   dnsIntervalMs: 15_000,
-  /** After this, ask the operator to confirm — but keep polling in background. */
+  /**
+   * After this, ask the operator to confirm — but keep polling in background.
+   * 30 min because registrar propagation genuinely takes that long on some
+   * zones, and the prompt is advisory: the poll continues either way.
+   */
   dnsPatienceMs: 30 * 60_000,
   serverIntervalMs: 10_000,
-  serverBudgetMs: 20 * 60_000,
+  /**
+   * First boot is a git clone + npm ci + a server build + a web build, and the
+   * budget has to carry the CHEAPEST documented box, not the comfortable one:
+   * measured comfortable on 2 GiB, but swap-bound on the 1 GiB default the
+   * Azure path recommends, where those builds can run past 20 min. 30 min keeps
+   * the headroom without letting a genuinely dead box hang forever.
+   */
+  serverBudgetMs: 30 * 60_000,
   /** Per-request timeout for the setup status/claim calls. */
   httpTimeoutMs: 10_000,
 }
@@ -47,6 +58,12 @@ export interface StepContext {
   credentials?: string
   /** Cooperative cancellation: long polls check this between attempts. */
   isCancelled: () => boolean
+  /**
+   * Aborted when the job is cancelled. The cooperative flag above only flips
+   * between polls, so this is what reaches work already in flight — a provider
+   * CLI child process, or an open HTTP request.
+   */
+  signal?: AbortSignal
   /**
    * Mark the job 'awaiting-input' WITHOUT ending the step — for a poll that has
    * run long enough to want an operator override but must keep polling, so a
@@ -103,8 +120,17 @@ export function selfDeviceName(): string {
   return /^[A-Za-z0-9]/.test(name) ? name : `mac-${Date.now()}`
 }
 
-async function fetchJson(url: string, init?: RequestInit): Promise<{ status: number; body: unknown }> {
-  const res = await fetch(url, { ...init, signal: AbortSignal.timeout(CLOUD_SETUP_TIMINGS.httpTimeoutMs) })
+/**
+ * `signal` composes with the per-request timeout so a cancel aborts the request
+ * already on the wire, not just the next one.
+ */
+async function fetchJson(
+  url: string,
+  init?: RequestInit & { signal?: AbortSignal },
+): Promise<{ status: number; body: unknown }> {
+  const timeout = AbortSignal.timeout(CLOUD_SETUP_TIMINGS.httpTimeoutMs)
+  const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout
+  const res = await fetch(url, { ...init, signal })
   let body: unknown = null
   try { body = await res.json() } catch { /* non-JSON error page */ }
   return { status: res.status, body }
@@ -206,6 +232,9 @@ async function provision(ctx: StepContext): Promise<StepOutcome> {
     domainMode: state.domainMode,
     domain: state.domain,
     credentials: ctx.credentials,
+    // Cancel has to reach the provider CLI itself: a deploy runs for tens of
+    // minutes and would keep creating chargeable resources otherwise.
+    signal: ctx.signal,
   }, ctx.log)
   state.ip = result.ip
   state.instanceRef = result.instanceRef
@@ -297,7 +326,7 @@ async function awaitServer(ctx: StepContext): Promise<StepOutcome> {
   for (;;) {
     if (ctx.isCancelled()) throw new CloudSetupCancelled()
     try {
-      const { status, body } = await fetchJson(statusUrl)
+      const { status, body } = await fetchJson(statusUrl, { signal: ctx.signal })
       if (status === 200 && body && typeof body === 'object') {
         const claimed = (body as { claimed?: boolean }).claimed
         if (claimed === false) {
@@ -327,7 +356,14 @@ async function awaitServer(ctx: StepContext): Promise<StepOutcome> {
     if (Date.now() > deadline) {
       throw new Error(
         `${target.origin} did not come up within ${Math.round(CLOUD_SETUP_TIMINGS.serverBudgetMs / 60000)} minutes. `
-        + 'Check /var/log/walnut-setup.log on the box, then retry this step.',
+        + 'Check /var/log/walnut-setup.log on the box, then retry this step.'
+        // sslip.io is not on the Public Suffix List, so every sslip user shares
+        // one Let's Encrypt issuance bucket — worth saying out loud, because the
+        // box looks dead when it is only waiting on a certificate.
+        + (target.hostname.endsWith('.sslip.io')
+          ? ' Certificate issuance for sslip.io shares Let\'s Encrypt rate limits across ALL sslip.io users, '
+            + 'so a timeout here can simply mean that bucket is temporarily exhausted — retry later, or use your own domain.'
+          : ''),
       )
     }
     await sleep(CLOUD_SETUP_TIMINGS.serverIntervalMs)
@@ -339,6 +375,12 @@ async function awaitServer(ctx: StepContext): Promise<StepOutcome> {
  * the only copy of the device token that will ever exist (the companion returns
  * it once). Splitting them would create a window where a crash loses it and the
  * box is claimed but unusable.
+ *
+ * That rationale covers a crash. The one remaining path that can still orphan
+ * the token is initSync THROWING after the claim landed (it is execSync-backed,
+ * so any git failure raises) — and execSync puts the full command line in
+ * error.message, i.e. the credentialed URL. Hence the wrap below: redact the
+ * token out of the message and tell the operator how to recover.
  */
 async function claimAndWire(ctx: StepContext): Promise<StepOutcome> {
   const { state } = ctx
@@ -346,9 +388,17 @@ async function claimAndWire(ctx: StepContext): Promise<StepOutcome> {
   const target = resolveTarget(state.domain)
 
   if (remoteAlreadyPointsAt(target.host)) {
-    ctx.log('git remote already points at this companion — nothing to claim')
-    state.pairingCode = undefined
-    return {}
+    // A credentialed remote existing does not prove its token still
+    // authenticates. Erasing the pairing code on that assumption is
+    // unrecoverable: if the token is stale, verify-sync fails and retry has
+    // neither a code to claim with nor a working credential.
+    const refs = await gitSafeAsync('ls-remote origin')
+    if (refs !== null) {
+      ctx.log('git remote already points at this companion — nothing to claim')
+      state.pairingCode = undefined
+      return {}
+    }
+    ctx.log('a git remote for this companion exists but failed authentication — trying the claim instead')
   }
   if (!state.pairingCode) throw new Error('no pairing code — cannot claim')
 
@@ -357,6 +407,7 @@ async function claimAndWire(ctx: StepContext): Promise<StepOutcome> {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ setupToken: state.pairingCode, deviceName }),
+    signal: ctx.signal,
   })
   if (status !== 200) {
     const message = (body as { error?: string } | null)?.error ?? `HTTP ${status}`
@@ -368,7 +419,17 @@ async function claimAndWire(ctx: StepContext): Promise<StepOutcome> {
 
   // Credentialed remote — the token lives only in .git/config, which setRemote
   // chmods to 0600 (hardenGitConfigPerms).
-  initSync(`${target.scheme}//walnut:${token}@${target.host}/git/data`)
+  try {
+    initSync(`${target.scheme}//walnut:${token}@${target.host}/git/data`)
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err)
+    throw new Error(
+      `${raw.split(token).join('<redacted>')}\n`
+      + `The box at ${target.origin} IS claimed now, but the git remote was not set, and the device `
+      + 'token it issued cannot be re-read. Wipe the box\'s auth.json (or redeploy it) so it can be '
+      + 'claimed again, then retry this step.',
+    )
+  }
   ctx.log('data repo remote configured')
   // The code is spent the moment the claim lands; drop it before the runner's
   // next persist so it never survives a crash.

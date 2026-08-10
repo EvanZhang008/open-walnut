@@ -77,6 +77,12 @@ Report readiness in plain language, e.g. "AWS is ready (credentials found), and
 have." If a provider is `available: false` with `needs: 'cli-login'`, relay
 `detail` — that is the fix — and do not try to log them in yourself.
 
+Do not read `needs: 'cli-login'` as "this provider is unavailable". Azure and
+Google Cloud provision through the user's own `az` / `gcloud` login, so they
+report `cli-login` until that CLI is installed and signed in — and they become
+one-click the moment it is. Relay the one-line fix from `detail`, and offer the
+manual path as the alternative rather than the only option.
+
 ## 2. Collect the two choices
 
 **Provider** — one of the `id` values from step 1.
@@ -297,7 +303,13 @@ Then, briefly:
 - **Teardown, if they ever want out: revoke the device tokens FIRST**
   (Settings → Devices, or `DELETE /api/devices/<name>?target=cloud`), then
   destroy the infrastructure — on AWS `cd infra && npx cdk destroy
-  WalnutCloudStack`, otherwise delete the VM in the provider console. Order
+  WalnutCloudStack`; on Azure `az group delete -n walnut-cloud` (one command,
+  because everything Walnut made lives in that group); on Google Cloud
+  `gcloud compute instances delete walnut-cloud --zone <zone>` **plus**
+  `gcloud compute addresses delete walnut-cloud-ip --region <region>` — the
+  reserved address starts charging once it is no longer attached, so deleting
+  only the instance leaves a small ongoing cost; otherwise delete the VM in the
+  provider console. Order
   matters: destroying the box first leaves live credentials pointing at an
   address someone else may later be handed. Note the root volume is deliberately
   retained on termination, so it may need deleting separately, and it holds

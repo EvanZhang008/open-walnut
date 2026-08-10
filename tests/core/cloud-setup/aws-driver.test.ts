@@ -18,10 +18,42 @@ const spawnCalls: Array<{ cmd: string; args: string[] }> = []
 /** Written to the --outputs-file of the next deploy, as cdk would. */
 let stackOutputs: Record<string, string> = {}
 
+/** Every `aws` invocation detectCreds made, and how the stub answered each. */
+const execFileCalls: Array<{ cmd: string; args: string[] }> = []
+type ExecReply = { stdout?: string; error?: Error & { code?: string | number } }
+/** Keyed by the argv joined with spaces; unmatched calls fail like a broken CLI. */
+let execFileReplies: Record<string, ExecReply> = {}
+
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>()
+  const { promisify } = await import('node:util')
+
+  /**
+   * detectCreds goes through promisify(execFile), so the stub carries the custom
+   * promisify symbol — without it promisify resolves with stdout alone and the
+   * driver's `{ stdout }` destructure reads undefined.
+   */
+  const execFile = (cmd: string, args: string[]) => {
+    execFileCalls.push({ cmd, args })
+    throw new Error('callback-style execFile is not used by this driver')
+  }
+  Object.defineProperty(execFile, promisify.custom, {
+    value: async (cmd: string, args: string[]) => {
+      execFileCalls.push({ cmd, args })
+      const reply = execFileReplies[args.join(' ')]
+      if (!reply) {
+        const err = new Error(`test: no execFile stub for ${cmd} ${args.join(' ')}`) as Error & { code: number }
+        err.code = 254
+        throw err
+      }
+      if (reply.error) throw reply.error
+      return { stdout: reply.stdout ?? '', stderr: '' }
+    },
+  })
+
   return {
     ...actual,
+    execFile,
     spawn: (cmd: string, args: string[]) => {
       spawnCalls.push({ cmd, args })
       // Real PassThroughs, not bare EventEmitters: the driver calls
@@ -73,6 +105,112 @@ function contextFlags(args: string[]): Record<string, string> {
   }
   return out
 }
+
+describe('awsDriver.detectCreds', () => {
+  const IDENTITY = 'sts get-caller-identity --output json'
+  const PROFILES = 'configure list-profiles'
+  /** The real CLI's exit for expired keys. */
+  function invalidToken(): Error & { code: number } {
+    const err = new Error(
+      'An error occurred (InvalidClientTokenId) when calling the GetCallerIdentity operation: '
+      + 'The security token included in the request is invalid',
+    ) as Error & { code: number }
+    err.code = 254
+    return err
+  }
+
+  let savedProfile: string | undefined
+  beforeEach(() => {
+    execFileCalls.length = 0
+    execFileReplies = {}
+    savedProfile = process.env.AWS_PROFILE
+    delete process.env.AWS_PROFILE
+  })
+  afterEach(() => {
+    if (savedProfile === undefined) delete process.env.AWS_PROFILE
+    else process.env.AWS_PROFILE = savedProfile
+  })
+
+  it('reports the account id and nothing else when the CLI authenticates', async () => {
+    // The ARN embeds a user/role name and this string is rendered in the wizard
+    // and written to the log, so only the account number may appear.
+    execFileReplies[IDENTITY] = {
+      stdout: JSON.stringify({
+        Account: '123456789012',
+        Arn: 'arn:aws:sts::123456789012:assumed-role/Admin/operator',
+        UserId: 'AROAEXAMPLE:operator',
+      }),
+    }
+    const detect = await awsDriver.detectCreds()
+    expect(detect).toMatchObject({ available: true, needs: 'nothing' })
+    expect(detect.detail).toContain('123456789012')
+    expect(detect.detail).not.toContain('Admin')
+    expect(detect.detail).not.toContain('operator')
+  })
+
+  it('offers to install the CLI when the binary is absent', async () => {
+    const enoent = new Error('spawn aws ENOENT') as Error & { code: string }
+    enoent.code = 'ENOENT'
+    execFileReplies[IDENTITY] = { error: enoent }
+    const detect = await awsDriver.detectCreds()
+    expect(detect).toMatchObject({ available: false, needs: 'cli-login' })
+    expect(detect.detail).toMatch(/not installed/)
+    // No point asking about profiles when there is no CLI to ask.
+    expect(execFileCalls.map((c) => c.args.join(' '))).not.toContain(PROFILES)
+  })
+
+  it('names AWS_PROFILE when several profiles exist and the DEFAULT one is stale', async () => {
+    // The reported failure: a machine with 8 profiles and an expired [default].
+    // Every `aws` call inherits Walnut's env, so the probe resolves [default] and
+    // fails while the profile the operator actually uses works. The old message
+    // sent them to `aws configure`, which would overwrite a working config.
+    execFileReplies[IDENTITY] = { error: invalidToken() }
+    execFileReplies[PROFILES] = { stdout: 'default\nwalnut-dev\nmarina-dev\nacme-prod\n' }
+    const detect = await awsDriver.detectCreds()
+    expect(detect).toMatchObject({ available: false, needs: 'cli-login' })
+    expect(detect.detail).toContain('AWS_PROFILE')
+    expect(detect.detail).toContain('4 profiles')
+    expect(detect.detail).toMatch(/restart/)
+  })
+
+  it('never leaks the operator profile NAMES into the wizard or the log', async () => {
+    // Same restraint as the caller ARN: what the operator called their accounts is
+    // theirs, and detail is both rendered and written to disk.
+    execFileReplies[IDENTITY] = { error: invalidToken() }
+    execFileReplies[PROFILES] = { stdout: 'default\nwalnut-dev\nacme-prod\n' }
+    const detect = await awsDriver.detectCreds()
+    expect(detect.detail).not.toContain('walnut-dev')
+    expect(detect.detail).not.toContain('acme-prod')
+  })
+
+  it('does NOT suggest AWS_PROFILE when it is already set — that one just failed', async () => {
+    // Telling an operator to set a variable they have already set reads as a bug.
+    process.env.AWS_PROFILE = 'walnut-dev'
+    execFileReplies[IDENTITY] = { error: invalidToken() }
+    execFileReplies[PROFILES] = { stdout: 'default\nwalnut-dev\nacme-prod\n' }
+    const detect = await awsDriver.detectCreds()
+    expect(detect.detail).toMatch(/AWS_PROFILE currently set/)
+    expect(detect.detail).not.toMatch(/set AWS_PROFILE=<name>/)
+    expect(detect.detail).not.toContain('walnut-dev')
+  })
+
+  it('keeps the plain advice when there is only one profile to blame', async () => {
+    execFileReplies[IDENTITY] = { error: invalidToken() }
+    execFileReplies[PROFILES] = { stdout: 'default\n' }
+    const detect = await awsDriver.detectCreds()
+    expect(detect.detail).toMatch(/aws configure/)
+    expect(detect.detail).not.toContain('AWS_PROFILE')
+  })
+
+  it('still answers when the profile count cannot be determined', async () => {
+    // `aws configure list-profiles` is advisory only: a CLI too old to have the
+    // subcommand must not turn a clean "not signed in" into a crash.
+    execFileReplies[IDENTITY] = { error: invalidToken() }
+    const detect = await awsDriver.detectCreds()
+    expect(detect).toMatchObject({ available: false, needs: 'cli-login' })
+    expect(detect.detail).toMatch(/no usable credentials/)
+  })
+})
 
 describe('awsDriver.createVM', () => {
   const logs: string[] = []

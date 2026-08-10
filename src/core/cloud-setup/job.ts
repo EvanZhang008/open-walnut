@@ -77,9 +77,24 @@ interface RunnerHandle {
   /** Set when the operator answers a requestConfirmation prompt. */
   confirmed: boolean
   force: boolean
+  /**
+   * Aborted by cancelJob. The cooperative `cancelled` flag is only observed
+   * between polls, so on its own it lets a 30-minute provider deploy keep
+   * provisioning chargeable resources after the operator cancelled. The signal
+   * is what reaches a live child process / in-flight fetch.
+   */
+  controller: AbortController
 }
 
 let active: RunnerHandle | null = null
+/**
+ * Serializes concurrent starts. Two POSTs (two browser tabs, or the wizard and
+ * the shipped skill racing) both passed the existing-job check and both spawned
+ * a runner, and the loser's provider API token lingered in credentialStore
+ * forever. The second caller awaits the first, then re-runs the check and
+ * throws CloudSetupJobExistsError exactly as a sequential second call would.
+ */
+let startInFlight: Promise<CloudSetupJobState> | null = null
 /** Provider credentials, never persisted. Keyed by job id. */
 const credentialStore = new Map<string, string>()
 /** Cached state so a GET doesn't have to hit disk on every poll. */
@@ -174,13 +189,34 @@ function freshSteps(): Record<CloudSetupStepId, { status: 'pending' }> {
 }
 
 export async function startCloudSetupJob(input: StartCloudSetupJobInput): Promise<CloudSetupJobState> {
+  // Serialize: an overlapping caller must see the first job as "existing".
+  const previous = startInFlight
+  const mine = (async () => {
+    // Swallow the predecessor's outcome: we only need it to have finished, so
+    // that the existing-job check below sees the job it created.
+    await previous?.catch(() => {})
+    return startJobExclusive(input)
+  })()
+  startInFlight = mine
+  try {
+    return await mine
+  } finally {
+    if (startInFlight === mine) startInFlight = null
+  }
+}
+
+async function startJobExclusive(input: StartCloudSetupJobInput): Promise<CloudSetupJobState> {
   const existing = await getCloudSetupJob()
   if (existing && (existing.status === 'running' || existing.status === 'awaiting-input') && !input.force) {
     throw new CloudSetupJobExistsError()
   }
   if (existing) {
-    // Superseded: stop the old runner before its next persist.
-    if (active) active.cancelled = true
+    // Superseded: stop the old runner before its next persist, and abort its
+    // in-flight work so a replaced provision does not keep provisioning.
+    if (active) {
+      active.cancelled = true
+      active.controller.abort()
+    }
     credentialStore.delete(existing.id)
   }
   if (!getDriver(input.provider)) throw new Error(`Unknown provider: ${input.provider}`)
@@ -197,12 +233,19 @@ export async function startCloudSetupJob(input: StartCloudSetupJobInput): Promis
     status: 'running',
     currentStep: 'preflight',
     steps: freshSteps(),
+    ...(input.force ? { force: true } : {}),
     logTail: [],
     createdAt: now,
     updatedAt: now,
   }
   if (input.credentials) credentialStore.set(state.id, input.credentials)
-  await persist(state)
+  try {
+    await persist(state)
+  } catch (err) {
+    // The job never became real, so its credential must not outlive the call.
+    credentialStore.delete(state.id)
+    throw err
+  }
   emitProgress(state)
   log.web.info('cloud-setup: job started', {
     jobId: state.id, provider: state.provider, domainMode: state.domainMode,
@@ -222,7 +265,13 @@ function stepIndex(id: CloudSetupStepId): number {
  * done, failed, cancelled, or parked on operator input.
  */
 async function runJob(state: CloudSetupJobState, opts: { force: boolean }): Promise<void> {
-  const handle: RunnerHandle = { jobId: state.id, cancelled: false, confirmed: false, force: opts.force }
+  const handle: RunnerHandle = {
+    jobId: state.id,
+    cancelled: false,
+    confirmed: false,
+    force: opts.force,
+    controller: new AbortController(),
+  }
   active = handle
   const runners = stepRunners(opts.force)
   const superseded = (): boolean => active !== handle
@@ -254,16 +303,27 @@ async function runJob(state: CloudSetupJobState, opts: { force: boolean }): Prom
    * echoes its own command line would otherwise push the secret into logTail —
    * and from there into SSE and every REST response. The runner owns the
    * secret, so the runner scrubs it, whatever the driver does.
+   *
+   * The `key=<blob>` argv shape is THE motivating case (that is literally what
+   * the in-tree aws driver emits) and it is why the token pattern keeps `=` out
+   * of the body class: a class containing `=` matches from `userDataB64=`, so
+   * the captured token is not valid base64 at offset 0 and the decode yields
+   * garbage. Retrying at offsets 0..3 covers every junk prefix: slicing
+   * (prefixLength mod 4) characters re-aligns the payload to base64's 4-char
+   * groups, so one of the four decodes recovers the script and .includes(code)
+   * fires.
    */
   const scrub = (line: string): string => {
     const code = state.pairingCode
     if (!code) return line
     let scrubbed = line.split(code).join('<redacted>')
     // Also catch the code arriving base64-wrapped inside a larger blob.
-    for (const token of scrubbed.match(/[A-Za-z0-9+/=]{64,}/g) ?? []) {
-      if (Buffer.from(token, 'base64').toString('utf-8').includes(code)) {
-        scrubbed = scrubbed.split(token).join('<redacted>')
+    for (const token of scrubbed.match(/[A-Za-z0-9+/]{64,}={0,2}/g) ?? []) {
+      let hit = false
+      for (let off = 0; off < 4 && !hit; off++) {
+        if (Buffer.from(token.slice(off), 'base64').toString('utf-8').includes(code)) hit = true
       }
+      if (hit) scrubbed = scrubbed.split(token).join('<redacted>')
     }
     return scrubbed
   }
@@ -285,6 +345,7 @@ async function runJob(state: CloudSetupJobState, opts: { force: boolean }): Prom
     log: appendLog,
     credentials: credentialStore.get(state.id),
     isCancelled: () => handle.cancelled || superseded(),
+    signal: handle.controller.signal,
     requestConfirmation: (awaitingInput: CloudSetupAwaitingInput) => {
       // Poll continues; only the job's outward status changes.
       state.status = 'awaiting-input'
@@ -391,9 +452,14 @@ export async function provideCloudSetupInput(input: CloudSetupJobInput): Promise
     }
     // No live runner (the answer arrived after a restart), so the poll that
     // would observe the flag is gone: skip the step outright and continue.
-    state.steps.dns = { status: 'skipped', endedAt: new Date().toISOString() }
-    await persist(state)
-    void runJob(state, { force: false })
+    // Only the dns step may be short-circuited this way — should a later kind
+    // ever reuse 'dns-confirm', marking dns 'skipped' from another step would
+    // silently skip work that never ran, so fall through to runJob untouched.
+    if (state.currentStep === 'dns') {
+      state.steps.dns = { status: 'skipped', endedAt: new Date().toISOString() }
+      await persist(state)
+    }
+    void runJob(state, { force: state.force === true })
     return state
   }
 
@@ -402,7 +468,8 @@ export async function provideCloudSetupInput(input: CloudSetupJobInput): Promise
     credentialStore.set(state.id, input.credentials)
   } else if (kind === 'vm-ip') {
     const ip = (input.ip ?? '').trim()
-    if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip)) throw new Error('Enter a valid IPv4 address')
+    const octet = '(?:25[0-5]|2[0-4]\\d|1\\d{2}|[1-9]?\\d)'
+    if (!new RegExp(`^(?:${octet}\\.){3}${octet}$`).test(ip)) throw new Error('Enter a valid IPv4 address')
     state.ip = ip
     if (state.domainMode === 'sslip') state.domain = sslipHostname(ip)
   }
@@ -411,7 +478,7 @@ export async function provideCloudSetupInput(input: CloudSetupJobInput): Promise
   state.awaitingInput = undefined
   await persist(state)
   emitProgress(state)
-  void runJob(state, { force: active?.force === true })
+  void runJob(state, { force: active?.force === true || state.force === true })
   return state
 }
 
@@ -421,6 +488,10 @@ export async function retryCloudSetupJob(): Promise<CloudSetupJobState> {
   if (!state) throw new Error('No cloud setup job exists')
   if (state.status === 'running') throw new Error('Job is already running')
   if (state.status === 'done') throw new Error('Job already finished')
+  // A cancelled job is terminal: the UI only offers Retry on a failed one, and
+  // resurrecting one over the raw API would restart a runner the operator
+  // deliberately stopped (its credential is already gone from the store).
+  if (state.status === 'cancelled') throw new Error('Job was cancelled — start a new one')
 
   // The failed step (or the current one) goes back to pending so the loop
   // re-enters it; every earlier done/skipped step is left alone.
@@ -430,7 +501,8 @@ export async function retryCloudSetupJob(): Promise<CloudSetupJobState> {
   state.awaitingInput = undefined
   await persist(state)
   emitProgress(state)
-  const force = active?.force === true
+  // state.force survives a restart; active?.force is the live runner's copy.
+  const force = active?.force === true || state.force === true
   void runJob(state, { force })
   return state
 }
@@ -438,7 +510,12 @@ export async function retryCloudSetupJob(): Promise<CloudSetupJobState> {
 export async function cancelCloudSetupJob(): Promise<CloudSetupJobState | null> {
   const state = await getCloudSetupJob()
   if (!state) return null
-  if (active) active.cancelled = true
+  if (active) {
+    active.cancelled = true
+    // Reaches the work itself: a provider CLI child process or an in-flight
+    // poll, neither of which observes the cooperative flag until it returns.
+    active.controller.abort()
+  }
   credentialStore.delete(state.id)
   state.status = 'cancelled'
   state.awaitingInput = undefined
@@ -456,20 +533,45 @@ export async function cancelCloudSetupJob(): Promise<CloudSetupJobState | null> 
  * on the same stack, polls are pure). 'awaiting-input' needs nothing — the
  * answer arrives over REST. A provider credential does NOT survive a restart,
  * so a job that needs one parks on awaiting-input instead.
+ *
+ * Runs at most once per process, and never against a job a live runner already
+ * owns: server.ts binds the port ~100 lines before it calls this, so a POST
+ * /start landing in that window creates a job which resume would otherwise
+ * re-run — two runners writing one state object. A second in-process
+ * startServer() would double-resume for the same reason.
  */
+let resumed = false
+
 export async function resumeCloudSetupJobIfAny(): Promise<void> {
   if (CLOUD_MODE) return // Mac-side feature: the companion never sets one up
+  if (resumed) return
+  resumed = true
+  const runnerBefore = active
+  if (runnerBefore) {
+    log.web.info('cloud-setup: a runner is already active, skipping resume', { jobId: runnerBefore.jobId })
+    return
+  }
   const state = await getCloudSetupJob()
   if (!state) return
   if (state.status !== 'running') {
     log.web.info('cloud-setup: found a job, nothing to resume', { jobId: state.id, status: state.status })
     return
   }
+  // The await above yields, so a start could have won the race meanwhile.
+  const runnerAfter: RunnerHandle | null = active
+  if (runnerAfter) {
+    log.web.info('cloud-setup: a start beat the resume, skipping', { jobId: runnerAfter.jobId })
+    return
+  }
 
   const driver = getDriver(state.provider)
+  // Capability, not provider id: aws/azure/gcp drivers authenticate through the
+  // operator's own signed-in CLI, so there is nothing to re-collect and asking
+  // for an "API token" they ignore would just wedge the job. Only a driver that
+  // declares credentialInput:'api-token' actually needs the value back.
   const needsCredentials = driver?.createVM != null
     && state.steps.provision.status !== 'done'
-    && state.provider !== 'aws' // aws reads the operator's own CLI credentials
+    && driver?.credentialInput === 'api-token'
   if (needsCredentials && !credentialStore.has(state.id)) {
     state.status = 'awaiting-input'
     state.awaitingInput = {
@@ -483,13 +585,18 @@ export async function resumeCloudSetupJobIfAny(): Promise<void> {
   }
 
   log.web.info('cloud-setup: resuming job after restart', { jobId: state.id, step: state.currentStep })
-  void runJob(state, { force: false })
+  void runJob(state, { force: state.force === true })
 }
 
 /** Test-only: drop module state so each test file starts clean. */
 export function _resetCloudSetupJobForTesting(): void {
-  if (active) active.cancelled = true
+  if (active) {
+    active.cancelled = true
+    active.controller.abort()
+  }
   active = null
   cached = null
+  resumed = false
+  startInFlight = null
   credentialStore.clear()
 }

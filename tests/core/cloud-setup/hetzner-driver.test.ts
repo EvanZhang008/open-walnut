@@ -120,8 +120,10 @@ describe('hetznerDriver.createVM — fresh create', () => {
       instanceRef: '4711',
       domain: 'wn.example.com',
     })
-    // Adopt-check comes first, before anything is created.
-    expect(calls[0]).toMatchObject({ method: 'GET', path: '/servers?name=walnut-cloud' })
+    // Adopt-check comes first, before anything is created — and it must filter
+    // by the managed_by label too, so an operator's unrelated server that
+    // happens to be named walnut-cloud is never adopted.
+    expect(calls[0]).toMatchObject({ method: 'GET', path: '/servers?name=walnut-cloud&label_selector=managed_by%3Dopen-walnut' })
     expect(serverCreates()).toHaveLength(1)
     // Polled until running, not just once.
     expect(calls.filter((c) => c.path === '/servers/4711')).toHaveLength(3)

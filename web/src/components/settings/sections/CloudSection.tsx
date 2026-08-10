@@ -24,8 +24,11 @@ import {
   retryJob,
   startSetup,
   streamJob,
+  CLOUD_SETUP_LOG_TAIL_MAX,
   type CloudSetupJob,
+  type CloudSetupJobStatus,
   type CloudSetupProvider,
+  type CloudSetupStepId,
 } from '@/api/cloud-setup';
 import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
@@ -67,19 +70,45 @@ export function CloudSection() {
 
   /** Last SSE id, so a remount resumes from the ring instead of re-reading all. */
   const lastEventIdRef = useRef<string | undefined>(undefined);
+  /**
+   * Mirror of `job` readable from the stream/bus callbacks. Those fire far more
+   * often than React re-renders and must compare against the live job without
+   * re-subscribing on every state change.
+   */
+  const jobRef = useRef<CloudSetupJob | null>(null);
+  /** Collapses overlapping refreshJob calls — both callers arrive in bursts. */
+  const refreshInFlightRef = useRef<Promise<CloudSetupJob | null> | null>(null);
+  /** True while the SSE stream is delivering; false once it errors out. */
+  const streamLiveRef = useRef(false);
+
+  /** Single writer for the job, so `jobRef` can never lag `job`. */
+  const commitJob = useCallback((next: CloudSetupJob | null) => {
+    jobRef.current = next;
+    setJob(next);
+  }, []);
 
   const refreshJob = useCallback(async (): Promise<CloudSetupJob | null> => {
-    try {
-      const next = await getJob();
-      setJob(next);
-      // logTail is the authoritative tail; SSE deltas append to it between fetches.
-      if (next) setLogLines(next.logTail ?? []);
-      return next;
-    } catch (err) {
-      log.warn('cloud-setup', 'job fetch failed', { error: String(err) });
-      return null;
-    }
-  }, []);
+    // GET /job carries the whole logTail, so a burst of callers must share one
+    // fetch rather than each pulling their own copy.
+    const inFlight = refreshInFlightRef.current;
+    if (inFlight) return inFlight;
+    const pending = (async () => {
+      try {
+        const next = await getJob();
+        commitJob(next);
+        // logTail is the authoritative tail; SSE deltas append to it between fetches.
+        if (next) setLogLines(next.logTail ?? []);
+        return next;
+      } catch (err) {
+        log.warn('cloud-setup', 'job fetch failed', { error: String(err) });
+        return null;
+      } finally {
+        refreshInFlightRef.current = null;
+      }
+    })();
+    refreshInFlightRef.current = pending;
+    return pending;
+  }, [commitJob]);
 
   // Mount probe: is a job in flight, and is a companion already wired up?
   useEffect(() => {
@@ -102,42 +131,62 @@ export function CloudSection() {
   useEffect(() => {
     const close = streamJob({
       onSnapshot: (snapshot) => {
-        setJob(snapshot);
+        streamLiveRef.current = true;
+        commitJob(snapshot);
         setLogLines(snapshot.logTail ?? []);
       },
       onProgress: (progress) => {
-        setJob((prev) => {
-          // A progress frame for a job we've never fetched (started elsewhere):
-          // pull the full state rather than rendering half of it.
-          if (!prev || prev.id !== progress.jobId) {
-            void refreshJob();
-            return prev;
-          }
-          return {
-            ...prev,
-            status: progress.status,
-            currentStep: progress.currentStep,
-            steps: progress.steps,
-            awaitingInput: progress.awaitingInput,
-            error: progress.error,
-            updatedAt: progress.updatedAt,
-          };
+        streamLiveRef.current = true;
+        const prev = jobRef.current;
+        // A progress frame for a job we've never fetched (started elsewhere):
+        // pull the full state rather than rendering half of it. The latch inside
+        // refreshJob keeps the frame burst down to one fetch.
+        if (!prev || prev.id !== progress.jobId) {
+          void refreshJob();
+          // Lines from a job we're not rendering would contaminate the tail of
+          // the one we are; the fetch brings the right tail with it.
+          return;
+        }
+        commitJob({
+          ...prev,
+          status: progress.status,
+          currentStep: progress.currentStep,
+          steps: progress.steps,
+          awaitingInput: progress.awaitingInput,
+          error: progress.error,
+          updatedAt: progress.updatedAt,
         });
         if (progress.logLines?.length) {
-          setLogLines((prev) => [...prev, ...progress.logLines!].slice(-200));
+          setLogLines((lines) => [...lines, ...progress.logLines!].slice(-CLOUD_SETUP_LOG_TAIL_MAX));
         }
       },
       onEventId: (id) => { lastEventIdRef.current = id; },
       onError: () => {
         // The stream is best-effort; the bus event below is the belt.
+        streamLiveRef.current = false;
         log.warn('cloud-setup', 'progress stream dropped — relying on bus events');
       },
     }, lastEventIdRef.current);
-    return close;
-  }, [refreshJob]);
+    return () => {
+      streamLiveRef.current = false;
+      close();
+    };
+  }, [commitJob, refreshJob]);
 
-  // Belt for a dropped/absent stream: the bus event carries only ids, so refetch.
-  useEvent('cloud-setup:update', () => { void refreshJob(); });
+  // Belt for a dropped/absent stream. The server also emits this event on every
+  // 250ms log batch, so an ungated refetch would mean several full GET /job
+  // (each carrying the whole logTail) per second for the minutes a deploy runs.
+  // Refetch only for what the belt exists to catch: a status/step transition the
+  // stream didn't deliver, a job id we don't know, or a dead stream.
+  useEvent('cloud-setup:update', (data) => {
+    const payload = data as { jobId?: string; status?: CloudSetupJobStatus; currentStep?: CloudSetupStepId } | null;
+    const current = jobRef.current;
+    const transitioned = !current
+      || current.id !== payload?.jobId
+      || current.status !== payload?.status
+      || current.currentStep !== payload?.currentStep;
+    if (transitioned || !streamLiveRef.current) void refreshJob();
+  });
 
   const loadProviders = useCallback(async () => {
     setError(null);
@@ -162,7 +211,7 @@ export function CloudSection() {
         ...(values.instanceType ? { instanceType: values.instanceType } : {}),
         ...(values.credentials ? { credentials: values.credentials } : {}),
       });
-      setJob(res.job);
+      commitJob(res.job);
       setLogLines(res.job.logTail ?? []);
       // The token was handed to the server; don't keep a copy in React state.
       setValues((prev) => ({ ...prev, credentials: '' }));
@@ -172,7 +221,7 @@ export function CloudSection() {
     } finally {
       setBusy(false);
     }
-  }, [selected, values]);
+  }, [selected, values, commitJob]);
 
   /** Every job action shares this shape: run it, adopt the returned state. */
   const act = useCallback(async (
@@ -184,10 +233,10 @@ export function CloudSection() {
     try {
       const res = await fn();
       if ('job' in res) {
-        setJob(res.job);
+        commitJob(res.job);
         setLogLines(res.job.logTail ?? []);
       } else {
-        setJob(null);
+        commitJob(null);
         setLogLines([]);
         setStage('hero');
         setSelected(null);
@@ -201,19 +250,28 @@ export function CloudSection() {
     } finally {
       setBusy(false);
     }
-  }, [job?.id, refreshJob]);
+  }, [job?.id, refreshJob, commitJob]);
 
   const selectedProvider = providers?.find((p) => p.id === selected) ?? null;
 
+  /** A finished-unhappily job record. Kept, but it must not outrank reality. */
+  const terminalJob = job?.status === 'failed' || job?.status === 'cancelled';
+
   const view: 'loading' | 'live' | 'done' | 'configured' | Stage = loading
     ? 'loading'
-    : isLive(job) || job?.status === 'failed' || job?.status === 'cancelled'
+    : isLive(job)
       ? 'live'
       : job?.status === 'done'
         ? 'done'
+        // A working companion outranks a stale failed/cancelled record: an
+        // operator whose cloud sync is fine shouldn't land on a failure screen
+        // from a setup they already worked around. The record stays dismissible
+        // from the configured card below.
         : cloudOrigin
           ? 'configured'
-          : stage;
+          : terminalJob
+            ? 'live'
+            : stage;
 
   return (
     <SectionCard
@@ -345,6 +403,20 @@ export function CloudSection() {
               off Wi-Fi. Replacing an existing companion isn&apos;t supported from this screen yet —
               remove the cloud git remote first if you need to start over.
             </p>
+            {terminalJob && (
+              <>
+                <p className="cloud-hint">
+                  There&apos;s also an old setup attempt on record that {job?.status === 'failed' ? 'failed' : 'was cancelled'}.
+                  Your companion is working, so you can clear it.
+                </p>
+                <div className="cloud-actions">
+                  <button type="button" className="btn" disabled={busy} onClick={() => void act('clear', clearJob)}>
+                    Clear old attempt
+                  </button>
+                </div>
+              </>
+            )}
+            {error && <p className="devices-error">{error}</p>}
           </div>
         )}
       </div>

@@ -54,6 +54,29 @@ describe('redactSensitiveText', () => {
     expect(result).not.toContain('mysecretpassword');
   });
 
+  it('masks credentials embedded in a URL (git remote error message)', () => {
+    // execSync puts the whole command in error.message, so a failed git remote
+    // add leaked the cloud companion's device token — the credential that
+    // authenticates the entire Mac↔EC2 data plane — in plain text.
+    const input =
+      'Command failed: git remote add origin https://walnut:9f8e7d6c5b4a39281706@host.example.com/git/data';
+    const result = redactSensitiveText(input);
+    expect(result).not.toContain('9f8e7d6c5b4a39281706');
+    expect(result).toBe(
+      'Command failed: git remote add origin https://walnut:[REDACTED]@host.example.com/git/data',
+    );
+  });
+
+  it('leaves a URL without userinfo untouched', () => {
+    const input = 'cloning https://github.com/acme/repo.git into /opt/walnut';
+    expect(redactSensitiveText(input)).toBe(input);
+  });
+
+  it('keeps the scheme and username when redacting user:pass@ URLs', () => {
+    const result = redactSensitiveText('http://admin:hunter2@203.0.113.7:8080/api');
+    expect(result).toBe('http://admin:[REDACTED]@203.0.113.7:8080/api');
+  });
+
   it('preserves normal text unchanged', () => {
     const input = 'Hello world, this is a normal log message';
     const result = redactSensitiveText(input);

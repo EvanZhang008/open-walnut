@@ -25,6 +25,12 @@ const gitCalls: { initSync: string[]; syncCount: number; lsRemote: number } = {
 let cloudRemote: { domain: string; token: string; secure: boolean } | null = null
 let syncShouldFail = false
 let lsRemoteAnswer: string | null = 'ref\tHEAD'
+/**
+ * Mirrors the real initSync's failure mode: it is execSync-backed, so a git
+ * failure throws an Error whose message embeds the whole command line — i.e.
+ * the credentialed remote URL.
+ */
+let initSyncShouldThrow = false
 
 vi.mock('../../../src/integrations/git-sync.js', () => ({
   getCloudRemoteCredentials: () => cloudRemote,
@@ -33,6 +39,9 @@ vi.mock('../../../src/integrations/git-sync.js', () => ({
   // uses to stay idempotent, so a fake that skipped it would hide the bug.
   initSync: (url?: string) => {
     if (!url) return
+    if (initSyncShouldThrow) {
+      throw new Error(`Command failed: git remote add origin ${url}\nfatal: could not lock config file`)
+    }
     gitCalls.initSync.push(url)
     const parsed = new URL(url)
     cloudRemote = { domain: parsed.host, token: parsed.password, secure: parsed.protocol === 'https:' }
@@ -212,6 +221,7 @@ beforeEach(async () => {
   gitCalls.initSync = []; gitCalls.syncCount = 0; gitCalls.lsRemote = 0
   cloudRemote = null
   syncShouldFail = false
+  initSyncShouldThrow = false
   lsRemoteAnswer = 'ref\tHEAD'
   box = { claimed: false, bootedAfter: 0, claimCalls: [], statusCalls: 0, issuedToken: 'devtok-abc123' }
   installFetchStub()
@@ -441,8 +451,16 @@ describe('crash-resume', () => {
     expect((await getCloudSetupJob())?.status).toBe('done')
   })
 
-  it('a non-aws driver needing a credential parks on awaiting-input after a restart', async () => {
-    const driver = { ...makeAutoDriver(), id: 'hetzner' as const, label: 'Fake Token Driver' }
+  it('an api-token driver needing a credential parks on awaiting-input after a restart', async () => {
+    // credentialInput is what makes the job re-ask, NOT the provider id: the
+    // CLI-credential drivers (aws/azure/gcp) read the operator's own signed-in
+    // CLI, so re-asking them for a token they ignore would wedge the job.
+    const driver = {
+      ...makeAutoDriver(),
+      id: 'hetzner' as const,
+      label: 'Fake Token Driver',
+      credentialInput: 'api-token' as const,
+    }
     restores.push(_setCloudProviderDriverForTesting('hetzner', driver))
     box.bootedAfter = 10_000
     await startCloudSetupJob({ provider: 'hetzner', domainMode: 'own-domain', domain: ORIGIN, credentials: 'secret-token' })
@@ -469,6 +487,95 @@ describe('crash-resume', () => {
     box.bootedAfter = 0
     const done = await waitFor((s) => s.status === 'done' || s.status === 'failed', 'terminal state')
     expect(done.status).toBe('done')
+  })
+
+  it('a CLI-credential driver resumes without asking for a token it would ignore', async () => {
+    // The complement of the case above, and the actual bug: the predicate used
+    // to be `provider !== 'aws'`, so azure/gcp operators were parked forever on
+    // a prompt for an API token their driver never reads.
+    const driver: FakeDriver = { ...makeAutoDriver(), id: 'azure', label: 'Fake CLI Driver' }
+    expect(driver.credentialInput).toBeUndefined()
+    restores.push(_setCloudProviderDriverForTesting('azure', driver))
+    box.bootedAfter = 10_000
+    await startCloudSetupJob({ provider: 'azure', domainMode: 'own-domain', domain: ORIGIN })
+    await waitFor((s) => s.steps.provision.status === 'done', 'provision done')
+
+    const state = await waitForOnDisk((s) => s.steps.provision.status === 'done', 'provision done on disk')
+    _resetCloudSetupJobForTesting()
+    state.currentStep = 'provision'
+    state.steps.provision = { status: 'pending' }
+    state.status = 'running'
+    await fs.writeFile(jobFile(), JSON.stringify(state))
+    box.bootedAfter = 0
+    await restart()
+
+    // Straight through to done — never parked on 'credentials'.
+    const done = await waitFor((s) => s.status === 'done' || s.status === 'failed', 'terminal state')
+    expect(done.status).toBe('done')
+    expect(done.awaitingInput).toBeUndefined()
+  })
+
+  it('resume is a no-op when a start already armed a runner', async () => {
+    // server.ts binds the port ~100 lines before it calls resume, so a POST
+    // /start can land in that window. Two runners on one state object is the
+    // failure this guards.
+    const driver = useDriver(makeAutoDriver())
+    box.bootedAfter = 10_000
+    await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
+    await waitFor((s) => s.steps.provision.status === 'done', 'provision done')
+
+    // Do NOT reset: the live runner stays, exactly as in the real race.
+    await resumeCloudSetupJobIfAny()
+    box.bootedAfter = 0
+    const done = await waitFor((s) => s.status === 'done' || s.status === 'failed', 'terminal state')
+    expect(done.status).toBe('done')
+    // One provision, one claim: the resume did not start a second runner.
+    expect(driver.createVMCalls).toHaveLength(1)
+    expect(box.claimCalls).toHaveLength(1)
+  })
+
+  it('resume runs at most once per process', async () => {
+    const driver = useDriver(makeAutoDriver())
+    box.bootedAfter = 10_000
+    await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
+    await waitForOnDisk((s) => s.steps.provision.status === 'done', 'provision done on disk')
+    _resetCloudSetupJobForTesting()
+
+    box.bootedAfter = 0
+    await resumeCloudSetupJobIfAny()
+    // A second startServer() in-process must not re-enter the job.
+    await resumeCloudSetupJobIfAny()
+    const done = await waitFor((s) => s.status === 'done' || s.status === 'failed', 'terminal state')
+    expect(done.status).toBe('done')
+    expect(driver.createVMCalls).toHaveLength(1)
+    expect(box.claimCalls).toHaveLength(1)
+  })
+
+  it('force survives a restart so a retry can still replace an existing companion', async () => {
+    // Without persisting force, preflight's "already configured" guard re-throws
+    // on every post-restart retry and the operator has no way to re-consent.
+    useDriver(makeAutoDriver())
+    cloudRemote = { domain: 'other.example.com', token: 'tok', secure: true }
+    box.bootedAfter = 10_000
+    await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN, force: true })
+    const onDisk = await waitForOnDisk((s) => s.steps.preflight.status === 'done', 'preflight done on disk')
+    expect(onDisk.force).toBe(true)
+
+    // Reload from disk only — the in-memory handle that used to hold `force` is
+    // gone, so a retry has nothing but the file to learn the consent from.
+    _resetCloudSetupJobForTesting()
+    const reloaded = await getCloudSetupJob()
+    expect(reloaded?.force).toBe(true)
+    reloaded!.status = 'failed'
+    reloaded!.currentStep = 'preflight'
+    reloaded!.steps.preflight = { status: 'error', error: 'boom' }
+    await fs.writeFile(jobFile(), JSON.stringify(reloaded))
+    _resetCloudSetupJobForTesting()
+
+    box.bootedAfter = 0
+    await retryCloudSetupJob()
+    const done = await waitFor((s) => s.status === 'done' || s.status === 'failed', 'terminal after retry')
+    expect(done.status, done.error ?? '').toBe('done')
   })
 })
 
@@ -597,6 +704,50 @@ describe('failure and retry', () => {
     expect(gitCalls.initSync).toHaveLength(0)
   })
 
+  it('an initSync failure after the claim redacts the device token and says how to recover', async () => {
+    // The residual window the claim+wire step's "one step so a crash can't lose
+    // it" rationale does NOT cover: initSync is execSync-backed, so a git
+    // failure throws — and execSync puts the whole command line, credentialed
+    // URL included, in error.message.
+    useDriver(makeAutoDriver())
+    initSyncShouldThrow = true
+    await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
+    const failed = await waitFor((s) => s.status === 'failed', 'failed')
+
+    expect(failed.currentStep).toBe('claim-and-wire')
+    // The box IS claimed — that is why the token cannot be re-read.
+    expect(box.claimCalls).toHaveLength(1)
+    const surfaces = [failed.error ?? '', failed.steps['claim-and-wire'].error ?? '', failed.logTail.join('\n')]
+    for (const surface of surfaces) {
+      expect(surface).not.toContain('devtok-abc123')
+    }
+    expect(failed.error).toContain('<redacted>')
+    // Recovery guidance, consistent with what awaitServer tells the operator.
+    expect(failed.error).toMatch(/auth\.json/)
+    expect(failed.error).toMatch(/IS claimed now/)
+  })
+
+  it('a stale credentialed remote does not erase the pairing code', async () => {
+    // getCloudRemoteCredentials only proves a credentialed remote EXISTS. If its
+    // token no longer authenticates, erasing the code on that assumption is
+    // unrecoverable: verify-sync fails and retry has nothing left to claim with.
+    useDriver(makeAutoDriver())
+    cloudRemote = { domain: '127.0.0.1:9', token: 'stale-token', secure: false }
+    lsRemoteAnswer = null // the existing credential fails authentication
+    await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN, force: true })
+    const settled = await waitFor((s) => s.status === 'done' || s.status === 'failed', 'terminal state')
+
+    // The claim was attempted rather than skipped, and it succeeded against the
+    // unclaimed box, so the job wired a FRESH device token.
+    expect(box.claimCalls).toHaveLength(1)
+    expect(gitCalls.initSync).toHaveLength(1)
+    expect(gitCalls.initSync[0]).toContain('devtok-abc123')
+    // It then fails at verify-sync (ls-remote still stubbed to null) — the point
+    // is that it got that far with a real credential instead of dying with the
+    // code already erased.
+    expect(settled.currentStep).toBe('verify-sync')
+  })
+
   it('verify-sync fails when the companion will not answer ls-remote', async () => {
     useDriver(makeAutoDriver())
     lsRemoteAnswer = null
@@ -617,6 +768,59 @@ describe('job lifecycle', () => {
     await waitFor((s) => s.status === 'running' || s.status === 'awaiting-input', 'in flight')
     await expect(startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN }))
       .rejects.toThrow(CloudSetupJobExistsError)
+    await cancelCloudSetupJob()
+  })
+
+  it('two concurrent starts produce exactly one job, the loser throwing', async () => {
+    // Two browser tabs, or the wizard racing the shipped skill: both used to
+    // pass the existing-job check and both spawned a runner, and the loser's
+    // provider token lingered in the credential store forever.
+    const driver = useDriver(makeAutoDriver())
+    box.bootedAfter = 10_000
+    const results = await Promise.allSettled([
+      startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN, credentials: 'tok-a' }),
+      startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN, credentials: 'tok-b' }),
+    ])
+    const fulfilled = results.filter((r) => r.status === 'fulfilled')
+    const rejected = results.filter((r) => r.status === 'rejected')
+    expect(fulfilled).toHaveLength(1)
+    expect(rejected).toHaveLength(1)
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(CloudSetupJobExistsError)
+
+    // One runner, so one VM.
+    await waitFor((s) => s.steps.provision.status === 'done', 'provision done')
+    expect(driver.createVMCalls).toHaveLength(1)
+    const winner = (fulfilled[0] as PromiseFulfilledResult<CloudSetupJobState>).value
+    expect((await getCloudSetupJob())?.id).toBe(winner.id)
+    await cancelCloudSetupJob()
+  })
+
+  it('retry refuses to resurrect a cancelled job', async () => {
+    // The UI only offers Retry on a failed job, but the raw API is reachable —
+    // and a cancelled job's credential is already gone from the store.
+    useDriver(makeAutoDriver())
+    box.bootedAfter = 10_000
+    await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
+    await waitFor((s) => s.steps.provision.status === 'done', 'provision done')
+    await cancelCloudSetupJob()
+
+    await expect(retryCloudSetupJob()).rejects.toThrow(/cancelled/)
+    box.bootedAfter = 0
+    await new Promise((r) => setTimeout(r, 60))
+    expect((await getCloudSetupJob())?.status).toBe('cancelled')
+    expect(box.claimCalls).toHaveLength(0)
+  })
+
+  it('rejects an IPv4 address with out-of-range octets', async () => {
+    useDriver(makeManualDriver())
+    await startCloudSetupJob({ provider: 'manual', domainMode: 'own-domain', domain: ORIGIN })
+    await waitFor((s) => s.status === 'awaiting-input', 'awaiting-input')
+    for (const bad of ['999.999.999.999', '256.0.0.1', '203.0.113.256', '1.2.3.4.5', '01.2.3.4']) {
+      await expect(provideCloudSetupInput({ ip: bad }), bad).rejects.toThrow(/valid IPv4/)
+    }
+    // And a legitimately high address still passes.
+    await provideCloudSetupInput({ ip: '255.255.255.254' })
+    expect((await getCloudSetupJob())?.ip).toBe('255.255.255.254')
     await cancelCloudSetupJob()
   })
 
@@ -708,12 +912,23 @@ describe('job lifecycle', () => {
     // carries `-c userDataB64=<base64 of the boot script>` — and that script
     // embeds the pairing code. Unredacted, the secret would reach logTail and
     // from there the SSE stream and every REST response.
+    //
+    // The oracle is a DIRECT assertion on the blob the driver emitted, not a
+    // token-decoding scan: an earlier version of this test split each line on
+    // whitespace and decoded tokens, which sees `userDataB64=<blob>` as one
+    // non-base64 token and therefore passed while the real leak was live. The
+    // three shapes below are the ones that regression covered up — `key=<blob>`,
+    // a `--flag=<blob>`, and a single junk character glued to the blob.
     const base = makeAutoDriver()
+    let emitted = ''
     const leaky: FakeDriver = {
       ...base,
       createVM: async (params, onLog) => {
         const b64 = Buffer.from(params.userData, 'utf-8').toString('base64')
+        emitted = b64
         onLog(`$ npx cdk deploy -c userDataB64=${b64}`)
+        onLog(`$ provider vm create --user-data=${b64}`)
+        onLog(`A${b64}`)
         return { ip: '203.0.113.10', instanceRef: 'i-fake', domain: params.domain as string }
       },
     }
@@ -724,15 +939,14 @@ describe('job lifecycle', () => {
 
     const code = box.claimCalls[0].setupToken
     const joined = done.logTail.join('\n')
-    // Neither the raw code nor a base64 blob that decodes to it.
     expect(joined).not.toContain(code)
-    for (const line of done.logTail) {
-      for (const token of line.split(/\s+/)) {
-        if (token.length < 64) continue
-        const decoded = Buffer.from(token, 'base64').toString('utf-8')
-        expect(decoded).not.toContain(code)
-      }
-    }
+    // The blob itself is gone, in every shape it was logged in. A 200-char
+    // prefix rather than the whole thing so a partially-scrubbed line still
+    // fails the assertion.
+    expect(emitted.length).toBeGreaterThan(200)
+    expect(joined).not.toContain(emitted.slice(0, 200))
+    expect(joined).toContain('userDataB64=<redacted>')
+    expect(joined).toContain('--user-data=<redacted>')
   })
 
   it('logTail is ring-capped and never contains the pairing code', async () => {

@@ -12,6 +12,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants());
 
 import { WALNUT_HOME } from '../../src/constants.js';
+import { log } from '../../src/logging/index.js';
 import {
   createDevice,
   verifyDeviceToken,
@@ -401,6 +402,64 @@ describe('provisioned setup token (pairing code)', () => {
       const setup = await getSetupTokenIfUnclaimed();
       expect(setup!.provisioned).toBe(false);
       expect(setup!.token).toMatch(/^[0-9a-f]{32}$/);
+    });
+  });
+
+  // An absent file means "not provisioned"; an existing-but-unreadable file means
+  // the operator holds a pairing code that will never work. Collapsing the two
+  // into a bare `catch { return null }` hid a real EACCES for a whole release
+  // (/etc/walnut was root 0700, so the service user could not traverse it).
+  describe('unreadable vs absent token file', () => {
+    let errors: Array<{ message: string; meta?: Record<string, unknown> }>;
+    let spy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      errors = [];
+      spy = vi.spyOn(log.web, 'error').mockImplementation((message, meta) => {
+        errors.push({ message, meta });
+      });
+    });
+
+    afterEach(() => {
+      spy.mockRestore();
+    });
+
+    it('ENOENT stays silent — that is the normal non-provisioned box', async () => {
+      process.env.WALNUT_SETUP_TOKEN_FILE = path.join(tokenDir, 'does-not-exist');
+      const setup = await getSetupTokenIfUnclaimed();
+      expect(setup!.provisioned).toBe(false);
+      expect(errors).toEqual([]);
+    });
+
+    it('a path that is a directory (EISDIR) logs an error naming the path and errno', async () => {
+      const dirPath = path.join(tokenDir, 'setup-token-dir');
+      await fs.mkdir(dirPath);
+      process.env.WALNUT_SETUP_TOKEN_FILE = dirPath;
+
+      const setup = await getSetupTokenIfUnclaimed();
+      // Still falls back, so the box stays claimable out of band.
+      expect(setup!.provisioned).toBe(false);
+      expect(setup!.token).toMatch(/^[0-9a-f]{32}$/);
+
+      expect(errors).toHaveLength(1);
+      expect(errors[0].message).toMatch(/could not be read/);
+      expect(errors[0].message).toMatch(/pairing code will NOT claim/);
+      expect(errors[0].meta!.file).toBe(dirPath);
+      expect(errors[0].meta!.code).toBe('EISDIR');
+    });
+
+    it('a mode-000 file (EACCES) logs an error — the shape the /etc/walnut bug produced', async () => {
+      if (process.getuid?.() === 0) return; // root ignores the mode
+      await fs.writeFile(tokenFile(), PAIRING_CODE, 'utf-8');
+      await fs.chmod(tokenFile(), 0o000);
+      process.env.WALNUT_SETUP_TOKEN_FILE = tokenFile();
+
+      const setup = await getSetupTokenIfUnclaimed();
+      expect(setup!.provisioned).toBe(false);
+      expect(errors).toHaveLength(1);
+      expect(errors[0].meta!.code).toBe('EACCES');
+      // The error must not echo the secret it failed to read.
+      expect(JSON.stringify(errors[0])).not.toContain(PAIRING_CODE);
     });
   });
 

@@ -377,8 +377,19 @@ async function readProvisionedSetupToken(): Promise<{ token: string; source: 'en
       source = 'file'
       try {
         candidate = await fs.readFile(file, 'utf-8')
-      } catch {
-        return null // absent/unreadable file is the normal non-provisioned case
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code
+        if (code !== 'ENOENT') {
+          // Only ENOENT is the normal "this box wasn't provisioned" case. EACCES
+          // in particular means the file IS there and the operator's pairing
+          // code is dead — that failure was invisible for a whole release.
+          log.web.error('device-auth: provisioned setup token file exists but could not be read — falling back to a random setup token, so the pairing code will NOT claim this instance', {
+            file,
+            code,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+        return null
       }
     }
   }

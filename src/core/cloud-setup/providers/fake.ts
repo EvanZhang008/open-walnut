@@ -64,11 +64,12 @@ function instructions(params: InstructionsParams): DriverInstructions {
 }
 
 export const fakeDriver: CloudProviderDriver = {
-  // Takes an unshipped slot from the id union rather than shadowing `aws` or
-  // `manual`: the fixture must exercise the SAME code paths the real drivers do,
-  // and replacing a real driver would hide a regression in it. When a real gcp
-  // driver lands, move this to whichever id is still unimplemented.
-  id: 'gcp',
+  // Its own id, never a shipped provider's slot. It originally borrowed 'gcp'
+  // while that was an empty placeholder — then the real gcp driver landed and
+  // the registry's Map.set silently REPLACED it in fixture mode, making the
+  // real GCP card unreachable from every browser test. A registry guard in
+  // index.ts now makes that collision loud instead of silent.
+  id: 'fake',
   label: 'Fake provider (test fixture)',
   costHint: 'free — provisions nothing',
   detectCreds,

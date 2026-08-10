@@ -89,7 +89,9 @@ export function CloudConfigureForm({ provider, values, onChange, onBack, onStart
             <span className="cloud-radio-note">
               Start in 5 minutes with no registrar — the box serves itself at
               <code>&lt;dashed-ip&gt;.sslip.io</code>. For long-term use we recommend your own
-              domain: the address changes if the IP ever does.
+              domain: the address changes if the IP ever does, and because sslip.io shares one
+              set of Let&apos;s Encrypt rate limits across every user worldwide, the first
+              certificate can occasionally take a while to issue.
             </span>
           </span>
         </label>

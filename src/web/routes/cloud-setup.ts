@@ -238,7 +238,11 @@ cloudSetupRouter.get('/user-data', async (req, res, next) => {
       : ((typeof req.query.domain === 'string' && req.query.domain) || job.domain)
     if (!domain) return badRequest(res, 'own-domain mode requires a domain')
 
-    const userData = buildUserData({ domain, pairingCode: job.pairingCode, flavor: 'al2023' })
+    // Same flavor the provision step would have used, so the blob an operator
+    // copies for a Hetzner box reaches for apt rather than dnf.
+    const userData = buildUserData({
+      domain, pairingCode: job.pairingCode, flavor: driver.userDataFlavor ?? 'al2023',
+    })
     const instructions = driver.instructions({ userData, domain, domainMode, region: job.region, instanceType: job.instanceType })
     res.json({ userData, steps: instructions.steps, consoleUrl: instructions.consoleUrl })
   } catch (err) {

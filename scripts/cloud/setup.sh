@@ -377,7 +377,15 @@ echo "==> [8/9] walnut.service"
 # it git-syncs through the data hub, and cloud-held secrets must never ride
 # a repo. Idempotent + best-effort — a missing parameter just means that
 # feature stays off.
-mkdir -p /etc/walnut
+# The dir must be OWNED by the service user, not root:walnut 0750: after a
+# successful claim the server unlinks /etc/walnut/setup-token, and unlink needs
+# write permission on the DIRECTORY. Re-tightening this to root 0700 looks like
+# hardening but silently breaks both traversal (EACCES on the token read) and
+# that cleanup. `mkdir -p` is not enough — cloud-init already created the dir
+# as root 0700 before this script runs, and mkdir -p does not change the mode
+# of an existing dir. systemd reads EnvironmentFile= as root, so walnut.env is
+# unaffected either way.
+install -d -m 700 -o "$WALNUT_USER" -g "$WALNUT_USER" /etc/walnut
 touch /etc/walnut/walnut.env
 # Non-AWS providers (and a hand-run of this script off-instance) have no aws CLI;
 # every SSM lookup below is optional, so skip the whole block rather than eating

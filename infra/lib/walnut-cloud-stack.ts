@@ -114,6 +114,15 @@ export class WalnutCloudStack extends cdk.Stack {
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/walnut/*`],
     }))
 
+    // ── Elastic IP ──────────────────────────────────────────────────────
+    // Declared BEFORE the user-data so the boot script can be handed the final
+    // public address (see WALNUT_PUBLIC_IP below). The EIP itself depends on
+    // nothing, so CloudFormation is free to create it first.
+    const eip = new ec2.CfnEIP(this, 'Eip', {
+      domain: 'vpc',
+      tags: [{ key: 'Name', value: 'walnut-cloud' }],
+    })
+
     // ── User data: minimal bootstrap, real logic lives in the repo ──────
     // Two shapes, on purpose:
     //
@@ -135,16 +144,23 @@ export class WalnutCloudStack extends cdk.Stack {
     const userData = ec2.UserData.forLinux()
     if (userDataB64) {
       userData.addCommands(
+        // The box learns its FINAL public address on first boot, even though the
+        // association below only lands mid-boot: the subnet auto-assigns a
+        // different ephemeral address at launch, so metadata cannot be trusted
+        // for the sslip.io hostname. Caddy's ACME retry loop absorbs the window
+        // before the association completes. Harmless when the script ignores it.
+        `export WALNUT_PUBLIC_IP=${eip.ref}`,
         `echo ${userDataB64} | base64 -d > /run/walnut-bootstrap.sh`,
         'bash /run/walnut-bootstrap.sh',
       )
     } else {
       // IMDSv2 only — the instance sets requireImdsv2, so a tokenless (v1) read
       // of the metadata service returns 401 and would leave $DOMAIN empty.
-      // Walnut's generated script has a more patient version of this (it polls
-      // until two reads agree, since the EIP association can land after
-      // cloud-init starts); these lines are the minimal equivalent for someone
-      // deploying the CDK app by hand with -c sslip=1.
+      // Caveat for this hand-deploy path: metadata returns the subnet's
+      // auto-assigned address, which is NOT the Elastic IP the association
+      // attaches later — so the derived hostname points at an address that
+      // stops being ours. The provisioner path above avoids this by exporting
+      // WALNUT_PUBLIC_IP. Prefer -c domain=… when deploying this app by hand.
       const resolveHost = [
         'TOKEN=$(curl -4 -sS -m 5 -X PUT http://169.254.169.254/latest/api/token'
         + ' -H "X-aws-ec2-metadata-token-ttl-seconds: 300")',
@@ -193,11 +209,7 @@ export class WalnutCloudStack extends cdk.Stack {
     // Tag targeted by the DLM lifecycle policy below.
     cdk.Tags.of(instance).add('walnut:backup', 'daily')
 
-    // ── Elastic IP ──────────────────────────────────────────────────────
-    const eip = new ec2.CfnEIP(this, 'Eip', {
-      domain: 'vpc',
-      tags: [{ key: 'Name', value: 'walnut-cloud' }],
-    })
+    // ── Elastic IP association (the EIP is declared above the user-data) ──
     new ec2.CfnEIPAssociation(this, 'EipAssociation', {
       allocationId: eip.attrAllocationId,
       instanceId: instance.instanceId,

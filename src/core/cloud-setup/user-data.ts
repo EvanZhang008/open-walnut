@@ -100,9 +100,21 @@ function installGitBlock(flavor: UserDataFlavor): string {
 }
 
 /**
- * Resolve the public IP and derive `<dashed-ip>.sslip.io`. Polls until two
- * consecutive reads 5s apart agree — an Elastic IP association can land after
- * cloud-init starts, so the first read may be the ephemeral address.
+ * Resolve the public IP and derive `<dashed-ip>.sslip.io`.
+ *
+ * `WALNUT_PUBLIC_IP` wins when set: on AWS the stack exports the Elastic IP into
+ * the instance's user-data, so the box knows its FINAL address from first boot.
+ * That is the only reliable source there, because the EIP *association* lands
+ * mid-boot while the instance already holds a different, auto-assigned public
+ * address (the stack's subnet sets mapPublicIpOnLaunch).
+ *
+ * The polling loop below is the fallback for providers whose address at boot IS
+ * the final one (Hetzner primary IP, Azure Standard-SKU static, GCP static — all
+ * assigned at create time). It is NOT a defense against late EIP association:
+ * an unassociated instance's ephemeral public-ipv4 is itself perfectly stable,
+ * so two agreeing reads prove nothing about whether the association happened.
+ * Waiting for agreement would simply return the wrong (ephemeral) address while
+ * the operator's Walnut polls the EIP-derived hostname.
  *
  * Three probes tried in order, each fail-safe, because 169.254.169.254 is NOT
  * AWS-only. Hetzner serves its OWN metadata at that same link-local address
@@ -120,7 +132,9 @@ function installGitBlock(flavor: UserDataFlavor): string {
 function sslipResolverBlock(): string {
   return [
     'is_ipv4() {',
-    '  printf \'%s\' "$1" | grep -Eq \'^([0-9]{1,3}\\.){3}[0-9]{1,3}$\'',
+    // Octets are bounded, so a 404 body or a truncated read shaped like
+    // "999.1.2.3" cannot become the hostname.
+    '  printf \'%s\' "$1" | grep -Eq \'^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$\'',
     '}',
     '',
     'public_ip() {',
@@ -143,17 +157,24 @@ function sslipResolverBlock(): string {
     '}',
     '',
     'IP=""',
-    'prev=""',
-    '# ~3 min cap: 36 reads x 5s.',
-    'for _ in $(seq 1 36); do',
-    '  cur="$(public_ip | tr -d "[:space:]")"',
-    '  if [ -n "$cur" ] && [ "$cur" = "$prev" ]; then',
-    '    IP="$cur"',
-    '    break',
-    '  fi',
-    '  prev="$cur"',
-    '  sleep 5',
-    'done',
+    '# Provisioner-supplied authoritative address (AWS: the stack\'s Elastic IP).',
+    'if [ -n "${WALNUT_PUBLIC_IP:-}" ] && is_ipv4 "$WALNUT_PUBLIC_IP"; then',
+    '  IP="$WALNUT_PUBLIC_IP"',
+    '  echo "using provisioned public IP: $IP"',
+    'fi',
+    'if [ -z "$IP" ]; then',
+    '  prev=""',
+    '  # ~3 min cap: 36 reads x 5s.',
+    '  for _ in $(seq 1 36); do',
+    '    cur="$(public_ip | tr -d "[:space:]")"',
+    '    if [ -n "$cur" ] && [ "$cur" = "$prev" ]; then',
+    '      IP="$cur"',
+    '      break',
+    '    fi',
+    '    prev="$cur"',
+    '    sleep 5',
+    '  done',
+    'fi',
     'if [ -z "$IP" ]; then',
     '  echo "could not determine a stable public IP for sslip.io hostname" >&2',
     '  exit 1',
@@ -196,6 +217,9 @@ export function buildUserData(params: BuildUserDataParams): string {
     '# The one place the code touches this box. printf puts it in argv for the',
     '# duration of one builtin call, which is unavoidable when writing a secret',
     '# from a script; it is never passed to setup.sh, exported, or echoed.',
+    // root-owned 0700 is deliberately TEMPORARY: setup.sh re-owns the dir to the
+    // service user, which is what lets the server traverse it AND unlink the
+    // spent token after a claim. Do not "harden" it back to root here.
     'install -d -m 700 /etc/walnut',
     `printf '%s' ${shellQuote(pairingCode)} > /etc/walnut/setup-token`,
     'chmod 600 /etc/walnut/setup-token',

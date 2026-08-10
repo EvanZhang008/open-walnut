@@ -36,7 +36,8 @@ export const CLOUD_SETUP_STEP_IDS: readonly CloudSetupStepId[] = [
   'done',
 ] as const
 
-export type CloudSetupProviderId = 'aws' | 'hetzner' | 'azure' | 'gcp' | 'manual'
+/** 'fake' is the fixture-only driver (WALNUT_CLOUD_SETUP_FAKE=1) — never shipped in the UI's picker outside tests. */
+export type CloudSetupProviderId = 'aws' | 'hetzner' | 'azure' | 'gcp' | 'manual' | 'fake'
 
 /** 'sslip' = derive the hostname from the public IP (no DNS registrar step). */
 export type CloudSetupDomainMode = 'own-domain' | 'sslip'
@@ -77,6 +78,14 @@ export interface CloudSetupJobState {
    * runner erases it from the persisted state the moment the claim succeeds.
    */
   pairingCode?: string
+  /**
+   * The operator started this job with force, i.e. explicitly consented to
+   * replace an existing companion. Persisted on purpose (optional, so older
+   * files still load): preflight deliberately refuses when cloud sync is already
+   * configured, and without this a restart would drop the consent and make
+   * every retry re-throw "already configured" with no way to re-assert it.
+   */
+  force?: boolean
   status: CloudSetupJobStatus
   currentStep: CloudSetupStepId
   steps: Record<CloudSetupStepId, CloudSetupStepState>

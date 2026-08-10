@@ -19,7 +19,9 @@
 
 import { log } from '../../../logging/index.js'
 import { sslipHostname } from '../user-data.js'
-import { cliErrorDetail, CliMissingError, cliVerb, runCli, withSecretFile, type CliResult } from './cli-exec.js'
+import {
+  cliErrorDetail, CliMissingError, cliVerb, parseJsonSafe, runCli, withSecretFile, type CliResult,
+} from './cli-exec.js'
 import type {
   CloudProviderDriver,
   CreateVMParams,
@@ -68,8 +70,9 @@ async function az(
   args: string[],
   onLog: ((line: string) => void) | undefined,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<CliResult> {
-  const res = await runCli('az', args, { timeoutMs, onLog })
+  const res = await runCli('az', args, { timeoutMs, onLog, signal })
   if (res.code !== 0) {
     const detail = cliErrorDetail(res)
     throw new Error(`az ${cliVerb(args)} failed (exit ${res.code})${detail ? `: ${detail}` : ''}`)
@@ -78,8 +81,8 @@ async function az(
 }
 
 /** Same call, but a non-zero exit is an ANSWER (absent / already-exists), not a throw. */
-async function azSoft(args: string[], timeoutMs: number): Promise<CliResult> {
-  return runCli('az', args, { timeoutMs })
+async function azSoft(args: string[], timeoutMs: number, signal?: AbortSignal): Promise<CliResult> {
+  return runCli('az', args, { timeoutMs, signal })
 }
 
 function parseJson<T>(text: string, what: string): T {
@@ -87,14 +90,6 @@ function parseJson<T>(text: string, what: string): T {
     return JSON.parse(text) as T
   } catch {
     throw new Error(`az returned output that is not JSON for ${what}`)
-  }
-}
-
-function parseJsonSafe<T>(text: string): T | undefined {
-  try {
-    return JSON.parse(text) as T
-  } catch {
-    return undefined
   }
 }
 
@@ -125,11 +120,16 @@ async function detectCreds(): Promise<DetectCredsResult> {
 }
 
 /** Public IP of an existing VM, via the group+name the adopt path found. */
-async function adoptedVmIp(name: string, onLog: (line: string) => void): Promise<string | undefined> {
+async function adoptedVmIp(
+  name: string,
+  onLog: (line: string) => void,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
   const res = await az(
     ['vm', 'list-ip-addresses', '-g', RESOURCE_GROUP, '-n', name, '-o', 'json'],
     onLog,
     AZURE_TIMINGS.shortMs,
+    signal,
   )
   const entries = parseJson<AzureVmIpEntry[]>(res.stdout, 'vm list-ip-addresses')
   for (const entry of entries) {
@@ -148,13 +148,17 @@ async function adoptedVmIp(name: string, onLog: (line: string) => void): Promise
  * `az network public-ip create` is a PUT: re-running it against an existing IP
  * returns the same resource rather than failing, so no adopt branch is needed.
  */
-async function ensurePublicIp(location: string, onLog: (line: string) => void): Promise<string> {
+async function ensurePublicIp(
+  location: string,
+  onLog: (line: string) => void,
+  signal?: AbortSignal,
+): Promise<string> {
   const res = await az([
     'network', 'public-ip', 'create',
     '-g', RESOURCE_GROUP, '-n', PUBLIC_IP_NAME, '-l', location,
     '--sku', 'Standard', '--allocation-method', 'Static',
     '-o', 'json',
-  ], onLog, AZURE_TIMINGS.shortMs)
+  ], onLog, AZURE_TIMINGS.shortMs, signal)
   const parsed = parseJson<{ publicIp?: AzurePublicIp } & AzurePublicIp>(res.stdout, 'public-ip create')
   // `create` wraps the resource in {publicIp}; `show` returns it bare. Accept both.
   const ip = parsed.publicIp?.ipAddress ?? parsed.ipAddress
@@ -178,17 +182,21 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   // `az group create` is idempotent (PUT) and cheap; running it first means
   // every later call has a group to talk to even on a fresh subscription.
   onLog(`ensuring resource group ${RESOURCE_GROUP} in ${location}`)
-  await az(['group', 'create', '-n', RESOURCE_GROUP, '-l', location, '-o', 'json'], onLog, AZURE_TIMINGS.shortMs)
+  await az(
+    ['group', 'create', '-n', RESOURCE_GROUP, '-l', location, '-o', 'json'],
+    onLog, AZURE_TIMINGS.shortMs, params.signal,
+  )
 
   // Adopt before create — the resume contract. A soft call because "not found"
   // is the normal first-run answer, not a failure.
   const existing = await azSoft(
     ['vm', 'show', '-g', RESOURCE_GROUP, '-n', params.name, '-o', 'json'],
     AZURE_TIMINGS.shortMs,
+    params.signal,
   )
   if (existing.code === 0) {
     onLog(`found an existing Azure VM named ${params.name} in ${RESOURCE_GROUP} — adopting it instead of creating one`)
-    const adoptedIp = await adoptedVmIp(params.name, onLog)
+    const adoptedIp = await adoptedVmIp(params.name, onLog, params.signal)
     if (!adoptedIp) {
       throw new Error(
         `Azure VM ${params.name} exists but has no public IP address. Attach one in the portal `
@@ -203,7 +211,7 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
     }
   }
 
-  const ip = await ensurePublicIp(location, onLog)
+  const ip = await ensurePublicIp(location, onLog, params.signal)
   onLog(`static public IP ${PUBLIC_IP_NAME} is ${ip}`)
 
   // The boot script goes through a 0600 tempfile, never the argv: it embeds the
@@ -222,6 +230,7 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
     const keyFile = `${userDataFile}.key`
     await runCli('ssh-keygen', ['-t', 'ed25519', '-N', '', '-C', 'open-walnut-throwaway', '-f', keyFile], {
       timeoutMs: AZURE_TIMINGS.shortMs,
+      signal: params.signal,
     }).then((res) => {
       if (res.code !== 0) {
         throw new Error(
@@ -245,7 +254,7 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
       '--ssh-key-values', `${keyFile}.pub`,
       '--custom-data', userDataFile,
       '-o', 'json',
-    ], onLog, AZURE_TIMINGS.createMs)
+    ], onLog, AZURE_TIMINGS.createMs, params.signal)
   })
 
   // 80 as well as 443: Caddy's HTTP-01 challenge lands on 80, and so does the
@@ -254,7 +263,7 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   await az([
     'vm', 'open-port', '-g', RESOURCE_GROUP, '-n', params.name,
     '--port', '80,443', '--priority', '1001', '-o', 'json',
-  ], onLog, AZURE_TIMINGS.shortMs)
+  ], onLog, AZURE_TIMINGS.shortMs, params.signal)
 
   log.web.info('cloud-setup: azure vm created', { location, size })
   return {

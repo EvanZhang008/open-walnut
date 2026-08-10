@@ -34,6 +34,9 @@ export const CLOUD_SETUP_STEP_IDS: readonly CloudSetupStepId[] = [
   'done',
 ];
 
+/** Mirrors the server's CLOUD_SETUP_LOG_TAIL_MAX (src/core/cloud-setup/job-types.ts). */
+export const CLOUD_SETUP_LOG_TAIL_MAX = 200;
+
 export type CloudSetupProviderId = 'aws' | 'hetzner' | 'azure' | 'gcp' | 'manual';
 export type CloudSetupDomainMode = 'own-domain' | 'sslip';
 export type CloudSetupJobStatus = 'running' | 'awaiting-input' | 'failed' | 'done' | 'cancelled';

@@ -64,8 +64,26 @@ wait_health() {
   echo "(server did not become healthy; tail of log:)"; tail -20 "$LOG"; return 1
 }
 stop_server() {
-  [ -f "$PID_FILE" ] && kill "$(cat "$PID_FILE")" 2>/dev/null || true
-  lsof -ti:${PORT} -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null || true   # never 3456
+  # Confirm the death, then escalate. The lsof fallback only sees servers that
+  # BOUND the port — one SIGTERMed mid-boot holds none, so it would leak silently
+  # with its background loops running (2026-08-09: 43 such leaks starved the Mac).
+  if [ -f "$PID_FILE" ]; then
+    spid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [ -n "$spid" ]; then
+      kill -15 "$spid" 2>/dev/null || true
+      for _ in $(seq 1 10); do
+        kill -0 "$spid" 2>/dev/null || break
+        sleep 0.5
+      done
+      if kill -0 "$spid" 2>/dev/null; then
+        echo "==> sandbox server pid $spid ignored SIGTERM — SIGKILL" >&2
+        kill -9 "$spid" 2>/dev/null || true
+      fi
+    fi
+  fi
+  lsof -ti:${PORT} -sTCP:LISTEN 2>/dev/null | xargs kill -15 2>/dev/null || true   # never 3456
+  sleep 1
+  lsof -ti:${PORT} -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true    # never 3456
   rm -f "$PID_FILE"
   reap_session_groups
 }
@@ -197,7 +215,10 @@ case "$cmd" in
     write_bedrock_config "    region: $region
     aws_profile: $prof"
     # REAL HOME so ~/.aws/config resolves; ~/.toolbox/bin on PATH so credential_process (ada) runs.
-    launch "$HOME" "$HOME/.toolbox/bin:$PATH"
+    # AWS_PROFILE: the cloud-setup wizard shells out to the bare `aws` CLI (detectCreds,
+    # cdk deploy) — without it, a machine whose [default] profile is stale shows
+    # "installed but has no usable credentials" even though the chosen profile works.
+    launch "$HOME" "$HOME/.toolbox/bin:$PATH" AWS_PROFILE="$prof"
     wait_health ;;
 
   export)

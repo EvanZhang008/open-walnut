@@ -64,6 +64,27 @@ const manualTestDriver: CloudProviderDriver = {
   instructions: ({ userData }) => ({ steps: ['create a VM', 'paste this'], userData, consoleUrl: 'https://example.test' }),
 }
 
+/**
+ * Stand-in for a driver whose real detectCreds shells out to a vendor CLI. The
+ * azure and gcp drivers do exactly that, and GET /providers probes EVERY
+ * registered driver — so without this, running this file on a machine that has
+ * `az` or `gcloud` installed would make real CLI calls and take their latency.
+ */
+function cliGatedTestDriver(id: string, label: string): CloudProviderDriver {
+  return {
+    id: id as CloudProviderDriver['id'],
+    label,
+    costHint: '~$9/mo',
+    detectCreds: async () => ({
+      available: false,
+      detail: `Install the ${label} CLI, or use the manual path.`,
+      needs: 'cli-login',
+    }),
+    createVM: () => new Promise(() => { /* never settles */ }),
+    instructions: ({ userData }) => ({ steps: ['step one'], userData }),
+  }
+}
+
 const restores: Array<() => void> = []
 
 /** Every string in a JSON tree, so a code can't hide in a nested field. */
@@ -100,6 +121,8 @@ beforeEach(async () => {
   cloudRemote = null
   restores.push(_setCloudProviderDriverForTesting('aws', stalledDriver))
   restores.push(_setCloudProviderDriverForTesting('manual', manualTestDriver))
+  restores.push(_setCloudProviderDriverForTesting('azure', cliGatedTestDriver('azure', 'Azure')))
+  restores.push(_setCloudProviderDriverForTesting('gcp', cliGatedTestDriver('gcp', 'Google Cloud')))
 })
 
 afterEach(async () => {
@@ -120,6 +143,33 @@ describe('GET /providers', () => {
     expect(manual.detect.available).toBe(true)
     expect(manual.canProvision).toBe(false)
     expect(res.body.providers.find((p: { id: string }) => p.id === 'aws').canProvision).toBe(true)
+  })
+
+  it('offers hetzner as a one-click provider that needs a token', async () => {
+    // The wizard derives two things from this payload: the "Needs API token"
+    // pill, and whether to show the token field at all (canProvision +
+    // needs==='api-token'). A driver that reported needs:'cli-login' would
+    // leave the operator with no field to type into.
+    const res = await request(createApp()).get('/api/cloud-setup/providers')
+    const hetzner = res.body.providers.find((p: { id: string }) => p.id === 'hetzner')
+    expect(hetzner).toBeDefined()
+    expect(hetzner.canProvision).toBe(true)
+    expect(hetzner.detect.needs).toBe('api-token')
+    expect(hetzner.costHint).toMatch(/€/)
+  })
+
+  it('offers azure and gcp as one-click providers gated on a CLI login, not a token', async () => {
+    // These two provision through the operator's own az/gcloud login, so the
+    // wizard must NOT show a token field for them (that is keyed on
+    // needs==='api-token'); needs:'cli-login' paints "CLI missing or signed out"
+    // and the operator falls back to the manual paste path.
+    const res = await request(createApp()).get('/api/cloud-setup/providers');
+    for (const id of ['azure', 'gcp']) {
+      const provider = res.body.providers.find((p: { id: string }) => p.id === id)
+      expect(provider, id).toBeDefined()
+      expect(provider.canProvision, id).toBe(true)
+      expect(provider.detect.needs, id).toBe('cli-login')
+    }
   })
 
   it('reports a throwing probe as unavailable instead of failing the request', async () => {
@@ -331,6 +381,24 @@ describe('GET /user-data', () => {
     await request(app).post('/api/cloud-setup/start').send({ provider: 'manual', domainMode: 'sslip' })
     await currentPairingCode()
     expect((await request(app).get('/api/cloud-setup/user-data?provider=nope')).status).toBe(400)
+  })
+
+  it('builds the blob for the PROVIDER\'S image family, not always AL2023', async () => {
+    // The paste blob has to match the box the operator is about to boot: a
+    // Hetzner server is Ubuntu, so a dnf-first script would try the wrong
+    // package manager first on every one of them.
+    const app = createApp()
+    await request(app).post('/api/cloud-setup/start').send({ provider: 'manual', domainMode: 'sslip' })
+    await currentPairingCode()
+
+    const hetzner = await request(app).get('/api/cloud-setup/user-data?provider=hetzner&domainMode=sslip')
+    expect(hetzner.status).toBe(200)
+    const h = hetzner.body.userData as string
+    expect(h.indexOf('apt-get install -y git')).toBeLessThan(h.indexOf('dnf install -y git'))
+
+    const manual = await request(app).get('/api/cloud-setup/user-data?provider=manual&domainMode=sslip')
+    const m = manual.body.userData as string
+    expect(m.indexOf('dnf install -y git')).toBeLessThan(m.indexOf('apt-get install -y git'))
   })
 
   it('400s on a shell-unsafe domain override', async () => {

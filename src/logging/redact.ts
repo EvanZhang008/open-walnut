@@ -50,6 +50,15 @@ const patterns: Array<{ re: RegExp; replacement: string }> = [
     replacement: `$1${REDACTED}`,
   },
 
+  // Credentials in URL userinfo: https://user:secret@host/...
+  // Motivating shape: execSync embeds the whole command in error.message, so a
+  // failed `git remote add origin https://walnut:<device-token>@host/git/data`
+  // otherwise logs the cloud companion's long-lived credential verbatim.
+  {
+    re: /(https?:\/\/[^/\s:@]+:)[^@/\s]+@/gi,
+    replacement: `$1${REDACTED}@`,
+  },
+
   // Generic secrets: password=, secret=, token=, api_key=, apikey=
   {
     re: /((?:password|secret|token|api_key|apikey)\s*[=:]\s*)\S+/gi,

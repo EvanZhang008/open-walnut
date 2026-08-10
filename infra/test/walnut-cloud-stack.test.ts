@@ -23,16 +23,21 @@ function synth(context: Record<string, string>): Template {
 
 /**
  * The instance's user-data as a plain string. CloudFormation stores it as
- * `{ 'Fn::Base64': <script> }`; for this stack the script is a literal (no
- * tokens), so it comes back as a string rather than an Fn::Join.
+ * `{ 'Fn::Base64': <script> }`, where the script is either a literal or an
+ * Fn::Join of literals and refs (the provisioner path embeds the Elastic IP's
+ * token). Refs are flattened to `<Ref:LogicalId>` so a test can assert which
+ * resource a line points at without depending on CDK's join granularity.
  */
 function userDataScript(template: Template): string {
   const instances = template.findResources('AWS::EC2::Instance')
   const keys = Object.keys(instances)
   expect(keys).toHaveLength(1)
   const raw = instances[keys[0]].Properties.UserData['Fn::Base64']
-  expect(typeof raw, 'user-data should synth to a literal string').toBe('string')
-  return raw as string
+  if (typeof raw === 'string') return raw
+  const parts = raw['Fn::Join'][1] as Array<unknown>
+  return parts
+    .map((p) => (typeof p === 'string' ? p : `<Ref:${(p as { Ref: string }).Ref}>`))
+    .join('')
 }
 
 /** Value of a named CfnOutput. */
@@ -104,6 +109,19 @@ describe('user-data', () => {
     // box would clone and run setup.sh twice.
     expect(script).not.toContain('dnf install -y git')
     expect(script).not.toContain('/opt/walnut/scripts/cloud/setup.sh')
+  })
+
+  it('with userDataB64: hands the boot script the Elastic IP, not a metadata read', () => {
+    // The subnet auto-assigns a public address at launch and the EIP associates
+    // mid-boot, so an on-box metadata read yields an address that stops being
+    // ours — two agreeing reads of it prove nothing. The export is the only
+    // thing that makes the derived sslip.io hostname match what the operator's
+    // Walnut polls.
+    const b64 = Buffer.from('#!/usr/bin/env bash\necho boot\n', 'utf-8').toString('base64')
+    const script = userDataScript(synth({ sslip: '1', userDataB64: b64 }))
+    expect(script).toMatch(/export WALNUT_PUBLIC_IP=<Ref:Eip>/)
+    // The export must precede the script it is meant to configure.
+    expect(script.indexOf('WALNUT_PUBLIC_IP')).toBeLessThan(script.indexOf('base64 -d'))
   })
 
   it('does not leak the decoded boot script into the template (only the base64)', () => {

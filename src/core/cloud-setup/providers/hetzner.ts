@@ -7,10 +7,11 @@
  * must never reach the persisted job, a log line, or an error message — so every
  * throw here goes through redact(), and nothing echoes a request header.
  *
- * Resume safety: createVM adopts an existing `walnut-cloud` server by NAME
- * before it would create one. A job that crashed after the POST but before the
- * poll finished therefore converges on the same box rather than leaving a second
- * one running (and chargeable) with nobody watching it.
+ * Resume safety: createVM adopts an existing `walnut-cloud` server by NAME AND by
+ * our `managed_by` label before it would create one. A job that crashed after the
+ * POST but before the poll finished therefore converges on the same box rather
+ * than leaving a second one running (and chargeable) with nobody watching it —
+ * while an operator's unrelated server of the same name is never adopted.
  */
 
 import { log } from '../../../logging/index.js'
@@ -61,6 +62,14 @@ function defaultServerType(location: string): string {
 const PENDING_STATUSES = new Set(['initializing', 'starting', 'running'])
 
 const FIREWALL_SUFFIX = '-fw'
+/**
+ * Stamped on every server this driver creates, and required by the adopt lookup.
+ * Without it, adopt-by-name would happily take over an unrelated server the
+ * operator happens to have called walnut-cloud; with it, that collision instead
+ * falls through to create and fails loudly on Hetzner's name-uniqueness check,
+ * which is the right outcome for a box we did not build.
+ */
+const MANAGED_BY_LABEL = 'managed_by=open-walnut'
 /** Hetzner's documented cloud-init user-data ceiling. */
 const USER_DATA_MAX_BYTES = 32 * 1024
 
@@ -83,8 +92,18 @@ interface HetznerServer {
 
 interface HetznerError { error?: { code?: string; message?: string } }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => { const t = setTimeout(resolve, ms); t.unref?.() })
+/** Wakes early on abort, so a cancel is not held for the rest of the interval. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = (): void => {
+      clearTimeout(t)
+      signal?.removeEventListener('abort', done)
+      resolve()
+    }
+    const t = setTimeout(done, ms)
+    t.unref?.()
+    signal?.addEventListener('abort', done, { once: true })
+  })
 }
 
 /**
@@ -97,13 +116,21 @@ function redact(text: string, token: string): string {
   return text.split(token).join('<redacted>')
 }
 
+/** Thrown on operator cancellation, so the runner can label the job cleanly. */
+function cancelled(): Error {
+  return new Error('Hetzner provisioning cancelled')
+}
+
 /** One JSON call. Throws a message that names the cause, never the token. */
 async function api<T>(
   token: string,
   method: 'GET' | 'POST' | 'DELETE',
   pathAndQuery: string,
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
+  if (signal?.aborted) throw cancelled()
+  const timeout = AbortSignal.timeout(HETZNER_TIMINGS.requestTimeoutMs)
   let res: Response
   try {
     res = await fetch(`${API}${pathAndQuery}`, {
@@ -113,9 +140,12 @@ async function api<T>(
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(HETZNER_TIMINGS.requestTimeoutMs),
+      // The operator's cancel has to abort the request in flight, not merely be
+      // noticed after it returns — a create that already left is a chargeable box.
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     })
   } catch (err) {
+    if (signal?.aborted) throw cancelled()
     const message = err instanceof Error ? err.message : String(err)
     throw new Error(redact(`Hetzner API ${method} ${pathAndQuery} failed: ${message}`, token))
   }
@@ -153,18 +183,33 @@ async function detectCreds(): Promise<DetectCredsResult> {
   }
 }
 
-/** Exact-name lookup. Hetzner's `name=` filter is an equality match. */
-async function findServerByName(token: string, name: string): Promise<HetznerServer | undefined> {
-  const res = await api<{ servers?: HetznerServer[] }>(
-    token, 'GET', `/servers?name=${encodeURIComponent(name)}`,
-  )
+/**
+ * Exact-name lookup, narrowed to servers this driver created. Hetzner's `name=`
+ * filter is an equality match, and `label_selector` ANDs with it — so a server
+ * with the right name but without our label is simply not returned, and the caller
+ * proceeds to create and gets the API's name-collision error instead of adopting
+ * an operator's unrelated box.
+ */
+async function findServerByName(
+  token: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<HetznerServer | undefined> {
+  const query = `/servers?name=${encodeURIComponent(name)}`
+    + `&label_selector=${encodeURIComponent(MANAGED_BY_LABEL)}`
+  const res = await api<{ servers?: HetznerServer[] }>(token, 'GET', query, undefined, signal)
   return (res.servers ?? []).find((s) => s.name === name)
 }
 
 /** Idempotent: reuse the firewall if a previous run already made it. */
-async function ensureFirewall(token: string, name: string, onLog: (line: string) => void): Promise<number> {
+async function ensureFirewall(
+  token: string,
+  name: string,
+  onLog: (line: string) => void,
+  signal?: AbortSignal,
+): Promise<number> {
   const existing = await api<{ firewalls?: Array<{ id: number; name: string }> }>(
-    token, 'GET', `/firewalls?name=${encodeURIComponent(name)}`,
+    token, 'GET', `/firewalls?name=${encodeURIComponent(name)}`, undefined, signal,
   )
   const found = (existing.firewalls ?? []).find((f) => f.name === name)
   if (found) {
@@ -181,7 +226,7 @@ async function ensureFirewall(token: string, name: string, onLog: (line: string)
       port: String(port),
       source_ips: ['0.0.0.0/0', '::/0'],
     })),
-  })
+  }, signal)
   const id = created.firewall?.id
   if (id == null) throw new Error('Hetzner created a firewall but returned no id')
   onLog(`created firewall ${name} (id ${id}) — inbound tcp 80 + 443`)
@@ -193,11 +238,13 @@ async function waitForRunning(
   token: string,
   id: number,
   onLog: (line: string) => void,
+  signal?: AbortSignal,
 ): Promise<HetznerServer> {
   const deadline = Date.now() + HETZNER_TIMINGS.pollBudgetMs
   let lastStatus = ''
   for (;;) {
-    const { server } = await api<{ server: HetznerServer }>(token, 'GET', `/servers/${id}`)
+    if (signal?.aborted) throw cancelled()
+    const { server } = await api<{ server: HetznerServer }>(token, 'GET', `/servers/${id}`, undefined, signal)
     if (server.status !== lastStatus) {
       onLog(`server ${id} is ${server.status}`)
       lastStatus = server.status
@@ -220,7 +267,11 @@ async function waitForRunning(
         + 'It may still be starting — retry this step, which adopts the existing server rather than creating another.',
       )
     }
-    await sleep(HETZNER_TIMINGS.pollIntervalMs)
+    await sleep(HETZNER_TIMINGS.pollIntervalMs, signal)
+    // Re-checked after the sleep as well as before the poll: a cancel that lands
+    // mid-interval must not spend another request, and with a 5s interval this is
+    // where the wait almost always sits.
+    if (signal?.aborted) throw cancelled()
   }
 }
 
@@ -249,11 +300,11 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   // Adopt first — this is the whole resume contract. A job that died between
   // POST /servers and the poll finishing must converge on the box it already
   // made, not stand up a second one.
-  let server = await findServerByName(token, params.name)
+  let server = await findServerByName(token, params.name, params.signal)
   if (server) {
     onLog(`found an existing Hetzner server named ${params.name} (id ${server.id}) — adopting it instead of creating one`)
   } else {
-    const firewallId = await ensureFirewall(token, `${params.name}${FIREWALL_SUFFIX}`, onLog)
+    const firewallId = await ensureFirewall(token, `${params.name}${FIREWALL_SUFFIX}`, onLog, params.signal)
     onLog(`creating ${serverType} in ${location} from image ${IMAGE}`)
     const created = await api<{ server?: HetznerServer }>(token, 'POST', '/servers', {
       name: params.name,
@@ -264,8 +315,10 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
       firewalls: [{ firewall: firewallId }],
       public_net: { enable_ipv4: true, enable_ipv6: true },
       start_after_create: true,
+      // Read back by findServerByName's label_selector — the adopt path only ever
+      // takes over a server carrying this label.
       labels: { managed_by: 'open-walnut' },
-    })
+    }, params.signal)
     // The create response also carries `root_password` when no SSH key was
     // given. Never touched, never logged: the box is reached over HTTPS, and
     // the pairing code (not a shell) is what claims it.
@@ -274,7 +327,9 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
     onLog(`server ${server.id} created — waiting for it to boot`)
   }
 
-  const running = server.status === 'running' ? server : await waitForRunning(token, server.id, onLog)
+  const running = server.status === 'running'
+    ? server
+    : await waitForRunning(token, server.id, onLog, params.signal)
   const ip = running.public_net?.ipv4?.ip
   if (!ip) {
     throw new Error(
@@ -323,6 +378,9 @@ export const hetznerDriver: CloudProviderDriver = {
   costHint: '~€12/mo — CPX22 (2 vCPU, 4 GB) + IPv4 in the EU; cx23 is cheaper when in stock',
   // Hetzner has no AL2023 image; the boot script must reach for apt first.
   userDataFlavor: 'ubuntu',
+  // The only driver with a pasted credential, so the only one a resumed job has
+  // to re-ask for. The CLI drivers read the operator's own login every time.
+  credentialInput: 'api-token',
   detectCreds,
   createVM,
   instructions,

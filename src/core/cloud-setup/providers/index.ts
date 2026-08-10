@@ -36,6 +36,12 @@ const drivers = new Map<string, CloudProviderDriver>([
 // job through the real state machine without a cloud account. Gated on an env
 // flag the Playwright fixture sets — never present in a normal build.
 if (process.env[FAKE_DRIVER_ENV] === '1') {
+  // Loud, not silent: Map.set on an existing key REPLACES it, which is exactly
+  // how the fake (then id 'gcp') shadowed the real GCP driver when PR7 landed —
+  // every fixture-mode surface lost the real card and no test noticed.
+  if (drivers.has(fakeDriver.id)) {
+    throw new Error(`fake cloud-setup driver id "${fakeDriver.id}" collides with a real registered driver`)
+  }
   drivers.set(fakeDriver.id, fakeDriver)
 }
 

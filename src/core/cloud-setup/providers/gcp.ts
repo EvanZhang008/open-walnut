@@ -21,7 +21,9 @@
 
 import { log } from '../../../logging/index.js'
 import { sslipHostname } from '../user-data.js'
-import { cliErrorDetail, CliMissingError, cliVerb, runCli, withSecretFile, type CliResult } from './cli-exec.js'
+import {
+  cliErrorDetail, CliMissingError, cliVerb, parseJsonSafe, runCli, withSecretFile, type CliResult,
+} from './cli-exec.js'
 import type {
   CloudProviderDriver,
   CreateVMParams,
@@ -56,8 +58,9 @@ async function gcloud(
   args: string[],
   onLog: ((line: string) => void) | undefined,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<CliResult> {
-  const res = await runCli('gcloud', args, { timeoutMs, onLog })
+  const res = await runCli('gcloud', args, { timeoutMs, onLog, signal })
   if (res.code !== 0) {
     const detail = cliErrorDetail(res)
     throw new Error(`gcloud ${cliVerb(args)} failed (exit ${res.code})${detail ? `: ${detail}` : ''}`)
@@ -66,8 +69,8 @@ async function gcloud(
 }
 
 /** Non-zero exit is an answer, not a throw (absent resource / already exists). */
-async function gcloudSoft(args: string[], timeoutMs: number): Promise<CliResult> {
-  return runCli('gcloud', args, { timeoutMs })
+async function gcloudSoft(args: string[], timeoutMs: number, signal?: AbortSignal): Promise<CliResult> {
+  return runCli('gcloud', args, { timeoutMs, signal })
 }
 
 /**
@@ -135,23 +138,20 @@ async function detectCreds(): Promise<DetectCredsResult> {
   return { available: true, detail: `Google Cloud CLI — project ${projectId}`, needs: 'nothing' }
 }
 
-function parseJsonSafe<T>(text: string): T | undefined {
-  try {
-    return JSON.parse(text) as T
-  } catch {
-    return undefined
-  }
-}
-
 /**
  * Idempotent regional static address. Reserved BEFORE the instance so the IP
  * survives a stop/start — an ephemeral GCP address is released on stop, which
  * would break both an own-domain A record and the sslip hostname.
  */
-async function ensureAddress(region: string, onLog: (line: string) => void): Promise<string> {
+async function ensureAddress(
+  region: string,
+  onLog: (line: string) => void,
+  signal?: AbortSignal,
+): Promise<string> {
   const created = await gcloudSoft(
     ['compute', 'addresses', 'create', ADDRESS_NAME, '--region', region],
     GCP_TIMINGS.shortMs,
+    signal,
   )
   if (created.code === 0) {
     onLog(`reserved static address ${ADDRESS_NAME} in ${region}`)
@@ -168,6 +168,7 @@ async function ensureAddress(region: string, onLog: (line: string) => void): Pro
     ['compute', 'addresses', 'describe', ADDRESS_NAME, '--region', region, '--format=json'],
     onLog,
     GCP_TIMINGS.shortMs,
+    signal,
   )
   const { address } = parseJson<{ address?: string }>(shown.stdout, 'addresses describe')
   if (!address) {
@@ -180,7 +181,7 @@ async function ensureAddress(region: string, onLog: (line: string) => void): Pro
 }
 
 /** Idempotent firewall rule for 80 + 443, scoped to our network tag. */
-async function ensureFirewall(onLog: (line: string) => void): Promise<void> {
+async function ensureFirewall(onLog: (line: string) => void, signal?: AbortSignal): Promise<void> {
   // Tag-scoped rather than open to every instance in the project: the operator's
   // other VMs in this project must not inherit an inbound web rule from us.
   const res = await gcloudSoft([
@@ -190,7 +191,7 @@ async function ensureFirewall(onLog: (line: string) => void): Promise<void> {
     '--target-tags', NETWORK_TAG,
     '--source-ranges', '0.0.0.0/0',
     '--description', 'open-walnut cloud companion: inbound web',
-  ], GCP_TIMINGS.shortMs)
+  ], GCP_TIMINGS.shortMs, signal)
   if (res.code === 0) {
     onLog(`created firewall rule ${FIREWALL_NAME} — inbound tcp 80 + 443 on tag ${NETWORK_TAG}`)
     return
@@ -216,6 +217,7 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   const existing = await gcloudSoft(
     ['compute', 'instances', 'describe', params.name, '--zone', zone, '--format=json'],
     GCP_TIMINGS.shortMs,
+    params.signal,
   )
   if (existing.code === 0) {
     onLog(`found an existing GCP instance named ${params.name} in ${zone} — adopting it instead of creating one`)
@@ -234,9 +236,9 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
     }
   }
 
-  const ip = await ensureAddress(region, onLog)
+  const ip = await ensureAddress(region, onLog, params.signal)
   onLog(`static address ${ADDRESS_NAME} is ${ip}`)
-  await ensureFirewall(onLog)
+  await ensureFirewall(onLog, params.signal)
 
   // The boot script goes through a 0600 tempfile, never the argv: it embeds the
   // pairing code, and this driver echoes its own command lines to the operator
@@ -255,7 +257,7 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
       '--address', ip,
       '--metadata-from-file', `startup-script=${userDataFile}`,
       '--format=json',
-    ], onLog, GCP_TIMINGS.createMs)
+    ], onLog, GCP_TIMINGS.createMs, params.signal)
   })
 
   log.web.info('cloud-setup: gcp instance created', { zone, machineType })

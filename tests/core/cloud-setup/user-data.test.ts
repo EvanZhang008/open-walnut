@@ -58,6 +58,44 @@ describe('buildUserData shape', () => {
     expect(script).not.toContain(SSLIP_AUTO)
   })
 
+  it('SSLIP_AUTO prefers WALNUT_PUBLIC_IP over any on-box probe', () => {
+    // On AWS the instance boots with a subnet-assigned address and the Elastic
+    // IP associates mid-boot, so probing is not just slower — it resolves the
+    // WRONG hostname, and consecutive-read agreement never catches it (the
+    // ephemeral address is itself stable). The stack exports the EIP instead.
+    const script = buildUserData({ domain: SSLIP_AUTO, pairingCode: CODE, flavor: 'al2023' })
+    expect(script).toContain('if [ -n "${WALNUT_PUBLIC_IP:-}" ] && is_ipv4 "$WALNUT_PUBLIC_IP"; then')
+    expect(script).toContain('IP="$WALNUT_PUBLIC_IP"')
+    // The env branch comes first, and the probe loop is skipped when it hit.
+    expect(script.indexOf('WALNUT_PUBLIC_IP')).toBeLessThan(script.indexOf('for _ in $(seq 1 36)'))
+    expect(script).toContain('if [ -z "$IP" ]; then')
+  })
+
+  it('is_ipv4 bounds each octet at 255', async () => {
+    // The regex is the last gate before a probe result becomes the public
+    // hostname, so an unbounded [0-9]{1,3} would let a truncated read or a
+    // 404 body shaped like "999.1.2.3" through. Exercise the real shell.
+    const script = buildUserData({ domain: SSLIP_AUTO, pairingCode: CODE, flavor: 'al2023' })
+    const fn = script.slice(script.indexOf('is_ipv4() {'), script.indexOf('public_ip() {'))
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-is-ipv4-'))
+    const file = path.join(dir, 'is_ipv4.sh')
+    const check = async (value: string) => {
+      await fsp.writeFile(file, `${fn}\nif is_ipv4 '${value}'; then echo yes; else echo no; fi\n`, 'utf-8')
+      const { stdout } = await execFileAsync('bash', [file])
+      return stdout.trim()
+    }
+    try {
+      for (const good of ['203.0.113.7', '255.255.255.255', '0.0.0.0', '10.0.0.1']) {
+        expect(await check(good), good).toBe('yes')
+      }
+      for (const bad of ['999.1.2.3', '203.0.113.256', '256.256.256.256', '203.0.113', 'not-an-ip']) {
+        expect(await check(bad), bad).toBe('no')
+      }
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('reads the metadata service IMDSv2-first: the token PUT precedes the IP GET', () => {
     // The AWS stack sets requireImdsv2, so an IMDSv1-style (tokenless) read
     // would 401 and strand the box with no hostname. Assert the ordering and
@@ -98,7 +136,7 @@ describe('buildUserData shape', () => {
     // and then as an address, and the box would ask Caddy for a garbage name.
     const script = buildUserData({ domain: SSLIP_AUTO, pairingCode: CODE, flavor: 'ubuntu' })
     expect(script).toContain('is_ipv4() {')
-    expect(script).toMatch(/\^\(\[0-9\]\{1,3\}\\\.\)\{3\}\[0-9\]\{1,3\}\$/)
+    expect(script).toContain('25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9]')
     // Every metadata/IP curl is fail-on-error.
     for (const line of script.split('\n')) {
       if (!/curl/.test(line)) continue
@@ -218,6 +256,32 @@ describe('the generated script is valid bash', () => {
     } finally {
       await fsp.rm(path.dirname(file), { recursive: true, force: true })
     }
+  })
+})
+
+// The generated script and setup.sh are two halves of one handshake over
+// /etc/walnut, so the invariant is pinned here rather than in a shell test.
+describe('setup.sh takes ownership of /etc/walnut', () => {
+  const setupSh = () => fsp.readFile(
+    path.join(import.meta.dirname, '../../../scripts/cloud/setup.sh'),
+    'utf-8',
+  )
+
+  it('re-owns the dir to the service user instead of `mkdir -p`', async () => {
+    // cloud-init creates /etc/walnut as root 0700 before setup.sh runs, and
+    // `mkdir -p` does NOT change an existing dir's mode — so the service user
+    // could not traverse it and every provisioned pairing code failed with
+    // EACCES. Ownership (not root:walnut 0750) is required because the server
+    // unlinks the spent token after claiming, which needs write on the dir.
+    const script = await setupSh()
+    expect(script).toContain('install -d -m 700 -o "$WALNUT_USER" -g "$WALNUT_USER" /etc/walnut')
+    expect(script).not.toMatch(/^mkdir -p \/etc\/walnut$/m)
+  })
+
+  it('still restricts the token file itself to the service user', async () => {
+    const script = await setupSh()
+    expect(script).toContain('chown "$WALNUT_USER:$WALNUT_USER" /etc/walnut/setup-token')
+    expect(script).toContain('chmod 600 /etc/walnut/setup-token')
   })
 })
 

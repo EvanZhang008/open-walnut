@@ -24,6 +24,16 @@ export interface CreateVMParams {
    * runner never persists this and never puts it in a log line or event.
    */
   credentials?: string
+  /**
+   * Fires when the operator cancels the job. A driver MUST kill its child
+   * process group / abort its in-flight fetches and reject promptly.
+   *
+   * A cooperative `cancelled` flag can only be observed between steps, so on its
+   * own it lets a 30-minute `cdk deploy` / `az vm create` run to completion —
+   * creating billable resources — while the UI already says "cancelled". The
+   * signal is the only thing that reaches a process that is already live.
+   */
+  signal?: AbortSignal
 }
 
 export interface CreateVMResult {
@@ -67,6 +77,17 @@ export interface CloudProviderDriver {
    * = 'al2023', which is what the aws stack and the manual path assume.
    */
   userDataFlavor?: UserDataFlavor
+  /**
+   * Set only by drivers whose credential is a value the OPERATOR pasted, which
+   * the runner holds in memory and never persists. It is therefore gone after a
+   * restart, so a resumed job has to ask for it again — this flag is what tells
+   * the resume path to re-prompt.
+   *
+   * CLI-credential drivers (aws/azure/gcp) leave it unset: they read the
+   * operator's signed-in CLI on every call, so there is nothing to re-ask for and
+   * a prompt would be a bug.
+   */
+  credentialInput?: 'api-token'
   detectCreds(): Promise<DetectCredsResult>
   createVM?(params: CreateVMParams, onLog: (line: string) => void): Promise<CreateVMResult>
   instructions(params: InstructionsParams): DriverInstructions

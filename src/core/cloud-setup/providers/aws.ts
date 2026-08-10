@@ -16,6 +16,7 @@ import { promisify } from 'node:util'
 import { WALNUT_INSTALL_DIR } from '../../../constants.js'
 import { log } from '../../../logging/index.js'
 import { sslipHostname } from '../user-data.js'
+import { killProcessGroup } from './cli-exec.js'
 import type {
   CloudProviderDriver,
   CreateVMParams,
@@ -53,6 +54,24 @@ function infraDir(): string {
   return dir
 }
 
+/**
+ * How many profiles the operator's ~/.aws defines, or null if the CLI could not
+ * say. Used only to pick the right advice — the NAMES are deliberately not
+ * surfaced: this string is rendered in the wizard AND written to the log, and the
+ * same restraint that keeps the caller ARN out of `detail` applies to whatever the
+ * operator called their accounts.
+ */
+async function countProfiles(): Promise<number | null> {
+  try {
+    const { stdout } = await execFileAsync('aws', ['configure', 'list-profiles'], {
+      timeout: IDENTITY_TIMEOUT_MS,
+    })
+    return stdout.split('\n').filter((line) => line.trim()).length
+  } catch {
+    return null
+  }
+}
+
 async function detectCreds(): Promise<DetectCredsResult> {
   try {
     const { stdout } = await execFileAsync('aws', ['sts', 'get-caller-identity', '--output', 'json'], {
@@ -74,9 +93,28 @@ async function detectCreds(): Promise<DetectCredsResult> {
         needs: 'cli-login',
       }
     }
+    // Every `aws` call here inherits Walnut's own environment, so it resolves the
+    // DEFAULT profile unless AWS_PROFILE is set. A machine with several profiles
+    // and a stale [default] therefore fails this probe while the profile the
+    // operator actually uses works perfectly — the old message sent them to `aws
+    // configure`, which is the wrong fix and would overwrite a working config.
+    const profiles = await countProfiles()
+    if (profiles !== null && profiles > 1 && !process.env.AWS_PROFILE) {
+      return {
+        available: false,
+        detail: `The aws CLI is installed and has ${profiles} profiles, but the default one has no usable credentials. `
+          + 'Either set AWS_PROFILE=<name> in the environment Walnut runs in and restart it, or refresh your default '
+          + 'profile (`aws configure`, or sign in with SSO), then re-check.',
+        needs: 'cli-login',
+      }
+    }
+    const activeProfile = process.env.AWS_PROFILE
+      ? ' The AWS_PROFILE currently set for Walnut did not authenticate — check that it is spelled correctly and still signed in.'
+      : ''
     return {
       available: false,
-      detail: 'The aws CLI is installed but has no usable credentials. Run `aws configure` or sign in with SSO, then re-check.',
+      detail: 'The aws CLI is installed but has no usable credentials. Run `aws configure` or sign in with SSO, then re-check.'
+        + activeProfile,
       needs: 'cli-login',
     }
   }
@@ -92,7 +130,14 @@ function redactArgs(args: string[]): string {
   return args.map((arg) => arg.replace(/^userDataB64=.*/, 'userDataB64=<redacted>')).join(' ')
 }
 
-/** Run a command in infra/, streaming both streams to onLog line by line. */
+/**
+ * Run a command in infra/, streaming both streams to onLog line by line.
+ *
+ * `detached` + killProcessGroup because `npx cdk deploy` is a process TREE (npx →
+ * node → the CDK CLI's own children). Killing only the top-level process orphans
+ * a 30-minute CloudFormation deploy to pid 1, where it keeps creating billable
+ * resources with nobody reading its output.
+ */
 async function runStreaming(
   cmd: string,
   args: string[],
@@ -100,19 +145,34 @@ async function runStreaming(
   onLog: (line: string) => void,
   timeoutMs: number,
   env: NodeJS.ProcessEnv = process.env,
+  signal?: AbortSignal,
 ): Promise<{ code: number; output: string }> {
   onLog(`$ ${cmd} ${redactArgs(args)}`)
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(cmd, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
     let output = ''
     let settled = false
     const timer = setTimeout(() => {
       if (settled) return
       settled = true
-      child.kill('SIGKILL')
+      signal?.removeEventListener('abort', onAbort)
+      killProcessGroup(child)
       reject(new Error(`${cmd} timed out after ${Math.round(timeoutMs / 1000)}s`))
     }, timeoutMs)
     timer.unref?.()
+
+    function onAbort(): void {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      killProcessGroup(child)
+      reject(new Error(`${cmd} cancelled`))
+    }
+    if (signal?.aborted) {
+      onAbort()
+      return
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
 
     const wire = (stream: NodeJS.ReadableStream): void => {
       let buf = ''
@@ -138,6 +198,7 @@ async function runStreaming(
       if (settled) return
       settled = true
       clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
       reject(err instanceof Error && (err as { code?: string }).code === 'ENOENT'
         ? new Error(`${cmd} is not installed or not on PATH`)
         : err)
@@ -146,6 +207,7 @@ async function runStreaming(
       if (settled) return
       settled = true
       clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
       resolve({ code: code ?? -1, output })
     })
   })
@@ -177,7 +239,7 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   // no node_modules, and `npx cdk` would then resolve to a download prompt.
   if (!fs.existsSync(path.join(cwd, 'node_modules', 'aws-cdk-lib'))) {
     onLog('infra/node_modules is missing — installing CDK dependencies (this takes a few minutes)')
-    const install = await runStreaming('npm', ['ci'], cwd, onLog, NPM_CI_TIMEOUT_MS)
+    const install = await runStreaming('npm', ['ci'], cwd, onLog, NPM_CI_TIMEOUT_MS, process.env, params.signal)
     if (install.code !== 0) throw new Error(`npm ci failed in infra/ (exit ${install.code})`)
   }
 
@@ -201,13 +263,15 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
 
   const deploy = async (): Promise<{ code: number; output: string }> => {
     onLog(`deploying ${STACK_NAME}${params.region ? ` in ${params.region}` : ''} — this usually takes 3-6 minutes`)
-    return runStreaming('npx', deployArgs, cwd, onLog, DEPLOY_TIMEOUT_MS, deployEnv)
+    return runStreaming('npx', deployArgs, cwd, onLog, DEPLOY_TIMEOUT_MS, deployEnv, params.signal)
   }
 
   let result = await deploy()
   if (result.code !== 0 && needsBootstrap(result.output)) {
     onLog('this account/region has never been CDK-bootstrapped — running cdk bootstrap once')
-    const bootstrap = await runStreaming('npx', ['cdk', 'bootstrap'], cwd, onLog, BOOTSTRAP_TIMEOUT_MS)
+    const bootstrap = await runStreaming(
+      'npx', ['cdk', 'bootstrap'], cwd, onLog, BOOTSTRAP_TIMEOUT_MS, process.env, params.signal,
+    )
     if (bootstrap.code !== 0) throw new Error(`cdk bootstrap failed (exit ${bootstrap.code})`)
     result = await deploy()
   }

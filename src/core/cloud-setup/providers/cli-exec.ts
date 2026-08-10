@@ -4,7 +4,9 @@
  *
  * aws.ts has its own older runStreaming and is deliberately left alone: it is
  * covered by its own tests, and folding it in here belongs in a refactor of its
- * own rather than riding along with a new provider.
+ * own rather than riding along with a new provider. It does share
+ * killProcessGroup below, so the two runners cannot drift on the one behavior
+ * that leaks real resources when it is wrong.
  *
  * Two details are load-bearing:
  *
@@ -48,6 +50,11 @@ export interface RunCliOptions {
    * drivers that keep secrets in files pass nothing.
    */
   redact?: (text: string) => string
+  /**
+   * Operator cancellation. Kills the process group and rejects, so a cancelled
+   * job stops creating billable resources instead of finishing unwatched.
+   */
+  signal?: AbortSignal
 }
 
 /** Thrown when the CLI itself is missing, so callers can offer install advice. */
@@ -56,6 +63,33 @@ export class CliMissingError extends Error {
   constructor(public readonly cmd: string) {
     super(`${cmd} is not installed or not on PATH`)
     this.name = 'CliMissingError'
+  }
+}
+
+/**
+ * Kill the whole process GROUP, falling back to the top-level child.
+ *
+ * `az` and `gcloud` are Python wrappers that spawn their own subprocesses, so an
+ * invocation is a process TREE. Signalling only the parent reparents the children
+ * to pid 1, where a 15-minute `az vm create` keeps running with nobody reading its
+ * output and nobody able to stop it. `detached: true` makes the child a group
+ * leader (pgid == pid), so `kill(-pid)` reaps it and every descendant.
+ *
+ * Same shape as execGitGroup in src/integrations/git-sync.ts, which this repo
+ * already needed for the identical failure mode with git's push tree.
+ */
+export function killProcessGroup(child: { pid?: number; kill: (signal: NodeJS.Signals) => unknown }): void {
+  // ⚠️ pid must be a real spawned child. kill(-1, SIGKILL) does NOT throw on
+  // macOS — POSIX defines it as a broadcast to EVERY process the user may
+  // signal. On 2026-08-09 a pid-1 value reaching this line SIGKILLed the
+  // user's entire GUI session (all apps, Dock, Finder) six times in one day.
+  if (child.pid === undefined || !Number.isInteger(child.pid) || child.pid <= 1) return
+  try {
+    process.kill(-child.pid, 'SIGKILL')
+  } catch {
+    // The group is already gone, or the child never became a leader. Fall back
+    // to the single pid rather than leaving it running.
+    try { child.kill('SIGKILL') } catch { /* already reaped */ }
   }
 }
 
@@ -70,6 +104,8 @@ export async function runCli(cmd: string, args: string[], opts: RunCliOptions): 
       // stdin ignored on purpose: a CLI that decides to prompt must hit EOF and
       // fail, never park the job forever waiting on a tty nobody is watching.
       stdio: ['ignore', 'pipe', 'pipe'],
+      // Own process group, so a timeout or a cancel can reap the whole tree.
+      detached: true,
     })
 
     let stdout = ''
@@ -83,15 +119,32 @@ export async function runCli(cmd: string, args: string[], opts: RunCliOptions): 
     const timer = setTimeout(() => {
       if (settled) return
       settled = true
-      child.kill('SIGKILL')
+      opts.signal?.removeEventListener('abort', onAbort)
+      killProcessGroup(child)
       reject(new Error(`${cmd} ${args[0] ?? ''} timed out after ${Math.round(opts.timeoutMs / 1000)}s`))
     }, opts.timeoutMs)
     timer.unref?.()
+
+    function onAbort(): void {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      killProcessGroup(child)
+      reject(new Error(`${cmd} ${args[0] ?? ''} cancelled`))
+    }
+    if (opts.signal?.aborted) {
+      // Already cancelled before the spawn landed — reap it rather than letting
+      // an abort that fired a tick too early run the command to completion.
+      onAbort()
+      return
+    }
+    opts.signal?.addEventListener('abort', onAbort, { once: true })
 
     const finish = (): void => {
       if (settled || !closed || openStreams > 0) return
       settled = true
       clearTimeout(timer)
+      opts.signal?.removeEventListener('abort', onAbort)
       resolve({ code, stdout, stderr, output })
     }
 
@@ -125,6 +178,7 @@ export async function runCli(cmd: string, args: string[], opts: RunCliOptions): 
       if (settled) return
       settled = true
       clearTimeout(timer)
+      opts.signal?.removeEventListener('abort', onAbort)
       reject((err as { code?: string }).code === 'ENOENT' ? new CliMissingError(cmd) : err)
     })
     child.on('close', (exitCode) => {
@@ -176,6 +230,22 @@ export function cliVerb(args: string[]): string {
     verb.push(arg)
   }
   return verb.join(' ')
+}
+
+/**
+ * Parse CLI output where unparseable text is an acceptable answer rather than a
+ * failure — a detectCreds probe that only wants a display name still reports
+ * "signed in" when the CLI printed a warning instead of JSON.
+ *
+ * Callers that NEED the shape (an IP, an address) use their own parseJson, which
+ * throws with a driver-specific message naming what it was reading.
+ */
+export function parseJsonSafe<T>(text: string): T | undefined {
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    return undefined
+  }
 }
 
 /** Last few lines of stderr (falling back to stdout), for an error message. */

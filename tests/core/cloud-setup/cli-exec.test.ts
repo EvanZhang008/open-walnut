@@ -9,11 +9,32 @@
  * on 'close' with a truncated stdout, and that a secret file really is 0600 and
  * really is gone afterwards.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import fs from 'node:fs'
-import { cliErrorDetail, CliMissingError, cliVerb, runCli, withSecretFile } from '../../../src/core/cloud-setup/providers/cli-exec.js'
+import os from 'node:os'
+import path from 'node:path'
+import { cliErrorDetail, CliMissingError, cliVerb, killProcessGroup, parseJsonSafe, runCli, withSecretFile } from '../../../src/core/cloud-setup/providers/cli-exec.js'
 
 const TIMEOUT = 30_000
+
+/** True while a pid exists (signal 0 does not deliver, it only probes). */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function until(predicate: () => boolean, budgetMs = 5_000): Promise<boolean> {
+  const deadline = Date.now() + budgetMs
+  while (Date.now() < deadline) {
+    if (predicate()) return true
+    await new Promise((r) => setTimeout(r, 50))
+  }
+  return predicate()
+}
 
 describe('runCli', () => {
   it('captures stdout and stderr separately, and interleaved in output', async () => {
@@ -88,6 +109,12 @@ describe('runCli', () => {
     expect((err as Error).message).toMatch(/not installed or not on PATH/)
   })
 
+  it('closes stdin so a CLI that decides to prompt fails instead of hanging', async () => {
+    // A prompt on a job nobody is watching would park the setup forever.
+    const res = await runCli('sh', ['-c', 'read line || echo eof'], { timeoutMs: TIMEOUT })
+    expect(res.stdout.trim()).toBe('eof')
+  })
+
   it('kills and rejects a command that outlives its timeout', async () => {
     const started = Date.now()
     await expect(runCli('sh', ['-c', 'sleep 30'], { timeoutMs: 150 }))
@@ -96,10 +123,109 @@ describe('runCli', () => {
     expect(Date.now() - started).toBeLessThan(5_000)
   })
 
-  it('closes stdin so a CLI that decides to prompt fails instead of hanging', async () => {
-    // A prompt on a job nobody is watching would park the setup forever.
-    const res = await runCli('sh', ['-c', 'read line || echo eof'], { timeoutMs: TIMEOUT })
-    expect(res.stdout.trim()).toBe('eof')
+  it('kills the whole process TREE on timeout, not just the top-level child', async () => {
+    // az and gcloud are Python wrappers that spawn subprocesses. Signalling only
+    // the parent reparents the grandchild to pid 1, where a 15-minute `az vm
+    // create` keeps running with nobody reading it and nobody able to stop it.
+    const pidFile = path.join(await fs.promises.mkdtemp(path.join(os.tmpdir(), 'walnut-pgid-')), 'grandchild.pid')
+    await expect(runCli('sh', ['-c', `sleep 30 & echo $! > ${pidFile}; wait`], { timeoutMs: 300 }))
+      .rejects.toThrow(/timed out after/)
+
+    const grandchild = Number(await fs.promises.readFile(pidFile, 'utf-8'))
+    expect(Number.isInteger(grandchild), 'the test child must have recorded a grandchild pid').toBe(true)
+    expect(await until(() => !alive(grandchild)), `grandchild ${grandchild} survived the timeout`).toBe(true)
+    await fs.promises.rm(path.dirname(pidFile), { recursive: true, force: true })
+  })
+
+  it('rejects promptly when the signal fires mid-run, and reaps the tree', async () => {
+    // Cancellation has to reach a LIVE child: a cooperative flag checked between
+    // steps would let a 30-minute deploy run to completion, charging the operator
+    // for work the UI already called cancelled.
+    const pidFile = path.join(await fs.promises.mkdtemp(path.join(os.tmpdir(), 'walnut-abort-')), 'grandchild.pid')
+    const controller = new AbortController()
+    const run = runCli('sh', ['-c', `sleep 30 & echo $! > ${pidFile}; wait`], {
+      timeoutMs: TIMEOUT,
+      signal: controller.signal,
+    })
+    // Fire once the child is really up, so this exercises the live-process path
+    // rather than the already-aborted shortcut below.
+    await until(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf-8').trim() !== '')
+    const started = Date.now()
+    controller.abort()
+
+    await expect(run).rejects.toThrow(/cancelled/)
+    expect(Date.now() - started).toBeLessThan(5_000)
+    const grandchild = Number(fs.readFileSync(pidFile, 'utf-8'))
+    expect(await until(() => !alive(grandchild)), `grandchild ${grandchild} survived the cancel`).toBe(true)
+    await fs.promises.rm(path.dirname(pidFile), { recursive: true, force: true })
+  })
+
+  it('rejects a signal that was already aborted before the spawn', async () => {
+    // The runner is called in a loop of steps; the abort can land between two of
+    // them, and running the command anyway would create the resource the cancel
+    // was meant to prevent.
+    const res = await runCli('sh', ['-c', 'echo should-not-matter'], {
+      timeoutMs: TIMEOUT,
+      signal: AbortSignal.abort(),
+    }).then(() => 'resolved, but should have rejected', (e: Error) => e.message)
+    expect(res).toMatch(/cancelled/)
+  })
+
+  it('leaves no abort listener behind on a normal completion', async () => {
+    // runCli is called many times per provision against ONE job signal, so a
+    // listener that outlives its call accumulates for the life of the job.
+    const controller = new AbortController()
+    for (let i = 0; i < 5; i++) {
+      await runCli('sh', ['-c', 'echo ok'], { timeoutMs: TIMEOUT, signal: controller.signal })
+    }
+    // No public listener count on AbortSignal, so assert the observable
+    // consequence: aborting now must not throw from a stale listener of an
+    // already-settled call.
+    expect(() => controller.abort()).not.toThrow()
+  })
+})
+
+describe('killProcessGroup', () => {
+  it('refuses pids that cannot be a spawned child (undefined, 0, 1)', () => {
+    // ⚠️ NEVER "test" this path by actually passing pid 1 to the real
+    // implementation without the guard: kill(-1, SIGKILL) does NOT throw EPERM
+    // on macOS — POSIX defines it as a BROADCAST to every process the user can
+    // signal. On 2026-08-09 exactly that line tore down the user's entire GUI
+    // session (every app SIGKILLed) six times in one afternoon. pid ≤ 1 can
+    // only ever be corrupted bookkeeping, so the guard must signal NOTHING —
+    // not even the single-pid fallback.
+    const killed: string[] = []
+    killProcessGroup({ pid: undefined, kill: () => killed.push('single') })
+    killProcessGroup({ pid: 1, kill: () => killed.push('single') })
+    killProcessGroup({ pid: 0, kill: () => killed.push('single') })
+    killProcessGroup({ pid: -5 as unknown as number, kill: () => killed.push('single') })
+    expect(killed).toEqual([])
+  })
+
+  it('falls back to the single pid when the group kill throws', () => {
+    // Simulate the real fallback trigger (child never became a group leader →
+    // ESRCH) with a spy, so the test never emits a real signal to anything.
+    const killed: string[] = []
+    const spy = vi.spyOn(process, 'kill').mockImplementation(((pid: number) => {
+      if (pid < 0) throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' })
+      return true
+    }) as typeof process.kill)
+    try {
+      killProcessGroup({ pid: 424242, kill: () => killed.push('single') })
+    } finally {
+      spy.mockRestore()
+    }
+    expect(killed).toEqual(['single'])
+  })
+})
+
+describe('parseJsonSafe', () => {
+  it('parses JSON, and answers undefined rather than throwing on anything else', () => {
+    // Shared by azure and gcp detectCreds: a CLI that printed an update warning
+    // instead of JSON still means "signed in", so this must not throw.
+    expect(parseJsonSafe<{ name: string }>('{"name":"acme"}')).toEqual({ name: 'acme' })
+    expect(parseJsonSafe('WARNING: extension update available')).toBeUndefined()
+    expect(parseJsonSafe('')).toBeUndefined()
   })
 })
 
