@@ -37,7 +37,10 @@
 #   WALNUT_DEMO_BEARER_TOKEN=… scripts/walnut-sandbox.sh record demo/Final/onboarding-chain.mp4
 set -uo pipefail
 
-PORT=3457
+# Overridable: :3457 doubles as the Playwright fixture port, whose orphan sweep
+# (pw-gate) reaps anything it finds listening there — a sandbox parked on 3457
+# during a concurrent Playwright run gets SIGTERMed mid-use. Pick 3458+ then.
+PORT="${WALNUT_SANDBOX_PORT:-3457}"
 URL="http://localhost:${PORT}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 ROOT="${TMPDIR:-/tmp}/walnut-sandbox"

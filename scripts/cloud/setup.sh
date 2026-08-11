@@ -191,25 +191,24 @@ EOF
 # would fail here. `email` is the supported way to get the dual ACME chain, so
 # that is all we write; issuer ordering stays Caddy's default (LE, then ZeroSSL).
 #
-# The address must be syntactically deliverable even though nothing is sent to
-# it: Let's Encrypt's Boulder validates contacts (policy.ValidEmail → the domain
-# must be a valid hostname ending in an ICANN TLD, and must not be example.com/
-# .net/.org). So `walnut@localhost` or an example.com address would be REJECTED
-# at account creation. `invalid` is the RFC 2606 reserved TLD, which parses as a
-# hostname and is not on Boulder's forbidden list.
-# LIVE SMOKE MUST VERIFY (not checkable at lint/synth time):
-#   1. `caddy validate --config /etc/caddy/Caddyfile` accepts the global block.
-#   2. A cert is really issued for <dashed-ip>.sslip.io (curl the https origin).
-#   3. `journalctl -u caddy | grep -i certificate` names the issuer, and LE
-#      accepted the placeholder contact (watch for an InvalidEmail problem
-#      document — if it appears, switch to a real operator address).
-#   4. If LE is rate-limited, confirm the retry actually reaches ZeroSSL rather
-#      than only backing off against LE.
+# The address must end in a REAL ICANN TLD. Live-verified 2026-08-11 (this was
+# the reasoned-but-wrong bit the first live run caught): an RFC 2606 `.invalid`
+# address was rejected by BOTH issuers — Boulder with "contact email has invalid
+# domain: Domain name does not end with a valid public suffix (TLD)" and ZeroSSL
+# ACME with "A contact URL for an account was invalid" — so the box sat cert-less
+# forever and the failover chain never helped (both ends failed the same way).
+# Boulder also forbids example.com/.net/.org. Hence a real, deliverable,
+# project-owned contact below; nothing is ever sent to it in practice.
+# LIVE SMOKE VERIFIED 2026-08-11 (us-west-2, real deploy):
+#   1. `caddy validate` accepts the global block.
+#   2. LE issued for <dashed-ip>.sslip.io ~4s after account creation succeeded.
+#   3. journalctl named the issuer (acme-v02.api.letsencrypt.org).
+#   4. Still unverified live: the LE→ZeroSSL failover under a real LE rate-limit.
 CADDY_GLOBAL_BLOCK=""
 case "$DOMAIN" in
   *.sslip.io)
     echo "    (sslip.io hostname — enabling Caddy's Let's Encrypt → ZeroSSL issuer failover)"
-    CADDY_GLOBAL_BLOCK=$'{\n\t# Turns on Caddy\'s redundant LE→ZeroSSL issuer chain (see setup.sh).\n\temail walnut@walnut.invalid\n}\n\n'
+    CADDY_GLOBAL_BLOCK=$'{\n\t# Turns on Caddy\'s redundant LE→ZeroSSL issuer chain (see setup.sh).\n\temail certs@openwalnut.dev\n}\n\n'
     ;;
 esac
 

@@ -51,6 +51,7 @@
     "test:live": "WALNUT_LIVE_TEST=1 vitest run --config vitest.live.config.ts",
     "test:live:daemon": "bash scripts/run-live-daemon-tests.sh",
     "test:live:cloud": "bash scripts/run-live-cloud-tests.sh",
+    "test:live:aws-setup": "bash scripts/run-live-aws-cloud-setup.sh",
     "test:full": "npm run test && npm run test:e2e && npm run test:live:daemon && npm run test:live:cloud",
     "test:all": "npm run lint && npm run lint:paths && npm run test && npx playwright test",
     "lint:paths": "bash scripts/lint-production-paths.sh",
