@@ -37,9 +37,46 @@
  * - Provides file system operations
  * - Never auto-exits; kills idle sessions after 2hr with no watchers
  */
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { computeExpectedDaemonVersion } from './daemon-version-check.js'
 import { foldLine, initialFoldState, assembleSnapshot, snapshotDiffers } from './daemon-fold.js'
+
+/**
+ * Version stamped into a source-deployed daemon, resolved at string-build time
+ * on the local machine. Priority:
+ *   1. sha256 of the daemon source tree (dev checkout — matches the binaries)
+ *   2. DAEMON_VERSION env (compile-time define passthrough)
+ *   3. `walnut-daemon-pkg-<version>` from the installed package.json — the
+ *      published-npm-package case, where src/ doesn't ship so (1) is null.
+ *      Package version identifies the shipped code exactly, so the local
+ *      fallback daemon and its .version sidecar agree, and a package upgrade
+ *      changes the version → daemon auto-restarts with the new code.
+ *   4. 'dev-source' — nothing else resolvable (should not happen in practice).
+ */
+export function resolveDaemonSourceVersion(): string {
+  const computed = computeExpectedDaemonVersion()
+  if (computed) return computed
+  if (process.env.DAEMON_VERSION) return process.env.DAEMON_VERSION
+  // Walk up from this bundle (dist/cli.js or dist/providers/...) to the
+  // open-walnut package.json.
+  let dir = path.dirname(fileURLToPath(import.meta.url))
+  for (let i = 0; i < 10; i++) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8')) as {
+        name?: string
+        version?: string
+      }
+      if (pkg.name === 'open-walnut' && pkg.version) return `walnut-daemon-pkg-${pkg.version}`
+    } catch { /* keep walking */ }
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return 'dev-source'
+}
 
 export function getDaemonSource(): string {
   // Inject capability list so the fallback node daemon answers `hello` with
@@ -78,7 +115,7 @@ export function getDaemonSource(): string {
       `daemon-source: expected exactly 1 '${versionPlaceholder}' placeholder in DAEMON_SOURCE, found ${versionMatches}`,
     )
   }
-  const version = computeExpectedDaemonVersion() || process.env.DAEMON_VERSION || 'dev-source'
+  const version = resolveDaemonSourceVersion()
 
   // ── C1: fold-function injection (contract §3) ──
   // The pure fold functions from daemon-fold.ts are inlined TEXTUALLY

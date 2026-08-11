@@ -1,4 +1,4 @@
-import { Maintenance, type QMDStore } from '@tobilu/qmd';
+import type { QMDStore } from '@tobilu/qmd';
 import type { Database as DatabaseType } from 'better-sqlite3';
 import { log } from '../logging/index.js';
 import {
@@ -205,10 +205,10 @@ export async function runQmdIncrementalWork(
   }
 }
 
-function compactQmdStoreIfNeeded(
+async function compactQmdStoreIfNeeded(
   store: QMDStore,
   label: string,
-): QmdCompactionStats | null {
+): Promise<QmdCompactionStats | null> {
   // QMD's public InternalStore type exposes only the cross-runtime database
   // subset, while Walnut's installed QMD backend is better-sqlite3.
   const db = store.internal.db as DatabaseType;
@@ -227,6 +227,9 @@ function compactQmdStoreIfNeeded(
   }
 
   const startedAt = Date.now();
+  // Dynamic import: qmd is an optionalDependency. Reaching this point means a
+  // store instance exists, so the module is already loaded — this never fails.
+  const { Maintenance } = await import('@tobilu/qmd');
   new Maintenance(store.internal).vacuum();
   const afterBytes = (
     db.pragma('page_count', { simple: true }) as number
@@ -271,7 +274,7 @@ export async function cleanupQmdCorpus(
       const cleanup = cleanupOrphanedQmdData(store);
       if (!options.compact) return cleanup;
       try {
-        const compaction = compactQmdStoreIfNeeded(store, name);
+        const compaction = await compactQmdStoreIfNeeded(store, name);
         return compaction ? { ...cleanup, compaction } : cleanup;
       } catch (error) {
         // Reclaiming disk is optional; a failed VACUUM must not invalidate the

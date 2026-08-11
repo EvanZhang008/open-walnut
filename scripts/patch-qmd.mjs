@@ -14,6 +14,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -22,6 +23,17 @@ const locations = [
   resolve(__dirname, '../node_modules/@tobilu/qmd'),
   resolve(__dirname, '../web/node_modules/@tobilu/qmd'),
 ];
+
+// Published-package installs hoist qmd to a PARENT node_modules where neither
+// hardcoded path exists — add wherever Node actually resolves it from. The
+// package exports map blocks './package.json', so resolve the main entry
+// (dist/index.js) and walk up to the package root.
+try {
+  const require_ = createRequire(import.meta.url);
+  let dir = dirname(require_.resolve('@tobilu/qmd'));
+  while (dir !== dirname(dir) && !existsSync(resolve(dir, 'package.json'))) dir = dirname(dir);
+  if (!locations.includes(dir)) locations.push(dir);
+} catch { /* not installed at all — the loop below reports it */ }
 
 let anyVerified = false;
 

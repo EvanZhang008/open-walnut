@@ -24,9 +24,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { createHash } from 'node:crypto'
 import { WebSocket } from 'ws'
 import { log } from '../logging/index.js'
 import { DAEMON_BINARIES_DIR } from '../constants.js'
+import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
 
 // Env-aware default so the singleton (exported below) isolates a demo server's
 // daemon when WALNUT_DAEMON_DIR is set. Tests pass `daemonDir` explicitly and are
@@ -322,7 +324,13 @@ export class LocalDaemon {
     delete env.OPEN_WALNUT_EPHEMERAL
     if (env.NODE_ENV === 'test') delete env.NODE_ENV
 
-    const proc = spawn(binaryPath, ['--start'], {
+    // Source-fallback daemons are plain .cjs scripts (no compiled binary in
+    // published npm installs) — run them under the current Node runtime.
+    const isSourceScript = binaryPath.endsWith('.cjs') || binaryPath.endsWith('.js')
+    const [cmd, args] = isSourceScript
+      ? [process.execPath, [binaryPath, '--start']]
+      : [binaryPath, ['--start']]
+    const proc = spawn(cmd, args, {
       detached: true,
       stdio: 'ignore',
       // Pass our daemonDir to the spawned binary so it writes its port/pid/streams
@@ -370,7 +378,38 @@ export class LocalDaemon {
     for (const p of candidates) {
       if (fs.existsSync(p)) return p
     }
-    throw new Error(`Local daemon binary not found. Run: bash scripts/build-daemon.sh`)
+    // No compiled binary — the published npm package (bun binaries are ~280MB
+    // and excluded from the tarball), or a non-darwin-arm64 host. Materialize
+    // the embedded daemon source (same code SSH source-deploys ship to remote
+    // hosts) and run it under the current Node. Feature scope matches the
+    // source twin — see daemon-source.ts.
+    return this.materializeSourceDaemon()
+  }
+
+  /**
+   * Write the embedded daemon source to <daemonDir>/daemon-fallback.cjs and
+   * return that path. spawnDaemon() detects the .cjs suffix and runs it with
+   * process.execPath. A .version sidecar mirrors the binary convention so the
+   * version-mismatch restart logic works unchanged — on package upgrade the
+   * stamped version changes, the running daemon reports the old one, and
+   * ensureRunningInner() restarts it with the new source.
+   */
+  private materializeSourceDaemon(): string {
+    const scriptPath = path.join(this.daemonDir, 'daemon-fallback.cjs')
+    const source = getDaemonSource()
+    const sourceHash = createHash('sha256').update(source).digest('hex').slice(0, 12)
+    const hashFile = `${scriptPath}.sha256`
+
+    fs.mkdirSync(this.daemonDir, { recursive: true })
+    let existingHash: string | null = null
+    try { existingHash = fs.readFileSync(hashFile, 'utf-8').trim() } catch { /* first run */ }
+    if (existingHash !== sourceHash) {
+      fs.writeFileSync(scriptPath, source, 'utf-8')
+      fs.writeFileSync(`${scriptPath}.version`, resolveDaemonSourceVersion(), 'utf-8')
+      fs.writeFileSync(hashFile, sourceHash, 'utf-8')
+      log.session.info('materialized source-fallback local daemon', { scriptPath, sourceHash })
+    }
+    return scriptPath
   }
 
   private readBinaryVersion(binaryPath: string): string | null {

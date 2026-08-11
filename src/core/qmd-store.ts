@@ -12,7 +12,7 @@
  * - taskStore: tasks (programmatic insertion from tasks.json)
  * - sessionStore: claude code sessions (programmatic insertion from sessions.json)
  */
-import { createStore, type QMDStore } from '@tobilu/qmd';
+import type { QMDStore } from '@tobilu/qmd';
 import Database, { type Database as DatabaseType } from 'better-sqlite3';
 import { WALNUT_HOME, MEMORY_DIR, NOTES_DIR, GLOBAL_SKILLS_DIR } from '../constants.js';
 import fs from 'node:fs';
@@ -43,6 +43,38 @@ const QMD_DB_FILES = [
 
 type QmdEmbedOptions = NonNullable<Parameters<QMDStore['embed']>[0]>;
 type QmdEmbedResult = Awaited<ReturnType<QMDStore['embed']>>;
+
+/**
+ * Lazy-load @tobilu/qmd. It transitively requires node-llama-cpp, whose
+ * native/xpack binaries need glibc ≥ 2.28 — on older-glibc distros npm
+ * installs walnut WITHOUT qmd (optionalDependency), and any
+ * eager import would crash the whole server. Callers get a clear error only
+ * when semantic search is actually exercised; isQmdAvailable() lets startup
+ * skip the subsystem gracefully.
+ */
+let qmdModulePromise: Promise<typeof import('@tobilu/qmd')> | null = null;
+async function loadQmd(): Promise<typeof import('@tobilu/qmd')> {
+  if (!qmdModulePromise) {
+    qmdModulePromise = import('@tobilu/qmd').catch((err) => {
+      qmdModulePromise = null;
+      throw new Error(
+        `semantic search unavailable: @tobilu/qmd failed to load (${err instanceof Error ? err.message : err}). ` +
+        'This host may lack glibc ≥ 2.28 or the optional dependency was skipped at install.',
+      );
+    });
+  }
+  return qmdModulePromise;
+}
+
+/** True if the qmd optional dependency is installed and loadable. */
+export async function isQmdAvailable(): Promise<boolean> {
+  try {
+    await loadQmd();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 interface PersistedEmbedRun {
   force: number;
@@ -260,7 +292,7 @@ let sessionStorePromise: Promise<QMDStore> | null = null;
 export async function getMemoryStore(): Promise<QMDStore> {
   if (memoryStore) return memoryStore;
   if (!memoryStorePromise) {
-    const model = await initializeQmdRuntimeModel();
+    const [{ createStore }, model] = await Promise.all([loadQmd(), initializeQmdRuntimeModel()]);
     if (memoryStore) return memoryStore;
     if (memoryStorePromise) return memoryStorePromise;
     memoryStorePromise = createStore({
@@ -300,7 +332,7 @@ export async function getMemoryStore(): Promise<QMDStore> {
 export async function getNotesStore(): Promise<QMDStore> {
   if (notesStore) return notesStore;
   if (!notesStorePromise) {
-    const model = await initializeQmdRuntimeModel();
+    const [{ createStore }, model] = await Promise.all([loadQmd(), initializeQmdRuntimeModel()]);
     if (notesStore) return notesStore;
     if (notesStorePromise) return notesStorePromise;
     notesStorePromise = createStore({
@@ -342,7 +374,7 @@ export async function getNotesStore(): Promise<QMDStore> {
 export async function getTaskStore(): Promise<QMDStore> {
   if (taskStore) return taskStore;
   if (!taskStorePromise) {
-    const model = await initializeQmdRuntimeModel();
+    const [{ createStore }, model] = await Promise.all([loadQmd(), initializeQmdRuntimeModel()]);
     if (taskStore) return taskStore;
     if (taskStorePromise) return taskStorePromise;
     taskStorePromise = createStore({
@@ -373,7 +405,7 @@ export async function getTaskStore(): Promise<QMDStore> {
 export async function getSessionStore(): Promise<QMDStore> {
   if (sessionStore) return sessionStore;
   if (!sessionStorePromise) {
-    const model = await initializeQmdRuntimeModel();
+    const [{ createStore }, model] = await Promise.all([loadQmd(), initializeQmdRuntimeModel()]);
     if (sessionStore) return sessionStore;
     if (sessionStorePromise) return sessionStorePromise;
     sessionStorePromise = createStore({

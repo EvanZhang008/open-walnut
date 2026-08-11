@@ -1364,6 +1364,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   } else if (CLOUD_MODE) {
     // Cloud companion: no semantic indexes (keyword/FTS search still works).
     log.memory.info('cloud mode: skipping QMD semantic index init')
+  } else if (!(await (await import('../core/qmd-store.js')).isQmdAvailable())) {
+    // qmd is an optionalDependency; npm skips it where node-llama-cpp can't
+    // build/run (e.g. glibc < 2.28 hosts). Keyword/FTS search still works.
+    log.memory.warn('QMD semantic search unavailable on this host (optional dependency not installed) — keyword search only')
   } else try {
     const { startQmdWatcher } = await import('../core/qmd-watcher.js')
     const {
