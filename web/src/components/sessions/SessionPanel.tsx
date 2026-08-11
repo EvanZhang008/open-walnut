@@ -5,7 +5,7 @@ import { SessionNotesPill, SessionNotesBar, useSessionNote } from './SessionNote
 import { SessionFileExplorer } from './SessionFileExplorer';
 import { SessionTerminal } from './SessionTerminal';
 import { SessionDiffView } from './SessionDiffView';
-import { buildSelectionPrefill } from './diffPrefill';
+import { buildSelectionPrefill, displayPathForPrefill } from './diffPrefill';
 import type { SessionSplitView } from './sessionSplitView';
 import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB } from '../common/Icons';
 import { openPopout } from '@/popout/openPopout';
@@ -17,7 +17,6 @@ import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
-import { useNotesAwareFileOpen } from '@/hooks/useNotesAwareFileOpen';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, terminateSession, investigateSession, setSessionEffort, setSessionModel } from '@/api/sessions';
@@ -509,9 +508,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined);
   const [prefillNonce, setPrefillNonce] = useState(0);
   const handleSelectCode = useCallback((filePath: string, line: number | undefined, code: string) => {
-    setPrefillText(buildSelectionPrefill(filePath, line, code));
+    // The Changed tab already hands a repo-relative path; the Files tab browses the
+    // whole filesystem and hands an absolute one. Shorten against the session cwd so
+    // a quote reads the same from either surface (a path outside the cwd stays absolute).
+    setPrefillText(buildSelectionPrefill(displayPathForPrefill(filePath, session?.cwd), line, code));
     setPrefillNonce((n) => n + 1);
-  }, []);
+  }, [session?.cwd]);
   // A line comment from the diff → send straight to this session's main agent.
   const handleDiffComment = useCallback((message: string) => {
     void send(sessionId, message);
@@ -527,8 +529,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // instead of the session cwd. Cleared when the split closes / view switches.
   const [fileViewTarget, setFileViewTarget] = useState<{ path: string; line?: number } | null>(null);
   // Toggle a split view: same view → close (exit fullscreen); other/none → open it.
-  // Exception: Files opened via a file-path click (fileViewTarget set) — the chip
-  // first re-roots the explorer back to the session cwd, second click closes.
+  //
+  // Exception kept: Files opened via a file-path click (fileViewTarget set) — the
+  // chip's first click re-roots the explorer to the session cwd so you can browse
+  // the whole tree, the second closes. The re-root no longer loses your place: the
+  // explorer's memory is scope-keyed, so the same file stays open and the tree
+  // expands to it under the new root (that loss WAS the reported bug).
   const toggleView = useCallback((view: SessionSplitView) => {
     const rerooting = view === 'files' && fileViewTarget !== null && activeView === 'files';
     setFileViewTarget(null);
@@ -542,12 +548,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // Clicking a file path in the chat opens it in the SAME split layout as
   // Changed/Files/Terminal — file explorer + preview on the left, the live chat
   // in the resizable right column (replaces the old full-screen FileViewer modal).
-  const openFileViewer = useCallback((path: string, line?: number) => {
+  // EVERY file type goes here, vault notes included: a click must never navigate
+  // the app away from the session (that jump was reverted 2026-08-09). Notes get
+  // an explicit "Open in Notes" button in the preview toolbar / right-click menu.
+  const handleFileOpen = useCallback((path: string, line?: number) => {
     setFileViewTarget({ path, line });
     setActiveView('files');
     enterFullscreen();
   }, [enterFullscreen]);
-  const handleFileOpen = useNotesAwareFileOpen(openFileViewer, session?.host);
   // planPopoverRef removed — modal uses backdrop click
 
   // Auto-refresh plan content when modal opens
@@ -1247,6 +1255,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                   host={session?.host}
                   sessionId={sessionId}
                   initialLine={fileViewTarget?.line}
+                  // ONE memory key for both ways in. `cwd` above differs per entry
+                  // (chat file click → the file's parent dir; Files chip → session
+                  // cwd), so a root-keyed "last file read" never matched across
+                  // them — the chip always reopened on the empty preview pane.
+                  memoryScope={session?.cwd}
+                  // Same sink the Changed tab uses — a quote from a whole file and
+                  // a quote from a diff compose the identical prefill.
+                  onSelectCode={handleSelectCode}
                 />
               )}
               {activeView === 'terminal' && (

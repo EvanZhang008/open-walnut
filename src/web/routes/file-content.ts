@@ -2,6 +2,7 @@
  * Serve local or remote file content for the FileViewer overlay.
  *
  * GET /api/file-content?path=/absolute/path/to/file.ts&host=optional-ssh-host
+ * PUT /api/file-content  { path, host?, content, expectedHash? }  → save an edit
  *
  * Security:
  * - Must be absolute path
@@ -9,6 +10,12 @@
  * - File size limit (512 KB for text content)
  * - Binary detection (first 8KB NUL scan)
  * - Localhost-only server
+ *
+ * The WRITE path reuses the read path's guards verbatim (`assertPathAllowed`) —
+ * one sandbox for both verbs, so a future denylist entry can't protect reads
+ * while leaving writes open. On top of that it refuses to clobber anything the
+ * viewer can't faithfully round-trip (binary, >512 KB) and takes an optional
+ * `expectedHash` for optimistic locking (mirrors the notes save contract).
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
@@ -19,6 +26,9 @@ import fsp from 'node:fs/promises'
 import { createFileReader } from '../../core/session-file-reader.js'
 import type { DaemonFileReader } from '../../core/daemon-file-reader.js'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { computeContentHash } from '../../utils/file-ops.js'
+import { withFileLock } from '../../utils/file-lock.js'
+import { log } from '../../logging/index.js'
 
 /**
  * In CLOUD mode a LOCAL file read (no `host=`) is confined to a small root
@@ -36,6 +46,7 @@ function cloudLocalReadAllowed(absPath: string): boolean {
     path.join(os.tmpdir(), 'open-walnut-streams'),
     '/tmp/open-walnut',
     '/tmp/open-walnut-streams',
+    path.join(os.homedir(), '.open-walnut', 'tmp'), // daemon stream files (2026-08 move)
   ]
   return roots.some((r) => resolved === r || resolved.startsWith(r + path.sep))
 }
@@ -59,8 +70,14 @@ export const fileContentRouter = Router()
 
 const MAX_FILE_SIZE = 512 * 1024 // 512 KB
 
-/** Media extensions served as streamable raw bytes (video/audio players). */
-const MEDIA_MIME: Record<string, string> = {
+/**
+ * Extensions served as byte-exact raw streams with a real Content-Type, so the
+ * BROWSER renders them with its own built-in viewer (PDF.js, image decoder,
+ * media player) instead of Walnut re-implementing one. Text decoding would
+ * corrupt every one of these, which is why they bypass the JSON payload path.
+ */
+const RAW_INLINE_MIME: Record<string, string> = {
+  // Video / audio — <video>/<audio> issue Range requests to seek.
   mp4: 'video/mp4',
   m4v: 'video/mp4',
   mov: 'video/quicktime',
@@ -69,6 +86,20 @@ const MEDIA_MIME: Record<string, string> = {
   wav: 'audio/wav',
   m4a: 'audio/mp4',
   ogg: 'audio/ogg',
+  // Documents the browser renders natively.
+  pdf: 'application/pdf',
+  // Raster images (svg stays on the text path — it IS text).
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+  ico: 'image/x-icon',
+  avif: 'image/avif',
+  heic: 'image/heic',
+  tiff: 'image/tiff',
+  tif: 'image/tiff',
 }
 
 /** Per-write chunk when streaming remote bytes (matches DaemonFileReader.CHUNK_SIZE —
@@ -238,23 +269,31 @@ export interface FileContentPayload {
   binary: boolean
   extension: string
   error?: string
+  /**
+   * Hash of the bytes served, for the editor's optimistic lock on save. Present
+   * only for a complete text read — a TRUNCATED payload deliberately has none,
+   * because hashing the first 512 KB would let a save round-trip a partial file
+   * back over the whole thing. No hash → the editor stays read-only.
+   */
+  contentHash?: string
 }
 
 /**
- * Read a file's text content as the FileViewer JSON payload — the ONE
- * implementation shared by the internal route and GET /api/v1/file-content.
- * ALL the security guards live here so every edge gets the identical sandbox:
- * traversal rejection, absolute-path requirement, and (cloud mode) the
- * safe-root allowlist + secret-path denylist.
+ * The path sandbox BOTH verbs share. Validates + normalizes a caller-supplied
+ * path and reports whether it addresses a remote host.
  *
- * Missing/unreadable files come back as a payload with `error` set (never a
- * throw) — the legacy viewer contract. Throws FileContentError only for
- * invalid/forbidden requests.
+ * Extracted so read and write can never drift: every guard added here applies to
+ * both. `intent` only widens the cloud-mode rule — see below.
+ *
+ * Throws FileContentError for anything invalid/forbidden; returns the local
+ * absolute path (`~` expanded) or, for remote, the path untouched (the daemon
+ * expands `~` against the remote HOME).
  */
-export async function readFileContentPayload(
+export function assertPathAllowed(
   rawPath: unknown,
   host: string | undefined,
-): Promise<FileContentPayload> {
+  intent: 'read' | 'write' = 'read',
+): { filePath: string; isRemote: boolean } {
   if (!rawPath || typeof rawPath !== 'string') {
     throw new FileContentError('Missing or invalid path parameter', 400)
   }
@@ -272,10 +311,39 @@ export async function readFileContentPayload(
   if (!isRemote && !path.isAbsolute(filePath)) {
     throw new FileContentError('Path must be absolute', 400)
   }
-  // Cloud box: confine local reads to safe roots and never serve secret files.
-  if (!isRemote && CLOUD_MODE && (isSecretPath(filePath) || !cloudLocalReadAllowed(filePath))) {
-    throw new FileContentError('Path not permitted', 403)
+  if (!isRemote && CLOUD_MODE) {
+    // Cloud box: confine local reads to safe roots and never serve secret files.
+    if (isSecretPath(filePath) || !cloudLocalReadAllowed(filePath)) {
+      throw new FileContentError('Path not permitted', 403)
+    }
+    // …and never WRITE a local file there at all. The cloud replica's only
+    // readable roots ARE its live session state (/tmp/open-walnut/sessions.json,
+    // the stream JSONLs) — handing a paired device an editor for those is a
+    // corruption vector with no user-facing purpose. Remote (`host=`) writes are
+    // unaffected: they execute on the trusted exec host's daemon.
+    if (intent === 'write') {
+      throw new FileContentError('Editing files is not available in cloud mode', 403)
+    }
   }
+  return { filePath, isRemote }
+}
+
+/**
+ * Read a file's text content as the FileViewer JSON payload — the ONE
+ * implementation shared by the internal route and GET /api/v1/file-content.
+ * ALL the security guards live here so every edge gets the identical sandbox:
+ * traversal rejection, absolute-path requirement, and (cloud mode) the
+ * safe-root allowlist + secret-path denylist.
+ *
+ * Missing/unreadable files come back as a payload with `error` set (never a
+ * throw) — the legacy viewer contract. Throws FileContentError only for
+ * invalid/forbidden requests.
+ */
+export async function readFileContentPayload(
+  rawPath: unknown,
+  host: string | undefined,
+): Promise<FileContentPayload> {
+  const { filePath, isRemote } = assertPathAllowed(rawPath, host, 'read')
 
   const ext = path.extname(filePath).slice(1).toLowerCase()
 
@@ -294,6 +362,8 @@ export async function readFileContentPayload(
         truncated,
         binary: false,
         extension: ext,
+        // Only a WHOLE read gets a hash — see FileContentPayload.contentHash.
+        ...(truncated ? {} : { contentHash: computeContentHash(content) }),
       }
     } catch (err) {
       return {
@@ -334,12 +404,172 @@ export async function readFileContentPayload(
   const buffer = truncated
     ? await readPartial(filePath, MAX_FILE_SIZE)
     : await fsp.readFile(filePath)
+  const content = buffer.toString('utf-8')
   return {
-    content: buffer.toString('utf-8'),
+    content,
     size: stat.size,
     truncated,
     binary: false,
     extension: ext,
+    // Only a WHOLE read gets a hash — see FileContentPayload.contentHash.
+    ...(truncated ? {} : { contentHash: computeContentHash(content) }),
+  }
+}
+
+/** Result of a successful save. */
+export interface FileWriteResult {
+  ok: true
+  size: number
+  contentHash: string
+}
+
+/** A save rejected because the file changed under the editor (HTTP 409). */
+export class FileConflictError extends Error {
+  constructor(public currentHash: string) {
+    super('File was modified externally')
+    this.name = 'FileConflictError'
+  }
+}
+
+/**
+ * Write a file's text content — the editor's save path, shared by the internal
+ * route and PUT /api/v1/file-content.
+ *
+ * Refuses everything the viewer can't faithfully round-trip, because for a save
+ * "render it approximately" means "destroy the rest of the file":
+ *   - a path outside the read sandbox        → 400/403 (assertPathAllowed)
+ *   - content over MAX_FILE_SIZE             → 413
+ *   - an existing file that reads as BINARY  → 415 (a text editor must not
+ *     overwrite a binary; the viewer never showed its bytes to begin with)
+ *   - an existing file over MAX_FILE_SIZE    → 409 truncated_source (the editor
+ *     only ever held the first 512 KB, so saving would delete the tail)
+ *   - a stale `expectedHash`                 → 409 (FileConflictError)
+ *
+ * Creating a NEW file is allowed (the tree's "new file" affordance) — a missing
+ * target with no expectedHash is not a conflict. Parent dirs are NOT created:
+ * an editor save into a non-existent directory is a typo, not an intent.
+ */
+export async function writeFileContentPayload(
+  rawPath: unknown,
+  host: string | undefined,
+  content: unknown,
+  expectedHash?: unknown,
+): Promise<FileWriteResult> {
+  const { filePath, isRemote } = assertPathAllowed(rawPath, host, 'write')
+  if (typeof content !== 'string') {
+    throw new FileContentError('content (string) is required', 400)
+  }
+  if (expectedHash != null && typeof expectedHash !== 'string') {
+    throw new FileContentError('expectedHash must be a string', 400)
+  }
+  if (Buffer.byteLength(content, 'utf-8') > MAX_FILE_SIZE) {
+    throw new FileContentError(
+      `Content too large to save (max ${MAX_FILE_SIZE} bytes) — the editor only loads the first ${MAX_FILE_SIZE} bytes of a file`,
+      413,
+    )
+  }
+  const nextHash = computeContentHash(content)
+
+  if (isRemote) {
+    // Remote: read-compare-write over the daemon. There is no remote file lock,
+    // so the hash check is the only guard — same best-effort contract the notes
+    // save has, and the window is one WS round-trip.
+    const reader = (await createFileReader(host as string)) as DaemonFileReader
+    // stat FIRST, for the same reason the local branch does: a file bigger than
+    // the editor can load must be refused before we read it, not truncated by the
+    // save. A daemon too old for fs.stat throws; treat that as "can't verify" and
+    // fall through to the read (which is itself size-guarded by readFile).
+    try {
+      const st = await reader.stat(filePath)
+      if (st && st.size > MAX_FILE_SIZE) {
+        throw new FileContentError('File is larger than the editor can load — saving would truncate it', 409)
+      }
+    } catch (err) {
+      if (err instanceof FileContentError) throw err
+      /* stat unavailable — the read below is the fallback guard */
+    }
+    const current = await reader.readFile(filePath)
+    if (current !== null) {
+      assertOverwritable(current, filePath)
+      if (expectedHash && computeContentHash(current) !== expectedHash) {
+        throw new FileConflictError(computeContentHash(current))
+      }
+    } else {
+      // Creating a remote file: the daemon's fs.write does `mkdir -p`, so refuse
+      // here if the parent is missing. Matches the local branch — a save into a
+      // directory that doesn't exist is a typo, and silently materializing a tree
+      // on a remote host is worse than a clear error.
+      //
+      // fs.stat (not fs.ls) because it distinguishes absent from empty: listDir
+      // returns [] for BOTH a failed call and an empty directory.
+      let parentExists: boolean
+      try {
+        parentExists = (await reader.stat(path.dirname(filePath))) !== null
+      } catch {
+        parentExists = true // old daemon without fs.stat — don't block the save
+      }
+      if (!parentExists) {
+        throw new FileContentError(`Directory does not exist on ${host}: ${path.dirname(filePath)}`, 404)
+      }
+    }
+    await reader.writeFile(filePath, content)
+    log.web.info('file saved (remote)', { path: filePath, host, size: Buffer.byteLength(content, 'utf-8') })
+    return { ok: true, size: Buffer.byteLength(content, 'utf-8'), contentHash: nextHash }
+  }
+
+  // Parent dir must already exist, checked BEFORE taking the lock: withFileLock
+  // mkdir -p's the lock's own parent (`<file>.lock`'s dirname IS the file's
+  // dirname), so entering the lock would silently create the missing directory —
+  // the opposite of this endpoint's contract.
+  const parent = path.dirname(filePath)
+  try {
+    const pstat = await fsp.stat(parent)
+    if (!pstat.isDirectory()) throw new FileContentError(`Not a directory: ${parent}`, 400)
+  } catch (err) {
+    if (err instanceof FileContentError) throw err
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw new FileContentError(`Directory does not exist: ${parent}`, 404)
+    }
+    throw err
+  }
+
+  // Local: check + write under the file lock, so a concurrent agent write (which
+  // takes the same lock via writeFileChecked) can't slip between them.
+  const conflict = await withFileLock(filePath, async () => {
+    let stat
+    try {
+      stat = await fsp.stat(filePath)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+      stat = null // new file — nothing to conflict with
+    }
+    if (stat) {
+      if (!stat.isFile()) throw new FileContentError('Not a regular file', 400)
+      if (stat.size > MAX_FILE_SIZE) {
+        throw new FileContentError(
+          'File is larger than the editor can load — saving would truncate it',
+          409,
+        )
+      }
+      const current = await fsp.readFile(filePath, 'utf-8')
+      assertOverwritable(current, filePath)
+      if (expectedHash && computeContentHash(current) !== expectedHash) {
+        return computeContentHash(current)
+      }
+    }
+    await fsp.writeFile(filePath, content, 'utf-8')
+    return null
+  })
+  if (conflict) throw new FileConflictError(conflict)
+
+  log.web.info('file saved', { path: filePath, size: Buffer.byteLength(content, 'utf-8') })
+  return { ok: true, size: Buffer.byteLength(content, 'utf-8'), contentHash: nextHash }
+}
+
+/** Refuse to let a TEXT editor overwrite bytes it could never have displayed. */
+function assertOverwritable(current: string, filePath: string): void {
+  if (isBinaryContent(Buffer.from(current.slice(0, 8192), 'utf-8'))) {
+    throw new FileContentError(`Refusing to overwrite a binary file: ${path.basename(filePath)}`, 415)
   }
 }
 
@@ -348,39 +578,13 @@ fileContentRouter.get('/', async (req: Request, res: Response, next: NextFunctio
     const rawPath = req.query.path
     const host = req.query.host
 
-    if (!rawPath || typeof rawPath !== 'string') {
-      res.status(400).json({ error: 'Missing or invalid path parameter' })
-      return
-    }
-
-    // No directory traversal
-    if (rawPath.includes('..')) {
-      res.status(400).json({ error: 'Invalid path' })
-      return
-    }
-
-    // Expand `~`/`~/…` for local reads (Node fs has no shell expansion). Remote
-    // keeps `~` — the daemon's fs.read expands it on the remote host's HOME.
-    let filePath = rawPath
-    if (!host && (filePath === '~' || filePath.startsWith('~/'))) {
-      filePath = os.homedir() + filePath.slice(1)
-    }
-
-    // Must be absolute (after ~ expansion); remote `~` paths are allowed through.
-    const isRemote = typeof host === 'string' && host.length > 0
-    if (!isRemote && !path.isAbsolute(filePath)) {
-      res.status(400).json({ error: 'Path must be absolute' })
-      return
-    }
-
-    // Cloud box: confine local reads to safe roots and never serve secret files.
+    // ONE sandbox for both verbs — see assertPathAllowed. Its FileContentError
+    // throws are mapped to the same {error} bodies by this handler's catch, so
+    // the wire contract is unchanged from the inlined checks this replaced.
     // (Remote `host=` reads run on the target daemon and keep their own scope.
     // The Mac/trusted-LAN FileViewer is intentionally unconfined — it's the
     // owner's own machine.)
-    if (!isRemote && CLOUD_MODE && (isSecretPath(filePath) || !cloudLocalReadAllowed(filePath))) {
-      res.status(403).json({ error: 'Path not permitted' })
-      return
-    }
+    const { filePath, isRemote } = assertPathAllowed(rawPath, typeof host === 'string' ? host : undefined, 'read')
 
     const ext = path.extname(filePath).slice(1).toLowerCase()
 
@@ -391,12 +595,12 @@ fileContentRouter.get('/', async (req: Request, res: Response, next: NextFunctio
     const raw = req.query.raw === '1' || req.query.raw === 'true'
     const download = req.query.download === '1' || req.query.download === 'true'
 
-    // Media playback + universal download: byte-exact streaming with Range
-    // support. Text decoding would corrupt these, so they take their own path.
+    // Media/PDF/image playback + universal download: byte-exact streaming with
+    // Range support. Text decoding would corrupt these, so they take their own path.
     // hasOwn guard: a file named e.g. "x.constructor" must not hit Object.prototype.
-    const mediaType = Object.hasOwn(MEDIA_MIME, ext) ? MEDIA_MIME[ext] : undefined
-    if (raw && (download || mediaType)) {
-      const ctype = mediaType ?? 'application/octet-stream'
+    const inlineType = Object.hasOwn(RAW_INLINE_MIME, ext) ? RAW_INLINE_MIME[ext] : undefined
+    if (raw && (download || inlineType)) {
+      const ctype = inlineType ?? 'application/octet-stream'
       await serveRawBytes(req, res, filePath, isRemote ? (host as string) : undefined, ctype, download)
       return
     }
@@ -439,6 +643,48 @@ fileContentRouter.get('/', async (req: Request, res: Response, next: NextFunctio
   } catch (err) {
     if (err instanceof FileContentError) {
       res.status(err.statusCode).json({ error: err.message })
+      return
+    }
+    next(err)
+  }
+})
+
+/**
+ * PUT /api/file-content — save an edit made in the Files-panel editor.
+ *
+ * Body: { path, host?, content, expectedHash? }
+ *   → 200 { ok, size, contentHash }
+ *   → 409 { error, code:'conflict', currentHash }  file changed under the editor
+ *   → 400/403/413/415  see writeFileContentPayload
+ *
+ * The path lives in the BODY (not the query) so a save never lands in an access
+ * log or browser history alongside its bytes.
+ */
+fileContentRouter.put('/', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { path: rawPath, host, content, expectedHash } = req.body ?? {}
+    const result = await writeFileContentPayload(
+      rawPath,
+      typeof host === 'string' && host.length > 0 ? host : undefined,
+      content,
+      expectedHash,
+    )
+    res.json(result)
+  } catch (err) {
+    if (err instanceof FileConflictError) {
+      res.status(409).json({ error: err.message, code: 'conflict', currentHash: err.currentHash })
+      return
+    }
+    if (err instanceof FileContentError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
+    // A daemon/transport failure on a remote save is the user's problem to see,
+    // not a 500 stack: report it as a bad gateway with the daemon's own message.
+    const msg = err instanceof Error ? err.message : String(err)
+    if (/fs\.write failed|daemon|not connected|timeout/i.test(msg)) {
+      log.web.warn('file save failed (remote transport)', { error: msg })
+      res.status(502).json({ error: `Could not save on the remote host: ${msg}` })
       return
     }
     next(err)

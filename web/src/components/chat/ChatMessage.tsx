@@ -6,7 +6,6 @@ import type { Task } from '@open-walnut/core';
 import type { MessageBlock, ThinkingBlock, ToolCallBlock, ImageBlock, TaskContext, ImageAttachment } from '@/hooks/useChat';
 import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
-import { useNotesAwareFileOpen } from '@/hooks/useNotesAwareFileOpen';
 import { Lightbox } from '@/components/common/Lightbox';
 import { FileViewer } from '@/components/common/FileViewer';
 import { entityRefsToHtml, renderToolResultWithRefs, extractMarkdownFields, renderMarkdownWithRefs } from '@/utils/markdown';
@@ -1032,12 +1031,12 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
   // File path click → open the shared FileViewer overlay. Self-contained so every
   // page that renders ChatMessage (MainPage chat + session columns, ChatPage) gets
   // clickable file paths without threading a callback through the props chain.
-  // Vault notes divert to the Notes page instead of the overlay.
+  // EVERY file type (vault notes included) opens here — see FileContentView's
+  // "Open in Notes" button for the opt-in jump to /notes.
   const [fileViewerState, setFileViewerState] = useState<{ path: string; line?: number } | null>(null);
-  const openFileViewer = useCallback((path: string, line?: number) => {
+  const handleFileOpen = useCallback((path: string, line?: number) => {
     setFileViewerState({ path, line });
   }, []);
-  const handleFileOpen = useNotesAwareFileOpen(openFileViewer);
 
   const isCron = source === 'cron';
   const isHeartbeat = source === 'heartbeat';

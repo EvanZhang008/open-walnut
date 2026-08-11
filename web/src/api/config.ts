@@ -33,6 +33,20 @@ export function fetchNotesDir(): Promise<string | null> {
   return _notesDirPromise;
 }
 
+/**
+ * Whether the server can hand a local path to the desktop (`open`) — macOS
+ * console only, false on cloud replicas. Drives whether the file-explorer's
+ * right-click menu offers Reveal in Finder / Open in default app. Same
+ * page-lifetime cache rationale as installDir (platform can't change).
+ */
+let _canRevealPromise: Promise<boolean> | null = null;
+export function fetchCanRevealLocalFiles(): Promise<boolean> {
+  _canRevealPromise ??= apiGet<{ canRevealLocalFiles?: boolean }>('/api/config')
+    .then(res => res.canRevealLocalFiles === true)
+    .catch(() => { _canRevealPromise = null; return false; });
+  return _canRevealPromise;
+}
+
 export async function updateConfig(config: Partial<Config>): Promise<{ ok: boolean }> {
   return apiPut<{ ok: boolean }>('/api/config', config);
 }

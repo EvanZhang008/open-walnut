@@ -17812,6 +17812,8 @@ td.usage-share-col {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  /* Containing block for the absolutely-positioned .sfe-reveal-error toast. */
+  position: relative;
 }
 
 .session-file-explorer-toolbar {
@@ -17933,6 +17935,35 @@ td.usage-share-col {
 }
 
 .sfe-btn:active { transform: scale(0.96); }
+
+/* Nothing to go back/forward to — dim, but keep the buttons in place so the
+   toolbar never reflows as history grows (jumping controls are worse than dim ones). */
+.sfe-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.sfe-btn:disabled:hover { background: var(--bg); }
+.sfe-btn:disabled:active { transform: none; }
+
+/* Back / Forward pair: one segmented control, like a browser's. */
+.sfe-nav-group {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.sfe-nav-group .sfe-nav-btn {
+  padding: 1px 7px;
+  font-size: 15px;
+  line-height: 1.2;
+}
+.sfe-nav-group .sfe-nav-btn:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.sfe-nav-group .sfe-nav-btn:last-child {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left-width: 0;
+}
 
 .sfe-btn-label {
   font-size: 11px;
@@ -22082,6 +22113,99 @@ a.file-link:hover {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
+/* Edit mode: Save is the primary action (filled), the exit is quiet, and a dot
+   marks unsaved work so a half-typed file is never mistaken for a saved one. */
+.fv-html-tab.fv-edit-btn:hover {
+  color: var(--accent);
+}
+.fv-html-tab.fv-save-btn {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.fv-html-tab.fv-save-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.fv-html-tab.fv-save-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  filter: none;
+}
+.fv-dirty-dot {
+  align-self: center;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--warning, #f59e0b);
+}
+
+/* Save failure / conflict: a one-line BANNER above the editor — deliberately not
+   built on .file-viewer-error, whose height:100% whole-pane empty state grew to
+   swallow the editor when the two were siblings (caught in UI verification). */
+.fv-save-error {
+  flex: 0 0 auto;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--danger, #ef4444);
+  background: color-mix(in srgb, var(--danger, #ef4444) 8%, transparent);
+  color: var(--danger, #ef4444);
+}
+
+/* CodeMirror host. Flex-fills the preview pane; the editor's own theme
+   (FileSourceEditor) owns the typography so it matches .file-viewer-code.
+
+   The `:has()` rule is load-bearing, not cosmetic: .file-content-view is a plain
+   block (height:100%), so a `flex:1; min-height:0` child COLLAPSES TO ZERO
+   height there. The editor rendered blank the moment anything else joined the
+   column — e.g. the save-error banner during a conflict (caught in UI
+   verification: the text was in the DOM but invisible). Scoped with :has so only
+   the editing state becomes a flex column; the read-only <pre>/preview layout,
+   which relies on block flow, is untouched. */
+.file-content-view:has(> .fv-source-editor),
+.file-content-view:has(> .fv-wysiwyg-editor) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* Chrome rows keep their natural height in that column; only the editor grows. */
+.file-content-view:has(> .fv-source-editor) > .fv-html-toolbar,
+.file-content-view:has(> .fv-source-editor) > .fv-save-error,
+.file-content-view:has(> .fv-source-editor) > .file-viewer-truncated,
+.file-content-view:has(> .fv-source-editor) > .fv-reloading-badge,
+.file-content-view:has(> .fv-wysiwyg-editor) > .fv-html-toolbar,
+.file-content-view:has(> .fv-wysiwyg-editor) > .fv-save-error,
+.file-content-view:has(> .fv-wysiwyg-editor) > .file-viewer-truncated,
+.file-content-view:has(> .fv-wysiwyg-editor) > .fv-reloading-badge {
+  flex: 0 0 auto;
+}
+
+/* WYSIWYG markdown edit surface (Files panel Preview-tab editing): hosts the
+   Notes TipTap editor. Scrolls itself like .fv-md-preview; same padding so
+   entering Edit doesn't visually jump. The tall bottom padding mirrors the
+   Notes surface — keeps the caret clear of the pane's bottom edge. */
+.fv-wysiwyg-editor {
+  flex: 1 1 auto;
+  min-height: 240px;
+  overflow-y: auto;
+  padding: 16px 20px 120px;
+}
+.fv-wysiwyg-editor .notes-editor .tiptap {
+  outline: none;
+  /* Ultra-wide by default: the Files pane is already a split column, so the
+     Notes page's 800px prose cap (globals .notes-editor .tiptap) left huge
+     dead gutters here. Fill the pane; the wrapper above owns the padding. */
+  max-width: none;
+  padding: 0;
+}
+.fv-source-editor {
+  flex: 1 1 auto;
+  /* A concrete floor so the editor is usable even if an ancestor has no
+     resolvable height (pop-out window, unusually short pane). */
+  min-height: 240px;
+  overflow: hidden;
+}
+
 .fv-html-preview {
   display: block;
   width: 100%;
@@ -22113,6 +22237,63 @@ a.file-link:hover {
 }
 .fv-media-preview audio {
   width: min(90%, 560px);
+}
+
+/* PDF: the browser's own viewer fills the pane (no bundled PDF renderer). */
+.fv-doc-preview {
+  width: 100%;
+  flex: 1;
+  min-height: 60vh;
+  border: 0;
+  background: var(--bg);
+}
+
+/* Images: contained + centered on a neutral checkerboard-free backdrop, so a
+   transparent PNG stays readable in both themes. */
+.fv-image-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 40vh;
+  overflow: auto;
+  padding: 12px;
+  background: var(--bg-subtle, var(--bg));
+}
+.fv-image-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+/* Desktop hand-off failure (open failed / not permitted) — dismiss by clicking. */
+.fv-reveal-error,
+.sfe-reveal-error {
+  cursor: pointer;
+  font-size: 12px;
+}
+.sfe-reveal-error {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  right: 8px;
+  z-index: 5;
+  padding: 6px 10px;
+  border: 1px solid var(--danger, #ef4444);
+  border-radius: 6px;
+  background: var(--bg-elevated, var(--bg));
+  color: var(--danger, #ef4444);
+}
+
+/* Backdrop under Walnut's own right-click menu — invisible, just swallows the
+   next click / right-click so the menu closes instead of stacking. */
+.file-ctx-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+}
+.file-ctx-menu {
+  min-width: 172px;
 }
 
 /* Download button — an <a> styled like the toolbar tabs */
@@ -22224,7 +22405,9 @@ a.file-link:hover {
 
 .file-content-view.fv-fullscreen .fv-html-preview,
 .file-content-view.fv-fullscreen .fv-md-preview,
-.file-content-view.fv-fullscreen .fv-media-preview {
+.file-content-view.fv-fullscreen .fv-media-preview,
+.file-content-view.fv-fullscreen .fv-doc-preview,
+.file-content-view.fv-fullscreen .fv-image-preview {
   flex: 1;
   height: auto;
   min-height: 0;

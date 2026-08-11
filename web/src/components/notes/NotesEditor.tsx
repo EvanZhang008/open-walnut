@@ -69,6 +69,12 @@ interface NotesEditorProps {
    * compact home-popup surface can opt out.
    */
   enableBlockTools?: boolean;
+  /**
+   * Adds an "Ask about this" action to the bubble menu (the Files panel's
+   * quote-to-ask). Receives the selected plain text. Notes surfaces leave it
+   * unset. Requires enableBlockTools.
+   */
+  onAskSelection?: (text: string) => void;
   /** Frequency-ranked vault tags for #tag autocomplete (from GET /tags; empty = manual typing). */
   tagSuggestions?: TagSuggestion[];
   /**
@@ -300,7 +306,7 @@ function detachListItemChildren(editor: Editor): boolean {
   }
 }
 
-export function NotesEditor({ content, onDirty, placeholder, className, autoFocus, tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, tagSuggestions, attachmentNotePath }: NotesEditorProps) {
+export function NotesEditor({ content, onDirty, placeholder, className, autoFocus, tasks, focusedTaskId, onTaskClick, enableWikiLinks, wikiLinkNotes, onWikiLinkClick, enableBlockTools, onAskSelection, tagSuggestions, attachmentNotePath }: NotesEditorProps) {
   const isExternalUpdate = useRef(false);
   const editorRef = useRef<Editor | null>(null);
   /**
@@ -761,7 +767,7 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
         className={`notes-editor ${className ?? ''}`}
       />
       {/* Selection format toolbar (opt-in per surface). */}
-      {editor && enableBlockTools && <NotesBubbleMenu editor={editor} />}
+      {editor && enableBlockTools && <NotesBubbleMenu editor={editor} onAsk={onAskSelection} />}
       {editor && slashState.phase !== 'closed' && (
         <SlashCommandPortal
           editor={editor}

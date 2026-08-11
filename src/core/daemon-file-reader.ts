@@ -146,6 +146,33 @@ export class DaemonFileReader implements SessionFileReader {
   }
 
   /**
+   * Write a file's UTF-8 text via the daemon's `fs.write`.
+   *
+   * The daemon takes base64 so the payload survives the JSON frame byte-exact
+   * (a raw utf-8 string in JSON is fine for text, but base64 keeps ONE encoding
+   * path for every writer — see RemoteSessionManager's image/spill uploads).
+   *
+   * Callers are the FileViewer's save path, which caps content at 512 KB, so no
+   * chunking is needed: one frame stays far under any proxy's limit. Throws on
+   * both daemon-side rejection and transport failure — a save must never report
+   * success for bytes that never landed (send() RESOLVES with {ok:false} on a
+   * daemon error and only throws on transport death).
+   */
+  async writeFile(remotePath: string, content: string): Promise<void> {
+    await this.resolve()
+    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const result = await conn.send('fs.write', {
+      path: remotePath,
+      data: Buffer.from(content, 'utf-8').toString('base64'),
+      encoding: 'base64',
+    })
+    if (!result.ok) {
+      const errMsg = typeof result.error === 'string' ? result.error : 'unknown'
+      throw new Error('fs.write failed: ' + errMsg)
+    }
+  }
+
+  /**
    * Read [start, EOF) of a remote file in CHUNK_SIZE fs.readRange calls.
    * Byte-exact: chunks are reassembled as bytes THEN utf-8 decoded (a range
    * boundary can split a multi-byte char). Old daemons without fs.readRange

@@ -7,6 +7,10 @@ export interface FileContentResponse {
   binary: boolean;
   error?: string;
   extension: string;
+  /** Hash of the served bytes — the editor's optimistic-lock token on save.
+   *  ABSENT for a truncated read, which is what makes the editor read-only there
+   *  (saving the first 512 KB back would delete the file's tail). */
+  contentHash?: string;
 }
 
 export async function fetchFileContent(
@@ -22,6 +26,46 @@ export async function fetchFileContent(
   const res = await fetch(`/api/file-content?${params}`, opts.noCache ? { cache: 'no-store' } : undefined);
   if (!res.ok) throw new Error(`Failed to fetch file content: ${res.status}`);
   return res.json();
+}
+
+/** A save rejected because the file changed on disk under the editor. */
+export class FileSaveConflictError extends Error {
+  constructor(public currentHash: string) {
+    super('This file changed on disk since you opened it.');
+    this.name = 'FileSaveConflictError';
+  }
+}
+
+/**
+ * Save an edited file. `expectedHash` is the contentHash from the read that
+ * seeded the editor — the server rejects the write with 409 if the bytes on disk
+ * no longer hash to it (an agent, another tab, or a git checkout got there
+ * first), so an edit can never silently clobber someone else's change.
+ *
+ * Throws FileSaveConflictError on 409, plain Error otherwise (both surfaced in
+ * the editor's toolbar rather than swallowed).
+ */
+export async function saveFileContent(
+  filePath: string,
+  content: string,
+  opts: { host?: string; expectedHash?: string } = {},
+): Promise<{ size: number; contentHash: string }> {
+  const res = await fetch('/api/file-content', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      path: filePath,
+      content,
+      ...(opts.host ? { host: opts.host } : {}),
+      ...(opts.expectedHash ? { expectedHash: opts.expectedHash } : {}),
+    }),
+  });
+  const body = await res.json().catch(() => ({} as Record<string, unknown>));
+  if (res.status === 409 && typeof body?.currentHash === 'string') {
+    throw new FileSaveConflictError(body.currentHash);
+  }
+  if (!res.ok) throw new Error(typeof body?.error === 'string' ? body.error : `Save failed: ${res.status}`);
+  return { size: body.size as number, contentHash: body.contentHash as string };
 }
 
 /**
@@ -43,6 +87,26 @@ export function downloadFileUrl(filePath: string, host?: string): string {
   const params = new URLSearchParams({ path: filePath, raw: '1', download: '1' });
   if (host) params.set('host', host);
   return `/api/file-content?${params}`;
+}
+
+/**
+ * Hand a LOCAL file/folder to the macOS desktop — reveal it in Finder, or launch
+ * it in its default app. Rejects (throws) in cloud mode, off macOS, and for
+ * remote (`host`) paths; callers surface that as a disabled/one-off error.
+ */
+export async function revealLocalFile(
+  filePath: string,
+  mode: 'finder' | 'app',
+  host?: string,
+): Promise<string> {
+  const res = await fetch('/api/files/reveal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: filePath, mode, host }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body?.error || `reveal failed: ${res.status}`);
+  return body.fullPath as string;
 }
 
 /** A single directory entry for the file explorer tree. */

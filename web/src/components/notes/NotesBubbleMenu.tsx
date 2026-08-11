@@ -16,9 +16,15 @@ import { usePrompt } from '@/hooks/useConfirm';
 
 interface NotesBubbleMenuProps {
   editor: Editor;
+  /**
+   * Optional "Ask about this" action (the Files panel's quote-to-ask). When
+   * set, an Ask button joins the toolbar and receives the selected plain text.
+   * Notes surfaces leave it unset — their menu is unchanged.
+   */
+  onAsk?: (text: string) => void;
 }
 
-export function NotesBubbleMenu({ editor }: NotesBubbleMenuProps) {
+export function NotesBubbleMenu({ editor, onAsk }: NotesBubbleMenuProps) {
   const prompt = usePrompt();
   // Only show for a non-empty text selection that is NOT inside a table cell or
   // code block (those have their own editing model / no inline marks).
@@ -101,6 +107,23 @@ export function NotesBubbleMenu({ editor }: NotesBubbleMenuProps) {
         onMouseDown={(e) => { e.preventDefault(); turnInto(editor, 'h3'); }}
         title="Heading 3"
       >H3</button>
+
+      {onAsk && (
+        <>
+          <span className="notes-bubble-sep" />
+          <button
+            type="button"
+            className="notes-bubble-btn notes-bubble-ask"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              const { from, to } = editor.state.selection;
+              const text = editor.state.doc.textBetween(from, to, '\n').trim();
+              if (text) onAsk(text);
+            }}
+            title="Ask the session about this selection"
+          >Ask</button>
+        </>
+      )}
     </BubbleMenu>
   );
 }

@@ -3015,7 +3015,9 @@ async function cmdImageSave(ws: ServerWebSocket<WsData>, id: number, cmd: Record
 
 async function cmdFsWrite(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const { path: filePath, data, encoding } = cmd as { path: string; data: string; encoding?: string }
-  if (!filePath || !data) return sendError(ws, id, 'fs.write: missing path or data')
+  // `typeof` not truthiness: EMPTY data is legal (clearing a file to zero bytes
+  // is a real save), and `!data` rejected it as "missing".
+  if (!filePath || typeof data !== 'string') return sendError(ws, id, 'fs.write: missing path or data')
 
   try {
     await fs.promises.mkdir(path.dirname(filePath), { recursive: true })

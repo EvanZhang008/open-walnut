@@ -3293,7 +3293,10 @@ async function cmdImageSave(ws, id, cmd) {
 
 async function cmdFsWrite(ws, id, cmd) {
   const { path: filePath, data, encoding } = cmd;
-  if (!filePath || !data) return sendError(ws, id, 'fs.write: missing path or data');
+  // typeof, not truthiness: EMPTY data is legal (clearing a file to zero bytes
+  // is a real save), and a !data check rejected it as "missing".
+  // (No backticks in this file — the daemon source is an embedded template literal.)
+  if (!filePath || typeof data !== 'string') return sendError(ws, id, 'fs.write: missing path or data');
 
   try {
     await fs.promises.mkdir(path.dirname(filePath), { recursive: true });

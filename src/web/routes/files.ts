@@ -22,6 +22,7 @@ import { execFile } from 'node:child_process'
 import { getConfig } from '../../core/config-manager.js'
 import { getFrequentDirs } from '../../core/frequent-dirs.js'
 import { recordMentionDir, getMentionDirs } from '../../core/mention-dirs.js'
+import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
 
 export const filesRouter = Router()
 
@@ -389,6 +390,96 @@ filesRouter.get('/list', async (req: Request, res: Response, next: NextFunction)
     next(err)
   }
 })
+
+/**
+ * POST /api/files/reveal { path, mode: 'finder' | 'app' }
+ *
+ * Hand a LOCAL file/folder to the macOS desktop: reveal it in Finder (`open -R`)
+ * or launch it in its default application (`open`). Backs the file-explorer's
+ * right-click menu — the console runs on the same Mac as the browser, so this is
+ * the same trust boundary as the FileViewer's read (the owner's own machine).
+ *
+ * Refused for:
+ * - cloud mode (no desktop, and the box is reachable by any paired device)
+ * - non-macOS (`open` doesn't exist)
+ * - remote paths (a `host=` file lives on another machine; nothing to open here)
+ * - secret paths, which `file-content` also never serves
+ *
+ * `mode: 'app'` LAUNCHES a file, so it additionally refuses executable/script
+ * types — a `.command`/`.app`/`.sh` written by an agent must not be one click
+ * from running. Finder-reveal only selects the icon, so it needs no such gate.
+ */
+const REVEAL_APP_DENY_EXTS = new Set([
+  'command', 'sh', 'bash', 'zsh', 'fish', 'csh', 'ksh', 'app', 'pkg', 'mpkg',
+  'dmg', 'jar', 'scpt', 'scptd', 'applescript', 'workflow', 'action', 'osax',
+  'terminal', 'webloc', 'url', 'inetloc', 'shortcut', 'exe', 'bat', 'cmd',
+  'msi', 'vbs', 'ps1', 'py', 'pl', 'rb', 'php',
+])
+
+filesRouter.post('/reveal', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (CLOUD_MODE) { res.status(400).json({ error: 'Not available in cloud mode' }); return }
+    if (process.platform !== 'darwin') { res.status(400).json({ error: 'Only supported on macOS' }); return }
+    const { path: rawPath, mode, host } = req.body ?? {}
+    if (typeof host === 'string' && host && host !== '__local__') {
+      res.status(400).json({ error: 'Remote files cannot be opened locally' })
+      return
+    }
+    if (typeof rawPath !== 'string' || !rawPath || (mode !== 'finder' && mode !== 'app')) {
+      res.status(400).json({ error: 'path and mode (finder|app) are required' })
+      return
+    }
+    // Same guards as file-content's read: expand ~, require absolute, reject any
+    // "." / ".." SEGMENT (a real name like "..bar" is fine), and cap the length.
+    let fullPath = rawPath
+    if (fullPath === '~' || fullPath.startsWith('~/')) fullPath = os.homedir() + fullPath.slice(1)
+    if (!path.isAbsolute(fullPath) || fullPath.length > 4096
+      || fullPath.split('/').some((seg) => seg === '..' || seg === '.')) {
+      res.status(400).json({ error: 'Invalid path' })
+      return
+    }
+    fullPath = path.resolve(fullPath)
+    if (isRevealSecretPath(fullPath)) { res.status(403).json({ error: 'Path not permitted' }); return }
+
+    let stat
+    try { stat = await fsp.stat(fullPath) } catch { res.status(404).json({ error: 'Not found' }); return }
+    if (mode === 'app' && !stat.isDirectory()) {
+      const ext = path.extname(fullPath).slice(1).toLowerCase()
+      if (REVEAL_APP_DENY_EXTS.has(ext)) {
+        res.status(400).json({ error: `Launching .${ext} files is not allowed — use Reveal in Finder` })
+        return
+      }
+    }
+    // execFile (not exec): args are never shell-interpolated. Awaited so a
+    // failure surfaces as a real error instead of a silently dead menu item.
+    const args = mode === 'finder' ? ['-R', fullPath] : [fullPath]
+    try {
+      await new Promise<void>((resolve, reject) => {
+        execFile('open', args, { timeout: 5000 }, (err) => (err ? reject(err) : resolve()))
+      })
+    } catch (err) {
+      res.status(500).json({ error: `open failed: ${err instanceof Error ? err.message : String(err)}` })
+      return
+    }
+    res.json({ ok: true, fullPath })
+  } catch (err) {
+    next(err)
+  }
+})
+
+/** Secret files/dirs never handed to the desktop (mirrors file-content's denylist). */
+function isRevealSecretPath(resolved: string): boolean {
+  const home = os.homedir()
+  const denied = [
+    path.join(WALNUT_HOME, 'auth.json'),
+    path.join(WALNUT_HOME, 'sync', 'bridge-tokens.json'),
+    path.join(home, '.aws'),
+    path.join(home, '.ssh'),
+    path.join(home, '.config', 'walnut-secrets'),
+  ]
+  return denied.some((d) => resolved === d || resolved.startsWith(d + path.sep))
+    || /(^|\/)config\.ya?ml$/.test(resolved)
+}
 
 // POST /api/files/record-dir — record a folder the user browsed in the "@" picker.
 // Writes to the SEPARATE mention-dirs store (NOT frequent-dirs), so ad-hoc "@"

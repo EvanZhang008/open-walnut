@@ -13,14 +13,24 @@
  * Expanded-dir state persists in localStorage, keyed per host + resolved root.
  */
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useDragGesture } from '@/hooks/useDragGesture';
-import { fetchDirList, type DirEntry } from '@/api/files';
+import { fetchDirList, downloadFileUrl, type DirEntry } from '@/api/files';
 import { fetchSessionChangedPaths } from '@/api/session-changes';
 import { FileContentView } from '@/components/common/FileContentView';
+import { FileTreeContextMenu, type FileTreeContextTarget } from './FileTreeContextMenu';
+import { parentPath, revealAncestors } from './reveal-ancestors';
 import { ICON_REFRESH } from '@/components/common/Icons';
 import { formatSize } from '@/utils/format';
 import { getRecentFolders, fuzzyMatchRecents, type RecentFolder } from '@/utils/recentFolders';
-import { loadSelectedFile, saveSelectedFile } from '@/utils/file-view-state';
+import {
+  loadSelectedFile, saveSelectedFile,
+  loadFileHistory, saveFileHistory, pushFileHistory, removeFromFileHistory,
+  type FileHistory,
+} from '@/utils/file-view-state';
+import { vaultRelativeNotePath } from '@/utils/notes-link';
+import { useRevealFile } from '@/hooks/useRevealFile';
+import { openPopout } from '@/popout/openPopout';
 import { log } from '@/utils/log';
 
 interface SessionFileExplorerProps {
@@ -30,6 +40,22 @@ interface SessionFileExplorerProps {
   sessionId?: string;
   /** Line to highlight/scroll-to in the initially-selected file's preview. */
   initialLine?: number;
+  /**
+   * Stable key for "which file was I reading" + the back/forward history.
+   *
+   * MUST NOT be the tree root: `cwd` differs between the two ways into this panel
+   * for the SAME session (Files chip → session cwd; a file-path click in the chat
+   * → that file's parent dir), and keying the memory by root made the two entries
+   * write/read different keys — so the chip always reopened on the empty preview
+   * pane. Callers pass the session cwd here; omitted → falls back to the root.
+   */
+  memoryScope?: string;
+  /**
+   * Quote-to-ask sink. Forwarded to the preview pane so selecting text in a file
+   * raises the "Ask about this" pill (same affordance as the Changed tab). Absent
+   * → no pill; the standalone FileViewer overlay has no chat input to prefill.
+   */
+  onSelectCode?: (filePath: string, line: number | undefined, code: string) => void;
 }
 
 interface TreeNode {
@@ -87,19 +113,12 @@ function joinPath(dir: string, name: string): string {
   return dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`;
 }
 
-function parentPath(p: string): string {
-  const trimmed = p.replace(/\/+$/, '');
-  const idx = trimmed.lastIndexOf('/');
-  if (idx <= 0) return '/';
-  return trimmed.slice(0, idx);
-}
-
 function lastSegment(p: string): string {
   const trimmed = p.replace(/\/+$/, '');
   return trimmed.slice(trimmed.lastIndexOf('/') + 1) || trimmed;
 }
 
-export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: SessionFileExplorerProps) {
+export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryScope, onSelectCode }: SessionFileExplorerProps) {
   const [root, setRoot] = useState<string>(cwd || '~');
   const [showHidden, setShowHidden] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -152,6 +171,34 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
   // a file deleted since the last visit must not leave a dead preview pane.
   const pendingValidateRef = useRef<string | null>(null);
 
+  // ── Remembered file + browser-style back/forward history ──────────────────
+  // Keyed by a STABLE scope, never by `root`: the Files chip roots at the session
+  // cwd while a chat file-path click roots at that file's parent dir, so a
+  // root-keyed memory had the two entries writing different keys (the reported
+  // bug — the chip always reopened on the empty preview pane).
+  const scope = memoryScope || root;
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+  const [history, setHistory] = useState<FileHistory>(() => loadFileHistory(host, memoryScope || (cwd || '~')));
+  const historyRef = useRef(history);
+  historyRef.current = history;
+
+  /** Single writer for "the preview is now showing this file". */
+  const commitSelection = useCallback((filePath: string | null, opts: { push?: boolean } = {}) => {
+    setSelectedFile(filePath);
+    saveSelectedFile(host, scopeRef.current, filePath);
+    if (!filePath || opts.push === false) return;
+    // pushFileHistory no-ops when this file is already the current entry, so a
+    // restore (or a re-click on the open file) can't duplicate or truncate.
+    const next = pushFileHistory(historyRef.current, filePath);
+    if (next === historyRef.current) return;
+    historyRef.current = next;
+    setHistory(next);
+    saveFileHistory(host, scopeRef.current, next);
+  }, [host]);
+  const commitSelectionRef = useRef(commitSelection);
+  commitSelectionRef.current = commitSelection;
+
   const loadDir = useCallback(async (
     dirPath: string,
     opts: { isRoot?: boolean; restoreExpanded?: boolean; noCache?: boolean } = {},
@@ -193,16 +240,18 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
         // (VS Code style). An EXPLICIT target always beats the remembered one.
         if (res.selectedFile) {
           const target = joinPath(canonical, res.selectedFile);
-          setSelectedFile(target);
-          saveSelectedFile(host, canonical, target);
+          // A deep-linked file IS a navigation — it joins the back/forward stack.
+          commitSelectionRef.current(target);
         } else if (restoreExpanded) {
-          // Nothing explicit: reopen the file that was last being read under this
-          // root, so toggling the Files panel resumes instead of showing the empty
+          // Nothing explicit: reopen the file that was last being read in this
+          // scope, so toggling the Files panel resumes instead of showing the empty
           // "Select a file to preview" pane. Validated below once its parent
           // listing arrives (the file may have been deleted since).
-          const remembered = loadSelectedFile(host, canonical);
+          const remembered = loadSelectedFile(host, scopeRef.current);
           if (remembered) {
-            setSelectedFile(remembered);
+            // push:false — restoring what you were already reading is not a new
+            // navigation, so it must not truncate the forward tail.
+            commitSelectionRef.current(remembered, { push: false });
             pendingValidateRef.current = remembered;
             const dir = parentPath(remembered);
             if (dir !== canonical && !childrenMapRef.current.has(dir)) void loadDirRef.current?.(dir);
@@ -256,9 +305,40 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [root, host]);
 
+  // The remembered file + history belong to the scope, so re-read them when the
+  // scope (or host) changes — i.e. when this explorer is pointed at a different
+  // session — NOT on every re-root inside the same session.
+  useEffect(() => {
+    const loaded = loadFileHistory(host, scope);
+    historyRef.current = loaded;
+    setHistory(loaded);
+  }, [host, scope]);
+
+  // REVEAL the selected file in the tree: expand every ancestor between the root
+  // and the file and load their listings. Without this, "remembered the file" only
+  // filled the preview pane — the tree still sat collapsed at the root, so the
+  // selected row was invisible and the file looked un-found ("it should go there
+  // automatically"). Also what makes Back/Forward land on a visible row.
+  useEffect(() => {
+    if (!selectedFile) return;
+    const ancestors = revealAncestors(root, selectedFile);
+    if (ancestors.length === 0) return; // direct child of the root — already visible
+    setExpanded((prev) => {
+      if (ancestors.every((a) => prev.has(a))) return prev; // no-op guard: keeps this effect from looping
+      const next = new Set(prev);
+      for (const a of ancestors) next.add(a);
+      try { localStorage.setItem(lsKeyRef.current, JSON.stringify([...next])); } catch { /* quota/denied */ }
+      return next;
+    });
+    for (const a of ancestors) {
+      if (!childrenMapRef.current.has(a)) void loadDirRef.current?.(a);
+    }
+  }, [selectedFile, root]);
+
   // Drop a restored selection whose file no longer exists (deleted/renamed since
   // the last visit) once its parent directory listing lands — otherwise the
-  // preview pane sits on a permanent "file not found".
+  // preview pane sits on a permanent "file not found". It leaves the history too:
+  // a Back button that lands on a dead file is worse than a shorter stack.
   useEffect(() => {
     const pending = pendingValidateRef.current;
     if (!pending) return;
@@ -268,9 +348,15 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
     const name = lastSegment(pending);
     if (!entries.some((e) => e.name === name && e.type === 'file')) {
       setSelectedFile((cur) => (cur === pending ? null : cur));
-      saveSelectedFile(host, root, null);
+      saveSelectedFile(host, scopeRef.current, null);
+      const pruned = removeFromFileHistory(historyRef.current, pending);
+      if (pruned !== historyRef.current) {
+        historyRef.current = pruned;
+        setHistory(pruned);
+        saveFileHistory(host, scopeRef.current, pruned);
+      }
     }
-  }, [childrenMap, host, root]);
+  }, [childrenMap, host]);
 
   // Changed-file quick access: ONE section per git repo/submodule the session
   // edited (git roots only — a section per changed folder was a noisy wall).
@@ -393,10 +479,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
     const parent = parentPath(root);
     if (parent !== root) {
       setChildrenMap(new Map());
-      // Deliberately leaves the OLD root's remembered file intact (navigating up
-      // isn't "I'm done with that file") — the new root has its own key, and
-      // loadDir's restoreExpanded reopens whatever was last read there.
-      setSelectedFile(null);
+      // The open file SURVIVES a re-root (VS Code keeps your editor open while you
+      // browse elsewhere), and the memory is scope-keyed now, so clearing it here
+      // would only flash the empty pane before loadDir restored the same file.
       setFocusedDir(null);
       pendingValidateRef.current = null;
       void loadDir(parent, { isRoot: true, restoreExpanded: true });
@@ -448,15 +533,107 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
     setPathQuery('');
     if (!next || next === root) return;
     setChildrenMap(new Map());
-    setSelectedFile(null);
+    // Selection survives the jump for the same reason as goUp: the memory is
+    // scope-keyed, so clearing it here would just flash the empty preview pane.
+    // Typing a FILE path still wins — loadDir's res.selectedFile is explicit.
     setFocusedDir(null);
     pendingValidateRef.current = null;
     void loadDir(next, { isRoot: true, restoreExpanded: true });
   }, [root, loadDir]);
 
+  // ── Right-click menu (Walnut's own, not the browser's) ────────────────────
+  const navigate = useNavigate();
+  const { canReveal, reveal, error: revealError, clearError: clearRevealError } = useRevealFile(host);
+  const [ctxMenu, setCtxMenu] = useState<FileTreeContextTarget | null>(null);
+
+  const openContextMenu = useCallback((e: React.MouseEvent, node: { path: string; type: 'dir' | 'file' }) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const point = { x: e.clientX, y: e.clientY };
+    // Open immediately (a right-click must never feel laggy); the vault-note
+    // check is async (notesDir fetch) and patches "Open in Notes" in when it
+    // resolves — for the same target only, so a fast re-click can't cross-fill.
+    setCtxMenu({ point, path: node.path, type: node.type });
+    if (node.type === 'file') {
+      void vaultRelativeNotePath(node.path, host).then((rel) => {
+        if (!rel) return;
+        setCtxMenu((cur) => (cur && cur.path === node.path ? { ...cur, notePath: rel } : cur));
+      }).catch(() => { /* not a note — menu just lacks the item */ });
+    }
+  }, [host]);
+
+  const selectFile = useCallback((filePath: string) => {
+    setFocusedDir(parentPath(filePath));
+    commitSelection(filePath);
+  }, [commitSelection]);
+
+  // ── Browser-style Back / Forward over the files read in this scope ─────────
+  // Both buttons move the index WITHOUT pushing (that would truncate the tail —
+  // the classic broken-back-button bug), and load the target's parent dir so the
+  // tree row is visible/selected when you land there, exactly like a tree click.
+  const canGoBack = history.index > 0;
+  const canGoForward = history.index >= 0 && history.index < history.entries.length - 1;
+
+  const navigateHistory = useCallback((delta: -1 | 1) => {
+    const cur = historyRef.current;
+    const nextIdx = cur.index + delta;
+    const target = cur.entries[nextIdx];
+    if (!target) return;
+    const next = { entries: cur.entries, index: nextIdx };
+    historyRef.current = next;
+    setHistory(next);
+    saveFileHistory(host, scopeRef.current, next);
+    setSelectedFile(target);
+    setFocusedDir(parentPath(target));
+    saveSelectedFile(host, scopeRef.current, target);
+    const dir = parentPath(target);
+    if (!childrenMapRef.current.has(dir)) void loadDirRef.current?.(dir);
+  }, [host]);
+
+  // ⌘/Ctrl + [ / ] — the shortcut every editor and browser uses. Listened on
+  // window, NOT on the explorer subtree: tree rows are plain divs with no
+  // tabindex, so nothing inside here ever holds focus and a local listener would
+  // simply never fire. Guards: text fields keep their brackets, and when more
+  // than one explorer is mounted the keys only drive the focused one.
+  const explorerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      if (e.key !== '[' && e.key !== ']') return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      const el = explorerRef.current;
+      if (!el) return;
+      if (document.querySelectorAll('.session-file-explorer').length > 1
+        && !el.contains(document.activeElement)) return;
+      e.preventDefault();
+      navigateHistory(e.key === '[' ? -1 : 1);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [navigateHistory]);
+
   return (
-    <div className="session-file-explorer">
+    <div className="session-file-explorer" ref={explorerRef}>
       <div className="session-file-explorer-toolbar">
+        <div className="sfe-nav-group">
+          <button
+            type="button"
+            className="sfe-btn sfe-nav-btn"
+            onClick={() => navigateHistory(-1)}
+            disabled={!canGoBack}
+            title={canGoBack ? `Back to ${lastSegment(history.entries[history.index - 1])} (⌘[)` : 'Back (no earlier file)'}
+            aria-label="Back to the previously viewed file"
+          >‹</button>
+          <button
+            type="button"
+            className="sfe-btn sfe-nav-btn"
+            onClick={() => navigateHistory(1)}
+            disabled={!canGoForward}
+            title={canGoForward ? `Forward to ${lastSegment(history.entries[history.index + 1])} (⌘])` : 'Forward (no later file)'}
+            aria-label="Forward to the next viewed file"
+          >›</button>
+        </div>
         <button type="button" className="sfe-btn sfe-up-btn" onClick={goUp} title="Go to parent directory" aria-label="Go to parent directory">↑</button>
         {editingPath ? (
           <div className="sfe-path-edit">
@@ -541,6 +718,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
                 <div
                   className={`session-file-explorer-node sfe-root-header${section.kind === 'changed' ? ' sfe-root-changed' : ''}`}
                   onClick={() => toggleRoot(section.path)}
+                  onContextMenu={(e) => openContextMenu(e, { path: section.path, type: 'dir' })}
                   title={section.path}
                 >
                   <span className="sfe-arrow">{isRootLoading ? '…' : isOpen ? '▼' : '▶'}</span>
@@ -568,13 +746,10 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
                         style={{ paddingLeft: `${8 + node.depth * 14}px` }}
                         onClick={() => {
                           if (node.type === 'dir') toggleDir(node);
-                          else {
-                            setSelectedFile(node.path);
-                            setFocusedDir(parentPath(node.path));
-                            // Remember the file being read so reopening the panel resumes here.
-                            saveSelectedFile(host, root, node.path);
-                          }
+                          // Remember the file being read so reopening the panel resumes here.
+                          else selectFile(node.path);
                         }}
+                        onContextMenu={(e) => openContextMenu(e, node)}
                         title={node.path}
                       >
                         <span className="sfe-arrow">
@@ -614,12 +789,35 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine }: Sessi
               host={host}
               line={selectedFile === cwd ? initialLine : undefined}
               reloadToken={reloadToken}
+              onSelectCode={onSelectCode}
+              // A save changes the file's size on disk, so the tree's size column
+              // is now stale — re-list just that file's directory (not the whole
+              // tree: a full Refresh would also reload the file we just wrote).
+              onSaved={(saved) => { void loadDir(parentPath(saved), { noCache: true }); }}
             />
           ) : (
             <div className="sfe-preview-empty">Select a file to preview</div>
           )}
         </div>
       </div>
+
+      {ctxMenu && (
+        <FileTreeContextMenu
+          target={ctxMenu}
+          onClose={() => setCtxMenu(null)}
+          onOpen={selectFile}
+          onOpenInNotes={(rel) => navigate(`/notes?path=${encodeURIComponent(rel)}`)}
+          onOpenInNewTab={(p) => openPopout('file', { path: p, host })}
+          onDownload={(p) => { window.location.href = downloadFileUrl(p, host); }}
+          onReveal={reveal}
+          canReveal={canReveal}
+        />
+      )}
+      {revealError && (
+        <div className="sfe-reveal-error" role="alert" onClick={clearRevealError} title="Click to dismiss">
+          {revealError}
+        </div>
+      )}
     </div>
   );
 }

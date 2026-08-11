@@ -20,7 +20,7 @@
 import { describe, it, expect } from 'vitest';
 import { tokenize, markEdits } from 'react-diff-view';
 import { buildFileData, toGitStylePatch } from '@/components/sessions/diffPatch';
-import { buildSelectionPrefill, buildCommentMessage, buildReviewMessage } from '@/components/sessions/diffPrefill';
+import { buildSelectionPrefill, buildCommentMessage, buildReviewMessage, displayPathForPrefill } from '@/components/sessions/diffPrefill';
 import type { SessionFileChange } from '@/api/session-changes';
 
 function change(partial: Partial<SessionFileChange> & { before: string; after: string; relPath: string }): SessionFileChange {
@@ -135,6 +135,32 @@ describe('buildSelectionPrefill — text that lands in the existing chat input',
 
   it('trims surrounding whitespace from the selected code', () => {
     expect(buildSelectionPrefill('a.ts', 1, '  spaced  ')).toBe('About a.ts:1 `spaced`: ');
+  });
+});
+
+describe('displayPathForPrefill — the Files tab hands ABSOLUTE paths, the diff hands short ones', () => {
+  it('shortens a path under the session cwd', () => {
+    expect(displayPathForPrefill('/Users/me/repo/src/lib.ts', '/Users/me/repo')).toBe('src/lib.ts');
+  });
+
+  it('tolerates a trailing slash on the cwd', () => {
+    expect(displayPathForPrefill('/Users/me/repo/src/lib.ts', '/Users/me/repo/')).toBe('src/lib.ts');
+  });
+
+  it('keeps an absolute path that is OUTSIDE the cwd — there the full path is information', () => {
+    expect(displayPathForPrefill('/tmp/scratch.ts', '/Users/me/repo')).toBe('/tmp/scratch.ts');
+  });
+
+  it('does not treat a sibling with a shared prefix as inside (repo vs repo-old)', () => {
+    expect(displayPathForPrefill('/Users/me/repo-old/x.ts', '/Users/me/repo')).toBe('/Users/me/repo-old/x.ts');
+  });
+
+  it('passes the path through untouched when no cwd is known', () => {
+    expect(displayPathForPrefill('/Users/me/repo/src/lib.ts', undefined)).toBe('/Users/me/repo/src/lib.ts');
+  });
+
+  it('leaves an already-relative path (the Changed tab path) alone', () => {
+    expect(displayPathForPrefill('src/lib.ts', '/Users/me/repo')).toBe('src/lib.ts');
   });
 });
 

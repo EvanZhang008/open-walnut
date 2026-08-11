@@ -8,6 +8,23 @@
  * cursor after a colon so the user just types their question and hits Send — the
  * message goes to the MAIN agent through the normal send path (no fork, no btw).
  */
+/**
+ * Shorten an absolute path to be cwd-relative when it lives under the session's
+ * working directory.
+ *
+ * The Changed tab already hands `buildSelectionPrefill` a repo-relative path (its
+ * own displayPath does this), but the Files tab browses the whole filesystem and
+ * only has absolutes. Passing those through verbatim produced quotes headed by a
+ * 90-character path for a file the agent thinks of as `src/x.ts`. Anything OUTSIDE
+ * the cwd keeps its absolute path — there it's information, not noise.
+ */
+export function displayPathForPrefill(filePath: string, cwd?: string): string {
+  if (!cwd) return filePath;
+  const base = cwd.replace(/\/+$/, '');
+  if (!base || !filePath.startsWith(base + '/')) return filePath;
+  return filePath.slice(base.length + 1);
+}
+
 export function buildSelectionPrefill(filePath: string, line: number | undefined, code: string): string {
   const loc = line != null ? `${filePath}:${line}` : filePath;
   const trimmed = code.trim();
