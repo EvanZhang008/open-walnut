@@ -2398,7 +2398,7 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
     });
   });
 
-  it('getContextUsage seeds _cliContextWindow via seedCliContextWindow (context% denominator)', async () => {
+  it('getContextUsage seeds _cliContextWindow via seedCliContextWindow', async () => {
     const { session, writes } = makeSessionWithStubTransport();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(session as any).seedCliContextWindow('test');
@@ -2409,14 +2409,115 @@ describe('ClaudeCodeSession payload reads (context usage / usage / version)', ()
       response: {
         subtype: 'success',
         request_id: env.request_id,
-        // env CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000 clamps a sonnet[1m] session
-        // to an effective 400K — the exact case the string-guess can't see.
+        // Newer CLIs report the AUTO-COMPACT window here (e.g. env
+        // CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000 → 400K on a [1m] session).
         response: { categories: [], totalTokens: 36762, maxTokens: 400000, percentage: 9 },
       },
     });
     await new Promise((r) => setTimeout(r, 5));
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect((session as any)._cliContextWindow).toBe(400000);
+  });
+
+  // ── contextWindowForPercent: the context% denominator ──
+  // Must match the official CLI statusline (used_percentage = tokens / RAW
+  // model window). get_context_usage.maxTokens is the auto-compact window on
+  // newer CLIs — it may only RAISE the string guess, never lower it.
+  // Regression (2026-08-11): 1M session + AUTO_COMPACT_WINDOW=400000 showed
+  // 200K tokens as 50% (÷400K) where the official UI says 20% (÷1M).
+  describe('contextWindowForPercent', () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const win = (session: ClaudeCodeSession, totalInput?: number) => (session as any).contextWindowForPercent(totalInput);
+
+    it('1M session with a 400K auto-compact clamp still divides by 1M', () => {
+      const { session } = makeSessionWithStubTransport();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._initModel = 'global.anthropic.claude-fable-5[1m]';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._cliContextWindow = 400_000; // CLI's auto-compact window
+      expect(win(session, 200_000)).toBe(1_000_000); // 20%, not 50%
+    });
+
+    it('CLI answer can RAISE the 200K string guess (custom >200K window)', () => {
+      const { session } = makeSessionWithStubTransport();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._initModel = 'some-proxy-model'; // no [1m] marker
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._cliContextWindow = 262_000;
+      expect(win(session, 100_000)).toBe(262_000);
+    });
+
+    it('falls back to the string guess when the CLI never answered', () => {
+      const { session } = makeSessionWithStubTransport();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._initModel = 'claude-sonnet-4-6';
+      expect(win(session)).toBe(200_000);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._initModel = 'claude-sonnet-4-6[1m]';
+      expect(win(session)).toBe(1_000_000);
+    });
+
+    it('observed tokens above the window force 1M (resume lost the [1m] suffix)', () => {
+      const { session } = makeSessionWithStubTransport();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._initModel = 'claude-sonnet-4-6'; // suffix lost
+      expect(win(session, 250_000)).toBe(1_000_000);
+    });
+
+    it('result.modelUsage contextWindow outranks every guess (no [1m] parsing needed)', () => {
+      const { session } = makeSessionWithStubTransport();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._initModel = 'global.anthropic.claude-fable-5[1m]';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._cliContextWindow = 400_000; // auto-compact clamp
+      // Verbatim modelUsage block from a live 2.1.220 result event.
+      feed(session, {
+        type: 'result', subtype: 'success', is_error: false, result: 'done', session_id: 'sid-mu',
+        modelUsage: {
+          'global.anthropic.claude-fable-5[1m]': {
+            inputTokens: 244, outputTokens: 281264, costUSD: 36.57, contextWindow: 1_000_000,
+          },
+        },
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((session as any)._cliRawContextWindow).toBe(1_000_000);
+      expect(win(session, 200_000)).toBe(1_000_000);
+    });
+
+    it('modelUsage matches the main model by normalized key, not the largest window', () => {
+      const { session } = makeSessionWithStubTransport();
+      // init said a short id; result key carries provider prefix + [1m]
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._initModel = 'claude-sonnet-4-6';
+      feed(session, {
+        type: 'result', subtype: 'success', is_error: false, result: 'done', session_id: 'sid-mu2',
+        modelUsage: {
+          'us.anthropic.claude-sonnet-4-6-v1:0': { contextWindow: 200_000 },
+          'us.anthropic.claude-haiku-4-5-v1:0': { contextWindow: 1_000_000 }, // subagent — must NOT win
+        },
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((session as any)._cliRawContextWindow).toBe(200_000);
+    });
+
+    it('model change clears the harvested raw window (old window must not leak)', () => {
+      const { session } = makeSessionWithStubTransport();
+      // The init handler renames the transport before capturing the model —
+      // the minimal stub needs those members or the handler dies mid-way.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._transport.renameForSession = () => {};
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._transport.outputFile = '/tmp/sid-mu3.jsonl';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._initModel = 'claude-fable-5[1m]';
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ;(session as any)._cliRawContextWindow = 1_000_000;
+      // /model switch → resume fires a fresh init with the new model
+      feed(session, { type: 'system', subtype: 'init', session_id: 'sid-mu3', model: 'claude-haiku-4-5' });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((session as any)._cliRawContextWindow).toBeUndefined();
+      expect(win(session, 50_000)).toBe(200_000);
+    });
   });
 
   it('getUsage resolves the session block (cost + per-model usage)', async () => {
