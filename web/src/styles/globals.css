@@ -26295,3 +26295,39 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   color: var(--fg-muted);
   font-size: 12px;
 }
+
+/* ── ProjectSourcePicker — provider chips under the New-Project inputs ──
+   Shared by the /tasks rail and the home panel's NewProjectRow. */
+.proj-src-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 2px 2px;
+}
+.proj-src-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 11px;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+  flex: none;
+}
+.proj-src-chip:hover { background: var(--bg-hover); }
+.proj-src-chip.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+.proj-src-chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}

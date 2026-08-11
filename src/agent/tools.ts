@@ -588,7 +588,7 @@ export const tools: ToolDefinition[] = [
         type: { type: 'string', enum: ['task', 'project'], description: 'Entity type. Default: "task".' },
         // Project fields
         name: { type: 'string', description: 'Project name. Required for type=project (alias: project).' },
-        source: { type: 'string', enum: ['local', 'ms-todo'], description: 'Sync target for a NEW project (type=project). "local" = never synced. Default: local.' },
+        source: { type: 'string', description: 'Sync provider claim for a NEW project (type=project). "local" (default) = never synced; otherwise any installed integration plugin id (e.g. "ms-todo"). Validated at runtime against the plugin registry — no hardcoded list, so third-party plugins work.' },
         // Task fields
         title: { type: 'string', description: 'Task title. Required for type=task. Format: "<≤3-word prefix> — <short description>". Prefix MUST be the most unique identifier of the task (max 3 words) — the thing that instantly tells you WHICH task this is. Use em-dash (—). Good: "Sprint选择器 — 查询/选择当前sprint", "Task不跳转 — 点击task不定位到列表位置". Bad: generic prefixes like "Sprint功能增强", "Bug:", "Tool Description".' },
         priority: { type: 'string', enum: ['immediate', 'important', 'backlog', 'none'], description: 'Priority: immediate (urgent), important (can wait), backlog (future), none' },
@@ -611,6 +611,14 @@ export const tools: ToolDefinition[] = [
           const name = ((params.name as string | undefined) ?? (params.project as string | undefined))?.trim();
           if (!name) return 'Error: "name" is required for type=project';
           const source = (params.source as TaskSource | undefined) ?? 'local';
+          // Same rule as POST /api/projects: 'local' or any registered plugin id.
+          if (source !== 'local') {
+            const { registry } = await import('../core/integration-registry.js');
+            if (!registry.has(source)) {
+              const valid = ['local', ...registry.getAll().map((p) => p.id)];
+              return `Error: unknown source "${source}". Valid sources: ${valid.join(', ')}.`;
+            }
+          }
           const result = await ensureProject(name, source);
           if (!result.created) {
             return `Project "${result.name}" already exists (source: ${result.source}).`;

@@ -198,11 +198,11 @@ export function DashboardPage() {
     await create({ title, priority: 'none', project: target || undefined });
   }, [create, activeProject]);
 
-  const handleCreateProject = useCallback(async (name: string) => {
+  const handleCreateProject = useCallback(async (name: string, source?: string) => {
     // Select the CANONICAL spelling: project identity is case-insensitive and an
     // existing row's spelling wins, so selecting the raw input could highlight
     // nothing in the rail and file ghost-created tasks under the wrong casing.
-    const res = await createProject(name);
+    const res = await createProject(name, source);
     refreshRegistry();
     setActiveProject(res.name);
   }, [refreshRegistry]);

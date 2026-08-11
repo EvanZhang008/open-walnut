@@ -25,6 +25,7 @@ import { ProjectPlusMenu, ProjectKebabMenu } from './ProjectHeaderMenus';
 import { ProjectSourceBadge } from './ProjectSourceBadge';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { createProject } from '@/api/projects';
+import { ProjectSourcePicker } from './ProjectSourcePicker';
 import { log } from '@/utils/log';
 import {
   mapServerTaskSearchResults,
@@ -1717,6 +1718,7 @@ function InlineAdd({ onAdd, label = 'Add to Focus…', openSignal, onOpenSignalC
 function NewProjectRow({ onCreated, onError }: { onCreated: (name: string) => void; onError?: (msg: string) => void }) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState('');
+  const [source, setSource] = useState('local');
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -1727,8 +1729,9 @@ function NewProjectRow({ onCreated, onError }: { onCreated: (name: string) => vo
     if (!name || busy) return;
     setBusy(true);
     try {
-      const res = await createProject(name);
+      const res = await createProject(name, source === 'local' ? undefined : source);
       setValue('');
+      setSource('local');
       setOpen(false);
       onCreated(res.name); // canonical spelling from the server (NOCASE registry)
     } catch (err) {
@@ -1768,11 +1771,14 @@ function NewProjectRow({ onCreated, onError }: { onCreated: (name: string) => vo
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing || e.keyCode === 229) return;
             if (e.key === 'Enter') { e.preventDefault(); void submit(); }
-            if (e.key === 'Escape') { e.preventDefault(); setValue(''); setOpen(false); }
+            if (e.key === 'Escape') { e.preventDefault(); setValue(''); setSource('local'); setOpen(false); }
           }}
           onBlur={() => { if (!value.trim()) setOpen(false); }}
         />
       </div>
+      {/* provider claim — default Local; chips preventDefault pointerdown so a
+          pick doesn't blur-cancel the empty input */}
+      <ProjectSourcePicker value={source} onChange={setSource} />
     </div>
   );
 }

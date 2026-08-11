@@ -11,6 +11,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities';
 import { ProjectSourceBadge } from './ProjectSourceBadge';
 import { ProjectKebabMenu } from './ProjectHeaderMenus';
+import { ProjectSourcePicker } from './ProjectSourcePicker';
 
 export interface RailProjectItem {
   /** Canonical project name (registry spelling when known). */
@@ -29,7 +30,8 @@ interface TasksPageRailProps {
   /** null = All Tasks, '' = Inbox, otherwise a project name. */
   activeKey: string | null;
   onSelect: (key: string | null) => void;
-  onCreateProject: (name: string) => void | Promise<void>;
+  /** source: 'local' (default) or a plugin id — the new project's sync claim. */
+  onCreateProject: (name: string, source?: string) => void | Promise<void>;
   /** Persist a new full project order after a rail drag. */
   onReorderProjects: (order: string[]) => void;
   onToggleFavorite: (project: string) => void;
@@ -110,6 +112,7 @@ export function TasksPageRail({
 }: TasksPageRailProps) {
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState('');
+  const [draftSource, setDraftSource] = useState('local');
   const inputRef = useRef<HTMLInputElement>(null);
 
   // ── resizable width ──
@@ -169,6 +172,7 @@ export function TasksPageRail({
   const cancelCreate = () => {
     setCreating(false);
     setDraft('');
+    setDraftSource('local');
   };
 
   const handleCreateKey = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -178,9 +182,10 @@ export function TasksPageRail({
       cancelCreate();
     } else if (e.key === 'Enter') {
       const name = draft.trim();
+      const source = draftSource;
       if (!name) { cancelCreate(); return; }
       cancelCreate();
-      void onCreateProject(name);
+      void onCreateProject(name, source === 'local' ? undefined : source);
     }
   };
 
@@ -222,15 +227,20 @@ export function TasksPageRail({
 
       <div className="tp-rail-newproj-wrap">
         {creating ? (
-          <input
-            ref={inputRef}
-            className="tp-rail-newproj-input"
-            placeholder="Project name…"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={handleCreateKey}
-            onBlur={cancelCreate}
-          />
+          <>
+            <input
+              ref={inputRef}
+              className="tp-rail-newproj-input"
+              placeholder="Project name…"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={handleCreateKey}
+              onBlur={cancelCreate}
+            />
+            {/* provider claim for the new project; chips preventDefault on
+                pointerdown so picking one doesn't blur-cancel the input */}
+            <ProjectSourcePicker value={draftSource} onChange={setDraftSource} />
+          </>
         ) : (
           <button type="button" className="tp-rail-newproj-btn" onClick={() => setCreating(true)}>
             ＋ New Project
