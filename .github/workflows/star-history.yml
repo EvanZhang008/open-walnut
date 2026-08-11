@@ -1,0 +1,43 @@
+name: Update star history
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/star-history.yml'
+      - 'scripts/generate-star-history.mjs'
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-history
+  cancel-in-progress: true
+
+jobs:
+  update:
+    name: Update chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Generate chart
+        run: node scripts/generate-star-history.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Commit changes
+        run: |
+          if [ -z "$(git status --porcelain -- docs/assets/star-history.svg)" ]; then
+            echo "Star history is already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/assets/star-history.svg
+          git commit -m "docs: update star history"
+          git push
