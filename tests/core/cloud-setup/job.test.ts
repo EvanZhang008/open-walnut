@@ -216,7 +216,7 @@ async function waitForOnDisk(
 beforeEach(async () => {
   // Reset the runner FIRST: a leftover runner from a previous file-level failure
   // must stop writing before the dir is wiped.
-  _resetCloudSetupJobForTesting()
+  await _resetCloudSetupJobForTesting()
   await wipeHome()
   gitCalls.initSync = []; gitCalls.syncCount = 0; gitCalls.lsRemote = 0
   cloudRemote = null
@@ -237,7 +237,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  _resetCloudSetupJobForTesting()
+  await _resetCloudSetupJobForTesting()
   while (restores.length) restores.pop()?.()
   vi.unstubAllGlobals()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
@@ -383,7 +383,7 @@ describe('crash-resume', () => {
    * the only thing that survives), then resume from disk.
    */
   async function restart(): Promise<void> {
-    _resetCloudSetupJobForTesting()
+    await _resetCloudSetupJobForTesting()
     await resumeCloudSetupJobIfAny()
   }
 
@@ -413,9 +413,31 @@ describe('crash-resume', () => {
   for (const boundary of ['generate', 'provision', 'await-server', 'claim-and-wire'] as const) {
     it(`resuming right after ${boundary} still reaches done exactly once`, async () => {
       const driver = useDriver(makeAutoDriver())
+      if (boundary === 'generate') {
+        // Stop the first provision attempt before it performs the fake provider
+        // side effect. Polling a completed generate step can otherwise race the
+        // next createVM call, turning this boundary test into a mid-provision
+        // crash test whose retry is expected to re-enter the provider.
+        const createVM = driver.createVM!
+        let holdFirstAttempt = true
+        driver.createVM = async (params, onLog) => {
+          if (holdFirstAttempt) {
+            holdFirstAttempt = false
+            await new Promise<void>((resolve) => {
+              if (params.signal?.aborted) resolve()
+              else params.signal?.addEventListener('abort', () => resolve(), { once: true })
+            })
+            if (params.signal?.aborted) throw new Error('test restart before provisioning')
+          }
+          return createVM(params, onLog)
+        }
+      }
       await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
       // Cut the runner as soon as this boundary's step has been recorded done.
-      await waitFor((s) => s.steps[boundary].status === 'done' || s.status === 'done', `${boundary} done`)
+      await waitForOnDisk(
+        (s) => s.steps[boundary].status === 'done' || s.status === 'done',
+        `${boundary} done`,
+      )
       await restart()
       const done = await waitFor((s) => s.status === 'done' || s.status === 'failed', `terminal after ${boundary}`)
 
@@ -469,7 +491,7 @@ describe('crash-resume', () => {
     // Stop the runner BEFORE editing the file, or it keeps advancing and
     // overwrites the edit (the state file has exactly one writer by design).
     const state = await waitForOnDisk((s) => s.steps.provision.status === 'done', 'provision done on disk')
-    _resetCloudSetupJobForTesting()
+    await _resetCloudSetupJobForTesting()
     // Rewind to a not-yet-provisioned job, then restart: the credential lived
     // only in memory, so it cannot silently be reused.
     state.currentStep = 'provision'
@@ -501,7 +523,7 @@ describe('crash-resume', () => {
     await waitFor((s) => s.steps.provision.status === 'done', 'provision done')
 
     const state = await waitForOnDisk((s) => s.steps.provision.status === 'done', 'provision done on disk')
-    _resetCloudSetupJobForTesting()
+    await _resetCloudSetupJobForTesting()
     state.currentStep = 'provision'
     state.steps.provision = { status: 'pending' }
     state.status = 'running'
@@ -539,7 +561,7 @@ describe('crash-resume', () => {
     box.bootedAfter = 10_000
     await startCloudSetupJob({ provider: 'aws', domainMode: 'own-domain', domain: ORIGIN })
     await waitForOnDisk((s) => s.steps.provision.status === 'done', 'provision done on disk')
-    _resetCloudSetupJobForTesting()
+    await _resetCloudSetupJobForTesting()
 
     box.bootedAfter = 0
     await resumeCloudSetupJobIfAny()
@@ -563,14 +585,14 @@ describe('crash-resume', () => {
 
     // Reload from disk only — the in-memory handle that used to hold `force` is
     // gone, so a retry has nothing but the file to learn the consent from.
-    _resetCloudSetupJobForTesting()
+    await _resetCloudSetupJobForTesting()
     const reloaded = await getCloudSetupJob()
     expect(reloaded?.force).toBe(true)
     reloaded!.status = 'failed'
     reloaded!.currentStep = 'preflight'
     reloaded!.steps.preflight = { status: 'error', error: 'boom' }
     await fs.writeFile(jobFile(), JSON.stringify(reloaded))
-    _resetCloudSetupJobForTesting()
+    await _resetCloudSetupJobForTesting()
 
     box.bootedAfter = 0
     await retryCloudSetupJob()
@@ -628,7 +650,7 @@ describe('dns step', () => {
 
     // Simulate the restart: the polling runner is gone, so there is nothing left
     // to observe an in-memory "confirmed" flag.
-    _resetCloudSetupJobForTesting()
+    await _resetCloudSetupJobForTesting()
     await resumeCloudSetupJobIfAny() // awaiting-input → no runner re-armed
 
     await provideCloudSetupInput({ confirmDnsSkip: true })

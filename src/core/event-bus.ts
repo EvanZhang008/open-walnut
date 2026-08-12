@@ -129,6 +129,9 @@ export const EventNames = {
 
   // Mobile client incidents (a freeze/crash line arrived in an uploaded iOS log)
   CLIENT_INCIDENT: 'client:incident',
+
+  // Cloud-companion setup job progress (never carries the pairing code)
+  CLOUD_SETUP_UPDATE: 'cloud-setup:update',
 } as const;
 
 export type EventName = (typeof EventNames)[keyof typeof EventNames];

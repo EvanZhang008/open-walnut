@@ -99,10 +99,22 @@ let startInFlight: Promise<CloudSetupJobState> | null = null
 const credentialStore = new Map<string, string>()
 /** Cached state so a GET doesn't have to hit disk on every poll. */
 let cached: CloudSetupJobState | null = null
+/** In-flight writes that a test-only process restart must let finish first. */
+const pendingPersists = new Set<Promise<void>>()
 
 // ── Persistence ─────────────────────────────────────────────────────────────
 
 async function persist(state: CloudSetupJobState): Promise<void> {
+  const pending = persistToDisk(state)
+  pendingPersists.add(pending)
+  try {
+    await pending
+  } finally {
+    pendingPersists.delete(pending)
+  }
+}
+
+async function persistToDisk(state: CloudSetupJobState): Promise<void> {
   state.updatedAt = new Date().toISOString()
   cached = state
   const file = jobFilePath()
@@ -588,13 +600,14 @@ export async function resumeCloudSetupJobIfAny(): Promise<void> {
   void runJob(state, { force: state.force === true })
 }
 
-/** Test-only: drop module state so each test file starts clean. */
-export function _resetCloudSetupJobForTesting(): void {
+/** Test-only: stop the runner and drain writes before simulating a restart. */
+export async function _resetCloudSetupJobForTesting(): Promise<void> {
   if (active) {
     active.cancelled = true
     active.controller.abort()
   }
   active = null
+  await Promise.allSettled([...pendingPersists])
   cached = null
   resumed = false
   startInFlight = null

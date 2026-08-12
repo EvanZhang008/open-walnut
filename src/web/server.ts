@@ -99,6 +99,7 @@ import { butlerV1Router } from './routes/butler-v1.js'
 import { searchMemoryV1Router } from './routes/search-memory-v1.js'
 import { eventsV1Router, startMobileEventsFeed, stopMobileEventsFeed } from './routes/events-v1.js'
 import { sttV1Router, sttPayloadTooLargeHandler } from './routes/stt-v1.js'
+import { pastesRouter } from './routes/pastes.js'
 import { mediaV1Router } from './routes/media-v1.js'
 import { routinesV1Router } from './routes/routines-v1.js'
 import { projectsV1Router } from './routes/projects-v1.js'
@@ -689,6 +690,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // raises before any router runs, and Express skips routers in error mode.
   app.use(['/api/v1/stt/transcribe', '/api/stt/transcribe'], sttPayloadTooLargeHandler)
   app.use(express.json({ limit: '15mb' }))
+  app.use('/api/pastes', pastesRouter)
   // Default API responses to no-store so the browser HTTP cache never
   // revalidates/synthesizes them (see the etag note above — same incident).
   // Routes that WANT caching (images, media, timeline …) set their own

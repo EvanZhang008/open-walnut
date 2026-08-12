@@ -63,7 +63,7 @@ describe('session launcher pin tier', () => {
   it('keeps the rest of the launcher defaults intact', () => {
     const meta = freshLauncherMeta();
     expect(meta.starred).toBe(true);
-    expect(meta.unread).toBe(false);
+    expect(meta.needs_attention).toBe(false);
     expect(meta.priority).toBe('none');
     expect(meta.model).toBeUndefined();
     expect(meta.engine).toBeUndefined();

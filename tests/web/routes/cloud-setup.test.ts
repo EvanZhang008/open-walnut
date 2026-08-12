@@ -115,9 +115,9 @@ async function waitAwaitingInput(): Promise<void> {
 }
 
 beforeEach(async () => {
+  await _resetCloudSetupJobForTesting()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
-  _resetCloudSetupJobForTesting()
   cloudRemote = null
   restores.push(_setCloudProviderDriverForTesting('aws', stalledDriver))
   restores.push(_setCloudProviderDriverForTesting('manual', manualTestDriver))
@@ -127,7 +127,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await cancelCloudSetupJob().catch(() => {})
-  _resetCloudSetupJobForTesting()
+  await _resetCloudSetupJobForTesting()
   while (restores.length) restores.pop()?.()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })

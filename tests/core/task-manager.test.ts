@@ -579,6 +579,18 @@ describe('updateTask — starred', () => {
 });
 
 describe('updateTask — needs_attention (read marker)', () => {
+  it('accepts unread, mirrors the legacy marker, and preserves updated_at', async () => {
+    const { task } = await addTask({ title: 'Unread task' });
+    const before = task.updated_at;
+    await new Promise((r) => setTimeout(r, 5));
+
+    const { task: marked } = await updateTask(task.id, { unread: true });
+
+    expect(marked.unread).toBe(true);
+    expect(marked.needs_attention).toBe(true);
+    expect(marked.updated_at).toBe(before);
+  });
+
   it('does NOT bump updated_at when only clearing needs_attention', async () => {
     const { task } = await addTask({ title: 'Attention task' });
     await updateTask(task.id, { needs_attention: true });
@@ -794,4 +806,3 @@ describe('autoPushIfConfigured sync_error lifecycle', () => {
     expect(result.success).toBe(true);
   });
 });
-

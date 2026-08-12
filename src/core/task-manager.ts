@@ -6,7 +6,7 @@ import { generateId, isLegacyInboxGroup, isRetiredQuickStartGroup } from '../uti
 import { initDirectories } from './init.js';
 import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
-import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
+import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, readMarkerPatch, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
 import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES } from './phase.js';
 import { registry } from './integration-registry.js';
 import { getDb, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction, TASK_DB_PATH } from './task-db.js';
@@ -2403,6 +2403,8 @@ export interface UpdateTaskInput {
   /** Move the task to another project. '' moves it to Inbox. */
   project?: string;
   starred?: boolean;
+  /** Canonical read marker; legacy callers may still use needs_attention. */
+  unread?: boolean;
   needs_attention?: boolean;
   parent_task_id?: string;  // Set or change parent. Empty string = remove parent.
   sprint?: string;          // Set sprint name (empty string clears)
@@ -2607,7 +2609,8 @@ export async function updateTask(
   if (updates.start_date !== undefined) task.start_date = updates.start_date || undefined;
   if (updates.end_date !== undefined) task.end_date = updates.end_date || undefined;
   if (updates.starred !== undefined) task.starred = updates.starred;
-  if (updates.needs_attention !== undefined) task.needs_attention = updates.needs_attention;
+  const unread = updates.unread ?? updates.needs_attention;
+  if (unread !== undefined) Object.assign(task, readMarkerPatch(unread));
   // Track parent change for plugin notification (fired after writeStore)
   let parentChangeAction: (() => void) | undefined;
   if (updates.parent_task_id !== undefined) {
@@ -2744,12 +2747,11 @@ export async function updateTask(
     applyDependencyMutations(store, task, updates);
   }
 
-  // `needs_attention` is a read/seen marker, not task content. Clearing it on
-  // focus must NOT bump updated_at — otherwise the task jumps to the top of any
-  // updated_at-ordered list a few seconds after the user merely selects it.
+  // Read markers are viewer state, not task content. Clearing one on focus must
+  // NOT bump updated_at, or the task jumps in updated_at-ordered lists.
   const changedKeys = Object.keys(updates).filter((k) => (updates as Record<string, unknown>)[k] !== undefined);
-  const onlyAttentionMarker = changedKeys.length > 0 && changedKeys.every((k) => k === 'needs_attention');
-  if (!onlyAttentionMarker) task.updated_at = new Date().toISOString();
+  const onlyReadMarker = changedKeys.length > 0 && changedKeys.every((k) => READ_MARKER_KEYS.includes(k));
+  if (!onlyReadMarker) task.updated_at = new Date().toISOString();
 
   await writeStore(store);
 
