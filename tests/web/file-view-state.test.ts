@@ -88,9 +88,62 @@ describe('scope normalization (the 2026-08-09 root cause)', () => {
     const clickRoot = '/repo/src/web';
     saveSelectedFile(undefined, clickRoot, '/repo/src/web/App.tsx');
     expect(loadSelectedFile(undefined, sessionCwd)).toBeNull(); // the old, broken keying
-    // With both callers passing the session cwd as the SCOPE, the chip finds it.
+    // With both callers passing one stable SCOPE, the chip finds it.
     saveSelectedFile(undefined, sessionCwd, '/repo/src/web/App.tsx');
     expect(loadSelectedFile(undefined, sessionCwd)).toBe('/repo/src/web/App.tsx');
+  });
+});
+
+describe('session isolation (the follow-up bug: cwd is NOT a session)', () => {
+  it('THE BUG: two sessions in the SAME repo must not share a memory', async () => {
+    const { sessionScope, saveSelectedFile, loadSelectedFile } = await load();
+    // The first fix keyed the scope on the session CWD. Two sessions opened on the
+    // same repo share a cwd, so they shared a key: opening a file in session 1 made
+    // it appear in session 2. Sessions are completely isolated — the id is the key.
+    const s1 = sessionScope('sess-1');
+    const s2 = sessionScope('sess-2');
+    expect(s1).not.toBe(s2);
+
+    saveSelectedFile(undefined, s1, '/repo/a.md');
+    expect(loadSelectedFile(undefined, s2)).toBeNull(); // no leak into the sibling
+    saveSelectedFile(undefined, s2, '/repo/b.md');
+    expect(loadSelectedFile(undefined, s1)).toBe('/repo/a.md'); // and none back
+  });
+
+  it('back/forward history is per session too — no shared stack', async () => {
+    const {
+      sessionScope, loadFileHistory, saveFileHistory, pushFileHistory,
+    } = await load();
+    const s1 = sessionScope('sess-1');
+    const s2 = sessionScope('sess-2');
+
+    saveFileHistory(undefined, s1, pushFileHistory(loadFileHistory(undefined, s1), '/repo/a.md'));
+    // Session 2 starts with an EMPTY stack — its Back button must be dead, not
+    // wired to whatever the neighbouring session was reading.
+    expect(loadFileHistory(undefined, s2)).toEqual({ entries: [], index: -1 });
+
+    saveFileHistory(undefined, s2, pushFileHistory(loadFileHistory(undefined, s2), '/repo/b.md'));
+    expect(loadFileHistory(undefined, s1).entries).toEqual(['/repo/a.md']);
+    expect(loadFileHistory(undefined, s2).entries).toEqual(['/repo/b.md']);
+  });
+
+  it('a session scope cannot collide with a session-less path scope', async () => {
+    const { sessionScope, saveSelectedFile, loadSelectedFile } = await load();
+    // The standalone FileViewer overlay has no session and falls back to the tree
+    // root — a path. The prefix keeps the two namespaces apart even if a session
+    // were ever named like a path.
+    const scoped = sessionScope('/repo');
+    saveSelectedFile(undefined, scoped, '/repo/a.md');
+    expect(loadSelectedFile(undefined, '/repo')).toBeNull();
+  });
+
+  it('the same session keeps ONE memory regardless of where the tree is rooted', async () => {
+    const { sessionScope, saveSelectedFile, loadSelectedFile } = await load();
+    // Both fixes have to hold at once: isolated across sessions, yet stable across
+    // the two entry points WITHIN a session (which resolve to different roots).
+    const scope = sessionScope('sess-1');
+    saveSelectedFile(undefined, scope, '/repo/src/web/App.tsx');
+    expect(loadSelectedFile(undefined, scope)).toBe('/repo/src/web/App.tsx');
   });
 });
 

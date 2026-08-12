@@ -11,14 +11,24 @@
  *    host+path, so reopening a long doc resumes where you stopped reading
  *    instead of jumping to the top.
  *
- * SCOPE, not tree root (root-cause fix, 2026-08-09): the Files panel is entered
- * two ways that resolve to DIFFERENT tree roots for the same session — the Files
- * chip roots at the session cwd, while a file-path click in the chat roots at the
- * clicked file's PARENT dir. Keying this memory by root meant the two entries
- * never met: the click wrote `…:/repo/src/web`, the chip read `…:/repo`, so the
- * chip always showed the empty preview pane. Callers pass a stable scope (the
- * session cwd) and both paths share one key; scope falls back to the root for
- * callers that have no session (the standalone FileViewer overlay).
+ * SCOPE = one session, not a directory. The scope has to satisfy two opposing
+ * requirements, and getting either wrong is a shipped bug:
+ *
+ *  1. STABLE WITHIN a session. The panel is entered two ways that resolve to
+ *     DIFFERENT tree roots — the Files chip roots at the session cwd, a file-path
+ *     click in the chat roots at the clicked file's PARENT dir. Keying by root
+ *     meant those two never met (the click wrote `…:/repo/src/web`, the chip read
+ *     `…:/repo`), so the chip always reopened on the empty preview pane.
+ *
+ *  2. UNIQUE ACROSS sessions. Fixing (1) by keying on the session CWD traded one
+ *     bug for a worse one: two sessions in the same repo share a cwd, so they
+ *     shared a key and leaked each other's open file and history — "I open a file
+ *     in session 1, go to session 2, and it's remembered there too". Sessions are
+ *     completely isolated, so the key must be the SESSION ID, which is unique by
+ *     construction and independent of where the tree happens to be rooted.
+ *
+ * Callers pass `session:<id>`. Scope falls back to the tree root only for callers
+ * that genuinely have no session (the standalone FileViewer overlay).
  *
  * All of it is pure navigation comfort — a miss just means "start at the top", so
  * every read is best-effort and a corrupt/denied localStorage is non-fatal.
@@ -52,7 +62,16 @@ export interface FileScrollState {
   source?: boolean;
 }
 
-/** Normalize a scope so `/repo` and `/repo/` share one key. */
+/**
+ * The scope for a session's Files panel. Prefixed so a session id can never
+ * collide with the path-shaped fallback scope of a session-less caller.
+ */
+export function sessionScope(sessionId: string): string {
+  return `session:${sessionId}`;
+}
+
+/** Normalize a scope so `/repo` and `/repo/` share one key. Session scopes have
+ *  no trailing slash to strip, so this is a no-op for them. */
 function normScope(scope: string): string {
   return scope.replace(/\/+$/, '') || '/';
 }
