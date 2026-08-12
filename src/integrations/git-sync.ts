@@ -17,6 +17,8 @@ export interface SyncStatus {
   branch: string;
   /** True while the mass-revert guard holds sync in pull-only safe mode. */
   safeMode: boolean;
+  /** True while the disk watermark holds sync in pull-only mode (disk ≥90%). */
+  diskPullOnly: boolean;
 }
 
 const LOCAL_TIMEOUT = 30_000;
@@ -170,8 +172,11 @@ export function gitSafe(args: string, options?: { cwd?: string; timeout?: number
  *
  * `detached: true` puts the child in a new process group (pgid == child pid),
  * so `kill(-pgid)` reaps the parent AND every descendant.
+ *
+ * Exported for git-maintenance.ts, which runs long gc/repack children under
+ * the same group-kill discipline.
  */
-async function execGitGroup(
+export async function execGitGroup(
   command: string,
   opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv },
 ): Promise<string> {
@@ -741,6 +746,35 @@ function enterSafeMode(reason: string, detail: Record<string, unknown>): void {
   );
 }
 
+// ── Disk-watermark pull-only latch ───────────────────────────────────────────
+// Set by src/core/disk-watermark.ts when the data-dir filesystem crosses the
+// critical watermark (90%). Distinct from the mass-revert safe mode above: that
+// one protects against committing a BAD tree and auto-clears when the anomaly
+// does; this one protects a nearly-full DISK — a commit writes objects and a
+// push writes pack files locally, so both would race the filesystem to 0% and
+// die mid-lock with ENOSPC (the 2026-08-12 cloud outage). Pulls stay allowed:
+// receiving upstream deletions/compactions is how the box gets smaller.
+let diskPullOnly = false;
+
+/** Flip the disk latch (idempotent — repeated same-value calls are silent). */
+export function setDiskPullOnly(v: boolean, detail?: Record<string, unknown>): void {
+  if (diskPullOnly === v) return;
+  diskPullOnly = v;
+  if (v) {
+    log.git.error(
+      'git-sync entering DISK pull-only mode — data disk critically full. '
+      + 'Auto-commits and pushes are paused until space is freed; pulls continue.',
+      detail ?? {},
+    );
+  } else {
+    log.git.warn('git-sync leaving disk pull-only mode — commits and pushes resume', detail ?? {});
+  }
+}
+
+export function isDiskPullOnly(): boolean {
+  return diskPullOnly;
+}
+
 /** Record a fetch/pull network failure; returns the current streak. */
 export function noteNetworkFailure(): number {
   return ++guard.consecutiveNetworkFailures;
@@ -753,6 +787,7 @@ export function noteNetworkSuccess(): void {
 
 /** Test hook: reset all guard state between tests. */
 export function resetSyncGuardForTest(): void {
+  diskPullOnly = false;
   guard.safeMode = false;
   guard.safeModeReason = null;
   guard.safeModeSince = null;
@@ -1039,7 +1074,7 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
     logSurgerySkip('syncInner:commit');
     return { pulled, pushed: 0, conflicts };
   }
-  if (dirtyLines.length > 0) {
+  if (dirtyLines.length > 0 && !diskPullOnly) {
     const safety = await assessCommitSafety(dirtyLines);
     if (safety.ok) {
       await gitAsync('add -A');
@@ -1072,8 +1107,10 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
     }
 
     // Push (skipped in safe mode: nothing new was committed, and a torn/stale
-    // box must not publish anything until a human or a clean cycle clears it).
-    if (!guard.safeMode) {
+    // box must not publish anything until a human or a clean cycle clears it.
+    // Also skipped in disk pull-only mode: a push packs objects LOCALLY first,
+    // which is exactly the write pressure the disk latch exists to stop).
+    if (!guard.safeMode && !diskPullOnly) {
       const pushResult = await gitSafeAsync(`push origin ${branch}`, { timeout: NETWORK_TIMEOUT });
       if (pushResult === null) {
         pushed = 0; // push failed
@@ -1512,6 +1549,10 @@ export function resetRepoSizeCheckForTest(): void {
  */
 export async function commitIfDirty(): Promise<boolean> {
   if (compactionInProgress) return false;
+  // Disk latch: a commit writes loose objects; on a critically-full disk it
+  // dies mid-lock with ENOSPC (2026-08-12 cloud outage). Local edits stay on
+  // disk and are committed as soon as the watermark clears.
+  if (diskPullOnly) return false;
   // Surgery-in-progress guard: a rebase/merge/am leaves a transient tree that
   // `add -A` must never snapshot (2026-08-04 incident). Bail BEFORE clearing
   // locks — a live rebase's locks are not ours to sweep.
@@ -1640,6 +1681,7 @@ export function getSyncStatus(): SyncStatus {
       pendingChanges: 0,
       branch: 'main',
       safeMode: guard.safeMode,
+      diskPullOnly,
     };
   }
 
@@ -1666,5 +1708,6 @@ export function getSyncStatus(): SyncStatus {
     pendingChanges,
     branch,
     safeMode: guard.safeMode,
+    diskPullOnly,
   };
 }

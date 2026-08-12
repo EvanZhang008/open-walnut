@@ -32,6 +32,7 @@ import path from 'node:path'
 import zlib from 'node:zlib'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { isSafeGroupPid } from '../../core/process-group-kill.js'
+import { isDiskWriteBlocked } from '../../core/disk-watermark.js'
 import { validateBearerCredential } from '../middleware/auth.js'
 import { recordAuthFailure, isAuthRateLimited } from '../middleware/auth-rate-limit.js'
 import { log } from '../../logging/index.js'
@@ -309,5 +310,16 @@ gitHttpRouter.use(gitAuthMiddleware)
 gitHttpRouter.get('/info/refs', (req, res) => runHttpBackend(req, res, '/info/refs'))
 // Fetch/clone data channel
 gitHttpRouter.post('/git-upload-pack', (req, res) => runHttpBackend(req, res, '/git-upload-pack'))
-// Push data channel
-gitHttpRouter.post('/git-receive-pack', (req, res) => runHttpBackend(req, res, '/git-receive-pack'))
+// Push data channel. Refused while the disk watermark is critical: a push is
+// the single biggest writer on the box (quarantine dir + pack file), and
+// letting it race the filesystem to 0% is how the 2026-08-12 ENOSPC outage
+// ended. 503 (not 507) so the git client prints a clean retryable error; the
+// pushing side's sync tick just tries again next cycle. Fetches stay allowed.
+gitHttpRouter.post('/git-receive-pack', (req, res) => {
+  if (isDiskWriteBlocked()) {
+    log.web.warn('git-http: refusing push — disk watermark critical')
+    res.status(503).type('text/plain').send('data hub disk critically full — push refused until space is freed')
+    return
+  }
+  runHttpBackend(req, res, '/git-receive-pack')
+})

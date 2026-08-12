@@ -242,6 +242,8 @@ let terminalReaperHandle: { stop: () => void } | null = null
 let qmdWatcherHandle: { stop: () => void } | null = null
 let qmdSyncStop: (() => Promise<void>) | null = null
 let gitAutoCommitHandle: { stop: () => void; health: GitAutoCommitHealth } | null = null
+let diskWatermarkHandle: { stop: () => void; poll: () => Promise<unknown> } | null = null
+let gitMaintenanceHandle: { stop: () => void } | null = null
 let taskProjectionHandle: { stop: () => void } | null = null
 let foreignWriterWatchdog: { stop: () => void } | null = null
 let sessionProjectionHandle: { stop: () => void } | null = null
@@ -698,6 +700,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Auth middleware: localhost passthrough, remote requires Bearer token
   app.use('/api', authMiddleware)
   app.use('/api', requestLogger)
+  // Disk-full guard: when the data disk crosses the critical watermark,
+  // mutating routes answer a clear 507 instead of crashing mid-write with
+  // ENOSPC (2026-08-12 cloud outage). Reads stay fully available.
+  const { diskGuardMiddleware } = await import('./middleware/disk-guard.js')
+  app.use('/api', diskGuardMiddleware)
 
   // -- Cron service --
   const cronService = new CronService({
@@ -1564,6 +1571,26 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Skip for ephemeral servers — they use a temp copy of data, no need to backup
   if (!isEphemeral) {
     gitAutoCommitHandle = startGitAutoCommit()
+
+    // Disk watermark monitor: warn at 80% used, block writes (507) + git
+    // pull-only at 90% (see src/core/disk-watermark.ts). Runs on every
+    // non-ephemeral box — the 2026-08-12 ENOSPC outage hit the cloud
+    // companion, but the primary box has the same failure mode.
+    const { startDiskWatermarkMonitor } = await import('../core/disk-watermark.js')
+    diskWatermarkHandle = startDiskWatermarkMonitor({
+      notify: (title, body, dedupScope) => {
+        void publishErrorNotification({ title, body, dedupScope })
+      },
+    })
+
+    // Scheduled git maintenance (weekly / size-triggered): sweeps the debris
+    // killed git processes leave behind (tmp packs, orphaned .keep pins,
+    // receive-pack quarantine dirs, stale gc.log) and runs a niced,
+    // single-threaded gc on the data worktree — plus the bare hub repo and
+    // stale deploy bundles on the cloud box. The 2026-08-12 disk-full outage
+    // was exactly this debris accumulating with no one ever gc'ing.
+    const { startGitMaintenance } = await import('../integrations/git-maintenance.js')
+    gitMaintenanceHandle = startGitMaintenance()
 
     // Task projection export (primary box only): tasks.sqlite is machine-
     // local, so a slim projection is written to cache/projections/ and
@@ -3745,6 +3772,14 @@ export async function stopServer(): Promise<void> {
   if (gitAutoCommitHandle) {
     gitAutoCommitHandle.stop()
     gitAutoCommitHandle = null
+  }
+  if (diskWatermarkHandle) {
+    diskWatermarkHandle.stop()
+    diskWatermarkHandle = null
+  }
+  if (gitMaintenanceHandle) {
+    gitMaintenanceHandle.stop()
+    gitMaintenanceHandle = null
   }
   if (taskProjectionHandle) {
     taskProjectionHandle.stop()

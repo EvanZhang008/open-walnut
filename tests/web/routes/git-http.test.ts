@@ -222,4 +222,32 @@ describe('git smart HTTP data hub (cloud mode)', () => {
     // Without the gc hook this is 12+ (one pack per push); with it, ≤8.
     expect(packs).toBeLessThanOrEqual(8);
   }, 60_000);
+
+  it('refuses a push with 503 while the disk watermark is critical; fetch still works', async () => {
+    // 2026-08-12 disk-full outage regression: a push writes a quarantine dir +
+    // pack file on the hub — the biggest writer on the box — and must be the
+    // first thing refused when the disk is nearly full.
+    const { _setStatfsForTest, pollDiskWatermarkOnce, resetDiskWatermarkForTest } =
+      await import('../../../src/core/disk-watermark.js');
+    const { resetSyncGuardForTest } = await import('../../../src/integrations/git-sync.js');
+    // 30GiB fs at 95% used → critical (both percent and absolute-free gates trip).
+    const blocks = 30 * 256; const bsize = 4 * 1024 * 1024;
+    const bavail = Math.round(blocks * 0.05);
+    _setStatfsForTest(async () => ({ bsize, blocks, bfree: bavail, bavail }));
+    try {
+      await pollDiskWatermarkOnce();
+
+      const dest = path.join(tmpRoot, 'clone-diskfull');
+      await git(['clone', cloneUrl(deviceToken), dest]); // fetch path stays open
+      await git(['-C', dest, 'checkout', '-B', 'main']);
+      await fs.writeFile(path.join(dest, 'blocked.txt'), 'no room\n');
+      await git(['-C', dest, 'add', 'blocked.txt']);
+      await git(['-C', dest, 'commit', '-m', 'should be refused']);
+      await expect(git(['-C', dest, 'push', 'origin', 'main'])).rejects.toThrow(/503|unable to access/i);
+    } finally {
+      _setStatfsForTest(null);
+      resetDiskWatermarkForTest();
+      resetSyncGuardForTest();
+    }
+  }, 30_000);
 });
