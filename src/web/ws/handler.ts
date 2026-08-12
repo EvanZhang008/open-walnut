@@ -240,7 +240,9 @@ async function verifyCloudUpgrade(url: URL, request: IncomingMessage): Promise<{
   const token = url.searchParams.get('token')
     ?? (header?.startsWith('Bearer ') ? header.slice(7) : null)
   if (!token) {
-    recordAuthFailure(ip)
+    // Token-absent upgrade = unpaired SPA booting, not a guess — don't feed the
+    // limiter (mirrors the HTTP middleware + git-http; a missing token can't
+    // brute-force anything).
     log.ws.warn('cloud ws upgrade: missing token', { ip })
     return null
   }

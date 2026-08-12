@@ -151,7 +151,11 @@ async function cloudAuthMiddleware(req: Request, res: Response, next: NextFuncti
 
   const authHeader = req.headers.authorization
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    recordAuthFailure(ip)
+    // A token-ABSENT request is the normal first contact (an unpaired browser
+    // loading the SPA fires a dozen of these on boot), not a guessing attempt —
+    // it cannot brute-force anything. Counting it burned the whole 10/min budget
+    // on one page load and 429-locked the very device trying to pair. Only
+    // invalid-token attempts (below) feed the limiter. Same rule as git-http.
     res.status(401).json({ error: 'Authentication required. Use Authorization: Bearer <device_token>' })
     return
   }

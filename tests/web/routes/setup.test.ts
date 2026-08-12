@@ -132,6 +132,18 @@ describe('cloud mode auth enforcement', () => {
     expect(res.status).toBe(401);
   });
 
+  it('token-ABSENT requests never trip the rate limiter (unpaired SPA boot)', async () => {
+    // Regression: an unpaired browser loading the SPA fires a dozen tokenless
+    // API calls; counting those as auth failures 429-locked the pairing device.
+    _resetAuthRateLimitForTesting();
+    for (let i = 0; i < 15; i++) {
+      const res = await fetch(apiUrl('/api/tasks'));
+      expect(res.status).toBe(401); // still denied — just not counted
+    }
+    const after = await fetch(apiUrl('/api/tasks'));
+    expect(after.status).toBe(401); // NOT 429
+  });
+
   it('rate-limits repeated auth failures with 429', async () => {
     _resetAuthRateLimitForTesting();
     for (let i = 0; i < 10; i++) {
