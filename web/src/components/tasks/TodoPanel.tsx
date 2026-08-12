@@ -306,6 +306,38 @@ function persistSection(section: TodoSection) {
   try { localStorage.setItem(LS_SECTION_KEY, section); } catch { /* ignore */ }
 }
 
+/**
+ * Per-tier view mode for the pinned tabs:
+ *  - 'project' (default): pin order re-clustered into project runs with folder
+ *    labels (clusterTierByProject).
+ *  - 'custom': the user's raw pin order, no project clustering, no labels.
+ * The two underlying orders are SEPARATE persisted stores — pin order lives in
+ * the focus store, project order in ordering.projects — so flipping the mode
+ * only changes which one drives the render; neither is rewritten. Keyed by tier
+ * id ('focus' | ... | ct_*); 'walnut-todo-' prefix rides ui-prefs-sync.
+ */
+type TierViewMode = 'project' | 'custom';
+const LS_TIER_VIEW_KEY = 'walnut-todo-tier-view-modes';
+
+function readTierViewModes(): Record<string, TierViewMode> {
+  try {
+    const raw = localStorage.getItem(LS_TIER_VIEW_KEY);
+    if (raw) {
+      const obj = JSON.parse(raw) as Record<string, unknown>;
+      const out: Record<string, TierViewMode> = {};
+      for (const [k, v] of Object.entries(obj)) {
+        if (v === 'project' || v === 'custom') out[k] = v;
+      }
+      return out;
+    }
+  } catch { /* ignore */ }
+  return {};
+}
+
+function persistTierViewModes(modes: Record<string, TierViewMode>) {
+  try { localStorage.setItem(LS_TIER_VIEW_KEY, JSON.stringify(modes)); } catch { /* ignore */ }
+}
+
 // Disable layout animation for items that were just dragged to prevent
 // the "flash" where both old and new position are briefly visible.
 const noAnimateAfterDrag: AnimateLayoutChanges = (args) => {
@@ -2129,6 +2161,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // independent — in single-section mode the region renders regardless of its
   // collapse flag (a tab you just picked must never show up already folded).
   const [activeSection, setActiveSection] = useState<TodoSection>(readSection);
+  // Per-tier view mode (project clustering vs raw pin order) — see TierViewMode.
+  const [tierViewModes, setTierViewModes] = useState<Record<string, TierViewMode>>(readTierViewModes);
+  const tierViewMode = useCallback(
+    (tier: string): TierViewMode => tierViewModes[tier] ?? 'project',
+    [tierViewModes],
+  );
+  const setTierViewMode = useCallback((tier: string, mode: TierViewMode) => {
+    setTierViewModes((prev) => {
+      const next = { ...prev, [tier]: mode };
+      persistTierViewModes(next);
+      return next;
+    });
+  }, []);
   // Ephemeral view override while a search query is active. Search defaults to the
   // stacked All view (every region shows its matches at once); picking a tab during
   // a search narrows the view WITHOUT touching the persisted tab, so clearing the
@@ -2968,18 +3013,26 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // it re-applies once the drag lands.
   // Project clustering layers on top of group clustering (folder labels render
   // per project run in renderTierItems). Both skip mid-drag for the same reason.
-  const focusIds_arr = useMemo(() => dragTierIds?.get('focus') ?? clusterTierByProject(clusterTierByGroup(focusTasksLocal), focusTasksLocal, ordering?.projectOrder), [dragTierIds, focusTasksLocal, ordering?.projectOrder]);
-  const satelliteIds_arr = useMemo(() => dragTierIds?.get('satellite') ?? clusterTierByProject(clusterTierByGroup(satelliteTasksLocal), satelliteTasksLocal, ordering?.projectOrder), [dragTierIds, satelliteTasksLocal, ordering?.projectOrder]);
-  const backlogIds_arr = useMemo(() => dragTierIds?.get('backlog') ?? clusterTierByProject(clusterTierByGroup(backlogTasksLocal), backlogTasksLocal, ordering?.projectOrder), [dragTierIds, backlogTasksLocal, ordering?.projectOrder]);
-  const waitIds_arr = useMemo(() => dragTierIds?.get('wait') ?? clusterTierByProject(clusterTierByGroup(waitTasksLocal), waitTasksLocal, ordering?.projectOrder), [dragTierIds, waitTasksLocal, ordering?.projectOrder]);
+  // In 'custom' view mode a tier SKIPS project clustering entirely — the raw pin
+  // order is the render order (group clustering stays: a group must never split).
+  const clusterForTier = useCallback((tier: string, tierTasks: Task[]): string[] => {
+    const grouped = clusterTierByGroup(tierTasks);
+    return tierViewMode(tier) === 'custom'
+      ? grouped
+      : clusterTierByProject(grouped, tierTasks, ordering?.projectOrder);
+  }, [tierViewMode, ordering?.projectOrder]);
+  const focusIds_arr = useMemo(() => dragTierIds?.get('focus') ?? clusterForTier('focus', focusTasksLocal), [dragTierIds, focusTasksLocal, clusterForTier]);
+  const satelliteIds_arr = useMemo(() => dragTierIds?.get('satellite') ?? clusterForTier('satellite', satelliteTasksLocal), [dragTierIds, satelliteTasksLocal, clusterForTier]);
+  const backlogIds_arr = useMemo(() => dragTierIds?.get('backlog') ?? clusterForTier('backlog', backlogTasksLocal), [dragTierIds, backlogTasksLocal, clusterForTier]);
+  const waitIds_arr = useMemo(() => dragTierIds?.get('wait') ?? clusterForTier('wait', waitTasksLocal), [dragTierIds, waitTasksLocal, clusterForTier]);
   const customIds_arr = useMemo(() => {
     const map: Record<string, string[]> = {};
     for (const def of customTiers ?? []) {
       const tierTasks = customTasksLocal[def.id] ?? [];
-      map[def.id] = dragTierIds?.get(def.id) ?? clusterTierByProject(clusterTierByGroup(tierTasks), tierTasks, ordering?.projectOrder);
+      map[def.id] = dragTierIds?.get(def.id) ?? clusterForTier(def.id, tierTasks);
     }
     return map;
-  }, [dragTierIds, customTiers, customTasksLocal, ordering?.projectOrder]);
+  }, [dragTierIds, customTiers, customTasksLocal, clusterForTier]);
 
   const pinnedTaskMap = useMemo(() => new Map(pinnedTasks.map((t) => [t.id, t])), [pinnedTasks]);
 
@@ -3050,13 +3103,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // frozen refs match the rendered list and grouped members sit contiguously (a
     // prerequisite for the collapse below). One entry per tier, render order.
     const tierArrays = new Map<FocusTier, string[]>();
-    tierArrays.set('focus', clusterTierByProject(clusterTierByGroup(focusTasksLocal), focusTasksLocal, ordering?.projectOrder));
-    tierArrays.set('satellite', clusterTierByProject(clusterTierByGroup(satelliteTasksLocal), satelliteTasksLocal, ordering?.projectOrder));
-    tierArrays.set('backlog', clusterTierByProject(clusterTierByGroup(backlogTasksLocal), backlogTasksLocal, ordering?.projectOrder));
-    tierArrays.set('wait', clusterTierByProject(clusterTierByGroup(waitTasksLocal), waitTasksLocal, ordering?.projectOrder));
+    tierArrays.set('focus', clusterForTier('focus', focusTasksLocal));
+    tierArrays.set('satellite', clusterForTier('satellite', satelliteTasksLocal));
+    tierArrays.set('backlog', clusterForTier('backlog', backlogTasksLocal));
+    tierArrays.set('wait', clusterForTier('wait', waitTasksLocal));
     for (const def of customTiers ?? []) {
       const tierTasks = customTasksLocal[def.id] ?? [];
-      tierArrays.set(def.id, clusterTierByProject(clusterTierByGroup(tierTasks), tierTasks, ordering?.projectOrder));
+      tierArrays.set(def.id, clusterForTier(def.id, tierTasks));
     }
     const rArr = recentDraggableIds;
     dragStartSnapshot.current = { tiers: tierArrays, recent: rArr };
@@ -3113,7 +3166,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const pe = event.activatorEvent as PointerEvent | undefined;
       dragBus.begin({ kind: 'task', task: busTask }, pe?.clientX !== undefined ? { x: pe.clientX, y: pe.clientY } : undefined);
     }
-  }, [focusTasksLocal, satelliteTasksLocal, backlogTasksLocal, waitTasksLocal, customTiers, customTasksLocal, recentDraggableIds, pinnedTaskMap]);
+  }, [focusTasksLocal, satelliteTasksLocal, backlogTasksLocal, waitTasksLocal, customTiers, customTasksLocal, recentDraggableIds, pinnedTaskMap, clusterForTier]);
 
   // Shared live-drag tier accessors: dragTierIdsRef is the live state during a
   // drag with the frozen snapshot as fallback. `findTierOf` answers "which tier
@@ -5020,7 +5073,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       const t = pinnedTaskMap.get(id);
       if (t) distinctProjects.add(t.project || '');
     }
-    const showFolders = !isPinnedDragActive && distinctProjects.size >= 2;
+    // 'custom' view mode = raw pin order: no project runs exist, so no labels.
+    const showFolders = !isPinnedDragActive && distinctProjects.size >= 2 && tierViewMode(tier) === 'project';
     let prevProject: string | null = null;
     for (const id of ids) {
       if (id.startsWith('group:')) {
@@ -5091,7 +5145,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       );
     }
     return out;
-  }, [pinnedTaskMap, taskGroups, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, handleExpandDetail, onClearFocus, onOpenSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop]);
+  }, [pinnedTaskMap, taskGroups, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, handleExpandDetail, onClearFocus, onOpenSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode]);
 
   // The regular task list gets its own PINNED/RECENT-style collapsible bar.
   // Outside the stacked view the Tasks tab IS the list — it can't be folded away.
@@ -5228,6 +5282,33 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               </button>
             </>
           )}
+        </div>
+      )}
+
+      {/* Tier view-mode bar — on single-TIER tabs only (not All/Recent/Notes):
+          group by project (clustered + folder labels) vs the raw custom pin
+          order. Persisted per tier; the two underlying orders are separate
+          stores, so flipping the mode never rewrites either. */}
+      {!isSearchMode
+        && (['focus', 'satellite', 'backlog', 'wait'].includes(effectiveSection) || effectiveSection.startsWith('ct_'))
+        && (
+        <div className="todo-minibar" data-testid="tier-view-bar">
+          <button
+            type="button"
+            className={`todo-minibar-btn${tierViewMode(effectiveSection) === 'project' ? ' on' : ''}`}
+            title="Cluster this tier by project, with folder labels"
+            onClick={() => setTierViewMode(effectiveSection, 'project')}
+          >
+            {ICONS.ICON_FOLDER} By project
+          </button>
+          <button
+            type="button"
+            className={`todo-minibar-btn${tierViewMode(effectiveSection) === 'custom' ? ' on' : ''}`}
+            title="Show your custom pin order (drag to arrange, order is kept)"
+            onClick={() => setTierViewMode(effectiveSection, 'custom')}
+          >
+            ↕ Custom order
+          </button>
         </div>
       )}
 
