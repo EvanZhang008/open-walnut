@@ -1,0 +1,5 @@
+# Build artifacts produced by build.sh / build-release.sh
+Walnut.app/
+Walnut.dmg
+AppIcon.iconset/
+dmg_staging/
