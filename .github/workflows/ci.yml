@@ -18,6 +18,9 @@ env:
   # worker cap (2 → 4). A runner is an isolated single-purpose box, so the
   # machine-safety reasoning behind the low local budget doesn't apply here.
   CI: 'true'
+  # Headless runners have no usable Vulkan device. QMD's auto mode otherwise
+  # launches repeated doomed native builds across the parallel test workers.
+  QMD_LLAMA_GPU: 'off'
 
 jobs:
   # ── Gate 1: type-check + build. Everything else is moot if this fails. ───────
@@ -123,9 +126,6 @@ jobs:
         env:
           # Never let a test process resolve the production daemon default.
           WALNUT_DAEMON_DIR: ${{ runner.temp }}/open-walnut-${{ matrix.tier }}
-          # Headless runners have no usable Vulkan device. QMD's auto mode
-          # otherwise launches multiple doomed native builds before CPU fallback.
-          QMD_LLAMA_GPU: 'off'
           # Tests create temporary repositories and commits. GitHub runners do
           # not provide an author identity by default.
           GIT_AUTHOR_NAME: Open Walnut CI
