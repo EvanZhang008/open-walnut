@@ -159,6 +159,12 @@ export function ContextInspectorPanel({ data, loading, error, onRefresh }: Conte
           <ContextMarkdown content={sections.taskProjects.content} fallback="(No active tasks)" />
         </ContextSection>
 
+        {sections.recentTasks && (
+          <ContextSection title="Recent Tasks" tokens={sections.recentTasks.tokens}>
+            <ContextMarkdown content={sections.recentTasks.content} fallback="(No recent tasks)" />
+          </ContextSection>
+        )}
+
         {/* Non-General agents: show split memory sections */}
         {sections.agentMemory && (
           <ContextSection title="Agent Memory" tokens={sections.agentMemory.tokens}>

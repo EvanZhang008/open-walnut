@@ -30,6 +30,8 @@ export interface ContextInspectorResponse {
     skills: ContextSection;
     compactionSummary: ContextSection;
     taskProjects: ContextSection;
+    /** Recent-task ledger (General agent only). */
+    recentTasks?: ContextSection;
     userProfile: ContextSection;
     globalMemory: ContextSection;
     notesContext: ContextSection;

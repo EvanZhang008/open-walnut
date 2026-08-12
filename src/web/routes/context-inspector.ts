@@ -120,6 +120,10 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
     // Projects overview (single grouping layer)
     const taskProjectsText = await buildTaskProjectsSection()
 
+    // Recent-task ledger (same render the prompt injects — task-ledger.ts)
+    const { buildTaskLedger } = await import('../../core/task-ledger.js')
+    const recentTasksText = await buildTaskLedger()
+
     // Token estimates per section
     const roleTokens = estimateTokens(roleContent)
     const skillsTokens = estimateTokens(skillsContent)
@@ -171,6 +175,10 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
         taskProjects: {
           content: taskProjectsText,
           tokens: taskProjectsTokens,
+        },
+        recentTasks: {
+          content: recentTasksText,
+          tokens: estimateTokens(recentTasksText),
         },
         userProfile: {
           content: userProfile,
