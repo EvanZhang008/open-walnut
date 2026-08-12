@@ -60,8 +60,14 @@ describe('runCli', () => {
   it('does not truncate a large stdout that arrives in several chunks', async () => {
     // The failure this guards: resolving on 'close' alone can settle before the
     // pipes have drained, handing back a short read that then fails to parse.
+    // Generate the payload inside the child: Linux limits one argv entry to
+    // 128 KiB, which is unrelated to the stdout-draining behavior under test.
     const payload = JSON.stringify({ blob: 'x'.repeat(300_000) })
-    const res = await runCli('node', ['-e', `process.stdout.write(${JSON.stringify(payload)})`], { timeoutMs: TIMEOUT })
+    const res = await runCli(
+      'node',
+      ['-e', 'process.stdout.write(JSON.stringify({ blob: "x".repeat(300000) }))'],
+      { timeoutMs: TIMEOUT },
+    )
     expect(res.code).toBe(0)
     expect(res.stdout.length).toBe(payload.length)
     expect(JSON.parse(res.stdout)).toEqual({ blob: 'x'.repeat(300_000) })

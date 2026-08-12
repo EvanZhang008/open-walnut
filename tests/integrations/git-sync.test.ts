@@ -27,6 +27,24 @@ import { bus } from '../../src/core/event-bus.js';
 
 let tmpDir: string;
 
+async function withNoConfiguredGitIdentity(run: () => void | Promise<void>): Promise<void> {
+  const globalConfig = path.join(tmpDir, 'empty-global-gitconfig');
+  await fsp.writeFile(globalConfig, '', 'utf-8');
+  const previousGlobal = process.env.GIT_CONFIG_GLOBAL;
+  const previousNoSystem = process.env.GIT_CONFIG_NOSYSTEM;
+  process.env.GIT_CONFIG_GLOBAL = globalConfig;
+  process.env.GIT_CONFIG_NOSYSTEM = '1';
+
+  try {
+    await run();
+  } finally {
+    if (previousGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = previousGlobal;
+    if (previousNoSystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
+    else process.env.GIT_CONFIG_NOSYSTEM = previousNoSystem;
+  }
+}
+
 beforeEach(async () => {
   tmpDir = WALNUT_HOME;
   await fsp.rm(tmpDir, { recursive: true, force: true });
@@ -89,6 +107,20 @@ describe('initSync', () => {
       timeout: 30_000,
     }).trim();
     expect(log).toContain('walnut init');
+  });
+
+  it('sets a repo-local fallback identity when no global identity exists', async () => {
+    await withNoConfiguredGitIdentity(() => {
+      initSync();
+      expect(execSync('git config --local user.name', {
+        cwd: tmpDir,
+        encoding: 'utf-8',
+      }).trim()).toBe('Open Walnut');
+      expect(execSync('git config --local user.email', {
+        cwd: tmpDir,
+        encoding: 'utf-8',
+      }).trim()).toBe('open-walnut@localhost');
+    });
   });
 
   it('is idempotent - can be called twice', () => {
@@ -162,6 +194,23 @@ describe('auth.json is never synced (data-repo gitignore)', () => {
     expect(result.available).toBe(true);
     const gitignore = await fsp.readFile(path.join(tmpDir, '.gitignore'), 'utf-8');
     expect(gitignore.split('\n')).toContain('auth.json');
+  });
+
+  it('ensureRepo repairs a missing Git identity in an existing repo', async () => {
+    await withNoConfiguredGitIdentity(() => {
+      execSync('git init -q', { cwd: tmpDir });
+      execSync('git checkout -q -B main', { cwd: tmpDir });
+
+      expect(ensureRepo()).toEqual({ available: true });
+      expect(execSync('git config --local user.name', {
+        cwd: tmpDir,
+        encoding: 'utf-8',
+      }).trim()).toBe('Open Walnut');
+      expect(execSync('git config --local user.email', {
+        cwd: tmpDir,
+        encoding: 'utf-8',
+      }).trim()).toBe('open-walnut@localhost');
+    });
   });
 
   it('ensureCriticalIgnores also protects config.yaml (machine-local settings)', async () => {

@@ -56,6 +56,8 @@ npm run test:focus -- -t 'reorder'                   # one test by name
 
 Blocking tiers (`quick`, `frontend`) and report-only ones (`slow`, `e2e`) are **separate jobs**, not one matrix with `continue-on-error: ${{ matrix.blocking == false }}`. Job-level `continue-on-error` has murky interaction with `needs.<job>.result` — a tolerated failure can still surface as `success` downstream — and the single check branch protection depends on must not rest on ambiguous semantics.
 
+Report-only jobs tolerate failure on the test step itself, so known failures appear as warnings while checkout, dependency, and build failures still turn the job red. They run with one worker, an isolated daemon directory, and CPU-only QMD on Linux to avoid environment-driven noise.
+
 Branch protection should require the **`CI OK`** job, not individual matrix legs — leg names change whenever the matrix does, which silently orphans a required-check rule.
 
 ### Why some tiers are report-only

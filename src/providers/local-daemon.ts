@@ -1,9 +1,10 @@
 /**
- * Local Daemon — manages a daemon process on the local macOS machine.
+ * Local Daemon — manages a daemon process on the local machine.
  *
  * The local daemon is the same binary (walnut-daemon) that runs on remote
- * Linux hosts, but compiled for darwin-arm64. It provides unified session
- * management: spawn, FIFO, JSONL tailing, permission policy — same as remote.
+ * Linux hosts, compiled for the current platform and architecture. It provides
+ * unified session management: spawn, FIFO, JSONL tailing, permission policy —
+ * same as remote.
  *
  * Lifecycle:
  *   1. Walnut startup: ensureRunning() checks /tmp/open-walnut/daemon.port
@@ -35,6 +36,13 @@ import { getDaemonSource, resolveDaemonSourceVersion } from './daemon-source.js'
 // unaffected. Production sets nothing → /tmp/open-walnut.
 const PROD_DAEMON_DIR = '/tmp/open-walnut'
 const DEFAULT_DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR
+
+export function getLocalDaemonBinaryName(
+  platform: string = process.platform,
+  arch: string = process.arch,
+): string {
+  return `daemon-${platform}-${arch}`
+}
 
 /**
  * Parent-liveness contract for spawned daemons.
@@ -370,7 +378,7 @@ export class LocalDaemon {
   private findDaemonBinary(): string {
     if (this.overrideBinaryPath) return this.overrideBinaryPath
     // DAEMON_BINARIES_DIR is the canonical build output location
-    const binaryName = `daemon-darwin-arm64`
+    const binaryName = getLocalDaemonBinaryName()
     const candidates = [
       path.join(DAEMON_BINARIES_DIR, binaryName),
       path.join(__dirname, '..', '..', 'dist', 'daemon-binaries', binaryName),

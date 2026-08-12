@@ -83,7 +83,8 @@ jobs:
   #
   # These spawn real daemons, `claude` CLIs and HTTP servers and still carry an
   # unmeasured pre-existing baseline, so they report rather than gate. They are
-  # NOT in `ci-ok`'s needs list — a red leg here does not block a merge.
+  # NOT in `ci-ok`'s needs list. Test failures become warnings; setup and build
+  # failures still fail the job.
   #
   # Promote a tier into the `test` job above once its baseline reaches zero (or
   # give it a known-failures file of its own, like the quick tier has).
@@ -91,11 +92,17 @@ jobs:
     name: Report (${{ matrix.tier }})
     runs-on: ubuntu-latest
     needs: build
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
-        tier: [slow, e2e]
+        include:
+          # These tiers start real daemons, servers, git processes and local
+          # embedding runtimes. Serial execution prevents shared-runtime races
+          # and resource-contention timeouts on the runner.
+          - tier: slow
+            cmd: npm run test:slow -- --maxWorkers=1
+          - tier: e2e
+            cmd: npm run test:e2e -- --maxWorkers=1
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -109,7 +116,29 @@ jobs:
       # Both tiers spawn the session daemon, which the build produces.
       - run: npm run build
       - name: ${{ matrix.tier }} tests
-        run: npm run test:${{ matrix.tier }}
+        id: report
+        # Only the unbaselined test command is informational. Checkout,
+        # dependency, and build failures must still fail the report job.
+        continue-on-error: true
+        env:
+          # Never let a test process resolve the production daemon default.
+          WALNUT_DAEMON_DIR: ${{ runner.temp }}/open-walnut-${{ matrix.tier }}
+          # Headless runners have no usable Vulkan device. QMD's auto mode
+          # otherwise launches multiple doomed native builds before CPU fallback.
+          QMD_LLAMA_GPU: 'off'
+          # Tests create temporary repositories and commits. GitHub runners do
+          # not provide an author identity by default.
+          GIT_AUTHOR_NAME: Open Walnut CI
+          GIT_AUTHOR_EMAIL: open-walnut@localhost
+          GIT_COMMITTER_NAME: Open Walnut CI
+          GIT_COMMITTER_EMAIL: open-walnut@localhost
+        run: ${{ matrix.cmd }}
+      - name: Summarize informational failures
+        if: steps.report.outcome == 'failure'
+        run: |
+          echo "::warning title=${{ matrix.tier }} test report::Known failures remain; inspect the test log."
+          echo "### ${{ matrix.tier }} report contains known failures" >> "$GITHUB_STEP_SUMMARY"
+          echo "This tier is informational until it has a stable baseline." >> "$GITHUB_STEP_SUMMARY"
 
   # ── The single required check ───────────────────────────────────────────────
   #

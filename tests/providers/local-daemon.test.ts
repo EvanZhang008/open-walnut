@@ -7,8 +7,8 @@
  *      files, version-mismatch restart, version-match reuse, binary-missing
  *      throw, ping timeout, port file timeout, pid dead detection, concurrent
  *      ensureRunning, and multi-dir isolation.
- *   B. Real darwin-arm64 binary — integration sanity check (only runs if the
- *      binary has been built via `bash scripts/build-daemon.sh`).
+ *   B. Real native binary — integration sanity check (only runs if the current
+ *      platform binary has been built via `bash scripts/build-daemon.sh`).
  *
  * Why mock: the real binary is 60MB and slow to spawn (~500ms each). Mock
  * script spawns in <50ms so we can run 20+ scenarios without it taking 2min.
@@ -362,11 +362,13 @@ describe('LocalDaemon — mock daemon coverage', () => {
   }, 15000)
 })
 
-// ── Test Ring B: Real darwin-arm64 binary integration ───────────────────
+// ── Test Ring B: Real native binary integration ──────────────────────────
+
+const CURRENT_DAEMON_BINARY = `daemon-${process.platform}-${process.arch}`
 
 function realBinaryExists(): boolean {
   const projectRoot = path.resolve(__dirname, '../..')
-  const binaryPath = path.join(projectRoot, 'dist', 'daemon-binaries', 'daemon-darwin-arm64')
+  const binaryPath = path.join(projectRoot, 'dist', 'daemon-binaries', CURRENT_DAEMON_BINARY)
   return fs.existsSync(binaryPath)
 }
 
@@ -420,7 +422,7 @@ describe.skipIf(!realBinaryExists())('LocalDaemon — real binary integration', 
     try { fs.rmSync(REAL_DAEMON_DIR, { recursive: true, force: true }) } catch {}
   })
 
-  it('spawns the real darwin-arm64 binary and gets hello capabilities', async () => {
+  it('spawns the real native binary and gets hello capabilities', async () => {
     const daemon = new LocalDaemon({ daemonDir: REAL_DAEMON_DIR })
     const port = await daemon.ensureRunning()
     expect(port).toBeGreaterThan(0)
@@ -444,7 +446,12 @@ describe.skipIf(!realBinaryExists())('LocalDaemon — real binary integration', 
 
   it('real binary reports version matching the .version sidecar', async () => {
     const projectRoot = path.resolve(__dirname, '../..')
-    const versionFile = path.join(projectRoot, 'dist', 'daemon-binaries', 'daemon-darwin-arm64.version')
+    const versionFile = path.join(
+      projectRoot,
+      'dist',
+      'daemon-binaries',
+      `${CURRENT_DAEMON_BINARY}.version`,
+    )
     const expectedVersion = fs.readFileSync(versionFile, 'utf-8').trim()
 
     const daemon = new LocalDaemon({ daemonDir: REAL_DAEMON_DIR })

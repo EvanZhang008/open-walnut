@@ -570,11 +570,23 @@ async function ensureMachineLocalUntrackedAsync(): Promise<string[]> {
   return untracked;
 }
 
+function ensureGitIdentity(): void {
+  // The data repo auto-commits without user interaction. Fresh CI runners and
+  // minimal self-hosted installs often have no global Git identity, which used
+  // to make initial commits and later auto-saves silently fail.
+  // Preserve an existing user identity; provide a repo-local fallback only
+  // when Git cannot resolve one.
+  if (!gitSafe('config user.name')) git('config user.name "Open Walnut"');
+  if (!gitSafe('config user.email')) git('config user.email "open-walnut@localhost"');
+}
+
 export function initSync(remoteUrl?: string): void {
   if (!isRepo()) {
     git('init');
     git('checkout -b main');
   }
+
+  ensureGitIdentity();
 
   // Create .gitignore if it doesn't exist
   const gitignorePath = path.join(WALNUT_HOME, '.gitignore');
@@ -1615,6 +1627,14 @@ export function ensureRepo(): { available: boolean; error?: string } {
       return { available: false, error: `git init failed: ${err instanceof Error ? err.message : String(err)}` };
     }
   } else {
+    try {
+      ensureGitIdentity();
+    } catch (err) {
+      return {
+        available: false,
+        error: `git identity setup failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
     // Pre-existing repo: self-heal the .gitignore so sensitive/machine-local
     // files added after the repo was initialized never enter the sync history…
     try { ensureCriticalIgnores(); } catch { /* best-effort */ }

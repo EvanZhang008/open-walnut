@@ -39,7 +39,8 @@ if (path.resolve(DAEMON_DIR) === path.resolve(PROD_DAEMON_DIR)) {
 
 function binaryExists(): boolean {
   const projectRoot = path.resolve(__dirname, '../..')
-  const binaryPath = path.join(projectRoot, 'dist', 'daemon-binaries', 'daemon-darwin-arm64')
+  const binaryName = `daemon-${process.platform}-${process.arch}`
+  const binaryPath = path.join(projectRoot, 'dist', 'daemon-binaries', binaryName)
   return fs.existsSync(binaryPath)
 }
 
