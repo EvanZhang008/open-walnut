@@ -276,8 +276,7 @@ describe('maintainer tool set', () => {
         content: '# Release checklist\n\n1. Build. 2. Test. 3. Tag.',
       });
       expect(String(result)).toContain("Skill 'release-checklist' created");
-      await new Promise((r) => setTimeout(r, 20));
-      expect(events).toHaveLength(1);
+      await vi.waitFor(() => expect(events).toHaveLength(1));
       expect((events[0].data as { name: string }).name).toBe('release-checklist');
       // Persisted to the durable notification feed as kind 'skill'.
       const feedRaw = fs.readFileSync(path.join(WALNUT_HOME, 'notifications.json'), 'utf-8');

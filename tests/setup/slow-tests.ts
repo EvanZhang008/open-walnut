@@ -48,10 +48,14 @@ export const SLOW_TEST_FILES = [
   'tests/providers/daemon-transport-unit.test.ts', // 3s
   'tests/providers/remote-session-manager-session-state.test.ts', // 2s
   'tests/integration/agent-gateway.test.ts', // ~10s — real daemon per test + a 2s hub timeout
+  'tests/agent/tools/exec-tool.test.ts', // real shell subprocesses + a 1s timeout case
+  'tests/core/cloud-setup/cli-exec.test.ts', // real shell/node subprocesses
+  'tests/integration/cloud-setup-e2e.test.ts', // real cloud-mode HTTP server + git sync
 
   // ── Real git subprocesses (repo creation, history rewrite, packing) ─────────
   'tests/integrations/git-compaction.test.ts', // 67s
   'tests/integrations/git-sync.test.ts', // 11s
+  'tests/integrations/git-sync-mass-revert-guard.test.ts', // many real repos and commits
   'tests/core/git-versioning.test.ts', // 5s
 
   // ── Real HTTP server + session plumbing ────────────────────────────────────
@@ -61,6 +65,7 @@ export const SLOW_TEST_FILES = [
   'tests/web/routes/chat-background-review.test.ts', // 3s
   'tests/web/routes/chat-task-context.test.ts', // 3.3s
   'tests/web/routes/notes-v2.test.ts', // 2s
+  'tests/web/routes/api-v1-notes-extras.test.ts', // real QMD note indexing
   'tests/web/routes/sessions-compare-modes-diverge.test.ts', // 2s
   'tests/web/routes/sessions-git-diff.test.ts', // 2s
 
