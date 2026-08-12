@@ -29,6 +29,7 @@ import fsp from 'node:fs/promises'
 import { vi } from 'vitest'
 import { createMockConstants } from '../helpers/mock-constants.js'
 import { mockLocalDaemonReader } from '../helpers/mock-local-daemon-reader.js'
+import { removeTempTree } from '../helpers/temp-home.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants())
 vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader())
@@ -153,7 +154,7 @@ function collectResults(): Array<Record<string, unknown>> {
 
 beforeEach(async () => {
   bus.clear()
-  await fsp.rm(tmpBase, { recursive: true, force: true })
+  await removeTempTree(tmpBase)
   await fsp.mkdir(tmpBase, { recursive: true })
   await fsp.mkdir(SESSION_STREAMS_DIR, { recursive: true })
 })
@@ -161,7 +162,7 @@ beforeEach(async () => {
 afterEach(async () => {
   bus.clear()
   await new Promise((r) => setImmediate(r))
-  await fsp.rm(tmpBase, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {})
+  await removeTempTree(tmpBase).catch(() => {})
 })
 
 // ═══════════════════════════════════════════════════════════════════
