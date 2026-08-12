@@ -278,10 +278,13 @@ describe('maintainer tool set', () => {
       expect(String(result)).toContain("Skill 'release-checklist' created");
       await vi.waitFor(() => expect(events).toHaveLength(1));
       expect((events[0].data as { name: string }).name).toBe('release-checklist');
-      // Persisted to the durable notification feed as kind 'skill'.
-      const feedRaw = fs.readFileSync(path.join(WALNUT_HOME, 'notifications.json'), 'utf-8');
-      expect(feedRaw).toContain('"kind": "skill"');
-      expect(feedRaw).toContain('release-checklist');
+      // Feed persistence is intentionally fire-and-forget, so wait for the
+      // atomic write instead of assuming the synchronous bus event implies it.
+      await vi.waitFor(() => {
+        const feedRaw = fs.readFileSync(path.join(WALNUT_HOME, 'notifications.json'), 'utf-8');
+        expect(feedRaw).toContain('"kind": "skill"');
+        expect(feedRaw).toContain('release-checklist');
+      });
     } finally {
       bus.unsubscribe('test-skill-notify');
     }

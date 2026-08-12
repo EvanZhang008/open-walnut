@@ -199,6 +199,9 @@ describe('runtime tool whitelist in the agent loop', () => {
     });
 
     const result = await runAgentLoop('review', [], undefined, {
+      // Keep this test on the runtime-whitelist path without also starting the
+      // unrelated default prompt/skill-prefetch pipeline.
+      system: 'Review the conversation.',
       source: 'background-review',
       toolWhitelist: ['skill_manage', 'skill_view'],
     });
@@ -232,6 +235,7 @@ describe('runtime tool whitelist in the agent loop', () => {
     });
 
     const result = await runAgentLoop('review', [], undefined, {
+      system: 'Review the conversation.',
       source: 'background-review',
       toolWhitelist: ['skill_manage', 'skill_view'],
     });
