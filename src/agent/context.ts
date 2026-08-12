@@ -13,6 +13,7 @@ import { buildAgentsSection } from './subagent-context.js';
 import { listRepoSummaries } from './tools/files/repos-handler.js';
 import { getAllRepoMemorySummaries } from '../core/repo-memory.js';
 import { listTasks, getStoreProjects } from '../core/task-manager.js';
+import { buildTaskLedger } from '../core/task-ledger.js';
 import { NOTES_DIR } from '../constants.js';
 
 /**
@@ -93,8 +94,9 @@ export function getNotesContext(): string {
  * (unchanged pre-freeze behavior; see memory-prompt-snapshot.ts).
  */
 export async function buildMemoryContext(budget: number = 8000, scope?: string): Promise<string> {
-  // Phase 0: task inventory
+  // Phase 0: task inventory + recent-task ledger
   const taskProjects = await buildTaskProjectsSection();
+  const taskLedger = await buildTaskLedger();
 
   // Phase 1: high-fidelity daily logs (~half budget)
   const dailyLogs = getDailyLogsWithinBudget(Math.floor(budget / 2));
@@ -131,8 +133,14 @@ export async function buildMemoryContext(budget: number = 8000, scope?: string):
   // memory/index.md retired (2026-07 unification): directory awareness now
   // comes from the skills index (buildSkillsPrompt) — no separate wiki index.
 
+  // Ledger: scan-first answer surface for "which task did X?" — check it BEFORE
+  // reaching for task_search. Sits in the dynamic segment (changes per turn).
+  const ledgerSection = taskLedger
+    ? `\n\n## Recent tasks (newest first — scan this before task_search when asked "which task did/does X")\n${taskLedger}`
+    : '';
+
   return `## Projects
-${taskProjects}
+${taskProjects}${ledgerSection}
 
 ## User profile (who the user is — bounded, update via memory_manage target:user)
 ${userProfileBlock ?? '(No user profile yet. Save who the user is — identity, work, durable preferences — with memory_manage target:user.)'}

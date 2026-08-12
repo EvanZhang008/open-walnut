@@ -610,6 +610,12 @@ export interface Task {
   sync_error?: string;
   /** ISO timestamp — last session interaction (start/resume). Drives "Recent" sort in sidebar. */
   last_session_update?: string;
+  /** One-line "what this task is about" label for the recent-task ledger
+   *  (task-ledger.ts). Generated once at creation by a cheap Haiku-tier call
+   *  (task-ledger-desc.ts); distinct from `summary`, which triage overwrites
+   *  with "what the session did". Local-only, never pushed to sync backends;
+   *  rides the SQLite `payload` blob (no dedicated column). */
+  ledger_desc?: string;
   /** Task-level working directory override. Takes precedence over project default_cwd in session resolution. */
   cwd?: string;
   /** Set by the cwd rename detector / turn-end check when task.cwd no longer exists on disk.

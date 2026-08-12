@@ -23,6 +23,7 @@ import {
 import { listTasks } from './task-manager.js';
 import { log } from '../logging/index.js';
 import { pruneStaleQmdDocuments } from './qmd-sync-utils.js';
+import { isJunkTask } from './task-junk.js';
 import type { Task } from './types.js';
 
 const COLLECTION = 'tasks';
@@ -34,6 +35,18 @@ const COLLECTION = 'tasks';
  * serializeTaskForSearch changes shape (v2 = category removed, project-only).
  */
 const TASK_DOC_FORMAT_VERSION = 'v2';
+
+/**
+ * Junk/test tasks stay OUT of the semantic index — pure-title test debris
+ * ("Burst message echo test", __TestCat fixtures) produces short embeddings
+ * that score inflated cosine against short queries and outranks real work
+ * (0.875 vs 0.4, 2026-08-12). Filtering at sync time also lets the prune pass
+ * clean up junk that older syncs already indexed: junk paths are excluded
+ * from expectedPaths, so pruneStaleQmdDocuments deactivates them.
+ */
+function isIndexableTask(task: Task): boolean {
+  return !isJunkTask(task);
+}
 
 /**
  * Serialize human-language task content for QMD.
@@ -89,6 +102,7 @@ export async function syncAllTasks(opts?: SyncAllTaskOptions): Promise<void> {
   let skipped = 0;
 
   for (const task of tasks) {
+    if (!isIndexableTask(task)) continue; // junk never enters; prune removes existing docs
     const text = serializeTaskForSearch(task);
     const hash = contentHash(text);
     const docPath = taskDocPath(task.id);
@@ -115,9 +129,12 @@ export async function syncAllTasks(opts?: SyncAllTaskOptions): Promise<void> {
   }
 
   // Re-read the source of truth at prune time so a task created during the
-  // initial loop is not mistaken for a stale QMD document.
+  // initial loop is not mistaken for a stale QMD document. Junk tasks are
+  // deliberately absent from expectedPaths so prune deactivates their docs.
   const currentTasks = await listTasks();
-  const expectedPaths = new Set(currentTasks.map((task) => taskDocPath(task.id)));
+  const expectedPaths = new Set(
+    currentTasks.filter(isIndexableTask).map((task) => taskDocPath(task.id)),
+  );
   const pruned = pruneStaleQmdDocuments(store, COLLECTION, expectedPaths);
 
   // Embed any new/updated content
@@ -139,6 +156,12 @@ export async function syncAllTasks(opts?: SyncAllTaskOptions): Promise<void> {
  */
 export async function syncTask(task: Task): Promise<boolean> {
   const store = await getTaskStore();
+  if (isJunkTask(task)) {
+    // Junk task created/updated (e.g. an E2E fixture): keep it out of the
+    // index — deactivate any doc an older sync may have inserted.
+    store.internal.deactivateDocument(COLLECTION, taskDocPath(task.id));
+    return store.internal.getHashesNeedingEmbedding() > 0;
+  }
   const text = serializeTaskForSearch(task);
   const hash = contentHash(text);
   const docPath = taskDocPath(task.id);

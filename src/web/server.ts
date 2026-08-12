@@ -1912,6 +1912,24 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
   }, { global: true, interest: ['task:completed'] })
 
+  // -- Recent-task ledger (butler context) --
+  // Any task mutation invalidates the cached render; a fresh task gets its
+  // one-liner generated in the background (cheap Haiku-tier call, fire-and-
+  // forget — see task-ledger-desc.ts). Deliberately OUTSIDE the QMD block:
+  // the ledger derives from the task store alone and must work with semantic
+  // search disabled.
+  bus.subscribe('task-ledger', (event) => {
+    void import('../core/task-ledger.js').then(m => m.invalidateTaskLedger()).catch(() => {})
+    if (event.name === EventNames.TASK_CREATED) {
+      const taskId = (event.data as { task?: { id?: string } })?.task?.id;
+      if (taskId) {
+        void import('../core/task-ledger-desc.js')
+          .then(m => m.scheduleLedgerDesc(taskId))
+          .catch(() => { /* best-effort */ })
+      }
+    }
+  }, { global: true, interest: ['task:created', 'task:updated', 'task:completed', 'task:deleted'] })
+
   // -- Heartbeat config reload: restart runner when heartbeat config changes --
   bus.subscribe('heartbeat-config', async (event) => {
     if (event.name !== EventNames.CONFIG_CHANGED) return
@@ -3752,6 +3770,7 @@ export async function stopServer(): Promise<void> {
   await stopQmdBackgroundIndex()
   bus.unsubscribe('qmd-task-sync')
   bus.unsubscribe('qmd-session-sync')
+  bus.unsubscribe('task-ledger')
   if (qmdWatcherHandle) {
     qmdWatcherHandle.stop()
     qmdWatcherHandle = null
