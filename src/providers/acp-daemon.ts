@@ -28,6 +28,12 @@ import { StringDecoder } from 'node:string_decoder'
 import type { AcpMcpServer } from './acp-worker/protocol.js'
 
 const ACP_IDLE_KILL_MS = 2 * 60 * 60 * 1000   // mirror native SESSION_IDLE_KILL_MS
+// A turn parked on a permission request produces ZERO journal/RPC traffic, so
+// lastActivity goes stale while the user simply hasn't answered yet. Killing
+// at 2h writes turn-interrupted:shutdown + auto-cancels the permission — the
+// 4th "idle reaper kills live work" blind spot (cron, bg task, …). While a
+// turn or control prompt is open, only a much larger safety ceiling applies.
+const ACP_TURN_OPEN_KILL_MS = 24 * 60 * 60 * 1000
 const ACP_SWEEP_INTERVAL_MS = 60 * 1000
 const OP_TIMEOUT_MS = 120_000                  // session/load against a real provider can be slow
 const CANCEL_RPC_TIMEOUT_MS = 1_000
@@ -194,15 +200,40 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     if (record.kind !== 'meta' || !record.event) return
     if (record.event.type === 'prompt-dispatched' || record.event.type === 'turn-started') {
       entry.activeCommandId = record.event.commandId ?? null
+      writeBusyFile()
     } else if (record.event.type === 'turn-ended' || record.event.type === 'turn-interrupted') {
       entry.terminalVersion++
       entry.activeCommandId = null
+      writeBusyFile()
     } else if (record.event.type === 'control-prompt-accepted') {
       entry.activeControlCommandId = record.event.commandId ?? null
+      writeBusyFile()
     } else if (record.event.type === 'control-ended') {
       entry.terminalVersion++
       entry.activeControlCommandId = null
+      writeBusyFile()
     }
+  }
+
+  /**
+   * Advertise which ACP workers currently hold an OPEN turn so the walnut
+   * server can defer a version-upgrade daemon restart instead of killing live
+   * work (every dev:prod deploy used to write turn-interrupted:shutdown into
+   * whatever the user was running). Refreshed on every lifecycle change and
+   * every sweep tick; readers treat a stale updatedAt (daemon died) as not
+   * busy, so this can never wedge upgrades.
+   */
+  function writeBusyFile(): void {
+    const busySids = [...workers.values()]
+      .filter((e) => e.state === 'running' && (e.activeCommandId !== null || e.activeControlCommandId !== null))
+      .map((e) => e.sid)
+    try {
+      fs.writeFileSync(
+        path.join(daemonDir, 'acp-busy.json'),
+        JSON.stringify({ busySids, updatedAt: Date.now() }),
+        { mode: 0o600 },
+      )
+    } catch {}
   }
 
   function replayTo(ws: W, entry: AcpWorkerEntry<W>, fromOffset: number): void {
@@ -250,6 +281,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     }
     workers.delete(sid)
     persistPids()
+    writeBusyFile()
     log('info', 'acp: worker reaped', { sid, reason })
   }
 
@@ -501,11 +533,18 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     const now = Date.now()
     for (const [sid, entry] of workers) {
       if (entry.state !== 'running') continue
-      if (now - entry.lastActivity > idleKillMs) {
-        log('info', 'acp: idle kill', { sid, idleMs: now - entry.lastActivity })
+      // An open turn/control prompt (e.g. waiting on a permission answer) is
+      // NOT idle even with zero traffic — hold it to the 24h ceiling instead.
+      const turnOpen = entry.activeCommandId !== null || entry.activeControlCommandId !== null
+      const limit = turnOpen ? Math.max(idleKillMs, ACP_TURN_OPEN_KILL_MS) : idleKillMs
+      if (now - entry.lastActivity > limit) {
+        log('info', 'acp: idle kill', { sid, idleMs: now - entry.lastActivity, turnOpen })
         void acpStop(sid)
       }
     }
+    // Keep the busy advertisement fresh: a turn parked on a permission emits
+    // ZERO journal traffic, and readers treat updatedAt >2min as stale.
+    writeBusyFile()
   }, ACP_SWEEP_INTERVAL_MS)
 
   // ── startup repair ──
@@ -639,6 +678,9 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
   }
 
   function signalProcessGroup(pid: number, signal: NodeJS.Signals): boolean {
+    // pid ≤ 1 = corrupted pid file. kill(-1, sig) does NOT throw — POSIX
+    // broadcasts to every process the user can signal (2026-08-09 incident).
+    if (!Number.isInteger(pid) || pid <= 1) return false
     try {
       process.kill(-pid, signal)
       return true

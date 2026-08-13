@@ -81,6 +81,9 @@ export interface StreamingPermissionBlock {
   reason?: string;
   /** Set when resolved (from snapshot or permission-resolved event). Absent = pending. */
   status?: 'pending' | 'allowed' | 'denied';
+  /** ACP (codex) provider options — rendered as the real buttons
+   * (Allow Once / Allow for Session / prefix amendment / Reject). */
+  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
 }
 
 /** Model reasoning ("thinking" mode). Rendered gray/italic, collapsible. */

@@ -295,6 +295,11 @@ export interface AcpSessionConfig {
   directWsUrl?: string
   /** Test override: worker/adapter command vectors. */
   artifacts?: { workerCmd: string[]; adapterCmd: string[] }
+  /** Called when the daemon reports the worker dead. The worker does NOT write
+   * a terminal journal fact at death (tail repair happens on the NEXT acpStart),
+   * so no session:result fires and queued messages would wait for an unrelated
+   * poke — the runner uses this to schedule a queue drain (lazy resume). */
+  onWorkerDead?: (session: AcpSession) => void
 }
 
 /**
@@ -356,7 +361,11 @@ export class AcpSession {
   private _capabilities: AcpCapabilitySnapshot | undefined
   private _models: AcpModelCatalog = { availableModels: [] }
   private _configOptions: AcpConfigOption[] = []
-  private _pendingPermission: PendingPermission | null = null
+  /** requestId → pending permission. A Map, not a single slot: codex can hold
+   * several outstanding requests at once (observed perm-2 + perm-3 in the
+   * 2026-08-10 incident; the single slot could only track one and the other
+   * died unanswerable). */
+  private readonly _pendingPermissions = new Map<string, PendingPermission>()
   private readonly _emittedPermissionRequestIds = new Set<string>()
   private _selfReport: PendingSelfReport | null = null
   private readonly normalizer: AcpStreamNormalizer
@@ -383,7 +392,10 @@ export class AcpSession {
   get cwd(): string { return this.cfg.cwd }
   get host(): string { return '__local__' }
   get activity(): 'processing' | 'idle' { return this._turnActive ? 'processing' : 'idle' }
-  get hasPendingPermission(): boolean { return this._pendingPermission !== null }
+  get hasPendingPermission(): boolean { return this._pendingPermissions.size > 0 }
+  /** True while we hold a live daemon connection and an established worker —
+   * i.e. `activity === 'processing'` is trustworthy, not a stale flag. */
+  get workerLive(): boolean { return this._active && (this.conn?.connected ?? false) }
   get modelCatalog(): AcpModelCatalog {
     return {
       ...this._models,
@@ -403,10 +415,11 @@ export class AcpSession {
     toolName?: string
     input?: Record<string, unknown>
     reason?: string
+    acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>
   }> {
-    if (!this._pendingPermission) return []
-    const { requestId, toolName, input } = this._pendingPermission
-    return [{ requestId, toolName, input }]
+    return [...this._pendingPermissions.values()].map(({ requestId, toolName, input, options }) => ({
+      requestId, toolName, input, acpOptions: options,
+    }))
   }
 
   // ── Connection ──
@@ -482,6 +495,7 @@ export class AcpSession {
     if (ev.ev === 'acp_state' && ev.state === 'dead') {
       this._active = false
       this._turnActive = false
+      this.cfg.onWorkerDead?.(this)
     }
   }
 
@@ -514,19 +528,22 @@ export class AcpSession {
         this._turnActive = false
       }
       if (t === 'error') this._turnHadError = true
-      if (t === 'permission-answered' || t === 'permission-auto-cancelled') this._pendingPermission = null
+      if (t === 'permission-answered' || t === 'permission-auto-cancelled') {
+        this._pendingPermissions.delete(record.event.providerRequestId)
+      }
     }
 
     for (const { name, payload } of this.normalizer.normalize(record)) {
       const full: Record<string, unknown> = { ...payload, sessionId: this.trackingId(), taskId: this.taskId }
       if (name === 'session:permission-request') {
-        this._pendingPermission = {
-          requestId: full.requestId as string,
+        const requestId = full.requestId as string
+        this._pendingPermissions.set(requestId, {
+          requestId,
           toolName: full.toolName as string,
           input: full.input as Record<string, unknown> | undefined,
           options: (full.acpOptions as Array<{ optionId?: string; kind?: string }>) ?? [],
-        }
-        this._emittedPermissionRequestIds.add(this._pendingPermission.requestId)
+        })
+        this._emittedPermissionRequestIds.add(requestId)
       }
       // Bus event names line up with EventNames values — emit directly.
       // Destinations MUST mirror the native emit contract: streaming events go
@@ -664,8 +681,48 @@ export class AcpSession {
     if (!this._providerSessionId) {
       throw new Error('ACP session established without a provider session ID')
     }
+    await this.replayPersistedConfig(conn)
     this._active = true
     return this._providerSessionId
+  }
+
+  /**
+   * Re-apply user-chosen config (mode / collaboration_mode / model …) after a
+   * worker (re)spawn. Codex config lives in the app-server process, NOT the
+   * durable thread — a replacement worker silently reverts to defaults, which
+   * is how "Agent (full access)" turned back into approval prompts after a
+   * crash. Sends raw acpSetConfigOption (calling setConfigOption() here would
+   * deadlock on _establishing). Only differing keys are sent; normal warm
+   * attaches send nothing.
+   */
+  private async replayPersistedConfig(conn: DaemonConnection): Promise<void> {
+    const record = await getSessionByClaudeId(this.trackingId()).catch(() => undefined)
+    const wanted = record?.acpConfig ?? this.cfg.acpConfig
+    if (!wanted || this._configOptions.length === 0) return
+    for (const [configId, value] of Object.entries(wanted)) {
+      const control = this._configOptions.find((c) => c.id === configId)
+      if (!control || control.currentValue === value) continue
+      if (!control.options.some((o) => o.value === value)) continue
+      const resp = await conn.send('acpSetConfigOption', {
+        sid: this.runtimeId,
+        commandId: `acp-config-replay-${crypto.randomBytes(8).toString('hex')}`,
+        configId,
+        value,
+      }).catch((error) => ({ ok: false, error: error instanceof Error ? error.message : String(error) }))
+      if (resp.ok) {
+        this._configOptions = this._configOptions.map((c) =>
+          c.id === configId ? { ...c, currentValue: value } : c)
+        if (configId === 'model') this._models = { ...this._models, currentModelId: value }
+        log.session.info('acp: replayed persisted config after worker spawn', {
+          runtimeId: this.runtimeId, configId, value,
+        })
+      } else {
+        log.session.warn('acp: config replay failed', {
+          runtimeId: this.runtimeId, configId, value,
+          error: (resp as { error?: string }).error,
+        })
+      }
+    }
   }
 
   /**
@@ -790,7 +847,7 @@ export class AcpSession {
                 `ACP prior session ID ${previousSessionId} no longer belongs to this runtime`,
               )
             }
-            const removed = await deleteSessionRecords(new Set([previousSessionId]))
+            const removed = await deleteSessionRecords(new Set([previousSessionId]), 'acp-identity-replaced')
             if (removed !== 1 && await getSessionByClaudeId(previousSessionId)) {
               throw new Error(`ACP prior session record ${previousSessionId} could not be retired`)
             }
@@ -881,8 +938,10 @@ export class AcpSession {
     this._models = state.models ?? snapshotAcpModels(state.sessionResponse)
     this._configOptions = state.configOptions ?? snapshotAcpConfigOptions(state.sessionResponse)
     this._turnActive = state.turnActive
-    if (state.pendingPermissions.length > 0) {
-      const p = state.pendingPermissions[0]
+    // Adopt EVERY worker-reported pending permission, not just the first —
+    // codex can hold several outstanding requests (2026-08-10 incident:
+    // perm-2 + perm-3 concurrently; the untracked one died unanswerable).
+    for (const p of state.pendingPermissions) {
       const toolCall = p.toolCall as {
         title?: unknown
         kind?: unknown
@@ -896,12 +955,13 @@ export class AcpSession {
         && !Array.isArray(toolCall.rawInput)
         ? toolCall.rawInput as Record<string, unknown>
         : undefined
-      this._pendingPermission = {
+      const options = (p.options as Array<{ optionId?: string; kind?: string }>) ?? []
+      this._pendingPermissions.set(p.providerRequestId, {
         requestId: p.providerRequestId,
         toolName,
         input,
-        options: (p.options as Array<{ optionId?: string; kind?: string }>) ?? [],
-      }
+        options,
+      })
       if (!this._emittedPermissionRequestIds.has(p.providerRequestId)) {
         this._emittedPermissionRequestIds.add(p.providerRequestId)
         bus.emit(EventNames.SESSION_PERMISSION_REQUEST, {
@@ -910,7 +970,7 @@ export class AcpSession {
           requestId: p.providerRequestId,
           toolName,
           input,
-          acpOptions: this._pendingPermission.options,
+          acpOptions: options,
         }, ['*'], { urgency: 'urgent' })
       }
     }
@@ -943,6 +1003,19 @@ export class AcpSession {
       ...(configId === 'model' ? { acpModel: value } : {}),
       acpConfig: { ...(record?.acpConfig ?? this.cfg.acpConfig ?? {}), [configId]: value },
     })
+    // Codex applies approvalPolicy per-turn (adapter passes it to runTurn), so
+    // switching to full access mid-turn cannot unblock approvals codex already
+    // asked for — they'd dangle until the turn dies. Match the user's intent:
+    // "full access" means stop asking, so answer anything pending with allow.
+    if (configId === 'mode' && value === 'agent-full-access' && this._pendingPermissions.size > 0) {
+      const pending = [...this._pendingPermissions.keys()]
+      log.session.info('acp: full access selected — auto-allowing pending permissions', {
+        sessionId: this.trackingId(), requestIds: pending,
+      })
+      for (const requestId of pending) {
+        await this.resolvePermissionRequest(requestId, true).catch(() => false)
+      }
+    }
     return true
   }
 
@@ -976,22 +1049,35 @@ export class AcpSession {
   private async discardUnpublishedWorker(): Promise<void> {
     this._active = false
     this._turnActive = false
-    this._pendingPermission = null
+    this._pendingPermissions.clear()
     if (!this.conn?.connected) return
     await this.conn.send('acpStop', { sid: this.runtimeId }).catch(() => {})
   }
 
   /** Answer a pending ACP permission request. `allow=false` → cancelled outcome
-   *  unless a reject-kind option exists (ACP wants an explicit option id). */
-  async resolvePermissionRequest(requestId: string, allow: boolean): Promise<boolean> {
+   *  unless a reject-kind option exists (ACP wants an explicit option id).
+   *  `selectedOptionId` (from the UI's option buttons, e.g. codex's
+   *  "Allow for Session") wins over the allow-boolean heuristic. */
+  async resolvePermissionRequest(requestId: string, allow: boolean, selectedOptionId?: string): Promise<boolean> {
     const conn = await this.ensureConn()
     let optionId: string | null = null
-    const options = this._pendingPermission?.requestId === requestId ? this._pendingPermission.options : []
-    if (allow) {
+    const options = this._pendingPermissions.get(requestId)?.options ?? []
+    if (selectedOptionId && options.some((o) => o.optionId === selectedOptionId)) {
+      optionId = selectedOptionId
+    } else if (allow) {
       optionId = options.find((o) => o.kind === 'allow_once')?.optionId
         ?? options.find((o) => o.kind?.startsWith('allow'))?.optionId
-        ?? options[0]?.optionId ?? null
-      if (!optionId) return false
+        ?? null
+      if (!optionId) {
+        // Unknown requestId (stale card / replaced worker) — refuse loudly.
+        // NEVER fall back to options[0]: on codex that could silently select
+        // an allow_always kind the user did not choose.
+        log.session.warn('acp: permission approve refused — request unknown to this session', {
+          sessionId: this.trackingId(), requestId,
+          pendingRequestIds: [...this._pendingPermissions.keys()],
+        })
+        return false
+      }
     } else {
       optionId = options.find((o) => o.kind === 'reject_once')?.optionId
         ?? options.find((o) => o.kind?.startsWith('reject'))?.optionId
@@ -1003,8 +1089,29 @@ export class AcpSession {
       providerRequestId: requestId,
       optionId,
     })
-    if (resp.ok) this._pendingPermission = null
-    return resp.ok
+    // The worker answers `{answered:false, reason:'no_pending_request'}` when it
+    // doesn't know the id (already answered, auto-cancelled, or a replacement
+    // worker that never saw it). Treating that as success returned HTTP 200 for
+    // approvals that never reached codex (2026-08-10 incident) — surface it.
+    const answered = (resp as { result?: { answered?: boolean } }).result?.answered !== false
+    if (resp.ok && answered) {
+      this._pendingPermissions.delete(requestId)
+      log.session.info('acp: permission answered', {
+        sessionId: this.trackingId(), requestId, optionId, allow,
+      })
+      return true
+    }
+    log.session.warn('acp: permission response was a no-op', {
+      sessionId: this.trackingId(), requestId, optionId,
+      ok: resp.ok, error: (resp as { error?: string }).error,
+      reason: (resp as { result?: { reason?: string } }).result?.reason,
+    })
+    if (resp.ok && !answered) {
+      // Worker no longer tracks it — drop our stale copy so the UI stops
+      // offering a dead card.
+      this._pendingPermissions.delete(requestId)
+    }
+    return false
   }
 
   /** Backward-compatible interruption alias for the hard-abort contract. */
@@ -1035,7 +1142,7 @@ export class AcpSession {
     }
     this._active = false
     this._turnActive = false
-    this._pendingPermission = null
+    this._pendingPermissions.clear()
   }
 
   /**
@@ -1248,7 +1355,7 @@ export class AcpSession {
     })
     this._active = false
     this._turnActive = false
-    this._pendingPermission = null
+    this._pendingPermissions.clear()
     if (!resp.ok && (resp as { errorKind?: string }).errorKind !== 'no_worker') {
       throw new Error('ACP self-report abort failed: ' + resp.error)
     }

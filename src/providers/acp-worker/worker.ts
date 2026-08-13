@@ -16,6 +16,7 @@
  * mapping bugs into a process we can't hot-fix.
  */
 
+import crypto from 'node:crypto'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { Writable, Readable } from 'node:stream'
 import readline from 'node:readline'
@@ -77,6 +78,11 @@ export class AcpWorker {
   /** providerRequestId → live JSON-RPC resolver. Dies with the process (by design). */
   private pendingPermissions = new Map<string, PendingPermission>()
   private permissionSeq = 0
+  /** Per-process nonce folded into permission ids. A bare `perm-${seq}` counter
+   * restarts at 1 in every replacement worker, so a stale UI card from a dead
+   * worker could alias a LIVE request in the new one and approve the wrong
+   * thing. The nonce makes ids unique across worker generations. */
+  private readonly permissionNonce = crypto.randomBytes(4).toString('hex')
   /** op+commandId → original result, rebuilt from the journal on every worker start. */
   private acceptedCommands = new Map<string, { op: string; commandId: string; result: unknown }>()
   private lastAcceptedCommands = new Map<string, string>()
@@ -559,7 +565,7 @@ export class AcpWorker {
         this.notifyJournal()
       },
       requestPermission: (params: RequestPermissionRequest): Promise<RequestPermissionResponse> => {
-        const providerRequestId = `perm-${++this.permissionSeq}`
+        const providerRequestId = `perm-${this.permissionNonce}-${++this.permissionSeq}`
         this.journal.appendAcpFrame(
           { method: 'session/request_permission', params, providerRequestId },
           this.frameSource(),

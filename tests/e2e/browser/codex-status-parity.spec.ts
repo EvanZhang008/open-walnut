@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
+import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 
 const SCREENSHOT_DIR = '/tmp/codex-status-regression'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -23,16 +24,13 @@ test.beforeAll(async () => {
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
 })
 
-async function openCodexQuickStart(page: Page): Promise<void> {
+/** Open a draft session column pointed at the fixture cwd with the Codex engine
+ *  picked. "+ Session" no longer opens the picker directly — the draft column
+ *  hosts it (same `.sps-*` controls), so only the route in changed. */
+async function openCodexQuickStart(page: Page): Promise<Locator> {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-  await page.locator('.quick-access-pill', { hasText: /Quick session|\+ Session/ }).click()
-  await expect(page.locator('.session-path-selector')).toBeVisible()
-  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
-  if (await localTab.isVisible()) await localTab.click()
-  await page.locator('.sps-engine-toggle .sps-engine-btn', { hasText: 'Codex' }).click()
-  await page.locator('.sps-search-input').fill(`${fixtureRoot}/projects/walnut`)
-  await page.locator('.sps-search-input').press('Shift+Enter')
+  return openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`, { engine: 'Codex' })
 }
 
 async function navigateToTasks(page: Page): Promise<void> {
@@ -69,14 +67,15 @@ test('broadcasts active Codex status across Home, task pill, and reload', async 
   const quickStartResponse = page.waitForResponse((response) =>
     response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/api/sessions/quick-start')
-  const quickInput = page.locator('.main-page-chat .chat-input-textarea')
+  // The launch now sends from the DRAFT column's composer, not the main chat's.
+  const quickInput = draftComposer(page)
   await quickInput.fill(BASE_PROMPT)
   await quickInput.press('Enter')
   const quickStart = await quickStartResponse
   expect(quickStart.status()).toBe(200)
   const { taskId } = await quickStart.json() as { taskId: string }
 
-  const homePanel = page.locator('.session-panel:not(.pending-session-panel)')
+  const homePanel = page.locator(REAL_PANEL)
   await expect(homePanel).toBeVisible({ timeout: 15_000 })
   await expect(homePanel.getByText(BASE_REPLY, { exact: true }))
     .toHaveCount(1, { timeout: 20_000 })
@@ -133,7 +132,7 @@ test('broadcasts active Codex status across Home, task pill, and reload', async 
   const finalTaskRow = page.locator(`.todo-panel-item[data-task-id="${taskId}"]`).last()
   await expect(finalTaskRow).toBeVisible()
   await finalTaskRow.locator('.todo-item-title').click()
-  const finalHomePanel = page.locator('.session-panel:not(.pending-session-panel)')
+  const finalHomePanel = page.locator(REAL_PANEL)
   await expect(finalHomePanel).toBeVisible({ timeout: 15_000 })
   await expect(finalHomePanel.getByText(FIRST_REPLY, { exact: true }))
     .toHaveCount(1, { timeout: 25_000 })
@@ -145,7 +144,7 @@ test('broadcasts active Codex status across Home, task pill, and reload', async 
     .toHaveCount(1)
 
   await page.reload()
-  const reloadedPanel = page.locator('.session-panel:not(.pending-session-panel)')
+  const reloadedPanel = page.locator(REAL_PANEL)
   await expect(reloadedPanel).toBeVisible({ timeout: 15_000 })
   await expect(reloadedPanel.locator('.session-panel-badge', { hasText: 'Idle' }))
     .toHaveCount(1)
@@ -164,9 +163,14 @@ test('broadcasts active Codex status across Home, task pill, and reload', async 
 
   await navigateToTasks(page)
   await showAllStatusesOnTasksPage(page)
-  const finalTaskRow = page.locator(`.tp-row[data-task-id="${taskId}"]`)
-  await expect(finalTaskRow).toBeVisible()
-  await expect(finalTaskRow.locator('.task-session-pill')).toContainText('Idle')
+  // Renamed from `finalTaskRow`: that name is already bound above (the Homepage
+  // todo row) in this same function scope, so the duplicate `const` made the
+  // whole FILE unparseable — every test in it was collected as a syntax error
+  // rather than run. Pre-existing at HEAD (verified with esbuild on the HEAD
+  // blob); fixed here because it otherwise hides the migrated spec's real result.
+  const idleTaskRow = page.locator(`.tp-row[data-task-id="${taskId}"]`)
+  await expect(idleTaskRow).toBeVisible()
+  await expect(idleTaskRow.locator('.task-session-pill')).toContainText('Idle')
 
   await audit.assertClean({
     requestFailure: (failure) => {

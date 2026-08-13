@@ -596,6 +596,53 @@ describe('lifecycle + repair', () => {
     await waitFor(() => !acp.hasWorker('sid-8'), 10_000)
   })
 
+  it('a turn parked on a permission request is NOT idle-killed', async () => {
+    for (const t of intervals) clearInterval(t)
+    intervals = []
+    acp = makeAcp(300) // same 300ms idle budget as the reap test above
+    const ws = makeWs()
+    await acp.acpStart(ws, startParams('sid-perm-idle'))
+    // Open a turn that parks on session/request_permission and never answers —
+    // zero journal/RPC traffic from here on, exactly like a user away from
+    // the keyboard with an approval card up.
+    const sendResp = await acp.acpOp('sid-perm-idle', 'prompt', {
+      commandId: 'cmd-perm-idle',
+      walnutMessageId: 'qm-perm-idle',
+      text: 'permission-test',
+    })
+    expect(sendResp.ok).toBe(true)
+    await waitFor(() => journalLines(ws).some(
+      (l) => l.kind === 'meta' && l.event?.type === 'permission-requested',
+    ), 10_000)
+    // Idle budget elapses many times over; the open turn must hold the worker.
+    await new Promise((r) => setTimeout(r, 1_200))
+    expect(acp.hasWorker('sid-perm-idle')).toBe(true)
+    // The open turn is advertised for the upgrade-defer guard (local-daemon /
+    // daemon-connection read this before a version-mismatch restart).
+    const busy = JSON.parse(fs.readFileSync(path.join(daemonDir, 'acp-busy.json'), 'utf-8')) as {
+      busySids: string[]
+      updatedAt: number
+    }
+    expect(busy.busySids).toContain('sid-perm-idle')
+    // Answer the permission → turn ends → worker becomes reapable again.
+    const journal = () => journalLines(ws)
+    const permLine = journal().find(
+      (l) => l.kind === 'meta' && l.event?.type === 'permission-requested',
+    ) as { event?: { providerRequestId?: string } } | undefined
+    const permId = permLine?.event?.providerRequestId
+    expect(permId).toBeTruthy()
+    const respond = await acp.acpOp('sid-perm-idle', 'permissionResponse', {
+      commandId: 'cmd-perm-answer',
+      providerRequestId: permId,
+      optionId: 'allow-once',
+    })
+    expect(respond.ok).toBe(true)
+    await waitFor(() => journal().some(
+      (l) => l.kind === 'meta' && l.event?.type === 'turn-ended',
+    ), 10_000)
+    await waitFor(() => !acp.hasWorker('sid-perm-idle'), 10_000)
+  })
+
   it('acpOp on unknown sid → no_worker errorKind', async () => {
     const resp = await acp.acpOp('sid-none', 'prompt', { commandId: 'c1', walnutMessageId: 'qm-none', text: 'x' })
     expect(resp.ok).toBe(false)

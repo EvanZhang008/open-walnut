@@ -1278,9 +1278,18 @@ export const sessionAutoTitleTurnCompleteHook: SessionHookDefinition = {
     // both return the same SessionHistoryMessage DTO.
     let message = '';
     try {
-      if (p.session?.engine === 'codex') {
+      // The payload snapshot can be stale/partial (hook cache) — a codex
+      // session missing `engine` here fell through to the native JSONL reader
+      // and burned the full 30s daemon-read timeout on a file that never
+      // exists (2026-08-10 incident). Re-read the record when engine is unset.
+      let engineSession = p.session;
+      if (engineSession && engineSession.engine === undefined) {
+        const { getSessionByClaudeId } = await import('../session-tracker.js');
+        engineSession = await getSessionByClaudeId(p.sessionId) ?? engineSession;
+      }
+      if (engineSession?.engine === 'codex') {
         const { readAcpSessionHistory } = await import('../../providers/acp-session-history.js');
-        const history = await readAcpSessionHistory(p.session);
+        const history = await readAcpSessionHistory(engineSession);
         message = history.find((m) => m.role === 'user' && m.text.trim())?.text.trim() ?? '';
       } else {
         const { readSessionHistoryTail } = await import('../session-history.js');

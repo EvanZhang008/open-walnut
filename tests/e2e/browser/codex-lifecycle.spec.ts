@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
+import { REAL_PANEL, openDraftOnCwd } from './draft-helpers'
 
 const SCREENSHOT_DIR = '/tmp/codex-customer-matrix-ui-final'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -18,33 +19,33 @@ test.beforeAll(async () => {
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
 })
 
-async function openCodexQuickStart(page: Page): Promise<void> {
+/**
+ * Land on the Homepage and open a Codex draft session column on the fixture repo.
+ * "+" grows the draft; the SAME picker (all `.sps-*` selectors) now lives inside
+ * it, so ./draft-helpers owns the route in. Returns the draft panel — the first
+ * message is composed in ITS composer, which is what launches the session.
+ */
+async function openCodexQuickStart(page: Page): Promise<Locator> {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-  await page.locator('.quick-access-pill', { hasText: /Quick session|\+ Session/ }).click()
-  await expect(page.locator('.session-path-selector')).toBeVisible()
-  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
-  if (await localTab.isVisible()) await localTab.click()
-  await page.locator('.sps-engine-toggle .sps-engine-btn', { hasText: 'Codex' }).click()
-  await page.locator('.sps-search-input').fill(`${fixtureRoot}/projects/walnut`)
-  await page.locator('.sps-search-input').press('Shift+Enter')
+  return openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`, { engine: 'Codex' })
 }
 
 test('interrupt and send leaves one boundary and one replacement turn', async ({ page }) => {
   const audit = await installBrowserAudit(page, walnutHome)
 
-  await openCodexQuickStart(page)
+  const draft = await openCodexQuickStart(page)
   const quickStartResponse = page.waitForResponse((response) =>
     response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/api/sessions/quick-start')
-  const input = page.locator('.main-page-chat .chat-input-textarea')
+  const input = draft.locator('.chat-input-textarea')
   await input.fill(SLOW_PROMPT)
   await input.press('Enter')
   const quickStart = await quickStartResponse
   expect(quickStart.status()).toBe(200)
   const { taskId } = await quickStart.json() as { taskId: string }
 
-  const panel = page.locator('.session-panel:not(.pending-session-panel)')
+  const panel = page.locator(REAL_PANEL)
   await expect(panel).toBeVisible({ timeout: 15_000 })
   await expect(panel.getByText('thinking...', { exact: true })).toHaveCount(1, { timeout: 15_000 })
 

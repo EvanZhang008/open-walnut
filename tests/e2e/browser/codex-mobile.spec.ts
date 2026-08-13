@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
+import { REAL_PANEL, openDraftOnCwd } from './draft-helpers'
 
 const SCREENSHOT_DIR = '/tmp/codex-customer-matrix-ui-final'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -30,14 +31,17 @@ async function expectFullWidth(page: Page, selector: string): Promise<void> {
   expect(box!.height).toBeGreaterThan(page.viewportSize()!.height * 0.7)
 }
 
-async function chooseCodexQuickStart(page: Page): Promise<void> {
-  await page.locator('.quick-access-pill', { hasText: /Quick session|\+ Session/ }).click()
-  await expect(page.locator('.session-path-selector')).toBeVisible()
-  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
-  if (await localTab.isVisible()) await localTab.click()
-  await page.locator('.sps-engine-toggle .sps-engine-btn', { hasText: 'Codex' }).click()
-  await page.locator('.sps-search-input').fill(`${fixtureRoot}/projects/walnut`)
-  await page.locator('.sps-search-input').press('Shift+Enter')
+/**
+ * Open a Codex draft session column on the fixture repo (no page.goto — callers
+ * are already loaded). "+" grows the draft and the SAME picker lives inside it,
+ * so ./draft-helpers owns the route in; every `.sps-*` selector is unchanged.
+ *
+ * Mobile detail: drafts insert LEFTMOST and `mobileActiveIdx` prefers the draft,
+ * so on a phone the new column IS the visible one — which is why the composer
+ * returned here is reachable at 390px.
+ */
+async function chooseCodexQuickStart(page: Page): Promise<Locator> {
+  return openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`, { engine: 'Codex' })
 }
 
 async function sessionIdForTask(page: Page, taskId: string): Promise<string> {
@@ -105,13 +109,13 @@ for (const viewport of [
     // prove the customer path at this exact viewport through the real quick
     // start route, ACP worker, journal, and session events.
     await page.locator('.todo-search-input').fill('')
-    await chooseCodexQuickStart(page)
+    const draft = await chooseCodexQuickStart(page)
     const prompt = `mobile ${viewport.slug} real create and send`
     const reply = `hello from mock-acp (you said: ${prompt})`
     const quickStartResponse = page.waitForResponse((response) =>
       response.request().method() === 'POST'
         && new URL(response.url()).pathname === '/api/sessions/quick-start')
-    const quickInput = page.locator('.main-page-chat .chat-input-textarea')
+    const quickInput = draft.locator('.chat-input-textarea')
     await quickInput.fill(prompt)
     await quickInput.press('Enter')
     const quickStart = await quickStartResponse
@@ -119,7 +123,7 @@ for (const viewport of [
     const { taskId } = await quickStart.json() as { taskId: string }
 
     const realPanel = page.locator(
-      '.main-page-session-column.is-mobile-active .session-panel:not(.pending-session-panel)',
+      `.main-page-session-column.is-mobile-active ${REAL_PANEL}`,
     )
     await expect(realPanel).toBeVisible({ timeout: 15_000 })
     await expectFullWidth(page, '.main-page.has-mobile-session .main-page-sessions-area')
@@ -160,20 +164,20 @@ test('mobile creates, queues, reloads, and interrupts a real Codex session', asy
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
-  await chooseCodexQuickStart(page)
+  const draft = await chooseCodexQuickStart(page)
 
   const initialPrompt = 'mobile real Codex initial'
   const quickStartResponse = page.waitForResponse((response) =>
     response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/api/sessions/quick-start')
-  const quickInput = page.locator('.main-page-chat .chat-input-textarea')
+  const quickInput = draft.locator('.chat-input-textarea')
   await quickInput.fill(initialPrompt)
   await quickInput.press('Enter')
   const quickStart = await quickStartResponse
   expect(quickStart.status()).toBe(200)
   const { taskId } = await quickStart.json() as { taskId: string }
 
-  const panel = page.locator('.main-page-session-column.is-mobile-active .session-panel:not(.pending-session-panel)')
+  const panel = page.locator(`.main-page-session-column.is-mobile-active ${REAL_PANEL}`)
   await expect(panel).toBeVisible({ timeout: 15_000 })
   await expect(panel.getByText(`hello from mock-acp (you said: ${initialPrompt})`, { exact: true }))
     .toHaveCount(1, { timeout: 15_000 })

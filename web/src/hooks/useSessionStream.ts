@@ -212,20 +212,34 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
           toolName?: string;
           input?: Record<string, unknown>;
           reason?: string;
+          acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
         }>;
       } | null) => {
         if (activeSessionId.current !== sessionId) return;
         if (data?.session) seedSessionStatus(data.session, 'rest:session');
-        const perms = data?.pendingPermissions;
-        if (!perms?.length) return;
+        const perms = data?.pendingPermissions ?? [];
+        // Zombie sweep is only safe when NO turn is running: mid-turn, a fresh
+        // permission may ride the WS ahead of this REST response and would be
+        // wrongly retired. When the session is settled, permissions can't be
+        // in flight — an unknown pending card is authoritatively dead (worker
+        // died / auto-cancelled while we were away; its permission-resolved
+        // event never reached us, so it would stay clickable forever and 404).
+        const settled = (data?.session as { process_status?: string } | undefined)?.process_status !== 'running';
         setBlocks(prev => {
+          const serverIds = new Set(perms.map(p => p.requestId));
           const existingIds = new Set(prev.filter(b => b.type === 'permission').map(b => (b as StreamingPermissionBlock).requestId));
+          const isZombie = (b: typeof prev[number]): b is StreamingPermissionBlock =>
+            b.type === 'permission' && (b.status === undefined || b.status === 'pending') && !serverIds.has(b.requestId);
+          const hasZombie = settled && prev.some(isZombie);
+          const next: typeof prev = hasZombie
+            ? prev.map(b => (isZombie(b) ? { ...b, status: 'denied' as const } : b))
+            : prev;
           const newBlocks = perms
             .filter(p => !existingIds.has(p.requestId))
-            .map(p => ({ type: 'permission' as const, requestId: p.requestId, toolName: p.toolName ?? 'unknown', input: p.input, reason: p.reason }));
-          if (newBlocks.length === 0) return prev;
+            .map(p => ({ type: 'permission' as const, requestId: p.requestId, toolName: p.toolName ?? 'unknown', input: p.input, reason: p.reason, acpOptions: p.acpOptions }));
+          if (newBlocks.length === 0) return hasZombie ? next : prev;
           for (const b of newBlocks) seenPermissionIds.current.add(b.requestId);
-          return [...prev, ...newBlocks];
+          return [...next, ...newBlocks];
         });
       })
       .catch(() => {});
@@ -540,9 +554,10 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
   // Handle permission request events (control_request from Claude Code)
   useEvent('session:permission-request', (data) => {
-    const { sessionId: sid, requestId, toolName, input, reason } = data as {
+    const { sessionId: sid, requestId, toolName, input, reason, acpOptions } = data as {
       sessionId: string; requestId: string; toolName: string;
       input?: Record<string, unknown>; reason?: string;
+      acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
     };
     if (!sessionId || sid !== sessionId) return;
     if (seenPermissionIds.current.has(requestId)) return; // dedup
@@ -550,7 +565,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
 
     flushPendingTextRaf();
     streamBuffer.current = '';
-    setBlocks(prev => [...prev, { type: 'permission', requestId, toolName, input, reason }]);
+    setBlocks(prev => [...prev, { type: 'permission', requestId, toolName, input, reason, acpOptions }]);
   });
 
   // Handle permission resolved events (update block status from pending → allowed/denied)

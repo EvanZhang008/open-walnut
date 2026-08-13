@@ -58,6 +58,10 @@ export interface StreamingPermissionBlock {
   input?: Record<string, unknown>
   reason?: string
   status: 'pending' | 'allowed' | 'denied'
+  /** ACP provider options (codex: Allow Once / Allow for Session / prefix
+   * amendment / Reject). Present only for engine='codex' sessions; the UI
+   * renders these as the real buttons instead of the bare Allow/Deny pair. */
+  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>
 }
 
 export interface StreamingThinkingBlock {
@@ -265,7 +269,7 @@ class SessionStreamBuffer {
   }
 
   /** Append a permission request block (idempotent — skips if requestId already exists). */
-  appendPermission(sessionId: string, requestId: string, toolName: string, input?: Record<string, unknown>, reason?: string): void {
+  appendPermission(sessionId: string, requestId: string, toolName: string, input?: Record<string, unknown>, reason?: string, acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>): void {
     const entry = this.getOrCreate(sessionId)
     // Idempotent: don't add duplicate permission blocks (re-emit timer may fire multiple times)
     const existing = entry.blocks.find(b => b.type === 'permission' && b.requestId === requestId) as StreamingPermissionBlock | undefined
@@ -273,7 +277,7 @@ class SessionStreamBuffer {
     this.resetIfTurnEnded(entry, sessionId)
     entry.textAccumulator = ''  // permission event breaks text flow
     this.touch(entry)
-    entry.blocks.push({ type: 'permission', requestId, toolName, input, reason, status: 'pending' })
+    entry.blocks.push({ type: 'permission', requestId, toolName, input, reason, status: 'pending', ...(acpOptions?.length ? { acpOptions } : {}) })
   }
 
   /** Update a permission block status after resolution. */
