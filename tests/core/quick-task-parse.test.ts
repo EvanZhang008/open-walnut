@@ -211,6 +211,97 @@ describe('parseQuickTask', () => {
     expect(lastCall().messages[0].content).not.toContain('Your projects');
   });
 
+  // Small models botch weekday arithmetic (a Sunday "monday" note came back as
+  // Tuesday), so the prompt carries a resolved weekday→date lookup table.
+  it('injects an upcoming-weekday lookup table with correct dates', async () => {
+    sendMessageMock.mockResolvedValue(textResult('{"title":"Remind wife"}'));
+    // 2026-08-09 is a Sunday in America/Los_Angeles.
+    const now = new Date('2026-08-09T14:00:00-07:00');
+    await parseQuickTask('monday remind wife', { now, timeZone: 'America/Los_Angeles' });
+    const content = lastCall().messages[0].content;
+    expect(content).toContain('Upcoming days');
+    expect(content).toContain('Monday=2026-08-10');
+    expect(content).toContain('Sunday=2026-08-16');
+    expect(lastCall().system).toContain('COPY the date from the "Upcoming days" table');
+  });
+
+  // A range needs width. Haiku sometimes echoes end === start on a single
+  // point-in-time note ("team dinner friday 6pm"), which would persist a
+  // zero-length calendar block the user has to clear by hand.
+  it('drops an end_date at or before the start_date', async () => {
+    sendMessageMock.mockResolvedValueOnce(textResult(
+      '{"title":"Team dinner","start_date":"2026-07-17T18:00:00","end_date":"2026-07-17T18:00:00"}',
+    ));
+    const { parse } = await parseQuickTask('team dinner friday 6pm');
+    expect(parse.start_date).toBe('2026-07-17T18:00:00');
+    expect(parse.end_date).toBeUndefined();
+
+    // An end BEFORE the start is equally unusable.
+    sendMessageMock.mockResolvedValueOnce(textResult(
+      '{"title":"Workshop","start_date":"2026-07-17T14:00:00","end_date":"2026-07-17T13:00:00"}',
+    ));
+    expect((await parseQuickTask('workshop friday')).parse.end_date).toBeUndefined();
+
+    // A real range still survives.
+    sendMessageMock.mockResolvedValueOnce(textResult(
+      '{"title":"Workshop","start_date":"2026-07-17T14:00:00","end_date":"2026-07-17T16:00:00"}',
+    ));
+    expect((await parseQuickTask('workshop 2-4pm')).parse.end_date).toBe('2026-07-17T16:00:00');
+  });
+
+  // Deterministic backstop: even with the lookup table, Haiku occasionally
+  // returns a date on the wrong weekday ("friday" → Saturday's date). When the
+  // note names exactly one weekday, snap the model's date to it.
+  describe('weekday snap backstop', () => {
+    // 2026-08-09 is a Sunday; Friday is 08-14, Saturday 08-15.
+    const now = new Date('2026-08-09T14:00:00-07:00');
+    const opts = { now, timeZone: 'America/Los_Angeles' };
+
+    it('snaps a start_date on the wrong weekday to the named weekday', async () => {
+      sendMessageMock.mockResolvedValue(textResult('{"title":"call mom","start_date":"2026-08-15"}'));
+      const { parse } = await parseQuickTask('call mom friday', opts);
+      expect(parse.start_date).toBe('2026-08-14');
+    });
+
+    it('snaps a datetime due_date and keeps the wall-clock time', async () => {
+      sendMessageMock.mockResolvedValue(textResult('{"title":"report","due_date":"2026-08-15T10:00:00"}'));
+      const { parse } = await parseQuickTask('report due friday 10am', opts);
+      expect(parse.due_date).toBe('2026-08-14T10:00:00');
+    });
+
+    it('snaps 周五 notes the same way', async () => {
+      sendMessageMock.mockResolvedValue(textResult('{"title":"交报告","start_date":"2026-08-15"}'));
+      const { parse } = await parseQuickTask('周五交报告', opts);
+      expect(parse.start_date).toBe('2026-08-14');
+    });
+
+    it('leaves a date already on the named weekday alone', async () => {
+      sendMessageMock.mockResolvedValue(textResult('{"title":"call mom","start_date":"2026-08-21"}'));
+      const { parse } = await parseQuickTask('call mom next friday', opts);
+      expect(parse.start_date).toBe('2026-08-21');
+    });
+
+    it('never snaps into the past — rolls forward a week instead', async () => {
+      // Model says Saturday 08-08 (yesterday); note says friday. Closest friday
+      // to 08-08 is 08-07 (past) → roll to 08-14.
+      sendMessageMock.mockResolvedValue(textResult('{"title":"call mom","start_date":"2026-08-08"}'));
+      const { parse } = await parseQuickTask('call mom friday', opts);
+      expect(parse.start_date).toBe('2026-08-14');
+    });
+
+    it('does not snap when the note names two weekdays', async () => {
+      sendMessageMock.mockResolvedValue(textResult('{"title":"trip","start_date":"2026-08-15","end_date":"2026-08-16"}'));
+      const { parse } = await parseQuickTask('trip monday to friday', opts);
+      expect(parse.start_date).toBe('2026-08-15');
+    });
+
+    it('does not snap when the note has no weekday', async () => {
+      sendMessageMock.mockResolvedValue(textResult('{"title":"call mom","start_date":"2026-08-15"}'));
+      const { parse } = await parseQuickTask('call mom this weekend', opts);
+      expect(parse.start_date).toBe('2026-08-15');
+    });
+  });
+
   it('tells the model that no project means Inbox and that new projects are opt-in', async () => {
     sendMessageMock.mockResolvedValue(textResult('{"title":"Pay invoice"}'));
     await parseQuickTask('pay invoice');
