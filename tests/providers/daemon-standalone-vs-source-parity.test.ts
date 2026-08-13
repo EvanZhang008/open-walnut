@@ -263,6 +263,58 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     }
   })
 
+  // Streams under HOME (incident 019a7fe5): /tmp is wiped on reboot, which
+  // vaporized every stream file and left walnut's byte watermarks pointing into
+  // dead files. Both twins must derive the prod dir from HOME, migrate legacy
+  // files at startup (skipping live pgids — the CLI holds an fd on the old
+  // inode), stamp a streamEpoch file identity on snapshots, force a NEW inode
+  // on fresh spawn (unlink, not truncate — truncation keeps the inode so the
+  // epoch would not change), and reap dead-session streams after 7 days.
+  it('both twins derive prod streams dir from HOME with legacy /tmp fallback', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/PROD_STREAMS_DIR = path\.join\(HOME_DIR, '\.open-walnut', 'tmp', 'streams'\)/)
+      expect(src).toMatch(/LEGACY_STREAMS_DIR = process\.env\.WALNUT_LEGACY_STREAMS_DIR \|\| '\/tmp\/open-walnut-streams'/)
+    }
+  })
+  it('both twins migrate legacy streams at startup, skipping live pgids and never overwriting', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/function migrateLegacyStreams/)
+      expect(src).toMatch(/migrateLegacyStreams\(\)/)
+      // Live-pgid skip + never-overwrite + copy fallback with size verify.
+      expect(src).toMatch(/skippedLive/)
+      expect(src).toMatch(/skippedExists/)
+      expect(src).toMatch(/COPYFILE_EXCL/)
+      expect(src).toMatch(/size mismatch after copy/)
+    }
+  })
+  it('both twins stamp streamEpoch (dev:ino:birthtime) into assembled snapshots', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/function streamEpochOf/)
+      expect(src).toMatch(/streamEpoch:\s*streamEpochOf\(session\)/)
+      expect(src).toMatch(/Math\.floor\(st\.birthtimeMs\)/)
+    }
+  })
+  it('both twins unlink+recreate the jsonl on fresh spawn (new inode → new epoch)', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/fs\.unlinkSync\(jsonlPath\)/)
+      expect(src).toMatch(/fs\.writeFileSync\(jsonlPath, ''\)/)
+    }
+  })
+  it('both twins sweep dead-session streams after the 90-day retention window', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/function sweepDeadStreams/)
+      expect(src).toMatch(/90 \* 24 \* 60 \* 60 \* 1000/)
+      expect(src).toMatch(/setInterval\(sweepDeadStreams, STREAM_RETENTION_SWEEP_MS\)/)
+      // Liveness paranoia: never reap a family whose pgid is still alive.
+      expect(src).toMatch(/isProcessGroupAlive\(pid\)\)\s*continue/)
+    }
+  })
+
   // Isolated-dir CLI reap (2026-07-25 leak): cleanup() preserves session process
   // groups for successor adoption in PROD, but isolated-dir daemons (sandbox /
   // tests / demos, marked by WATCHDOG_PARENT_PID) never get a successor — they
@@ -514,9 +566,10 @@ describe('L1/L2 daemon-standalone vs daemon-source parity (versioned events + ta
   // taskState still counts a running background task (wait-style bash tasks
   // write to output_file, not the JSONL, so the stream goes silent for the
   // task's whole lifetime). Same shape as the cron guard: extended threshold
-  // (24h), never disabled.
+  // (3 days — an immortal-process backstop for a wedged task framework, NOT
+  // a working-session budget), never disabled.
   it('both extend the idle-kill threshold when a background task is running (bgActive)', () => {
-    const constRe = /SESSION_BG_IDLE_KILL_MS\s*=\s*24\s*\*\s*60\s*\*\s*60\s*\*\s*1000/
+    const constRe = /SESSION_BG_IDLE_KILL_MS\s*=\s*3\s*\*\s*24\s*\*\s*60\s*\*\s*60\s*\*\s*1000/
     expect(standaloneSrc).toMatch(constRe)
     expect(templateSrc).toMatch(constRe)
     // bgActive derives from the daemon's own fold, not a cached flag
@@ -691,7 +744,17 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
     expect(corePushIdx, 'death snapshot must push BEFORE the exit fan-out clears subscribers').toBeLessThan(coreFanIdx)
 
     const tmplReapStart = templateSrc.search(/function reapSession/)
-    const tmplBody = templateSrc.slice(tmplReapStart, tmplReapStart + 4000)
+    // Brace-match the real function end instead of guessing a byte window — a
+    // fixed slice silently starts failing the moment reapSession grows (it did,
+    // when the durable-cron strip landed at ~+1000 chars).
+    const tmplBody = (() => {
+      let depth = 0
+      for (let i = templateSrc.indexOf('{', tmplReapStart); i < templateSrc.length; i++) {
+        if (templateSrc[i] === '{') depth++
+        else if (templateSrc[i] === '}' && --depth === 0) return templateSrc.slice(tmplReapStart, i + 1)
+      }
+      return templateSrc.slice(tmplReapStart)
+    })()
     const tmplPushIdx = tmplBody.indexOf('pushSnapshot(sid, true)')
     const tmplClearIdx = tmplBody.indexOf('session.subscribers.clear()')
     expect(tmplPushIdx).toBeGreaterThan(-1)
@@ -1157,6 +1220,259 @@ describe('cloud bridge daemon-standalone vs daemon-source parity', () => {
     for (const src of [standaloneSrc, templateSrc]) {
       expect(src).toMatch(/try \{ stopBridge\(\);? \} catch \{\}/)
       expect(src).toMatch(/loadBridgeConfig\(\);?\s*\n\s*startBridge\('startup'\)/)
+    }
+  })
+})
+
+describe('scheduled-task fire detection daemon-standalone vs daemon-source parity', () => {
+  const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+  const templateSrc = readFile(sourcePath)
+
+  it('both check scheduled_tasks.json + lock on turn-start lines via checkCronFires', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/scheduled_tasks\.json/)
+      expect(src).toMatch(/scheduled_tasks\.lock/)
+      // Tailer hook: substring gate on init/session_state_changed then checkCronFires
+      expect(src).toMatch(/"session_state_changed"'\)\)\s*\{\s*\n?\s*try \{ checkCronFires\(sid, s\)/)
+    }
+  })
+  it('both throttle the on-disk check to 30s per session', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/CRON_CHECK_THROTTLE_MS = 30[_]?000/)
+      expect(src).toMatch(/lastCronCheckTs/)
+    }
+  })
+  it('both append a scheduled_task_fire marker to the STREAM file (never canonical)', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/subtype: 'scheduled_task_fire'/)
+      expect(src).toMatch(/appendFileSync\(session\.jsonlPath, marker\)/)
+    }
+  })
+  it('both EVICT the orphaned row on a foreign fire and inject NOTHING into the model', () => {
+    // 2026-08-13: the old behavior injected a provenance warning on every foreign
+    // fire — a turn + context burned hourly that could not stop the loop. A
+    // foreign fire proves no CronDelete will come from this process, so the row
+    // must go. Regression guard: no FIFO write may reappear on this path.
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/if \(fire\.foreign && !ALLOW_DURABLE_CRON\)/)
+      expect(src).toMatch(/stripCronTaskById\(tasksJson, fire\.taskId\)/)
+      expect(src).toMatch(/evicted orphaned foreign cron \(Walnut policy: session-scoped crons only\)/)
+      expect(src).not.toMatch(/cronFireFifoWarning/)
+      // The eviction block must not write to the FIFO at all.
+      const start = src.indexOf('if (fire.foreign && !ALLOW_DURABLE_CRON)')
+      const block = src.slice(start, start + 900)
+      expect(block).not.toMatch(/writeFifoRaw/)
+    }
+  })
+  it('template mirrors daemon-core detection semantics (lock-holder gate + dedup key + 10min window)', () => {
+    // The template cannot import daemon-core, so its inlined copy must keep the
+    // same decision points: lockSid !== sid bail, taskId:lastFiredAt dedup, and
+    // the 10-minute recency window.
+    expect(templateSrc).toMatch(/lockSid !== args\.sid\) return \[\]/)
+    expect(templateSrc).toMatch(/tid \+ ':' \+ fired/)
+    expect(templateSrc).toMatch(/CRON_FIRE_RECENT_MS = 10 \* 60 \* 1000/)
+    const coreSrc2 = readFile(corePath)
+    expect(coreSrc2).toMatch(/lockSid !== args\.sid\) return \[\]/)
+    expect(coreSrc2).toMatch(/CRON_FIRE_RECENT_MS = 10 \* 60 \* 1000/)
+  })
+})
+
+describe('idle-reaper disk cron signal daemon-standalone vs daemon-source parity', () => {
+  const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+  const templateSrc = readFile(sourcePath)
+
+  it('both idle scans consult hasDiskCronInterest when the fold shows no cron', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/foldCronArmed/)
+      // TS uses shorthand ({ sid, … }), the JS template spells it out ({ sid: sid, … })
+      expect(src).toMatch(/hasDiskCronInterest\(\{ sid(?:: sid)?, tasksJson(?:: tasksJson)?, lockJson(?:: lockJson)?, nowMs: now \}\)/)
+      expect(src).toMatch(/disk scheduled_tasks arms cron protection/)
+    }
+  })
+  it('both cache the disk check per session with a 10-minute TTL', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/diskCronCache/)
+      expect(src).toMatch(/diskCronCache\.at < 10 \* 60_?000/)
+    }
+  })
+  it('both snapshots OR the disk signal into cronActive one-way (never clears fold-armed)', () => {
+    // C1 parity requires assembleSessionSnapshot bodies byte-identical, so both
+    // twins use the same &&-guard spelling (no optional chaining in the template).
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/if \(!snap\.cronActive && session\.diskCronCache && session\.diskCronCache\.armed\) snap\.cronActive = true/)
+    }
+  })
+  it('template mirrors daemon-core hasDiskCronInterest semantics (7d liveness + creator-or-lock-holder)', () => {
+    const coreSrc = readFile(corePath)
+    for (const src of [coreSrc, templateSrc]) {
+      expect(src).toMatch(/CRON_TASK_LIVE_MS = 7 \* 24 \* 60 \* 60 \* 1000/)
+      expect(src).toMatch(/createdBySessionId === args\.sid/)
+      expect(src).toMatch(/'lock_holder'/)
+    }
+  })
+})
+
+describe('shouldAutoRespond AskUserQuestion exemption daemon-core vs daemon-source parity', () => {
+  const coreSrc = readFile(corePath)
+  const templateSrc = readFile(sourcePath)
+
+  // Extract just the shouldAutoRespond body from either twin so an unrelated
+  // mention of the tool name elsewhere in a 3000-line file can't satisfy this.
+  function autoRespondBody(src: string): string {
+    const at = src.indexOf('function shouldAutoRespond(')
+    expect(at, 'shouldAutoRespond not found').toBeGreaterThan(-1)
+    const end = src.indexOf('\n}', at)
+    return src.slice(at, end)
+  }
+
+  it('both exempt AskUserQuestion BEFORE the bypass auto-allow', () => {
+    // Order is the whole fix: the bypass branch returns true unconditionally, so a
+    // guard placed after it would never run for the exact mode that broke (bypass
+    // auto-allowed AskUserQuestion with an empty `answers` set — 11 occurrences in
+    // production daemon logs, each one telling the model the human answered nothing).
+    for (const body of [autoRespondBody(coreSrc), autoRespondBody(templateSrc)]) {
+      const askAt = body.indexOf("toolName === 'AskUserQuestion'")
+      const bypassAt = body.indexOf("mode === 'bypass'")
+      expect(askAt).toBeGreaterThan(-1)
+      expect(bypassAt).toBeGreaterThan(-1)
+      expect(askAt).toBeLessThan(bypassAt)
+      expect(body).toMatch(/toolName === 'AskUserQuestion'\) return false/)
+    }
+  })
+
+  it('the template twin BEHAVES like daemon-core (evaluated, not just grepped)', async () => {
+    // Run the template's own function text so a copy-paste that keeps the comment
+    // but drops the `return false` can't pass. eval scope is the extracted body only.
+    const body = autoRespondBody(templateSrc)
+    const templateFn = new Function(`${body}\n}\nreturn shouldAutoRespond`)() as
+      (mode: string, tool: string | undefined) => boolean
+    const { shouldAutoRespond } = await import('../../src/providers/daemon-core.js')
+    const cases: Array<[string, string]> = [
+      ['bypass', 'AskUserQuestion'], ['plan', 'AskUserQuestion'], ['default', 'AskUserQuestion'],
+      ['bypass', 'Bash'], ['bypass', 'Write'], ['plan', 'ExitPlanMode'], ['plan', 'Read'],
+      ['auto', 'Write'], ['dontAsk', 'Write'],
+    ]
+    for (const [mode, tool] of cases) {
+      expect(templateFn(mode, tool), `${mode}/${tool}`).toBe(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        shouldAutoRespond(mode as any, tool),
+      )
+    }
+    // And pin the values themselves, so "both wrong identically" fails too.
+    expect(templateFn('bypass', 'AskUserQuestion')).toBe(false)
+    expect(templateFn('bypass', 'Bash')).toBe(true)
+  })
+})
+
+describe('durable-cron invariant daemon-standalone vs daemon-source parity', () => {
+  const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+  const templateSrc = readFile(sourcePath)
+
+  it('both treat enforcement as OPT-IN (WALNUT_ENFORCE_SESSION_CRON) with the allow override', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      // Default OFF: ALLOW is true unless the spawner explicitly set the
+      // enforce flag; WALNUT_ALLOW_DURABLE_CRON=1 still overrides (back-compat).
+      expect(src).toMatch(/ALLOW_DURABLE_CRON = process\.env\.WALNUT_ENFORCE_SESSION_CRON !== '1'/)
+      expect(src).toMatch(/process\.env\.WALNUT_ALLOW_DURABLE_CRON === '1'/)
+    }
+  })
+
+  it('both DENY a durable CronCreate permission request BEFORE the auto-allow check', () => {
+    // Order matters: a bypass-mode session hits shouldAutoRespond first and would
+    // be waved through, so the deny must come earlier in the same block.
+    for (const src of [standaloneSrc, templateSrc]) {
+      const denyAt = src.indexOf('isDurableCronRequest(toolName')
+      const autoAt = src.indexOf('if (shouldAutoRespond(s.mode, toolName))')
+      expect(denyAt).toBeGreaterThan(-1)
+      expect(autoAt).toBeGreaterThan(-1)
+      expect(denyAt).toBeLessThan(autoAt)
+      expect(src).toMatch(/durableCronDenyMessage\(\)/)
+      expect(src).toMatch(/denied durable CronCreate \(Walnut policy: session-scoped crons only\)/)
+    }
+  })
+
+  it('both run the corrective stream check on CronCreate lines (bypass mode has no permission round-trip)', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/line\.includes\('CronCreate'\)/)
+      expect(src).toMatch(/try \{ checkDurableCronCreate\(sid, s, line\)/)
+      expect(src).toMatch(/durableCronCorrectionMessage\(undefined\)/)
+      expect(src).toMatch(/durableCronNudged/)
+    }
+  })
+
+  it('template mirrors daemon-core durable predicate + messages (explicit-true only)', () => {
+    const coreSrc = readFile(corePath)
+    for (const src of [coreSrc, templateSrc]) {
+      expect(src).toMatch(/durable === true/)
+      expect(src).toMatch(/Retry the same CronCreate with durable:false/)
+      expect(src).toMatch(/call CronDelete on that task id/)
+    }
+  })
+})
+
+describe('durable-cron death-funnel strip daemon-core vs daemon-source parity', () => {
+  const templateSrc = readFile(sourcePath)
+  const coreSrc = readFile(corePath)
+
+  it('both reapSessions strip the dying session durable rows after unlinking the FIFO', () => {
+    for (const src of [coreSrc, templateSrc]) {
+      expect(src).toMatch(/stripDurableTasksForSession\(raw, sid\)/)
+      expect(src).toMatch(/stripped dead session durable crons \(Walnut policy: session-scoped only\)/)
+      // Ordering: the strip must sit inside reapSession, after the FIFO unlink
+      // and before the process-group kill (so a slow kill can't race a fire).
+      const unlink = src.indexOf('unlinkSync(session.pipePath)')
+      const strip = src.indexOf('stripDurableTasksForSession(raw, sid)')
+      const kill = src.indexOf('SIGTERM')
+      expect(unlink).toBeGreaterThan(-1)
+      expect(strip).toBeGreaterThan(unlink)
+      expect(kill).toBeGreaterThan(strip)
+    }
+  })
+
+  it('both write atomically via a same-dir tmp + rename (EXDEV-safe, no torn read)', () => {
+    for (const src of [coreSrc, templateSrc]) {
+      expect(src).toMatch(/tasksPath \+ '\.walnut-'/)
+      expect(src).toMatch(/renameSync\(tmp, tasksPath\)/)
+      expect(src).toMatch(/mode: 0o600/)
+    }
+  })
+
+  it('both gate the strip on the opt-in + allow override and only ever remove OWN rows', () => {
+    for (const src of [coreSrc, templateSrc]) {
+      expect(src).toMatch(/WALNUT_ALLOW_DURABLE_CRON/)
+      // The strip must be opt-in gated like points 1-2. daemon-core checks the
+      // env pair inline; the template funnels through the same ALLOW_DURABLE_CRON.
+      expect(src).toMatch(/WALNUT_ENFORCE_SESSION_CRON === '1'|!ALLOW_DURABLE_CRON/)
+      expect(src).toMatch(/createdBySessionId !== sid\) return true/)
+    }
+  })
+})
+
+describe('control_cancel_request pendingCtrl clear daemon-standalone vs daemon-source parity', () => {
+  const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+  const templateSrc = readFile(sourcePath)
+
+  // Incident a172ce49: the CLI withdraws a pending can_use_tool via
+  // control_cancel_request (turn abort / restart). Without these two pieces the
+  // daemon's pendingCtrl stays set forever → snapshot waiting=true → permanent
+  // amber "Waiting" badge + an unanswerable permission card in the UI.
+  it('both pre-filter the tailer intercept on the control_cancel_request substring', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      // The intercept gate is a substring pre-filter; '"control_request"' does
+      // NOT match control_cancel_request, so the cancel needs its own clause.
+      expect(src).toMatch(/line\.includes\('"control_cancel_request"'\)/)
+    }
+  })
+
+  it('both clear pendingCtrl when the cancel request_id matches', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const at = src.indexOf("parsed.type === 'control_cancel_request'")
+      expect(at, 'cancel branch missing').toBeGreaterThan(-1)
+      const branch = src.slice(at, at + 600)
+      expect(branch).toMatch(/request_id === s\.pendingCtrl\.reqId/)
+      expect(branch).toMatch(/s\.pendingCtrl = null/)
+      expect(branch).toMatch(/persistRegistry\(\)/)
+      expect(branch).toMatch(/control_cancel_request cleared pendingCtrl/)
     }
   })
 })

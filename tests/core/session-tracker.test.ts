@@ -1049,3 +1049,55 @@ describe('batchUpdateSessionRecords', () => {
     expect(written).toEqual([]);
   });
 });
+
+describe('healStalePendingPermissions (incident a172ce49)', () => {
+  // A permission request cannot outlive its CLI process, but before the
+  // control_cancel_request handler existed nothing cleared the persisted copy
+  // on dead sessions — 28 terminal rows accumulated a permanent "Waiting"
+  // badge. The startup heal clears pendingPermission ONLY on terminal records.
+  const PP = {
+    requestId: 'req-stale-1',
+    toolName: 'ExitPlanMode',
+    subtype: 'can_use_tool',
+    receivedAt: '2026-06-01T00:00:00.000Z',
+  };
+
+  it('clears pendingPermission on stopped/error records, leaves live ones alone', async () => {
+    const { healStalePendingPermissions } = await import('../../src/core/session-tracker.js');
+
+    await createSessionRecord('heal-stopped', 'task-h1', 'walnut');
+    await updateSessionRecord('heal-stopped', { process_status: 'stopped', pendingPermission: PP });
+
+    await createSessionRecord('heal-error', 'task-h2', 'walnut');
+    await updateSessionRecord('heal-error', { process_status: 'error', pendingPermission: { ...PP, requestId: 'req-stale-2' } });
+
+    // Live sessions: daemon pendingCtrl is their truth — heal must NOT touch them.
+    await createSessionRecord('heal-running', 'task-h3', 'walnut', undefined, { pid: 4242 });
+    await updateSessionRecord('heal-running', { pendingPermission: { ...PP, requestId: 'req-live-1' } });
+
+    await createSessionRecord('heal-idle', 'task-h4', 'walnut', undefined, { pid: 4243 });
+    await updateSessionRecord('heal-idle', { process_status: 'idle', pendingPermission: { ...PP, requestId: 'req-live-2' } });
+
+    const healed = await healStalePendingPermissions();
+    expect(healed).toBe(2);
+
+    expect((await getSessionByClaudeId('heal-stopped'))?.pendingPermission).toBeUndefined();
+    expect((await getSessionByClaudeId('heal-error'))?.pendingPermission).toBeUndefined();
+    expect((await getSessionByClaudeId('heal-running'))?.pendingPermission?.requestId).toBe('req-live-1');
+    expect((await getSessionByClaudeId('heal-idle'))?.pendingPermission?.requestId).toBe('req-live-2');
+  });
+
+  it('is idempotent — second run heals nothing', async () => {
+    const { healStalePendingPermissions } = await import('../../src/core/session-tracker.js');
+    await createSessionRecord('heal-idem', 'task-h5', 'walnut');
+    await updateSessionRecord('heal-idem', { process_status: 'stopped', pendingPermission: PP });
+    expect(await healStalePendingPermissions()).toBe(1);
+    expect(await healStalePendingPermissions()).toBe(0);
+  });
+
+  it('no-op on a database with no stale rows', async () => {
+    const { healStalePendingPermissions } = await import('../../src/core/session-tracker.js');
+    await createSessionRecord('heal-clean', 'task-h6', 'walnut');
+    expect(await healStalePendingPermissions()).toBe(0);
+  });
+});

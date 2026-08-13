@@ -31,6 +31,13 @@ import {
   shouldAutoRespond,
   buildControlResponse,
   decideBridgeRestart,
+  detectCronFires,
+  hasDiskCronInterest,
+  isDurableCronRequest,
+  durableCronDenyMessage,
+  durableCronCorrectionMessage,
+  cronFireMarkerText,
+  stripCronTaskById,
   type CoreSessionData,
   type RegistryEntry as CoreRegistryEntry,
   type SessionMode,
@@ -79,10 +86,6 @@ if (process.argv.includes('--version') && process.argv[2] !== 'wn') {
 // sandbox, test, ephemeral demo — which decides CLI-reap-on-exit.
 const PROD_DAEMON_DIR = '/tmp/open-walnut'
 const DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR
-// Streams live in a sibling dir so an isolated demo daemon (WALNUT_DAEMON_DIR=
-// /tmp/open-walnut-demo) gets /tmp/open-walnut-demo-streams automatically, while
-// production stays at /tmp/open-walnut-streams (byte-identical default).
-const STREAMS_DIR = process.env.WALNUT_STREAMS_DIR || `${DAEMON_DIR}-streams`
 // Home dir used to expand `~/...` paths from the app (e.g. ~/.claude/projects/...).
 // In production this is the real HOME (daemon runs as the same user as walnut, so both
 // resolve `~` identically). WALNUT_HOME_OVERRIDE lets a test point the daemon at the same
@@ -90,6 +93,20 @@ const STREAMS_DIR = process.env.WALNUT_STREAMS_DIR || `${DAEMON_DIR}-streams`
 // without it, the daemon (a separate process) would read the real ~/.claude and never see
 // the test fixtures. Same env-override pattern as WALNUT_DAEMON_DIR / WALNUT_STREAMS_DIR.
 const HOME_DIR = process.env.WALNUT_HOME_OVERRIDE || process.env.HOME || '/root'
+// Streams live under the user's HOME so they SURVIVE REBOOTS — /tmp is wiped on
+// macOS/Linux restarts, which vaporized every stream file mid-session and left
+// walnut's stored byte watermarks pointing into dead files (incident 019a7fe5:
+// the stale 85 MB watermark silently vetoed every snapshot of the recreated
+// file). Isolated daemons (tests/sandbox/demo — any non-prod WALNUT_DAEMON_DIR)
+// keep the sibling-dir derivation so their streams stay in the throwaway area.
+// LEGACY_STREAMS_DIR is the pre-2026-08 location; startup migrates dead-session
+// files from it and live sessions keep their registry-recorded absolute paths.
+const PROD_STREAMS_DIR = path.join(HOME_DIR, '.open-walnut', 'tmp', 'streams')
+// Env override is for TESTS ONLY (never set in prod) — without it a spawned
+// test daemon would migrate the REAL production /tmp/open-walnut-streams.
+const LEGACY_STREAMS_DIR = process.env.WALNUT_LEGACY_STREAMS_DIR || '/tmp/open-walnut-streams'
+const STREAMS_DIR = process.env.WALNUT_STREAMS_DIR
+  || (DAEMON_DIR === PROD_DAEMON_DIR ? PROD_STREAMS_DIR : `${DAEMON_DIR}-streams`)
 const PORT_FILE = path.join(DAEMON_DIR, 'daemon.port')
 const PID_FILE = path.join(DAEMON_DIR, 'daemon.pid')
 const INSTANCE_ID_FILE = path.join(DAEMON_DIR, 'daemon.instance')
@@ -136,6 +153,114 @@ function ensureOwnerOnlyStorage(): void {
   fs.chmodSync(STREAMS_DIR, 0o700)
   for (const root of [DAEMON_DIR, STREAMS_DIR]) {
     for (const name of fs.readdirSync(root)) repair(path.join(root, name))
+  }
+}
+
+// ── Legacy streams migration (/tmp/open-walnut-streams → HOME) ─────────────
+// One-way, loss-averse, idempotent. Runs at startup BEFORE reconcileRegistry
+// so adopted sessions see their files at the final location. Rules:
+//   - Only when STREAMS_DIR is the prod HOME location and the legacy dir exists.
+//   - A sid with a LIVE process group (per its .pgid) is SKIPPED ENTIRELY: the
+//     CLI holds an O_APPEND fd on the old inode — moving the path would split
+//     writer and readers. Its registry entry stores absolute paths, so it keeps
+//     working from the legacy dir until that process dies; a later restart
+//     migrates the files then.
+//   - Never overwrite: a same-named file already in the new dir wins (it is
+//     newer by construction — this daemon or a successor created it).
+//   - rename() first (atomic, same volume); EXDEV falls back to copy + size
+//     verify + unlink. A failed verify keeps the original in place.
+//   - .pipe files are dead FIFOs from previous daemon lives — recreated at
+//     spawn; deleted, not migrated.
+function migrateLegacyStreams(): void {
+  // Force flag is TEST-ONLY: prod triggers via the dir identity; isolated test
+  // daemons opt in explicitly with their own temp legacy/streams dirs.
+  if (STREAMS_DIR !== PROD_STREAMS_DIR && !process.env.WALNUT_FORCE_STREAMS_MIGRATION) return
+  let names: string[] = []
+  try { names = fs.readdirSync(LEGACY_STREAMS_DIR) } catch { return } // no legacy dir — done
+  if (names.length === 0) return
+
+  // Live-pgid sids: their whole file family stays put.
+  const liveSids = new Set<string>()
+  for (const f of names) {
+    if (!f.endsWith('.pgid')) continue
+    try {
+      const pid = parseInt(fs.readFileSync(path.join(LEGACY_STREAMS_DIR, f), 'utf-8').trim(), 10)
+      if (Number.isInteger(pid) && pid > 1 && isProcessGroupAlive(pid)) liveSids.add(f.slice(0, -'.pgid'.length))
+    } catch {}
+  }
+
+  let migrated = 0, skippedLive = 0, skippedExists = 0, dropped = 0, failed = 0
+  for (const f of names) {
+    const src = path.join(LEGACY_STREAMS_DIR, f)
+    const sid = f.replace(/\.(jsonl\.err|jsonl|pgid|pipe|log)$/, '')
+    if (liveSids.has(sid)) { skippedLive++; continue }
+    let st: fs.Stats
+    try { st = fs.lstatSync(src) } catch { continue }
+    if (st.isFIFO()) { try { fs.unlinkSync(src) } catch {}; dropped++; continue }
+    if (!st.isFile()) continue // symlinks/dirs: not ours — leave untouched
+    const dst = path.join(STREAMS_DIR, f)
+    if (fs.existsSync(dst)) { skippedExists++; continue }
+    try {
+      fs.renameSync(src, dst)
+      migrated++
+    } catch {
+      try {
+        fs.copyFileSync(src, dst, fs.constants.COPYFILE_EXCL)
+        if (fs.statSync(dst).size !== st.size) throw new Error('size mismatch after copy')
+        fs.unlinkSync(src)
+        migrated++
+      } catch (err) {
+        failed++
+        try { fs.unlinkSync(dst) } catch {} // never leave a half-copy shadowing the original
+        logMsg('warn', 'legacy streams migration: file failed (kept in place)', {
+          file: f, error: (err as Error).message,
+        })
+      }
+    }
+  }
+  logMsg('info', 'legacy streams migration: done', {
+    from: LEGACY_STREAMS_DIR, to: STREAMS_DIR,
+    migrated, skippedLive, skippedExists, droppedPipes: dropped, failed,
+    liveSids: [...liveSids],
+  })
+}
+
+// ── Dead-stream retention (3 months) ────────────────────────────────────────
+// Streams now live under HOME and survive reboots, so they need a lifecycle:
+// hourly, delete the file family of any sid that (a) is not in the live
+// sessions map, (b) has no live process group, and (c) hasn't been written for
+// RETENTION_MS. The conversation's real record lives in ~/.claude/projects/ —
+// the stream file is status/replay plumbing, safe to reap after the window.
+// Env overrides are TEST-ONLY (drive the sweep inside a test's timeframe).
+const STREAM_RETENTION_MS = parseInt(process.env.WALNUT_STREAM_RETENTION_MS || '', 10)
+  || 90 * 24 * 60 * 60 * 1000
+const STREAM_RETENTION_SWEEP_MS = parseInt(process.env.WALNUT_STREAM_SWEEP_MS || '', 10)
+  || 60 * 60 * 1000
+function sweepDeadStreams(): void {
+  let names: string[] = []
+  try { names = fs.readdirSync(STREAMS_DIR) } catch { return }
+  const now = Date.now()
+  const reaped = new Set<string>()
+  for (const f of names) {
+    if (!f.endsWith('.jsonl')) continue
+    const sid = f.slice(0, -'.jsonl'.length)
+    if (sessions.has(sid)) continue
+    const jsonlPath = path.join(STREAMS_DIR, f)
+    let st: fs.Stats
+    try { st = fs.statSync(jsonlPath) } catch { continue }
+    if (now - st.mtimeMs < STREAM_RETENTION_MS) continue
+    // Paranoia: a live pgid means a process still owns this family — skip.
+    try {
+      const pid = parseInt(fs.readFileSync(path.join(STREAMS_DIR, sid + '.pgid'), 'utf-8').trim(), 10)
+      if (Number.isInteger(pid) && pid > 1 && isProcessGroupAlive(pid)) continue
+    } catch {}
+    for (const ext of ['.jsonl', '.jsonl.err', '.pgid', '.pipe', '.log']) {
+      try { fs.unlinkSync(path.join(STREAMS_DIR, sid + ext)) } catch {}
+    }
+    reaped.add(sid)
+  }
+  if (reaped.size > 0) {
+    logMsg('info', 'dead-stream retention sweep: reaped', { count: reaped.size, sids: [...reaped] })
   }
 }
 
@@ -280,10 +405,24 @@ interface SessionData {
   snapshotTimer?: ReturnType<typeof setTimeout> | null
   spawnTs?: number   // latency instrumentation: CLI spawn ts
   sawInit?: boolean  // latency instrumentation: first init line seen
+  // Scheduled-task (CLI cron) fire detection — see daemon-core detectCronFires.
+  // Dedup map `${taskId}:${lastFiredAt}` → detectedAtMs; in-memory only.
+  cronWarned?: Record<string, number>
+  lastCronCheckTs?: number
+  // Disk-side cron interest cache for the idle scan (60s scans × N sessions
+  // would otherwise re-read scheduled_tasks.json every minute forever).
+  diskCronCache?: { at: number; armed: boolean; reason: 'creator' | 'lock_holder' | null }
+  // durable:true CronCreate corrections already injected, keyed by tool_use id.
+  durableCronNudged?: Record<string, number>
   // Tailer self-heal: last forced watcher rebuild ts. Session-level (not watcher
   // closure) so the rebuilt watcher inherits the cooldown — a persistent error
   // (EMFILE) can't thrash rebuild every few seconds.
   lastWatcherHealAt?: number
+  // Identity of the stream FILE (dev:ino:birthtimeMs, computed at spawn/adopt).
+  // Rides every snapshot so walnut can tell "same file, higher v" from "the
+  // file was recreated and v restarted at 0" (incident 019a7fe5). null when
+  // stat failed; recomputed lazily by streamEpochOf.
+  streamEpoch?: string | null
 }
 
 interface AgentSub {
@@ -402,6 +541,10 @@ function logStateTransition(
 
 /** Send a signal to an entire process group. Returns true if signal was delivered. */
 function killProcessGroup(pid: number, signal: NodeJS.Signals): boolean {
+  // pid ≤ 1 can only be corrupted bookkeeping (a stale registry/pgid file).
+  // kill(-1, sig) does NOT throw — POSIX broadcasts it to every process the
+  // user can signal; on 2026-08-09 that tore down an entire GUI session.
+  if (!Number.isInteger(pid) || pid <= 1) return false
   try {
     process.kill(-pid, signal)
     return true
@@ -887,12 +1030,28 @@ function drainFoldRange(session: SessionData, from: number, to: number): number 
   return boundary
 }
 
+// Stream-file identity: dev:ino:birthtimeMs. Changes exactly when the FILE is
+// recreated (reboot wiped /tmp, manual delete) — the event that resets v to 0
+// and invalidates every consumer-side watermark. Cached on the session; a
+// failed stat leaves null (walnut treats null as "epoch unknown, no reset").
+// Keep in sync with daemon-source.ts.
+function streamEpochOf(session: SessionData): string | null {
+  if (session.streamEpoch) return session.streamEpoch
+  try {
+    const st = fs.statSync(session.jsonlPath)
+    session.streamEpoch = `${st.dev}:${st.ino}:${Math.floor(st.birthtimeMs)}`
+  } catch {
+    session.streamEpoch = null
+  }
+  return session.streamEpoch
+}
+
 // Combine the pure fold with imperatively-tracked daemon facts. exitCode is
 // already normalized by reapSession (isTurnCompleteExit) by the time state
 // flips to 'dead'.
 function assembleSessionSnapshot(session: SessionData): SessionSnapshot {
   const ctrl = session.pendingCtrl
-  return assembleSnapshot({
+  const snap = assembleSnapshot({
     foldState: session.foldState,
     pendingCtrl: ctrl
       ? { requestId: ctrl.reqId, toolName: ctrl.toolName, sinceTs: ctrl.receivedAt }
@@ -900,7 +1059,14 @@ function assembleSessionSnapshot(session: SessionData): SessionSnapshot {
     dead: session.state === 'dead',
     pid: session.pid,
     exitCode: session.exitCode,
+    streamEpoch: streamEpochOf(session),
   })
+  // Disk-side durable crons arm cronActive too (fold only sees CronCreate in
+  // THIS stream file — blind after wipe/--resume/adoption). One-way OR: the
+  // walnut health monitor treats snapshot cronActive as arm-only, so a stale
+  // cache never *unarms* anything. Cache is filled by the idle scan (60s).
+  if (!snap.cronActive && session.diskCronCache && session.diskCronCache.armed) snap.cronActive = true
+  return snap
 }
 
 // snapshotDiffers (the change-compare that ignores a bare v advance) is
@@ -1743,7 +1909,7 @@ function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
         logMsg('warn', 'cmdStart: killing old-session process group before respawn', {
           sid, oldPid: existing.pid,
         })
-        try { process.kill(-existing.pid, 'SIGTERM') } catch {}
+        killProcessGroup(existing.pid, 'SIGTERM')
       }
     }
     // Mark dead so any late callbacks (subscribers, watchers) don't act on it.
@@ -1783,7 +1949,14 @@ function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
   // writers in O_APPEND every write() lands at the true EOF. Fresh spawns
   // truncate explicitly first ('a' alone never truncates).
   const pipeFd = fs.openSync(pipePath, fs.constants.O_RDWR)
-  if (!resume) { try { fs.writeFileSync(jsonlPath, '') } catch {} }
+  // Fresh spawn: unlink+recreate (NOT truncate-in-place) so the file gets a NEW
+  // inode → new streamEpoch. Truncation keeps the inode, and a same-sid relaunch
+  // would then reset v to 0 under an UNCHANGED epoch — walnut's stale watermark
+  // from the previous incarnation would veto every snapshot (the 019a7fe5 class).
+  if (!resume) {
+    try { fs.unlinkSync(jsonlPath) } catch {}
+    try { fs.writeFileSync(jsonlPath, '') } catch {}
+  }
   const outputFd = fs.openSync(jsonlPath, 'a')
   const stderrFd = fs.openSync(stderrPath, resume ? 'a' : 'w')
 
@@ -1974,6 +2147,131 @@ function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
 // interface comment for the full rationale.
 
 // Idempotent: if the session already has a watcher, does nothing.
+// ── Scheduled-task (CLI cron) fire detection ──
+// A cron fire in headless mode delivers its prompt STRAIGHT to the model —
+// nothing appears in the stream-json stdout except a bare turn start
+// (session_state_changed{running} + init), so neither the Mac nor the UI can
+// see it happened. The daemon is the only component with the cwd + the files,
+// so it checks {cwd}/.claude/scheduled_tasks.json on turn-start lines
+// (30s-throttled) and, when a recently-fired task was created by a DIFFERENT
+// session (directory-scoped lock adoption — upstream #50300/#66509):
+//   1. appends a scheduled_task_fire system marker to the stream file
+//      (history + live UI render it), and
+//   2. injects a provenance warning into the FIFO so the MODEL knows the
+//      prompt is an adopted cron, not the human.
+// Same-session fires get only the marker (normal /loop operation).
+const CRON_CHECK_THROTTLE_MS = 30_000
+
+// ── OPT-IN policy: session-scoped crons only ──
+// Full rationale + the experiment that established it: daemon-core.ts, the
+// block above isDurableCronRequest. OFF by default for the public build —
+// denying tool calls, injecting corrective messages, and rewriting
+// .claude/scheduled_tasks.json on death are opinionated interventions a
+// generic user did not ask for. Walnut sets WALNUT_ENFORCE_SESSION_CRON=1
+// at daemon spawn when config `session.cron_policy: 'session-only'`.
+// (WALNUT_ALLOW_DURABLE_CRON=1 is honored as an override for back-compat
+// with daemons already deployed with the old default.)
+const ALLOW_DURABLE_CRON = process.env.WALNUT_ENFORCE_SESSION_CRON !== '1'
+  || process.env.WALNUT_ALLOW_DURABLE_CRON === '1'
+
+// Enforcement point 2 (corrective): a bypassPermissions session never emits a
+// can_use_tool control_request, so the deny in the permission intercept can't
+// fire — the durable job is already on disk by the time we see the tool_use
+// echo. Tell the model to swap it for a session-scoped one. Once per tool_use
+// id so a re-read of the same line can't nag in a loop; `durableCronNudged` is
+// in-memory only (a respawn re-nudges, which is correct — the durable task is
+// still on disk). The FIFO write lands as queued stdin, so the model reads it
+// after the current turn, exactly like the foreign-fire provenance warning.
+function checkDurableCronCreate(sid: string, session: SessionData, line: string) {
+  if (ALLOW_DURABLE_CRON) return
+  let parsed: Record<string, unknown>
+  try { parsed = JSON.parse(line) as Record<string, unknown> } catch { return }
+  if (parsed.type !== 'assistant') return
+  const content = (parsed.message as { content?: unknown })?.content
+  if (!Array.isArray(content)) return
+  for (const block of content as Array<Record<string, unknown>>) {
+    if (block?.type !== 'tool_use') continue
+    if (!isDurableCronRequest(block.name as string | undefined, block.input)) continue
+    const key = String(block.id ?? 'unknown')
+    if (!session.durableCronNudged) session.durableCronNudged = {}
+    if (session.durableCronNudged[key]) continue
+    session.durableCronNudged[key] = Date.now()
+    // Task id isn't in the tool_use (the CLI mints it) — the model knows it
+    // from its own tool_result, so the message asks it to delete "that task id".
+    const payload = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: durableCronCorrectionMessage(undefined) },
+    })
+    const ok = writeFifoRaw(session.pipePath, payload)
+    logMsg(ok ? 'warn' : 'error',
+      'durable CronCreate observed in stream — correction ' + (ok ? 'injected' : 'FIFO write FAILED'),
+      { sid, toolUseId: key, mode: session.mode })
+  }
+}
+function checkCronFires(sid: string, session: SessionData) {
+  const now = Date.now()
+  if (session.lastCronCheckTs && now - session.lastCronCheckTs < CRON_CHECK_THROTTLE_MS) return
+  session.lastCronCheckTs = now
+  if (!session.cwd) return
+  const base = path.join(session.cwd, '.claude')
+  let tasksJson: string | null = null
+  let lockJson: string | null = null
+  try { tasksJson = fs.readFileSync(path.join(base, 'scheduled_tasks.json'), 'utf-8') } catch { return }
+  try { lockJson = fs.readFileSync(path.join(base, 'scheduled_tasks.lock'), 'utf-8') } catch {}
+  if (!session.cronWarned) session.cronWarned = {}
+  const fires = detectCronFires({ sid, tasksJson, lockJson, nowMs: now, warned: session.cronWarned })
+  for (const fire of fires) {
+    logMsg(fire.foreign ? 'warn' : 'info', 'scheduled-task fire detected', {
+      sid, taskId: fire.taskId, foreign: fire.foreign,
+      createdBySessionId: fire.createdBySessionId, lastFiredAt: fire.lastFiredAt,
+    })
+    // 1. Stream-file marker — same append pattern as handleAppendUserMarker
+    // (never the canonical JSONL). The tailer folds it (unknown system subtype
+    // = v-only, safe) and fans it out; session-history renders
+    // scheduled_task_fire as a system info row.
+    try {
+      const marker = JSON.stringify({
+        type: 'system',
+        subtype: 'scheduled_task_fire',
+        content: cronFireMarkerText(fire),
+        cron_task_id: fire.taskId,
+        cron_created_by: fire.createdBySessionId ?? null,
+        cron_foreign: fire.foreign,
+        uuid: crypto.randomUUID(),
+        session_id: sid,
+        timestamp: new Date(now).toISOString(),
+      }) + '\n'
+      fs.appendFileSync(session.jsonlPath, marker)
+    } catch (err) {
+      logMsg('warn', 'scheduled-task fire: marker append failed', { sid, error: (err as Error).message })
+    }
+    // 2. Foreign fire = an ORPHANED durable cron just hijacked this session.
+    // EVICT it from disk. We deliberately do NOT talk to the model here:
+    // injecting a provenance warning (the original design) cost a turn + context
+    // every hour and could not actually stop anything — the model is entitled to
+    // ignore an automated message, and one verifiably did (2026-08-11). A
+    // foreign fire means the creating session is not this one, so nobody in this
+    // process will ever CronDelete it; removing the row is the only thing that
+    // ends the loop. The stream marker above still tells the HUMAN what happened.
+    if (fire.foreign && !ALLOW_DURABLE_CRON) {
+      try {
+        const tasksPath = path.join(base, 'scheduled_tasks.json')
+        const strip = stripCronTaskById(tasksJson, fire.taskId)
+        if (strip.changed && strip.text != null) {
+          const tmp = tasksPath + '.walnut-' + String(process.pid) + '.tmp'
+          fs.writeFileSync(tmp, strip.text, { mode: 0o600 })
+          fs.renameSync(tmp, tasksPath)
+          logMsg('warn', 'evicted orphaned foreign cron (Walnut policy: session-scoped crons only)', {
+            sid, taskId: fire.taskId, createdBySessionId: fire.createdBySessionId, tasksPath,
+          })
+        }
+      } catch (err) {
+        logMsg('warn', 'foreign cron eviction failed', { sid, taskId: fire.taskId, error: (err as Error).message })
+      }
+    }
+  }
+}
+
 function ensureWatcher(sid: string) {
   const session = sessions.get(sid)
   if (!session) return
@@ -2124,6 +2422,20 @@ function ensureWatcher(sid: string) {
           })
         }
 
+        // ── Scheduled-task fire detection (see checkCronFires) ──
+        // A cron fire's ONLY stream evidence is a bare turn start: the CLI
+        // re-emits init + session_state_changed{running} with no user line.
+        // Check the on-disk scheduled_tasks.json on those lines (30s throttle
+        // inside makes this cheap; substring gate keeps the hot path free).
+        if (line.includes('"init"') || line.includes('"session_state_changed"')) {
+          try { checkCronFires(sid, s) } catch {}
+        }
+
+        // ── Durable-cron invariant, corrective half (see checkDurableCronCreate) ──
+        if (line.includes('CronCreate')) {
+          try { checkDurableCronCreate(sid, s, line) } catch {}
+        }
+
         // ── L2: materialize daemon-authoritative task state ──
         // Cheap substring pre-filter (task_* events are `"type":"system"` lines carrying a
         // `task_` subtype) so we JSON.parse only the relevant ~1% of lines. The applied state
@@ -2141,13 +2453,32 @@ function ensureWatcher(sid: string) {
         }
 
         // ── Permission policy intercept ──
-        if (line.includes('"control_request"') || line.includes('"control_response"')) {
+        if (line.includes('"control_request"') || line.includes('"control_response"')
+          || line.includes('"control_cancel_request"')) {
           try {
             const parsed = JSON.parse(line) as Record<string, unknown>
             if (parsed.type === 'control_request' && parsed.request_id
               && (parsed.request as Record<string, unknown>)?.subtype === 'can_use_tool') {
               const req = parsed.request as Record<string, unknown>
               const toolName = req.tool_name as string | undefined
+              // ── INVARIANT: no durable crons (see daemon-core.ts) ──
+              // Deny BEFORE the auto-allow check: a bypass-mode session would
+              // otherwise be waved through, and a durable job outlives this
+              // session to fire inside a stranger sharing the directory.
+              if (!ALLOW_DURABLE_CRON && isDurableCronRequest(toolName, req.input)) {
+                const resp = buildControlResponse(
+                  parsed.request_id as string, req, false, durableCronDenyMessage(),
+                )
+                if (writeFifoRaw(s.pipePath, resp)) {
+                  s.pendingCtrl = null
+                  try { persistRegistry() } catch {}
+                  logMsg('warn', 'denied durable CronCreate (Walnut policy: session-scoped crons only)', {
+                    sid, mode: s.mode,
+                  })
+                  continue
+                }
+                logMsg('error', 'durable CronCreate deny could not be written to FIFO', { sid })
+              }
               if (shouldAutoRespond(s.mode, toolName)) {
                 const resp = buildControlResponse(parsed.request_id as string, req, true)
                 if (writeFifoRaw(s.pipePath, resp)) {
@@ -2169,6 +2500,15 @@ function ensureWatcher(sid: string) {
               if (resp?.request_id === s.pendingCtrl.reqId) {
                 s.pendingCtrl = null
                 try { persistRegistry() } catch {}
+              }
+            } else if (parsed.type === 'control_cancel_request' && s.pendingCtrl) {
+              // CLI withdrew the request (turn aborted / restart). Without this
+              // branch pendingCtrl stays set forever → snapshot waiting=true and
+              // the UI shows a permanent Waiting badge (incident a172ce49).
+              if (parsed.request_id === s.pendingCtrl.reqId) {
+                s.pendingCtrl = null
+                try { persistRegistry() } catch {}
+                logMsg('info', 'control_cancel_request cleared pendingCtrl', { sid, requestId: parsed.request_id })
               }
             }
           } catch { /* parse failed, fall through to normal push */ }
@@ -2631,13 +2971,21 @@ function cmdGetState(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
   if (!fs.existsSync(jsonlPath)) return sendOk(ws, id, { exists: false })
   const taskState = rebuildTaskStateFromJsonl(jsonlPath, Date.now())
   // C1: disk-rebuild snapshot. No live process backs this sid (it would be in
-  // the map) → dead, no pendingCtrl, unknown pid/exitCode.
+  // the map) → dead, no pendingCtrl, unknown pid/exitCode. The epoch is stamped
+  // from the on-disk file so a pull against a dead session still lets walnut
+  // detect a recreated file (incident 019a7fe5 — this IS the reconcile path).
+  let diskEpoch: string | null = null
+  try {
+    const st = fs.statSync(jsonlPath)
+    diskEpoch = `${st.dev}:${st.ino}:${Math.floor(st.birthtimeMs)}`
+  } catch {}
   const snapshot = assembleSnapshot({
     foldState: rebuildFoldStateFromJsonl(jsonlPath).state,
     pendingCtrl: null,
     dead: true,
     pid: null,
     exitCode: null,
+    streamEpoch: diskEpoch,
   })
   return sendOk(ws, id, { exists: true, alive: false, state: 'dead', taskState, snapshot })
 }
@@ -2651,8 +2999,14 @@ function cmdRename(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
   const session = sessions.get(oldSid)
   if (!session) return sendError(ws, id, 'rename: session not found: ' + oldSid)
 
-  const oldBase = path.join(STREAMS_DIR, oldSid)
-  const newBase = path.join(STREAMS_DIR, newSid)
+  // Derive from the session's ACTUAL file location, not STREAMS_DIR: a live
+  // session spawned before the /tmp→HOME move still has its family in the
+  // legacy dir (startup migration skips live pgids), and renaming against the
+  // new dir would silently fail per-ext and then point jsonlPath at a
+  // nonexistent file — the session would go deaf.
+  const liveDir = path.dirname(session.jsonlPath)
+  const oldBase = path.join(liveDir, oldSid)
+  const newBase = path.join(liveDir, newSid)
 
   // C14: flush a pending coalesced snapshot BEFORE the re-key. pushSnapshot's
   // 50ms timer carries a generation guard (`sessions.get(sid) !== session`) that
@@ -3130,7 +3484,15 @@ async function cmdFsStat(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
 
   try {
     const st = await fs.promises.stat(filePath)
-    sendOk(ws, id, { exists: true, mtimeMs: st.mtimeMs, size: st.size })
+    // dev/ino/birthtimeMs let walnut compute the stream-file epoch
+    // (dev:ino:birthtimeMs) for a file it only sees through this RPC —
+    // required to durably reset a consumedOffset watermark that belongs to a
+    // dead file incarnation (incident inc-1786428350008: a 37.9 MB legacy-path
+    // watermark suppressed every result in the 6 MB successor file).
+    sendOk(ws, id, {
+      exists: true, mtimeMs: st.mtimeMs, size: st.size,
+      dev: st.dev, ino: st.ino, birthtimeMs: st.birthtimeMs,
+    })
   } catch (err: unknown) {
     const e = err as NodeJS.ErrnoException
     if (e.code === 'ENOENT') {
@@ -3373,10 +3735,16 @@ const SESSION_CRON_IDLE_KILL_MS = 7 * 24 * 60 * 60 * 1000   // 7 days
 // local_workflow): a wait-style bash task polls silently — its output goes to
 // the task's output_file, NOT the JSONL — so the session looks "idle" for the
 // task's whole lifetime (incident inc-1786222771315: a "wait for QA phase"
-// bash task was killed at the 2h mark while derivedRunning was 1). Extended,
-// not disabled: a genuinely lost terminal event would otherwise make the
-// process immortal, so cap the grace at 24h of total JSONL silence.
-const SESSION_BG_IDLE_KILL_MS = 24 * 60 * 60 * 1000   // 24 hours
+// bash task was killed at the 2h mark while derivedRunning was 1).
+// PRINCIPLE: a session with running background work should never be reaped.
+// The Mac-side health monitor implements exactly that (isBackgroundWorkActive
+// → skip, unbounded). This daemon-side cap exists ONLY for the one edge case
+// with no client to bail us out: a live CLI whose task framework wedged and
+// will never emit a terminal event — indistinguishable from real work, and
+// without a ceiling it's an immortal process on the remote host. 3 days of
+// TOTAL JSONL silence (not task runtime) is far beyond any legitimate silent
+// stretch; the Mac monitor protects real work long before this fires.
+const SESSION_BG_IDLE_KILL_MS = 3 * 24 * 60 * 60 * 1000   // 3 days
 const SESSION_SCAN_INTERVAL_MS = 60_000            // every 60s
 
 // ── Last-resort cron evidence: the CLI scheduler's own debug log ──
@@ -3465,10 +3833,40 @@ function scanIdleSessions() {
     const idleMs = now - mtimeMs
 
     // A CronCreate'd /loop lives in the CLI process — the loop only looks
-    // "idle" between fires, and killing the process kills the loop silently
-    // (session-only crons are never on disk). Extend the threshold to the
-    // CLI's own 7-day cron auto-expiry instead of disabling the reaper.
-    const cronArmed = Object.keys(session.foldState.cronIds).length > 0
+    // "idle" between fires, and killing the process kills the loop silently.
+    // TWO signals, either arms the protection:
+    //   1. fold — CronCreate tool_use seen in THIS stream file (covers
+    //      session-only crons, which never touch disk).
+    //   2. disk — {cwd}/.claude/scheduled_tasks.json (durable crons). The fold
+    //      goes blind on stream wipe/rebuild, on --resume respawn (history
+    //      replay re-arms the CLI scheduler with NO new CronCreate line —
+    //      lab 2026-08-10 P4b), and on adopted foreign tasks; the disk file is
+    //      the CLI's own source of truth for all of those.
+    // Extend the threshold to the CLI's own 7-day cron auto-expiry instead of
+    // disabling the reaper.
+    const foldCronArmed = Object.keys(session.foldState.cronIds).length > 0
+    let cronArmed = foldCronArmed
+    if (!cronArmed && session.cwd) {
+      // 10-min TTL cache: the scan runs every 60s per session; the underlying
+      // file changes on the CLI's own schedule (create/fire), and staleness
+      // only delays the *lift* of protection, never a kill.
+      if (session.diskCronCache && now - session.diskCronCache.at < 10 * 60_000) {
+        cronArmed = session.diskCronCache.armed
+      } else {
+        let tasksJson: string | null = null
+        let lockJson: string | null = null
+        try { tasksJson = fs.readFileSync(path.join(session.cwd, '.claude', 'scheduled_tasks.json'), 'utf-8') } catch {}
+        try { lockJson = fs.readFileSync(path.join(session.cwd, '.claude', 'scheduled_tasks.lock'), 'utf-8') } catch {}
+        const disk = hasDiskCronInterest({ sid, tasksJson, lockJson, nowMs: now })
+        session.diskCronCache = { at: now, armed: disk.armed, reason: disk.reason }
+        if (disk.armed) {
+          cronArmed = true
+          logMsg('info', 'idle scan: disk scheduled_tasks arms cron protection', {
+            sid, pid, reason: disk.reason, liveTasks: disk.liveTasks,
+          })
+        }
+      }
+    }
     // A running background task (daemon's OWN taskState — same fold the
     // watcher feeds) also outlives JSONL silence: wait-style bash tasks write
     // to output_file, not the stream. Killing the CLI kills the task
@@ -4022,6 +4420,14 @@ if (action === '--start') {
 
   ensureOwnerOnlyStorage()
 
+  // Move dead-session stream files from the legacy /tmp location into the
+  // reboot-surviving HOME dir. MUST run before reconcileRegistry: adopted
+  // sessions resolve their files by the registry's absolute paths, and the
+  // pgid scan below walks STREAMS_DIR.
+  try { migrateLegacyStreams() } catch (err) {
+    logMsg('error', 'legacy streams migration failed', { error: (err as Error).message })
+  }
+
   // Phase C: startup reconcile — adopts live orphans (1s poll) and reaps
   // any entries whose pids are gone or recycled. Runs BEFORE the legacy
   // cleanup sweep so the registry's "known good" pids aren't misclassified
@@ -4113,6 +4519,12 @@ if (action === '--start') {
 
   // Start session idle scanner (every 60s)
   setInterval(scanIdleSessions, SESSION_SCAN_INTERVAL_MS)
+
+  // Dead-stream retention: hourly sweep of >7d-idle files for sids with no
+  // live session/process. First pass shortly after startup (not immediately —
+  // let reconcile finish adopting before judging liveness by the map).
+  setTimeout(sweepDeadStreams, 60_000)
+  setInterval(sweepDeadStreams, STREAM_RETENTION_SWEEP_MS)
 
   // Cloud bridge self-heal: a persisted bridge.json re-dials without waiting
   // for the Mac to push bridge.configure again.

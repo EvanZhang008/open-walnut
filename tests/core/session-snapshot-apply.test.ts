@@ -835,3 +835,169 @@ describe('legacy-writer gate inside applyUpdateToSession', () => {
     expect((debugs[1][1] as { suppressedCount?: number }).suppressedCount).toBe(3)
   })
 })
+
+// ── streamEpoch: file-identity watermark reset (incident 019a7fe5) ──────────
+// The stream file was recreated (reboot wiped /tmp) → v restarted at 0 while
+// the record kept the OLD incarnation's 85 MB consumedOffset. Every snapshot
+// of the new file was silently 'stale' — the record showed Running for a CLI
+// idle for a day, with ZERO divergence logs (drop happened before the compare).
+describe('applySnapshot — streamEpoch reset (incident 019a7fe5)', () => {
+  const OLD_EPOCH = '16777231:111:1754000000000'
+  const NEW_EPOCH = '16777231:222:1754600000000'
+
+  it('INCIDENT SHAPE (shadow): epoch change unblocks the v-gate so the divergence is finally VISIBLE', async () => {
+    setSnapshotModeForTests('shadow')
+    const warnSpy = vi.spyOn(log.session, 'warn')
+    const sid = 'epoch-shadow'
+    // The poisoned record: huge dead-file watermark, stuck 'running'.
+    await seedSession(sid, {
+      process_status: 'running', consumedOffset: 85_688_560, streamEpoch: OLD_EPOCH,
+    })
+    // New incarnation's settled snapshot: v far BELOW the stale watermark.
+    const res = await applySnapshot(sid, snap({
+      v: 16_225_380, cliState: 'idle', turnActive: false, streamEpoch: NEW_EPOCH,
+      lastResult: { isError: false, endOffset: 16_225_000 },
+    }), 'daemon-push')
+    // Without the epoch reset this was outcome:'stale'. Now it reaches the compare.
+    expect(res).toMatchObject({ outcome: 'shadow', diverged: true, projected: 'idle' })
+    expect(warnSpy.mock.calls.find(([msg]) => msg === 'snapshot stream-epoch changed — resetting watermarks')).toBeTruthy()
+    // Shadow never writes: record untouched (incl. the stale watermark + epoch).
+    const after = await getSessionByClaudeId(sid)
+    expect(after?.process_status).toBe('running')
+    expect(after?.consumedOffset).toBe(85_688_560)
+    expect(after?.streamEpoch).toBe(OLD_EPOCH)
+  })
+
+  it('INCIDENT SHAPE (enforce): converges the record and RESETS the watermark to the new file', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'epoch-enforce'
+    await seedSession(sid, {
+      process_status: 'running', consumedOffset: 85_688_560, streamEpoch: OLD_EPOCH,
+    })
+    const res = await applySnapshot(sid, snap({
+      v: 16_225_380, cliState: 'idle', turnActive: false, streamEpoch: NEW_EPOCH,
+      lastResult: { isError: false, endOffset: 16_225_000 },
+    }), 'daemon-push')
+    expect(res).toMatchObject({ outcome: 'applied', projected: 'idle' })
+    const after = await getSessionByClaudeId(sid)
+    expect(after?.process_status).toBe('idle')
+    expect(after?.streamEpoch).toBe(NEW_EPOCH)
+    // Settled snapshot → watermark adopted at the NEW file's v (regression
+    // 85 MB → 16 MB sanctioned by the epoch-reset arbitration in the tracker).
+    expect(after?.consumedOffset).toBe(16_225_380)
+  })
+
+  it('enforce: epoch change on a MID-TURN snapshot resets consumedOffset to 0 (no mid-turn adoption)', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'epoch-midturn'
+    await seedSession(sid, {
+      process_status: 'idle', consumedOffset: 85_688_560, streamEpoch: OLD_EPOCH,
+    })
+    const res = await applySnapshot(sid, snap({
+      v: 5_000, cliState: 'running', turnActive: true, streamEpoch: NEW_EPOCH,
+    }), 'daemon-push')
+    expect(res).toMatchObject({ outcome: 'applied', projected: 'running' })
+    const after = await getSessionByClaudeId(sid)
+    // consumedOffset is a TURN-END coordinate (C15): a running snapshot may not
+    // plant it mid-turn, but the dead file's 85 MB floor must go — reset to 0.
+    expect(after?.consumedOffset).toBe(0)
+    expect(after?.streamEpoch).toBe(NEW_EPOCH)
+  })
+
+  it('enforce: first sight of an epoch (record has none) stamps it without resetting the watermark', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'epoch-first-sight'
+    await seedSession(sid, { process_status: 'running', consumedOffset: 1_000 })
+    const res = await applySnapshot(sid, snap({
+      v: 2_000, cliState: 'idle', turnActive: false, streamEpoch: NEW_EPOCH,
+      lastResult: { isError: false, endOffset: 1_990 },
+    }), 'test')
+    expect(res).toMatchObject({ outcome: 'applied', projected: 'idle' })
+    const after = await getSessionByClaudeId(sid)
+    expect(after?.streamEpoch).toBe(NEW_EPOCH)
+    expect(after?.consumedOffset).toBe(2_000) // normal monotonic adoption, not a reset
+  })
+
+  it('UNCHANGED epoch keeps the normal v-gate (a below-watermark snapshot is still stale)', async () => {
+    setSnapshotModeForTests('shadow')
+    const sid = 'epoch-same'
+    await seedSession(sid, {
+      process_status: 'running', consumedOffset: 85_688_560, streamEpoch: OLD_EPOCH,
+    })
+    const res = await applySnapshot(sid, snap({
+      v: 16_225_380, cliState: 'idle', turnActive: false, streamEpoch: OLD_EPOCH,
+      lastResult: { isError: false, endOffset: 16_225_000 },
+    }), 'test')
+    expect(res.outcome).toBe('stale')
+  })
+
+  it('epoch-less snapshot (old daemon, version skew) never triggers a reset', async () => {
+    setSnapshotModeForTests('shadow')
+    const sid = 'epoch-skew'
+    await seedSession(sid, {
+      process_status: 'running', consumedOffset: 85_688_560, streamEpoch: OLD_EPOCH,
+    })
+    const res = await applySnapshot(sid, snap({
+      v: 16_225_380, cliState: 'idle', turnActive: false, streamEpoch: null,
+      lastResult: { isError: false, endOffset: 16_225_000 },
+    }), 'test')
+    expect(res.outcome).toBe('stale')
+  })
+
+  it('user terminal intent still outranks a same-epoch snapshot, but an epoch change with live evidence supersedes', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'epoch-user-intent'
+    await seedSession(sid, {
+      process_status: 'stopped', status_changed_by: 'user', status_reason: 'user_stopped',
+      consumedOffset: 85_688_560, streamEpoch: OLD_EPOCH,
+    })
+    // Terminal-projecting snapshot of the NEW file: still just a label — user wins.
+    const label = await applySnapshot(sid, snap({
+      v: 100, cliState: 'dead', turnActive: false, exitCode: 0, streamEpoch: NEW_EPOCH,
+    }), 'test')
+    expect(label).toMatchObject({ outcome: 'skipped', reason: 'user-terminal-intent' })
+    // Contradicting evidence (running) in the new incarnation: beyond-watermark
+    // requirement collapses (all of the new file is "beyond" the dead file).
+    const contradict = await applySnapshot(sid, snap({
+      v: 100, cliState: 'running', turnActive: true, streamEpoch: NEW_EPOCH,
+    }), 'test')
+    expect(contradict).toMatchObject({ outcome: 'applied', projected: 'running' })
+  })
+})
+
+// ── tracker arbitration: the epoch-gated consumedOffset regression ──────────
+describe('applyUpdateToSession — epoch-gated consumedOffset arbitration', () => {
+  it('rejects a watermark regression WITHOUT an epoch change', async () => {
+    const sid = 'arb-no-epoch'
+    await seedSession(sid, { consumedOffset: 10_000, streamEpoch: 'e1' })
+    await updateSessionRecord(sid, { consumedOffset: 500 } as never)
+    expect((await getSessionByClaudeId(sid))?.consumedOffset).toBe(10_000)
+  })
+
+  it('accepts a watermark regression WITH an epoch change (and logs it)', async () => {
+    const warnSpy = vi.spyOn(log.session, 'warn')
+    const sid = 'arb-epoch-reset'
+    await seedSession(sid, { consumedOffset: 10_000, streamEpoch: 'e1' })
+    await updateSessionRecord(sid, { consumedOffset: 500, streamEpoch: 'e2' } as never)
+    const after = await getSessionByClaudeId(sid)
+    expect(after?.consumedOffset).toBe(500)
+    expect(after?.streamEpoch).toBe('e2')
+    expect(warnSpy.mock.calls.find(([msg]) => msg === 'consumedOffset epoch reset accepted')).toBeTruthy()
+  })
+
+  it('an epoch change never excuses an INVALID offset (sentinel still rejected)', async () => {
+    const sid = 'arb-epoch-invalid'
+    await seedSession(sid, { consumedOffset: 10_000, streamEpoch: 'e1' })
+    await updateSessionRecord(sid, { consumedOffset: Number.MAX_SAFE_INTEGER, streamEpoch: 'e2' } as never)
+    const after = await getSessionByClaudeId(sid)
+    expect(after?.consumedOffset).toBe(10_000) // poisoned sentinel dropped
+    expect(after?.streamEpoch).toBe('e2') // the epoch stamp itself still lands
+  })
+
+  it('streamEpoch survives the SQL round-trip (payload-spilled field)', async () => {
+    const sid = 'arb-epoch-persist'
+    await seedSession(sid, { streamEpoch: 'dev:ino:birth' })
+    closeDb() // force a re-read from disk
+    expect((await getSessionByClaudeId(sid))?.streamEpoch).toBe('dev:ino:birth')
+  })
+})

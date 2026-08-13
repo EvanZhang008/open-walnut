@@ -132,12 +132,13 @@ class MockLocalDaemonFileReader {
     }
   }
 
-  async stat(remotePath: string): Promise<{ mtimeMs: number; size: number } | null> {
+  async stat(remotePath: string): Promise<{ mtimeMs: number; size: number; epoch?: string } | null> {
     const abs = await this.resolve(remotePath);
     if (!abs) return null;
     try {
       const s = await fsp.stat(abs);
-      return { mtimeMs: s.mtimeMs, size: s.size };
+      // epoch mirrors the real reader: dev:ino:birthtimeMs file-incarnation id.
+      return { mtimeMs: s.mtimeMs, size: s.size, epoch: `${s.dev}:${s.ino}:${Math.floor(s.birthtimeMs)}` };
     } catch {
       return null;
     }

@@ -33,6 +33,7 @@ import { log } from '../logging/index.js'
 import {
   getSnapshotStatusMode,
   markSnapshotCovered,
+  unmarkSnapshotCovered,
   getAppliedV,
   putBoundedEntry,
   SNAPSHOT_REGISTRY_CAP,
@@ -217,6 +218,36 @@ export async function applySnapshot(
   const projected = projectProcessStatus(snapshot)
   const actual = record.process_status
 
+  // ── Stream-file epoch: detect "the file was recreated" ────────────────────
+  // v is a byte offset INTO ONE FILE INCARNATION. When the file is recreated
+  // (reboot wiped /tmp, fresh same-sid spawn), offsets restart at 0 while the
+  // record still holds the previous incarnation's watermark — without this, the
+  // v-gate below silently vetoes EVERY snapshot of the new file forever
+  // (incident 019a7fe5: 85 MB stale watermark vs a 16 MB successor file; the
+  // record showed Running for a CLI that had been idle for a day, and not one
+  // divergence line was logged because the drop happened before the compare).
+  // A changed epoch invalidates BOTH coordinates: the in-memory appliedV and
+  // the durable consumedOffset. The reset is epoch-gated in the tracker's
+  // arbitration (see applyUpdateToSession), so this is the sanctioned path.
+  const epochChanged = typeof snapshot.streamEpoch === 'string' && snapshot.streamEpoch.length > 0
+    && typeof record.streamEpoch === 'string' && record.streamEpoch.length > 0
+    && snapshot.streamEpoch !== record.streamEpoch
+  if (epochChanged) {
+    log.session.warn('snapshot stream-epoch changed — resetting watermarks', {
+      sessionId, prevEpoch: record.streamEpoch, nextEpoch: snapshot.streamEpoch,
+      staleConsumedOffset: record.consumedOffset ?? null, snapshotV: snapshot.v,
+      mode, source,
+    })
+    // In-memory gate: forget the old incarnation's appliedV in every mode —
+    // shadow's divergence compare below must not be starved by a dead file's
+    // coordinates. Coverage re-marks right after via markSnapshotCovered.
+    unmarkSnapshotCovered(sessionId)
+  }
+  // First sight of an epoch (record has none yet): stamp it. Harmless in
+  // shadow? No — stamping requires a record write, which shadow must not do.
+  // So epoch stamping happens only on enforce-mode writes below; shadow relies
+  // on the in-memory reset above within each process lifetime.
+
   // ── Terminal USER intent outranks snapshot labeling (C4) ──────────────────
   // The user clicked Stop: walnut records ('user','user_stopped','stopped') and
   // kills the CLI. The reap produces a death snapshot whose v is BEYOND the
@@ -233,7 +264,9 @@ export async function applySnapshot(
     if (TERMINAL.has(projected)) {
       return { outcome: 'skipped', reason: 'user-terminal-intent' }
     }
-    if (snapshot.v <= (record.consumedOffset ?? 0)) {
+    // The beyond-watermark requirement only makes sense within one incarnation;
+    // a new file's evidence is all "beyond" the dead file's watermark.
+    if (!epochChanged && snapshot.v <= (record.consumedOffset ?? 0)) {
       return { outcome: 'skipped', reason: 'user-terminal-intent' }
     }
   }
@@ -246,7 +279,10 @@ export async function applySnapshot(
   // stale drop — a stale snapshot is not evidence, so it must not grant
   // coverage either (coverage and appliedV are the same registry entry now; see
   // session-snapshot-gate.ts).
-  const gate = Math.max(
+  // EPOCH EXCEPTION: a changed epoch means both floors are coordinates in a
+  // DEAD file — comparing the new file's v against them is meaningless, so the
+  // gate collapses to 0 (appliedV was already cleared above).
+  const gate = epochChanged ? 0 : Math.max(
     getAppliedV(sessionId) ?? 0,
     typeof record.consumedOffset === 'number' ? record.consumedOffset : 0,
   )
@@ -300,6 +336,16 @@ export async function applySnapshot(
   // Turn-END watermark only (C15) — a mid-turn 'running' projection writes the
   // status WITHOUT touching consumedOffset.
   if (adoptWatermark) updates.consumedOffset = snapshot.v
+  // Stamp/refresh the file identity alongside anything that references its
+  // coordinate space. On an epoch CHANGE the watermark must move to the new
+  // file even mid-turn (v=0 floor beats a dead file's 85 MB watermark): the
+  // tracker's arbitration accepts the pair (streamEpoch change + offset) as
+  // the sanctioned reset. First-sight stamping rides adoptWatermark writes.
+  if (typeof snapshot.streamEpoch === 'string' && snapshot.streamEpoch.length > 0
+    && (epochChanged || adoptWatermark || !record.streamEpoch)) {
+    updates.streamEpoch = snapshot.streamEpoch
+    if (epochChanged && !adoptWatermark) updates.consumedOffset = 0
+  }
   // Clear stale error text on any non-error convergence; on 'error' keep the
   // existing message (the snapshot has no richer text to offer).
   if (projected !== 'error') updates.errorMessage = undefined
@@ -311,6 +357,15 @@ export async function applySnapshot(
       // Re-checked UNDER the tracker's write lock — the check-then-act above
       // spans awaits, so this is the only place the decision is atomic (C5).
       const currentOffset = typeof current.consumedOffset === 'number' ? current.consumedOffset : -1
+
+      // EPOCH RESET: the stored offset is a dead file's coordinate — none of
+      // the same-incarnation ordering rules below apply. Recheck the change
+      // under the lock (a concurrent applier may have already stamped it).
+      if (epochChanged) {
+        return typeof current.streamEpoch !== 'string'
+          || current.streamEpoch !== snapshot.streamEpoch
+          || current.process_status !== projected
+      }
 
       // (1) MONOTONICITY: refuse a snapshot that predates the durable turn-END
       // watermark. Without this the write predicate never REQUIRED v to move
@@ -328,8 +383,10 @@ export async function applySnapshot(
       // new at the same v and passes.
       if (currentOffset === snapshot.v && !outOfBand) return false
 
-      // (3) Something must actually change.
-      return current.process_status !== projected || (adoptWatermark && currentOffset < snapshot.v)
+      // (3) Something must actually change (a first-sight epoch stamp counts).
+      return current.process_status !== projected
+        || (adoptWatermark && currentOffset < snapshot.v)
+        || (typeof updates.streamEpoch === 'string' && current.streamEpoch !== updates.streamEpoch)
     },
   )
   if (!updated) return { outcome: 'skipped', reason: 'predicate-false', projected }

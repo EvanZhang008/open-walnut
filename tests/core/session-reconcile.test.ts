@@ -31,7 +31,7 @@ import { mockLocalDaemonReader } from '../helpers/mock-local-daemon-reader.js'
 vi.mock('../../src/constants.js', () => createMockConstants())
 vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader())
 
-import { foldSessionTail, fetchStreamTailFold, reconcileProcessStatus, daemonStreamPath } from '../../src/core/session-reconcile.js'
+import { foldSessionTail, fetchStreamTailFold, reconcileProcessStatus, daemonStreamPath, daemonStreamPathCandidates, isStaleWatermark } from '../../src/core/session-reconcile.js'
 import {
   createSessionRecord,
   updateSessionRecord,
@@ -740,12 +740,33 @@ describe('reconcileProcessStatus — stale-evidence vetoes (incident inc-1783644
 })
 
 describe('daemonStreamPath', () => {
-  it('remote host → fixed production path', () => {
-    expect(daemonStreamPath('sid-1', 'clouddev')).toBe('/tmp/open-walnut-streams/sid-1.jsonl')
+  it('remote host → HOME primary with legacy /tmp fallback', () => {
+    expect(daemonStreamPathCandidates('sid-1', 'clouddev')).toEqual([
+      '~/.open-walnut/tmp/streams/sid-1.jsonl',
+      '/tmp/open-walnut-streams/sid-1.jsonl',
+    ])
+    expect(daemonStreamPath('sid-1', 'clouddev')).toBe('~/.open-walnut/tmp/streams/sid-1.jsonl')
   })
-  it('local → honors WALNUT_STREAMS_DIR isolation', () => {
+  it('local → honors WALNUT_STREAMS_DIR isolation (single candidate)', () => {
     expect(daemonStreamPath('sid-1', null)).toBe(path.join(streamsDir, 'sid-1.jsonl'))
     expect(daemonStreamPath('sid-1', '__local__')).toBe(path.join(streamsDir, 'sid-1.jsonl'))
+    expect(daemonStreamPathCandidates('sid-1', null)).toHaveLength(1)
+  })
+  it('local prod (no env overrides) → HOME primary with legacy fallback', () => {
+    const savedStreams = process.env.WALNUT_STREAMS_DIR
+    const savedDaemon = process.env.WALNUT_DAEMON_DIR
+    delete process.env.WALNUT_STREAMS_DIR
+    delete process.env.WALNUT_DAEMON_DIR
+    try {
+      expect(daemonStreamPathCandidates('sid-1', null)).toEqual([
+        path.join(os.homedir(), '.open-walnut', 'tmp', 'streams', 'sid-1.jsonl'),
+        '/tmp/open-walnut-streams/sid-1.jsonl',
+      ])
+    } finally {
+      process.env.WALNUT_STREAMS_DIR = savedStreams
+      if (savedDaemon === undefined) delete process.env.WALNUT_DAEMON_DIR
+      else process.env.WALNUT_DAEMON_DIR = savedDaemon
+    }
   })
 })
 
@@ -905,6 +926,112 @@ describe('fetchStreamTailFold — whale-turn watermark fallback (incident 57b125
     if (typeof result !== 'string') {
       expect(result.fold.anchorSynthetic).toBeUndefined()
       expect(result.fold.turnEnded).toBe(true)
+    }
+  })
+})
+
+// ── Incident inc-1786428350008: dead-incarnation watermark suppresses the real result ──
+// A session spawned before the /tmp→HOME streams-dir move carried a
+// consumedOffset measured in the LEGACY file (37.9 MB). Its respawn wrote a
+// fresh HOME file starting at offset ~0; every event in the new (6 MB) file
+// sat "below" the stale watermark, so the live path suppressed the real
+// end-of-turn result as a replay and the task never reached AGENT_COMPLETE.
+// The positional veto in reconcileProcessStatus had the same blindness — the
+// reconciler could never heal what the live path suppressed.
+
+describe('isStaleWatermark — dead-incarnation detection', () => {
+  it('offset beyond EOF proves a different file', () => {
+    expect(isStaleWatermark(
+      { consumedOffset: 37_982_175 },
+      { fileSize: 6_030_794 },
+    )).toBe(true)
+  })
+
+  it('epoch mismatch proves a recreated file even when the offset fits', () => {
+    expect(isStaleWatermark(
+      { consumedOffset: 100, streamEpoch: '1:111:1000' },
+      { fileSize: 5_000, streamEpoch: '1:222:2000' },
+    )).toBe(true)
+  })
+
+  it('same epoch + in-range offset is NOT stale', () => {
+    expect(isStaleWatermark(
+      { consumedOffset: 100, streamEpoch: '1:111:1000' },
+      { fileSize: 5_000, streamEpoch: '1:111:1000' },
+    )).toBe(false)
+  })
+
+  it('missing epochs + in-range offset is NOT stale (no proof)', () => {
+    expect(isStaleWatermark({ consumedOffset: 100 }, { fileSize: 5_000 })).toBe(false)
+  })
+
+  it('no watermark → never stale', () => {
+    expect(isStaleWatermark({}, { fileSize: 5_000, streamEpoch: '1:2:3' })).toBe(false)
+    expect(isStaleWatermark({ consumedOffset: 0 }, { fileSize: 5_000 })).toBe(false)
+  })
+})
+
+describe('reconcileProcessStatus — stale watermark from a dead file incarnation (incident inc-1786428350008)', () => {
+  it('INCIDENT REPLAY: watermark > fileSize → positional veto yields, record converges + phase syncs + epoch stamped', async () => {
+    const { addTaskFull, getTask } = await import('../../src/core/task-manager.js')
+    const task = await addTaskFull({
+      title: 'incident task', type: 'task', status: 'in_progress', phase: 'IN_PROGRESS',
+      project: 'proj', source: 'local', created_at: new Date().toISOString(),
+    } as any)
+
+    const sid = 'inc-dead-incarnation'
+    // The NEW (recreated) stream file: a full clean turn, ~small.
+    await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid), stateEvent(sid, 'idle')])
+    await createSessionRecord(sid, task.id, 'proj', CWD)
+    const record = await updateSessionRecord(sid, {
+      process_status: 'running',
+      last_status_change: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      // Watermark measured in the DEAD legacy file — far beyond the new file's EOF.
+      consumedOffset: 37_982_175,
+    })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: false })
+    expect(outcome.converged).toBe(true)
+    expect((outcome as { to?: string }).to).toBe('stopped')
+    expect((await getTask(task.id)).phase).toBe('AGENT_COMPLETE')
+
+    // The record must be durably healed: new-epoch stamp + watermark now a
+    // coordinate of the NEW file (tracker accepted the regression because the
+    // epoch changed in the same patch).
+    const after = await getSessionByClaudeId(sid)
+    expect(after?.process_status).toBe('stopped')
+    expect(typeof after?.streamEpoch).toBe('string')
+    expect(after!.consumedOffset!).toBeLessThan(37_982_175)
+  })
+
+  it('same-incarnation consumed result still vetoes (the fix must not break inc-1783644415695)', async () => {
+    const sid = 'inc-still-vetoes'
+    const lines = [initEvent(sid), userEvent(sid, 'yesterday'), resultEvent(sid, true)]
+    await writeStream(sid, lines)
+    const fileSize = lines.join('\n').length + 1
+    // Record carries the CURRENT file's epoch → watermark is same-incarnation.
+    const streamFile = path.join(streamsDir, `${sid}.jsonl`)
+    const st = await fsp.stat(streamFile)
+    await createSessionRecord(sid, '', 'proj', CWD, { pid: process.pid })
+    const record = await updateSessionRecord(sid, {
+      process_status: 'running',
+      last_status_change: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      consumedOffset: fileSize,
+      streamEpoch: `${st.dev}:${st.ino}:${Math.floor(st.birthtimeMs)}`,
+    })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: true })
+    expect(outcome).toEqual({ converged: false, reason: 'result-already-consumed' })
+  })
+
+  it('fetchStreamTailFold reports the stream file epoch', async () => {
+    const sid = 'inc-epoch-reported'
+    await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid)])
+    const result = await fetchStreamTailFold(sid, null)
+    expect(typeof result).not.toBe('string')
+    if (typeof result !== 'string') {
+      const st = await fsp.stat(path.join(streamsDir, `${sid}.jsonl`))
+      expect(result.streamEpoch).toBe(`${st.dev}:${st.ino}:${Math.floor(st.birthtimeMs)}`)
     }
   })
 })

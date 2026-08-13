@@ -50,7 +50,7 @@ export class RemoteSessionManager implements SessionManager {
   private _pid: number | null = null
   private _remoteOutputFile: string | null = null
   private _hasPipe = false
-  // Byte cursor into the daemon's STREAM file (/tmp/open-walnut-streams/<sid>.jsonl).
+  // Byte cursor into the daemon's STREAM file (~/.open-walnut/tmp/streams/<sid>.jsonl).
   // Only an ABSOLUTE position is a valid fromOffset for daemon attach. It is
   // absolute only after start()/attach() adopted the daemon-reported offset —
   // _cursorValid tracks that. A fresh RSM (e.g. created by attachToExisting

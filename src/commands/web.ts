@@ -154,6 +154,11 @@ async function runEphemeralLauncher(): Promise<void> {
       if (/\.sqlite(-wal|-shm)?$/.test(src)) return false
       // Skip session stream files (large, not needed)
       if (src.includes(path.join('sessions', 'streams'))) return false
+      // Skip the runtime tmp dir — since streams moved to ~/.open-walnut/tmp/
+      // it holds live FIFO .pipe files, and cpSync on a FIFO dies with
+      // ERR_INTERNAL_ASSERTION "Unreachable code" (cp-sync getStats).
+      if (src.includes(path.join(path.sep, 'tmp', path.sep)) ||
+          src.endsWith(path.join(path.sep, 'tmp'))) return false
       // Skip images dir (can be large)
       if (src.includes(path.join(path.sep, 'images', path.sep)) ||
           src.endsWith(path.join(path.sep, 'images'))) return false

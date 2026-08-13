@@ -31,7 +31,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { SESSION_STREAMS_DIR } from '../constants.js'
-import { daemonStreamPath } from '../core/session-reconcile.js'
+import { daemonStreamPathCandidates } from '../core/session-reconcile.js'
 import type { SessionRecord } from '../core/types.js'
 
 /**
@@ -67,7 +67,7 @@ export function isLocalJsonlFresh(session: SessionRecord, windowMs: number): boo
   // structurally dead. Check both; the FRESHEST mtime wins (a stale legacy
   // leftover must not out-vote the live daemon file).
   const candidates = [
-    daemonStreamPath(session.claudeSessionId, null),
+    ...daemonStreamPathCandidates(session.claudeSessionId, null),
     path.join(SESSION_STREAMS_DIR, `${session.claudeSessionId}.jsonl`),
   ]
   let newestMtime = -1

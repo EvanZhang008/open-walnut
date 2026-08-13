@@ -703,6 +703,11 @@ export async function checkSessionLimit(
       const victim = evictable[i];
       log.session.warn('evicting idle session for capacity', { sessionId: victim.claudeSessionId, pid: victim.pid });
       if (victim.pid != null) {
+        // Mark first — an unmarked kill surfaces as a spurious "init failed" error toast.
+        try {
+          const { sessionRunner } = await import('../providers/claude-code-session.js');
+          sessionRunner.markExpectedTeardown(victim.claudeSessionId, 'capacity_eviction');
+        } catch { /* runner unavailable — the kill is still correct */ }
         try { process.kill(victim.pid, 'SIGINT') } catch (err) { log.session.warn('SIGINT failed during eviction', { pid: victim.pid, error: String(err) }); }
       }
       await updateSessionRecord(victim.claudeSessionId, {
@@ -847,6 +852,50 @@ export async function listSessionsForHealthScan(): Promise<SessionRecord[]> {
     )
   `).all(cutoff) as Record<string, any>[];
   return rows.map(rowToSession);
+}
+
+/**
+ * One-shot startup heal (incident a172ce49): clear pendingPermission left on
+ * TERMINAL records. A permission request dies with its CLI process — the CLI
+ * withdraws it (control_cancel_request) or it simply can't be answered once the
+ * process is gone — but before the cancel handler existed nothing ever cleared
+ * the persisted copy, so dead sessions kept a permanent amber "Waiting" badge
+ * and an unanswerable card (28 such rows accumulated since June). Live
+ * (running/idle) records are NOT touched here: their truth is the daemon's
+ * pendingCtrl, reconciled on attach. Uses json_extract on the payload column
+ * (pendingPermission lives in payload, not its own column).
+ */
+export async function healStalePendingPermissions(): Promise<number> {
+  await ensureSessionInit();
+  const db = getDb();
+  if (!db) return 0;
+  const rows = db.prepare(`
+    SELECT * FROM sessions
+    WHERE process_status IN ('stopped', 'error')
+      AND payload IS NOT NULL
+      AND json_extract(payload, '$.pendingPermission') IS NOT NULL
+  `).all() as Record<string, any>[];
+  let healed = 0;
+  for (const row of rows) {
+    const record = rowToSession(row);
+    try {
+      await updateSessionRecord(record.claudeSessionId, { pendingPermission: undefined });
+      healed++;
+      log.session.info('healed stale pendingPermission on terminal session', {
+        sessionId: record.claudeSessionId,
+        requestId: record.pendingPermission?.requestId,
+        toolName: record.pendingPermission?.toolName,
+        process_status: record.process_status,
+        receivedAt: record.pendingPermission?.receivedAt,
+      });
+    } catch (err) {
+      log.session.warn('failed to heal stale pendingPermission', {
+        sessionId: record.claudeSessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return healed;
 }
 
 /**
@@ -1260,8 +1309,23 @@ function applyUpdateToSession(
     const next = updates.consumedOffset;
     const invalid = typeof next !== 'number' || !Number.isInteger(next)
       || next < 0 || next >= Number.MAX_SAFE_INTEGER;
+    // Monotonicity holds WITHIN one stream-file incarnation. A patch that also
+    // changes `streamEpoch` is the sanctioned epoch-reset (the file was
+    // recreated, offsets restarted at 0 — incident 019a7fe5): the regression
+    // check must yield or the stale watermark from the dead file is permanent.
+    // Validity still applies — an epoch change never excuses NaN/negative/
+    // MAX_SAFE_INTEGER.
+    const epochReset = typeof updates.streamEpoch === 'string'
+      && updates.streamEpoch !== session.streamEpoch;
     const regression = typeof session.consumedOffset === 'number' && !invalid
-      && next <= session.consumedOffset;
+      && !epochReset && next <= session.consumedOffset;
+    if (epochReset && !invalid) {
+      log.session.warn('consumedOffset epoch reset accepted', {
+        sessionId: session.claudeSessionId,
+        prevOffset: session.consumedOffset, nextOffset: next,
+        prevEpoch: session.streamEpoch ?? null, nextEpoch: updates.streamEpoch,
+      });
+    }
     if (invalid || regression) {
       if (invalid) {
         log.session.warn('rejecting invalid consumedOffset write', {
@@ -1521,6 +1585,22 @@ export async function renameSessionId(
       }
       handle.prepare(insertSql).run(bound);
       log.session.info('session ID renamed', { oldId: oldClaudeSessionId, newId: newClaudeSessionId });
+      // Durable audit (inc-2026-08-10): the old ID stops resolving from this
+      // moment — any deep link / queued message still holding it will 404.
+      // Runtime logs rotate; this file is the permanent record of the rename.
+      import('./session-audit.js').then(({ auditSessionRecord }) => auditSessionRecord({
+        op: 'rename',
+        sessionId: oldClaudeSessionId,
+        renamedTo: newClaudeSessionId,
+        reason: 'resume-id-changed',
+        record: {
+          taskId: session.taskId,
+          title: session.title,
+          host: session.host,
+          process_status: session.process_status,
+          startedAt: session.startedAt,
+        },
+      })).catch(() => { /* audit is best-effort */ });
       return session;
     });
   });
@@ -1672,7 +1752,10 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
     }
     const now = new Date().toISOString();
     let updated = 0;
-    const pidsToKill: number[] = [];
+    // sid rides along with the pid: the in-memory session must be told the kill is
+    // intentional BEFORE the signal lands, or its liveness monitor reports the exit
+    // as "session init failed" (a red toast on every task you mark done, 2026-08-10).
+    const pidsToKill: { pid: number; sid: string }[] = [];
     const toReap: { claudeSessionId: string; host?: string }[] = [];
 
     const insertCols = [...SESSION_COLUMNS, 'payload'];
@@ -1697,7 +1780,7 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
         // listen, queueing the browser's first requests behind it).
         if (session.process_status === 'stopped' && session.pid == null) continue;
         if (session.pid != null && session.provider !== 'embedded' && session.provider !== 'sdk') {
-          pidsToKill.push(session.pid);
+          pidsToKill.push({ pid: session.pid, sid: session.claudeSessionId });
         }
         toReap.push({ claudeSessionId: session.claudeSessionId, host: session.host });
         session.process_status = 'stopped';
@@ -1719,7 +1802,21 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
     });
     if (updated > 0) {
       log.session.info('completing task sessions', { sessionIds: sessionIds.join(','), count: updated });
-      for (const pid of pidsToKill) {
+      // Mark BEFORE signalling (see pidsToKill). Dynamic import avoids the
+      // session-tracker ↔ claude-code-session cycle; it's module-cached.
+      if (pidsToKill.length > 0) {
+        try {
+          const { sessionRunner } = await import('../providers/claude-code-session.js');
+          for (const { sid } of pidsToKill) {
+            sessionRunner.markExpectedTeardown(sid, 'task_completed');
+          }
+        } catch (err) {
+          log.session.debug('markExpectedTeardown unavailable on task completion', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      for (const { pid } of pidsToKill) {
         try { process.kill(pid, 'SIGINT'); } catch { /* already dead */ }
       }
       // Conditionally reap each session's persistent terminal (dtach): a session
@@ -1738,11 +1835,17 @@ export async function completeTaskSessions(sessionIds: string[]): Promise<number
 /**
  * Remove session records by ID. Used by Session Reaper for cleanup.
  * Returns the number of records removed.
+ * `reason` names the caller in the durable audit trail (inc-2026-08-10:
+ * a vanished record could not be attributed because runtime logs had rotated).
  */
-export async function deleteSessionRecords(ids: Set<string>): Promise<number> {
+export async function deleteSessionRecords(ids: Set<string>, reason = 'unspecified'): Promise<number> {
   if (ids.size === 0) return 0;
   await ensureSessionInit();
   const removedIds: string[] = [];
+  const removedSnapshots: {
+    sessionId: string; taskId?: string; title?: string; host?: string;
+    process_status?: string; startedAt?: string;
+  }[] = [];
   const removed = await withWriteLock(async () => {
     const db = getDb();
     if (!db) {
@@ -1750,16 +1853,33 @@ export async function deleteSessionRecords(ids: Set<string>): Promise<number> {
     }
     let removed = 0;
     sessionDbTx((handle) => {
+      const sel = handle.prepare('SELECT * FROM sessions WHERE claude_session_id = ?');
       const del = handle.prepare('DELETE FROM sessions WHERE claude_session_id = ?');
       for (const id of ids) {
+        const row = sel.get(id) as Record<string, any> | undefined;
         const res = del.run(id);
         removed += res.changes;
-        if (res.changes > 0) removedIds.push(id);
+        if (res.changes > 0) {
+          removedIds.push(id);
+          if (row) {
+            const rec = rowToSession(row);
+            removedSnapshots.push({
+              sessionId: id, taskId: rec.taskId, title: rec.title, host: rec.host,
+              process_status: rec.process_status, startedAt: rec.startedAt,
+            });
+          }
+        }
       }
     });
     return removed;
   });
   if (removedIds.length > 0) {
+    import('./session-audit.js').then(({ auditSessionRecord }) => {
+      for (const snap of removedSnapshots) {
+        const { sessionId, ...record } = snap;
+        auditSessionRecord({ op: 'delete', sessionId, reason, record });
+      }
+    }).catch(() => { /* audit is best-effort */ });
     bus.emit(
       EventNames.SESSION_DELETED,
       { sessionIds: removedIds },

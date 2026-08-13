@@ -7,7 +7,7 @@
 #   server.log                     human-readable mirror (HH:MM:SS LVL [subsystem] msg {json})
 #   daemon-d-<pid>-<id>.log        per-daemon-instance JSON logs (remote/local session spawns)
 #   sessions.json                  session registry
-# Streams ($STREAMS_DIR, default /tmp/open-walnut-streams):
+# Streams ($STREAMS_DIR, default ~/.open-walnut/tmp/streams; legacy /tmp fallback):
 #   <sid>.jsonl / .jsonl.err / .pipe / .pgid   per-session CLI output (source of truth)
 #
 # Usage:
@@ -33,7 +33,15 @@
 set -uo pipefail
 
 LOG_DIR="${WALNUT_LOG_DIR:-/tmp/open-walnut}"
-STREAMS_DIR="${WALNUT_STREAMS_DIR:-/tmp/open-walnut-streams}"
+# Prod streams moved to ~/.open-walnut/tmp/streams (2026-08, reboot-surviving);
+# fall back to the legacy /tmp dir for pre-move sessions still writing there.
+if [[ -n "${WALNUT_STREAMS_DIR:-}" ]]; then
+  STREAMS_DIR="$WALNUT_STREAMS_DIR"
+elif [[ -d "$HOME/.open-walnut/tmp/streams" ]]; then
+  STREAMS_DIR="$HOME/.open-walnut/tmp/streams"
+else
+  STREAMS_DIR="/tmp/open-walnut-streams"
+fi
 JSON_LOG="$LOG_DIR/open-walnut-$(date +%Y-%m-%d).log"
 
 # Fall back to most recent dated log if today's doesn't exist yet.

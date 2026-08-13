@@ -1,4 +1,6 @@
 import path from 'node:path'
+import os from 'node:os'
+import { log } from '../logging/index.js'
 import { DaemonFileReader } from '../core/daemon-file-reader.js'
 import type { SessionHistoryMessage } from '../core/session-history.js'
 import type { SessionRecord } from '../core/types.js'
@@ -24,11 +26,38 @@ type AcpHistoryRecord = Pick<SessionRecord, 'claudeSessionId'>
   & Partial<Pick<SessionRecord, 'acpRuntimeId' | 'acpJournalPath' | 'host'>>
 
 export function getAcpJournalPath(record: AcpHistoryRecord): string | null {
-  if (record.acpJournalPath) return record.acpJournalPath
-  if (!record.acpRuntimeId) return null
-  const daemonDir = process.env.WALNUT_DAEMON_DIR || '/tmp/open-walnut'
-  const streamsDir = process.env.WALNUT_STREAMS_DIR || `${daemonDir}-streams`
-  return path.join(streamsDir, `${record.acpRuntimeId}.acp.jsonl`)
+  return getAcpJournalPathCandidates(record)[0] ?? null
+}
+
+/**
+ * Candidate journal paths, most likely first. The daemon moved its streams dir
+ * (2026-08: /tmp/open-walnut-streams → ~/.open-walnut/tmp/streams) and migrates
+ * files on startup, but records persisted BEFORE the move still hold the dead
+ * absolute path — 11 of 16 codex records on the incident machine pointed at
+ * files that had been migrated away, silently reading as empty history. So:
+ * try the recorded path, then re-derive from the runtimeId against the current
+ * prod dir, then the legacy dir.
+ */
+export function getAcpJournalPathCandidates(record: AcpHistoryRecord): string[] {
+  const candidates: string[] = []
+  const push = (p: string | null | undefined): void => {
+    if (p && !candidates.includes(p)) candidates.push(p)
+  }
+  push(record.acpJournalPath)
+  if (record.acpRuntimeId) {
+    const file = `${record.acpRuntimeId}.acp.jsonl`
+    const daemonDir = process.env.WALNUT_DAEMON_DIR || '/tmp/open-walnut'
+    if (process.env.WALNUT_STREAMS_DIR) {
+      push(path.join(process.env.WALNUT_STREAMS_DIR, file))
+    } else if (process.env.WALNUT_DAEMON_DIR) {
+      // Isolated daemon (tests/sandbox): streams live in the sibling dir.
+      push(path.join(`${daemonDir}-streams`, file))
+    }
+    // Prod locations — current first, legacy second (mirror daemon-standalone).
+    push(path.join(os.homedir(), '.open-walnut', 'tmp', 'streams', file))
+    push(path.join('/tmp/open-walnut-streams', file))
+  }
+  return candidates
 }
 
 /**
@@ -48,15 +77,23 @@ export async function readAcpSessionHistoryState(
   options: ReadAcpSessionHistoryOptions = {},
 ): Promise<AcpSessionHistoryState> {
   const runtimeId = record.acpRuntimeId
-  const journalPath = getAcpJournalPath(record)
-  if (!runtimeId || !journalPath) return { messages: [], journalExists: false }
+  const candidates = getAcpJournalPathCandidates(record)
+  if (!runtimeId || candidates.length === 0) return { messages: [], journalExists: false }
   const reader = options.reader ?? new DaemonFileReader(record.host ?? '__local__')
-  const content = await reader.readFile(journalPath)
-  if (content === null) return { messages: [], journalExists: false }
-  return {
-    messages: projectAcpJournalHistory(runtimeId, parseAcpJournal(content)),
-    journalExists: true,
+  for (const journalPath of candidates) {
+    const content = await reader.readFile(journalPath)
+    if (content === null) continue
+    return {
+      messages: projectAcpJournalHistory(runtimeId, parseAcpJournal(content)),
+      journalExists: true,
+    }
   }
+  // Not "empty history" — the journal is genuinely gone. Silent [] here made a
+  // stale acpJournalPath indistinguishable from a fresh session (2026-08-10).
+  log.session.warn('acp history: journal not found at any candidate path', {
+    sessionId: record.claudeSessionId, runtimeId, candidates,
+  })
+  return { messages: [], journalExists: false }
 }
 
 /** Parse complete journal lines only; corrupt/torn lines never poison history. */

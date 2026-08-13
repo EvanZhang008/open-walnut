@@ -56,6 +56,8 @@
  * incident-C shape), and the conditional write re-checks under the write lock.
  */
 
+import os from 'node:os'
+import path from 'node:path'
 import { log } from '../logging/index.js'
 import type { SessionRecord, ProcessStatus, TaskPhase } from './types.js'
 
@@ -435,15 +437,38 @@ const TAIL_WINDOW_BYTES = 256 * 1024
  *  whale; give up this tick rather than dragging megabytes over the tunnel. */
 const TAIL_WINDOW_MAX_BYTES = 2 * 1024 * 1024
 
-/** Daemon stream-file path for a session. Mirrors the daemon's own derivation
- *  (daemon-standalone.ts): STREAMS_DIR = WALNUT_STREAMS_DIR ||
- *  (WALNUT_DAEMON_DIR || '/tmp/open-walnut') + '-streams'. Remote daemons are
- *  always started with default env, so the remote path is fixed. */
+/** Daemon stream-file candidate paths for a session, PRIMARY FIRST. Mirrors the
+ *  daemon's derivation (daemon-standalone.ts): prod streams now live under
+ *  `~/.open-walnut/tmp/streams` (reboot-surviving; incident 019a7fe5), with the
+ *  legacy `/tmp/open-walnut-streams` still a valid fallback — a live session
+ *  spawned before the move keeps appending to its legacy-path file until that
+ *  CLI dies (registry absolute paths; startup migration skips live pgids).
+ *  Isolated envs (WALNUT_STREAMS_DIR / non-prod WALNUT_DAEMON_DIR) keep their
+ *  single derived dir. Remote daemons run with default env, so the remote pair
+ *  is fixed; `~` is expanded by the remote daemon's own fs RPC layer. */
+export function daemonStreamPathCandidates(sessionId: string, host?: string | null): string[] {
+  if (host && host !== '__local__') {
+    return [
+      `~/.open-walnut/tmp/streams/${sessionId}.jsonl`,
+      `/tmp/open-walnut-streams/${sessionId}.jsonl`,
+    ]
+  }
+  if (process.env.WALNUT_STREAMS_DIR) {
+    return [`${process.env.WALNUT_STREAMS_DIR}/${sessionId}.jsonl`]
+  }
+  const daemonDir = process.env.WALNUT_DAEMON_DIR
+  if (daemonDir && daemonDir !== '/tmp/open-walnut') {
+    return [`${daemonDir}-streams/${sessionId}.jsonl`]
+  }
+  return [
+    path.join(os.homedir(), '.open-walnut', 'tmp', 'streams', `${sessionId}.jsonl`),
+    `/tmp/open-walnut-streams/${sessionId}.jsonl`,
+  ]
+}
+
+/** Primary daemon stream-file path (see daemonStreamPathCandidates). */
 export function daemonStreamPath(sessionId: string, host?: string | null): string {
-  if (host && host !== '__local__') return `/tmp/open-walnut-streams/${sessionId}.jsonl`
-  const dir = process.env.WALNUT_STREAMS_DIR
-    || `${process.env.WALNUT_DAEMON_DIR || '/tmp/open-walnut'}-streams`
-  return `${dir}/${sessionId}.jsonl`
+  return daemonStreamPathCandidates(sessionId, host)[0]
 }
 
 /** Read the stream-file tail and fold it. Returns the fold + file size, or a
@@ -463,23 +488,37 @@ export async function fetchStreamTailFold(
   sessionId: string,
   host: string | null | undefined,
   opts?: { consumedOffset?: number },
-): Promise<{ fold: SessionTailFold; fileSize: number } | string> {
+): Promise<{ fold: SessionTailFold; fileSize: number; streamEpoch?: string } | string> {
   const { DaemonFileReader } = await import('./daemon-file-reader.js')
   const reader = new DaemonFileReader(host ?? '__local__')
-  const streamPath = daemonStreamPath(sessionId, host)
-
-  let size: number
-  try {
-    const st = await reader.stat(streamPath)
-    if (st === null) return 'no-stream-file'
-    size = st.size
-  } catch (err) {
-    log.session.debug('reconcile: stream stat failed', {
-      sessionId, host: host ?? '__local__',
-      error: err instanceof Error ? err.message : String(err),
-    })
-    return 'stream-stat-failed'
+  // New HOME location first, legacy /tmp second (a live pre-move session keeps
+  // appending at the legacy path until its CLI dies — see the candidates doc).
+  let streamPath = ''
+  let size = -1
+  let statFailed = false
+  // File-incarnation identity (dev:ino:birthtimeMs) of the stream file the
+  // fold is computed over. Callers need it to durably reset a consumedOffset
+  // watermark that belongs to a DEAD predecessor file (the tracker's
+  // arbitration only accepts a watermark regression paired with an epoch
+  // change). undefined = pre-epoch daemon.
+  let streamEpoch: string | undefined
+  for (const candidate of daemonStreamPathCandidates(sessionId, host)) {
+    try {
+      const st = await reader.stat(candidate)
+      if (st === null) continue
+      streamPath = candidate
+      size = st.size
+      streamEpoch = st.epoch
+      break
+    } catch (err) {
+      statFailed = true
+      log.session.debug('reconcile: stream stat failed', {
+        sessionId, host: host ?? '__local__', candidate,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
   }
+  if (size < 0) return statFailed ? 'stream-stat-failed' : 'no-stream-file'
   if (size === 0) return 'no-stream-file'
 
   let window = TAIL_WINDOW_BYTES
@@ -505,7 +544,7 @@ export async function fetchStreamTailFold(
       content = nl >= 0 ? content.slice(nl + 1) : ''
     }
     const fold = foldSessionTail(content, base)
-    if (fold.foundTurnAnchor) return { fold, fileSize: size }
+    if (fold.foundTurnAnchor) return { fold, fileSize: size, ...(streamEpoch !== undefined ? { streamEpoch } : {}) }
     if (start === 0) return 'no-turn-anchor'                 // whole file, still no real user line
     if (window >= TAIL_WINDOW_MAX_BYTES) break               // whale turn — try the watermark fallback
     window = TAIL_WINDOW_MAX_BYTES
@@ -557,7 +596,35 @@ export async function fetchStreamTailFold(
     sawTurnActivity: fold.sawTurnActivity, gatingBgCount: fold.gatingBgCount,
     hasResult: fold.lastResult != null,
   })
-  return { fold, fileSize: size }
+  return { fold, fileSize: size, ...(streamEpoch !== undefined ? { streamEpoch } : {}) }
+}
+
+/** True when the record's consumedOffset provably belongs to a DEAD stream-file
+ *  incarnation — i.e. the watermark is garbage for the file we are looking at
+ *  and must not veto/suppress anything (incident inc-1786428350008: a session
+ *  spawned pre-/tmp→HOME-move carried a 37.9 MB legacy-file watermark; its
+ *  respawn wrote a fresh 6 MB HOME file whose every event sat "below" the
+ *  watermark, so the real end-of-turn result was suppressed as a replay and
+ *  the task never reached AGENT_COMPLETE). Two independent proofs:
+ *    offset-beyond-file — a consumed line-end offset can never exceed the size
+ *      of the append-only file it was measured in, so watermark > fileSize
+ *      means "different file";
+ *    epoch-mismatch — the file identity (dev:ino:birthtimeMs) changed. NOTE:
+ *      by epoch semantics a changed identity always means new coordinates
+ *      (matches session-snapshot-apply's epochChanged → consumedOffset=0);
+ *      the daemon's one-time legacy→HOME copy migration technically preserved
+ *      coordinates while changing inodes, but it ran before any record ever
+ *      had an epoch stamped, so it can't produce a false positive here. */
+export function isStaleWatermark(
+  record: { consumedOffset?: number; streamEpoch?: string },
+  evidence: { fileSize: number; streamEpoch?: string },
+): boolean {
+  if (typeof record.consumedOffset !== 'number'
+    || !Number.isInteger(record.consumedOffset) || record.consumedOffset <= 0) return false
+  if (record.consumedOffset > evidence.fileSize) return true
+  return typeof evidence.streamEpoch === 'string' && evidence.streamEpoch.length > 0
+    && typeof record.streamEpoch === 'string' && record.streamEpoch.length > 0
+    && evidence.streamEpoch !== record.streamEpoch
 }
 
 // ── Convergence ──
@@ -565,7 +632,7 @@ export async function fetchStreamTailFold(
 export interface ReconcileProcessStatusInputs {
   /** Pre-fetched stream-tail evidence (attach path already has it — avoids a
    *  second tail read). Pass a string reason to mean "evidence unavailable". */
-  evidence?: { fold: SessionTailFold; fileSize: number } | string
+  evidence?: { fold: SessionTailFold; fileSize: number; streamEpoch?: string } | string
   /** Pre-computed process liveness. Omit to compute via isSessionProcessAlive(). */
   isAlive?: boolean
   /** Skip records whose last_status_change is younger than this — protects the
@@ -642,7 +709,18 @@ export async function reconcileProcessStatus(
   // what stops a stale error result from being re-adopted as the current
   // turn's verdict when the turn's own anchor is missing (legacy sessions
   // without delivery markers — inc-1783644415695).
-  if (typeof fold.lastResult?.endOffset === 'number'
+  // EXCEPTION: a watermark from a DEAD file incarnation is not a position in
+  // THIS file — comparing against it vetoes every real result forever
+  // (inc-1786428350008). isStaleWatermark proves the mismatch (offset beyond
+  // EOF, or epoch differs); then the veto must yield.
+  const staleWatermark = isStaleWatermark(record, evidence)
+  if (staleWatermark) {
+    log.session.warn('reconcileProcessStatus: consumedOffset belongs to a dead stream-file incarnation — ignoring watermark', {
+      sessionId: sid, consumedOffset: record.consumedOffset,
+      fileSize: evidence.fileSize,
+      recordEpoch: record.streamEpoch ?? null, fileEpoch: evidence.streamEpoch ?? null,
+    })
+  } else if (typeof fold.lastResult?.endOffset === 'number'
     && typeof record.consumedOffset === 'number'
     && fold.lastResult.endOffset <= record.consumedOffset) {
     return { converged: false, reason: 'result-already-consumed' }
@@ -690,6 +768,12 @@ export async function reconcileProcessStatus(
         // positionally suppressed. Monotonic arbitration in the tracker drops
         // this silently if a newer position is already in place.
         consumedOffset: evidence.fileSize,
+        // Stamp the file identity alongside the watermark. When the record's
+        // old watermark came from a DEAD incarnation (staleWatermark), the new
+        // offset is a REGRESSION — the tracker only accepts it paired with an
+        // epoch change, and first-sight stamping (record has no epoch yet) is
+        // exactly that pair. Same-epoch restamps are no-ops.
+        ...(evidence.streamEpoch ? { streamEpoch: evidence.streamEpoch } : {}),
         ...(to === 'error'
           ? { errorMessage: 'Turn ended with error — reconciled from daemon stream file' }
           : {}),

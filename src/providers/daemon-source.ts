@@ -401,14 +401,20 @@ function runWnMinimal(argv) {
 // ephemeral demo — which decides CLI-reap-on-exit. Mirror daemon-standalone.ts.
 const PROD_DAEMON_DIR = '/tmp/open-walnut';
 const DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR;
-// Sibling dir so an isolated daemon dir yields an isolated streams dir; production
-// default stays /tmp/open-walnut-streams. Must mirror daemon-standalone.ts.
-// NOTE: string concat (not template literal) because this code lives inside a
-// template literal string in the outer TypeScript file.
-const STREAMS_DIR = process.env.WALNUT_STREAMS_DIR || (DAEMON_DIR + '-streams');
 // Home for ~/... expansion. WALNUT_HOME_OVERRIDE lets tests align the daemon's ~/.claude
 // with their mocked CLAUDE_HOME. Mirrors daemon-standalone.ts.
 const HOME_DIR = process.env.WALNUT_HOME_OVERRIDE || process.env.HOME || '/root';
+// Streams live under HOME so they survive reboots (/tmp is wiped — incident
+// 019a7fe5: stale watermark vetoed every snapshot of the recreated file).
+// Isolated daemons keep the sibling-dir derivation. Mirror daemon-standalone.ts.
+// NOTE: string concat (not template literal) because this code lives inside a
+// template literal string in the outer TypeScript file.
+const PROD_STREAMS_DIR = path.join(HOME_DIR, '.open-walnut', 'tmp', 'streams');
+// Env override is for TESTS ONLY (never set in prod) — without it a spawned
+// test daemon would migrate the REAL production /tmp/open-walnut-streams.
+const LEGACY_STREAMS_DIR = process.env.WALNUT_LEGACY_STREAMS_DIR || '/tmp/open-walnut-streams';
+const STREAMS_DIR = process.env.WALNUT_STREAMS_DIR
+  || (DAEMON_DIR === PROD_DAEMON_DIR ? PROD_STREAMS_DIR : (DAEMON_DIR + '-streams'));
 const PORT_FILE = path.join(DAEMON_DIR, 'daemon.port');
 const PID_FILE = path.join(DAEMON_DIR, 'daemon.pid');
 const INSTANCE_ID_FILE = path.join(DAEMON_DIR, 'daemon.instance');
@@ -460,6 +466,95 @@ function ensureOwnerOnlyStorage() {
   fs.chmodSync(STREAMS_DIR, 0o700);
   for (const root of [DAEMON_DIR, STREAMS_DIR]) {
     for (const name of fs.readdirSync(root)) repair(path.join(root, name));
+  }
+}
+
+// ── Legacy streams migration (/tmp → HOME) ──
+// One-way, loss-averse, idempotent. Live-pgid sids are skipped whole (the CLI
+// holds an O_APPEND fd on the old inode; registry absolute paths keep them
+// working). Never overwrites; rename → copy+verify+unlink fallback; dead FIFOs
+// dropped. Mirror daemon-standalone.ts.
+function migrateLegacyStreams() {
+  // Force flag is TEST-ONLY: prod triggers via the dir identity; isolated test
+  // daemons opt in explicitly with their own temp legacy/streams dirs.
+  if (STREAMS_DIR !== PROD_STREAMS_DIR && !process.env.WALNUT_FORCE_STREAMS_MIGRATION) return;
+  let names = [];
+  try { names = fs.readdirSync(LEGACY_STREAMS_DIR); } catch { return; }
+  if (names.length === 0) return;
+  const liveSids = new Set();
+  for (const f of names) {
+    if (!f.endsWith('.pgid')) continue;
+    try {
+      const pid = parseInt(fs.readFileSync(path.join(LEGACY_STREAMS_DIR, f), 'utf-8').trim(), 10);
+      if (Number.isInteger(pid) && pid > 1 && isProcessGroupAlive(pid)) liveSids.add(f.slice(0, -5));
+    } catch {}
+  }
+  let migrated = 0, skippedLive = 0, skippedExists = 0, dropped = 0, failed = 0;
+  for (const f of names) {
+    const src = path.join(LEGACY_STREAMS_DIR, f);
+    const sid = f.replace(/\.(jsonl\.err|jsonl|pgid|pipe|log)$/, '');
+    if (liveSids.has(sid)) { skippedLive++; continue; }
+    let st;
+    try { st = fs.lstatSync(src); } catch { continue; }
+    if (st.isFIFO()) { try { fs.unlinkSync(src); } catch {}; dropped++; continue; }
+    if (!st.isFile()) continue;
+    const dst = path.join(STREAMS_DIR, f);
+    if (fs.existsSync(dst)) { skippedExists++; continue; }
+    try {
+      fs.renameSync(src, dst);
+      migrated++;
+    } catch {
+      try {
+        fs.copyFileSync(src, dst, fs.constants.COPYFILE_EXCL);
+        if (fs.statSync(dst).size !== st.size) throw new Error('size mismatch after copy');
+        fs.unlinkSync(src);
+        migrated++;
+      } catch (err) {
+        failed++;
+        try { fs.unlinkSync(dst); } catch {}
+        logMsg('warn', 'legacy streams migration: file failed (kept in place)', { file: f, error: err.message });
+      }
+    }
+  }
+  logMsg('info', 'legacy streams migration: done', {
+    from: LEGACY_STREAMS_DIR, to: STREAMS_DIR,
+    migrated, skippedLive, skippedExists, droppedPipes: dropped, failed,
+    liveSids: [...liveSids],
+  });
+}
+
+// ── Dead-stream retention (3 months) ──
+// Hourly: reap the file family of sids with no live session/process whose
+// jsonl is idle past the window. Conversation truth lives in ~/.claude —
+// stream files are status/replay plumbing. Mirror daemon-standalone.ts.
+// Env overrides are TEST-ONLY (drive the sweep inside a test's timeframe).
+const STREAM_RETENTION_MS = parseInt(process.env.WALNUT_STREAM_RETENTION_MS || '', 10)
+  || 90 * 24 * 60 * 60 * 1000;
+const STREAM_RETENTION_SWEEP_MS = parseInt(process.env.WALNUT_STREAM_SWEEP_MS || '', 10)
+  || 60 * 60 * 1000;
+function sweepDeadStreams() {
+  let names = [];
+  try { names = fs.readdirSync(STREAMS_DIR); } catch { return; }
+  const now = Date.now();
+  const reaped = new Set();
+  for (const f of names) {
+    if (!f.endsWith('.jsonl')) continue;
+    const sid = f.slice(0, -6);
+    if (sessions.has(sid)) continue;
+    let st;
+    try { st = fs.statSync(path.join(STREAMS_DIR, f)); } catch { continue; }
+    if (now - st.mtimeMs < STREAM_RETENTION_MS) continue;
+    try {
+      const pid = parseInt(fs.readFileSync(path.join(STREAMS_DIR, sid + '.pgid'), 'utf-8').trim(), 10);
+      if (Number.isInteger(pid) && pid > 1 && isProcessGroupAlive(pid)) continue;
+    } catch {}
+    for (const ext of ['.jsonl', '.jsonl.err', '.pgid', '.pipe', '.log']) {
+      try { fs.unlinkSync(path.join(STREAMS_DIR, sid + ext)); } catch {}
+    }
+    reaped.add(sid);
+  }
+  if (reaped.size > 0) {
+    logMsg('info', 'dead-stream retention sweep: reaped', { count: reaped.size, sids: [...reaped] });
   }
 }
 
@@ -648,6 +743,32 @@ function reapSession(sid, code, reason) {
   }
 
   try { fs.unlinkSync(session.pipePath); } catch {}
+
+  // ── INVARIANT enforcement point 3: no adoptable durable crons ──
+  // Mirrors daemon-core.ts reapSession + stripDurableTasksForSession (parity
+  // test locks the sync). A durable task whose creator just died is the
+  // 2026-08-09 incident in waiting — the next lock holder in this directory
+  // would run it as a bare user message. Strip our own rows only, never a live
+  // sibling's. This is the one enforcement point the model cannot decline
+  // (point 2's injected correction was verifiably refused on 2026-08-11).
+  if (session.cwd && !ALLOW_DURABLE_CRON) {
+    try {
+      const tasksPath = path.join(session.cwd, '.claude', 'scheduled_tasks.json');
+      let raw = null;
+      try { raw = fs.readFileSync(tasksPath, 'utf-8'); } catch {}
+      const strip = stripDurableTasksForSession(raw, sid);
+      if (strip.changed && strip.text != null) {
+        const tmp = tasksPath + '.walnut-' + String(session.pid || 0) + '.tmp';
+        fs.writeFileSync(tmp, strip.text, { mode: 0o600 });
+        fs.renameSync(tmp, tasksPath);
+        logMsg('warn', 'stripped dead session durable crons (Walnut policy: session-scoped only)', {
+          sid: sid, removed: strip.removed, tasksPath: tasksPath,
+        });
+      }
+    } catch (err) {
+      logMsg('warn', 'durable-cron strip failed', { sid: sid, error: err.message });
+    }
+  }
 
   if (session.pid) {
     try { killProcessGroup(session.pid, 'SIGTERM'); } catch {}
@@ -967,9 +1088,13 @@ function drainFoldRange(session, from, to) {
 
 // Combine the pure fold with imperatively-tracked daemon facts. exitCode is
 // already normalized by reapSession (isTurnCompleteExit) when state='dead'.
+// NOTE: streamEpochOf is declared BELOW (hoisted) — it must live INSIDE the
+// assembleSessionSnapshot…"Startup reconcile" region because the snapshot-push
+// unit harness (daemon-snapshot-wiring.test.ts scenario 10) evals exactly that
+// text block; a reference to a function outside the block throws at eval time.
 function assembleSessionSnapshot(session) {
   const ctrl = session.pendingCtrl;
-  return assembleSnapshot({
+  const snap = assembleSnapshot({
     foldState: session.foldState,
     pendingCtrl: ctrl
       ? { requestId: ctrl.reqId, toolName: ctrl.toolName, sinceTs: ctrl.receivedAt }
@@ -977,7 +1102,27 @@ function assembleSessionSnapshot(session) {
     dead: session.state === 'dead',
     pid: session.pid,
     exitCode: session.exitCode,
+    streamEpoch: streamEpochOf(session),
   });
+  // Disk-side durable crons arm cronActive too — one-way OR, arm-only on the
+  // walnut side, so a stale cache never unarms. Keep in sync with
+  // daemon-standalone.ts.
+  if (!snap.cronActive && session.diskCronCache && session.diskCronCache.armed) snap.cronActive = true;
+  return snap;
+}
+
+// Stream-file identity: dev:ino:birthtimeMs — changes exactly when the file is
+// recreated, which resets v to 0 and invalidates consumer watermarks (incident
+// 019a7fe5). Cached; failed stat leaves null. Mirror daemon-standalone.ts.
+function streamEpochOf(session) {
+  if (session.streamEpoch) return session.streamEpoch;
+  try {
+    const st = fs.statSync(session.jsonlPath);
+    session.streamEpoch = st.dev + ':' + st.ino + ':' + Math.floor(st.birthtimeMs);
+  } catch {
+    session.streamEpoch = null;
+  }
+  return session.streamEpoch;
 }
 
 function emitSnapshot(sid, session) {
@@ -1097,6 +1242,9 @@ function reconcileRegistry() {
 // kill(-pid) sends signal to the entire process group (Claude + MCP servers).
 
 function killProcessGroup(pid, signal) {
+  // pid ≤ 1 = corrupted bookkeeping. kill(-1, sig) does NOT throw — POSIX
+  // broadcasts to every process the user can signal (2026-08-09 incident).
+  if (!Number.isInteger(pid) || pid <= 1) return false;
   try { process.kill(-pid, signal); return true; } catch { return false; }
 }
 
@@ -2014,7 +2162,7 @@ function cmdStart(ws, id, cmd) {
         logMsg('warn', 'cmdStart: killing old-session process group before respawn', {
           sid, oldPid: existing.pid,
         });
-        try { process.kill(-existing.pid, 'SIGTERM'); } catch {}
+        killProcessGroup(existing.pid, 'SIGTERM');
       }
     }
     existing.state = 'dead';
@@ -2051,7 +2199,12 @@ function cmdStart(ws, id, cmd) {
   // turn-start marker lines (appendUserMarker); a positional 'w' fd would
   // overwrite them. Fresh spawns truncate explicitly first.
   const pipeFd = fs.openSync(pipePath, fs.constants.O_RDWR);
-  if (!resume) { try { fs.writeFileSync(jsonlPath, ''); } catch {} }
+  // Fresh spawn: unlink+recreate (NOT truncate) → new inode → new streamEpoch,
+  // so consumers know v restarted at 0. Mirror daemon-standalone.ts.
+  if (!resume) {
+    try { fs.unlinkSync(jsonlPath); } catch {}
+    try { fs.writeFileSync(jsonlPath, ''); } catch {}
+  }
   const outputFd = fs.openSync(jsonlPath, 'a');
   const stderrFd = fs.openSync(stderrPath, resume ? 'a' : 'w');
 
@@ -2200,6 +2353,13 @@ var MODE_CLI = {
 };
 
 function shouldAutoRespond(mode, toolName) {
+  // AskUserQuestion is a requiresUserInteraction tool: the CLI emits its
+  // control_request even in bypassPermissions (checkPermissions always returns
+  // 'ask'), and the tool echoes its 'answers' field back out of the permission
+  // response's updatedInput. Auto-allowing therefore replies with NO answers, and
+  // the CLI reports a fabricated "user answered your questions" (empty) result
+  // to the model. Forward it to walnut so the human actually answers.
+  if (toolName === 'AskUserQuestion') return false;
   if (mode === 'bypass') return true;
   if (mode === 'plan') return toolName !== 'ExitPlanMode';
   // 'auto'/'dontAsk' intentionally fall through: the CLI decides internally and
@@ -2278,6 +2438,256 @@ function writeFifoFully(pipePath, buf) {
 // watcher.
 
 // Idempotent: if the session already has a watcher, does nothing.
+// ── Scheduled-task (CLI cron) fire detection ──
+// Mirrors daemon-core.ts detectCronFires/cronFireMarkerText/stripCronTaskById
+// + daemon-standalone.ts checkCronFires (template can't import; parity test
+// locks the sync). A cron fire in headless mode delivers its prompt STRAIGHT
+// to the model — the stream shows only a bare turn start — and the CLI's
+// directory-scoped scheduler lock lets the current holder ADOPT a task whose
+// creating session looks dead (upstream #50300/#66509). Detect via the
+// on-disk scheduled_tasks.json: lastFiredAt recent + we hold the lock. For
+// FOREIGN fires (createdBySessionId !== sid): append a scheduled_task_fire
+// marker to the stream file AND inject a model-visible provenance warning
+// into the FIFO. Same-session fires get only the marker.
+var CRON_FIRE_RECENT_MS = 10 * 60 * 1000;
+var CRON_CHECK_THROTTLE_MS = 30000;
+function detectCronFires(args) {
+  if (!args.tasksJson) return [];
+  var lockSid;
+  if (args.lockJson) {
+    try { lockSid = JSON.parse(args.lockJson).sessionId; } catch {}
+  }
+  if (lockSid !== args.sid) return [];
+  var tasks;
+  try {
+    var parsed = JSON.parse(args.tasksJson);
+    tasks = Array.isArray(parsed && parsed.tasks) ? parsed.tasks : [];
+  } catch { return []; }
+  var recentMs = args.recentMs || CRON_FIRE_RECENT_MS;
+  var out = [];
+  for (var i = 0; i < tasks.length; i++) {
+    var t = tasks[i];
+    var tid = t && typeof t.id === 'string' ? t.id : null;
+    var fired = t && typeof t.lastFiredAt === 'number' ? t.lastFiredAt : null;
+    if (!tid || !fired) continue;
+    if (args.nowMs - fired > recentMs || fired > args.nowMs + 60000) continue;
+    var key = tid + ':' + fired;
+    if (args.warned[key]) continue;
+    args.warned[key] = args.nowMs;
+    var creator = t && typeof t.createdBySessionId === 'string' ? t.createdBySessionId : undefined;
+    out.push({
+      taskId: tid,
+      lastFiredAt: fired,
+      createdBySessionId: creator,
+      foreign: creator !== undefined && creator !== args.sid,
+      promptPreview: t && typeof t.prompt === 'string' ? t.prompt.slice(0, 160) : '',
+    });
+  }
+  return out;
+}
+// Disk-side cron interest for the idle reaper — mirrors daemon-core.ts
+// hasDiskCronInterest (template can't import; parity test locks the sync).
+// armed when: 'creator' (created a live task; schedules its own tasks with or
+// without the lock) or 'lock_holder' (will execute/adopt the next fire).
+// Live = createdAt/lastFiredAt within the CLI's 7-day cron auto-expiry.
+var CRON_TASK_LIVE_MS = 7 * 24 * 60 * 60 * 1000;
+function hasDiskCronInterest(args) {
+  if (!args.tasksJson) return { armed: false, reason: null, liveTasks: 0 };
+  var tasks;
+  try {
+    var parsed = JSON.parse(args.tasksJson);
+    tasks = Array.isArray(parsed && parsed.tasks) ? parsed.tasks : [];
+  } catch { return { armed: false, reason: null, liveTasks: 0 }; }
+  var liveMs = args.liveMs || CRON_TASK_LIVE_MS;
+  var live = 0;
+  var createdByMe = false;
+  for (var i = 0; i < tasks.length; i++) {
+    var t = tasks[i];
+    var createdAt = t && typeof t.createdAt === 'number' ? t.createdAt : 0;
+    var lastFiredAt = t && typeof t.lastFiredAt === 'number' ? t.lastFiredAt : 0;
+    var freshest = Math.max(createdAt, lastFiredAt);
+    if (!freshest || args.nowMs - freshest > liveMs) continue;
+    live++;
+    if (t && t.createdBySessionId === args.sid) createdByMe = true;
+  }
+  if (live === 0) return { armed: false, reason: null, liveTasks: 0 };
+  if (createdByMe) return { armed: true, reason: 'creator', liveTasks: live };
+  var lockSid;
+  if (args.lockJson) {
+    try { lockSid = JSON.parse(args.lockJson).sessionId; } catch {}
+  }
+  if (lockSid === args.sid) return { armed: true, reason: 'lock_holder', liveTasks: live };
+  return { armed: false, reason: null, liveTasks: live };
+}
+
+function cronFireMarkerText(f) {
+  return f.foreign
+    ? 'Orphaned scheduled task ' + f.taskId + ' fired here — created by another session (' + f.createdBySessionId + ') that shares this directory. Walnut removed it so it cannot fire again.'
+    : 'Scheduled task ' + f.taskId + ' fired (created by this session).';
+}
+// Enforcement point 4: evict ONE orphaned cron by id. Mirrors daemon-core.ts
+// stripCronTaskById (parity test locks the sync). A foreign fire proves the row
+// is orphaned relative to this process — no CronDelete will ever come from here,
+// so removing it is the only thing that ends the hourly hijack. Costs the
+// session no turn and no context, unlike the injected warning it replaces.
+function stripCronTaskById(tasksJson, taskId) {
+  if (!tasksJson || !taskId) return { changed: false, text: null };
+  var parsed;
+  try { parsed = JSON.parse(tasksJson); } catch { return { changed: false, text: null }; }
+  if (!parsed || !Array.isArray(parsed.tasks)) return { changed: false, text: null };
+  var kept = parsed.tasks.filter(function (t) { return !t || t.id !== taskId; });
+  if (kept.length === parsed.tasks.length) return { changed: false, text: null };
+  var next = Object.assign({}, parsed, { tasks: kept });
+  return { changed: true, text: JSON.stringify(next, null, 2) + '\\n' };
+}
+function checkCronFires(sid, session) {
+  var now = Date.now();
+  if (session.lastCronCheckTs && now - session.lastCronCheckTs < CRON_CHECK_THROTTLE_MS) return;
+  session.lastCronCheckTs = now;
+  if (!session.cwd) return;
+  var base = path.join(session.cwd, '.claude');
+  var tasksJson = null, lockJson = null;
+  try { tasksJson = fs.readFileSync(path.join(base, 'scheduled_tasks.json'), 'utf-8'); } catch { return; }
+  try { lockJson = fs.readFileSync(path.join(base, 'scheduled_tasks.lock'), 'utf-8'); } catch {}
+  if (!session.cronWarned) session.cronWarned = {};
+  var fires = detectCronFires({ sid: sid, tasksJson: tasksJson, lockJson: lockJson, nowMs: now, warned: session.cronWarned });
+  for (var i = 0; i < fires.length; i++) {
+    var fire = fires[i];
+    logMsg(fire.foreign ? 'warn' : 'info', 'scheduled-task fire detected', {
+      sid: sid, taskId: fire.taskId, foreign: fire.foreign,
+      createdBySessionId: fire.createdBySessionId, lastFiredAt: fire.lastFiredAt,
+    });
+    // 1. Stream-file marker (never the canonical JSONL) — unknown system
+    // subtype folds v-only (safe); session-history renders scheduled_task_fire.
+    try {
+      var marker = JSON.stringify({
+        type: 'system',
+        subtype: 'scheduled_task_fire',
+        content: cronFireMarkerText(fire),
+        cron_task_id: fire.taskId,
+        cron_created_by: fire.createdBySessionId || null,
+        cron_foreign: fire.foreign,
+        uuid: crypto.randomUUID(),
+        session_id: sid,
+        timestamp: new Date(now).toISOString(),
+      }) + '\\n';
+      fs.appendFileSync(session.jsonlPath, marker);
+    } catch (err) {
+      logMsg('warn', 'scheduled-task fire: marker append failed', { sid: sid, error: err.message });
+    }
+    // 2. Foreign fire = an ORPHANED durable cron hijacked this session. EVICT it
+    // from disk; deliberately NO message to the model (see daemon-core.ts
+    // stripCronTaskById — the old injected warning burned a turn hourly and could
+    // not stop anything). The marker above is what tells the HUMAN.
+    if (fire.foreign && !ALLOW_DURABLE_CRON) {
+      try {
+        var tasksPath = path.join(base, 'scheduled_tasks.json');
+        var strip = stripCronTaskById(tasksJson, fire.taskId);
+        if (strip.changed && strip.text != null) {
+          var tmp = tasksPath + '.walnut-' + String(process.pid) + '.tmp';
+          fs.writeFileSync(tmp, strip.text, { mode: 0o600 });
+          fs.renameSync(tmp, tasksPath);
+          logMsg('warn', 'evicted orphaned foreign cron (Walnut policy: session-scoped crons only)', {
+            sid: sid, taskId: fire.taskId, createdBySessionId: fire.createdBySessionId, tasksPath: tasksPath,
+          });
+        }
+      } catch (err) {
+        logMsg('warn', 'foreign cron eviction failed', { sid: sid, taskId: fire.taskId, error: err.message });
+      }
+    }
+  }
+}
+
+// ── INVARIANT: Walnut sessions create SESSION-SCOPED crons only ──
+// Mirrors daemon-core.ts isDurableCronRequest/durableCronDenyMessage/
+// durableCronCorrectionMessage + daemon-standalone.ts checkDurableCronCreate
+// (template can't import; parity test locks the sync). durable:true writes the
+// job to {cwd}/.claude/scheduled_tasks.json and the CLI scopes the scheduler
+// LOCK to the directory, so after this session ends the job is adopted and
+// executed by any other session sharing the cwd, delivered as a bare user
+// message (2026-08-09 incident; lab P2). durable:false is in-memory and can
+// never be adopted. Two enforcement points because a bypassPermissions session
+// never issues a can_use_tool request: (1) DENY the permission request;
+// (2) when the tool_use is only observed in the stream, FIFO-inject a
+// correction telling the model to CronDelete + recreate non-durable.
+// OPT-IN policy (see daemon-standalone.ts): enforcement only when the spawner
+// sets WALNUT_ENFORCE_SESSION_CRON=1 (config session.cron_policy 'session-only');
+// WALNUT_ALLOW_DURABLE_CRON=1 overrides for back-compat.
+var ALLOW_DURABLE_CRON = process.env.WALNUT_ENFORCE_SESSION_CRON !== '1'
+  || process.env.WALNUT_ALLOW_DURABLE_CRON === '1';
+function isDurableCronRequest(toolName, input) {
+  if (toolName !== 'CronCreate') return false;
+  // Only an explicit true is durable — absent/false is the safe CLI default.
+  return !!input && input.durable === true;
+}
+function durableCronDenyMessage() {
+  return 'Denied by Walnut: durable scheduled tasks are not allowed in a Walnut-managed session. '
+    + 'A durable cron is written to .claude/scheduled_tasks.json and the scheduler lock is scoped to the '
+    + 'PROJECT DIRECTORY, so once this session ends the job is adopted and executed by whatever other session '
+    + 'shares this directory — with no indication that a cron, not the user, asked for it. '
+    + 'Retry the same CronCreate with durable:false (the default) to keep the job inside this session. '
+    + 'If the user genuinely needs an unattended job that survives this session, use a system scheduler '
+    + '(crontab / launchd) that starts its own dedicated session instead.';
+}
+function durableCronCorrectionMessage(taskId) {
+  return '[Walnut scheduler policy — automated message, not from the user] '
+    + 'You just created a DURABLE scheduled task' + (taskId ? ' (' + taskId + ')' : '') + '. '
+    + 'Durable tasks persist to .claude/scheduled_tasks.json and the CLI scopes the scheduler lock to the '
+    + 'project directory, so after this session ends the job fires inside an unrelated session that happens to '
+    + 'share this directory, delivered as if the user had typed it. That caused a real incident here. '
+    + 'Please immediately call CronDelete on that task id, then re-create the same schedule with durable:false '
+    + '(session-scoped). Do not keep the durable version. Then continue what you were doing and mention the swap '
+    + 'briefly in your next summary.';
+}
+// Enforcement point 3 (deterministic, the one that actually holds): remove the
+// dying session's own durable rows. Pure — returns the text to write back, or
+// text:null when nothing changes. Mirrors daemon-core.ts.
+function stripDurableTasksForSession(tasksJson, sid) {
+  const unchanged = { changed: false, text: null, removed: [] };
+  if (!tasksJson) return unchanged;
+  let parsed;
+  try { parsed = JSON.parse(tasksJson); } catch { return unchanged; }
+  if (!parsed || !Array.isArray(parsed.tasks)) return unchanged;
+  const removed = [];
+  const kept = parsed.tasks.filter(function (t) {
+    if (!t || t.createdBySessionId !== sid) return true;
+    removed.push(typeof t.id === 'string' ? t.id : 'unknown');
+    return false;
+  });
+  if (removed.length === 0) return unchanged;
+  const next = Object.assign({}, parsed, { tasks: kept });
+  return { changed: true, text: JSON.stringify(next, null, 2) + '\\n', removed: removed };
+}
+
+// Enforcement point 2 (corrective). Once per tool_use id so a re-read can't
+// nag in a loop; durableCronNudged is in-memory only (a respawn re-nudges,
+// which is correct — the durable task is still on disk).
+function checkDurableCronCreate(sid, session, line) {
+  if (ALLOW_DURABLE_CRON) return;
+  var parsed;
+  try { parsed = JSON.parse(line); } catch { return; }
+  if (!parsed || parsed.type !== 'assistant') return;
+  var content = parsed.message && parsed.message.content;
+  if (!Array.isArray(content)) return;
+  for (var i = 0; i < content.length; i++) {
+    var block = content[i];
+    if (!block || block.type !== 'tool_use') continue;
+    if (!isDurableCronRequest(block.name, block.input)) continue;
+    var key = String(block.id || 'unknown');
+    if (!session.durableCronNudged) session.durableCronNudged = {};
+    if (session.durableCronNudged[key]) continue;
+    session.durableCronNudged[key] = Date.now();
+    var payload = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: durableCronCorrectionMessage(undefined) },
+    });
+    var ok = writeFifoRaw(session.pipePath, payload);
+    logMsg(ok ? 'warn' : 'error',
+      'durable CronCreate observed in stream — correction ' + (ok ? 'injected' : 'FIFO write FAILED'),
+      { sid: sid, toolUseId: key, mode: session.mode });
+  }
+}
+
 function ensureWatcher(sid) {
   const session = sessions.get(sid);
   if (!session) return;
@@ -2426,6 +2836,19 @@ function ensureWatcher(sid) {
           });
         }
 
+        // ── Scheduled-task fire detection (see checkCronFires) ──
+        // A cron fire's ONLY stream evidence is a bare turn start (init +
+        // session_state_changed{running}, no user line). 30s throttle inside.
+        // Keep in sync with daemon-standalone.ts.
+        if (line.includes('"init"') || line.includes('"session_state_changed"')) {
+          try { checkCronFires(sid, s); } catch {}
+        }
+
+        // ── Durable-cron invariant, corrective half (see checkDurableCronCreate) ──
+        if (line.includes('CronCreate')) {
+          try { checkDurableCronCreate(sid, s, line); } catch {}
+        }
+
         // ── L2: materialize daemon-authoritative task state ──
         // Cheap substring pre-filter so we JSON.parse only task_* lines. Served on getState
         // so Walnut reconciles a lost-terminal event without guessing liveness.
@@ -2442,12 +2865,27 @@ function ensureWatcher(sid) {
         }
 
         // ── Permission policy intercept ──
-        if (line.includes('"control_request"') || line.includes('"control_response"')) {
+        if (line.includes('"control_request"') || line.includes('"control_response"')
+          || line.includes('"control_cancel_request"')) {
           try {
             const parsed = JSON.parse(line);
             if (parsed.type === 'control_request' && parsed.request_id
               && parsed.request && parsed.request.subtype === 'can_use_tool') {
               const toolName = parsed.request.tool_name;
+              // ── INVARIANT: no durable crons (see checkDurableCronCreate) ──
+              // Deny BEFORE the auto-allow check: a bypass-mode session would
+              // otherwise be waved through, and a durable job outlives this
+              // session to fire inside a stranger sharing the directory.
+              if (!ALLOW_DURABLE_CRON && isDurableCronRequest(toolName, parsed.request.input)) {
+                const denyResp = buildControlResponse(parsed.request_id, parsed.request, false, durableCronDenyMessage());
+                if (writeFifoRaw(s.pipePath, denyResp)) {
+                  s.pendingCtrl = null;
+                  try { persistRegistry(); } catch {}
+                  logMsg('warn', 'denied durable CronCreate (Walnut policy: session-scoped crons only)', { sid, mode: s.mode });
+                  continue;
+                }
+                logMsg('error', 'durable CronCreate deny could not be written to FIFO', { sid });
+              }
               if (shouldAutoRespond(s.mode, toolName)) {
                 const resp = buildControlResponse(parsed.request_id, parsed.request, true);
                 if (writeFifoRaw(s.pipePath, resp)) {
@@ -2463,6 +2901,15 @@ function ensureWatcher(sid) {
               if (parsed.response && parsed.response.request_id === s.pendingCtrl.reqId) {
                 s.pendingCtrl = null;
                 try { persistRegistry(); } catch {}
+              }
+            } else if (parsed.type === 'control_cancel_request' && s.pendingCtrl) {
+              // CLI withdrew the request (turn aborted / restart). Without this
+              // branch pendingCtrl stays set forever -> snapshot waiting=true and
+              // the UI shows a permanent Waiting badge (incident a172ce49).
+              if (parsed.request_id === s.pendingCtrl.reqId) {
+                s.pendingCtrl = null;
+                try { persistRegistry(); } catch {}
+                logMsg('info', 'control_cancel_request cleared pendingCtrl', { sid: sid, requestId: parsed.request_id });
               }
             }
           } catch {}
@@ -2945,13 +3392,20 @@ function cmdGetState(ws, id, cmd) {
   const jsonlPath = path.join(STREAMS_DIR, sid + '.jsonl');
   if (!fs.existsSync(jsonlPath)) return sendOk(ws, id, { exists: false });
   const taskState = rebuildTaskStateFromJsonl(jsonlPath, Date.now());
-  // C1: disk-rebuild snapshot — no live process backs this sid → dead.
+  // C1: disk-rebuild snapshot — no live process backs this sid → dead. Epoch
+  // stamped from disk so pull-reconcile detects a recreated file (019a7fe5).
+  let diskEpoch = null;
+  try {
+    const st = fs.statSync(jsonlPath);
+    diskEpoch = st.dev + ':' + st.ino + ':' + Math.floor(st.birthtimeMs);
+  } catch {}
   const snapshot = assembleSnapshot({
     foldState: rebuildFoldStateFromJsonl(jsonlPath).state,
     pendingCtrl: null,
     dead: true,
     pid: null,
     exitCode: null,
+    streamEpoch: diskEpoch,
   });
   return sendOk(ws, id, { exists: true, alive: false, state: 'dead', taskState, snapshot });
 }
@@ -2965,8 +3419,11 @@ function cmdRename(ws, id, cmd) {
   const session = sessions.get(oldSid);
   if (!session) return sendError(ws, id, 'rename: session not found: ' + oldSid);
 
-  const oldBase = path.join(STREAMS_DIR, oldSid);
-  const newBase = path.join(STREAMS_DIR, newSid);
+  // Derive from the session's ACTUAL file location, not STREAMS_DIR — a live
+  // pre-move session's family is still in the legacy dir. Mirror daemon-standalone.ts.
+  const liveDir = path.dirname(session.jsonlPath);
+  const oldBase = path.join(liveDir, oldSid);
+  const newBase = path.join(liveDir, newSid);
 
   // C14: flush a pending coalesced snapshot BEFORE the re-key. pushSnapshot's
   // 50ms timer carries a generation guard (sessions.get(sid) !== session) that is
@@ -3444,7 +3901,12 @@ async function cmdFsStat(ws, id, cmd) {
 
   try {
     const st = await fs.promises.stat(filePath);
-    sendOk(ws, id, { exists: true, mtimeMs: st.mtimeMs, size: st.size });
+    // dev/ino/birthtimeMs → walnut derives the stream-file epoch for the
+    // stale-watermark reset (twin of daemon-standalone cmdFsStat).
+    sendOk(ws, id, {
+      exists: true, mtimeMs: st.mtimeMs, size: st.size,
+      dev: st.dev, ino: st.ino, birthtimeMs: st.birthtimeMs,
+    });
   } catch (err) {
     if (err.code === 'ENOENT') {
       sendOk(ws, id, { exists: false });
@@ -3965,9 +4427,11 @@ const SESSION_IDLE_KILL_MS = 2 * 60 * 60 * 1000;   // 2 hours
 const SESSION_CRON_IDLE_KILL_MS = 7 * 24 * 60 * 60 * 1000;   // 7 days
 // Sessions with a running background task: wait-style bash tasks write to
 // output_file, not the JSONL, so the session looks idle for the task's whole
-// lifetime (incident inc-1786222771315). Extended, not disabled — capped at
-// 24h so a lost terminal event can't make the process immortal.
-const SESSION_BG_IDLE_KILL_MS = 24 * 60 * 60 * 1000;   // 24 hours
+// lifetime (incident inc-1786222771315). PRINCIPLE: never reap running bg
+// work — this 3-day cap exists only for a wedged task framework that will
+// never emit a terminal event (immortal-process backstop). See
+// daemon-standalone.ts for the full rationale.
+const SESSION_BG_IDLE_KILL_MS = 3 * 24 * 60 * 60 * 1000;   // 3 days
 const SESSION_SCAN_INTERVAL_MS = 60000;             // every 60s
 
 // Last-resort cron evidence: the CLI scheduler's own debug log in HOME
@@ -4034,9 +4498,29 @@ function scanIdleSessions() {
 
     const idleMs = now - mtimeMs;
     // A CronCreate'd /loop lives in the CLI process — killing it silently
-    // kills the loop (session-only crons are never on disk). Extend to the
-    // CLI's own 7-day cron auto-expiry instead of disabling the reaper.
-    const cronArmed = Object.keys(session.foldState.cronIds || {}).length > 0;
+    // kills the loop. TWO signals, either arms the protection: fold (CronCreate
+    // seen in THIS stream file — session-only crons never touch disk) and disk
+    // ({cwd}/.claude/scheduled_tasks.json — durable crons; the fold goes blind
+    // on stream wipe, --resume replay, and adopted foreign tasks). Keep in
+    // sync with daemon-standalone.ts.
+    const foldCronArmed = Object.keys(session.foldState.cronIds || {}).length > 0;
+    let cronArmed = foldCronArmed;
+    if (!cronArmed && session.cwd) {
+      // 10-min TTL cache — staleness only delays lift of protection, never a kill.
+      if (session.diskCronCache && now - session.diskCronCache.at < 10 * 60000) {
+        cronArmed = session.diskCronCache.armed;
+      } else {
+        var tasksJson = null, lockJson = null;
+        try { tasksJson = fs.readFileSync(path.join(session.cwd, '.claude', 'scheduled_tasks.json'), 'utf-8'); } catch {}
+        try { lockJson = fs.readFileSync(path.join(session.cwd, '.claude', 'scheduled_tasks.lock'), 'utf-8'); } catch {}
+        var disk = hasDiskCronInterest({ sid: sid, tasksJson: tasksJson, lockJson: lockJson, nowMs: now });
+        session.diskCronCache = { at: now, armed: disk.armed, reason: disk.reason };
+        if (disk.armed) {
+          cronArmed = true;
+          logMsg('info', 'idle scan: disk scheduled_tasks arms cron protection', { sid: sid, pid: pid, reason: disk.reason, liveTasks: disk.liveTasks });
+        }
+      }
+    }
     // A running background task (daemon's OWN taskState) also outlives JSONL
     // silence — see daemon-standalone.ts for the full rationale (inc-1786222771315).
     const bgActive = (session.taskState && session.taskState.derivedRunning > 0) === true;
@@ -4257,6 +4741,12 @@ if (action === '--start') {
 
   ensureOwnerOnlyStorage();
 
+  // Move dead-session stream files from legacy /tmp to the HOME dir BEFORE
+  // reconcile (adopted sessions resolve files by registry absolute paths).
+  try { migrateLegacyStreams(); } catch (err) {
+    logMsg('error', 'legacy streams migration failed', { error: err.message });
+  }
+
   // Write-ahead registry reconcile: load sessions.json, probe liveness,
   // adopt or reap. This is source-of-truth for cross-daemon handoff.
   logMsg('info', 'startup: reconcile begin', { registryFile: REGISTRY_FILE, streamsDir: STREAMS_DIR });
@@ -4339,6 +4829,10 @@ if (action === '--start') {
 
     // Start session idle scanner (every 60s)
     setInterval(scanIdleSessions, SESSION_SCAN_INTERVAL_MS);
+
+    // Dead-stream retention: hourly; first pass after reconcile settles.
+    setTimeout(sweepDeadStreams, 60000);
+    setInterval(sweepDeadStreams, STREAM_RETENTION_SWEEP_MS);
 
     // Cloud bridge self-heal: a persisted bridge.json re-dials without the Mac.
     loadBridgeConfig();

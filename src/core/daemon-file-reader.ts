@@ -286,13 +286,22 @@ export class DaemonFileReader implements SessionFileReader {
    * command" which we treat as a transport failure, forcing the caller to
    * skip the cache and do a full read.
    */
-  async stat(remotePath: string): Promise<{ mtimeMs: number; size: number } | null> {
+  async stat(remotePath: string): Promise<{ mtimeMs: number; size: number; epoch?: string } | null> {
     await this.resolve()
     const conn = await getDaemonConnection(this.host, this.sshTarget!)
     const result = await conn.send('fs.stat', { path: remotePath })
     if (result.ok) {
       if (!result.exists) return null
-      return { mtimeMs: result.mtimeMs as number, size: result.size as number }
+      // epoch (dev:ino:birthtimeMs) identifies the file INCARNATION — same
+      // formula as the daemon's streamEpochOf. Absent on pre-epoch daemons.
+      const epoch = typeof result.dev === 'number' && typeof result.ino === 'number'
+        && typeof result.birthtimeMs === 'number'
+        ? `${result.dev}:${result.ino}:${Math.floor(result.birthtimeMs)}`
+        : undefined
+      return {
+        mtimeMs: result.mtimeMs as number, size: result.size as number,
+        ...(epoch !== undefined ? { epoch } : {}),
+      }
     }
     throw new Error('fs.stat failed: ' + (typeof result.error === 'string' ? result.error : 'unknown'))
   }

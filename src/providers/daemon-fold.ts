@@ -34,14 +34,28 @@ export interface SessionSnapshot {
   /** Non-backgrounded, non-terminal background tasks (#870 semantics). */
   gatingBgCount: number
   teamActive: boolean
-  /** A CronCreate succeeded and no CronDelete removed it — the CLI's in-process
-   *  cron scheduler (/loop) is armed. Session-only crons die with the process,
-   *  so idle reapers must treat this session as deliberately long-running. */
+  /** A CronCreate succeeded and no CronDelete removed it — the CLI's cron
+   *  scheduler (/loop) is armed, so idle reapers must treat this session as
+   *  deliberately long-running. Only the EXECUTION timer is in-process: a
+   *  `durable:true` job also persists to {cwd}/.claude/scheduled_tasks.json and
+   *  is directory-scoped, so it can outlive this session (see the INVARIANT
+   *  block in daemon-core.ts — Walnut now denies durable creates). The disk
+   *  side is a separate signal the fold cannot see: hasDiskCronInterest. */
   cronActive: boolean
   lastResult: { isError: boolean; numTurns?: number; endOffset: number } | null
   pid: number | null
   /** Normalized via isTurnCompleteExit by the daemon when dead. */
   exitCode: number | null
+  /** Identity of the stream FILE the fold was computed over
+   *  (`dev:ino:birthtimeMs` at open/adopt time). `v` is only comparable
+   *  between snapshots of the SAME epoch: when the file is recreated (reboot
+   *  wiped it, manual delete), byte offsets restart at 0 and every stored
+   *  watermark from the previous incarnation is garbage — the consumer must
+   *  reset its bookkeeping, not "win" with the stale higher offset
+   *  (incident 019a7fe5: an 85 MB watermark from a dead file silently vetoed
+   *  every snapshot of its 16 MB successor). null/absent = epoch unknown
+   *  (stat failed, or the snapshot came from a pre-epoch daemon). */
+  streamEpoch?: string | null
 }
 
 export interface FoldState {
@@ -75,8 +89,10 @@ export interface FoldState {
    *  reset by a real user anchor — cron jobs deliberately span turns (that is
    *  the whole point of /loop). Does NOT participate in turn settle: a loop
    *  session goes legitimately idle between fires. Consumers: idle reapers,
-   *  which must not kill a session whose in-process scheduler is armed
-   *  (session-only crons die with the CLI process). Over-report is the safe
+   *  which must not kill a session whose scheduler is armed (a non-durable
+   *  cron dies with the CLI process — but note `--resume` revives it from
+   *  history, so a kill is never a reliable stop; only CronDelete is).
+   *  Over-report is the safe
    *  direction (mirrors teamActive) — a CLI-side 7-day auto-expiry the fold
    *  cannot observe is backstopped by the reapers' extended-not-disabled
    *  threshold. */
@@ -424,6 +440,8 @@ export function assembleSnapshot(input: {
   dead: boolean
   pid: number | null
   exitCode: number | null
+  /** Optional so pre-epoch call sites (and replayed cached inputs) stay valid. */
+  streamEpoch?: string | null
 }): SessionSnapshot {
   const s = input.foldState
   let gating = 0
@@ -449,6 +467,7 @@ export function assembleSnapshot(input: {
     lastResult: s.lastResult ? { ...s.lastResult } : null,
     pid: input.pid,
     exitCode: input.exitCode,
+    streamEpoch: input.streamEpoch ?? null,
   }
 }
 
@@ -465,7 +484,8 @@ export function snapshotDiffers(a: SessionSnapshot, b: SessionSnapshot): boolean
   if (a.cliState !== b.cliState || a.turnActive !== b.turnActive
     || a.gatingBgCount !== b.gatingBgCount || a.teamActive !== b.teamActive
     || a.cronActive !== b.cronActive
-    || a.pid !== b.pid || a.exitCode !== b.exitCode) return true
+    || a.pid !== b.pid || a.exitCode !== b.exitCode
+    || (a.streamEpoch ?? null) !== (b.streamEpoch ?? null)) return true
   const ap = a.pendingPermission, bp = b.pendingPermission
   if (!!ap !== !!bp) return true
   if (ap && bp && (ap.requestId !== bp.requestId || ap.toolName !== bp.toolName || ap.sinceTs !== bp.sinceTs)) return true
