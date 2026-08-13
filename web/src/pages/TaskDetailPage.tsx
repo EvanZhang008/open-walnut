@@ -610,7 +610,10 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
                       Archive
                     </button>
                   )}
-                  <span className="tdv2-session-open">Open session \u2192</span>
+                  {/* Arrow must come from a JS string literal (an escape sequence in
+                      JSX *text* renders as the six literal characters), which is why
+                      the sibling ellipses above use '\u2026' the same way. */}
+                  <span className="tdv2-session-open">Open session {'\u2192'}</span>
                 </div>
               );
             })}
