@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { fetchSessionHistory } from '@/api/sessions';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { fetchSessionHistory, HISTORY_TAIL_LIMIT } from '@/api/sessions';
 import { perf } from '@/utils/perf-logger';
 import { log } from '@/utils/log';
 import type { SessionHistoryMessage } from '@/types/session';
@@ -10,6 +10,7 @@ import {
 } from '@/cache/session-cache';
 import { computeHistoryAnchor, collectUnsettledIds } from './history-anchor';
 import { planDeltaMerge } from './history-merge';
+import { visibleInterval } from '@/utils/page-visibility';
 
 interface UseSessionHistoryReturn {
   messages: SessionHistoryMessage[];
@@ -23,6 +24,16 @@ interface UseSessionHistoryReturn {
   stale: string | null;
   /** Index in messages[] where the fork boundary is (source messages end, forked messages start) */
   forkBoundaryIndex?: number;
+  /** Messages that exist at the source but were NOT loaded (lazy tail load).
+   *  0 = we hold the full history. */
+  olderHidden: number;
+  /** The payload was a BOUNDED window read (whale / cold tail-bounded read):
+   *  older messages exist but their COUNT is unknown (`total` is the window
+   *  length), so olderHidden stays 0 — show an uncounted "Load earlier". */
+  olderWindowed: boolean;
+  /** Fetch the full history (no tail limit) — call when the user wants to read
+   *  past the lazy-loaded tail. Idempotent while in flight. */
+  loadFullHistory: () => void;
 }
 
 /** Diagnostic: count user text messages and check if they're interleaved or bunched */
@@ -80,6 +91,22 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   // stale closure (version-effect reads it synchronously).
   const messagesRef = useRef<SessionHistoryMessage[]>([]);
   messagesRef.current = messages;
+  // Lazy tail load: how many messages exist BEFORE messages[0] at the source
+  // (`?tail=` slice). cursor space includes them; planDeltaMerge gets this as
+  // baseOffset so its length guard still adds up.
+  const baseOffsetRef = useRef(0);
+  const [olderHidden, setOlderHidden] = useState(0);
+  const [olderWindowed, setOlderWindowed] = useState(false);
+  // Adopt a full (possibly tail-sliced) payload's offset bookkeeping.
+  // `windowed` = bounded window read: cursor === messages.length even though
+  // older messages exist, so olderHidden computes to 0 — track the flag
+  // separately so the UI still offers "Load earlier".
+  const adoptOffset = (msgCount: number, cursor: number, windowed?: boolean) => {
+    const offset = Math.max(0, cursor - msgCount);
+    baseOffsetRef.current = offset;
+    setOlderHidden(offset);
+    setOlderWindowed(!!windowed);
+  };
 
   useEffect(() => {
     if (!sessionId) {
@@ -90,6 +117,9 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       setStale(null);
       setForkBoundaryIndex(undefined);
       cursorRef.current = 0;
+      baseOffsetRef.current = 0;
+      setOlderHidden(0);
+      setOlderWindowed(false);
       return;
     }
 
@@ -127,20 +157,30 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
         anchorMsgId: anchor.anchorMsgId,
         anchorTail: anchor.anchorTail,
         reviseIds,
+        // Bounds the fall-through only: an honored delta ignores tail; a DECLINED
+        // delta (anchor lost) returns a full payload, which must not be multi-MB.
+        tail: HISTORY_TAIL_LIMIT,
         signal: controller.signal,
       })
         .then((result) => {
           if (cancelled) return;
           endP2(`+${result.messages.length} msgs (delta=${result.delta})`);
+          // A fetch that SUCCEEDED clears any previous failure. Without this the
+          // error was only reset on session switch / version bump, so a single
+          // transient answer (notably the startup-window "history unavailable")
+          // stuck on screen for the life of the session even though every later
+          // fetch was healthy.
+          setError(null);
           if (result.delta) {
             // Fold the delta via the SHARED merge planner (history-merge.ts) —
             // session-cache uses the same function, so the two mirrors can't
             // drift apart again (drifted guards are how the sliding-window bug
             // survived undetected; inc-1785993576822).
-            const plan = planDeltaMerge(messagesRef.current, result, cursorRef.current);
+            const plan = planDeltaMerge(messagesRef.current, result, cursorRef.current,
+              { baseOffset: baseOffsetRef.current });
             if (plan.kind === 'rebuild') {
               log.warn('session-history', `delta merge inconsistent — rebuilding (${plan.reason}, had=${messagesRef.current.length} +delta=${result.messages.length})`, { sessionId });
-              fetchSessionHistory(sessionId, { signal: controller.signal })
+              fetchSessionHistory(sessionId, { tail: HISTORY_TAIL_LIMIT, signal: controller.signal })
                 .then((full) => {
                   if (cancelled) return;
                   // Stale rebuild would replace a fresher local view with the
@@ -150,11 +190,14 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                   setStale(null);
                   setMessages(full.messages);
                   setForkBoundaryIndex(full.forkBoundaryIndex);
-                  cursorRef.current = full.cursor ?? full.messages.length;
+                  const fullCursor = full.cursor ?? full.messages.length;
+                  cursorRef.current = fullCursor;
+                  adoptOffset(full.messages.length, fullCursor, full.windowed);
                   setHistoryCache(sessionId, {
                     messages: full.messages,
                     forkBoundaryIndex: full.forkBoundaryIndex,
-                    msgCount: full.cursor ?? full.messages.length,
+                    msgCount: fullCursor,
+                    baseOffset: Math.max(0, fullCursor - full.messages.length),
                   });
                 })
                 .catch(() => { /* keep current view; next turn retries */ });
@@ -166,20 +209,24 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                 messages: plan.messages,
                 forkBoundaryIndex: result.forkBoundaryIndex ?? forkBoundaryIndex,
                 msgCount: plan.cursor,
+                baseOffset: baseOffsetRef.current,
               });
             }
             // Advance cursor even on an empty delta (nothing new yet — archive lagging).
             cursorRef.current = plan.cursor;
           } else {
-            // Server rebuilt (since out of range) → full replace.
+            // Server rebuilt (since out of range) → full replace (tail-sliced).
             diagnoseOrdering('refetch-full', sid, result.messages);
             setMessages(result.messages);
             setForkBoundaryIndex(result.forkBoundaryIndex);
-            cursorRef.current = result.cursor ?? result.messages.length;
+            const fullCursor = result.cursor ?? result.messages.length;
+            cursorRef.current = fullCursor;
+            adoptOffset(result.messages.length, fullCursor, result.windowed);
             setHistoryCache(sessionId, {
               messages: result.messages,
               forkBoundaryIndex: result.forkBoundaryIndex,
-              msgCount: result.cursor ?? result.messages.length,
+              msgCount: fullCursor,
+              baseOffset: Math.max(0, fullCursor - result.messages.length),
             });
           }
         })
@@ -199,16 +246,19 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       setMessages(cached.messages);
       setForkBoundaryIndex(cached.forkBoundaryIndex);
       cursorRef.current = cached.msgCount;
+      baseOffsetRef.current = cached.baseOffset ?? 0;
+      setOlderHidden(cached.baseOffset ?? 0);
       setLoading(false);
       // Offscreen column: show cache, skip the background SSH re-verify until visible.
       if (!enabled) return () => { cancelled = true; controller.abort(); };
       setPhase2Pending(true);
 
       const endP2 = perf.start(`session:full:${sid}`);
-      fetchSessionHistory(sessionId, { signal: controller.signal })
+      fetchSessionHistory(sessionId, { tail: HISTORY_TAIL_LIMIT, signal: controller.signal })
         .then((result) => {
           if (cancelled) return;
           endP2(`${result.messages.length} msgs`);
+          setError(null); // successful fetch clears a previous failure (see above)
           // Degraded payload (live read failed, server sent its last-good
           // parse): our local cache is at least as fresh — keep it, surface
           // the banner, and leave cursor/cache untouched so recovery comes
@@ -219,12 +269,15 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           }
           setStale(null);
           diagnoseOrdering('cache-verify', sid, result.messages);
+          const fullCursor = result.cursor ?? result.messages.length;
           setHistoryCache(sessionId, {
             messages: result.messages,
             forkBoundaryIndex: result.forkBoundaryIndex,
-            msgCount: result.cursor ?? result.messages.length,
+            msgCount: fullCursor,
+            baseOffset: Math.max(0, fullCursor - result.messages.length),
           });
-          cursorRef.current = result.cursor ?? result.messages.length;
+          cursorRef.current = fullCursor;
+          adoptOffset(result.messages.length, fullCursor, result.windowed);
           setMessages(result.messages);
           setForkBoundaryIndex(result.forkBoundaryIndex);
           // NOTE: turn-boundary block cleanup is driven by the version-bump delta
@@ -246,9 +299,10 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     setLoading(true);
     setPhase2Pending(true);
 
-    // Phase 1: Fast local read (streams file, ~1ms)
+    // Phase 1: Fast local read (streams file, ~1ms). Tail-sliced too — the
+    // response has no cursor, so no offset bookkeeping; Phase 2 replaces it.
     const endP1 = perf.start(`session:streams:${sid}`);
-    fetchSessionHistory(sessionId, { source: 'streams', signal: controller.signal })
+    fetchSessionHistory(sessionId, { source: 'streams', tail: HISTORY_TAIL_LIMIT, signal: controller.signal })
       .then((result) => {
         if (cancelled) return;
         endP1(`${result.messages.length} msgs`);
@@ -267,12 +321,15 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
         // Offscreen column: Phase 1 (local streams) already gave instant
         // content; skip the expensive Phase 2 SSH fetch until visible.
         if (!enabled) { setPhase2Pending(false); return; }
-        // Phase 2: Full fetch (source of truth, may SSH for remote sessions)
+        // Phase 2: Full fetch (source of truth, may SSH for remote sessions).
+        // Lazy: only the last HISTORY_TAIL_LIMIT messages — a whale session used
+        // to pin one of the browser's 6 connections for 35-150s here.
         const endP2 = perf.start(`session:full:${sid}`);
-        fetchSessionHistory(sessionId, { signal: controller.signal })
+        fetchSessionHistory(sessionId, { tail: HISTORY_TAIL_LIMIT, signal: controller.signal })
           .then((result) => {
             if (!cancelled) {
               endP2(`${result.messages.length} msgs`);
+              setError(null); // successful fetch clears a previous failure (see above)
               diagnoseOrdering('P2:full', sid, result.messages);
               setMessages(result.messages);
               setForkBoundaryIndex(result.forkBoundaryIndex);
@@ -284,12 +341,15 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
                 return;
               }
               setStale(null);
-              cursorRef.current = result.cursor ?? result.messages.length;
+              const fullCursor = result.cursor ?? result.messages.length;
+              cursorRef.current = fullCursor;
+              adoptOffset(result.messages.length, fullCursor, result.windowed);
               // Write to cache for next visit
               setHistoryCache(sessionId, {
                 messages: result.messages,
                 forkBoundaryIndex: result.forkBoundaryIndex,
-                msgCount: result.cursor ?? result.messages.length,
+                msgCount: fullCursor,
+                baseOffset: Math.max(0, fullCursor - result.messages.length),
               });
             }
           })
@@ -326,25 +386,62 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     const controller = new AbortController();
     // 10s in prod; tests may shorten via window.__staleRetryMs to avoid a 10s wait.
     const retryMs = (typeof window !== 'undefined' && (window as unknown as { __staleRetryMs?: number }).__staleRetryMs) || 10_000;
-    const timer = setInterval(() => {
-      fetchSessionHistory(sessionId, { signal: controller.signal })
+    // visibleInterval: a hidden tab must not retry full history fetches every
+    // 10s for hours (stale remote sessions are exactly the expensive fetch).
+    const cancel = visibleInterval(() => {
+      fetchSessionHistory(sessionId, { tail: HISTORY_TAIL_LIMIT, signal: controller.signal })
         .then((result) => {
           if (cancelled || result.stale) return; // still down — keep the banner, retry next tick
           // Live read recovered → adopt the fresh parse and drop the banner.
           setStale(null);
           setMessages(result.messages);
           setForkBoundaryIndex(result.forkBoundaryIndex);
-          cursorRef.current = result.cursor ?? result.messages.length;
+          const fullCursor = result.cursor ?? result.messages.length;
+          cursorRef.current = fullCursor;
+          adoptOffset(result.messages.length, fullCursor, result.windowed);
           setHistoryCache(sessionId, {
             messages: result.messages,
             forkBoundaryIndex: result.forkBoundaryIndex,
-            msgCount: result.cursor ?? result.messages.length,
+            msgCount: fullCursor,
+            baseOffset: Math.max(0, fullCursor - result.messages.length),
           });
         })
         .catch(() => { /* transient — keep the banner, retry next tick */ });
     }, retryMs);
-    return () => { cancelled = true; controller.abort(); clearInterval(timer); };
+    return () => { cancelled = true; controller.abort(); cancel(); };
   }, [sessionId, stale, enabled]);
 
-  return { messages, loading, phase2Pending, error, stale, forkBoundaryIndex };
+  // "Show earlier" past the lazy tail: fetch the WHOLE history once, on demand.
+  // The one deliberately unbounded fetch — user-initiated, so pinning a browser
+  // connection for it is the user's explicit choice, not a background tax.
+  const loadingFullRef = useRef(false);
+  // olderWindowedRef mirrors the state for the guard below (a windowed payload
+  // has baseOffset 0 — the count is unknown — yet older messages DO exist).
+  const olderWindowedRef = useRef(false);
+  olderWindowedRef.current = olderWindowed;
+  const loadFullHistory = useCallback(() => {
+    if (!sessionId || loadingFullRef.current
+      || (baseOffsetRef.current === 0 && !olderWindowedRef.current)) return;
+    loadingFullRef.current = true;
+    setPhase2Pending(true);
+    fetchSessionHistory(sessionId)
+      .then((result) => {
+        if (result.stale) return; // keep the tail view; banner path handles it
+        setMessages(result.messages);
+        setForkBoundaryIndex(result.forkBoundaryIndex);
+        const fullCursor = result.cursor ?? result.messages.length;
+        cursorRef.current = fullCursor;
+        adoptOffset(result.messages.length, fullCursor, result.windowed);
+        setHistoryCache(sessionId, {
+          messages: result.messages,
+          forkBoundaryIndex: result.forkBoundaryIndex,
+          msgCount: fullCursor,
+          baseOffset: Math.max(0, fullCursor - result.messages.length),
+        });
+      })
+      .catch(() => { /* keep the tail view; user can retry */ })
+      .finally(() => { loadingFullRef.current = false; setPhase2Pending(false); });
+  }, [sessionId]);
+
+  return { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, loadFullHistory };
 }

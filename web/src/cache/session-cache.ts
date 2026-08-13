@@ -27,11 +27,14 @@ import {
   type StreamingBlock,
 } from '@/stream/stream-reducer';
 import type { SessionHistoryMessage } from '@/types/session';
-import { fetchSessionHistory } from '@/api/sessions';
+import { fetchSessionHistory, HISTORY_TAIL_LIMIT } from '@/api/sessions';
 import { promoteCompletedBlocks, buildIdOnlyEvidence, type DeltaEvidence } from './promote-blocks';
+import { getFinishedAgentIds } from './finished-agents-store';
 import { computeHistoryAnchor, collectUnsettledIds } from '@/hooks/history-anchor';
 import { planDeltaMerge } from '@/hooks/history-merge';
 import { recordFlight, trimStreamEvent } from '@/stream/flight-recorder';
+import { tracePhase } from '@/utils/main-thread-tracer';
+import { runWhenVisible } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
 
 const MAX_CACHED = 20;
@@ -42,6 +45,10 @@ export interface CachedHistory {
   messages: SessionHistoryMessage[];
   forkBoundaryIndex?: number;
   msgCount: number;
+  /** Messages hidden BEFORE messages[0] (lazy tail load — msgCount counts them).
+   *  Undefined/0 = full history. Must ride every cache write or the delta
+   *  length-guard sees a mismatched count space and rebuilds forever. */
+  baseOffset?: number;
 }
 
 const historyCache = new Map<string, CachedHistory>();
@@ -161,7 +168,10 @@ function gcAbsorbedBlocks(sid: string, delta: SessionHistoryMessage[], fullEvide
   // match against history must not GC it mid-accumulation.
   const liveTail = state.isStreaming ? lastMainLaneIndex(state.blocks) : -1;
   const boundary = liveTail >= 0 ? liveTail : state.blocks.length;
-  const { kept, removed } = promoteCompletedBlocks(state.blocks, delta, boundary, fullEvidence);
+  // Orphan finished-agent ids (nested agents with no history row) — same
+  // evidence the render filter uses; fetchSessionHistory already unioned this
+  // session's server-reported ids into the store before we got here.
+  const { kept, removed } = promoteCompletedBlocks(state.blocks, delta, boundary, fullEvidence, getFinishedAgentIds(sid));
   if (removed === 0) return;
   if (kept.length === 0 && !state.isStreaming) {
     streamStates.delete(sid);
@@ -377,11 +387,15 @@ function registerGlobalListeners(): void {
       anchorMsgId: anchor.anchorMsgId,
       anchorTail: anchor.anchorTail,
       reviseIds,
+      // Bounds the declined-delta fall-through (full payload) — see useSessionHistory.
+      tail: HISTORY_TAIL_LIMIT,
     })
-      .then((r) => {
+      .then((r) => tracePhase(`bg-delta-merge:${sid.substring(0, 8)}(+${r.messages.length})`, () => {
         // Fold via the SHARED merge planner (history-merge.ts) — same function
         // as useSessionHistory, so the two mirrors can't drift apart again.
-        const plan = r.delta && cached ? planDeltaMerge(cached.messages, r, cached.msgCount) : undefined;
+        const plan = r.delta && cached
+          ? planDeltaMerge(cached.messages, r, cached.msgCount, { baseOffset: cached.baseOffset ?? 0 })
+          : undefined;
 
         // GC streaming blocks proven present in history (memory bound for
         // background sessions — correctness lives in the render filter).
@@ -396,18 +410,23 @@ function registerGlobalListeners(): void {
         if (plan && cached) {
           if (plan.kind === 'rebuild') {
             log.warn('session-cache', `bg delta inconsistent for ${sid.substring(0, 8)} — rebuilding (${plan.reason})`);
-            fetchSessionHistory(sid)
-              .then((full) => historyCacheSet(sid, {
-                messages: full.messages,
-                forkBoundaryIndex: full.forkBoundaryIndex,
-                msgCount: full.cursor ?? full.messages.length,
-              }))
+            fetchSessionHistory(sid, { tail: HISTORY_TAIL_LIMIT })
+              .then((full) => {
+                const fullCursor = full.cursor ?? full.messages.length;
+                historyCacheSet(sid, {
+                  messages: full.messages,
+                  forkBoundaryIndex: full.forkBoundaryIndex,
+                  msgCount: fullCursor,
+                  baseOffset: Math.max(0, fullCursor - full.messages.length),
+                });
+              })
               .catch(() => { /* keep current cache; next turn retries */ });
           } else if (plan.kind === 'merged') {
             historyCacheSet(sid, {
               messages: plan.messages,
               forkBoundaryIndex: r.forkBoundaryIndex ?? cached.forkBoundaryIndex,
               msgCount: plan.cursor,
+              baseOffset: cached.baseOffset ?? 0,
             });
             log.info('session-cache', `bg delta for ${sid.substring(0, 8)}: +${r.messages.length} → ${plan.messages.length}`);
           } else {
@@ -416,33 +435,42 @@ function registerGlobalListeners(): void {
           }
         } else {
           // Full payload (no cache yet, or since out of range → rebuild).
+          // May be tail-sliced: cursor counts the messages we did NOT receive.
+          const fullCursor = r.cursor ?? r.messages.length;
           historyCacheSet(sid, {
             messages: r.messages,
             forkBoundaryIndex: r.forkBoundaryIndex,
-            msgCount: r.cursor ?? r.messages.length,
+            msgCount: fullCursor,
+            baseOffset: Math.max(0, fullCursor - r.messages.length),
           });
           log.info('session-cache', `bg-updated history for ${sid.substring(0, 8)}`, { msgCount: r.messages.length });
         }
-      })
+      }))
       .catch((err) => log.warn('session-cache', 'bg history fetch failed', { sid, error: String(err) }))
       .finally(() => inflightBgFetches.delete(sid));
   }
 
   // ── batch-completed (turn wrote to JSONL, streaming blocks are now history) ──
+  // Hidden tabs defer the delta fetch until shown (one catch-up per session):
+  // every open tab receives every turn's batch-completed, so N background tabs
+  // used to multiply each turn into N delta fetches against the shared
+  // 6-connections-per-origin pool.
   onSessionEvent('session:batch-completed', (data: unknown) => {
     const sid = (data as { sessionId?: string })?.sessionId;
     if (!sid || !trackedSessions.has(sid)) return;
-    void deltaRefreshHistory(sid);
+    runWhenVisible(`session-cache:delta:${sid}`, () => { void deltaRefreshHistory(sid); });
   });
 
   // ── WS reconnect — refresh all tracked sessions ──
   // Debounced: WS can flap (disconnect→connect within seconds); refreshing up to
   // 20 sessions per flap starves the main thread. Coalesce rapid reconnects.
+  // Hidden tabs defer the whole sweep until shown — a server restart reconnects
+  // EVERY tab at once; only the visible one should refresh immediately.
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   wsClient.onEvent('_ws:reconnected', () => {
     clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
-      void refreshAllOnReconnect();
+      runWhenVisible('session-cache:reconnect-sweep', () => { void refreshAllOnReconnect(); });
     }, 1_000);
   });
 

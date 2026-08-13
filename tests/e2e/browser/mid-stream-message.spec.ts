@@ -143,12 +143,19 @@ test.describe('Mid-stream user message persistence', () => {
       { role: 'assistant', text: 'I have completed the task.', timestamp: '2026-01-01T00:01:00.000Z' },
     ];
 
+    // The mock MUST honor `since` like the real server: `?since=N` returns rows
+    // AFTER N (so a second turn-boundary refetch at since=4 gets []). The old
+    // "any since → full turnDelta" shortcut broke when the turn boundary gained
+    // a second refetch (isStreaming false-edge reliability net): the double
+    // merge tripped the length!==cursor rebuild, whose FULL refetch served only
+    // the base — a mock-contract vanish, not a product one.
+    const fullHistory = [...baseMessages, ...turnDelta];
     await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
       const url = new URL(route.request().url());
       const since = url.searchParams.get('since');
       if (since !== null) {
-        // Delta refetch after batch-completed: the new assistant message only.
-        await route.fulfill({ json: { messages: turnDelta, cursor: baseMessages.length + turnDelta.length, delta: true } });
+        // Delta refetch after the turn: rows past the client's cursor.
+        await route.fulfill({ json: { messages: fullHistory.slice(Number(since)), cursor: fullHistory.length, delta: true } });
       } else {
         // Phase 1 (streams) + Phase 2 (full): the base exchange.
         await route.fulfill({ json: { messages: baseMessages, cursor: baseMessages.length, delta: false } });
@@ -327,11 +334,14 @@ test.describe('Mid-stream user message persistence', () => {
       { role: 'assistant', text: 'Done with everything.', timestamp: '2026-01-01T00:02:00.000Z' },
     ];
 
+    // Honor `since` like the real server (rows after N; second refetch at the
+    // turn boundary gets []) — see the contract comment in the first test.
+    const fullHistory = [...baseMessages, ...turnDelta];
     await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
       const url = new URL(route.request().url());
       const since = url.searchParams.get('since');
       if (since !== null) {
-        await route.fulfill({ json: { messages: turnDelta, cursor: baseMessages.length + turnDelta.length, delta: true } });
+        await route.fulfill({ json: { messages: fullHistory.slice(Number(since)), cursor: fullHistory.length, delta: true } });
       } else {
         await route.fulfill({ json: { messages: baseMessages, cursor: baseMessages.length, delta: false } });
       }
@@ -450,11 +460,13 @@ test.describe('Mid-stream user message persistence', () => {
       { role: 'assistant', text: 'Stopping. Got your messages.', timestamp: '2026-01-01T00:00:20.000Z' },
     ];
 
+    // Honor `since` like the real server (rows after N) — see the first test.
+    const fullHistory = [...baseMessages, ...turnDelta];
     await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
       const url = new URL(route.request().url());
       const since = url.searchParams.get('since');
       if (since !== null) {
-        await route.fulfill({ json: { messages: turnDelta, cursor: baseMessages.length + turnDelta.length, delta: true } });
+        await route.fulfill({ json: { messages: fullHistory.slice(Number(since)), cursor: fullHistory.length, delta: true } });
       } else {
         await route.fulfill({ json: { messages: baseMessages, cursor: baseMessages.length, delta: false } });
       }

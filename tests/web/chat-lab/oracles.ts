@@ -68,3 +68,36 @@ export function expectNothingVanished(client: HeadlessChatClient, server: Script
     expect(projected, `assistant content vanished: "${m.text.slice(0, 40)}"`).toContain(m.text.slice(0, 40));
   }
 }
+
+/** Oracle 2, lazy-tail variant: a tail-mounted client legitimately does not
+ *  hold the archive before `fromIndex` — never-vanish applies to everything
+ *  the user could have WATCHED (rows appended after mount). */
+export function expectNothingVanishedSince(
+  client: HeadlessChatClient,
+  server: ScriptedServer,
+  fromIndex: number,
+): void {
+  const projected = client.project().map(i => i.label).join('\n');
+  for (const m of server.canonical.slice(fromIndex)) {
+    if (m.role !== 'assistant' || !m.text) continue;
+    expect(projected, `assistant content vanished: "${m.text.slice(0, 40)}"`).toContain(m.text.slice(0, 40));
+  }
+}
+
+/** Oracle 1, lazy-tail variant: the fresh comparison client mounts with the
+ *  same ?tail=N the live client used. */
+export function expectRefreshEquivalentLazy(
+  client: HeadlessChatClient,
+  server: ScriptedServer,
+  tailLimit: number,
+  opts?: QuiescenceOptions,
+): void {
+  const fresh = new Client(server, { tailLimit });
+  fresh.reload();
+  const freshLabels = new Set(fresh.project().map(i => `${i.kind}|${i.label}`));
+  const residuals = client.project()
+    .filter(i => i.kind !== 'history')
+    .filter(i => !freshLabels.has(`${i.kind}|${i.label}`))
+    .filter(i => !(opts?.allowResiduals?.(i) ?? false));
+  expect(residuals, 'live lazy view shows items a lazy refresh would clear').toEqual([]);
+}

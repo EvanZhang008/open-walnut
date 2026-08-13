@@ -714,6 +714,162 @@ describe('GET /api/sessions/:sessionId/history', () => {
     expect(res.status).toBe(404);
   });
 
+  // ── Startup window: a just-launched session has no JSONL for its first
+  // seconds (measured on a real launch: history fetched at +0.8s, first JSONL
+  // line at +4.8s). Claiming "Session history file not found" there made EVERY
+  // task creation flash "History unavailable" in the UI.
+  it('does NOT report historyUnavailable for a session still starting up', async () => {
+    await createSessionRecord('hist-starting', 'task-1', 'project-a', '/tmp', {
+      initialProcessStatus: 'idle',
+      initialStatusReason: 'awaiting_spawn',
+    });
+
+    const app = createApp();
+    const res = await request(app).get('/api/sessions/hist-starting/history');
+
+    expect(res.status).toBe(200);
+    expect(res.body.historyUnavailable).toBeUndefined();
+    expect(res.body).toEqual({ messages: [], total: 0, cursor: 0, delta: false });
+  });
+
+  it('still reports historyUnavailable once the startup window has passed', async () => {
+    await createSessionRecord('hist-stale-missing', 'task-1', 'project-a', '/tmp', {
+      initialProcessStatus: 'idle',
+    });
+    // Age both clocks past the 2-minute grace so the missing file is a real fault.
+    const old = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    await updateSessionRecord('hist-stale-missing', {
+      startedAt: old,
+      last_status_change: old,
+    });
+
+    const app = createApp();
+    const res = await request(app).get('/api/sessions/hist-stale-missing/history');
+
+    expect(res.status).toBe(200);
+    expect(res.body.historyUnavailable).toBe('Session history file not found');
+  });
+
+  // ── FORK: a fresh fork's OWN transcript is empty by definition — its whole
+  // value is the INHERITED parent conversation. The "nothing to show" verdict was
+  // decided BEFORE the fork-ancestor block ran, so a fork both reported
+  // "History unavailable" AND never loaded the parent history at all.
+  it('serves the inherited parent conversation for a fork whose own transcript is still empty', async () => {
+    const parentJournal = `${WALNUT_HOME}/journals/runtime-fork-parent.acp.jsonl`;
+    await fs.mkdir(`${WALNUT_HOME}/journals`, { recursive: true });
+    await fs.writeFile(parentJournal, [
+      JSON.stringify({
+        kind: 'meta',
+        ts: Date.parse('2026-08-09T12:00:00.000Z'),
+        event: {
+          type: 'prompt-accepted',
+          commandId: 'acp-prompt:qm-fork-parent',
+          walnutMessageId: 'qm-fork-parent',
+          text: 'parent question',
+        },
+      }),
+      JSON.stringify({
+        kind: 'acp',
+        ts: Date.parse('2026-08-09T12:00:01.000Z'),
+        source: 'live',
+        frame: {
+          method: 'session/update',
+          params: {
+            update: {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'parent answer' },
+            },
+          },
+        },
+      }),
+      JSON.stringify({
+        kind: 'meta',
+        ts: Date.parse('2026-08-09T12:00:02.000Z'),
+        event: { type: 'turn-ended', commandId: 'acp-prompt:qm-fork-parent', stopReason: 'end_turn' },
+      }),
+      '',
+    ].join('\n'));
+    await createSessionRecord('fork-parent', 'task-1', 'project-a', '/tmp', {
+      initialProcessStatus: 'stopped',
+      engine: 'codex',
+      acpRuntimeId: 'runtime-fork-parent',
+      acpJournalPath: parentJournal,
+      messageCount: 2,
+    });
+    // The fork itself: no journal on disk yet (just spawned), points at the parent.
+    await createSessionRecord('fork-child', 'task-2', 'project-a', '/tmp', {
+      initialProcessStatus: 'idle',
+      initialStatusReason: 'awaiting_spawn',
+      engine: 'codex',
+      acpRuntimeId: 'runtime-fork-child',
+      acpJournalPath: `${WALNUT_HOME}/journals/runtime-fork-child.acp.jsonl`,
+      forkedFromSessionId: 'fork-parent',
+    });
+
+    const app = createApp();
+    const res = await request(app).get('/api/sessions/fork-child/history');
+
+    expect(res.status).toBe(200);
+    // The regression: the parent conversation must be PRESENT, not "unavailable".
+    expect(res.body.historyUnavailable).toBeUndefined();
+    expect(res.body.messages.map((m: { text: string }) => m.text))
+      .toEqual(['parent question', 'parent answer']);
+    expect(res.body.forkedFromSessionId).toBe('fork-parent');
+    // Everything shown belongs to the ancestor, so the boundary sits at the end.
+    expect(res.body.forkBoundaryIndex).toBe(2);
+  });
+
+  it('does NOT report historyUnavailable for a starting fork whose parent is also empty', async () => {
+    await createSessionRecord('fork-empty-parent', 'task-1', 'project-a', '/tmp', {
+      initialProcessStatus: 'stopped',
+    });
+    await createSessionRecord('fork-empty-child', 'task-2', 'project-a', '/tmp', {
+      initialProcessStatus: 'idle',
+      initialStatusReason: 'awaiting_spawn',
+      forkedFromSessionId: 'fork-empty-parent',
+    });
+
+    const app = createApp();
+    const res = await request(app).get('/api/sessions/fork-empty-child/history');
+
+    expect(res.status).toBe(200);
+    expect(res.body.historyUnavailable).toBeUndefined();
+    expect(res.body.messages).toEqual([]);
+  });
+
+  it('still explains itself for an OLD fork with no transcript anywhere', async () => {
+    // The deferred verdict must still fire — a fork is not a blanket excuse.
+    await createSessionRecord('fork-old-parent', 'task-1', 'project-a', '/tmp', {
+      initialProcessStatus: 'stopped',
+    });
+    await createSessionRecord('fork-old-child', 'task-2', 'project-a', '/tmp', {
+      initialProcessStatus: 'idle',
+      forkedFromSessionId: 'fork-old-parent',
+    });
+    const old = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    await updateSessionRecord('fork-old-child', { startedAt: old, last_status_change: old });
+
+    const app = createApp();
+    const res = await request(app).get('/api/sessions/fork-old-child/history');
+
+    expect(res.status).toBe(200);
+    expect(res.body.historyUnavailable).toBe('Session history file not found');
+  });
+
+  it('reports historyUnavailable immediately for a terminal session that never wrote a transcript', async () => {
+    // A stopped/errored session with no transcript is a REAL fault — it must not
+    // be hidden behind the startup grace window.
+    await createSessionRecord('hist-dead-missing', 'task-1', 'project-a', '/tmp', {
+      initialProcessStatus: 'stopped',
+    });
+
+    const app = createApp();
+    const res = await request(app).get('/api/sessions/hist-dead-missing/history');
+
+    expect(res.status).toBe(200);
+    expect(res.body.historyUnavailable).toBe('Session history file not found');
+  });
+
   it('returns messages for a known session', async () => {
     // Create session record first
     await createSessionRecord('hist-session', 'task-1', 'project-a');

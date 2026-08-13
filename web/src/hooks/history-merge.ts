@@ -42,7 +42,17 @@ export function planDeltaMerge(
   base: readonly SessionHistoryMessage[],
   result: DeltaResultLike,
   currentCursor: number,
+  opts?: {
+    /** Messages hidden BEFORE base[0] (lazy tail load: base is the last N of a
+     *  longer history, cursor space counts them all). The length guard compares
+     *  `merged.length + baseOffset` against the cursor. MUST be tracked
+     *  explicitly at adoption time — deriving it here as `cursor - base.length`
+     *  would make the guard tautological, which is exactly how the sliding-
+     *  window bug stayed invisible (inc-1785993576822). */
+    baseOffset?: number;
+  },
 ): DeltaMergeOutcome {
+  const baseOffset = opts?.baseOffset ?? 0;
   // Revised prefix rows replace BY IDENTITY first, so the append below builds
   // on the corrected array (a late bgTaskFinished / tool result — the frozen-
   // prefix bug, inc-1785965937858).
@@ -78,10 +88,10 @@ export function planDeltaMerge(
   const overlap = result.messages.find(m => m.msgId && baseIds.has(m.msgId));
   if (overlap) return { kind: 'rebuild', reason: `overlap:${overlap.msgId}` };
 
-  const expected = result.cursor ?? merged.length;
-  if (result.cursor != null && merged.length !== expected) {
-    return { kind: 'rebuild', reason: `length:${merged.length}!=${expected}` };
+  const expected = result.cursor ?? (merged.length + baseOffset);
+  if (result.cursor != null && merged.length + baseOffset !== expected) {
+    return { kind: 'rebuild', reason: `length:${merged.length}+${baseOffset}!=${expected}` };
   }
 
-  return { kind: 'merged', messages: merged, cursor: result.cursor ?? merged.length };
+  return { kind: 'merged', messages: merged, cursor: result.cursor ?? (merged.length + baseOffset) };
 }

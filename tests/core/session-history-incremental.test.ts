@@ -23,6 +23,7 @@ import { CLAUDE_HOME } from '../../src/constants.js';
 import {
   encodeProjectPath,
   readSessionHistory,
+  getOrphanFinishedAgentIds,
   _resetHistoryCacheForTesting,
   _historyCacheGetForTesting,
 } from '../../src/core/session-history.js';
@@ -185,6 +186,78 @@ describe('incremental append-read', () => {
     expect(cold.map(m => m.text)).toEqual([
       'm1', 'reply 2', 'm2', 'reply 3', 'm3', 'reply 4', 'm4', 'reply 5', 'm5',
     ]);
+  });
+
+  it('orphan finished-agent ids survive incremental tail reads (prefix ∪ tail)', async () => {
+    // inc-1786496042099: the proof rides a WeakMap keyed on the parser's OWN
+    // array; the incremental merge builds a NEW array from prefix+tail, so ids
+    // proven before the boundary must be unioned back from the cache entry.
+    const sid = 'inc-orphan';
+    const notif = (toolUseId: string) =>
+      `<task-notification>\n<task-id>fixture01</task-id>\n<tool-use-id>${toolUseId}</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n<result>r</result>\n</task-notification>`;
+    await writeLines(sid, [
+      userLine('start'),
+      assistantLine('working'),
+      // Orphan proof: no tool row anywhere carries this id (nested agent).
+      { type: 'queue-operation', operation: 'enqueue', timestamp: new Date().toISOString(), content: notif('toolu_prefix_orphan') },
+    ]);
+
+    const first = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    expect(getOrphanFinishedAgentIds(first)?.has('toolu_prefix_orphan')).toBe(true);
+    expect(_historyCacheGetForTesting(sid)?.inc).toBeDefined();
+    expect(_historyCacheGetForTesting(sid)?.orphanFinishedIds).toEqual(['toolu_prefix_orphan']);
+
+    // Append plain turns — the tail parse alone would see NO notification.
+    await appendLines(sid, [userLine('next'), assistantLine('answer')]);
+    await bumpMtime(sid);
+    const second = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    expect(second.map(m => m.text)).toContain('answer');
+    // The merged array must still carry the prefix-proven orphan id.
+    expect(getOrphanFinishedAgentIds(second)?.has('toolu_prefix_orphan')).toBe(true);
+
+    // A NEW orphan proof arriving in a later append unions in alongside.
+    await appendLines(sid, [
+      { type: 'queue-operation', operation: 'enqueue', timestamp: new Date().toISOString(), content: notif('toolu_tail_orphan') },
+      assistantLine('post-notif'),
+    ]);
+    await bumpMtime(sid);
+    const third = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    const ids = getOrphanFinishedAgentIds(third);
+    expect(ids?.has('toolu_prefix_orphan')).toBe(true);
+    expect(ids?.has('toolu_tail_orphan')).toBe(true);
+    expect([..._historyCacheGetForTesting(sid)?.orphanFinishedIds ?? []].sort())
+      .toEqual(['toolu_prefix_orphan', 'toolu_tail_orphan']);
+  });
+
+  it('orphan id in the FROZEN PREFIX survives when the tail parse cannot see it (real boundary)', async () => {
+    // The strict shape of the incident: the file is big enough that the
+    // notification line freezes into the prefix (boundary = last ~1 MB), so the
+    // tail re-parse NEVER sees it — only the cache-entry union can carry it.
+    const sid = 'inc-orphan-prefix';
+    const notif =
+      '<task-notification>\n<task-id>fixture02</task-id>\n<tool-use-id>toolu_deep_prefix</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n<result>r</result>\n</task-notification>';
+    const lines: unknown[] = [
+      { type: 'queue-operation', operation: 'enqueue', timestamp: new Date().toISOString(), content: notif },
+    ];
+    // ~3 MB of paired tool turns (results paired so pendingToolIds stays empty
+    // — an unresolved prefix tool id would force full reads and mask the path).
+    for (let i = 0; i < 12; i++) {
+      lines.push(toolUseLine(`bulk-${i}`, 'Bash'), toolResultLine(`bulk-${i}`, 'X'.repeat(250_000)));
+    }
+    await writeLines(sid, lines);
+
+    const first = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    expect(getOrphanFinishedAgentIds(first)?.has('toolu_deep_prefix')).toBe(true);
+    const inc = _historyCacheGetForTesting(sid)?.inc;
+    expect(inc).toBeDefined();
+    // The notification really is beyond the tail boundary (frozen prefix).
+    expect(inc!.tailText).not.toContain('toolu_deep_prefix');
+
+    await appendLines(sid, [userLine('later question'), assistantLine('later answer')]);
+    await bumpMtime(sid);
+    const second = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    expect(second.map(m => m.text)).toContain('later answer');
+    expect(getOrphanFinishedAgentIds(second)?.has('toolu_deep_prefix')).toBe(true);
   });
 
   it('assistant message blocks split across an append boundary stay merged', async () => {

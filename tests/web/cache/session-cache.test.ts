@@ -30,6 +30,7 @@ vi.mock('@/api/ws', () => ({
 
 vi.mock('@/api/sessions', () => ({
   fetchSessionHistory: mockFetchHistory,
+  HISTORY_TAIL_LIMIT: 400,
 }));
 
 vi.mock('@/api/chat', () => ({
@@ -656,8 +657,11 @@ describe('WS: session:batch-completed', () => {
       expect(cached!.msgCount).toBe(5);
       expect(cached!.messages).toHaveLength(5);
     });
-    // The 2nd (rebuild) fetch was issued with no `since`.
-    expect(mockFetchHistory).toHaveBeenNthCalledWith(2, 'sid');
+    // The 2nd (rebuild) fetch was issued with no `since` — but tail-bounded:
+    // an UNBOUNDED rebuild on a whale session is the multi-MB fetch that
+    // saturated the browser pool (2026-08-11 STT-timeout cascade).
+    expect(mockFetchHistory).toHaveBeenNthCalledWith(2, 'sid', expect.objectContaining({ tail: 400 }));
+    expect((mockFetchHistory.mock.calls[1][1] as { since?: number }).since).toBeUndefined();
   });
 
   it('ignores untracked sessions', () => {

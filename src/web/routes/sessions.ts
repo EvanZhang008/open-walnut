@@ -20,7 +20,7 @@ import {
   updateSessionRecord,
   updateSessionRecordConditionally,
 } from '../../core/session-tracker.js'
-import { readSessionHistory, extractPlanContent, rewriteHistoryRemoteImages, isWindowedHistory } from '../../core/session-history.js'
+import { readSessionHistory, extractPlanContent, rewriteHistoryRemoteImages, isWindowedHistory, HISTORY_COLD_TAIL_READ_BYTES } from '../../core/session-history.js'
 import { resolveDeltaStart, deltaCursor, collectRequestedRevisions, isUnsettledRow } from '../../core/history-delta.js'
 import { computeSessionChanges } from '../../core/session-changes.js'
 import { computeSessionGitDiff, type GitDiffBase } from '../../core/session-git-diff.js'
@@ -55,6 +55,26 @@ import { QUICK_START_MESSAGE_HARD_LIMIT } from '../../constants.js'
 
 /** Client-supplied session ids must be well-formed UUIDs (they become CLI --session-id args and file names). */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Condense a live-read failure into a short, human-readable banner reason.
+ * The raw error can embed an entire multi-line ssh command plus ANSI-colored
+ * proxy/auth stderr (observed: a banner filling the whole page). The full
+ * text still goes to the server log; the UI only needs the cause in one line.
+ */
+function condenseStaleReason(msg: string): string {
+  // eslint-disable-next-line no-control-regex
+  const clean = msg.replace(/\x1b\[[0-9;]*m/g, '').replace(/\s+/g, ' ').trim()
+  const host = /^Remote read failed \(([^)]+)\)/.exec(clean)?.[1]
+  const at = host ? ` (${host})` : ''
+  if (/authenticat|cookie is invalid or expired/i.test(clean)) return `SSH auth expired${at} — re-authenticate to the host`
+  if (/timeout|timed out/i.test(clean)) {
+    const dur = /timeout \(([^)]*)\)/i.exec(clean)?.[1]
+    return `Remote read timeout${dur ? ` (${dur})` : ''}${at}`
+  }
+  if (/Command failed: ssh/i.test(clean)) return `SSH connection failed${at}`
+  return clean.length > 120 ? clean.slice(0, 117) + '…' : clean
+}
 
 /** Diagnose message ordering — logs whether user text messages are interleaved or bunched at end. */
 function logMessageOrdering(phase: string, sessionId: string, messages: SessionHistoryMessage[], host?: string | null): void {
@@ -223,9 +243,14 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       project?: string
       taskMeta?: {
         starred?: boolean
-        needs_attention?: boolean
+        /** Start the new task marked unread. */
+        unread?: boolean
         priority?: 'immediate' | 'important' | 'backlog' | 'none'
         pinTier?: string // built-in tier or a registered custom tier id (ct_*)
+        /** Task dates (ISO) — same trio as POST /api/tasks. */
+        due_date?: string
+        start_date?: string
+        end_date?: string
       }
       /** Optional launch intent — 'fix-walnut' wraps the message in a repair briefing. */
       intent?: string
@@ -301,6 +326,15 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       // client comments rely on). Only reject values that were never tier ids.
       if (!validTiers.includes(taskMeta.pinTier) && !/^ct_[a-z0-9]+$/.test(taskMeta.pinTier)) {
         res.status(400).json({ error: `Invalid taskMeta.pinTier: ${taskMeta.pinTier}. Must be one of: ${validTiers.join(', ')}` })
+        return
+      }
+    }
+    // Task dates must at least parse — they flow into updateTask verbatim and an
+    // unparseable string would render as "Invalid Date" on every task surface.
+    for (const field of ['due_date', 'start_date', 'end_date'] as const) {
+      const v = taskMeta?.[field]
+      if (v !== undefined && (typeof v !== 'string' || Number.isNaN(Date.parse(v)))) {
+        res.status(400).json({ error: `Invalid taskMeta.${field}: not a parseable date` })
         return
       }
     }
@@ -436,6 +470,7 @@ import {
   executeContinueSession,
   getSessionChanges,
   getSessionFileChange,
+  isHistoryStartupWindow,
   CLAUDE_SESSION_MODES,
 } from '../../core/sessions/session-lifecycle.js'
 import { SessionControlError } from '../../core/sessions/session-controls.js'
@@ -626,7 +661,15 @@ sessionsRouter.get('/:sessionId/vscode-uri', async (req: Request, res: Response,
 // GET /api/sessions/:sessionId
 sessionsRouter.get('/:sessionId', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const session = await getSessionByClaudeId(String(req.params.sessionId))
+    let session = await getSessionByClaudeId(String(req.params.sessionId))
+    if (!session) {
+      // Record lost but transcript may survive (inc-2026-08-10 "Untitled
+      // session"): self-heal from the canonical JSONL instead of 404ing a
+      // session whose /history still renders. Cheap on genuine 404s — the
+      // recovery module negative-caches misses.
+      const { recoverSessionRecordFromJsonl } = await import('../../core/sessions/session-record-recovery.js')
+      session = await recoverSessionRecordFromJsonl(String(req.params.sessionId))
+    }
     if (!session) {
       res.status(404).json({ error: 'session not found' })
       return
@@ -773,17 +816,24 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
         const { readHistoryCache } = await import('../../core/history-disk-cache.js')
         const diskCached = await readHistoryCache(sessionId)
         if (diskCached && diskCached.messages.length > 0) {
-          res.json({ messages: diskCached.messages, total: diskCached.messages.length })
+          const cachedSlice = tail && tail > 0 ? diskCached.messages.slice(-tail) : diskCached.messages
+          res.json({
+            messages: cachedSlice, total: diskCached.messages.length,
+            ...(diskCached.finishedAgentIds?.length ? { finishedAgentIds: diskCached.finishedAgentIds } : {}),
+          })
           return
         }
         res.json({ messages: [], total: 0 })
         return
       }
       // skipSubagents: frontend lazy-loads each subagent via /subagent/:agentId/history on demand
-      const { messages } = await readProviderSessionHistory(sessionId, record, undefined)
+      const { messages, finishedAgentIds: p1FinishedIds } = await readProviderSessionHistory(sessionId, record, undefined)
       logMessageOrdering('P1:streams', sessionId, messages, record?.host)
       const sliced = tail && tail > 0 ? messages.slice(-tail) : messages
-      res.json({ messages: sliced, total: messages.length })
+      res.json({
+        messages: sliced, total: messages.length,
+        ...(p1FinishedIds && p1FinishedIds.length > 0 ? { finishedAgentIds: p1FinishedIds } : {}),
+      })
       return
     }
 
@@ -795,12 +845,23 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     // lives on the object the reader returned. Sticky through those transforms:
     // a derived array is windowed iff its own-session part was.
     let historyWindowed = false
+    // Orphan finished-agent ids (nested agents with no history row — see
+    // readProviderSessionHistory). Captured HERE like `windowed`: image
+    // rewriting / fork concatenation below REPLACE the messages array, and the
+    // parser's mark lives on the exact object the reader returned. Fork
+    // ancestors may carry their own set — unioned where their fetches merge.
+    const finishedAgentIdSet = new Set<string>()
     try {
-      // skipSubagents: frontend lazy-loads each subagent via /subagent/:agentId/history on demand
-      const history = await readProviderSessionHistory(sessionId, record, record?.host)
+      // skipSubagents: frontend lazy-loads each subagent via /subagent/:agentId/history on demand.
+      // Tail-bounded request → bound a COLD read to the last few MB too
+      // (inc-1786572252481: ?tail=400 bounded the response but the server still
+      // pulled the whole 9.5 MB remote JSONL over SSH on every cold panel open).
+      const history = await readProviderSessionHistory(sessionId, record, record?.host, true,
+        tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined)
       messages = history.messages
       historySourceAvailable = history.sourceAvailable
       historyWindowed = history.windowed
+      for (const id of history.finishedAgentIds ?? []) finishedAgentIdSet.add(id)
     } catch (err) {
       // Surface remote read errors (SSH auth, daemon connection, etc.) to the frontend
       const msg = err instanceof Error ? err.message : String(err)
@@ -812,13 +873,19 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       // reconnecting banner. Delta requests (?since=) must NOT get this —
       // a stale total would corrupt the client cursor; they fail as before.
       if (req.query.since === undefined) {
-        const { getCachedSessionHistory } = await import('../../core/session-history.js')
+        const { getCachedSessionHistory, getOrphanFinishedAgentIds } = await import('../../core/session-history.js')
         const cached = getCachedSessionHistory(sessionId, record?.host)
         if (cached && cached.length > 0) {
           log.web.info('serving stale history cache (live read failed)', {
             sessionId, host: record?.host, messages: cached.length,
           })
-          res.json({ messages: cached, total: cached.length, stale: true, staleReason: msg })
+          // The cached array is the exact object the parser marked, so its
+          // orphan finished-agent ids are still readable from the WeakMap.
+          const staleOrphans = getOrphanFinishedAgentIds(cached)
+          res.json({
+            messages: cached, total: cached.length, stale: true, staleReason: condenseStaleReason(msg),
+            ...(staleOrphans && staleOrphans.size > 0 ? { finishedAgentIds: [...staleOrphans].sort() } : {}),
+          })
           return
         }
         // Disk cache fallback (survives app restarts)
@@ -828,11 +895,14 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
           log.web.info('serving disk-cached history (live read threw)', {
             sessionId, host: record?.host, messages: diskCached.messages.length, cachedAt: diskCached.cachedAt,
           })
-          res.json({ messages: diskCached.messages, total: diskCached.messages.length, stale: true, staleReason: msg })
+          res.json({
+            messages: diskCached.messages, total: diskCached.messages.length, stale: true, staleReason: condenseStaleReason(msg),
+            ...(diskCached.finishedAgentIds?.length ? { finishedAgentIds: diskCached.finishedAgentIds } : {}),
+          })
           return
         }
       }
-      res.status(502).json({ error: msg })
+      res.status(502).json({ error: condenseStaleReason(msg) })
       return
     }
     logMessageOrdering('P2:full', sessionId, messages, record?.host)
@@ -847,7 +917,14 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
     // Delta requests must continue to the cursor logic below: a stale cache has
     // a different cursor space, and ?since=0 on a genuinely empty archive is a
     // valid empty delta rather than a full history-unavailable response.
-    if (messages.length === 0 && record && !historySourceAvailable && req.query.since === undefined) {
+    // ...but NOT for a fork: "nothing to show" may only be decided after the
+    // fork ancestors are consulted (the fork-aware block further down). A fresh
+    // fork's OWN transcript is legitimately empty — its whole value is the
+    // inherited parent conversation — so answering here reported "History
+    // unavailable" on a fork that had plenty to show, AND skipped loading the
+    // parent entirely. The verdict is deferred to `forkHistoryVerdict` below.
+    if (messages.length === 0 && record && !historySourceAvailable && req.query.since === undefined
+        && !record.forkedFromSessionId) {
       const { readHistoryCache } = await import('../../core/history-disk-cache.js')
       const diskCached = await readHistoryCache(sessionId)
       if (diskCached && diskCached.messages.length > 0) {
@@ -861,7 +938,17 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
           delta: false,
           stale: true,
           staleReason: 'Session file unavailable — showing cached history',
+          ...(diskCached.finishedAgentIds?.length ? { finishedAgentIds: diskCached.finishedAgentIds } : {}),
         })
+        return
+      }
+      // Still in the startup window: the CLI hasn't written its first JSONL line
+      // yet (measured: ~4s after spawn, while the UI fetches history at ~0.8s).
+      // "File not found" is TRUE here but not a fault — reporting it made every
+      // task creation flash "History unavailable". Serve a plain empty history so
+      // the panel shows its normal starting state; the next turn's fetch fills in.
+      if (isHistoryStartupWindow(record)) {
+        res.json({ messages: [], total: 0, cursor: 0, delta: false })
         return
       }
       // No disk cache either — return a meaningful reason so the UI can show
@@ -919,13 +1006,19 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
             if (sourceRecord.host) {
               sourceMessages = await rewriteHistoryRemoteImages(sourceMessages, sourceRecord.host, sourceRecord.claudeSessionId, sourceRecord.cwd)
             }
-            return { messages: sourceMessages, windowed: src.windowed }
+            return { messages: sourceMessages, windowed: src.windowed, finishedAgentIds: src.finishedAgentIds }
           }),
         )
 
         // A windowed ANCESTOR poisons the combined cursor space just as badly as a
         // windowed own-session read: the prefix length shifts under the client.
         if (fetched.some(f => f.windowed)) historyWindowed = true
+        // Ancestor orphan finished-agent ids ride the combined payload too — a
+        // fork inherits the parent's lane blocks via replayed streams, so their
+        // absorption proof must survive the concatenation.
+        for (const f of fetched) {
+          for (const id of f.finishedAgentIds ?? []) finishedAgentIdSet.add(id)
+        }
         const allSourceMessages = fetched.flatMap(f => f.messages)
         if (allSourceMessages.length > 0) {
           messages = [...allSourceMessages, ...messages]
@@ -940,7 +1033,46 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       }
     }
 
+    // Deferred verdict for a FORK whose own transcript was empty (the
+    // short-circuit above deliberately skipped it so the ancestors got their
+    // chance). If the ancestors supplied nothing either, THIS is where "nothing to
+    // show" finally becomes true. Same three-way answer as the non-fork path:
+    // disk cache → startup grace → explained reason. Delta requests are excluded
+    // for the same reason as above (a stale cache has a different cursor space);
+    // a transient ancestor failure is NOT a verdict — it keeps the existing
+    // degraded-payload behavior rather than claiming the history is gone.
+    if (messages.length === 0 && record?.forkedFromSessionId && !historySourceAvailable
+        && !forkLoadFailed && req.query.since === undefined) {
+      const { readHistoryCache } = await import('../../core/history-disk-cache.js')
+      const diskCached = await readHistoryCache(sessionId)
+      if (diskCached && diskCached.messages.length > 0) {
+        res.json({
+          messages: diskCached.messages,
+          total: diskCached.messages.length,
+          cursor: diskCached.messages.length,
+          delta: false,
+          stale: true,
+          staleReason: 'Session file unavailable — showing cached history',
+          ...(diskCached.finishedAgentIds?.length ? { finishedAgentIds: diskCached.finishedAgentIds } : {}),
+        })
+        return
+      }
+      if (isHistoryStartupWindow(record)) {
+        res.json({ messages: [], total: 0, cursor: 0, delta: false })
+        return
+      }
+      res.json({
+        messages: [], total: 0, cursor: 0, delta: false,
+        historyUnavailable: unavailableHistoryReason(record),
+      })
+      return
+    }
+
     const total = messages.length
+    // Sorted-array form for the response payloads (a handful of ids; cheap).
+    // Rides OUTSIDE the messages array on BOTH delta and full responses so the
+    // cursor space never changes.
+    const finishedAgentIds = finishedAgentIdSet.size > 0 ? [...finishedAgentIdSet].sort() : undefined
 
     // ── Delta mode (?since=<N>) — the turn-boundary incremental path ──
     // The client sends the count it holds PLUS the identity (`anchorMsgId`) of its
@@ -1012,6 +1144,9 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
               // Fork fields are static after first load; client already has them.
               ...(forkedFromSessionId ? { forkedFromSessionId } : {}),
               ...(forkBoundaryIndex != null ? { forkBoundaryIndex } : {}),
+              // NOT static: a nested agent finishing mid-session adds an id, and
+              // its lane blocks may already sit in the client — ship on every delta.
+              ...(finishedAgentIds ? { finishedAgentIds } : {}),
             })
             return
           }
@@ -1039,8 +1174,15 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
       total,
       cursor: total,
       delta: false,
+      // Windowed parse: `total` is the WINDOW length, not the file's message
+      // count — the client can't compute a real olderHidden from it. The flag
+      // lets it show an uncounted "Load earlier messages" affordance instead of
+      // silently hiding the button (the full fetch it triggers bypasses the
+      // windowed cache and does the real read).
+      ...(historyWindowed ? { windowed: true } : {}),
       ...(forkedFromSessionId ? { forkedFromSessionId } : {}),
       ...(adjustedForkBoundary != null ? { forkBoundaryIndex: adjustedForkBoundary } : {}),
+      ...(finishedAgentIds ? { finishedAgentIds } : {}),
     })
   } catch (err) {
     next(err)
@@ -1191,13 +1333,17 @@ sessionsRouter.post('/:sessionId/execute-continue', async (req: Request, res: Re
 sessionsRouter.post('/:sessionId/permission', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const sessionId = req.params.sessionId as string
-    const { requestId, allow, message: denyMessage } = req.body as {
+    // `answers` carries an AskUserQuestion decision (question text → chosen label);
+    // it becomes the tool's `answers` input so the model sees the real answers.
+    const { requestId, allow, message: denyMessage, optionId, answers } = req.body as {
       requestId?: unknown
       allow?: unknown
       message?: unknown
+      optionId?: unknown
+      answers?: unknown
     }
     try {
-      res.json(await respondSessionPermission(sessionId, requestId, allow, denyMessage))
+      res.json(await respondSessionPermission(sessionId, requestId, allow, denyMessage, optionId, answers))
     } catch (err) {
       if (err instanceof SessionControlError) {
         res.status(err.statusCode).json({ error: err.message })

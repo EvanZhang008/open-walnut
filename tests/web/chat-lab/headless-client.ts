@@ -62,13 +62,19 @@ export class HeadlessChatClient {
   isStreaming = false;
   watermark = 0;
   optimistic: OptimisticBubble[] = [];
+  /** Lazy tail mode (mirrors useSessionHistory): full fetches carry ?tail=N;
+   *  baseOffset counts the rows hidden before messages[0] in cursor space. */
+  tailLimit?: number;
+  baseOffset = 0;
   /** Sticky consumption (mirrors SessionChatHistory's consumedQueueIds ref):
    *  once dedup hides a bubble it is GC'd permanently — the watermark advancing
    *  past its persisted twin must not resurrect it. */
   private consumedQueueIds = new Set<string>();
   private bubbleSeq = 0;
 
-  constructor(private server: ScriptedServer) {}
+  constructor(private server: ScriptedServer, opts?: { tailLimit?: number }) {
+    this.tailLimit = opts?.tailLimit;
+  }
 
   // ── Initial load / reload ──────────────────────────────────────────────────
 
@@ -76,9 +82,11 @@ export class HeadlessChatClient {
    *  state (the server prunes its buffer after turn end, and the empty-snapshot
    *  guard means a fresh mount simply has no blocks). */
   reload(): void {
-    const r = this.server.serve();
+    const r = this.server.serve(this.tailLimit ? { tail: this.tailLimit } : {});
     this.messages = r.messages;
     this.cursor = r.cursor;
+    // Lazy tail: cursor counts rows we did not receive (adoptOffset in the hook).
+    this.baseOffset = Math.max(0, r.cursor - r.messages.length);
     this.blocks = [];
     this.textBuffer = '';
     this.isStreaming = false;
@@ -86,6 +94,20 @@ export class HeadlessChatClient {
     // Optimistic bubbles live in useSessionSend state, which a reload resets.
     this.optimistic = [];
     this.consumedQueueIds.clear();
+  }
+
+  /** "Load N earlier messages" — the one deliberately unbounded fetch. */
+  loadFullHistory(): void {
+    if (this.baseOffset === 0) return;
+    const grew = this.server.serve({});
+    // Mirror the hook: full replace + fresh offset bookkeeping. The watermark
+    // must keep pointing at the same MESSAGE (turn boundary), not the same
+    // index — the array just grew by the backfilled prefix.
+    const growth = grew.messages.length - this.messages.length;
+    this.messages = grew.messages;
+    this.cursor = grew.cursor;
+    this.baseOffset = Math.max(0, grew.cursor - grew.messages.length);
+    this.watermark = Math.min(grew.messages.length, Math.max(0, this.watermark + growth));
   }
 
   // ── User actions ───────────────────────────────────────────────────────────
@@ -194,18 +216,22 @@ export class HeadlessChatClient {
       anchorMsgId: anchor.anchorMsgId,
       anchorTail: anchor.anchorTail,
       reviseIds,
+      // Mirrors the hook: tail bounds the declined-delta full payload only.
+      ...(this.tailLimit ? { tail: this.tailLimit } : {}),
     });
     if (!r.delta) {
-      // Full replace (server declined the delta).
+      // Full replace (server declined the delta) — possibly tail-sliced.
       this.messages = r.messages;
       this.cursor = r.cursor;
+      this.baseOffset = Math.max(0, r.cursor - r.messages.length);
       return;
     }
-    const plan = planDeltaMerge(this.messages, r, this.cursor);
+    const plan = planDeltaMerge(this.messages, r, this.cursor, { baseOffset: this.baseOffset });
     if (plan.kind === 'rebuild') {
-      const full = this.server.serve();
+      const full = this.server.serve(this.tailLimit ? { tail: this.tailLimit } : {});
       this.messages = full.messages;
       this.cursor = full.cursor;
+      this.baseOffset = Math.max(0, full.cursor - full.messages.length);
       return;
     }
     if (plan.kind === 'merged') this.messages = plan.messages;

@@ -3,6 +3,8 @@ import type { SessionSummary, SessionRecord, SessionEffort, SessionModelCatalogE
 import type { ImageAttachment } from './chat';
 import type { SessionHistoryMessage } from '@/types/session';
 import { log } from '@/utils/log';
+import { isPlaceholderColumnId } from '@/utils/column-ids';
+import { recordFinishedAgentIds } from '@/cache/finished-agents-store';
 import {
   seedSessionStatus,
   seedTaskSessionStatuses,
@@ -43,7 +45,7 @@ const STATUS_HYDRATION_BATCH_SIZE = 100;
 
 export async function hydrateSessionStatuses(sessionIds: Iterable<string>): Promise<void> {
   const uniqueIds = [...new Set(sessionIds)]
-    .filter((sessionId) => sessionId && !sessionId.startsWith('pending:'));
+    .filter((sessionId) => sessionId && !isPlaceholderColumnId(sessionId));
   for (let index = 0; index < uniqueIds.length; index += STATUS_HYDRATION_BATCH_SIZE) {
     const ids = uniqueIds.slice(index, index + STATUS_HYDRATION_BATCH_SIZE);
     try {
@@ -78,6 +80,13 @@ export interface SessionHistoryResult {
    *  a phantom Agent box sits at the bottom of the timeline (inc-1785965937858). */
   revisedMessages?: SessionHistoryMessage[];
   forkBoundaryIndex?: number;
+  /** Orphan finished-agent toolUseIds (inc-1786496042099): nested background
+   *  agents proven STOPPED by a canonical <task-notification>, whose tool_use
+   *  row never reaches the canonical JSONL (it exists only in the daemon
+   *  stream) — so no history row can ever carry the id. Rides OUTSIDE the
+   *  messages array (cursor space unchanged); the render filter counts these
+   *  as finished-parent lane evidence. Omitted when empty. */
+  finishedAgentIds?: string[];
   /** Combined-message count at the source of truth = the cursor for the NEXT delta fetch. */
   cursor?: number;
   /** True when `messages` is an incremental slice (since was honored); false/undefined = full payload. */
@@ -90,7 +99,16 @@ export interface SessionHistoryResult {
   staleReason?: string;
   /** Set when session exists but history file is unavailable (remote unreachable, file deleted). */
   historyUnavailable?: string;
+  /** True when the payload came from a BOUNDED window read (whale transcript /
+   *  cold tail-bounded read): `total` is the window length, not the source's
+   *  message count, so olderHidden can't be computed from it — but older
+   *  messages DO exist; show an uncounted "Load earlier" affordance. */
+  windowed?: boolean;
 }
+
+/** Lazy history: first load fetches only the last N messages (server `?tail=`).
+ *  Older messages backfill on demand ("Show earlier" past what we hold). */
+export const HISTORY_TAIL_LIMIT = 400;
 
 export async function fetchSessionHistory(
   sessionId: string,
@@ -102,10 +120,16 @@ export async function fetchSessionHistory(
     anchorMsgId?: string; anchorTail?: number;
     /** msgIds we hold an UNSETTLED copy of and want re-served (see collectUnsettledIds). */
     reviseIds?: string[];
+    /** Lazy load: only the last N messages (server-side slice — the response's
+     *  `cursor`/`total` stay in the FULL count space, so deltas keep working).
+     *  A whale session (3000+ msgs) shrinks from a multi-MB transfer + a 25s
+     *  render freeze to a ~100KB tail. */
+    tail?: number;
   },
 ): Promise<SessionHistoryResult> {
   const params: Record<string, string> = {};
   if (opts?.source) params.source = opts.source;
+  if (opts?.tail !== undefined && Number.isFinite(opts.tail)) params.tail = String(opts.tail);
   // Delta mode: ask only for messages after the client's cursor. Server returns a
   // small slice (usually 1-5 messages) + the new cursor. Empty slice = archive
   // hasn't caught up yet (turn not flushed); caller keeps streaming blocks & retries.
@@ -119,17 +143,22 @@ export async function fetchSessionHistory(
   // serially through a corporate proxy). Streams path is local-only and fast; full path may be
   // slow — and a WHALE session (>10MB JSONL, chunked fs.readRange server-side, 120s
   // server ceiling) legitimately exceeds the old 60s; aborting client-side just wasted
-  // the transfer and re-requested from zero (inc-1783532915925).
-  const timeoutMs = opts?.source === 'streams' ? 15_000 : 150_000;
+  // the transfer and re-requested from zero (inc-1783532915925). Tail-sliced requests
+  // get a tighter ceiling: the response is bounded, and one unbounded fetch pinning a
+  // browser lane for 150s starves everything else on the shared 6-connection pool
+  // (that is how STT "timed out" while the server was idle — 2026-08-11).
+  const timeoutMs = opts?.source === 'streams' ? 15_000 : (opts?.tail ? 60_000 : 150_000);
   const res = await apiGet<{
     messages: SessionHistoryMessage[];
     revisedMessages?: SessionHistoryMessage[];
     forkBoundaryIndex?: number;
+    finishedAgentIds?: string[];
     cursor?: number;
     delta?: boolean;
     stale?: boolean;
     staleReason?: string;
     historyUnavailable?: string;
+    windowed?: boolean;
   }>(
     `/api/sessions/${sessionId}/history`, params, { signal: opts?.signal, timeoutMs },
   );
@@ -146,14 +175,21 @@ export async function fetchSessionHistory(
       revised: res.revisedMessages?.length ?? 0, cursor: res.cursor,
     });
   } catch { /* recorder is diagnostics-only — never block the fetch */ }
+  // Union orphan finished-agent ids into the per-session store — the ONE choke
+  // point every history consumer flows through (useSessionHistory, the
+  // session-cache background refresh, the stale retry loop), so nested-agent
+  // absorption proof reaches the render filter no matter which path fetched.
+  recordFinishedAgentIds(sessionId, res.finishedAgentIds);
   return {
     messages: res.messages,
     revisedMessages: res.revisedMessages,
     forkBoundaryIndex: res.forkBoundaryIndex,
+    finishedAgentIds: res.finishedAgentIds,
     cursor: res.cursor,
     delta: res.delta,
     stale: res.stale,
     staleReason: res.staleReason,
+    windowed: res.windowed,
   };
 }
 
@@ -481,6 +517,17 @@ export async function fetchWorkingDirs(): Promise<WorkingDirsResult> {
 /** Invalidate cache (e.g. after starting a new session) */
 export function invalidateWorkingDirsCache(): void { _workingDirsCache = null; _workingDirsFetching = null; }
 
+/**
+ * SYNCHRONOUS peek at the working-dirs cache — `null` until a fetch has landed.
+ *
+ * For render paths that are contractually network-free (the draft session
+ * column's recent-folder chips + its per-directory launch memory): they show
+ * what is already known and simply render nothing when the cache is cold. Never
+ * triggers a request — callers that want the data warm must have called
+ * `fetchWorkingDirs()` earlier (MainPage prefetches once on mount).
+ */
+export function peekWorkingDirs(): WorkingDirsResult | null { return _workingDirsCache; }
+
 export interface DirListing {
   dirs: string[];
   parent: string;
@@ -555,13 +602,19 @@ export function prewarmWorkingDirs(): void {
 
 export interface QuickStartTaskMeta {
   starred?: boolean;
-  needs_attention?: boolean;
+  /** Start the new task already marked unread. */
+  unread?: boolean;
   priority?: 'immediate' | 'important' | 'backlog' | 'none';
   /** Tier to pin the new task to — a built-in name or a custom tier id (`ct_*`).
    *  `null` = explicitly DON'T pin — distinct from omitted, which lets the server
    *  apply its own default (fix-walnut → Satellite, the same launcher baseline as
    *  a regular quick session). */
   pinTier?: string | null;
+  /** Task dates (ISO) — the same trio POST /api/tasks takes; a launch IS a task
+   *  create. Snake_case to match the task wire format. */
+  due_date?: string;
+  start_date?: string;
+  end_date?: string;
 }
 
 export async function quickStartSession(opts: {
@@ -657,21 +710,29 @@ export async function restartSession(sessionId: string): Promise<
   return apiPost(`/api/sessions/${sessionId}/restart`, {});
 }
 
-/** Terminate a session — closes the CLI process (no respawn) and marks it stopped. */
-export async function terminateSession(sessionId: string): Promise<
+/** Terminate a session — closes the CLI process (no respawn) and marks it stopped.
+ *  A session that owns recurring CLI crons is refused with 409 `cron_owner`
+ *  unless `force` — the crons would silently migrate to another session in the
+ *  same project directory (directory-scoped scheduler lock). */
+export async function terminateSession(sessionId: string, opts?: { force?: boolean }): Promise<
   { status: 'terminated'; sessionId: string }
 > {
-  return apiPost(`/api/sessions/${sessionId}/terminate`, {});
+  return apiPost(`/api/sessions/${sessionId}/terminate`, { force: opts?.force === true });
 }
 
+/** Answer a live CLI permission prompt.
+ *  `answers` is AskUserQuestion-only: question text → the chosen option label (or
+ *  the user's free-text). The server merges it into the tool's `answers` input, so
+ *  the model receives the real answers instead of an empty set. */
 export async function respondToPermission(
   sessionId: string,
   requestId: string,
   allow: boolean,
   message?: string,
   optionId?: string,
+  answers?: Record<string, string>,
 ): Promise<{ status: string; requestId: string; allow: boolean }> {
-  return apiPost(`/api/sessions/${sessionId}/permission`, { requestId, allow, message, optionId });
+  return apiPost(`/api/sessions/${sessionId}/permission`, { requestId, allow, message, optionId, answers });
 }
 
 export async function forkSessionInWalnut(

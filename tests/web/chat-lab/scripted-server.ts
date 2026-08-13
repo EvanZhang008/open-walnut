@@ -33,6 +33,10 @@ export interface ServeRequest {
   anchorMsgId?: string;
   anchorTail?: number;
   reviseIds?: string[];
+  /** Lazy tail (?tail=N): full payloads serve only the last N rows, but
+   *  total/cursor stay in the FULL count space. Honored deltas ignore it —
+   *  mirror of src/web/routes/sessions.ts. */
+  tail?: number;
 }
 
 export interface ServeResponse {
@@ -102,6 +106,13 @@ export class ScriptedServer {
     return cloned.map(m => (isUnsettledRow(m) ? { ...m, unsettled: true } : m));
   }
 
+  /** Full payload, tail-bounded when the request carried ?tail=N — the exact
+   *  shape of the route's final res.json (slice(-tail), full-space total). */
+  private full(messages: SessionHistoryMessage[], total: number, tail?: number): ServeResponse {
+    const sliced = tail && tail > 0 ? messages.slice(-tail) : messages;
+    return { messages: this.stampUnsettled(sliced), cursor: total, total, delta: false };
+  }
+
   /** The /history endpoint. Mirrors src/web/routes/sessions.ts' delta branch. */
   serve(req: ServeRequest = {}): ServeResponse {
     this.requests.push({ ...req, reviseIds: req.reviseIds ? [...req.reviseIds] : undefined });
@@ -109,7 +120,7 @@ export class ScriptedServer {
     const total = messages.length;
 
     if (req.since === undefined) {
-      return { messages: this.stampUnsettled(messages), cursor: total, total, delta: false };
+      return this.full(messages, total, req.tail);
     }
 
     if (this.faults.legacyCountDelta) {
@@ -122,7 +133,7 @@ export class ScriptedServer {
           cursor: total, total, delta: true,
         };
       }
-      return { messages: this.stampUnsettled(messages), cursor: total, total, delta: false };
+      return this.full(messages, total, req.tail);
     }
 
     const resolved = resolveDeltaStart(
@@ -131,13 +142,13 @@ export class ScriptedServer {
       { windowed: this.windowed },
     );
     if (resolved.kind === 'rebuild') {
-      return { messages: this.stampUnsettled(messages), cursor: total, total, delta: false };
+      return this.full(messages, total, req.tail);
     }
     const slice = messages.slice(resolved.start);
     const reviseIds = this.faults.dropRevisions ? [] : (req.reviseIds ?? []);
     const { revised, ambiguous } = collectRequestedRevisions(messages, reviseIds);
     if (ambiguous) {
-      return { messages: this.stampUnsettled(messages), cursor: total, total, delta: false };
+      return this.full(messages, total, req.tail);
     }
     return {
       messages: this.stampUnsettled(slice),

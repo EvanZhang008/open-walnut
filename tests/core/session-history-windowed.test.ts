@@ -130,6 +130,32 @@ describe('whale-session bounded tail', () => {
     expect(bound?.text).toBe('the newest question');
   });
 
+  it('serves the tail for a hashed-cwd whale (encoded cwd >200 chars, no cached path)', async () => {
+    // inc-1786390337224: Claude Code hashes cwds whose encoded form exceeds 200
+    // chars, so we can't compute the exact JSONL path — and the resolved-path
+    // cache is only seeded by a successful FULL read, which a whale can never
+    // complete. The tail-window fallback then had no stat path and returned
+    // null → the UI showed "No conversation" for a healthy 70 MB live session.
+    const sid = 'whale-hashed-1';
+    const longCwd = '/tmp/' + 'deeply-nested-project-dir/'.repeat(10); // encodes to >200 chars
+    expect(encodeProjectPath(longCwd).length).toBeGreaterThan(200);
+    // On disk the dir name is Claude Code's hashed form — anything ≠ our encoding.
+    const hashedDir = path.join(tmpBase, 'projects', '-tmp-deeply-nested-pro-abc123');
+    await fsp.mkdir(hashedDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(hashedDir, `${sid}.jsonl`),
+      [...padding(60), userLine('hashed final question', '2026-01-02T00:00:00.000Z')]
+        .map(l => JSON.stringify(l)).join('\n') + '\n',
+    );
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '4096';
+
+    const messages = await readSessionHistory(sid, longCwd, undefined, undefined, { skipSubagents: true });
+
+    expect(messages.length).toBeGreaterThan(0);
+    expect(isWindowedHistory(messages)).toBe(true);
+    expect(messages.map(m => m.text)).toContain('hashed final question');
+  });
+
   it('the window keeps the NEWEST messages (what the UI actually shows)', async () => {
     const sid = 'whale-3';
     await writeLines(sid, [
@@ -143,5 +169,62 @@ describe('whale-session bounded tail', () => {
     const texts = messages.map(m => m.text);
     expect(texts).toContain('final question');
     expect(texts).toContain('final answer');
+  });
+});
+
+/**
+ * inc-1786572252481 — ?tail=400 bounded the RESPONSE but not the READ: a cold
+ * cache still transferred + parsed the whole 9.5 MB remote JSONL (10-16 s per
+ * panel open) because the file sat UNDER the 32 MB ceiling, so the degradation
+ * path above never engaged. Tail-bounded callers now pass maxColdReadBytes and
+ * a cold read bigger than it reads only the last window.
+ */
+describe('cold tail-bounded read (maxColdReadBytes)', () => {
+  it('a cold read over the bound serves a windowed tail with the newest messages', async () => {
+    const sid = 'cold-tail-1';
+    await writeLines(sid, [
+      ...padding(60),
+      userLine('cold newest question', '2026-01-02T00:00:00.000Z'),
+      asstLine('cold newest answer', '2026-01-02T00:00:05.000Z'),
+    ]);
+    // NO ceiling override: the file is comfortably under maxReadBytes — the old
+    // code did a full read here. The cold-read bound alone must window it.
+    const messages = await readSessionHistory(sid, CWD, undefined, undefined,
+      { skipSubagents: true, maxColdReadBytes: 4096 });
+
+    expect(isWindowedHistory(messages)).toBe(true);
+    expect(messages.length).toBeGreaterThan(0);
+    expect(messages.length).toBeLessThan(122); // strictly fewer than the file holds
+    const texts = messages.map(m => m.text);
+    expect(texts).toContain('cold newest question');
+    expect(texts).toContain('cold newest answer');
+  });
+
+  it('a full-read caller is never served the windowed cache entry', async () => {
+    const sid = 'cold-tail-2';
+    const lines = [
+      ...padding(60),
+      userLine('quarantine newest', '2026-01-02T00:00:00.000Z'),
+    ];
+    await writeLines(sid, lines);
+    const windowed = await readSessionHistory(sid, CWD, undefined, undefined,
+      { skipSubagents: true, maxColdReadBytes: 4096 });
+    expect(isWindowedHistory(windowed)).toBe(true);
+
+    // Same mtime, but the caller wants the FULL history (Load earlier / fork
+    // ancestor read) — must fall through to the real full read, not the cache.
+    const full = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    expect(isWindowedHistory(full)).toBe(false);
+    expect(full.length).toBe(121); // 60 padding pairs + the newest line
+    expect(full.length).toBeGreaterThan(windowed.length);
+  });
+
+  it('a file under the bound takes the normal full read (not windowed)', async () => {
+    const sid = 'cold-tail-3';
+    await writeLines(sid, [userLine('hi', '2026-01-01T00:00:00.000Z'), asstLine('hello', '2026-01-01T00:00:01.000Z')]);
+    const messages = await readSessionHistory(sid, CWD, undefined, undefined,
+      { skipSubagents: true, maxColdReadBytes: 4 * 1024 * 1024 });
+    expect(isWindowedHistory(messages)).toBe(false);
+    expect(messages.length).toBe(2);
   });
 });

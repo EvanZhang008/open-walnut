@@ -43,9 +43,21 @@ interface ParsedHistoryCacheEntry {
   messages: SessionHistoryMessage[];
   /** Approx retained chars (raw JSONL length proxy) — drives the byte budget. */
   approxChars: number;
+  /** Entry came from a BOUNDED cold tail read (maxColdReadBytes), not a full
+   *  parse. It may only satisfy requests that are themselves tail-bounded — a
+   *  full-read request (Load earlier / delta warm-up) must fall through to the
+   *  real full read, which overwrites this entry. */
+  windowed?: boolean;
   /** Incremental append-read state (see readSessionHistory). Absent when the
    *  last read couldn't establish it (no resolvable path / stat failed). */
   inc?: HistoryIncrementalState;
+  /** Orphan finished-agent ids (getOrphanFinishedAgentIds) carried across
+   *  incremental reads: the tail re-parse only sees the tail's notifications,
+   *  and the merged [...prefix, ...tail] array is a NEW object the parser never
+   *  marked — without persisting here, ids proven in the frozen prefix would be
+   *  silently dropped on every incremental round. Full parses overwrite;
+   *  incremental reads union cached ∪ tail. */
+  orphanFinishedIds?: string[];
 }
 
 /**
@@ -193,6 +205,37 @@ const sourceFoundParses = new WeakSet<object>();
 function markSourceFound(messages: object): void { sourceFoundParses.add(messages); }
 /** True when the transcript source behind `messages` was proven to exist. */
 export function isSourceFoundHistory(messages: object): boolean { return sourceFoundParses.has(messages); }
+
+/**
+ * Orphan finished-agent ids (inc-1786496042099): tool_use ids PROVEN stopped by
+ * a <task-notification> line, for which NO tool row exists anywhere in the
+ * parse. A NESTED background agent's tool_use definition line exists only in
+ * the daemon stream file (parent_tool_use_id set) — never in the canonical
+ * session JSONL — so no history row can ever carry its toolUseId and the
+ * bgTaskFinished stamp has no row to land on. The completion proof DOES reach
+ * the canonical file (queue-operation enqueues / hidden user lines); without
+ * this transport it was silently thrown away and the nested agent's streamed
+ * lane blocks had no absorption evidence at all — pinned below every later
+ * turn forever.
+ *
+ * Marked on the ARRAY ITSELF for the same reason as windowedParses above: the
+ * answer can't be raced by a concurrent read of the same session, because the
+ * caller asks about the exact object it was handed. Callers that concatenate
+ * (fork ancestors) must read the set BEFORE building the combined array and
+ * union it themselves.
+ */
+const orphanFinishedParses = new WeakMap<object, Set<string>>();
+/** Finished-agent toolUseIds with no tool row in this parse (see above). */
+export function getOrphanFinishedAgentIds(messages: object): Set<string> | undefined {
+  return orphanFinishedParses.get(messages);
+}
+/** Attach orphan finished-agent ids to a messages array (incremental merges,
+ *  disk-cache rehydration — anywhere the array wasn't produced by
+ *  parseSessionMessages itself). No-op for an empty set. */
+export function markOrphanFinishedAgentIds(messages: object, ids: Iterable<string>): void {
+  const set = new Set(ids);
+  if (set.size > 0) orphanFinishedParses.set(messages, set);
+}
 
 /** Compose cache key so local and remote entries for the same sessionId don't collide. */
 function cacheKey(sessionId: string, host?: string): string {
@@ -1027,7 +1070,31 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
   // Group inline subagent children (e.g. Agent tool calls from Claude Code).
   // Unlike Task tools (which have separate JSONL files), Agent children are inline
   // in the same JSONL with parent_tool_use_id linking them to the parent tool_use.
-  return groupInlineChildren(result, resultParentIds);
+  const grouped = groupInlineChildren(result, resultParentIds);
+
+  // ── Orphan finished-agent ids (inc-1786496042099) ──
+  // A finished-agent proof whose tool row does NOT exist in this parse: a NESTED
+  // background agent's tool_use line lives only in the daemon stream file, never
+  // in the canonical JSONL, so the bgTaskFinished stamp above has no row to land
+  // on and the proof would otherwise be discarded. Attach the leftover ids to
+  // the returned array (single choke point — every parse, full/tail/windowed,
+  // is marked here; see getOrphanFinishedAgentIds).
+  if (finishedBgToolUseIds.size > 0) {
+    // Walk the PRE-grouping flat array: grouping only moves messages under
+    // tool.childMessages, so `result` still holds every tool row of the parse.
+    const presentToolIds = new Set<string>();
+    for (const m of result) {
+      for (const t of m.tools ?? []) {
+        if (t.toolUseId) presentToolIds.add(t.toolUseId);
+      }
+    }
+    const orphans = new Set<string>();
+    for (const id of finishedBgToolUseIds) {
+      if (!presentToolIds.has(id)) orphans.add(id);
+    }
+    if (orphans.size > 0) orphanFinishedParses.set(grouped, orphans);
+  }
+  return grouped;
 }
 
 /**
@@ -1155,7 +1222,19 @@ function attachSubagentMessages(messages: SessionHistoryMessage[], subagentMap: 
 export interface ReadHistoryOptions {
   /** Skip reading subagent JSONL files (default: false). When true, Task tools retain agentId but childMessages stays undefined — frontend lazy-loads on demand. */
   skipSubagents?: boolean;
+  /** Tail-bounded caller (GET /history?tail=N): on a COLD cache, a file bigger
+   *  than this reads only its last `maxColdReadBytes` (marked windowed) instead
+   *  of transferring + parsing the whole JSONL. inc-1786572252481: ?tail=400
+   *  bounded the RESPONSE but the server still pulled a 9.5 MB remote JSONL
+   *  over SSH on every cold panel open (10–16 s). One-shot by design — the
+   *  windowed cache entry only satisfies same-mtime tail-bounded requests, so
+   *  the next read (turn append / full request) takes the normal full path and
+   *  re-seeds full + incremental state. */
+  maxColdReadBytes?: number;
 }
+
+/** Default bounded-window size for cold tail-bounded reads (see maxColdReadBytes). */
+export const HISTORY_COLD_TAIL_READ_BYTES = 4 * 1024 * 1024;
 
 /**
  * Incremental append-read (see HistoryIncrementalState). Reads only the bytes
@@ -1224,6 +1303,16 @@ async function tryIncrementalHistoryRead(
     const tailMessages = parseSessionMessages(merged);
     const messages = [...inc.prefixMessages, ...tailMessages];
 
+    // Orphan finished-agent ids: the tail parse only marked tailMessages (a
+    // different object), and the merged array is new — union the cached ids
+    // (proven in the frozen prefix on earlier rounds) with the tail parse's set
+    // and mark the array actually handed out. An id whose tool row sits in the
+    // prefix may appear here too — benign: it is genuinely finished, so extra
+    // finished-parent evidence can only absorb blocks correctly, never wrongly.
+    const orphanUnion = new Set<string>(cached.orphanFinishedIds ?? []);
+    for (const id of getOrphanFinishedAgentIds(tailMessages) ?? []) orphanUnion.add(id);
+    markOrphanFinishedAgentIds(messages, orphanUnion);
+
     try {
       const { bindEchoClaims } = await import('./echo-claims.js');
       bindEchoClaims(sessionId, messages);
@@ -1251,13 +1340,16 @@ async function tryIncrementalHistoryRead(
     // window inside it), so it must not be added to newTailText.length — that
     // would double-count the tail. It is the single authoritative figure here.
     const approxChars = inc.parsedBytes;
-    cacheSet(sessionId, { mtimeMs: newMtimeMs, messages, approxChars, inc }, host);
+    cacheSet(sessionId, {
+      mtimeMs: newMtimeMs, messages, approxChars, inc,
+      ...(orphanUnion.size > 0 ? { orphanFinishedIds: [...orphanUnion] } : {}),
+    }, host);
 
     // Keep the restart-survival disk cache fresh (same as the full-read path).
     // mtime included so the post-restart mtime fast-path can validate it.
     if (messages.length > 0) {
       import('./history-disk-cache.js').then(({ writeHistoryCache }) => {
-        writeHistoryCache(sessionId, messages, newMtimeMs);
+        writeHistoryCache(sessionId, messages, newMtimeMs, [...orphanUnion]);
       }).catch(() => {});
     }
     return messages;
@@ -1393,13 +1485,24 @@ async function readSessionHistoryTailWindow(
   maxTailBytes = 4 * 1024 * 1024,
 ): Promise<SessionHistoryMessage[] | null> {
   const daemonHost = host ?? '__local__';
-  const statPath = cwd && isSafeForProjectEncoding(cwd)
+  let statPath = cwd && isSafeForProjectEncoding(cwd)
     ? remoteJsonlPath(sessionId, cwd)
     : getResolvedRemotePath(sessionId, daemonHost);
-  if (!statPath) return null;
   try {
     const { DaemonFileReader } = await import('./daemon-file-reader.js');
     const reader = new DaemonFileReader(daemonHost);
+    if (!statPath) {
+      // Hashed-cwd session (encoded cwd >200 chars) with no cached path. The
+      // resolved-path cache is only seeded by a SUCCESSFUL full read — and a
+      // file over the byte ceiling can never complete one, so for a hashed-cwd
+      // whale the cache stays empty forever and the degradation path used to
+      // die right here, serving an empty history for a healthy live session
+      // (inc-1786390337224: 70 MB JSONL, "No conversation" on every load).
+      // One fs.find resolves it; cache so the next read takes the stat fast-path.
+      statPath = (await reader.findSessionPath(sessionId)) ?? undefined;
+      if (!statPath) return null;
+      setResolvedRemotePath(sessionId, daemonHost, statPath);
+    }
     const st = await reader.stat(statPath);
     if (!st) return null;
     // Clamp the window to the reader's own ceiling. Without this, a ceiling set
@@ -1492,7 +1595,7 @@ export async function readSessionHistoryTail(
 const historyInflightByKey = new Map<string, Promise<SessionHistoryMessage[]>>();
 
 export function readSessionHistory(sessionId: string, cwd?: string, host?: string, outputFile?: string, options?: ReadHistoryOptions): Promise<SessionHistoryMessage[]> {
-  const key = `${sessionId}@${host ?? '__local__'}|${options?.skipSubagents ? 's' : ''}`;
+  const key = `${sessionId}@${host ?? '__local__'}|${options?.skipSubagents ? 's' : ''}|w${options?.maxColdReadBytes ?? ''}`;
   const existing = historyInflightByKey.get(key);
   if (existing) return existing;
 
@@ -1529,6 +1632,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
   //   2. Otherwise (cwd missing or hashed by Claude Code) → a previously resolved
   //      full path discovered via a prior full read.
   let mtimeMs: number | undefined;
+  let statSize: number | undefined;
   let statPath: string | undefined;
   {
     const daemonHost = host ?? '__local__';
@@ -1544,14 +1648,21 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
         const statResult = await reader.stat(statPath);
         if (statResult) {
           mtimeMs = statResult.mtimeMs;
+          statSize = statResult.size;
           // The stat SUCCEEDED — the transcript file exists on disk, whatever the
           // parse yields. Every return below this point inherits that fact.
           sourceFound = true;
           const cached = cacheGet(sessionId, host);
           if (cached && cached.mtimeMs === mtimeMs) {
-            // Cache hit — return cached messages (skipSubagents is the common path
-            // now, so cached messages don't include childMessages; no mutation concern).
-            return handOff(cached.messages);
+            // A windowed entry (bounded cold tail) may only answer callers that
+            // are themselves tail-bounded — a full-read caller (Load earlier,
+            // fork ancestor read) falls through to the real full read below,
+            // which overwrites this entry with the full parse.
+            if (!cached.windowed || options?.maxColdReadBytes) {
+              // Cache hit — return cached messages (skipSubagents is the common path
+              // now, so cached messages don't include childMessages; no mutation concern).
+              return handOff(cached.messages);
+            }
           }
           // In-memory miss (e.g. server just restarted) but the DISK cache may
           // still be current: validate its stored mtime against the live stat.
@@ -1566,12 +1677,18 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
                 log.session.info('history disk cache hit (mtime match) — skipping full read', {
                   sessionId, host: host ?? '__local__', messages: disk.messages.length,
                 });
+                // Re-mark orphan finished-agent ids: the WeakMap died with the
+                // old process; the disk entry persisted the set explicitly.
+                if (disk.finishedAgentIds?.length) {
+                  markOrphanFinishedAgentIds(disk.messages, disk.finishedAgentIds);
+                }
                 // Seed the in-memory cache (no incremental state — that needs a
                 // real parse pass; the next mtime change does one full read and
                 // re-seeds it, same as any inc-state hazard).
                 cacheSet(sessionId, {
                   mtimeMs, messages: disk.messages,
                   approxChars: statResult.size,
+                  ...(disk.finishedAgentIds?.length ? { orphanFinishedIds: disk.finishedAgentIds } : {}),
                 }, host);
                 return handOff(disk.messages);
               }
@@ -1601,6 +1718,52 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
         });
       }
     }
+  }
+
+  // Bounded COLD read for tail-bounded callers (inc-1786572252481): the cache is
+  // cold (server restart / eviction) and no incremental state can help, so the
+  // fallthrough below would transfer + parse the WHOLE file — 10-16 s for a
+  // 9.5 MB remote JSONL, all to serve ?tail=400. When the caller declared it only
+  // needs the tail, read just the last window instead and mark it windowed (the
+  // delta route then refuses anchorless cursors against it, same contract as the
+  // byte-ceiling degradation). The windowed cache entry is quarantined: only
+  // same-mtime tail-bounded requests hit it, so the next turn append or a
+  // full-read caller does the normal full read and re-seeds everything.
+  if (options?.maxColdReadBytes && statPath && statSize !== undefined
+      && statSize > options.maxColdReadBytes) {
+    const win = await readSessionHistoryTailWindow(sessionId, cwd, host, options.maxColdReadBytes);
+    if (win) {
+      log.session.info('history cold read bounded to tail window', {
+        sessionId, host: host ?? '__local__', fileSize: statSize,
+        windowBytes: options.maxColdReadBytes, messages: win.length,
+      });
+      if (mtimeMs !== undefined) {
+        cacheSet(sessionId, {
+          mtimeMs, messages: win, approxChars: options.maxColdReadBytes, windowed: true,
+          ...(getOrphanFinishedAgentIds(win)?.size
+            ? { orphanFinishedIds: [...getOrphanFinishedAgentIds(win)!] } : {}),
+        }, host);
+      }
+      // NOT written to the disk cache: that store feeds full-read fallbacks
+      // (SSH-down stale serving), which must never adopt a partial parse.
+      //
+      // Background warm-up (fire-and-forget): a plain full read re-seeds the
+      // full cache + incremental state OFF the critical path, so the session's
+      // next turn takes the cheap incremental append instead of re-pulling a
+      // 4 MB window every mtime change (the sliding-window regime is correct
+      // but 1000× the transfer of an incremental read on an active session).
+      // Skipped for files over the reader's hard ceiling — their full read is
+      // structurally impossible; they live in the sliding-window regime anyway.
+      const { DaemonFileReader } = await import('./daemon-file-reader.js');
+      if (statSize <= DaemonFileReader.maxReadBytes()) {
+        setTimeout(() => {
+          readSessionHistory(sessionId, cwd, host, outputFile, { skipSubagents: true })
+            .catch(() => { /* warm-up is best-effort; next full request retries */ });
+        }, 0).unref?.();
+      }
+      return handOff(win);
+    }
+    // Window read failed — fall through to the normal full read.
   }
 
   // A file over the reader's hard byte ceiling throws instead of materializing
@@ -1744,16 +1907,27 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     const inc = (result && (result.source === 'local' || result.source === 'remote'))
       ? seedIncrementalState(sessionId, result, messages, statPath)
       : undefined;
-    cacheSet(sessionId, { mtimeMs, messages, approxChars: sourceChars, ...(inc ? { inc } : {}) }, host);
+    // Orphan finished-agent ids: the parser already marked `messages` in the
+    // WeakMap; persist the set on the entry so future INCREMENTAL reads (whose
+    // tail parse can't see prefix notifications) union it back in.
+    const orphanIds = getOrphanFinishedAgentIds(messages);
+    cacheSet(sessionId, {
+      mtimeMs, messages, approxChars: sourceChars,
+      ...(inc ? { inc } : {}),
+      ...(orphanIds && orphanIds.size > 0 ? { orphanFinishedIds: [...orphanIds] } : {}),
+    }, host);
   }
 
   // Persist to disk cache (fire-and-forget) so history survives app restarts
   // and is available when remote JSONL is temporarily unreachable. mtime (when
   // the stat succeeded) lets the post-restart fast-path validate this entry
-  // with one stat instead of a full JSONL re-fetch.
+  // with one stat instead of a full JSONL re-fetch. Orphan finished-agent ids
+  // ride along — they live OUTSIDE the messages array and would otherwise be
+  // lost on a post-restart disk-cache hit.
   if (messages.length > 0) {
+    const orphanForDisk = getOrphanFinishedAgentIds(messages);
     import('./history-disk-cache.js').then(({ writeHistoryCache }) => {
-      writeHistoryCache(sessionId, messages, mtimeMs);
+      writeHistoryCache(sessionId, messages, mtimeMs, orphanForDisk ? [...orphanForDisk] : undefined);
     }).catch(() => {});
   }
 
@@ -2172,6 +2346,15 @@ export async function recoverStateFromJsonl(sessionId: string, cwd?: string, hos
           state.pendingControlRequest = undefined;
         } else if (!respId) {
           // Fallback: if no request_id in response, clear unconditionally
+          state.pendingControlRequest = undefined;
+        }
+      }
+      if (type === 'control_cancel_request') {
+        // The CLI WITHDREW the request (turn abort / restart) — it is no longer
+        // answerable. Without this, recovery resurrects a request the CLI has
+        // already discarded (incident a172ce49: permanent Waiting badge).
+        const cancel = parsed as { request_id?: string };
+        if (cancel.request_id && state.pendingControlRequest?.request_id === cancel.request_id) {
           state.pendingControlRequest = undefined;
         }
       }

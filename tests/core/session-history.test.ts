@@ -16,6 +16,8 @@ import {
   readSessionHistory,
   extractPlanContent,
   readSessionHistoryPaginated,
+  parseSessionMessages,
+  getOrphanFinishedAgentIds,
 } from '../../src/core/session-history.js';
 
 const tmpBase = CLAUDE_HOME;
@@ -814,5 +816,91 @@ describe('readSessionHistory in-flight dedup', () => {
     await writeJsonl('dedup-missing', '/test', [msg('m0', 'user', 'Now here')]);
     const after = await readSessionHistory('dedup-missing', '/test');
     expect(after).toHaveLength(1);
+  });
+});
+
+// ── Orphan finished-agent ids (inc-1786496042099) ──
+// A NESTED background agent's tool_use line lives only in the daemon stream
+// file — never in the canonical JSONL — so no history row can ever carry its
+// toolUseId and bgTaskFinished has no row to land on. The canonical JSONL DOES
+// carry the <task-notification> completion proof (queue-operation enqueues /
+// hidden user lines); the parser must ship those orphan ids OUTSIDE the
+// messages array instead of silently discarding them.
+describe('getOrphanFinishedAgentIds', () => {
+  const notif = (toolUseId: string) =>
+    `<task-notification>\n<task-id>fixture01234567</task-id>\n<tool-use-id>${toolUseId}</tool-use-id>\n<status>completed</status>\n<summary>Agent finished</summary>\n<result>report…</result>\n</task-notification>`;
+
+  it('returns an id proven by a queue-operation enqueue that matches NO tool row', () => {
+    // The nested agent toolu_nested_orphan was defined only in the daemon
+    // stream — this canonical fixture has no tool_use for it, only the proof.
+    const lines = [
+      msg('u1', 'user', 'run the pipeline'),
+      msg('a1', 'assistant', 'Working on it.'),
+      { type: 'queue-operation', operation: 'enqueue', timestamp: '2025-01-01T00:01:00Z', content: notif('toolu_nested_orphan') },
+      msg('a2', 'assistant', 'Nested agent reported back.'),
+    ];
+    const parsed = parseSessionMessages(lines.map(l => JSON.stringify(l)).join('\n'));
+    const orphans = getOrphanFinishedAgentIds(parsed);
+    expect(orphans).toBeDefined();
+    expect([...orphans!]).toEqual(['toolu_nested_orphan']);
+    // Cursor-space invariant: the proof rides OUTSIDE the array — no extra rows.
+    expect(parsed.map(m => m.text)).toEqual(['run the pipeline', 'Working on it.', 'Nested agent reported back.']);
+  });
+
+  it('an id that DOES match a tool row is NOT an orphan (bgTaskFinished stamps it instead)', () => {
+    const lines = [
+      msg('u1', 'user', 'start a bg agent'),
+      msg('a1', 'assistant', 'Launching.', {
+        tools: [{ type: 'tool_use', id: 'toolu_top_level', name: 'Agent', input: { name: 'worker', prompt: 'go' } }],
+      }),
+      // Hidden user-line proof for the top-level agent (row exists) AND an
+      // enqueue proof for a nested grandchild (row absent).
+      { type: 'user', timestamp: '2025-01-01T00:01:00Z', uuid: 'uuid-n1', message: { role: 'user', content: notif('toolu_top_level') } },
+      { type: 'queue-operation', operation: 'enqueue', timestamp: '2025-01-01T00:01:10Z', content: notif('toolu_nested_only') },
+      msg('a2', 'assistant', 'Both done.'),
+    ];
+    const parsed = parseSessionMessages(lines.map(l => JSON.stringify(l)).join('\n'));
+    const tools = parsed.flatMap(m => m.tools ?? []);
+    expect(tools.find(t => t.toolUseId === 'toolu_top_level')?.bgTaskFinished).toBe(true);
+    const orphans = getOrphanFinishedAgentIds(parsed);
+    expect(orphans?.has('toolu_top_level')).toBeFalsy();
+    expect(orphans?.has('toolu_nested_only')).toBe(true);
+  });
+
+  it('no notifications at all → no orphan set (undefined, not empty)', () => {
+    const parsed = parseSessionMessages([
+      msg('u1', 'user', 'hello'),
+      msg('a1', 'assistant', 'hi'),
+    ].map(l => JSON.stringify(l)).join('\n'));
+    expect(getOrphanFinishedAgentIds(parsed)).toBeUndefined();
+  });
+
+  it('an id matching a tool row moved under childMessages by grouping is still not an orphan', () => {
+    // groupInlineChildren moves inline-subagent rows under the parent tool —
+    // the orphan check walks the PRE-grouping flat array, so a grouped-away
+    // tool row still counts as present.
+    const lines = [
+      msg('u1', 'user', 'go'),
+      msg('a1', 'assistant', 'Launching.', {
+        tools: [{ type: 'tool_use', id: 'toolu_parent', name: 'Agent', input: { name: 'w', prompt: 'x' } }],
+      }),
+      // Inline child line carrying its own nested Agent tool_use (grouped under toolu_parent).
+      { type: 'assistant', timestamp: '2025-01-01T00:00:02Z', parent_tool_use_id: 'toolu_parent',
+        message: { id: 'msg_child_1', role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_inline_child', name: 'Agent', input: { name: 'nested', prompt: 'y' } }] } },
+      { type: 'queue-operation', operation: 'enqueue', timestamp: '2025-01-01T00:01:00Z', content: notif('toolu_inline_child') },
+      msg('a2', 'assistant', 'done'),
+    ];
+    const parsed = parseSessionMessages(lines.map(l => JSON.stringify(l)).join('\n'));
+    expect(getOrphanFinishedAgentIds(parsed)?.has('toolu_inline_child')).toBeFalsy();
+  });
+
+  it('readSessionHistory marks the array it returns (route-visible surface)', async () => {
+    await writeJsonl('orphan-read', '/test', [
+      msg('u1', 'user', 'run'),
+      msg('a1', 'assistant', 'ok'),
+      { type: 'queue-operation', operation: 'enqueue', timestamp: '2025-01-01T00:01:00Z', content: notif('toolu_via_reader') },
+    ]);
+    const messages = await readSessionHistory('orphan-read', '/test', undefined, undefined, { skipSubagents: true });
+    expect(getOrphanFinishedAgentIds(messages)?.has('toolu_via_reader')).toBe(true);
   });
 });
