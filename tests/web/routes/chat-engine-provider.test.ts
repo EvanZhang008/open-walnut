@@ -39,6 +39,24 @@ const runAgentLoop = vi.fn(async (userContent: string | unknown[], history: unkn
 
 vi.mock('../../../src/agent/loop.js', () => ({ runAgentLoop }))
 
+// Turn-boundary memory bookkeeping: PARTIAL mock — the real implementations still
+// run (so nothing about memory behavior diverges here), the two entry points are
+// merely wrapped in spies so the lane branch's calls are countable. vi.hoisted is
+// required: the mock factory is lifted above every import, so it cannot close over
+// ordinary top-level consts (they'd still be uninitialized when it runs).
+const { getBoundedMemory, beginMemoryPromptTurn } = vi.hoisted(() => ({
+  getBoundedMemory: vi.fn(),
+  beginMemoryPromptTurn: vi.fn(),
+}))
+vi.mock('../../../src/core/bounded-memory.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/core/bounded-memory.js')>()
+  getBoundedMemory.mockImplementation((agentId?: string, target?: 'memory' | 'user') =>
+    actual.getBoundedMemory(agentId, target))
+  beginMemoryPromptTurn.mockImplementation((agentId?: string, conversationId?: string) =>
+    actual.beginMemoryPromptTurn(agentId, conversationId))
+  return { ...actual, getBoundedMemory, beginMemoryPromptTurn }
+})
+
 import type { Server as HttpServer } from 'node:http'
 import WebSocket from 'ws'
 import { WALNUT_HOME, CONFIG_FILE } from '../../../src/constants.js'
@@ -112,6 +130,8 @@ async function boot(agent: Record<string, unknown>): Promise<void> {
 
 beforeEach(() => {
   runAgentLoop.mockClear()
+  getBoundedMemory.mockClear()
+  beginMemoryPromptTurn.mockClear()
   started = []
 })
 
@@ -133,6 +153,10 @@ describe('agent.provider unset (default) → in-process loop', () => {
       expect(res.payload).toBeUndefined()
       expect(runAgentLoop).toHaveBeenCalledTimes(1)
       expect(started).toHaveLength(0)
+      // The bookkeeping belongs to whichever engine ran the turn. On this branch
+      // that is loop.ts (mocked here) — the chat route must NOT also do it, or a
+      // real in-process turn would pin the snapshot twice per turn.
+      expect(beginMemoryPromptTurn).not.toHaveBeenCalled()
 
       const { getSessionByLane } = await import('../../../src/core/session-tracker.js')
       const { getActiveConversationId } = await import('../../../src/core/conversations.js')
@@ -215,6 +239,31 @@ describe("agent.provider = 'claude-code' → lane session", () => {
       const queued = (await getQueue(firstId!)).map((m) => m.message)
       expect(queued.some((m) => m.includes('two'))).toBe(true)
       expect(queued.some((m) => m.includes('one'))).toBe(false)
+    } finally {
+      ws.close()
+    }
+  })
+
+  it('does the turn-boundary memory bookkeeping the in-process loop would have done', async () => {
+    // The lane path skips agent/loop.ts entirely, and with it the two things every
+    // main-butler turn owes memory: clearing the consolidation breaker, and
+    // re-pinning the frozen memory-prompt snapshot for this conversation. Without
+    // them a single failed consolidation wedges the breaker for the process's life
+    // and the prompt scope never advances.
+    await boot({ provider: 'claude-code' })
+    const ws = await connectWs()
+    try {
+      await sendRpc(ws, 'chat', { message: 'lane bookkeeping' })
+      const { getActiveConversationId } = await import('../../../src/core/conversations.js')
+      const conv = await getActiveConversationId('general')
+
+      // Both global stores get their breaker reset: the general one and USER.md.
+      expect(getBoundedMemory).toHaveBeenCalledWith()
+      expect(getBoundedMemory).toHaveBeenCalledWith(undefined, 'user')
+
+      // The snapshot is pinned for THIS conversation's scope, exactly once.
+      expect(beginMemoryPromptTurn).toHaveBeenCalledTimes(1)
+      expect(beginMemoryPromptTurn).toHaveBeenCalledWith('general', conv)
     } finally {
       ws.close()
     }

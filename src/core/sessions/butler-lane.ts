@@ -33,6 +33,30 @@ export function butlerLaneKey(agentId: string, conversationId: string): string {
   return `chat:${agentId}:${conversationId}`;
 }
 
+/**
+ * Inverse of `butlerLaneKey` — recover the (agentId, conversationId) a lane-bound
+ * session belongs to. Returns null for anything that is not a butler chat lane
+ * (a future lane namespace, a hand-edited record, an empty string).
+ *
+ * Parse rule, deliberately asymmetric: strip the `chat:` prefix, then split on
+ * the FIRST remaining ':' only — agentId is the head, and EVERYTHING after it is
+ * the conversationId, colons included. Today neither id can contain ':'
+ * (validateAgentId / validateConversationId both reject it), so a naive
+ * three-way split would also work; the single-split form is chosen so that if a
+ * conversation id ever grows a separator, the agent attribution stays right and
+ * the conversation id stays whole instead of being silently truncated.
+ */
+export function parseLaneKey(lane: string | undefined | null): { agentId: string; conversationId: string } | null {
+  if (!lane || !lane.startsWith('chat:')) return null;
+  const rest = lane.slice('chat:'.length);
+  const sep = rest.indexOf(':');
+  if (sep <= 0) return null; // no separator, or an empty agentId
+  const agentId = rest.slice(0, sep);
+  const conversationId = rest.slice(sep + 1);
+  if (!conversationId) return null;
+  return { agentId, conversationId };
+}
+
 export interface LaneSession {
   /** The `claude` session id backing this conversation. */
   sessionId: string;

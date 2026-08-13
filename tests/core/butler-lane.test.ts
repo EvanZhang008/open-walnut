@@ -24,7 +24,7 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 
 import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js'
 import { WALNUT_HOME } from '../../src/constants.js'
-import { butlerLaneKey, getOrCreateLaneSession } from '../../src/core/sessions/butler-lane.js'
+import { butlerLaneKey, parseLaneKey, getOrCreateLaneSession } from '../../src/core/sessions/butler-lane.js'
 import { butlerProfile, walnutMcpProfile } from '../../src/core/sessions/profiles.js'
 import type { SessionStartEvent } from '../../src/core/event-types.js'
 
@@ -66,6 +66,37 @@ describe('lane key', () => {
   it('is namespaced per agent + conversation', () => {
     expect(butlerLaneKey('general', 'conv-abc')).toBe('chat:general:conv-abc')
     expect(butlerLaneKey('research', 'conv-abc')).toBe('chat:research:conv-abc')
+  })
+})
+
+describe('parseLaneKey', () => {
+  it('round-trips butlerLaneKey', () => {
+    expect(parseLaneKey(butlerLaneKey('general', 'conv-abc')))
+      .toEqual({ agentId: 'general', conversationId: 'conv-abc' })
+    expect(parseLaneKey(butlerLaneKey('research', 'conv-9f2e-4a')))
+      .toEqual({ agentId: 'research', conversationId: 'conv-9f2e-4a' })
+  })
+
+  it('splits ONCE — a conversation id keeps every colon it contains', () => {
+    // Pinning the parse rule, not today's id format: agentId is the FIRST segment
+    // after 'chat:', the conversationId is ALL the rest. A three-way split would
+    // silently truncate the conversation id (→ token-truth written under a key
+    // nothing reads) if conversation ids ever grow a separator.
+    expect(parseLaneKey('chat:general:conv-a:b:c'))
+      .toEqual({ agentId: 'general', conversationId: 'conv-a:b:c' })
+  })
+
+  it('returns null for anything that is not a butler chat lane', () => {
+    expect(parseLaneKey(undefined)).toBeNull()
+    expect(parseLaneKey(null)).toBeNull()
+    expect(parseLaneKey('')).toBeNull()
+    // Not our namespace — a future lane kind must not be read as a chat lane.
+    expect(parseLaneKey('notes:general:conv-a')).toBeNull()
+    // Prefix only / missing pieces.
+    expect(parseLaneKey('chat:')).toBeNull()
+    expect(parseLaneKey('chat:general')).toBeNull()
+    expect(parseLaneKey('chat:general:')).toBeNull()
+    expect(parseLaneKey('chat::conv-a')).toBeNull()
   })
 })
 

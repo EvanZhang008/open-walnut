@@ -15,6 +15,9 @@ const USAGE_LABELS: Record<string, string> = {
   agent: 'Main agent',
   'agent-cli': 'Main agent (CLI)',
   session: 'Claude Code session',
+  // A butler turn answered by its lane-bound CLI session (agent.provider='claude-code').
+  // Same work as 'agent', different engine — hence its own source, one label apart.
+  chat: 'Main agent (session engine)',
   compaction: 'Compaction',
   heartbeat: 'Heartbeat',
   cron: 'Cron',

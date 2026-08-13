@@ -29,7 +29,7 @@ import type { ImagePayload, ImageRef } from './images.js'
 import { truncateToTokenBudget } from '../../utils/token-truncate.js'
 import { log } from '../../logging/index.js'
 import { validateAgentId, validateConversationId, GLOBAL_SKILLS_DIR } from '../../constants.js'
-import { enqueueAgentTurn, recordLastTurnTokens } from '../agent-turn-queue.js'
+import { enqueueAgentTurn, recordLastTurnTokens, getLastTurnTokens } from '../agent-turn-queue.js'
 import { triggerBackgroundCompaction } from '../background-compaction.js'
 import {
   shouldUpdateWorkingMemory,
@@ -57,6 +57,32 @@ function trackCompactionUsage(usage: { model?: string; input_tokens?: number; ou
       cache_read_input_tokens: usage.cache_read_input_tokens,
     })
   } catch { /* non-critical */ }
+}
+
+/**
+ * The forked turn that rewrites working memory. Module-level because BOTH engines
+ * trigger it — the in-process loop off its token breakdown, the butler lane off
+ * the lane turn — and they must fork identically (same tool filter, same system,
+ * same source tag, so usage attribution and the tool allowlist can't drift).
+ */
+async function runWmForkedTurn(prompt: string): Promise<void> {
+  const { runAgentLoop } = await import('../../agent/loop.js')
+  const { filesTools } = await import('../../agent/tools/files-tools.js')
+  // Restrict to file_edit only (not file_write) — the updater should EDIT sections
+  // within the existing template, never overwrite the entire file (would destroy structure).
+  const editTool = filesTools.find(t => t.name === 'file_edit')
+  const allowedTools = editTool ? [editTool] : filesTools
+  // Empty history is intentional: the update prompt contains the current working memory
+  // content inline. Full conversation context comes from the prompt cache prefix.
+  // Passing history would double token cost and defeat the lightweight extraction purpose.
+  await runAgentLoop(prompt, [], {
+    onTextDelta: () => {},
+  }, {
+    system: 'You are a working memory updater. Your only job is to update the working memory notes file using file_edit. Do not do anything else.',
+    tools: allowedTools,
+    source: 'working-memory-updater',
+    maxToolRounds: 5,
+  })
 }
 
 /**
@@ -865,6 +891,35 @@ export function registerChatRpc(): void {
         activeAbortControllers.delete(aKey)
         unregisterAbort()
         try {
+          // ── Turn-boundary memory bookkeeping (mirrors agent/loop.ts) ──
+          // The in-process loop opens every main-butler turn by resetting the
+          // memory-consolidation breaker and re-pinning the frozen memory-prompt
+          // snapshot for this conversation. A lane turn never enters that loop, so
+          // without this the breaker's consecutive-failure count never clears
+          // (one bad turn wedges consolidation for the process's life) and the
+          // prompt scope never advances. Same two calls, same order, same reasons
+          // — see loop.ts for the full rationale.
+          try {
+            const { getBoundedMemory, beginMemoryPromptTurn } = await import('../../core/bounded-memory.js')
+            getBoundedMemory().resetConsolidationFailures()
+            getBoundedMemory(undefined, 'user').resetConsolidationFailures()
+            const { drift } = beginMemoryPromptTurn(agentId, conversationId)
+            for (const d of drift) {
+              if (d.origin !== 'external') continue
+              // Not an error: the new bytes ARE adopted from this turn on. But these
+              // paths (hand edit, file_write on a memory path, data-repo sync, the web
+              // editor) bypass every write-time check, so make it visible.
+              log.web.warn('memory changed outside the memory tool; adopted this turn', {
+                scope: d.scope, previousHash: d.previousHash, currentHash: d.currentHash,
+                agentId, conversationId,
+              })
+            }
+          } catch (err) {
+            log.web.warn('lane turn memory bookkeeping failed; continuing', {
+              agentId, conversationId, error: err instanceof Error ? err.message : String(err),
+            })
+          }
+
           const { getOrCreateLaneSession } = await import('../../core/sessions/butler-lane.js')
           // The CLI takes plain text on stdin, not content blocks — images ride as
           // readable file paths (the same shape session chat uses), never base64.
@@ -883,6 +938,32 @@ export function registerChatRpc(): void {
             agentId, conversationId, sessionId: lane.sessionId, created: lane.created,
             durationMs: Date.now() - turnStartMs,
           })
+
+          // ── Working-memory updater (lane path) ──
+          // The in-process trigger reads `result.tokenBreakdown`, which a lane turn
+          // never produces, so working memory would freeze the moment the butler
+          // moves onto the lane. Two deliberate MVP approximations:
+          //   - Tool-call count: ONE per turn, not the turn's real tool calls (those
+          //     land on session:tool-use, which this RPC does not consume). It only
+          //     UNDERCOUNTS, so the threshold is reached later — updates are rarer,
+          //     never spurious.
+          //   - Token size: the lane's last exact API input count (fed by the
+          //     session:usage-update handler in server.ts), 0 until the lane's first
+          //     assistant message reports usage — 0 simply fails the threshold.
+          // Fire-and-forget, same as the in-process trigger.
+          if (agentId === 'general') {
+            trackWmToolCall(agentId, conversationId)
+            const laneTokens = getLastTurnTokens(conversationId) ?? 0
+            if (shouldUpdateWorkingMemory(laneTokens, agentId, conversationId)) {
+              executeWorkingMemoryUpdate(
+                runWmForkedTurn,
+                laneTokens,
+                agentId,
+                conversationId,
+              ).catch(() => { /* non-critical */ })
+            }
+          }
+
           // Durable breadcrumb + live push: the turn happened somewhere the chat
           // timeline can't see, so leave a session-ref the user can click through.
           const notice = `Butler ran on session <session-ref id="${lane.sessionId}"/>`
@@ -1092,25 +1173,7 @@ export function registerChatRpc(): void {
           const currentTokens = result.tokenBreakdown.total
           if (shouldUpdateWorkingMemory(currentTokens, agentId, conversationId)) {
             executeWorkingMemoryUpdate(
-              async (prompt) => {
-                const { runAgentLoop } = await import('../../agent/loop.js')
-                const { filesTools } = await import('../../agent/tools/files-tools.js')
-                // Restrict to file_edit only (not file_write) — the updater should EDIT sections
-                // within the existing template, never overwrite the entire file (would destroy structure).
-                const editTool = filesTools.find(t => t.name === 'file_edit')
-                const allowedTools = editTool ? [editTool] : filesTools
-                // Empty history is intentional: the update prompt contains the current working memory
-                // content inline. Full conversation context comes from the prompt cache prefix.
-                // Passing history would double token cost and defeat the lightweight extraction purpose.
-                await runAgentLoop(prompt, [], {
-                  onTextDelta: () => {},
-                }, {
-                  system: 'You are a working memory updater. Your only job is to update the working memory notes file using file_edit. Do not do anything else.',
-                  tools: allowedTools,
-                  source: 'working-memory-updater',
-                  maxToolRounds: 5,
-                })
-              },
+              runWmForkedTurn,
               currentTokens,
               agentId,
               conversationId,

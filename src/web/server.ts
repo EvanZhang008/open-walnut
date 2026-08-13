@@ -773,11 +773,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           })
           const cronPrompt = `[Scheduled Job "${jobName}"] ${prompt}`
           const result = await runAgentLoop(cronPrompt, history, {
-            onTextDelta: (delta) => broadcastEvent('agent:text-delta', { delta, source: 'cron' }),
-            onThinking: (text) => broadcastEvent('agent:thinking', { text }),
-            onToolCall: (toolName, input, toolUseId) => broadcastEvent('agent:tool-call', { toolName, input, toolUseId }),
-            onToolResult: (toolName, result, toolUseId) => broadcastEvent('agent:tool-result', { toolName, result, toolUseId }),
-            onToolActivity: (activity) => broadcastEvent('agent:tool-activity', activity),
+            onTextDelta: (delta) => broadcastEvent('agent:text-delta', { delta, source: 'cron', agentId: 'general', conversationId }),
+            onThinking: (text) => broadcastEvent('agent:thinking', { text, agentId: 'general', conversationId }),
+            onToolCall: (toolName, input, toolUseId) => broadcastEvent('agent:tool-call', { toolName, input, toolUseId, agentId: 'general', conversationId }),
+            onToolResult: (toolName, result, toolUseId) => broadcastEvent('agent:tool-result', { toolName, result, toolUseId, agentId: 'general', conversationId }),
+            onToolActivity: (activity) => broadcastEvent('agent:tool-activity', { ...activity, agentId: 'general', conversationId }),
             // onText intentionally NOT provided — fires per text block per round.
             // agent:response is fired ONCE below after the loop completes.
             onUsage: (usage) => {
@@ -786,7 +786,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           }, { source: 'cron', agentId: 'general', conversationId })
           // Fire agent:response exactly once after loop completes
           if (result.response) {
-            broadcastEvent('agent:response', { text: result.response, source: 'cron' })
+            broadcastEvent('agent:response', { text: result.response, source: 'cron', agentId: 'general', conversationId })
           }
           // Persist agent response to chat history. newMessages (not slice(history.length))
           // is trim-safe — see chat.ts. NB: pass the WHOLE array incl. the user prompt at [0];
@@ -800,7 +800,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           const errMsg = err instanceof Error ? err.message : String(err)
           log.cron.error('cron runMainAgentWithPrompt failed', { jobName, error: errMsg })
           // Broadcast error so the UI clears streaming state
-          broadcastEvent('agent:error', { error: `Cron job "${jobName}" agent failed: ${errMsg}`, conversationId })
+          broadcastEvent('agent:error', { error: `Cron job "${jobName}" agent failed: ${errMsg}`, agentId: 'general', conversationId })
           throw err // Re-throw so the cron system records the error status
         }
       })
@@ -2212,9 +2212,31 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         sendStreamEvent(sessionId, event.name, event.data)
       }
     } else if (event.name === 'session:usage-update') {
-      const { sessionId } = eventData<'session:usage-update'>(event)
+      const { sessionId, inputTokens } = eventData<'session:usage-update'>(event)
       if (sessionId) {
         sendStreamEvent(sessionId, event.name, event.data)
+        // Token-truth feed for butler-lane turns. On the in-process path the
+        // loop's onUsage callback records the turn's EXACT input tokens (the
+        // ground-truth half of effectiveTotalTokens); a lane turn never enters
+        // that loop, so without this the conversation's compaction gate and
+        // triage bail keep reasoning from the last in-process number — i.e.
+        // from before the lane took over. The CLI's own usage payload is the
+        // same measurement, so adopt it.
+        //
+        // Deliberately NOT awaited: this is the highest-frequency session event
+        // (one per assistant message) and the stream push above must not queue
+        // behind a record read.
+        if (typeof inputTokens === 'number' && inputTokens > 0) {
+          void (async () => {
+            try {
+              const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+              const rec = await getSessionByClaudeId(sessionId)
+              const { parseLaneKey } = await import('../core/sessions/butler-lane.js')
+              const laneIds = parseLaneKey(rec?.lane)
+              if (laneIds) recordLastTurnTokens(laneIds.conversationId, inputTokens)
+            } catch { /* token truth is an optimization; a miss falls back to the estimate */ }
+          })()
+        }
       }
     } else if (event.name === 'session:model-catalog') {
       // Eager catalog push (fetched on init / invalidation refetch). Broadcast to
@@ -2498,14 +2520,26 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // daemon payload), skip billing rather than fall back to totalCost and
       // reintroduce the bug — a missed increment is far cheaper than a 13× overcount.
       if (costDelta != null && costDelta > 0) {
-        try { usageTracker.record({
-          source: 'session',
-          model: 'claude-code-cli',
-          sessionId,
-          taskId,
-          external_cost_usd: costDelta,
-          duration_ms: duration,
-        }) } catch {}
+        try {
+          // Attribution fork (butler lane): a lane-bound session IS the butler's
+          // own turn, not an external coding session. Recording it as
+          // source:'session' parked the butler's whole spend in the dashboard's
+          // pass-through session_cost bucket and zeroed its per-agent row. The
+          // event payload carries no lane, so read it off the record — one cheap
+          // indexed sqlite read, and only on results that actually cost money.
+          const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+          const laneRecord = sessionId ? await getSessionByClaudeId(sessionId) : null
+          const { parseLaneKey } = await import('../core/sessions/butler-lane.js')
+          const laneIds = parseLaneKey(laneRecord?.lane)
+          usageTracker.record({
+            ...(laneIds ? { source: 'chat' as const, agentId: laneIds.agentId } : { source: 'session' as const }),
+            model: 'claude-code-cli',
+            sessionId,
+            taskId,
+            external_cost_usd: costDelta,
+            duration_ms: duration,
+          })
+        } catch {}
       }
 
       const taskRef = taskId ? await resolveTaskRef(taskId) : null
@@ -2865,7 +2899,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
                   source: 'triage', notification: true, taskId,
                   agentId: 'general', conversationId,
                 })
-                broadcastEvent('agent:response', { text: bailContent, source: 'triage', conversationId })
+                broadcastEvent('agent:response', { text: bailContent, source: 'triage', agentId: 'general', conversationId })
                 triggerBackgroundCompaction('triage-bail', { agentId: 'general', conversationId })
                 return
               }
@@ -2881,11 +2915,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
               })
 
               const agentResult = await runAgentLoop(prompt, history, {
-                onTextDelta: (delta) => broadcastEvent('agent:text-delta', { delta, source: 'triage' }),
-                onThinking: (text) => broadcastEvent('agent:thinking', { text }),
-                onToolCall: (toolName, input) => broadcastEvent('agent:tool-call', { toolName, input }),
-                onToolResult: (toolName, result) => broadcastEvent('agent:tool-result', { toolName, result }),
-                onToolActivity: (activity) => broadcastEvent('agent:tool-activity', activity),
+                onTextDelta: (delta) => broadcastEvent('agent:text-delta', { delta, source: 'triage', agentId: 'general', conversationId }),
+                onThinking: (text) => broadcastEvent('agent:thinking', { text, agentId: 'general', conversationId }),
+                onToolCall: (toolName, input) => broadcastEvent('agent:tool-call', { toolName, input, agentId: 'general', conversationId }),
+                onToolResult: (toolName, result) => broadcastEvent('agent:tool-result', { toolName, result, agentId: 'general', conversationId }),
+                onToolActivity: (activity) => broadcastEvent('agent:tool-activity', { ...activity, agentId: 'general', conversationId }),
                 onUsage: (u) => {
                   try { usageTracker.record({ source: 'triage', model: u.model ?? 'unknown', input_tokens: u.input_tokens, output_tokens: u.output_tokens, cache_creation_input_tokens: u.cache_creation_input_tokens, cache_read_input_tokens: u.cache_read_input_tokens, agentId: 'general' }) } catch {}
                   // Fix 2: cache the EXACT input-token count (incl. cache) so the next
@@ -2895,7 +2929,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
               }, { source: 'triage', tools: readOnlyTools, agentId: 'general', conversationId })
 
               if (agentResult.response) {
-                broadcastEvent('agent:response', { text: agentResult.response, source: 'triage', conversationId })
+                broadcastEvent('agent:response', { text: agentResult.response, source: 'triage', agentId: 'general', conversationId })
               }
               // newMessages (not slice(history.length)) is trim-safe — see chat.ts. NB: pass
               // the WHOLE array incl. the user prompt at [0]; unlike chat.ts we did NOT
@@ -2907,7 +2941,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             } catch (err) {
               const errMsg = err instanceof Error ? err.message : String(err)
               log.web.error('triage main agent failed', { taskId, error: errMsg })
-              broadcastEvent('agent:error', { error: `Triage notify failed for task ${taskId}: ${errMsg}`, conversationId })
+              broadcastEvent('agent:error', { error: `Triage notify failed for task ${taskId}: ${errMsg}`, agentId: 'general', conversationId })
             }
           })
         } else {
@@ -3326,11 +3360,11 @@ async function startHeartbeatIfConfigured(): Promise<void> {
           })
 
           const result = await runAgentLoop(prompt, history, {
-            onTextDelta: (delta) => broadcastEvent('agent:text-delta', { delta, source: 'heartbeat' }),
-            onThinking: (text) => broadcastEvent('agent:thinking', { text }),
-            onToolCall: (toolName, input, toolUseId) => broadcastEvent('agent:tool-call', { toolName, input, toolUseId }),
-            onToolResult: (toolName, result, toolUseId) => broadcastEvent('agent:tool-result', { toolName, result, toolUseId }),
-            onToolActivity: (activity) => broadcastEvent('agent:tool-activity', activity),
+            onTextDelta: (delta) => broadcastEvent('agent:text-delta', { delta, source: 'heartbeat', agentId: 'general', conversationId }),
+            onThinking: (text) => broadcastEvent('agent:thinking', { text, agentId: 'general', conversationId }),
+            onToolCall: (toolName, input, toolUseId) => broadcastEvent('agent:tool-call', { toolName, input, toolUseId, agentId: 'general', conversationId }),
+            onToolResult: (toolName, result, toolUseId) => broadcastEvent('agent:tool-result', { toolName, result, toolUseId, agentId: 'general', conversationId }),
+            onToolActivity: (activity) => broadcastEvent('agent:tool-activity', { ...activity, agentId: 'general', conversationId }),
             // onText intentionally NOT provided — fires per text block per round.
             // agent:response is fired ONCE below after the loop completes (same
             // pattern as the chat handler in routes/chat.ts).
@@ -3352,7 +3386,7 @@ async function startHeartbeatIfConfigured(): Promise<void> {
           // Fire agent:response exactly once after loop completes
           const responseText = result.response ?? ''
           if (responseText) {
-            broadcastEvent('agent:response', { text: responseText, source: 'heartbeat' })
+            broadcastEvent('agent:response', { text: responseText, source: 'heartbeat', agentId: 'general', conversationId })
           }
 
           // Persist agent response to chat history. newMessages (not slice(history.length))
