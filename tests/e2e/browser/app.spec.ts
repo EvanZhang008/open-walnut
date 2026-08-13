@@ -196,15 +196,19 @@ test('search and filters apply across pinned, recent, and task sections', async 
   await page.locator('.vd-field').filter({ hasText: /^Priority/ }).locator('select').selectOption('immediate')
   await page.keyboard.press('Escape')
 
+  // Search ignores EVERY toolbar filter (user ruling 2026-08-09 — see
+  // todo-search-ignores-filters.spec.ts): while the query is active, the
+  // priority filter must NOT hide a matching card anywhere. It only takes
+  // effect once the query is cleared (asserted below).
   await expect(pinnedCard(matchingPinned.id)).toBeVisible()
-  await expect(pinnedCard(priorityMismatch.id)).toBeHidden()
+  await expect(pinnedCard(priorityMismatch.id)).toBeVisible()
   await expect(pinnedCard(searchMismatch.id)).toBeHidden()
-  await expect(pinnedCount).toHaveText('1')
+  await expect(pinnedCount).toHaveText('2')
   await expect(recentCard(matchingPinned.id)).toBeVisible()
-  await expect(recentCard(priorityMismatch.id)).toBeHidden()
+  await expect(recentCard(priorityMismatch.id)).toBeVisible()
   await expect(recentCard(searchMismatch.id)).toBeHidden()
   await expect(recentCard(unpinnedMatch.id)).toBeVisible()
-  await expect(recentCount).toHaveText('2')
+  await expect(recentCount).toHaveText('3')
   await expect(taskList.locator('.todo-panel-item', { hasText: unpinnedMatch.title })).toBeVisible()
 
   await page.getByTitle('Clear search (Esc)').click()
