@@ -10,8 +10,8 @@ import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { TaskSessionPill } from './SessionPill';
 import { SyncIndicator, type TaskListProjection } from './TaskCard';
 import { TaskKebabMenu } from './TaskKebabMenu';
-import { ProjectKebabMenu } from './ProjectHeaderMenus';
-import { openSessionOnHome } from '@/utils/open-session';
+import { ProjectKebabMenu, ProjectPlusMenu } from './ProjectHeaderMenus';
+import { openSessionOnHome, openDraftSessionOnHome } from '@/utils/open-session';
 import { sortTasks, groupTasksByProject, type TpSort, type TpSortKey } from './tasks-page-sort';
 import * as ICONS from '../common/Icons';
 
@@ -305,6 +305,13 @@ export function TasksPageTable({
     openSessionOnHome(sessionId, navigate);
   }, [navigate]);
 
+  // Group-header "+" — sessions live ONLY on the home columns, so /tasks can't open
+  // one in place. Same bridge the session pills use one line up: dispatch, then
+  // navigate home where MainPage (always mounted) has already grown the draft.
+  const openDraftForProject = useCallback((project: string) => {
+    openDraftSessionOnHome(project, navigate);
+  }, [navigate]);
+
   const sorted = useMemo(() => sortTasks(tasks, sort), [tasks, sort]);
   const groups = useMemo(
     () => (showGroups ? groupTasksByProject(sorted, projectOrder) : null),
@@ -397,7 +404,11 @@ export function TasksPageTable({
               onStar={onStar}
               onOpenSession={openSession}
               onSetDate={(id, d) => onUpdate(id, { due_date: d ?? '' })}
-              onSetStartDate={(id, d) => onUpdate(id, { start_date: d })}
+              // `?? ''` is the clear convention the store understands (task-manager
+              // does `updates.start_date || undefined`); forwarding the picker's raw
+              // null stored a null instead of deleting the field, and diverged from
+              // MainPage's handleSetStartDate + this menu's own due-date handler.
+              onSetStartDate={(id, d) => onUpdate(id, { start_date: d ?? '' })}
               onDelete={() => void confirmDelete(t)}
             />
           </span>
@@ -444,6 +455,16 @@ export function TasksPageTable({
             <span className="tp-group-name">{project || 'Inbox'}</span>
             {project && <ProjectSourceBadge source={sourceByName.get(project.toLowerCase())} />}
             <span className="tp-group-count">{groupTasks.length}</span>
+            {/* One-click "+" → a draft session in this project, the same control (and
+                the same aria-label) as the home panel's project header. Named
+                projects only, for the same reason as the kebab below: the launch
+                seeds the project's default folder and Inbox has no registry row.
+                Wrapped so the hover-reveal CSS can address it alongside the kebab. */}
+            {project && (
+              <span className="tp-group-plus-wrap">
+                <ProjectPlusMenu project={project} onAddSession={openDraftForProject} />
+              </span>
+            )}
             {/* Same project menu as the rail (⋮ + right-click). Inbox has no
                 registry row to rename/delete, so named projects only. */}
             {project && (

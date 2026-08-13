@@ -97,13 +97,51 @@
 /* hover ⋮ on rail rows + table group headers (shared trigger style; the menu
    itself is the portalled .task-kebab-menu). Swaps with the count on hover so
    the row doesn't widen. */
-.tp-rail-kebab-wrap,
-.tp-group-kebab-wrap { display: none; flex: none; }
-.tp-group-kebab-wrap { margin-left: auto; }
+.tp-rail-kebab-wrap { display: none; flex: none; }
 .tp-rail-item:hover .tp-rail-kebab-wrap,
-.tp-rail-kebab-wrap[data-menu-open],
+.tp-rail-kebab-wrap[data-menu-open] { display: inline-flex; }
+/* The group-header kebab RESERVES its width at rest (visibility, not display:none):
+   the "+" beside it is rest-visible, so a zero-width kebab materializing on hover
+   reflowed the header and shifted that "+" 27px left at the exact moment the user
+   aimed at it — the click landed on the kebab instead. The home panel's identical
+   pair avoids this the same way (its kebab keeps its box via opacity: 0). */
+.tp-group-kebab-wrap { display: inline-flex; flex: none; margin-left: 0; visibility: hidden; }
 .tp-group-header:hover .tp-group-kebab-wrap,
-.tp-group-kebab-wrap[data-menu-open] { display: inline-flex; }
+.tp-group-kebab-wrap[data-menu-open] { visibility: visible; }
+
+/* Group-header "+" → a draft session in this project (opened on the home columns).
+   REST-VISIBLE at .45, unlike the kebab: it is the header's primary verb, and a
+   control that only exists on hover is a control nobody finds. `margin-left: auto`
+   moved here from the kebab so the pair still sits flush right as one cluster. */
+.tp-group-plus-wrap {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+}
+.tp-group-plus-wrap .todo-group-action-btn {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-muted);
+  opacity: 0.45;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+.tp-group-header:hover .tp-group-plus-wrap .todo-group-action-btn,
+.tp-group-plus-wrap .todo-group-action-btn:hover,
+.tp-group-plus-wrap .todo-group-action-btn:focus-visible {
+  opacity: 1;
+}
+.tp-group-plus-wrap .todo-group-action-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--fg);
+}
 .tp-rail-item:hover .tp-ri-count,
 .tp-rail-item:has(.tp-rail-kebab-wrap[data-menu-open]) .tp-ri-count { display: none; }
 .tp-rail-kebab-btn {

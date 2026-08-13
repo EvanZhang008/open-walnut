@@ -50,11 +50,15 @@
 
   /* Focus-tier colors (crosshair / satellite / hourglass icons) */
   --tier-focus: var(--accent);
-  --tier-satellite: var(--fg-muted);
-  --tier-backlog: #30B0C7; /* iOS teal — "stored, cool", between satellite grey and wait amber */
+  /* Satellite = iOS indigo. Was --fg-muted grey ("neutral bucket"), but as the
+     BIGGEST tier that made the whole tab read as colorless (user report
+     2026-08-11). Shares the session-ref indigo family — acceptable: session
+     refs are text pills in chat, tier marks are icons in the task strip. */
+  --tier-satellite: #5856D6;
+  --tier-backlog: #30B0C7; /* iOS teal — "stored, cool", between satellite indigo and wait amber */
   --tier-wait: #FF9F0A;
   /* All user-defined tiers share one hue (iOS system purple — distinct from
-     accent blue, satellite grey, backlog teal, wait amber, and the indigo session-ref). */
+     accent blue, satellite indigo, backlog teal, wait amber). */
   --tier-custom: #AF52DE;
 
   /* iOS material helpers — translucent chrome recipe shared by all glass
@@ -110,6 +114,7 @@
   --session-ref: #5E5CE6;
   --session-ref-subtle: rgba(94, 92, 230, 0.12);
   --session-ref-subtle-hover: rgba(94, 92, 230, 0.24);
+  --tier-satellite: #5E5CE6;
   --tier-backlog: #40C8E0;
   --tier-wait: #FFB340;
   --tier-custom: #BF5AF2;
@@ -2363,6 +2368,110 @@ input:focus, textarea:focus, select:focus {
   font-size: 12px;
 }
 
+/* Codex mode pill dropdown — ChatGPT-parity approval menu: icon column,
+   name + description rows, check on the RIGHT, full-access row in warning
+   orange. Opens UPWARD (pill sits in the bottom mode bar; downward would
+   clip under the composer). Bounded content (≤5 fixed rows) + max-height/
+   overflow keeps it inside the viewport per the menu hard rules. */
+.session-control-picker {
+  position: relative;
+  display: inline-flex;
+}
+
+.session-control-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 80;
+  display: block;
+  width: min(380px, calc(100vw - 24px));
+  max-height: min(420px, calc(100vh - 24px));
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--card-shadow-hover);
+}
+
+.session-control-menu-title {
+  display: block;
+  padding: 8px 10px 6px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.session-control-menu-divider {
+  display: block;
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border-strong);
+}
+
+.session-control-option {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 20px;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-control-option:hover {
+  background: var(--bg-hover, rgba(127, 127, 127, 0.12));
+}
+
+.session-control-option:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.session-control-option-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-muted);
+}
+
+.session-control-option-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.session-control-option-name {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.session-control-option-description {
+  overflow-wrap: anywhere;
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.session-control-option-check {
+  justify-self: end;
+  color: var(--fg-primary);
+  font-weight: 700;
+}
+
+/* Full access = ChatGPT's warning-orange row (name, description AND icon). */
+.session-control-option-danger .session-control-option-name,
+.session-control-option-danger .session-control-option-description,
+.session-control-option-danger .session-control-option-icon {
+  color: var(--warning, #e8833a);
+}
+
 .codex-model-option {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
@@ -2849,15 +2958,16 @@ input:focus, textarea:focus, select:focus {
   border-radius: 18px;
   font-size: 14px;
   line-height: 1.6;
-  /* Off-screen rows skip layout/paint entirely (browser-native lazy render).
-     With 30+ message rows × several session columns this is the difference
-     between re-laying-out the whole transcript on every streaming flush and
-     only the viewport. contain-intrinsic-size reserves an estimated height so
-     the scrollbar doesn't jump; the browser replaces it with the real height
-     once a row is rendered. Selection/find-in-page still work (spec renders
-     content for those). */
-  content-visibility: auto;
-  contain-intrinsic-size: auto 120px;
+  /* NO content-visibility here (removed 2026-08-13, inc-1786603990062).
+     `content-visibility:auto` + `contain-intrinsic-size: auto 120px` made
+     off-screen rows use a 120px GUESS for height; scrolling up re-rendered
+     each row at its true height (10px..3000px), shifting content under the
+     reader on every step — and the container's overflow-anchor:none means
+     nothing compensates. Measured on a real 340-msg session: 22 scrollHeight
+     jitter events (max 1070px single-step collapse) with it ON vs 0 with it
+     OFF ("scrolling up randomly teleports to top" class). The perf it bought
+     is marginal anyway: the DOM renders only the truncated tail
+     (INITIAL_RENDER_LIMIT=30 rows) — bounded without lazy rendering. */
 }
 
 .session-msg-user {
@@ -3002,14 +3112,45 @@ input:focus, textarea:focus, select:focus {
   50% { opacity: 1; transform: scale(1.15); }
 }
 
-.session-streaming-badge {
-  font-size: 10px;
-  padding: 1px 8px;
-  border-radius: 8px;
-  background: var(--accent);
-  color: #fff;
+/* Working indicator — label with a scanning walnut-brown underline + elapsed/token meta.
+   Rides the tail of the live region for the whole turn (replaced the old "Streaming" pill). */
+.session-working-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+.session-working-label {
   font-weight: 500;
-  animation: session-pulse 1.4s ease-in-out infinite;
+  position: relative;
+  padding-bottom: 3px;
+}
+/* Indeterminate scan: a soft light-brown light band sweeps under the static text. */
+.session-working-label::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 1.5px;
+  width: 100%;
+  background: linear-gradient(90deg, transparent, #d4b59a, transparent);
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: session-working-scan 1.6s ease-in-out infinite;
+}
+@keyframes session-working-scan {
+  0% { background-position: -40% 0; }
+  100% { background-position: 140% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-working-label::after { animation: none; opacity: 0.5; background-size: 100% 100%; }
+}
+.session-working-meta {
+  font-size: 12px;
+  opacity: 0.75;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Session system notification lines (compact, error, info) */
@@ -3122,6 +3263,13 @@ input:focus, textarea:focus, select:focus {
 .permission-request-resolved--allowed { color: var(--success); }
 .permission-request-resolved--denied { color: var(--error); }
 
+/* AskUserQuestion card — permission-card frame, QuestionPopover (qp-*) pills inside. */
+.ask-user-question-card { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, var(--bg-secondary)); }
+.ask-user-question { margin-top: 10px; }
+.ask-user-question .qp-question { font-size: 13px; margin-bottom: 8px; }
+.ask-user-answer-line { font-weight: 400; line-height: 1.5; }
+.permission-request-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
 /* ── Session Error Banner (persistent, shown at top of session chat) ── */
 .session-error-banner {
   display: flex;
@@ -3154,6 +3302,15 @@ input:focus, textarea:focus, select:focus {
 }
 .session-error-banner--reconnecting .session-error-banner-text {
   color: var(--warning, #f59e0b);
+}
+/* Idle-timeout auto-stop: routine housekeeping, not a failure — neutral, not red. */
+.session-error-banner--idle {
+  background: color-mix(in srgb, var(--fg-muted, #8e8e93) 7%, var(--bg-secondary));
+  border-color: color-mix(in srgb, var(--fg-muted, #8e8e93) 22%, transparent);
+}
+.session-error-banner--idle .session-error-banner-text {
+  color: var(--fg-secondary);
+  font-family: inherit;
 }
 
 /* ── Team Tab Bar (top-level: Lead | Team1 | Team2) ── */
@@ -6369,7 +6526,7 @@ input:focus, textarea:focus, select:focus {
   max-width: 100%;
   animation: contextBarSlideIn 0.15s ease;
 }
-.chat-input-task-pill.pill-attention {
+.chat-input-task-pill.pill-unread {
   background: rgba(255, 59, 48, 0.06);
 }
 .chat-input-task-pill .pill-close {
@@ -6589,6 +6746,15 @@ input:focus, textarea:focus, select:focus {
 }
 .chat-send-btn-icon:hover:not(:disabled) { filter: brightness(0.92); }
 .chat-send-btn-icon:active:not(:disabled) { transform: scale(0.94); }
+/* Stop primary (streaming + empty composer): same circle, muted danger-ish tone
+   so the square glyph reads as "stop", not "send". */
+.chat-stop-btn-icon {
+  background: var(--fg-muted);
+}
+.chat-stop-btn-icon:hover:not(:disabled) {
+  background: var(--danger, #ff3b30);
+  filter: none;
+}
 .chat-send-btn-icon:disabled {
   opacity: 0.4;
   cursor: not-allowed;
@@ -9393,15 +9559,15 @@ body.walnut-dragging {
   cursor: text;
 }
 
-.todo-pinned-card-attention {
+.todo-pinned-card-unread {
   background: rgba(255, 59, 48, 0.08);
 }
 
-.todo-pinned-card-attention:hover {
+.todo-pinned-card-unread:hover {
   background: rgba(255, 59, 48, 0.14);
 }
 
-.todo-pinned-card-attention.todo-pinned-card-active {
+.todo-pinned-card-unread.todo-pinned-card-active {
   background: rgba(255, 59, 48, 0.12);
 }
 
@@ -9597,6 +9763,31 @@ body.walnut-dragging {
   opacity: 0.7;
 }
 
+/* Tier header "+" → a draft session pinned to that tier (R8). Same control and
+   same hover-reveal as a project header's "+" — only the reveal SELECTOR differs,
+   since the hover target here is the sublabel row, not a project header. Pushed to
+   the row's right edge so it lands in the same place in both headers. */
+.todo-tier-action-wrap {
+  margin-left: auto;
+}
+.todo-pinned-sublabel .todo-group-action-btn {
+  font-size: 12px;
+  padding: 0 4px;
+}
+.todo-pinned-sublabel:hover .todo-group-action-btn,
+.todo-pinned-sublabel .todo-group-action-btn:focus-visible {
+  opacity: 1;
+}
+
+/* Tier view bar (single-tier tabs): the tier's own session "+" sits at the right
+   edge of the mode buttons — that tab has no sublabel row to host it. Pushed right
+   by the shared .todo-tier-action-wrap `margin-left: auto` above; only the metrics
+   change here so the glyph matches the 26px bar. */
+.todo-minibar .todo-group-action-btn {
+  font-size: 14px;
+  padding: 0 6px;
+}
+
 /* Tier icons (SVG, stroke-style: crosshair / planet+satellite / hourglass).
    Color IS the tier: Focus accent-blue, Satellite muted-grey,
    Wait amber (paused/blocked — the old grey half-circle read as Satellite). */
@@ -9647,11 +9838,11 @@ body.walnut-dragging {
   background: color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
-.todo-focus-card.todo-pinned-card-attention {
+.todo-focus-card.todo-pinned-card-unread {
   background: rgba(255, 59, 48, 0.08);
 }
 
-.todo-focus-card.todo-pinned-card-attention:hover {
+.todo-focus-card.todo-pinned-card-unread:hover {
   background: rgba(255, 59, 48, 0.14);
 }
 
@@ -10304,7 +10495,11 @@ body.walnut-dragging {
   flex-shrink: 0;
 }
 
-.task-attention-dot {
+/* Unread dot (task.unread) — the base rule is the FLEX-CHILD form, which is what
+   the pinned / Focus / Satellite cards use: they are flex rows, so the dot just
+   takes its own 7px slot before the phase icon. The list row overrides it to
+   absolute below (it has a dedicated left gutter and must not shift the icon). */
+.task-unread-dot {
   display: inline-block;
   flex-shrink: 0;
   width: 7px;
@@ -10313,14 +10508,25 @@ body.walnut-dragging {
   background: var(--error);
 }
 
-/* Attention dot — pinned into .todo-panel-item's left padding gutter so it never
+/* Pinned / Focus / Satellite cards are narrow flex rows (gap:6px). The dot must
+   NOT shift the phase circle (unread rows would misalign with their neighbors),
+   so cancel its ENTIRE flex footprint: 7px width + the one extra 6px gap it
+   introduces = 13px, split evenly. The dot then floats centered in the gap
+   between the drag handle and the phase circle — "just before the circle". */
+.todo-pinned-card > .task-unread-dot,
+.todo-focus-card > .task-unread-dot {
+  margin-left: -6.5px;
+  margin-right: -6.5px;
+}
+
+/* List-row form — pinned into .todo-panel-item's left padding gutter so it never
    shifts the phase icon. Two magic numbers, both load-bearing:
    - left:-13px is empirical: phase-icon left edge measured at x=90, dot at x=77 →
      13px gutter. It is RELATIVE to .todo-panel-item's padding-left (22px); changing
      that padding requires re-deriving this offset.
    - top:50%+translateY (NOT a fixed top:11px, which was tried and broke alignment
      when titles wrap to multiple lines) keeps it centered against the phase icon. */
-.todo-item-title-row .task-attention-dot {
+.todo-item-title-row .task-unread-dot {
   position: absolute;
   left: -13px;
   top: 50%;
@@ -10330,7 +10536,7 @@ body.walnut-dragging {
    (left:2px, 18px wide → occupies x≈[2,20] of .todo-panel-item). The default dot
    sits at x≈[9,16] and would overlap the chevron glyph. When a chevron is present,
    tuck the dot just right of the chevron box (item x≈15) so both stay legible. */
-.todo-panel-item:has(> .collapse-chevron) .todo-item-title-row .task-attention-dot {
+.todo-panel-item:has(> .collapse-chevron) .todo-item-title-row .task-unread-dot {
   left: -7px;
 }
 
@@ -11925,9 +12131,22 @@ body.walnut-dragging {
   opacity: 1;
 }
 
+/* The "+" is REST-VISIBLE (muted → full on hover); only the kebab stays fully
+   hover-only. A pure opacity:0 reveal made "start a session here" undiscoverable —
+   you had to already know it was there to hover the right row. .45 is quiet enough
+   that a long project list still reads as text, not as a column of buttons. */
+.todo-group-action-btn-plus {
+  opacity: 0.45;
+}
+
 .todo-group-action-btn:hover {
   color: var(--fg-primary);
   background: var(--bg-hover);
+  opacity: 1;
+}
+
+.todo-group-action-btn:focus-visible {
+  opacity: 1;
 }
 
 /* One-letter provider badge next to a project name (no badge = local).
@@ -12058,6 +12277,25 @@ body.walnut-dragging {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Project "+" on a by-project tier label — right-edge slot, same rest-visible
+   control as the All-view project header. `pointer-events: auto` is required: the
+   label itself is inert (`pointer-events: none`) so it never eats card clicks, and
+   the Inbox variant never re-enables them at all. */
+.tier-project-label-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  pointer-events: auto;
+}
+.tier-project-label .todo-group-action-btn {
+  font-size: 12px;
+  padding: 0 4px;
+}
+.tier-project-label:hover .todo-group-action-btn,
+.tier-project-label .todo-group-action-btn:focus-visible {
+  opacity: 1;
 }
 
 /* Starred tab golden accent */
@@ -14835,7 +15073,17 @@ a.task-kebab-info:hover {
        session surface is a viewport overlay, so this must outrank that style. */
     position: fixed !important;
     inset: 52px 0 0;
-    z-index: 30;
+    /* Must beat .chat-composer-overlay (z-index: 40). The chat column stays IN
+       FLOW behind this full-screen overlay (nothing hides it on mobile), and its
+       composer is absolutely positioned at the bottom — so at 30 that glass bar
+       painted ON TOP of the session panel's own composer and swallowed its
+       clicks. The session column looked perfect and simply refused to be typed
+       into (measured: elementFromPoint over the panel textarea returned the
+       CHAT textarea; Playwright reported ".chat-input-controls … intercepts
+       pointer events"). Raising this instead of lowering the chat keeps the
+       desktop stacking (composer above the chat scroller) untouched. 41, not
+       50: it must stay UNDER the sidebar overlay + mobile top bar, both 50. */
+    z-index: 41;
     display: flex;
     width: 100vw !important;
     height: calc(100dvh - 52px);
@@ -15862,12 +16110,12 @@ a.task-kebab-info:hover {
   border-color: var(--accent);
   color: var(--accent);
 }
-.sps-meta-toggle.active.attention {
+.sps-meta-toggle.active.unread {
   background: #fdecea;
   border-color: var(--error);
   color: var(--error);
 }
-[data-theme="dark"] .sps-meta-toggle.active.attention {
+[data-theme="dark"] .sps-meta-toggle.active.unread {
   background: #3a1e1b;
 }
 .sps-meta-toggle-icon {
@@ -15904,29 +16152,36 @@ a.task-kebab-info:hover {
 @container sps-footer (max-width: 520px) {
   .pin-tier-label { display: none; }
 }
+/* ONE segmented control (same shape as .sps-engine-toggle): the tiers are
+   mutually exclusive answers to one question, so they share a frame with
+   hairline dividers instead of reading as a row of unrelated pills. */
+.pin-tier-seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
 /* Unpicked tiers stay muted so the picked one reads as picked — the tier color
-   lands only on .active. Satellite's brand grey (--tier-satellite) is too quiet
-   to signal "selected", so the active state uses full --fg for it. */
+   lands only on .active. */
 .pin-tier-btn {
   padding: 2px 10px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
+  border: none;
   background: transparent;
   color: var(--fg-muted);
   font-size: 11px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.12s, border-color 0.12s;
+  transition: background 0.12s, color 0.12s;
 }
-.pin-tier-btn:hover { background: var(--accent-subtle); }
+.pin-tier-btn + .pin-tier-btn { border-left: 1px solid var(--border); }
+.pin-tier-btn:hover:not(:disabled) { background: var(--accent-subtle); }
 .pin-tier-btn:disabled { cursor: default; opacity: 0.55; }
 .pin-tier-focus.active { color: var(--tier-focus); }
-.pin-tier-satellite.active { color: var(--fg); }
+.pin-tier-satellite.active { color: var(--tier-satellite); }
 .pin-tier-backlog.active { color: var(--tier-backlog); }
 .pin-tier-wait.active { color: var(--tier-wait); }
 .pin-tier-custom.active { color: var(--tier-custom); }
 .pin-tier-btn.active {
-  border-color: currentColor;
   background: color-mix(in srgb, currentColor 12%, transparent);
   font-weight: 600;
 }
@@ -15985,6 +16240,16 @@ a.task-kebab-info:hover {
 }
 .sps-meta-more-popover .sps-meta-row {
   flex-wrap: nowrap;
+}
+/* Start / End / Due pills inside the More menu — same DatePicker trio as the
+   Quick Task form. Wraps (unlike the toggle rows): three dated pills can exceed
+   the popover's min-width and must not force it wide. */
+.sps-meta-dates {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 .sps-engine-toggle {
   display: inline-flex;
@@ -16583,6 +16848,63 @@ a.task-kebab-info:hover {
   word-break: break-word;
   margin: 0;
   font-family: var(--font-mono, 'SF Mono', 'Fira Code', 'Menlo', monospace);
+}
+.hook-card-disabled {
+  opacity: 0.55;
+}
+.hook-card-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+}
+.hook-card-badge-config { color: var(--accent); border-color: var(--accent); }
+.hook-card-badge-daemon-policy { color: var(--warning, #b8860b); border-color: var(--warning, #b8860b); }
+.hook-card-readonly {
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.hook-card-note {
+  font-size: 12px;
+  color: var(--fg-muted);
+  font-style: italic;
+  margin: 0;
+}
+.hook-group { margin-top: 20px; }
+.hook-group:first-of-type { margin-top: 0; }
+.hook-group-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 2px;
+}
+.hook-group-subtitle {
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin: 0 0 10px;
+}
+.hook-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+.hook-banner-dismiss {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
 }
 
 /* ===== Commands Page ===== */
@@ -18899,7 +19221,7 @@ td.usage-share-col {
   border-bottom: 2px solid var(--accent);
 }
 
-.dock-task-attention {
+.dock-task-unread {
   border: 2px solid var(--error);
 }
 
@@ -18939,7 +19261,7 @@ td.usage-share-col {
   color: var(--fg-muted);
 }
 
-.dock-task-phase-attention {
+.dock-task-phase-unread {
   color: var(--error);
 }
 
@@ -19995,6 +20317,330 @@ td.usage-share-col {
 }
 .pending-session-retry-btn:hover {
   background: var(--accent-hover, #0066D6);
+}
+
+/* ===== Draft Session Panel ("+" → an empty column, nothing on the server) =====
+   Same chrome as the pending panel: an IN-FLOW header + body + composer, i.e.
+   deliberately outside the G4 absolute-overlay layout (which needs the
+   --sp-header-h / --sp-composer-h vars only SessionPanel measures — hence the
+   `:not(.draft-session-panel)` exemptions in the glass region). */
+
+.draft-session-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* Bound draft (task ▶ Start on a title-only task): which task this session will
+   attach to, stated in the header next to the Draft badge. It absorbs ALL the
+   truncation on a narrow column — the panel's own title is two fixed words and
+   must stay readable, so the chip is the only shrinkable item on the row (its
+   `title` carries the full task title either way). */
+.draft-bound-task {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.draft-session-panel .session-panel-title,
+.draft-session-panel .session-panel-badge {
+  flex-shrink: 0;
+}
+
+/* ── Launch config stack (directly ABOVE the composer) ──
+   Everything about HOW this draft launches, stacked bottom-up so the controls sit
+   next to the two verbs they configure. Row order (R6) is DOM order in
+   DraftLaunchBar — quick-access folder chips → provider/task row (engine · pin
+   tier · ⋯ More) → cwd pill · project pill — with no `order` overrides anywhere,
+   so the JSX stays the single source of truth for the stack. The volatile chips
+   are topmost and the pills are pinned last, right against the composer. A normal
+   chat has no folder/project controls inside its composer, so these live just
+   OUTSIDE it. `position: relative` makes this the anchor for the folder picker,
+   which the shared rule already opens UPWARD from here. */
+.draft-launch-bar {
+  position: relative;
+  z-index: 20;   /* the picker + the More popover overlay the body above */
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 2px 6px;
+}
+.draft-launch-pills {
+  display: flex;
+  align-items: center;
+  /* LEFT-ALIGNED, side by side (v4): the pair reads as one "where does this run"
+     statement rather than two opposite corners of the panel. */
+  justify-content: flex-start;
+  gap: 6px;
+  min-width: 0;
+  /* WRAP, don't overflow: a session column can be ~270px wide and these two
+     pills carry user-sized labels (folder basename · host, project name). */
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+/* .session-action-chip is borderless by design INSIDE a session's composer row,
+   where its neighbours make it read as a control. On its own row it just looked
+   like two muted labels, so the folder/project pills get an outline here — same
+   affordance as the meta row's controls. Bigger type too: these two are the
+   most-clicked controls in the panel and were rendering at 10px. */
+.draft-launch-pills .session-action-chip {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 11px;
+  color: var(--fg);
+}
+.draft-launch-pills .session-action-chip:hover,
+.draft-launch-pills .session-action-chip-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* The MetaFooter inside the stack is the SAME component as the picker's, so it
+   arrives with the popover's footer chrome (top hairline, secondary fill). Strip
+   that here — in the stack it is a plain row among rows. */
+.draft-launch-bar .sps-meta-footer {
+  border-top: none;
+  background: transparent;
+  padding: 0;
+}
+
+/* The picker opens UPWARD from the stack, which is what the shared rule
+   (`bottom: 100%`) already does — it was born above a composer, and that is
+   exactly where this stack sits. Only the margin is restated so the popover
+   clears the pills.
+   The FIXED height stays (see .session-path-selector: browse and edit mode must
+   render the same box, else the path input and footer move under the cursor
+   between interactions). At min(44vh, 460px) opening upward from the composer it
+   fits inside the column at every viewport height this app supports, and
+   .session-panel's `overflow: hidden` bounds it regardless, so it can never spill
+   past the viewport. */
+.draft-launch-bar .session-path-selector {
+  bottom: 100%;
+  top: auto;
+  margin-bottom: 6px;
+}
+/* The MetaFooter's own "More" popover opens upward too — which is its default.
+   Re-anchoring is the point of dropping `position` on .sps-meta-more: the popover
+   then measures against .sps-meta-footer (the next positioned ancestor, exactly
+   row-width) instead of the ~70px More button, so `left/right: 0` gives it the
+   column's full width and its 260px min-width can't overhang either edge of a
+   ~270px column. Its outside-click closer tests DOM containment, not position, so
+   it is unaffected. */
+.draft-launch-bar .sps-meta-more {
+  position: static;
+  /* No `margin-left: auto` here (the shared rule's): in the picker's footer the
+     model select anchors the left and pushing More to the far right balances the
+     row, but this row starts at the engine toggle and the model select is gone —
+     an auto margin stranded "⋯ More" against the panel edge, a whole column away
+     from the controls it belongs to. Hugging the tier group is the approved shape. */
+  margin-left: 0;
+}
+.draft-launch-bar .sps-meta-more-popover {
+  bottom: calc(100% + 4px);
+  top: auto;
+  left: 0;
+  right: 0;
+  min-width: 0;
+}
+
+/* ── Empty body = ONE muted line ──
+   "What happens next", centered, nothing else: every control lives in the bottom
+   stack now, within reach of the composer. */
+.draft-session-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 16px;
+  text-align: center;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--fg-muted);
+}
+.draft-quick-hint {
+  max-width: 34ch;
+}
+
+/* Quick-access row — one chip per recently-used folder, labelled with the folder
+   BASENAME only (a "Start in " prefix repeated four times was noise). One click
+   sets folder AND project. */
+.draft-quick-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+  row-gap: 4px;
+}
+.draft-quick-chip {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.draft-quick-chip:hover {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.draft-quick-chip:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 2px;
+}
+/* The chip for the draft's CURRENT folder — stays in the row (stable membership,
+   see DraftLaunchBar) but reads as the selected state and takes no clicks. */
+.draft-quick-chip-active,
+.draft-quick-chip-active:hover {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--accent);
+  cursor: default;
+}
+
+/* ── AI back-fill marks (R9) ──
+   The background parse of what the user is typing may pre-fill the project, the
+   folder that project declares, and the tier/priority/star — each marked with the
+   SAME ✦ the Quick Task confirm panel uses, so "the AI guessed this" looks
+   identical everywhere. A later user edit clears the mark (and, separately, the
+   field's authority flag). */
+.draft-ai-badge {
+  margin-left: 4px;
+  color: var(--accent);
+  font-size: 9px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+/* An AI-filled pill gets the accent outline a hover would give it, so the row
+   reads as "look at these" without shouting. */
+.draft-launch-pills .session-action-chip-ai {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+/* The meta row wraps MetaFooter plus ONE row-level ✦ slot (the tier/priority/star
+   controls are shared with the picker's footer, so the badge can't live inside them
+   without teaching every other launcher surface about a draft-only concept).
+   The slot is an ABSOLUTE overlay pinned to the row's right edge — out of the flex
+   flow entirely. An in-flow leading slot (the first shape shipped) permanently
+   indented this row 11px relative to the chips row above and the pills row below,
+   which read as broken alignment; out of flow, the three rows share one left edge
+   and a landing suggestion can't nudge any control either. */
+.draft-meta-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  position: relative;
+}
+.draft-meta-row > .sps-meta-footer {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.draft-meta-ai-slot {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--accent);
+  font-size: 9px;
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* The composer wrapper stays positioned: ChatInput's own overlays (command
+   palette, file-mention popup) place themselves against it. */
+.draft-session-panel .session-panel-input {
+  position: relative;
+}
+
+/* The draft's controlsSlot row reuses .session-mode-bar wholesale (wrap +
+   row-gap: a session column can be ~270px wide) and carries the marker class
+   .draft-actions-bar purely as a DOM hook. Deliberately no `margin-left: auto` on
+   the action buttons: inside a WRAPPING flex row an auto margin pushes everything
+   after it onto its own line, which stranded "Start ↵" alone under the pills
+   (measured on a 300px column). */
+
+/* Model select, LEFTMOST in the row — the composer's equivalent of a real
+   session's model pill in its mode bar. Ghost styling (no resting border) so it
+   reads as a quiet readout that happens to be clickable, unlike the outlined
+   controls in the stack above; it also has to survive being the widest label in
+   the row ("Auto (Opus 5 1M)") on a ~270px column, hence the shrink + ellipsis. */
+.draft-actions-bar .draft-model-select {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-color: transparent;
+  color: var(--fg-muted);
+  font-size: 10.5px;
+}
+.draft-actions-bar .draft-model-select:hover {
+  border-color: var(--border);
+  color: var(--fg);
+}
+
+.draft-later-btn,
+.draft-start-btn {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, opacity 0.15s;
+}
+
+/* Secondary action — Start's tinted twin (same shape, accent-tinted fill
+   instead of solid): "keep it as a task" is a real exit, not an afterthought,
+   so it must read as a button at rest — but stay visually behind Start. */
+.draft-later-btn {
+  border: none;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-weight: 600;
+}
+.draft-later-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.draft-later-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Primary action — the accent-filled twin of .pending-session-retry-btn. */
+.draft-start-btn {
+  border: none;
+  background: var(--accent, #007AFF);
+  color: #fff;
+  font-weight: 600;
+}
+.draft-start-btn:hover {
+  background: var(--accent-hover, #0066D6);
+}
+
+/* Keyboard parity: these are the panel's two primary actions, so they must be
+   visibly reachable by Tab (same ring recipe as .app-modal-btn.primary). */
+.draft-later-btn:focus-visible,
+.draft-start-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 2px;
 }
 
 /* Inline retry button in session error banner */
@@ -24289,10 +24935,14 @@ a.file-link:hover {
   font-weight: 600;
 }
 
-/* Floating "Ask about this" pill at the selection */
+/* Floating "Ask about this" pill at the selection (SelectionAskPill).
+   Placement is fully MEASURED in the component (portalled to <body>,
+   left/top are final viewport coords) — no transform here: the old
+   translate(-50%, -100%) recipe broke whenever an ancestor's
+   transform/filter re-based the fixed containing block, parking the pill
+   ON TOP of the selected text. */
 .session-diff-ask-pill {
   position: fixed;
-  transform: translate(-50%, calc(-100% - 8px));
   z-index: 9100;
   background: var(--accent);
   color: #fff;
@@ -24314,6 +24964,13 @@ a.file-link:hover {
   transform: translateX(-50%);
   border: 5px solid transparent;
   border-top-color: var(--accent);
+}
+/* Flipped under the selection (no room above): arrow points up from the top edge. */
+.session-diff-ask-pill.below::after {
+  bottom: auto;
+  top: -5px;
+  border-top-color: transparent;
+  border-bottom-color: var(--accent);
 }
 
 /* ── Routines (panel + composer + cards) ── */
@@ -24670,6 +25327,28 @@ a.file-link:hover {
 .cloud-configure { display: flex; flex-direction: column; gap: 14px; }
 .cloud-configure-provider { margin: 0; font-size: 13px; }
 .cloud-configure-note { margin: 0; font-size: 12px; color: var(--text-secondary); max-width: 62ch; }
+.cloud-profile-field select { max-width: 340px; }
+/* Advisory, not a blocker: the probe can be a false negative, so it warns. */
+.cloud-configure-warn {
+  margin: 0; font-size: 12px; max-width: 62ch;
+  color: var(--warning, #b8860b);
+}
+.cloud-field-note { font-size: 12px; color: var(--text-secondary); max-width: 62ch; }
+/* "What will happen": the operator is about to create billable resources in
+   their own account, so this states the resources, the cost and the ownership
+   before the Start button is reachable. */
+.cloud-whathappens {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--bg-secondary);
+}
+.cloud-whathappens-title { margin: 0; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.cloud-whathappens-list {
+  margin: 0; padding-left: 18px;
+  display: flex; flex-direction: column; gap: 3px;
+  font-size: 12px; max-width: 62ch;
+}
+.cloud-whathappens-cost { margin: 0; font-size: 12px; color: var(--text-secondary); max-width: 62ch; }
 .cloud-fieldset {
   display: flex; flex-direction: column; gap: 10px; margin: 0;
   padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px;
@@ -24925,7 +25604,11 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .session-panel {
   position: relative;
 }
-.session-panel:not(.pending-session-panel) > .session-panel-header {
+/* The two placeholder panels (pending / draft) are EXEMPT from the overlay
+   layout: they render their own flow header + body and never set
+   --sp-header-h / --sp-composer-h (only SessionPanel's ResizeObservers do), so
+   an absolute header would float over a body with zero compensating padding. */
+.session-panel:not(.pending-session-panel):not(.draft-session-panel) > .session-panel-header {
   position: absolute;
   top: 0;
   left: 0;
@@ -24938,7 +25621,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
    Wrapper = transparent padding (glass lives on the card). pointer-events
    none so the 8px gutter around the card doesn't swallow clicks on content
    scrolling beneath. */
-.session-panel .session-panel-input {
+.session-panel:not(.draft-session-panel) .session-panel-input {
   position: absolute;
   bottom: 0;
   left: 0;
@@ -25100,12 +25783,13 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 /* ── The material (gated): milky bg + blur, hairlines, soft shadow ── */
 @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
 
-  /* Session header — full-width bar: hairline bottom, NO radius, no shadow. */
-  .session-panel:not(.pending-session-panel) > .session-panel-header {
+  /* Session header — full-width bar: hairline bottom, NO radius, no shadow.
+     Placeholder panels keep their in-flow opaque header (see the layout rule). */
+  .session-panel:not(.pending-session-panel):not(.draft-session-panel) > .session-panel-header {
     background: transparent;
     border-bottom: 0.5px solid var(--border);
   }
-  .session-panel:not(.pending-session-panel) > .session-panel-header::before {
+  .session-panel:not(.pending-session-panel):not(.draft-session-panel) > .session-panel-header::before {
     content: '';
     position: absolute;
     inset: 0;
@@ -25119,14 +25803,14 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
      the same soft-edged wash as the chat overlay so the rows ABOVE the card
      (notes bar, recap tip, send-error line, queue indicator) are never bare
      over scrolling transcript text. Soft top edge, no border/radius/shadow. */
-  .session-panel .session-panel-input {
+  .session-panel:not(.draft-session-panel) .session-panel-input {
     background: transparent;
     pointer-events: none;
   }
-  .session-panel .session-panel-input > * {
+  .session-panel:not(.draft-session-panel) .session-panel-input > * {
     pointer-events: auto;
   }
-  .session-panel .session-panel-input::before {
+  .session-panel:not(.draft-session-panel) .session-panel-input::before {
     content: '';
     position: absolute;
     /* Fade lives above the content box (see the chat overlay note) so the notes
@@ -25235,8 +25919,8 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
    summary panel, error banners) must clear the absolute header — only the
    FIRST one; the rest stack naturally below it. The split is exempt (its
    content is what scrolls under the glass). */
-.session-panel:not(.pending-session-panel) > .session-panel-header + .session-action-panel,
-.session-panel:not(.pending-session-panel) > .session-panel-header + .session-error-banner {
+.session-panel:not(.pending-session-panel):not(.draft-session-panel) > .session-panel-header + .session-action-panel,
+.session-panel:not(.pending-session-panel):not(.draft-session-panel) > .session-panel-header + .session-error-banner {
   margin-top: calc(var(--sp-header-h, 76px) + 6px);
 }
 
@@ -25454,7 +26138,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   background: var(--fg-muted);
 }
 .cal-rail-tier-focus { background: var(--tier-focus, var(--accent)); }
-.cal-rail-tier-satellite { background: var(--fg-muted); }
+.cal-rail-tier-satellite { background: var(--tier-satellite, var(--fg-muted)); }
 .cal-rail-tier-backlog { background: var(--tier-backlog); }
 .cal-rail-tier-wait { background: var(--tier-wait); }
 .cal-rail-tier-custom { background: var(--accent-subtle, var(--accent)); border: 1px solid var(--accent); box-sizing: border-box; }
@@ -26639,6 +27323,48 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   color: var(--fg-muted);
   font-size: 12px;
 }
+
+/* ===== One-click ▶ Start on task rows ===== */
+
+/* Hover-revealed, mirroring .task-kebab-btn (~L12751): opacity 0 by default so a
+   dense list stays quiet, 1 on the owning row/card's :hover AND on
+   :focus-visible so the button is reachable by keyboard (Tab) — an
+   opacity-0-only reveal is invisible to a keyboard user even while focused. */
+.task-start-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 10px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+
+.todo-panel-item:hover .task-start-btn,
+.todo-focus-card:hover .task-start-btn,
+.todo-pinned-card:hover .task-start-btn,
+.task-start-btn:focus-visible {
+  opacity: 1;
+}
+
+.task-start-btn:hover {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  opacity: 1;
+}
+
+/* No margin rules on purpose: both host rows put a `flex: 1` title before this
+   button, so the kebab's own `margin-left: auto` has no free space left to claim
+   and the ▶ lands flush against it as one action cluster. */
 
 /* ── ProjectSourcePicker — provider chips under the New-Project inputs ──
    Shared by the /tasks rail and the home panel's NewProjectRow. */

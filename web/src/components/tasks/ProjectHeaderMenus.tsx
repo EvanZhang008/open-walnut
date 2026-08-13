@@ -1,15 +1,21 @@
 /**
  * ProjectHeaderMenus — the two hover actions on a project group header:
  *
- *   ProjectPlusMenu  ("+")  → Add task (opens the group's ghost row) / Add session (with task)
+ *   ProjectPlusMenu  ("+")  → opens a DRAFT SESSION column in this project
  *   ProjectKebabMenu ("⋮")  → Details / Favorite / Rename… / Delete…
  *
- * Both portal to <body> with useMenuPlacement — same pattern (and same
- * .task-kebab-menu styling) as TaskKebabMenu, so they inherit flip/clamp
- * behavior and the theme. The call site gates by group: the plus menu renders
- * for every group INCLUDING Inbox ('' — Add task is meaningful there; Add
- * session is omitted since it seeds project defaults), while the kebab is
- * named-projects-only (Inbox has no registry row to rename/delete/detail).
+ * The "+" is a DIRECT button, not a menu (R7). It used to drop a two-item menu
+ * (Add task / Add session), which cost a click on both branches for no decision
+ * the header couldn't already make: "add a task" is already one click away as the
+ * ghost row at the bottom of every group, so the header's "+" now means the OTHER
+ * thing — start working in this project. The component name/export is unchanged
+ * because the ~2 browser specs and the TodoPanel call site address it by name.
+ *
+ * The kebab still portals to <body> with useMenuPlacement — same pattern (and same
+ * .task-kebab-menu styling) as TaskKebabMenu, so it inherits flip/clamp behavior
+ * and the theme. The call site gates by group: the kebab is named-projects-only
+ * (Inbox has no registry row to rename/delete/detail), and so is the "+" (a
+ * session launch seeds the project's default folder, which Inbox cannot have).
  */
 
 import { useState, useRef, useCallback, useEffect } from 'react';
@@ -62,51 +68,65 @@ function useHeaderMenu() {
   return { open, setOpen, btnRef, menuRef, menuPos, closeMenu, openAtCursor, setCursorAnchor };
 }
 
-// ── "+" — quick create inside this project ──────────────────────────────────
+// ── "+" — start a session in this project (ONE click, no menu) ──────────────
 
-export function ProjectPlusMenu({ project, onAddTask, onAddSession }: {
-  /** '' = Inbox (Add-task-only). */
+export function ProjectPlusMenu({ project, onAddSession }: {
   project: string;
-  /** Open the group's inline ghost add row and focus its input. */
-  onAddTask: (project: string) => void;
-  /** Open the session launcher seeded with this project (default cwd/host). */
+  /** Open a new draft session column seeded with this project (and its default
+   *  cwd/host, patched in when the project detail resolves). Omit to render
+   *  nothing — a group with no session route has no "+" at all. */
   onAddSession?: (project: string) => void;
 }) {
-  const { open, setOpen, btnRef, menuRef, menuPos, closeMenu } = useHeaderMenu();
+  if (!onAddSession) return null;
   const label = project || 'Inbox';
   return (
-    <span className="todo-group-action-wrap" data-menu-open={open || undefined}>
+    <span className="todo-group-action-wrap">
       <button
-        ref={btnRef}
-        className="todo-group-action-btn"
-        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
-        title={`Add to ${label}…`}
-        aria-label={`Add to ${label}`}
-        aria-expanded={open}
+        // `-plus` modifier: the "+" is legible AT REST (muted, full on hover) while
+        // the kebab stays hover-only. A discoverability call — a control nobody can
+        // see until they happen to hover the right row may as well not exist, and
+        // "start working here" is the header's primary verb.
+        className="todo-group-action-btn todo-group-action-btn-plus"
+        onClick={(e) => { e.stopPropagation(); onAddSession(project); }}
+        // dnd-kit: the header IS the group's drag handle, so a pointerdown here
+        // would otherwise arm a project reorder while the user is just clicking.
+        onPointerDown={(e) => e.stopPropagation()}
+        title={`New session in ${label}`}
+        aria-label={`New session in ${label}`}
       >
         +
       </button>
-      {open && createPortal(
-        <div ref={menuRef} className="task-kebab-menu" style={menuPlacementStyle(menuPos)}>
-          <button
-            className="task-kebab-item"
-            onClick={(e) => { e.stopPropagation(); closeMenu(); onAddTask(project); }}
-          >
-            <span className="task-kebab-icon">{ICONS.ICON_PHASE_TODO}</span>
-            <span>Add task</span>
-          </button>
-          {onAddSession && (
-            <button
-              className="task-kebab-item"
-              onClick={(e) => { e.stopPropagation(); closeMenu(); onAddSession(project); }}
-            >
-              <span className="task-kebab-icon">▷</span>
-              <span>Add session (with task)</span>
-            </button>
-          )}
-        </div>,
-        document.body,
-      )}
+    </span>
+  );
+}
+
+// ── "+" — start a session pinned to this tier (R8; same control as above) ────
+
+export function TierPlusButton({ tier, label, onAddSession }: {
+  /** Built-in tier name ('focus' | 'satellite' | 'backlog' | 'wait') or a custom
+   *  tier id (`ct_*`) — whatever `meta.pinTier` accepts. */
+  tier: string;
+  /** Human label for the tooltip ("Focus", "Satellite", a custom tier's name). */
+  label: string;
+  /** Open a draft session column with this tier preset. */
+  onAddSession: (tier: string) => void;
+}) {
+  return (
+    <span className="todo-group-action-wrap todo-tier-action-wrap">
+      <button
+        // Rest-visible like the project "+" — see the note there.
+        className="todo-group-action-btn todo-group-action-btn-plus"
+        // The tier sublabel is a click-to-collapse row, so BOTH events have to
+        // stop here: the click would fold the section, the pointerdown would arm
+        // the pinned area's drag sensors.
+        onClick={(e) => { e.stopPropagation(); onAddSession(tier); }}
+        onPointerDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+        title={`New session in ${label}`}
+        aria-label={`New session in ${label}`}
+      >
+        +
+      </button>
     </span>
   );
 }

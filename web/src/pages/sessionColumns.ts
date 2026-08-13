@@ -11,9 +11,17 @@
 // the locked region. Unlock symmetrically drops the slot at the right edge of
 // the unlocked region, next to the boundary the user just crossed.
 
+import { isPlaceholderColumnId } from '@/utils/column-ids';
+
 export interface SessionSlot {
   id: string;
   locked: boolean;
+}
+
+/** Slots the trim may never evict: user-pinned, or a placeholder mid-flight
+ *  (`draft:`/`pending:`) whose column holds state that lives nowhere else. */
+function trimExempt(slot: SessionSlot): boolean {
+  return slot.locked || isPlaceholderColumnId(slot.id);
 }
 
 export function splitByLock(cols: SessionSlot[]): { unlocked: SessionSlot[]; locked: SessionSlot[] } {
@@ -24,11 +32,18 @@ export function splitByLock(cols: SessionSlot[]): { unlocked: SessionSlot[]; loc
 }
 
 /**
- * Shrink to `max` total columns by dropping unlocked slots from the RIGHT, and
+ * Shrink to `max` total columns by dropping evictable slots from the RIGHT, and
  * leaving every surviving slot exactly where it was.
  *
- * Locked slots are exempt — they can even push the total past `max` (visible
- * overflow is preferred over evicting something the user explicitly pinned).
+ * Two kinds of slot are exempt and can push the total past `max`:
+ *   - LOCKED — visible overflow is preferred over evicting a user's pin.
+ *   - PLACEHOLDER (`draft:`/`pending:`) — the column IS the state. A draft holds
+ *     the user's unsent text; a pending column holds an in-flight launch whose
+ *     only handle is that id. Trimming either destroys data the user cannot get
+ *     back (this also fixes the pre-existing "pending column evicted mid-HTTP"
+ *     bug: the launch completed into a column that no longer existed).
+ * The overflow license is self-expiring — a placeholder becomes a real id (or is
+ * closed), which makes it evictable again and the next trim resolves the strip.
  *
  * IT MUST PRESERVE THE INCOMING ORDER. This used to return
  * `[...unlocked.slice(0, keep), ...locked]`, i.e. it rebuilt the strip from the
@@ -46,13 +61,13 @@ export function splitByLock(cols: SessionSlot[]): { unlocked: SessionSlot[]; loc
  */
 export function trimUnlockedToMax(cols: SessionSlot[], max: number): SessionSlot[] {
   if (cols.length <= max) return cols;
-  // How many unlocked slots must go. Locked ones are never candidates, so when
-  // they alone exceed `max` this drops every unlocked slot and still overflows.
-  let toDrop = cols.length - Math.max(max, cols.filter(c => c.locked).length);
+  // How many slots must go. Exempt ones are never candidates, so when they alone
+  // exceed `max` this drops every evictable slot and still overflows.
+  let toDrop = cols.length - Math.max(max, cols.filter(trimExempt).length);
   if (toDrop <= 0) return cols;
   const doomed = new Set<SessionSlot>();
   for (let i = cols.length - 1; i >= 0 && toDrop > 0; i--) {
-    if (cols[i].locked) continue;
+    if (trimExempt(cols[i])) continue;
     doomed.add(cols[i]);
     toDrop--;
   }
@@ -81,6 +96,37 @@ export function addSessionColumn(cols: SessionSlot[], id: string, triageOpen: bo
   const { unlocked, locked } = splitByLock(cols);
   if (locked.length >= max) return cols; // fully locked — caller shows toast
   return trimUnlockedToMax([{ id, locked: false }, ...unlocked, ...locked], max);
+}
+
+/**
+ * Unconditional leftmost insert — the "overflow license".
+ *
+ * Contract, and every clause of it is deliberate: NO max check, NO trim, NO
+ * all-locked rejection. The user pressed "+"; a new column MUST appear, even
+ * when every panel is locked and the strip is already at max. Overflow is the
+ * accepted cost (hard requirement of the one-verb-"New" design) and it expires
+ * on its own: the inserted id is a placeholder, so it's trim-exempt only while
+ * it stays one — the moment it becomes a real session (or is closed) the normal
+ * eviction rules apply and the strip shrinks back.
+ *
+ * Never returns `cols` reference-equal for a NEW id, so callers must not read a
+ * same-reference result as a rejection signal (unlike `addSessionColumn`, this
+ * function has no rejection path). An id already in the strip is moved rather
+ * than duplicated, matching `addSessionColumn`'s existing-id behavior.
+ */
+export function forceAddSessionColumn(cols: SessionSlot[], id: string): SessionSlot[] {
+  const existing = cols.find(c => c.id === id);
+  if (existing) {
+    const filtered = cols.filter(c => c.id !== id);
+    const { unlocked, locked } = splitByLock(filtered);
+    // Locked branch re-uses the existing object reference (React key+memo
+    // identity — see addSessionColumn); unlocked moves to leftmost.
+    return existing.locked
+      ? [...unlocked, existing, ...locked]
+      : [{ id, locked: false }, ...unlocked, ...locked];
+  }
+  const { unlocked, locked } = splitByLock(cols);
+  return [{ id, locked: false }, ...unlocked, ...locked];
 }
 
 export function removeSessionColumn(cols: SessionSlot[], id: string): SessionSlot[] {

@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { MAX_PANELS } from '@/hooks/useSessionPanelMode';
 import { projectToUrl, projectFromUrl } from '@/components/tasks/task-tabs';
+import { isPlaceholderColumnId } from '@/utils/column-ids';
 
 // `?proj=` <-> internal tab id mapping lives in components/tasks/task-tabs.ts,
 // next to the sentinel definitions it encodes (and unit-testable without this
@@ -46,8 +47,9 @@ function buildSearch(params: {
   activeProject?: string;
 }): string {
   const sp = new URLSearchParams();
-  // Only persist real session IDs (not pending: placeholders).
-  const sessions = params.sessionColumns.filter(s => !s.startsWith('pending:'));
+  // Only persist real session IDs (draft:/pending: placeholders resolve to
+  // nothing on reload, and a shared link must not carry them).
+  const sessions = params.sessionColumns.filter(s => !isPlaceholderColumnId(s));
   sessions.slice(0, MAX_URL_SESSIONS).forEach((id, i) => sp.set(SESSION_PARAMS[i], id));
   if (params.focusedTaskId) sp.set('task', params.focusedTaskId);
   if (params.activeProject) sp.set('proj', projectToUrl(params.activeProject));

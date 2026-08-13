@@ -21,14 +21,17 @@ import * as ICONS from '../common/Icons';
 import type { TaskPriority } from '@open-walnut/core';
 import { TodoSearchBar } from './TodoSearchBar';
 import { NewLauncherButton } from './NewLauncherButton';
-import { ProjectPlusMenu, ProjectKebabMenu } from './ProjectHeaderMenus';
+import { ProjectPlusMenu, ProjectKebabMenu, TierPlusButton } from './ProjectHeaderMenus';
+import { TaskStartButton } from './TaskStartButton';
 import { ProjectSourceBadge } from './ProjectSourceBadge';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { createProject } from '@/api/projects';
 import { ProjectSourcePicker } from './ProjectSourcePicker';
 import { log } from '@/utils/log';
+import { visibleInterval } from '@/utils/page-visibility';
 import {
   mapServerTaskSearchResults,
+  rankOpenTasksFirst,
   taskReferenceMatchField,
 } from './search-results';
 import { useTaskSearch } from '@/hooks/useTaskSearch';
@@ -127,6 +130,10 @@ interface TodoPanelProps {
   /** Called when switching to manual sort — baker freezes current displayed order into the store. */
   onBakeOrder?: (orderedIds: string[]) => void;
   onOpenSession?: (sessionId: string) => void;
+  /** One-click "▶ Start": launch a session FOR this task (reusing it, never
+   *  creating a second one). Only offered for tasks that don't already own a
+   *  session — those get the open-session affordances instead. */
+  onStartSession?: (task: Task) => void;
   onOpenTriageForTask?: (taskId: string) => void;
   onPinTask?: (taskId: string) => void;
   onUnpinTask?: (taskId: string) => void;
@@ -160,9 +167,12 @@ interface TodoPanelProps {
   /** Toolbar "+" — opens the todo-anchored launcher popover (Session | Task
    *  tabs, Session default) rendered by MainPage inside the task panel. */
   onOpenLauncher?: () => void;
-  /** Project header "+ → Add session": open the launcher's Session tab seeded
-   *  with this project (path prefilled from the project's default cwd/host). */
+  /** Project header "+": open a draft session column seeded with this project
+   *  (path prefilled from the project's default cwd/host). */
   onOpenLauncherForProject?: (project: string) => void;
+  /** Pin-tier header "+": open a draft session column with `meta.pinTier` preset
+   *  to this tier (built-in name or a `ct_*` custom tier id). */
+  onOpenLauncherForTier?: (tier: string) => void;
   /** Virtual-group name registry: group_id → label. */
   taskGroups?: Record<string, string>;
   /** Group ids hidden from the Focus (pinned) area — their cards are skipped there. */
@@ -244,6 +254,15 @@ const CHEVRON_ICON = '\u25B6'; // ▶ — used by all collapse-chevron buttons (
 // Shared empty set for the tierGraceUnion fast path — one identity so memos
 // keyed on the result don't churn. Never mutate.
 const EMPTY_ID_SET: Set<string> = new Set<string>();
+
+/** Human label for a tier value — a built-in name capitalized, a custom id (`ct_*`)
+ *  resolved through the registry. Same rule as MainPage.tierLabel; kept local
+ *  because the panel must not depend on its host page. */
+function tierDisplayLabel(tier: string, customTiers?: CustomTierDef[]): string {
+  const custom = customTiers?.find((t) => t.id === tier);
+  if (custom) return custom.label;
+  return `${tier[0]?.toUpperCase() ?? ''}${tier.slice(1)}`;
+}
 
 // Action icons: imported from shared Icons.tsx via ICONS.*
 
@@ -380,6 +399,8 @@ interface SortableTaskItemProps {
   onSetPriority?: (id: string, priority: string) => void;
   onUpdateTitle?: (id: string, title: string) => void;
   onOpenSession?: (sessionId: string) => void;
+  /** One-click ▶ — launch a session for this task (see TaskStartButton). */
+  onStartSession?: (task: Task) => void;
   onExpandDetail?: (task: Task) => void;
   onClearFocus?: () => void;
   onPinTask?: (taskId: string) => void;
@@ -389,6 +410,7 @@ interface SortableTaskItemProps {
   onSetStartDate?: (taskId: string, date: string | null) => void;
   onUnparent?: (taskId: string) => void;  // Remove parent_task_id (promote to top-level)
   onMoveUp?: (taskId: string) => void;    // Swap with previous sibling
+  onMoveToProject?: (taskId: string, project: string) => void;  // Kebab "Project" select
   isPinned?: boolean;
   pinnedTier?: FocusTier;
   searchContext?: string; // Project context pill shown in search mode
@@ -538,7 +560,7 @@ function buildTierGroupMeta(displayed: Task[], labels?: Record<string, string>):
   return map;
 }
 
-function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onStar, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, onUnparent, onMoveUp, isPinned, pinnedTier, searchContext, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup }: SortableTaskItemProps) {
+function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onStar, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onStartSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveToProject, isPinned, pinnedTier, searchContext, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup }: SortableTaskItemProps) {
   const {
     attributes,
     listeners,
@@ -777,9 +799,10 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVan
       {/* — content area: single-line [attention] [phase] [title] [badges] [⋮] — */}
       <div className="todo-item-content">
         <div className="todo-item-title-row">
-          {/* Attention dot — leftmost, keeps everything on one line */}
-          {task.needs_attention && !isDone && (
-            <span className="task-attention-dot" role="img" aria-label="Needs your attention" title="Needs your attention" />
+          {/* Unread dot — leftmost, keeps everything on one line. Clears when the
+              user opens the task (MainPage.handleFocusTask marks it read). */}
+          {task.unread && !isDone && (
+            <span className="task-unread-dot" role="img" aria-label="Unread — agent output you haven't seen" title="Unread — click to open and mark read" />
           )}
           {/* Phase icon — one click toggles To Do ↔ Complete */}
           <button
@@ -830,6 +853,8 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVan
           {isDone && task.completed_at && (
             <span className="task-completed-time">{timeAgo(task.completed_at)}</span>
           )}
+          {/* One-click ▶ Start — hover-revealed, before the kebab */}
+          <TaskStartButton task={task} isDone={isDone} onStartSession={onStartSession} />
           {/* Kebab menu — all actions consolidated */}
           <TaskKebabMenu
             task={task}
@@ -846,10 +871,12 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVan
             onUnpinTask={onUnpinTask}
             onSetTier={onSetTier}
             onOpenSession={onOpenSession}
+            onStartSession={onStartSession}
             onSetDate={onSetDate}
             onSetStartDate={onSetStartDate}
             onUnparent={onUnparent}
             onMoveUp={onMoveUp}
+            onMoveToProject={onMoveToProject}
             onUngroup={onUngroupTask}
             isGroupHidden={isGroupHidden}
             onUnhideGroup={onUnhideGroup}
@@ -1622,7 +1649,7 @@ const RECENT_VISIBLE_MAX = 3;
 // Mirrors the built-in Wait sub-group JSX exactly, but lives in its own component
 // because each tier needs its own useResizableHeight hook and the number of custom
 // tiers is dynamic (hooks can't run in a loop inside TodoPanel itself).
-function CustomTierSubgroup({ def, isAll, folded, collapsed, onToggle, visibleIds, children, isEmpty, count, onAdd }: {
+function CustomTierSubgroup({ def, isAll, folded, collapsed, onToggle, visibleIds, children, isEmpty, count, onAdd, onAddSession }: {
   def: CustomTierDef;
   isAll: boolean;
   /** Chevron-folded in the stacked view (content hidden). */
@@ -1636,6 +1663,8 @@ function CustomTierSubgroup({ def, isAll, folded, collapsed, onToggle, visibleId
   isEmpty: boolean;
   count: number;
   onAdd: (title: string) => Promise<unknown>;
+  /** Header "+" → a draft session pinned to this custom tier (R8). */
+  onAddSession?: (tier: string) => void;
 }) {
   const resize = useResizableHeight(`open-walnut-focus-tier-height-${def.id}`, { min: 60, max: 1200 });
   return (
@@ -1646,6 +1675,7 @@ function CustomTierSubgroup({ def, isAll, folded, collapsed, onToggle, visibleId
         <span className="todo-pinned-sublabel-icon todo-tier-icon-custom">{ICONS.ICON_TIER_CUSTOM}</span>
         <span className="todo-pinned-sublabel-text">{def.label}</span>
         <span className="todo-pinned-sublabel-count">{count}</span>
+        {onAddSession && <TierPlusButton tier={def.id} label={def.label} onAddSession={onAddSession} />}
       </div>
       )}
       {!folded && (
@@ -1833,14 +1863,18 @@ interface RecentCardProps {
   onExpandDetail?: (task: Task) => void;
   onClearFocus?: () => void;
   onOpenSession?: (sessionId: string) => void;
+  /** One-click ▶ — launch a session for this task (see TaskStartButton). */
+  onStartSession?: (task: Task) => void;
   onSetPhase?: (id: string, phase: string) => void;
   onUpdateTitle?: (id: string, title: string) => void;
   onDelete?: (id: string) => void;
+  /** Move this task to another project ('' = Inbox) — kebab "Project" select. */
+  onMoveToProject?: (taskId: string, project: string) => void;
 }
 
 // ── SortableRecentCard — draggable recent-activity card with kebab menu ──
 
-function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onPinTask, onUnpinTask, isPinned, pinnedTier, pinnedTierLabel, onSetPriority, onSetDate, onSetStartDate, onStar, onSetTier, onExpandDetail, onClearFocus, onOpenSession, onSetPhase, onUpdateTitle, onDelete }: RecentCardProps) {
+function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onPinTask, onUnpinTask, isPinned, pinnedTier, pinnedTierLabel, onSetPriority, onSetDate, onSetStartDate, onStar, onSetTier, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject }: RecentCardProps) {
   // Static cards: done (tiers filter them out — a drag would silently vanish) and
   // pinned (already placed in a tier; that tier card is the draggable one). Static
   // cards register under a NAMESPACED sortable id — the raw task.id is already
@@ -1915,7 +1949,11 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
   }, [onUpdateTitle]);
 
   const isDone = task.status === 'done' || task.phase === 'COMPLETE';
-  const needsAttention = !isDone && (task.phase === 'AGENT_COMPLETE' || task.phase === 'AWAIT_HUMAN_ACTION');
+  // Read the STORED marker, never re-derive it from phase. Deriving is what made
+  // this card stay red after the list row's dot had already cleared: opening a
+  // task marks it read but does NOT change its phase, so a phase-derived card
+  // had no way to go quiet. One field, one truth, every surface.
+  const unread = !isDone && Boolean(task.unread);
   // Done cards show completion time (that's what "recently completed" means here)
   const ago = timeAgo((isDone && task.completed_at) || task.last_session_update || task.created_at);
 
@@ -1930,7 +1968,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
       ref={setNodeRef}
       style={style}
       data-task-id={task.id}
-      className={`todo-pinned-card${isFocused ? ' todo-pinned-card-active' : ''}${needsAttention ? ' todo-pinned-card-attention' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}`}
+      className={`todo-pinned-card${isFocused ? ' todo-pinned-card-active' : ''}${unread ? ' todo-pinned-card-unread' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}`}
       onClick={(e) => {
         if (isEditing) return;
         if ((e.target as HTMLElement).closest('.pinned-phase-picker')) return;
@@ -1950,6 +1988,11 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
         >
           {ICONS.tierIcon(pinnedTier)}
         </span>
+      )}
+      {/* Unread dot — the tinted background alone was too subtle on a dense
+          pinned strip, and the user asked for the dot on these cards too. */}
+      {unread && (
+        <span className="task-unread-dot" role="img" aria-label="Unread — agent output you haven't seen" title="Unread — click to open and mark read" />
       )}
       {/* Phase icon — one click toggles To Do ↔ Complete */}
       <button
@@ -1981,6 +2024,8 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
         {task.title}
       </span>
       {ago && <span className="todo-recent-ago" title={(isDone && task.completed_at) || task.last_session_update}>{ago}</span>}
+      {/* One-click ▶ Start — hover-revealed, before the kebab */}
+      <TaskStartButton task={task} isDone={isDone} onStartSession={onStartSession} />
       <TaskKebabMenu
         task={task}
         isFocused={isFocused}
@@ -1998,6 +2043,8 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
         onUnpinTask={onUnpinTask}
         onSetTier={onSetTier}
         onOpenSession={onOpenSession}
+        onStartSession={onStartSession}
+        onMoveToProject={onMoveToProject}
         onDelete={onDelete}
       />
     </div>
@@ -2006,7 +2053,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, openSessionIds, openSessionTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, openSessionIds, openSessionTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden }: TodoPanelProps) {
   // TEMP drag-flash trace — remove after diagnosis
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
@@ -2086,8 +2133,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // pill, which renders in the "All" view too, so the timer runs always.
   const [_tick, setTick] = useState(0);
   useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 60_000);
-    return () => clearInterval(id);
+    // visibleInterval: hidden tabs skip the re-render tick; one catch-up on return.
+    return visibleInterval(() => setTick((t) => t + 1), 60_000);
   }, []);
 
   const integrations = useIntegrations();
@@ -3744,10 +3791,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // Explicit toolbar filters ONLY (priority, phase, session, source, tag, date) —
   // deliberately excludes the project and Starred tabs, which are navigation
-  // affordances rather than refinement choices. Used by both search (which spans
-  // all projects) and the Pinned/Recent visibility set below, so a pin/recent
-  // card is never hidden merely because the user navigated to a different project
-  // tab — pins are a cross-project focus view by design.
+  // affordances rather than refinement choices. Used by the Pinned/Recent
+  // visibility set below, so a pin/recent card is never hidden merely because the
+  // user navigated to a different project tab — pins are a cross-project focus
+  // view by design. NOT used by search: search ignores all view controls
+  // (see `searchMatches`).
   const passesExplicitFilters = useCallback((t: Task): boolean => {
     if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
     if (phaseFilter && !matchesPhaseFilter(phaseFilter, t.phase)) return false;
@@ -3758,17 +3806,22 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return true;
   }, [priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, dateFilter, tasks]);
 
-  // --- Search filtering: intersect search results with active filters ---
-  // Search bypasses the project tab so results span ALL projects (the whole
-  // point of search is to find things you can't see in the current view).
-  // Explicit toolbar filters (priority, phase, source, tag, session, date) are
-  // still respected because the user toggled those intentionally.
+  // --- Search filtering: search spans the WHOLE task set ---
+  // Search deliberately ignores EVERY view control — the project tab, the
+  // completed toggle, AND the toolbar filters (priority, phase, source, tag,
+  // session, date). Search is a lookup tool, not a refinement of the current
+  // view: typing a title you know exists must find it, or the feature is
+  // untrustworthy. The old behavior intersected with the toolbar filters, and
+  // since the Date filter DEFAULTS to "Now" (which hides any task whose
+  // start_date is still in the future), a deferred task was silently
+  // unfindable — the user got "No tasks match" for a task they were looking
+  // straight at yesterday. A row already carries its own explanation of why it
+  // isn't in the plain list: the project context pill plus the "▶ <date>"
+  // deferred-start pill.
   const searchMatches = useMemo(() => {
     if (!isSearchMode) return filtered;
 
-    // In search mode always show completed tasks (the user is explicitly searching)
-    // — passesExplicitFilters intentionally omits showCompleted for that reason.
-    const eligibleTasks = tasks.filter(passesExplicitFilters);
+    const eligibleTasks = tasks;
     const lowerQuery = searchQuery.trim().toLowerCase();
     // Keep the urgent pass on small metadata fields; descriptions and summaries can
     // contain enough text to block an input frame across a large task collection.
@@ -3780,13 +3833,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
     if (!searchResults) {
       const metadataTaskIds = new Set(metadataMatches.map((task) => task.id));
-      return [
+      return rankOpenTasksFirst([
         ...metadataMatches,
         ...eligibleTasks.filter((task) =>
           !metadataTaskIds.has(task.id)
           && taskReferenceMatchField(task, searchQuery) !== null
         ),
-      ];
+      ]);
     }
 
     // Direct metadata matches (literal substring of what the user typed) rank BEFORE
@@ -3801,11 +3854,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       searchResults.map((result) => result.taskId),
     );
     const metadataTaskIds = new Set(metadataMatches.map((task) => task.id));
-    return [
+    return rankOpenTasksFirst([
       ...metadataMatches,
       ...serverMatches.filter((task) => !metadataTaskIds.has(task.id)),
-    ];
-  }, [tasks, filtered, isSearchMode, searchQuery, searchResults, passesExplicitFilters]);
+    ]);
+  }, [tasks, filtered, isSearchMode, searchQuery, searchResults]);
 
   // Counts and cross-section visibility use the complete match set, but the main
   // list mounts a bounded number of rows so neither search phase can stall typing.
@@ -4743,6 +4796,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onReparentTask(taskId, null);
   }, [onReparentTask, ensureManualSort]);
 
+  // Kebab "Project" select — same mutation as dragging the task onto another
+  // project group, minus the drag (no insertNearTaskId: append to the target).
+  const handleMoveToProject = useCallback((taskId: string, project: string) => {
+    onMoveTask?.(taskId, project);
+  }, [onMoveTask]);
+
   // Group chip click → rename the group via the app's own prompt dialog (never the
   // browser-native prompt). Cancel/empty/unchanged keeps the name.
   const handleRenameGroup = useCallback(async (groupId: string, currentLabel: string) => {
@@ -4994,6 +5053,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     exitSelectMode();
   }, [selectionInfo, pinnedTaskIds, onPinTask, onSetTier, exitSelectMode]);
 
+  const batchMoveToProject = useCallback((project: string) => {
+    selectionInfo.tasks.forEach((t) => {
+      if ((t.project || '') !== project) onMoveTask?.(t.id, project);
+    });
+    exitSelectMode();
+  }, [selectionInfo, onMoveTask, exitSelectMode]);
+
   const handlePinnedCardClick = handleTaskClick;
 
   const handleExpandDetail = useCallback((task: Task) => {
@@ -5114,6 +5180,31 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           >
             <span className="tier-project-label-icon">{ICONS.ICON_FOLDER}</span>
             <span className="tier-project-label-name">{proj || 'Inbox'}</span>
+            {/* Project "+" (GAP-2) — the same one-click control the All-view project
+                header carries, so a by-project tier reads and behaves the same way.
+                Named projects only, exactly like that header: a launch seeds the
+                project's default folder and Inbox has no registry row to carry one.
+                The label is an HTML5 drag handle for project reordering, so a
+                dragstart originating on the button is swallowed here — otherwise
+                pressing "+" and twitching would arm a project reorder. */}
+            {proj && onOpenLauncherForProject && (
+              <span
+                className="tier-project-label-actions"
+                draggable={false}
+                onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                // Disarm the label's OWN draggability while the pointer is over
+                // the "+": `draggable=false` here doesn't stop Chromium's native
+                // drag detection on the draggable ANCESTOR, which silently eats
+                // the click once the pointer slips ≥3px between press and release
+                // (measured; a 16×12 target on a trackpad slips often). Toggled on
+                // the DOM node directly — no re-render happens mid-hover, and a
+                // re-render outside one re-applies React's value harmlessly.
+                onPointerEnter={(e) => { const label = e.currentTarget.parentElement; if (label) label.draggable = false; }}
+                onPointerLeave={(e) => { const label = e.currentTarget.parentElement; if (label) label.draggable = true; }}
+              >
+                <ProjectPlusMenu project={proj} onAddSession={onOpenLauncherForProject} />
+              </span>
+            )}
           </div>
         );
       }
@@ -5134,14 +5225,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask}
           onPinTask={onPinTask} onSetPriority={onSetPriority} onSetDate={onSetDate} onSetStartDate={onSetStartDate} onStar={onStar}
           onExpandDetail={handleExpandDetail} onClearFocus={onClearFocus} onOpenSession={onOpenSession}
+          onStartSession={onStartSession}
           onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
-          onDelete={onDelete} groupInfo={gi} selectMode={selectMode}
+          onDelete={onDelete} onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
+          groupInfo={gi} selectMode={selectMode}
           isSelected={selectedIds.has(task.id)} onSelectToggle={onSelectToggle}
           onStartSelect={onStartSelect} isGroupTarget={groupTargetId === task.id} />
       );
     }
     return out;
-  }, [pinnedTaskMap, taskGroups, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, handleExpandDetail, onClearFocus, onOpenSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode]);
+  }, [pinnedTaskMap, taskGroups, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject]);
 
   // The regular task list gets its own PINNED/RECENT-style collapsible bar.
   // Outside the stacked view the Tasks tab IS the list — it can't be folded away.
@@ -5305,6 +5398,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           >
             ↕ Custom order
           </button>
+          {/* Session "+" for THIS tab's tier (GAP-1). In the stacked All view every
+              tier owns a sublabel row that carries this button; a single-tier tab has
+              no sublabel (the tab itself names the tier), so the tier view bar is
+              where the same control belongs — otherwise the tier tabs are the only
+              place in the panel with no route to a session. Same handler and same
+              `meta.pinTier` seed as the All-view sublabel "+". */}
+          {onOpenLauncherForTier && (
+            <TierPlusButton
+              tier={effectiveSection}
+              label={tierDisplayLabel(effectiveSection, customTiers)}
+              onAddSession={onOpenLauncherForTier}
+            />
+          )}
         </div>
       )}
 
@@ -5347,6 +5453,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       <span className="todo-pinned-sublabel-icon todo-tier-icon-focus">{ICONS.ICON_TIER_FOCUS}</span>
                       <span className="todo-pinned-sublabel-text">Focus</span>
                       <span className="todo-pinned-sublabel-count">{focusTasksDisplay.length}</span>
+                      {onOpenLauncherForTier && <TierPlusButton tier="focus" label="Focus" onAddSession={onOpenLauncherForTier} />}
                     </div>
                     )}
                     {!isFolded('focus') && (
@@ -5387,6 +5494,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         <span className="todo-pinned-sublabel-icon todo-tier-icon-satellite">{ICONS.ICON_TIER_SATELLITE}</span>
                         <span className="todo-pinned-sublabel-text">Satellite</span>
                         <span className="todo-pinned-sublabel-count">{satelliteTasksDisplay.length}</span>
+                        {onOpenLauncherForTier && <TierPlusButton tier="satellite" label="Satellite" onAddSession={onOpenLauncherForTier} />}
                       </div>
                       )}
                       {!isFolded('satellite') && (
@@ -5431,6 +5539,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       <span className="todo-pinned-sublabel-icon todo-tier-icon-backlog">{ICONS.ICON_TIER_BACKLOG}</span>
                       <span className="todo-pinned-sublabel-text">Backlog</span>
                       <span className="todo-pinned-sublabel-count">{backlogTasksDisplay.length}</span>
+                      {onOpenLauncherForTier && <TierPlusButton tier="backlog" label="Backlog" onAddSession={onOpenLauncherForTier} />}
                     </div>
                     )}
                     {!isFolded('backlog') && (
@@ -5465,6 +5574,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       <span className="todo-pinned-sublabel-icon todo-tier-icon-wait">{ICONS.ICON_TIER_WAIT}</span>
                       <span className="todo-pinned-sublabel-text">Wait</span>
                       <span className="todo-pinned-sublabel-count">{waitTasksDisplay.length}</span>
+                      {onOpenLauncherForTier && <TierPlusButton tier="wait" label="Wait" onAddSession={onOpenLauncherForTier} />}
                     </div>
                     )}
                     {!isFolded('wait') && (
@@ -5513,6 +5623,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         isEmpty={render.display.length === 0}
                         count={render.display.length}
                         onAdd={(title) => onCreate({ title, priority: 'none', pinnedTier: def.id, capture: true })}
+                        onAddSession={onOpenLauncherForTier}
                       >
                         {renderTierItems(render.visibleIds, def.id, render.groupMeta)}
                       </CustomTierSubgroup>
@@ -5595,8 +5706,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         onExpandDetail={handleExpandDetail}
                         onClearFocus={onClearFocus}
                         onOpenSession={onOpenSession}
+                        onStartSession={onStartSession}
                         onSetPhase={setPhaseOrComplete}
                         onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
+                        onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
                         onDelete={onDelete}
                       />
                     ))}
@@ -5747,6 +5860,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     onSetStartDate={onSetStartDate}
                     onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                     onOpenSession={onOpenSession}
+                    onStartSession={onStartSession}
                     onExpandDetail={handleExpandDetail}
                     onClearFocus={onClearFocus}
                     onPinTask={onPinTask}
@@ -5754,6 +5868,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                     onSetTier={onSetTier}
                     onUnparent={onReparentTask ? handleUnparent : undefined}
                     onMoveUp={moveUpMap.get(task.id)}
+                    onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
                     isPinned={pinnedTaskIds?.has(task.id)}
                     pinnedTier={getTier(task.id)}
                     searchContext={task.project || 'Inbox'}
@@ -5797,12 +5912,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   onSetStartDate={onSetStartDate}
                   onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                   onOpenSession={onOpenSession}
+                  onStartSession={onStartSession}
                   onExpandDetail={handleExpandDetail}
                   onClearFocus={onClearFocus}
                   onPinTask={onPinTask}
                   onUnpinTask={onUnpinTask}
                   onUnparent={onReparentTask ? handleUnparent : undefined}
                   onMoveUp={moveUpMap.get(task.id)}
+                  onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
                   isPinned={pinnedTaskIds?.has(task.id)}
                   searchContext={task.project || 'Inbox'}
                   filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideReason : undefined}
@@ -5857,14 +5974,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                               </button>
                             )}
                             <span className="todo-group-header-actions">
-                              {/* Inbox gets "+" too (Add task is meaningful there — the
-                                  bottom quick-add bar this replaced served Inbox); the
-                                  kebab stays named-projects-only (no registry row to
-                                  rename/delete/detail). Session launch seeds a project
-                                  default cwd, so it's also named-only. */}
+                              {/* "+" is now ONE click → a draft session in this project
+                                  (R7), so like the kebab it is named-projects-only: a
+                                  launch seeds the project's default cwd and Inbox has no
+                                  registry row to carry one. Adding a TASK to any group,
+                                  Inbox included, stays covered by the ghost row at the
+                                  bottom of the group. */}
                               <ProjectPlusMenu
                                 project={project}
-                                onAddTask={handleHeaderAddTask}
                                 onAddSession={project ? onOpenLauncherForProject : undefined}
                               />
                               {project && (
@@ -5909,6 +6026,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 onSetStartDate={onSetStartDate}
                                 onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
                                 onOpenSession={onOpenSession}
+                                onStartSession={onStartSession}
                                 onExpandDetail={handleExpandDetail}
                                 onClearFocus={onClearFocus}
                                 onPinTask={onPinTask}
@@ -5916,6 +6034,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 onSetTier={onSetTier}
                                 onUnparent={onReparentTask ? handleUnparent : undefined}
                                 onMoveUp={moveUpMap.get(task.id)}
+                                onMoveToProject={onMoveTask ? handleMoveToProject : undefined}
                                 isPinned={pinnedTaskIds?.has(task.id)}
                                 pinnedTier={getTier(task.id)}
                                 filterOverrideReason={(task.id === filterOverrideId || task.id === fadingOverrideId) ? filterOverrideReason : undefined}
@@ -6030,6 +6149,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             onPinAllToTier={batchPinToTier}
             onSetDateAll={batchSetDate}
             onSetStartDateAll={batchSetStartDate}
+            onMoveAllToProject={batchMoveToProject}
             onCompleteAll={() => batchSetPhase('COMPLETE')}
             onReopenAll={() => batchSetPhase('TODO')}
             doneCount={selectionInfo.doneCount}

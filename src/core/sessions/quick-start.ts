@@ -17,10 +17,15 @@ import { spillLargePromptToFile } from './quick-start-spill.js';
 
 export interface QuickStartTaskMeta {
   starred?: boolean;
-  needs_attention?: boolean;
+  /** Start the new task already marked unread. */
+  unread?: boolean;
   priority?: 'immediate' | 'important' | 'backlog' | 'none';
   /** Built-in tier ('focus' | 'satellite' | 'backlog' | 'wait') or a registered custom tier id (ct_*). */
   pinTier?: string;
+  /** Task dates (ISO) — same trio as POST /api/tasks; a launch IS a task create. */
+  due_date?: string;
+  start_date?: string;
+  end_date?: string;
 }
 
 export interface QuickStartParams {
@@ -112,7 +117,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
 
   if (existingTaskId) {
     // Retry mode: reuse existing task, archive error sessions.
-    // Note: footer taskMeta picks (starred/needs_attention/priority/pinTier) are
+    // Note: footer taskMeta picks (starred/unread/priority/pinTier) are
     // intentionally IGNORED on retry — we preserve the original task's metadata.
     // getTask THROWS on an unknown id (it never returns null) and is a PREFIX
     // matcher with three failure modes: no match, ambiguous prefix, and a
@@ -166,10 +171,14 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       starred: taskMeta?.starred ?? true,
       cwd,
     };
-    if (taskMeta?.needs_attention) updates.needs_attention = true;
+    if (taskMeta?.unread) updates.unread = true;
     // 'none' is a sentinel meaning "don't write priority" — lets a future retry
     // branch or other caller omit the field without clearing an existing value.
     if (taskMeta?.priority && taskMeta.priority !== 'none') updates.priority = taskMeta.priority;
+    // Dates ride the same initial update (route already validated they parse).
+    if (taskMeta?.due_date) updates.due_date = taskMeta.due_date;
+    if (taskMeta?.start_date) updates.start_date = taskMeta.start_date;
+    if (taskMeta?.end_date) updates.end_date = taskMeta.end_date;
     await updateTask(task.id, updates, { source });
     // Pin + tier — only for new tasks, only when the caller picked a tier.
     //

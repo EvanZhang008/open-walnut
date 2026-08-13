@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { openDraft } from './draft-helpers'
 
 const PIN_TIER_KEY = 'open-walnut-launcher-pin-tier'
 
@@ -13,11 +14,12 @@ test('Quick Start footer keeps primary controls visible and opens task settings 
   }, PIN_TIER_KEY)
   await page.goto('/')
 
-  const pill = page.getByRole('button', { name: /Quick session|\+ Session/i })
-  await expect(pill).toBeVisible({ timeout: 15_000 })
-  await pill.click()
+  // The launcher is reached through a DRAFT session column now: "+" grows the
+  // column, its cwd pill opens this same picker (unchanged `.sps-*` markup).
+  const panel = await openDraft(page)
+  await panel.locator('.draft-composer-bar .session-action-chip').first().click()
 
-  const selector = page.locator('.session-path-selector')
+  const selector = panel.locator('.session-path-selector')
   await expect(selector).toBeVisible({ timeout: 10_000 })
 
   const footer = selector.locator('.sps-meta-footer')
@@ -30,7 +32,7 @@ test('Quick Start footer keeps primary controls visible and opens task settings 
   await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'true')
 
   await expect(footer.getByTitle('Star this task')).toHaveCount(0)
-  await expect(footer.getByTitle('Flag as needs attention')).toHaveCount(0)
+  await expect(footer.getByTitle('Start this task marked unread')).toHaveCount(0)
   await expect(footer.getByText('Priority', { exact: true })).toHaveCount(0)
 
   const more = footer.getByRole('button', { name: /More/ })
@@ -39,8 +41,11 @@ test('Quick Start footer keeps primary controls visible and opens task settings 
   const popover = footer.getByRole('dialog', { name: 'More task settings' })
   await expect(popover).toBeVisible()
   await expect(popover.getByTitle('Star this task')).toBeVisible()
-  await expect(popover.getByTitle('Flag as needs attention')).toBeVisible()
+  await expect(popover.getByTitle('Start this task marked unread')).toBeVisible()
   await expect(popover.getByText('Priority', { exact: true })).toBeVisible()
+  // The task dates trio lives here too (start leads; end/due ghost when empty) —
+  // the launch IS a task create, so the Quick Task form's dates exist on it.
+  await expect(popover.locator('.sps-meta-dates .dp-trigger')).toHaveCount(3)
   // Pin moved OUT of the menu — it must not be duplicated there.
   await expect(popover.getByRole('group', { name: 'Pin new task to tier' })).toHaveCount(0)
 

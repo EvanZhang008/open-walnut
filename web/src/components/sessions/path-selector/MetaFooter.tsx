@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from 'react';
 import { SESSION_MODELS } from '@open-walnut/core';
 import { PRIORITY_OPTIONS, DEFAULT_META, rememberPinTier } from '../task-meta-constants';
 import type { QuickStartTaskMeta } from '../SessionPathSelector';
+import { DatePicker } from '@/components/common/DatePicker';
 import { PinTierPicker } from '@/components/common/PinTierPicker';
 import { useHostModelCatalog } from '@/hooks/useModelCatalog';
 import { formatModelName } from '@/hooks/useSessionUsage';
@@ -20,6 +21,11 @@ interface Props {
   /** Host the session will spawn on (null/undefined = local; drives which
    *  host's model catalog fills the dropdown). */
   host?: string | null;
+  /** Render the row WITHOUT the model select, for a surface that shows the model
+   *  somewhere else (the draft column puts it in the composer, mirroring a real
+   *  session where the model pill lives in the mode bar). Default false — every
+   *  other caller keeps the model in the primary row. */
+  hideModel?: boolean;
 }
 
 /** Model dropdown rows: the host's last-known CLI catalog (values = full
@@ -46,6 +52,42 @@ function useModelOptions(host?: string | null): {
     options: SESSION_MODELS.map((sm) => ({ value: sm.id, label: sm.label })),
     autoResolved: '',
   };
+}
+
+/**
+ * The launcher's model dropdown, on its own so a surface can place it somewhere
+ * other than the meta row (the draft column puts it in the composer's controls
+ * row) without re-deriving the option list — `useModelOptions` is the single
+ * source of truth for what a launch can pick.
+ *
+ * Renders NOTHING for a Codex launch: Codex models come from ACP capability
+ * discovery at session start, so there is no pre-start catalog to offer.
+ */
+export function MetaModelSelect({ meta, onChange, host, className }: Pick<Props, 'meta' | 'onChange' | 'host'> & { className?: string }) {
+  const { options: modelOptions, autoResolved } = useModelOptions(host);
+  // A previously-picked model that isn't in the current host's rows (host tab
+  // switched, catalog updated) still renders — selected, clearly marked — so
+  // the <select> never silently shows Auto while meta.model is set.
+  const orphanModel = meta.model && !modelOptions.some((o) => o.value === meta.model)
+    ? meta.model : null;
+  // Remote tabs run Claude regardless (codex is local-only), so show the select.
+  const isCodex = meta.engine === 'codex' && !(host && host !== '__local__');
+  if (isCodex) return null;
+  return (
+    <select
+      className={`sps-meta-model-select${className ? ` ${className}` : ''}`}
+      value={meta.model ?? ''}
+      onChange={(e) => onChange(m => ({ ...m, model: e.target.value || undefined }))}
+      title="Session model — Auto lets Claude/config pick the default"
+      aria-label="Session model"
+    >
+      <option value="">{autoResolved ? `Auto (${autoResolved})` : 'Auto'}</option>
+      {modelOptions.map(o => (
+        <option key={o.value} value={o.value}>{o.label}</option>
+      ))}
+      {orphanModel && <option value={orphanModel}>{orphanModel} (not in this host's catalog)</option>}
+    </select>
+  );
 }
 
 /** Segmented Claude | Codex engine toggle. Codex is ACP-backed and local-only
@@ -101,33 +143,29 @@ function TierPicker({ meta, onChange }: Pick<Props, 'meta' | 'onChange'>) {
   );
 }
 
-export function MetaFooter({ meta, onChange, compact, host }: Props) {
+export function MetaFooter({ meta, onChange, compact, host, hideModel = false }: Props) {
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
   const moreBtnRef = useRef<HTMLButtonElement>(null);
-  const { options: modelOptions, autoResolved } = useModelOptions(host);
-  // A previously-picked model that isn't in the current host's rows (host tab
-  // switched, catalog updated) still renders — selected, clearly marked — so
-  // the <select> never silently shows Auto while meta.model is set.
-  const orphanModel = meta.model && !modelOptions.some((o) => o.value === meta.model)
-    ? meta.model : null;
-  // Codex models come from ACP capability discovery at session start — there is
-  // no pre-start catalog, so the Claude model dropdown is hidden, not emulated.
-  // Remote tabs run Claude regardless (codex is local-only), so show the select.
-  const isCodex = meta.engine === 'codex' && !(host && host !== '__local__');
   // Count fields the user actually CHANGED from the quick-start defaults —
   // starred=true IS a default, so a fresh open must show an inactive badge, not
   // "More · 1". Only counts controls that LIVE in the menu: the pin tier moved
   // to the primary row, where its own active state is already visible.
   const nonDefaultCount = Number(meta.starred !== DEFAULT_META.starred)
-    + Number(meta.needs_attention !== DEFAULT_META.needs_attention)
-    + Number(meta.priority !== DEFAULT_META.priority);
+    + Number(meta.unread !== DEFAULT_META.unread)
+    + Number(meta.priority !== DEFAULT_META.priority)
+    + Number(!!meta.startDate) + Number(!!meta.endDate) + Number(!!meta.dueDate);
 
   useEffect(() => {
     if (!moreOpen) return;
 
     const handleMouseDown = (event: MouseEvent) => {
-      if (!moreRef.current?.contains(event.target as Node)) setMoreOpen(false);
+      const t = event.target as HTMLElement;
+      // The date pickers' calendar popovers are PORTALLED to <body> (escaping
+      // clipping ancestors), so a click inside one is outside moreRef — without
+      // this exemption picking a date would slam the whole More menu shut.
+      if (t.closest?.('.dp-popover')) return;
+      if (!moreRef.current?.contains(t)) setMoreOpen(false);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
@@ -156,26 +194,39 @@ export function MetaFooter({ meta, onChange, compact, host }: Props) {
   return (
     <div className={`sps-meta-footer${compact ? ' compact' : ''}`}>
       <div className="sps-meta-row">
-        {!isCodex && (
-          <select
-            className="sps-meta-model-select"
-            value={meta.model ?? ''}
-            onChange={(e) => onChange(m => ({ ...m, model: e.target.value || undefined }))}
-            title="Session model — Auto lets Claude/config pick the default"
-            aria-label="Session model"
-          >
-            <option value="">{autoResolved ? `Auto (${autoResolved})` : 'Auto'}</option>
-            {modelOptions.map(o => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-            {orphanModel && <option value={orphanModel}>{orphanModel} (not in this host's catalog)</option>}
-          </select>
-        )}
+        {!hideModel && <MetaModelSelect meta={meta} onChange={onChange} host={host} />}
         <EngineToggle meta={meta} onChange={onChange} host={host} />
         <TierPicker meta={meta} onChange={onChange} />
         <div className="sps-meta-more" ref={moreRef}>
           {moreOpen && (
             <div className="sps-meta-more-popover" role="dialog" aria-label="More task settings">
+              {/* Task dates — the same Start / End / Due trio as the Quick Task
+                  form (a launch IS a task create). Same calendar semantics too:
+                  Start leads, End/Due are usually empty so they ghost. Popover
+                  pickers (not inline): three inline calendars would triple the
+                  menu's height. */}
+              <div className="sps-meta-row">
+                <span className="sps-meta-label">Dates</span>
+                <div className="sps-meta-dates">
+                  <DatePicker
+                    date={meta.startDate}
+                    label="Start"
+                    onChange={(startDate) => onChange(m => ({ ...m, startDate: startDate ?? undefined }))}
+                  />
+                  <DatePicker
+                    date={meta.endDate}
+                    label="End"
+                    ghostWhenEmpty
+                    onChange={(endDate) => onChange(m => ({ ...m, endDate: endDate ?? undefined }))}
+                  />
+                  <DatePicker
+                    date={meta.dueDate}
+                    label="Due"
+                    ghostWhenEmpty
+                    onChange={(dueDate) => onChange(m => ({ ...m, dueDate: dueDate ?? undefined }))}
+                  />
+                </div>
+              </div>
               <div className="sps-meta-row">
                 <button
                   type="button"
@@ -190,12 +241,12 @@ export function MetaFooter({ meta, onChange, compact, host }: Props) {
               <div className="sps-meta-row">
                 <button
                   type="button"
-                  className={`sps-meta-toggle${meta.needs_attention ? ' active attention' : ''}`}
-                  onClick={() => onChange(m => ({ ...m, needs_attention: !m.needs_attention }))}
-                  title="Flag as needs attention"
+                  className={`sps-meta-toggle${meta.unread ? ' active unread' : ''}`}
+                  onClick={() => onChange(m => ({ ...m, unread: !m.unread }))}
+                  title="Start this task marked unread"
                 >
                   <span className="sps-meta-toggle-icon">●</span>
-                  <span>Needs attention</span>
+                  <span>Mark unread</span>
                 </button>
               </div>
               <div className="sps-meta-row">

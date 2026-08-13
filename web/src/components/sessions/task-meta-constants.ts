@@ -12,7 +12,7 @@ import type { QuickStartTaskMeta } from './SessionPathSelector';
  *  cycle — both it and the picker share one definition of "default". */
 export const DEFAULT_META: QuickStartTaskMeta = {
   starred: true,         // mirrors existing quick-start behavior (task.starred = true)
-  needs_attention: false,
+  unread: false,         // the phase machine marks it unread when the turn ends
   priority: 'none',
   // Satellite, not Focus: a launched session is "in flight", not necessarily
   // what the user is staring at right now — Focus filled up with every session
@@ -55,6 +55,45 @@ export function rememberPinTier(tier: FocusTier | undefined): void {
   try { localStorage.setItem(LAUNCHER_PIN_TIER_KEY, tier ?? PIN_TIER_NONE); } catch { /* quota */ }
 }
 
+/** Last cwd/host a session was launched on. Same `open-walnut-` prefix as the
+ *  pin tier, so ui-prefs-sync mirrors it to the server and the memory follows
+ *  the user across browsers. */
+export const LAUNCHER_LAST_PATH_KEY = 'open-walnut-launcher-last-path';
+
+export interface LastLaunchPath {
+  cwd: string;
+  /** null = local machine (matches the session record's own host convention). */
+  host: string | null;
+  /** Display alias for `host`, when the user picked it from a named host. */
+  hostLabel?: string;
+}
+
+/** The cwd/host a new draft column opens on — read synchronously so the first
+ *  paint needs zero network (the working-dirs cache is null until fetched).
+ *  Returns null when nothing has been launched yet or the entry is unusable. */
+export function readLastLaunchPath(): LastLaunchPath | null {
+  try {
+    const raw = localStorage.getItem(LAUNCHER_LAST_PATH_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const { cwd, host, hostLabel } = parsed as Record<string, unknown>;
+    if (typeof cwd !== 'string' || !cwd) return null;
+    return {
+      cwd,
+      host: typeof host === 'string' && host ? host : null,
+      ...(typeof hostLabel === 'string' && hostLabel ? { hostLabel } : {}),
+    };
+  } catch { /* storage disabled or corrupt JSON — behave like "never launched" */ }
+  return null;
+}
+
+/** Remember where the user just launched. Written from exactly one place
+ *  (launchQuickStart's tail) so the memory can't drift per entry point. */
+export function rememberLaunchPath(path: LastLaunchPath): void {
+  try { localStorage.setItem(LAUNCHER_LAST_PATH_KEY, JSON.stringify(path)); } catch { /* quota */ }
+}
+
 /** Meta a freshly-opened launcher starts from: the defaults with the user's
  *  remembered tier applied. Use this instead of DEFAULT_META wherever a NEW
  *  launch is being seeded (DEFAULT_META stays the static baseline the
@@ -67,7 +106,7 @@ export function freshLauncherMeta(): QuickStartTaskMeta {
 // a grey wait was indistinguishable from Satellite's grey at a glance.
 export const TIER_COLORS: Record<FocusTier, string> = {
   focus: 'var(--accent)',
-  satellite: 'var(--fg-muted)',
+  satellite: 'var(--tier-satellite, #5856d6)',
   backlog: 'var(--tier-backlog, #30b0c7)',
   wait: 'var(--tier-wait, #ff9f0a)',
 };

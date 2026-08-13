@@ -12,6 +12,24 @@ export function openSessionOnHome(sessionId: string, navigate: (to: string) => v
 }
 
 /**
+ * Open a NEW draft session column on the home page, optionally seeded with a
+ * project — the cross-page twin of the home panel's project-header "+".
+ *
+ * Rides the existing `session-launcher:open` event (already MainPage's "grow a
+ * draft column" entry, used by the `/session` slash command) rather than a new
+ * channel, so /tasks and the command palette share one code path. The optional
+ * `project` detail routes MainPage to its handleOpenLauncherForProject, which also
+ * patches in the project's default folder when the detail fetch lands.
+ *
+ * MainPage stays mounted behind every route (App.tsx), so the listener is live
+ * before the navigation — the draft is already open by the time home paints.
+ */
+export function openDraftSessionOnHome(project: string | undefined, navigate: (to: string) => void): void {
+  window.dispatchEvent(new CustomEvent('session-launcher:open', { detail: project ? { project } : undefined }));
+  navigate('/');
+}
+
+/**
  * Navigate to a deep-link target, rerouting session links (`/sessions?id=…`)
  * to the home-page session columns. Non-session targets navigate as-is.
  */

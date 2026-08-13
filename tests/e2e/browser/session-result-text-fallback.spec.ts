@@ -18,6 +18,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
+import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 
 const SCREENSHOT_DIR = '/tmp/session-result-text-fallback'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -37,24 +38,25 @@ test.beforeAll(async () => {
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
 })
 
-/** Open the quick-session path selector on a real fixture cwd (Claude engine). */
+/**
+ * Open a draft session column on a real fixture cwd (Claude engine).
+ *
+ * The launcher moved: "+" grows a draft column and its cwd pill hosts the same
+ * folder picker. The draft morphs into the pending → real column in place, so
+ * the home-column assertions below are untouched.
+ */
 async function openQuickStart(page: Page): Promise<void> {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-  await page.locator('.quick-access-pill', { hasText: /Quick session|\+ Session/ }).click()
-  await expect(page.locator('.session-path-selector')).toBeVisible()
-  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
-  if (await localTab.isVisible()) await localTab.click()
-  await page.locator('.sps-search-input').fill(`${fixtureRoot}/projects/walnut`)
-  await page.locator('.sps-search-input').press('Shift+Enter')
+  await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
 }
 
-/** Send a prompt through the composer and return the created session's task id. */
+/** Send a prompt through the draft's composer and return the created task id. */
 async function sendQuickStart(page: Page, prompt: string): Promise<string> {
   const quickStartResponse = page.waitForResponse((response) =>
     response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/api/sessions/quick-start')
-  const input = page.locator('.main-page-chat .chat-input-textarea')
+  const input = draftComposer(page)
   await input.fill(prompt)
   await input.press('Enter')
   const quickStart = await quickStartResponse
@@ -79,7 +81,7 @@ test('a turn whose answer is only on the result line renders that text exactly o
   await openQuickStart(page)
   const taskId = await sendQuickStart(page, REPLAYED_PROMPT)
 
-  const panel = page.locator('.session-panel:not(.pending-session-panel)')
+  const panel = page.locator(REAL_PANEL)
   await expect(panel).toBeVisible({ timeout: 20_000 })
 
   // THE ASSERTION THIS SPEC EXISTS FOR: without the fallback the turn renders
@@ -119,7 +121,7 @@ test('a normal streaming turn still renders its reply exactly once (no double-em
   await openQuickStart(page)
   await sendQuickStart(page, NORMAL_PROMPT)
 
-  const panel = page.locator('.session-panel:not(.pending-session-panel)')
+  const panel = page.locator(REAL_PANEL)
   await expect(panel).toBeVisible({ timeout: 20_000 })
 
   // mock-claude echoes the prompt back as streamed assistant text, then repeats

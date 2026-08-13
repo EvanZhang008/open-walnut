@@ -8,8 +8,15 @@
  * working-dirs API because the tmpdir name is dynamic.
  *
  * All interactions are real UI clicks/keys — page.goto('/') only for load.
+ *
+ * ROUTE IN: the picker is no longer chat-anchored. Every "+" now grows a DRAFT
+ * session column and the picker lives inside it, opened from the draft
+ * composer's cwd pill (see tests/e2e/browser/draft-helpers.ts). The picker
+ * itself is untouched, so every `.sps-*` assertion below is unchanged — only
+ * `openPicker` and the locator SCOPES moved.
  */
 import { test, expect, type Page } from '@playwright/test'
+import { draftComposer, openDraft } from './draft-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
@@ -27,12 +34,34 @@ test.beforeAll(async () => {
   fixtureRoot = walnut.cwd.replace(/\/projects\/walnut$/, '')
 })
 
-/** Open the picker fresh and wait for history to load. */
+/**
+ * Open the picker fresh (browse mode, empty input) and wait for history to load.
+ *
+ * Route in: todo "+" → a draft session column → its composer's cwd pill → the
+ * SAME picker. Every `.sps-*` locator below deliberately stays document-level:
+ * the chat-anchored instance renders NOTHING while closed (`if (!open) return
+ * null`) and this file never opens it, so exactly one picker is ever mounted.
+ */
 async function openPicker(page: Page): Promise<void> {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-  await page.locator('.quick-access-pill', { hasText: /Quick session|\+ Session/ }).click()
+  const panel = await openDraft(page)
+  // First chip in the composer footer = cwd/host (the project pill follows it).
+  await panel.locator('.draft-composer-bar .session-action-chip').first().click()
   await expect(page.locator('.session-path-selector')).toBeVisible()
+
+  // A draft seeds its cwd from the launch memory, which is a SYNCED ui-prefs key —
+  // so a concurrent spec's quick-start can leave one on the shared fixture server —
+  // and a seeded cwd opens the picker in EDIT mode on that path. Every assertion
+  // in this file is written against the fresh BROWSE view (which is what the old
+  // chat-anchored picker always opened in, since it was mounted with
+  // initialPath: undefined). Esc from edit mode is exactly that step back, and it
+  // is itself pinned by the keyboard-matrix test below — so this normalization
+  // cannot mask a picker regression, it only restores the precondition.
+  if ((await input(page).inputValue()) !== '') {
+    await input(page).press('Escape')
+    await expect(input(page)).toHaveValue('')
+  }
 }
 
 const input = (page: Page) => page.locator('.sps-search-input')
@@ -232,8 +261,9 @@ test('nonexistent leaf → create & start row; confirming sends createCwd:true',
   })
 
   await createRow.click()
-  // Quick-start bar confirmed — now send a message to trigger the POST
-  const chatInput = page.locator('.chat-input-textarea')
+  // Path confirmed onto the draft — now send from the DRAFT's composer to trigger
+  // the POST. Scoped: the main chat has a `.chat-input-textarea` too.
+  const chatInput = draftComposer(page)
   await chatInput.fill('bootstrap this new project')
   await chatInput.press('Enter')
 
@@ -334,7 +364,7 @@ test('⇧Enter on a missing path routes to create & start (createCwd:true), not 
   })
 
   await input(page).press('Shift+Enter')
-  const chatInput = page.locator('.chat-input-textarea')
+  const chatInput = draftComposer(page)
   await chatInput.fill('kick off in the new folder')
   await chatInput.press('Enter')
 

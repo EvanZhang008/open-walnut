@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
+import { openDraftOnCwd } from './draft-helpers'
 
 const SCREENSHOT_DIR = '/tmp/session-status-store'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -29,16 +30,19 @@ test.beforeAll(async () => {
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
 })
 
-async function openCodexQuickStart(page: Page): Promise<void> {
+/**
+ * Open a Codex-engine launcher on the fixture repo.
+ *
+ * The chat "+ Session" pill no longer opens the picker — every "+" now grows a
+ * DRAFT session column whose cwd pill hosts that same picker (all `.sps-*`
+ * selectors unchanged), so this is a new route in, not a new launcher. The
+ * returned draft panel is where the first message is composed: the launch fires
+ * from the draft's own composer instead of the main chat one.
+ */
+async function openCodexQuickStart(page: Page): Promise<Locator> {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-  await page.locator('.quick-access-pill', { hasText: /Quick session|\+ Session/ }).click()
-  await expect(page.locator('.session-path-selector')).toBeVisible()
-  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
-  if (await localTab.isVisible()) await localTab.click()
-  await page.locator('.sps-engine-toggle .sps-engine-btn', { hasText: 'Codex' }).click()
-  await page.locator('.sps-search-input').fill(`${fixtureRoot}/projects/walnut`)
-  await page.locator('.sps-search-input').press('Shift+Enter')
+  return openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`, { engine: 'Codex' })
 }
 
 async function statusFor(page: Page, id: string): Promise<StatusSnapshot> {
@@ -188,11 +192,13 @@ test('rejects delayed REST N after WS N+1 across every desktop status surface', 
   })
   const audit = await installBrowserAudit(page, walnutHome)
 
-  await openCodexQuickStart(page)
+  const draft = await openCodexQuickStart(page)
   const quickStartResponse = page.waitForResponse((response) =>
     response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/api/sessions/quick-start')
-  const quickInput = page.locator('.main-page-chat .chat-input-textarea')
+  // The DRAFT's own composer is the launcher now — the main chat textarea would
+  // just message the butler, so the scope here is load-bearing.
+  const quickInput = draft.locator('.chat-input-textarea')
   await quickInput.fill(BASE_PROMPT)
   await quickInput.press('Enter')
   const quickStart = await quickStartResponse

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   addSessionColumn,
+  forceAddSessionColumn,
   toggleLockSlot,
   trimUnlockedToMax,
   removeSessionColumn,
@@ -83,6 +84,120 @@ describe('sessionColumns: trimUnlockedToMax', () => {
     // All locked and over max — callers compare by reference to detect "no change".
     const cols = [slot('a', true), slot('b', true), slot('c', true)];
     expect(trimUnlockedToMax(cols, 2)).toBe(cols);
+  });
+
+  // ── Placeholder columns (draft:/pending:) are trim-exempt like locked ones. ──
+  // The column IS the state: a draft holds unsent text, a pending column holds an
+  // in-flight launch whose only handle is that id. Evicting either loses data
+  // (the pre-existing "pending column evicted mid-HTTP" bug).
+
+  it('evicts a plain column rather than the rightmost pending: one', () => {
+    // Rightmost slot is the placeholder, so the trim reaches PAST it and takes
+    // the plain column instead — the in-flight launch keeps its column.
+    const cols = [slot('a'), slot('pending:temp-1')];
+    expect(trimUnlockedToMax(cols, 1).map(s => s.id)).toEqual(['pending:temp-1']);
+  });
+
+  it('keeps placeholders even when they alone force overflow', () => {
+    // Two in-flight launches with max=1: nothing is evictable, so the strip
+    // overflows exactly as it does for two locked columns.
+    const cols = [slot('pending:temp-1'), slot('draft:1-1')];
+    expect(trimUnlockedToMax(cols, 1)).toBe(cols);
+  });
+
+  it('keeps a draft next to a locked column with max=1 (both exempt)', () => {
+    const cols = [slot('draft:1-1'), slot('L', true)];
+    expect(trimUnlockedToMax(cols, 1).map(s => s.id)).toEqual(['draft:1-1', 'L']);
+  });
+
+  it('keeps every placeholder and sheds only the plain columns', () => {
+    const cols = [slot('draft:1-1'), slot('a'), slot('pending:temp-1'), slot('b')];
+    expect(trimUnlockedToMax(cols, 2).map(s => s.id)).toEqual(['draft:1-1', 'pending:temp-1']);
+  });
+
+  it('a draft does NOT shield unlocked neighbours from eviction', () => {
+    // [A, draft, B] max=2 → the draft is exempt but grants NO amnesty to its
+    // neighbours: the rightmost evictable slot (B) still goes, leaving 2 columns.
+    // Getting this wrong (e.g. "any placeholder ⇒ skip the trim") would let the
+    // strip grow without bound every time the user opened a draft.
+    const cols = [slot('A'), slot('draft:1-1'), slot('B')];
+    expect(trimUnlockedToMax(cols, 2).map(s => s.id)).toEqual(['A', 'draft:1-1']);
+  });
+
+  it('the overflow license expires when the placeholder becomes real', () => {
+    // draft → pending keeps the exemption (still a placeholder, count unchanged);
+    // pending → real id makes the column evictable again and the next trim
+    // resolves the overflow. This is the "after send… normal rules" contract.
+    const withDraft = [slot('draft:1-1'), slot('L1', true), slot('L2', true)];
+    expect(trimUnlockedToMax(withDraft, 2)).toBe(withDraft);
+    const promoted = replaceSessionColumn(withDraft, 'draft:1-1', 'pending:temp-1');
+    expect(trimUnlockedToMax(promoted, 2)).toBe(promoted);
+    const real = replaceSessionColumn(promoted, 'pending:temp-1', 'sess-real');
+    expect(trimUnlockedToMax(real, 2).map(s => s.id)).toEqual(['L1', 'L2']);
+  });
+});
+
+describe('sessionColumns: forceAddSessionColumn', () => {
+  it('inserts leftmost on an empty strip', () => {
+    const next = forceAddSessionColumn([], 'draft:1-1');
+    expect(next.map(s => ({ id: s.id, locked: s.locked }))).toEqual([
+      { id: 'draft:1-1', locked: false },
+    ]);
+  });
+
+  it('adds even when every slot is locked (no rejection path)', () => {
+    // addSessionColumn signals rejection by reference equality; force must NOT —
+    // the "+" button has to produce a column unconditionally.
+    const cols = [slot('a', true), slot('b', true)];
+    const next = forceAddSessionColumn(cols, 'draft:1-1');
+    expect(next).not.toBe(cols);
+    expect(next.map(s => s.id)).toEqual(['draft:1-1', 'a', 'b']);
+    expect(next[0].locked).toBe(false);
+  });
+
+  it('adds when already at/over max — overflow is accepted, nothing is trimmed', () => {
+    const cols = [slot('a'), slot('b')]; // max would be 2
+    const next = forceAddSessionColumn(cols, 'draft:1-1');
+    expect(next.map(s => s.id)).toEqual(['draft:1-1', 'a', 'b']);
+  });
+
+  it('locked-and-at-max together still yields the new column', () => {
+    const cols = [slot('L1', true), slot('u'), slot('L2', true)];
+    const next = forceAddSessionColumn(cols, 'draft:1-1');
+    // Insert is leftmost and lock partitioning is respected (unlocked left of locked).
+    expect(next.map(s => ({ id: s.id, locked: s.locked }))).toEqual([
+      { id: 'draft:1-1', locked: false },
+      { id: 'u', locked: false },
+      { id: 'L1', locked: true },
+      { id: 'L2', locked: true },
+    ]);
+  });
+
+  it('is idempotent for an existing unlocked id — moves it leftmost, no duplicate', () => {
+    const cols = [slot('a'), slot('b'), slot('c', true)];
+    const next = forceAddSessionColumn(cols, 'b');
+    expect(next.map(s => s.id)).toEqual(['b', 'a', 'c']);
+    expect(next.filter(s => s.id === 'b')).toHaveLength(1);
+  });
+
+  it('is idempotent for an existing locked id and keeps its object identity', () => {
+    // Same trick as addSessionColumn: re-using the slot object preserves React
+    // key+memo identity so the locked panel's subtree does not remount.
+    const locked = slot('L2', true);
+    const cols = [slot('u'), slot('L1', true), locked];
+    const next = forceAddSessionColumn(cols, 'L2');
+    expect(next.map(s => ({ id: s.id, locked: s.locked }))).toEqual([
+      { id: 'u', locked: false },
+      { id: 'L2', locked: true },
+      { id: 'L1', locked: true },
+    ]);
+    expect(next[1]).toBe(locked);
+  });
+
+  it('repeated force-adds of the same draft id do not stack columns', () => {
+    let cols = forceAddSessionColumn([slot('a')], 'draft:1-1');
+    cols = forceAddSessionColumn(cols, 'draft:1-1');
+    expect(cols.map(s => s.id)).toEqual(['draft:1-1', 'a']);
   });
 });
 
@@ -214,5 +329,27 @@ describe('sessionColumns: removeSessionColumn / replaceSessionColumn', () => {
   it('replace is a no-op when oldId missing', () => {
     const cols = [slot('a')];
     expect(replaceSessionColumn(cols, 'missing', 'new')).toBe(cols);
+  });
+
+  it('draft: → pending: morphs in place, preserving index AND lock', () => {
+    // 「开始」swaps the id under the column instead of removing + re-adding, so the
+    // draft does not visibly jump across the strip on send. A locked draft (the
+    // user pinned the empty column) must stay locked and stay where it is.
+    const cols = [slot('a'), slot('draft:1-1', true), slot('b')];
+    const next = replaceSessionColumn(cols, 'draft:1-1', 'pending:temp-1');
+    expect(next.map(s => ({ id: s.id, locked: s.locked }))).toEqual([
+      { id: 'a', locked: false },
+      { id: 'pending:temp-1', locked: true },
+      { id: 'b', locked: false },
+    ]);
+  });
+
+  it('draft: → pending: keeps an unlocked draft unlocked at its index', () => {
+    const cols = [slot('draft:1-1'), slot('a', true)];
+    const next = replaceSessionColumn(cols, 'draft:1-1', 'pending:temp-1');
+    expect(next.map(s => ({ id: s.id, locked: s.locked }))).toEqual([
+      { id: 'pending:temp-1', locked: false },
+      { id: 'a', locked: true },
+    ]);
   });
 });

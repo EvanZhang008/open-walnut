@@ -8,6 +8,7 @@ import type {
   SessionRecord,
 } from '@/types/session';
 import { log } from '@/utils/log';
+import { isPlaceholderColumnId } from '@/utils/column-ids';
 
 export interface SessionStatusSnapshot {
   sessionId: string;
@@ -76,7 +77,8 @@ function isRecord(value: unknown): value is UnknownRecord {
 function isProviderSessionId(value: unknown): value is string {
   return typeof value === 'string'
     && value.length > 0
-    && !value.startsWith('pending:')
+    // Column placeholders (draft:/pending:) are client-side ids with no server row.
+    && !isPlaceholderColumnId(value)
     // ACP runtime IDs are Walnut process identities, never provider session IDs.
     && !/^acp-[0-9a-f]{16}$/.test(value);
 }

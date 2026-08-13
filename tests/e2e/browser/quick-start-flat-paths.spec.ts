@@ -1,4 +1,5 @@
-import { test, expect, type Page, type Route } from '@playwright/test'
+import { test, expect, type Locator, type Page, type Route } from '@playwright/test'
+import { openDraft } from './draft-helpers'
 
 const localCwd = '/Users/playwright/flat-fixture/a/very/long/parent/tree/that/forces/the/path/to/truncate/walnut'
 const secondLocalCwd = '/Users/playwright/flat-fixture/projects/wallets'
@@ -21,19 +22,60 @@ async function fulfillWorkingDirs(route: Route): Promise<void> {
   })
 }
 
-async function openPicker(page: Page): Promise<void> {
+const LAST_PATH_KEY = 'open-walnut-launcher-last-path'
+
+/**
+ * Make this browser look like it has never launched a session.
+ *
+ * A draft column seeds its cwd from `open-walnut-launcher-last-path`, and a
+ * seeded cwd opens the picker straight into EDIT mode (live listing of that
+ * path) instead of the flat history BROWSE view every assertion here is about.
+ *
+ * `removeItem` is the WRONG reset: the key is `open-walnut-` prefixed, so
+ * ui-prefs-sync mirrors it to the fixture server's ui-prefs.json, which is
+ * SHARED by every spec in the run — and its boot merge adopts the server value
+ * whenever the local one is null. So a concurrent spec that launched a session
+ * would decide what "never launched" means here. Instead seed a real local value
+ * that readLastLaunchPath REJECTS (empty cwd → null): a local value with no
+ * tracked write timestamp always wins that merge, so this needs no server round
+ * trip and can't be raced. Same technique as seedPinTierPref in
+ * session-launcher-pin-tier.spec.ts.
+ */
+async function clearLaunchMemory(page: Page): Promise<void> {
+  await page.addInitScript((key) => {
+    try { localStorage.setItem(key as string, '{"cwd":"","host":null}') } catch { /* storage disabled */ }
+  }, LAST_PATH_KEY)
+}
+
+/**
+ * Open the folder picker the way the app does now: the "+" grows a DRAFT session
+ * column, and the picker lives inside it behind the cwd pill. The picker markup
+ * (every `.sps-*` selector in this file) is unchanged — only the route in is.
+ *
+ * Returns the draft panel: a confirmed path now lands on THIS column's cwd pill
+ * instead of the chat's quick-start bar, so callers need the scope. Drafts are
+ * never persisted, so this has to run again after every reload.
+ */
+async function openPickerInDraft(page: Page): Promise<Locator> {
+  const panel = await openDraft(page)
+  await panel.locator('.draft-composer-bar .session-action-chip').first().click()
+  await expect(panel.locator('.session-path-selector')).toBeVisible({ timeout: 10_000 })
+  return panel
+}
+
+async function openPicker(page: Page): Promise<Locator> {
   await page.setViewportSize({ width: 520, height: 640 })
   await page.route('**/api/sessions/working-dirs', fulfillWorkingDirs)
+  await clearLaunchMemory(page)
   await page.goto('/')
-  const pill = page.getByRole('button', { name: /Quick session|\+ Session/i })
-  await expect(pill).toBeVisible({ timeout: 15_000 })
-  await pill.click()
+  const panel = await openPickerInDraft(page)
   await expect(page.locator('.sps-path-list')).toBeVisible({ timeout: 10_000 })
   await expect(page.locator('.sps-path-item')).toHaveCount(3, { timeout: 20_000 })
+  return panel
 }
 
 test('history paths render as flat single-line rows with only remote host metadata', async ({ page }) => {
-  await openPicker(page)
+  const panel = await openPicker(page)
 
   const list = page.locator('.sps-path-list')
   const rows = list.locator('.sps-path-item')
@@ -72,8 +114,22 @@ test('history paths render as flat single-line rows with only remote host metada
   }
 
   // Hover moves the highlight but must NOT expand the row under the pointer.
-  await rows.nth(1).hover()
-  await expect(rows.nth(1)).toHaveClass(/active/)
+  //
+  // Retried as a unit, because the hover TARGET MOVES: at this 520x640 viewport
+  // the picker's list is a ~62px scroll viewport holding ~133px of rows (measured
+  // — identical in the chat-anchored mount, so it is the small-screen layout and
+  // not this route), and row 0 is the keyboard-expanded multi-line one. Row 1
+  // therefore starts below the visible slice; scrolling it in re-lays the list
+  // out, and a hover computed against the pre-scroll box lands on whatever now
+  // occupies those coordinates (measured: `.sps-keys-hint`) so no mouseenter ever
+  // reaches the row. Re-aiming until the highlight lands is exactly what a real
+  // pointer does, and it weakens nothing: the `active` + `nowrap` claims below
+  // still have to hold, and toPass gives up (fails) if the hover never takes.
+  await expect(async () => {
+    await rows.nth(1).scrollIntoViewIfNeeded()
+    await rows.nth(1).hover()
+    await expect(rows.nth(1)).toHaveClass(/active/, { timeout: 1_000 })
+  }).toPass({ timeout: 15_000 })
   const hoveredWhiteSpace = await rows.nth(1).locator('.sps-path-cwd')
     .evaluate(element => getComputedStyle(element).whiteSpace)
   expect(hoveredWhiteSpace).toBe('nowrap')
@@ -99,7 +155,14 @@ test('history paths render as flat single-line rows with only remote host metada
   await expect(input).toHaveValue(secondLocalCwd)
   await input.press('Shift+Enter')
   await expect(page.locator('.session-path-selector')).not.toBeVisible()
-  await expect(page.locator('.qsb-path')).toHaveText(secondLocalCwd)
+  // The confirmed path now lands on the DRAFT column's cwd pill (the chat
+  // quick-start bar is no longer in this route). The title carries the FULL path
+  // — the exact equivalent of the old `.qsb-path` assertion — while the pill text
+  // is the folder basename, optionally suffixed with the host label ("wallets ·
+  // Local"), hence containText there and an exact match on the title.
+  const cwdPill = panel.locator('.draft-composer-bar .session-action-chip').first()
+  await expect(cwdPill).toHaveAttribute('title', `Working folder: ${secondLocalCwd}`)
+  await expect(cwdPill).toContainText('wallets')
 })
 
 test('live rows: relative segments when idle, full path when highlighted, icon-only history marker', async ({ page }) => {
@@ -124,7 +187,9 @@ test('live rows: relative segments when idle, full path when highlighted, icon-o
   }))
 
   await page.reload()
-  await page.getByRole('button', { name: /Quick session|\+ Session/i }).click()
+  // A draft column is pure client state — the reload discarded the one openPicker
+  // opened, so re-open a fresh one against the re-routed fixtures.
+  await openPickerInDraft(page)
   const input = page.locator('.sps-search-input')
   await input.fill(`${parent}/Acm`)
 

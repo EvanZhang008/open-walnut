@@ -1,8 +1,14 @@
 /**
  * NewLauncherButton — compact "+" icon button in the TODO panel toolbar.
- * Opens the todo-anchored launcher popover (Session / Task tabs, Session
- * default). Styled as a twin of the View (sliders) button so the toolbar
- * reads as one control family.
+ *
+ * ONE verb: it grows an empty DRAFT SESSION column (no popover, no tabs, no
+ * network). It used to open a Session|Task launcher popover, which is why the
+ * tooltip said "New session or task"; task creation now lives INSIDE the draft
+ * ("◌ Create task for later"), so advertising a task branch here points at a
+ * chooser that no longer exists.
+ *
+ * Styled as a twin of the View (sliders) button so the toolbar reads as one
+ * control family.
  */
 
 const ICON_PLUS = (
@@ -20,8 +26,8 @@ export function NewLauncherButton({ onOpen }: NewLauncherButtonProps) {
     <button
       className="new-launcher-btn"
       onClick={onOpen}
-      title="New session or task"
-      aria-label="New session or task"
+      title="New session"
+      aria-label="New session"
     >
       {ICON_PLUS}
     </button>

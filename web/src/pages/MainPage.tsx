@@ -28,14 +28,19 @@ import { CalendarSidePanel } from '@/components/calendar/CalendarSidePanel';
 import { TaskDetailModal } from '@/components/tasks/TaskDetailModal';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
+import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
+import {
+  applyDraftParse, clearAiFields, draftComposerKey, withDirLaunchMemory,
+  launchDivergesFromDirMemory, type DraftColumn,
+} from '@/components/sessions/draft-column';
 import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } from '@/components/sessions/SessionPathSelector';
 import { SessionSearchPanel } from '@/components/sessions/SessionSearchPanel';
-import { freshLauncherMeta } from '@/components/sessions/task-meta-constants';
+import { freshLauncherMeta, readLastLaunchPath, rememberLaunchPath } from '@/components/sessions/task-meta-constants';
 import { QuestionPopover, parseAskQuestionInput } from '@/components/chat/QuestionPopover';
 import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchSession, fetchSessionsForTask, fetchWorkingDirs, quickStartSession } from '@/api/sessions';
 import { fetchProjectDetail } from '@/api/projects';
-import { deleteTask as deleteTaskApi } from '@/api/tasks';
+import { deleteTask as deleteTaskApi, fetchTask, type QuickTaskParse } from '@/api/tasks';
 import { fetchConfig, fetchInstallDir } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
 import { QuickAccessBar } from '@/components/chat/QuickAccessBar';
@@ -43,6 +48,7 @@ import { AgentTabBar, slugifyAgentId } from '@/components/chat/AgentTabBar';
 import { EngineBadge } from '@/components/chat/EngineBadge';
 import { createAgentDef, updateAgentDef } from '@/api/agents';
 import { log } from '@/utils/log';
+import { visibleInterval } from '@/utils/page-visibility';
 import { useContextInspector } from '@/hooks/useContextInspector';
 import { useUrlSync } from '@/hooks/useUrlSync';
 import { useSessionPanelMode } from '@/hooks/useSessionPanelMode';
@@ -59,10 +65,12 @@ import {
   type SessionSlot,
   trimUnlockedToMax,
   addSessionColumn,
+  forceAddSessionColumn,
   removeSessionColumn,
   replaceSessionColumn,
   toggleLockSlot,
 } from './sessionColumns';
+import { isDraftColumnId, isPendingColumnId, isPlaceholderColumnId, DRAFT_COL_PREFIX } from '@/utils/column-ids';
 import { loadColWeights, saveColWeights, resizeAtBoundary } from './columnSizing';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
 
@@ -182,6 +190,37 @@ function loadSessionColumns(): SessionSlot[] {
   return [];
 }
 
+/** Optional seeds for a new draft column.
+ *
+ *  `cwd`/`host` apply verbatim — a draft NO LONGER inherits the last-launch path
+ *  (readLastLaunchPath): a fresh "+" opens with no folder chosen, and the
+ *  quick-access chips in its launch bar cover the folders the user actually works
+ *  in. A sticky path meant every draft silently pointed at wherever the previous
+ *  launch happened to be, which is the one thing the chips make unnecessary. */
+interface DraftSeed {
+  project?: string;
+  cwd?: string;
+  host?: string | null;
+  hostLabel?: string;
+  /**
+   * Pin tier the new task should land in — a pin-tier group header's "+" (R8).
+   *
+   * A SEED, not a user edit: it is written into `meta.pinTier` WITHOUT setting
+   * `metaTouched`, because that flag is also the per-directory launch-memory
+   * switch — latching it here would freeze the model at whatever folder the draft
+   * opened on and make every later folder change launch with the wrong one.
+   */
+  pinTier?: string;
+  /** This `cwd` is an explicit PIN (a task's own folder), not a suggestion — a
+   *  later async seed (e.g. a project's default dir) must not move it. A
+   *  memory-derived cwd deliberately leaves this false: nobody chose it. */
+  cwdPinned?: boolean;
+  /** Bind the draft to an existing task (task row ▶ Start on a title-only task):
+   *  Start reuses that task instead of minting a new one. */
+  taskId?: string;
+  boundTaskTitle?: string;
+}
+
 /** The one Quick Start failure notification shape — used by both the retry
  *  path and the initial-launch path so the copy/dedup key can't drift apart. */
 function quickStartFailedNotification(host: string | null | undefined, cwd: string, errMsg: string) {
@@ -248,6 +287,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Deduped case-insensitively — project identity is NOCASE — registry spelling
   // wins since it's the canonical one.
   const projectRegistry = useProjectRegistry();
+  const { projectByCwd, projectDefaults } = projectRegistry;
   const quickTaskProjectOptions = useMemo(() => {
     const byLower = new Map<string, string>();
     for (const name of projectRegistry.projectNames) {
@@ -370,6 +410,33 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // Session columns state — up to 2 sessions displayed side by side
   const [sessionColumns, setSessionColumns] = useState<SessionSlot[]>(loadSessionColumns);
+
+  // ── Draft session columns ("+" → an empty column, zero network) ──
+  // The DraftColumn rows are the ONLY home of a draft's cwd/host/project/meta;
+  // sessionColumns just carries the `draft:` id that keys the strip slot. Both
+  // must be mutated together (open / close / Start).
+  const [draftColumns, setDraftColumns] = useState<DraftColumn[]>([]);
+  // Ref mirror so handlers can read the current drafts synchronously without
+  // being re-created on every draft edit (same pattern as sessionColumnsRef).
+  const draftColumnsRef = useRef(draftColumns);
+  draftColumnsRef.current = draftColumns;
+  // Monotonic suffix: two "+" clicks inside the same millisecond would otherwise
+  // mint the SAME id, and forceAddSessionColumn would treat the second as "move
+  // the existing column" — one visible column for two drafts.
+  const draftSeqRef = useRef(0);
+  // Tasks with a ▶ Start launch currently in flight (see handleStartSessionForTask).
+  const startingTaskIdsRef = useRef(new Set<string>());
+  // Which draft should take the caret. A bump (new id, or the same id again via
+  // the anti-spam valve) re-runs DraftSessionPanel's focus effect.
+  const [focusDraftId, setFocusDraftId] = useState<string | null>(null);
+  const draftById = useMemo(() => new Map(draftColumns.map(d => [d.id, d])), [draftColumns]);
+  // Stable handle for the mount-time window listeners below (they run with `[]`
+  // deps and must not capture the first render's callback).
+  const openDraftColumnRef = useRef<(seed?: DraftSeed) => string>(() => '');
+  // Same reason as above: the mount-time `session-launcher:open` listener needs the
+  // project-seeded route (a /tasks group header "+" arrives through that event).
+  const openLauncherForProjectRef = useRef<(project: string) => void>(() => {});
+
   const sessionOpenersRef = useRef(new Map<string, HTMLElement>());
   const pendingSessionFocusRef = useRef<{
     opener?: HTMLElement;
@@ -434,43 +501,73 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const panelModeLoadedRef = useRef(panelModeLoaded);
   panelModeLoadedRef.current = panelModeLoaded;
 
+  // How many columns are placeholders (`draft:`/`pending:`) right now. Only used
+  // to RE-KEY the eviction effect below — see the license note there.
+  const placeholderCount = useMemo(
+    () => sessionColumns.reduce((n, s) => n + (isPlaceholderColumnId(s.id) ? 1 : 0), 0),
+    [sessionColumns],
+  );
+
   // Auto-evict excess session columns when effectiveMaxPanels shrinks (e.g. auto mode + window resize).
   // Gated on `panelModeLoaded`: until the config fetch settles the hook reports the
   // '2' DEFAULT, and evicting on that would silently drop a 3rd restored column
   // (sessionStorage/deep link) before the user's real '3' arrives — eviction is
   // one-way, so the column never comes back.
+  //
+  // OVERFLOW LICENSE: "+" inserts unconditionally (forceAddSessionColumn) and
+  // trimUnlockedToMax exempts placeholders, so the strip legitimately sits above
+  // max while a draft/pending column is open. `placeholderCount` in the deps is
+  // what makes that license SELF-EXPIRING: draft→pending keeps the count (still
+  // one placeholder → still licensed), while pending→real or a draft close DROPS
+  // it, re-running this trim so the strip shrinks back to the user's panel
+  // setting. Count, not the array: a mere reorder/lock toggle must not re-fire an
+  // eviction.
+  //
+  // The RISING edge is deliberately skipped. trimUnlockedToMax exempts the
+  // placeholder itself but grants no amnesty to its neighbours, so trimming on
+  // the "+" commit would close a live session panel the instant the user asked
+  // for a new column — the license would be void on arrival. Overflow while
+  // drafting is the accepted cost; the strip trims back when the draft resolves.
+  const trimGuardRef = useRef({ placeholders: placeholderCount, max: effectiveMaxPanels });
   useEffect(() => {
+    const prev = trimGuardRef.current;
+    trimGuardRef.current = { placeholders: placeholderCount, max: effectiveMaxPanels };
     if (!panelModeLoaded) return;
-    setSessionColumns(prev => {
+    // A placeholder appeared and nothing else changed → license granted, hands off.
+    // (A simultaneous max change still trims: that's a real capacity shrink.)
+    if (placeholderCount > prev.placeholders && effectiveMaxPanels === prev.max) return;
+    setSessionColumns(prev2 => {
       const max = triageOpenRef.current ? effectiveMaxPanels - 1 : effectiveMaxPanels;
-      return trimUnlockedToMax(prev, max);
+      return trimUnlockedToMax(prev2, max);
     });
-  }, [effectiveMaxPanels, panelModeLoaded]);
+  }, [effectiveMaxPanels, panelModeLoaded, placeholderCount]);
 
-  // Session/task quick-entry popovers above the chat input.
+  // Session/task quick-entry popovers above the chat input. There is only ONE
+  // anchor left (the chat composer): the todo-panel launcher popover and its
+  // `launcherAnchor` discriminator were replaced by draft session columns.
   const [pathSelectorOpen, setPathSelectorOpen] = useState(false);
   const [quickTaskOpen, setQuickTaskOpen] = useState(false);
   // Session finder — search existing sessions by title/task/cwd/host and open
   // one as a column. Toggled by the QuickAccessBar pill or ⌘⇧O.
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
-  // Where the launcher popover is anchored: 'chat' = above the chat input
-  // (message-first flow), 'todo' = dropdown inside the task panel (path-first
-  // flow that NEVER touches chat visibility — sessions can start with the chat
-  // column hidden; the CLI spawns with an empty first message and idles).
-  const [launcherAnchor, setLauncherAnchor] = useState<'chat' | 'todo'>('chat');
   const [quickStartPath, setQuickStartPath] = useState<QuickStartPath | null>(null);
-  // Project header "+ → Add session" seed: the new task is filed under this
-  // project, and the launcher's path prefills from the project's default
-  // cwd/host (when set). Cleared on every launcher open/select so a stale seed
-  // never leaks into an unrelated launch.
-  const [launcherProject, setLauncherProject] = useState<{ project: string; path?: { cwd: string; host: string | null } } | null>(null);
-  // Ref mirror for async/select callbacks (same pattern as quickStartPathRef).
-  const launcherProjectRef = useRef(launcherProject);
-  launcherProjectRef.current = launcherProject;
   // Walnut's own source checkout (null on npm installs / cloud) — drives the
   // fix-walnut pill. Fetched once; the API layer caches for the page lifetime.
   const [walnutInstallDir, setWalnutInstallDir] = useState<string | null>(null);
   useEffect(() => { fetchInstallDir().then(setWalnutInstallDir); }, []);
+  // Warm the working-dirs module cache ONCE, so that by the time a draft column
+  // opens, its recent-folder chips and its per-directory launch memory can be read
+  // SYNCHRONOUSLY (peekWorkingDirs) — the draft-OPEN path itself is contractually
+  // network-free, so a cold cache there means "no chips", never "fetch now".
+  //
+  // Fired on mount rather than on a timer, deliberately: it must land inside the
+  // page's initial load window. A deferred fetch could otherwise be issued
+  // moments AFTER load settles — i.e. exactly while a user (or the zero-network
+  // acceptance spec) is watching the "+" click, where a working-dirs request is
+  // indistinguishable from the draft path fetching. This is one small GET, not the
+  // per-host SSH fan-out that `prewarmWorkingDirs` still keeps behind a real open.
+  // Fire-and-forget; the API layer dedupes and caches for the page lifetime.
+  useEffect(() => { void fetchWorkingDirs().catch(() => { /* offline → chips stay hidden */ }); }, []);
   // Task metadata picked in the launcher footer; applied to the new task on quick-start.
   // Using a ref (not state) for two reasons — same pattern as `quickStartPathRef` above:
   //   (1) Avoid re-renders on every keystroke/toggle inside the popover. Meta lives in
@@ -622,6 +719,16 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     [colWeights, colCount],
   );
 
+  // On phones only ONE column is displayed (`.is-mobile-active`; every sibling is
+  // display:none). The rule used to be "the last column", which broke "+": drafts
+  // insert LEFTMOST, so on a phone the new composer was the one hidden column and
+  // the tap looked like it did nothing. Prefer the first draft, else keep the old
+  // rightmost default (a launch/open still lands on the newest real session).
+  const mobileActiveIdx = useMemo(() => {
+    const draftIdx = sessionColumns.findIndex(s => isDraftColumnId(s.id));
+    return draftIdx >= 0 ? draftIdx : sessionColumns.length - 1;
+  }, [sessionColumns]);
+
   // Keep focusedTask in sync with latest data from tasks array (handles WS updates from other sources)
   useEffect(() => {
     if (!focusedTask) return;
@@ -712,8 +819,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [focusedTask?.id]);
 
   useEffect(() => {
-    // Only persist real session IDs (not pending: placeholders) to sessionStorage
-    const persistable = sessionColumns.filter(s => !s.id.startsWith('pending:'));
+    // Only persist real session IDs (draft:/pending: placeholders resolve to
+    // nothing after a reload) to sessionStorage
+    const persistable = sessionColumns.filter(s => !isPlaceholderColumnId(s.id));
     if (persistable.length > 0) sessionStorage.setItem(SS_SESSION_COLUMNS_KEY, JSON.stringify(persistable));
     else sessionStorage.removeItem(SS_SESSION_COLUMNS_KEY);
   }, [sessionColumns]);
@@ -755,13 +863,22 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // Toggle main chat panel visibility
       setChatVisible(prev => !prev);
     };
-    const handleSessionLauncher = () => {
-      setLauncherAnchor('chat');
-      setPathSelectorOpen(true);
-      setQuickTaskOpen(false);
+    // `/session` (src/commands/session.ts) — one verb "New": grow a draft column
+    // instead of opening the chat-anchored picker. Via the ref because this
+    // listener is installed once (`[]` deps) and must not capture a stale
+    // callback. Note: the picker still exists for the fix-walnut / chat pill
+    // flows; this entry just no longer routes through it.
+    //
+    // A `project` in the detail is the CROSS-PAGE project "+" (the /tasks group
+    // header, via openDraftSessionOnHome): route it through the same handler the
+    // home panel's header uses, so the folder-patching half of the seed comes along
+    // instead of just the pill.
+    const handleSessionLauncher = (e: Event) => {
+      const project = (e as CustomEvent<{ project?: string } | undefined>).detail?.project;
+      if (project) openLauncherForProjectRef.current(project);
+      else openDraftColumnRef.current();
     };
     const handleTaskComposer = () => {
-      setLauncherAnchor('chat');
       setQuickTaskOpen(true);
       setPathSelectorOpen(false);
     };
@@ -821,6 +938,250 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const sessionColumnsRef = useRef(sessionColumns);
   sessionColumnsRef.current = sessionColumns;
 
+  // ── Draft column handlers ──
+
+  /**
+   * "+" → a new empty session column, RIGHT NOW.
+   *
+   * Synchronous and network-free by contract (hard requirement of the design):
+   * cwd/host come from the seed only, task meta from the sticky launcher
+   * defaults. Nothing is created server-side — the draft is 0 bytes until Start.
+   * Returns the draft id so callers can patch it asynchronously.
+   *
+   * NO STICKY PATH: an unseeded draft opens with cwd '' — the neutral state the
+   * rest of the app already models (the pill reads "Choose folder…", and a Start
+   * with no cwd opens the folder picker rather than launching somewhere
+   * arbitrary; there is no "default cwd" anywhere in the launch path — quick-start
+   * rejects a missing one). The launch bar's quick-access chips are what make the
+   * common folders one click away, which is why inheriting the previous launch's
+   * path is no longer worth the surprise of a draft silently pointing elsewhere.
+   */
+  const openDraftColumn = useCallback((seed?: DraftSeed): string => {
+    // Anti-spam valve: repeated "+" on an untouched empty draft just refocuses it
+    // instead of stacking another. Only the LEFTMOST column counts — that's where
+    // "+" just put one, so a stale empty draft further right (user moved on) is
+    // left alone.
+    const leftmost = sessionColumnsRef.current[0];
+    if (leftmost && isDraftColumnId(leftmost.id) && draftColumnsRef.current.some(d => d.id === leftmost.id)) {
+      // "Untouched" is read off the LIVE textarea first, with the persisted draft
+      // as the fallback. localStorage alone would lie for 300ms after a keystroke
+      // (ChatInput's save is debounced), and inside that window a "+" would refuse
+      // to open a second column and instead bounce the caret back into text the
+      // user had already started.
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        `[data-draft-id="${CSS.escape(leftmost.id)}"] .chat-input-textarea`,
+      );
+      let composed = textarea?.value ?? '';
+      if (!composed && !textarea) {
+        try { composed = localStorage.getItem(draftComposerKey(leftmost.id)) ?? ''; } catch { /* storage off → treat as empty */ }
+      }
+      if (!composed.trim()) {
+        // Refocus IMPERATIVELY, not via focusDraftId: the panel's focus effect is
+        // keyed on `autoFocus`, and re-setting the same id is a no-op React
+        // (batched null→id collapses, and an unchanged value can't flip a bool
+        // prop). Scoped by data-draft-id so it lands in THIS column even with
+        // several drafts open.
+        requestAnimationFrame(() => {
+          document.querySelector<HTMLTextAreaElement>(
+            `[data-draft-id="${CSS.escape(leftmost.id)}"] .chat-input-textarea`,
+          )?.focus();
+        });
+        // Seeds still apply — "+ Add session" on a project must land its project
+        // on the draft the user is looking at, not silently do nothing. A BOUND
+        // seed (task ▶ Start) additionally rebinds the reused column, cwd
+        // included: a task carrying its own folder outranks the memory the draft
+        // opened on, and dropping the binding here would launch a second task.
+        if (seed) {
+          setDraftColumns(prev => prev.map(d => {
+            if (d.id !== leftmost.id) return d;
+            const next = { ...d };
+            if (seed.project !== undefined) {
+              next.project = seed.project;
+              // A "+" seed outranks a previous AI guess but NOT the user's own
+              // pick — otherwise reusing the column would silently move a project
+              // they chose by hand.
+              if (d.projectSource !== 'user') next.projectSource = 'seed';
+            }
+            // Tier seed (pin-tier header "+"), again without metaTouched — see
+            // DraftSeed.pinTier. Skipped once the user has edited the meta.
+            if (seed.pinTier && !d.metaTouched) next.meta = { ...next.meta, pinTier: seed.pinTier };
+            if (seed.taskId) {
+              next.taskId = seed.taskId;
+              next.boundTaskTitle = seed.boundTaskTitle;
+              if (seed.cwd) {
+                next.cwd = seed.cwd;
+                next.host = seed.host ?? null;
+                next.hostLabel = seed.hostLabel;
+                // Only a TASK's own folder is a pin. A ▶ that fell back to the
+                // launch memory hands the folder over as a starting point, so a
+                // project default may still refine it.
+                next.cwdPinned = seed.cwdPinned === true;
+                if (!next.metaTouched) next.meta = withDirLaunchMemory(next.meta, next.cwd, next.host);
+              }
+            }
+            return next;
+          }));
+        }
+        return leftmost.id;
+      }
+    }
+
+    const id = `${DRAFT_COL_PREFIX}${Date.now()}-${draftSeqRef.current++}`;
+    // The seed is the ONLY path source now (a task's own cwd, or a project's
+    // default patched in asynchronously). Unseeded → '' = "choose a folder".
+    const pinnedSeed = !!(seed?.cwd && seed.cwdPinned);
+    const cwd = seed?.cwd ?? '';
+    const host = seed?.host ?? null;
+    const hostLabel = seed?.hostLabel;
+    setDraftColumns(prev => [
+      ...prev,
+      {
+        id, cwd, host,
+        ...(hostLabel ? { hostLabel } : {}),
+        // 'seed' (not 'user'): a project "+" pre-fills the pill, but the user
+        // hasn't chosen anything yet. Both are FINAL against the AI backfill —
+        // the distinction exists so a future rule can tell them apart.
+        ...(seed?.project ? { project: seed.project, projectSource: 'seed' as const } : {}),
+        ...(seed?.taskId ? { taskId: seed.taskId, boundTaskTitle: seed.boundTaskTitle } : {}),
+        ...(pinnedSeed ? { cwdPinned: true } : {}),
+        // Per-directory launch memory, applied at OPEN time: the bar shows the
+        // model/engine this folder actually launches with, instead of "Auto" that
+        // silently becomes something else at Start. metaTouched is false here by
+        // construction, so there is no user pick to overwrite. Synchronous (module
+        // cache only) — a cold cache just leaves the launcher defaults. A tier seed
+        // rides on top WITHOUT metaTouched (see DraftSeed.pinTier).
+        meta: {
+          ...withDirLaunchMemory(freshLauncherMeta(), cwd, host),
+          ...(seed?.pinTier ? { pinTier: seed.pinTier } : {}),
+        },
+      },
+    ]);
+    setSessionColumns(prev => forceAddSessionColumn(prev, id));
+    setFocusDraftId(id);
+    return id;
+    // Stable identity (refs only, no state deps) — TodoPanel is React.memo'd and
+    // takes this as a prop; a new arrow per render would re-render the task list
+    // on every draft keystroke.
+  }, []);
+  openDraftColumnRef.current = openDraftColumn;
+
+  /** Drop a draft's client-side state: the row, its persisted composer text and
+   *  its focus claim. The strip SLOT is handled by the caller, because the two
+   *  exits differ there — closing removes the column, Start morphs it into the
+   *  `pending:` one. */
+  const forgetDraft = useCallback((draftId: string) => {
+    setDraftColumns(prev => prev.filter(d => d.id !== draftId));
+    setFocusDraftId(prev => (prev === draftId ? null : prev));
+    try { localStorage.removeItem(draftComposerKey(draftId)); } catch { /* storage disabled */ }
+  }, []);
+
+  /** Discard a draft: column + row + persisted composer text. Close = no trace. */
+  const closeDraftColumn = useCallback((draftId: string) => {
+    setSessionColumns(prev => removeSessionColumn(prev, draftId));
+    forgetDraft(draftId);
+  }, [forgetDraft]);
+
+  /**
+   * A cwd/host pick landed on this draft (folder picker, or a recent-dir chip in
+   * the draft body).
+   *
+   * `meta` is stored VERBATIM — every caller has already resolved the
+   * launch-memory question for the directory it is handing over, and re-resolving
+   * it here would undo the answer: the picker suppresses memory once the user
+   * touches its model/engine controls during that open, so re-applying would
+   * silently restore the folder's remembered model over the user's explicit Auto.
+   *
+   * `metaTouched` therefore STICKS once the confirmed meta diverges from the
+   * picked directory's memory — that divergence is the only thing that can mean
+   * "the user chose this" (see launchDivergesFromDirMemory), and without latching
+   * it here a later cwd change would refresh model/engine right back over the
+   * choice they just made inside the picker.
+   */
+  const handleDraftPathChange = useCallback((draftId: string, path: QuickStartPath, meta: QuickStartTaskMeta) => {
+    setDraftColumns(prev => prev.map(d => (d.id === draftId
+      // `createCwd` is always REWRITTEN (never merged) so re-picking an existing
+      // folder clears a stale "create it" flag from an earlier pick.
+      ? {
+          // The folder is now the user's own pick (`cwdPinned`), so any ✦ the AI
+          // put on it is no longer true — drop the badge with the same write.
+          ...clearAiFields(d, ['cwd']),
+          cwd: path.cwd, host: path.host, hostLabel: path.hostLabel, meta, cwdPinned: true,
+          createCwd: path.createCwd === true,
+          metaTouched: d.metaTouched || launchDivergesFromDirMemory(meta, path.cwd, path.host),
+        }
+      : d)));
+  }, []);
+
+  /** Project pill / quick-access chip → an EXPLICIT project choice. `projectSource:
+   *  'user'` is what makes it final: the background parse (handleDraftAiParse) will
+   *  never write over it again, however the sentence changes. */
+  const handleDraftProjectChange = useCallback((draftId: string, project: string) => {
+    setDraftColumns(prev => prev.map(d => (d.id === draftId
+      ? { ...clearAiFields(d, ['project']), project, projectSource: 'user' as const }
+      : d)));
+  }, []);
+
+  /**
+   * A background parse of a draft's composer text landed (R9).
+   *
+   * Purely additive back-fill of the launch pills — which fields it MAY write is
+   * `applyDraftParse`'s rule, not this handler's: project only while unclaimed,
+   * tier/priority/star only while `metaTouched` is false, and NEITHER may latch an
+   * authority flag (an AI value must not masquerade as a user pick, or it would
+   * switch off per-directory launch memory). Registry lookup only — no fetch.
+   */
+  const projectDefaultsRef = useRef(projectDefaults);
+  projectDefaultsRef.current = projectDefaults;
+  const handleDraftAiParse = useCallback((draftId: string, parse: QuickTaskParse) => {
+    setDraftColumns(prev => prev.map(d => (d.id === draftId
+      ? applyDraftParse(d, parse, (name) => projectDefaultsRef.current.get(name.trim().toLowerCase()))
+      : d)));
+  }, []);
+
+  /** Which registry project OWNS this folder (its `default_cwd`), so a draft's
+   *  quick-access chip sets folder + project in one click. '' = no project
+   *  declares it, in which case the caller leaves the project alone rather than
+   *  clearing a seeded one. Reads the already-loaded registry — no fetch, which
+   *  the draft path requires. */
+  const projectForDir = useCallback(
+    (cwd: string) => projectByCwd.get(cwd.replace(/\/+$/, '')) ?? '',
+    [projectByCwd],
+  );
+
+  /** A launch-meta edit from the draft's launch bar (model / engine / pin tier /
+   *  star / unread / priority). Every route in is a USER action, so this is also
+   *  the one place that flips `metaTouched` — from then on the row's meta is
+   *  authoritative and per-directory launch memory stops overwriting it (same
+   *  contract as SessionPathSelector's `launchTouchedRef`). */
+  const handleDraftMetaChange = useCallback((
+    draftId: string,
+    updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta,
+  ) => {
+    setDraftColumns(prev => prev.map(d => (d.id === draftId
+      // metaTouched already stops the AI from writing these — dropping the ✦
+      // badges keeps the display honest about who chose what.
+      ? {
+          ...clearAiFields(d, ['pinTier', 'priority', 'starred', 'dueDate', 'startDate', 'endDate']),
+          meta: updater(d.meta), metaTouched: true,
+        }
+      : d)));
+  }, []);
+
+  // One-time sweep of orphaned composer drafts. Draft ids are timestamped, so a
+  // key from a previous page load can never be reached again — without this the
+  // user's unsent text would accumulate in localStorage forever.
+  useEffect(() => {
+    try {
+      const prefix = draftComposerKey('');
+      const stale: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key?.startsWith(prefix)) stale.push(key);
+      }
+      for (const key of stale) localStorage.removeItem(key);
+    } catch { /* storage disabled — nothing to sweep */ }
+  }, []);
+
   // ── Session column handlers ──
   // Clicking a session pill always opens/moves to rightmost — use close button to dismiss.
   // Single path for "open a session, with toast if fully locked" — shared by pill
@@ -862,6 +1223,25 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         setPathSelectorOpen(false);
         setQuickTaskOpen(false);
         setSessionSearchOpen(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [visible]);
+
+  // ⌘⇧Enter opens a new draft session column — the keyboard twin of "+".
+  // NOT ⌘N / ⌘⇧N: those are reserved by the browser (new window / new private
+  // window) and cannot be preventDefault'd from a page, so binding them would
+  // "work" in tests and silently lose to the browser for real users. Same
+  // input-focus guard and `visible` gate as the ⌘⇧O listener above.
+  useEffect(() => {
+    if (!visible) return;
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'Enter') {
+        const active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable)) return;
+        e.preventDefault();
+        openDraftColumnRef.current();
       }
     };
     window.addEventListener('keydown', handler);
@@ -993,9 +1373,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Fork: pending panel metadata (same pattern as quick-start)
   const pendingForkMetaRef = useRef<{ id: string; cwd: string; host?: string; realTaskId?: string; httpError?: string } | null>(null);
   const pendingForkTaskRef = useRef<string | null>(null);
-  // Fallback poll handle for pending columns (used by promoteToRealSession below
-  // and armed by the effect further down; declared here so both can see it).
-  const pendingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Fallback poll canceller for pending columns (used by promoteToRealSession
+  // below and armed by the effect further down; declared here so both can see
+  // it). Holds visibleInterval's cancel fn — hidden tabs skip poll ticks.
+  const pendingPollRef = useRef<(() => void) | null>(null);
 
   // Swap a `pending:*` placeholder column for its real session id and clear the
   // pending bookkeeping, so the event/poll fallbacks can't fire a second swap.
@@ -1013,7 +1394,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       pendingForkMetaRef.current = null;
       pendingForkTaskRef.current = null;
     }
-    if (pendingPollRef.current) { clearInterval(pendingPollRef.current); pendingPollRef.current = null; }
+    if (pendingPollRef.current) { pendingPollRef.current(); pendingPollRef.current = null; }
     setSessionColumns(prev => replaceSessionColumn(prev, pendingColId, sessionId));
     log.info('session', 'promoted pending column to real session', { sessionId, taskId });
   }, []);
@@ -1029,37 +1410,48 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setPathSelectorOpen(false);
   }, []);
 
-  // TodoPanel toolbar "+" launcher — opens the SAME SessionPathSelector /
-  // QuickTaskComposer components, but anchored INSIDE the task panel with a
-  // Session | Task tab header (Session default). Never touches chat
-  // visibility: the whole point of this entry is starting a session while
-  // the chat column stays hidden.
+  // TodoPanel toolbar "+" — one verb "New": grow an empty draft session column.
+  // No popover, no tabs, no network; the draft's own composer row covers what the
+  // old Session|Task tab pair did ("◌ Create task for later" is the Task half).
   const handleToolbarOpenLauncher = useCallback(() => {
-    setLauncherAnchor('todo');
-    setLauncherProject(null);    // plain "+" carries no project seed
-    setQuickTaskOpen(false);
-    setPathSelectorOpen(true);   // Session tab is the default
-  }, []);
-  // Project header "+ → Add session (with task)": same todo-anchored launcher,
-  // but the resulting task files under the project and the path picker seeds
-  // from the project's default cwd/host. The detail fetch is best-effort — no
-  // defaults just means the picker opens on its usual recents.
-  const handleOpenLauncherForProject = useCallback(async (project: string) => {
-    setLauncherAnchor('todo');
-    setQuickTaskOpen(false);
-    // Resolve the project's default cwd/host BEFORE opening: the picker reads
-    // initialPath only in its open effect, so seeding after open would need a
-    // remount that discards whatever the user typed meanwhile. The fetch is one
-    // small metadata read — a beat of delay beats losing in-flight state.
-    let path: { cwd: string; host: string | null } | undefined;
-    try {
-      const detail = await fetchProjectDetail(project);
+    openDraftColumn();
+  }, [openDraftColumn]);
+
+  // Project header "+ → Add session": open the draft IMMEDIATELY with the project
+  // pill pre-filled, then patch in the project's default cwd/host when the detail
+  // fetch lands. Opening first is the point — the old flow awaited the fetch
+  // before showing anything, which is exactly the delay this design removes.
+  const handleOpenLauncherForProject = useCallback((project: string) => {
+    const draftId = openDraftColumn({ project });
+    fetchProjectDetail(project).then((detail) => {
       const cwd = detail.metadata?.default_cwd;
-      if (cwd) path = { cwd, host: detail.metadata?.default_host ?? null };
-    } catch { /* no defaults → picker opens on recents */ }
-    setLauncherProject({ project, ...(path ? { path } : {}) });
-    setPathSelectorOpen(true);
-  }, []);
+      if (!cwd) return;
+      setDraftColumns(prev => prev.map(d => {
+        // Only patch while this draft is still open AND the user hasn't picked a
+        // path themselves — a late async seed must never move a chosen folder.
+        if (d.id !== draftId || d.cwdPinned) return d;
+        const host = detail.metadata?.default_host ?? null;
+        return {
+          ...d, cwd, host, hostLabel: undefined,
+          // The launch bar now SHOWS the model/engine, so a cwd move has to move
+          // them with it (unless the user already edited them) — otherwise the bar
+          // would keep displaying the previous folder's remembered model while the
+          // launch used this one's.
+          meta: d.metaTouched ? d.meta : withDirLaunchMemory(d.meta, cwd, host),
+        };
+      }));
+    }).catch(() => { /* no defaults → the draft keeps the launch-memory path */ });
+  }, [openDraftColumn]);
+  openLauncherForProjectRef.current = handleOpenLauncherForProject;
+
+  // Pin-tier header "+" (R8) — the same one-click-to-a-draft gesture as a project
+  // header's "+", with the tier pre-selected instead of the project. Network-free:
+  // a tier is a local value, so there is nothing to fetch (contrast the project
+  // path above, which patches in a default_cwd when its detail lands).
+  const handleOpenLauncherForTier = useCallback((tier: string) => {
+    openDraftColumn({ pinTier: tier });
+  }, [openDraftColumn]);
+
   // fix-walnut pill → skip the path picker entirely: the target is Walnut's own
   // checkout (server-authoritative), the user only describes what's broken.
   const walnutInstallDirRef = useRef(walnutInstallDir);
@@ -1098,6 +1490,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }, 50);
   }, []);
 
+  // NOTE: there is deliberately no draft-column "Fix Walnut" chip. The repair
+  // entry point is the CHAT pill (handleFixWalnut above) only — inside a draft the
+  // chip was one more thing between the user and the folder they actually wanted,
+  // and a quick-access chip for Walnut's own checkout does the same job. The
+  // DraftColumn.intent plumbing (handleDraftStart forwards it to quick-start)
+  // stays wired but no draft UI sets it any more.
+
   // Auto-open session panel when a quick-start or fork session resolves.
   // Strategy: listen to task:updated events (fires after linkSession persists the
   // session record). Also poll as fallback in case the WS event is missed.
@@ -1113,7 +1512,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       const pendingMeta = pendingQuickStartMetaRef.current;
       pendingQuickStartRef.current = null;
       pendingQuickStartMetaRef.current = null;
-      if (pendingPollRef.current) { clearInterval(pendingPollRef.current); pendingPollRef.current = null; }
+      if (pendingPollRef.current) { pendingPollRef.current(); pendingPollRef.current = null; }
       if (pendingMeta) {
         setSessionColumns(prev => replaceSessionColumn(prev, pendingMeta.id, sessionId));
       } else {
@@ -1127,7 +1526,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       const meta = pendingForkMetaRef.current;
       pendingForkTaskRef.current = null;
       pendingForkMetaRef.current = null;
-      if (pendingPollRef.current) { clearInterval(pendingPollRef.current); pendingPollRef.current = null; }
+      if (pendingPollRef.current) { pendingPollRef.current(); pendingPollRef.current = null; }
       if (meta) {
         setSessionColumns(prev => replaceSessionColumn(prev, meta.id, sessionId));
       } else {
@@ -1140,13 +1539,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // Fallback poll: if WS events are missed, poll for the session ID every 2s
   useEffect(() => {
-    return () => { if (pendingPollRef.current) clearInterval(pendingPollRef.current); };
+    return () => { pendingPollRef.current?.(); };
   }, []);
-  // Start polling when a pending column exists
+  // Start polling when a pending column exists. Deliberately PENDING-only: a
+  // `draft:` column has no in-flight launch to resolve, so polling for it would
+  // be a 2s timer with nothing to find.
   useEffect(() => {
-    const hasPending = sessionColumns.some(s => s.id.startsWith('pending:'));
+    const hasPending = sessionColumns.some(s => isPendingColumnId(s.id));
     if (!hasPending || pendingPollRef.current) return;
-    pendingPollRef.current = setInterval(async () => {
+    pendingPollRef.current = visibleInterval(async () => {
       // Try quick-start pending
       const qsTaskId = pendingQuickStartRef.current;
       if (qsTaskId && !qsTaskId.startsWith('pending-')) {
@@ -1157,7 +1558,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             const pendingMeta = pendingQuickStartMetaRef.current;
             pendingQuickStartRef.current = null;
             pendingQuickStartMetaRef.current = null;
-            clearInterval(pendingPollRef.current!);
+            pendingPollRef.current!();
             pendingPollRef.current = null;
             if (pendingMeta) {
               setSessionColumns(prev => replaceSessionColumn(prev, pendingMeta.id, active.claudeSessionId));
@@ -1178,7 +1579,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             const meta = pendingForkMetaRef.current;
             pendingForkTaskRef.current = null;
             pendingForkMetaRef.current = null;
-            clearInterval(pendingPollRef.current!);
+            pendingPollRef.current!();
             pendingPollRef.current = null;
             if (meta) {
               setSessionColumns(prev => replaceSessionColumn(prev, meta.id, active.claudeSessionId));
@@ -1239,7 +1640,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     } catch { /* non-critical */ }
   }, [openSessionOrToast]);
 
-  const handleCreate = useCallback(async (input: { title: string; priority: string; project?: string; due_date?: string; start_date?: string; starred?: boolean; pinnedTier?: string; capture?: boolean }) => {
+  const handleCreate = useCallback(async (input: { title: string; priority: string; project?: string; description?: string; due_date?: string; start_date?: string; end_date?: string; starred?: boolean; pinnedTier?: string; capture?: boolean }) => {
     const tier = input.pinnedTier;
     // Quick-capture ("Add to <tier>…" inline rows, Focus Dock) routes to the user's
     // configured Default Platform + Project instead of the active tab's project — so a
@@ -1254,8 +1655,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         title: input.title,
         priority: input.priority,
         project: input.capture ? captureProject : input.project,
+        // Long-form body (a draft column's "Create task for later": everything
+        // after the first line). Passed straight through — POST /api/tasks → addTask.
+        description: input.description,
         due_date: input.due_date,
         start_date: input.start_date,
+        end_date: input.end_date,
         ...(input.capture ? { source: captureSource } : {}),
       },
       tier
@@ -1300,7 +1705,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     await handleCreate({ title, priority: 'none', pinnedTier: 'focus', capture: true });
   }, [handleCreate]);
 
-  // Ref to avoid re-creating handleFocusTask on every focus change (which defeats React.memo on TodoPanel)
+  // Read the current focus without re-creating callbacks on every focus change
+  // (that would defeat React.memo on TodoPanel). Used by the Esc handler and the
+  // "focused task went away" effects below.
   const focusedTaskRef = useRef(focusedTask);
   focusedTaskRef.current = focusedTask;
 
@@ -1314,16 +1721,19 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [suppressDetail]);
 
   const handleFocusTask = useCallback((task: Task, opts?: { openDetail?: boolean }) => {
-    const isRefocus = focusedTaskRef.current?.id === task.id;
     // Always focus (never toggle off) — unfocusing is done via detail panel close / Esc.
     // Increment nonce so TodoPanel re-scrolls even when the same task is re-clicked.
     setFocusScope('all'); // explicit user locate — full behavior incl. tab switch
     setFocusedTask(task);
     setFocusNonce(n => n + 1);
     setSuppressDetail(opts?.openDetail === false); // Auto-clears on next direct click (opts is undefined → false)
-    // Clear attention flag on new focus (not re-focus)
-    if (!isRefocus && task.needs_attention) {
-      update(task.id, { needs_attention: false });
+    // THE read event: opening a task marks it read. Deliberately NOT gated on
+    // "is this a new focus" — a task can go unread again while it is still the
+    // focused one (the agent finishes another turn), and under the old
+    // !isRefocus gate re-clicking it left the dot stuck on forever. Guarded on
+    // task.unread so a read task issues no write at all.
+    if (task.unread) {
+      update(task.id, { unread: false });
     }
   }, [update]);
 
@@ -1456,17 +1866,52 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // API call. Deliberately does NOT touch chat state/visibility: the todo-panel
   // "+" entry point starts sessions while the chat column stays hidden (the CLI
   // spawns with an empty first message and idles on stdin).
-  const launchQuickStart = useCallback((qsp: QuickStartPath, metaSnapshot: QuickStartTaskMeta | null, text: string, images?: ImageAttachment[], project?: string) => {
+  const launchQuickStart = useCallback((
+    qsp: QuickStartPath,
+    metaSnapshot: QuickStartTaskMeta | null,
+    text: string,
+    images?: ImageAttachment[],
+    project?: string,
+    opts?: {
+      /** Existing column to MORPH into the pending column (a `draft:` id) instead
+       *  of inserting a new one — keeps the draft's index and lock state. */
+      columnId?: string;
+      /** Reuse this task instead of letting the server create one (task ▶ Start). */
+      taskId?: string;
+    },
+  ) => {
       // Set pending ref BEFORE the async call so WS events that arrive
-      // during the HTTP round-trip can still match via taskId
+      // during the HTTP round-trip can still match via taskId. With a real
+      // taskId in hand (▶ Start on an existing task) that IS the match key —
+      // the server won't mint a new one to swap in later.
       const tempTaskId = `pending-${Date.now()}`;
-      pendingQuickStartRef.current = tempTaskId;
+      pendingQuickStartRef.current = opts?.taskId ?? tempTaskId;
 
-      // Immediately open a pending session column for instant visual feedback
+      // Immediately open a pending session column for instant visual feedback.
+      // Morph in place when a draft asked for it; otherwise force-insert.
+      // forceAddSessionColumn, NOT addSessionColumn: the old insert silently
+      // returned `prev` when every panel was locked, so the launch proceeded into
+      // a column that never existed (invisible session, no error). There is no
+      // rejection path left, hence no toast.
       const pendingColId = `pending:${tempTaskId}`;
-      setSessionColumns(prev => addSessionColumn(prev, pendingColId, triageOpenRef.current, maxPanelsRef.current));
-      // Store pending metadata for rendering
-      pendingQuickStartMetaRef.current = { id: pendingColId, cwd: qsp.cwd, host: qsp.host ?? undefined, hostLabel: qsp.hostLabel ?? undefined, message: text };
+      setSessionColumns(prev => {
+        if (opts?.columnId) {
+          const morphed = replaceSessionColumn(prev, opts.columnId, pendingColId);
+          if (morphed !== prev) return morphed;   // draft column found → morphed in place
+        }
+        return forceAddSessionColumn(prev, pendingColId);
+      });
+      // Store pending metadata for rendering. `realTaskId` is seeded up front for
+      // the reuse case so the error banner + Retry (which reuses the task rather
+      // than creating a second one) work before the HTTP response lands.
+      pendingQuickStartMetaRef.current = {
+        id: pendingColId,
+        cwd: qsp.cwd,
+        host: qsp.host ?? undefined,
+        hostLabel: qsp.hostLabel ?? undefined,
+        message: text,
+        ...(opts?.taskId ? { realTaskId: opts.taskId } : {}),
+      };
 
       // `pinTier: null` — NOT undefined — is how an explicit "don't pin this"
       // reaches the server: undefined is dropped by JSON.stringify, and the
@@ -1475,9 +1920,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // fix-walnut re-edit was silently overridden back to the server default.
       const taskMeta = metaSnapshot ? {
         starred: metaSnapshot.starred,
-        needs_attention: metaSnapshot.needs_attention,
+        unread: metaSnapshot.unread,
         priority: metaSnapshot.priority,
         pinTier: metaSnapshot.pinTier ?? null,
+        ...(metaSnapshot.dueDate ? { due_date: metaSnapshot.dueDate } : {}),
+        ...(metaSnapshot.startDate ? { start_date: metaSnapshot.startDate } : {}),
+        ...(metaSnapshot.endDate ? { end_date: metaSnapshot.endDate } : {}),
       } : undefined;
       // Model is a session arg, not task metadata. undefined = Auto (let the
       // CLI/config default decide) — only forwarded when the user picks one.
@@ -1487,7 +1935,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // back to Claude instead of letting the server reject the quick-start.
       const engine = qsp.host && qsp.host !== '__local__' ? undefined : metaSnapshot?.engine;
 
-      quickStartSession({
+      const settled = quickStartSession({
         cwd: qsp.cwd,
         host: qsp.host ?? undefined,
         message: text,
@@ -1498,6 +1946,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         project,
         intent: qsp.intent,
         createCwd: qsp.createCwd,
+        taskId: opts?.taskId,
       }).then((result) => {
         // Update ref with real taskId (WS events use this to match)
         if (pendingQuickStartRef.current === tempTaskId) {
@@ -1515,6 +1964,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         if (result.sessionId) {
           promoteToRealSession(pendingColId, result.sessionId, result.taskId);
         }
+        // RE-WARM the working-dirs cache this launch just invalidated (a new
+        // session = a new/updated path entry, so quickStartSession drops it).
+        // Without this the cache stays cold for the rest of the page's life and
+        // every later draft loses its recent-folder chips + per-directory launch
+        // memory — both of which read the cache SYNCHRONOUSLY and never fetch.
+        // Fired here, well before any draft opens, so the open path stays
+        // network-free; failure just leaves the chips hidden.
+        void fetchWorkingDirs().catch(() => { /* chips stay hidden until the next launch */ });
         // No butler notification here anymore. Title AND project are both
         // server-side now: the session-auto-title hook titles from the
         // user's first message (CLI generate_session_title), and quick-start
@@ -1532,20 +1989,216 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         setSessionColumns(prev => [...prev]);
         notify(quickStartFailedNotification(qsp.host, qsp.cwd, errMsg));
       });
+
+      // THE single write point of the launch memory — every entry point funnels
+      // through here. Still read by ▶ Start on a task with no folder of its own
+      // (the only remaining reader; a plain "+" draft is deliberately
+      // path-neutral). Written on dispatch (not on success): the intent is what
+      // matters, and a failed launch still tells us where they were aiming.
+      rememberLaunchPath({ cwd: qsp.cwd, host: qsp.host ?? null, ...(qsp.hostLabel ? { hostLabel: qsp.hostLabel } : {}) });
+
+      // For ▶ Start's in-flight latch: the launch is only "settled" once the HTTP
+      // round-trip lands (both branches above already handled their own effects —
+      // this resolves either way and never rejects).
+      return settled.then(() => undefined, () => undefined);
   }, [notify]);
 
-  // Todo-anchored select = path-first flow: no chat input to type a first
-  // message into, so start the session immediately with an empty message —
-  // the CLI spawns, initializes, and idles; the user talks to it in the
-  // session column that opens.
-  const handleTodoPathSelect = useCallback((path: QuickStartPath, taskMeta: QuickStartTaskMeta) => {
-    setPathSelectorOpen(false);
-    // Consume the project-header seed (if any) — the launched task files under
-    // that project. Clear it so the next plain launch doesn't inherit it.
-    const seededProject = launcherProjectRef.current?.project;
-    setLauncherProject(null);
-    launchQuickStart(path, taskMeta, '', undefined, seededProject);
-  }, [launchQuickStart]);
+  // ── Draft column → session / task ──
+
+  /**
+   * "Start ↵" in a draft column. Returns a PROMISE always (never a bare `false`):
+   * ChatInput restores the composer only for a promise resolving false — a sync
+   * false takes its other branch and CLEARS the persisted draft, losing the text.
+   */
+  const handleDraftStart = useCallback(async (draftId: string, text: string, images?: ImageAttachment[]): Promise<boolean> => {
+    const draft = draftColumnsRef.current.find(d => d.id === draftId);
+    // Gone (double-send, closed mid-flight): report success so ChatInput doesn't
+    // resurrect text into a composer that no longer exists.
+    if (!draft) return true;
+    if (!draft.cwd) {
+      // No folder yet → ask for one and keep the text. The panel self-guards this
+      // case before ever calling us; this is the belt-and-braces path (state
+      // divergence), so drive the picker through the nonce rather than dead-ending.
+      setDraftColumns(prev => prev.map(d => (d.id === draftId ? { ...d, openPickerNonce: (d.openPickerNonce ?? 0) + 1 } : d)));
+      return false;
+    }
+    // A BOUND draft (task ▶ Start on a title-only task) with an empty composer
+    // still has something to say: the task's own title. Without this the CLI
+    // would spawn and idle on a task the user explicitly asked to work on.
+    const message = text.trim() || (draft.taskId ? draft.boundTaskTitle ?? '' : text);
+    // ONE commit: the strip slot morphs draft:→pending: (inside launchQuickStart)
+    // while the draft row + its composer key disappear. Splitting these would
+    // render either a `pending:` column still holding a DraftSessionPanel, or a
+    // draft row with no column — both flash visibly.
+    forgetDraft(draftId);
+    launchQuickStart(
+      // createCwd must ride along: the picker's "Create folder & start" row
+      // confirms a path that does not exist yet, and only this flag makes
+      // quick-start mkdir it before spawning. `intent` likewise: it is what turns
+      // the launch into a repair (server-side briefing + task title/project).
+      {
+        cwd: draft.cwd, host: draft.host, hostLabel: draft.hostLabel,
+        ...(draft.createCwd ? { createCwd: true } : {}),
+        ...(draft.intent ? { intent: draft.intent } : {}),
+      },
+      draft.meta,
+      message,
+      images,
+      draft.project || undefined,
+      // `taskId` on a bound draft REUSES that task (server's existingTaskId
+      // branch) instead of minting a second one for the same work.
+      { columnId: draftId, ...(draft.taskId ? { taskId: draft.taskId } : {}) },
+    );
+    return true;
+  }, [forgetDraft, launchQuickStart]);
+
+  /** "◌ Create task for later": the composed text becomes a task, no session. First
+   *  line = title, the rest = description. Images are dropped (text-only by design). */
+  const handleDraftSaveAsTask = useCallback(async (draftId: string, text: string) => {
+    const draft = draftColumnsRef.current.find(d => d.id === draftId);
+    const [firstLine, ...rest] = text.split('\n');
+    const title = firstLine.trim();
+    if (!title) return;   // button is disabled on empty, but a whitespace-only body can still reach here
+    const description = rest.join('\n').trim();
+    // Optimistic: the column vanishes on click, before the POST. handleQuickTaskCreate
+    // owns the outcome UI (toast + Undo, or the shared operation-error banner).
+    closeDraftColumn(draftId);
+    try {
+      await handleQuickTaskCreate({
+        title,
+        // The launch bar's meta applies to the TASK exit too — tier, priority and
+        // dates were picked (or ✦-suggested) for this work item, not for the
+        // session transport. Same fields quick-start would have written.
+        priority: draft?.meta.priority ?? 'none',
+        ...(draft?.project ? { project: draft.project } : {}),
+        ...(description ? { description } : {}),
+        ...(draft?.meta.pinTier ? { pinnedTier: draft.meta.pinTier } : {}),
+        ...(draft?.meta.starred ? { starred: true } : {}),
+        ...(draft?.meta.dueDate ? { due_date: draft.meta.dueDate } : {}),
+        ...(draft?.meta.startDate ? { start_date: draft.meta.startDate } : {}),
+        ...(draft?.meta.endDate ? { end_date: draft.meta.endDate } : {}),
+      });
+    } catch {
+      // The create rejected (useTasks already showed the operation-error banner and
+      // rolled its optimistic row back). Put the column BACK with the text intact —
+      // an optimistic close must never be the reason a user's writing disappears.
+      // Same id on purpose: it's timestamped so it can't collide, and remounting
+      // under it makes ChatInput's mount-time draft read restore the text. The key
+      // is written BEFORE the state commit for exactly that reason.
+      if (draft) {
+        try { localStorage.setItem(draftComposerKey(draft.id), text); } catch { /* quota */ }
+        setDraftColumns(prev => (prev.some(d => d.id === draft.id) ? prev : [...prev, draft]));
+        setSessionColumns(prev => forceAddSessionColumn(prev, draft.id));
+        setFocusDraftId(draft.id);
+      }
+    }
+  }, [closeDraftColumn, handleQuickTaskCreate]);
+
+  /**
+   * "▶ Start" on a task row — one click from a task to a working session.
+   *
+   * Four outcomes, in priority order:
+   *  1. The task already HAS a session → just show it (never launch a second one).
+   *  2. No cwd known anywhere → open a draft column seeded with the task's project
+   *     so the user picks a folder; the ▶ is intentionally not a dead end.
+   *  3. TITLE-ONLY task → open a BOUND draft instead of launching. A bare title is
+   *     not a brief: launching straight away spends a session on "do this thing"
+   *     with no context, so the user gets a composer (pre-pointed at the task's
+   *     folder/project, headed "for: <title>") to write the actual instruction.
+   *     The draft carries `taskId`, so Start reuses this task rather than minting
+   *     a second one — and an empty composer falls back to the title, i.e. the old
+   *     behavior is still one keystroke away.
+   *  4. Task WITH a description → launch directly, reusing THIS task (`taskId`),
+   *     with title + description as the first message. The brief already exists.
+   */
+  const handleStartSessionForTask = useCallback(async (task: Task) => {
+    const existing = resolveTaskSessionId(task);
+    if (existing) { openSessionOrToast(existing); return; }
+
+    // In-flight latch. `resolveTaskSessionId` above can't gate a SECOND click:
+    // the task's session_id only lands after the launch round-trips (~270ms
+    // measured), well inside a double-click, and each unguarded pass spawned a
+    // real duplicate CLI session burning tokens against the same brief. The
+    // draft paths below don't strictly need it (openDraftColumn has its own
+    // refocus valve) but they clear it on their synchronous exit anyway —
+    // cheaper than proving which branch a given task takes before latching.
+    if (startingTaskIdsRef.current.has(task.id)) return;
+    startingTaskIdsRef.current.add(task.id);
+    let unlatchDeferred = false;
+    try {
+      const last = readLastLaunchPath();
+      const cwd = task.cwd || last?.cwd;
+      if (!cwd) {
+        openDraftColumn({
+          project: task.project || undefined,
+          taskId: task.id, boundTaskTitle: task.title,
+        });
+        return;
+      }
+
+      // The home list payload (`fields=list`) DROPS description and keeps only the
+      // `has_description` flag, so the full task has to be fetched to build the
+      // first message. Best-effort: a failed fetch still launches with the title.
+      // Typed as optional even though core Task declares `description: string` —
+      // that projection genuinely omits the field at runtime.
+      let description: string | undefined = task.description;
+      if (!description && (task as { has_description?: boolean }).has_description) {
+        const full = await fetchTask(task.id).catch(() => null);
+        description = full?.description;
+      }
+
+      // Title-only → hand the user a bound draft, don't launch. Read AFTER the lazy
+      // fetch above so a list-payload row (description dropped, `has_description`
+      // true) isn't mistaken for title-only.
+      if (!description?.trim()) {
+        openDraftColumn({
+          project: task.project || undefined,
+          taskId: task.id, boundTaskTitle: task.title,
+          // A task's own cwd is a PIN; otherwise the folder this ▶ would have
+          // launched in (`cwd`, resolved from the launch memory above) rides along
+          // as a mere starting point (no pin — a project default may still refine
+          // it). Spelled out HERE rather than inherited from openDraftColumn, which
+          // is deliberately path-neutral now: a plain "+" must not inherit the last
+          // launch, but a ▶ that already decided it has somewhere to run should hand
+          // the bound draft that same folder.
+          ...(task.cwd
+            ? { cwd: task.cwd, host: null, cwdPinned: true }
+            : { cwd, host: last?.host ?? null, ...(last?.hostLabel ? { hostLabel: last.hostLabel } : {}) }),
+        });
+        return;
+      }
+
+      const message = `${task.title}\n\n${description}`;
+
+      // Host rides ONLY with a memory-derived cwd. A task carrying its own cwd is
+      // pinned to that path — pairing it with the last remembered host would launch
+      // a local folder on whatever remote box was used last.
+      const fromMemory = !task.cwd;
+      // Awaited so the latch holds through the whole HTTP round-trip — the
+      // window in which a second click still sees a session-less task.
+      await launchQuickStart(
+        {
+          cwd,
+          host: fromMemory ? (last?.host ?? null) : null,
+          ...(fromMemory && last?.hostLabel ? { hostLabel: last.hostLabel } : {}),
+        },
+        freshLauncherMeta(),
+        message,
+        undefined,
+        task.project || undefined,
+        { taskId: task.id },
+      );
+      // HTTP settling is NOT the end of the race: `task.session_id` only reaches
+      // this row via the task:updated broadcast, so `resolveTaskSessionId` at the
+      // top still answers null for a beat after the await. Hold the latch a few
+      // seconds longer — long past any broadcast, short enough that a genuinely
+      // failed launch (whose notification the user just read) can be retried.
+      unlatchDeferred = true;
+      setTimeout(() => startingTaskIdsRef.current.delete(task.id), 5000);
+    } finally {
+      if (!unlatchDeferred) startingTaskIdsRef.current.delete(task.id);
+    }
+  }, [launchQuickStart, openDraftColumn, openSessionOrToast]);
 
   const handleSendMessage = useCallback((text: string, images?: ImageAttachment[]) => {
     const qsp = quickStartPathRef.current;
@@ -1678,6 +2331,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onRenameGroup={renameGroup}
           onSetGroupHidden={setGroupHidden}
           onOpenSession={handleToggleSession}
+          onStartSession={handleStartSessionForTask}
           openSessionIds={openSessionIdSet}
           openSessionTaskIds={openSessionTaskIds}
           onOpenTriageForTask={handleOpenTriageForTask}
@@ -1698,49 +2352,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onProjectChange={setActiveProject}
           onOpenLauncher={handleToolbarOpenLauncher}
           onOpenLauncherForProject={handleOpenLauncherForProject}
+          onOpenLauncherForTier={handleOpenLauncherForTier}
         />
-        {/* Todo-anchored launcher popover — the SAME components as the chat
-            column's, wrapped in a Session | Task tab header and dropping DOWN
-            from the toolbar (todo-launcher-popover flips the bottom:100%
-            anchoring). Session select starts the session immediately (empty
-            first message) — chat stays hidden. */}
-        {launcherAnchor === 'todo' && (pathSelectorOpen || quickTaskOpen) && (
-          <div className="todo-launcher-popover">
-            {/* stopPropagation: the hosted components' document-level outside-click
-                handlers would treat a tab mousedown as "outside" and close the
-                popover before the tab's click ever fires. */}
-            <div className="todo-launcher-tabs" onMouseDown={(e) => e.stopPropagation()}>
-              <button
-                className={`todo-launcher-tab${pathSelectorOpen ? ' active' : ''}`}
-                onClick={() => { setQuickTaskOpen(false); setPathSelectorOpen(true); }}
-              >
-                Session
-              </button>
-              <button
-                className={`todo-launcher-tab${quickTaskOpen ? ' active' : ''}`}
-                onClick={() => { setPathSelectorOpen(false); setQuickTaskOpen(true); }}
-              >
-                Task
-              </button>
-            </div>
-            {/* Project seed (initialPath) is resolved BEFORE open (see
-                handleOpenLauncherForProject), so the open effect reads it — no
-                remount, no lost in-flight state. */}
-            <SessionPathSelector
-              open={pathSelectorOpen}
-              onClose={() => { setPathSelectorOpen(false); setLauncherProject(null); }}
-              onSelect={handleTodoPathSelect}
-              initialPath={launcherProject?.path}
-              confirmOnDismiss={false}
-            />
-            <QuickTaskComposer
-              open={quickTaskOpen}
-              onClose={() => setQuickTaskOpen(false)}
-              projectOptions={quickTaskProjectOptions}
-              onCreate={handleQuickTaskCreate}
-            />
-          </div>
-        )}
+        {/* The todo-anchored launcher popover (Session | Task tabs) is GONE — the
+            toolbar "+" now grows a draft session column in the sessions strip
+            instead of dropping a popover here. The chat-anchored instances of
+            both components remain (fix-walnut + the chat "+" pills). */}
       </div>
 
       {/* Todo Resize Handle — only shown when todo is visible */}
@@ -1826,7 +2443,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             health={health}
             loading={healthLoading}
             onNavigateSettings={handleNavigateSettings}
-            onStartSession={() => { setLauncherAnchor('chat'); setPathSelectorOpen(true); }}
+            onStartSession={() => setPathSelectorOpen(true)}
           />
 
           <ChatPanel messageCount={chat.messages.length} prependedRef={chat.prependedRef}>
@@ -1899,7 +2516,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                     overflow and saves a row of controls. */}
                 <button
                   className="qsb-model-chip"
-                  onClick={() => { setLauncherAnchor('chat'); setPathSelectorOpen(true); setQuickTaskOpen(false); }}
+                  onClick={() => { setPathSelectorOpen(true); setQuickTaskOpen(false); }}
                   title="Edit launch settings (engine, model, star, pin, priority)"
                 >
                   {/* Chip label: codex engine → "Codex" (its models are discovered at
@@ -1927,7 +2544,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           <div style={{ position: 'relative' }}>
             {/* Session path selector popover (above the input) */}
             <SessionPathSelector
-              open={pathSelectorOpen && launcherAnchor === 'chat' && !pendingQuestion}
+              open={pathSelectorOpen && !pendingQuestion}
               onClose={() => setPathSelectorOpen(false)}
               onSelect={handlePathSelect}
               // Re-opening to edit an already-confirmed Quick Start keeps the prior
@@ -1938,7 +2555,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             />
 
             <QuickTaskComposer
-              open={quickTaskOpen && launcherAnchor === 'chat' && !pendingQuestion}
+              open={quickTaskOpen && !pendingQuestion}
               onClose={() => setQuickTaskOpen(false)}
               projectOptions={quickTaskProjectOptions}
               onCreate={handleQuickTaskCreate}
@@ -1953,13 +2570,16 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
             <QuickAccessBar
               onTaskClick={() => {
-                setLauncherAnchor('chat');
                 setQuickTaskOpen(true);
                 setPathSelectorOpen(false);
               }}
+              // "+ Session" — the LAST entry point to switch to one verb "New":
+              // grow a draft column instead of opening the chat-anchored picker.
+              // That picker stays mounted (fix-walnut and the model chip re-open
+              // it), so this only changes the route in, not the plumbing.
+              // Quick-task still closes: the two pills remain mutually exclusive.
               onSessionClick={() => {
-                setLauncherAnchor('chat');
-                setPathSelectorOpen(true);
+                openDraftColumn();
                 setQuickTaskOpen(false);
               }}
               onSessionSearchClick={() => {
@@ -2040,7 +2660,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         {sessionColumns.map((slot, idx) => {
           const sid = slot.id;
           const needsDivider = idx > 0 || triagePanelOpen;
-          const isPending = sid.startsWith('pending:');
+          const isDraft = isDraftColumnId(sid);
+          const draft = isDraft ? draftById.get(sid) : undefined;
+          const isPending = isPendingColumnId(sid);
           const qsMeta = isPending ? pendingQuickStartMetaRef.current : null;
           const forkMeta = isPending ? pendingForkMetaRef.current : null;
           const pendingMeta = (qsMeta?.id === sid ? qsMeta : null) ?? (forkMeta?.id === sid ? forkMeta : null);
@@ -2055,10 +2677,31 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             {/* This divider trades width between colIdx-1 and colIdx only. */}
             {needsDivider && <div className="session-col-resize-handle" {...colSplitHandleProps(colIdx - 1)} />}
             <div
-              className={`main-page-session-column${slot.locked ? ' is-locked' : ''}${idx === sessionColumns.length - 1 ? ' is-mobile-active' : ''}`}
+              className={`main-page-session-column${slot.locked ? ' is-locked' : ''}${idx === mobileActiveIdx ? ' is-mobile-active' : ''}`}
               style={colStyle}
             >
-              {isPending && pendingMeta ? (
+              {isDraft ? (
+                // A `draft:` id resolves to NOTHING server-side, so it must never
+                // reach SessionPanel (which would fetch it and render "session not
+                // found"). Missing row = the draft was just consumed/closed while
+                // the column lingers for a tick → render nothing, not a fallback.
+                draft ? (
+                  <DraftSessionPanel
+                    draft={draft}
+                    autoFocus={sid === focusDraftId}
+                    onStart={handleDraftStart}
+                    onSaveAsTask={handleDraftSaveAsTask}
+                    onClose={closeDraftColumn}
+                    onPathChange={handleDraftPathChange}
+                    onProjectChange={handleDraftProjectChange}
+                    onMetaChange={handleDraftMetaChange}
+                    // Lets a quick-access chip set folder + project together.
+                    projectForDir={projectForDir}
+                    // Back-fills the launch pills from what the user types (R9).
+                    onAiParse={handleDraftAiParse}
+                  />
+                ) : null
+              ) : isPending && pendingMeta ? (
                 <PendingSessionPanel
                   taskId={sid}
                   realTaskId={'realTaskId' in pendingMeta ? (pendingMeta as { realTaskId?: string }).realTaskId : undefined}

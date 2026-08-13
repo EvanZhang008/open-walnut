@@ -39,13 +39,21 @@ export interface QuickStartPath {
  *  The wire-format counterpart in `@/api/sessions` has every field optional — see that file. */
 export interface QuickStartTaskMeta {
   starred: boolean;
-  needs_attention: boolean;
+  /** Start the task already marked unread, so it carries a dot before you ever
+   *  look at its output. */
+  unread: boolean;
   priority: TaskPriority;
   pinTier: FocusTier | undefined;
   /** Session model alias (SESSION_MODELS id). undefined = Auto — let the CLI/config default decide. */
   model: string | undefined;
   /** Coding-agent engine. undefined = 'claude' (native path). 'codex' → ACP-backed, local-only. */
   engine: 'codex' | undefined;
+  /** Task dates (ISO strings), same trio as the Quick Task form — a launch IS a
+   *  task create, so it carries the same fields. Optional (unlike the controls
+   *  above): they render as DatePicker pills, not controlled inputs. */
+  dueDate?: string;
+  startDate?: string;
+  endDate?: string;
 }
 
 interface Props {

@@ -15,6 +15,28 @@ export interface UseProjectRegistryReturn {
   sourceByName: Map<string, string>;
   /** lowercased names of favorited projects (server folds config.favorites.projects in). */
   favoriteByName: Set<string>;
+  /**
+   * A project's `default_cwd` → its canonical name. Answers "which project is
+   * this folder?", which is what lets a folder pick set the project in the same
+   * click (the draft column's quick-access chips).
+   *
+   * PATHS ARE CASE-SENSITIVE (unlike project identity), so this is keyed
+   * verbatim — only trailing slashes are normalised away. First writer wins when
+   * two projects declare the same folder: the list arrives name-sorted, so the
+   * mapping is at least stable rather than render-order dependent.
+   */
+  projectByCwd: Map<string, string>;
+  /**
+   * The INVERSE of `projectByCwd`: lowercased project name → the folder it
+   * declares (`default_cwd` + `default_host`). Answers "where does this project
+   * run?" WITHOUT a fetch, which is what lets a draft column follow an
+   * AI-suggested project to its folder while the user is still typing (the
+   * detail-fetch path stays for the "+" seed, where one round-trip is fine).
+   *
+   * Keyed lowercase because project identity is case-insensitive server-side,
+   * while the VALUE keeps the path verbatim (paths are case-sensitive).
+   */
+  projectDefaults: Map<string, { cwd: string; host: string | null }>;
   /** True once the first fetch has resolved — consumers that reconcile against the
    *  registry (e.g. pruning stale session-local names) must wait for this. */
   loaded: boolean;
@@ -35,7 +57,7 @@ export interface UseProjectRegistryReturn {
  * a datalist, and the create path is idempotent either way.
  */
 export function useProjectRegistry(): UseProjectRegistryReturn {
-  const [rows, setRows] = useState<Array<{ name: string; source: string; favorite: boolean }>>([]);
+  const [rows, setRows] = useState<Array<{ name: string; source: string; favorite: boolean; defaultCwd?: string; defaultHost?: string }>>([]);
   const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(() => {
@@ -43,7 +65,11 @@ export function useProjectRegistry(): UseProjectRegistryReturn {
       .then((data) => {
         setRows(
           (data.projects ?? [])
-            .map((p) => ({ name: p.name, source: p.source, favorite: p.favorite }))
+            .map((p) => ({
+              name: p.name, source: p.source, favorite: p.favorite,
+              ...(p.metadata?.default_cwd ? { defaultCwd: p.metadata.default_cwd } : {}),
+              ...(p.metadata?.default_host ? { defaultHost: p.metadata.default_host } : {}),
+            }))
             .sort((a, b) => a.name.localeCompare(b.name)),
         );
         setLoaded(true);
@@ -72,13 +98,32 @@ export function useProjectRegistry(): UseProjectRegistryReturn {
     [rows],
   );
 
+  const projectByCwd = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of rows) {
+      const cwd = r.defaultCwd?.replace(/\/+$/, '');
+      if (cwd && !map.has(cwd)) map.set(cwd, r.name);
+    }
+    return map;
+  }, [rows]);
+
+  const projectDefaults = useMemo(() => {
+    const map = new Map<string, { cwd: string; host: string | null }>();
+    for (const r of rows) {
+      const cwd = r.defaultCwd?.replace(/\/+$/, '');
+      if (!cwd) continue;
+      map.set(r.name.toLowerCase(), { cwd, host: r.defaultHost ?? null });
+    }
+    return map;
+  }, [rows]);
+
   const isKnownProject = useCallback(
     (name: string) => lowerSet.has(name.trim().toLowerCase()),
     [lowerSet],
   );
 
   return useMemo(
-    () => ({ projectNames, isKnownProject, sourceByName, favoriteByName, loaded, refresh }),
-    [projectNames, isKnownProject, sourceByName, favoriteByName, loaded, refresh],
+    () => ({ projectNames, isKnownProject, sourceByName, favoriteByName, projectByCwd, projectDefaults, loaded, refresh }),
+    [projectNames, isKnownProject, sourceByName, favoriteByName, projectByCwd, projectDefaults, loaded, refresh],
   );
 }

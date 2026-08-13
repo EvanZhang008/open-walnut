@@ -39,6 +39,14 @@ process.env.USERPROFILE = tmpBase
 process.env.WALNUT_CLOUD_SETUP_FAKE = '1'
 process.argv.push('--_ephemeral-child')
 
+/** Local `YYYY-MM-DD` N days from now — for fixtures that must stay in the future. */
+function futureDay(days: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() + days)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
 // Ensure directories exist
 await fs.rm(tmpBase, { recursive: true, force: true })
 const tasksDir = path.join(tmpBase, 'tasks')
@@ -232,6 +240,47 @@ await fs.writeFile(
         active_session_ids: [],
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      // Deferred task: start_date is in the FUTURE, so the Date filter's default
+      // ("Now") hides it from the plain list. Search must still find it — see
+      // tests/e2e/browser/todo-search-ignores-filters.spec.ts.
+      {
+        id: 'pw-task-deferred',
+        title: 'Deferred marmalade task',
+        status: 'todo',
+        phase: 'TODO',
+        priority: 'none',
+        project: 'Ideas',
+        source: 'local',
+        start_date: futureDay(30),
+        session_ids: [],
+        active_session_ids: [],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      // Completed twin of the deferred task. Search ignores "Show completed" too,
+      // so this one is findable — but must rank BEHIND the open hit.
+      {
+        id: 'pw-task-done-marmalade',
+        title: 'Finished marmalade task',
+        status: 'done',
+        phase: 'COMPLETE',
+        priority: 'none',
+        project: 'Ideas',
+        source: 'local',
+        session_ids: [],
+        active_session_ids: [],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        completed_at: new Date().toISOString(),
         description: '',
         summary: '',
         note: '',
@@ -515,6 +564,79 @@ await fs.writeFile(
     '',
   ].join('\n'),
 )
+// PDF fixture (file-preview-kinds.spec.ts): a minimal but STRUCTURALLY VALID
+// one-page PDF, so the browser's built-in viewer actually renders it instead of
+// showing its "failed to load" chrome. Byte offsets in the xref are hand-checked.
+{
+  const objs = [
+    '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n',
+    '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n',
+    '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n',
+    '4 0 obj<</Length 46>>stream\nBT /F1 18 Tf 20 100 Td (WALNUT PDF) Tj ET\nendstream endobj\n',
+    '5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n',
+  ]
+  let body = '%PDF-1.4\n'
+  const offsets: number[] = []
+  for (const o of objs) { offsets.push(body.length); body += o }
+  const xrefStart = body.length
+  body += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`
+  for (const off of offsets) body += `${String(off).padStart(10, '0')} 00000 n \n`
+  body += `trailer<</Size ${objs.length + 1}/Root 1 0 R>>\nstartxref\n${xrefStart}\n%%EOF\n`
+  await fs.writeFile(path.join(vscodeFixtureRoot, 'contract.pdf'), body, 'latin1')
+}
+// Image fixture in the SAME dir as the other explorer fixtures, so one spec can
+// walk file → doc → image without changing roots.
+await fs.writeFile(path.join(vscodeFixtureRoot, 'diagram.png'), makePng(34, 139, 34))
+// Vault note fixture: a real note inside NOTES_DIR. Clicking it must open the
+// file preview IN PLACE (the old behavior navigated the whole app to /notes);
+// the jump is now the explicit "Open in Notes" button.
+const notesFixtureDir = path.join(tmpBase, 'notes')
+await fs.mkdir(notesFixtureDir, { recursive: true })
+await fs.writeFile(
+  path.join(notesFixtureDir, 'vault-note.md'),
+  '# Vault note\n\nThis note lives in the notes vault. VAULT_NOTE_MARKER\n',
+)
+// A nested subdir + file, reached ONLY by a file-path click in the chat (below).
+// That entry point roots the explorer at this dir while the Files chip roots at
+// the session cwd — the two roots whose split localStorage keys were the
+// 2026-08-09 "it doesn't remember the last file I opened" bug.
+const vscodeNestedDir = path.join(vscodeFixtureRoot, 'deep', 'nested')
+await fs.mkdir(vscodeNestedDir, { recursive: true })
+await fs.writeFile(
+  path.join(vscodeNestedDir, 'linked-from-chat.md'),
+  '# Linked from chat\n\nThis file is only reachable by clicking its path in the session chat. LINKED_FROM_CHAT_MARKER\n',
+)
+// Real Claude Code JSONL for pw-vscode-session, so its chat renders an assistant
+// message containing that absolute path — the clickable `a.file-link` the
+// file-view-history spec needs. HOME is the fixture tmpBase (set at the top), so
+// this lands where session-history.ts looks.
+{
+  const encodedCwd = vscodeFixtureRoot.replace(/[^a-zA-Z0-9]/g, '-')
+  const jsonlDir = path.join(tmpBase, '.claude', 'projects', encodedCwd)
+  await fs.mkdir(jsonlDir, { recursive: true })
+  const linkedPath = path.join(vscodeNestedDir, 'linked-from-chat.md')
+  await fs.writeFile(
+    path.join(jsonlDir, 'pw-vscode-session.jsonl'),
+    [
+      JSON.stringify({
+        type: 'user',
+        sessionId: 'pw-vscode-session',
+        timestamp: new Date(sessionFixtureNow - 40_000).toISOString(),
+        message: { role: 'user', content: 'Where did you put the notes?' },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: 'pw-vscode-session',
+        timestamp: new Date(sessionFixtureNow - 35_000).toISOString(),
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: `Wrote them to ${linkedPath} — take a look.` }],
+        },
+      }),
+      '',
+    ].join('\n'),
+  )
+}
 const oldExactTargetAt = new Date(sessionFixtureNow - 30 * 24 * 60 * 60 * 1_000).toISOString()
 const scaleSessions = Array.from({ length: 501 }, (_, index) => ({
   claudeSessionId: `pw-scale-session-${String(index).padStart(3, '0')}`,
