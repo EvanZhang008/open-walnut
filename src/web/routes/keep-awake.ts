@@ -3,7 +3,7 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { getKeepAwakeState, pollKeepAwakeOnce, getSudoSetupCommand } from '../../core/keep-awake.js'
+import { getKeepAwakeState, pollKeepAwakeOnce, getSudoSetupCommand, listHotspotCandidates } from '../../core/keep-awake.js'
 
 export const keepAwakeRouter = Router()
 
@@ -18,6 +18,17 @@ keepAwakeRouter.post('/poll', async (_req: Request, res: Response, next: NextFun
   try {
     const state = await pollKeepAwakeOnce()
     res.json({ state, sudoSetupCommand: getSudoSetupCommand() })
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/keep-awake/hotspot-candidates — the Mac's saved Wi-Fi networks,
+// hotspot-looking names first, so the settings UI can offer a picker instead
+// of making the user type an SSID with special characters by hand.
+keepAwakeRouter.get('/hotspot-candidates', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json({ candidates: await listHotspotCandidates() })
   } catch (err) {
     next(err)
   }

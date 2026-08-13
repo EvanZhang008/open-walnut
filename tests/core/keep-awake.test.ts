@@ -10,6 +10,8 @@ import {
   pollKeepAwakeOnce,
   getKeepAwakeState,
   getSudoSetupCommand,
+  rankHotspotCandidates,
+  listHotspotCandidates,
   resetKeepAwakeForTest,
   _setExecForTest,
   _setOnlineCheckForTest,
@@ -54,6 +56,9 @@ function installWorld(): void {
     }
     if (cmd === '/usr/sbin/networksetup' && args[0] === '-listallhardwareports') {
       return { ok: true, stdout: 'Hardware Port: Wi-Fi\nDevice: en0\n', stderr: '' };
+    }
+    if (cmd === '/usr/sbin/networksetup' && args[0] === '-listpreferredwirelessnetworks') {
+      return { ok: true, stdout: 'Preferred networks on en0:\n\tHomeNet\n\tEvan’s iPhone\n\tOffice Guest\n', stderr: '' };
     }
     if (cmd === '/usr/sbin/networksetup' && args[0] === '-setairportnetwork') {
       return { ok: true, stdout: '', stderr: '' };
@@ -296,6 +301,28 @@ darwinOnly('pollKeepAwakeOnce', () => {
     await pollKeepAwakeOnce();
     expect(getKeepAwakeState().reason).toBe('no-sessions');
     expect(disableSleepCalls().at(-1)).toBe('0');
+  });
+});
+
+describe('hotspot SSID discovery', () => {
+  it('ranks hotspot-looking names first, preserving saved order within groups', () => {
+    const out = 'Preferred networks on en0:\n\tHomeNet\n\tEvan’s iPhone\n\tOffice Guest\n\tMy Hotspot\n';
+    expect(rankHotspotCandidates(out)).toEqual([
+      { ssid: 'Evan’s iPhone', likely: true },
+      { ssid: 'My Hotspot', likely: true },
+      { ssid: 'HomeNet', likely: false },
+      { ssid: 'Office Guest', likely: false },
+    ]);
+  });
+
+  it('handles an empty saved list', () => {
+    expect(rankHotspotCandidates('Preferred networks on en0:\n')).toEqual([]);
+  });
+
+  it('listHotspotCandidates goes through the injected exec', async () => {
+    const candidates = await listHotspotCandidates();
+    expect(candidates[0]).toEqual({ ssid: 'Evan’s iPhone', likely: true });
+    expect(candidates).toHaveLength(3);
   });
 });
 

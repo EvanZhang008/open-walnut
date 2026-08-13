@@ -237,6 +237,46 @@ async function findWifiDevice(): Promise<string | null> {
   return wifiDeviceCache;
 }
 
+// ── Hotspot SSID discovery (settings UI helper) ─────────────────────────────
+
+export interface HotspotCandidate {
+  ssid: string;
+  /** Name looks like a phone hotspot (iPhone/iPad/hotspot/热点 …). */
+  likely: boolean;
+}
+
+const HOTSPOT_NAME_PATTERN = /iphone|ipad|phone|hotspot|热点|熱點/i;
+
+/**
+ * Parse `networksetup -listpreferredwirelessnetworks` output into ranked
+ * candidates: hotspot-looking names first, otherwise the Mac's own saved-
+ * network priority order. Pure — unit-tested directly.
+ */
+export function rankHotspotCandidates(preferredOutput: string): HotspotCandidate[] {
+  const ssids = preferredOutput
+    .split('\n')
+    .slice(1) // drop the "Preferred networks on en0:" header
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return ssids
+    .map((ssid) => ({ ssid, likely: HOTSPOT_NAME_PATTERN.test(ssid) }))
+    .sort((a, b) => Number(b.likely) - Number(a.likely)); // stable: keeps saved order within each group
+}
+
+/**
+ * The Mac's saved Wi-Fi networks, hotspot-looking names first. The menubar's
+ * "Personal Hotspot" entry itself is Bluetooth-discovered (Apple-private, not
+ * scriptable) — but a hotspot the Mac has EVER joined is in this saved list,
+ * and rejoining a saved network needs no password (keychain supplies it).
+ */
+export async function listHotspotCandidates(): Promise<HotspotCandidate[]> {
+  const device = await findWifiDevice();
+  if (!device) return [];
+  const res = await execImpl('/usr/sbin/networksetup', ['-listpreferredwirelessnetworks', device]);
+  if (!res.ok) return [];
+  return rankHotspotCandidates(res.stdout);
+}
+
 async function maybeJoinHotspot(cfg: KeepAwakeConfig, notify?: KeepAwakeNotify): Promise<void> {
   if (!cfg.hotspot_ssid) return;
   if (consecutiveOfflinePolls < HOTSPOT_MIN_OFFLINE_POLLS) return; // let macOS auto-join known networks first

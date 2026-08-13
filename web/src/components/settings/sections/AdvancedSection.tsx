@@ -22,6 +22,8 @@ interface KeepAwakeStatus {
   sudoSetupCommand: string;
 }
 
+interface HotspotCandidate { ssid: string; likely: boolean }
+
 interface Props { config: Config; onSave: (partial: Partial<Config>) => Promise<void>; }
 
 export function AdvancedSection({ config, onSave }: Props) {
@@ -40,6 +42,29 @@ export function AdvancedSection({ config, onSave }: Props) {
   const refreshKaStatus = useCallback(() => {
     // Force a poll so a toggle takes effect immediately, not after the next minute tick.
     apiPost<KeepAwakeStatus>('/api/keep-awake/poll').then(setKaStatus).catch(() => {});
+  }, []);
+
+  // Hotspot SSID detection: saved Wi-Fi networks, hotspot-looking names first.
+  const [kaCandidates, setKaCandidates] = useState<HotspotCandidate[] | null>(null);
+  const [kaDetecting, setKaDetecting] = useState(false);
+  const detectHotspots = useCallback(async () => {
+    setKaDetecting(true);
+    try {
+      const res = await apiGet<{ candidates: HotspotCandidate[] }>('/api/keep-awake/hotspot-candidates');
+      setKaCandidates(res.candidates);
+    } catch {
+      setKaCandidates([]);
+    } finally {
+      setKaDetecting(false);
+    }
+  }, []);
+  const pickSsid = useCallback((ssid: string) => {
+    const input = document.getElementById('ka-ssid') as HTMLInputElement | null;
+    if (!input) return;
+    input.value = ssid;
+    // Uncontrolled form: fire 'input' so the section's autosave listener persists it.
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    setKaCandidates(null);
   }, []);
 
   const handleSave = useCallback(async () => {
@@ -247,11 +272,31 @@ export function AdvancedSection({ config, onSave }: Props) {
               <div className="form-row">
                 <div className="form-group">
                   <label htmlFor="ka-ssid">iPhone Hotspot SSID (optional)</label>
-                  <input id="ka-ssid" name="ka-ssid" type="text" defaultValue={keepAwake.hotspot_ssid ?? ''} placeholder="Never auto-join" />
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input id="ka-ssid" name="ka-ssid" type="text" defaultValue={keepAwake.hotspot_ssid ?? ''} placeholder="Never auto-join" style={{ flex: 1 }} />
+                    <button type="button" className="btn-secondary" onClick={detectHotspots} disabled={kaDetecting}>
+                      {kaDetecting ? 'Detecting…' : 'Detect'}
+                    </button>
+                  </div>
+                  {kaCandidates !== null && (
+                    kaCandidates.length === 0 ? (
+                      <p className="text-sm text-muted" style={{ margin: '6px 0 0 0' }}>
+                        No saved Wi-Fi networks found. Join the hotspot once from the Wi-Fi menu, then detect again.
+                      </p>
+                    ) : (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                        {kaCandidates.slice(0, 8).map((c) => (
+                          <button key={c.ssid} type="button" className="btn-secondary" onClick={() => pickSsid(c.ssid)} title={c.likely ? 'Looks like a phone hotspot' : 'Saved network'}>
+                            {c.likely ? '📱 ' : ''}{c.ssid}
+                          </button>
+                        ))}
+                      </div>
+                    )
+                  )}
                 </div>
                 <div className="form-group">
-                  <label htmlFor="ka-password">Hotspot Password</label>
-                  <input id="ka-password" name="ka-password" type="password" defaultValue={keepAwake.hotspot_password ?? ''} placeholder="Unchanged" autoComplete="off" />
+                  <label htmlFor="ka-password">Hotspot Password (optional if saved)</label>
+                  <input id="ka-password" name="ka-password" type="password" defaultValue={keepAwake.hotspot_password ?? ''} placeholder="Keychain if already saved" autoComplete="off" />
                 </div>
               </div>
               <p className="text-sm text-muted" style={{ margin: '4px 0 12px 0' }}>
