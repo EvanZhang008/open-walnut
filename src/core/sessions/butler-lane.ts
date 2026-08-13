@@ -229,7 +229,7 @@ async function resolveLane(
   const config = await getConfig();
   const profile = butlerProfile(config.user?.name ?? 'the user');
   const sessionId = crypto.randomUUID();
-  const title = agentId === 'general' ? 'Butler chat' : `Butler chat (${agentId})`;
+  const title = agentId === 'general' ? 'Main AI chat' : `Main AI chat (${agentId})`;
 
   // Seed the record BEFORE the spawn — same reason quick-start does (the id is
   // ours, so the row can exist before the CLI). Here it additionally CLOSES the

@@ -20,14 +20,14 @@ export function createMainAgentExecutor(deps: MainAgentExecutorDeps): ExecutorDe
   return {
     type: 'main-agent',
     label: 'Main Agent',
-    description: 'Send the instructions to your main butler conversation at the scheduled time.',
+    description: 'Send the instructions to your main AI conversation at the scheduled time.',
     configSchema: [
       {
         name: 'instructions',
         label: 'Instructions',
         kind: 'textarea',
         required: true,
-        placeholder: 'What should the butler be told?',
+        placeholder: 'What should the main AI be told?',
       },
     ],
     validate(config: unknown) {

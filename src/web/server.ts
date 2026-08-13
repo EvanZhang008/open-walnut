@@ -2667,6 +2667,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
       // Successful task sessions are summarized by triage. Taskless successful
       // results stay in chat; errors belong exclusively in Notifications.
+      // Lane-bound sessions are the main AI answering its own chat — the chat
+      // route already persists the answer as an ordinary assistant message, so
+      // the "Session Result" notification would be a duplicate (and always lands
+      // in the MAIN conversation, even for another conversation's lane).
+      const { getSessionByClaudeId: laneCheckRead } = await import('../core/session-tracker.js')
+      const isLaneSession = !!(sessionId && (await laneCheckRead(sessionId).catch(() => null))?.lane)
       const willBeTriage = !isError && !!taskId
       if (isError) {
         await publishErrorNotification({
@@ -2676,7 +2682,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           sessionId,
           taskId,
         })
-      } else if (result && !willBeTriage) {
+      } else if (result && !willBeTriage && !isLaneSession) {
         const content = taskRef
           ? `**Session Result** (${taskRef}):\n\n${result}`
           : `**Session Result**:\n\n${result}`

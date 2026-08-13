@@ -8,7 +8,7 @@ export function MemorySection() {
     <SectionCard
       id="memory"
       title="Memory"
-      description="Browse and manage what the butler remembers — long-term memories, skills, and learned context."
+      description="Browse and manage what the main AI remembers — long-term memories, skills, and learned context."
     >
       <div className="form-group">
         <button

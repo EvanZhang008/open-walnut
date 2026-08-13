@@ -181,13 +181,13 @@ describe('SESSION_RESULT', () => {
 })
 
 describe('SESSION_ERROR', () => {
-  it('a LANE error is reported as the butler failing', async () => {
+  it('a LANE error is reported as the main AI failing', async () => {
     records.set('lane-sid', { claudeSessionId: 'lane-sid', lane: 'chat:general:conv-abc' })
     await emitAndSettle(EventNames.SESSION_ERROR, { sessionId: 'lane-sid', error: 'CLI exited with code 1' })
 
     expect(sent).toHaveLength(1)
     expect(sent[0].title).toBe('Walnut')
-    expect(sent[0].body).toBe('The butler hit an error: CLI exited with code 1')
+    expect(sent[0].body).toBe('The main AI hit an error: CLI exited with code 1')
     expect(sent[0].data).toMatchObject({
       type: 'session_error', agentId: 'general', conversationId: 'conv-abc',
     })

@@ -901,10 +901,10 @@ export function registerChatRpc(): void {
 
       // ── Engine branch: lane session (config.agent.provider='claude-code') ──
       // Everything above this point ran for BOTH engines (history load, image
-      // persist, eager user-message persist) — only the engine differs. The turn's
-      // output does NOT come back through this RPC in the MVP: it streams on the
-      // session's own channel, which the client subscribes to via `laneSessionId`
-      // in the reply.
+      // persist, eager user-message persist) — only the engine differs. The turn
+      // is AWAITED like the in-process loop and its stream is relayed onto this
+      // chat's own agent:* events: the lane session is an implementation detail,
+      // the chat panel is the one and only surface for a main-AI turn.
       if (useLaneEngine) {
         activeAbortControllers.delete(aKey)
         unregisterAbort()
@@ -938,72 +938,122 @@ export function registerChatRpc(): void {
             })
           }
 
-          const { getOrCreateLaneSession } = await import('../../core/sessions/butler-lane.js')
           // The CLI takes plain text on stdin, not content blocks — images ride as
           // readable file paths (the same shape session chat uses), never base64.
           const sessionMessage = savedImages.length > 0
             ? buildSessionImageContext(savedImages) + agentMessage + planSuffix
             : agentMessage + planSuffix
-          const lane = await getOrCreateLaneSession(agentId, conversationId, { firstMessage: sessionMessage })
-          laneSessionId = lane.sessionId
-          // `created` means the message was consumed as the spawn's first turn —
-          // sending it again would deliver it twice.
-          if (!lane.created) {
-            const { sendMessageToSession } = await import('../../core/session-message-queue.js')
-            await sendMessageToSession(lane.sessionId, sessionMessage, { source: 'chat' })
-          }
-          log.web.info('chat turn routed to butler lane', {
-            agentId, conversationId, sessionId: lane.sessionId, created: lane.created,
-            durationMs: Date.now() - turnStartMs,
-          })
 
-          // ── Working-memory updater (lane path) ──
-          // The in-process trigger reads `result.tokenBreakdown`, which a lane turn
-          // never produces, so working memory would freeze the moment the butler
-          // moves onto the lane. Two deliberate MVP approximations:
-          //   - Tool-call count: ONE per turn, not the turn's real tool calls (those
-          //     land on session:tool-use, which this RPC does not consume). It only
-          //     UNDERCOUNTS, so the threshold is reached later — updates are rarer,
-          //     never spurious.
-          //   - Token size: the lane's last exact API input count (fed by the
-          //     session:usage-update handler in server.ts), 0 until the lane's first
-          //     assistant message reports usage — 0 simply fails the threshold.
-          // Fire-and-forget, same as the in-process trigger.
-          if (agentId === 'general') {
-            trackWmToolCall(agentId, conversationId)
-            const laneTokens = getLastTurnTokens(conversationId) ?? 0
-            if (shouldUpdateWorkingMemory(laneTokens, agentId, conversationId)) {
-              executeWorkingMemoryUpdate(
-                runWmForkedTurn,
-                laneTokens,
-                agentId,
-                conversationId,
-              ).catch(() => { /* non-critical */ })
+          // ── Live relay: the lane session's stream → this chat's own agent:*
+          // events. The chat panel IS the surface for a main-AI turn: the answer
+          // (and the tools/thinking on the way) must appear exactly where the user
+          // typed, never as a "ran on session X" breadcrumb pointing somewhere
+          // else. Interest-scoped like every other session-event consumer.
+          const relayName = `chat-lane-relay-${turnId}`
+          let relaySessionId: string | null = null
+          // Thinking arrives as deltas, but agent:thinking consumers render one
+          // block per event — buffer and flush per contiguous thinking run.
+          let thinkingBuf = ''
+          const flushThinking = (): void => {
+            if (thinkingBuf.trim()) {
+              broadcastEvent(EventNames.AGENT_THINKING, { text: thinkingBuf, agentId, conversationId })
             }
+            thinkingBuf = ''
           }
+          bus.subscribe(relayName, (event) => {
+            const d = event.data as {
+              sessionId?: string; parentToolUseId?: string; replayed?: boolean;
+              delta?: string; toolName?: string; toolUseId?: string;
+              input?: Record<string, unknown>; result?: string;
+            }
+            if (relaySessionId === null || d.sessionId !== relaySessionId) return
+            // Subagent output belongs to its own lane, and a replayed event is
+            // JSONL history being re-read — neither is this turn's live stream.
+            if (d.parentToolUseId || d.replayed) return
+            if (event.name === EventNames.SESSION_TEXT_DELTA) {
+              flushThinking()
+              // No sessionId in the payload: useChat drops agent:text-delta
+              // events that carry one (they'd be a session's, not the chat's).
+              if (d.delta) broadcastEvent(EventNames.AGENT_TEXT_DELTA, { delta: d.delta, agentId, conversationId })
+            } else if (event.name === EventNames.SESSION_THINKING_DELTA) {
+              if (d.delta) thinkingBuf += d.delta
+            } else if (event.name === EventNames.SESSION_TOOL_USE) {
+              flushThinking()
+              // Real per-tool working-memory counting (the in-process loop's
+              // onToolCall does exactly this).
+              trackWmToolCall(agentId, conversationId)
+              broadcastEvent(EventNames.AGENT_TOOL_CALL, {
+                toolName: d.toolName, input: d.input, toolUseId: d.toolUseId, agentId, conversationId,
+              })
+            } else if (event.name === EventNames.SESSION_TOOL_RESULT) {
+              // toolName is not on the session event; the client matches by toolUseId.
+              broadcastEvent(EventNames.AGENT_TOOL_RESULT, {
+                toolName: '', result: d.result, toolUseId: d.toolUseId, agentId, conversationId,
+              })
+            }
+          }, { global: true, interest: [
+            EventNames.SESSION_TEXT_DELTA, EventNames.SESSION_THINKING_DELTA,
+            EventNames.SESSION_TOOL_USE, EventNames.SESSION_TOOL_RESULT,
+          ] })
 
-          // Durable breadcrumb + live push: the turn happened somewhere the chat
-          // timeline can't see, so leave a session-ref the user can click through.
-          const notice = `Butler ran on session <session-ref id="${lane.sessionId}"/>`
-          const resolvedNotice = await resolveEntityRefs(notice)
-          await chatHistory.addNotification({
-            role: 'assistant', content: resolvedNotice, source: 'session',
-            notification: true, sessionId: lane.sessionId, agentId, conversationId,
-          })
-          broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
-            entry: {
-              role: 'assistant', content: resolvedNotice, source: 'session',
-              notification: true, timestamp: new Date().toISOString(),
-            },
-            agentId,
-            conversationId,
-          })
-          // Releases the client's streaming indicator — this RPC's work is done
-          // even though the session's own turn is still running.
-          // source:'session' lets consumers tell this apart from a real in-process
-          // turn end (e.g. the context inspector skips its refetch — the lane turn's
-          // tokens never flow through the in-process context stats).
-          broadcastEvent(EventNames.AGENT_RESPONSE, { text: '', agentId, conversationId, source: 'session' })
+          try {
+            // AWAITED, exactly like the in-process loop: the reply belongs in this
+            // chat. runLaneTurn owns create/send/result-correlation (lane-turn.ts);
+            // onSessionId fires before the send, so the relay can't miss a delta.
+            // 30 min ceiling — a chat turn that long has effectively hung.
+            const { runLaneTurn } = await import('../../core/sessions/lane-turn.js')
+            const { sessionId, resultText } = await runLaneTurn(agentId, conversationId, sessionMessage, {
+              source: 'chat',
+              timeoutMs: 1_800_000,
+              onSessionId: (sid) => { relaySessionId = sid },
+            })
+            laneSessionId = sessionId
+            flushThinking()
+
+            // ── Working-memory updater (lane path) ──
+            // The in-process trigger reads `result.tokenBreakdown`, which a lane
+            // turn never produces. Tool calls were counted per relayed
+            // session:tool-use above; the token size is the lane's last exact API
+            // input count (fed by the session:usage-update handler in server.ts),
+            // 0 until the lane's first assistant message reports usage — 0 simply
+            // fails the threshold. Fire-and-forget, same as the in-process trigger.
+            if (agentId === 'general') {
+              const laneTokens = getLastTurnTokens(conversationId) ?? 0
+              if (shouldUpdateWorkingMemory(laneTokens, agentId, conversationId)) {
+                executeWorkingMemoryUpdate(
+                  runWmForkedTurn,
+                  laneTokens,
+                  agentId,
+                  conversationId,
+                ).catch(() => { /* non-critical */ })
+              }
+            }
+
+            if (resultText === null) {
+              // Timeout / session:error / failed send — the user must see a real
+              // error in chat, not silence (the catch below persists it).
+              throw new Error('The main AI did not answer this turn (timed out or errored).')
+            }
+
+            // Persist the answer as an ORDINARY assistant message — the same shape
+            // the in-process loop persists, so a page reload shows the reply
+            // itself. Refs are resolved BEFORE persisting (labels back-filled into
+            // the tags), matching resolveMessagesEntityRefs on the in-process path.
+            // (Deliberate duplication with the CLI's own transcript: this chat's
+            // history is what the chat panel reads back.)
+            const resolvedText = await resolveEntityRefs(resultText)
+            await chatHistory.addAIMessages(
+              [{ role: 'assistant', content: [{ type: 'text', text: resolvedText }] }] as MessageParam[],
+              { agentId, conversationId },
+            )
+            broadcastEvent(EventNames.AGENT_RESPONSE, { text: resolvedText, agentId, conversationId })
+            log.web.info('chat lane turn completed', {
+              agentId, conversationId, sessionId, resultLength: resultText.length,
+              durationMs: Date.now() - turnStartMs,
+            })
+          } finally {
+            bus.unsubscribe(relayName)
+          }
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err)
           log.web.error('butler lane turn failed', { agentId, conversationId, error: errMsg })

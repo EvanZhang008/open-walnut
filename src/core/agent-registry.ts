@@ -18,7 +18,7 @@ import { log } from '../logging/index.js';
 const BUILTIN_GENERAL: AgentDefinition = {
   id: 'general',
   name: 'Walnut',
-  description: 'Your personal butler — tasks, sessions, memory, and everything else.',
+  description: 'Your main AI — tasks, sessions, memory, and everything else.',
   runner: 'embedded',
   console: true,
   source: 'builtin',

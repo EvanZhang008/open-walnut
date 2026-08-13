@@ -677,7 +677,7 @@ async function runApiV1LaneTurn(
       // runLaneTurn degrades instead of rejecting: null is a timeout, a
       // session:error, or a failed send. All three are "this turn has no answer",
       // which the client must be told about or its composer stays locked.
-      const errMsg = 'The butler session did not answer this turn (timed out or errored).'
+      const errMsg = 'The main AI did not answer this turn (timed out or errored).'
       log.web.error('api-v1 lane turn failed', { conversationId, turnId, agentId, sessionId })
       await persistAndEmitTurnError(agentId, conversationId, errMsg)
       return

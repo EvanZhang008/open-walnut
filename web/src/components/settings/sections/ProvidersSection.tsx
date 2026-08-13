@@ -818,7 +818,7 @@ function ProviderCard({
               {serverInfo?.credential_source === 'subscription' && (
                 <p className="text-sm text-muted">
                   Detected a logged-in Claude Code subscription (Pro/Max). No API key needed — the
-                  butler spawns the local <code style={{ fontSize: 11 }}>claude</code> CLI directly,
+                  main AI spawns the local <code style={{ fontSize: 11 }}>claude</code> CLI directly,
                   and its tools work through a structured output protocol.
                 </p>
               )}
@@ -967,7 +967,7 @@ export function ProvidersSection({ config, onSave }: Props) {
           background: 'color-mix(in srgb, var(--accent) 8%, transparent)',
           color: 'var(--fg-secondary)',
         }}>
-          Butler chat is currently running on the <strong>Claude Code engine</strong>{' '}
+          The main AI chat is currently running on the <strong>Claude Code engine</strong>{' '}
           (<code style={{ fontSize: 11 }}>agent.provider: claude-code</code>) — a
           long-lived <code style={{ fontSize: 11 }}>claude</code> session with its own
           authentication. The provider selected below still powers everything else

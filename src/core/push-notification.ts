@@ -189,7 +189,7 @@ export function initPushNotifications(): void {
           if (lane) {
             await maybePush(
               'Walnut',
-              `The butler hit an error: ${error?.slice(0, 150) ?? 'unknown error'}`,
+              `The main AI hit an error: ${error?.slice(0, 150) ?? 'unknown error'}`,
               { type: 'session_error', sessionId: data.sessionId, agentId: lane.agentId, conversationId: lane.conversationId }
             )
             break

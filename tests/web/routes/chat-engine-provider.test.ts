@@ -5,15 +5,18 @@
  * each branch runs and that the other one does NOT:
  *   - default / 'walnut-agent' → the in-process loop runs, no lane is touched
  *   - 'claude-code'            → the turn goes to the conversation's lane session,
- *                                the RPC answers `laneSessionId`, and the loop is
- *                                never called
+ *                                is AWAITED, and the lane's answer is persisted as
+ *                                an ordinary assistant message in THIS chat (the
+ *                                lane session is an implementation detail — the
+ *                                chat panel is the only surface). The loop is
+ *                                never called.
  * Plus the invariant that must hold on BOTH branches: the user's message is
  * persisted before the engine runs (it survives a refresh either way).
  *
  * What's real: Express server, WS RPC, chat handler, session records, lane module.
  * What's mocked: constants.js (temp dir), the agent loop (spy), and the
- * 'session-runner' bus subscriber (a fake that records SESSION_START and NEVER
- * spawns a `claude`).
+ * 'session-runner' bus subscriber (a fake that records SESSION_START, answers with
+ * a synthetic session:result, and NEVER spawns a `claude`).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -68,6 +71,9 @@ import { markProcessing, removeProcessed } from '../../../src/core/session-messa
 let server: HttpServer
 let port: number
 let started: SessionStartEvent[] = []
+let sent: SessionSendEvent[] = []
+/** What the fake CLI "answers" each lane turn with. */
+let laneReply = 'lane answer'
 
 /**
  * Consume a session's queued messages, the way a real delivery would. Tracked so
@@ -88,16 +94,29 @@ function drainQueue(sessionId: string): void {
   void p.finally(() => inFlightDrains.delete(p))
 }
 
-/** Fake session-runner: records starts, drains sends, never spawns anything. */
+/**
+ * Fake session-runner: records starts, drains sends, answers each turn with a
+ * synthetic session:result (the chat RPC AWAITS the lane turn, so a runner that
+ * never answers would hang every lane test to its timeout), never spawns anything.
+ */
 function installFakeRunner(): void {
   bus.subscribe('session-runner', (event: BusEvent) => {
+    let sid: string | undefined
     if (event.name === EventNames.SESSION_START) {
       const d = event.data as SessionStartEvent
       started.push(d)
-      if (d.preassignedSessionId) drainQueue(d.preassignedSessionId)
+      sid = d.preassignedSessionId
     } else if (event.name === EventNames.SESSION_SEND) {
-      drainQueue((event.data as SessionSendEvent).sessionId)
+      sent.push(event.data as SessionSendEvent)
+      sid = (event.data as SessionSendEvent).sessionId
     }
+    if (!sid) return
+    drainQueue(sid)
+    const sessionId = sid
+    setTimeout(() => {
+      bus.emit(EventNames.SESSION_RESULT, { sessionId, result: laneReply, isError: false },
+        ['main-ai', 'session-runner'], { source: 'session-runner' })
+    }, 5)
   })
 }
 
@@ -159,6 +178,8 @@ beforeEach(() => {
   getBoundedMemory.mockClear()
   beginMemoryPromptTurn.mockClear()
   started = []
+  sent = []
+  laneReply = 'lane answer'
 })
 
 afterEach(async () => {
@@ -263,11 +284,10 @@ describe("agent.provider = 'claude-code' → lane session", () => {
       expect(started).toHaveLength(1)
       expect(runAgentLoop).not.toHaveBeenCalled()
 
-      // The follow-up was delivered through the session queue instead of a spawn.
-      const { getQueue } = await import('../../../src/core/session-message-queue.js')
-      const queued = (await getQueue(firstId!)).map((m) => m.message)
-      expect(queued.some((m) => m.includes('two'))).toBe(true)
-      expect(queued.some((m) => m.includes('one'))).toBe(false)
+      // The follow-up was delivered through the session queue instead of a spawn
+      // ('one' rode the spawn itself; the queue is drained by the fake runner, so
+      // assert on the recorded SESSION_SEND, not the now-empty queue).
+      expect(sent.map((s) => s.message)).toEqual(['two'])
     } finally {
       ws.close()
     }
@@ -298,12 +318,13 @@ describe("agent.provider = 'claude-code' → lane session", () => {
     }
   })
 
-  it('persists the user message and a clickable session-ref breadcrumb', async () => {
+  it("persists the user message and the lane's ANSWER as an ordinary assistant turn", async () => {
+    laneReply = 'noted — I will remember that'
     await boot({ provider: 'claude-code' })
     const ws = await connectWs()
     try {
       const res = await sendRpc(ws, 'chat', { message: 'remember this' })
-      const { laneSessionId } = res.payload as { laneSessionId: string }
+      expect(res.ok).toBe(true)
       const chatHistory = await import('../../../src/core/chat-history.js')
       const { getActiveConversationId } = await import('../../../src/core/conversations.js')
       const conv = await getActiveConversationId('general')
@@ -312,13 +333,18 @@ describe("agent.provider = 'claude-code' → lane session", () => {
       const modelMsgs = await chatHistory.getApiMessages('general', conv)
       expect(JSON.stringify(modelMsgs)).toContain('remember this')
 
-      // And the UI gets a breadcrumb pointing at the session that ran the turn.
+      // The reply itself lands in THIS chat — no session-ref breadcrumb, no
+      // "go look at a session": the lane is an implementation detail.
+      // An ORDINARY assistant entry (block content, not a notification) carries
+      // the answer — the same shape the in-process loop persists.
       const page = await chatHistory.getDisplayEntries(1, 50, 'general', conv)
-      const notice = page.messages.find((e) => typeof e.content === 'string'
+      const answer = page.messages.find((e) => e.role === 'assistant'
+        && e.notification !== true
+        && JSON.stringify(e.content).includes('noted — I will remember that'))
+      expect(answer, "the lane's answer should be persisted as an ordinary assistant message").toBeTruthy()
+      const breadcrumb = page.messages.find((e) => typeof e.content === 'string'
         && (e.content as string).includes('<session-ref'))
-      expect(notice, 'a session-ref notice should be persisted').toBeTruthy()
-      expect(notice!.content as string).toContain(laneSessionId)
-      expect(notice!.sessionId).toBe(laneSessionId)
+      expect(breadcrumb, 'no session-ref breadcrumb should be persisted').toBeUndefined()
     } finally {
       ws.close()
     }

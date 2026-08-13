@@ -39,8 +39,8 @@ export function EngineBadge() {
     <span
       className={`chat-engine-badge${isLane ? ' lane' : ''}`}
       title={isLane
-        ? 'Butler turns run in a Claude Code session (agent.provider: claude-code). The claude CLI brings its own auth — the AI Provider in Settings is not what answers these turns.'
-        : 'Butler turns run in the built-in agent loop, calling the AI Provider configured in Settings.'}
+        ? 'Main AI turns run in a Claude Code session (agent.provider: claude-code). The claude CLI brings its own auth — the AI Provider in Settings is not what answers these turns.'
+        : 'Main AI turns run in the built-in agent loop, calling the AI Provider configured in Settings.'}
     >
       {isLane ? 'Claude Code' : 'Built-in loop'}
     </span>
