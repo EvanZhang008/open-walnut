@@ -1,5 +1,6 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, memo } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore, memo } from 'react';
 import { scrollDebugEnabled } from '@/utils/scroll-debug';
+import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import { useSessionStream, type StreamingBlock } from '@/hooks/useSessionStream';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -7,7 +8,9 @@ import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { SessionMessage, SessionThinking, PlanCard, CollapsedPlanWrite, GenericToolCall, TaskGroupPrompt, agentModelLabel, ToolRunShell, toolRunPhrase, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, MergedHistoryToolRun, SystemGroupRun, SystemLineCollapsible, systemGroupMemberFromHistory, type SystemGroupMember } from './SessionMessage';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
+import { parseHistoryUnavailable, visibleHistoryUnavailable } from './history-unavailable';
 import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence } from '@/stream/render-filter';
+import { getFinishedAgentIds, subscribeFinishedAgentIds } from '@/cache/finished-agents-store';
 import { groupStreamingBlocks, groupLaneChildren, countAgentTree, GROUPABLE_STREAM_TOOLS, type GroupedStreamItem } from '@/stream/group-blocks';
 import { TeamCard } from './TeamCard';
 import { WorkflowProgress } from './WorkflowProgress';
@@ -16,8 +19,10 @@ import { Lightbox } from '../common/Lightbox';
 import type { SessionEngine, SessionHistoryMessage } from '@/types/session';
 import type { ImageAttachment } from '@/api/chat';
 import { respondToPermission } from '@/api/sessions';
+import { parseAskUserQuestionInput, buildAskUserAnswers, allAskUserQuestionsAnswered, toggleAskUserSelection, type AskQuestion } from './ask-user-question';
 import { renderMarkdownWithRefs, findImagePaths, resolveImagePath } from '@/utils/markdown';
 import { useSelectionScrollGuard, useSelectionFrozen, useSelectionFrozenWith } from '@/utils/selection-guard';
+import { runWhenVisible, visibleInterval } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
 
 /**
@@ -185,26 +190,157 @@ function StreamingTextBlock({ content, sessionCwd, sessionHost, onTaskClick, onS
   );
 }
 
-/** Inline permission request card — Allow/Deny buttons for sensitive operations */
-function PermissionRequestCard({ sessionId, requestId, toolName, input, reason, initialStatus }: {
+/** Inline AskUserQuestion card — the CLI's multiple-choice tool, answered for real.
+ *
+ * AskUserQuestion is a requiresUserInteraction tool whose control_request reaches
+ * walnut in EVERY mode (including bypass). Allowing it without `answers` makes the
+ * CLI tell the model "user answered your questions" with nothing in it, so this card
+ * renders the real options and submits the chosen labels as `answers`
+ * (question text → label / free text). Option pills reuse the butler-side
+ * QuestionPopover `qp-*` styles; the frame keeps the permission-card classes. */
+function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, answered }: {
+  questions: AskQuestion[];
+  onSubmit: (answers: Record<string, string>) => void;
+  onDismiss: () => void;
+  status: 'pending' | 'loading' | 'allowed' | 'denied';
+  answered?: Record<string, string>;
+}) {
+  const [selections, setSelections] = useState<Record<string, string[]>>({});
+  const [otherText, setOtherText] = useState<Record<string, string>>({});
+
+  const complete = allAskUserQuestionsAnswered(questions, selections, otherText);
+  const resolvedAnswers = answered ?? buildAskUserAnswers(questions, selections, otherText);
+
+  if (status === 'allowed' || status === 'denied') {
+    return (
+      <div className={`permission-request-card permission-request-card--${status}`}>
+        <div className="permission-request-header">
+          <span className="permission-request-icon">{status === 'allowed' ? '✓' : '✗'}</span>
+          <span className="permission-request-tool">AskUserQuestion</span>
+        </div>
+        {status === 'allowed' ? (
+          <div className="permission-request-resolved permission-request-resolved--allowed">
+            {Object.entries(resolvedAnswers).length > 0
+              ? Object.entries(resolvedAnswers).map(([q, a]) => (
+                <div key={q} className="ask-user-answer-line">{'·'} {q} {'→'} {a}</div>
+              ))
+              : 'Answered'}
+          </div>
+        ) : (
+          <div className="permission-request-resolved permission-request-resolved--denied">Dismissed</div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="permission-request-card ask-user-question-card">
+      <div className="permission-request-header">
+        <span className="permission-request-icon">{'❓'}</span>
+        <span className="permission-request-tool">Agent has a question</span>
+      </div>
+      {questions.map((q) => {
+        const picked = selections[q.question] ?? [];
+        return (
+          <div key={q.question} className="ask-user-question">
+            {q.header && <div className="qp-chip">{q.header}</div>}
+            <div className="qp-question">{q.question}</div>
+            {q.options.length > 0 && (
+              <div className="qp-options">
+                {q.options.map((opt) => (
+                  <button
+                    key={opt.label}
+                    className={`qp-option ${picked.includes(opt.label) ? 'qp-option-selected' : ''}`}
+                    title={opt.description}
+                    disabled={status === 'loading'}
+                    onClick={() => setSelections(prev => ({
+                      ...prev,
+                      [q.question]: toggleAskUserSelection(prev[q.question], opt.label, q.multiSelect),
+                    }))}
+                  >
+                    {opt.label}
+                    {opt.description && <span className="qp-option-desc">{opt.description}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="qp-input-row">
+              <input
+                className="qp-input"
+                placeholder={q.options.length > 0 ? 'Other (type your own answer)...' : 'Type your answer...'}
+                value={otherText[q.question] ?? ''}
+                disabled={status === 'loading'}
+                onChange={(e) => setOtherText(prev => ({ ...prev, [q.question]: e.target.value }))}
+                {...NO_AUTOFILL_PROPS}
+              />
+            </div>
+          </div>
+        );
+      })}
+      <div className="permission-request-actions">
+        <button
+          className="permission-request-btn permission-request-btn--allow"
+          disabled={!complete || status === 'loading'}
+          onClick={() => onSubmit(buildAskUserAnswers(questions, selections, otherText))}
+        >
+          {status === 'loading' ? 'Sending...' : 'Submit'}
+        </button>
+        <button
+          className="permission-request-btn permission-request-btn--deny"
+          disabled={status === 'loading'}
+          onClick={onDismiss}
+        >
+          Dismiss
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Inline permission request card — Allow/Deny buttons for sensitive operations.
+ * ACP (codex) requests carry provider options (Allow Once / Allow for Session /
+ * prefix amendment / Reject) — render those as the real buttons so "always
+ * allow" is actually reachable; the bare Allow/Deny pair could only ever send
+ * allow_once, which made codex re-prompt on every retry of the same command. */
+function PermissionRequestCard({ sessionId, requestId, toolName, input, reason, initialStatus, acpOptions }: {
   sessionId: string; requestId: string; toolName: string;
   input?: Record<string, unknown>; reason?: string;
   initialStatus?: 'pending' | 'allowed' | 'denied';
+  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
 }) {
   const [status, setStatus] = useState<'pending' | 'loading' | 'allowed' | 'denied'>(initialStatus && initialStatus !== 'pending' ? initialStatus : 'pending');
   const [inputExpanded, setInputExpanded] = useState(false);
+  const [submittedAnswers, setSubmittedAnswers] = useState<Record<string, string> | undefined>();
 
-  const handleResponse = async (allow: boolean) => {
+  const handleResponse = async (allow: boolean, optionId?: string, message?: string, answers?: Record<string, string>) => {
     setStatus('loading');
     try {
-      await respondToPermission(sessionId, requestId, allow);
+      await respondToPermission(sessionId, requestId, allow, message, optionId, answers);
+      if (answers) setSubmittedAnswers(answers);
       setStatus(allow ? 'allowed' : 'denied');
     } catch {
       setStatus('pending'); // revert on error
     }
   };
 
+  // AskUserQuestion answers ARE the permission response (see AskUserQuestionCard).
+  const askQuestions = toolName === 'AskUserQuestion' ? parseAskUserQuestionInput(input) : null;
+  if (askQuestions) {
+    return (
+      <AskUserQuestionCard
+        questions={askQuestions}
+        status={status}
+        answered={submittedAnswers}
+        onSubmit={(answers) => void handleResponse(true, undefined, undefined, answers)}
+        onDismiss={() => void handleResponse(false, undefined, 'User dismissed the questions')}
+      />
+    );
+  }
+
   const inputPreview = input ? JSON.stringify(input, null, 2) : null;
+  const validAcpOptions = (acpOptions ?? []).filter(
+    (o): o is { optionId: string; kind?: string; name?: string } => !!o.optionId,
+  );
 
   return (
     <div className={`permission-request-card permission-request-card--${status}`}>
@@ -221,7 +357,23 @@ function PermissionRequestCard({ sessionId, requestId, toolName, input, reason, 
           {inputExpanded && <pre className="permission-request-input-preview">{inputPreview}</pre>}
         </div>
       )}
-      {status === 'pending' && (
+      {status === 'pending' && validAcpOptions.length > 0 && (
+        <div className="permission-request-actions">
+          {validAcpOptions.map((o) => {
+            const isReject = o.kind?.startsWith('reject') ?? false;
+            return (
+              <button
+                key={o.optionId}
+                className={`permission-request-btn ${isReject ? 'permission-request-btn--deny' : 'permission-request-btn--allow'}`}
+                onClick={() => handleResponse(!isReject, o.optionId)}
+              >
+                {o.name ?? o.optionId}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {status === 'pending' && validAcpOptions.length === 0 && (
         <div className="permission-request-actions">
           <button className="permission-request-btn permission-request-btn--allow" onClick={() => handleResponse(true)}>Allow</button>
           <button className="permission-request-btn permission-request-btn--deny" onClick={() => handleResponse(false)}>Deny</button>
@@ -266,6 +418,7 @@ const StreamingBlockView = memo(function StreamingBlockView({ block, sessionId, 
         input={block.input}
         reason={block.reason}
         initialStatus={block.status}
+        acpOptions={block.acpOptions}
       />
     );
   }
@@ -477,6 +630,7 @@ function EditableQueuedMessage({ message, onSave, onCancel }: {
         }}
         className="session-msg-edit-textarea"
         rows={2}
+        {...NO_AUTOFILL_PROPS}
       />
       <div className="session-msg-edit-actions">
         <button onClick={() => onSave(value.trim() || message)} className="btn btn-sm btn-primary">Save</button>
@@ -561,20 +715,94 @@ function buildTimeline(
     }
   }
 
-  // Streaming/resuming indicator when no VISIBLE blocks yet
-  if (visibleCount === 0) {
-    if (isResuming && !isStreaming) {
-      items.push({ kind: 'indicator', type: 'resuming' });
-    } else if (isStreaming) {
-      items.push({ kind: 'indicator', type: 'working' });
-    }
+  // Working indicator: pinned at the TAIL of the live region for the whole
+  // turn (Claude-app style) — it replaced the old "Streaming" badge as the
+  // turn-is-live signal. Resuming keeps the old empty-only behavior (a
+  // resumed session with visible blocks isn't producing anything yet).
+  if (isStreaming) {
+    items.push({ kind: 'indicator', type: 'working' });
+  } else if (isResuming && visibleCount === 0) {
+    items.push({ kind: 'indicator', type: 'resuming' });
   }
 
   return items;
 }
 
+/**
+ * Rough size of everything streamed so far (chars), for the working
+ * indicator's token figure (chars/4 ≈ tokens — a progress signal, not an
+ * exact usage number). MUST include tool calls: agentic turns are mostly
+ * tool activity (and thinking is often not streamed), so a text-only count
+ * sits frozen while the turn visibly works — the "token count never goes
+ * up" bug. Tool input/result sizes are cached per block object (the reducer
+ * replaces a block object whenever it changes), so growth costs O(new
+ * blocks), not a JSON.stringify sweep per render frame.
+ */
+const toolCharCache = new WeakMap<object, number>();
+function countStreamChars(blocks: StreamingBlock[], hidden?: Set<number>): number {
+  let n = 0;
+  for (let i = 0; i < blocks.length; i++) {
+    if (hidden?.has(i)) continue; // absorbed by history — not this turn's live output
+    const b = blocks[i];
+    if (b.type === 'text' || b.type === 'thinking') {
+      n += b.content.length;
+    } else if (b.type === 'tool_call') {
+      let c = toolCharCache.get(b);
+      if (c === undefined) {
+        c = b.result?.length ?? 0;
+        try { c += JSON.stringify(b.input ?? {}).length; } catch { /* non-serializable input */ }
+        toolCharCache.set(b, c);
+      }
+      n += c;
+    }
+  }
+  return n;
+}
+
+/** "168" / "1.2k" — compact token figure for the working indicator. */
+function formatTokenCount(tokens: number): string {
+  if (tokens < 1000) return String(tokens);
+  return `${(tokens / 1000).toFixed(1).replace(/\.0$/, '')}k`;
+}
+
+/**
+ * Claude-app-style live-turn indicator: "<label> is working…" with a scanning
+ * underline + elapsed seconds · streamed-token estimate. It mounts when the turn starts
+ * (the indicator timeline item only exists while isStreaming, and React keys
+ * it stably), so elapsed time is simply time-since-mount — no cross-component
+ * turn clock to maintain.
+ */
+function WorkingIndicator({ label, tokens }: { label: string; tokens: number }) {
+  const [elapsed, setElapsed] = useState(0);
+  const startRef = useRef(Date.now());
+  useEffect(() => {
+    // visibleInterval: no 1Hz re-render in hidden tabs; elapsed derives from
+    // the clock, so the catch-up tick on return is exact.
+    return visibleInterval(() => {
+      setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
+    }, 1000);
+  }, []);
+  return (
+    <div className="session-working-indicator">
+      <span className="session-working-label">{label} is working…</span>
+      <span className="session-working-meta">
+        {elapsed}s{tokens > 0 ? ` · ${formatTokenCount(tokens)} tokens` : ''}
+      </span>
+    </div>
+  );
+}
+
 // ── Auto-scroll constant ──
 const NEAR_BOTTOM_PX = 80;  // px from bottom to consider "at bottom"
+
+// Divergence-tripwire settle window: the unmatched set must survive this long
+// unchanged (no new turn, no history fetch in flight) before evidence ships.
+// Sized above the observed post-turn delta round-trip (~1.2s on SSH sessions,
+// inc-1786496042099) so a normal turn-end never reports; a real divergence is
+// persistent and merely reports a few seconds later. Tests can shrink it via
+// window.__tripwireSettleMs.
+const TRIPWIRE_SETTLE_MS = (typeof window !== 'undefined'
+  && (window as unknown as { __tripwireSettleMs?: number }).__tripwireSettleMs) || 8_000;
 
 export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange }: SessionChatHistoryProps) {
   // Slow-commit detector: renderT0 is per-render-pass (closure), the layout
@@ -622,6 +850,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // reading position out of view. Bottom distance is invariant to any
   // content inserted above the viewport.
   const pendingBottomDistance = useRef<number | null>(null);
+  // Reading-mode render-window pin: while the user is scrolled up, the
+  // truncation window's START index is frozen here so message growth can't
+  // slide rows out from above the reader (see the visibleStart computation).
+  // null = not pinned (user at bottom / initial). Index into messages[].
+  const readingPinStart = useRef<number | null>(null);
   const { lightboxSrc, openLightbox, closeLightbox } = useLightbox();
 
   // ── blockIndexMap: assigns each optimistic message a fixed position in the streaming timeline ──
@@ -641,10 +874,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }, [openLightbox]);
 
-  const { messages, loading, phase2Pending, error, stale, forkBoundaryIndex } = useSessionHistory(sessionId, historyVersion);
-  const historyUnavailable = error?.startsWith('HISTORY_UNAVAILABLE:')
-    ? error.slice('HISTORY_UNAVAILABLE:'.length)
-    : null;
+  const { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, loadFullHistory } = useSessionHistory(sessionId, historyVersion);
+  const historyUnavailableRaw = parseHistoryUnavailable(error);
   const { blocks, isStreaming, resetIfAbsorbed } = useSessionStream(sessionId);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -662,6 +893,30 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       watermarkInitialized.current = true;
       turnWatermark.current = messages.length;
     }
+  }, [messages]);
+  // Front-insertion guard (lazy "Load N earlier" backfill): when older rows are
+  // inserted BEFORE the current head, every index shifts by the growth — shift
+  // the watermark too. Without this the content window suddenly spans thousands
+  // of OLD rows and a pending bubble can be falsely absorbed by an ancient twin
+  // (the disappearing-message class the watermark exists to prevent). A rewrite
+  // where the old head simply vanished (/compact, whale window slide) finds no
+  // match and shifts nothing — too-big watermarks already degrade safely.
+  const prevFirstMsgId = useRef<string | undefined>(undefined);
+  useLayoutEffect(() => {
+    const first = messages[0]?.msgId;
+    const prev = prevFirstMsgId.current;
+    if (prev && first !== prev) {
+      const k = messages.findIndex((m) => m.msgId === prev);
+      if (k > 0) {
+        turnWatermark.current = Math.min(messages.length, turnWatermark.current + k);
+        // The reading pin is an index too — shift it by the same insertion
+        // count or it would point k rows too old after a backfill.
+        if (readingPinStart.current !== null) {
+          readingPinStart.current = Math.min(messages.length, readingPinStart.current + k);
+        }
+      }
+    }
+    prevFirstMsgId.current = first;
   }, [messages]);
   const prevIsStreaming = useRef(false);
   useLayoutEffect(() => {
@@ -699,6 +954,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Evidence walks the FULL history — memoized by messages ref so whale
   // sessions (5000+ msgs) don't re-walk on every streaming frame.
   const historyEvidence = useMemo(() => buildHistoryEvidence(messages), [messages]);
+  // Server-transported orphan finished-agent ids (nested agents whose tool_use
+  // row never reaches the canonical JSONL — inc-1786496042099). Store-backed:
+  // the proving notification lines are hidden from chat, so a delta can grow
+  // this set with an EMPTY message slice — only the store subscription
+  // re-renders us then. Stable ref until it grows, so the filter memo is safe.
+  const finishedAgentIds = useSyncExternalStore(
+    useCallback((cb: () => void) => subscribeFinishedAgentIds(sessionId, cb), [sessionId]),
+    () => getFinishedAgentIds(sessionId),
+  );
   // NOTE: turnWatermark.current is a ref read — invisible to the deps array,
   // so a watermark write alone never recomputes this memo. That is sound only
   // because every watermark write is triggered by a dep edge (messages /
@@ -709,8 +973,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // vanish). If you ever write the watermark on an independent trigger, this
   // memo will keep serving a stale filter until some dep happens to change.
   const { hidden: liveHiddenBlocks, unmatched: unmatchedBlocks } = useMemo(
-    () => computeRenderFilter({ blocks, messages, watermark: turnWatermark.current, isStreaming, historyEvidence }),
-    [blocks, messages, isStreaming, historyEvidence],
+    () => computeRenderFilter({ blocks, messages, watermark: turnWatermark.current, isStreaming, historyEvidence, finishedAgentIds }),
+    [blocks, messages, isStreaming, historyEvidence, finishedAgentIds],
   );
   // Freeze the hidden set while a selection lives in the container: absorption
   // hides a streaming block and mounts its persisted twin — brand-new DOM — so
@@ -723,10 +987,23 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Divergence tripwire: a FINISHED block with no history twin is kept visible
   // (safe), but persistent misses mean archive & stream disagree — surface it.
   // Deduped per count so a stable divergence logs once, not every render.
+  //
+  // QUIESCENCE GATE (inc-1786496042099 false positive): the tripwire used to
+  // fire the instant isStreaming flipped false — 41ms after session:result and
+  // 1.2s BEFORE the post-turn delta returned, so the entire final turn read as
+  // "no history twin" and shipped a 460-block bogus evidence payload that then
+  // drove a mis-diagnosis. Real quiescence = no turn streaming AND no history
+  // fetch in flight (loading/phase2Pending) AND the unmatched set survives a
+  // settle delay unchanged — the delay covers the gap before the version-bump
+  // fetch even starts and any revise round between fetches. A genuine
+  // divergence is persistent by definition, so delaying the report loses nothing.
   const lastUnmatchedLogged = useRef(0);
   useEffect(() => {
-    if (isStreaming) return;
-    if (unmatchedBlocks.length > 0 && unmatchedBlocks.length !== lastUnmatchedLogged.current) {
+    if (isStreaming || loading || phase2Pending) return;
+    if (unmatchedBlocks.length === 0) { lastUnmatchedLogged.current = 0; return; }
+    if (unmatchedBlocks.length === lastUnmatchedLogged.current) return;
+    const timer = setTimeout(() => {
+      lastUnmatchedLogged.current = unmatchedBlocks.length;
       log.warn('stream', `render-filter: ${unmatchedBlocks.length} completed block(s) had no delta twin — kept, not deleted`, {
         sessionId, unmatched: unmatchedBlocks.slice(0, 5),
       });
@@ -767,9 +1044,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           }),
         }).catch(() => {});
       }).catch(() => {});
-    }
-    lastUnmatchedLogged.current = unmatchedBlocks.length;
-  }, [unmatchedBlocks, isStreaming, sessionId]);
+    }, TRIPWIRE_SETTLE_MS);
+    // Any dep change within the window (delta landed → unmatched recomputed,
+    // new turn started, fetch began) cancels the pending report — evidence is
+    // only shipped for a divergence that outlived the settle window.
+    return () => clearTimeout(timer);
+  }, [unmatchedBlocks, isStreaming, loading, phase2Pending, sessionId]);
 
   // Memory reclamation: once EVERY block is absorbed and no turn is live,
   // physically drop the array (zero visual difference — all were hidden).
@@ -894,8 +1174,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // WebSocket reconnect: re-fetch history to recover events lost during disconnect.
   // Without this, a turn that completed during disconnect would be invisible.
   // The absorption filter reconciles blocks against whatever arrives — no flag.
+  // Hidden tabs defer until shown: a server restart reconnects every open tab,
+  // and N hidden tabs × M session columns each firing a history fetch is the
+  // burst that saturates the shared 6-connection pool.
   useEvent('_ws:reconnected', () => {
-    setHistoryVersion((v) => v + 1);
+    runWhenVisible(`sch:reconnect:${sessionId}`, () => setHistoryVersion((v) => v + 1));
   });
 
   // Agent-sent messages: create synthetic optimistic message so it appears in the queue
@@ -965,7 +1248,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // ── Scroll debug logging (persisted via browser-logger → walnut logs -s browser) ──
   // Gated: every call is a console.log that the browser-logger forwards to the
   // server — on hot scroll/resize paths this amplifies main-thread starvation.
-  const sid8 = sessionId.substring(0, 8);
+  // Instance uid: two mounts of the same session (second tab, dock card,
+  // popout) log interleaved lines that read as ONE container flip-flopping
+  // (inc-1786553756848 showed two monotonic sh series interleaved). The uid
+  // separates the series so forensics can attribute each line to a mount.
+  const instanceUid = useRef(Math.random().toString(36).slice(2, 6));
+  const sid8 = `${sessionId.substring(0, 8)}#${instanceUid.current}`;
+  // Render-state mirror for the always-on scroll tripwires below (they live in
+  // event closures that must read CURRENT values without re-subscribing).
+  const forensicsRef = useRef({ msgs: 0, blocks: 0, hidden: 0, trunc: 0, streaming: false });
+  forensicsRef.current = { msgs: messages.length, blocks: blocks.length, hidden: hiddenBlocks.size, trunc: truncationOffset, streaming: isStreaming };
   const scrollLog = useCallback((layer: string, action: string, el?: HTMLElement | null) => {
     if (!scrollDebugEnabled()) return;
     if (el) {
@@ -979,14 +1271,29 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }, [sid8]);
 
+  // ── ALWAYS-ON scroll-jump tripwire (not gated by scrollDebugEnabled) ──
+  // Fires only on anomalies (rare), so it can't amplify starvation like the
+  // per-tick debug logging above. Captures the "scrolling up suddenly jumps to
+  // top" class: a large scrollTop teleport or a scrollHeight collapse, with
+  // enough render-state context (msgs/blocks/hidden/trunc) to attribute cause.
+  const jumpForensics = useCallback((why: string, el: HTMLElement, extra = '') => {
+    const f = forensicsRef.current;
+    console.warn(`[scroll-jump:${sid8}] ${why} top=${Math.round(el.scrollTop)} sh=${Math.round(el.scrollHeight)} ch=${Math.round(el.clientHeight)} msgs=${f.msgs} blocks=${f.blocks} hidden=${f.hidden} trunc=${f.trunc} streaming=${f.streaming} atBot=${isAtBottom.current}${extra}`);
+  }, [sid8]);
+
   // Reset on session switch
   useEffect(() => {
+    // Always-on mount marker: lets forensics tell N mounts of the same session
+    // apart (SessionPanel vs FocusDock vs popout vs second tab). One line per
+    // mount/session-switch — negligible volume.
+    console.log(`[scroll-mount:${sid8}] mounted path=${window.location.pathname}`);
     setHistoryVersion(0);
     turnWatermark.current = 0;
     watermarkInitialized.current = false;
     setEditingId(null);
     setTruncationOffset(0);
     pendingBottomDistance.current = null;
+    readingPinStart.current = null;
     blockIndexMap.current.clear();
     consumedQueueIds.current.clear();
     notifiedConsumedIds.current.clear();
@@ -1010,18 +1317,28 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // truncation window. Runs before paint (useLayoutEffect) so there is no
   // visible jump: same distance-to-bottom ⇒ the message the user was reading
   // stays exactly where it was, with the revealed batch above the viewport.
+  // `messages` is a dep too: "Load N earlier" (lazy-tail backfill) replaces the
+  // whole array without touching truncationOffset. Null-guarded, so ordinary
+  // appends (dist === null) are a no-op.
   useLayoutEffect(() => {
     const dist = pendingBottomDistance.current;
     if (dist === null) return;
     pendingBottomDistance.current = null;
     const el = containerRef.current;
     if (!el) return;
+    // Tripwire: a target above the viewport start clamps to 0 = teleport to
+    // the very top. Happens when content COLLAPSED between the "Show earlier"
+    // click (dist captured against the tall layout) and this restore (short
+    // layout: sh - dist < 0). Always-on — this is the exact reported symptom.
+    if (el.scrollHeight - dist < 0) {
+      jumpForensics('anchor-clamped-to-top', el, ` dist=${Math.round(dist)}`);
+    }
     el.scrollTop = el.scrollHeight - dist;
     // A programmatic scrollTop write fires a scroll event; the handler would
     // recompute isAtBottom correctly (we're far from bottom), but suppress the
     // resize-window race anyway so a concurrent sibling resize can't misread it.
     ignoreScrollUntil.current = Date.now() + 100;
-  }, [truncationOffset]);
+  }, [truncationOffset, messages, jumpForensics]);
 
   // Listen for expand-to-message events from parent panels (when clicking a truncated message)
   useEffect(() => {
@@ -1057,7 +1374,51 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (!el) return;
     let prevArrowState = false;
     let lastLoggedAtBot: boolean | null = null;
+    // Jump tripwire state: previous geometry, to detect teleports between
+    // consecutive scroll events. User scrolling (incl. momentum fling) moves
+    // scrollTop ≤ a few hundred px per event; a single-event move of
+    // thousands of px is programmatic or a browser clamp after content
+    // collapsed under the viewport. Always-on (anomaly-frequency only).
+    let prevTop = el.scrollTop;
+    let prevSh = el.scrollHeight;
+    // Flicker sentinel: sub-teleport content shifts (|dSh| 150..1000px) felt
+    // as jitter while reading. Individually too small for the teleport
+    // tripwire and too chatty to log each — aggregate and flush at most one
+    // line per 2s: count + net/max shift + context. Always-on.
+    let flickCount = 0;
+    let flickNet = 0;
+    let flickMax = 0;
+    let flickLastLog = 0;
+    const noteFlicker = (dSh: number, source: string) => {
+      flickCount++;
+      flickNet += dSh;
+      if (Math.abs(dSh) > Math.abs(flickMax)) flickMax = dSh;
+      const now = Date.now();
+      if (now - flickLastLog > 2000) {
+        flickLastLog = now;
+        const f = forensicsRef.current;
+        console.warn(`[scroll-flicker:${sid8}] ${source} n=${flickCount} net=${Math.round(flickNet)} max=${Math.round(flickMax)} top=${Math.round(el.scrollTop)} sh=${Math.round(el.scrollHeight)} msgs=${f.msgs} blocks=${f.blocks} hidden=${f.hidden} trunc=${f.trunc} streaming=${f.streaming} atBot=${isAtBottom.current}`);
+        flickCount = 0; flickNet = 0; flickMax = 0;
+      }
+    };
     const onScroll = () => {
+      const rawTop = el.scrollTop;
+      const rawSh = el.scrollHeight;
+      const dTop = rawTop - prevTop;
+      const dSh = rawSh - prevSh;
+      // scrollHeight collapse (content vanished under the user) or an upward
+      // teleport (this includes the browser clamping scrollTop after a
+      // collapse — the reported "scrolling up suddenly jumps to top").
+      if (dSh < -1000 || dTop < -2000) {
+        jumpForensics('teleport', el, ` dTop=${Math.round(dTop)} dSh=${Math.round(dSh)} ignored=${Date.now() < ignoreScrollUntil.current}`);
+      } else if (Math.abs(dSh) > 150 && !isAtBottom.current) {
+        // Content height changed DURING a user scroll away from the bottom —
+        // the reader-visible jitter class (at bottom, follow-bottom makes
+        // growth expected; skip it there).
+        noteFlicker(dSh, 'mid-scroll');
+      }
+      prevTop = rawTop;
+      prevSh = rawSh;
       // Skip scroll events triggered by ResizeObserver-induced geometry shifts
       if (Date.now() < ignoreScrollUntil.current) return;
       const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - NEAR_BOTTOM_PX;
@@ -1078,8 +1439,21 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       }
     };
     el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
-  }, [sid8]);
+    // Stationary flicker sentinel: content shifting while the reader is NOT
+    // scrolling fires no scroll event (unless the browser clamps), so poll
+    // scrollHeight at 2Hz — one layout read per 500ms, negligible — and put
+    // any shift through the same aggregator. Only while scrolled up (at
+    // bottom, growth is expected follow-bottom churn).
+    let pollSh = el.scrollHeight;
+    const pollTimer = setInterval(() => {
+      const sh = el.scrollHeight;
+      const dSh = sh - pollSh;
+      pollSh = sh;
+      prevSh = sh; // keep onScroll's baseline in sync so one shift isn't double-counted
+      if (Math.abs(dSh) > 150 && !isAtBottom.current) noteFlicker(dSh, 'stationary');
+    }, 500);
+    return () => { el.removeEventListener('scroll', onScroll); clearInterval(pollTimer); };
+  }, [sid8, jumpForensics]);
 
   // Mark initial load done once Phase 2 completes for the first time.
   // This prevents force-scroll from firing on batch-refresh re-fetches
@@ -1332,7 +1706,23 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Prepare both render partitions together so a persisted tool run can absorb
   // the unpersisted run at the streaming boundary instead of producing two rows.
   const visibleLimit = INITIAL_RENDER_LIMIT + truncationOffset;
-  const visibleStart = Math.max(0, messages.length - visibleLimit);
+  // Reading-mode window pin (inc-1786553756848 / inc-1786603990062): the
+  // window is a TAIL slice, so message growth slides it forward — rows the
+  // reader is looking at leave the render window while tall streaming blocks
+  // above them get absorbed, collapsing scrollHeight by thousands of px and
+  // clamping scrollTop toward the top. While the user reads (not at bottom),
+  // pin the window START: growth only APPENDS below, never evicts above.
+  // The pin only ratchets DOWN (older); returning to bottom releases it and
+  // the window collapses back to the tail (follow-bottom keeps them pinned).
+  let visibleStart = Math.max(0, messages.length - visibleLimit);
+  if (!isAtBottom.current) {
+    if (readingPinStart.current !== null) {
+      visibleStart = Math.min(visibleStart, readingPinStart.current);
+    }
+    readingPinStart.current = visibleStart;
+  } else {
+    readingPinStart.current = null;
+  }
   const visibleMessages = messages.slice(visibleStart);
   const hiddenCount = visibleStart;
   const historyParts: HistoryPart[] = [];
@@ -1539,6 +1929,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   let lastVisibleTimelineIdx = -1;
   for (let i = timeline.length - 1; i >= 0; i--) {
     const item = timeline[i];
+    // The working indicator rides the tail of every live turn — it must not
+    // steal "liveness" from the actual last content block.
+    if (item.kind === 'indicator') continue;
     if (boundaryStreamIndices.has(i) || isTransparentStreamItem(item)) continue;
     if (item.kind === 'block'
       && consumedBlockIndices.has(item.index)
@@ -1549,6 +1942,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
 
   const hasContent = messages.length > 0 || timeline.length > 0 || isStreaming
     || deduped.length > 0;
+
+  // Suppressed whenever the session has visible content — see history-unavailable.ts.
+  const historyUnavailable = visibleHistoryUnavailable(error, hasContent);
 
   // Always mount the scroll container so containerRef is available for scroll effects.
   // Remote sessions have a gap between Phase 1 (empty, local streams) and Phase 2 (SSH fetch)
@@ -1600,7 +1996,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       <div className="session-history" ref={containerRef} onClick={handleContainerClick} style={activeTeamTab ? { display: 'none' } : undefined}>
         {/* Loading / empty / error states rendered INSIDE the scroll container */}
         {loading && messages.length === 0 && blocks.length === 0 && <LoadingSpinner />}
-        {error && !historyUnavailable && (
+        {/* Gate on the RAW flag: when an unavailable answer is suppressed because
+            the session has content, it must not fall through to this generic
+            banner and print the internal "HISTORY_UNAVAILABLE:" string. */}
+        {error && !historyUnavailableRaw && (
           <div className="session-history-empty">
             <p className="text-muted">Failed to load history: {error}</p>
           </div>
@@ -1631,7 +2030,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         )}
         {/* Persisted history messages — truncated to tail for performance.
             Full messages[] stays in memory; only the visible slice is rendered as DOM. */}
-        {initialPrompt && hiddenCount > 0 && (
+        {initialPrompt && (hiddenCount > 0 || olderHidden > 0 || olderWindowed) && (
           <div className="session-msg session-msg-user session-initial-prompt">
             <div className="session-msg-header">
               <span className="session-initial-prompt-label">Initial Prompt</span>
@@ -1652,7 +2051,27 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             }}
           >
             Show {Math.min(hiddenCount, LOAD_MORE_BATCH)} earlier messages
-            <span className="session-show-earlier-count">({hiddenCount} hidden)</span>
+            <span className="session-show-earlier-count">({hiddenCount + olderHidden} hidden)</span>
+          </button>
+        )}
+        {/* Lazy tail exhausted: everything we HOLD is rendered, but the source
+            has older messages we never fetched. One click fetches the rest.
+            olderWindowed = bounded window read, count unknown (whale / cold
+            tail-bounded read) — same button, uncounted label. */}
+        {hiddenCount === 0 && (olderHidden > 0 || olderWindowed) && (
+          <button
+            className="session-show-earlier-btn"
+            disabled={phase2Pending}
+            onClick={() => {
+              isAtBottom.current = false;
+              const el = containerRef.current;
+              if (el) pendingBottomDistance.current = el.scrollHeight - el.scrollTop;
+              loadFullHistory();
+            }}
+          >
+            {phase2Pending
+              ? 'Loading earlier messages…'
+              : olderHidden > 0 ? `Load ${olderHidden} earlier messages` : 'Load earlier messages'}
           </button>
         )}
         {renderedHistoryParts.map((part) => {
@@ -1811,11 +2230,20 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 );
               }
               if (item.kind === 'indicator') {
+                if (item.type === 'resuming') {
+                  return (
+                    <div key="ind-resuming" className="session-streaming-indicator">
+                      <span className="session-streaming-dot" />
+                      Resuming session...
+                    </div>
+                  );
+                }
                 return (
-                  <div key={`ind-${item.type}`} className="session-streaming-indicator">
-                    <span className="session-streaming-dot" />
-                    {item.type === 'resuming' ? 'Resuming session...' : `${assistantLabel} is working...`}
-                  </div>
+                  <WorkingIndicator
+                    key="ind-working"
+                    label={assistantLabel}
+                    tokens={Math.round(countStreamChars(blocks, hiddenBlocks) / 4)}
+                  />
                 );
               }
 
@@ -1826,15 +2254,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 const grouped = groupedByIndex.get(item.index);
                 if (grouped && (grouped.kind === 'task-group' || grouped.kind === 'orphan-group')) {
                   const isFirst = i === 0 || timeline[i - 1].kind !== 'block';
-                  const isInLastGroup = !timeline.slice(i).some(t => t.kind === 'user');
-                  const showStreamingBadge = isFirst && isStreaming && isInLastGroup;
                   return (
                     <div key={`tg-${item.index}`} className={isFirst ? 'session-msg session-msg-assistant' : ''}>
-                      {showStreamingBadge && (
-                        <div className="session-msg-header">
-                          <span className="session-streaming-badge">Streaming</span>
-                        </div>
-                      )}
                       <div className={isFirst ? 'session-msg-content' : ''}>
                         <StreamingTaskGroup
                           taskBlock={grouped.kind === 'task-group' ? grouped.taskBlock : undefined}
@@ -1860,21 +2281,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 // Regular block rendering
                 // Group consecutive blocks under one assistant header.
                 // Show header on first block in each consecutive run.
-                // "Streaming" badge only on the last block's group header.
+                // (The old "Streaming" pill badge was retired — the tail
+                // WorkingIndicator is now the only turn-is-live signal.)
                 //
                 // Only text/system blocks get the assistant "bubble" (padding +
                 // rounded background). Tool-call and thinking blocks render flush
                 // to the panel — the bubble padding on the first tool_call
                 // produced a visible indent-jump against the following tool_calls.
                 const isFirst = i === 0 || timeline[i - 1].kind !== 'block';
-                const isInLastGroup = !timeline.slice(i).some(t => t.kind === 'user');
                 const blockWantsBubble = item.block.type === 'text' || item.block.type === 'system';
-                const showStreamingBadge = isFirst && isStreaming && isInLastGroup;
-                const headerEl = showStreamingBadge ? (
-                  <div className="session-msg-header">
-                    <span className="session-streaming-badge">Streaming</span>
-                  </div>
-                ) : null;
                 // `live` marks the block still receiving tokens: streaming AND
                 // it is the last visible timeline item (crude but the only
                 // per-block signal available — deltas always append at the tail).
@@ -1882,7 +2297,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 if (blockWantsBubble) {
                   return (
                     <div key={`b-${item.index}`} className={isFirst ? 'session-msg session-msg-assistant' : ''}>
-                      {headerEl}
                       <div className={isFirst ? 'session-msg-content' : ''}>
                         <StreamingBlockView block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={isLiveTail} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
                       </div>
@@ -1891,7 +2305,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 }
                 return (
                   <div key={`b-${item.index}`} className="session-msg-bare">
-                    {headerEl}
                     <StreamingBlockView block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={isLiveTail} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
                   </div>
                 );

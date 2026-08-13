@@ -75,6 +75,10 @@ async function mockSessionDetail(page: Page) {
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
+    // Shrink the divergence-tripwire settle window (prod 8s — sized to outlive
+    // the post-turn delta round-trip) so the "no delta twin" warning fires
+    // within this spec's 1.5s wait.
+    (window as unknown as { __tripwireSettleMs?: number }).__tripwireSettleMs = 300;
     const OrigWebSocket = window.WebSocket;
     window.WebSocket = class PatchedWebSocket extends OrigWebSocket {
       constructor(url: string | URL, protocols?: string | string[]) {
@@ -179,6 +183,13 @@ test.describe('Streaming blocks survive turn boundaries (evidence-based promotio
 
     // Turn-boundary bookkeeping fires while the archive is still lagging (empty delta).
     await injectEvent(page, 'session:batch-completed', { sessionId: SESSION_ID, count: 1 });
+
+    // Text deltas are coalesced on a 150ms flush timer (TEXT_FLUSH_INTERVAL_MS)
+    // that stretches under machine load — wait for turn 2's text to RENDER
+    // before starting the anti-vanish loop. The invariant under test is "once
+    // rendered, never disappears", not "renders within 0ms"; an iteration-0
+    // instant read raced the flush and failed spuriously at load >40.
+    await expect(history).toContainText('Message 5 is generating');
 
     // ── THE CRITICAL ANTI-VANISH ASSERTION ──
     // Poll continuously across ~6s (covers the 5s fallback timer). At NO point may
