@@ -10510,13 +10510,21 @@ body.walnut-dragging {
 
 /* Pinned / Focus / Satellite cards are narrow flex rows (gap:6px). The dot must
    NOT shift the phase circle (unread rows would misalign with their neighbors),
-   so cancel its ENTIRE flex footprint: 7px width + the one extra 6px gap it
-   introduces = 13px, split evenly. The dot then floats centered in the gap
-   between the drag handle and the phase circle — "just before the circle". */
+   so its flex footprint must net to ZERO: dot margins + width + the extra 6px
+   gap it introduces must sum to 0. The corridor [drag handle → circle ring] is
+   only ~10px, so to give the dot a breathable ~8px gap to the circle ring
+   (user-picked design, 2026-08-13) the element just BEFORE the dot (drag handle /
+   select checkbox / tier dot — hence sibling :has, not a class) slides 4px left.
+   Net: -4 (prev sibling) + 6 (gap) - 7 (ml) + 7 (w) - 2 (mr) = 0; circle stays
+   pixel-identical to non-unread rows. */
 .todo-pinned-card > .task-unread-dot,
 .todo-focus-card > .task-unread-dot {
-  margin-left: -6.5px;
-  margin-right: -6.5px;
+  margin-left: -7px;
+  margin-right: -2px;
+}
+.todo-pinned-card > :has(+ .task-unread-dot),
+.todo-focus-card > :has(+ .task-unread-dot) {
+  margin-left: -4px;
 }
 
 /* List-row form — pinned into .todo-panel-item's left padding gutter so it never
