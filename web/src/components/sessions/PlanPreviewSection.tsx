@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PlanCard } from './SessionMessage';
+import { visibleInterval } from '@/utils/page-visibility';
 import type { SessionRecord } from '@/types/session';
 import type { SessionPlanResponse } from '@/api/sessions';
 
@@ -26,16 +27,16 @@ export function PlanPreviewSection({ session, plan, loading, refresh }: PlanPrev
     setOpen(false);
   }, [session.claudeSessionId]);
 
-  // Auto-poll for plan updates while session is running
+  // Auto-poll for plan updates while session is running.
+  // visibleInterval: sessions run for hours — a hidden tab must not poll along.
   useEffect(() => {
     if (!shouldFetch) return;
     const isRunning = session.process_status === 'running';
     if (!isRunning) return;
 
-    const interval = setInterval(() => {
+    return visibleInterval(() => {
       refresh();
     }, PLAN_POLL_INTERVAL);
-    return () => clearInterval(interval);
   }, [shouldFetch, session.process_status, refresh]);
 
   const handleRefresh = async (e: React.MouseEvent) => {

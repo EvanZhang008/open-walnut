@@ -14,6 +14,7 @@ import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { useNotifications, type Notification } from '@/contexts/notifications';
 import { respondToPermission } from '@/api/sessions';
 import { navigateToTarget } from '@/utils/open-session';
+import { visibleInterval } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
 
 interface NotificationPanelProps {
@@ -84,10 +85,11 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
         });
     };
     fetchQmd();
-    const interval = setInterval(() => {
+    // visibleInterval: indexing can run for many minutes — hidden tabs skip.
+    const cancel = visibleInterval(() => {
       if (qmdStatus?.status === 'indexing' || qmdStatus?.status === 'downloading') fetchQmd();
     }, 3000);
-    return () => { ac.abort(); clearInterval(interval); };
+    return () => { ac.abort(); cancel(); };
   }, [open, qmdStatus?.status]);
 
   if (!open) return null;

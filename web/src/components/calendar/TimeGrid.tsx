@@ -31,6 +31,7 @@ import {
   slotToLocalIso,
   weekRange,
 } from '@/utils/calendar-date';
+import { visibleInterval } from '@/utils/page-visibility';
 import type { CalendarItem } from './calendar-items';
 import { CalendarChip } from './CalendarChip';
 import type { CreateSeed } from './QuickCreatePopover';
@@ -282,14 +283,14 @@ export const TimeGrid = memo(function TimeGrid({
     scrollRef.current?.scrollTo({ top: 8 * 2 * SLOT_PX - 12 });
   }, [days]);
 
-  // Now-line, re-anchored every 60s.
+  // Now-line, re-anchored every 60s. visibleInterval: hidden tabs skip; the
+  // catch-up tick on return recomputes from the clock, so it's never stale.
   const [nowMin, setNowMin] = useState(() => today.getHours() * 60 + today.getMinutes());
   useEffect(() => {
-    const t = setInterval(() => {
+    return visibleInterval(() => {
       const n = new Date();
       setNowMin(n.getHours() * 60 + n.getMinutes());
     }, 60_000);
-    return () => clearInterval(t);
   }, []);
 
   const { allDayByDay, timedByDay } = useMemo(() => {

@@ -14,6 +14,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { fetchRecordings, retranscribeRecording, type VoiceRecording } from '@/api/stt';
 import { insertVoiceText, setVoiceStatus } from '@/utils/voice-status';
+import { visibleInterval } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
 
 interface VoicePanelProps {
@@ -56,13 +57,12 @@ export function VoicePanel({ open, onClose, sidebarCollapsed }: VoicePanelProps)
   }, []);
 
   // Load on open; light poll while open so an in-flight transcription's result
-  // appears without reopening.
+  // appears without reopening. visibleInterval: hidden tabs skip the poll.
   useEffect(() => {
     if (!open) return;
     setLoading(true);
     refresh();
-    const t = setInterval(refresh, REFRESH_MS);
-    return () => clearInterval(t);
+    return visibleInterval(refresh, REFRESH_MS);
   }, [open, refresh]);
 
   // Opening the panel acknowledges the failure badge.

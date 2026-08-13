@@ -10,8 +10,124 @@ class ApiError extends Error {
   }
 }
 
+// ── Fetch admission control ────────────────────────────────────────────────
+// Browsers allow only 6 HTTP/1.1 connections per origin. Excess fetches queue
+// INSIDE the browser with their abort timers already running, so one burst
+// (e.g. a WS-reconnect refresh of every open session while a slow request pins
+// the pool) cascades into "FAILED after 15s" for requests the server never
+// received (2026-08-11: a PATCH "failed" 3× client-side while the server
+// answered the one attempt that arrived in 304ms). Gate concurrency here
+// instead: the timeout timer starts when the request is actually dispatched,
+// never while it waits for a connection. Writes (non-GET) jump the queue —
+// a user action must not wait behind a pile of background GETs.
+const MAX_CONCURRENT_FETCHES = 6;
+const MAX_QUEUE_WAIT_MS = 20_000;
+const QUEUE_DEPTH_WARN_STEP = 10;
+
+interface QueuedFetch {
+  dispatch: () => void;
+  fail: (err: unknown) => void;
+  callerSignal?: AbortSignal;
+  onCallerAbort?: () => void;
+  waitTimer: ReturnType<typeof setTimeout>;
+}
+
+let inFlightFetches = 0;
+const fetchQueue: QueuedFetch[] = [];
+
+function pumpFetchQueue(): void {
+  while (inFlightFetches < MAX_CONCURRENT_FETCHES && fetchQueue.length > 0) {
+    const next = fetchQueue.shift()!;
+    clearTimeout(next.waitTimer);
+    if (next.callerSignal && next.onCallerAbort) {
+      next.callerSignal.removeEventListener('abort', next.onCallerAbort);
+    }
+    inFlightFetches++;
+    next.dispatch();
+  }
+}
+
+function acquireFetchSlot(urgent: boolean, callerSignal?: AbortSignal): Promise<void> {
+  if (callerSignal?.aborted) {
+    return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
+  }
+  if (inFlightFetches < MAX_CONCURRENT_FETCHES && fetchQueue.length === 0) {
+    inFlightFetches++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve, reject) => {
+    const entry: QueuedFetch = {
+      dispatch: resolve,
+      fail: reject,
+      callerSignal,
+      waitTimer: setTimeout(() => {
+        const idx = fetchQueue.indexOf(entry);
+        if (idx >= 0) fetchQueue.splice(idx, 1);
+        if (callerSignal && entry.onCallerAbort) {
+          callerSignal.removeEventListener('abort', entry.onCallerAbort);
+        }
+        // TimeoutError so existing timeout handling applies; the message makes
+        // the saturation case distinguishable from a real network timeout.
+        reject(new DOMException(
+          `Request queued ${MAX_QUEUE_WAIT_MS}ms without a free connection — pool saturated`,
+          'TimeoutError',
+        ));
+      }, MAX_QUEUE_WAIT_MS),
+    };
+    if (callerSignal) {
+      entry.onCallerAbort = () => {
+        clearTimeout(entry.waitTimer);
+        const idx = fetchQueue.indexOf(entry);
+        if (idx >= 0) fetchQueue.splice(idx, 1);
+        reject(new DOMException('The operation was aborted.', 'AbortError'));
+      };
+      callerSignal.addEventListener('abort', entry.onCallerAbort, { once: true });
+    }
+    if (urgent) fetchQueue.unshift(entry);
+    else fetchQueue.push(entry);
+    if (fetchQueue.length % QUEUE_DEPTH_WARN_STEP === 0) {
+      console.warn('[api] fetch queue backing up', {
+        queued: fetchQueue.length, inFlight: inFlightFetches,
+      });
+    }
+  });
+}
+
+function releaseFetchSlot(): void {
+  inFlightFetches--;
+  pumpFetchQueue();
+}
+
+/** Test hook — not for product code. */
+export function getFetchQueueStats(): { inFlight: number; queued: number } {
+  return { inFlight: inFlightFetches, queued: fetchQueue.length };
+}
+
+/** Sentinel: attemptRequest asks the wrapper to retry with cache bypass AFTER
+ *  releasing its connection slot (retrying inside would hold two slots and
+ *  can deadlock the pool if several requests hit the cache race at once). */
+const RETRY_WITH_CACHE_BYPASS = Symbol('retry-with-cache-bypass');
+
 async function request<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean }): Promise<T> {
+  await acquireFetchSlot(method !== 'GET', extra?.signal);
+  let retryWithBypass = false;
+  try {
+    return await attemptRequest<T>(method, path, body, extra);
+  } catch (err) {
+    if (err === RETRY_WITH_CACHE_BYPASS) retryWithBypass = true;
+    else throw err;
+  } finally {
+    releaseFetchSlot();
+  }
+  // Cache-race retry re-enters through the gate (fresh slot, fresh timer) —
+  // retrying while still holding the slot would double-book the pool.
+  return request<T>(method, path, body, { ...extra, cacheBypass: true });
+}
+
+async function attemptRequest<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean }): Promise<T> {
   const timeoutMs = extra?.timeoutMs ?? 15_000;
+  // Created AFTER slot acquisition — the timer measures the network round
+  // trip only, never time spent waiting for a connection.
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const signal = extra?.signal
     ? AbortSignal.any([extra.signal, timeoutSignal])
@@ -98,7 +214,7 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
     };
     console.error(`[api] ${method} ${path} → ${res.status} JSON parse failed in ${Math.round(performance.now() - jsonT0)}ms`, jsonErr, JSON.stringify(detail));
     if (method === 'GET' && !extra?.cacheBypass) {
-      return request<T>(method, path, body, { ...extra, cacheBypass: true });
+      throw RETRY_WITH_CACHE_BYPASS;
     }
     throw new ApiError(res.status, `Response body is not valid JSON (${(jsonErr as Error).message ?? 'parse error'})`);
   }
@@ -141,16 +257,22 @@ export async function apiGetText(path: string, params?: Record<string, string>, 
   const headers: Record<string, string> = {};
   const deviceToken = getDeviceToken();
   if (deviceToken) headers['Authorization'] = `Bearer ${deviceToken}`;
-  const res = await fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(opts?.timeoutMs ?? 30_000) });
-  if (!res.ok) {
-    let message = res.statusText;
-    try {
-      const data = await res.json();
-      if (data.error) message = data.error;
-    } catch { /* use statusText */ }
-    throw new ApiError(res.status, message);
+  await acquireFetchSlot(false);
+  let res: Response;
+  try {
+    res = await fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(opts?.timeoutMs ?? 30_000) });
+    if (!res.ok) {
+      let message = res.statusText;
+      try {
+        const data = await res.json();
+        if (data.error) message = data.error;
+      } catch { /* use statusText */ }
+      throw new ApiError(res.status, message);
+    }
+    return await res.text();
+  } finally {
+    releaseFetchSlot();
   }
-  return res.text();
 }
 
 export function apiPost<T>(path: string, body?: unknown, opts?: { timeoutMs?: number }): Promise<T> {

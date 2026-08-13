@@ -8,6 +8,7 @@ import { fetchSession, fetchSessionsForTask } from '@/api/sessions';
 import type { ImageAttachment } from '@/api/chat';
 import type { SessionRecord } from '@/types/session';
 import { log } from '@/utils/log';
+import { visibleInterval } from '@/utils/page-visibility';
 
 /**
  * NotesSessionChat — the PENDING shell for a REAL Claude Code session launched
@@ -110,9 +111,10 @@ export function NotesSessionChat({ taskId, sessionId: knownSessionId, onResolved
     if (!taskId || sessionId) return;
     let cancelled = false;
     const startedAt = Date.now();
-    const timer = setInterval(async () => {
+    // visibleInterval: 400ms resolve poll must not run in a hidden tab.
+    const cancel = visibleInterval(async () => {
       if (Date.now() - startedAt > RESOLVE_TIMEOUT_MS) {
-        clearInterval(timer);
+        cancel();
         if (!cancelled) setError('Session timed out — Claude CLI may not be available.');
         return;
       }
@@ -120,12 +122,12 @@ export function NotesSessionChat({ taskId, sessionId: knownSessionId, onResolved
         const sessions = await fetchSessionsForTask(taskId);
         const active = sessions.find(s => s.claudeSessionId && !s.archived);
         if (active && !cancelled) {
-          clearInterval(timer);
+          cancel();
           adoptSessionId(active.claudeSessionId);
         }
       } catch { /* retry on next tick */ }
     }, RESOLVE_POLL_MS);
-    return () => { cancelled = true; clearInterval(timer); };
+    return () => { cancelled = true; cancel(); };
   }, [taskId, sessionId, adoptSessionId]);
 
   // Surface spawn failures for the pending task instead of spinning forever.

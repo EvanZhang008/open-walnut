@@ -6,6 +6,7 @@
 
 import { useState, useEffect } from 'react';
 import { fetchSttStatus, type SttStatus } from '@/api/stt';
+import { visibleInterval } from '@/utils/page-visibility';
 
 interface SttStatusState {
   /** An STT engine is configured in settings */
@@ -106,12 +107,13 @@ export function useSttStatus(): SttStatusState {
     // Re-fetch when cache is invalidated externally
     const unsub = subscribe(doFetch);
 
-    // Periodic re-check: if error cached, retry after ERROR_RETRY_MS
-    const interval = setInterval(() => {
+    // Periodic re-check: if error cached, retry after ERROR_RETRY_MS.
+    // visibleInterval: an error-state hidden tab must not retry every 10s forever.
+    const cancel = visibleInterval(() => {
       if (isStale()) doFetch();
     }, ERROR_RETRY_MS);
 
-    return () => { unsub(); clearInterval(interval); };
+    return () => { unsub(); cancel(); };
   }, []);
 
   const isConfigured = !!status?.engine;

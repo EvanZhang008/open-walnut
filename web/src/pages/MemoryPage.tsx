@@ -5,6 +5,7 @@ import { MemoryTreePanel } from '@/components/memory/MemoryTreePanel';
 import { MemoryContentPanel } from '@/components/memory/MemoryContentPanel';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { useDragGesture } from '@/hooks/useDragGesture';
+import { visibleInterval } from '@/utils/page-visibility';
 import type { MemoryBrowseTree } from '@/api/memory';
 
 const LS_WIDTH_KEY = 'open-walnut-memory-list-width';
@@ -69,8 +70,9 @@ export function MemoryPage() {
     loadTree();
     // Live refresh: poll every 15s so new daily logs, topics, compaction snapshots
     // appear without manual refresh. Backend `/api/memory/browse` is cheap (metadata only).
-    const interval = setInterval(loadTree, 15_000);
-    return () => { cancelled = true; clearInterval(interval); };
+    // visibleInterval: hidden tabs skip the poll and catch up once on return.
+    const cancel = visibleInterval(loadTree, 15_000);
+    return () => { cancelled = true; cancel(); };
   }, []);
 
   // Load content when selection changes

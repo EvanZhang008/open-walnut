@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useEvent } from './useWebSocket';
 import { fetchWorkflowProgress } from '@/api/sessions';
 import { log } from '@/utils/log';
+import { runWhenVisible } from '@/utils/page-visibility';
 
 /** One background task / dynamic-workflow subagent. Mirrors the backend
  *  SessionBackgroundTasksPayload.tasks[] shape (web defines its own copy — no
@@ -128,7 +129,8 @@ export function useBackgroundTasks(sessionId: string | undefined): BackgroundTas
   useEvent('_ws:reconnected', () => {
     if (!sessionId) return;
     sawLiveRef.current = false;
-    fetchWorkflowProgress(sessionId).then((snap) => {
+    // Hidden tabs defer the manifest fetch until shown (reconnect hits every tab).
+    runWhenVisible(`bg-tasks:reconnect:${sessionId}`, () => fetchWorkflowProgress(sessionId).then((snap) => {
       if (!snap || sawLiveRef.current) return;
       log.info('workflow', `reconnect: restored persisted workflow: agents=${snap.agents?.length ?? 0} phases=${snap.phases?.length ?? 0}`, { sessionId });
       setState({
@@ -140,7 +142,7 @@ export function useBackgroundTasks(sessionId: string | undefined): BackgroundTas
         phases: Array.isArray(snap.phases) ? snap.phases : [],
         agents: Array.isArray(snap.agents) ? (snap.agents as WorkflowAgent[]) : [],
       });
-    }).catch(() => {});
+    }).catch(() => {}));
   });
 
   useEvent('session:background-tasks', (data) => {

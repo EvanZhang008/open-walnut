@@ -50,6 +50,29 @@ const SUPPRESSED_EVENTS = new Set([
   'agent:thinking',
 ]);
 
+/**
+ * RPC methods whose `→` / `← OK` lines are logged at debug instead of info.
+ *
+ * `browser:logs` is the load-bearing one: it is the transport the browser logger
+ * uses to ship console output to the server. Logging its own send at info made it
+ * SELF-FEEDING — one flush logs "RPC → browser:logs", which the console patch
+ * captures as a new entry, which the next flush ships, forever. Measured
+ * 2026-08-10 on a normal day: 28,640 of 146,461 production log lines (~20%) were
+ * the logger reporting on itself, plus a matching `← OK` each. That volume is
+ * paid in main-thread JSON work and synchronous server-side appends on every
+ * flush — i.e. it degrades the very event loop the logs get used to diagnose.
+ *
+ * The others are per-keystroke/per-frame terminal traffic: one `terminal:input`
+ * RPC per typed character, each previously worth two info lines. Nothing reads
+ * these lines (no scripts/walnut-logs.sh query matches them) — failures still
+ * surface, since `← ERROR` is logged at warn regardless of this set.
+ */
+const LOW_VALUE_RPC_METHODS = new Set([
+  'browser:logs',
+  'terminal:input',
+  'terminal:resize',
+]);
+
 /** Human-readable labels for WebSocket close codes (RFC 6455). */
 const WS_CLOSE_CODES: Record<number, string> = {
   1000: 'normal', 1001: 'going away', 1002: 'protocol error',
@@ -91,7 +114,7 @@ class WsClient {
   private ws: WebSocket | null = null;
   private eventListeners = new Map<string, Set<EventCallback>>();
   private connectionListeners = new Set<ConnectionCallback>();
-  private pendingRpc = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
+  private pendingRpc = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; lowValue?: boolean }>();
   // RPCs issued before the socket reaches OPEN (cold-load race: useChat/session
   // hooks fire RPCs in the first ~200-500ms while the lazy WS handshake is still
   // in flight). Instead of rejecting immediately ("RPC failed — not connected"),
@@ -289,7 +312,10 @@ class WsClient {
       ));
       return;
     }
-    this.pendingRpc.set(id, { resolve, reject });
+    // Remember whether this id's lines are low-value, so the response side can
+    // match the request side without re-deriving it from the method name.
+    const lowValue = LOW_VALUE_RPC_METHODS.has(method);
+    this.pendingRpc.set(id, { resolve, reject, lowValue });
     // Extract IDs from payload for traceability
     const rpcLog: Record<string, unknown> = { rpcId: id, method };
     if (payload && typeof payload === 'object') {
@@ -297,7 +323,9 @@ class WsClient {
       if (p.sessionId) rpcLog.sessionId = p.sessionId;
       if (p.taskId) rpcLog.taskId = p.taskId;
     }
-    log.info('ws', `RPC:${id} →`, rpcLog);
+    // debug (not info) for the high-frequency methods — see LOW_VALUE_RPC_METHODS.
+    if (lowValue) log.debug('ws', `RPC:${id} →`, rpcLog);
+    else log.info('ws', `RPC:${id} →`, rpcLog);
     this.ws!.send(body);
   }
 
@@ -393,7 +421,10 @@ class WsClient {
     }
     this.pendingRpc.delete(frame.id);
     if (frame.ok) {
-      log.info('ws', `RPC:${frame.id} ← OK`);
+      // Mirror the request side's level so a low-value RPC costs zero log lines
+      // on the happy path. Failures below stay at warn regardless.
+      if (pending.lowValue) log.debug('ws', `RPC:${frame.id} ← OK`);
+      else log.info('ws', `RPC:${frame.id} ← OK`);
       pending.resolve(frame.payload);
     } else {
       log.warn('ws', `RPC:${frame.id} ← ERROR`, { error: frame.error });

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { log } from '@/utils/log';
+import { visibleInterval } from '@/utils/page-visibility';
 import { useAutoSave } from '@/hooks/useAutoSave';
 import { useConfirm } from '@/hooks/useConfirm';
 
@@ -113,7 +114,7 @@ export function SearchSection({ config, onSave }: Props) {
   const [loading, setLoading] = useState(true);
   const [actionPending, setActionPending] = useState(false);
 
-  const pollRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const pollRef = useRef<(() => void) | undefined>(undefined);
   // Track whether user has made unsaved edits (suppress config->state sync)
   const userEditedRef = useRef(false);
   // Track initial mount for config sync
@@ -159,13 +160,14 @@ export function SearchSection({ config, onSave }: Props) {
   }, [fetchStatus]);
 
   // ── Poll while downloading or indexing (CRITICAL-2: clear before create) ──
+  // visibleInterval: model downloads take minutes — hidden tabs skip the poll.
   useEffect(() => {
-    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current?.();
     if (qmdStatus?.status === 'downloading' || qmdStatus?.status === 'indexing') {
-      pollRef.current = setInterval(fetchStatus, 5000);
+      pollRef.current = visibleInterval(fetchStatus, 5000);
     }
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current?.();
     };
   }, [qmdStatus?.status, fetchStatus]);
 

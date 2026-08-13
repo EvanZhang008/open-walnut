@@ -4,6 +4,7 @@ import { wsClient } from '@/api/ws';
 import { buildImageRefsPayload } from '@/api/image-upload';
 import { spillOversizedText } from '@/api/paste-spill';
 import { perf } from '@/utils/perf-logger';
+import { runWhenVisible } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
 import {
   fetchChatHistory, clearChatHistory, fetchChatStats,
@@ -764,15 +765,18 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   // Re-fetch chat history on WebSocket reconnect.
   // During disconnect, the agent may have completed or the user refreshed mid-processing.
   // Without this, main chat shows stale React state (session chat already has this).
+  // Hidden tabs defer the fetches until shown (reconnect hits every open tab at once).
   useEvent('_ws:reconnected', () => {
-    fetchChatHistory(1, PAGE_SIZE, agentIdRef.current, conversationIdRef.current ?? undefined)
-      .then((resp) => {
-        setMessages(chatEntriesToMessages(resp.messages));
-        setHasMore(resp.pagination.hasMore);
-        nextPageRef.current = 2;
-      })
-      .catch(() => {});
-    refreshStats();
+    runWhenVisible('use-chat:reconnect', () => {
+      fetchChatHistory(1, PAGE_SIZE, agentIdRef.current, conversationIdRef.current ?? undefined)
+        .then((resp) => {
+          setMessages(chatEntriesToMessages(resp.messages));
+          setHasMore(resp.pagination.hasMore);
+          nextPageRef.current = 2;
+        })
+        .catch(() => {});
+      refreshStats();
+    });
     // Reset streaming state — the turn may have completed during disconnect
     setIsStreaming(false);
     setToolActivity(null);
