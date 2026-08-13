@@ -30,6 +30,10 @@ func saveConfig(_ config: WalnutConfig) {
 
 let REPO_URL = "https://github.com/EvanZhang008/open-walnut.git"
 
+// Printed by the server when it recompiles a native addon for the running Node.
+// Keep in sync with REBUILD_MARKER in src/core/native-abi-preflight.ts.
+let REBUILD_MARKER = "rebuilding native module"
+
 // MARK: - App Delegate
 
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -37,6 +41,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var webView: WKWebView!
     var serverProcess: Process?
     var serverPort: Int?
+    // Last captured stdout/stderr from a server child that died before confirming
+    // its port — surfaced in error messages so a startup crash isn't misreported
+    // as "ports are all in use".
+    var lastServerOutput: String = ""
     var walnutHome: String?
     var walnutSourceDir: String?
     var statusLabel: NSTextField?
@@ -660,7 +668,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func tryStartServerOnPort(index: Int) {
         guard let home = walnutHome, let source = walnutSourceDir else { return }
         guard index < portsToTry.count else {
-            showError("Could not start server — ports \(portsToTry.map(String.init).joined(separator: ", ")) are all in use.")
+            let tail = lastServerOutput.isEmpty ? "" : "\n\nLast server output:\n\(lastServerOutput)"
+            showError("Could not start the Walnut server on ports \(portsToTry.map(String.init).joined(separator: ", ")).\(tail)")
             return
         }
 
@@ -700,11 +709,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let handle = pipe.fileHandleForReading
         var outputBuffer = ""
         var portConfirmed = false
+        // Guards the two failure paths (child death vs 15s timeout) so exactly one
+        // acts. Mutated only on the main queue, so no locking is needed.
+        var settled = false
+        // Set when the server reports it is recompiling a native addon; the startup
+        // deadline is then re-armed instead of firing (a from-source build easily
+        // exceeds 15s, and killing it mid-compile corrupts the module).
+        var rebuildingNativeModule = false
 
         handle.readabilityHandler = { [weak self] fileHandle in
             let data = fileHandle.availableData
             guard !data.isEmpty, let str = String(data: data, encoding: .utf8) else { return }
             outputBuffer += str
+
+            // The server may recompile a native addon whose ABI doesn't match this
+            // Node (see src/core/native-abi-preflight.ts). That takes far longer
+            // than a normal boot, so stop counting against the startup deadline —
+            // otherwise we'd kill the rebuild partway and leave it broken.
+            if outputBuffer.contains(REBUILD_MARKER) {
+                DispatchQueue.main.async {
+                    self?.statusLabel?.stringValue = "Rebuilding native module (first run after a Node change)…"
+                    rebuildingNativeModule = true
+                }
+            }
 
             if outputBuffer.contains("listening on http://localhost:\(port)") && !portConfirmed {
                 portConfirmed = true
@@ -727,20 +754,58 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         process.terminationHandler = { [weak self] proc in
             DispatchQueue.main.async {
-                guard let self = self, !portConfirmed else { return }
+                guard let self = self, !portConfirmed, !settled else { return }
+                settled = true
                 self.serverProcess = nil
-                self.tryStartServerOnPort(index: index + 1)
+
+                // Keep the tail of the child's output for diagnostics.
+                let trimmed = outputBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+                let lines = trimmed.split(separator: "\n", omittingEmptySubsequences: false)
+                self.lastServerOutput = lines.suffix(15).joined(separator: "\n")
+
+                // Only a genuine port conflict justifies trying the next port. A
+                // crash (stale dist/, bad Node, missing dep) will recur identically
+                // on every port, so retrying just delays a misleading "ports in
+                // use" error — surface the real crash output immediately instead.
+                let lower = trimmed.lowercased()
+                let portInUse = lower.contains("eaddrinuse") || lower.contains("address already in use")
+                if portInUse {
+                    self.tryStartServerOnPort(index: index + 1)
+                } else {
+                    let detail = self.lastServerOutput.isEmpty ? "No output was captured." : self.lastServerOutput
+                    self.showError(
+                        "The Walnut server exited during startup (exit code \(proc.terminationStatus)).\n\n"
+                        + "\(detail)\n\n"
+                        + "This is usually a stale build. In the source directory run:\n"
+                        + "    npm run web:build")
+                }
             }
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
-            guard let self = self, !portConfirmed, self.serverProcess === process else { return }
-            if process.isRunning {
-                process.terminate()
+        // Startup deadline. Re-arms itself while a native-module rebuild is running,
+        // up to a hard ceiling, so a slow compile isn't mistaken for a hang.
+        func armStartupDeadline(secondsRemaining: Int) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+                guard let self = self, !portConfirmed, !settled, self.serverProcess === process else { return }
+                let remaining = rebuildingNativeModule ? max(secondsRemaining, 300) - 5 : secondsRemaining - 5
+                if remaining > 0 {
+                    armStartupDeadline(secondsRemaining: remaining)
+                    return
+                }
+                settled = true
+                // A hang (never printed "listening"), not a crash — terminate and try
+                // the next port. terminationHandler fires but bails on `settled`.
+                if process.isRunning {
+                    process.terminate()
+                }
+                self.serverProcess = nil
+                let trimmed = outputBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.lastServerOutput = trimmed.split(separator: "\n", omittingEmptySubsequences: false)
+                    .suffix(15).joined(separator: "\n")
+                self.tryStartServerOnPort(index: index + 1)
             }
-            self.serverProcess = nil
-            self.tryStartServerOnPort(index: index + 1)
         }
+        armStartupDeadline(secondsRemaining: 15)
     }
 
     func pollForServer() {
@@ -877,16 +942,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Prefer candidates meeting minimum version (Node >= 20)
-        // Check version by extracting from path or running the binary
-        for candidate in unique {
-            if nodeVersionMeetsMinimum(candidate, major: 20) {
+        // Node >= 22 matches package.json "engines". (Below 20, ora's string-width
+        // dependency uses the `v` regex flag and can't even load.)
+        let supported = unique.filter { nodeVersionMeetsMinimum($0, major: 22) }
+
+        // Version alone can't tell us a runtime WORKS: better-sqlite3 is compiled
+        // against one Node ABI, so the newest Node is often the wrong one. Prefer a
+        // candidate that can actually load the compiled addons. Falling back to the
+        // newest supported Node is safe — the server's native-module preflight
+        // recompiles for whatever it's run under (native-abi-preflight.ts); this
+        // probe just avoids paying for a rebuild when a matching runtime exists.
+        if let source = walnutSourceDir,
+           FileManager.default.fileExists(atPath: source + "/node_modules/better-sqlite3") {
+            for candidate in supported where nodeCanLoadNativeModules(candidate, sourceDir: source) {
                 return candidate
             }
         }
 
+        if let newest = supported.first { return newest }
+
         // Fall back to any available node (user will see engine warnings but might still work)
         return unique.first
+    }
+
+    /// True when `nodePath` can actually load the compiled native addons in
+    /// `sourceDir` — i.e. its ABI matches what `npm install` compiled against.
+    /// better-sqlite3 resolves its `.node` lazily on first Database construction,
+    /// so the probe must construct one; a bare require() passes even on a mismatch.
+    func nodeCanLoadNativeModules(_ nodePath: String, sourceDir: String) -> Bool {
+        let script = "const D=require('better-sqlite3'); new D(':memory:').close()"
+        return runProcess(nodePath, args: ["-e", script], cwd: sourceDir).success
     }
 
     func nodeVersionMeetsMinimum(_ nodePath: String, major minimum: Int) -> Bool {
