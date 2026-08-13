@@ -308,13 +308,37 @@ export function FileContentView({
     const firstRestore = restoredForRef.current !== key;
     restoredForRef.current = key;
 
-    let scroller: HTMLElement | null = null;
     let raf = 0;
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
 
-    const onScroll = () => {
-      if (!scroller) return;
-      lastSeenRef.current = { key, top: scroller.scrollTop };
+    // ── Save: capture-phase listener on document, not a listener on one node.
+    // The body is an ASYNC-mounting editor now (TipTap fills after mount,
+    // CodeMirror measures on its own rAF), so "find the scroller once, attach
+    // there" raced the mount: when findScroller came up empty on frame 1 the
+    // listener was never attached and NOTHING was ever saved — the reported
+    // "doesn't remember the scroll location". Scroll events don't bubble but
+    // they DO capture, so one document-level listener hears every current and
+    // FUTURE scroller; we filter to elements related to this file's body.
+    const saved = firstRestore && !line ? loadFileScroll(host, filePath) : null;
+    let chaseTop: number | null = saved ? saved.top : null;
+    let lastSetTop = -1;
+    const chaseDeadline = Date.now() + 5000;
+
+    const onScrollCapture = (e: Event) => {
+      const t = e.target;
+      const rootEl = contentRef.current;
+      if (!(t instanceof HTMLElement) || !rootEl) return;
+      // The vertical scroller is either inside the body (editors, md preview)
+      // or an ancestor pane (read-only <pre> case). Anything else on the page
+      // is not ours. Horizontal-only scrollers (the <pre> itself) are skipped —
+      // saving their scrollTop of 0 would delete the entry being preserved.
+      if (!rootEl.contains(t) && !t.contains(rootEl)) return;
+      if (t.scrollHeight <= t.clientHeight + 1) return;
+      const top = t.scrollTop;
+      // A scroll that isn't the echo of our own programmatic set means the
+      // user took over — stop chasing the saved offset, never fight them.
+      if (chaseTop != null && Math.abs(top - lastSetTop) > 1) chaseTop = null;
+      lastSeenRef.current = { key, top };
       clearTimeout(saveTimer);
       // Debounced: a scroll gesture fires dozens of events; one write per rest.
       saveTimer = setTimeout(() => {
@@ -322,35 +346,45 @@ export function FileContentView({
         if (seen?.key === key) saveFileScroll(host, filePath, { top: seen.top, source: showSource });
       }, 250);
     };
+    document.addEventListener('scroll', onScrollCapture, { capture: true, passive: true });
 
-    // Content lands after paint (markdown HTML injection / syntax highlight /
-    // editor mount), so the scroller and its scrollHeight only exist on the
-    // next frame. The editors are the default body now: CodeMirror scrolls its
-    // own .cm-scroller, the WYSIWYG surface scrolls .fv-wysiwyg-editor.
-    raf = requestAnimationFrame(() => {
-      const body = contentRef.current?.querySelector<HTMLElement>(
-        '.fv-md-preview, .file-viewer-code, .fv-source-editor .cm-scroller, .fv-wysiwyg-editor',
-      );
-      scroller = findScroller(body ?? contentRef.current);
-      if (!scroller) return;
-      if (firstRestore && !line) {
-        const saved = loadFileScroll(host, filePath);
-        if (saved) {
-          // Clamp: the file may have shrunk since the offset was stored.
-          const top = Math.max(0, Math.min(saved.top, scroller.scrollHeight - scroller.clientHeight));
-          scroller.scrollTop = top;
-          // Seed the tracker so an immediate close re-persists the restored value
-          // rather than flushing a 0 (setting scrollTop fires no synchronous event).
-          lastSeenRef.current = { key, top };
+    // ── Restore: CHASE the saved offset across frames instead of applying it
+    // once. At any single frame the scroller may not exist yet or its
+    // scrollHeight may be a fraction of the final document (editor mount,
+    // syntax highlight, image loads) — a one-shot restore clamped the offset
+    // against that fraction, so long files always "resumed" near the top.
+    // Chasing stops when the full offset is reachable, the user scrolls, or
+    // the deadline passes (never-scrollable short files).
+    const tick = () => {
+      if (chaseTop != null) {
+        const body = contentRef.current?.querySelector<HTMLElement>(
+          '.fv-md-preview, .file-viewer-code, .fv-source-editor .cm-scroller, .fv-wysiwyg-editor',
+        );
+        const scroller = findScroller(body ?? contentRef.current);
+        if (scroller) {
+          const max = scroller.scrollHeight - scroller.clientHeight;
+          // Clamp to what's renderable NOW; keep chasing until the document
+          // has grown enough to hold the full saved offset.
+          const top = Math.max(0, Math.min(chaseTop, max));
+          if (Math.abs(scroller.scrollTop - top) > 1) {
+            lastSetTop = top;
+            scroller.scrollTop = top;
+            // Seed the tracker so an immediate close re-persists the restored
+            // value rather than flushing a 0 (a programmatic scrollTop set
+            // fires no synchronous event).
+            lastSeenRef.current = { key, top };
+          }
+          if (max >= chaseTop) chaseTop = null; // full saved offset reached
         }
       }
-      scroller.addEventListener('scroll', onScroll, { passive: true });
-    });
+      if (chaseTop != null && Date.now() < chaseDeadline) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
 
     return () => {
       cancelAnimationFrame(raf);
       clearTimeout(saveTimer);
-      scroller?.removeEventListener('scroll', onScroll);
+      document.removeEventListener('scroll', onScrollCapture, { capture: true } as EventListenerOptions);
       // Flush the last LIVE value — closing the panel is the most common way to
       // leave a file, and the debounce would otherwise drop that last position.
       const seen = lastSeenRef.current;
