@@ -38,14 +38,21 @@ const PHASE_LABELS: Record<string, string> = {
 const DOCK_HEIGHT_KEY = 'open-walnut-dock-height';
 const DOCK_HEIGHT_DEFAULT = 200;
 const DOCK_HEIGHT_MIN = 120;
-const DOCK_HEIGHT_MAX = 500;
+// Cap the dock at 70% of the viewport so it scales with screen size instead of a
+// flat pixel ceiling (was 500px — too small on tall displays). Recomputed on each
+// read/drag so it tracks window resizes; floored at DOCK_HEIGHT_MIN for safety
+// (e.g. tiny windows) and guarded for non-browser/SSR contexts.
+function dockHeightMax(): number {
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 0;
+  return Math.max(DOCK_HEIGHT_MIN, Math.round(vh * 0.7));
+}
 
 function readDockHeight(): number {
   try {
     const stored = localStorage.getItem(DOCK_HEIGHT_KEY);
     if (stored) {
       const v = parseInt(stored, 10);
-      if (!isNaN(v)) return Math.min(DOCK_HEIGHT_MAX, Math.max(DOCK_HEIGHT_MIN, v));
+      if (!isNaN(v)) return Math.min(dockHeightMax(), Math.max(DOCK_HEIGHT_MIN, v));
     }
   } catch { /* ignore */ }
   return DOCK_HEIGHT_DEFAULT;
@@ -328,12 +335,25 @@ export function FocusDock({ focusBar, onQuickAddToFocus }: FocusDockProps) {
   dockHeightRef.current = dockHeight;
   const startHeightRef = useRef(dockHeight);
 
+  // Re-clamp to the 70%-of-viewport cap when the window shrinks, so a height saved
+  // on a large window doesn't overflow a smaller one. (Persisted value is untouched —
+  // only the live height is clamped, so it restores if the window grows back.)
+  useEffect(() => {
+    const onResize = () => {
+      const max = dockHeightMax();
+      if (dockHeightRef.current > max) setDockHeight(max);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   const { onPointerDown: resizePointerDown } = useDragGesture({
     cursor: 'row-resize',
     onStart: () => { startHeightRef.current = dockHeightRef.current; },
     // Dock grows upward, so an upward drag (negative dy) increases the height.
+    // Cap at 70% of the viewport (dockHeightMax) rather than a fixed pixel max.
     onMove: ({ dy }) => {
-      setDockHeight(Math.min(DOCK_HEIGHT_MAX, Math.max(DOCK_HEIGHT_MIN, startHeightRef.current - dy)));
+      setDockHeight(Math.min(dockHeightMax(), Math.max(DOCK_HEIGHT_MIN, startHeightRef.current - dy)));
     },
     onEnd: () => {
       try { localStorage.setItem(DOCK_HEIGHT_KEY, String(dockHeightRef.current)); } catch { /* ignore */ }

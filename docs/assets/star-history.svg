@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="460" viewBox="0 0 900 460" role="img" aria-labelledby="title description">
-  <title id="title">EvanZhang008/open-walnut star history</title>
-  <desc id="description">28 cumulative GitHub stars since Feb 24</desc>
+  <title id="title">ystimokk/open-walnut star history</title>
+  <desc id="description">0 cumulative GitHub stars since Jul 17</desc>
   <defs>
     <linearGradient id="area" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#2f81f7" stop-opacity="0.32" />
@@ -30,33 +30,33 @@
   </defs>
   <rect class="background" width="900" height="460" rx="8" />
   <rect class="border" x="0.5" y="0.5" width="899" height="459" rx="8" />
-  <text class="chart-title" x="72" y="42">EvanZhang008/open-walnut</text>
+  <text class="chart-title" x="72" y="42">ystimokk/open-walnut</text>
   <text class="chart-caption" x="72" y="64">GitHub star history</text>
-  <text class="chart-total" x="858" y="44" text-anchor="end">28</text>
+  <text class="chart-total" x="858" y="44" text-anchor="end">0</text>
   <text class="chart-caption" x="858" y="64" text-anchor="end">stars</text>
   <line class="grid" x1="72" y1="396" x2="858" y2="396" />
   <text class="axis-label" x="58" y="400" text-anchor="end">0</text>
   <line class="grid" x1="72" y1="334" x2="858" y2="334" />
-  <text class="axis-label" x="58" y="338" text-anchor="end">10</text>
+  <text class="axis-label" x="58" y="338" text-anchor="end">1</text>
   <line class="grid" x1="72" y1="272" x2="858" y2="272" />
-  <text class="axis-label" x="58" y="276" text-anchor="end">20</text>
+  <text class="axis-label" x="58" y="276" text-anchor="end">2</text>
   <line class="grid" x1="72" y1="210" x2="858" y2="210" />
-  <text class="axis-label" x="58" y="214" text-anchor="end">30</text>
+  <text class="axis-label" x="58" y="214" text-anchor="end">3</text>
   <line class="grid" x1="72" y1="148" x2="858" y2="148" />
-  <text class="axis-label" x="58" y="152" text-anchor="end">40</text>
+  <text class="axis-label" x="58" y="152" text-anchor="end">4</text>
   <line class="grid" x1="72" y1="86" x2="858" y2="86" />
-  <text class="axis-label" x="58" y="90" text-anchor="end">50</text>
+  <text class="axis-label" x="58" y="90" text-anchor="end">5</text>
   <line class="tick" x1="72" y1="396" x2="72" y2="402" />
-  <text class="axis-label" x="72" y="424" text-anchor="middle">Feb 24</text>
+  <text class="axis-label" x="72" y="424" text-anchor="middle">Jul 17</text>
   <line class="tick" x1="268.5" y1="396" x2="268.5" y2="402" />
-  <text class="axis-label" x="268.5" y="424" text-anchor="middle">Apr 7</text>
+  <text class="axis-label" x="268.5" y="424" text-anchor="middle">Jul 24</text>
   <line class="tick" x1="465" y1="396" x2="465" y2="402" />
-  <text class="axis-label" x="465" y="424" text-anchor="middle">May 19</text>
+  <text class="axis-label" x="465" y="424" text-anchor="middle">Jul 31</text>
   <line class="tick" x1="661.5" y1="396" x2="661.5" y2="402" />
-  <text class="axis-label" x="661.5" y="424" text-anchor="middle">Jun 30</text>
+  <text class="axis-label" x="661.5" y="424" text-anchor="middle">Aug 7</text>
   <line class="tick" x1="858" y1="396" x2="858" y2="402" />
-  <text class="axis-label" x="858" y="424" text-anchor="middle">Aug 11</text>
-  <path d="M 72 396 H 72 V 389.8 H 72 V 383.6 H 75.66 V 377.4 H 143.05 V 371.2 H 289.05 V 365 H 328.43 V 358.8 H 632.75 V 352.6 H 638.86 V 346.4 H 639.02 V 340.2 H 640.54 V 334 H 646.62 V 327.8 H 658.26 V 321.6 H 673.93 V 315.4 H 689.32 V 309.2 H 689.43 V 303 H 692.28 V 296.8 H 694.64 V 290.6 H 709.09 V 284.4 H 740.4 V 278.2 H 786.43 V 272 H 793.49 V 265.8 H 797.6 V 259.6 H 797.75 V 253.4 H 798.22 V 247.2 H 798.31 V 241 H 798.64 V 234.8 H 836.42 V 228.6 H 855.07 V 222.4 H 858 V 396 H 72 Z" fill="url(#area)" />
-  <path class="line" d="M 72 396 H 72 V 389.8 H 72 V 383.6 H 75.66 V 377.4 H 143.05 V 371.2 H 289.05 V 365 H 328.43 V 358.8 H 632.75 V 352.6 H 638.86 V 346.4 H 639.02 V 340.2 H 640.54 V 334 H 646.62 V 327.8 H 658.26 V 321.6 H 673.93 V 315.4 H 689.32 V 309.2 H 689.43 V 303 H 692.28 V 296.8 H 694.64 V 290.6 H 709.09 V 284.4 H 740.4 V 278.2 H 786.43 V 272 H 793.49 V 265.8 H 797.6 V 259.6 H 797.75 V 253.4 H 798.22 V 247.2 H 798.31 V 241 H 798.64 V 234.8 H 836.42 V 228.6 H 855.07 V 222.4 H 858" />
+  <text class="axis-label" x="858" y="424" text-anchor="middle">Aug 13</text>
+  <path d="M 72 396 H 858 V 396 H 72 Z" fill="url(#area)" />
+  <path class="line" d="M 72 396 H 858" />
   <text class="chart-caption" x="858" y="442" text-anchor="end">Updated from the GitHub API</text>
 </svg>
