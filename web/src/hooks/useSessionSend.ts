@@ -13,6 +13,8 @@ interface UseSessionSendReturn {
   /** Resolves true once the message is persisted server-side (RPC ok), false if the RPC rejected. */
   send: (sessionId: string, message: string, images?: ImageAttachment[]) => Promise<boolean>;
   interruptSend: (sessionId: string, message: string, images?: ImageAttachment[]) => Promise<boolean>;
+  /** Bare turn-stop (no message). Resolves true when the server accepted the interrupt. */
+  stopTurn: (sessionId: string) => Promise<boolean>;
   retryFailed: (queueId: string, sessionId: string) => void;
   dismissFailed: (queueId: string) => void;
   handleMessagesDelivered: (count: number, messageIds?: string[]) => void;
@@ -336,11 +338,25 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     setSendError(null);
   }, []);
 
+  const stopTurn = useCallback(async (sessionId: string): Promise<boolean> => {
+    log.info('send', 'stop turn requested', { sessionId });
+    try {
+      await wsClient.sendRpc('session:interrupt', { sessionId });
+      return true;
+    } catch (e) {
+      const err = e as Error;
+      log.error('send', 'stop turn failed', { sessionId, error: err.message });
+      setSendError(`Stop failed: ${err.message}`);
+      return false;
+    }
+  }, []);
+
   return {
     optimisticMsgs,
     sendError,
     send,
     interruptSend,
+    stopTurn,
     retryFailed,
     dismissFailed,
     handleMessagesDelivered,

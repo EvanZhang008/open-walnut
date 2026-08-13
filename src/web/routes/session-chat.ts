@@ -205,6 +205,21 @@ export function registerSessionChatRpc(): void {
     }
   })
 
+  registerMethod('session:interrupt', async (payload: unknown) => {
+    if (typeof payload !== 'object' || payload === null) {
+      throw new Error('session:interrupt requires an object payload')
+    }
+    const data = payload as Record<string, unknown>
+    if (typeof data.sessionId !== 'string') {
+      throw new Error('session:interrupt requires sessionId (string)')
+    }
+    // Bare turn-stop: no message, no queue drain — just stop the running turn.
+    // The runner's SESSION_INTERRUPT handler routes CLI/SDK/ACP appropriately.
+    log.web.info('session interrupt via RPC', { sessionId: data.sessionId })
+    bus.emit(EventNames.SESSION_INTERRUPT, { sessionId: data.sessionId }, ['session-runner'], { source: 'web-ui' })
+    return { ok: true }
+  })
+
   registerMethod('session:edit-queued', async (payload: unknown) => {
     if (typeof payload !== 'object' || payload === null) {
       throw new Error('session:edit-queued requires an object payload')

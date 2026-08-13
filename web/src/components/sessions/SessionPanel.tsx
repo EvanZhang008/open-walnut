@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { SessionChatHistory } from './SessionChatHistory';
 import { SessionNotesPill, SessionNotesBar, useSessionNote } from './SessionNotes';
 import { SessionFileExplorer } from './SessionFileExplorer';
+import { sessionScope } from '@/utils/file-view-state';
 import { SessionTerminal } from './SessionTerminal';
 import { SessionDiffView } from './SessionDiffView';
 import { buildSelectionPrefill, displayPathForPrefill } from './diffPrefill';
@@ -22,6 +23,7 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, terminateSession, investigateSession, setSessionEffort, setSessionModel } from '@/api/sessions';
 import { terminalPrewarm } from '@/api/terminal';
 import { log } from '@/utils/log';
+import { runWhenVisible } from '@/utils/page-visibility';
 import { buildInvestigationClip } from '@/utils/investigation-clipboard';
 import { fetchTask } from '@/api/tasks';
 import { EditableSessionTitle } from './EditableSessionTitle';
@@ -52,6 +54,7 @@ import { useResolvedSessionRecord } from '@/hooks/useSessionStatus';
 import { useSessionControls } from '@/hooks/useSessionControls';
 import { nextSessionControlValue, SessionControlPills } from './SessionControlPills';
 import { useNotifications } from '@/contexts/notifications';
+import { useConfirm } from '@/hooks/useConfirm';
 
 interface SessionPanelErrorBoundaryProps {
   sessionId: string;
@@ -145,6 +148,7 @@ interface SessionPanelProps {
 export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, locked, onToggleLock, onTaskClick, onOpenTaskDetail, onSessionClick, onSessionReplaced, onForkPending, onForkResolved, onForkFailed }: SessionPanelProps) {
   const navigate = useNavigate();
   const { notify } = useNotifications();
+  const confirmDialog = useConfirm();
   const enabledModes = useEnabledModes();
   const [sessionRecord, setSession] = useState<SessionRecord | null>(null);
   const session = useResolvedSessionRecord(sessionRecord);
@@ -153,7 +157,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     session?.engine,
   );
   const [loading, setLoading] = useState(true);
-  const { optimisticMsgs, sendError, send, interruptSend, retryFailed, dismissFailed, handleMessagesDelivered, handleBatchCompleted, handleBatchFailed, handleEditQueued, handleDeleteQueued, addExternalQueued } = useSessionSend(sessionId);
+  const { optimisticMsgs, sendError, send, interruptSend, stopTurn, retryFailed, dismissFailed, handleMessagesDelivered, handleBatchCompleted, handleBatchFailed, handleEditQueued, handleDeleteQueued, addExternalQueued } = useSessionSend(sessionId);
   // isStreaming is bubbled up from the single useSessionStream instance that lives
   // inside SessionChatHistory (via onStreamingChange). We used to mount a second
   // hook instance here, which doubled stream-subscribe RPCs and produced two
@@ -484,7 +488,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   // Typical trigger: a `dev:prod` server restart drops the WS connection briefly.
   useEvent('_ws:reconnected', () => {
     if (sessionId) {
-      fetchSession(sessionId).then((s) => { if (s) setSession(s); }).catch(() => {});
+      // Hidden tabs defer until shown — every open tab reconnects at once on a
+      // server restart; only the visible one should hit the API immediately.
+      runWhenVisible(`session-panel:reconnect:${sessionId}`, () => {
+        fetchSession(sessionId).then((s) => { if (s) setSession(s); }).catch(() => {});
+      });
     }
   });
 
@@ -685,13 +693,37 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     try {
       await terminateSession(sessionId);
     } catch (err) {
-      log.error('session-panel', 'terminate API failed', {
-        sessionId,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      // 409 cron_owner: this session owns recurring CLI crons — killing it
+      // silently migrates them to any other session sharing the project
+      // directory. Surface the choice instead of failing quietly.
+      const status = (err as { status?: number })?.status;
+      if (status === 409) {
+        const proceed = await confirmDialog({
+          title: 'Session owns scheduled crons',
+          message: 'Stopping this session will NOT stop its recurring scheduled tasks — they persist in the project directory and will fire into any other session that shares it, without provenance. Terminate anyway?',
+          confirmLabel: 'Terminate anyway',
+          cancelLabel: 'Keep running',
+          danger: true,
+        });
+        if (proceed) {
+          try {
+            await terminateSession(sessionId, { force: true });
+          } catch (err2) {
+            log.error('session-panel', 'forced terminate API failed', {
+              sessionId,
+              error: err2 instanceof Error ? err2.message : String(err2),
+            });
+          }
+        }
+      } else {
+        log.error('session-panel', 'terminate API failed', {
+          sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
     setTerminateBusy(false);
-  }, [sessionId]);
+  }, [sessionId, confirmDialog]);
 
   // Investigate — freeze an evidence bundle + open a manual incident, then copy
   // every id (session/task/incident/bundle/host) to the clipboard so the human
@@ -750,6 +782,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
   const handleInterruptSend = useCallback((message: string, images?: ImageAttachment[]) => {
     return interruptSend(sessionId, message, images);
   }, [sessionId, interruptSend]);
+
+  const handleStopTurn = useCallback(() => {
+    void stopTurn(sessionId);
+  }, [sessionId, stopTurn]);
 
   const handleEdit = useCallback((queueId: string, newText: string) => {
     handleEditQueued(sessionId, queueId, newText);
@@ -1002,6 +1038,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             })() : undefined}
                           onSend={handleSend}
                           onInterruptSend={handleInterruptSend}
+                          onStop={handleStopTurn}
                           isStreaming={isStreaming}
                           placeholder="Send a message while viewing plan..."
                           showCommands={false}
@@ -1227,6 +1264,29 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             </div>
           );
         })()}
+        {ps === 'stopped' && session?.errorMessage && (() => {
+          // Idle-timeout reclaim is routine housekeeping, not a failure — the health
+          // monitor stops CLI processes after N idle minutes to free memory, and the
+          // conversation resumes losslessly via --resume. Showing it as a red Error
+          // banner scared users into thinking the session broke (2026-08-10).
+          const idle = session.errorMessage.match(/^No output for (\d+) min$/i);
+          if (!idle) return null;
+          return (
+            <div className="session-error-banner session-error-banner--idle">
+              <span className="session-error-banner-icon">{'⏸'}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <span className="session-error-banner-text">
+                  Auto-stopped after {idle[1]} min idle. The conversation is preserved — send a message or Retry to resume.
+                </span>
+                {(() => {
+                  const sug = getErrorSuggestion(session.errorMessage!, { host: session.host, provider: session.provider });
+                  return sug ? <ErrorSuggestionLink {...sug} /> : null;
+                })()}
+              </div>
+              <SessionRetryButton sessionId={sessionId} onRetried={handleRetried} onResuming={handleResuming} />
+            </div>
+          );
+        })()}
         {!historyLoading && (ps === 'stopped' || ps === 'error') && !session?.archived
           && historyMessages.filter(m => m.role === 'assistant').length === 0
           && historyMessages.some(m => m.role === 'user') && (
@@ -1255,11 +1315,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                   host={session?.host}
                   sessionId={sessionId}
                   initialLine={fileViewTarget?.line}
-                  // ONE memory key for both ways in. `cwd` above differs per entry
-                  // (chat file click → the file's parent dir; Files chip → session
-                  // cwd), so a root-keyed "last file read" never matched across
-                  // them — the chip always reopened on the empty preview pane.
-                  memoryScope={session?.cwd}
+                  // ONE memory key for both ways in, and one PER SESSION. `cwd`
+                  // above differs per entry (chat file click → the file's parent
+                  // dir; Files chip → session cwd), so a root-keyed "last file
+                  // read" never matched across them. Keyed on the session id, not
+                  // the cwd: sessions are fully isolated, and two sessions in the
+                  // same repo share a cwd — that leaked one's open file into the
+                  // other. The session id is unique by construction.
+                  memoryScope={sessionScope(sessionId)}
                   // Same sink the Changed tab uses — a quote from a whole file and
                   // a quote from a diff compose the identical prefill.
                   onSelectCode={handleSelectCode}
@@ -1404,6 +1467,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             })() : undefined}
             onSend={handleSend}
             onInterruptSend={handleInterruptSend}
+            onStop={handleStopTurn}
             isStreaming={isStreaming}
             placeholder="Send a message to this session... (/ for commands)"
             showCommands={false}

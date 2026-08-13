@@ -5,10 +5,12 @@ import type { ImageAttachment } from '@/api/chat';
 import type { SlashCommandItem } from '@/api/slash-commands';
 import { MAX_QUEUE_SIZE } from '@/hooks/useChat';
 import { CommandPalette, type PaletteItem } from './CommandPalette';
+import { detectSlashCommand } from './slash-trigger';
 import { FileMentionPopup, type FileMentionHandle } from './FileMentionPopup';
 import type { Task } from '@open-walnut/core';
 import { StatusBadge } from '../common/StatusBadge';
 import { MicButton } from '../common/MicButton';
+import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 
 const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 const MAX_IMAGES = 5;
@@ -94,9 +96,15 @@ interface ChatInputProps {
   /** Extra controls rendered in the card's bottom row, between the "+" and the
    *  mic/send cluster (e.g. the session's Bypass / btw / Note text buttons). */
   controlsSlot?: React.ReactNode;
+  /** READ-ONLY mirror of the composed text, for `controlsSlot` controls that need
+   *  to react to it (e.g. enabling a "save as task" button once something is typed).
+   *  This does NOT make the input controlled — it only reports. Fired from an effect
+   *  on `value`, so every mutation path is covered (draft restore, prefill, mention
+   *  rewrite, voice insert, post-send reset), not just typing. */
+  onValueChange?: (text: string) => void;
 }
 
-export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onControlCommand, draftKey, onToggleMode, mentionCwd, mentionHost, prefillText, prefillNonce, controlsSlot }: ChatInputProps) {
+export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQueue, disabled, isStreaming, focusedTaskTitle, focusedTask, onClearFocus, queueCount, placeholder, showCommands = true, sessionCommands, searchSessionCommands, onRefreshSessionCommands, onControlCommand, draftKey, onToggleMode, mentionCwd, mentionHost, prefillText, prefillNonce, controlsSlot, onValueChange }: ChatInputProps) {
   const [value, setValue] = useState(() => {
     if (!draftKey) return '';
     try { return localStorage.getItem(draftKey) ?? ''; } catch { return ''; }
@@ -216,6 +224,16 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Active "/command" token span: [slashIndexRef, slashEndRef) brackets the "/query"
+  // in `value` (same pattern as the "@" mention refs below) so selection splices the
+  // command in place — the palette opens mid-message too, not only when the whole
+  // input starts with "/".
+  const slashIndexRef = useRef<number>(-1);
+  const slashEndRef = useRef<number>(-1);
+  // "/" the user dismissed with Esc — handleChange won't reopen the palette for that
+  // same "/" (only a different "/" or edited text reopens).
+  const slashDismissedAtRef = useRef<number>(-1);
+
   // Re-scan session commands (remote skill list), keeping the palette open. The
   // spinner is cleared (and the open palette reflows) by the sessionCommands effect
   // below when the new list lands; a ceiling guards against a fetch that errors out.
@@ -234,6 +252,17 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
+  }, [value]);
+
+  // Report the composed text upward (read-only mirror — see onValueChange). ONE
+  // effect on `value` instead of calls inside the handlers: the value also changes
+  // from paths no handler sees (localStorage draft restore, prefill, mention
+  // rewrite, post-send reset), and each of those must reach the consumer too.
+  // Ref-mirrored so a fresh arrow from the parent doesn't re-fire the effect.
+  const onValueChangeRef = useRef(onValueChange);
+  onValueChangeRef.current = onValueChange;
+  useEffect(() => {
+    onValueChangeRef.current?.(value);
   }, [value]);
 
   // Re-fit when the textarea's WIDTH changes (panel resize / composer overlay
@@ -259,16 +288,27 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     paletteRef.current = { open: paletteOpen, results: paletteResults, selectedIndex };
   }, [paletteOpen, paletteResults, selectedIndex]);
 
-  // When a refresh brings in a new sessionCommands list, reflow the open palette to
-  // show it (and stop the spinner) without the user needing to retype.
+  // When a NEW sessionCommands list lands — the initial fetch, a cwd/host change,
+  // or a manual refresh — reflow (or OPEN) the palette against the live "/" span.
+  // Deliberately NOT gated on the palette already being open: a "/" typed before
+  // the list arrived produced zero results and no palette, and without this it
+  // stayed closed until the next keystroke. The draft composer hits that window
+  // every time (its list starts fetching at mount, caret already in the box); a
+  // session composer hits it on a cold cache.
   useEffect(() => {
-    if (!refreshing) return;
     setRefreshing(false);
-    if (!paletteOpen || !isSessionMode || !value.startsWith('/') || value.includes(' ')) return;
-    const results = searchSessionCommands!(value.slice(1));
+    if (!isSessionMode) return;
+    const caret = textareaRef.current?.selectionStart ?? value.length;
+    const s = detectSlashCommand(value, caret);
+    if (!s || s.slashIndex === slashDismissedAtRef.current) return;
+    slashIndexRef.current = s.slashIndex;
+    slashEndRef.current = caret;
+    const results = searchSessionCommands!(s.query);
+    const open = results.length > 0;
     setPaletteResults(results);
+    setPaletteOpen(open);
     setSelectedIndex(0);
-    paletteRef.current = { open: results.length > 0, results, selectedIndex: 0 };
+    paletteRef.current = { open, results, selectedIndex: 0 };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionCommands]);
 
@@ -356,6 +396,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     setImages([]);
     closePalette();
     closeMention();
+    // Clear the "/" span + Esc-dismissal memory — a new message starts fresh
+    // (otherwise a dismissed "/" at index 0 would suppress the next palette).
+    slashIndexRef.current = -1;
+    slashEndRef.current = -1;
+    slashDismissedAtRef.current = -1;
     if (!keepDraft) clearDraft();
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -447,21 +492,30 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       resetInput();
       return;
     }
-    // Both modes: insert command text into input (user presses Enter to execute)
-    const text = `/${cmd.name} `;
-    setValue(text);
+    // Both modes: splice the command over the active "/query" span (user presses
+    // Enter to execute). Falls back to whole-input replace if the span is stale.
+    const at = slashIndexRef.current;
+    const end = slashEndRef.current;
+    const inserted = `/${cmd.name} `;
+    const spanValid = at >= 0 && end >= at && end <= value.length;
+    const newValue = spanValid
+      ? value.slice(0, at) + inserted + value.slice(end)
+      : inserted;
+    const newCaret = spanValid ? at + inserted.length : inserted.length;
+    setValue(newValue);
+    saveDraft(newValue);
     closePalette();
-    // Resize textarea and move cursor to end
+    // Resize textarea and move cursor to just after the inserted command
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (el) {
         el.style.height = 'auto';
         el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
         el.focus();
-        el.setSelectionRange(text.length, text.length);
+        el.setSelectionRange(newCaret, newCaret);
       }
     });
-  }, [onControlCommand, closePalette]);
+  }, [onControlCommand, closePalette, value, saveDraft]);
 
   // Replace the active "@query" span with the selected path, then close the popup.
   // The popup hands back an absolute path (avoids ambiguity about what a relative
@@ -570,6 +624,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       }
       if (e.key === 'Escape') {
         e.preventDefault();
+        // Remember this "/" was dismissed so handleChange doesn't immediately
+        // reopen the palette on the next keystroke for the same token.
+        slashDismissedAtRef.current = slashIndexRef.current;
         closePalette();
         return;
       }
@@ -622,15 +679,23 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       if (mentionOpenRef.current) closeMention();
     }
 
-    // Slash command detection: text starts with "/" and no space yet (still typing command name)
+    // Slash command detection: the caret follows a "/" at the input start or after
+    // whitespace, with no whitespace or second "/" in between (so paths/URLs don't
+    // false-fire). Works anywhere in the message, not just when the input is empty.
     const enablePalette = showCommands || isSessionMode;
-    if (enablePalette && newValue.startsWith('/') && !newValue.includes(' ')) {
-      const query = newValue.slice(1);
+    const slashCaret = textareaRef.current?.selectionStart ?? newValue.length;
+    const s = enablePalette ? detectSlashCommand(newValue, slashCaret) : null;
+    if (s && s.slashIndex !== slashDismissedAtRef.current) {
+      slashDismissedAtRef.current = -1; // a live "/" — clear any stale dismissal
+      slashIndexRef.current = s.slashIndex;
+      slashEndRef.current = slashCaret;
+      const query = s.query;
       let results: PaletteItem[];
       if (isSessionMode) {
         results = searchSessionCommands!(query);
-        // Inject control commands into palette
-        if ('model'.startsWith(query.toLowerCase())) {
+        // Inject control commands — only where a handler exists to run them (a
+        // draft composer has none; inserting "/model " as text there is noise).
+        if (onControlCommand && 'model'.startsWith(query.toLowerCase())) {
           results = [{ name: 'model', description: 'Switch model (opus / sonnet / haiku / fable)', source: 'control' }, ...results];
         }
       } else {
@@ -643,6 +708,15 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       // Sync ref immediately so handleKeyDown reads correct state even before re-render
       paletteRef.current = { open, results, selectedIndex: 0 };
     } else {
+      if (s && s.slashIndex === slashDismissedAtRef.current) {
+        // Keep the span refs current so a later select-after-redetect stays correct.
+        slashIndexRef.current = s.slashIndex;
+        slashEndRef.current = slashCaret;
+      } else {
+        slashDismissedAtRef.current = -1; // no active "/" — reset dismissal memory
+        slashIndexRef.current = -1;
+        slashEndRef.current = -1;
+      }
       closePalette();
       paletteRef.current = { open: false, results: [], selectedIndex: 0 };
     }
@@ -704,7 +778,13 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     onStop?.();
   };
 
-  const canSend = !disabled && !queueFull && !!(value.trim() || images.length > 0);
+  const hasInput = !!(value.trim() || images.length > 0);
+  const canSend = !disabled && !queueFull && hasInput;
+
+  // Claude-style primary action swap: while a turn is streaming and the composer is
+  // EMPTY, the primary button is a square STOP (there is nothing to send anyway).
+  // The moment the user types, it flips back to send (which queues mid-turn).
+  const showStopPrimary = !!isStreaming && !hasInput && !!onStop;
 
   // The primary send action always sends the composed message. Its title reflects
   // whether a live turn is running (queue / interrupt) so the icon-only button
@@ -715,8 +795,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   } else if (isStreaming && onInterruptSend) {
     sendTitle = 'Send (queues after the current turn)';
   }
-  // The split-menu is only useful mid-turn, and only when we have an interrupt/stop action.
-  const showSendMenu = !!isStreaming && (!!onInterruptSend || !!onStop);
+  // The split-menu is only useful mid-turn with something composed (Interrupt & send /
+  // Stop turn). When stop IS the primary button, the menu would be redundant.
+  const showSendMenu = !!isStreaming && !showStopPrimary && (!!onInterruptSend || !!onStop);
 
   return (
     <div
@@ -770,7 +851,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
         <div className="chat-input-box">
           {/* Inline task context pill */}
           {focusedTask && onClearFocus && (
-            <div className={`chat-input-task-pill${(focusedTask.phase === 'AGENT_COMPLETE' || focusedTask.phase === 'AWAIT_HUMAN_ACTION') ? ' pill-attention' : ''}`}>
+            <div className={`chat-input-task-pill${focusedTask.unread ? ' pill-unread' : ''}`}>
               <button
                 className="pill-close"
                 onClick={onClearFocus}
@@ -815,6 +896,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
             placeholder={placeholder ?? (focusedTaskTitle ? `Ask about '${focusedTaskTitle}'...` : 'Type a message... (/ for commands)')}
             disabled={disabled}
             rows={1}
+            {...NO_AUTOFILL_PROPS}
           />
           {/* Controls row inside the card */}
           <div className="chat-input-controls">
@@ -884,9 +966,23 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           style={{ display: 'none' }}
           onChange={handleFileChange}
         />
-        {/* Send — icon button (↑). While streaming it grows a split "▾" that
-            exposes Interrupt / Stop. */}
+        {/* Send — icon button (↑). While streaming with an EMPTY composer the
+            primary swaps to a square STOP (Claude-style); typing flips it back
+            to send, which grows a split "▾" exposing Interrupt & send. */}
         <div className={`chat-send-group${showSendMenu ? ' has-menu' : ''}`} ref={sendGroupRef}>
+          {showStopPrimary ? (
+            <button
+              className="chat-send-btn-icon chat-stop-btn-icon"
+              onClick={handleStop}
+              type="button"
+              aria-label="Stop the running turn"
+              title="Stop the running turn"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                <rect x="7" y="7" width="10" height="10" rx="1.5" />
+              </svg>
+            </button>
+          ) : (
           <button
             className="chat-send-btn-icon"
             onClick={handleSend}
@@ -900,6 +996,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
               <polyline points="6 11 12 5 18 11" />
             </svg>
           </button>
+          )}
           {showSendMenu && (
             <>
               <button
