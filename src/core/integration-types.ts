@@ -172,6 +172,40 @@ export interface DisplayMeta {
   languageHint?: string;
 }
 
+// ── TaskFieldSpec: plugin-declared task fields (manifest `taskFields`) ──
+// A plugin can expose extra per-task fields (e.g. a tracker's sprint) that the
+// console renders generically — a picker in the task kebab menu + a pill on the
+// card — without core or the frontend knowing the field exists. Values live in
+// task.ext.<pluginId>.<key> unless the spec binds an existing core column via
+// `coreField` (sprint predates this system and stays a core field).
+
+export interface TaskFieldOption {
+  /** Value stored on the task (and shown unless label is set). */
+  value: string;
+  label?: string;
+  /** Extra context rendered dim next to the label (e.g. sprint date range). */
+  hint?: string;
+}
+
+export interface TaskFieldSpec {
+  /** Field key — storage subkey inside ext.<pluginId> (or the coreField name). [a-z0-9_]+ */
+  key: string;
+  /** Display name for menus and pills (e.g. "Sprint"). */
+  label: string;
+  /** v1 supports single-choice enums only; other types are reserved. */
+  type: 'enum';
+  /** Plugin HTTP route (relative to /api/plugins/<id>) returning
+   *  { options: TaskFieldOption[], current?: string|null } — `current` marks
+   *  the suggested default (e.g. the active sprint). Options are fetched
+   *  lazily when the picker opens, never cached by core. */
+  optionsRoute: string;
+  /** Allow clearing the value (adds a "None" row). Default true. */
+  clearable?: boolean;
+  /** Bind to an existing core Task column instead of ext.<pluginId>.<key>.
+   *  Only 'sprint' is honored — it predates taskFields as a core field. */
+  coreField?: 'sprint';
+}
+
 // ── HttpRoute: plugin-registered HTTP routes ──
 
 export interface HttpRoute {
@@ -242,6 +276,8 @@ export interface RegisteredPlugin {
   /** Manifest configSchema/uiHints — drives the data-driven Settings → Integrations form. */
   configSchema?: Record<string, unknown>;
   uiHints?: Record<string, { label?: string; help?: string }>;
+  /** Manifest taskFields — plugin-declared per-task fields the console renders generically. */
+  taskFields?: TaskFieldSpec[];
 }
 
 /** Plugin discovered on disk but not loaded because required config is missing.
@@ -272,4 +308,6 @@ export interface PluginManifest {
   capabilities?: Record<string, Record<string, unknown>>;
   configSchema?: Record<string, unknown>;
   uiHints?: Record<string, { label?: string; help?: string }>;
+  /** Per-task fields this plugin exposes to the console (see TaskFieldSpec). */
+  taskFields?: TaskFieldSpec[];
 }

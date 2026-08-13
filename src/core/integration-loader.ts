@@ -38,6 +38,7 @@ import type {
   RegisteredPlugin,
   ExtIndexSpec,
   UnconfiguredPlugin,
+  TaskFieldSpec,
 } from './integration-types.js';
 
 const log = createSubsystemLogger('plugin-loader');
@@ -423,6 +424,36 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
     }
   }
 
+  // taskFields: per-task fields the console renders generically. Invalid
+  // entries are dropped with a warn (a bad field must not unload the plugin).
+  let taskFields: TaskFieldSpec[] | undefined;
+  if (Array.isArray(obj.taskFields)) {
+    taskFields = [];
+    const seenKeys = new Set<string>();
+    for (const raw of obj.taskFields) {
+      const f = raw as Record<string, unknown>;
+      const drop = (reason: string) =>
+        log.warn('Manifest taskFields entry dropped', { filePath, reason, entry: JSON.stringify(raw).slice(0, 200) });
+      if (!f || typeof f !== 'object') { drop('not an object'); continue; }
+      if (typeof f.key !== 'string' || !/^[a-z0-9_]+$/.test(f.key)) { drop('key must match [a-z0-9_]+'); continue; }
+      if (seenKeys.has(f.key)) { drop(`duplicate key "${f.key}"`); continue; }
+      if (typeof f.label !== 'string' || !f.label) { drop('label required'); continue; }
+      if (f.type !== 'enum') { drop(`type "${String(f.type)}" not supported (v1: enum only)`); continue; }
+      if (typeof f.optionsRoute !== 'string' || !f.optionsRoute.startsWith('/')) { drop('optionsRoute must start with /'); continue; }
+      if (f.coreField !== undefined && f.coreField !== 'sprint') { drop(`coreField "${String(f.coreField)}" not honored`); continue; }
+      seenKeys.add(f.key);
+      taskFields.push({
+        key: f.key,
+        label: f.label,
+        type: 'enum',
+        optionsRoute: f.optionsRoute,
+        clearable: typeof f.clearable === 'boolean' ? f.clearable : undefined,
+        coreField: f.coreField as 'sprint' | undefined,
+      });
+    }
+    if (taskFields.length === 0) taskFields = undefined;
+  }
+
   return {
     id: obj.id,
     name: obj.name,
@@ -438,6 +469,7 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
     uiHints: obj.uiHints && typeof obj.uiHints === 'object'
       ? obj.uiHints as Record<string, { label?: string; help?: string }>
       : undefined,
+    taskFields,
   };
 }
 
@@ -616,6 +648,7 @@ async function loadPlugin(
     extIndex: builder.collected.extIndex ?? undefined,
     configSchema: manifest.configSchema,
     uiHints: manifest.uiHints,
+    taskFields: manifest.taskFields,
   };
 
   registry.register(pluginId, registered);

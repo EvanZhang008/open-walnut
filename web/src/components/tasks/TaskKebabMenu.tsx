@@ -5,17 +5,19 @@
  * into a single kebab button to reduce visual noise per task row.
  */
 
-import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
+import { useState, useRef, useEffect, useCallback, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task, TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import * as ICONS from '../common/Icons';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
+import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { getIntegrationMeta, useIntegrations } from '@/hooks/useIntegrations';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '../common/DatePicker';
 import { useSessionStatus } from '@/hooks/useSessionStatus';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { PluginFieldsSection } from './PluginFieldPicker';
 
 type TaskListProjection = Task & {
   /** Precomputed by fields=list because that projection intentionally omits ext. */
@@ -40,6 +42,9 @@ interface TaskKebabMenuProps {
   onUnpinTask?: (id: string) => void;
   onSetTier?: (id: string, tier: FocusTier) => void;
   onOpenSession?: (sessionId: string) => void;
+  /** Launch a session FOR this task (reusing it). Only rendered when the task
+   *  owns no session yet — when it does, the open-session row above covers it. */
+  onStartSession?: (task: Task) => void;
   onSetDate?: (id: string, date: string | null) => void;
   onSetStartDate?: (id: string, date: string | null) => void;
   /** Promote a subtask to top-level (remove parent_task_id). Only shown when task has a parent. */
@@ -54,6 +59,8 @@ interface TaskKebabMenuProps {
   onUnhideGroup?: (groupId: string) => void;
   /** Enter multi-select mode with this task picked (to group several tasks). Only on list rows. */
   onStartSelect?: (id: string) => void;
+  /** Move this task to another project ('' = Inbox). Renders the "Move to project" section. */
+  onMoveToProject?: (id: string, project: string) => void;
   onDelete?: (id: string) => void;
 }
 
@@ -68,7 +75,7 @@ const TIER_OPTIONS: { value: FocusTier; label: string; icon: ReactNode }[] = [
 // from Satellite's grey outline at a glance. Backlog is teal ("stored, cool").
 const TIER_COLORS: Record<FocusTier, string> = {
   focus: 'var(--accent)',
-  satellite: 'var(--fg-muted)',
+  satellite: 'var(--tier-satellite, #5856d6)',
   backlog: 'var(--tier-backlog, #30b0c7)',
   wait: 'var(--tier-wait, #ff9f0a)',
 };
@@ -230,7 +237,139 @@ export function TaskActionMenuItems({
   );
 }
 
-export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onStar, onPinTask, onUnpinTask, onSetTier, onOpenSession, onSetDate, onSetStartDate, onUnparent, onMoveUp, onUngroup, isGroupHidden, onUnhideGroup, onStartSelect, onDelete }: TaskKebabMenuProps) {
+/**
+ * The project OPTION LIST — a portalled flyout of every registry project plus
+ * Inbox, anchored to whatever trigger the owner passes. Split out of
+ * MoveToProjectSection so any surface needing "pick a project" (kebab, batch
+ * dropdown, a composer's project pill) reuses ONE definition of the list, its
+ * placement and its guards.
+ *
+ * A custom option list, NOT a native <select>: the OS popup clashed with the
+ * app's menu styling, and on macOS it swallows the pointerup so dnd-kit saw a
+ * held-down pointer and started dragging the row after the pick. Options come
+ * from the project REGISTRY (not the loaded tasks) so EMPTY projects are valid
+ * targets; the registry fetch happens when this component MOUNTS (i.e. per open
+ * menu), not per open flyout and not per task row.
+ *
+ * It is a PORTALLED flyout placed by useMenuPlacement, NOT an inline expansion:
+ * inlining it grew the parent menu past the viewport (the registry can be 30+
+ * projects). The flyout gets the same flip/clamp/scroll treatment as every other
+ * menu, and the parent menu's height never changes. Host menus' outside-click /
+ * scroll closers must exempt `.task-kebab-project-flyout` — it is intentionally
+ * outside their menu ref.
+ */
+export function ProjectPickerFlyout({ open, anchorRef, current, onPick, onClose }: {
+  open: boolean;
+  /** The trigger the flyout is placed against. */
+  anchorRef: RefObject<HTMLElement | null>;
+  /** Current project ('' = Inbox), shown with a ✓. null = no single current value. */
+  current: string | null;
+  onPick: (project: string) => void;
+  /** Dismiss request. Fired right after every `onPick` (so a host that stays
+   *  mounted — e.g. a composer pill — doesn't have to close itself) and when the
+   *  anchor is lost (trigger unmounted / hidden while the flyout was open). */
+  onClose: () => void;
+}) {
+  const { projectNames } = useProjectRegistry();
+  const [filter, setFilter] = useState('');
+  const listRef = useRef<HTMLDivElement>(null);
+  const placement = useMenuPlacement(open, anchorRef, listRef, {
+    minHeight: 160,
+    onAnchorLost: onClose,
+  });
+  if (!open) return null;
+  // The task's own project may be missing from the registry (race, legacy data) —
+  // include it so the list always shows the true current value.
+  const options = current && !projectNames.includes(current)
+    ? [...projectNames, current].sort((a, b) => a.localeCompare(b))
+    : projectNames;
+  const q = filter.trim().toLowerCase();
+  const shown = q ? options.filter((n) => n.toLowerCase().includes(q)) : options;
+  const optionRow = (name: string, label?: string) => (
+    <button
+      key={name || '·inbox·'}
+      className={`task-kebab-project-opt${current === name ? ' active' : ''}`}
+      onClick={(e) => { e.stopPropagation(); onPick(name); onClose(); }}
+    >
+      <span className="task-kebab-project-check">{current === name ? '✓' : ''}</span>
+      <span className="task-kebab-project-opt-name">{label ?? name}</span>
+    </button>
+  );
+  return createPortal(
+    <div
+      ref={listRef}
+      className="task-kebab-project-flyout"
+      style={menuPlacementStyle(placement)}
+      onClick={(e) => e.stopPropagation()}
+      // Same drag guard as the parent menu: portal events bubble through the
+      // React tree to the sortable row, arming dnd-kit's PointerSensor.
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      {options.length > 6 && (
+        <input
+          className="task-kebab-project-filter"
+          placeholder="Filter projects…"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          autoFocus
+        />
+      )}
+      {(!q || 'inbox'.includes(q)) && optionRow('', 'Inbox')}
+      {shown.map((name) => optionRow(name))}
+      {q && shown.length === 0 && (
+        <div className="task-kebab-project-empty">No matching project</div>
+      )}
+    </div>,
+    document.body,
+  );
+}
+
+/**
+ * "Project" row — move the task to another project ('' = Inbox) without dragging.
+ * The in-menu trigger; the option list itself is {@link ProjectPickerFlyout}.
+ */
+export function MoveToProjectSection({ current, onMove, afterAction }: {
+  /** Current project ('' = Inbox). null in batch mode — no single current value. */
+  current: string | null;
+  onMove: (project: string) => void;
+  afterAction: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  return (
+    <>
+      <div className="task-kebab-divider" />
+      <div className="task-kebab-project">
+        <span className="task-kebab-project-label">Project</span>
+        <button
+          ref={btnRef}
+          className={`task-kebab-project-current${open ? ' open' : ''}`}
+          onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        >
+          <span className="task-kebab-project-current-name">
+            {current === null ? 'Move to…' : (current || 'Inbox')}
+          </span>
+          <span className="task-kebab-project-caret">▾</span>
+        </button>
+      </div>
+      <ProjectPickerFlyout
+        open={open}
+        anchorRef={btnRef}
+        current={current}
+        onPick={(name) => {
+          // Re-picking the current project is a dismiss, not a move (no server
+          // PATCH). Batch mode (current === null) always moves — there is no
+          // single current value to compare against.
+          if (current === null || name !== current) onMove(name);
+          afterAction();
+        }}
+        onClose={() => setOpen(false)}
+      />
+    </>
+  );
+}
+
+export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onStar, onPinTask, onUnpinTask, onSetTier, onOpenSession, onStartSession, onSetDate, onSetStartDate, onUnparent, onMoveUp, onUngroup, isGroupHidden, onUnhideGroup, onStartSelect, onMoveToProject, onDelete }: TaskKebabMenuProps) {
   const integrations = useIntegrations();
   const sessionId = resolveTaskSessionId(task);
   const storedSessionStatus = useSessionStatus(sessionId);
@@ -254,6 +393,9 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
     const handleClickOutside = (e: MouseEvent) => {
       if (btnRef.current?.contains(e.target as Node)) return;
       if (menuRef.current?.contains(e.target as Node)) return;
+      // The Project picker's option list is a separate portal (see
+      // MoveToProjectSection) — clicks inside it are NOT "outside the menu".
+      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout')) return;
       closeMenu();
     };
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeMenu(); };
@@ -272,6 +414,8 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
     //     documented in TaskBatchMenu.tsx.
     const handleScroll = (e: Event) => {
       if (menuRef.current?.contains(e.target as Node)) return;
+      // Scrolling the Project flyout's own list is reading, not page scroll.
+      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout')) return;
       if (cursorAnchor) { closeMenu(); return; }
       const r = btnRef.current?.getBoundingClientRect();
       if (r && (r.bottom < 0 || r.top > window.innerHeight)) closeMenu();
@@ -350,6 +494,12 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
           ref={menuRef}
           className="task-kebab-menu"
           style={menuPlacementStyle(menuPos)}
+          // The portal target is <body>, but React synthetic events still bubble
+          // through the PORTAL to this row's component tree — so a pointerdown
+          // inside the menu reached useSortable's activator and started a DRAG of
+          // the row once the cursor moved 5px (felt as "picking a project drags
+          // the task"). Kill pointerdown here so no menu interaction can arm dnd.
+          onPointerDown={(e) => e.stopPropagation()}
         >
           {/* Session status */}
           {(() => {
@@ -357,9 +507,9 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
             if (!sessionId && !ss) return null;
             const isRunning = ss?.process_status === 'running';
             const isError = ss?.process_status === 'error';
-            const needsAttention = task.phase === 'AGENT_COMPLETE' || task.phase === 'AWAIT_HUMAN_ACTION';
-            const color = isError || needsAttention ? 'var(--error)' : isRunning ? 'var(--success)' : 'var(--fg-muted)';
-            const label = isRunning ? 'AI is working...' : isError ? 'Session error' : needsAttention ? 'Needs your attention' : 'Session idle';
+            const unread = Boolean(task.unread);
+            const color = isError || unread ? 'var(--error)' : isRunning ? 'var(--success)' : 'var(--fg-muted)';
+            const label = isRunning ? 'AI is working...' : isError ? 'Session error' : unread ? 'Unread — open to mark read' : 'Session idle';
             return (
               <button
                 className="task-kebab-item"
@@ -373,6 +523,23 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
               </button>
             );
           })()}
+
+          {/* Start Session — the kebab twin of the row's ▶. Same gate: a task that
+              already owns a session gets the open-session row above instead, so a
+              second launch on the same task is never one click away. */}
+          {onStartSession && !isDone && !sessionId && (
+            <button
+              className="task-kebab-item"
+              onClick={(e) => {
+                e.stopPropagation();
+                onStartSession(task);
+                closeMenu();
+              }}
+            >
+              <span className="task-kebab-icon">▶</span>
+              <span>Start Session</span>
+            </button>
+          )}
 
           {/* Details */}
           <button
@@ -499,6 +666,20 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
             onSetStartDate={onSetStartDate ? (d) => onSetStartDate(task.id, d) : undefined}
             afterAction={closeMenu}
           />
+
+          {/* Move to project — precise alternative to dragging across group headers */}
+          {onMoveToProject && (
+            <MoveToProjectSection
+              current={task.project || ''}
+              onMove={(p) => onMoveToProject(task.id, p)}
+              afterAction={closeMenu}
+            />
+          )}
+
+          {/* Plugin-declared task fields (manifest taskFields) — e.g. a
+              tracker's Sprint. Generic: one picker row per declared field,
+              options fetched from the plugin when the flyout opens. */}
+          <PluginFieldsSection task={task} afterAction={closeMenu} />
 
           {/* Source badge — combined with external link if available */}
           {task.source && (() => {

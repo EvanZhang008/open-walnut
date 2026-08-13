@@ -5,7 +5,7 @@ import type { Task as CoreTask, SessionRecord } from '@open-walnut/core';
 import { renderNoteMarkdown } from '@/utils/markdown';
 import { fetchSessionsForTask } from '@/api/sessions';
 import { fetchTask, updateTask as apiUpdateTask, type BatchTaskOutcome } from '@/api/tasks';
-import { SprintPicker } from '@/components/tasks/SprintPicker';
+import { PluginFieldPills } from '@/components/tasks/PluginFieldPicker';
 import { fetchTriageHistory } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { useConfirm, usePrompt } from '@/hooks/useConfirm';
@@ -1228,10 +1228,6 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
   // Use full task data when available for stripped-field rendering
   const noteContent = task.note ?? fullTask?.note;
   const descriptionContent = task.description ?? fullTask?.description;
-  const handleSprintChange = async (sprintName: string | null) => {
-    await apiUpdateTask(task.id, { sprint: sprintName ?? '' });
-  };
-
   const handleDateChange = async (date: string | null) => {
     await apiUpdateTask(task.id, { due_date: date ?? '' });
   };
@@ -1367,7 +1363,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
               {PRIORITY_ICON[task.priority]} {PRIORITY_LABEL[task.priority]}
             </span>
           )}
-          <SprintPicker sprint={task.sprint} onSprintChange={handleSprintChange} />
+          <PluginFieldPills task={task} />
         </div>
         <div className="todo-detail-dates text-xs text-muted">
           {task.created_at && <span>Created {timeAgo(task.created_at)}</span>}

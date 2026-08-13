@@ -36,6 +36,7 @@ import {
   setGroupHidden,
   listGroups,
   getCustomTiers,
+  setPluginTaskField,
   type SlimTask,
 } from '../../core/task-manager.js'
 import { listSessions } from '../../core/session-tracker.js'
@@ -759,6 +760,39 @@ tasksRouter.patch('/groups/:groupId/hidden', async (req: Request, res: Response,
     bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, hidden: result.hidden }, ['web-ui', 'main-agent'], { source: 'api' })
     res.json(result)
   } catch (err) {
+    next(err)
+  }
+})
+
+// PUT /api/tasks/:id/plugin-field — set a plugin-declared task field
+// (manifest taskFields). Body: { pluginId, key, value } — value null/'' clears.
+// Generic UI path: the kebab menu's per-plugin field pickers write here; the
+// plugin's own push logic translates the stored value for its remote API.
+tasksRouter.put('/:id/plugin-field', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = param(req.params.id)
+    const { pluginId, key, value } = (req.body ?? {}) as { pluginId?: unknown; key?: unknown; value?: unknown }
+    if (typeof pluginId !== 'string' || !pluginId || typeof key !== 'string' || !key) {
+      res.status(400).json({ error: 'pluginId and key are required strings' })
+      return
+    }
+    if (value !== null && value !== undefined && typeof value !== 'string') {
+      res.status(400).json({ error: 'value must be a string or null' })
+      return
+    }
+    const result = await setPluginTaskField(id, pluginId, key, (value as string | null | undefined) ?? null)
+    log.web.info('plugin task field set via REST', { taskId: id, pluginId, key, cleared: !value })
+    res.json({ task: result.task })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (/does not declare|not clearable/.test(message)) {
+      res.status(400).json({ error: message })
+      return
+    }
+    if (/No task found/.test(message)) {
+      res.status(404).json({ error: message })
+      return
+    }
     next(err)
   }
 })

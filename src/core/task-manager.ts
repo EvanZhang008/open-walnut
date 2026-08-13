@@ -4744,6 +4744,50 @@ export async function updateTaskRaw(
   return { changed: true, task: updated };
 }
 
+// ── Plugin-declared task fields (manifest taskFields) ──────────────────────
+
+/**
+ * Set a plugin-declared per-task field (see TaskFieldSpec). The value lands on
+ * the core column when the spec binds one (`coreField: 'sprint'`), otherwise in
+ * ext.<pluginId>.<key>. `value: null` clears. Emits TASK_UPDATED and triggers
+ * the plugin push (async — UI must not wait on the external round-trip).
+ * Throws if the plugin/field isn't declared, so arbitrary ext writes are
+ * impossible through this path.
+ */
+export async function setPluginTaskField(
+  idPrefix: string,
+  pluginId: string,
+  fieldKey: string,
+  value: string | null,
+): Promise<{ task: Task }> {
+  const plugin = registry.get(pluginId);
+  const spec = plugin?.taskFields?.find(f => f.key === fieldKey);
+  if (!plugin || !spec) {
+    throw new Error(`Plugin "${pluginId}" does not declare task field "${fieldKey}"`);
+  }
+  if (spec.clearable === false && (value === null || value === '')) {
+    throw new Error(`Field "${fieldKey}" of plugin "${pluginId}" is not clearable`);
+  }
+
+  if (spec.coreField === 'sprint') {
+    // Reuse the full updateTask path — sprint has existing semantics (tag
+    // intercepts, projections) that must stay in one place.
+    return updateTask(idPrefix, { sprint: value ?? '' }, { source: 'api', asyncPush: true });
+  }
+
+  const full = await getTask(idPrefix); // resolves prefix + throws on ambiguity
+  const prevExt = (full.ext?.[pluginId] ?? {}) as Record<string, unknown>;
+  const nextExt = { ...prevExt };
+  if (value === null || value === '') delete nextExt[fieldKey];
+  else nextExt[fieldKey] = value;
+  const { changed, task } = await updateTaskRaw(
+    full.id,
+    { ext: { ...full.ext, [pluginId]: nextExt } },
+    { emitEvent: true, push: true, source: 'api' },
+  );
+  return { task: changed && task ? task : full };
+}
+
 // ── Bulk APIs ───────────────────────────────────────────────────────────────
 // sync-reconciler.applyDiff (task #3) and startPluginSyncPolling (task #7)
 // used to call updateTaskRaw N times per tick, paying N full withWriteLock +

@@ -12987,6 +12987,140 @@ a.task-kebab-info:hover {
   font-weight: 600;
 }
 
+/* ── Kebab menu: Project section (custom in-menu picker, no native select) ── */
+.task-kebab-project {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+}
+.task-kebab-project-label {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  white-space: nowrap;
+}
+.task-kebab-project-current {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: none;
+  color: var(--fg);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.task-kebab-project-current:hover { background: var(--accent-subtle); }
+.task-kebab-project-current.open {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+.task-kebab-project-current-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-kebab-project-caret {
+  font-size: 9px;
+  color: var(--fg-muted);
+  flex: none;
+}
+/* The option list is a PORTALLED flyout placed by useMenuPlacement (position:
+   fixed + measured maxHeight). overflow-y:auto is that hook's contract — without
+   it a capped flyout clips instead of scrolling. Inlining this list inside the
+   kebab menu is what made the menu itself overflow the viewport; never go back. */
+.task-kebab-project-flyout {
+  min-width: 220px;
+  max-width: 300px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated, var(--bg));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+}
+.task-kebab-project-filter {
+  position: sticky;
+  top: 0;
+  margin: 6px 6px 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--fg);
+  outline: none;
+}
+.task-kebab-project-filter:focus { border-color: var(--accent); }
+.task-kebab-project-opt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  text-align: left;
+  border: none;
+  background: none;
+  color: var(--fg);
+  cursor: pointer;
+}
+.task-kebab-project-opt:hover { background: var(--accent-subtle); }
+.task-kebab-project-opt.active { font-weight: 600; color: var(--accent); }
+.task-kebab-project-check {
+  width: 12px;
+  flex: none;
+  font-size: 11px;
+  color: var(--accent);
+}
+.task-kebab-project-opt-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-kebab-project-empty {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+/* ── Plugin-declared task fields (manifest taskFields) ── */
+/* Flyout rows reuse .task-kebab-project-opt; these are the extras. */
+.plugin-field-opt-hint {
+  margin-left: auto;
+  padding-left: 10px;
+  flex: none;
+  font-size: 10px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.plugin-field-current-mark {
+  font-size: 10px;
+  color: var(--accent);
+}
+.plugin-field-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle, var(--bg));
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ── Kebab menu: Date section ── */
 .task-kebab-date {
   display: flex;

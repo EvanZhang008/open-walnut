@@ -4,7 +4,7 @@ import type { Task } from '@open-walnut/core';
 import { renderNoteMarkdown } from '@/utils/markdown';
 import { fetchTask, toggleCompleteTask, starTask, addNote, updateNote, updateDescription, deleteTask, addTag, removeTag, addDependency, removeDependency, updateTask, type TaskDetail } from '@/api/tasks';
 import { TaskFieldEditor } from '@/components/tasks/TaskFieldEditor';
-import { SprintPicker } from '@/components/tasks/SprintPicker';
+import { PluginFieldPills } from '@/components/tasks/PluginFieldPicker';
 import { DatePicker } from '@/components/common/DatePicker';
 import { fetchSessionsForTask, updateSession } from '@/api/sessions';
 import type { SessionRecord } from '@open-walnut/core';
@@ -248,12 +248,6 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
   const handleStar = async () => {
     if (!id) return;
     const updated = await starTask(id);
-    setTask(updated);
-  };
-
-  const handleSprintChange = async (sprintName: string | null) => {
-    if (!id) return;
-    const updated = await updateTask(id, { sprint: sprintName ?? '' });
     setTask(updated);
   };
 
@@ -746,9 +740,11 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
           <span className="tdv2-k">Due</span>
           <span className="tdv2-v"><DatePicker date={task.due_date} onChange={handleDateChange} label="Due" ghostWhenEmpty /></span>
         </div>
+        {/* Plugin-declared fields (manifest taskFields) — generic pills; each
+            opens the shared option flyout. Replaces the hardcoded SprintPicker. */}
         <div className="tdv2-kv">
-          <span className="tdv2-k">Sprint</span>
-          <span className="tdv2-v"><SprintPicker sprint={task.sprint} onSprintChange={handleSprintChange} /></span>
+          <span className="tdv2-k">Fields</span>
+          <span className="tdv2-v"><PluginFieldPills task={task} /></span>
         </div>
         <div className="tdv2-kv tdv2-kv-block">
           <span className="tdv2-k">Tags</span>

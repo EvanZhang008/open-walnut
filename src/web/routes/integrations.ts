@@ -29,6 +29,22 @@ integrationsRouter.get('/', (_req, res) => {
   res.json(plugins);
 });
 
+// GET /api/integrations/task-fields — every enabled plugin's declared per-task
+// fields (manifest taskFields). The frontend renders these generically: one
+// picker per field in the task kebab menu, options fetched lazily from
+// /api/plugins/<pluginId><optionsRoute>.
+integrationsRouter.get('/task-fields', (_req, res) => {
+  const fields = registry.getAll()
+    .filter(p => p.id !== 'local' && p.taskFields?.length)
+    .flatMap(p => p.taskFields!.map(f => ({
+      pluginId: p.id,
+      pluginName: p.name,
+      ...f,
+      optionsUrl: `/api/plugins/${p.id}${f.optionsRoute}`,
+    })));
+  res.json({ fields });
+});
+
 // Secret-ish config keys are masked in the response (values still editable via config API).
 const SENSITIVE_KEY = /token|secret|password|api_key|apikey/i;
 

@@ -256,55 +256,10 @@ export async function fetchDashboard(): Promise<DashboardData> {
   return dashboard;
 }
 
-// ── Sprint helpers ──
-
-export interface SprintOption {
-  id: string;
-  name: string;
-  startDate: string;
-  endDate: string;
-}
-
-/**
- * Fetch available sprints for the sprint picker dropdown.
- * Two-layer strategy:
- *  1. Discover plugins dynamically, try each for /sprints (has dates + current sprint)
- *  2. Fallback to local task meta (just names + counts, always works)
- */
-export async function fetchAvailableSprints(): Promise<{ sprints: SprintOption[]; current: string | null }> {
-  // Layer 1: discover plugins and try each for enriched sprint data
-  try {
-    const plugins = await apiGet<Array<{ id: string }>>('/api/integrations');
-    for (const plugin of plugins) {
-      try {
-        const result = await apiGet<{ sprints: SprintOption[]; current: string | null }>(`/api/plugins/${plugin.id}/sprints`);
-        if (result.sprints.length > 0) return result;
-      } catch { /* this plugin doesn't serve sprints — try next */ }
-    }
-  } catch {
-    // Integrations endpoint unavailable — fall through to local data
-  }
-
-  // Layer 2: local task meta — always works, but only has names + counts
-  try {
-    const meta = await apiGet<{ sprints: { name: string; count: number }[] }>('/api/tasks/meta/sprints');
-    const sprints: SprintOption[] = meta.sprints.map((s, i) => ({
-      id: `local-${i}`,
-      name: s.name,
-      startDate: '',
-      endDate: '',
-    }));
-    return { sprints, current: null };
-  } catch {
-    return { sprints: [], current: null };
-  }
-}
-
-/** Fetch sprint metadata (unique sprint names with task counts) */
-export async function fetchSprintMeta(): Promise<{ name: string; count: number }[]> {
-  const res = await apiGet<{ sprints: { name: string; count: number }[] }>('/api/tasks/meta/sprints');
-  return res.sprints;
-}
+// Sprint helpers RETIRED (plugin taskFields, 2026-08-12): the console now
+// renders plugin-declared fields generically — see PluginFieldPicker.tsx.
+// Options come straight from /api/integrations/task-fields + the plugin's
+// own options route; the GET /api/tasks/meta/sprints fallback had no callers.
 
 // ── Tag helpers ──
 
