@@ -1345,21 +1345,13 @@ input:focus, textarea:focus, select:focus {
 .badge-phase-release_in_pipeline { background: rgba(48, 176, 199, 0.12); color: #30B0C7; }
 .badge-phase-complete { background: rgba(52, 199, 89, 0.12); color: var(--success); }
 
-/* Phase status button colors */
-.task-phase-investigation { color: #5856D6; }
-.task-phase-todo { color: var(--fg-muted); }
-.task-phase-in_progress { color: var(--accent); }
-.task-phase-agent_complete { color: var(--error); }
-.task-phase-await_human_action { color: var(--error); }
-.task-phase-human_verified { color: #34C759; }
-.task-phase-post_work_completed { color: #5AC8FA; }
-.task-phase-human_verification { color: #FF6B00; }
-.task-phase-peer_code_review { color: #AF52DE; }
-.task-phase-release_in_pipeline { color: #30B0C7; }
-.task-phase-complete { color: var(--success); }
-/* Higher specificity overrides for phases that must win over .task-phase-icon-btn */
-.task-phase-icon-btn.task-phase-agent_complete { color: var(--error); }
-.task-phase-icon-btn.task-phase-await_human_action { color: var(--error); }
+/* Task circle colors — deliberately session-driven, NOT phase-driven
+   (2026-08-13 user request: the 7-phase rainbow was unreadable).
+   grey = plain task, blue = has a session attached, green = done.
+   Compound selectors so they beat the .task-phase-icon-btn base color. */
+.task-phase-icon-btn.task-circle-todo, .task-quick-phase-btn.task-circle-todo { color: var(--fg-muted); }
+.task-phase-icon-btn.task-circle-session, .task-quick-phase-btn.task-circle-session { color: var(--accent); }
+.task-phase-icon-btn.task-circle-done, .task-quick-phase-btn.task-circle-done { color: var(--success); }
 
 /* Inline phase icon (before title text) */
 .task-phase-icon-btn {

@@ -20,6 +20,16 @@ export function resolveTaskSessionId(task: Task): string | null {
     || null;
 }
 
+/** Color class for the task circle (the clickable To Do ↔ Complete toggle).
+ *  Deliberately simple — exactly three states (2026-08-13 user request; the
+ *  old per-phase rainbow was unreadable):
+ *  green = done, blue = has a session attached, grey = plain task. */
+export function taskCircleClass(task: Task): string {
+  const isDone = task.status === 'done' || task.phase === 'COMPLETE';
+  if (isDone) return 'task-circle-done';
+  return resolveTaskSessionId(task) ? 'task-circle-session' : 'task-circle-todo';
+}
+
 // ── Labels ──
 
 export const PROCESS_LABELS: Record<ProcessStatus, string> = {

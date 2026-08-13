@@ -14,7 +14,7 @@ import { timeAgo } from '@/utils/time';
 import { scrollLog } from '@/utils/scroll-debug';
 import type { ProcessStatus } from '@open-walnut/core';
 import type { TaskPhase } from '@/types/session';
-import { PHASE_LABELS, PHASE_COLORS, PROCESS_COLORS, resolveTaskSessionId, phasePickerChoices, matchesPhaseFilter } from '@/utils/session-status';
+import { PHASE_LABELS, PHASE_COLORS, PROCESS_COLORS, resolveTaskSessionId, taskCircleClass, phasePickerChoices, matchesPhaseFilter } from '@/utils/session-status';
 import type { UseFavoritesReturn } from '@/hooks/useFavorites';
 import type { UseOrderingReturn } from '@/hooks/useOrdering';
 import * as ICONS from '../common/Icons';
@@ -783,7 +783,7 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVan
           )}
           {/* Phase icon — one click toggles To Do ↔ Complete */}
           <button
-            className={`task-phase-icon-btn task-status-${task.status} task-phase-${task.phase?.toLowerCase()}`}
+            className={`task-phase-icon-btn ${taskCircleClass(task)}`}
             onClick={(e) => {
               e.stopPropagation();
               onSetPhase(task.id, isDone ? 'TODO' : 'COMPLETE');
@@ -1953,7 +1953,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
       )}
       {/* Phase icon — one click toggles To Do ↔ Complete */}
       <button
-        className={`task-phase-icon-btn pinned-phase-picker task-status-${task.status} task-phase-${task.phase?.toLowerCase()}`}
+        className={`task-phase-icon-btn pinned-phase-picker ${taskCircleClass(task)}`}
         onClick={(e) => {
           e.stopPropagation();
           onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');

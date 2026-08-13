@@ -12,6 +12,7 @@ import { TaskKebabMenu } from './TaskKebabMenu';
 import { PersonIcon } from '../common/PersonIcon';
 import * as ICONS from '../common/Icons';
 
+import { taskCircleClass } from '@/utils/session-status';
 /** Sortable id for a group's chip in a tier — encodes the tier so a group split
  *  across tiers renders distinct chips without an id collision. Kept in sync with
  *  the parser in TodoPanel (`group:<gid>:<tier>`). */
@@ -295,7 +296,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       )}
       {/* Phase icon — one click toggles To Do ↔ Complete */}
       <button
-        className={`task-phase-icon-btn pinned-phase-picker task-status-${task.status} task-phase-${task.phase?.toLowerCase()}`}
+        className={`task-phase-icon-btn pinned-phase-picker ${taskCircleClass(task)}`}
         onClick={(e) => {
           e.stopPropagation();
           onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');

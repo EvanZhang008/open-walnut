@@ -13,6 +13,7 @@ import { fetchTask, updateTask, starTask } from '@/api/tasks';
 import { ApiError } from '@/api/client';
 import { useEvent } from '@/hooks/useWebSocket';
 import * as ICONS from '@/components/common/Icons';
+import { taskCircleClass } from '@/utils/session-status';
 import type { FocusTier } from '@/api/focus';
 import { getIntegrationMeta, useIntegrations } from '@/hooks/useIntegrations';
 import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '@/components/common/DatePicker';
@@ -255,7 +256,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
       {slot !== 'kebab' && task && (
       <div className="task-quick-phase">
         <button
-          className={`task-quick-phase-btn${task.phase ? ` task-phase-${task.phase.toLowerCase()}` : ''}`}
+          className={`task-quick-phase-btn ${taskCircleClass(task)}`}
           onClick={(e) => {
             e.stopPropagation();
             handlePhaseChange(isDone ? 'TODO' : 'COMPLETE');
