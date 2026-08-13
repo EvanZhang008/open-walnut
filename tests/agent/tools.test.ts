@@ -547,7 +547,7 @@ describe('start_session tool', () => {
     );
   });
 
-  it('includes session-ref and task-ref XML tags in result', async () => {
+  it('includes only a task-ref (no session-ref) when the session has a task', async () => {
     const addResult = await executeTool('task_create', { title: 'Ref tag test' });
     const idMatch = addResult.match(/id="([^"]+)"/);
 
@@ -557,8 +557,9 @@ describe('start_session tool', () => {
       prompt: 'do work',
     });
 
-    expect(result).toContain('<session-ref id="mock-session-id-12345" label="Mock Session Title"/>');
+    // Task and session are the same work item — one link only (the task-ref opens the chat).
     expect(result).toContain(`<task-ref id="${idMatch![1]}" label="Ref tag test"/>`);
+    expect(result).not.toContain('<session-ref');
   });
 
   it('includes session-ref in taskless session result', async () => {

@@ -276,8 +276,8 @@ When forwarding the user's instruction to sessions:
 
 ## Entity references
 When mentioning task IDs or session IDs in your text responses, wrap them in reference tags:
-- Tasks: \`<task-ref id="taskId" label="human-readable title"/>\`
-- Sessions: \`<session-ref id="sessionId" label="session title"/>\`
+- Tasks: \`<task-ref id="taskId" label="human-readable title"/>\` — the default. A task and its session are the same work item; when work has a task, reference the TASK only (clicking it opens the task's chat). Never put a task-ref and a session-ref for the same work in one reply.
+- Sessions: \`<session-ref id="sessionId" label="session title"/>\` — ONLY for a session with no linked task.
 Include the label attribute with the task title or session title when you know it (e.g. from a recent tool call).
 If you don't know the title, omit label — the system fills it in automatically.
 The UI renders these as clickable links. Only use in natural language text — never inside tool call arguments.

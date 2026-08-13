@@ -1539,7 +1539,8 @@ and is always allowed.`,
           const hostNote = forkHost ? ` on ${forkHost}` : '';
           const forkNote = ` (forked from ${forkSessionId.slice(0, 16)}...)`;
           if (task) {
-            return `CLI session ${sRef} started${hostNote}${forkNote} for task ${taskRef(task.id, task.title)}. Running in background.`;
+            // One work item = one link: the task ref opens the chat column, so no session ref here.
+            return `Started work on ${taskRef(task.id, task.title)}${hostNote}${forkNote}. Running in background.`;
           }
           return `CLI session ${sRef} started${hostNote}${forkNote}. Running in background.`;
         }
@@ -1640,7 +1641,8 @@ and is always allowed.`,
         const sRef = sessionRef(sessionResult.claudeSessionId, sessionResult.title);
         const hostNote = resolvedHost ? ` on ${resolvedHost}` : '';
         if (task) {
-          return `CLI session ${sRef} started${hostNote} for task ${taskRef(task.id, task.title)}. Running in background.`;
+          // One work item = one link: the task ref opens the chat column, so no session ref here.
+          return `Started work on ${taskRef(task.id, task.title)}${hostNote}. Running in background.`;
         }
         return `Taskless CLI session ${sRef} started${hostNote}. Running in background.`;
       } catch (err) {
