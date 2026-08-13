@@ -5089,15 +5089,18 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const handleLabelDrop = useCallback((active: string, target: string) => {
     setLabelDragProj(null);
     setLabelDropProj(null);
-    if (!ordering || active === target || active === '' || target === '') return;
+    // '' (Inbox) is a legal drag participant: it has no registry row, but its
+    // POSITION among the tier's project runs is still user-arrangeable, so it
+    // rides ordering.projects as the empty string (user ask 2026-08-13).
+    if (!ordering || active === target) return;
     const current = ordering.projectOrder ?? [];
     // Visible projects (this panel's grouped view order) supply names missing
-    // from the explicit order.
+    // from the explicit order — including '' when Inbox tasks exist.
     const visible: string[] = [];
     const seen = new Set<string>();
     for (const t of tasks) {
       const p = t.project || '';
-      if (p && !seen.has(p.toLowerCase())) { seen.add(p.toLowerCase()); visible.push(p); }
+      if (!seen.has(p.toLowerCase())) { seen.add(p.toLowerCase()); visible.push(p); }
     }
     const lower = new Set(current.map((n) => n.toLowerCase()));
     const merged = [...current];
@@ -5148,7 +5151,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const projSeq: string[] = [];
     for (const p of distinctProjects) projSeq.push(p);
     const dropSide = (targetProj: string): 'above' | 'below' =>
-      labelDragProj && projSeq.indexOf(labelDragProj) > projSeq.indexOf(targetProj) ? 'above' : 'below';
+      // null check, not truthiness — '' (Inbox) is a legal dragged project.
+      labelDragProj !== null && projSeq.indexOf(labelDragProj) > projSeq.indexOf(targetProj) ? 'above' : 'below';
     let prevProject: string | null = null;
     for (const id of ids) {
       if (id.startsWith('group:')) {
@@ -5167,8 +5171,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         out.push(
           <div
             key={`projlabel:${tier}:${proj}`}
-            className={`tier-project-label${proj && !foldersInert ? ' tier-project-label-draggable' : ''}${foldersInert ? ' tier-project-label-inert' : ''}${labelDropProj === proj && labelDragProj !== proj ? ` tier-project-label-dropover dropover-${dropSide(proj)}` : ''}`}
-            draggable={!!proj && !foldersInert}
+            // Inbox ('') drags too — its slot rides ordering.projects as the
+            // empty string. '' is falsy, so every gate below checks against
+            // null (the "no drag" sentinel), never truthiness.
+            className={`tier-project-label${!foldersInert ? ' tier-project-label-draggable' : ''}${foldersInert ? ' tier-project-label-inert' : ''}${labelDropProj === proj && labelDragProj !== proj ? ` tier-project-label-dropover dropover-${dropSide(proj)}` : ''}`}
+            draggable={!foldersInert}
             onDragStart={(e) => {
               e.dataTransfer.setData('text/walnut-project', proj);
               e.dataTransfer.effectAllowed = 'move';
@@ -5176,7 +5183,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             }}
             onDragEnd={() => { setLabelDragProj(null); setLabelDropProj(null); }}
             onDragOver={(e) => {
-              if (labelDragProj !== null && proj && labelDragProj !== proj) {
+              if (labelDragProj !== null && labelDragProj !== proj) {
                 e.preventDefault();
                 e.dataTransfer.dropEffect = 'move';
                 setLabelDropProj(proj);
@@ -5185,10 +5192,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             onDragLeave={() => { if (labelDropProj === proj) setLabelDropProj(null); }}
             onDrop={(e) => {
               e.preventDefault();
-              const active = e.dataTransfer.getData('text/walnut-project') || labelDragProj;
-              if (active && proj) handleLabelDrop(active, proj);
+              // getData returns '' both for "no payload" AND for an Inbox drag —
+              // labelDragProj (state) disambiguates; null means no live drag.
+              const fromData = e.dataTransfer.getData('text/walnut-project');
+              const active = fromData !== '' ? fromData : labelDragProj;
+              if (active !== null) handleLabelDrop(active, proj);
             }}
-            title={proj ? 'Drag to reorder projects' : undefined}
+            title="Drag to reorder projects"
           >
             <span className="tier-project-label-icon">{ICONS.ICON_FOLDER}</span>
             <span className="tier-project-label-name">{proj || 'Inbox'}</span>

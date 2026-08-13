@@ -222,8 +222,20 @@ export function DashboardPage() {
   }, [create]);
 
   const handleReorderProjects = useCallback((order: string[]) => {
-    void reorderProjects(order);
-  }, [reorderProjects]);
+    // The rail only shows NAMED projects, but ordering.projects may hold other
+    // entries — notably '' (Inbox), placed by the home panel's tier-label drag.
+    // A wholesale replace would silently drop them; re-insert each missing
+    // entry at its old index so a rail drag never rewrites slots it can't see.
+    const railSet = new Set(order.map((n) => n.toLowerCase()));
+    const merged = [...order];
+    projectOrder.forEach((entry, oldIdx) => {
+      if (!railSet.has(entry.toLowerCase())) {
+        merged.splice(Math.min(oldIdx, merged.length), 0, entry);
+        railSet.add(entry.toLowerCase());
+      }
+    });
+    void reorderProjects(merged);
+  }, [reorderProjects, projectOrder]);
 
   const handleToggleFavorite = useCallback((project: string) => {
     // Registry rows fold the favorite flag in server-side, so refresh after.
