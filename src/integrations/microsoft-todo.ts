@@ -580,16 +580,16 @@ async function resolveListIdImpl(listName: string, cacheKey: string): Promise<st
  * Compose a MS To-Do body from the 3 text fields.
  * Format: description, then --- separator, then ## Summary / ## Notes sections.
  */
-function composeMsTodoBody(description: string, summary: string, note: string, phase?: TaskPhase, parentTaskId?: string, conversationLog?: string, needsAttention?: boolean, dependsOn?: string[]): string {
+function composeMsTodoBody(description: string, summary: string, note: string, phase?: TaskPhase, parentTaskId?: string, conversationLog?: string, unread?: boolean, dependsOn?: string[]): string {
   // Header lines (Phase, Parent, Attention) are placed before the description/sections
   const headers: string[] = [];
   if (phase) headers.push(`Phase: ${phase}`);
   if (parentTaskId) headers.push(`Parent: ${parentTaskId.slice(0, 8)}`);
   // Note: Attention header is written for both true and false. On parse, an absent
   // header yields undefined (not false), so pre-existing tasks without the header
-  // won't have needs_attention cleared on pull — only tasks pushed with this field
-  // round-trip correctly. This is intentional: absence = "no remote opinion."
-  if (needsAttention !== undefined) headers.push(`Attention: ${needsAttention}`);
+  // won't have their read marker cleared on pull — only tasks pushed with this
+  // field round-trip correctly. This is intentional: absence = "no remote opinion."
+  if (unread !== undefined) headers.push(`Attention: ${unread}`);
   if (dependsOn?.length) headers.push(`DependsOn: ${dependsOn.map(id => id.slice(0, 8)).join(',')}`);
   const prefix = headers.length > 0 ? headers.join('\n') + '\n\n' : '';
   const sections: string[] = [];
@@ -609,13 +609,13 @@ function composeMsTodoBody(description: string, summary: string, note: string, p
  * Parse a MS To-Do body back into description, summary, and note.
  * If the body doesn't have the expected structure, put everything in note.
  */
-export function parseMsTodoBody(body: string): { description: string; summary: string; note: string; conversation_log?: string; phase?: TaskPhase; parent_task_id?: string; needs_attention?: boolean; depends_on?: string[] } {
+export function parseMsTodoBody(body: string): { description: string; summary: string; note: string; conversation_log?: string; phase?: TaskPhase; parent_task_id?: string; unread?: boolean; depends_on?: string[] } {
   if (!body || !body.trim()) return { description: '', summary: '', note: '' };
 
   // Extract header lines (Phase:, Parent:, Attention:, DependsOn:) from the top of the body
   let phase: TaskPhase | undefined;
   let parentTaskId: string | undefined;
-  let needsAttention: boolean | undefined;
+  let unread: boolean | undefined;
   let dependsOn: string[] | undefined;
   let bodyToParse = body;
 
@@ -629,7 +629,7 @@ export function parseMsTodoBody(body: string): { description: string; summary: s
     } else if (key === 'Parent') {
       parentTaskId = value;
     } else if (key === 'Attention') {
-      needsAttention = value === 'true';
+      unread = value === 'true';
     } else if (key === 'DependsOn') {
       dependsOn = value.split(',').filter(Boolean);
     }
@@ -644,18 +644,18 @@ export function parseMsTodoBody(body: string): { description: string; summary: s
     const description = hrParts[0].trim();
     const rest = hrParts.slice(1).join('\n\n---\n\n');
     const { summary, note, conversation_log } = parseSections(rest);
-    return { description, summary, note, conversation_log, phase, parent_task_id: parentTaskId, ...(needsAttention !== undefined ? { needs_attention: needsAttention } : {}), ...(dependsOn ? { depends_on: dependsOn } : {}) };
+    return { description, summary, note, conversation_log, phase, parent_task_id: parentTaskId, ...(unread !== undefined ? { unread } : {}), ...(dependsOn ? { depends_on: dependsOn } : {}) };
   }
 
   // No separator — try to parse sections directly
   const hasSections = /^## (Summary|Notes|Conversation Log)\b/m.test(bodyToParse);
   if (hasSections) {
     const { summary, note, conversation_log } = parseSections(bodyToParse);
-    return { description: '', summary, note, conversation_log, phase, parent_task_id: parentTaskId, ...(needsAttention !== undefined ? { needs_attention: needsAttention } : {}), ...(dependsOn ? { depends_on: dependsOn } : {}) };
+    return { description: '', summary, note, conversation_log, phase, parent_task_id: parentTaskId, ...(unread !== undefined ? { unread } : {}), ...(dependsOn ? { depends_on: dependsOn } : {}) };
   }
 
   // Unstructured body — put everything in note
-  return { description: '', summary: '', note: bodyToParse.trim(), phase, parent_task_id: parentTaskId, ...(needsAttention !== undefined ? { needs_attention: needsAttention } : {}), ...(dependsOn ? { depends_on: dependsOn } : {}) };
+  return { description: '', summary: '', note: bodyToParse.trim(), phase, parent_task_id: parentTaskId, ...(unread !== undefined ? { unread } : {}), ...(dependsOn ? { depends_on: dependsOn } : {}) };
 }
 
 /** Parse ## Summary, ## Notes, and ## Conversation Log sections from text. */
@@ -691,7 +691,14 @@ export function mapToRemote(task: Task): Partial<MSTodoTask> {
   };
 
   // Combine description + summary + note into body with section markers
-  const bodyContent = composeMsTodoBody(task.description, task.summary, task.note, task.phase, task.parent_task_id, task.conversation_log, task.needs_attention, task.depends_on);
+  // The wire header stays `Attention:` — an established external format; renaming
+  // it would strand every task already synced. Only the local field was renamed.
+  //
+  // Pass `task.unread` RAW: undefined must stay undefined, because
+  // composeMsTodoBody then omits the header entirely and "absent header" means
+  // "no remote opinion" on pull. Coercing with Boolean() here would start writing
+  // `Attention: false` onto every task that never had a marker at all.
+  const bodyContent = composeMsTodoBody(task.description, task.summary, task.note, task.phase, task.parent_task_id, task.conversation_log, task.unread, task.depends_on);
   if (bodyContent) {
     msTask.body = {
       content: bodyContent,
@@ -768,7 +775,10 @@ export function mapToLocal(
     if (parsed.conversation_log) local.conversation_log = parsed.conversation_log;
     // Parent task ID prefix — stored as-is; resolved to full ID during reconcile
     if (parsed.parent_task_id) local.parent_task_id = parsed.parent_task_id;
-    if (parsed.needs_attention !== undefined) local.needs_attention = parsed.needs_attention;
+    // Wire header is `Attention:` (the external name for the read marker). Note the
+    // sync reconciler drops the marker from remote patches anyway (local read state
+    // wins) — this only matters for a freshly IMPORTED task.
+    if (parsed.unread !== undefined) local.unread = parsed.unread;
     // Dependency ID prefixes — stored as-is; resolved to full IDs during reconcile
     if (parsed.depends_on) local.depends_on = parsed.depends_on;
   }

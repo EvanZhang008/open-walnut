@@ -193,9 +193,11 @@ Stored in the `task_projects.metadata` JSON blob (`default_host`, `default_cwd`,
 
 `parent_task_id` links to parent. Children inherit project/source. Parent can't be COMPLETE with non-COMPLETE children (409 error).
 
-### Needs-attention
+### Read / unread
 
-`needs_attention?: boolean`: Synced flag for "needs human input." Set by triage agent on session end. Red dot in UI. Auto-cleared on task focus or completion.
+`unread?: boolean`: the read/unread lifecycle for agent work — "the agent produced something the human hasn't looked at yet." Red dot in the UI (task rows, pinned cards, Focus/Satellite cards, the Focus Dock). Driven entirely by the phase machine (`readMarkerForPhase` in `src/core/phase.ts`): a task goes **unread** on `AGENT_COMPLETE` (turn finished) and `AWAIT_HUMAN_ACTION` (errored / needs a decision), and goes **read** on `IN_PROGRESS` (a new turn supersedes it), on `COMPLETE`, and — the actual read event — the moment the human opens the task in the UI. The marker rides the same row write as the phase, so no surface can observe handed-back work without its dot.
+
+There is exactly ONE field and one spelling: read `task.unread`, write `{ unread }`. Never re-derive "unread" from `phase` at a render site: opening a task clears the marker but does *not* change its phase, so a phase-derived surface has no way to go quiet. The field is `unread` rather than `is_read` because an absent value must mean "no dot" — `is_read: undefined` would light up every task that predates the feature. `needs_attention` was the name until 2026-08-09; the v6 SQLite migration rewrites it inside the `payload` blob and `RETIRED_TASK_KEYS` blocks it from ever coming back. External sync still uses `Attention:` on the wire (MS To-Do / Jira body header) — that's an established remote format, not a second local field.
 
 ### Task text fields (5-field model)
 

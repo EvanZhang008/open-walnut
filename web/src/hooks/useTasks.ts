@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { READ_MARKER_KEYS } from '@open-walnut/core';
 import type { Task } from '@open-walnut/core';
 import { useEvent } from './useWebSocket';
 import { wsClient, type ConnectionState } from '@/api/ws';
@@ -36,7 +37,7 @@ function tasksShallowEqual(a: Task, b: Task): boolean {
   const scalarKeys: (keyof Task)[] = [
     'title', 'status', 'phase', 'priority', 'project',
     'parent_task_id', 'group_id', 'starred', 'due_date', 'start_date', 'completed_at', 'updated_at',
-    'sync_error', 'external_url', 'needs_attention', 'source', 'sprint',
+    'sync_error', 'external_url', 'unread', 'source', 'sprint',
     'cwd', 'session_id', 'plan_session_id', 'exec_session_id',
     // Session-resume touch updates ONLY this field now (the pin-bump side
     // effect was removed), so it must count as a UI-visible diff — without it
@@ -131,7 +132,8 @@ function applyToggleStar(tasks: Task[], id: string): Task[] {
     : t);
 }
 
-/** Clear session slots and needs_attention — mirrors server applyPhase('COMPLETE'). */
+/** Clear session slots and the read marker — mirrors server applyPhase('COMPLETE').
+ *  The marker must go too, or a completed task keeps its dot alive. */
 function clearSessionSlots(t: Task): Task {
   return {
     ...t,
@@ -141,7 +143,7 @@ function clearSessionSlots(t: Task): Task {
     session_status: undefined,
     plan_session_status: undefined,
     exec_session_status: undefined,
-    needs_attention: undefined,
+    unread: undefined,
   };
 }
 
@@ -189,7 +191,7 @@ function applyPhaseChangeMany(tasks: Task[], ids: Set<string>, phase: string): T
 /** Only spread direct-value task fields for optimistic update (not instruction fields like add_tags). */
 const OPTIMISTIC_FIELDS = new Set([
   'title', 'status', 'phase', 'priority', 'project',
-  'due_date', 'start_date', 'needs_attention', 'parent_task_id', 'starred',
+  'due_date', 'start_date', 'unread', 'parent_task_id', 'starred',
 ]);
 
 function applyFieldUpdate(tasks: Task[], id: string, updates: Record<string, unknown>): Task[] {
@@ -198,13 +200,14 @@ function applyFieldUpdate(tasks: Task[], id: string, updates: Record<string, unk
   for (const key of Object.keys(updates)) {
     if (OPTIMISTIC_FIELDS.has(key)) filtered[key] = updates[key];
   }
-  // `needs_attention` is a read/seen marker, not content. Clearing it on focus
-  // must NOT bump updated_at, or the task jumps to the top of an updated_at-sorted
-  // list seconds after the user merely selects it. Mirror task-manager.updateTask.
+  // The read marker (`unread`) is not content. Clearing it on focus must NOT
+  // bump updated_at, or the task jumps to the top of an
+  // updated_at-sorted list seconds after the user merely selects it. Mirror
+  // task-manager.updateTask (same READ_MARKER_KEYS list).
   const changedKeys = Object.keys(updates).filter((k) => updates[k] !== undefined);
-  const onlyAttentionMarker = changedKeys.length > 0 && changedKeys.every((k) => k === 'needs_attention');
+  const onlyReadMarker = changedKeys.length > 0 && changedKeys.every((k) => READ_MARKER_KEYS.includes(k));
   return tasks.map(t => t.id === id
-    ? (onlyAttentionMarker ? { ...t, ...filtered } : { ...t, ...filtered, updated_at: now })
+    ? (onlyReadMarker ? { ...t, ...filtered } : { ...t, ...filtered, updated_at: now })
     : t);
 }
 

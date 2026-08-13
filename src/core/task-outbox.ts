@@ -82,7 +82,7 @@ export type TaskOp =
 const UPDATE_WHITELIST: (keyof Task)[] = [
   'title', 'status', 'phase', 'priority', 'project',
   'due_date', 'start_date', 'end_date', 'completed_at', 'starred', 'pinned', 'tags', 'summary',
-  'description', 'note', 'sprint', 'needs_attention', 'updated_at',
+  'description', 'note', 'sprint', 'unread', 'updated_at',
 ];
 
 let opSeq = 0;

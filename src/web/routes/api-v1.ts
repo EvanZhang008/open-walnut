@@ -1059,7 +1059,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     // ids are hex-ish and can never be the literal word "reorder".
     if (id === 'reorder') { next(); return }
     const { status, priority, due_date: dueDate, start_date: startDate, project, title, description, tags,
-      unread, needs_attention: needsAttention } = (req.body ?? {}) as {
+      unread } = (req.body ?? {}) as {
       status?: unknown
       priority?: unknown
       due_date?: unknown
@@ -1069,11 +1069,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       description?: unknown
       tags?: unknown
       unread?: unknown
-      needs_attention?: unknown
     }
-    // Read marker: the phone marks a task read after showing its output. Accept
-    // both spellings (older builds send needs_attention); updateTask writes both.
-    const unreadPatch = unread ?? needsAttention
 
     if (status !== undefined && !(typeof status === 'string' && V1_TASK_STATUSES.has(status))) {
       sendError(res, 400, 'bad_request', 'status must be one of: todo, in_progress, done')
@@ -1115,13 +1111,14 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       sendError(res, 400, 'bad_request', 'tags must be an array of strings')
       return
     }
-    if (unreadPatch !== undefined && typeof unreadPatch !== 'boolean') {
+    // Read marker: the phone marks a task read after showing its output.
+    if (unread !== undefined && typeof unread !== 'boolean') {
       sendError(res, 400, 'bad_request', 'unread must be a boolean')
       return
     }
     if (status === undefined && priority === undefined && dueDate === undefined
         && startDate === undefined && project === undefined && title === undefined
-        && description === undefined && tags === undefined && unreadPatch === undefined) {
+        && description === undefined && tags === undefined && unread === undefined) {
       sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/priority/due_date/start_date/project/title/description/tags/unread)')
       return
     }
@@ -1138,7 +1135,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         ...(project !== undefined ? { project: project as string } : {}),
         ...(title !== undefined ? { title: (title as string).trim() } : {}),
         ...(tags !== undefined ? { set_tags: tags as string[] } : {}),
-        ...(unreadPatch !== undefined ? { unread: unreadPatch as boolean } : {}),
+        ...(unread !== undefined ? { unread: unread as boolean } : {}),
       }
       // description FIRST (not atomic with the main patch — two separate
       // writes). Ordering rationale: updateDescription resolves the same task

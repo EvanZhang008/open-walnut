@@ -1,6 +1,6 @@
 /**
  * E2E regression: a virtual task group (local-only `group_id`) must survive a
- * session phase transition that writes a payload-only field (`needs_attention`).
+ * session phase transition that writes a payload-only field (`unread`).
  *
  * Background — the user-reported bug ("grouped session/incident tasks lose their
  * group after a while"): `group_id` has no dedicated SQLite column; it spills
@@ -8,8 +8,8 @@
  * `updateTaskRaw` (and its bulk sibling) rebuilt the `payload` column from
  * `taskToRow(prepared)` — i.e. from the PATCH alone. Every session phase
  * transition through `applySessionPhase` (src/core/phase.ts) injects
- * `needs_attention` (also a payload field), so each transition rewrote the whole
- * payload column from just `{ phase, needs_attention }`, silently dropping
+ * `unread` (also a payload field), so each transition rewrote the whole
+ * payload column from just `{ phase, unread }`, silently dropping
  * `group_id`. Plain tasks rarely raw-update so it looked intermittent; session
  * tasks transition phase constantly, so their group "vanished".
  *
@@ -26,11 +26,11 @@
  *   - the mutation is driven through the REAL production function
  *     `applySessionPhase(taskId, 'session:error' | 'session:streaming', ...)`
  *     — the exact code production runs from src/web/server.ts on session events —
- *     which itself calls updateTaskRaw with `needs_attention`. (A full live CLI
+ *     which itself calls updateTaskRaw with `unread`. (A full live CLI
  *     session would emit those events; we invoke the same downstream function
  *     directly so no Claude CLI is needed.)
  *   - downstream we re-fetch over HTTP and assert the group + group_id + the
- *     applied `needs_attention` all survived MULTIPLE transitions.
+ *     applied `unread` all survived MULTIPLE transitions.
  *
  * Would it fail on reverted code? YES. Revert the `taskToRow({ ...task,
  * ...prepared }).payload` line and the first `session:error` transition wipes
@@ -96,11 +96,11 @@ async function createTask(
 /** Re-fetch a single task via GET so we assert on PERSISTED state, not internals. */
 async function getTask(
   id: string,
-): Promise<{ id: string; group_id?: string; needs_attention?: boolean; phase?: string }> {
+): Promise<{ id: string; group_id?: string; unread?: boolean; phase?: string }> {
   const res = await fetch(apiUrl(`/api/tasks/${id}`));
   expect(res.status).toBe(200);
   const body = (await res.json()) as {
-    task: { id: string; group_id?: string; needs_attention?: boolean; phase?: string };
+    task: { id: string; group_id?: string; unread?: boolean; phase?: string };
   };
   return body.task;
 }
@@ -149,22 +149,22 @@ describe('virtual group survives session phase transitions (REST → real phase 
    *      the group with BOTH members; both tasks carry group_id (persisted).
    *   3. Drive a REAL session phase transition on ONE member through the exact
    *      production function applySessionPhase('session:error'): TODO →
-   *      AWAIT_HUMAN_ACTION, which makes updateTaskRaw write `needs_attention:true`
+   *      AWAIT_HUMAN_ACTION, which makes updateTaskRaw write `unread:true`
    *      into the payload column. Then a second transition
    *      ('session:streaming': AWAIT_HUMAN_ACTION → IN_PROGRESS, writes
-   *      needs_attention:false), then a third ('session:error' again →
+   *      unread:false), then a third ('session:error' again →
    *      AWAIT_HUMAN_ACTION). Each rewrites the payload column — exactly what the
    *      bug exploited — so surviving all three is a strong guard.
    *   4. Downstream over HTTP: GET /api/tasks/groups STILL lists the group with
    *      BOTH members; GET /api/tasks/:id shows group_id unchanged AND
-   *      needs_attention reflecting the last transition (proves BOTH the patch
+   *      unread reflecting the last transition (proves BOTH the patch
    *      applied and group_id survived). The untouched sibling keeps group_id too.
    *
    * Reverting the fix breaks step 4: the first transition drops group_id from the
    * mutated member, dropping it from the group listing and nulling its task
    * group_id.
    */
-  it('keeps group_id (+ applies needs_attention) across repeated session phase transitions', async () => {
+  it('keeps group_id (+ applies unread) across repeated session phase transitions', async () => {
     // 1. Two tasks in the same category+project.
     const a = await createTask('Session task A');
     const b = await createTask('Sibling task B');
@@ -185,10 +185,10 @@ describe('virtual group survives session phase transitions (REST → real phase 
 
     // 3. Drive REAL production phase transitions on member A. applySessionPhase is
     //    the exact function src/web/server.ts invokes on session:error /
-    //    session:streaming events; it calls updateTaskRaw with needs_attention,
+    //    session:streaming events; it calls updateTaskRaw with unread,
     //    rewriting the payload column each time (the bug's trigger).
 
-    // TODO → AWAIT_HUMAN_ACTION (writes needs_attention: true)
+    // TODO → AWAIT_HUMAN_ACTION (writes unread: true)
     const t1 = await applySessionPhase(a.id, 'session:error', 'e2e:phase-persist');
     expect(t1.changed).toBe(true);
     expect(t1.newPhase).toBe('AWAIT_HUMAN_ACTION');
@@ -197,16 +197,16 @@ describe('virtual group survives session phase transitions (REST → real phase 
     {
       const ra = await getTask(a.id);
       expect(ra.phase).toBe('AWAIT_HUMAN_ACTION');
-      expect(ra.needs_attention).toBe(true); // the patch applied
+      expect(ra.unread).toBe(true); // the patch applied
       expect(ra.group_id).toBe(group.group_id); // ...and group_id survived
     }
 
-    // AWAIT_HUMAN_ACTION → IN_PROGRESS (writes needs_attention: false)
+    // AWAIT_HUMAN_ACTION → IN_PROGRESS (writes unread: false)
     const t2 = await applySessionPhase(a.id, 'session:streaming', 'e2e:phase-persist');
     expect(t2.changed).toBe(true);
     expect(t2.newPhase).toBe('IN_PROGRESS');
 
-    // IN_PROGRESS → AWAIT_HUMAN_ACTION (writes needs_attention: true again)
+    // IN_PROGRESS → AWAIT_HUMAN_ACTION (writes unread: true again)
     const t3 = await applySessionPhase(a.id, 'session:error', 'e2e:phase-persist');
     expect(t3.changed).toBe(true);
     expect(t3.newPhase).toBe('AWAIT_HUMAN_ACTION');
@@ -214,7 +214,7 @@ describe('virtual group survives session phase transitions (REST → real phase 
     // 4. Downstream assertions over HTTP after THREE payload rewrites.
     const ra = await getTask(a.id);
     expect(ra.phase).toBe('AWAIT_HUMAN_ACTION');
-    expect(ra.needs_attention).toBe(true); // last transition's payload field applied
+    expect(ra.unread).toBe(true); // last transition's payload field applied
     expect(ra.group_id).toBe(group.group_id); // group_id survived every rewrite
 
     // The untouched sibling never lost its group_id.

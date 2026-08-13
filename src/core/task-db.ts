@@ -90,9 +90,11 @@ const EXPLICIT_TASK_KEYS = new Set<string>([
 /**
  * Retired Task keys. NOT columns and NOT allowed into the `payload` spillover
  * blob either — see the denylist in `taskToRow`. Project is the single grouping
- * layer; `category` must never come back.
+ * layer, so `category` must never come back; `needs_attention` was renamed to
+ * `unread` (v6 migration) and an old client spelling it must not resurrect a
+ * second read marker beside the real one.
  */
-const RETIRED_TASK_KEYS = new Set<string>(['category']);
+const RETIRED_TASK_KEYS = new Set<string>(['category', 'needs_attention']);
 
 // ── Singleton ──────────────────────────────────────────────────────────────
 let db: DatabaseType | null = null;
@@ -440,7 +442,11 @@ const SCHEMA_SQL = `
  * Bump SCHEMA_VERSION and add an `if (from < N)` branch for each new one-time
  * migration. Keep the branch append-only — never edit or reorder old ones.
  */
-const SCHEMA_VERSION = 5;
+/**
+ * Exported so migration tests can assert "the DB ended up current" without
+ * hardcoding a number that every future bump would break.
+ */
+export const SCHEMA_VERSION = 6;
 
 function runOneTimeMigrations(handle: DatabaseType): void {
   const current = handle.pragma('user_version', { simple: true }) as number;
@@ -498,6 +504,11 @@ function runOneTimeMigrations(handle: DatabaseType): void {
   if (current < 5) {
     // v4 → v5: category removal — Project becomes the single grouping layer.
     migrateToProjectOnly(handle);
+  }
+
+  if (current < 6) {
+    // v5 → v6: `needs_attention` → `unread` (the read/unread marker rename).
+    migrateReadMarkerToUnread(handle);
   }
 
   handle.pragma('user_version = ' + SCHEMA_VERSION);
@@ -987,6 +998,48 @@ function migrateToProjectOnly(handle: DatabaseType): void {
     inboxProviderResetFrom: summary.inboxProviderResetFrom,
     perProject: summary.perProject,
   });
+}
+
+// ── v6: read-marker rename ─────────────────────────────────────────────────
+
+/**
+ * v5 → v6: fold the retired `needs_attention` marker into `unread`.
+ *
+ * The marker never had a column — it lives inside the `payload` JSON blob — so
+ * this is JSON surgery, not an ALTER TABLE. Two statements, in this order:
+ *
+ *   1. Carry `true` forward as `unread: true`, but only where `unread` isn't
+ *      already set (a task written after the rename is already correct and its
+ *      value wins).
+ *   2. Delete the retired key from every row. `false` is dropped rather than
+ *      copied: absent means read, so `unread: false` would be pure noise.
+ *
+ * `updated_at` is deliberately NOT touched. The marker is viewer state, not task
+ * content — bumping it would reshuffle every updated_at-sorted list on upgrade.
+ */
+function migrateReadMarkerToUnread(handle: DatabaseType): void {
+  const summary = handle.transaction(() => {
+    const carried = handle
+      .prepare(
+        `UPDATE tasks SET payload = json_set(payload, '$.unread', json('true'))
+          WHERE payload IS NOT NULL AND json_valid(payload)
+            AND json_extract(payload, '$.needs_attention') IN (1, 'true')
+            AND json_extract(payload, '$.unread') IS NULL`,
+      )
+      .run().changes;
+    const cleared = handle
+      .prepare(
+        `UPDATE tasks SET payload = json_remove(payload, '$.needs_attention')
+          WHERE payload IS NOT NULL AND json_valid(payload)
+            AND json_extract(payload, '$.needs_attention') IS NOT NULL`,
+      )
+      .run().changes;
+    return { carried, cleared };
+  })();
+
+  if (summary.cleared > 0) {
+    log.task.info('task-db v6: read marker renamed needs_attention → unread', summary);
+  }
 }
 
 // ── Dynamic ext-index management ───────────────────────────────────────────

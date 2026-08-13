@@ -12,6 +12,8 @@
  *  3. session:result stale-result gate — a SESSION_RESULT whose turnGen is
  *     older than the live session's current turnGen belongs to a superseded
  *     turn and must not flip AGENT_COMPLETE (incident ed347bde, 2026-08-05).
+ *  4. read/unread marker — the phase write also carries task.unread, so a
+ *     handed-back task can never be observed without its dot (2026-08-09).
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -73,13 +75,13 @@ describe('applySessionPhase: session:turn-start', () => {
     expect((await getTask(taskId)).phase).toBe('IN_PROGRESS')
   })
 
-  it('clears needs_attention on the pullback (red row goes away)', async () => {
+  it('marks the task READ on the pullback (red row goes away)', async () => {
     const taskId = await taskInPhase('AWAIT_HUMAN_ACTION')
-    await updateTaskRaw(taskId, { needs_attention: true })
+    await updateTaskRaw(taskId, { unread: true })
     await applySessionPhase(taskId, 'session:turn-start', 'test', { sessionId: 'sid-1' })
     const task = await getTask(taskId)
     expect(task.phase).toBe('IN_PROGRESS')
-    expect(task.needs_attention).toBeFalsy()
+    expect(task.unread).toBe(false)
   })
 
   it('no-op on IN_PROGRESS (every turn re-fires the trigger)', async () => {
@@ -165,5 +167,54 @@ describe('applySessionPhase: session:result stale-result gate (incident ed347bde
     const res = await applySessionPhase(taskId, 'session:result', 'test', { sessionId: 'sid-gen' })
     expect(res.changed).toBe(true)
     expect((await getTask(taskId)).phase).toBe('AGENT_COMPLETE')
+  })
+})
+
+// ── Read/unread lifecycle ──────────────────────────────────────────────────
+//
+// THE BUG THIS LOCKS DOWN (2026-08-09): the marker was only ever set on
+// AWAIT_HUMAN_ACTION, so the dot appeared when a session ERRORED and stayed dark
+// when a session finished NORMALLY (AGENT_COMPLETE) — which is the overwhelmingly
+// common case. "Session finished, go look at it" was therefore invisible, and the
+// feature read as "needs attention on failure" instead of "unread".
+describe('applySessionPhase: read/unread marker rides the phase write', () => {
+  it('AGENT_COMPLETE marks the task UNREAD (the normal turn-finished path)', async () => {
+    const taskId = await taskInPhase('IN_PROGRESS')
+    await applySessionPhase(taskId, 'session:result', 'test', { sessionId: 'sid-r' })
+    const task = await getTask(taskId)
+    expect(task.phase).toBe('AGENT_COMPLETE')
+    expect(task.unread).toBe(true)
+  })
+
+  it('AWAIT_HUMAN_ACTION marks the task UNREAD (the error path)', async () => {
+    const taskId = await taskInPhase('IN_PROGRESS')
+    await applySessionPhase(taskId, 'session:error', 'test', { sessionId: 'sid-e' })
+    const task = await getTask(taskId)
+    expect(task.phase).toBe('AWAIT_HUMAN_ACTION')
+    expect(task.unread).toBe(true)
+  })
+
+  it('IN_PROGRESS marks it READ — a new turn supersedes the pending output', async () => {
+    const taskId = await taskInPhase('AGENT_COMPLETE')
+    await applySessionPhase(taskId, 'session:input', 'test', { sessionId: 'sid-i' })
+    const task = await getTask(taskId)
+    expect(task.phase).toBe('IN_PROGRESS')
+    expect(task.unread).toBe(false)
+  })
+
+  it('a task the user already read goes unread again on the NEXT turn end', async () => {
+    // Full round trip: agent finishes → unread → user opens it (read) → agent
+    // finishes another turn → unread again. The old code could not express the
+    // second half, because a re-focus of an already-focused task was a no-op.
+    const taskId = await taskInPhase('IN_PROGRESS')
+    await applySessionPhase(taskId, 'session:result', 'test', { sessionId: 'sid-cycle' })
+    expect((await getTask(taskId)).unread).toBe(true)
+
+    await updateTaskRaw(taskId, { unread: false }) // the UI's read event
+    expect((await getTask(taskId)).unread).toBe(false)
+
+    await applySessionPhase(taskId, 'session:input', 'test', { sessionId: 'sid-cycle' })
+    await applySessionPhase(taskId, 'session:result', 'test', { sessionId: 'sid-cycle' })
+    expect((await getTask(taskId)).unread).toBe(true)
   })
 })

@@ -35,6 +35,14 @@
  * Task Phases (7):
  *   TODO → IN_PROGRESS → AGENT_COMPLETE → AWAIT_HUMAN_ACTION
  *        → HUMAN_VERIFIED → POST_WORK_COMPLETED → COMPLETE
+ *
+ * Read/unread lifecycle (task.unread — see readMarkerForPhase):
+ *   AGENT_COMPLETE / AWAIT_HUMAN_ACTION → unread   (agent handed work back)
+ *   IN_PROGRESS                         → read     (new turn supersedes it)
+ *   COMPLETE                            → read     (applyPhase clears it)
+ *   opening the task in the UI          → read     (the actual "read" event)
+ * The marker is written in the SAME row update as the phase, so no surface can
+ * see a handed-back task without its unread dot.
  */
 
 import { log } from '../logging/index.js'
@@ -93,19 +101,56 @@ export function phaseFromStatus(status: TaskStatus): TaskPhase {
 }
 
 /**
+ * The read-marker patch a phase implies, or `{}` when the phase says nothing
+ * about read state. THE single definition of "what does this phase mean for the
+ * unread dot" — both write paths (applyPhase for updateTask, applySessionPhase
+ * for the session machine) derive from this one function.
+ *
+ * UNREAD (the agent handed work back and the human hasn't looked):
+ *   - AGENT_COMPLETE     — the turn finished and produced output. This is the
+ *     COMMON case and used to set nothing at all, which is why a normally
+ *     completed session never showed a dot: only the error path
+ *     (AWAIT_HUMAN_ACTION) marked the task, so the dot fired on failures and
+ *     stayed dark on success.
+ *   - AWAIT_HUMAN_ACTION — errored / waiting on a human decision.
+ *
+ * READ (nothing new to look at):
+ *   - IN_PROGRESS — a fresh turn started; whatever was pending is superseded.
+ *   - COMPLETE    — finishing a task is itself an act of reading it.
+ *
+ * TODO / HUMAN_VERIFIED / POST_WORK_COMPLETED leave the marker untouched: a
+ * human already drove those, so neither setting nor clearing is implied.
+ */
+export function readMarkerForPhase(phase: TaskPhase): Partial<Task> {
+  if (phase === 'AGENT_COMPLETE' || phase === 'AWAIT_HUMAN_ACTION') return { unread: true }
+  if (phase === 'IN_PROGRESS' || phase === 'COMPLETE') return { unread: false }
+  return {}
+}
+
+/**
  * Apply a phase to a task, updating phase + derived status + metadata.
  * Mutates the task in place.
+ *
+ * This is the base every NON-session phase write goes through (updateTask — the
+ * REST phase picker, the agent's task_update, plugin sync). The session machine
+ * has its own O(1) row-patch path (applySessionPhase) that derives the marker
+ * from the same readMarkerForPhase, so both agree by construction. Setting the
+ * marker in only one of the two is what let a task hand-dragged to
+ * AGENT_COMPLETE stay dot-less while a session-driven one lit up.
  */
 export function applyPhase(task: Task, phase: TaskPhase): void {
   task.phase = phase;
   task.status = deriveStatusFromPhase(phase);
+
+  // Read marker implied by the phase. Object.assign (not a ternary per key) so
+  // phases that imply nothing leave whatever the caller set untouched.
+  Object.assign(task, readMarkerForPhase(phase));
 
   if (phase === 'COMPLETE') {
     if (!task.completed_at) task.completed_at = new Date().toISOString();
     task.session_id = undefined;          // new 1-slot
     task.plan_session_id = undefined;     // legacy 2-slot (backward compat)
     task.exec_session_id = undefined;     // legacy 2-slot (backward compat)
-    task.needs_attention = undefined;
   } else {
     task.completed_at = undefined;
   }
@@ -322,8 +367,9 @@ export async function applySessionPhase(
       // updateTask or you'll bypass the active-children guard.
       await updateTaskRaw(taskId, {
         phase: newPhase,
-        ...(newPhase === 'AWAIT_HUMAN_ACTION' ? { needs_attention: true } : {}),
-        ...(newPhase === 'IN_PROGRESS' ? { needs_attention: false } : {}),
+        // Read/unread marker rides the SAME write as the phase — one atomic row
+        // update, so a surface can never observe AGENT_COMPLETE without its dot.
+        ...readMarkerForPhase(newPhase),
       }, { emitEvent: true, push: true, source })
 
       log.session.info('phase transition', {

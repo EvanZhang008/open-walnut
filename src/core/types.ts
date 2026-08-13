@@ -584,28 +584,24 @@ export interface Task {
   pin_order?: number;  // lower = higher in list, undefined = not pinned
   focus_tier?: string;  // undefined = satellite (default); 'focus' | 'backlog' | 'wait' built-ins, or a custom tier id ('ct_*')
   /**
-   * UNREAD marker — the read/unread lifecycle for agent work.
+   * UNREAD marker — the read/unread lifecycle for agent work. The ONE field for
+   * this; read it directly (`task.unread`), never re-derive it from `phase`.
    *
    * Semantics: "the agent produced something the human has not looked at yet".
-   * Set to true by the phase machine whenever a session hands work back
+   * Set true by the phase machine whenever a session hands work back
    * (AGENT_COMPLETE — turn finished; AWAIT_HUMAN_ACTION — errored / needs a
-   * decision). Cleared to false the moment the human OPENS the task (focus /
-   * session open) — that IS the read event — and on COMPLETE.
+   * decision). Set false the moment the human OPENS the task — that IS the read
+   * event — and on IN_PROGRESS / COMPLETE. See readMarkerForPhase in phase.ts.
    *
-   * This is a read marker, NOT task content: writing it must never bump
-   * `updated_at` (see updateTask's onlyReadMarker check), or merely selecting a
-   * task would reorder every updated_at-sorted list.
+   * Absent means READ, which is why the field is `unread` and not `is_read`: a
+   * missing value has to mean "no dot", and `is_read: undefined` would mean the
+   * opposite (every pre-existing task would light up).
    *
-   * @see needs_attention — the retired name, still accepted on input and still
-   * mirrored to external sync backends (MS To-Do / Jira headers) and the frozen
-   * /api/v1 contract. `unread` is the single source of truth in-process;
-   * normalizeReadMarker() folds legacy rows forward on read.
+   * This is a marker about the VIEWER, not task content: writing it must never
+   * bump `updated_at` (see updateTask's onlyReadMarker check), or merely
+   * selecting a task would reorder every updated_at-sorted list.
    */
   unread?: boolean;
-  /** @deprecated Renamed to `unread` (2026-08-09). Kept so legacy rows, external
-   *  sync headers, and older clients keep round-tripping. Reads should go through
-   *  `isUnread(task)`; writes should set `unread`. */
-  needs_attention?: boolean;
   /** Last sync error message — set on push failure, cleared on success. */
   sync_error?: string;
   /** ISO timestamp — last session interaction (start/resume). Drives "Recent" sort in sidebar. */
@@ -628,47 +624,16 @@ export interface Task {
   ext?: Record<string, unknown>;
 }
 
-// ── Read / unread marker ───────────────────────────────────────────────────
-//
-// `unread` replaced `needs_attention` (2026-08-09). Both keys can appear on a
-// task: legacy rows only carry the old one, external sync round-trips it, and
-// older clients still PATCH it. These three helpers are the ONLY sanctioned way
-// to read or write the marker so no surface can drift back to reading the raw
-// field (that drift is exactly what left the Focus/Satellite cards painted red
-// after the list row's dot had already cleared).
-
-/** Read the marker, honoring the legacy field when `unread` is absent. */
-export function isUnread(task: Pick<Task, 'unread' | 'needs_attention'>): boolean {
-  return task.unread ?? task.needs_attention ?? false;
-}
-
 /**
- * The patch that sets/clears the marker. Writes BOTH keys so a task never ends
- * up with the two disagreeing — external sync (MS To-Do / Jira) and the frozen
- * /api/v1 contract still read `needs_attention`.
+ * The task fields that are read markers rather than content. A patch touching
+ * ONLY these must not bump `updated_at` — see updateTask and the web optimistic
+ * layer's applyFieldUpdate, which share this one definition.
+ *
+ * A list (not a bare string) because "is this patch only marker keys?" is the
+ * question both call sites ask, and a second viewer-state field would join here
+ * rather than duplicating the check.
  */
-export function readMarkerPatch(unread: boolean): { unread: boolean; needs_attention: boolean } {
-  return { unread, needs_attention: unread };
-}
-
-/**
- * Keys that carry the read marker. A patch touching ONLY these must not bump
- * `updated_at` — see updateTask / applyFieldUpdate. Exported so the server and
- * the web optimistic layer share one definition.
- */
-export const READ_MARKER_KEYS: readonly string[] = ['unread', 'needs_attention'] as const;
-
-/**
- * Fold a legacy row forward: a task carrying only `needs_attention` gets an
- * equivalent `unread`. Mutates in place and returns the task (call sites read
- * it inline). Cheap enough for the per-row normalize path.
- */
-export function normalizeReadMarker<T extends Partial<Task>>(task: T): T {
-  if (task.unread === undefined && task.needs_attention !== undefined) {
-    task.unread = task.needs_attention;
-  }
-  return task;
-}
+export const READ_MARKER_KEYS: readonly string[] = ['unread'] as const;
 
 /**
  * A row of the `task_projects` registry — the single grouping layer.
@@ -914,6 +879,11 @@ export interface Config {
     enabled?: boolean;
     /** Calendar ids the user hid in Settings → Calendar. */
     hidden_calendar_ids?: string[];
+    /** When set, ONLY these calendar ids are visible — every other calendar
+     *  (including ones added to the Mac later) stays hidden. Stronger than the
+     *  denylist for kiosk/demo/shared-screen setups; hidden_calendar_ids still
+     *  applies on top. */
+    visible_calendar_ids?: string[];
     /** Cache TTL / periodic refresh interval. Default: 15. */
     refresh_minutes?: number;
   };
@@ -960,6 +930,17 @@ export interface Config {
    *  Default: local=7, remote hosts=20. */
   session_limits?: Record<string, number>;
   session?: {
+    /** Cron scheduling policy for Walnut-managed CLI sessions.
+     *  - 'unrestricted' (default): sessions may create any cron the CLI allows,
+     *    including durable ones (persisted to {cwd}/.claude/scheduled_tasks.json).
+     *  - 'session-only': Walnut enforces session-scoped crons — durable
+     *    CronCreate is denied (or corrected in bypass mode), and a dying
+     *    session's durable rows are stripped from scheduled_tasks.json. Guards
+     *    against the directory-scoped scheduler lock: a durable job whose
+     *    creator died is adopted and executed by ANY other session sharing the
+     *    directory, delivered as if the user had typed it. Enable this if you
+     *    run multiple sessions in shared project directories. */
+    cron_policy?: 'unrestricted' | 'session-only';
     /** Mount the walnut MCP server (`open-walnut mcp`) into ACP/Codex sessions
      *  so they can call walnut task tools. Default false: the provider spawns
      *  the mount on the EXECUTION host, where `open-walnut` may not be on PATH. */
@@ -1000,6 +981,9 @@ export interface Config {
     premount_walnut_mcp?: boolean;
   };
   heartbeat?: import('../heartbeat/types.js').HeartbeatConfig;
+  /** Keep the Mac awake (lid closed included) while local sessions run.
+   *  Advanced, opt-in, macOS console only — see src/core/keep-awake.ts. */
+  keep_awake?: import('./keep-awake.js').KeepAwakeConfig;
   tools?: {
     exec?: {
       security?: string;
@@ -1031,7 +1015,41 @@ export interface Config {
     push_interval_ms?: number;      // default: 600000 (10 min)
     push_on_session_end?: boolean;  // default: true
   };
+  /** @deprecated Superseded by `hooks`. `session_hooks.overrides` is still
+   *  honored (merged UNDER `hooks.overrides` — the new key wins on conflict).
+   *  The `session_hooks.hooks` array was never read and stays inert. */
   session_hooks?: import('./session-hooks/types.js').SessionHooksConfig;
+  /** Unified hook system (session + task + cron lifecycle). */
+  hooks?: {
+    /** Master switch. Default: true. */
+    enabled?: boolean;
+    /** Per-hook overrides, keyed by hook id — works for builtins, file hooks,
+     *  and config defs alike. */
+    overrides?: Record<string, { enabled?: boolean; priority?: number; timeoutMs?: number }>;
+    /** Declarative hook definitions. `on` = hook points (onTaskPhaseChanged,
+     *  onTurnComplete, onCronFired, …); `action` = what to do (see
+     *  core/hooks/actions.ts — send_message_to_session | notify | run_agent |
+     *  log; there is deliberately NO shell action). Malformed defs are dropped
+     *  with a warning, never fatal. */
+    defs?: Array<{
+      id: string;
+      name?: string;
+      description?: string;
+      on: string[];
+      filter?: {
+        modes?: string[];
+        projects?: string[];
+        phases?: string[];
+        fromPhases?: string[];
+        sources?: string[];
+        requiresSession?: boolean;
+      };
+      action: { type: string; [key: string]: unknown };
+      enabled?: boolean;
+      priority?: number;
+      timeoutMs?: number;
+    }>;
+  };
   developer?: {
     /** Show "UI ONLY" triage messages in chat. Default: false (hidden for less noise). */
     show_ui_only_triage?: boolean;
@@ -1297,6 +1315,13 @@ export type StatusReason =
   | 'streaming_evidence_self_heal'
   | 'turn_interrupted'
   | 'user_stopped'
+  | 'user_terminated'
+  /** A death WE requested (task done, capacity eviction, idle timeout) — daemon exit
+   *  code is irrelevant; not an error. */
+  | 'expected_teardown'
+  | 'restart_reinitialize'
+  | 'auto_recovered'
+  | 'auto_recovered_dead'
   /** C2 snapshot projection wrote the status (docs/plan/session-snapshot-source-of-truth.md §5). */
   | 'snapshot_projection';
 

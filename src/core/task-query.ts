@@ -27,7 +27,8 @@ export interface TaskQuery {
   tagsAll?: string[];
   pinned?: boolean;
   starred?: boolean;
-  needsAttention?: boolean;
+  /** Read/unread marker — true = agent output the human hasn't opened. */
+  unread?: boolean;
   blocked?: boolean;
   parentTaskId?: string;
   groupId?: string;
@@ -157,7 +158,7 @@ export function normalizeTaskQuery(raw: TaskQuery, now: Date): NormalizedTaskQue
   validateEnumArray(raw.priorities, TASK_PRIORITIES, 'priority');
   validateEnum(raw.sort, QUERY_SORTS, 'sort');
 
-  for (const field of ['pinned', 'starred', 'needsAttention', 'blocked'] as const) {
+  for (const field of ['pinned', 'starred', 'unread', 'blocked'] as const) {
     if (raw[field] !== undefined && typeof raw[field] !== 'boolean') {
       queryError('invalid_boolean', `${field} must be a boolean`);
     }
@@ -277,7 +278,7 @@ export function matchesTaskQuery(task: Task, query: NormalizedTaskQuery, ctx: Ta
   if (query.tagsAll !== undefined && !query.tagsAll.every((tag) => tags.includes(tag))) return false;
 
   if (query.pinned !== undefined && Boolean(task.pinned) !== query.pinned) return false;
-  if (query.needsAttention !== undefined && Boolean(task.needs_attention) !== query.needsAttention) return false;
+  if (query.unread !== undefined && Boolean(task.unread) !== query.unread) return false;
   if (query.blocked !== undefined) {
     if (!ctx.blockedIds) {
       throw new Error('matchesTaskQuery: query.blocked requires ctx.blockedIds (caller must compute the blocked set)');

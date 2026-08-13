@@ -21,6 +21,7 @@ import {
   closeDb,
   TASK_DB_PATH,
   TASK_DB_PRE_V5_BACKUP_PATH,
+  SCHEMA_VERSION,
   promoteLegacyGroup,
   legacyListName,
   pickMajoritySource,
@@ -336,7 +337,7 @@ describe('task-db v5 migration', () => {
     ).map((r) => r.name);
     expect(indexes).not.toContain('tasks_category_project');
 
-    expect(getDb()!.pragma('user_version', { simple: true })).toBe(5);
+    expect(getDb()!.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION);
   });
 
   it('promotes degenerate groups and routes Quick Start / Inbox to Inbox', () => {
@@ -521,14 +522,14 @@ describe('task-db v5 migration', () => {
     getDb()!.pragma('user_version = 4');
     closeDb();
     getDb();
-    expect(getDb()!.pragma('user_version', { simple: true })).toBe(5);
+    expect(getDb()!.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION);
     expect(JSON.stringify([...readProjects().entries()])).toBe(first);
     expect(getDb()!.prepare('SELECT id, project FROM tasks ORDER BY id').all()).toEqual(firstTasks);
   });
 
   it('is a no-op on a fresh database (no backup, empty registry)', () => {
     getDb();
-    expect(getDb()!.pragma('user_version', { simple: true })).toBe(5);
+    expect(getDb()!.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION);
     expect(fs.existsSync(TASK_DB_PRE_V5_BACKUP_PATH)).toBe(false);
     expect(readProjects().size).toBe(0);
     const cols = (getDb()!.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]).map(

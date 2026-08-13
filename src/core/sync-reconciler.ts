@@ -382,10 +382,12 @@ export class SyncReconciler {
         delete (updates as any).exec_session_id;
         // Never overwrite local-only sync metadata
         delete (updates as any)._syncedAt;
-        // Never overwrite phase/status/needs_attention from remote (RC8 fix)
+        // Never overwrite phase/status/read-marker from remote (RC8 fix). BOTH
+        // marker keys must be dropped — leaving the legacy one through would let a
+        // remote echo resurrect the dot on a task the user already read.
         delete (updates as any).phase;
         delete (updates as any).status;
-        delete (updates as any).needs_attention;
+        delete (updates as any).unread;
         // Claim conflict → keep the local project rather than moving the task
         // into another provider's group.
         if ((await resolveProject(updates)) === 'conflict') delete updates.project;

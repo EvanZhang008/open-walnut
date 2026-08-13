@@ -127,7 +127,7 @@ export function mapToLocal(
 function composeCommentBody(task: Task): string {
   const headers: string[] = [];
   if (task.parent_task_id) headers.push(`Parent: ${task.parent_task_id.slice(0, 8)}`);
-  if (task.needs_attention) headers.push(`Attention: true`);
+  if (task.unread) headers.push(`Attention: true`);
   if (task.depends_on?.length) headers.push(`DependsOn: ${task.depends_on.map(id => id.slice(0, 8)).join(',')}`);
   const sections: string[] = [];
   if (task.summary) sections.push(`## Summary\n${task.summary}`);

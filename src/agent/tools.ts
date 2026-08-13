@@ -55,7 +55,7 @@ import {
 import type { SessionLimitResult } from '../core/session-tracker.js';
 import { bus, EventNames } from '../core/event-bus.js';
 import { getConfig, updateConfig } from '../core/config-manager.js';
-import { isUnread, SESSION_MODES, SESSION_MODE_IDS } from '../core/types.js';
+import { SESSION_MODES, SESSION_MODE_IDS } from '../core/types.js';
 import type { Config, SessionRecord, Task, TaskPhase, TaskPriority, TaskSource } from '../core/types.js';
 import path from 'node:path';
 import { log } from '../logging/index.js';
@@ -296,7 +296,6 @@ export const tools: ToolDefinition[] = [
             priority: { type: 'string', enum: ['immediate', 'important', 'backlog', 'none'] },
             starred: { type: 'boolean', description: 'Filter starred/favorite tasks (includes individually starred tasks and tasks in favorited projects).' },
             unread: { type: 'boolean', description: 'Filter to UNREAD tasks — the agent produced output the human has not opened yet. Set automatically when a session turn ends; cleared when the human opens the task.' },
-            needs_attention: { type: 'boolean', description: 'Deprecated alias of `unread`.' },
             parent_task_id: { type: 'string', description: 'Filter to children of a parent task (by ID prefix).' },
             group_id: { type: 'string', description: 'Filter to members of a virtual group (exact group id, e.g. "g_xxx").' },
             tags: { type: 'array', items: { type: 'string' }, description: 'Filter to tasks with any of these tags (OR match).' },
@@ -416,11 +415,10 @@ export const tools: ToolDefinition[] = [
         });
       }
 
-      // Apply unread filter (accepts the retired `needs_attention` spelling too)
-      const unreadFilter = where.unread ?? where.needs_attention;
-      if (unreadFilter !== undefined) {
-        const wantUnread = unreadFilter === true || unreadFilter === 'true';
-        tasks = tasks.filter((t) => isUnread(t) === wantUnread);
+      // Apply unread filter
+      if (where.unread !== undefined) {
+        const wantUnread = where.unread === true || where.unread === 'true';
+        tasks = tasks.filter((t) => Boolean(t.unread) === wantUnread);
       }
 
       // Apply parent_task_id filter
@@ -477,7 +475,7 @@ export const tools: ToolDefinition[] = [
           phase: t.phase,
         };
         if (t.starred) entry.starred = true;
-        if (isUnread(t)) entry.unread = true;
+        if (t.unread) entry.unread = true;
         if (t.due_date) entry.due_date = t.due_date;
         if (t.start_date) entry.start_date = t.start_date;
         if (t.end_date) entry.end_date = t.end_date;
@@ -727,7 +725,6 @@ For projects (type='project'): set default_host and default_cwd for session defa
         end_date: { type: 'string', description: 'New end of the working block (YYYY-MM-DD, or ISO datetime). With start_date it gives the task a duration on the calendar; independent of due_date. Empty string clears.' },
         starred: { type: 'boolean', description: 'Star or unstar the task.' },
         unread: { type: 'boolean', description: 'Read/unread marker (red dot in UI). true = there is agent output the human has not seen. Normally managed automatically by the session lifecycle — set it manually only to re-flag a task for review.' },
-        needs_attention: { type: 'boolean', description: 'Deprecated alias of `unread`.' },
         parent_task_id: { type: 'string', description: 'Set or change the parent task. Pass empty string to remove parent.' },
         sprint: { type: 'string', description: 'Set sprint name (e.g. "Feb16-Feb27"). Empty string clears. Plugins map this to platform-specific sprint/iteration fields.' },
         description: { type: 'string', description: 'Set task description (what & why — pre-action context).' },
@@ -833,7 +830,7 @@ For projects (type='project'): set default_host and default_cwd for session defa
           params.phase !== undefined ||
           params.project !== undefined || params.due_date !== undefined ||
           params.start_date !== undefined || params.end_date !== undefined ||
-          params.starred !== undefined || params.unread !== undefined || params.needs_attention !== undefined ||
+          params.starred !== undefined || params.unread !== undefined ||
           params.parent_task_id !== undefined || params.sprint !== undefined ||
           params.add_tags !== undefined || params.remove_tags !== undefined ||
           params.set_tags !== undefined ||
@@ -853,11 +850,7 @@ For projects (type='project'): set default_host and default_cwd for session defa
               // Trim at the boundary like task_create does ('' stays '', = Inbox).
               project: params.project === undefined ? undefined : String(params.project).trim(),
               starred: (params.starred === true || params.starred === 'true') ? true : (params.starred === false || params.starred === 'false') ? false : undefined,
-              // Accept either spelling; updateTask writes both keys.
-              unread: (() => {
-                const v = params.unread ?? params.needs_attention;
-                return (v === true || v === 'true') ? true : (v === false || v === 'false') ? false : undefined;
-              })(),
+              unread: (params.unread === true || params.unread === 'true') ? true : (params.unread === false || params.unread === 'false') ? false : undefined,
               parent_task_id: params.parent_task_id as string | undefined,
               sprint: params.sprint as string | undefined,
               add_tags: params.add_tags as string[] | undefined,
@@ -1140,9 +1133,22 @@ queries: ["pipeline API allowlisting", "PAPINS SigV4", "pipeline allowlist"]  �
 
       try {
         if (semanticQueries.length > 0) {
-          // Agent search intentionally retains QMD's reranker.
+          // rerank:false. "It's an agent tool, nobody's watching a spinner" is NOT
+          // a reason to keep the reranker here: the agent loop runs IN THE WEB
+          // SERVER PROCESS (src/web/server.ts imports agent/loop.js directly), and
+          // QMD's reranker is a native llama.cpp call. Measured on this vault:
+          // task_search 14.7s with rerank vs 0.26s without, and it stalled the
+          // event loop 609ms — i.e. every tool call degraded the whole app for
+          // every user. Quality delta was nil where it matters (top-1 hit
+          // identical across 4 probe queries; 46x total latency).
           const { memoryNotesSearch } = await import('../core/memory-search.js');
-          const qmdResults = await memoryNotesSearch(semanticQueries, ['task'], limit);
+          const qmdResults = await memoryNotesSearch(
+            semanticQueries,
+            ['task'],
+            limit,
+            undefined,
+            { rerank: false },
+          );
           for (const result of qmdResults) {
             appendResult({
               type: 'task',

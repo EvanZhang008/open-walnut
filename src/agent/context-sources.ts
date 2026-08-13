@@ -49,7 +49,7 @@ function formatTaskDetails(task: Task): string {
   ];
 
   if (task.starred) lines.push('Starred: yes');
-  if (task.needs_attention) lines.push('Needs Attention: yes');
+  if (task.unread) lines.push('Unread: yes (output the human has not opened)');
   if (task.parent_task_id) lines.push(`Parent Task: ${task.parent_task_id}`);
   if (task.start_date) lines.push(`Start: ${task.start_date}`);
   if (task.due_date) lines.push(`Due: ${task.due_date}`);

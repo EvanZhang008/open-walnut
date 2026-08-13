@@ -126,9 +126,18 @@ describe('field composition', () => {
 
   it('matches explicit false against absent booleans while undefined does not filter', () => {
     const fixture = task();
-    expect(matchesTaskQuery(fixture, query({ pinned: false, starred: false, needsAttention: false, blocked: false }), { blockedIds: new Set() })).toBe(true);
+    expect(matchesTaskQuery(fixture, query({ pinned: false, starred: false, unread: false, blocked: false }), { blockedIds: new Set() })).toBe(true);
     expect(matchesTaskQuery(task({ pinned: true }), query({ pinned: false }))).toBe(false);
-    expect(matchesTaskQuery(task({ pinned: true, starred: true, needs_attention: true }), query())).toBe(true);
+    expect(matchesTaskQuery(task({ pinned: true, starred: true, unread: true }), query())).toBe(true);
+  });
+
+  it('matches the unread marker in both directions, treating absent as read', () => {
+    expect(matchesTaskQuery(task({ unread: true }), query({ unread: true }))).toBe(true);
+    expect(matchesTaskQuery(task({ unread: true }), query({ unread: false }))).toBe(false);
+    // Absent means READ — the whole reason the field is `unread` and not `is_read`.
+    expect(matchesTaskQuery(task(), query({ unread: false }))).toBe(true);
+    expect(matchesTaskQuery(task(), query({ unread: true }))).toBe(false);
+    expect(matchesTaskQuery(task({ unread: false }), query({ unread: false }))).toBe(true);
   });
 
   it('computes effective starred from the task or a favorite project', () => {

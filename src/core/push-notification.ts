@@ -216,8 +216,8 @@ export function initPushNotifications(): void {
           // source lives on the entry, not the top-level payload — reading the
           // top-level d.source (always undefined) meant triage pushes never fired.
           if (data.entry?.source === 'triage') {
-            const text = data.entry.content || 'A task needs your attention'
-            await maybePush('Task Needs Attention', text.slice(0, 150), { type: 'triage' })
+            const text = data.entry.content || 'The agent finished — open the task to read it'
+            await maybePush('Unread task update', text.slice(0, 150), { type: 'triage' })
           }
           break
         }

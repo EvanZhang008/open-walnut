@@ -59,6 +59,9 @@ export interface ProjectedTask {
   completed_at?: string
   starred?: boolean
   pinned?: boolean
+  /** Read/unread marker — true = agent output the human hasn't opened. Additive
+   *  (omitted when false), so an older iOS build that doesn't decode it is fine. */
+  unread?: boolean
   tags?: string[]
   /** First 500 chars — enough for a detail preview without the full blob. */
   summary?: string
@@ -97,6 +100,7 @@ export function projectTask(t: Task): ProjectedTask {
     ...(t.completed_at ? { completed_at: t.completed_at } : {}),
     ...(t.starred ? { starred: true } : {}),
     ...(t.pinned ? { pinned: true } : {}),
+    ...(t.unread ? { unread: true } : {}),
     ...(t.tags && t.tags.length > 0 ? { tags: t.tags } : {}),
     ...(summary ? { summary: summary.length > SUMMARY_MAX ? summary.slice(0, SUMMARY_MAX) + '…' : summary } : {}),
   }

@@ -585,7 +585,7 @@ describe('parseMsTodoBody', () => {
     const result = parseMsTodoBody(body);
     expect(result.phase).toBe('AGENT_COMPLETE');
     expect(result.parent_task_id).toBe('12345678');
-    expect(result.needs_attention).toBe(true);
+    expect(result.unread).toBe(true);
     expect(result.depends_on).toEqual(['aaa11111', 'bbb22222', 'ccc33333']);
     expect(result.description).toBe('Description text');
     expect(result.summary).toBe('Summary text');

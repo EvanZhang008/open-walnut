@@ -73,6 +73,10 @@ export async function quickParseTask(text: string): Promise<QuickTaskParse> {
 export interface CreateTaskInput {
   title: string;
   priority?: string;
+  /** Long-form body. POST /api/tasks passes it straight to addTask, which already
+   *  accepts it — used by one-click capture, where the first typed line becomes the
+   *  title and the rest becomes this. */
+  description?: string;
   /** Target project. Omitted/'' = Inbox. A name with no registry row is created. */
   project?: string;
   due_date?: string;
@@ -98,7 +102,8 @@ export interface UpdateTaskInput {
   end_date?: string | null;
   /** Idempotent star set (unlike POST /:id/star which toggles). */
   starred?: boolean;
-  needs_attention?: boolean;
+  /** Read/unread marker — true = agent output the human hasn't opened. */
+  unread?: boolean;
   parent_task_id?: string;  // Set parent (task ID) or '' to remove parent
   sprint?: string;  // Set sprint name or '' to clear
   add_tags?: string[];

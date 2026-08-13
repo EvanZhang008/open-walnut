@@ -261,21 +261,21 @@ describe('group_id survives raw partial updates (regression: vanishing groups)',
   // Repro for the user-reported bug: a grouped session/incident task loses its
   // group after a while. Root cause — group_id lives in the SQLite `payload`
   // blob (no dedicated column). A raw partial update whose patch carries ANY
-  // non-column key (e.g. needs_attention, set on every session phase
+  // non-column key (e.g. the unread marker, set on every session phase
   // transition) made taskToRow rewrite the WHOLE payload column from just the
   // patch, silently dropping group_id. Session tasks transition phase often, so
   // their group "disappeared"; plain tasks rarely raw-update, so it looked
   // intermittent.
-  it('keeps group_id when updateTaskRaw patches a payload field (needs_attention)', async () => {
+  it('keeps group_id when updateTaskRaw patches a payload field (unread)', async () => {
     const [a, b] = await makeTasks(['Session task', 'Sibling']);
     const g = await groupTasks([a, b]);
     expect((await getTask(a)).group_id).toBe(g.group_id);
 
     // Mirror phase.ts: a session phase transition sets a payload-only field.
-    await updateTaskRaw(a, { phase: 'AWAIT_HUMAN_ACTION', needs_attention: true });
+    await updateTaskRaw(a, { phase: 'AWAIT_HUMAN_ACTION', unread: true });
 
     const reloaded = await getTask(a);
-    expect(reloaded.needs_attention).toBe(true);          // the patch applied
+    expect(reloaded.unread).toBe(true);                   // the patch applied
     expect(reloaded.group_id).toBe(g.group_id);           // ...and group_id survived
     // The group still lists both members.
     const groups = await listGroups();
@@ -286,7 +286,7 @@ describe('group_id survives raw partial updates (regression: vanishing groups)',
   it('keeps group_id across a fresh DB read after a raw payload-field update', async () => {
     const [a, b] = await makeTasks(['A', 'B']);
     const g = await groupTasks([a, b]);
-    await updateTaskRaw(a, { needs_attention: true });
+    await updateTaskRaw(a, { unread: true });
 
     // Force a real reload from SQLite — proves it persisted, not just in-memory.
     closeDb();
@@ -299,7 +299,7 @@ describe('group_id survives raw partial updates (regression: vanishing groups)',
     const [a, b] = await makeTasks(['A', 'B']);
     const g = await groupTasks([a, b]);
 
-    await updateTasksBulk([{ id: a, patch: { needs_attention: true } }]);
+    await updateTasksBulk([{ id: a, patch: { unread: true } }]);
 
     expect((await getTask(a)).group_id).toBe(g.group_id);
   });
