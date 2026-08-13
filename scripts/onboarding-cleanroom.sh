@@ -49,9 +49,29 @@ launch_server() {
 }
 
 stop_server() {
-  [ -f "$PID_FILE" ] && kill "$(cat "$PID_FILE")" 2>/dev/null || true
+  # A signal is not a death — confirm, then escalate. A server SIGTERMed while
+  # still booting holds no port, so the lsof fallback below cannot see it; only
+  # waiting on the recorded PID catches that case. Leaked boot-time servers keep
+  # their health monitor / cron / git-autocommit loops running forever (2026-08-09:
+  # 43 concurrent leaks starved the Mac until macOS killed the user's GUI apps).
+  if [ -f "$PID_FILE" ]; then
+    spid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [ -n "$spid" ]; then
+      kill -15 "$spid" 2>/dev/null || true
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+        kill -0 "$spid" 2>/dev/null || break
+        sleep 0.5
+      done
+      if kill -0 "$spid" 2>/dev/null; then
+        echo "==> server pid $spid ignored SIGTERM — SIGKILL" >&2
+        kill -9 "$spid" 2>/dev/null || true
+      fi
+    fi
+  fi
   # Belt-and-suspenders: kill anything we left on :3457 (NEVER touch 3456).
-  lsof -ti:${PORT} -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null || true
+  lsof -ti:${PORT} -sTCP:LISTEN 2>/dev/null | xargs kill -15 2>/dev/null || true
+  sleep 1
+  lsof -ti:${PORT} -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true
   rm -f "$PID_FILE"
 }
 

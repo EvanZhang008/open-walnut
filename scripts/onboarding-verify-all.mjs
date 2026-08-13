@@ -62,9 +62,43 @@ async function waitHealth(timeoutMs = 45000) {
   }
   throw new Error('server did not become healthy in time');
 }
-function stop(srv) { try { srv.kill('SIGTERM'); } catch { /* ignore */ } }
+/**
+ * Stop a launched clean-room server and WAIT for it to actually die, escalating
+ * to SIGKILL.
+ *
+ * ⚠️ This used to be a bare `srv.kill('SIGTERM')` with no confirmation, and
+ * killPort() below only reached servers that had already BOUND the port. A server
+ * still booting (the common case here — we stop several cases before they finish
+ * starting) held no port, so lsof could not see it and nothing ever confirmed its
+ * death. Combined with a server-side bug that swallowed SIGTERM during boot, each
+ * run of this script leaked one immortal node process per case. On 2026-08-09 that
+ * reached 43 concurrent leaked servers — each still running its health monitor,
+ * cron, git auto-commit and plugin polling against its own isolated
+ * OPEN_WALNUT_HOME (so the single-instance lock never applied). Load average hit
+ * 94 on 14 cores and macOS started SIGKILLing the user's GUI apps.
+ *
+ * Rule for every spawner in this repo: a kill is not done until the process is
+ * confirmed gone. Never trust the signal alone.
+ */
+async function stop(srv) {
+  if (!srv?.pid) return;
+  const alive = () => { try { process.kill(srv.pid, 0); return true; } catch { return false; } };
+  try { srv.kill('SIGTERM'); } catch { /* already gone */ }
+  for (let i = 0; i < 20 && alive(); i++) await sleep(250); // up to 5s graceful
+  if (alive()) {
+    console.log(`  (server pid ${srv.pid} ignored SIGTERM — SIGKILL)`);
+    try { srv.kill('SIGKILL'); } catch { /* raced */ }
+    for (let i = 0; i < 12 && alive(); i++) await sleep(250);
+  }
+  if (alive()) console.log(`  ⚠️ server pid ${srv.pid} SURVIVED SIGKILL — investigate`);
+}
 async function killPort() {
-  await new Promise((res) => spawn('bash', ['-c', `lsof -ti:${PORT} -sTCP:LISTEN | xargs kill 2>/dev/null || true`]).on('close', res));
+  // -TERM then -KILL: same "confirm the death" rule as stop(). Note this can only
+  // ever see servers that bound the port; stop() is what covers booting ones.
+  await new Promise((res) => spawn('bash', ['-c',
+    `lsof -ti:${PORT} -sTCP:LISTEN | xargs kill -15 2>/dev/null || true; sleep 1; ` +
+    `lsof -ti:${PORT} -sTCP:LISTEN | xargs kill -9 2>/dev/null || true`,
+  ]).on('close', res));
   await sleep(500);
 }
 
@@ -140,7 +174,7 @@ async function main() {
     await page.screenshot({ path: path.join(SHOTS, 'case1-clean-onboarding.png') });
     await browser.close();
   }
-  stop(srv); await killPort();
+  await stop(srv); await killPort();
 
   // ── Case 2: settings.json env auto-detect (+ LIVE reply) ──
   log('\n── Case 2: ~/.claude/settings.json env auto-detect ──');
@@ -164,7 +198,7 @@ async function main() {
     const r = await butlerReplies('ONBOARDINGOK', 'case2-live-reply');
     record('C2 LIVE reply', r.replied, r.replied ? `replied: …${r.text.slice(-90)}` : r.text);
   } else record('C2 LIVE reply', false, 'SKIPPED — no WALNUT_TEST_TOKEN');
-  stop(srv); await killPort();
+  await stop(srv); await killPort();
 
   // ── Case 3: env-var auto-detect (no settings.json) ──
   log('\n── Case 3: env-var auto-detect ──');
@@ -172,7 +206,7 @@ async function main() {
     srv = launch(HOME, WH, { extraEnv: { AWS_BEARER_TOKEN_BEDROCK: TOKEN, AWS_REGION: REGION } });
     h = await waitHealth();
     record('C3 env-detect', h.hasReadyProvider === true && h.credentialSource === 'env', `source=${h.credentialSource} detail=${h.credentialDetail}`);
-    stop(srv); await killPort();
+    await stop(srv); await killPort();
   } else record('C3 env-detect', false, 'SKIPPED — no WALNUT_TEST_TOKEN');
 
   // ── Case 4: hero skill writes config.yaml (+ LIVE reply) ──
@@ -189,7 +223,7 @@ async function main() {
     const r = await butlerReplies('HEROOK', 'case4-live-reply');
     record('C4 LIVE reply', r.replied, r.replied ? `replied: …${r.text.slice(-90)}` : r.text);
   } else record('C4 LIVE reply', false, 'SKIPPED — no WALNUT_TEST_TOKEN');
-  stop(srv); await killPort();
+  await stop(srv); await killPort();
 
   // ── Case 5: manual via API (the path the banner's Settings link drives) ──
   log('\n── Case 5: manual via /api/config (Settings UI path) ──');
@@ -207,7 +241,7 @@ async function main() {
     const r = await butlerReplies('MANUALOK', 'case5-live-reply');
     record('C5 LIVE reply', r.replied, r.replied ? `replied: …${r.text.slice(-90)}` : r.text);
   } else record('C5 after-save', false, 'SKIPPED — no WALNUT_TEST_TOKEN');
-  stop(srv); await killPort();
+  await stop(srv); await killPort();
 
   // ── Summary ──
   log('\n══════════ SUMMARY ══════════');
