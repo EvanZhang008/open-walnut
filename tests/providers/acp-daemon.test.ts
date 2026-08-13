@@ -195,6 +195,61 @@ describe('resume paths', () => {
   })
 })
 
+describe('MCP mount forwarding', () => {
+  const WALNUT_MOUNT = {
+    name: 'walnut',
+    command: 'open-walnut',
+    args: ['mcp'],
+    env: [],
+  }
+
+  function sessionRequests(logPath: string): Array<{
+    method: string
+    mcpServers?: unknown
+  }> {
+    if (!fs.existsSync(logPath)) return []
+    return fs.readFileSync(logPath, 'utf-8').trim().split('\n')
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line))
+  }
+
+  it('acpStart with no mcpServers keeps the provider mount list empty', async () => {
+    const sessionLog = path.join(tmpDir, 'daemon-sessions-default.jsonl')
+    const resp = await acp.acpStart(makeWs(), startParams('sid-mcp-off', {
+      env: { MOCK_ACP_SESSION_LOG: sessionLog },
+    }))
+    expect(resp.ok).toBe(true)
+    expect(sessionRequests(sessionLog)).toEqual([
+      expect.objectContaining({ method: 'session/new', mcpServers: [] }),
+    ])
+  })
+
+  it('acpStart forwards mcpServers on the newSession path', async () => {
+    const sessionLog = path.join(tmpDir, 'daemon-sessions-new.jsonl')
+    const resp = await acp.acpStart(makeWs(), startParams('sid-mcp-new', {
+      env: { MOCK_ACP_SESSION_LOG: sessionLog },
+      mcpServers: [WALNUT_MOUNT],
+    }))
+    expect(resp.ok).toBe(true)
+    expect(sessionRequests(sessionLog)).toEqual([
+      expect.objectContaining({ method: 'session/new', mcpServers: [WALNUT_MOUNT] }),
+    ])
+  })
+
+  it('acpStart forwards mcpServers on the loadSession (cold resume) path too', async () => {
+    const sessionLog = path.join(tmpDir, 'daemon-sessions-load.jsonl')
+    const resp = await acp.acpStart(makeWs(), startParams('sid-mcp-load', {
+      providerSessionId: 'mock-session-mcp-resume',
+      env: { MOCK_ACP_SESSION_LOG: sessionLog },
+      mcpServers: [WALNUT_MOUNT],
+    }))
+    expect(resp.ok).toBe(true)
+    expect(sessionRequests(sessionLog)).toEqual([
+      expect.objectContaining({ method: 'session/load', mcpServers: [WALNUT_MOUNT] }),
+    ])
+  })
+})
+
 describe('lifecycle + repair', () => {
   it('acpStop tears down worker and notifies subscribers with acp_state dead', async () => {
     const ws = makeWs()

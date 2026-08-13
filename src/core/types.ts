@@ -808,6 +808,22 @@ export interface AgentRun {
   history?: unknown[];
 }
 
+/**
+ * Engine that answers a butler chat turn (`config.agent.provider`). NOT the model
+ * provider (`config.provider.type`) — that one picks credentials/API, this one
+ * picks who runs the loop.
+ */
+export type AgentEngineProvider = 'walnut-agent' | 'claude-code';
+
+/** Runtime allowlist for route/config validation of `agent.provider`. */
+export const VALID_AGENT_ENGINE_PROVIDERS: ReadonlySet<string> = new Set<AgentEngineProvider>([
+  'walnut-agent',
+  'claude-code',
+]);
+
+/** The default engine — today's behavior (in-process agent loop). */
+export const DEFAULT_AGENT_ENGINE_PROVIDER: AgentEngineProvider = 'walnut-agent';
+
 export interface AgentConfig {
   model?: string;
   region?: string;
@@ -815,6 +831,17 @@ export interface AgentConfig {
   cache?: CacheConfig;
   subagent?: SubagentGlobalConfig;
   agents?: Omit<AgentDefinition, 'source'>[];
+  /**
+   * Which ENGINE answers a butler chat turn. Unrelated to `config.provider.type`
+   * (the model/credential provider).
+   *
+   *   - 'walnut-agent' (default): the in-process agent loop (`runAgentLoop`).
+   *   - 'claude-code': the turn is delivered to a daemon-managed `claude` CLI
+   *     session bound to the conversation's lane (see core/sessions/butler-lane.ts).
+   *
+   * Default keeps today's behavior exactly; flipping it is opt-in.
+   */
+  provider?: AgentEngineProvider;
   /** Agent ID to use for session summarization (defined in config.yaml agent.agents[]). */
   session_summarizer_agent?: string;
   /** LEGACY: agentId recognised when classifying turn-complete summary events.
@@ -933,6 +960,10 @@ export interface Config {
    *  Default: local=7, remote hosts=20. */
   session_limits?: Record<string, number>;
   session?: {
+    /** Mount the walnut MCP server (`open-walnut mcp`) into ACP/Codex sessions
+     *  so they can call walnut task tools. Default false: the provider spawns
+     *  the mount on the EXECUTION host, where `open-walnut` may not be on PATH. */
+    acp_walnut_mcp?: boolean;
     /** How many minutes an idle FIFO session stays alive before being auto-killed.
      *  Set to 0 to disable idle timeout entirely. Default: 30. */
     idle_timeout_minutes?: number;
@@ -961,6 +992,12 @@ export interface Config {
      *  appearing all at once when the message completes.
      *  Default: true. Set to false to fall back to per-message delivery. */
     stream_partial_messages?: boolean;
+    /** Mount the `open-walnut mcp` stdio server into every spawned coding
+     *  session (`--mcp-config`), so the CLI can read/write the user's tasks,
+     *  projects and search directly instead of being told about them.
+     *  Default: false — mounting an MCP server costs CLI startup time and
+     *  tool-list context in every session, so it stays opt-in. */
+    premount_walnut_mcp?: boolean;
   };
   heartbeat?: import('../heartbeat/types.js').HeartbeatConfig;
   tools?: {
@@ -1318,6 +1355,37 @@ export interface AcpSessionCapabilities {
   closeSession: boolean;
 }
 
+/** One MCP server mount, in `--mcp-config`'s stdio shape. */
+export interface SessionMcpServer {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
+/**
+ * A bundle of launch configuration a session carries — its IDENTITY, expanded
+ * into `claude` CLI args at every spawn (fresh start AND cold `--resume`).
+ *
+ * Why a bundle rather than N loose params: the CLI flags below are only honored
+ * at spawn time, so a session whose CLI was reaped (idle timeout, host reboot)
+ * must have them re-applied from the persisted record or it silently comes back
+ * as a plain session. Keeping them in one object means one field to persist and
+ * one place to re-resolve (see resolveResumeArgs in claude-code-session.ts).
+ *
+ * Flag mapping (verified against CLI 2.1.220):
+ *   systemPrompt + mode 'replace' → `--system-prompt`        (FULL replacement)
+ *   systemPrompt + mode 'append'  → `--append-system-prompt` (default)
+ *   mcpServers                    → `--mcp-config` (inline JSON)
+ *   allowedTools                  → `--allowedTools` (comma-joined)
+ */
+export interface SessionProfile {
+  systemPrompt?: string;
+  /** How `systemPrompt` is applied. Undefined = 'append' (the safe default). */
+  systemPromptMode?: 'replace' | 'append';
+  mcpServers?: Record<string, SessionMcpServer>;
+  allowedTools?: string[];
+}
+
 export interface SessionRecord {
   claudeSessionId: string;
   taskId: string;
@@ -1439,4 +1507,17 @@ export interface SessionRecord {
    *  garbage from a dead file and MUST be reset instead of vetoing the new
    *  file's evidence (incident 019a7fe5). Spilled into `payload` (no column). */
   streamEpoch?: string;
+
+  /** Launch-config bundle re-applied on every cold resume. Spawn-time CLI flags
+   *  (system prompt / MCP mounts / allowedTools) are in-process only, so a
+   *  reaped-and-resumed session rebuilds its identity from this field. Spilled
+   *  into `payload` (no column). */
+  profile?: SessionProfile;
+  /** Bound to a UI conversation lane, not a normal session list entry; exempt
+   *  from host capacity. Set for sessions that back a persistent surface (e.g.
+   *  a chat lane) rather than a user-visible "session". Deliberately NOT a
+   *  SessionType value: the retention reaper purges environment/triage records
+   *  after 30 days, and a lane session must outlive that. Spilled into
+   *  `payload` (no column). */
+  lane?: string;
 }

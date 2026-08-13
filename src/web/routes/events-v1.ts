@@ -56,10 +56,12 @@ const FEED_INTEREST = [
 // ── Slim-row mapping (authoritative reads, best-effort) ─────────────────────
 
 async function projectSessionRow(sessionId: string): Promise<Record<string, unknown> | null> {
-  const { getSessionByClaudeId, isEnvironmentSession } = await import('../../core/session-tracker.js')
+  const { getSessionByClaudeId, isListableSession } = await import('../../core/session-tracker.js')
   const { projectSession } = await import('../../core/session-projection.js')
   const record = await getSessionByClaudeId(sessionId)
-  if (!record || record.archived || isEnvironmentSession(record)) return null
+  // Same visibility rule as buildSessionProjection: no environment sessions, no
+  // lane-bound ones (they back a UI conversation surface, not a listed session).
+  if (!record || record.archived || !isListableSession(record)) return null
   let task: Task | undefined
   if (record.taskId) {
     const { getTask } = await import('../../core/task-manager.js')

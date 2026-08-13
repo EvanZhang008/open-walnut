@@ -26,6 +26,7 @@ import {
   type Client,
 } from '@agentclientprotocol/sdk'
 import type {
+  McpServer,
   RequestPermissionRequest,
   RequestPermissionResponse,
   SessionNotification,
@@ -33,6 +34,7 @@ import type {
 } from '@agentclientprotocol/sdk'
 import { AcpJournal, readJournal } from './journal.js'
 import type {
+  AcpMcpServer,
   WorkerRequest,
   WorkerResponse,
   WorkerError,
@@ -204,9 +206,29 @@ export class AcpWorker {
   private models: AcpModelCatalog = { availableModels: [] }
   private configOptions: AcpConfigOption[] = []
 
+  /**
+   * MCP mounts for session/new + session/load. The SAME list must ride both:
+   * ACP treats `mcpServers` as the complete set for the session being
+   * created OR loaded, so a mount present only on `new` silently disappears on
+   * the next cold resume. Absent option = `[]` = pre-mount behavior.
+   */
+  private mcpServersFor(params: { mcpServers?: AcpMcpServer[] }): McpServer[] {
+    const servers = params.mcpServers ?? []
+    // Structurally an McpServerStdio (name/command/args/env) — see protocol.ts.
+    return servers.map((server) => ({
+      name: server.name,
+      command: server.command,
+      args: [...server.args],
+      env: (server.env ?? []).map((entry) => ({ name: entry.name, value: entry.value })),
+    }))
+  }
+
   private async opNewSession(params: NewSessionParams): Promise<unknown> {
     const conn = this.requireConn()
-    const resp = await conn.newSession({ cwd: params.cwd || this.cwd, mcpServers: [] })
+    const resp = await conn.newSession({
+      cwd: params.cwd || this.cwd,
+      mcpServers: this.mcpServersFor(params),
+    })
     this.providerSessionId = resp.sessionId
     this.sessionResponse = resp
     this.models = snapshotAcpModels(resp)
@@ -223,7 +245,7 @@ export class AcpWorker {
       const resp = await conn.loadSession({
         sessionId: params.providerSessionId,
         cwd: params.cwd || this.cwd,
-        mcpServers: [],
+        mcpServers: this.mcpServersFor(params),
       })
       this.providerSessionId = params.providerSessionId
       this.sessionResponse = resp

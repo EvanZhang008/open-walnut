@@ -62,6 +62,7 @@ export const SLOW_TEST_FILES = [
   'tests/web/routes/bug-report.test.ts', // 5s
   'tests/web/routes/task-hook-maintainer.test.ts', // 5s
   'tests/web/routes/chat-plan-mode.test.ts', // 5s
+  'tests/web/routes/chat-engine-provider.test.ts', // 9s — boots a server per engine flag
   'tests/web/routes/chat-background-review.test.ts', // 3s
   'tests/web/routes/chat-task-context.test.ts', // 3.3s
   'tests/web/routes/notes-v2.test.ts', // 2s

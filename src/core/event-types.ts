@@ -71,6 +71,17 @@ export interface SessionStartEvent {
    */
   preassignedSessionId?: string;
   /**
+   * Launch-config bundle (full-replace system prompt / MCP mounts /
+   * allowedTools) expanded into CLI args at spawn and persisted on the record so
+   * a cold `--resume` re-applies it. See core/types.ts SessionProfile.
+   */
+  profile?: import('./types.js').SessionProfile;
+  /**
+   * Marks the session as bound to a UI conversation lane: exempt from host
+   * capacity counting and hidden from the default session lists.
+   */
+  lane?: string;
+  /**
    * When the original user message was spilled to a temp file (Quick Start long paste),
    * the pointer to that local file. For remote sessions, the file is uploaded to the
    * same path on the remote host before the session starts.

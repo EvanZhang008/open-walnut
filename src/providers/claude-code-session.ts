@@ -352,6 +352,23 @@ export function assertSessionForkSupported(
   }
 }
 
+/**
+ * Build the trailing `opts` object for a COLD-RESUME send() from a record's
+ * profile/lane. Returns undefined when the session carries neither, so plain
+ * sessions keep passing no opts at all (unchanged behavior).
+ *
+ * Why a helper: `--system-prompt` / `--mcp-config` / `--allowedTools` have no
+ * live control_request, so every cold-spawn path must re-emit them. One helper
+ * = one place to keep the resume paths honest.
+ */
+function resumeProfileOpts(
+  profile: import('../core/types.js').SessionProfile | undefined,
+  lane: string | undefined,
+): { profile?: import('../core/types.js').SessionProfile; lane?: string } | undefined {
+  if (!profile && !lane) return undefined
+  return { ...(profile ? { profile } : {}), ...(lane ? { lane } : {}) }
+}
+
 // ── ClaudeCodeSession ──
 
 const MAX_FULL_TEXT = 100 * 1024 // 100KB cap on accumulated text
@@ -540,6 +557,12 @@ export class ClaudeCodeSession {
   /** TRUE runtime effort last read back from the CLI via get_settings (applied.effort).
    *  Authoritative — reflects env override + model downgrade. Undefined until first read. */
   private _effectiveEffort: import('../core/types.js').SessionEffort | undefined
+  /** Launch-config bundle expanded into spawn args. Persisted so a cold --resume
+   *  re-applies it (spawn-time flags have no live control_request). */
+  private _profile: import('../core/types.js').SessionProfile | undefined
+  /** UI conversation lane this session backs, if any. Persisted so capacity
+   *  counting and the default session lists skip it. */
+  private _lane: string | undefined
   /** CLI-reported window (get_context_usage.maxTokens), cached from the
    *  session-start/model-change read. ⚠️ On newer CLIs (≥2.1.2xx) this is the
    *  AUTO-COMPACT window — min(model window, CLAUDE_CODE_AUTO_COMPACT_WINDOW) —
@@ -1352,6 +1375,15 @@ export class ClaudeCodeSession {
        * still inheriting the parent conversation).
        */
       preassignedSessionId?: string
+      /**
+       * Launch-config bundle (system prompt / MCP mounts / allowedTools) expanded
+       * into CLI args below and persisted on the record so a cold `--resume`
+       * re-applies it (resolveResumeArgs). See core/types.ts SessionProfile.
+       */
+      profile?: import('../core/types.js').SessionProfile
+      /** Marks this session as bound to a UI conversation lane — persisted so
+       *  capacity counting and the default session lists skip it. */
+      lane?: string
     },
   ): void {
     const args = ['-p', '--output-format', 'stream-json', '--verbose']
@@ -1474,8 +1506,44 @@ export class ClaudeCodeSession {
       this._expectedSessionId = preassignedId
     }
 
-    if (appendSystemPrompt) {
-      args.push('--append-system-prompt', appendSystemPrompt)
+    // ── Profile expansion (see core/types.ts SessionProfile) ──
+    // The three flags below are SPAWN-TIME ONLY — there is no control_request to
+    // change them mid-session — so a cold --resume must re-emit them from the
+    // persisted record. That's why the profile is stored (persistSessionRecord)
+    // and re-resolved (resolveResumeArgs) rather than being a one-shot param.
+    const profile = opts?.profile
+    this._profile = profile
+    this._lane = opts?.lane
+    // 'replace' → --system-prompt (FULL replacement of the CLI's own prompt).
+    // Anything else (append / unset) composes with the caller's append text:
+    // profile prompt FIRST, caller's append after, so a profile establishes the
+    // session's identity and per-turn context is layered on top.
+    let appendParts: string[] = []
+    // Size floor: the prompt rides the spawn argv, and for remote sessions that
+    // argv is shell-quoted into a single SSH command line (twice: daemon quote +
+    // `$SHELL -lc` wrapper). ARG_MAX won't hard-fail until ~1MB, but a runaway
+    // profile (future per-agent builders, user config) must fail HERE with a
+    // clear error, not as an opaque spawn failure on some hosts only.
+    const MAX_PROFILE_PROMPT_BYTES = 65536
+    if (profile?.systemPrompt && Buffer.byteLength(profile.systemPrompt, 'utf-8') > MAX_PROFILE_PROMPT_BYTES) {
+      throw new Error(`session profile systemPrompt exceeds ${MAX_PROFILE_PROMPT_BYTES} bytes — too large to ride the spawn argv`)
+    }
+    if (profile?.systemPrompt && profile.systemPromptMode === 'replace') {
+      args.push('--system-prompt', profile.systemPrompt)
+    } else if (profile?.systemPrompt) {
+      appendParts.push(profile.systemPrompt)
+    }
+    if (appendSystemPrompt) appendParts.push(appendSystemPrompt)
+    if (appendParts.length > 0) {
+      args.push('--append-system-prompt', appendParts.join('\n\n'))
+    }
+    // Inline JSON is safe in an arg: the bun daemon shell-quotes every element
+    // and the JS daemon spawns without a shell (no re-parsing either way).
+    if (profile?.mcpServers && Object.keys(profile.mcpServers).length > 0) {
+      args.push('--mcp-config', JSON.stringify({ mcpServers: profile.mcpServers }))
+    }
+    if (profile?.allowedTools && profile.allowedTools.length > 0) {
+      args.push('--allowedTools', profile.allowedTools.join(','))
     }
 
     // Both local and SSH sessions use stream-json stdin via SessionIO
@@ -1797,6 +1865,12 @@ export class ClaudeCodeSession {
     if (record.cliModel) {
       session._cliModel = record.cliModel
     }
+    // Profile/lane are durable identity — restore them so a later
+    // persistSessionRecord() from this attached instance re-writes the same
+    // values instead of clearing them (createSessionRecord only overwrites on
+    // a truthy `extra` value, but keeping the instance honest avoids surprises).
+    if (record.profile) session._profile = record.profile
+    if (record.lane) session._lane = record.lane
     // Seed the consumed-offset watermark from the persisted record (sanitized:
     // non-negative finite integer only — a corrupt/sentinel value must never
     // become the guard, it would suppress every future result).
@@ -5922,6 +5996,8 @@ export class ClaudeCodeSession {
       forkedFromSessionId: this.forkedFromSessionId,
       cliModel: this._cliModel,
       effort: this._effort,
+      profile: this._profile,
+      lane: this._lane,
       // Init-only spawn persists while parked ('idle' — no first turn). All
       // other callers persist mid-turn, where the default 'running' is right.
       initialProcessStatus: this._processStatus === 'idle' ? 'idle' : undefined,
@@ -6855,6 +6931,10 @@ export class SessionRunner {
     fromPlanSessionId?: string
     forkedFromSessionId?: string
     engine?: import('../core/types.js').SessionEngine
+    /** Launch-config bundle (see core/types.ts SessionProfile). */
+    profile?: import('../core/types.js').SessionProfile
+    /** Lane binding — exempts the session from capacity + default lists. */
+    lane?: string
   }): Promise<{ claudeSessionId: string; title: string }> {
     await this.assertStartRouting(data)
     if (data.engine === 'codex') {
@@ -7390,6 +7470,11 @@ export class SessionRunner {
     largePromptFile?: { localPath: string; originalLength: number }
     requestTs?: number
     preassignedSessionId?: string
+    /** Launch-config bundle (system prompt / MCP mounts / allowedTools). Merged
+     *  UNDER the config-driven walnut-MCP pre-mount below. */
+    profile?: import('../core/types.js').SessionProfile
+    /** Lane binding — exempts the session from capacity + default lists. */
+    lane?: string
   }): Promise<{ sessionReady: Promise<string>; title: string }> {
     const { taskId, project, mode, model } = data
     let cwd = data.cwd
@@ -7597,7 +7682,21 @@ export class SessionRunner {
     // Carry the HTTP request ts onto the session instance so the init handler can
     // compute the full route→init latency breakdown (instrumentation only).
     session._requestTs = data.requestTs ?? 0
-    session.send(message, cwd, resumeId, mode, resolvedModel, appendSystemPrompt, data.host, sshTarget, isFork, config.session?.permission_prompt, spillFile, config.session?.stream_partial_messages, resolvedEffort, undefined, data.preassignedSessionId ? { preassignedSessionId: data.preassignedSessionId } : undefined)
+    // Profile: the caller's bundle, with the config-driven Walnut MCP pre-mount
+    // merged ON TOP (`session.premount_walnut_mcp`, default off) so an install
+    // that wants every coding session to reach the user's tasks gets it without
+    // each caller opting in. mergeProfiles unions mcpServers per key, so a
+    // caller's own mounts survive.
+    const { mergeProfiles, walnutMcpProfile } = await import('../core/sessions/profiles.js')
+    const resolvedProfile = config.session?.premount_walnut_mcp
+      ? mergeProfiles(data.profile, walnutMcpProfile())
+      : data.profile
+    const sendOpts = {
+      ...(data.preassignedSessionId ? { preassignedSessionId: data.preassignedSessionId } : {}),
+      ...(resolvedProfile ? { profile: resolvedProfile } : {}),
+      ...(data.lane ? { lane: data.lane } : {}),
+    }
+    session.send(message, cwd, resumeId, mode, resolvedModel, appendSystemPrompt, data.host, sshTarget, isFork, config.session?.permission_prompt, spillFile, config.session?.stream_partial_messages, resolvedEffort, undefined, Object.keys(sendOpts).length > 0 ? sendOpts : undefined)
 
     // Record directory usage for the frequent-dirs persistent store (fire-and-forget)
     if (cwd) {
@@ -8285,15 +8384,24 @@ export class SessionRunner {
    * the durable fallback so a cold --resume re-applies them (control_requests are
    * in-memory only, lost when the CLI dies). Shared by processNext + reinitialize.
    */
-  private async resolveResumeArgs(sessionId: string): Promise<{ model?: string; effort?: import('../core/types.js').SessionEffort }> {
+  private async resolveResumeArgs(sessionId: string): Promise<{
+    model?: string
+    effort?: import('../core/types.js').SessionEffort
+    profile?: import('../core/types.js').SessionProfile
+    lane?: string
+  }> {
     let resolvedModel: string | undefined
     let resolvedEffort: import('../core/types.js').SessionEffort | undefined
+    let resolvedProfile: import('../core/types.js').SessionProfile | undefined
+    let resolvedLane: string | undefined
     try {
       const { getSessionByClaudeId: getSession } = await import('../core/session-tracker.js')
       const record = await getSession(sessionId)
       if (record?.effort) {
         resolvedEffort = record.effort
       }
+      if (record?.profile) resolvedProfile = record.profile
+      if (record?.lane) resolvedLane = record.lane
       // Fall back to stored CLI model for --resume so the [1m] context window
       // marker is preserved.  record.cliModel stores the original --model arg
       // (e.g. "opus[1m]").  record.model stores the *reported* model from init
@@ -8323,7 +8431,7 @@ export class SessionRunner {
     } catch (err) {
       log.session.warn('resolveResumeArgs: failed to read record', { sessionId, error: err instanceof Error ? err.message : String(err) })
     }
-    return { model: resolvedModel, effort: resolvedEffort }
+    return { model: resolvedModel, effort: resolvedEffort, profile: resolvedProfile, lane: resolvedLane }
   }
 
   /**
@@ -8436,7 +8544,7 @@ export class SessionRunner {
     // Model/effort routes persist BEFORE applying their process-local control
     // requests. Re-read after the old process is stopped so changes made during
     // the restart window are applied to the replacement CLI.
-    const { model, effort } = await this.resolveResumeArgs(sessionId)
+    const { model, effort, profile, lane } = await this.resolveResumeArgs(sessionId)
     const refreshedRecord = await getSessionByClaudeId(sessionId)
     const resumeMode = modeOverride ?? refreshedRecord?.mode ?? record.mode
     log.session.info('reinitialize: respawning fresh CLI (no turn)', { sessionId, taskId: record.taskId, host: record.host, model, mode: resumeMode })
@@ -8453,7 +8561,10 @@ export class SessionRunner {
           } else {
             reject(err ?? new Error('reinitialize spawn failed'))
           }
-        })
+        },
+        // Re-emit the profile's spawn-time flags on the replacement CLI —
+        // "Restart" must not silently strip a session's identity.
+        resumeProfileOpts(profile, lane))
     })
   }
 
@@ -8537,7 +8648,12 @@ export class SessionRunner {
 
       // Resolve cold-resume spawn args (model/effort) from the record — the durable
       // fallback re-applied on a cold --resume (live control_requests are in-memory only).
-      const { model: resolvedModel, effort: resolvedEffort } = await this.resolveResumeArgs(sessionId)
+      const {
+        model: resolvedModel,
+        effort: resolvedEffort,
+        profile: resolvedProfile,
+        lane: resolvedLane,
+      } = await this.resolveResumeArgs(sessionId)
 
       // Rehydrate: if this.sessions lost the entry (e.g. reconciler didn't flag the
       // record as reconnectable on startup, so init() never populated the map), try
@@ -8722,7 +8838,9 @@ export class SessionRunner {
             (ok, err) => {
               if (ok) this.settleResumeSuccess(sessionId, session, msgs)
               else this.settleResumeFailure(sessionId, msgs, err ?? new Error('resume spawn failed'))
-            })
+            },
+            // Cold resume: re-emit the record's profile flags (spawn-time only).
+            resumeProfileOpts(resolvedProfile, resolvedLane))
 
           bus.emit(EventNames.SESSION_STARTED, {
             taskId: record.taskId,
@@ -8768,7 +8886,9 @@ export class SessionRunner {
         (ok, err) => {
           if (ok) this.settleResumeSuccess(sessionId, settleTarget, msgs)
           else this.settleResumeFailure(sessionId, msgs, err ?? new Error('resume spawn failed'))
-        })
+        },
+        // Cold resume: re-emit the record's profile flags (spawn-time only).
+        resumeProfileOpts(resolvedProfile, resolvedLane))
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err)
       // Clean up activeProcessing + batchCounts on any error (send() EMFILE, lookup failure, etc.)

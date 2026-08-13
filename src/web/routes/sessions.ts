@@ -12,6 +12,7 @@ import {
   getSessionSummaries,
   getSessionsForTask,
   isEnvironmentSession,
+  isListableSession,
   isTriageSession,
   listRecentSessionRecords,
   listSessions,
@@ -506,7 +507,9 @@ sessionsRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
     const query = typeof req.query.q === 'string' ? req.query.q.trim() : ''
     // With q: bounded most-recent-first candidate window (see cap above).
     const all = query ? await listRecentSessionRecords(SEARCH_CANDIDATE_LIMIT) : await listSessions()
-    let sessions = all.filter(s => !isEnvironmentSession(s) && !s.archived)
+    // isListableSession = not an environment session AND not lane-bound (a lane
+    // session backs a UI conversation surface, not a listed session).
+    let sessions = all.filter(s => isListableSession(s) && !s.archived)
     sessions = await applySessionSearch(sessions, query)
     res.json({ sessions: await enrichWithHostnames(await enrichWithLiveStatus(sessions)) })
   } catch (err) {
@@ -524,7 +527,7 @@ sessionsRouter.get('/recent', async (req: Request, res: Response, next: NextFunc
     // keystroke can never trigger a whole-table read.
     const query = typeof req.query.q === 'string' ? req.query.q.trim() : ''
     const all = query ? await listRecentSessionRecords(SEARCH_CANDIDATE_LIMIT) : await getRecentSessions(limit)
-    let sessions = all.filter(s => !isEnvironmentSession(s) && !s.archived)
+    let sessions = all.filter(s => isListableSession(s) && !s.archived)
     if (query) {
       sessions = (await applySessionSearch(sessions, query))
         .sort((a, b) => (b.lastActiveAt ?? '').localeCompare(a.lastActiveAt ?? ''))

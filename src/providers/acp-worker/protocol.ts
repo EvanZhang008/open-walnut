@@ -79,8 +79,54 @@ export interface InitializeParams {
   env?: Record<string, string>
 }
 
-export interface NewSessionParams { cwd: string }
-export interface LoadSessionParams { providerSessionId: string; cwd: string }
+/**
+ * One stdio MCP server mount, structurally identical to ACP's `McpServerStdio`
+ * (schema/types.gen.d.ts: name / command / args / env). Declared locally so the
+ * worker↔daemon wire contract does not depend on the SDK's generated union.
+ */
+export interface AcpMcpServer {
+  name: string
+  command: string
+  args: string[]
+  env: Array<{ name: string; value: string }>
+}
+
+/**
+ * The walnut MCP mount — `open-walnut mcp` (src/mcp/server.ts), which exposes
+ * the task/project/session tools to an ACP provider.
+ *
+ * Deliberately a bare command, not an absolute path: it is spawned by the
+ * provider on the EXECUTION host, where walnut's install location is unknown.
+ * That is also why the mount is opt-in (see `resolveWalnutMcpServers`) — on a
+ * host without `open-walnut` on PATH the provider would report a dead MCP
+ * server on every session.
+ */
+export const WALNUT_MCP_SERVER: AcpMcpServer = {
+  name: 'walnut',
+  command: 'open-walnut',
+  args: ['mcp'],
+  env: [],
+}
+
+/**
+ * Walnut's MCP mount list for an ACP session — empty unless the user opted in
+ * with config `session.acp_walnut_mcp: true`. Pure (takes the config section,
+ * never reads config itself) so both the server and tests can call it.
+ */
+export function resolveWalnutMcpServers(
+  session?: { acp_walnut_mcp?: boolean } | null,
+): AcpMcpServer[] {
+  if (session?.acp_walnut_mcp !== true) return []
+  return [{ ...WALNUT_MCP_SERVER, args: [...WALNUT_MCP_SERVER.args], env: [] }]
+}
+
+/** `mcpServers` absent = no MCP servers, i.e. exactly the pre-mount behavior. */
+export interface NewSessionParams { cwd: string; mcpServers?: AcpMcpServer[] }
+export interface LoadSessionParams {
+  providerSessionId: string
+  cwd: string
+  mcpServers?: AcpMcpServer[]
+}
 
 export type PromptParams =
   | {

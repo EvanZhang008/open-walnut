@@ -2,7 +2,14 @@ import fs from 'node:fs/promises';
 import yaml from 'js-yaml';
 import { log } from '../logging/index.js';
 import { CONFIG_FILE } from '../constants.js';
-import { VALID_PRIORITIES, type Config, type TaskPriority } from './types.js';
+import {
+  VALID_PRIORITIES,
+  DEFAULT_AGENT_ENGINE_PROVIDER,
+  VALID_AGENT_ENGINE_PROVIDERS,
+  type AgentEngineProvider,
+  type Config,
+  type TaskPriority,
+} from './types.js';
 import { MODEL_CATALOG } from '../agent/providers/model-catalog.js';
 import { scanSshConfig } from './ssh-config-scanner.js';
 
@@ -16,7 +23,28 @@ const DEFAULT_CONFIG: Config = {
   // so this never re-routes an established setup.
   defaults: { priority: 'none', platform: 'local' },
   provider: { type: 'claude-code' },
+  // Which ENGINE answers a butler chat turn. 'walnut-agent' = today's in-process
+  // agent loop; 'claude-code' routes the turn into a lane-bound `claude` session.
+  // NOTE: getConfig() spreads the parsed file OVER these defaults at the TOP
+  // level, so a config.yaml with any `agent:` section replaces this whole object
+  // — resolveAgentEngineProvider() (below) is what actually applies the default.
+  agent: { provider: DEFAULT_AGENT_ENGINE_PROVIDER },
 };
+
+/**
+ * The engine that answers a butler chat turn, defaulted + validated.
+ *
+ * Read through this rather than `config.agent?.provider` directly: getConfig()
+ * merges the parsed YAML over DEFAULT_CONFIG at the top level only, so any user
+ * config with an `agent:` section drops the default — and an unknown string from
+ * a hand-edited file must degrade to today's behavior, never to "no engine".
+ */
+export function resolveAgentEngineProvider(config: Config): AgentEngineProvider {
+  const raw = config.agent?.provider;
+  return typeof raw === 'string' && VALID_AGENT_ENGINE_PROVIDERS.has(raw)
+    ? (raw as AgentEngineProvider)
+    : DEFAULT_AGENT_ENGINE_PROVIDER;
+}
 
 // ── One-time config migration: category removal (project-only model) ────────
 

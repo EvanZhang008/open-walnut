@@ -24,7 +24,7 @@ import { getTask, appendConversationLog } from '../../core/task-manager.js'
 import { getProjectMemory } from '../../core/project-memory.js'
 import { resolveProjectSkillDir } from '../../core/overview-log.js'
 import { getSessionByClaudeId } from '../../core/session-tracker.js'
-import { resolvePayloadImages, buildImageAnnotation } from './images.js'
+import { resolvePayloadImages, buildImageAnnotation, buildSessionImageContext } from './images.js'
 import type { ImagePayload, ImageRef } from './images.js'
 import { truncateToTokenBudget } from '../../utils/token-truncate.js'
 import { log } from '../../logging/index.js'
@@ -737,12 +737,23 @@ export function registerChatRpc(): void {
       imageContentBlocks = processed.imageContentBlocks
     }
 
-    // Enqueue turn for this agent — per-agent queue, no cross-agent blocking
-    log.web.info('enqueueing agent turn', { taskId: taskContext?.id, source: 'chat', agentId })
-    await enqueueAgentTurn(agentId, 'chat', async () => {
-      // Lazy import to avoid loading the agent at server startup
-      const { runAgentLoop } = await import('../../agent/loop.js')
+    // ── Engine selection (config.agent.provider) ──
+    // 'claude-code' delivers the turn into the conversation's lane session instead
+    // of running the in-process loop. Resolved BEFORE the queue so the branch is a
+    // single decision per turn, and scoped to the butler ('general'): a custom
+    // console agent carries its OWN system prompt + tool filter, which the butler
+    // profile does not model — routing it through a butler lane would silently
+    // replace its persona. Those stay on the in-process loop until a per-agent
+    // profile exists.
+    const { getConfig: getEngineConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
+    const useLaneEngine = agentId === 'general'
+      && resolveAgentEngineProvider(await getEngineConfig()) === 'claude-code'
+    /** Set by the lane branch so the client can subscribe to the session stream. */
+    let laneSessionId: string | undefined
 
+    // Enqueue turn for this agent — per-agent queue, no cross-agent blocking
+    log.web.info('enqueueing agent turn', { taskId: taskContext?.id, source: 'chat', agentId, engine: useLaneEngine ? 'claude-code' : 'walnut-agent' })
+    await enqueueAgentTurn(agentId, 'chat', async () => {
       // Create abort controller for this client + agent combo
       const abortController = new AbortController()
       const aKey = abortKey(client, agentId)
@@ -844,6 +855,80 @@ export function registerChatRpc(): void {
         conversationId,
       })
 
+      // ── Engine branch: lane session (config.agent.provider='claude-code') ──
+      // Everything above this point ran for BOTH engines (history load, image
+      // persist, eager user-message persist) — only the engine differs. The turn's
+      // output does NOT come back through this RPC in the MVP: it streams on the
+      // session's own channel, which the client subscribes to via `laneSessionId`
+      // in the reply.
+      if (useLaneEngine) {
+        activeAbortControllers.delete(aKey)
+        unregisterAbort()
+        try {
+          const { getOrCreateLaneSession } = await import('../../core/sessions/butler-lane.js')
+          // The CLI takes plain text on stdin, not content blocks — images ride as
+          // readable file paths (the same shape session chat uses), never base64.
+          const sessionMessage = savedImages.length > 0
+            ? buildSessionImageContext(savedImages) + agentMessage + planSuffix
+            : agentMessage + planSuffix
+          const lane = await getOrCreateLaneSession(agentId, conversationId, { firstMessage: sessionMessage })
+          laneSessionId = lane.sessionId
+          // `created` means the message was consumed as the spawn's first turn —
+          // sending it again would deliver it twice.
+          if (!lane.created) {
+            const { sendMessageToSession } = await import('../../core/session-message-queue.js')
+            await sendMessageToSession(lane.sessionId, sessionMessage, { source: 'chat' })
+          }
+          log.web.info('chat turn routed to butler lane', {
+            agentId, conversationId, sessionId: lane.sessionId, created: lane.created,
+            durationMs: Date.now() - turnStartMs,
+          })
+          // Durable breadcrumb + live push: the turn happened somewhere the chat
+          // timeline can't see, so leave a session-ref the user can click through.
+          const notice = `Butler ran on session <session-ref id="${lane.sessionId}"/>`
+          const resolvedNotice = await resolveEntityRefs(notice)
+          await chatHistory.addNotification({
+            role: 'assistant', content: resolvedNotice, source: 'session',
+            notification: true, sessionId: lane.sessionId, agentId, conversationId,
+          })
+          broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
+            entry: {
+              role: 'assistant', content: resolvedNotice, source: 'session',
+              notification: true, timestamp: new Date().toISOString(),
+            },
+            agentId,
+            conversationId,
+          })
+          // Releases the client's streaming indicator — this RPC's work is done
+          // even though the session's own turn is still running.
+          // source:'session' lets consumers tell this apart from a real in-process
+          // turn end (e.g. the context inspector skips its refetch — the lane turn's
+          // tokens never flow through the in-process context stats).
+          broadcastEvent(EventNames.AGENT_RESPONSE, { text: '', agentId, conversationId, source: 'session' })
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err)
+          log.web.error('butler lane turn failed', { agentId, conversationId, error: errMsg })
+          await chatHistory.addAIMessages(
+            [{ role: 'assistant', content: [{ type: 'text', text: `[Error: ${errMsg}]` }] }] as MessageParam[],
+            { source: 'agent-error', agentId, conversationId },
+          )
+          broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
+            entry: {
+              role: 'assistant', content: `[Error: ${errMsg}]`, source: 'agent-error',
+              notification: true, timestamp: new Date().toISOString(),
+            },
+            agentId,
+            conversationId,
+          })
+          broadcastEvent(EventNames.AGENT_ERROR, { error: errMsg, agentId, conversationId })
+        }
+        return
+      }
+
+      // Lazy import to avoid loading the agent at server startup (and skipped
+      // entirely on the lane path above, which never runs the in-process loop).
+      const { runAgentLoop } = await import('../../agent/loop.js')
+
       try {
         const result = await runAgentLoop(userContent, history, {
           onTextDelta: (delta) => {
@@ -857,7 +942,7 @@ export function registerChatRpc(): void {
           },
           onToolCall: (toolName, input, toolUseId) => {
             toolsUsedInTurn.add(toolName)
-            trackWmToolCall()
+            trackWmToolCall(agentId, conversationId)
             broadcastEvent(EventNames.AGENT_TOOL_CALL, { toolName, input, toolUseId, agentId, conversationId })
           },
           onToolResult: (toolName, result, toolUseId) => {
@@ -1090,5 +1175,10 @@ export function registerChatRpc(): void {
         broadcastEvent(EventNames.AGENT_ERROR, { error: errMsg, agentId, conversationId })
       }
     })
+
+    // The lane branch answers with the session that ran the turn, so the client can
+    // subscribe to its stream / open its panel. Undefined (→ no payload) for the
+    // in-process engine: unchanged reply for every existing caller.
+    if (laneSessionId) return { laneSessionId }
   })
 }

@@ -278,6 +278,24 @@ export function isEnvironmentSession(s: SessionRecord): boolean {
 }
 
 /**
+ * Lane sessions back a persistent UI conversation surface rather than being a
+ * user-launched "session", so the default session lists hide them (a caller that
+ * genuinely wants them opts in). Deliberately SEPARATE from
+ * isEnvironmentSession: the retention reaper purges environment records after 30
+ * days and a lane session must outlive that — that's why `lane` is its own
+ * field instead of a SessionType value.
+ */
+export function isLaneSession(s: SessionRecord): boolean {
+  return typeof s.lane === 'string' && s.lane.length > 0;
+}
+
+/** The default session-list visibility rule: neither an environment session nor
+ *  a lane-bound one. One predicate so every surface filters identically. */
+export function isListableSession(s: SessionRecord): boolean {
+  return !isEnvironmentSession(s) && !isLaneSession(s);
+}
+
+/**
  * Read the whole session store. Served from an in-process cache that survives
  * until the next write (invalidated in withWriteLock.finally).
  *
@@ -650,6 +668,13 @@ export async function checkSessionLimit(
       staleIds.push(s.claudeSessionId);
       continue;
     }
+    // Lane sessions back a persistent UI surface (a conversation lane), not a
+    // user-launched unit of work: they never occupy a capacity slot and are never
+    // a CAPACITY-eviction victim here. (The health monitor's idle TIMEOUT still
+    // reaps an idle lane CLI by design — the record survives and the next message
+    // cold-resumes it with its profile re-applied.) Placed AFTER the liveness
+    // check so a dead lane CLI still gets its record repaired by fixStaleRecords.
+    if (s.lane) continue;
     const sKey = s.host || 'local';
     if (sKey !== key) continue;
     if (s.process_status === 'running') {
@@ -717,6 +742,39 @@ export async function getSessionByClaudeId(claudeSessionId: string): Promise<Ses
   const row = db.prepare('SELECT * FROM sessions WHERE claude_session_id = ?').get(claudeSessionId) as
     | Record<string, any>
     | undefined;
+  return row ? rowToSession(row) : null;
+}
+
+/**
+ * The session bound to `lane`, or null. Newest-first so a lane that somehow holds
+ * two records (a crash between mint and spawn) resolves to the live one rather
+ * than a stale corpse.
+ *
+ * `lane` has no dedicated column — it spills into `payload` (see session-db.ts
+ * FIELD_TO_COLUMN) — so this queries with `json_extract`. `json_valid` guard is
+ * load-bearing: SQLite RAISES on malformed JSON rather than returning NULL, so a
+ * single corrupt payload row would make every lane lookup throw (i.e. the butler
+ * could never find its own lane). Rows with NULL/empty payload can't match a
+ * lane, so skipping them is free.
+ */
+export async function getSessionByLane(lane: string): Promise<SessionRecord | null> {
+  if (!lane) return null;
+  await ensureSessionInit();
+  const db = getDb();
+  if (!db) return null;
+  // Archived rows are excluded: when a lane session dies unresumably its record
+  // gets auto-archived (conversationLost), and matching it here would pin the
+  // conversation to a permanently-dead session — skipping it lets the lane mint
+  // a fresh one instead. started_at DESC (not last_active_at) so a corpse that
+  // background writers keep touching can't out-rank a genuinely newer session.
+  const row = db.prepare(`
+    SELECT * FROM sessions
+    WHERE payload IS NOT NULL AND payload != '' AND json_valid(payload)
+      AND json_extract(payload, '$.lane') = ?
+      AND (archived IS NULL OR archived = 0)
+    ORDER BY started_at DESC
+    LIMIT 1
+  `).get(lane) as Record<string, any> | undefined;
   return row ? rowToSession(row) : null;
 }
 
@@ -833,6 +891,10 @@ export async function createSessionRecord(
     forkedFromSessionId?: string;
     cliModel?: string;
     effort?: import('./types.js').SessionEffort;
+    /** Launch-config bundle re-applied on every cold resume (see SessionProfile). */
+    profile?: import('./types.js').SessionProfile;
+    /** Marks the session as lane-bound: skipped by capacity + default lists. */
+    lane?: string;
     initialProcessStatus?: SessionRecord['process_status'];
     /** Why the row starts in `initialProcessStatus` (e.g. 'awaiting_spawn' for a
      *  record seeded before its CLI process exists). */
@@ -875,6 +937,10 @@ export async function createSessionRecord(
         if (extra?.forkedFromSessionId && existing.forkedFromSessionId !== extra.forkedFromSessionId) materialChange = true;
         if (extra?.cliModel && existing.cliModel !== extra.cliModel) materialChange = true;
         if (extra?.effort && existing.effort !== extra.effort) materialChange = true;
+        if (extra?.lane && existing.lane !== extra.lane) materialChange = true;
+        // Profile is a structured bundle — compare serialized so a re-spawn with
+        // the SAME profile stays a no-op (this path is re-invoked ~9× per resume).
+        if (extra?.profile && JSON.stringify(existing.profile) !== JSON.stringify(extra.profile)) materialChange = true;
 
         if (!materialChange) {
           return existing;
@@ -909,6 +975,8 @@ export async function createSessionRecord(
         if (extra?.forkedFromSessionId) existing.forkedFromSessionId = extra.forkedFromSessionId;
         if (extra?.cliModel) existing.cliModel = extra.cliModel;
         if (extra?.effort) existing.effort = extra.effort;
+        if (extra?.profile) existing.profile = extra.profile;
+        if (extra?.lane) existing.lane = extra.lane;
 
         commitStatusVersion(existing, beforeStatus, now);
         writeSessionRowSqlite(handle, existing);
@@ -943,6 +1011,8 @@ export async function createSessionRecord(
         ...(extra?.forkedFromSessionId ? { forkedFromSessionId: extra.forkedFromSessionId } : {}),
         ...(extra?.cliModel ? { cliModel: extra.cliModel } : {}),
         ...(extra?.effort ? { effort: extra.effort } : {}),
+        ...(extra?.profile ? { profile: extra.profile } : {}),
+        ...(extra?.lane ? { lane: extra.lane } : {}),
         ...(extra?.engine ? { engine: extra.engine } : {}),
         ...(extra?.acpRuntimeId ? { acpRuntimeId: extra.acpRuntimeId } : {}),
         ...(extra?.acpJournalPath ? { acpJournalPath: extra.acpJournalPath } : {}),
@@ -1735,10 +1805,20 @@ export async function getSessionSummaries(limit = 10): Promise<SessionSummary[]>
 
 /**
  * Get recent tracked sessions, sorted by last active time.
+ *
+ * Lane-bound sessions (records with `lane` set) are EXCLUDED by default — they
+ * back a persistent UI conversation surface, not a listed session. Pass
+ * `{ includeLanes: true }` when a caller legitimately needs them (e.g. lane
+ * bookkeeping). The filter runs before the limit so excluded lanes don't eat
+ * slots in the returned window.
  */
-export async function getRecentSessions(limit = 10): Promise<SessionRecord[]> {
+export async function getRecentSessions(
+  limit = 10,
+  opts?: { includeLanes?: boolean },
+): Promise<SessionRecord[]> {
   const store = await readStore();
   return store.sessions
+    .filter((s) => (opts?.includeLanes ? true : !isLaneSession(s)))
     .sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))
     .slice(0, limit);
 }

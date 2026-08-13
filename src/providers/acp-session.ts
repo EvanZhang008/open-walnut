@@ -30,11 +30,16 @@ import { AcpStreamNormalizer } from './acp-stream-normalizer.js'
 import type {
   AcpCapabilitySnapshot,
   AcpConfigOption,
+  AcpMcpServer,
   AcpModelCatalog,
   JournalRecord,
   WorkerStateSnapshot,
 } from './acp-worker/protocol.js'
-import { snapshotAcpConfigOptions, snapshotAcpModels } from './acp-worker/protocol.js'
+import {
+  resolveWalnutMcpServers,
+  snapshotAcpConfigOptions,
+  snapshotAcpModels,
+} from './acp-worker/protocol.js'
 import {
   acceptAcpPrompt,
   createSessionRecord,
@@ -560,6 +565,39 @@ export class AcpSession {
     }
   }
 
+  /**
+   * MCP servers to mount on the provider session. Currently only the walnut
+   * task tools (`open-walnut mcp`), gated on config `session.acp_walnut_mcp`.
+   *
+   * OPT-IN and default-off on purpose: the provider spawns the mount on the
+   * EXECUTION host, where `open-walnut` may not be on PATH (remote dev boxes,
+   * or a walnut installed outside the provider's PATH). A default-on mount
+   * would make every such session report a dead MCP server. Config read is
+   * best-effort — an unreadable config means no mounts, never a failed start.
+   *
+   * DELIBERATE: the flag is read at every provider-session establish, so flipping
+   * it mid-conversation changes the mount set on the NEXT cold resume (ACP treats
+   * `mcpServers` as the complete set). Tool calls referencing an unmounted tool
+   * just error individually — acceptable for an opt-in flag; pinning the mount
+   * set per-session would need record-level persistence like SessionProfile.
+   */
+  private async resolveMcpServers(): Promise<AcpMcpServer[]> {
+    try {
+      const { getConfig } = await import('../core/config-manager.js')
+      const config = await getConfig()
+      // Read structurally: the field is optional and additive in Config.
+      return resolveWalnutMcpServers(
+        config.session as { acp_walnut_mcp?: boolean } | undefined,
+      )
+    } catch (error) {
+      log.session.debug('acp: MCP mount config unreadable — mounting none', {
+        runtimeId: this.runtimeId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return []
+    }
+  }
+
   private async establishProviderSession(): Promise<string> {
     await this.seedReplayCursor()
     const { workerCmd, adapterCmd } = this.cfg.artifacts ?? resolveAcpArtifacts()
@@ -568,7 +606,13 @@ export class AcpSession {
     // CODEX_PATH would make codex-acp silently use its bundled dependency.
     // Tests that inject a mock adapter do not need a Codex executable.
     const systemCodex = this.cfg.artifacts ? undefined : resolveSystemCodexPath()
-    const conn = await this.ensureConn()
+    // Concurrent with ensureConn: the mount list is a small config read and must
+    // not add serial latency to the cold-resume path, which is already the
+    // slowest thing walnut does (worker spawn + provider initialize + load).
+    const [mcpServers, conn] = await Promise.all([
+      this.resolveMcpServers(),
+      this.ensureConn(),
+    ])
     const startResp = await conn.send('acpStart', {
       sid: this.runtimeId,
       cwd: this.cfg.cwd,
@@ -577,6 +621,7 @@ export class AcpSession {
       env: systemCodex ? { CODEX_PATH: systemCodex } : undefined,
       providerSessionId: this._providerSessionId ?? undefined,
       fromOffset: this._seenV,
+      mcpServers,
     }, ACP_COLD_RESUME_TIMEOUT_MS)
     try {
       if (!startResp.ok) {
@@ -587,7 +632,11 @@ export class AcpSession {
           log.session.warn('acp: session/load failed, falling back to new session', {
             sessionId: previousSessionId, runtimeId: this.runtimeId,
           })
-          const fresh = await conn.send('acpNewSession', { sid: this.runtimeId, cwd: this.cfg.cwd }, ACP_COLD_RESUME_TIMEOUT_MS)
+          const fresh = await conn.send('acpNewSession', {
+            sid: this.runtimeId,
+            cwd: this.cfg.cwd,
+            mcpServers,
+          }, ACP_COLD_RESUME_TIMEOUT_MS)
           if (!fresh.ok) throw new Error('acp newSession fallback failed: ' + fresh.error)
           await this.publishSessionResponse((fresh as { result?: unknown }).result)
           const newSessionId = this.trackingId()

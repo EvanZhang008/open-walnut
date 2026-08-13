@@ -25,6 +25,7 @@ import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import readline from 'node:readline'
 import { StringDecoder } from 'node:string_decoder'
+import type { AcpMcpServer } from './acp-worker/protocol.js'
 
 const ACP_IDLE_KILL_MS = 2 * 60 * 60 * 1000   // mirror native SESSION_IDLE_KILL_MS
 const ACP_SWEEP_INTERVAL_MS = 60 * 1000
@@ -78,6 +79,12 @@ export interface AcpStartParams {
   providerSessionId?: string
   /** Journal replay cursor for the subscribing ws (default 0). */
   fromOffset?: number
+  /**
+   * MCP servers the provider should mount for this session (e.g. the walnut
+   * task tools). Forwarded verbatim to the worker's newSession/loadSession;
+   * absent = none, which is the pre-mount behavior.
+   */
+  mcpServers?: AcpMcpServer[]
 }
 
 export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
@@ -247,7 +254,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
   }
 
   async function acpStart(ws: W, params: AcpStartParams): Promise<{ ok: boolean; result?: Record<string, unknown>; error?: string; errorKind?: string }> {
-    const { sid, cwd, workerCmd, adapterCmd, env, providerSessionId } = params
+    const { sid, cwd, workerCmd, adapterCmd, env, providerSessionId, mcpServers } = params
     const existing = workers.get(sid)
     if (existing && existing.state === 'running') {
       existing.subscribers.add(ws)
@@ -344,9 +351,11 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       reapWorker(sid, 'initialize-failed')
       return { ok: false, error: 'acp initialize failed: ' + (init.error?.message ?? '?'), errorKind: init.error?.kind }
     }
+    // Same mount list on both paths: ACP's mcpServers is the complete set for
+    // the session, so omitting it on load would drop the mounts on cold resume.
     const sessionResp = providerSessionId
-      ? await rpc(entry, 'loadSession', { providerSessionId, cwd })
-      : await rpc(entry, 'newSession', { cwd })
+      ? await rpc(entry, 'loadSession', { providerSessionId, cwd, mcpServers })
+      : await rpc(entry, 'newSession', { cwd, mcpServers })
     if (!sessionResp.ok) {
       // load_failed is a real outcome the caller must decide on (fallback to
       // new session is walnut's call, with a visible warning) — keep worker

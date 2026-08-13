@@ -67,7 +67,11 @@ export function useContextInspector(agentId?: string, conversationId?: string): 
   // Debounced to 2 seconds to avoid hammering the server during multi-turn tool use.
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEvent('agent:response', () => {
+  useEvent('agent:response', (data) => {
+    // A butler-lane turn (source 'session') runs in a claude CLI session — its
+    // tokens never touch the in-process context stats, so refetching would just
+    // repaint the same (now stale) numbers as if they were fresh.
+    if ((data as { source?: string } | undefined)?.source === 'session') return;
     if (isOpenRef.current) {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(() => {

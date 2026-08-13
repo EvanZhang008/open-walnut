@@ -17,6 +17,9 @@
  * tests can assert suppression/handling, then succeeds.
  * Set MOCK_ACP_FAIL_LOAD=1 to make every session/load fail.
  * Set MOCK_ACP_FAIL_LOAD_FILE to a marker path consumed on the next load only.
+ * Set MOCK_ACP_SESSION_LOG to record every session/new + session/load request
+ * (method + mcpServers + cwd), so tests can assert what the CLIENT actually
+ * sent — the only honest check for MCP mount wiring.
  * Set MOCK_ACP_EXIT_ON_STDIN_CLOSE_MS to delay exit after stdin closes
  * (default 50ms — models codex-acp's ~2s app-server teardown, shortened).
  */
@@ -108,6 +111,17 @@ function collaborationModeConfigOption(sessionId) {
       { value: 'plan', name: 'Plan' },
     ],
   };
+}
+
+/** Append a session/new | session/load request to MOCK_ACP_SESSION_LOG (if set). */
+function logSessionRequest(method, params) {
+  if (!process.env.MOCK_ACP_SESSION_LOG) return;
+  fs.appendFileSync(process.env.MOCK_ACP_SESSION_LOG, JSON.stringify({
+    method,
+    cwd: params?.cwd,
+    sessionId: params?.sessionId,
+    mcpServers: params?.mcpServers,
+  }) + '\n');
 }
 
 function sessionConfigOptions(sessionId) {
@@ -339,6 +353,7 @@ rl.on('line', async (line) => {
       break;
     case 'session/new':
       sessionCounter++;
+      logSessionRequest('session/new', msg.params);
       {
         // Every adapter process starts its own counter. Include the PID so
         // multiple independent ACP sessions in one server test cannot all
@@ -357,6 +372,7 @@ rl.on('line', async (line) => {
       }
       break;
     case 'session/load': {
+      logSessionRequest('session/load', msg.params);
       const failOnceFile = process.env.MOCK_ACP_FAIL_LOAD_FILE;
       const failOnce = Boolean(failOnceFile && fs.existsSync(failOnceFile));
       if (failOnce && failOnceFile) fs.unlinkSync(failOnceFile);

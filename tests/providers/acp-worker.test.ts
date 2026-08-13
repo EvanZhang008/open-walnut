@@ -10,6 +10,10 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { AcpWorker } from '../../src/providers/acp-worker/worker.js'
 import { readJournal } from '../../src/providers/acp-worker/journal.js'
+import {
+  WALNUT_MCP_SERVER,
+  resolveWalnutMcpServers,
+} from '../../src/providers/acp-worker/protocol.js'
 import type { WorkerStateSnapshot, JournalRecord } from '../../src/providers/acp-worker/protocol.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -446,6 +450,91 @@ describe('AcpWorker lifecycle', () => {
     expect(controlFrames.length).toBeGreaterThan(0)
     expect(controlFrames.every((record) => record.source === 'control')).toBe(true)
     expect(fs.readFileSync(promptLog, 'utf-8').trim().split('\n')).toHaveLength(1)
+  })
+})
+
+describe('MCP server mounts', () => {
+  /** What the CLIENT actually put on the wire, as recorded by the mock agent. */
+  function sessionRequests(logPath: string): Array<{
+    method: string
+    sessionId?: string
+    mcpServers?: Array<{ name: string; command: string; args: string[]; env: unknown[] }>
+  }> {
+    if (!fs.existsSync(logPath)) return []
+    return fs.readFileSync(logPath, 'utf-8').trim().split('\n')
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line))
+  }
+
+  it('resolveWalnutMcpServers is opt-in: nothing unless session.acp_walnut_mcp is true', () => {
+    expect(resolveWalnutMcpServers(undefined)).toEqual([])
+    expect(resolveWalnutMcpServers(null)).toEqual([])
+    expect(resolveWalnutMcpServers({})).toEqual([])
+    expect(resolveWalnutMcpServers({ acp_walnut_mcp: false })).toEqual([])
+    expect(resolveWalnutMcpServers({ acp_walnut_mcp: true })).toEqual([
+      { name: 'walnut', command: 'open-walnut', args: ['mcp'], env: [] },
+    ])
+  })
+
+  it('default (no mcpServers param): newSession sends an empty mcpServers list', async () => {
+    const sessionLog = path.join(tmpDir, 'sessions-default.jsonl')
+    worker = await initWorker({ MOCK_ACP_SESSION_LOG: sessionLog })
+    const resp = await op(worker, 'newSession', { cwd: tmpDir })
+    expect(resp.ok).toBe(true)
+
+    const requests = sessionRequests(sessionLog)
+    expect(requests).toHaveLength(1)
+    expect(requests[0].method).toBe('session/new')
+    // Exactly as before the mount existed: present-but-empty, per ACP schema.
+    expect(requests[0].mcpServers).toEqual([])
+  })
+
+  it('with the walnut mount: it rides BOTH newSession and loadSession', async () => {
+    const sessionLog = path.join(tmpDir, 'sessions-mounted.jsonl')
+    const mcpServers = resolveWalnutMcpServers({ acp_walnut_mcp: true })
+    worker = await initWorker({ MOCK_ACP_SESSION_LOG: sessionLog })
+
+    const created = await op(worker, 'newSession', { cwd: tmpDir, mcpServers })
+    expect(created.ok).toBe(true)
+    const loaded = await op(worker, 'loadSession', {
+      providerSessionId: 'mock-session-mcp',
+      cwd: tmpDir,
+      mcpServers,
+    })
+    expect(loaded.ok).toBe(true)
+
+    const requests = sessionRequests(sessionLog)
+    expect(requests.map((r) => r.method)).toEqual(['session/new', 'session/load'])
+    for (const request of requests) {
+      expect(request.mcpServers).toEqual([{
+        name: WALNUT_MCP_SERVER.name,
+        command: WALNUT_MCP_SERVER.command,
+        args: [...WALNUT_MCP_SERVER.args],
+        env: [],
+      }])
+    }
+  })
+
+  it('forwards a custom mount verbatim, env entries included', async () => {
+    const sessionLog = path.join(tmpDir, 'sessions-custom.jsonl')
+    worker = await initWorker({ MOCK_ACP_SESSION_LOG: sessionLog })
+    const resp = await op(worker, 'newSession', {
+      cwd: tmpDir,
+      mcpServers: [{
+        name: 'extra',
+        command: 'some-mcp',
+        args: ['serve', '--stdio'],
+        env: [{ name: 'EXTRA_MODE', value: 'on' }],
+      }],
+    })
+    expect(resp.ok).toBe(true)
+
+    expect(sessionRequests(sessionLog)[0].mcpServers).toEqual([{
+      name: 'extra',
+      command: 'some-mcp',
+      args: ['serve', '--stdio'],
+      env: [{ name: 'EXTRA_MODE', value: 'on' }],
+    }])
   })
 })
 

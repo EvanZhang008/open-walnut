@@ -35,8 +35,9 @@
  *
  * Scope: all live sessions (running/idle/error) + sessions stopped within
  * STOPPED_RETENTION_DAYS. Environment sessions (triage/cron/hook/embedded
- * subagents) and archived sessions are excluded — same visibility rule as
- * the web session tree.
+ * subagents), lane-bound sessions (records with `lane` set — they back a UI
+ * conversation surface, not a listed session), and archived sessions are
+ * excluded — same visibility rule as the web session tree.
  *
  * ⚠️ LATENCY CONTRACT — this projection is EVENTUALLY consistent, and every
  * consumer must design for the gap. With the bridge up, cloud freshness is
@@ -152,7 +153,7 @@ export function projectSession(s: SessionRecord, task: Task | undefined): Projec
 export async function buildSessionProjection(): Promise<SessionProjection> {
   // Lazy imports keep cloud boxes (which never export) from touching the
   // session registry / task store at module load.
-  const { listSessions, isEnvironmentSession } = await import('./session-tracker.js')
+  const { listSessions, isListableSession } = await import('./session-tracker.js')
   const { listTasks } = await import('./task-manager.js')
 
   const [allSessions, allTasks] = await Promise.all([listSessions(), listTasks()])
@@ -161,7 +162,9 @@ export async function buildSessionProjection(): Promise<SessionProjection> {
 
   const sessions = allSessions
     .filter((s) => {
-      if (isEnvironmentSession(s) || s.archived) return false
+      // isListableSession excludes BOTH environment sessions and lane-bound ones
+      // (a lane session backs a UI conversation surface, not a listed session).
+      if (!isListableSession(s) || s.archived) return false
       if (s.process_status === 'stopped') {
         const at = Date.parse(s.lastActiveAt ?? s.startedAt)
         return Number.isFinite(at) && at >= cutoff
