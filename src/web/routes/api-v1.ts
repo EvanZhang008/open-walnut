@@ -48,7 +48,7 @@ import {
   MAX_NOTE_SIZE,
 } from './notes-v2.js'
 import { emitSse as emitChannelSse, attachSse, closeAllSseChannels } from '../sse-channels.js'
-import { processAndSaveImages, buildImageAnnotation, type ImagePayload } from './images.js'
+import { processAndSaveImages, buildImageAnnotation, buildSessionImageContext, type ImagePayload } from './images.js'
 import { stripEntityRefs } from '../../utils/entity-refs.js'
 import { log } from '../../logging/index.js'
 
@@ -591,6 +591,126 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
 })
 
 /**
+ * Persist + publish a failed turn: the disk entry, the SSE `error` the mobile
+ * client unlocks its composer on, and the two WS broadcasts the web console
+ * needs (live error card + agent:error). One helper so the in-process catch and
+ * the lane branch below cannot drift into two different failure shapes.
+ */
+async function persistAndEmitTurnError(
+  agentId: string,
+  conversationId: string,
+  errMsg: string,
+): Promise<void> {
+  await chatHistory.addAIMessages(
+    [{ role: 'assistant', content: [{ type: 'text', text: `[Error: ${errMsg}]` }] }] as MessageParam[],
+    { source: 'agent-error', agentId, conversationId },
+  ).catch(() => { /* best-effort */ })
+  emitSse(conversationId, 'error', { message: errMsg })
+  // Mirror the WS path: push the error entry live, not disk-only (see chat.ts).
+  broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
+    entry: {
+      role: 'assistant',
+      content: `[Error: ${errMsg}]`,
+      source: 'agent-error',
+      notification: true,
+      timestamp: new Date().toISOString(),
+    },
+    agentId,
+    conversationId,
+  })
+  broadcastEvent(EventNames.AGENT_ERROR, { error: errMsg, agentId, conversationId })
+}
+
+/**
+ * Run one REST turn on the conversation's butler lane
+ * (`config.agent.provider === 'claude-code'`) and keep the frozen SSE contract.
+ *
+ * Why this exists at all, when chat.ts's lane branch is fire-and-forget: the web
+ * client subscribes to the LANE SESSION's own stream, so the RPC there can return
+ * the moment the message is delivered. The mobile client has exactly one channel —
+ * this conversation's SSE — and unlocks its composer on `message-end`. So a lane
+ * turn fired from mobile has to be AWAITED and translated back onto that channel:
+ *
+ *   - `session:text-delta` for the lane session → SSE `text-delta` (the same shape
+ *     the in-process path emits). This is what feeds the client's inactivity
+ *     watchdog and paints the live bubble during a multi-minute turn; the SSE
+ *     channel's own 25s comment ping is transport-level only and carries no event.
+ *   - turn answer → SSE `message-end` + a normal assistant entry on disk.
+ *   - timeout / `session:error` → SSE `error` + the same failure the in-process
+ *     catch persists.
+ */
+async function runApiV1LaneTurn(
+  agentId: string,
+  conversationId: string,
+  message: string,
+  turnId: string,
+): Promise<void> {
+  const { runLaneTurn } = await import('../../core/sessions/lane-turn.js')
+
+  // Live relay. Interest-scoped global subscription (the pattern every session-event
+  // consumer uses): session events are addressed to 'main-ai'/'session-runner', and
+  // without `interest` this handler would wake on every event in the process.
+  // The lane id is only known once the lane resolves, hence the onSessionId hook —
+  // subscribing FIRST means no delta of this turn can slip through the gap.
+  const subName = `api-v1-lane-relay-${turnId}`
+  let laneSessionId: string | null = null
+  bus.subscribe(subName, (event) => {
+    if (event.name !== EventNames.SESSION_TEXT_DELTA) return
+    const d = event.data as {
+      sessionId?: string; delta?: string; parentToolUseId?: string; replayed?: boolean
+    }
+    if (laneSessionId === null || d.sessionId !== laneSessionId || !d.delta) return
+    // Subagent text never reaches the turn's result text (claude-code-session.ts
+    // keeps it out of fullText), and a `replayed` delta is JSONL history being
+    // re-read — neither belongs in the phone's live bubble for THIS turn.
+    if (d.parentToolUseId || d.replayed) return
+    emitSse(conversationId, 'text-delta', { delta: d.delta })
+  }, { global: true, interest: [EventNames.SESSION_TEXT_DELTA] })
+
+  try {
+    const { sessionId, resultText } = await runLaneTurn(agentId, conversationId, message, {
+      source: 'api-v1',
+      onSessionId: (sid) => { laneSessionId = sid },
+    })
+
+    if (resultText === null) {
+      // runLaneTurn degrades instead of rejecting: null is a timeout, a
+      // session:error, or a failed send. All three are "this turn has no answer",
+      // which the client must be told about or its composer stays locked.
+      const errMsg = 'The butler session did not answer this turn (timed out or errored).'
+      log.web.error('api-v1 lane turn failed', { conversationId, turnId, agentId, sessionId })
+      await persistAndEmitTurnError(agentId, conversationId, errMsg)
+      return
+    }
+
+    // Persist the answer as an ORDINARY assistant message — the same call the
+    // in-process path makes. Deliberate duplication with the lane session's own
+    // transcript: mobile has no session-stream surface, so GET /messages is the
+    // only place the phone can read the answer back after a reload.
+    await chatHistory.addAIMessages(
+      [{ role: 'assistant', content: [{ type: 'text', text: resultText }] }] as MessageParam[],
+      { agentId, conversationId },
+    )
+
+    emitSse(conversationId, 'message-end', { turnId, fullText: resultText })
+    // source:'session' marks a lane turn, exactly as chat.ts's branch does: the
+    // context inspector must not refetch in-process stats the lane never fed.
+    broadcastEvent(EventNames.AGENT_RESPONSE, { text: resultText, agentId, conversationId, source: 'session' })
+    log.web.info('api-v1 lane turn completed', {
+      conversationId, turnId, agentId, sessionId, resultLength: resultText.length,
+    })
+  } catch (err) {
+    // getOrCreateLaneSession can still throw (no config, record write failure) —
+    // without this the client would only learn of it from its own watchdog.
+    const errMsg = err instanceof Error ? err.message : String(err)
+    log.web.error('api-v1 lane turn error', { conversationId, turnId, agentId, error: errMsg })
+    await persistAndEmitTurnError(agentId, conversationId, errMsg)
+  } finally {
+    bus.unsubscribe(subName)
+  }
+}
+
+/**
  * Run one REST-initiated turn. Mirrors the canonical WS chat flow
  * (src/web/routes/chat.ts) minus web-only extras: enqueue → load history →
  * eager-persist user msg → runAgentLoop → persist AI messages → compaction.
@@ -608,8 +728,22 @@ async function runApiV1Turn(
   },
 ): Promise<void> {
   await enqueueAgentTurn(agentId, 'api-v1', async () => {
-    // Lazy import to avoid loading the agent at server startup (same as chat.ts).
-    const { runAgentLoop } = await import('../../agent/loop.js')
+    // ── Engine selection (config.agent.provider) ──
+    // 'claude-code' delivers the turn into the conversation's lane session instead
+    // of running the in-process loop. Scoped to the butler ('general') for the same
+    // reason as chat.ts: a custom console agent carries its own system prompt +
+    // tool filter, which the butler lane profile does not model.
+    // A failure to read config degrades to the in-process loop — never "no engine".
+    let useLaneEngine = false
+    try {
+      const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
+      useLaneEngine = agentId === DEFAULT_AGENT_ID
+        && resolveAgentEngineProvider(await getConfig()) === 'claude-code'
+    } catch (err) {
+      log.web.warn('api-v1 engine resolution failed; using the in-process loop', {
+        conversationId, turnId, agentId, error: err instanceof Error ? err.message : String(err),
+      })
+    }
 
     // Agent-level abort registration so POST /v1/conversations/:id/stop can
     // cancel this turn (REST clients have no per-socket AbortController).
@@ -670,6 +804,31 @@ async function runApiV1Turn(
     })
 
     emitSse(conversationId, 'message-start', { turnId })
+
+    // ── Engine branch: butler lane (config.agent.provider='claude-code') ──
+    // Everything above ran for BOTH engines (engine resolution, history load, image
+    // save, eager user-message persist, message-start) — only the engine differs.
+    // The POST handler's `activeTurns` entry is released in its `.finally()`, i.e.
+    // when the promise this callback belongs to settles: awaiting the lane turn here
+    // means the 409 guard covers the lane turn for its whole duration, same as the
+    // in-process path, with no second bookkeeping path to keep in sync.
+    if (useLaneEngine) {
+      // The lane's CLI process is not this controller's to cancel (stopping a lane
+      // turn is a session-level interrupt), so drop the registration rather than
+      // leave a no-op abort target that would make /stop report a false success.
+      unregisterAbort()
+      // The CLI takes plain text on stdin, not content blocks — images ride as
+      // readable file paths (the shape session chat uses), never base64.
+      const sessionMessage = savedImages.length > 0
+        ? buildSessionImageContext(savedImages) + text
+        : text
+      await runApiV1LaneTurn(agentId, conversationId, sessionMessage, turnId)
+      return
+    }
+
+    // Lazy import to avoid loading the agent at server startup (same as chat.ts);
+    // skipped entirely on the lane path above, which never runs the in-process loop.
+    const { runAgentLoop } = await import('../../agent/loop.js')
 
     try {
       const result = await runAgentLoop(userContent, history, {
@@ -733,24 +892,7 @@ async function runApiV1Turn(
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
       log.web.error('api-v1 turn error', { conversationId, turnId, agentId, error: errMsg })
-      await chatHistory.addAIMessages(
-        [{ role: 'assistant', content: [{ type: 'text', text: `[Error: ${errMsg}]` }] }] as MessageParam[],
-        { source: 'agent-error', agentId, conversationId },
-      ).catch(() => { /* best-effort */ })
-      emitSse(conversationId, 'error', { message: errMsg })
-      // Mirror the WS path: push the error entry live, not disk-only (see chat.ts).
-      broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
-        entry: {
-          role: 'assistant',
-          content: `[Error: ${errMsg}]`,
-          source: 'agent-error',
-          notification: true,
-          timestamp: new Date().toISOString(),
-        },
-        agentId,
-        conversationId,
-      })
-      broadcastEvent(EventNames.AGENT_ERROR, { error: errMsg, agentId, conversationId })
+      await persistAndEmitTurnError(agentId, conversationId, errMsg)
     } finally {
       unregisterAbort()
     }

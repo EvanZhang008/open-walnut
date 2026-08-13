@@ -42,14 +42,18 @@ export interface LaneTurnResult {
 /**
  * Deliver `message` into the conversation's lane session and wait for the turn.
  *
- * @param opts.source     provenance tag for the send (e.g. 'cron' | 'heartbeat' | 'triage')
- * @param opts.timeoutMs  wait ceiling; defaults to {@link LANE_TURN_TIMEOUT_MS}
+ * @param opts.source       provenance tag for the send (e.g. 'cron' | 'heartbeat' | 'triage')
+ * @param opts.timeoutMs    wait ceiling; defaults to {@link LANE_TURN_TIMEOUT_MS}
+ * @param opts.onSessionId  called with the lane id the moment it resolves, BEFORE the
+ *                          wait begins — the hook a caller needs to attach a live relay
+ *                          to the lane's own stream events (they are keyed by session id,
+ *                          and by the time this promise resolves the turn is already over).
  */
 export async function runLaneTurn(
   agentId: string,
   conversationId: string,
   message: string,
-  opts: { source: string; timeoutMs?: number },
+  opts: { source: string; timeoutMs?: number; onSessionId?: (sessionId: string) => void },
 ): Promise<LaneTurnResult> {
   const timeoutMs = opts.timeoutMs ?? LANE_TURN_TIMEOUT_MS;
   const subName = `lane-turn-${opts.source}-${crypto.randomUUID()}`;
@@ -123,6 +127,17 @@ export async function runLaneTurn(
 
     const lane = await getOrCreateLaneSession(agentId, conversationId, { firstMessage: message });
     sessionId = lane.sessionId;
+    // Hand the lane id over BEFORE the wait (and before the send below, so a relay
+    // subscribed here cannot miss this turn's first deltas). A throwing hook is the
+    // caller's bug, never a reason to fail the turn.
+    if (opts.onSessionId) {
+      try { opts.onSessionId(sessionId); } catch (err) {
+        log.session.warn('lane turn onSessionId hook threw', {
+          sessionId, agentId, conversationId, source: opts.source,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
 
     // Only a JUST-CREATED lane may adopt a buffered event: its id was minted
     // microseconds ago inside the call above, so a result carrying it can only be
