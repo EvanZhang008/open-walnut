@@ -818,11 +818,15 @@ function ProviderCard({
               {serverInfo?.credential_source === 'subscription' && (
                 <p className="text-sm text-muted">
                   Detected a logged-in Claude Code subscription (Pro/Max). No API key needed — the
-                  butler spawns the local <code style={{ fontSize: 11 }}>claude</code> CLI directly.
-                  Text-only: no tool calls, so this works best for titles/summaries or simple chat,
-                  not for tasks that need file/shell tools.
+                  butler spawns the local <code style={{ fontSize: 11 }}>claude</code> CLI directly,
+                  and its tools work through a structured output protocol.
                 </p>
               )}
+              <p className="text-sm text-muted" style={{ marginTop: 8, opacity: 0.8 }}>
+                Note: this uses your Claude subscription outside the Claude Code app itself.
+                Anthropic has previously restricted some subscription usage outside Claude Code —
+                use at your own discretion; an API key or Bedrock is the fully supported path.
+              </p>
             </div>
           )}
 

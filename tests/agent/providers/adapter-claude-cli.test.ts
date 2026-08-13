@@ -62,12 +62,16 @@ describe('buildArgs — text-only, subscription-forced argv', () => {
     expect(defaultArgs).not.toContain('--model');       // sentinel → subscription default
   });
 
-  it('adds a TEXT-ONLY notice to the system prompt when tools are requested', () => {
+  it('appends the pseudo-tool protocol to the system prompt when tools are requested', () => {
     const tools: Tool[] = [{ name: 'task_query', description: 'q', input_schema: { type: 'object' } }];
     const args = buildArgs(opts({ tools }));
     const sys = args[args.indexOf('--system-prompt') + 1];
-    expect(sys.toLowerCase()).toContain('text-only');
-    expect(sys.toLowerCase()).toContain('no tools');
+    expect(sys).toContain('Tool protocol');
+    expect(sys).toContain('task_query');           // schema embedded
+    expect(sys).toContain('"tool_calls"');         // output contract stated
+    // The CLI's OWN tools stay off regardless — protocol tools are executed by walnut.
+    const i = args.indexOf('--tools');
+    expect(args[i + 1]).toBe('');
   });
 });
 
