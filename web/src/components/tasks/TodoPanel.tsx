@@ -5136,7 +5136,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (t) distinctProjects.add(t.project || '');
     }
     // 'custom' view mode = raw pin order: no project runs exist, so no labels.
-    const showFolders = !isPinnedDragActive && distinctProjects.size >= 2 && tierViewMode(tier) === 'project';
+    // Labels STAY during a card drag (hiding them collapsed the tier into a
+    // flat list mid-drag — "我完全懵逼", 2026-08-13) but render INERT: no drag
+    // handle, no "+", no hover — read-only separators until the drop lands.
+    const showFolders = distinctProjects.size >= 2 && tierViewMode(tier) === 'project';
+    const foldersInert = isPinnedDragActive;
+    // Project run sequence (first-seen order) — decides which SIDE of the target
+    // the drop indicator draws on. handleLabelDrop's splice means the dragged
+    // project takes the target's slot: dragging UP lands before the target
+    // (line above), dragging DOWN lands after it (line below).
+    const projSeq: string[] = [];
+    for (const p of distinctProjects) projSeq.push(p);
+    const dropSide = (targetProj: string): 'above' | 'below' =>
+      labelDragProj && projSeq.indexOf(labelDragProj) > projSeq.indexOf(targetProj) ? 'above' : 'below';
     let prevProject: string | null = null;
     for (const id of ids) {
       if (id.startsWith('group:')) {
@@ -5155,8 +5167,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         out.push(
           <div
             key={`projlabel:${tier}:${proj}`}
-            className={`tier-project-label${proj ? ' tier-project-label-draggable' : ''}${labelDropProj === proj && labelDragProj !== proj ? ' tier-project-label-dropover' : ''}`}
-            draggable={!!proj}
+            className={`tier-project-label${proj && !foldersInert ? ' tier-project-label-draggable' : ''}${foldersInert ? ' tier-project-label-inert' : ''}${labelDropProj === proj && labelDragProj !== proj ? ` tier-project-label-dropover dropover-${dropSide(proj)}` : ''}`}
+            draggable={!!proj && !foldersInert}
             onDragStart={(e) => {
               e.dataTransfer.setData('text/walnut-project', proj);
               e.dataTransfer.effectAllowed = 'move';
