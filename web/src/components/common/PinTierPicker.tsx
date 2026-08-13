@@ -27,45 +27,50 @@ export function PinTierPicker({ value, onChange, label, disabled }: Props) {
   return (
     <div className="pin-tier-options" role="group" aria-label="Pin new task to tier">
       {label && <span className="pin-tier-label">{label}</span>}
-      {PIN_TIER_POLICY.map((t) => {
-        const active = value === t.tier;
-        return (
-          <button
-            key={t.tier}
-            type="button"
-            // Tier color comes from CSS keyed on the tier class, and ONLY while
-            // active: painting every button its brand color made inactive Focus
-            // (blue) look selected next to active Satellite (grey).
-            className={`pin-tier-btn pin-tier-${t.tier}${active ? ' active' : ''}`}
-            disabled={disabled}
-            // Toggle off when re-clicking the active tier — clicking the visible
-            // active state is exactly the "don't pin this one" gesture.
-            onClick={() => onChange(active ? undefined : t.tier)}
-            // Tooltip = the SAME policy line the quick-task prompt is built from,
-            // so the AI's guess and the user's mental model share one definition.
-            title={`${t.guidance}${active ? ' (click to unpin)' : ''}`}
-            aria-pressed={active}
-          >
-            {t.label}
-          </button>
-        );
-      })}
-      {customTiers.map((ct) => {
-        const active = value === ct.id;
-        return (
-          <button
-            key={ct.id}
-            type="button"
-            className={`pin-tier-btn pin-tier-custom${active ? ' active' : ''}`}
-            disabled={disabled}
-            onClick={() => onChange(active ? undefined : ct.id)}
-            title={`Custom tier "${ct.label}"${active ? ' (click to unpin)' : ''}`}
-            aria-pressed={active}
-          >
-            {ct.label}
-          </button>
-        );
-      })}
+      {/* ONE segmented control (like the Claude|Codex engine toggle), not a row of
+          independent pills: the tiers are mutually exclusive answers to the same
+          question, and separate pills read as unrelated buttons. */}
+      <div className="pin-tier-seg">
+        {PIN_TIER_POLICY.map((t) => {
+          const active = value === t.tier;
+          return (
+            <button
+              key={t.tier}
+              type="button"
+              // Tier color comes from CSS keyed on the tier class, and ONLY while
+              // active: painting every button its brand color made inactive Focus
+              // (blue) look selected next to active Satellite (grey).
+              className={`pin-tier-btn pin-tier-${t.tier}${active ? ' active' : ''}`}
+              disabled={disabled}
+              // Toggle off when re-clicking the active tier — clicking the visible
+              // active state is exactly the "don't pin this one" gesture.
+              onClick={() => onChange(active ? undefined : t.tier)}
+              // Tooltip = the SAME policy line the quick-task prompt is built from,
+              // so the AI's guess and the user's mental model share one definition.
+              title={`${t.guidance}${active ? ' (click to unpin)' : ''}`}
+              aria-pressed={active}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+        {customTiers.map((ct) => {
+          const active = value === ct.id;
+          return (
+            <button
+              key={ct.id}
+              type="button"
+              className={`pin-tier-btn pin-tier-custom${active ? ' active' : ''}`}
+              disabled={disabled}
+              onClick={() => onChange(active ? undefined : ct.id)}
+              title={`Custom tier "${ct.label}"${active ? ' (click to unpin)' : ''}`}
+              aria-pressed={active}
+            >
+              {ct.label}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

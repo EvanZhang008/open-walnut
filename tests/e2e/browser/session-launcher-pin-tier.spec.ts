@@ -13,7 +13,8 @@
  *      the user to another browser.
  */
 
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Locator, type Page } from '@playwright/test'
+import { draftPanel, openDraft } from './draft-helpers'
 
 const PREF_KEY = 'open-walnut-launcher-pin-tier'
 
@@ -44,26 +45,36 @@ async function seedPinTierPref(page: Page, value: 'focus' | 'satellite' | 'backl
   }, [PREF_KEY, value] as const)
 }
 
-async function openLauncher(page: Page) {
-  const pill = page.getByRole('button', { name: /Quick session|\+ Session/i })
-  await expect(pill).toBeVisible({ timeout: 15_000 })
-  await pill.click()
-  const selector = page.locator('.session-path-selector')
+/**
+ * Open a FRESH launcher: "+" grows a draft session column, and its cwd pill opens
+ * the same picker (unchanged `.sps-*` markup, footer included).
+ *
+ * Both handles are returned because the two live in different places now: the
+ * tier picker is inside the popover, while the message that actually launches is
+ * typed in the draft column's own composer.
+ */
+async function openLauncher(page: Page): Promise<{ panel: Locator; selector: Locator }> {
+  const panel = await openDraft(page)
+  await panel.locator('.draft-composer-bar .session-action-chip').first().click()
+  const selector = panel.locator('.session-path-selector')
   await expect(selector).toBeVisible({ timeout: 10_000 })
-  return selector
+  return { panel, selector }
 }
 
+/**
+ * Discard the launcher, popover AND draft column.
+ *
+ * The column has to go, not just the popover: a draft snapshots the sticky tier
+ * ONCE, when it is created (freshLauncherMeta), and the picker is seeded from
+ * that snapshot (initialMeta). So re-opening the picker on the SAME draft would
+ * replay the snapshot and prove nothing about stickiness — a fresh "+" is the
+ * real "open the launcher again". Closing the draft is also the gesture a user
+ * has for "never mind", so this stays a real-UI step.
+ */
 async function closeLauncher(page: Page) {
-  const selector = page.locator('.session-path-selector')
-  // Escape is handled on the path input, so focus has to be there — after a tier
-  // click it sits on the button and the key would go nowhere. Edit mode also eats
-  // the first Escape (it clears the typed path), hence the retry.
-  for (let i = 0; i < 3 && await selector.count() > 0; i++) {
-    await selector.locator('.sps-search input').first().click()
-    await page.keyboard.press('Escape')
-    await page.waitForTimeout(150)
-  }
-  await expect(selector).toHaveCount(0)
+  await draftPanel(page).locator('.session-panel-close').click()
+  await expect(page.locator('.draft-session-panel')).toHaveCount(0)
+  await expect(page.locator('.session-path-selector')).toHaveCount(0)
 }
 
 test('launcher defaults to Satellite and remembers the tier the user picks', async ({ page }) => {
@@ -72,7 +83,7 @@ test('launcher defaults to Satellite and remembers the tier the user picks', asy
   await seedPinTierPref(page, null)
   await page.goto('/')
 
-  let selector = await openLauncher(page)
+  let { selector } = await openLauncher(page)
   let tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
 
   // 1 + 2: visible in the primary row (no More menu click) and defaulting to Satellite.
@@ -95,7 +106,7 @@ test('launcher defaults to Satellite and remembers the tier the user picks', asy
 
   // 3: reopening the launcher opens on the remembered tier, not the baseline.
   await closeLauncher(page)
-  selector = await openLauncher(page)
+  ;({ selector } = await openLauncher(page))
   tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
   await expect(tiers.getByRole('button', { name: 'Wait' })).toHaveAttribute('aria-pressed', 'true')
   await page.screenshot({ path: '/tmp/launcher-pin-tier/remembered-wait.png' })
@@ -105,7 +116,7 @@ test('launcher defaults to Satellite and remembers the tier the user picks', asy
   await tiers.getByRole('button', { name: 'Wait' }).click()
   await expect(tiers.getByRole('button', { name: 'Wait' })).toHaveAttribute('aria-pressed', 'false')
   await closeLauncher(page)
-  selector = await openLauncher(page)
+  ;({ selector } = await openLauncher(page))
   tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
   for (const label of ['Focus', 'Satellite', 'Wait']) {
     await expect(tiers.getByRole('button', { name: label })).toHaveAttribute('aria-pressed', 'false')
@@ -121,12 +132,12 @@ test('the launcher sends the picked tier in the quick-start payload', async ({ p
   await seedPinTierPref(page, 'satellite')
   await page.goto('/')
 
-  const selector = await openLauncher(page)
+  const { panel, selector } = await openLauncher(page)
   const tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
   await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'true')
 
-  // Pick a folder → the launcher collapses into the quick-start bar, and the
-  // first message launches. The payload is the contract the server pins from.
+  // Pick a folder → the popover closes onto the draft's cwd pill, and the first
+  // message launches. The payload is the contract the server pins from.
   const input = selector.locator('.sps-search input').first()
   await input.click()
   await input.fill('/tmp/')
@@ -140,8 +151,11 @@ test('the launcher sends the picked tier in the quick-start payload', async ({ p
   const launchRequest = page.waitForRequest(req =>
     req.url().includes('/api/sessions/quick-start') && req.method() === 'POST', { timeout: 20_000 })
   await go.click()
+  await expect(selector).toBeHidden()
 
-  const chatInput = page.locator('.chat-input-textarea')
+  // The DRAFT column's composer, not the main chat's — the latter would message
+  // the butler and this spec would wait 20s for a quick-start that never fires.
+  const chatInput = panel.locator('.chat-input-textarea')
   await expect(chatInput).toBeVisible({ timeout: 10_000 })
   await chatInput.click()
   await chatInput.fill(`pin tier payload probe ${Date.now()}`)
@@ -164,7 +178,7 @@ test('an explicit unpin is sent as null, not dropped from the payload', async ({
   await seedPinTierPref(page, 'satellite')
   await page.goto('/')
 
-  const selector = await openLauncher(page)
+  const { panel, selector } = await openLauncher(page)
   const tiers = selector.getByRole('group', { name: 'Pin new task to tier' })
   // Click the ACTIVE tier to toggle it off — the "don't pin this one" gesture.
   await tiers.getByRole('button', { name: 'Satellite' }).click()
@@ -179,8 +193,11 @@ test('an explicit unpin is sent as null, not dropped from the payload', async ({
   const launchRequest = page.waitForRequest(req =>
     req.url().includes('/api/sessions/quick-start') && req.method() === 'POST', { timeout: 20_000 })
   await go.click()
+  await expect(selector).toBeHidden()
 
-  const chatInput = page.locator('.chat-input-textarea')
+  // Scoped to the draft column (see the sibling test) — the main chat composer
+  // does not launch sessions.
+  const chatInput = panel.locator('.chat-input-textarea')
   await expect(chatInput).toBeVisible({ timeout: 10_000 })
   await chatInput.click()
   await chatInput.fill(`explicit unpin probe ${Date.now()}`)
