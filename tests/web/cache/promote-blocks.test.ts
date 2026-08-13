@@ -573,6 +573,83 @@ describe('promoteCompletedBlocks — background-subagent lane', () => {
       const r = promoteCompletedBlocks(blocks, [], blocks.length);
       expect(r.kept).toEqual(blocks);
     });
+
+    // Transported orphan finished-agent ids (inc-1786496042099): the nested
+    // Agent's tool_use line exists ONLY in the daemon stream — its id appears
+    // in NO history row, so neither twin- nor bgTaskFinished-evidence can ever
+    // form. The server ships the canonical <task-notification> proof OUTSIDE
+    // the messages array as finishedAgentIds.
+    describe('transported finishedAgentIds (nested agents with no history row)', () => {
+      it('absorbs lane blocks whose only proof is a transported intermediate id — even with the chain broken', () => {
+        // The incident shape: intermediate Agent tool_call blocks are GONE
+        // (streamed before page load / prior reset), so laneParentOf cannot
+        // walk grandchildren to the top-level root — resolveLaneRoot stops at
+        // toolu_nested, an id that appears in NO history row.
+        const blocks = [
+          laneText('grandchild narration', 'toolu_nested'),
+          laneTool('toolu_gc_bash', 'toolu_nested'),
+        ];
+        const finishedAgentIds = new Set(['toolu_nested']);
+        const r = promoteCompletedBlocks(blocks, [], blocks.length, undefined, finishedAgentIds);
+        expect(r.removed).toBe(2);
+        expect(r.kept).toHaveLength(0);
+        expect(r.unmatched).toHaveLength(0);
+      });
+
+      it('WITHOUT the transported id the same blocks are kept — SILENTLY (no unmatched log)', () => {
+        const blocks = [
+          laneText('grandchild narration', 'toolu_nested'),
+          laneTool('toolu_gc_bash', 'toolu_nested'),
+        ];
+        const r = promoteCompletedBlocks(blocks, [], blocks.length);
+        expect(r.kept).toEqual(blocks); // still-running nested agent keeps its live tail
+        expect(r.unmatched).toHaveLength(0); // silent — expected live state, not divergence
+      });
+
+      it('a provably-finished INTERMEDIATE absorbs the whole chain even when the root has no proof', () => {
+        // Chain intact (nested Agent block present) but bgTaskFinished never
+        // reaches the top-level row: the intermediate id in finishedAgentIds is
+        // sufficient — its whole nested run archives into the top-level
+        // agent's transcript.
+        const blocks = [
+          nestedAgent('toolu_mid', 'toolu_top'),
+          laneText('grandchild narration', 'toolu_mid'),
+          laneTool('toolu_gc_bash', 'toolu_mid'),
+        ];
+        const finishedAgentIds = new Set(['toolu_mid']);
+        const r = promoteCompletedBlocks(blocks, [], blocks.length, undefined, finishedAgentIds);
+        // Grandchildren absorbed via the finished intermediate; the nested
+        // Agent block itself starts its chain walk at toolu_top (unproven) —
+        // kept silently as the running-root anchor.
+        expect(r.removed).toBe(2);
+        expect(r.kept).toEqual([nestedAgent('toolu_mid', 'toolu_top')]);
+        expect(r.unmatched).toHaveLength(0);
+      });
+
+      it('transported id counts as the completion proof for a deferred top-level parent', () => {
+        // Top-level Agent has its toolUseId twin in history but bgTaskFinished
+        // never landed (notification consumed as an enqueue only). The
+        // transported id supplies the missing "run is over" proof.
+        const blocks: StreamingBlock[] = [
+          { type: 'tool_call', toolUseId: 'toolu_top', name: 'Agent', status: 'done' },
+          laneText('child output', 'toolu_top'),
+        ];
+        const delta = [agentToolMsg('toolu_top', false)]; // twin, NOT finished
+        const withIds = promoteCompletedBlocks(blocks, delta, blocks.length, undefined, new Set(['toolu_top']));
+        expect(withIds.removed).toBe(2);
+        const withoutIds = promoteCompletedBlocks(blocks, delta, blocks.length);
+        expect(withoutIds.kept).toEqual(blocks);
+      });
+
+      it('does not absorb an UNRELATED lane (id must be on the chain)', () => {
+        const blocks = [
+          laneText('other agent output', 'toolu_other'),
+        ];
+        const r = promoteCompletedBlocks(blocks, [], blocks.length, undefined, new Set(['toolu_nested']));
+        expect(r.kept).toEqual(blocks);
+        expect(r.unmatched).toHaveLength(0);
+      });
+    });
   });
 });
 

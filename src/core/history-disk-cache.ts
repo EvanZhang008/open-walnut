@@ -42,9 +42,22 @@ function cachePath(sessionId: string): string {
  * writes from paths that had no stat (stream fallbacks) — those entries still
  * serve the offline/stale fallbacks, just not the mtime fast-path.
  */
-export function writeHistoryCache(sessionId: string, messages: SessionHistoryMessage[], mtimeMs?: number): void {
+export function writeHistoryCache(
+  sessionId: string,
+  messages: SessionHistoryMessage[],
+  mtimeMs?: number,
+  finishedAgentIds?: readonly string[],
+): void {
   if (messages.length === 0) return;
-  const payload = JSON.stringify({ messages, cachedAt: new Date().toISOString(), ...(mtimeMs !== undefined ? { mtimeMs } : {}) });
+  const payload = JSON.stringify({
+    messages,
+    cachedAt: new Date().toISOString(),
+    ...(mtimeMs !== undefined ? { mtimeMs } : {}),
+    // Orphan finished-agent ids (see session-history.ts getOrphanFinishedAgentIds):
+    // proof that lives OUTSIDE the messages array, so it must be persisted
+    // explicitly or a post-restart disk-cache hit silently drops it.
+    ...(finishedAgentIds && finishedAgentIds.length > 0 ? { finishedAgentIds: [...finishedAgentIds] } : {}),
+  });
   ensureDir()
     .then(() => fsp.writeFile(cachePath(sessionId), payload, 'utf-8'))
     .catch((err) => {
@@ -57,7 +70,7 @@ export function writeHistoryCache(sessionId: string, messages: SessionHistoryMes
 /**
  * Read cached history from disk. Returns null if no cache or on error.
  */
-export async function readHistoryCache(sessionId: string): Promise<{ messages: SessionHistoryMessage[]; cachedAt: string; mtimeMs?: number } | null> {
+export async function readHistoryCache(sessionId: string): Promise<{ messages: SessionHistoryMessage[]; cachedAt: string; mtimeMs?: number; finishedAgentIds?: string[] } | null> {
   try {
     const raw = await fsp.readFile(cachePath(sessionId), 'utf-8');
     const parsed = JSON.parse(raw);
@@ -66,6 +79,9 @@ export async function readHistoryCache(sessionId: string): Promise<{ messages: S
         messages: parsed.messages,
         cachedAt: parsed.cachedAt ?? 'unknown',
         ...(typeof parsed.mtimeMs === 'number' ? { mtimeMs: parsed.mtimeMs } : {}),
+        ...(Array.isArray(parsed.finishedAgentIds) && parsed.finishedAgentIds.length > 0
+          ? { finishedAgentIds: parsed.finishedAgentIds.filter((x: unknown): x is string => typeof x === 'string') }
+          : {}),
       };
     }
   } catch {

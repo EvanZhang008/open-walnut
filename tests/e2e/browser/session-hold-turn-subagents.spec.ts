@@ -21,6 +21,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
+import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 
 const SCREENSHOT_DIR = '/tmp/session-hold-turn-subagents'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -38,24 +39,25 @@ test.beforeAll(async () => {
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
 })
 
-/** Open the quick-session path selector on a real fixture cwd (Claude engine). */
+/**
+ * Open a draft session column on a real fixture cwd (Claude engine).
+ *
+ * The launcher moved: "+" grows a draft column and its cwd pill hosts the same
+ * folder picker. The draft morphs into the pending → real column in place, so
+ * every session assertion below is untouched.
+ */
 async function openQuickStart(page: Page): Promise<void> {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
-  await page.locator('.quick-access-pill', { hasText: /Quick session|\+ Session/ }).click()
-  await expect(page.locator('.session-path-selector')).toBeVisible()
-  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
-  if (await localTab.isVisible()) await localTab.click()
-  await page.locator('.sps-search-input').fill(`${fixtureRoot}/projects/walnut`)
-  await page.locator('.sps-search-input').press('Shift+Enter')
+  await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
 }
 
-/** Send a prompt through the composer and return the created session's task id. */
+/** Send a prompt through the draft's composer and return the created task id. */
 async function sendQuickStart(page: Page, prompt: string): Promise<string> {
   const quickStartResponse = page.waitForResponse((response) =>
     response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/api/sessions/quick-start')
-  const input = page.locator('.main-page-chat .chat-input-textarea')
+  const input = draftComposer(page)
   await input.fill(prompt)
   await input.press('Enter')
   const quickStart = await quickStartResponse
@@ -92,7 +94,7 @@ test('turn stays open across the early result+idle and completes with the follow
   // result handler) would flip process_status to idle here.
   // The launch text streams immediately; wait for it so we know the first
   // batch (assistant + result + idle) has been processed before judging.
-  const panel = page.locator('.session-panel:not(.pending-session-panel)')
+  const panel = page.locator(REAL_PANEL)
   await expect(panel).toBeVisible({ timeout: 20_000 })
   await expect(panel.getByText('Launching a background agent', { exact: false }).first())
     .toBeVisible({ timeout: 20_000 })
@@ -117,7 +119,7 @@ test('a plain turn with no subagents still completes instantly (no added latency
   const taskId = await sendQuickStart(page, 'plain hold-port control message')
   const sessionId = await sessionIdForTask(page, taskId)
 
-  const panel = page.locator('.session-panel:not(.pending-session-panel)')
+  const panel = page.locator(REAL_PANEL)
   await expect(panel).toBeVisible({ timeout: 20_000 })
   await expect(panel.getByText('I processed your message', { exact: false }).first())
     .toBeVisible({ timeout: 25_000 })

@@ -102,6 +102,21 @@ describe('computeHiddenBlocks — absorption proof', () => {
     expect(hidden.has(0)).toBe(false); // content matching paused (window empty)
     expect(hidden.has(1)).toBe(true);  // id immune to the watermark
   });
+
+  it('hides nested-agent lane blocks via transported finishedAgentIds (no history row exists)', () => {
+    // inc-1786496042099: the nested Agent's tool_use never reaches the
+    // canonical JSONL — history is EMPTY of both the id and any bgTaskFinished
+    // row. The server-transported id is the only possible proof.
+    const blocks = [text('grandchild output', 'msg-gc', 'tu-nested')];
+    const withIds = computeHiddenBlocks({
+      blocks, messages: [], watermark: 0, isStreaming: false,
+      finishedAgentIds: new Set(['tu-nested']),
+    });
+    expect(withIds.has(0)).toBe(true);
+    // Without the transported proof: kept (still-running nested agent).
+    const without = computeHiddenBlocks({ blocks, messages: [], watermark: 0, isStreaming: false });
+    expect(without.has(0)).toBe(false);
+  });
 });
 
 describe('allBlocksAbsorbed — reset gate', () => {

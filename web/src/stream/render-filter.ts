@@ -52,6 +52,12 @@ export interface RenderFilterInput {
   /** Prebuilt buildHistoryEvidence(messages) — pass to avoid a full-history
    *  walk per call; rebuilt internally when omitted. */
   historyEvidence?: DeltaEvidence;
+  /** Server-transported orphan finished-agent toolUseIds (inc-1786496042099):
+   *  NESTED background agents' tool_use lines never reach the canonical JSONL,
+   *  so no history row carries their id — the parser ships their
+   *  <task-notification> completion proof OUTSIDE the messages array. Counts
+   *  as finished-parent lane evidence exactly like bgTaskFinished. */
+  finishedAgentIds?: ReadonlySet<string>;
 }
 
 export interface RenderFilterResult {
@@ -86,7 +92,7 @@ export function computeRenderFilter(input: RenderFilterInput): RenderFilterResul
   const liveTail = isStreaming ? lastMainLaneIndex(blocks) : -1;
   const boundary = liveTail >= 0 ? liveTail : blocks.length;
   const { absorbed, unmatched } = computeAbsorbedIndices(
-    blocks, contentDelta as SessionHistoryMessage[], boundary, fullEv,
+    blocks, contentDelta as SessionHistoryMessage[], boundary, fullEv, input.finishedAgentIds,
   );
   return { hidden: absorbed, unmatched };
 }

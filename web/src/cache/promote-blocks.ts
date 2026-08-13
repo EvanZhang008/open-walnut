@@ -164,12 +164,20 @@ export interface AbsorbedResult {
  * @param fullEvidence optional ID-ONLY evidence over the FULL history
  *                     (buildIdOnlyEvidence) — catches twins persisted before the
  *                     delta window + finished-background-agent lanes.
+ * @param finishedAgentIds server-transported orphan finished-agent toolUseIds
+ *                     (inc-1786496042099): NESTED agents' tool_use lines never
+ *                     reach the canonical JSONL, so no history row can carry
+ *                     their id — but the canonical <task-notification> proof
+ *                     does. The parser ships those ids OUTSIDE the messages
+ *                     array; here they count as finished-parent evidence
+ *                     exactly like bgTaskFinished.
  */
 export function computeAbsorbedIndices(
   blocks: readonly StreamingBlock[],
   delta: SessionHistoryMessage[],
   boundary: number,
   fullEvidence?: DeltaEvidence,
+  finishedAgentIds?: ReadonlySet<string>,
 ): AbsorbedResult {
   const absorbed = new Set<number>();
   const unmatched: AbsorbedResult['unmatched'] = [];
@@ -210,9 +218,27 @@ export function computeAbsorbedIndices(
     }
     return cur;
   };
+  // Finished-parent proof for a single id: bgTaskFinished on a history row
+  // (delta or full scope), or a server-transported orphan finished-agent id
+  // (nested agents have NO history row to stamp — see finishedAgentIds).
+  const idFinished = (id: string): boolean =>
+    ev.finishedBgParents.has(id) || full?.finishedBgParents.has(id) === true
+    || finishedAgentIds?.has(id) === true;
+  // A lane chain is finished when ANY id along it (starting pid → … → root) is
+  // provably finished, not only the final root: when intermediate Agent
+  // tool_call blocks are gone (streamed before page load / prior reset),
+  // laneParentOf can't walk to the true top-level root — the chain stops at an
+  // id no history row carries. A provably-finished INTERMEDIATE is sufficient:
+  // its whole nested run archives into the top-level agent's transcript.
   const laneRootFinished = (pid: string): boolean => {
-    const root = resolveLaneRoot(pid);
-    return ev.finishedBgParents.has(root) || full?.finishedBgParents.has(root) === true;
+    let cur = pid;
+    const seen = new Set<string>();
+    while (true) {
+      if (idFinished(cur)) return true;
+      if (!laneParentOf.has(cur) || seen.has(cur)) return false;
+      seen.add(cur);
+      cur = laneParentOf.get(cur)!;
+    }
   };
 
   for (let i = 0; i < bound; i++) {
@@ -243,6 +269,13 @@ export function computeAbsorbedIndices(
       }
       if (b.toolUseId && (ev.toolUseIds.has(b.toolUseId) || full?.toolUseIds.has(b.toolUseId))) { absorbed.add(i); continue; }
       if (laneParent) {
+        // Chain check starts at laneParent, NOT at this block's own id: a
+        // nested Agent tool_call absorbing on its OWN finished proof while its
+        // top-level parent still runs would let the deferred-parent pass see
+        // "all children absorbed" and absorb the running anchor too — the
+        // phantom-box shape (inc-1785965937858). Its own children DO absorb
+        // (their pid is this id); this box stays as their anchor until the
+        // chain above it is proven finished.
         if (laneFinished) absorbed.add(i);
         continue;
       }
@@ -329,8 +362,7 @@ export function computeAbsorbedIndices(
       if (b.toolUseId) { allMatchableMatched = false; unmatched.push({ index: i, kind: 'tool_call', reason: 'no toolUseId twin in delta' }); }
       continue;
     }
-    const finished = !!b.toolUseId
-      && (ev.finishedBgParents.has(b.toolUseId) || full?.finishedBgParents.has(b.toolUseId) === true);
+    const finished = !!b.toolUseId && idFinished(b.toolUseId);
     let childCount = 0;
     let liveChild = false;
     for (let j = 0; j < blocks.length; j++) {
@@ -378,8 +410,9 @@ export function promoteCompletedBlocks(
   delta: SessionHistoryMessage[],
   completedLen: number,
   fullEvidence?: DeltaEvidence,
+  finishedAgentIds?: ReadonlySet<string>,
 ): PromoteResult {
-  const { absorbed, unmatched } = computeAbsorbedIndices(blocks, delta, completedLen, fullEvidence);
+  const { absorbed, unmatched } = computeAbsorbedIndices(blocks, delta, completedLen, fullEvidence, finishedAgentIds);
   if (absorbed.size === 0) return { kept: blocks, removed: 0, unmatched };
   const kept = blocks.filter((_, i) => !absorbed.has(i));
   return { kept, removed: absorbed.size, unmatched };
