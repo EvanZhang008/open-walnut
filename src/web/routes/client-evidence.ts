@@ -128,14 +128,28 @@ clientEvidenceRouter.post('/', async (req: Request, res: Response) => {
   }
 })
 
-/** Latest evidence file for a session, or null. Used by the bundle capturer. */
-export function latestClientEvidence(sessionId: string): string | null {
+/** Latest evidence file for a session WITH its real upload time, or null.
+ *  Used by the bundle capturer. The upload time is parsed from the
+ *  `<sessionId>-<ts>.json` filename this route itself writes — callers MUST
+ *  surface it: inc-1786496042099 was mis-diagnosed as a client-array
+ *  regression because the bundle attached a 7.5-minute-old evidence file
+ *  under a meta.json whose capturedAt was the BUNDLE's clock, so the payload
+ *  read as a snapshot of the wrong instant. */
+export function latestClientEvidence(
+  sessionId: string,
+): { content: string; uploadedAtMs: number } | null {
   try {
     const files = fs.readdirSync(CLIENT_EVIDENCE_DIR)
       .filter(f => f.startsWith(`${sessionId}-`) && f.endsWith('.json'))
       .sort()
     const last = files[files.length - 1]
-    return last ? fs.readFileSync(path.join(CLIENT_EVIDENCE_DIR, last), 'utf-8') : null
+    if (!last) return null
+    const tsRaw = last.slice(sessionId.length + 1, -'.json'.length)
+    const uploadedAtMs = Number(tsRaw)
+    return {
+      content: fs.readFileSync(path.join(CLIENT_EVIDENCE_DIR, last), 'utf-8'),
+      uploadedAtMs: Number.isFinite(uploadedAtMs) ? uploadedAtMs : 0,
+    }
   } catch {
     return null
   }

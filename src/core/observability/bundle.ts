@@ -14,6 +14,7 @@
  */
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { CLAUDE_HOME, LOG_DIR, SESSION_STREAMS_DIR } from '../../constants.js';
@@ -54,6 +55,9 @@ interface BundleMeta {
   windowMins: number;
   filesIncluded: string[];
   notesIfMissing: string[];
+  /** REAL upload time of client-evidence.json — the browser posted it at THIS
+   *  moment, not at capturedAt. Absent when the artifact is absent. */
+  clientEvidenceUploadedAt?: string;
 }
 
 /**
@@ -150,11 +154,32 @@ export async function captureBundle(
     //    POST /api/client-evidence. The console-log forwarder truncates args at
     //    1000 chars, so server.log.txt alone cannot answer "what did the client
     //    consume" (inc-1786165723472's forensics gap) — this file can.
-    writeArtifact(
-      'client-evidence.json',
-      await captureClientEvidence(sessionId),
-      `client-evidence.json: no client divergence uploads for ${sessionId}`,
-    );
+    //    WINDOW-BOUNDED like every other artifact: an upload older than the
+    //    bundle window describes a DIFFERENT instant, and attaching it under
+    //    this bundle's capturedAt reads as a snapshot of the wrong moment
+    //    (inc-1786496042099 was mis-read as a client-array regression off a
+    //    7.5-minute-old payload). Stale → note instead; fresh → record the
+    //    real upload time in meta so readers never assume capturedAt.
+    {
+      const evidence = await captureClientEvidence(sessionId);
+      if (evidence && evidence.uploadedAtMs >= cutoffMs) {
+        writeArtifact(
+          'client-evidence.json',
+          evidence.content,
+          `client-evidence.json: no client divergence uploads for ${sessionId}`,
+        );
+        if (evidence.uploadedAtMs > 0) {
+          meta.clientEvidenceUploadedAt = new Date(evidence.uploadedAtMs).toISOString();
+        }
+      } else if (evidence) {
+        meta.notesIfMissing.push(
+          `client-evidence.json: newest upload is outside the ${windowMins}min window `
+          + `(uploaded ${new Date(evidence.uploadedAtMs).toISOString()}) — omitted as stale`,
+        );
+      } else {
+        meta.notesIfMissing.push(`client-evidence.json: no client divergence uploads for ${sessionId}`);
+      }
+    }
   } catch (err) {
     // Even the mkdir/orchestration failing must not throw on the incident path.
     meta.notesIfMissing.push(`bundle capture error: ${errMsg(err)}`);
@@ -280,19 +305,26 @@ function captureCliJsonl(sessionId: string, meta: BundleMeta): string {
 
 /** Candidate stream directories, de-duplicated, in probe order. */
 function streamDirs(): string[] {
-  const dirs = [SESSION_STREAMS_DIR, '/tmp/open-walnut-streams'];
+  const dirs = [
+    path.join(os.homedir(), '.open-walnut', 'tmp', 'streams'), // daemon prod dir (2026-08 move)
+    SESSION_STREAMS_DIR,
+    '/tmp/open-walnut-streams', // legacy daemon dir (pre-move live sessions)
+  ];
   return [...new Set(dirs)];
 }
 
 /** Latest browser-uploaded divergence evidence for the session (routes/
- *  client-evidence.ts writes one JSON file per tripwire fire). Lazy import so
- *  bundle capture never hard-depends on the web layer being loadable. */
-async function captureClientEvidence(sessionId: string): Promise<string> {
+ *  client-evidence.ts writes one JSON file per tripwire fire), with its REAL
+ *  upload time. Lazy import so bundle capture never hard-depends on the web
+ *  layer being loadable. */
+async function captureClientEvidence(
+  sessionId: string,
+): Promise<{ content: string; uploadedAtMs: number } | null> {
   try {
     const { latestClientEvidence } = await import('../../web/routes/client-evidence.js');
-    return latestClientEvidence(sessionId) ?? '';
+    return latestClientEvidence(sessionId);
   } catch {
-    return '';
+    return null;
   }
 }
 

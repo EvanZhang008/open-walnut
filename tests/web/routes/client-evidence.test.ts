@@ -54,7 +54,7 @@ describe('POST /api/client-evidence', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
 
-    const stored = JSON.parse(latestClientEvidence('sid-full-trace')!);
+    const stored = JSON.parse(latestClientEvidence('sid-full-trace')!.content);
     expect(stored.flightTrace).toHaveLength(200);
     expect(stored.unmatched).toHaveLength(78);
     // Verbatim: the deepest field round-trips exactly.
@@ -95,6 +95,35 @@ describe('POST /api/client-evidence', () => {
     const parsed = JSON.parse(fs.readFileSync(evidencePath, 'utf-8'));
     expect(parsed.kind).toBe('render-filter-no-twin');
     expect(parsed.flightTrace).toHaveLength(1);
+
+    // The meta records the REAL upload time (the browser posted at THIS moment,
+    // not at the bundle's capturedAt) — inc-1786496042099 was mis-diagnosed
+    // off a bundle whose payload silently predated capture by 7.5 minutes.
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf-8'));
+    expect(typeof meta.clientEvidenceUploadedAt).toBe('string');
+    const uploadedMs = Date.parse(meta.clientEvidenceUploadedAt);
+    expect(Math.abs(uploadedMs - Date.now())).toBeLessThan(60_000);
+  });
+
+  it('captureBundle omits evidence older than the window as stale (miss-note instead)', async () => {
+    // Write an evidence file with an artificially OLD ts suffix — the exact
+    // shape of inc-1786496042099: newest upload predates the incident window.
+    fs.mkdirSync(CLIENT_EVIDENCE_DIR, { recursive: true });
+    const staleTs = Date.now() - 2 * 60 * 60_000; // 2h ago, far outside 60min window
+    fs.writeFileSync(
+      path.join(CLIENT_EVIDENCE_DIR, `sid-stale-${staleTs}.json`),
+      JSON.stringify({ kind: 'render-filter-no-twin', unmatched: [{ index: 0 }] }),
+    );
+
+    const { captureBundle } = await import('../../../src/core/observability/bundle.js');
+    const dir = await captureBundle('sid-stale');
+    expect(fs.existsSync(path.join(dir, 'client-evidence.json'))).toBe(false);
+
+    const meta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf-8'));
+    expect(meta.clientEvidenceUploadedAt).toBeUndefined();
+    const note = (meta.notesIfMissing as string[]).find(n => n.startsWith('client-evidence.json:'));
+    expect(note).toContain('outside');
+    expect(note).toContain(new Date(staleTs).toISOString());
   });
 
   it('caps stored files per session (prunes oldest)', async () => {
@@ -109,7 +138,7 @@ describe('POST /api/client-evidence', () => {
     const files = fs.readdirSync(CLIENT_EVIDENCE_DIR).filter(f => f.startsWith('sid-prune-'));
     expect(files.length).toBeLessThanOrEqual(5);
     // The newest survives.
-    const newest = JSON.parse(latestClientEvidence('sid-prune')!);
+    const newest = JSON.parse(latestClientEvidence('sid-prune')!.content);
     expect(newest.unmatched[0].seq).toBe(7);
   });
 
