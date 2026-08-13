@@ -113,6 +113,7 @@ import { consoleExtrasV1Router } from './routes/console-extras-v1.js'
 import { incidentsRouter } from './routes/incidents.js'
 import { clientEvidenceRouter } from './routes/client-evidence.js'
 import { notificationsRouter } from './routes/notifications.js'
+import { hooksRouter } from './routes/hooks.js'
 import { addNotification as addFeedNotification, resolvePermissionNotification } from '../core/notifications/store.js'
 import { djb2 as notificationHash } from '../core/notifications/log-error-bridge.js'
 import { redactSensitiveText } from '../logging/redact.js'
@@ -263,6 +264,7 @@ let qmdWatcherHandle: { stop: () => void } | null = null
 let qmdSyncStop: (() => Promise<void>) | null = null
 let gitAutoCommitHandle: { stop: () => void; health: GitAutoCommitHealth } | null = null
 let diskWatermarkHandle: { stop: () => void; poll: () => Promise<unknown> } | null = null
+let keepAwakeHandle: import('../core/keep-awake.js').KeepAwakeHandle | null = null
 let gitMaintenanceHandle: { stop: () => void } | null = null
 let taskProjectionHandle: { stop: () => void } | null = null
 let foreignWriterWatchdog: { stop: () => void } | null = null
@@ -709,6 +711,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // raises before any router runs, and Express skips routers in error mode.
   app.use(['/api/v1/stt/transcribe', '/api/stt/transcribe'], sttPayloadTooLargeHandler)
   app.use(express.json({ limit: '15mb' }))
+  // Paste spill-over (>200K chars from the web UI) — needs req.body, so must
+  // mount AFTER the json parser above.
   app.use('/api/pastes', pastesRouter)
   // Default API responses to no-store so the browser HTTP cache never
   // revalidates/synthesizes them (see the etag note above — same incident).
@@ -1025,6 +1029,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/skills', createSkillsRouter())
   app.use('/api/slash-commands', createSlashCommandsRouter())
   app.use('/api/heartbeat', (await import('./routes/heartbeat.js')).heartbeatRouter)
+  app.use('/api/keep-awake', (await import('./routes/keep-awake.js')).keepAwakeRouter)
   app.use('/api/timeline', timelineRouter)
   app.use('/api/notes', notesRouter)
   app.use('/api/notes-v2', notesV2Router)
@@ -1119,9 +1124,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/incidents', incidentsRouter)
   app.use('/api/client-evidence', clientEvidenceRouter)
   app.use('/api/notifications', notificationsRouter)
+  app.use('/api/hooks', hooksRouter)
+  // Deprecated alias — served from the unified hook registry (same shape as
+  // the retired task-phase-hooks endpoint).
   app.get('/api/task-phase-hooks', async (_req, res) => {
-    const { getHookInfoList } = await import('../core/task-phase-hooks/index.js')
-    res.json(getHookInfoList())
+    const { getHookInfoListLegacy } = await import('../core/hooks/registry.js')
+    res.json(await getHookInfoListLegacy())
   })
 
   app.get('/api/git-sync/status', (_req, res) => {
@@ -1245,12 +1253,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const enabled = await registerTerminalRpc()
     if (enabled) {
       onClientDisconnect((ws) => terminalManager.onClientDisconnect(ws))
-      // Ephemeral/sandbox instances share the machine-global dtach socket dir
-      // (/tmp/open-walnut-term) but have an isolated, empty session registry, so
-      // letting them run the orphan sweep / periodic reaper would enumerate
-      // PRODUCTION's sockets, find none in their own registry, and kill prod's
-      // live terminals. Gate both behind !IS_EPHEMERAL (3457/ephemeral never
-      // touches 3456/production). Cloud mode has no local terminals either.
+      // Only an instance that OWNS the dtach socket dir may reap in it. The
+      // reaper's rule is "socket whose sessionId is absent from my registry →
+      // kill", so an instance with an isolated (empty) registry pointed at
+      // someone else's sockets classifies all of them as orphans. Ownership is
+      // now structural: DTACH_SOCKET_DIR is derived from LOG_DIR, so an isolated
+      // runtime dir gets its own socket dir (see constants.ts). CLOUD_MODE has no
+      // local terminals at all. IS_EPHEMERAL stays gated for a second reason: it
+      // runs over a SNAPSHOT of production's registry, so its view of "which
+      // sessions still exist" is stale by construction.
       if (!IS_EPHEMERAL && !CLOUD_MODE) {
         // Sweep leaked walnut-*.dsock dtach sessions whose backing session is gone.
         import('./terminal/dtach-lifecycle.js')
@@ -1648,6 +1659,18 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // GET /api/v1/tasks (legacy git-synced tasks/projection.json rides along
     // while sync.legacy_projection_files is on). Cloud mode only reads.
     if (!CLOUD_MODE) {
+      // Keep-Awake (macOS console only): holds the Mac awake while local CLI
+      // sessions run — opt-in via config keep_awake.enabled, released on low
+      // battery / prolonged offline. See src/core/keep-awake.ts.
+      if (process.platform === 'darwin') {
+        const { startKeepAwakeMonitor } = await import('../core/keep-awake.js')
+        keepAwakeHandle = startKeepAwakeMonitor({
+          notify: (title, body, dedupScope) => {
+            void publishErrorNotification({ title, body, dedupScope })
+          },
+        })
+      }
+
       // Model catalog freshness: settings.json edits invisibly change the CLI
       // model menu (live CLIs hot-reload it). Watch the file and force one
       // live local session to refetch — that pushes the new catalog to every
@@ -1674,8 +1697,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // Auto-continue: recover a turn that died to upstream retry exhaustion by
       // scheduling one delayed `continue` nudge (b12 retry hardening). Primary box
       // only — the cloud replica proxies sessions and must not double-fire.
-      const { startSessionAutoContinue } = await import('../core/session-auto-continue.js')
-      autoContinueHandle = startSessionAutoContinue()
+      // hooks.overrides['session-auto-continue'].enabled=false wins over the env
+      // default (the module itself only reads WALNUT_AUTO_CONTINUE_*).
+      const { getConfig: getAcConfig } = await import('../core/config-manager.js')
+      const autoContinueOverride = (await getAcConfig()).hooks?.overrides?.['session-auto-continue']?.enabled
+      if (autoContinueOverride === false) {
+        log.web.info('session auto-continue disabled via hooks.overrides')
+      } else {
+        const { startSessionAutoContinue } = await import('../core/session-auto-continue.js')
+        autoContinueHandle = startSessionAutoContinue()
+      }
     } else {
       // Cloud box: two-way task sync. Writer half (Phase 4) — every local task
       // mutation is pushed to the primary SYNCHRONOUSLY over the bridge RPC
@@ -1798,26 +1829,52 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
   }
 
-  // -- Init SubagentRunner + SessionRunner --
-  subagentRunner.init()
-  sessionRunner.init(reconnectable)
-
-  // -- Init Session Hook Dispatcher --
+  // -- Init Hook Dispatcher (unified: session + task + cron domains) --
+  // Deliberately BEFORE subagentRunner/sessionRunner init: those can start
+  // emitting bus events (reconnect replays, plugin sync mutating tasks) and
+  // hooks registered after the fact would silently miss them.
   try {
-    const { SessionHookDispatcher, builtinHooks, discoverFileHooks, setSessionHookDispatcher } = await import('../core/session-hooks/index.js')
+    const { SessionHookDispatcher, builtinHooks, builtinTaskHooks, discoverFileHooks, setSessionHookDispatcher } = await import('../core/session-hooks/index.js')
+    const { loadConfigHooks, mergedOverrides } = await import('../core/hooks/config-hooks.js')
     const { getConfig: getHooksConfig } = await import('../core/config-manager.js')
-    const hooksConfig = (await getHooksConfig()).session_hooks
-    const fileHooks = await discoverFileHooks()
-    const allHooks = [...builtinHooks, ...fileHooks]
-    const hookDispatcher = new SessionHookDispatcher(hooksConfig)
-    hookDispatcher.init(allHooks, hooksConfig)
-    setSessionHookDispatcher(hookDispatcher)
-    log.web.info('session hook dispatcher initialized', { hookCount: allHooks.length })
+    const bootConfig = await getHooksConfig()
+    if (bootConfig.hooks?.enabled === false) {
+      log.web.info('hook dispatcher disabled via config hooks.enabled=false')
+    } else {
+      const fileHooks = await discoverFileHooks()
+      const buildDefs = (cfg: typeof bootConfig) =>
+        [...builtinHooks, ...builtinTaskHooks, ...fileHooks, ...loadConfigHooks(cfg)]
+      const buildCfg = (cfg: typeof bootConfig) =>
+        ({ ...cfg.session_hooks, overrides: mergedOverrides(cfg) })
+      const hookDispatcher = new SessionHookDispatcher(buildCfg(bootConfig))
+      // Cloud replica: session domain stays live (session hooks are display/triage
+      // side), but task/cron actions must not double-fire — the primary already
+      // dispatches them for the same phase change arriving via task sync.
+      const domains = CLOUD_MODE ? (['session'] as const) : undefined
+      hookDispatcher.init(buildDefs(bootConfig), buildCfg(bootConfig), domains ? { domains: [...domains] } : undefined)
+      setSessionHookDispatcher(hookDispatcher)
+      // Live reload on config change: pure in-memory recompute of defs/overrides
+      // (no resubscribe; .mjs files are NOT re-scanned — restart for those).
+      // global+interest instead of a name in PUT /api/config's destination list:
+      // other config writers emit to ['web-ui'] only and would miss a named sub.
+      bus.subscribe('hook-dispatcher-reload', () => {
+        void getHooksConfig().then((cfg) => {
+          hookDispatcher.reload(buildDefs(cfg), buildCfg(cfg))
+        }).catch((err) => {
+          log.web.warn('hook dispatcher reload failed', { error: err instanceof Error ? err.message : String(err) })
+        })
+      }, { global: true, interest: ['config:changed'] })
+      log.web.info('hook dispatcher initialized', { cloudMode: CLOUD_MODE })
+    }
   } catch (err) {
-    log.web.error('session hook dispatcher init failed — session triage and lifecycle hooks will NOT fire', {
+    log.web.error('hook dispatcher init failed — session triage and lifecycle hooks will NOT fire', {
       error: err instanceof Error ? err.message : String(err),
     })
   }
+
+  // -- Init SubagentRunner + SessionRunner --
+  subagentRunner.init()
+  sessionRunner.init(reconnectable)
 
   // -- Connect to SDK session server (if enabled) --
   try {
@@ -1874,6 +1931,21 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // -- Start session reaper (periodic cleanup of high-volume triage session records) --
     sessionReaper = new SessionReaper()
     sessionReaper.start()
+
+    // -- One-shot heal: stale pendingPermission on terminal sessions --
+    // A permission request cannot outlive its CLI process, but until the
+    // control_cancel_request handler existed nothing cleared the persisted
+    // copy on dead sessions — leaving permanent "Waiting" badges and
+    // unanswerable cards (incident a172ce49; 28 stale rows found). Runs after
+    // listen, best-effort, off the startup critical path.
+    import('../core/session-tracker.js')
+      .then(({ healStalePendingPermissions }) => healStalePendingPermissions())
+      .then(healed => {
+        if (healed > 0) log.web.info('startup: healed stale pendingPermission rows', { healed })
+      })
+      .catch(err => log.web.warn('startup: pendingPermission heal failed', {
+        error: err instanceof Error ? err.message : String(err),
+      }))
 
     // -- Start recording reaper (periodic cleanup of old audio recordings) --
     {
@@ -2218,14 +2290,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         sendStreamEvent(sessionId, event.name, event.data)
       }
     } else if (event.name === 'session:permission-request') {
-      const { sessionId, requestId, toolName, input, reason } = event.data as {
+      const { sessionId, requestId, toolName, input, reason, acpOptions } = event.data as {
         sessionId?: string; requestId?: string; toolName?: string;
         input?: Record<string, unknown>; reason?: string;
+        acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
       }
       if (sessionId) {
         // Buffer the permission block so stream-subscribe snapshots include it
         if (requestId && toolName) {
-          sessionStreamBuffer.appendPermission(sessionId, requestId, toolName, input, reason)
+          sessionStreamBuffer.appendPermission(sessionId, requestId, toolName, input, reason, acpOptions)
         }
         sendStreamEvent(sessionId, event.name, event.data)
         // Persist to the durable notification feed (survives refresh). Fire-and-forget;
@@ -3942,6 +4015,12 @@ export async function stopServer(): Promise<void> {
   if (diskWatermarkHandle) {
     diskWatermarkHandle.stop()
     diskWatermarkHandle = null
+  }
+  if (keepAwakeHandle) {
+    keepAwakeHandle.stop()
+    // Release the pmset hold — a dead server must never leave the Mac sleepless.
+    await keepAwakeHandle.release().catch(() => {})
+    keepAwakeHandle = null
   }
   if (gitMaintenanceHandle) {
     gitMaintenanceHandle.stop()

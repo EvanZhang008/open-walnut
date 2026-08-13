@@ -8,6 +8,7 @@
 export const SECRET_FIELDS = new Set([
   'bedrock_bearer_token', 'bearer_token', 'api_key', 'perplexity_api_key',
   'openai_api_key', 'aws_secret_access_key', 'aws_access_key_id', 'key',
+  'hotspot_password',
 ])
 
 export function maskSecret(v: unknown): unknown {

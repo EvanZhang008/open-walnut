@@ -1,9 +1,26 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { UI_ONLY_CATEGORIES, setShowUiOnlyCategory, type UiOnlyCategory } from '@/hooks/useDeveloperSettings';
 import { updateConfig } from '@/api/config';
 import { AUTOSAVE_DELAY_MS } from '@/hooks/useAutoSave';
+import { apiGet, apiPost } from '@/api/client';
+
+interface KeepAwakeStatus {
+  state: {
+    supported: boolean;
+    enabled: boolean;
+    holding: boolean;
+    reason: string;
+    runningLocalSessions: number;
+    battery: { pct: number; onAc: boolean } | null;
+    online: boolean | null;
+    needsSudo: boolean;
+    lastHotspotAttempt: { at: string; ok: boolean; detail: string } | null;
+    checkedAt: string | null;
+  };
+  sudoSetupCommand: string;
+}
 
 interface Props { config: Config; onSave: (partial: Partial<Config>) => Promise<void>; }
 
@@ -13,6 +30,17 @@ export function AdvancedSection({ config, onSave }: Props) {
   const git = config.git_versioning ?? {};
   const exec = config.tools?.exec ?? {};
   const sub = config.agent?.subagent ?? {};
+  const keepAwake = config.keep_awake ?? {};
+
+  // Keep-Awake live status (macOS console feature; route 404s elsewhere → hidden)
+  const [kaStatus, setKaStatus] = useState<KeepAwakeStatus | null>(null);
+  useEffect(() => {
+    apiGet<KeepAwakeStatus>('/api/keep-awake').then(setKaStatus).catch(() => setKaStatus(null));
+  }, []);
+  const refreshKaStatus = useCallback(() => {
+    // Force a poll so a toggle takes effect immediately, not after the next minute tick.
+    apiPost<KeepAwakeStatus>('/api/keep-awake/poll').then(setKaStatus).catch(() => {});
+  }, []);
 
   const handleSave = useCallback(async () => {
     // SectionCard renders a <form id="advanced"> — look it up directly.
@@ -48,8 +76,21 @@ export function AdvancedSection({ config, onSave }: Props) {
           max_tool_rounds: num('sub-rounds'),
         },
       },
+      keep_awake: {
+        ...config.keep_awake,
+        enabled: bool('ka-enabled'),
+        battery_floor_pct: num('ka-battery'),
+        offline_grace_minutes: num('ka-offline'),
+        linger_minutes: num('ka-linger'),
+        hotspot_ssid: val('ka-ssid') || undefined,
+        // Empty = keep whatever is stored (the field shows a masked value in
+        // cloud mode; never overwrite the real secret with the mask or '').
+        ...(val('ka-password') && !val('ka-password').includes('••') ? { hotspot_password: val('ka-password') } : {}),
+      },
     });
-  }, [config, onSave]);
+    // Re-evaluate immediately so the toggle takes effect without waiting a minute.
+    refreshKaStatus();
+  }, [config, onSave, refreshKaStatus]);
 
   // Auto-save: this section uses uncontrolled inputs (defaultValue/defaultChecked + FormData),
   // so there's no React state to fingerprint — and config-prop refreshes don't reset the DOM
@@ -174,6 +215,78 @@ export function AdvancedSection({ config, onSave }: Props) {
             </div>
           </div>
         </details>
+
+        {/* Keep Awake (macOS console only — hidden when the route reports unsupported) */}
+        {kaStatus?.state.supported !== false && (
+          <details className="settings-collapsible">
+            <summary className="settings-collapsible-title">Keep Mac Awake During Sessions</summary>
+            <div className="settings-collapsible-body">
+              <p className="text-sm text-muted" style={{ margin: '0 0 12px 0' }}>
+                Advanced. Keeps the Mac running with the lid closed while local Claude Code
+                sessions are active. Releases automatically on low battery or after a long
+                offline stretch. Requires a one-time admin setup (shown below when needed).
+              </p>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <input type="checkbox" name="ka-enabled" defaultChecked={keepAwake.enabled === true} style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
+                Enable Keep-Awake
+              </label>
+              <div className="form-row">
+                <div className="form-group">
+                  <label htmlFor="ka-battery">Battery Floor (%)</label>
+                  <input id="ka-battery" name="ka-battery" type="number" defaultValue={keepAwake.battery_floor_pct ?? ''} placeholder="30" min={5} max={95} />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="ka-offline">Offline Grace (min)</label>
+                  <input id="ka-offline" name="ka-offline" type="number" defaultValue={keepAwake.offline_grace_minutes ?? ''} placeholder="30" min={1} />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="ka-linger">Linger After Last Session (min)</label>
+                  <input id="ka-linger" name="ka-linger" type="number" defaultValue={keepAwake.linger_minutes ?? ''} placeholder="5" min={0} />
+                </div>
+              </div>
+              <div className="form-row">
+                <div className="form-group">
+                  <label htmlFor="ka-ssid">iPhone Hotspot SSID (optional)</label>
+                  <input id="ka-ssid" name="ka-ssid" type="text" defaultValue={keepAwake.hotspot_ssid ?? ''} placeholder="Never auto-join" />
+                </div>
+                <div className="form-group">
+                  <label htmlFor="ka-password">Hotspot Password</label>
+                  <input id="ka-password" name="ka-password" type="password" defaultValue={keepAwake.hotspot_password ?? ''} placeholder="Unchanged" autoComplete="off" />
+                </div>
+              </div>
+              <p className="text-sm text-muted" style={{ margin: '4px 0 12px 0' }}>
+                Hotspot join is best-effort: an iPhone hotspot is only visible while it is
+                broadcasting (Personal Hotspot screen open, or &ldquo;Allow Others to Join&rdquo;
+                with Maximize Compatibility).
+              </p>
+              {kaStatus && (
+                <div className="text-sm" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span>
+                    Status: {kaStatus.state.holding
+                      ? '🟢 Holding awake'
+                      : kaStatus.state.enabled ? `⚪ Not holding (${kaStatus.state.reason})` : '⚪ Disabled'}
+                    {' · '}{kaStatus.state.runningLocalSessions} local session{kaStatus.state.runningLocalSessions === 1 ? '' : 's'} running
+                    {kaStatus.state.battery ? ` · battery ${kaStatus.state.battery.pct}%${kaStatus.state.battery.onAc ? ' (AC)' : ''}` : ''}
+                    {kaStatus.state.online === false ? ' · offline' : ''}
+                  </span>
+                  {kaStatus.state.enabled && kaStatus.state.needsSudo && (
+                    <div>
+                      <p style={{ margin: '8px 0 4px 0', color: 'var(--warning, #b58900)' }}>
+                        One-time setup needed — run this in a terminal so Walnut may toggle sleep:
+                      </p>
+                      <pre className="settings-raw-config" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{kaStatus.sudoSetupCommand}</pre>
+                    </div>
+                  )}
+                  {kaStatus.state.lastHotspotAttempt && (
+                    <span className="text-muted">
+                      Last hotspot attempt: {kaStatus.state.lastHotspotAttempt.ok ? 'joined' : 'failed'} ({kaStatus.state.lastHotspotAttempt.detail})
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          </details>
+        )}
 
         {/* Chat Notifications */}
         <details className="settings-collapsible">
