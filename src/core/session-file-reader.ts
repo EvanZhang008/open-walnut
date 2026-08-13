@@ -444,6 +444,34 @@ export async function readSingleSubagentContent(
   }
 }
 
+/**
+ * Resolve a session's subagents/ directory path (no reads). When cwd is known +
+ * safe, the tilde path is exact. Otherwise resolve the canonical JSONL location
+ * via fs.find (one RPC, path only) and derive the sibling subagents/ dir.
+ * Exported for session-changes' per-file subagent cache, which lists the dir
+ * itself and selectively reads only new/grown files.
+ */
+export async function resolveSubagentDir(
+  sessionId: string,
+  cwd: string | undefined,
+  host: string,
+): Promise<string | null> {
+  if (cwd && isSafeForProjectEncoding(cwd)) {
+    return remoteSubagentDirPath(sessionId, cwd);
+  }
+  const { DaemonFileReader } = await import('./daemon-file-reader.js');
+  const reader = new DaemonFileReader(host);
+  try {
+    const found = await reader.findSessionPath(sessionId); // ~/.claude/projects/<enc>/<sid>.jsonl
+    if (found) return found.replace(/\.jsonl$/, '') + '/subagents';
+  } catch (err) {
+    log.session.debug('subagent dir resolve via fs.find failed', {
+      host, sessionId, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return null;
+}
+
 async function readSubagentContentsViaDaemon(
   sessionId: string,
   cwd: string | undefined,
@@ -452,22 +480,7 @@ async function readSubagentContentsViaDaemon(
   const { DaemonFileReader } = await import('./daemon-file-reader.js');
   const reader = new DaemonFileReader(host);
 
-  // Resolve the subagents dir. When cwd is known + safe, the tilde path is exact.
-  // Otherwise resolve the session's canonical JSONL location via fs.find and derive
-  // the sibling subagents/ dir — batchReadSubagents' fs.ls does NOT expand globs.
-  let subDir: string | null = null;
-  if (cwd && isSafeForProjectEncoding(cwd)) {
-    subDir = remoteSubagentDirPath(sessionId, cwd);
-  } else {
-    try {
-      const found = await reader.findSession(sessionId); // ~/.claude/projects/<enc>/<sid>.jsonl
-      if (found) subDir = found.path.replace(/\.jsonl$/, '') + '/subagents';
-    } catch (err) {
-      log.session.debug('subagent dir resolve via fs.find failed', {
-        host, sessionId, error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
+  const subDir = await resolveSubagentDir(sessionId, cwd, host);
   if (!subDir) return new Map();
 
   try {

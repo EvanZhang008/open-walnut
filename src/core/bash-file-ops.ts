@@ -63,15 +63,53 @@ function splitStatements(command: string): string[] {
   const out: string[] = [];
   let cur = '';
   let quote: '"' | "'" | null = null;
-  for (let i = 0; i < command.length; i++) {
+  const n = command.length;
+  for (let i = 0; i < n; i++) {
     const c = command[i]!;
     if (quote) {
       cur += c;
       if (c === quote) quote = null;
-      else if (c === '\\' && quote === '"' && i + 1 < command.length) { cur += command[++i]!; }
+      else if (c === '\\' && quote === '"' && i + 1 < n) { cur += command[++i]!; }
       continue;
     }
     if (c === '"' || c === "'") { quote = c; cur += c; continue; }
+    // Heredoc (`<<WORD` / `<<-WORD` / quoted WORD): the BODY is data, not shell.
+    // Parsing it as statements fabricated file ops — a JS arrow `=> 'n/a')`
+    // inside a heredoc script parsed as a stdout redirect and invented a file
+    // literally named "n/a)" in the Changed tab. Swallow the body up to the
+    // terminator line. (`<<<` herestrings pass through as a plain token.)
+    if (c === '<' && command[i + 1] === '<') {
+      if (command[i + 2] === '<') { cur += '<<<'; i += 2; continue; }
+      let j = i + 2;
+      if (command[j] === '-') j++;
+      while (command[j] === ' ' || command[j] === '\t') j++;
+      let q: string | null = null;
+      if (command[j] === '"' || command[j] === "'") { q = command[j]!; j++; }
+      let delim = '';
+      while (j < n) {
+        const d = command[j]!;
+        if (q) { if (d === q) { j++; break; } delim += d; j++; continue; }
+        if (d === ' ' || d === '\t' || d === '\n' || d === ';' || d === '<' || d === '>') break;
+        delim += d; j++;
+      }
+      if (!delim) { cur += c; continue; } // bare `<<` — leave to the tokenizer
+      // Keep the rest of the line (a real redirect can follow: `cat <<EOF > out`).
+      let lineEnd = command.indexOf('\n', j);
+      if (lineEnd === -1) lineEnd = n;
+      out.push(cur + ' ' + command.slice(j, lineEnd));
+      cur = '';
+      // Skip body lines until the terminator (leading tabs stripped, as <<-).
+      let k = lineEnd + 1;
+      while (k <= n && k > 0) {
+        let le = command.indexOf('\n', k);
+        if (le === -1) le = n;
+        const line = command.slice(k, le).replace(/^\t+/, '');
+        k = le + 1;
+        if (line === delim || le === n) break;
+      }
+      i = k - 1; // for-loop increments past the terminator's newline
+      continue;
+    }
     if (c === '\n' || c === ';') { out.push(cur); cur = ''; continue; }
     if ((c === '&' && command[i + 1] === '&') || (c === '|' && command[i + 1] === '|')) {
       out.push(cur); cur = ''; i++; continue;
@@ -106,6 +144,10 @@ function tokenize(stmt: string): string[] | null {
     if (c === '\\' && i + 1 < stmt.length) { cur += stmt[++i]!; has = true; continue; }
     if (c === ' ' || c === '\t' || c === '\r') { push(); continue; }
     if (c === '>') {
+      // `=>` is a JS/TS arrow leaking into an unquoted command fragment, not a
+      // redirect. Real `FOO=>bar` redirects exist in shell but are vanishingly
+      // rare next to arrows; conservative = never fabricate a file from `=>`.
+      if (cur.endsWith('=')) { cur += c; has = true; continue; }
       push();
       if (stmt[i + 1] === '>') { tokens.push('>>'); i++; } else { tokens.push('>'); }
       continue;

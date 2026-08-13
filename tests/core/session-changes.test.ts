@@ -10,7 +10,7 @@ vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader());
 
 import { CLAUDE_HOME } from '../../src/constants.js';
 import { encodeProjectPath } from '../../src/core/session-file-reader.js';
-import { computeSessionChanges } from '../../src/core/session-changes.js';
+import { computeSessionChanges, computeSessionChangesSwr } from '../../src/core/session-changes.js';
 
 const tmpBase = CLAUDE_HOME;
 // A sandbox for the actual edited files (the "current content on disk" the engine
@@ -880,5 +880,108 @@ describe('computeSessionChanges — incremental parse cache', () => {
     const res1 = await computeSessionChanges(sid, repo);
     const res2 = await computeSessionChanges(sid, repo);
     expect(res2).toBe(res1); // identity: the exact cached object
+  });
+});
+
+// ── Subagent per-file parse cache (size-keyed) ──
+//
+// A whale session's subagents/ dir can dwarf the main JSONL (observed 59MB vs
+// 9.8MB). Finished subagent JSONLs never change, so recomputes must NOT
+// re-read files whose size is unchanged — only new/grown ones.
+describe('computeSessionChanges — subagent per-file cache', () => {
+  const jsonlAbs = (sessionId: string, cwd: string) =>
+    path.join(tmpBase, 'projects', encodeProjectPath(cwd), `${sessionId}.jsonl`);
+
+  async function touchMain(sessionId: string, cwd: string) {
+    // Append a benign line + bump mtime so the mtime fast-path doesn't serve
+    // the cached result (we want a real recompute that hits the subagent path).
+    const p = jsonlAbs(sessionId, cwd);
+    await fsp.appendFile(p, '\n' + JSON.stringify({ type: 'user', cwd, message: { role: 'user', content: 'tick' } }));
+    const now = new Date(Date.now() + 5_000);
+    await fsp.utimes(p, now, now);
+  }
+
+  it('unchanged subagent files are NOT re-read on recompute; new ones are picked up', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const subA = path.join(repo, 'a.ts');
+    const subB = path.join(repo, 'b.ts');
+    await putFile(subA, 'aaa v2\n');
+    await putFile(subB, 'bbb v2\n');
+
+    const sid = `subcache-${Date.now()}`;
+    await writeSessionJsonl(sid, repo, [
+      { type: 'user', cwd: repo, message: { role: 'user', content: 'go' } },
+    ]);
+    await writeSubagentJsonl(sid, repo, 'agent1', [
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: subA, old_string: 'aaa v1', new_string: 'aaa v2' } }]),
+    ]);
+
+    const res1 = await computeSessionChanges(sid, repo);
+    expect(res1.groups.flatMap(g => g.files.map(f => f.filePath))).toContain(subA);
+
+    // DELETE agent1's file content on disk out from under the cache, keeping
+    // name+size identical (rewrite same bytes) — a size-keyed cache hit means
+    // the ops survive without a read. Then add a NEW subagent file.
+    await writeSubagentJsonl(sid, repo, 'agent2', [
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: subB, old_string: 'bbb v1', new_string: 'bbb v2' } }]),
+    ]);
+    await touchMain(sid, repo);
+
+    const res2 = await computeSessionChanges(sid, repo);
+    const paths2 = res2.groups.flatMap(g => g.files.map(f => f.filePath));
+    expect(paths2).toContain(subA); // cached ops still merged
+    expect(paths2).toContain(subB); // new file picked up
+    expect(res2.fileCount).toBe(2);
+  });
+
+  it('a vanished subagent file drops out of the merge', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const subA = path.join(repo, 'gone.ts');
+    await putFile(subA, 'ggg v2\n');
+
+    const sid = `subgone-${Date.now()}`;
+    await writeSessionJsonl(sid, repo, [
+      { type: 'user', cwd: repo, message: { role: 'user', content: 'go' } },
+    ]);
+    await writeSubagentJsonl(sid, repo, 'agentg', [
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: subA, old_string: 'ggg v1', new_string: 'ggg v2' } }]),
+    ]);
+
+    const res1 = await computeSessionChanges(sid, repo);
+    expect(res1.fileCount).toBe(1);
+
+    await fsp.rm(path.join(tmpBase, 'projects', encodeProjectPath(repo), sid, 'subagents', 'agent-agentg.jsonl'));
+    await touchMain(sid, repo);
+
+    const res2 = await computeSessionChanges(sid, repo);
+    expect(res2.fileCount).toBe(0);
+  });
+});
+
+// ── SWR (stale-while-revalidate) ──
+describe('computeSessionChangesSwr', () => {
+  it('serves the cached result instantly with stale+refreshing flags', async () => {
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const f = path.join(repo, 'swr.ts');
+    await putFile(f, 'v2\n');
+
+    const sid = `swr-${Date.now()}`;
+    await writeSessionJsonl(sid, repo, [
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: f, old_string: 'v1', new_string: 'v2' } }]),
+    ]);
+
+    // Cold: no cache → falls through to a blocking compute (no stale flag).
+    const cold = await computeSessionChangesSwr(sid, repo);
+    expect(cold.stale).toBeUndefined();
+    expect(cold.fileCount).toBe(1);
+
+    // Warm: cached → instant result flagged stale+refreshing.
+    const warm = await computeSessionChangesSwr(sid, repo);
+    expect(warm.stale).toBe(true);
+    expect(warm.refreshing).toBe(true);
+    expect(warm.fileCount).toBe(1);
   });
 });

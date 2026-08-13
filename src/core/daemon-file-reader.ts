@@ -305,6 +305,19 @@ export class DaemonFileReader implements SessionFileReader {
   }
 
   /**
+   * listDir with per-file size/mtimeMs (fs.ls detail:true). Old daemons ignore
+   * the flag and return entries without size — callers must treat a missing
+   * size as "unknown, assume changed".
+   */
+  async listDirDetailed(remotePath: string): Promise<Array<{ name: string; type: string; size?: number; mtimeMs?: number }>> {
+    await this.resolve()
+    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const result = await conn.send('fs.ls', { path: remotePath, detail: true })
+    if (!result.ok) return []
+    return result.entries as Array<{ name: string; type: string; size?: number; mtimeMs?: number }>
+  }
+
+  /**
    * Locate a session JSONL's absolute path via fs.find WITHOUT reading it.
    * One RPC — used by callers that want to stat/range-read afterwards (e.g.
    * the session-changes incremental cache for hashed-cwd sessions, where a

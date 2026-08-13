@@ -153,3 +153,29 @@ describe('computeGitDiff', () => {
     expect(res!.files.map((f) => f.relPath)).toEqual(['a.ts', 'm.ts', 'z.ts']);
   });
 });
+
+describe('computeGitDiff — opts.paths narrowing', () => {
+  it('materializes blobs ONLY for the requested paths (no git show for the rest)', async () => {
+    const { exec, calls } = mockExec({
+      'git rev-parse --show-toplevel': { stdout: REPO },
+      'git diff --name-status -z HEAD': { stdout: 'M\0keep.ts\0M\0skip1.ts\0M\0skip2.ts\0' },
+      'git ls-files --others --exclude-standard -z': { stdout: '' },
+      'git show HEAD:keep.ts': { stdout: 'old\n' },
+    });
+    const res = await computeGitDiff('uncommitted', REPO, exec, mockRead({ [REPO + '/keep.ts']: 'new\n' }), { paths: ['keep.ts'] });
+    expect(res!.files.map((f) => f.relPath)).toEqual(['keep.ts']);
+    expect(calls).not.toContain('git show HEAD:skip1.ts');
+    expect(calls).not.toContain('git show HEAD:skip2.ts');
+  });
+
+  it('a rename matches on its OLD path too', async () => {
+    const { exec } = mockExec({
+      'git rev-parse --show-toplevel': { stdout: REPO },
+      'git diff --name-status -z HEAD': { stdout: 'R100\0old/name.ts\0new/name.ts\0' },
+      'git ls-files --others --exclude-standard -z': { stdout: '' },
+      'git show HEAD:old/name.ts': { stdout: 'body\n' },
+    });
+    const res = await computeGitDiff('uncommitted', REPO, exec, mockRead({ [REPO + '/new/name.ts']: 'body\n' }), { paths: ['old/name.ts'] });
+    expect(res!.files[0]).toMatchObject({ relPath: 'new/name.ts', status: 'renamed' });
+  });
+});

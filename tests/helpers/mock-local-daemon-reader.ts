@@ -172,6 +172,30 @@ class MockLocalDaemonFileReader {
     }
   }
 
+  /** listDir with per-file size/mtimeMs — mirrors the real reader's fs.ls detail:true. */
+  async listDirDetailed(remotePath: string): Promise<Array<{ name: string; type: string; size?: number; mtimeMs?: number }>> {
+    const abs = await this.resolve(remotePath);
+    if (!abs) return [];
+    let entries: string[];
+    try {
+      entries = await fsp.readdir(abs);
+    } catch {
+      return [];
+    }
+    const result: Array<{ name: string; type: string; size?: number; mtimeMs?: number }> = [];
+    for (const name of entries) {
+      try {
+        const s = await fsp.stat(path.join(abs, name));
+        const type = s.isDirectory() ? 'dir' : s.isFile() ? 'file' : 'other';
+        if (type === 'file') result.push({ name, type, size: s.size, mtimeMs: s.mtimeMs });
+        else result.push({ name, type });
+      } catch {
+        result.push({ name, type: 'other' });
+      }
+    }
+    return result;
+  }
+
   async findSession(sessionId: string): Promise<{ content: string; path: string } | null> {
     const found = await this.findSessionPath(sessionId);
     if (!found) return null;

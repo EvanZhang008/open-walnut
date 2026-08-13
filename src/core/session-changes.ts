@@ -41,12 +41,13 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   readSessionJsonlContent,
-  readSubagentContents,
   isSafeForProjectEncoding,
   remoteJsonlPath,
+  resolveSubagentDir,
   extractCwdFromJsonlContent,
 } from './session-file-reader.js';
 import { parseBashFileOps } from './bash-file-ops.js';
+import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
 
 // ── Public types (shared shape with the frontend api wrapper) ──
@@ -95,6 +96,14 @@ export interface SessionChangesResult {
   fileCount: number;
   /** True if any file was reconstructed only partially. */
   anyPartial: boolean;
+  /** SWR markers (computeSessionChangesSwr): this result was served from cache
+   *  and MAY be outdated; a recompute is running — follow up with a normal
+   *  (blocking) fetch to converge on fresh data. */
+  stale?: boolean;
+  refreshing?: boolean;
+  /** True when before/after content is absent (disk-restored light result —
+   *  the file list is real, diffs need the follow-up fetch). */
+  light?: boolean;
 }
 
 // ── Internal: per-file accumulated ops ──
@@ -228,6 +237,135 @@ function collectOpsFromJsonl(content: string, fileMap: Map<string, FileAccum>): 
       fileMap.set(filePath, accum);
     }
   }
+}
+
+/**
+ * Merge one parsed fileMap into another, replaying ops in order. Rename ops
+ * re-run their migration against the DESTINATION map (mirrors the sequential
+ * semantics of parsing all content into one shared map): a rename in subagent B
+ * still migrates ops subagent A accumulated on the old path.
+ */
+function mergeFileMapInto(src: Map<string, FileAccum>, dest: Map<string, FileAccum>): void {
+  for (const [filePath, accum] of src) {
+    for (const op of accum.ops) {
+      if (op.kind === 'rename') {
+        const srcAccum = dest.get(op.from);
+        const destAccum = dest.get(filePath) ?? { filePath, cwd: accum.cwd, ops: [] };
+        if (!destAccum.cwd && accum.cwd) destAccum.cwd = accum.cwd;
+        if (srcAccum && srcAccum !== destAccum) {
+          destAccum.ops.push(...srcAccum.ops);
+          dest.delete(op.from);
+        }
+        destAccum.ops.push(op);
+        dest.set(filePath, destAccum);
+      } else {
+        const destAccum = dest.get(filePath) ?? { filePath, cwd: accum.cwd, ops: [] };
+        if (!destAccum.cwd && accum.cwd) destAccum.cwd = accum.cwd;
+        destAccum.ops.push(op);
+        dest.set(filePath, destAccum);
+      }
+    }
+  }
+}
+
+// ── Subagent per-file parse cache ──
+//
+// A whale session's subagents/ dir can dwarf the main JSONL (observed: 9.8MB
+// main vs 59MB across 91 agent-*.jsonl). Re-reading ALL of it on every Changed
+// tab open was the dominant cost (~15-30s over the tunnel). A finished
+// subagent's JSONL never changes, so: list the dir with per-file sizes
+// (fs.ls detail:true), re-read ONLY files whose size changed (live agents) or
+// that are new, and re-merge cached parsed ops for the rest. Reads run in a
+// small parallel pool (the old loop was strictly serial).
+
+interface SubagentCacheEntry {
+  size: number;
+  fileMap: Map<string, FileAccum>;
+}
+
+const SUBAGENT_READ_PARALLELISM = 4;
+
+/** Minimal reader surface (structural — the real DaemonFileReader satisfies it). */
+interface SubagentReader {
+  listDirDetailed(p: string): Promise<Array<{ name: string; type: string; size?: number }>>;
+  readFile(p: string): Promise<string | null>;
+}
+
+/**
+ * Collect subagent ops into `fileMap`, maintaining `subCache` (mutated in
+ * place). Returns the resolved subagents dir (reused across recomputes) plus
+ * the file paths whose ops came from NEWLY-READ subagent JSONLs this round —
+ * the incremental content-reuse path treats only those as changed.
+ */
+async function collectSubagentOpsCached(
+  reader: SubagentReader,
+  sessionId: string,
+  effectiveCwd: string | undefined,
+  host: string,
+  subCache: Map<string, SubagentCacheEntry>,
+  subDirCached: string | null | undefined,
+  fileMap: Map<string, FileAccum>,
+): Promise<{ subDir: string | null; newPaths: Set<string> }> {
+  const newPaths = new Set<string>();
+  const subDir = subDirCached ?? await resolveSubagentDir(sessionId, effectiveCwd, host);
+  if (!subDir) return { subDir: null, newPaths };
+
+  let entries: Array<{ name: string; type: string; size?: number }>;
+  try {
+    entries = await reader.listDirDetailed(subDir);
+  } catch {
+    return { subDir, newPaths }; // dir unreadable this round — keep cache for next time
+  }
+  const jsonls = entries.filter(
+    (e) => e.type === 'file' && e.name.startsWith('agent-') && e.name.endsWith('.jsonl'),
+  );
+
+  // Drop cache entries for files that vanished from disk.
+  const names = new Set(jsonls.map((e) => e.name));
+  for (const k of [...subCache.keys()]) {
+    if (!names.has(k)) subCache.delete(k);
+  }
+
+  // Re-read only new/changed files. size undefined (old daemon without
+  // detail support) is stored as -1 → never matches → re-read every time
+  // (the pre-cache behavior, so old daemons see no regression).
+  const toRead = jsonls.filter((e) => {
+    const c = subCache.get(e.name);
+    return !(c && typeof e.size === 'number' && c.size === e.size);
+  });
+
+  let next = 0;
+  const freshlyRead = new Set<string>();
+  const worker = async (): Promise<void> => {
+    while (next < toRead.length) {
+      const e = toRead[next++]!;
+      try {
+        const content = await reader.readFile(`${subDir}/${e.name}`);
+        if (content == null) { subCache.delete(e.name); continue; }
+        const parsed = new Map<string, FileAccum>();
+        collectOpsFromJsonl(content, parsed);
+        subCache.set(e.name, { size: typeof e.size === 'number' ? e.size : -1, fileMap: parsed });
+        freshlyRead.add(e.name);
+      } catch {
+        // skip unreadable file — matches old skip-on-error behavior
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(SUBAGENT_READ_PARALLELISM, toRead.length) }, worker),
+  );
+
+  // Merge in stable name order so the result is deterministic across cache
+  // hits/misses (cross-subagent op order was never chronological anyway).
+  for (const name of [...names].sort()) {
+    const c = subCache.get(name);
+    if (!c) continue;
+    mergeFileMapInto(c.fileMap, fileMap);
+    if (freshlyRead.has(name)) {
+      for (const p of c.fileMap.keys()) newPaths.add(p);
+    }
+  }
+  return { subDir, newPaths };
 }
 
 const execFileAsync = promisify(execFile);
@@ -489,6 +627,17 @@ interface CacheEntry {
   mtimeMs: number;
   result: SessionChangesResult;
   inc?: IncrementalState;
+  /** Per-subagent-file parsed ops, keyed by filename, size-validated. Finished
+   *  subagent JSONLs never change, so cache hits skip the read entirely — this
+   *  is what killed the 59MB-per-open subagent re-read on whale sessions. */
+  subCache?: Map<string, SubagentCacheEntry>;
+  /** Paths evaluated last compute but DROPPED from the result (clean no-op /
+   *  orphan scratch file / excluded). With unchanged ops the verdict holds, so
+   *  incremental recomputes skip them without re-reading content — a whale's
+   *  hundreds of /tmp scratch files otherwise re-read on every mtime bump. */
+  droppedPaths?: Set<string>;
+  /** Resolved subagents/ dir (an fs.find for hashed-cwd sessions — cache it). */
+  subDir?: string | null;
   /** Git-root lookups persist across recomputes — repo roots don't move, and
    *  re-walking them is listDir-per-level over the tunnel for remote sessions. */
   gitRootByDir: Map<string, string | null>;
@@ -519,19 +668,28 @@ const MAX_CACHE_CHARS = 64 * 1024 * 1024;
 let maxCacheChars = MAX_CACHE_CHARS;
 let cacheChars = 0;
 
-/** Approx retained chars of an entry: file before/after + incremental op payloads. */
+/** Approx retained chars of one fileMap's op payloads. */
+function fileMapChars(fileMap: Map<string, FileAccum>): number {
+  let n = 0;
+  for (const accum of fileMap.values()) {
+    for (const op of accum.ops) {
+      if (op.kind === 'edit') n += op.oldString.length + op.newString.length;
+      else if (op.kind === 'write') n += op.content.length;
+    }
+  }
+  return n;
+}
+
+/** Approx retained chars of an entry: file before/after + incremental op
+ *  payloads + cached subagent op payloads. */
 function entryChars(entry: CacheEntry): number {
   let n = 0;
   for (const group of entry.result.groups) {
     for (const f of group.files) n += f.before.length + f.after.length;
   }
-  if (entry.inc) {
-    for (const accum of entry.inc.mainFileMap.values()) {
-      for (const op of accum.ops) {
-        if (op.kind === 'edit') n += op.oldString.length + op.newString.length;
-        else if (op.kind === 'write') n += op.content.length;
-      }
-    }
+  if (entry.inc) n += fileMapChars(entry.inc.mainFileMap);
+  if (entry.subCache) {
+    for (const c of entry.subCache.values()) n += fileMapChars(c.fileMap);
   }
   return n;
 }
@@ -630,6 +788,104 @@ function splitCompleteLines(content: string): { complete: string; tail: string }
 function lastLineOf(complete: string): string {
   const withoutFinal = complete.slice(0, -1);
   return withoutFinal.slice(withoutFinal.lastIndexOf('\n') + 1);
+}
+
+// ── Disk snapshot (light result) — instant list across server restarts ──
+//
+// The in-memory cache dies with the process; a whale session's first Changed
+// open after a deploy paid the full 20-40s again. We persist a LIGHT result
+// (paths/status/ops only — before/after stripped, so a 551-file whale is
+// ~100KB) and serve it instantly with stale+light flags while the real
+// recompute runs. Never a source of truth — purely a first-paint accelerator.
+
+function snapshotPath(key: string): string {
+  const safe = key.replace(/[^a-zA-Z0-9._@-]/g, '-');
+  return path.join(WALNUT_HOME, 'cache', 'session-changes', `${safe}.json`);
+}
+
+function toLightResult(result: SessionChangesResult): SessionChangesResult {
+  return {
+    ...result,
+    groups: result.groups.map((g) => ({
+      ...g,
+      files: g.files.map((f) => ({ ...f, before: '', after: '' })),
+    })),
+  };
+}
+
+async function writeDiskSnapshot(key: string, result: SessionChangesResult): Promise<void> {
+  try {
+    const p = snapshotPath(key);
+    await fsp.mkdir(path.dirname(p), { recursive: true });
+    // Same-dir tmp + rename: atomic on POSIX, avoids EXDEV.
+    const tmp = `${p}.tmp-${process.pid}`;
+    await fsp.writeFile(tmp, JSON.stringify(toLightResult(result)), 'utf-8');
+    await fsp.rename(tmp, p);
+  } catch { /* best-effort — never fail the request over a snapshot */ }
+}
+
+async function readDiskSnapshot(key: string): Promise<SessionChangesResult | null> {
+  try {
+    const raw = await fsp.readFile(snapshotPath(key), 'utf-8');
+    const parsed = JSON.parse(raw) as SessionChangesResult;
+    if (!Array.isArray(parsed.groups)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Stale-while-revalidate wrapper: return SOMETHING paintable immediately.
+ *  1. In-memory cache → serve it (stale:true) + background recompute.
+ *  2. Disk snapshot   → serve it (stale:true, light:true) + background recompute.
+ *  3. Nothing         → block on the normal compute (cold first open).
+ * The background recompute dedups through the same inflightByKey chain, so a
+ * follow-up blocking fetch queues behind it and lands on the mtime fast-path.
+ */
+export async function computeSessionChangesSwr(
+  sessionId: string,
+  cwd?: string,
+  host?: string,
+  outputFile?: string,
+): Promise<SessionChangesResult> {
+  const key = cacheKey(sessionId, host);
+  const kickRefresh = (): void => {
+    void computeSessionChanges(sessionId, cwd, host, outputFile).catch(() => { /* logged inside */ });
+  };
+  const entry = cacheGet(key);
+  if (entry) {
+    kickRefresh();
+    return { ...entry.result, stale: true, refreshing: true };
+  }
+  const disk = await readDiskSnapshot(key);
+  if (disk && disk.sessionId === sessionId) {
+    kickRefresh();
+    return { ...disk, stale: true, refreshing: true, light: true };
+  }
+  return computeSessionChanges(sessionId, cwd, host, outputFile);
+}
+
+/**
+ * Non-blocking peek at ONE file's change record from the in-memory cache,
+ * even when the cache is outdated (mtime moved). Serves the Changed tab's
+ * per-file diff while a background recompute holds the in-flight chain —
+ * without this, a click lands BEHIND a 20-40s whale recompute (observed 31s).
+ * Returns null when the session/file isn't cached; caller falls back to the
+ * blocking compute.
+ */
+export function peekSessionFileChange(
+  sessionId: string,
+  host: string | undefined,
+  filePath: string,
+): { repoRoot: string; file: SessionFileChange } | null {
+  const entry = cacheGet(cacheKey(sessionId, host));
+  if (!entry) return null;
+  for (const group of entry.result.groups) {
+    const file = group.files.find((f) => f.filePath === filePath);
+    if (file) return { repoRoot: group.repoRoot, file };
+  }
+  return null;
 }
 
 // ── Main entry ──
@@ -741,6 +997,13 @@ async function computeSessionChangesInner(
   let inc: IncrementalState | undefined;
   let effectiveCwd = cwd;
   let parseMode: 'incremental' | 'full' | 'legacy' = 'legacy';
+  // Paths whose ops CHANGED this round (new main-JSONL ops / newly-read
+  // subagent files). null = unknown → treat every file as changed (full/legacy
+  // parse). Incremental recomputes use it to reuse the cached before/after for
+  // untouched files instead of re-reading every file's current content — the
+  // dominant recompute cost for LIVE whale sessions (mtime moves every turn,
+  // and each recompute paid 100-1200 content reads over the daemon RPC).
+  let changedPaths: Set<string> | null = null;
   const READ_TIMEOUT = host ? 120_000 : 30_000;
   const withTimeout = <T>(p: Promise<T>): Promise<T> => Promise.race([
     p,
@@ -762,7 +1025,17 @@ async function computeSessionChangesInner(
           if (nl !== -1 && lineMatches(firstLine, prior.lastLineCheck)) {
             const appended = range.content.slice(nl + 1);
             const { complete, tail } = splitCompleteLines(appended);
+            changedPaths = new Set<string>();
             if (complete) {
+              // Double-parse the (small) appended block: once into a throwaway
+              // map purely to learn WHICH paths got new ops, once into the
+              // cached map with unchanged merge semantics.
+              const tempNew = new Map<string, FileAccum>();
+              collectOpsFromJsonl(complete, tempNew);
+              for (const [p, a] of tempNew) {
+                changedPaths.add(p);
+                for (const op of a.ops) if (op.kind === 'rename') changedPaths.add(op.from);
+              }
               collectOpsFromJsonl(complete, prior.mainFileMap);
               const lastLine = lastLineOf(complete);
               prior.lastLineStart = prior.parsedBytes + Buffer.byteLength(complete, 'utf-8')
@@ -778,7 +1051,14 @@ async function computeSessionChangesInner(
             }
             inc = prior;
             fileMap = cloneFileMap(prior.mainFileMap);
-            if (tail) collectOpsFromJsonl(tail, fileMap);
+            if (tail) {
+              // Trailing partial line: parse into the clone AND mark its paths
+              // changed (its ops are per-request, never cached).
+              const tempTail = new Map<string, FileAccum>();
+              collectOpsFromJsonl(tail, tempTail);
+              for (const p of tempTail.keys()) changedPaths.add(p);
+              collectOpsFromJsonl(tail, fileMap);
+            }
             effectiveCwd = prior.effectiveCwd ?? cwd;
             parseMode = 'incremental';
           }
@@ -831,16 +1111,37 @@ async function computeSessionChangesInner(
   }
 
   // 2. Subagent JSONLs — subagents that edit write into their own files.
+  //    Per-file size-keyed cache: only new/grown files are re-read (finished
+  //    subagents never change), reads run in a small parallel pool.
+  //    `cached` (not `cachedEntry`): ?refresh=1 must re-read subagent DATA too.
+  //    subDir: when the main JSONL path is known, the subagents dir is ALWAYS
+  //    its sibling — derive it (never stale). The cached value only serves the
+  //    legacy path (no jsonlPath), where deriving would cost another fs.find.
+  const subCache = cached?.subCache ?? new Map<string, SubagentCacheEntry>();
+  let subDir = jsonlPath
+    ? jsonlPath.replace(/\.jsonl$/, '') + '/subagents'
+    : cachedEntry?.subDir;
+  // The subCache is keyed by FILENAME — valid only within one subagents dir.
+  // If the dir moved (session re-keyed to a different cwd), same-named files
+  // with identical sizes would false-hit; drop the cache.
+  if (cached?.subDir && subDir && cached.subDir !== subDir) subCache.clear();
   try {
-    const subContents = await readSubagentContents(sessionId, effectiveCwd, host);
-    for (const [, content] of subContents) {
-      collectOpsFromJsonl(content, fileMap);
-    }
+    const subResult = await collectSubagentOpsCached(
+      reader, sessionId, effectiveCwd, host ?? '__local__', subCache, subDir, fileMap,
+    );
+    subDir = subResult.subDir;
+    if (changedPaths) for (const p of subResult.newPaths) changedPaths.add(p);
   } catch (err) {
+    // Unknown what changed in subagents — disable content reuse this round.
+    changedPaths = null;
     log.session.debug('session-changes: subagent read failed', {
       sessionId, error: err instanceof Error ? err.message : String(err),
     });
   }
+  // subCache grew IN PLACE on a live entry (same hazard as inc.mainFileMap):
+  // re-account now so a throw before the final cacheSet can't leave the entry
+  // under-counted against the byte budget.
+  if (cached) cacheReaccount(key, cached);
 
   // Git-root walk cache persists across recomputes (roots don't move; remote
   // walks are listDir-per-level RPCs). Kept even when fileMap is empty.
@@ -848,7 +1149,7 @@ async function computeSessionChangesInner(
 
   if (fileMap.size === 0) {
     const empty: SessionChangesResult = { sessionId, groups: [], fileCount: 0, anyPartial: false };
-    if (mtimeMs !== undefined) cacheSet(key, { mtimeMs, result: empty, inc, gitRootByDir, resolvedPath });
+    if (mtimeMs !== undefined) cacheSet(key, { mtimeMs, result: empty, inc, subCache, subDir, gitRootByDir, resolvedPath });
     return empty;
   }
 
@@ -860,9 +1161,41 @@ async function computeSessionChangesInner(
   // recover the removed content from git so the diff shows what was lost: local
   // sessions run `git show HEAD:<relpath>` in-process; remote sessions can't
   // (no per-file SSH), so the delete still shows with an empty before + partial.
+  //
+  // Content-read reuse: on an incremental recompute (`changedPaths` known), a
+  // file whose ops did NOT change this round reuses the cached record verbatim
+  // instead of re-reading its content — this was the dominant recompute cost
+  // for live whale sessions (100-1200 reader.readFile RPCs per mtime bump,
+  // 30s+ observed). Trade-off: an out-of-band disk edit to an untouched file
+  // shows stale until the next full parse or ?refresh=1 — acceptable for a
+  // view scoped to what THE SESSION changed.
+  const priorChanges = new Map<string, SessionFileChange>();
+  if (changedPaths && cached) {
+    for (const g of cached.result.groups) {
+      for (const f of g.files) priorChanges.set(f.filePath, f);
+    }
+  }
+  let reusedRecords = 0;
   const changesByPath = new Map<string, SessionFileChange>();
   await Promise.all(
     [...fileMap.values()].map(async (accum) => {
+      if (changedPaths && !changedPaths.has(accum.filePath)) {
+        const prior = priorChanges.get(accum.filePath);
+        if (prior) {
+          reusedRecords++;
+          changesByPath.set(accum.filePath, { ...prior, relPath: accum.filePath });
+          return;
+        }
+        // Dropped last time (clean no-op / orphan / excluded) with unchanged
+        // ops → same verdict; skip without a read. No record in changesByPath
+        // = the grouping loop drops it again.
+        if (cached?.droppedPaths?.has(accum.filePath)) {
+          reusedRecords++;
+          return;
+        }
+        // Genuinely unknown (first sight without ops change is rare — e.g.
+        // cache built by an older build) — fall through to a real read.
+      }
       let current: string | null = null;
       try {
         current = await reader.readFile(accum.filePath);
@@ -920,9 +1253,12 @@ async function computeSessionChangesInner(
   };
 
   const groupsByRoot = new Map<string, SessionRepoGroup>();
+  // Paths that get no record in the final result — persisted so incremental
+  // recomputes can skip re-evaluating them while their ops are unchanged.
+  const droppedPaths = new Set<string>(cached?.droppedPaths ?? []);
   for (const accum of fileMap.values()) {
     const change = changesByPath.get(accum.filePath);
-    if (!change) continue;
+    if (!change) continue; // reused drop verdict (or read raced a delete)
     // Drop CLEAN net no-op edits: the session touched the file but reconstruction
     // (which succeeded — not partial) shows no actual change, e.g. edited then
     // reverted to the same bytes. An empty diff is noise, and it's exactly why the
@@ -933,15 +1269,21 @@ async function computeSessionChangesInner(
     // EXCEPT renames/deletes: a pure move has before===after content but is still
     // a real structural change the user wants to see.
     const structural = change.status === 'renamed' || change.status === 'deleted';
-    if (change.before === change.after && !change.partial && !structural) continue;
+    if (change.before === change.after && !change.partial && !structural) {
+      droppedPaths.add(accum.filePath);
+      continue;
+    }
     const { root, orphan } = await resolveRepoRoot(accum.filePath, accum.cwd);
     // Skip stray out-of-repo scratch files (see resolveRepoRoot) so the set
     // matches the git modes, which can never show a non-repo file.
-    if (orphan) continue;
+    if (orphan) { droppedPaths.add(accum.filePath); continue; }
+    // Shown this round → not dropped (ops may have re-materialized a diff).
+    droppedPaths.delete(accum.filePath);
     change.relPath = path.relative(root, accum.filePath) || path.basename(accum.filePath);
     // Convert an absolute rename source to a repo-relative display path (fall back
-    // to a basename if it lived outside this root).
-    if (change.oldRelPath) {
+    // to a basename if it lived outside this root). A REUSED prior record's
+    // oldRelPath is already repo-relative — converting again would mangle it.
+    if (change.oldRelPath && path.isAbsolute(change.oldRelPath)) {
       const relOld = path.relative(root, change.oldRelPath);
       change.oldRelPath = relOld && !relOld.startsWith('..') ? relOld : path.basename(change.oldRelPath);
     }
@@ -960,7 +1302,10 @@ async function computeSessionChangesInner(
   //    they're agent scratch, not reviewable code. A whole group made only of
   //    these is dropped in step 6. Other .claude files (settings/skills/...) stay.
   for (const group of groupsByRoot.values()) {
-    group.files = group.files.filter((f) => !isExcludedPath(f.filePath));
+    group.files = group.files.filter((f) => {
+      if (isExcludedPath(f.filePath)) { droppedPaths.add(f.filePath); return false; }
+      return true;
+    });
   }
 
   // 6. Order: cwd group first, then submodules, then other repos; files sorted by relPath.
@@ -976,9 +1321,10 @@ async function computeSessionChangesInner(
   const anyPartial = groups.some((g) => g.files.some((f) => f.partial));
   const result: SessionChangesResult = { sessionId, groups, fileCount, anyPartial };
 
-  if (mtimeMs !== undefined) cacheSet(key, { mtimeMs, result, inc, gitRootByDir, resolvedPath });
+  if (mtimeMs !== undefined) cacheSet(key, { mtimeMs, result, inc, subCache, subDir, droppedPaths, gitRootByDir, resolvedPath });
+  void writeDiskSnapshot(key, result);
   log.session.info('session-changes computed', {
-    sessionId, host: host ?? '__local__', parseMode, fileCount, durationMs: Date.now() - t0,
+    sessionId, host: host ?? '__local__', parseMode, fileCount, reusedRecords, durationMs: Date.now() - t0,
   });
   return result;
 }

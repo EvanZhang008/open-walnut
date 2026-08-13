@@ -124,6 +124,14 @@ export async function computeGitDiff(
   cwd: string,
   exec: ExecFn,
   readText: ReadTextFn,
+  opts?: {
+    /** Only materialize before/after for these repo-relative paths (a rename
+     *  matches on either side). The scope=session caller knows exactly which
+     *  files it will show — without this it paid a `git show` for EVERY changed
+     *  file in the repo and then threw most away (observed: 683 serial spawns
+     *  ≈ 10.7s to display 16 files). */
+    paths?: string[];
+  },
 ): Promise<GitDiffResult | null> {
   // Repo root anchors all relPaths + blob reads.
   const rootRes = await exec(['git', 'rev-parse', '--show-toplevel'], cwd);
@@ -138,7 +146,7 @@ export async function computeGitDiff(
     // e.g. HEAD~1 missing (shallow/single commit), or unknown upstream rev.
     throw new GitDiffError(ns.stderr.trim() || `git diff against ${baseRev} failed`);
   }
-  const entries = parseNameStatusZ(ns.stdout);
+  let entries = parseNameStatusZ(ns.stdout);
 
   // Untracked files are "not committed" too, but `git diff` never reports them.
   // Include them read-only (`ls-files --others`, NO index mutation) so the
@@ -153,21 +161,35 @@ export async function computeGitDiff(
       }
     }
   }
+  if (opts?.paths) {
+    const want = new Set(opts.paths);
+    entries = entries.filter((e) => want.has(e.relPath) || (e.oldRelPath !== undefined && want.has(e.oldRelPath)));
+  }
   if (entries.length === 0) return { repoRoot, files: [] };
 
   // before = blob at the base rev (`git show <rev>:<path>`); after = working
-  // tree content. All host-local, so a simple per-file loop is fine — no batching.
-  const files: GitDiffFile[] = [];
-  for (const e of entries) {
-    const beforePath = e.oldRelPath ?? e.relPath;
-    let before = '';
-    if (e.status !== 'added') {
-      const show = await exec(['git', 'show', `${baseRev}:${beforePath}`], repoRoot);
-      before = show.code === 0 ? show.stdout : ''; // non-zero = absent at base
+  // tree content. Host-local but each `git show` is a process spawn — a serial
+  // loop over a big repo took ~15ms × N. Small parallel pool instead.
+  const files: GitDiffFile[] = new Array(entries.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < entries.length) {
+      const i = next++;
+      const e = entries[i]!;
+      const beforePath = e.oldRelPath ?? e.relPath;
+      let before = '';
+      if (e.status !== 'added') {
+        const show = await exec(['git', 'show', `${baseRev}:${beforePath}`], repoRoot);
+        before = show.code === 0 ? show.stdout : ''; // non-zero = absent at base
+      }
+      const after = e.status === 'deleted' ? '' : await readText(joinPosix(repoRoot, e.relPath));
+      files[i] = { relPath: e.relPath, before, after, status: e.status, oldRelPath: e.oldRelPath };
     }
-    const after = e.status === 'deleted' ? '' : await readText(joinPosix(repoRoot, e.relPath));
-    files.push({ relPath: e.relPath, before, after, status: e.status, oldRelPath: e.oldRelPath });
-  }
+  };
+  const pool = Math.min(8, entries.length);
+  const workers: Promise<void>[] = [];
+  for (let w = 0; w < pool; w++) workers.push(worker());
+  await Promise.all(workers);
 
   files.sort((a, b) => a.relPath.localeCompare(b.relPath));
   return { repoRoot, files };

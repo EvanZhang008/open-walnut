@@ -120,3 +120,47 @@ describe('parseBashFileOps — multi-statement real-world command', () => {
     expect(renames.some((o) => o.from === '/home/u/notes/Areas/Career/PERM' && o.path === '/home/u/notes/Projects/PERM')).toBe(true);
   });
 });
+
+describe('parseBashFileOps — heredoc bodies and JS arrows are NOT file ops', () => {
+  it('does not fabricate creates from a heredoc SCRIPT body (the "n/a)" incident)', () => {
+    // Real incident (2026-08-13): a `cat > file <<'EOF' … EOF` Playwright script
+    // contained `.catch(() => 'n/a')` and page.on handlers with `=>` — the body
+    // was parsed as shell and `=> 'n/a')` became a created file named "n/a)".
+    const command = [
+      "cat > /tmp/pw-test.mjs <<'EOF'",
+      "import { chromium } from 'playwright';",
+      'const title = await page.locator(".t").textContent().catch(() => \'n/a\');',
+      'page.on(\'pageerror\', (e) => errors.push(String(e)));',
+      'if (n > 3) { console.log(n); }',
+      'EOF',
+      'node /tmp/pw-test.mjs',
+    ].join('\n');
+    const ops = parseBashFileOps(command, '/w');
+    // The heredoc's stdout-redirect target IS a legitimate create…
+    expect(ops).toEqual([{ kind: 'create', path: '/tmp/pw-test.mjs' }]);
+  });
+
+  it('heredoc WITHOUT a redirect produces nothing', () => {
+    const command = [
+      "python3 <<'PY'",
+      "x = { 'a': 1 }",
+      "print(x if x else 'n/a')",
+      'PY',
+    ].join('\n');
+    expect(parseBashFileOps(command, '/w')).toEqual([]);
+  });
+
+  it('statements AFTER the heredoc terminator still parse', () => {
+    const command = [
+      "cat <<'EOF'",
+      'body line with => arrow and n > 1 comparison',
+      'EOF',
+      'touch /tmp/after.txt',
+    ].join('\n');
+    expect(parseBashFileOps(command, '/w')).toEqual([{ kind: 'create', path: '/tmp/after.txt' }]);
+  });
+
+  it('a bare `=>` in an unquoted fragment is not a redirect', () => {
+    expect(parseBashFileOps('node -e console.log([1].map((x)=>x))', '/w')).toEqual([]);
+  });
+});

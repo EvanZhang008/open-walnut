@@ -27,6 +27,12 @@ export interface SessionChangesResult {
   groups: SessionRepoGroup[];
   fileCount: number;
   anyPartial: boolean;
+  /** SWR markers: served from cache/disk, possibly outdated, recompute running. */
+  stale?: boolean;
+  refreshing?: boolean;
+  /** True when before/after content is absent (light list — fetch per-file diffs
+   *  via fetchSessionFileChange). */
+  light?: boolean;
 }
 
 /**
@@ -60,15 +66,35 @@ export type SessionDiffScope = 'all' | 'session';
  */
 export async function fetchSessionChanges(
   sessionId: string,
-  opts?: { refresh?: boolean; base?: SessionDiffBase; scope?: SessionDiffScope; signal?: AbortSignal },
+  opts?: { refresh?: boolean; base?: SessionDiffBase; scope?: SessionDiffScope; signal?: AbortSignal;
+    /** light: strip before/after (per-file diffs load lazily). swr: serve the
+     *  last cached result instantly (stale:true) while recomputing. */
+    light?: boolean; swr?: boolean },
 ): Promise<SessionChangesResult> {
   const params: Record<string, string> = {};
   if (opts?.refresh) params.refresh = '1';
   if (opts?.base && opts.base !== 'session') params.base = opts.base;
   if (opts?.scope === 'all') params.scope = 'all';
+  if (opts?.light) params.light = '1';
+  if (opts?.swr) params.swr = '1';
   return apiGet<SessionChangesResult>(
     `/api/sessions/${sessionId}/changes`,
     Object.keys(params).length ? params : undefined,
+    { signal: opts?.signal, timeoutMs: 60_000 },
+  );
+}
+
+/** One file's full change record (before/after included) — the lazy-diff pair
+ *  of a light list fetch. Server-side this is a cache read after the list
+ *  compute finishes. */
+export async function fetchSessionFileChange(
+  sessionId: string,
+  filePath: string,
+  opts?: { signal?: AbortSignal },
+): Promise<{ sessionId: string; repoRoot: string; file: SessionFileChange }> {
+  return apiGet<{ sessionId: string; repoRoot: string; file: SessionFileChange }>(
+    `/api/sessions/${sessionId}/changes/file`,
+    { path: filePath },
     { signal: opts?.signal, timeoutMs: 60_000 },
   );
 }

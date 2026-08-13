@@ -3061,9 +3061,19 @@ async function cmdFsLs(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
 
   try {
     const entries = await fs.promises.readdir(dirPath, { withFileTypes: true })
-    const result = entries.map(e => ({
-      name: e.name,
-      type: e.isDirectory() ? 'dir' : e.isFile() ? 'file' : 'other',
+    // detail:true adds per-file size/mtimeMs (one stat per entry) — used by the
+    // session-changes subagent cache to skip re-reading unchanged files. Off by
+    // default so high-frequency callers (git-root walks) don't pay the stats.
+    const detail = cmd.detail === true
+    const result = await Promise.all(entries.map(async e => {
+      const type = e.isDirectory() ? 'dir' : e.isFile() ? 'file' : 'other'
+      if (!detail || type !== 'file') return { name: e.name, type }
+      try {
+        const st = await fs.promises.stat(dirPath + '/' + e.name)
+        return { name: e.name, type, size: st.size, mtimeMs: st.mtimeMs }
+      } catch {
+        return { name: e.name, type }
+      }
     }))
     sendOk(ws, id, { entries: result, resolvedPath: dirPath })
   } catch (err: unknown) {
@@ -3200,8 +3210,13 @@ async function cmdGitDiff(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
     try { return await fs.promises.readFile(absPath, 'utf-8') } catch { return '' }
   }
 
+  // Optional narrowing: only materialize blobs for these repo-relative paths.
+  const paths = Array.isArray(cmd.paths) && (cmd.paths as unknown[]).every((p) => typeof p === 'string')
+    ? cmd.paths as string[]
+    : undefined
+
   try {
-    const result = await computeGitDiff(base, cwd, exec, readText)
+    const result = await computeGitDiff(base, cwd, exec, readText, paths ? { paths } : undefined)
     if (!result) return sendOk(ws, id, { repoRoot: null, files: [] }) // not a git repo
     sendOk(ws, id, { repoRoot: result.repoRoot, files: result.files })
   } catch (err: unknown) {

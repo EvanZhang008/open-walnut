@@ -606,6 +606,10 @@ export interface SessionChangesInput {
   scope?: unknown;
   light?: boolean;
   refresh?: boolean;
+  /** Stale-while-revalidate: serve the last cached/disk result instantly
+   *  (stale:true + refreshing:true) and recompute in the background. Only
+   *  meaningful for base=session. */
+  swr?: boolean;
 }
 
 const GIT_BASES: ReadonlySet<string> = new Set(['uncommitted', 'previous', 'remote']);
@@ -636,6 +640,11 @@ export async function getSessionChanges(
         base as import('../session-git-diff.js').GitDiffBase,
         record.cwd, record.host, scope, record.outputFile, { noCache },
       ) as unknown as Record<string, unknown>;
+    } else if (input.swr === true && !noCache) {
+      const { computeSessionChangesSwr } = await import('../session-changes.js');
+      result = await computeSessionChangesSwr(
+        sessionId, record.cwd, record.host, record.outputFile,
+      ) as unknown as Record<string, unknown>;
     } else {
       const { computeSessionChanges } = await import('../session-changes.js');
       result = await computeSessionChanges(
@@ -660,6 +669,45 @@ export async function getSessionChanges(
     };
   }
   return result;
+}
+
+/**
+ * One file's full change record (before/after included) from the session-scope
+ * changes. Serves the Changed tab's lazy per-file diff: the list ships light
+ * (no content), and each file's diff loads on selection. computeSessionChanges
+ * dedups via its in-flight chain and hits the mtime fast-path right after a
+ * list fetch, so this is normally a pure cache read — no file I/O.
+ */
+export async function getSessionFileChange(
+  sessionId: string,
+  filePath: string,
+): Promise<Record<string, unknown>> {
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const record = await getSessionByClaudeId(sessionId);
+  if (!record) throw new SessionControlError('Session not found', 404);
+
+  const { computeSessionChanges, peekSessionFileChange } = await import('../session-changes.js');
+
+  // Serve from the cache even if it's outdated: a click must not queue behind
+  // a 20-40s whale recompute holding the in-flight chain. Slightly-stale
+  // content self-corrects (the list refresh clears the frontend's per-file
+  // cache and re-fetches).
+  const peeked = peekSessionFileChange(sessionId, record.host, filePath);
+  if (peeked) return { sessionId, ...peeked };
+
+  let result: import('../session-changes.js').SessionChangesResult;
+  try {
+    result = await computeSessionChanges(sessionId, record.cwd, record.host, record.outputFile);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.session.warn('session file change read failed', { sessionId, host: record.host, filePath, error: msg });
+    throw new SessionControlError(msg, 502);
+  }
+  for (const group of result.groups) {
+    const file = group.files.find((f) => f.filePath === filePath);
+    if (file) return { sessionId, repoRoot: group.repoRoot, file };
+  }
+  throw new SessionControlError('File not in session changes', 404);
 }
 
 // ── Rich history ─────────────────────────────────────────────────────────────

@@ -435,6 +435,7 @@ import {
   respondSessionPermission,
   executeContinueSession,
   getSessionChanges,
+  getSessionFileChange,
   CLAUDE_SESSION_MODES,
 } from '../../core/sessions/session-lifecycle.js'
 import { SessionControlError } from '../../core/sessions/session-controls.js'
@@ -1113,7 +1114,29 @@ sessionsRouter.get('/:sessionId/changes', async (req: Request, res: Response, ne
         scope: req.query.scope,
         light: req.query.light === '1',
         refresh: req.query.refresh === '1' || req.query.refresh === 'true',
+        swr: req.query.swr === '1',
       }))
+    } catch (err) {
+      if (err instanceof SessionControlError) {
+        res.status(err.statusCode).json({ error: err.message })
+        return
+      }
+      throw err
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/sessions/:sessionId/changes/file?path=<abs> — ONE file's change
+// record with full before/after. Pairs with ?light=1/&swr=1 list fetches: the
+// list paints instantly without content, each diff loads on selection.
+sessionsRouter.get('/:sessionId/changes/file', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const filePath = String(req.query.path ?? '')
+    if (!filePath) { res.status(400).json({ error: 'path query param required' }); return }
+    try {
+      res.json(await getSessionFileChange(String(req.params.sessionId), filePath))
     } catch (err) {
       if (err instanceof SessionControlError) {
         res.status(err.statusCode).json({ error: err.message })

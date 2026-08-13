@@ -23260,6 +23260,16 @@ a.file-link:hover {
   font-weight: 600;
   color: var(--fg);
 }
+/* Background re-scan indicator next to the file count (SWR stale list). */
+.session-diff-refreshing {
+  display: inline-block;
+  margin-left: 6px;
+  color: var(--fg-muted);
+  animation: session-diff-spin 1.2s linear infinite;
+}
+@keyframes session-diff-spin {
+  to { transform: rotate(360deg); }
+}
 .session-diff-toolbar-actions {
   display: flex;
   align-items: center;

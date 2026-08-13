@@ -99,6 +99,7 @@ async function runGitDiffForRepo(
   repoRoot: string,
   host: string | undefined,
   sessionId: string,
+  paths?: string[],
 ): Promise<GitDiffResult | null> {
   if (host) {
     // Remote: the daemon runs the SAME core on the host (no per-file SSH hops).
@@ -109,7 +110,9 @@ async function runGitDiffForRepo(
     if (!hostname) throw new Error(`Host ${host} missing hostname`);
     const conn = await getDaemonConnection(host, { hostname, user: hostDef.user, port: hostDef.port });
 
-    const res = await conn.send('git.diff', { base, cwd: repoRoot });
+    // `paths` narrows the blob materialization to the files we'll show (old
+    // daemons ignore the extra key — full result, same correctness).
+    const res = await conn.send('git.diff', { base, cwd: repoRoot, ...(paths ? { paths } : {}) });
     if (!res.ok) {
       const msg = typeof res.error === 'string' ? res.error : 'git.diff failed';
       log.session.debug('session-git-diff: remote git.diff failed', { sessionId, base, repoRoot, msg });
@@ -119,7 +122,7 @@ async function runGitDiffForRepo(
   }
 
   // Local: run the shared core in-process.
-  return computeGitDiff(base, repoRoot, localExec, localReadText);
+  return computeGitDiff(base, repoRoot, localExec, localReadText, paths ? { paths } : undefined);
 }
 
 /**
@@ -152,10 +155,19 @@ export async function computeSessionGitDiff(
     return { sessionId, groups: [], fileCount: 0, anyPartial: false };
   }
 
+  // Touched repos diff CONCURRENTLY (each is an independent host-local run);
+  // scope=session also narrows blob materialization to the session's own files
+  // (a whole-repo materialization was 683 `git show` spawns to display 16 files).
+  const gitResults = await Promise.all(edits.groups.map((editGroup) =>
+    runGitDiffForRepo(
+      base, editGroup.repoRoot, host, sessionId,
+      scope === 'session' ? editGroup.files.map((f) => f.relPath) : undefined,
+    )));
+
   const outGroups: SessionRepoGroup[] = [];
-  for (const editGroup of edits.groups) {
-    // Diff THIS touched repo against the base (anchored on its own root).
-    const gitResult = await runGitDiffForRepo(base, editGroup.repoRoot, host, sessionId);
+  for (let gi = 0; gi < edits.groups.length; gi++) {
+    const editGroup = edits.groups[gi]!;
+    const gitResult = gitResults[gi];
     if (!gitResult || gitResult.files.length === 0) continue;
 
     // Drop agent memory / bookkeeping in BOTH scopes — identical to the JSONL

@@ -5,7 +5,7 @@ import {
   type HunkData, type FileData, type ChangeData, type ChangeEventArgs, type EventMap,
 } from 'react-diff-view';
 import 'react-diff-view/style/index.css';
-import { fetchSessionChanges, type SessionChangesResult, type SessionFileChange, type SessionDiffBase, type SessionDiffScope } from '@/api/session-changes';
+import { fetchSessionChanges, fetchSessionFileChange, type SessionChangesResult, type SessionFileChange, type SessionDiffBase, type SessionDiffScope } from '@/api/session-changes';
 import { buildFileData } from '@/components/sessions/diffPatch';
 import { buildDiffTree, flattenFiles, allContainerIds, isMarkdownPath, type DiffTreeNode, type DiffTreeRepoNode } from '@/components/sessions/diffTree';
 import { languageForPath, diffRefractor } from '@/components/sessions/diffHighlight';
@@ -1007,12 +1007,57 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   // Floating "Ask about this" affordance, positioned at the current text selection.
   const [selection, setSelection] = useState<{ x: number; y: number; text: string; filePath: string; line?: number } | null>(null);
 
+  // Session-base lists ship LIGHT (no before/after) + SWR (cached list paints
+  // instantly, recompute runs behind) — per-file diffs load lazily below. Git
+  // bases keep the original full blocking fetch (their diff comes from git).
+  const isSessionBase = base === 'session';
+  // Per-file diff cache (session base). Ref-backed so ensureFileContent stays
+  // referentially stable; version bump triggers re-render on arrival.
+  const fileContentRef = useRef(new Map<string, SessionFileChange>());
+  const fileFetchesRef = useRef(new Set<string>());
+  const [contentVersion, setContentVersion] = useState(0);
+  const [refreshingBg, setRefreshingBg] = useState(false);
+
+  // Changing the comparison (base/scope) invalidates the shown data OUTRIGHT:
+  // keeping the old list while the new fetch runs (10-30s for remote git bases)
+  // rendered a light session-base row under a git base — empty content, bogus
+  // "No textual diff", stale file count. Clear to the spinner instead.
+  const baseKey = `${base}|${scope}`;
+  const prevBaseKey = useRef(baseKey);
+  useEffect(() => {
+    if (prevBaseKey.current === baseKey) return;
+    prevBaseKey.current = baseKey;
+    setData(null);
+    fileContentRef.current.clear();
+  }, [baseKey]);
+
   const load = useCallback((refresh = false) => {
     setLoading(true);
     setError(null);
     const ctrl = new AbortController();
-    fetchSessionChanges(sessionId, { refresh, base, scope, signal: ctrl.signal })
-      .then((res) => setData(res))
+    const light = isSessionBase;
+    fetchSessionChanges(sessionId, { refresh, base, scope, light, swr: light && !refresh, signal: ctrl.signal })
+      .then((res) => {
+        setData(res);
+        if (refresh) {
+          fileContentRef.current.clear();
+          setContentVersion((v) => v + 1);
+        }
+        // SWR served a possibly-outdated list — converge: a blocking light
+        // fetch queues behind the background recompute and lands fresh.
+        if (res.stale && light) {
+          setRefreshingBg(true);
+          fetchSessionChanges(sessionId, { base, scope, light: true, signal: ctrl.signal })
+            .then((fresh) => {
+              if (ctrl.signal.aborted) return;
+              setData(fresh);
+              fileContentRef.current.clear();
+              setContentVersion((v) => v + 1);
+            })
+            .catch(() => { /* stale list stays — refresh button recovers */ })
+            .finally(() => { if (!ctrl.signal.aborted) setRefreshingBg(false); });
+        }
+      })
       .catch((err) => {
         if (ctrl.signal.aborted) return;
         const msg = err instanceof Error ? err.message : String(err);
@@ -1021,7 +1066,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
       })
       .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
     return () => ctrl.abort();
-  }, [sessionId, base, scope]);
+  }, [sessionId, base, scope, isSessionBase]);
 
   useEffect(() => {
     const cancel = load(false);
@@ -1042,10 +1087,51 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     setSelectedId((prev) => (prev && files.some((f) => f.id === prev)) ? prev : (files[0]?.id ?? null));
   }, [tree2, files]);
 
-  const selectedChange = useMemo(
+  const selectedChangeRaw = useMemo(
     () => files.find((f) => f.id === selectedId)?.change ?? null,
     [files, selectedId],
   );
+
+  // Lazy per-file content (session base): a light list row has before===after===''.
+  // Fetch the full record on demand; renames/deletes with empty content are
+  // legitimate, so "needs fetch" = light list + not yet cached, not "empty".
+  const ensureFileContent = useCallback((filePath: string) => {
+    if (fileContentRef.current.has(filePath) || fileFetchesRef.current.has(filePath)) return;
+    fileFetchesRef.current.add(filePath);
+    fetchSessionFileChange(sessionId, filePath)
+      .then((res) => {
+        fileContentRef.current.set(filePath, res.file);
+        setContentVersion((v) => v + 1);
+      })
+      .catch((err) => {
+        log.warn('session-changes', 'file diff fetch failed', {
+          sessionId, filePath, error: err instanceof Error ? err.message : String(err),
+        });
+      })
+      .finally(() => { fileFetchesRef.current.delete(filePath); });
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!isSessionBase || !selectedChangeRaw) return;
+    ensureFileContent(selectedChangeRaw.filePath);
+    // Prefetch neighbours (±2 in tree order) so ↑/↓ stepping feels instant.
+    const idx = files.findIndex((f) => f.id === selectedId);
+    for (const off of [1, -1, 2, -2]) {
+      const n = files[idx + off];
+      if (n) ensureFileContent(n.change.filePath);
+    }
+  }, [isSessionBase, selectedChangeRaw, files, selectedId, ensureFileContent]);
+
+  // The change record FileDiffPane renders: light row hydrated with fetched
+  // content. contentVersion re-runs this when a lazy fetch lands.
+  const selectedChange = useMemo(() => {
+    void contentVersion;
+    if (!selectedChangeRaw) return null;
+    if (!isSessionBase) return selectedChangeRaw;
+    const full = fileContentRef.current.get(selectedChangeRaw.filePath);
+    return full ? { ...selectedChangeRaw, before: full.before, after: full.after, partial: full.partial } : null;
+  }, [selectedChangeRaw, isSessionBase, contentVersion]);
+  const selectedContentLoading = isSessionBase && !!selectedChangeRaw && !selectedChange;
 
   // Reset Rendered when the selected file isn't markdown.
   const selectedIsMd = selectedChange ? isMarkdownPath(selectedChange.relPath) : false;
@@ -1191,6 +1277,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         </button>
         <span className="session-diff-toolbar-title">
           {empty ? 'No file changes' : `${data!.fileCount} file${data!.fileCount === 1 ? '' : 's'} changed`}
+          {refreshingBg && <span className="session-diff-refreshing" title="List served from cache — re-scanning in the background">↻</span>}
         </span>
         <div className="session-diff-base-wrap">
           <label className="session-diff-base-select" title="Choose what the diff compares against">
@@ -1301,7 +1388,9 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
             </>
           )}
           <div className="session-diff-main">
-            {selectedChange ? (
+            {selectedContentLoading ? (
+              <div className="session-diff-file-empty"><LoadingSpinner /></div>
+            ) : selectedChange ? (
               <FileDiffPane
                 key={selectedChange.filePath}
                 change={selectedChange}

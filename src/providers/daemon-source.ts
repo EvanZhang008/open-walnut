@@ -3376,9 +3376,18 @@ async function cmdFsLs(ws, id, cmd) {
 
   try {
     const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
-    const result = entries.map(e => ({
-      name: e.name,
-      type: e.isDirectory() ? 'dir' : e.isFile() ? 'file' : 'other',
+    // PARITY: keep in sync with daemon-standalone.ts cmdFsLs. detail:true adds
+    // per-file size/mtimeMs for the session-changes subagent cache.
+    const detail = cmd.detail === true;
+    const result = await Promise.all(entries.map(async e => {
+      const type = e.isDirectory() ? 'dir' : e.isFile() ? 'file' : 'other';
+      if (!detail || type !== 'file') return { name: e.name, type };
+      try {
+        const st = await fs.promises.stat(dirPath + '/' + e.name);
+        return { name: e.name, type, size: st.size, mtimeMs: st.mtimeMs };
+      } catch {
+        return { name: e.name, type };
+      }
     }));
     sendOk(ws, id, { entries: result, resolvedPath: dirPath });
   } catch (err) {
@@ -3559,19 +3568,37 @@ async function cmdGitDiff(ws, id, cmd) {
         if (rel && !tracked.has(rel)) { entries.push({ status: 'added', relPath: rel }); tracked.add(rel); }
       }
     }
-    if (entries.length === 0) return sendOk(ws, id, { repoRoot: repoRoot, files: [] });
-
-    const files = [];
-    for (const e of entries) {
-      const beforePath = e.oldRelPath || e.relPath;
-      let before = '';
-      if (e.status !== 'added') {
-        const show = await exec(['git', 'show', baseRev + ':' + beforePath], repoRoot);
-        before = show.code === 0 ? show.stdout : '';
-      }
-      const after = e.status === 'deleted' ? '' : await readText(joinPosix(repoRoot, e.relPath));
-      files.push({ relPath: e.relPath, before: before, after: after, status: e.status, oldRelPath: e.oldRelPath });
+    // PARITY (git-diff-core.ts opts.paths): narrow blob materialization to the
+    // caller's file set — scope=session sends the session's own files so we
+    // don't git-show every changed file in the repo.
+    let wanted = entries;
+    if (Array.isArray(cmd.paths) && cmd.paths.every((p) => typeof p === 'string')) {
+      const want = new Set(cmd.paths);
+      wanted = entries.filter((e) => want.has(e.relPath) || (e.oldRelPath !== undefined && want.has(e.oldRelPath)));
     }
+    if (wanted.length === 0) return sendOk(ws, id, { repoRoot: repoRoot, files: [] });
+
+    // Parallel pool (PARITY with git-diff-core.ts): serial git-show spawns
+    // were ~15ms x N — 683 files took ~10.7s.
+    const files = new Array(wanted.length);
+    let nextIdx = 0;
+    const worker = async () => {
+      while (nextIdx < wanted.length) {
+        const i = nextIdx++;
+        const e = wanted[i];
+        const beforePath = e.oldRelPath || e.relPath;
+        let before = '';
+        if (e.status !== 'added') {
+          const show = await exec(['git', 'show', baseRev + ':' + beforePath], repoRoot);
+          before = show.code === 0 ? show.stdout : '';
+        }
+        const after = e.status === 'deleted' ? '' : await readText(joinPosix(repoRoot, e.relPath));
+        files[i] = { relPath: e.relPath, before: before, after: after, status: e.status, oldRelPath: e.oldRelPath };
+      }
+    };
+    const workers = [];
+    for (let w = 0; w < Math.min(8, wanted.length); w++) workers.push(worker());
+    await Promise.all(workers);
     files.sort((a, b) => a.relPath.localeCompare(b.relPath));
     sendOk(ws, id, { repoRoot: repoRoot, files: files });
   } catch (err) {
