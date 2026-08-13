@@ -49,6 +49,19 @@ export async function runWeb(options: {
   // Note: ephemeral WALNUT_HOME guard is in constants.ts (must run at import time,
   // before any derived paths are computed). See resolveWalnutHome() there.
 
+  // Native addons (better-sqlite3) are compiled against one Node ABI. If the
+  // running Node differs, the task store can't open and startup dies with an
+  // opaque "prewarm failed". Repair it in place instead of requiring a Node
+  // version pin to stay in sync forever. Advisory: never exits.
+  const { ensureNativeModulesLoadable } = await import('../core/native-abi-preflight.js')
+  try {
+    ensureNativeModulesLoadable()
+  } catch (err) {
+    process.stderr.write(
+      `native module preflight errored (continuing): ${err instanceof Error ? err.message : String(err)}\n`,
+    )
+  }
+
   // Sanity check: dist/daemon-binaries/*.version must match current daemon source.
   // If not, auto-rebuild. This is the belt to the suspenders of `npm run build`
   // auto-building daemon — catches someone running `node dist/cli.js web`

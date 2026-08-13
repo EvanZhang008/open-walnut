@@ -93,3 +93,15 @@ scripts/verify-and-purge-migrated.mjs
 ios-native/Walnut.xcodeproj/
 ios-native/DerivedData/
 ios-native/build/
+
+# Local runtime-manager pins (mise/asdf/nvm). Machine-local tool config, NOT the
+# project's contract — package.json "engines" (>=22) is the single source of truth
+# for the supported Node range, and src/core/native-abi-preflight.ts recompiles
+# native addons for whatever Node you actually run. Committing a point version
+# here would duplicate `engines` as a value that rots and over-constrain
+# contributors without making anything more correct.
+mise.toml
+.mise.toml
+.tool-versions
+.nvmrc
+.node-version
