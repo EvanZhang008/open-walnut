@@ -70,6 +70,14 @@ export interface CloudSetupJobState {
   /** Provider-scoped placement hints, echoed back to the driver on resume. */
   region?: string
   instanceType?: string
+  /**
+   * Local CLI credential profile chosen in the wizard (aws: an ~/.aws profile).
+   * Persisted so a resumed or retried deploy targets the SAME account as the first
+   * attempt rather than re-resolving from the ambient environment. Not a secret,
+   * but never written to a log line — it is the operator's own label for an
+   * account (see DetectCredsResult.profiles).
+   */
+  profile?: string
   /** Provider-scoped handle for teardown (EC2 instance id, stack name, …). */
   instanceRef?: string
   /**

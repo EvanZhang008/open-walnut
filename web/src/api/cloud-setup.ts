@@ -91,6 +91,14 @@ export interface CloudSetupDetect {
   available: boolean;
   detail: string;
   needs?: 'api-token' | 'cli-login' | 'nothing';
+  /**
+   * Selectable local credential profiles (aws: ~/.aws profile names), when the
+   * driver found more than the default. Rendered as a picker. Server-side these
+   * are kept out of every log line — do not put them in a log call here either.
+   */
+  profiles?: string[];
+  /** Which profile the server actually probed with, when one was requested. */
+  activeProfile?: string;
 }
 
 export interface CloudSetupProvider {
@@ -108,6 +116,8 @@ export interface StartCloudSetupBody {
   domain?: string;
   region?: string;
   instanceType?: string;
+  /** Local CLI credential profile to deploy with (aws: an ~/.aws profile name). */
+  profile?: string;
   credentials?: string;
   force?: boolean;
 }
@@ -118,10 +128,15 @@ export interface CloudSetupUserData {
   consoleUrl?: string;
 }
 
-export function getProviders(): Promise<{ providers: CloudSetupProvider[] }> {
+/**
+ * `awsProfile` re-probes the aws driver with that local profile, so the picker can
+ * report whether the chosen account authenticates before a deploy is started.
+ */
+export function getProviders(awsProfile?: string): Promise<{ providers: CloudSetupProvider[] }> {
   // Each card's detect probe shells out server-side (5s cap per driver), so the
   // default 15s client timeout is too tight once a few drivers ship.
-  return apiGet<{ providers: CloudSetupProvider[] }>('/api/cloud-setup/providers', undefined, { timeoutMs: 30_000 });
+  const query = awsProfile ? `?awsProfile=${encodeURIComponent(awsProfile)}` : '';
+  return apiGet<{ providers: CloudSetupProvider[] }>(`/api/cloud-setup/providers${query}`, undefined, { timeoutMs: 30_000 });
 }
 
 export function startSetup(body: StartCloudSetupBody): Promise<{ job: CloudSetupJob }> {

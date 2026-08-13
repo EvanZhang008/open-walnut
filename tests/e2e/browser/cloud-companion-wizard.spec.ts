@@ -72,6 +72,35 @@ test.describe('Settings → Cloud Companion', () => {
     // Own-domain is the default and REQUIRES a domain — the start button must stay
     // disabled until one is typed (client-side guard for the route's 400).
     await section.locator('.cloud-provider-card[data-provider="aws"]').click()
+
+    // The operator is one button from creating billable resources in their OWN
+    // account, so the configure screen must say what appears, what it costs, and
+    // whose bill it lands on BEFORE Start is reachable.
+    const whatHappens = section.locator('.cloud-whathappens')
+    await expect(whatHappens).toBeVisible()
+    await expect(whatHappens).toContainText(/Elastic IP/i)
+    await expect(whatHappens).toContainText(/encrypted/i)
+    await expect(whatHappens).toContainText(/snapshot/i)
+    await expect(whatHappens).toContainText(/CloudFormation stack/i)
+    // Ownership must be unmissable, not implied.
+    await expect(whatHappens).toContainText(/YOUR OWN cloud account/i)
+    await expect(whatHappens).toContainText(/you pay for it/i)
+    // The cost shown is the driver's own costHint, so the wizard and the provider
+    // card can never quote different numbers.
+    const awsCost = await section.locator('.cloud-configure-provider').innerText()
+    const quoted = awsCost.split('—').pop()!.trim()
+    await expect(whatHappens.locator('.cloud-whathappens-cost')).toContainText(quoted)
+
+    // The profile picker only appears when the host really has several ~/.aws
+    // profiles, which a fixture cannot guarantee — so assert the INVARIANT that
+    // holds either way: if it rendered, it offers the CLI default plus real names,
+    // and choosing one must never be the thing that blocks Start.
+    const profileSelect = section.getByRole('combobox', { name: 'AWS profile' })
+    if (await profileSelect.count() > 0) {
+      await expect(profileSelect.locator('option').first()).toHaveText(/Default profile/i)
+      expect(await profileSelect.locator('option').count()).toBeGreaterThan(2)
+    }
+
     const startBtn = section.getByRole('button', { name: /^Start setup$/ })
     await expect(startBtn).toBeDisabled()
     await expect(section).toContainText(/Enter a domain, or switch to the free auto-address/i)
@@ -84,6 +113,11 @@ test.describe('Settings → Cloud Companion', () => {
     await section.getByRole('button', { name: /^Back$/ }).click()
     await section.locator('.cloud-provider-card[data-provider="manual"]').click()
     await expect(section.getByRole('button', { name: /Generate the script/i })).toBeEnabled()
+
+    // The manual driver creates NOTHING — Walnut only prints a script. Listing
+    // resources here would promise work the operator has to do by hand, and the
+    // snapshot/stack lines are AWS-only in any case.
+    await expect(section.locator('.cloud-whathappens')).toHaveCount(0)
   })
 
   test('manual path shows a copyable boot script carrying the setup-token write', async ({ page }) => {

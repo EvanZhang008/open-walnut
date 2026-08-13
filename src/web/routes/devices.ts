@@ -78,7 +78,7 @@ async function mintOnCloud(
 > {
   const cloud = getCloudPairingEndpoint()
   if (!cloud) {
-    return { error: 'Cloud pairing needs cloud sync configured first (Settings → Repositories).', status: 400 }
+    return { error: 'Cloud pairing needs a cloud companion first (Settings → Cloud Companion).', status: 400 }
   }
   const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${cloud.token}` }
   try {

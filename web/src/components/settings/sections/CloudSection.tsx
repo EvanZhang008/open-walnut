@@ -48,6 +48,7 @@ const EMPTY_VALUES: ConfigureValues = {
   region: '',
   instanceType: '',
   credentials: '',
+  profile: '',
 };
 
 /** A job in one of these states is the screen; the stage machine is bypassed. */
@@ -188,15 +189,30 @@ export function CloudSection() {
     if (transitioned || !streamLiveRef.current) void refreshJob();
   });
 
-  const loadProviders = useCallback(async () => {
+  /**
+   * `awsProfile` re-probes the aws driver with that profile, which is how the
+   * card's verdict changes from "signed out" to the account it authenticated.
+   */
+  const loadProviders = useCallback(async (awsProfile?: string) => {
     setError(null);
     try {
-      const res = await getProviders();
+      const res = await getProviders(awsProfile);
       setProviders(res.providers);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }, []);
+
+  /** Re-probe with the newly chosen profile; the card verdict updates in place. */
+  const handleProfileChange = useCallback(async (profile: string) => {
+    setValues((prev) => ({ ...prev, profile }));
+    setBusy(true);
+    try {
+      await loadProviders(profile || undefined);
+    } finally {
+      setBusy(false);
+    }
+  }, [loadProviders]);
 
   const handleStart = useCallback(async () => {
     if (!selected) return;
@@ -209,6 +225,7 @@ export function CloudSection() {
         ...(values.domainMode === 'own-domain' && values.domain ? { domain: values.domain } : {}),
         ...(values.region ? { region: values.region } : {}),
         ...(values.instanceType ? { instanceType: values.instanceType } : {}),
+        ...(values.profile ? { profile: values.profile } : {}),
         ...(values.credentials ? { credentials: values.credentials } : {}),
       });
       commitJob(res.job);
@@ -334,6 +351,7 @@ export function CloudSection() {
             onChange={setValues}
             onBack={() => { setStage('picker'); setError(null); }}
             onStart={() => void handleStart()}
+            onProfileChange={(p) => void handleProfileChange(p)}
             busy={busy}
             error={error}
           />

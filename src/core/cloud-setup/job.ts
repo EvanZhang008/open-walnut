@@ -52,6 +52,8 @@ export interface StartCloudSetupJobInput {
   domain?: string
   region?: string
   instanceType?: string
+  /** Local CLI credential profile to deploy with (aws: an ~/.aws profile name). */
+  profile?: string
   credentials?: string
   force?: boolean
 }
@@ -99,22 +101,10 @@ let startInFlight: Promise<CloudSetupJobState> | null = null
 const credentialStore = new Map<string, string>()
 /** Cached state so a GET doesn't have to hit disk on every poll. */
 let cached: CloudSetupJobState | null = null
-/** In-flight writes that a test-only process restart must let finish first. */
-const pendingPersists = new Set<Promise<void>>()
 
 // ── Persistence ─────────────────────────────────────────────────────────────
 
 async function persist(state: CloudSetupJobState): Promise<void> {
-  const pending = persistToDisk(state)
-  pendingPersists.add(pending)
-  try {
-    await pending
-  } finally {
-    pendingPersists.delete(pending)
-  }
-}
-
-async function persistToDisk(state: CloudSetupJobState): Promise<void> {
   state.updatedAt = new Date().toISOString()
   cached = state
   const file = jobFilePath()
@@ -242,6 +232,7 @@ async function startJobExclusive(input: StartCloudSetupJobInput): Promise<CloudS
     ...(input.domain ? { domain: input.domain } : {}),
     ...(input.region ? { region: input.region } : {}),
     ...(input.instanceType ? { instanceType: input.instanceType } : {}),
+    ...(input.profile ? { profile: input.profile } : {}),
     status: 'running',
     currentStep: 'preflight',
     steps: freshSteps(),
@@ -600,14 +591,13 @@ export async function resumeCloudSetupJobIfAny(): Promise<void> {
   void runJob(state, { force: state.force === true })
 }
 
-/** Test-only: stop the runner and drain writes before simulating a restart. */
-export async function _resetCloudSetupJobForTesting(): Promise<void> {
+/** Test-only: drop module state so each test file starts clean. */
+export function _resetCloudSetupJobForTesting(): void {
   if (active) {
     active.cancelled = true
     active.controller.abort()
   }
   active = null
-  await Promise.allSettled([...pendingPersists])
   cached = null
   resumed = false
   startInFlight = null

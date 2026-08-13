@@ -56,6 +56,29 @@ const stalledDriver: CloudProviderDriver = {
   instructions: ({ userData }) => ({ steps: ['step one'], userData }),
 }
 
+/**
+ * Records the profile every detectCreds call received, so a test can prove the
+ * query param reaches the driver — and reaches ONLY the aws driver.
+ */
+const profileProbes: Array<string | undefined> = []
+const profileAwareDriver: CloudProviderDriver = {
+  id: 'aws',
+  label: 'Profile Aware Test Driver',
+  costHint: 'free',
+  detectCreds: async (profile?: string) => {
+    profileProbes.push(profile)
+    return {
+      available: profile === 'marina-dev',
+      detail: profile ? `probed ${profile}` : 'probed the default',
+      needs: profile === 'marina-dev' ? 'nothing' : 'cli-login',
+      profiles: ['default', 'marina-dev'],
+      activeProfile: profile,
+    }
+  },
+  createVM: () => new Promise(() => { /* never settles */ }),
+  instructions: ({ userData }) => ({ steps: ['step one'], userData }),
+}
+
 const manualTestDriver: CloudProviderDriver = {
   id: 'manual',
   label: 'Manual Test Driver',
@@ -115,9 +138,9 @@ async function waitAwaitingInput(): Promise<void> {
 }
 
 beforeEach(async () => {
-  await _resetCloudSetupJobForTesting()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
+  _resetCloudSetupJobForTesting()
   cloudRemote = null
   restores.push(_setCloudProviderDriverForTesting('aws', stalledDriver))
   restores.push(_setCloudProviderDriverForTesting('manual', manualTestDriver))
@@ -127,9 +150,56 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await cancelCloudSetupJob().catch(() => {})
-  await _resetCloudSetupJobForTesting()
+  _resetCloudSetupJobForTesting()
   while (restores.length) restores.pop()?.()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
+})
+
+describe('GET /providers?awsProfile=', () => {
+  beforeEach(() => {
+    profileProbes.length = 0
+    restores.push(_setCloudProviderDriverForTesting('aws', profileAwareDriver))
+  })
+
+  it('passes the requested profile to the aws driver and reports its verdict', async () => {
+    const res = await request(createApp()).get('/api/cloud-setup/providers?awsProfile=marina-dev')
+    expect(res.status).toBe(200)
+    const aws = res.body.providers.find((p: { id: string }) => p.id === 'aws')
+    expect(aws.detect.available).toBe(true)
+    expect(aws.detect.activeProfile).toBe('marina-dev')
+    expect(profileProbes).toContain('marina-dev')
+  })
+
+  it('surfaces the profile list so the wizard can render a picker', async () => {
+    const res = await request(createApp()).get('/api/cloud-setup/providers')
+    const aws = res.body.providers.find((p: { id: string }) => p.id === 'aws')
+    expect(aws.detect.profiles).toEqual(['default', 'marina-dev'])
+  })
+
+  it('does NOT hand the aws profile to any other driver', async () => {
+    // The param names one provider's credential store; leaking it into azure/gcp
+    // probes would be meaningless at best and confusing at worst.
+    await request(createApp()).get('/api/cloud-setup/providers?awsProfile=marina-dev')
+    // Exactly one probe saw it — the aws one.
+    expect(profileProbes.filter((p) => p === 'marina-dev')).toHaveLength(1)
+  })
+
+  it('rejects a profile name that is not shaped like one', async () => {
+    // The value becomes an env var on a cdk child, so it is validated rather than
+    // passed through as prose.
+    for (const bad of ['a b', 'x;whoami', '../other', 'a'.repeat(129)]) {
+      const res = await request(createApp()).get(`/api/cloud-setup/providers?awsProfile=${encodeURIComponent(bad)}`)
+      expect(res.status, bad).toBe(400)
+      expect(res.body.error, bad).toMatch(/profile name/i)
+    }
+    expect(profileProbes).toHaveLength(0)
+  })
+
+  it('treats an empty awsProfile as no choice at all', async () => {
+    const res = await request(createApp()).get('/api/cloud-setup/providers?awsProfile=')
+    expect(res.status).toBe(200)
+    expect(profileProbes).toContain(undefined)
+  })
 })
 
 describe('GET /providers', () => {
@@ -183,6 +253,35 @@ describe('GET /providers', () => {
     expect(aws.detect.available).toBe(false)
     // The internal error text must not be echoed to the client verbatim.
     expect(JSON.stringify(res.body)).not.toContain('CLI exploded')
+  })
+})
+
+describe('POST /start — profile selection', () => {
+  it('persists the chosen profile on the job, so a retry targets the same account', async () => {
+    // The account is decided by this value; re-resolving it from the ambient
+    // environment on resume could point a retry at a different account.
+    const res = await request(createApp()).post('/api/cloud-setup/start')
+      .send({ provider: 'aws', domainMode: 'sslip', profile: 'marina-dev' })
+    expect(res.status).toBe(202)
+    expect((await getCloudSetupJob())?.profile).toBe('marina-dev')
+  })
+
+  it('rejects a profile that is not shaped like a profile name', async () => {
+    for (const bad of ['a b', 'x;whoami', 'a'.repeat(129)]) {
+      const res = await request(createApp()).post('/api/cloud-setup/start')
+        .send({ provider: 'aws', domainMode: 'sslip', profile: bad })
+      expect(res.status, bad).toBe(400)
+      expect(res.body.error, bad).toMatch(/profile name/i)
+    }
+    expect(await getCloudSetupJob()).toBeNull()
+  })
+
+  it('omits the field entirely when no profile was chosen', async () => {
+    const res = await request(createApp()).post('/api/cloud-setup/start')
+      .send({ provider: 'aws', domainMode: 'sslip', profile: '   ' })
+    expect(res.status).toBe(202)
+    // Not '' — an empty AWS_PROFILE makes the CLI hunt for an empty-named profile.
+    expect((await getCloudSetupJob())?.profile).toBeUndefined()
   })
 })
 

@@ -25,6 +25,16 @@ export interface CreateVMParams {
    */
   credentials?: string
   /**
+   * Which local CLI credential profile to provision with (aws: an ~/.aws profile
+   * name). Persisted with the job, because a resumed deploy MUST target the same
+   * account as the first attempt — resolving it again from the ambient environment
+   * could silently point a retry at a different account.
+   *
+   * Not a secret (it names no credential material), but still never logged: see
+   * DetectCredsResult.profiles.
+   */
+  profile?: string
+  /**
    * Fires when the operator cancels the job. A driver MUST kill its child
    * process group / abort its in-flight fetches and reject promptly.
    *
@@ -50,6 +60,18 @@ export interface DetectCredsResult {
   detail: string
   /** What the operator must supply when `available` is false. */
   needs?: 'api-token' | 'cli-login' | 'nothing'
+  /**
+   * Selectable local credential profiles, when the driver has more than one to
+   * offer (aws: ~/.aws profiles). The wizard renders these as a picker.
+   *
+   * UI-ONLY, and deliberately NOT folded into `detail`: `detail` is written to the
+   * log, while a profile name is the operator's own label for an account and can
+   * carry a client, employer or project name. Keep them in this field, keep this
+   * field out of log lines and out of the persisted job.
+   */
+  profiles?: string[]
+  /** Which profile this probe actually used, when one was requested. */
+  activeProfile?: string
 }
 
 export interface InstructionsParams {
@@ -88,8 +110,22 @@ export interface CloudProviderDriver {
    * a prompt would be a bug.
    */
   credentialInput?: 'api-token'
-  detectCreds(): Promise<DetectCredsResult>
+  /**
+   * `profile` selects among local CLI credential profiles (aws). Drivers that have
+   * no such concept ignore the argument — the caller may always pass it.
+   */
+  detectCreds(profile?: string): Promise<DetectCredsResult>
   createVM?(params: CreateVMParams, onLog: (line: string) => void): Promise<CreateVMResult>
   instructions(params: InstructionsParams): DriverInstructions
-  teardown?(instanceRef: string, onLog: (line: string) => void): Promise<void>
+  /**
+   * `opts` pins WHERE the deletion happens (aws: the profile + region the job
+   * deployed with). Omitting it lets the driver fall back to the ambient
+   * environment, which for a destroy is how you delete the wrong account's box —
+   * callers that know the job's profile must pass it.
+   */
+  teardown?(
+    instanceRef: string,
+    onLog: (line: string) => void,
+    opts?: { profile?: string; region?: string },
+  ): Promise<void>
 }

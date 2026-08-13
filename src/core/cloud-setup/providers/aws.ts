@@ -55,34 +55,60 @@ function infraDir(): string {
 }
 
 /**
- * How many profiles the operator's ~/.aws defines, or null if the CLI could not
- * say. Used only to pick the right advice — the NAMES are deliberately not
- * surfaced: this string is rendered in the wizard AND written to the log, and the
- * same restraint that keeps the caller ARN out of `detail` applies to whatever the
- * operator called their accounts.
+ * The profile names in the operator's ~/.aws, or null if the CLI could not say.
+ *
+ * These names go to the WIZARD ONLY (GET /providers → the picker's dropdown), so
+ * the operator can choose which account to deploy into. They must never reach a
+ * log line or a persisted job: a profile name is the operator's own label for an
+ * account and can carry a client, employer or project name. That is the same
+ * restraint that keeps the caller ARN out of `detail` — `detail` is written to the
+ * log, `profiles` is not, which is why they are separate fields rather than one
+ * prose sentence.
  */
-async function countProfiles(): Promise<number | null> {
+async function listProfiles(): Promise<string[] | null> {
   try {
     const { stdout } = await execFileAsync('aws', ['configure', 'list-profiles'], {
       timeout: IDENTITY_TIMEOUT_MS,
     })
-    return stdout.split('\n').filter((line) => line.trim()).length
+    const names = stdout.split('\n').map((line) => line.trim()).filter(Boolean)
+    return names.length > 0 ? names : null
   } catch {
+    // Too old to have the subcommand, or no config at all. Advisory only.
     return null
   }
 }
 
-async function detectCreds(): Promise<DetectCredsResult> {
+/**
+ * The environment an `aws`/`cdk` child should run with.
+ *
+ * An explicitly chosen profile wins over whatever Walnut itself was started with,
+ * and AWS_DEFAULT_PROFILE is cleared alongside it: the CLI honours that variable
+ * too, so leaving a stale one in place could silently send the deploy to a
+ * different account than the wizard displayed.
+ */
+function envForProfile(profile: string | undefined, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  if (!profile) return base
+  return { ...base, AWS_PROFILE: profile, AWS_DEFAULT_PROFILE: profile }
+}
+
+async function detectCreds(profile?: string): Promise<DetectCredsResult> {
+  const chosen = profile?.trim() || undefined
   try {
     const { stdout } = await execFileAsync('aws', ['sts', 'get-caller-identity', '--output', 'json'], {
       timeout: IDENTITY_TIMEOUT_MS,
+      env: envForProfile(chosen),
     })
     // Only the account id is surfaced — never the ARN (it embeds a user/role name).
     const account = (JSON.parse(stdout) as { Account?: string }).Account
+    // The chosen profile is echoed back so the wizard can show WHICH account it
+    // verified — the operator picked that name, so it is not news to them.
+    const via = chosen ? ` via profile ${chosen}` : ''
     return {
       available: true,
-      detail: account ? `AWS credentials ready (account ${account})` : 'AWS credentials ready',
+      detail: account ? `AWS credentials ready (account ${account})${via}` : `AWS credentials ready${via}`,
       needs: 'nothing',
+      profiles: (await listProfiles()) ?? undefined,
+      activeProfile: chosen,
     }
   } catch (err) {
     const code = (err as { code?: string }).code
@@ -93,29 +119,37 @@ async function detectCreds(): Promise<DetectCredsResult> {
         needs: 'cli-login',
       }
     }
-    // Every `aws` call here inherits Walnut's own environment, so it resolves the
-    // DEFAULT profile unless AWS_PROFILE is set. A machine with several profiles
-    // and a stale [default] therefore fails this probe while the profile the
-    // operator actually uses works perfectly — the old message sent them to `aws
-    // configure`, which is the wrong fix and would overwrite a working config.
-    const profiles = await countProfiles()
-    if (profiles !== null && profiles > 1 && !process.env.AWS_PROFILE) {
+    // Without an explicit profile every `aws` call inherits Walnut's own
+    // environment, so it resolves the DEFAULT profile. A machine with several
+    // profiles and a stale [default] therefore fails this probe while the profile
+    // the operator actually uses works perfectly — telling them to run `aws
+    // configure` would be the wrong fix and would overwrite a working config.
+    const profiles = await listProfiles()
+    const effective = chosen ?? process.env.AWS_PROFILE
+    if (effective) {
       return {
         available: false,
-        detail: `The aws CLI is installed and has ${profiles} profiles, but the default one has no usable credentials. `
-          + 'Either set AWS_PROFILE=<name> in the environment Walnut runs in and restart it, or refresh your default '
-          + 'profile (`aws configure`, or sign in with SSO), then re-check.',
+        detail: `Profile ${effective} did not authenticate — check that it is still signed in `
+          + '(for SSO: `aws sso login`), or pick a different one.',
         needs: 'cli-login',
+        profiles: profiles ?? undefined,
+        activeProfile: chosen,
       }
     }
-    const activeProfile = process.env.AWS_PROFILE
-      ? ' The AWS_PROFILE currently set for Walnut did not authenticate — check that it is spelled correctly and still signed in.'
-      : ''
+    if (profiles && profiles.length > 1) {
+      return {
+        available: false,
+        detail: `The default AWS profile has no usable credentials, but this machine has ${profiles.length} profiles — `
+          + 'pick the one you want to deploy with below.',
+        needs: 'cli-login',
+        profiles,
+      }
+    }
     return {
       available: false,
-      detail: 'The aws CLI is installed but has no usable credentials. Run `aws configure` or sign in with SSO, then re-check.'
-        + activeProfile,
+      detail: 'The aws CLI is installed but has no usable credentials. Run `aws configure` or sign in with SSO, then re-check.',
       needs: 'cli-login',
+      profiles: profiles ?? undefined,
     }
   }
 }
@@ -239,6 +273,7 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   // no node_modules, and `npx cdk` would then resolve to a download prompt.
   if (!fs.existsSync(path.join(cwd, 'node_modules', 'aws-cdk-lib'))) {
     onLog('infra/node_modules is missing — installing CDK dependencies (this takes a few minutes)')
+    // No AWS call here — npm only fetches packages — so the ambient env is right.
     const install = await runStreaming('npm', ['ci'], cwd, onLog, NPM_CI_TIMEOUT_MS, process.env, params.signal)
     if (install.code !== 0) throw new Error(`npm ci failed in infra/ (exit ${install.code})`)
   }
@@ -257,9 +292,14 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   if (params.instanceType) deployArgs.push('-c', `instanceType=${params.instanceType}`)
   if (params.region) deployArgs.push('-c', `region=${params.region}`)
 
+  // The profile has to reach the CHILD, not just the probe: cdk resolves the
+  // target account from its own environment, so a deploy without it would land in
+  // whatever [default] points at — a different account than the wizard verified
+  // and displayed.
+  const profileEnv = envForProfile(params.profile)
   const deployEnv = params.region
-    ? { ...process.env, CDK_DEFAULT_REGION: params.region, AWS_REGION: params.region }
-    : process.env
+    ? { ...profileEnv, CDK_DEFAULT_REGION: params.region, AWS_REGION: params.region }
+    : profileEnv
 
   const deploy = async (): Promise<{ code: number; output: string }> => {
     onLog(`deploying ${STACK_NAME}${params.region ? ` in ${params.region}` : ''} — this usually takes 3-6 minutes`)
@@ -269,8 +309,10 @@ async function createVM(params: CreateVMParams, onLog: (line: string) => void): 
   let result = await deploy()
   if (result.code !== 0 && needsBootstrap(result.output)) {
     onLog('this account/region has never been CDK-bootstrapped — running cdk bootstrap once')
+    // Same env as the deploy: bootstrapping a DIFFERENT account than the one the
+    // deploy targets would leave the real failure unfixed.
     const bootstrap = await runStreaming(
-      'npx', ['cdk', 'bootstrap'], cwd, onLog, BOOTSTRAP_TIMEOUT_MS, process.env, params.signal,
+      'npx', ['cdk', 'bootstrap'], cwd, onLog, BOOTSTRAP_TIMEOUT_MS, deployEnv, params.signal,
     )
     if (bootstrap.code !== 0) throw new Error(`cdk bootstrap failed (exit ${bootstrap.code})`)
     result = await deploy()
@@ -317,10 +359,28 @@ function instructions(params: InstructionsParams): DriverInstructions {
   }
 }
 
-async function teardown(instanceRef: string, onLog: (line: string) => void): Promise<void> {
+/**
+ * Destroy the stack. `profile` MUST be the one the job deployed with.
+ *
+ * The stack name is a constant, so the ONLY thing deciding which account and
+ * region this deletes from is the environment handed to the child. Resolving that
+ * from the ambient environment would make "destroy the test box" delete whatever
+ * [default] happens to point at — an unrecoverable outcome (instance, Elastic IP
+ * and disk all go), so the caller has to state the account explicitly.
+ */
+async function teardown(
+  instanceRef: string,
+  onLog: (line: string) => void,
+  opts?: { profile?: string; region?: string },
+): Promise<void> {
   const cwd = infraDir()
   onLog(`destroying ${STACK_NAME} (instance ${instanceRef})`)
-  const res = await runStreaming('npx', ['cdk', 'destroy', STACK_NAME, '--force'], cwd, onLog, DEPLOY_TIMEOUT_MS)
+  const env = opts?.region
+    ? { ...envForProfile(opts.profile), CDK_DEFAULT_REGION: opts.region, AWS_REGION: opts.region }
+    : envForProfile(opts?.profile)
+  const res = await runStreaming(
+    'npx', ['cdk', 'destroy', STACK_NAME, '--force'], cwd, onLog, DEPLOY_TIMEOUT_MS, env,
+  )
   if (res.code !== 0) throw new Error(`cdk destroy failed (exit ${res.code})`)
 }
 

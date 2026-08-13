@@ -40,14 +40,25 @@ function badRequest(res: import('express').Response, message: string): void {
   res.status(400).json({ error: message })
 }
 
-// GET /api/cloud-setup/providers → [{ id, label, costHint, detect }]
-cloudSetupRouter.get('/providers', async (_req, res, next) => {
+// GET /api/cloud-setup/providers[?awsProfile=name] → [{ id, label, costHint, detect }]
+//
+// awsProfile re-probes the aws driver with a specific local profile, so the picker
+// can show whether the operator's chosen account authenticates before they commit
+// to a deploy. It only reaches the driver whose id it names.
+cloudSetupRouter.get('/providers', async (req, res, next) => {
   try {
+    const rawProfile = typeof req.query.awsProfile === 'string' ? req.query.awsProfile.trim() : ''
+    // The value becomes an env var for a child process, so keep it to the shape
+    // AWS itself allows for a profile name rather than passing prose through.
+    const awsProfile = /^[\w.@-]{1,128}$/.test(rawProfile) ? rawProfile : undefined
+    if (rawProfile && !awsProfile) {
+      return badRequest(res, 'awsProfile must be a profile name (letters, digits, dot, dash, underscore, @)')
+    }
     const providers = await Promise.all(listDrivers().map(async (driver) => {
       let detect: Awaited<ReturnType<typeof driver.detectCreds>>
       try {
         detect = await Promise.race([
-          driver.detectCreds(),
+          driver.detectCreds(driver.id === 'aws' ? awsProfile : undefined),
           new Promise<never>((_, reject) => {
             const t = setTimeout(() => reject(new Error('timeout')), DETECT_TIMEOUT_MS)
             t.unref?.()
@@ -80,11 +91,18 @@ cloudSetupRouter.post('/start', async (req, res, next) => {
       domain?: string
       region?: string
       instanceType?: string
+      profile?: string
       credentials?: string
       force?: boolean
     }
     if (!body.provider || !getDriver(body.provider)) {
       return badRequest(res, `Unknown or missing provider: ${body.provider ?? '(none)'}`)
+    }
+    // Same shape check as the detect query: this value ends up as AWS_PROFILE on a
+    // cdk child, and it decides which ACCOUNT gets the resources.
+    const profile = body.profile?.trim() || undefined
+    if (profile && !/^[\w.@-]{1,128}$/.test(profile)) {
+      return badRequest(res, 'profile must be a profile name (letters, digits, dot, dash, underscore, @)')
     }
     if (!body.domainMode || !DOMAIN_MODES.includes(body.domainMode as CloudSetupDomainMode)) {
       return badRequest(res, `domainMode must be one of: ${DOMAIN_MODES.join(', ')}`)
@@ -99,6 +117,7 @@ cloudSetupRouter.post('/start', async (req, res, next) => {
       domain: body.domain,
       region: body.region,
       instanceType: body.instanceType,
+      profile,
       credentials: body.credentials,
       force: body.force === true,
     })

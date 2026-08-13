@@ -228,6 +228,9 @@ async function provision(ctx: StepContext): Promise<StepOutcome> {
     userData,
     region: state.region,
     instanceType: state.instanceType,
+    // From the persisted job, not the ambient env: a retry must deploy into the
+    // same account the first attempt did.
+    profile: state.profile,
     name: 'walnut-cloud',
     domainMode: state.domainMode,
     domain: state.domain,
