@@ -21,6 +21,12 @@ contradicts a stated preference) surface it with a recommendation — otherwise 
 obvious option and proceed. Fix root causes, not symptoms. Verify your own work
 (build + real-UI E2E) before claiming it's done. Default to finishing the whole job.
 
+**Commit automatically after the loop.** Once the full dev loop is done (implement →
+build → deploy → real-UI verification passed), commit the change yourself — don't stop
+and wait to be asked. Scope the commit to your own changes only (never sweep up other
+agents' uncommitted files), and run the usual pre-commit sensitive-content scan. Push
+still only happens on request.
+
 ## CRITICAL: Open Source Repository
 
 **PUBLIC repo. Every commit is visible to the internet.**
