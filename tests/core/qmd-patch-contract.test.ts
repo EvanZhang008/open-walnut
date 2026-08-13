@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 const repoRoot = path.resolve(import.meta.dirname, '../..');
 const packageJson = JSON.parse(
   fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'),
-) as { optionalDependencies: Record<string, string> };
+) as { dependencies?: Record<string, string>; optionalDependencies?: Record<string, string> };
 const qmdPackage = JSON.parse(
   fs.readFileSync(
     path.join(repoRoot, 'node_modules/@tobilu/qmd/package.json'),
@@ -19,7 +19,12 @@ const qmdStoreSource = fs.readFileSync(
 
 describe('QMD postinstall patch contract', () => {
   it('pins the exact dependency version supported by the patch', () => {
-    expect(packageJson.optionalDependencies['@tobilu/qmd']).toBe('2.1.0');
+    // qmd moved to optionalDependencies (native-addon install may fail on
+    // unsupported platforms; npx install must survive that) — the pin contract
+    // holds wherever the dep is declared.
+    const declared = packageJson.dependencies?.['@tobilu/qmd']
+      ?? packageJson.optionalDependencies?.['@tobilu/qmd'];
+    expect(declared).toBe('2.1.0');
     expect(qmdPackage.version).toBe('2.1.0');
   });
 

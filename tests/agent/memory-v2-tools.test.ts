@@ -103,11 +103,15 @@ describe('memory_notes_search tool', () => {
       sources: ['memory_daily', 'note_vault'],
       path: 'walnut/overview/history/',
     });
+    // 5th arg pins rerank:false — QMD's reranker is a native llama.cpp call that
+    // blocks the event loop, and the agent loop runs inside the web server process,
+    // so leaving it on froze the whole app for ~3s per tool call (28.7s call).
     expect(memoryNotesSearch).toHaveBeenCalledWith(
       ['test'],
       ['memory_daily', 'note_vault'],
       15,
       'walnut/overview/history/',
+      { rerank: false },
     );
   });
 

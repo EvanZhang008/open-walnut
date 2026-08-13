@@ -255,7 +255,18 @@ describe('QMD memory search integration', () => {
     expect(results[0].type).toBe('memory');
     expect(results[0].matchField).toBe('memory');
     expect(results[0].path).toBe('memory/notes.md');
-    expect(mockMemoryNotesSearch).toHaveBeenCalledWith('TypeScript', undefined, 20);
+    // rerank MUST be false on this interactive lane. QMD's reranker is a local
+    // llama.cpp cross-encoder: measured 11-20s on a cold query AND it pinned the
+    // event loop for ~11s (one search froze every route in the app). Asserting the
+    // options object here is the regression guard — a well-meaning "improve
+    // relevance" change that drops it reintroduces an app-wide freeze.
+    expect(mockMemoryNotesSearch).toHaveBeenCalledWith(
+      'TypeScript',
+      undefined,
+      20,
+      undefined,
+      { rerank: false, overfetchMultiplier: 1 },
+    );
   });
 
   it('surfaces a total QMD failure instead of returning an authoritative empty set', async () => {

@@ -546,11 +546,28 @@ export async function search(
     }
   }
 
-  // Memory search: delegate to QMD
+  // Memory search: delegate to QMD.
+  //
+  // rerank:false like the task/session legs above. This was the LAST interactive
+  // leg still running QMD's local llama.cpp cross-encoder, and it was the worst
+  // offender: measured 11–20s on a cold query, and because llama.cpp scoring is a
+  // native call it PINNED THE EVENT LOOP for ~11s (`event-loop blocked (probe
+  // late) lateByMs:11026`) — i.e. one search in the box froze every route for the
+  // whole app. That violates the "never block the web server" rule outright.
+  //
+  // Measured quality cost of dropping it (4 real queries, top-10): the #1 hit was
+  // identical every time, top-5 overlap 3–5 of 5. Not free, but nowhere near
+  // worth 11s of app-wide freeze on a keystroke path.
   if (types.includes('memory') && qmdEnabled) {
     try {
       const { memoryNotesSearch } = await import('./memory-search.js');
-      const qmdResults = await memoryNotesSearch(normalizedQuery, undefined, limit);
+      const qmdResults = await memoryNotesSearch(
+        normalizedQuery,
+        undefined,
+        limit,
+        undefined,
+        { rerank: false, overfetchMultiplier: 1 },
+      );
       for (const r of qmdResults) {
         results.push({
           type: 'memory',

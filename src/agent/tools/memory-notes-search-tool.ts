@@ -147,8 +147,19 @@ The search uses keyword matching (BM25, AND logic) + vector similarity (semantic
       semanticQueries.push(...queries);
     }
 
+    // rerank:false — the single worst offender measured on this vault: 28.7s for
+    // one call, stalling the event loop 2949ms. This tool searches ALL sources, so
+    // it feeds the reranker the most candidates of any caller. And because the
+    // agent loop runs inside the web server process, that stall is app-wide: the
+    // butler answering a question froze every route for every surface (web, iOS,
+    // cloud). Quality delta was negligible (top-1 identical across 4 probes),
+    // which is the whole reason the reranker loses this trade.
+    //
+    // If a genuinely recall-critical caller ever needs the reranker back, it must
+    // first move off the server's event loop (a worker, like the QMD index
+    // worker) — not just flip this flag.
     const semanticResults = semanticQueries.length > 0
-      ? await memoryNotesSearch(semanticQueries, sources, limit, pathPrefix)
+      ? await memoryNotesSearch(semanticQueries, sources, limit, pathPrefix, { rerank: false })
       : [];
     const resultKey = (result: MemorySearchResult): string =>
       result.taskId

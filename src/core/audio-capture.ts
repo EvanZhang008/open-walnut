@@ -8,6 +8,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
+import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { RECORDINGS_DIR, TMP_DIR } from '../constants.js'
 import { bus, EventNames } from './event-bus.js'
@@ -129,6 +130,17 @@ class AudioCaptureService {
   private permissionsCheckedAt = 0
   private permissionsRefreshing = false
   private static readonly PERMISSIONS_TTL_MS = 5 * 60 * 1000
+  // getAudioApps() is the same class of synchronous ScreenCaptureKit bridge as
+  // verifyPermissions() — it spins a CFRunLoop waiting for a macOS callback.
+  // 2026-08-11 incident: one GET /api/audio/apps pinned the event loop for
+  // MINUTES (main-thread sample: 100% of ticks inside GetAvailableApps →
+  // CFRunLoopRun, wedged behind replayd/os_log), freezing every HTTP request
+  // including static index.html — the whole app "stuck on refresh". Same
+  // cache + background-refresh treatment as permissions.
+  private appsCache: Array<{ processId: number; bundleIdentifier: string; applicationName: string }> | null = null
+  private appsCheckedAt = 0
+  private appsRefreshing = false
+  private static readonly APPS_TTL_MS = 60 * 1000
 
   /**
    * Check if audio capture is available on this platform.
@@ -171,20 +183,45 @@ class AudioCaptureService {
   }
 
   /**
-   * Refresh the permissions cache off the request path. The native call runs on
-   * a later tick (setImmediate) so the current request returns instantly; it
-   * still blocks the loop for the duration of the native call, but only once
-   * per TTL instead of once per poll, and never inside a user's request/response.
-   * Guarded against concurrent refreshes.
+   * Refresh the permissions cache off the request path — in a CHILD PROCESS.
+   * The old setImmediate version only deferred the native call; it still ran
+   * on (and blocked) the server's event loop for its full duration (~20s cold,
+   * 150s under contention). Same child-process treatment as the apps refresh.
    */
   private refreshPermissionsInBackground(): void {
     if (this.permissionsRefreshing) return
     this.permissionsRefreshing = true
-    setImmediate(() => {
+    let addonPath: string
+    try {
+      addonPath = require.resolve('screencapturekit-audio-capture')
+    } catch (err) {
+      this.permissionsCache = { granted: false, message: (err as Error).message }
+      this.permissionsCheckedAt = Date.now()
+      this.permissionsRefreshing = false
+      return
+    }
+    const script = 'const m=require(process.argv[1]);' +
+      'process.stdout.write(JSON.stringify(m.AudioCapture.verifyPermissions()))'
+    const child = spawn(process.execPath, ['-e', script, addonPath], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 30_000,
+    })
+    let out = ''
+    child.stdout.on('data', (d: Buffer) => { out += d.toString() })
+    child.on('error', (err) => {
+      this.permissionsCache = { granted: false, message: err.message }
+      this.permissionsCheckedAt = Date.now()
+      this.permissionsRefreshing = false
+    })
+    child.on('exit', (code) => {
       try {
-        const { AudioCapture } = require('screencapturekit-audio-capture')
-        const status = AudioCapture.verifyPermissions()
-        this.permissionsCache = { granted: status.granted, message: status.message }
+        if (code === 0 && out) {
+          const status = JSON.parse(out) as { granted: boolean; message: string }
+          this.permissionsCache = { granted: status.granted, message: status.message }
+        } else {
+          this.permissionsCache = this.permissionsCache
+            ?? { granted: false, message: 'permission probe did not complete' }
+        }
       } catch (err) {
         this.permissionsCache = { granted: false, message: (err as Error).message }
       } finally {
@@ -196,21 +233,70 @@ class AudioCaptureService {
 
   /**
    * List running applications that can be captured.
+   *
+   * NEVER calls the native bridge on the request path (see appsCache note):
+   * serves the cached list immediately and refreshes in the background when
+   * stale. First-ever call returns [] while the initial refresh runs — the
+   * frontend picker just shows an empty list for one poll.
    */
   listApps(): Array<{ processId: number; bundleIdentifier: string; applicationName: string }> {
     if (!this.isAvailable()) return []
+    const now = Date.now()
+    const isStale = !this.appsCache || (now - this.appsCheckedAt) >= AudioCaptureService.APPS_TTL_MS
+    if (isStale) this.refreshAppsInBackground()
+    return this.appsCache ?? []
+  }
+
+  /** Refresh the capturable-app list off the request path.
+   *
+   *  Runs getAudioApps() in a CHILD PROCESS, not via setImmediate: the native
+   *  call blocks whichever event loop it runs on, and a deferred tick still
+   *  froze /api/config for 10s right after deploy (measured 2026-08-11). A
+   *  child process wedging for minutes costs nothing; it's killed on timeout. */
+  private refreshAppsInBackground(): void {
+    if (this.appsRefreshing) return
+    this.appsRefreshing = true
+    const startedAt = Date.now()
+    let addonPath: string
     try {
-      const { AudioCapture } = require('screencapturekit-audio-capture')
-      const ac = new AudioCapture()
-      try {
-        return ac.getAudioApps()
-      } finally {
-        ac.dispose()
-      }
+      addonPath = require.resolve('screencapturekit-audio-capture')
     } catch (err) {
-      log.audio.error('listApps failed', { error: (err as Error).message })
-      return []
+      log.audio.error('listApps refresh failed: addon not resolvable', { error: (err as Error).message })
+      this.appsCache = this.appsCache ?? []
+      this.appsCheckedAt = Date.now()
+      this.appsRefreshing = false
+      return
     }
+    const script = 'const m=require(process.argv[1]);const ac=new m.AudioCapture();' +
+      'try{process.stdout.write(JSON.stringify(ac.getAudioApps()))}finally{try{ac.dispose()}catch{}}'
+    const child = spawn(process.execPath, ['-e', script, addonPath], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 30_000, // wedged CFRunLoop → SIGTERM; cache just stays stale
+    })
+    let out = ''
+    child.stdout.on('data', (d: Buffer) => { out += d.toString() })
+    child.on('error', (err) => {
+      log.audio.error('listApps refresh spawn failed', { error: err.message })
+      this.appsCache = this.appsCache ?? []
+      this.appsCheckedAt = Date.now()
+      this.appsRefreshing = false
+    })
+    child.on('exit', (code) => {
+      try {
+        if (code === 0 && out) {
+          this.appsCache = JSON.parse(out)
+        } else {
+          log.audio.warn('listApps refresh child failed', { code, tookMs: Date.now() - startedAt })
+          this.appsCache = this.appsCache ?? []
+        }
+      } catch (err) {
+        log.audio.error('listApps refresh parse failed', { error: (err as Error).message })
+        this.appsCache = this.appsCache ?? []
+      } finally {
+        this.appsCheckedAt = Date.now()
+        this.appsRefreshing = false
+      }
+    })
   }
 
   /**

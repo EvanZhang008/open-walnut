@@ -56,7 +56,28 @@ export interface MemorySearchResult {
 }
 
 export interface MemorySearchOptions {
-  /** Local reranker quality pass. Disable for latency-sensitive interactive UI. */
+  /**
+   * QMD's local reranker quality pass. **Defaults to FALSE — opt IN, never out.**
+   *
+   * The reranker is a native llama.cpp cross-encoder. It does not merely cost
+   * latency, it BLOCKS THE NODE EVENT LOOP while it scores, and every caller in
+   * this process tree (web routes AND agent tools — the agent loop runs inside
+   * the web server process) therefore froze the entire app when it ran. Measured
+   * on a real vault: `memory_notes_search` 28.7s/2949ms-stall, `task_search`
+   * 14.7s/609ms-stall, `/api/search?types=memory` 13-20s/11026ms-stall. Same
+   * failure class as any sync native call on the event loop.
+   *
+   * It used to default to TRUE, which meant every new caller silently opted into
+   * an app-wide freeze. The default is now safe-by-construction: you cannot
+   * accidentally block the server, you can only deliberately choose to.
+   *
+   * Quality cost of it being off, measured A/B on 8 real queries: the #1 result
+   * was IDENTICAL every time; only the mid/tail order shifts.
+   *
+   * Before setting this true: the caller must not be on the server's event loop
+   * (move it to a worker, like the QMD index worker). Do not flip it on a route,
+   * a tool, or anything the web process awaits.
+   */
   rerank?: boolean;
   /** Candidate over-fetch before source/path filtering. Default 3. */
   overfetchMultiplier?: number;
@@ -78,6 +99,13 @@ async function memoryNotesSearchUnlocked(
 ): Promise<MemorySearchResult[]> {
   const queryList = Array.isArray(queries) ? queries : [queries];
   if (queryList.length === 0) return [];
+
+  // Resolved ONCE: the two store-search paths below must agree, and the score
+  // filter must match the score SEMANTICS this produces (reranked = blended
+  // score; not reranked = 1/rank, where MIN_RERANKED_BLEND_SCORE would wrongly
+  // truncate every result set to six rows). See MemorySearchOptions.rerank for
+  // why the default is false.
+  const rerank = options.rerank ?? false;
 
   // Optional path scoping: keep only results whose path WITHIN its collection
   // starts with this prefix (e.g. 'walnut/overview/history/' on memory_skill,
@@ -144,7 +172,7 @@ async function memoryNotesSearchUnlocked(
         // Over-fetch to allow post-filtering; a narrow path prefix discards
         // most hits, so fetch deeper when one is set.
         limit: storeLimit * (normalizedPrefix ? 8 : (options.overfetchMultiplier ?? 3)),
-        rerank: options.rerank ?? true,
+        rerank,
       });
       log.agent.info(`memory search ${storeLabel}: ${raw.length} results, queries=${queryList.length}`, {
         queries: queryList,
@@ -153,7 +181,7 @@ async function memoryNotesSearchUnlocked(
 
       const collectionSet = new Set(collections);
       return raw
-        .filter(r => options.rerank === false || r.score >= MIN_RERANKED_BLEND_SCORE)
+        .filter(r => !rerank || r.score >= MIN_RERANKED_BLEND_SCORE)
         .filter(r => {
           // Post-filter to requested collections
           const m = r.file?.match(/^qmd:\/\/([^/]+)\//);
@@ -209,7 +237,7 @@ async function memoryNotesSearchUnlocked(
       const raw: HybridQueryResult[] = await store.search({
         queries: expandedQueries,
         limit: storeLimit * (options.overfetchMultiplier ?? 3),
-        rerank: options.rerank ?? true,
+        rerank,
       });
       log.agent.info(`memory search ${sourceLabel}: ${raw.length} results, queries=${queryList.length}`, {
         queries: queryList,
@@ -220,7 +248,7 @@ async function memoryNotesSearchUnlocked(
       const weight = config?.weight ?? 1.0;
 
       return raw
-        .filter(r => options.rerank === false || r.score >= MIN_RERANKED_BLEND_SCORE)
+        .filter(r => !rerank || r.score >= MIN_RERANKED_BLEND_SCORE)
         .filter(r => matchesPathPrefix(r.file ?? ''))
         .map((r) => {
           const virtualFile = r.file ?? '';

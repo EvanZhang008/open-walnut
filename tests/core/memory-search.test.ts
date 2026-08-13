@@ -186,12 +186,30 @@ describe('memoryNotesSearch', () => {
     expect(results).toEqual([]);
   });
 
-  it('4.9: low-score results are filtered (MIN_SCORE)', async () => {
+  it('4.9: low-score results are filtered (MIN_SCORE) — reranked scores only', async () => {
+    // The MIN_RERANKED_BLEND_SCORE floor is meaningful ONLY for reranked scores
+    // (QMD's blend of RRF position and reranker relevance). Without reranking QMD
+    // scores a hit as 1/rank — 1.0, 0.5, 0.33, 0.25 … — so applying a 0.15 floor
+    // there would silently truncate EVERY result set to six rows. That is why the
+    // filter is gated on the rerank flag, and why this test must opt in explicitly
+    // now that rerank defaults to false.
     qmdStore.__setMockMemoryResults([
       { file: dailyVPath(0), title: 'Noise', bestChunk: 'barely related', score: 0.05 },
     ]);
-    const results = await memoryNotesSearch('some query', ['memory_daily']);
+    const results = await memoryNotesSearch('some query', ['memory_daily'], 15, undefined, {
+      rerank: true,
+    });
     expect(results).toEqual([]);
+  });
+
+  it('4.9b: the reranked-score floor is NOT applied to un-reranked 1/rank scores', async () => {
+    // Guard for the inverse trap: a 1/rank score of 0.05 (rank 20) is a legitimate
+    // tail result, not noise, and must survive when reranking is off.
+    qmdStore.__setMockMemoryResults([
+      { file: dailyVPath(0), title: 'Tail hit', bestChunk: 'still relevant', score: 0.05 },
+    ]);
+    const results = await memoryNotesSearch('some query', ['memory_daily']);
+    expect(results.length).toBeGreaterThan(0);
   });
 
   it('4.11: result shape has all expected fields', async () => {
@@ -213,13 +231,35 @@ describe('memoryNotesSearch', () => {
     }
   });
 
-  it('enables QMD reranking by default for ordinary memory search', async () => {
+  it('DISABLES QMD reranking by default — the safe-by-construction default', async () => {
+    // This test asserted `rerank: true` until 2026-08-12. Inverted deliberately:
+    // QMD's reranker is a native llama.cpp cross-encoder that BLOCKS the Node event
+    // loop while scoring, and every caller lives in the web server process (the
+    // agent loop is imported directly by src/web/server.ts, not run in a worker).
+    // A true-by-default therefore meant any new caller silently opted the whole app
+    // into a multi-second freeze. Measured: memory_notes_search 28.7s with a 2949ms
+    // stall; /api/search?types=memory 13-20s with an 11026ms stall.
+    //
+    // Quality cost of the flip, A/B over 8 real queries: the #1 result was
+    // IDENTICAL every time — only mid/tail ordering moves.
     await memoryNotesSearch('deployment history', ['memory_daily']);
 
     expect(qmdStore.__getMockStore().search).toHaveBeenCalledWith(
       expect.objectContaining({
-        rerank: true,
+        rerank: false,
       }),
+    );
+  });
+
+  it('still honors an EXPLICIT opt-in to reranking', async () => {
+    // Off-by-default must not mean unreachable: a caller that is genuinely off the
+    // event loop (e.g. a worker) can still ask for the quality pass.
+    await memoryNotesSearch('deployment history', ['memory_daily'], 15, undefined, {
+      rerank: true,
+    });
+
+    expect(qmdStore.__getMockStore().search).toHaveBeenCalledWith(
+      expect.objectContaining({ rerank: true }),
     );
   });
 

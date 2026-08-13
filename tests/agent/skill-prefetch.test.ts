@@ -33,11 +33,16 @@ describe('buildSkillPrefetchHint', () => {
     expect(hint).toBe(
       'Possibly relevant skills: tax-filing, eks-oncall — load with skill_view if applicable.',
     );
-    // Searches ONLY the skill collection, with over-fetch (post-filter crowding)
+    // Searches ONLY the skill collection, with over-fetch (post-filter crowding),
+    // and with rerank DISABLED: this runs on every agent turn, in the web server's
+    // event loop, purely to produce one advisory hint line. The reranker there cost
+    // seconds of first-token latency and stalled every route while it scored.
     expect(mockSearch).toHaveBeenCalledWith(
       ['how do I file my taxes this year?'],
       ['memory_skill'],
       12,
+      undefined,
+      { rerank: false },
     );
   });
 

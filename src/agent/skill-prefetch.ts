@@ -29,7 +29,20 @@ export async function buildSkillPrefetchHint(userMessage: string): Promise<strin
     // MAX_HINTS): the store searches the whole memory DB then post-filters to
     // the skill collection, so a tight limit lets daily/compaction noise crowd
     // skill hits out entirely.
-    const results = await memoryNotesSearch([query.slice(0, 500)], ['memory_skill'], 12);
+    //
+    // rerank:false — this runs on EVERY agent turn and sits directly in the
+    // user's first-token latency, while its entire output is one advisory hint
+    // line. QMD's reranker is a local llama.cpp cross-encoder that measured
+    // 11-20s cold and pins the event loop while it scores; paying that to
+    // maybe-reorder three skill names is the worst latency/value trade in the
+    // codebase. RRF order is plenty for "which 3 names do we mention".
+    const results = await memoryNotesSearch(
+      [query.slice(0, 500)],
+      ['memory_skill'],
+      12,
+      undefined,
+      { rerank: false },
+    );
     if (results.length === 0) return null;
 
     // The skill collection indexes ALL md under skills/ (SKILL.md + support
