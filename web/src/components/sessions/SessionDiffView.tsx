@@ -14,6 +14,7 @@ import { markdownBlocksWithLines, markdownCommentRange, type MarkdownBlock } fro
 import { computeExpandGaps, oldSourceLineCount, UNFOLD_CHUNK } from '@/components/sessions/diffExpand';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
+import { SelectionAskPill } from '@/components/common/SelectionAskPill';
 import { ICON_REFRESH, ICON_WARNING } from '@/components/common/Icons';
 import { log } from '@/utils/log';
 
@@ -1162,7 +1163,10 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   }, [files, selectedId]);
 
   // Detect a text selection inside the diff → show the floating "Ask" pill.
-  const handleMouseUp = useCallback(() => {
+  // The anchor is the POINTER at release (not the selection rect), so the pill
+  // appears next to the cursor — below after a downward drag, above after an
+  // upward one (SelectionAskPill decides the side from this point).
+  const handleMouseUp = useCallback((e: ReactMouseEvent) => {
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) { setSelection(null); return; }
     const text = sel.toString().trim();
@@ -1188,8 +1192,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
       lineNode = lineNode.parentNode;
     }
 
-    const rect = range.getBoundingClientRect();
-    setSelection({ x: rect.left + rect.width / 2, y: rect.top, text, filePath, line });
+    setSelection({ x: e.clientX, y: e.clientY, text, filePath, line });
   }, [selectedChange]);
 
   const commitSelection = useCallback(() => {
@@ -1421,19 +1424,11 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
       )}
 
       {selection && (
-        <button
-          className="session-diff-ask-pill"
-          style={{ left: selection.x, top: selection.y }}
-          // preventDefault keeps the text selection; stopPropagation on mouseup is
-          // CRITICAL — otherwise the mouseup bubbles to the container's handleMouseUp,
-          // which recomputes the now-collapsing selection and unmounts THIS pill
-          // before click fires (so commitSelection never runs).
-          onMouseDown={(e) => { e.preventDefault(); }}
-          onMouseUp={(e) => { e.stopPropagation(); }}
-          onClick={commitSelection}
-        >
-          Ask about this
-        </button>
+        <SelectionAskPill
+          anchor={selection}
+          onCommit={commitSelection}
+          onDismiss={() => setSelection(null)}
+        />
       )}
 
       {/* Hidden keyboard nav target — ↑/↓ steps files when the diff has focus */}

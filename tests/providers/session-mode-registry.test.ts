@@ -189,6 +189,22 @@ describe('daemon twins agree on the mode vocabulary', () => {
     expect(shouldAutoRespond('plan', 'ExitPlanMode')).toBe(false)
     expect(shouldAutoRespond('plan', 'Read')).toBe(true)
   })
+
+  it('never auto-approves AskUserQuestion — not even in bypass', async () => {
+    const { shouldAutoRespond } = await import('../../src/providers/daemon-core.js')
+    // AskUserQuestion is a requiresUserInteraction tool: the tool result echoes the
+    // `answers` field out of the permission response's updatedInput, so an
+    // auto-allow (which sends the input unchanged, i.e. no answers) hands the model
+    // a fabricated "the user answered your questions" with an EMPTY answer set.
+    // It must reach walnut in every mode so a human answers for real.
+    expect(shouldAutoRespond('bypass', 'AskUserQuestion')).toBe(false)
+    expect(shouldAutoRespond('plan', 'AskUserQuestion')).toBe(false)
+    expect(shouldAutoRespond('default', 'AskUserQuestion')).toBe(false)
+    // The exemption is tool-scoped: every OTHER tool keeps its old answer.
+    expect(shouldAutoRespond('bypass', 'Bash')).toBe(true)
+    expect(shouldAutoRespond('bypass', 'Write')).toBe(true)
+    expect(shouldAutoRespond('plan', 'Read')).toBe(true)
+  })
 })
 
 describe('validators and pickers all derive from the registry', () => {
@@ -219,6 +235,24 @@ describe('validators and pickers all derive from the registry', () => {
     expect(pill).not.toMatch(/legacyModeLabel = legacyMode === 'plan' \? 'Plan' : 'Bypass'/)
     // TodoPanel leaked the raw camelCase id ('dontAsk') instead of a label.
     expect(read('web/src/components/tasks/TodoPanel.tsx')).toContain('SESSION_MODE_LABELS[record.mode]')
+  })
+
+  it('a mode change persists first and never awaits the CLI hand-shake', () => {
+    // The CLI drains its stdin control queue only between streaming chunks, so
+    // awaiting set_permission_mode inside the PATCH pinned the response to
+    // inference speed: 6–15s measured mid-turn, 15s client timeouts. The click
+    // must be bounded by a record write, with the live apply fired in the
+    // background (record.mode is the durable source of truth — spawn and cold
+    // --resume both read it, so a lost hand-shake self-heals next turn).
+    const src = read('src/core/sessions/session-lifecycle.ts')
+    const body = src.slice(src.indexOf('export async function changeSessionMode'))
+    const persistAt = body.indexOf('await persistSessionModeChange')
+    const applyAt = body.indexOf('applySessionModeControl')
+    expect(persistAt).toBeGreaterThan(-1)
+    expect(applyAt).toBeGreaterThan(-1)
+    expect(persistAt).toBeLessThan(applyAt)          // persist happens first
+    expect(body).not.toMatch(/await applySessionModeControl/) // and CLI is never awaited
+    expect(body).toMatch(/void applySessionModeControl/)
   })
 
   it('the transport mode field uses the registry type, not a re-declared union', () => {

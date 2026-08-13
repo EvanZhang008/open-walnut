@@ -17,7 +17,7 @@ import request from 'supertest'
 import { sessionLifecycleV1Router } from '../../../src/web/routes/session-lifecycle-v1.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
-import { createSessionRecord, getSessionByClaudeId } from '../../../src/core/session-tracker.js'
+import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../../src/core/session-tracker.js'
 
 function createApp() {
   const app = express()
@@ -216,6 +216,48 @@ describe('GET /api/v1/sessions/:id/history', () => {
     expect(res.status).toBe(200)
     expect(res.body.messages).toEqual([])
     expect(res.body.total).toBe(0)
+    expect(typeof res.body.historyUnavailable).toBe('string')
+  })
+
+  // Mobile parity for the two web-route fixes: a starting session and a fresh
+  // fork must not be told their history is unavailable.
+  it('does NOT report historyUnavailable for a session still starting up', async () => {
+    await createSessionRecord('lc-hist-starting', 'task-h3', 'proj', '/tmp', {
+      initialProcessStatus: 'idle',
+      initialStatusReason: 'awaiting_spawn',
+    })
+    const res = await request(createApp()).get('/api/v1/sessions/lc-hist-starting/history')
+    expect(res.status).toBe(200)
+    expect(res.body.messages).toEqual([])
+    expect(res.body.historyUnavailable).toBeUndefined()
+  })
+
+  it('does NOT report historyUnavailable for a fresh fork with an empty own transcript', async () => {
+    await createSessionRecord('lc-fork-parent', 'task-h4', 'proj', '/tmp', {
+      initialProcessStatus: 'stopped',
+    })
+    await createSessionRecord('lc-fork-child', 'task-h5', 'proj', '/tmp', {
+      initialProcessStatus: 'idle',
+      initialStatusReason: 'awaiting_spawn',
+      forkedFromSessionId: 'lc-fork-parent',
+    })
+    const res = await request(createApp()).get('/api/v1/sessions/lc-fork-child/history')
+    expect(res.status).toBe(200)
+    expect(res.body.historyUnavailable).toBeUndefined()
+  })
+
+  it('still reports historyUnavailable for an OLD fork with no transcript anywhere', async () => {
+    await createSessionRecord('lc-fork-old-parent', 'task-h6', 'proj', '/tmp', {
+      initialProcessStatus: 'stopped',
+    })
+    await createSessionRecord('lc-fork-old-child', 'task-h7', 'proj', '/tmp', {
+      initialProcessStatus: 'idle',
+      forkedFromSessionId: 'lc-fork-old-parent',
+    })
+    const old = new Date(Date.now() - 10 * 60 * 1000).toISOString()
+    await updateSessionRecord('lc-fork-old-child', { startedAt: old, last_status_change: old })
+    const res = await request(createApp()).get('/api/v1/sessions/lc-fork-old-child/history')
+    expect(res.status).toBe(200)
     expect(typeof res.body.historyUnavailable).toBe('string')
   })
 

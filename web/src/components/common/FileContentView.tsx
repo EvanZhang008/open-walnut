@@ -35,6 +35,7 @@ import { useConfirm } from '@/hooks/useConfirm';
 import { ICON_NEW_TAB } from '@/components/common/Icons';
 import { FileSourceEditor, type FileSourceEditorHandle } from '@/components/common/FileSourceEditor';
 import { FileMarkdownEditor } from '@/components/common/FileMarkdownEditor';
+import { SelectionAskPill, selectionClientRect } from '@/components/common/SelectionAskPill';
 import { openPopout } from '@/popout/openPopout';
 import { log } from '@/utils/log';
 
@@ -578,13 +579,17 @@ export function FileContentView({
   // Select text → floating pill → prefill the session chat with a located,
   // code-quoted reference. Mirrors the Changed tab's affordance (same pill, same
   // buildSelectionPrefill composer upstream) so a quoted reference reads the same
-  // whether it came from a diff or from a whole file. Three sources feed it:
+  // whether it came from a diff or from a whole file. Four sources feed it:
   //  - read-only views (md preview for MDX, truncated <pre>) → DOM mouseup walk;
   //  - the CodeMirror editor → its onSelectText callback (line from the doc);
-  //  - the WYSIWYG editor → the bubble menu's "Ask" button (commits directly).
-  const [selection, setSelection] = useState<{ x: number; y: number; text: string; line?: number } | null>(null);
+  //  - the WYSIWYG editor → the bubble menu's "Ask" button (commits directly);
+  //  - the HTML preview iframe → mouseup inside its own document (below).
+  const [selection, setSelection] = useState<{ x: number; y: number; text: string; line?: number; inHtml?: boolean } | null>(null);
 
-  const handleMouseUp = useCallback(() => {
+  // The anchor is the POINTER at release: the pill hugs the cursor (below the
+  // selection after a downward drag, above after an upward one) — the side is
+  // decided by SelectionAskPill from this point.
+  const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (!onSelectCode) return;
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) { setSelection(null); return; }
@@ -610,8 +615,7 @@ export function FileContentView({
       node = node.parentNode;
     }
 
-    const rect = range.getBoundingClientRect();
-    setSelection({ x: rect.left + rect.width / 2, y: rect.top, text, line });
+    setSelection({ x: e.clientX, y: e.clientY, text, line });
   }, [onSelectCode]);
 
   const commitSelection = useCallback(() => {
@@ -619,6 +623,10 @@ export function FileContentView({
     onSelectCode(filePath, selection.line, selection.text);
     setSelection(null);
     window.getSelection()?.removeAllRanges();
+    // An HTML-preview selection lives in the iframe's document — clear it there.
+    if (selection.inHtml) {
+      try { htmlFrameRef.current?.contentDocument?.getSelection()?.removeAllRanges(); } catch { /* cross-origin */ }
+    }
   }, [selection, onSelectCode, filePath]);
 
   // WYSIWYG "Ask": the bubble menu already scopes to a real selection, so it
@@ -627,6 +635,57 @@ export function FileContentView({
   const handleAskSelection = useCallback((text: string) => {
     onSelectCode?.(filePath, undefined, text);
   }, [onSelectCode, filePath]);
+
+  // HTML preview: the rendered page lives in a same-origin IFRAME, so the
+  // outer mouseup handler never sees selections made inside it. Listen inside
+  // the iframe's own document and translate its selection rect to top-viewport
+  // coords (iframe box offset). Line is unknowable in rendered HTML — the
+  // prefill degrades to a file-level reference, same as the WYSIWYG path.
+  const htmlFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const htmlPreviewLive = !loading && !showSource && isHtml;
+  useEffect(() => {
+    if (!onSelectCode || !htmlPreviewLive) return;
+    const frame = htmlFrameRef.current;
+    if (!frame) return;
+    let doc: Document | null = null;
+    const onFrameMouseUp = (e: MouseEvent) => {
+      if (!doc) return;
+      const sel = doc.getSelection();
+      const text = sel && !sel.isCollapsed && sel.rangeCount ? sel.toString().trim() : '';
+      if (!text) { setSelection((prev) => (prev?.inHtml ? null : prev)); return; }
+      // Anchor = the pointer at release, translated from iframe to top-viewport
+      // coords — the pill hugs the cursor (side decided by SelectionAskPill).
+      const box = frame.getBoundingClientRect();
+      setSelection({ x: box.left + e.clientX, y: box.top + e.clientY, text, inHtml: true });
+    };
+    const attach = () => {
+      // A cross-origin navigation inside the preview throws here — no pill then.
+      try { doc = frame.contentDocument; } catch { doc = null; }
+      doc?.addEventListener('mouseup', onFrameMouseUp);
+    };
+    // The document is replaced on every load (including the first, which may
+    // not have happened yet) — (re)attach each time.
+    frame.addEventListener('load', attach);
+    if (frame.contentDocument?.readyState === 'complete') attach();
+    return () => {
+      frame.removeEventListener('load', attach);
+      doc?.removeEventListener('mouseup', onFrameMouseUp);
+    };
+  }, [onSelectCode, htmlPreviewLive, filePath]);
+
+  // Live selection rect for the pill, translated to top-viewport coords when
+  // the selection lives inside the HTML preview iframe.
+  const resolveSelectionRect = useCallback((): DOMRect | null => {
+    if (!selection?.inHtml) return selectionClientRect();
+    const frame = htmlFrameRef.current;
+    let doc: Document | null = null;
+    try { doc = frame?.contentDocument ?? null; } catch { return null; }
+    if (!frame || !doc) return null;
+    const rect = selectionClientRect(doc);
+    if (!rect) return null;
+    const box = frame.getBoundingClientRect();
+    return new DOMRect(box.left + rect.left, box.top + rect.top, rect.width, rect.height);
+  }, [selection?.inHtml]);
 
   // Drop a stale pill when the file changes.
   useEffect(() => { setSelection(null); }, [filePath]);
@@ -941,6 +1000,7 @@ export function FileContentView({
       )}
       {!loading && showPreview && isHtml && (
         <iframe
+          ref={htmlFrameRef}
           className="fv-html-preview"
           // `src` (not `srcDoc`) so the page has its OWN document URL — in-page
           // anchors, relative links and scripts resolve against the file itself
@@ -1007,19 +1067,13 @@ export function FileContentView({
         </div>
       )}
       {selection && (
-        <button
-          className="session-diff-ask-pill"
-          style={{ left: selection.x, top: selection.y }}
-          // preventDefault keeps the text selection alive; stopPropagation on
-          // mouseup is CRITICAL — otherwise the mouseup bubbles to the container's
-          // handleMouseUp, which recomputes the now-collapsing selection and
-          // unmounts THIS pill before click fires (so commitSelection never runs).
-          onMouseDown={(e) => { e.preventDefault(); }}
-          onMouseUp={(e) => { e.stopPropagation(); }}
-          onClick={commitSelection}
-        >
-          Ask about this
-        </button>
+        <SelectionAskPill
+          anchor={selection}
+          onCommit={commitSelection}
+          onDismiss={() => setSelection(null)}
+          resolveRect={resolveSelectionRect}
+          listenTo={selection.inHtml ? htmlFrameRef.current?.contentDocument : undefined}
+        />
       )}
     </div>
   );

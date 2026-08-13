@@ -189,11 +189,13 @@ sessionLifecycleV1Router.post('/sessions/:id/permission', async (req: Request, r
         requestId: body.requestId,
         allow: body.allow,
         ...(body.message !== undefined ? { message: body.message } : {}),
+        ...(body.optionId !== undefined ? { optionId: body.optionId } : {}),
+        ...(body.answers !== undefined ? { answers: body.answers } : {}),
       }, 200)
       return
     }
     const { respondSessionPermission } = await import('../../core/sessions/session-lifecycle.js')
-    await runLocal(res, next, 200, () => respondSessionPermission(sessionId, body.requestId, body.allow, body.message))
+    await runLocal(res, next, 200, () => respondSessionPermission(sessionId, body.requestId, body.allow, body.message, body.optionId, body.answers))
   } catch (err) {
     next(err)
   }

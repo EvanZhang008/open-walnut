@@ -37,23 +37,41 @@ export async function readProviderSessionHistory(
   record: SessionRecord | null | undefined,
   nativeHost: string | null | undefined,
   skipSubagents = true,
-): Promise<{ messages: SessionHistoryMessage[]; sourceAvailable: boolean; windowed: boolean }> {
+  opts?: {
+    /** Tail-bounded caller: bound a COLD full read to the last N bytes (marked
+     *  windowed) instead of transferring + parsing the whole JSONL. See
+     *  ReadHistoryOptions.maxColdReadBytes. Claude engine only (ACP journals
+     *  are projected, not byte-addressable). */
+    maxColdReadBytes?: number;
+  },
+): Promise<{
+  messages: SessionHistoryMessage[];
+  sourceAvailable: boolean;
+  windowed: boolean;
+  /** Orphan finished-agent toolUseIds (nested agents proven stopped by a
+   *  <task-notification> but with NO tool row in the parse) — absorption
+   *  evidence the client can't derive from the rows (inc-1786496042099).
+   *  Absent/empty for Codex and for parses with no orphans. */
+  finishedAgentIds?: string[];
+}> {
   if (record?.engine === 'codex') {
     const { readAcpSessionHistoryState } = await import('../../providers/acp-session-history.js');
     const state = await readAcpSessionHistoryState(record);
     return { messages: state.messages, sourceAvailable: state.journalExists, windowed: false };
   }
-  const { readSessionHistory, isWindowedHistory, isSourceFoundHistory } = await import('../session-history.js');
+  const { readSessionHistory, isWindowedHistory, isSourceFoundHistory, getOrphanFinishedAgentIds } = await import('../session-history.js');
   const messages = await readSessionHistory(
     sessionId,
     record?.cwd,
     nativeHost ?? undefined,
     record?.outputFile,
-    { skipSubagents },
+    { skipSubagents, ...(opts?.maxColdReadBytes ? { maxColdReadBytes: opts.maxColdReadBytes } : {}) },
   );
-  // `windowed` and `sourceAvailable` must be read HERE, while we still hold the
-  // exact array the reader returned — both flags live on that object (see
-  // isWindowedHistory / isSourceFoundHistory).
+  // `windowed`, `sourceAvailable` and `finishedAgentIds` must be read HERE,
+  // while we still hold the exact array the reader returned — all three live on
+  // that object (see isWindowedHistory / isSourceFoundHistory /
+  // getOrphanFinishedAgentIds); downstream transforms (image rewriting, fork
+  // concatenation) REPLACE the array and lose the marks.
   //
   // sourceAvailable = "the transcript file EXISTS", NOT "the parse produced rows".
   // A just-spawned session's JSONL holds only system/hook lines for its first
@@ -61,10 +79,12 @@ export async function readProviderSessionHistory(
   // a perfectly healthy session and the UI rendered "History unavailable — Session
   // history file not found" on every task launch. Fall back to the length proxy
   // only when the reader gave us no verdict at all (fake/mocked readers in tests).
+  const orphanIds = getOrphanFinishedAgentIds(messages);
   return {
     messages,
     sourceAvailable: isSourceFoundHistory(messages) || messages.length > 0,
     windowed: isWindowedHistory(messages),
+    ...(orphanIds && orphanIds.size > 0 ? { finishedAgentIds: [...orphanIds].sort() } : {}),
   };
 }
 
@@ -119,7 +139,9 @@ async function applySessionModeControl(
     && record.process_status !== 'stopped'
     && record.process_status !== 'error';
   if (application === 'not-live' && expectedLive) {
-    throw new Error('Live session is unavailable; permission mode was not changed');
+    // The record is already persisted by the time this runs (persist-first
+    // contract in changeSessionMode) — the mode applies at the next turn.
+    throw new Error('Live session is unavailable; permission mode applies next turn');
   }
 }
 
@@ -168,15 +190,40 @@ export async function persistSessionModeChange(
   return updated;
 }
 
-/** Live-apply + persist a mode change (the full flow the web PATCH uses). */
+/**
+ * Persist + live-apply a mode change (the full flow the web PATCH uses).
+ *
+ * Order matters and is deliberately persist-FIRST, notify-CLI-in-background:
+ *
+ * The CLI only drains its stdin control queue between streaming chunks, so a
+ * mid-turn `set_permission_mode` round-trip takes 6–15s measured — and can
+ * blow the client's 15s budget outright. Awaiting it here held the user's
+ * click hostage to inference speed (the "mode pill takes 30s" report).
+ *
+ * Persisting first is safe because record.mode is the durable source of
+ * truth: spawn args map it through the registry and processNext falls back to
+ * it on a cold --resume, so even if the live hand-shake never lands the very
+ * next turn runs in the chosen mode. persistSessionModeChange also emits the
+ * status event, so every UI updates immediately off the record.
+ *
+ * A live-apply failure therefore does NOT revert the record — it logs and
+ * the mode simply takes effect at the next turn boundary instead of mid-turn.
+ */
 export async function changeSessionMode(
   existingRecord: SessionRecord,
   sessionId: string,
   mode: SessionMode,
   updates: Partial<SessionRecord> = {},
 ): Promise<SessionRecord> {
-  await applySessionModeControl(existingRecord, sessionId, mode);
-  return persistSessionModeChange(existingRecord, sessionId, mode, updates);
+  const updated = await persistSessionModeChange(existingRecord, sessionId, mode, updates);
+
+  void applySessionModeControl(existingRecord, sessionId, mode).catch((err: unknown) => {
+    log.session.warn('live permission mode apply failed after persist; mode takes effect next turn', {
+      sessionId, mode, error: err instanceof Error ? err.message : String(err),
+    });
+  });
+
+  return updated;
 }
 
 // ── PATCH (rename / archive / human note / mode) ────────────────────────────
@@ -501,13 +548,22 @@ export interface PermissionResult { status: 'resolved'; requestId: string; allow
 /**
  * Resolve a pending permission request (approve/deny a CLI tool prompt).
  * ACP sessions answer via the daemon acpRespond RPC; Claude sessions resolve
- * on the live session object.
+ * on the live session object. `optionId` (ACP only) selects a specific
+ * provider option (e.g. codex "Allow for Session") instead of the allow
+ * heuristic.
+ *
+ * `answers` (Claude CLI AskUserQuestion only) maps question text → the chosen
+ * option label. It is merged into the allow response's `updatedInput`, which the
+ * AskUserQuestion tool echoes back to the model as "User has answered your
+ * questions". Without it a bypass-mode session hands the model empty answers.
  */
 export async function respondSessionPermission(
   sessionId: string,
   requestId: unknown,
   allow: unknown,
   denyMessage?: unknown,
+  optionId?: unknown,
+  answers?: unknown,
 ): Promise<PermissionResult> {
   if (typeof requestId !== 'string' || !requestId || typeof allow !== 'boolean') {
     throw new SessionControlError('requestId (string) and allow (boolean) are required', 400);
@@ -515,16 +571,44 @@ export async function respondSessionPermission(
   if (denyMessage !== undefined && typeof denyMessage !== 'string') {
     throw new SessionControlError('message must be a string', 400);
   }
+  if (optionId !== undefined && typeof optionId !== 'string') {
+    throw new SessionControlError('optionId must be a string', 400);
+  }
+  // answers must be a plain object of string values — it is forwarded verbatim into
+  // the CLI's tool input, so anything else (array, nested object, number) would
+  // reach the model as a malformed answer set.
+  if (answers !== undefined) {
+    if (typeof answers !== 'object' || answers === null || Array.isArray(answers)) {
+      throw new SessionControlError('answers must be an object mapping question to answer string', 400);
+    }
+    for (const value of Object.values(answers as Record<string, unknown>)) {
+      if (typeof value !== 'string') {
+        throw new SessionControlError('answers values must be strings', 400);
+      }
+    }
+  }
+  const answerPatch = answers !== undefined && Object.keys(answers as Record<string, string>).length > 0
+    ? { answers: answers as Record<string, string> }
+    : undefined;
   const { sessionRunner } = await import('../../providers/claude-code-session.js');
-  const acpSession = sessionRunner.findAcpSession(sessionId);
+  // findOrAttach, not find: after a server restart the live map is empty but
+  // the worker (and its pending permission) may still be alive. A bare find
+  // 404'd every approve clicked in that window (2026-08-10 incident).
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const record = await getSessionByClaudeId(sessionId);
+  const acpSession = record?.engine === 'codex'
+    ? await sessionRunner.findOrAttachAcpSession(sessionId)
+    : sessionRunner.findAcpSession(sessionId);
   if (acpSession) {
-    const ok = await acpSession.resolvePermissionRequest(requestId, allow);
+    // `answers` is intentionally dropped here: ACP providers (codex) have no
+    // AskUserQuestion tool, so there is no updatedInput to patch.
+    const ok = await acpSession.resolvePermissionRequest(requestId, allow, optionId as string | undefined);
     if (!ok) throw new SessionControlError('Permission request not found or already resolved', 404);
     return { status: 'resolved', requestId, allow };
   }
   const session = sessionRunner.findByClaudeId(sessionId);
   if (!session) throw new SessionControlError('Live session not found', 404);
-  const resolved = session.resolvePermissionRequest(requestId, allow, denyMessage as string | undefined);
+  const resolved = session.resolvePermissionRequest(requestId, allow, denyMessage as string | undefined, answerPatch);
   if (!resolved) throw new SessionControlError('Permission request not found or already resolved', 404);
   return { status: 'resolved', requestId, allow };
 }
@@ -788,7 +872,11 @@ export async function readSessionRichHistory(sessionId: string, tail?: number): 
   let messages: SessionHistoryMessage[];
   let sourceAvailable = false;
   try {
-    const history = await readProviderSessionHistory(sessionId, record, record.host);
+    // Snapshot API with a tail → bound a COLD read too (same rationale as the
+    // web /history route; see ReadHistoryOptions.maxColdReadBytes).
+    const { HISTORY_COLD_TAIL_READ_BYTES } = await import('../session-history.js');
+    const history = await readProviderSessionHistory(sessionId, record, record.host, true,
+      tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined);
     messages = history.messages;
     sourceAvailable = history.sourceAvailable;
   } catch (err) {
