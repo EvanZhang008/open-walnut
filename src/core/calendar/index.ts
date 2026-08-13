@@ -34,6 +34,7 @@ interface CacheEntry {
 interface CalendarConfigShape {
   enabled?: boolean;
   hidden_calendar_ids?: string[];
+  visible_calendar_ids?: string[];
   refresh_minutes?: number;
 }
 
@@ -61,6 +62,8 @@ export class CalendarService {
   private cache = new Map<string, CacheEntry>();
   private refreshTimer: NodeJS.Timeout | null = null;
   private hiddenIds = new Set<string>();
+  /** When non-null, ONLY these ids are visible (allowlist); hiddenIds still applies on top. */
+  private visibleIds: Set<string> | null = null;
   private enabled = true;
   private refreshMinutes = DEFAULT_REFRESH_MINUTES;
   private lastRefresh: string | undefined;
@@ -95,15 +98,18 @@ export class CalendarService {
     const cal = config.calendar ?? {};
     const prevEnabled = this.enabled;
     const prevHidden = this.hiddenIds;
+    const prevVisible = this.visibleIds;
     this.enabled = cal.enabled !== false;
     this.hiddenIds = new Set(cal.hidden_calendar_ids ?? []);
+    this.visibleIds = cal.visible_calendar_ids ? new Set(cal.visible_calendar_ids) : null;
     this.refreshMinutes = Math.max(1, cal.refresh_minutes ?? DEFAULT_REFRESH_MINUTES);
     // Visibility is applied at read time (cache keeps everything), so a toggle
     // never changes the cache hash — announce it explicitly or the UI would
     // only notice on its next unrelated refetch.
-    const hiddenChanged =
-      prevHidden.size !== this.hiddenIds.size || [...this.hiddenIds].some((id) => !prevHidden.has(id));
-    if (prevEnabled !== this.enabled || hiddenChanged) this.emitUpdated();
+    const setChanged = (a: Set<string> | null, b: Set<string> | null) =>
+      (a === null) !== (b === null) || (a && b && (a.size !== b.size || [...b].some((id) => !a.has(id))));
+    if (prevEnabled !== this.enabled || setChanged(prevHidden, this.hiddenIds) || setChanged(prevVisible, this.visibleIds))
+      this.emitUpdated();
   }
 
   status(): CalendarSourceStatus {
@@ -137,10 +143,10 @@ export class CalendarService {
 
   async listCalendars(): Promise<CalendarInfo[]> {
     this.assertUsable();
-    // The service owns the hidden set (config) — overlay it here so every
-    // source (incl. test mocks) reports visibility consistently.
+    // The service owns the hidden/visible sets (config) — overlay them here so
+    // every source (incl. test mocks) reports visibility consistently.
     const cals = await this.trackErrors(() => this.source.listCalendars());
-    return cals.map((c) => ({ ...c, hidden: this.hiddenIds.has(c.id) }));
+    return cals.map((c) => ({ ...c, hidden: this.isHidden(c.id) }));
   }
 
   /** Events within [from, to] (inclusive day strings), served from cache.
@@ -165,9 +171,15 @@ export class CalendarService {
     return this.visible(filterRange(events, from, to));
   }
 
+  /** Allowlist (when set) wins first, then the denylist applies on top. */
+  private isHidden(calendarId: string): boolean {
+    if (this.visibleIds && !this.visibleIds.has(calendarId)) return true;
+    return this.hiddenIds.has(calendarId);
+  }
+
   private visible(events: CalendarEvent[]): CalendarEvent[] {
-    if (this.hiddenIds.size === 0) return events;
-    return events.filter((e) => !this.hiddenIds.has(e.calendarId));
+    if (this.hiddenIds.size === 0 && !this.visibleIds) return events;
+    return events.filter((e) => !this.isHidden(e.calendarId));
   }
 
   /** Re-fetch every cached window (periodic refresh / manual refresh). */

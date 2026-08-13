@@ -4,7 +4,7 @@
  *
  * GET    /events?from=YYYY-MM-DD&to=YYYY-MM-DD → { events, sources }
  * GET    /sources                              → { sources, calendars }
- * PUT    /sources/eventkit                     → { enabled?, hidden_calendar_ids? }
+ * PUT    /sources/eventkit                     → { enabled?, hidden_calendar_ids?, visible_calendar_ids? }
  * POST   /refresh                              → force re-fetch all cached windows
  * PATCH  /events/:id                           → { start, end, title? }
  * POST   /events                               → { calendarId, title, start, end, allDay? }
@@ -74,12 +74,19 @@ calendarRouter.get('/sources', async (_req, res) => {
 });
 
 calendarRouter.put('/sources/eventkit', async (req, res) => {
-  const { enabled, hidden_calendar_ids } = req.body as {
+  const { enabled, hidden_calendar_ids, visible_calendar_ids } = req.body as {
     enabled?: boolean;
     hidden_calendar_ids?: string[];
+    /** Allowlist: when set, ONLY these calendars show. null clears it. */
+    visible_calendar_ids?: string[] | null;
   };
-  if (hidden_calendar_ids !== undefined && (!Array.isArray(hidden_calendar_ids) || hidden_calendar_ids.some((x) => typeof x !== 'string'))) {
+  const badIdArray = (v: unknown) => !Array.isArray(v) || v.some((x) => typeof x !== 'string');
+  if (hidden_calendar_ids !== undefined && badIdArray(hidden_calendar_ids)) {
     res.status(400).json({ error: 'hidden_calendar_ids must be a string array' });
+    return;
+  }
+  if (visible_calendar_ids !== undefined && visible_calendar_ids !== null && badIdArray(visible_calendar_ids)) {
+    res.status(400).json({ error: 'visible_calendar_ids must be a string array or null' });
     return;
   }
   const config = await getConfig();
@@ -88,6 +95,10 @@ calendarRouter.put('/sources/eventkit', async (req, res) => {
       ...config.calendar,
       ...(enabled !== undefined ? { enabled: !!enabled } : {}),
       ...(hidden_calendar_ids !== undefined ? { hidden_calendar_ids } : {}),
+      // null clears the allowlist (key removed on next write via undefined)
+      ...(visible_calendar_ids !== undefined
+        ? { visible_calendar_ids: visible_calendar_ids === null ? undefined : visible_calendar_ids }
+        : {}),
     },
   });
   const service = getCalendarService();

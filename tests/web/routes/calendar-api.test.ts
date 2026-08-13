@@ -302,6 +302,58 @@ describe('PUT /api/calendar/sources/eventkit', () => {
     expect(restoredBody.events.some((e) => e.calendarId === 'cal-work')).toBe(true);
   });
 
+  it('visible_calendar_ids allowlist shows ONLY listed calendars; null clears it', async () => {
+    await fetch(apiUrl('/api/calendar/events?from=2026-08-03&to=2026-08-09')); // prime cache
+    const put = await fetch(apiUrl('/api/calendar/sources/eventkit'), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visible_calendar_ids: ['cal-home'] }),
+    });
+    expect(put.status).toBe(200);
+
+    // Only the allowlisted calendar's events survive — applies to the CACHED window.
+    const allow = await fetch(apiUrl('/api/calendar/events?from=2026-08-03&to=2026-08-09'));
+    const allowBody = await allow.json() as { events: EventShape[] };
+    expect(allowBody.events.length).toBeGreaterThan(0);
+    expect(allowBody.events.every((e) => e.calendarId === 'cal-home')).toBe(true);
+
+    // /sources marks everything outside the allowlist hidden.
+    const sources = await fetch(apiUrl('/api/calendar/sources'));
+    const sourcesBody = await sources.json() as { calendars: { id: string; hidden: boolean }[] };
+    expect(sourcesBody.calendars.find((c) => c.id === 'cal-work')?.hidden).toBe(true);
+    expect(sourcesBody.calendars.find((c) => c.id === 'cal-home')?.hidden).toBe(false);
+
+    // Denylist still applies ON TOP of the allowlist.
+    await fetch(apiUrl('/api/calendar/sources/eventkit'), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hidden_calendar_ids: ['cal-home'] }),
+    });
+    const both = await fetch(apiUrl('/api/calendar/events?from=2026-08-03&to=2026-08-09'));
+    const bothBody = await both.json() as { events: EventShape[] };
+    expect(bothBody.events).toEqual([]);
+
+    // null clears the allowlist; empty denylist restores everything.
+    await fetch(apiUrl('/api/calendar/sources/eventkit'), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visible_calendar_ids: null, hidden_calendar_ids: [] }),
+    });
+    const restored = await fetch(apiUrl('/api/calendar/events?from=2026-08-03&to=2026-08-09'));
+    const restoredBody = await restored.json() as { events: EventShape[] };
+    expect(restoredBody.events.some((e) => e.calendarId === 'cal-work')).toBe(true);
+    expect(restoredBody.events.some((e) => e.calendarId === 'cal-home')).toBe(true);
+  });
+
+  it('rejects a non-array visible_calendar_ids', async () => {
+    const res = await fetch(apiUrl('/api/calendar/sources/eventkit'), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visible_calendar_ids: 'cal-home' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it('emits calendar:updated when visibility changes so open views refresh', async () => {
     await fetch(apiUrl('/api/calendar/sources/eventkit'), {
       method: 'PUT',
