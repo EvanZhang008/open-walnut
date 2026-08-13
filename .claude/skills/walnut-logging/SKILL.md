@@ -44,6 +44,25 @@ All log lines pass through `redactSensitiveText()` before being written to the f
 - **PEM blocks**: `-----BEGIN ... PRIVATE KEY-----` through `-----END ... PRIVATE KEY-----`
 - **Generic secrets**: Values after `password=`, `secret=`, `token=`, `api_key=`, `apikey=`
 
+## Scroll-jump / flicker sentinels (session chat)
+
+Always-on, anomaly-gated tripwires in `web/src/components/sessions/SessionChatHistory.tsx` (added for inc-1786553756848 / inc-1786603990062 — "scrolling up teleports to top / jitters"). If a scroll bug report comes in, grep these FIRST:
+
+```bash
+grep -a 'scroll-jump\|scroll-flicker\|scroll-mount' /tmp/open-walnut/open-walnut-<date>.log
+```
+
+| Line | Fires when | Context carried |
+|---|---|---|
+| `[scroll-jump:<sid8>#<uid>] teleport` | single scroll event dTop<-2000 or dSh<-1000 | top/sh/ch + msgs/blocks/hidden/trunc/streaming/atBot |
+| `[scroll-jump:…] anchor-clamped-to-top` | "Show earlier" restore computed negative scrollTop | dist |
+| `[scroll-flicker:<sid8>#<uid>] mid-scroll\|stationary` | \|dSh\|>150 while scrolled up; aggregated 1 line/2s (n/net/max); `stationary` = 500ms poll caught content shifting with no scroll | same as above |
+| `[scroll-mount:<sid8>#<uid>]` | every mount/session-switch | path |
+
+Reading them: `#<uid>` separates multiple mounts of the same session (SessionPanel / FocusDock / popout / second tab) — interleaved series from two mounts look like ONE container flapping without it. `blocks>0 streaming=true` at fire time → absorption-collapse class; `blocks=0 streaming=false` → layout/CSS class (the content-visibility bug was found this way). Known root causes + fixes: memory `scroll_jump_to_top_two_root_causes`; regression test `tests/e2e/browser/scroll-jump-on-absorption.spec.ts`.
+
+The heavier per-tick `[scroll:…]` logging stays OFF by default (`localStorage.setItem('open_walnut_scroll_debug_on','1')` + reload to enable) — the sentinels above are the always-on layer.
+
 ## Browser Console Log Persistence
 
 Browser-side `console.log/info/warn/error` are intercepted and persisted to the same log file with `subsystem: 'browser'`. This is critical for debugging frontend issues — browser console is lost on refresh, but these logs survive.

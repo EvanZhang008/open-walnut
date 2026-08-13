@@ -46,6 +46,11 @@ No company-internal names, personal info, internal URLs, credentials, or interna
 
 **Port 3456 = PRODUCTION. NEVER kill, restart, or interfere.**
 
+### Never block the web server (each rule = a shipped outage)
+
+- **No sync blocking on the event loop** (`execSync`, sync native-addon calls, multi-MB parse): one call freezes EVERY route. Child process + timeout + cached value instead (`setImmediate` doesn't help). Ratchet: `tests/core/event-loop-blocking-ratchet.test.ts`.
+- **Every route touching daemon/SSH/network/whale files needs a deadline** — answer degraded (204/stale), never hang: one pinned response starves the browser's 6-connection pool → app-wide fake 15s timeouts.
+
 ```bash
 npm run dev:prod        # Build all → restart 3456 with latest code
 npm run dev:ephemeral   # Ephemeral server (random port, temp data, auto-cleans)
@@ -142,6 +147,19 @@ Personal AI butler: tasks + knowledge + AI sessions. **Tasks are the atom.** `Pr
 **Auto-deploy (use this):** `DaemonConnection` compares local `.version` vs remote `binary --version`; if differs, gzips + chunks binary into 1MB pieces, each via separate SSH connection (bypasses proxies that kill >5MB transfers), retries 2x per chunk, falls back to 44KB source deploy if chunked binary fails. Just `npm run build && bash scripts/build-daemon.sh && npm run dev:prod` — next UI send to that host auto-upgrades (old CLI processes survive via Phase C).
 
 **Never scp manually** — some corporate SSH proxies kills large transfers. That's exactly what the chunked auto-deploy solves.
+
+### CLI scheduled tasks (crons) are DIRECTORY-scoped, not session-scoped
+
+Upstream docs say "session-scoped". They are wrong, and a 2026-08-09 incident here proved it: session A's recurring cron fired *inside session B* (same cwd) as a bare user message, running a multi-hour unattended job under `bypassPermissions` with zero provenance. Behavior model, established by controlled experiment (CLI 2.1.224):
+
+| `durable` | Where it lives | Creator killed | Creator `--resume`d |
+|---|---|---|---|
+| `false` (CLI default) | in-memory | job dies, **no** other session can adopt it | **REVIVES** from history replay and immediately fires anything overdue |
+| `true` | `{cwd}/.claude/scheduled_tasks.json` | the current **directory** lock holder (`scheduled_tasks.lock`) ADOPTS and executes it | creator reclaims it |
+
+Consequences to keep in mind: killing a process is *never* a reliable way to stop a cron (only `CronDelete` is); recurring tasks auto-expire after 7 days; a creator schedules its own tasks without holding the lock (the lock only gates adopting *foreign* tasks); `CLAUDE_CODE_DISABLE_CRON=1` stops a bystander from ever adopting.
+
+**Walnut can enforce `durable:false` — OPT-IN via config `session.cron_policy: 'session-only'`** (default `'unrestricted'` does nothing; the policy denies tool calls, injects corrective messages, and rewrites the user's `scheduled_tasks.json`, which a generic install must not do unasked). When enabled, walnut sets `WALNUT_ENFORCE_SESSION_CRON=1` at daemon spawn (local + remote) and the daemon enforces at three points (`src/providers/daemon-core.ts`, the block above `isDurableCronRequest`), in order of how much they can be argued with: (1) the `can_use_tool` intercept DENIES a durable `CronCreate`; (2) for a bypass session, which never asks permission, the tailer FIFO-injects a "CronDelete + recreate non-durable" correction — **advisory, and a live CLI verifiably refused it** on 2026-08-11, reasoning that an automated message is not user authorization (correct reasoning, which is why it can't be the guarantee); (3) `reapSession` strips the dying session's own rows from `scheduled_tasks.json` (`stripDurableTasksForSession`) — the model has no say, and death is exactly when a durable row becomes adoptable. Foreign fires get a `scheduled_task_fire` stream marker + a model-visible provenance warning (`detectCronFires`) regardless of policy (observation, not intervention). Idle reapers treat a cron-armed session as long-lived (`hasDiskCronInterest`, 7d), and terminating one needs `force:true` (409 `cron_owner`). `WALNUT_ALLOW_DURABLE_CRON=1` on the daemon overrides the enforcement even when opted in — better yet use crontab/launchd starting its own dedicated session for cross-session jobs.
 
 **Debugging send/delivery latency (quick refs):**
 - Both local (`__local__`) AND remote sessions go through the daemon / `RemoteSessionManager`. There is no separate "local" transport — don't assume a stall is SSH-specific.
@@ -262,6 +280,10 @@ Every feature needs 1+ real E2E test through `startServer({ port: 0, dev: true }
 ## Conventions
 
 Plans: architecture diagrams first → UX scenarios → pseudocode. No detailed implementation code in plans.
+
+### Menus & overlays (web UI) — hard rules
+
+**Before touching any dropdown/menu/flyout in `web/src/`, read ["Menus & overlays — hard rules"](./web/src/AGENTS.md#menus--overlays--hard-rules).** Every rule there is a shipped incident. The one-line version: menus never overflow the viewport (always place via `useMenuPlacement`); unbounded content becomes its own portalled flyout, never inline growth; no native `<select>` inside styled menus; menu portals need `onPointerDown` stopPropagation or dnd-kit drags the row; outside-click closers must exempt child portals.
 
 ### Frontend logging: `import { log } from '@/utils/log'`
 

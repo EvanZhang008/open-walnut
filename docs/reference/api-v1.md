@@ -390,8 +390,8 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   out of the web Now view; additive and optional, so older clients ignore it.
   `unread` (added 2026-08-09) is the read/unread marker — present and `true` only
   when the agent produced output the human hasn't opened; omitted otherwise.
-  Additive and optional. `PATCH /api/v1/tasks/:id` accepts it (and the retired
-  `needs_attention` spelling) to mark a task read from the phone.
+  Additive and optional. `PATCH /api/v1/tasks/:id` accepts `unread` to mark a
+  task read from the phone.
 - Scope: all open tasks + tasks completed in the last 14 days (older
   completions are excluded from the projection).
 - Provenance: `syncedAt` is when the primary box exported the snapshot. On the
@@ -527,7 +527,9 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   Satellite.
 - Scope: all live sessions + sessions stopped in the last 14 days, newest
   first, capped at 500. System sessions (triage/cron/hooks) and archived
-  sessions are excluded.
+  sessions are excluded. Lane-bound sessions (2026-08) — ones that back a
+  persistent UI conversation surface rather than a user-launched session — are
+  also excluded; no row shape changed, the list just never contains them.
 - Provenance/laggy-replica semantics identical to `/tasks` (`syncedAt`,
   `503 unavailable` on a fresh companion).
 - `GET /api/v1/sessions/:id/transcript?fresh=1` →
@@ -767,10 +769,17 @@ an id outside `[A-Za-z0-9_-]`.
   archived + a new session started on the task). Only `error`/`stopped`
   sessions are retryable (`400` otherwise; `400` when no task is linked).
 - `POST /api/v1/sessions/:id/permission` body `{ "requestId", "allow",
-  "message"? }` → `200 { "status": "resolved", "requestId", "allow" }` —
-  answers a live CLI tool prompt (`message` = optional deny reason).
-  `404 not_found` when the request is gone/already resolved or no live
-  session holds it.
+  "message"?, "optionId"?, "answers"? }` → `200 { "status": "resolved",
+  "requestId", "allow" }` — answers a live CLI tool prompt (`message` =
+  optional deny reason; `optionId` selects a specific provider option on ACP
+  sessions). `answers` (optional, additive 2026-08) answers the CLI's
+  `AskUserQuestion` tool: an object mapping each question's text to the chosen
+  option label (or the user's own free text). It is merged into the tool's
+  input, so the model receives the real answers — an `allow` without it tells
+  the model the user answered nothing. Must be a flat object of string values
+  (`400 bad_request` otherwise); ignored on ACP sessions, which have no
+  `AskUserQuestion` tool. `404 not_found` when the request is
+  gone/already resolved or no live session holds it.
 - `POST /api/v1/sessions/:id/execute-continue` → `200 { "status": "started",
   "sessionId" }` — resumes a completed plan session with bypass permissions
   ("Continue" on a finished plan). Non-plan session → `400 bad_request`.
