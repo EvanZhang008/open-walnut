@@ -1104,3 +1104,40 @@ describe('task_type rides task_started into the SESSION_BACKGROUND_TASKS snapsho
     expect(after.tokens).toBe(500)
   })
 })
+
+describe('recoverStateFromJsonl: control_cancel_request clears pendingControlRequest (incident a172ce49)', () => {
+  async function writeJsonl(sessionId: string, cwd: string, lines: string[]) {
+    const dir = path.join(CLAUDE_HOME, 'projects', encodeProjectPath(cwd))
+    await fsp.mkdir(dir, { recursive: true })
+    await fsp.writeFile(path.join(dir, `${sessionId}.jsonl`), lines.join('\n') + '\n')
+  }
+  const ctrlReq = (id: string) => JSON.stringify({
+    type: 'control_request', request_id: id,
+    request: { subtype: 'can_use_tool', tool_name: 'ExitPlanMode', input: { plan: 'p' } },
+  })
+  const ctrlCancel = (id: string) => JSON.stringify({ type: 'control_cancel_request', request_id: id })
+
+  it('a cancelled request is NOT recovered (was: resurrected forever)', async () => {
+    const sid = 'recover-cancelled-ctrl'
+    const cwd = '/Users/test/cancel-project'
+    await writeJsonl(sid, cwd, [makeInitEvent(sid), ctrlReq('req-c-1'), ctrlCancel('req-c-1')])
+    const state = await recoverStateFromJsonl(sid, cwd)
+    expect(state?.pendingControlRequest).toBeUndefined()
+  })
+
+  it('an un-cancelled request IS still recovered (recovery path stays alive)', async () => {
+    const sid = 'recover-live-ctrl'
+    const cwd = '/Users/test/cancel-project'
+    await writeJsonl(sid, cwd, [makeInitEvent(sid), ctrlReq('req-c-2')])
+    const state = await recoverStateFromJsonl(sid, cwd)
+    expect(state?.pendingControlRequest?.request_id).toBe('req-c-2')
+  })
+
+  it('a cancel for a DIFFERENT id leaves the pending request intact', async () => {
+    const sid = 'recover-other-cancel'
+    const cwd = '/Users/test/cancel-project'
+    await writeJsonl(sid, cwd, [makeInitEvent(sid), ctrlReq('req-c-3'), ctrlCancel('req-unrelated')])
+    const state = await recoverStateFromJsonl(sid, cwd)
+    expect(state?.pendingControlRequest?.request_id).toBe('req-c-3')
+  })
+})

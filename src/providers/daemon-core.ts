@@ -16,6 +16,7 @@
  */
 
 import { execSync } from 'node:child_process'
+import { join as pathJoin } from 'node:path'
 
 // ── Shared types ──
 
@@ -380,6 +381,34 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     // kernel buffers on a readerless FIFO silently swallow writes; deleting the
     // path means next open(O_WRONLY|O_NONBLOCK) returns ENXIO instead.
     try { fs.unlinkSync(session.pipePath) } catch {}
+
+    // ── Enforcement point 3 (opt-in, see block above isDurableCronRequest):
+    // no adoptable durable crons. A durable task whose creator just died is
+    // the 2026-08-09 incident in waiting: the next lock holder in this
+    // directory would execute it as a bare user message. Strip our own rows
+    // (never a live sibling's) — the only enforcement point the model cannot
+    // decline. Gated on the same opt-in as points 1-2.
+    if (session.cwd && process.env.WALNUT_ENFORCE_SESSION_CRON === '1'
+      && process.env.WALNUT_ALLOW_DURABLE_CRON !== '1') {
+      try {
+        const tasksPath = pathJoin(session.cwd, '.claude', 'scheduled_tasks.json')
+        let raw: string | null = null
+        try { raw = fs.readFileSync(tasksPath, 'utf-8') } catch {}
+        const strip = stripDurableTasksForSession(raw, sid)
+        if (strip.changed && strip.text != null) {
+          // Same-dir atomic replace (EXDEV-safe) so a concurrent CLI read never
+          // sees a truncated file.
+          const tmp = tasksPath + '.walnut-' + String(session.pid ?? 0) + '.tmp'
+          fs.writeFileSync(tmp, strip.text, { mode: 0o600 })
+          fs.renameSync(tmp, tasksPath)
+          logger('warn', 'stripped dead session durable crons (Walnut policy: session-scoped only)', {
+            sid, removed: strip.removed, tasksPath,
+          })
+        }
+      } catch (err) {
+        logger('warn', 'durable-cron strip failed', { sid, error: (err as Error).message })
+      }
+    }
 
     // Kill any residual process group members (MCP servers outliving claude).
     if (session.pid) {
@@ -809,6 +838,13 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
  * Returns true if daemon should write allow response directly to FIFO.
  */
 export function shouldAutoRespond(mode: SessionMode, toolName: string | undefined): boolean {
+  // AskUserQuestion is a requiresUserInteraction tool: the CLI emits its
+  // control_request even in bypassPermissions (checkPermissions always returns
+  // 'ask'), and the tool echoes its 'answers' field back out of the permission
+  // response's updatedInput. Auto-allowing therefore replies with NO answers, and
+  // the CLI reports a fabricated "user answered your questions" (empty) result
+  // to the model. Forward it to walnut so the human actually answers.
+  if (toolName === 'AskUserQuestion') return false
   if (mode === 'bypass') return true
   // ExitPlanMode is forwarded to walnut (not auto-allowed) because in `-p` mode
   // the CLI returns is_error=true for this tool, requiring interactive approval.
@@ -839,6 +875,306 @@ export function buildControlResponse(requestId: string, request: Record<string, 
       response: result,
     },
   })
+}
+
+// ── Scheduled-task (Claude Code cron) fire detection ──
+//
+// The CLI persists recurring crons to {cwd}/.claude/scheduled_tasks.json and
+// scopes the scheduler LOCK to the project directory, not the session. When
+// the creating session's PID looks dead, the current lock holder ADOPTS the
+// task and executes its prompt as a bare user message — with no marker in
+// headless mode (incident 2026-08-09: session B ran session A's multi-hour
+// production KB sync believing the human asked for it; upstream
+// anthropics/claude-code#50300 / #66509, both auto-closed).
+//
+// The daemon can't prevent the adoption (upstream), but it CAN observe it:
+// a fire bumps the task's `lastFiredAt`, and only the lock-holding session
+// executes it. Detection is therefore ordering-immune — no dependence on
+// stream line order, just "a task in MY cwd fired recently, I hold the lock,
+// and someone else created it".
+//
+// Pure parse+decide; adapters read the files and act (append a
+// scheduled_task_fire marker to the stream file; inject a provenance warning
+// into the FIFO for foreign fires). Mirrored verbatim in daemon-source.ts —
+// parity test locks the sync.
+
+/** How far back a lastFiredAt still counts as "this just fired into us".
+ *  Generous on purpose: detection runs on a 30s throttle inside the tailer,
+ *  and a daemon restart mid-turn must still catch an in-flight adopted fire
+ *  (the `warned` dedup map is in-memory only). */
+export const CRON_FIRE_RECENT_MS = 10 * 60 * 1000
+
+export interface DetectedCronFire {
+  taskId: string
+  lastFiredAt: number
+  createdBySessionId: string | undefined
+  /** true = created by a DIFFERENT session — the dangerous adopted case. */
+  foreign: boolean
+  promptPreview: string
+}
+
+export function detectCronFires(args: {
+  sid: string
+  /** Raw text of {cwd}/.claude/scheduled_tasks.json, or null if unreadable. */
+  tasksJson: string | null
+  /** Raw text of {cwd}/.claude/scheduled_tasks.lock, or null if unreadable. */
+  lockJson: string | null
+  nowMs: number
+  /** Dedup map, mutated in place: `${taskId}:${lastFiredAt}` → nowMs. */
+  warned: Record<string, number>
+  recentMs?: number
+}): DetectedCronFire[] {
+  if (!args.tasksJson) return []
+  // Only the scheduler-lock holder executes fires. Without this gate, every
+  // session sharing the cwd would self-report the same fire.
+  let lockSid: string | undefined
+  if (args.lockJson) {
+    try { lockSid = (JSON.parse(args.lockJson) as { sessionId?: string }).sessionId } catch {}
+  }
+  if (lockSid !== args.sid) return []
+  let tasks: Array<Record<string, unknown>>
+  try {
+    const parsed = JSON.parse(args.tasksJson) as { tasks?: unknown }
+    tasks = Array.isArray(parsed?.tasks) ? parsed.tasks as Array<Record<string, unknown>> : []
+  } catch { return [] }
+  const recentMs = args.recentMs ?? CRON_FIRE_RECENT_MS
+  const out: DetectedCronFire[] = []
+  for (const t of tasks) {
+    const id = typeof t?.id === 'string' ? t.id : null
+    const fired = typeof t?.lastFiredAt === 'number' ? t.lastFiredAt : null
+    if (!id || !fired) continue
+    // Recent past only (small future tolerance for clock skew).
+    if (args.nowMs - fired > recentMs || fired > args.nowMs + 60_000) continue
+    const key = id + ':' + fired
+    if (args.warned[key]) continue
+    args.warned[key] = args.nowMs
+    const creator = typeof t?.createdBySessionId === 'string' ? t.createdBySessionId : undefined
+    out.push({
+      taskId: id,
+      lastFiredAt: fired,
+      createdBySessionId: creator,
+      foreign: creator !== undefined && creator !== args.sid,
+      promptPreview: typeof t?.prompt === 'string' ? (t.prompt as string).slice(0, 160) : '',
+    })
+  }
+  return out
+}
+
+/** The CLI auto-expires recurring crons 7 days after creation (fires once
+ *  more, then deletes). A task older than that is dead weight — counting it
+ *  would make the idle-reaper protection immortal. lastFiredAt also counts
+ *  as liveness proof: a fire resets the "still worth protecting" clock. */
+export const CRON_TASK_LIVE_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * Disk-side cron interest for the idle reaper — the second signal beside the
+ * chat-stream fold. The fold only sees CronCreate tool_use lines in THIS
+ * stream file; it goes blind when the stream was wiped/rebuilt, when the cron
+ * was created before a --resume respawn (history replay re-arms the CLI's
+ * in-memory scheduler but emits no new CronCreate line — verified in the
+ * 2026-08-10 lab, P4b), or when this session ADOPTED a foreign durable task.
+ * Durable tasks live in {cwd}/.claude/scheduled_tasks.json, so read the truth
+ * from disk. A session has cron interest when:
+ *   - 'creator': it created a live task (createdBySessionId === sid). It will
+ *     schedule its own tasks with or without the lock (lab P3).
+ *   - 'lock_holder': it holds the scheduler lock while live tasks exist — it
+ *     is the one that will execute (or adopt) the next fire.
+ * Pure parse+decide; mirrored verbatim in daemon-source.ts (parity-tested).
+ */
+export function hasDiskCronInterest(args: {
+  sid: string
+  tasksJson: string | null
+  lockJson: string | null
+  nowMs: number
+  liveMs?: number
+}): { armed: boolean; reason: 'creator' | 'lock_holder' | null; liveTasks: number } {
+  if (!args.tasksJson) return { armed: false, reason: null, liveTasks: 0 }
+  let tasks: Array<Record<string, unknown>>
+  try {
+    const parsed = JSON.parse(args.tasksJson) as { tasks?: unknown }
+    tasks = Array.isArray(parsed?.tasks) ? parsed.tasks as Array<Record<string, unknown>> : []
+  } catch { return { armed: false, reason: null, liveTasks: 0 } }
+  const liveMs = args.liveMs ?? CRON_TASK_LIVE_MS
+  let live = 0
+  let createdByMe = false
+  for (const t of tasks) {
+    const createdAt = typeof t?.createdAt === 'number' ? t.createdAt : 0
+    const lastFiredAt = typeof t?.lastFiredAt === 'number' ? t.lastFiredAt : 0
+    const freshest = Math.max(createdAt, lastFiredAt)
+    if (!freshest || args.nowMs - freshest > liveMs) continue
+    live++
+    if (t?.createdBySessionId === args.sid) createdByMe = true
+  }
+  if (live === 0) return { armed: false, reason: null, liveTasks: 0 }
+  if (createdByMe) return { armed: true, reason: 'creator', liveTasks: live }
+  let lockSid: string | undefined
+  if (args.lockJson) {
+    try { lockSid = (JSON.parse(args.lockJson) as { sessionId?: string }).sessionId } catch {}
+  }
+  if (lockSid === args.sid) return { armed: true, reason: 'lock_holder', liveTasks: live }
+  return { armed: false, reason: null, liveTasks: live }
+}
+
+// ── INVARIANT: Walnut sessions create SESSION-SCOPED crons only ──
+//
+// `CronCreate({durable: true})` writes the job to {cwd}/.claude/scheduled_tasks.json,
+// and the CLI's scheduler LOCK is scoped to that directory — not to the session.
+// Behavior model, established by controlled experiment (2026-08-10 lab, CLI
+// 2.1.224, report + evidence in the incident memo):
+//
+//   durable:false (CLI default) — in-memory only. Dies with the process; NO other
+//     session can adopt it. A `--resume` DOES revive it (history replay rebuilds
+//     the in-memory schedule and immediately fires anything overdue — lab P4b), so
+//     killing a process is never a reliable way to stop a cron; only CronDelete is.
+//   durable:true — on disk, project-scoped. When the creator's PID looks dead, the
+//     current lock holder ADOPTS the job and its model executes the prompt as a
+//     bare user message with no provenance (lab P2 = the 2026-08-09 incident). The
+//     creator reclaims it on resume (lab P3), but every gap is an adoption window,
+//     and the weekly host patch-reboot kills all sessions at once.
+//     Refinement measured live 2026-08-11: a GRACEFUL exit self-cleans — the CLI
+//     logs "released scheduler lock" and drops its own rows. So the hazard is
+//     specifically an UNGRACEFUL death (SIGKILL, panic, reboot), which is exactly
+//     what happened on 08-09 and what the weekly patch-reboot guarantees. Point 3
+//     below covers precisely that gap, and is a no-op after a clean stop.
+//
+// Upstream documents the opposite ("Tasks are session-scoped") and has not fixed
+// it: 4 independent reports (anthropics/claude-code #50300 — labelled area:security,
+// #54734, #66509, plus #84196 asking for task→session attribution) were closed by a
+// stale-bot with zero maintainer replies; #50300 is locked. Walnut can enforce the
+// safe subset itself: a session may create crons (that is what /loop is), but not
+// durable ones, because a durable job outlives its session and lands in a stranger.
+//
+// The enforcement is OPT-IN (config `session.cron_policy: 'session-only'` →
+// WALNUT_ENFORCE_SESSION_CRON=1 at daemon spawn; default 'unrestricted' does
+// nothing). Denying tool calls, injecting corrective messages, and rewriting a
+// user's .claude/scheduled_tasks.json are opinionated interventions the public
+// build must not perform unasked. WALNUT_ALLOW_DURABLE_CRON=1 still overrides
+// (back-compat with daemons deployed under the old enforce-by-default).
+//
+// THREE enforcement points, in order of how much they can be argued with:
+//   1. can_use_tool control_request (permission-gated modes) → DENY with a message
+//      telling the model to retry with durable:false. Pre-emptive, nothing lands.
+//   2. stream tailer sees a CronCreate tool_use with durable:true (bypass mode, no
+//      permission round-trip) → the job is already on disk, so FIFO-inject an
+//      instruction to CronDelete + recreate non-durable. ADVISORY, and verified
+//      refusable: on 2026-08-11 a live CLI read it and declined, reasoning that an
+//      automated message is not user authorization. It is right to reason that way,
+//      which is exactly why it cannot be the guarantee.
+//   3. reapSession (death funnel) → stripDurableTasksForSession removes the dying
+//      session's own rows from {cwd}/.claude/scheduled_tasks.json. The model has no
+//      say here, and death is precisely when a durable row becomes adoptable, so
+//      this is the point that actually holds the invariant.
+// Pure predicates here; adapters own the I/O. Mirrored in daemon-source.ts.
+
+/** Does this `can_use_tool` request (or CronCreate tool_use input) ask for a durable cron? */
+export function isDurableCronRequest(toolName: string | undefined, input: unknown): boolean {
+  if (toolName !== 'CronCreate') return false
+  const i = input as { durable?: unknown } | null | undefined
+  // Only an explicit true is durable — absent/false is the safe CLI default.
+  return i?.durable === true
+}
+
+/** Deny message for the control_response — the model reads this and retries. */
+export function durableCronDenyMessage(): string {
+  return 'Denied by Walnut: durable scheduled tasks are not allowed in a Walnut-managed session. '
+    + 'A durable cron is written to .claude/scheduled_tasks.json and the scheduler lock is scoped to the '
+    + 'PROJECT DIRECTORY, so once this session ends the job is adopted and executed by whatever other session '
+    + 'shares this directory — with no indication that a cron, not the user, asked for it. '
+    + 'Retry the same CronCreate with durable:false (the default) to keep the job inside this session. '
+    + 'If the user genuinely needs an unattended job that survives this session, use a system scheduler '
+    + '(crontab / launchd) that starts its own dedicated session instead.'
+}
+
+/** Corrective instruction FIFO-injected when a durable cron was already created
+ *  (bypass-mode sessions get no permission round-trip to deny). */
+export function durableCronCorrectionMessage(taskId: string | undefined): string {
+  return '[Walnut scheduler policy — automated message, not from the user] '
+    + `You just created a DURABLE scheduled task${taskId ? ' (' + taskId + ')' : ''}. `
+    + 'Durable tasks persist to .claude/scheduled_tasks.json and the CLI scopes the scheduler lock to the '
+    + 'project directory, so after this session ends the job fires inside an unrelated session that happens to '
+    + 'share this directory, delivered as if the user had typed it. That caused a real incident here. '
+    + 'Please immediately call CronDelete on that task id, then re-create the same schedule with durable:false '
+    + '(session-scoped). Do not keep the durable version. Then continue what you were doing and mention the swap '
+    + 'briefly in your next summary.'
+}
+
+/**
+ * Enforcement point 3 (deterministic): strip a dead session's durable tasks.
+ *
+ * Points 1 and 2 both depend on the model cooperating, and point 2 provably
+ * does not: verified live 2026-08-11, the CLI read the injected correction and
+ * REFUSED it — correctly, by its own rule that an automated message carries no
+ * user authorization ("你明确要求 durable 设为 true … 这条消息是自动发的,不算你
+ * 的授权"). A policy the model can veto is not an invariant, so the guarantee
+ * has to live somewhere the model cannot reach: the death funnel.
+ *
+ * When a session dies, any task in {cwd}/.claude/scheduled_tasks.json that it
+ * created is exactly the adoption hazard — the creator is gone, so the next
+ * lock holder in that directory would run it as a bare user message. Remove
+ * ONLY those rows: a task created by a still-live sibling is none of our
+ * business, and a task with no createdBySessionId (legacy/hand-written) is not
+ * ours to delete.
+ *
+ * Pure: takes the file text, returns the text to write back (or null when
+ * nothing changes, so the adapter can skip the write entirely).
+ */
+export function stripDurableTasksForSession(
+  tasksJson: string | null,
+  sid: string,
+): { changed: boolean; text: string | null; removed: string[] } {
+  const unchanged = { changed: false, text: null, removed: [] as string[] }
+  if (!tasksJson) return unchanged
+  let parsed: { tasks?: unknown }
+  try { parsed = JSON.parse(tasksJson) as { tasks?: unknown } } catch { return unchanged }
+  if (!Array.isArray(parsed.tasks)) return unchanged
+  const tasks = parsed.tasks as Array<Record<string, unknown>>
+  const removed: string[] = []
+  const kept = tasks.filter((t) => {
+    if (!t || t.createdBySessionId !== sid) return true
+    removed.push(typeof t.id === 'string' ? t.id : 'unknown')
+    return false
+  })
+  if (removed.length === 0) return unchanged
+  // Preserve any sibling keys the CLI may add to the envelope.
+  const next = { ...(parsed as Record<string, unknown>), tasks: kept }
+  return { changed: true, text: JSON.stringify(next, null, 2) + '\n', removed }
+}
+
+/**
+ * Enforcement point 4: evict ONE orphaned cron by id, on the fire that hijacked us.
+ *
+ * Point 3 only covers crons created by a session Walnut itself reaps. The 2026-08-13
+ * recurrence proved that is the minority case: the creator (e32173e4) was a bare CLI
+ * started outside Walnut, so Walnut never saw it live or die, and its durable row sat
+ * in a shared monorepo directory hijacking a real session every hour, 22 times.
+ *
+ * A FOREIGN fire is self-evident proof the row is orphaned relative to this process:
+ * whoever created it is not us, so no CronDelete will ever come from here. Deleting
+ * the row is the only thing that ends the loop — and unlike the warning this replaces,
+ * it costs the session no turn and no context.
+ */
+export function stripCronTaskById(
+  tasksJson: string | null,
+  taskId: string,
+): { changed: boolean; text: string | null } {
+  if (!tasksJson || !taskId) return { changed: false, text: null }
+  let parsed: { tasks?: unknown }
+  try { parsed = JSON.parse(tasksJson) as { tasks?: unknown } } catch { return { changed: false, text: null } }
+  if (!Array.isArray(parsed.tasks)) return { changed: false, text: null }
+  const tasks = parsed.tasks as Array<Record<string, unknown>>
+  const kept = tasks.filter((t) => !t || t.id !== taskId)
+  if (kept.length === tasks.length) return { changed: false, text: null }
+  const next = { ...(parsed as Record<string, unknown>), tasks: kept }
+  return { changed: true, text: JSON.stringify(next, null, 2) + '\n' }
+}
+
+/** Human-readable marker text for the stream-file scheduled_task_fire line.
+ *  This is the ONLY thing a foreign fire produces for a human to read — it lands
+ *  in the session timeline as a system row. Deliberately not sent to the model. */
+export function cronFireMarkerText(f: DetectedCronFire): string {
+  return f.foreign
+    ? `Orphaned scheduled task ${f.taskId} fired here — created by another session (${f.createdBySessionId}) that shares this directory. Walnut removed it so it cannot fire again.`
+    : `Scheduled task ${f.taskId} fired (created by this session).`
 }
 
 // ── Cloud bridge: restart decision (pure) ──

@@ -144,6 +144,24 @@ export class LocalDaemon {
       if (helloResult.alive) {
         // 2. Check version — auto-restart if stale
         if (expectedVersion && helloResult.version && helloResult.version !== expectedVersion) {
+          // Upgrade-vs-live-work guard: restarting the daemon closes every ACP
+          // worker's stdin → turn-interrupted:shutdown for whatever the user is
+          // mid-flight on (each dev:prod deploy used to kill live codex turns —
+          // 6 shutdowns across 3 days on one session). The daemon advertises
+          // open turns in acp-busy.json; while any are open, keep the old
+          // daemon and let a later ensureRunning() (post-turn) do the upgrade.
+          const busySids = this.readAcpBusySids()
+          if (busySids.length > 0) {
+            log.session.warn('local daemon version mismatch — upgrade DEFERRED (ACP turns open)', {
+              running: helloResult.version,
+              expected: expectedVersion,
+              busySids,
+            })
+            this._port = existingPort
+            this._wsUrl = `ws://localhost:${existingPort}`
+            this._instanceId = helloResult.instanceId ?? this.readInstanceIdFile()
+            return existingPort
+          }
           log.session.info('local daemon version mismatch — restarting', {
             running: helloResult.version,
             expected: expectedVersion,
@@ -207,6 +225,23 @@ export class LocalDaemon {
       return pid > 0 ? pid : null
     } catch {
       return null
+    }
+  }
+
+  /**
+   * ACP workers with an OPEN turn (acp-busy.json, maintained by acp-daemon).
+   * Used to defer version-upgrade restarts. A stale file (daemon crashed >2min
+   * ago, or predates the busy-file feature) reads as "not busy" so upgrades
+   * can never be wedged by leftovers.
+   */
+  private readAcpBusySids(): string[] {
+    try {
+      const raw = fs.readFileSync(path.join(this.daemonDir, 'acp-busy.json'), 'utf-8')
+      const parsed = JSON.parse(raw) as { busySids?: unknown; updatedAt?: unknown }
+      if (typeof parsed.updatedAt !== 'number' || Date.now() - parsed.updatedAt > 2 * 60_000) return []
+      return Array.isArray(parsed.busySids) ? parsed.busySids.filter((s): s is string => typeof s === 'string') : []
+    } catch {
+      return []
     }
   }
 
@@ -313,6 +348,16 @@ export class LocalDaemon {
       ...process.env,
       WALNUT_DAEMON_DIR: this.daemonDir,
     }
+    // Opt-in session-only cron policy (config session.cron_policy) — the daemon
+    // reads WALNUT_ENFORCE_SESSION_CRON at boot, so it must ride the spawn env.
+    // Best-effort: absent/unreadable config = default 'unrestricted' = no env
+    // var = daemon does nothing.
+    try {
+      const { getConfig } = await import('../core/config-manager.js')
+      if ((await getConfig()).session?.cron_policy === 'session-only') {
+        env.WALNUT_ENFORCE_SESSION_CRON = '1'
+      }
+    } catch { /* config not loaded yet — default policy */ }
     // Scrub any INHERITED watchdog pid before (maybe) setting our own: for the
     // prod dir parentWatchdogEnv() returns {} and would otherwise leave a stale
     // value from an isolated-daemon-spawned CLI in place — the prod daemon's
