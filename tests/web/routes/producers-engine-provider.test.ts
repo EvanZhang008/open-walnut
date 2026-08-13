@@ -47,6 +47,7 @@ import { startServer, stopServer, getHeartbeatHandle } from '../../../src/web/se
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js'
 import type { SessionStartEvent, SessionSendEvent } from '../../../src/core/event-types.js'
 import * as chatHistory from '../../../src/core/chat-history.js'
+import { markProcessing, removeProcessed } from '../../../src/core/session-message-queue.js'
 
 let server: HttpServer
 let started: SessionStartEvent[] = []
@@ -55,8 +56,29 @@ let sent: SessionSendEvent[] = []
 let laneReply: string | null = 'lane answer'
 
 /**
- * Fake session-runner: records SESSION_START / SESSION_SEND and answers each with
- * a synthetic session:result on the next tick — the shape runLaneTurn waits for.
+ * Consume a session's queued messages, the way a real delivery would. Tracked in
+ * `inFlightDrains` so teardown can await it: a message left 'pending' when the
+ * server goes down is exactly what the local daemon's reconnect redelivery would
+ * later cold-`--resume` into a REAL `claude` spawn (observed: 2 spawns leaked from
+ * this file before the drain existed).
+ */
+const inFlightDrains = new Set<Promise<void>>()
+
+function drainQueue(sessionId: string): void {
+  const p = (async () => {
+    try {
+      const batch = await markProcessing(sessionId)
+      if (batch.length > 0) await removeProcessed(sessionId, batch.map((m) => m.id))
+    } catch { /* the store may be torn down between tests */ }
+  })()
+  inFlightDrains.add(p)
+  void p.finally(() => inFlightDrains.delete(p))
+}
+
+/**
+ * Fake session-runner: records SESSION_START / SESSION_SEND, drains the message
+ * queue (as a real delivery would), and answers each with a synthetic
+ * session:result on the next tick — the shape runLaneTurn waits for.
  */
 function installFakeRunner(): void {
   bus.subscribe('session-runner', (event: BusEvent) => {
@@ -70,7 +92,9 @@ function installFakeRunner(): void {
       sent.push(d)
       sid = d.sessionId
     }
-    if (!sid || laneReply === null) return
+    if (!sid) return
+    drainQueue(sid)
+    if (laneReply === null) return
     const answer = laneReply
     setTimeout(() => {
       bus.emit(EventNames.SESSION_RESULT, { sessionId: sid!, result: answer, isError: false },
@@ -129,6 +153,9 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  // Let every fake delivery finish draining BEFORE the server goes down (see
+  // drainQueue): a message left 'pending' is exactly what triggers a real spawn.
+  await Promise.allSettled([...inFlightDrains])
   await stopServer()
   await new Promise((r) => setTimeout(r, 100))
   bus.clear()

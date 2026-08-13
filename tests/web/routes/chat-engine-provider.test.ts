@@ -62,16 +62,42 @@ import WebSocket from 'ws'
 import { WALNUT_HOME, CONFIG_FILE } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js'
-import type { SessionStartEvent } from '../../../src/core/event-types.js'
+import type { SessionStartEvent, SessionSendEvent } from '../../../src/core/event-types.js'
+import { markProcessing, removeProcessed } from '../../../src/core/session-message-queue.js'
 
 let server: HttpServer
 let port: number
 let started: SessionStartEvent[] = []
 
-/** Fake session-runner: records starts, never spawns anything. */
+/**
+ * Consume a session's queued messages, the way a real delivery would. Tracked so
+ * teardown can await it: a message left 'pending' when the server goes down is
+ * exactly what the local daemon's reconnect redelivery would later
+ * cold-`--resume` into a REAL `claude` spawn (observed leaking from this file).
+ */
+const inFlightDrains = new Set<Promise<void>>()
+
+function drainQueue(sessionId: string): void {
+  const p = (async () => {
+    try {
+      const batch = await markProcessing(sessionId)
+      if (batch.length > 0) await removeProcessed(sessionId, batch.map((m) => m.id))
+    } catch { /* the store may be torn down between tests */ }
+  })()
+  inFlightDrains.add(p)
+  void p.finally(() => inFlightDrains.delete(p))
+}
+
+/** Fake session-runner: records starts, drains sends, never spawns anything. */
 function installFakeRunner(): void {
   bus.subscribe('session-runner', (event: BusEvent) => {
-    if (event.name === EventNames.SESSION_START) started.push(event.data as SessionStartEvent)
+    if (event.name === EventNames.SESSION_START) {
+      const d = event.data as SessionStartEvent
+      started.push(d)
+      if (d.preassignedSessionId) drainQueue(d.preassignedSessionId)
+    } else if (event.name === EventNames.SESSION_SEND) {
+      drainQueue((event.data as SessionSendEvent).sessionId)
+    }
   })
 }
 
@@ -136,6 +162,9 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  // Let every fake delivery finish draining BEFORE the server goes down (see
+  // drainQueue): a message left 'pending' is exactly what triggers a real spawn.
+  await Promise.allSettled([...inFlightDrains])
   await stopServer()
   await new Promise((r) => setTimeout(r, 100))
   bus.clear()
