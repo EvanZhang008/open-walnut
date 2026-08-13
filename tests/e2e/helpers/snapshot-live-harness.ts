@@ -246,7 +246,7 @@ export async function teardownDaemon(opts: {
     for (const f of fs.readdirSync(opts.streamsDir)) {
       if (!f.endsWith('.pgid')) continue
       const pid = parseInt(fs.readFileSync(path.join(opts.streamsDir, f), 'utf-8').trim(), 10)
-      if (pid > 0) {
+      if (pid > 1) {
         try { process.kill(-pid, 'SIGKILL') } catch { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
       }
     }

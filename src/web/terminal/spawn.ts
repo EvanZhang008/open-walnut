@@ -40,6 +40,7 @@ import type { SessionRecord } from '../../core/types.js'
 import type { SshTarget } from '../../providers/session-io.js'
 import { shellQuote } from '../../providers/session-io.js'
 import { getConfig } from '../../core/config-manager.js'
+import { DTACH_SOCKET_DIR } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { remoteDtachPath, localDtachPath } from './dtach-provision.js'
 
@@ -71,12 +72,25 @@ export interface SpawnResult {
 }
 
 /**
- * Directory (under the target host's tmp) holding the per-session dtach unix
- * sockets. One socket per terminal: `<dir>/walnut-<sessionId>.dsock`. Keeping
- * them in a dedicated dir makes the orphan reaper a simple readdir + compare
- * against the session registry.
+ * Directory holding the per-session dtach unix sockets, one per terminal:
+ * `<dir>/walnut-<sessionId>.dsock`. A dedicated dir makes the orphan reaper a
+ * simple readdir + compare against the session registry.
+ *
+ * Re-exported from constants (LOG_DIR/term) so it is isolated per instance in
+ * lockstep with the session registry — see the DTACH_SOCKET_DIR doc comment in
+ * constants.ts for why a machine-global literal here let one instance's reaper
+ * kill another instance's live terminals.
+ *
+ * NOTE (remote hosts): this LOCAL path is also used verbatim as the socket path
+ * ON the remote host (the ssh command interpolates it, and `mkdir -p`s it there).
+ * So a walnut whose LOG_DIR is overridden creates that same dir on the remote
+ * box. That's coherent — an isolated instance stays isolated on both ends — but
+ * it means the remote path is chosen by the LOCAL env, not the remote one. Fine
+ * today (only local test/demo instances override LOG_DIR, and a test instance is
+ * now gated out of reaping anyway); revisit if remote-specific dirs are ever
+ * needed.
  */
-export const DTACH_SOCKET_DIR = '/tmp/open-walnut-term'
+export { DTACH_SOCKET_DIR }
 
 /**
  * Stable dtach socket path derived from the Claude session ID.

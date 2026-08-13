@@ -171,7 +171,7 @@ afterAll(async () => {
     for (const f of fs.readdirSync(STREAMS_DIR)) {
       if (!f.endsWith('.pgid')) continue
       const pid = parseInt(fs.readFileSync(path.join(STREAMS_DIR, f), 'utf-8').trim(), 10)
-      if (pid > 0) { try { process.kill(-pid, 'SIGKILL') } catch { try { process.kill(pid, 'SIGKILL') } catch {} } }
+      if (pid > 1) { try { process.kill(-pid, 'SIGKILL') } catch { try { process.kill(pid, 'SIGKILL') } catch {} } }
     }
   } catch {}
   for (const d of [DAEMON_DIR, STREAMS_DIR, path.dirname(scriptPath)]) {
@@ -715,7 +715,7 @@ describe('C1 snapshot wiring — daemon restart (SIGKILL) rebuilds foldState on 
         for (const f of fs.readdirSync(d)) {
           if (!f.endsWith('.pgid')) continue
           const pid = parseInt(fs.readFileSync(path.join(d, f), 'utf-8').trim(), 10)
-          if (pid > 0) { try { process.kill(-pid, 'SIGKILL') } catch { try { process.kill(pid, 'SIGKILL') } catch {} } }
+          if (pid > 1) { try { process.kill(-pid, 'SIGKILL') } catch { try { process.kill(pid, 'SIGKILL') } catch {} } }
         }
       } catch {}
     }

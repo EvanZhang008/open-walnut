@@ -6,9 +6,12 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     globalSetup: ['tests/setup/global-setup.ts'],
+    // runtime-dir-isolation MUST be first: it redirects WALNUT_DAEMON_DIR (and
+    // hence LOG_DIR / streams / images) away from the production /tmp/open-walnut
+    // before any test module imports constants.ts and freezes those paths.
     // Per-worker parent-liveness watchdog — exits workers whose runner died
     // (they otherwise leak forever with ppid=1). See the file for the incident.
-    setupFiles: ['tests/setup/worker-watchdog.ts'],
+    setupFiles: ['tests/setup/runtime-dir-isolation.ts', 'tests/setup/worker-watchdog.ts'],
     include: ['tests/**/*.test.ts'],
     // notes-roundtrip runs under its own DOM-shimmed config (its deps live in
     // web/node_modules); exclude it from the node-env base/coverage runs so it

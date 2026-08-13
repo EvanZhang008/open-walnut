@@ -258,6 +258,25 @@ export const USAGE_DB_FILE = path.join(WALNUT_HOME, 'usage.sqlite');
 // same constraint as IS_EPHEMERAL above. Production sets nothing → /tmp/open-walnut.
 export const LOG_DIR = process.env.WALNUT_DAEMON_DIR || '/tmp/open-walnut';
 export const SESSION_STREAMS_DIR = path.join(LOG_DIR, 'streams');
+/**
+ * Per-session dtach unix sockets for the embedded terminal (one per terminal:
+ * `<dir>/walnut-<sessionId>.dsock`).
+ *
+ * DERIVED FROM LOG_DIR ON PURPOSE — do NOT hardcode this back to a fixed
+ * `/tmp/...` path. It used to be a machine-global literal while the rest of the
+ * runtime tree was already env-isolated, which made the orphan reaper a
+ * cross-instance weapon: the reaper's kill rule is "socket in this dir whose
+ * sessionId is absent from MY session registry → kill it". Any second instance
+ * with an isolated (empty) registry therefore enumerated PRODUCTION's sockets,
+ * classified every one of them as an orphan, and pkill'd the user's live
+ * terminals mid-keystroke (2026-08-10: a vitest server killed session
+ * 43b00853's terminal 1.2s after boot — `[got signal 15 - dying]`).
+ *
+ * Sharing the socket dir is only safe if the registry is also shared. Tying
+ * both to LOG_DIR makes that invariant structural: isolated runtime dir →
+ * isolated sockets → a reaper can only ever see its own instance's terminals.
+ */
+export const DTACH_SOCKET_DIR = path.join(LOG_DIR, 'term');
 export const SESSION_QUEUE_FILE = path.join(WALNUT_HOME, 'session-message-queue.json');
 export const IMAGES_DIR = path.join(LOG_DIR, 'images');
 export const REMOTE_IMAGES_DIR = path.join(IMAGES_DIR, 'remote');

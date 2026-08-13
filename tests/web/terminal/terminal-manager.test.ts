@@ -44,7 +44,10 @@ vi.mock('../../../src/core/session-tracker.js', () => ({
 // resolveSpawnForSession returns our fake pty.
 vi.mock('../../../src/web/terminal/spawn.js', () => ({
   resolveSpawnForSession: vi.fn(async () => ({ pty: currentPty, cwd: '/home/u/proj', host: undefined })),
-  dtachSocketPath: (sid: string) => `/tmp/open-walnut-term/walnut-${sid}.dsock`,
+  // Fake path only — this mock never touches disk. Deliberately NOT the real
+  // socket dir: a prod-looking literal here would read as an assertion about
+  // where sockets live (they now follow LOG_DIR — see src/constants.ts).
+  dtachSocketPath: (sid: string) => `/tmp/walnut-fake-term/walnut-${sid}.dsock`,
 }));
 
 import { terminalManager } from '../../../src/web/terminal/terminal-manager.js';

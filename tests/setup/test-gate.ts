@@ -46,6 +46,22 @@ const GROUP_TTL_MS = 45 * 60_000
 const WAIT_TIMEOUT_MS = 15 * 60_000
 const POLL_MS = 3_000
 
+/**
+ * Load-aware admission (added after the 2026-08-09 incidents): a slot being
+ * free does not mean the MACHINE is free. Four times that day the box sat at
+ * load 60-95 (14 cores) from security agents + recovery storms; admitting a
+ * test run at that point was the last straw that starved Finder, upon which
+ * loginwindow tore down the user's whole GUI session ("all my apps closed").
+ * So: with the slot in hand, still wait while 1-min loadavg exceeds the cap.
+ * Fail-open stays (a busy-forever box must not block tests permanently), but
+ * the wait gives recovery storms time to drain instead of piling on.
+ */
+const MAX_LOAD = (() => {
+  const n = Number(process.env.WALNUT_VITEST_MAX_LOAD)
+  return Number.isFinite(n) && n > 0 ? n : 20
+})()
+const LOAD_WAIT_TIMEOUT_MS = 10 * 60_000
+
 /** One logical invocation. test-parallel exports this so all 6 tiers share a slot. */
 function runId(): string {
   return process.env.WALNUT_TEST_RUN_ID ?? `pid-${process.pid}`
@@ -104,6 +120,40 @@ function register(): void {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+/** 1-minute load average, or 0 if unreadable (fail open). */
+function loadAvg1m(): number {
+  try {
+    return os.loadavg()[0] ?? 0
+  } catch {
+    return 0
+  }
+}
+
+/** Wait for the machine itself to calm down before starting a run. */
+async function waitForSaneLoad(): Promise<void> {
+  const deadline = Date.now() + LOAD_WAIT_TIMEOUT_MS
+  let announced = false
+  for (;;) {
+    const load = loadAvg1m()
+    if (load <= MAX_LOAD) {
+      if (announced) console.log(`[vitest-gate] load ${load.toFixed(1)} ≤ ${MAX_LOAD} — starting`)
+      return
+    }
+    if (Date.now() >= deadline) {
+      console.warn(`[vitest-gate] load still ${load.toFixed(1)} after ${LOAD_WAIT_TIMEOUT_MS / 60_000}min — proceeding anyway (fail open)`)
+      return
+    }
+    if (!announced) {
+      announced = true
+      console.log(
+        `[vitest-gate] machine load ${load.toFixed(1)} > ${MAX_LOAD} — waiting for it to drain before starting tests ` +
+        `(starving the GUI tears down the user's session; see 2026-08-09 incidents). WALNUT_VITEST_MAX_LOAD overrides.`,
+      )
+    }
+    await sleep(POLL_MS)
+  }
+}
+
 /** Await a slot (or timeout → fail open). Call from vitest globalSetup. */
 export async function acquireTestSlot(): Promise<void> {
   if (process.env.WALNUT_VITEST_GATE === '0' || process.env.CI) return
@@ -116,12 +166,17 @@ export async function acquireTestSlot(): Promise<void> {
       const { live, mine } = sweepAndCount(now)
       // Our group already holds a slot (sibling tier of the same run) → join it.
       if (mine || live.length < MAX_GROUPS) {
+        // Slot free ≠ machine free: also wait out machine-wide load spikes
+        // BEFORE registering, so queued runs behind us keep seeing the true
+        // group count while we hold nothing.
+        await waitForSaneLoad()
         register()
         if (announced) console.log('[vitest-gate] slot acquired — starting')
         return
       }
       if (now >= deadline) {
         console.warn(`[vitest-gate] wait timed out after ${WAIT_TIMEOUT_MS / 60_000}min — proceeding anyway (fail open)`)
+        await waitForSaneLoad()
         register()
         return
       }

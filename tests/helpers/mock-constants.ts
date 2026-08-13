@@ -84,6 +84,11 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
     PASTES_DIR: path.join(tmpBase, 'pastes'),
     HEARTBEAT_FILE: path.join(tmpBase, 'HEARTBEAT.md'),
     LOG_DIR: path.join(tmpBase, 'logs'),
+    // Per-test dtach socket dir. MUST stay isolated: the terminal orphan reaper
+    // kills every socket here whose sessionId is missing from the (empty) test
+    // registry, so a shared dir means a test server pkill's the developer's live
+    // production terminals. See DTACH_SOCKET_DIR in src/constants.ts.
+    DTACH_SOCKET_DIR: path.join(tmpBase, 'logs', 'term'),
     LOG_PREFIX: 'open-walnut-test-',
     FREQUENT_DIRS_FILE: path.join(tmpBase, 'frequent-directories.json'),
     MENTION_DIRS_FILE: path.join(tmpBase, 'mention-directories.json'),
