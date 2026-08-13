@@ -11,7 +11,7 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 
 import { WALNUT_HOME, DAILY_DIR, MEMORY_FILE } from '../../src/constants.js';
 import { buildMemoryContext } from '../../src/agent/context.js';
-import { formatDateKey } from '../../src/core/daily-log.js';
+import { formatDateKey, estimateTokens } from '../../src/core/daily-log.js';
 import {
   beginMemoryPromptTurn,
   getBoundedMemory,
@@ -163,5 +163,62 @@ describe('buildMemoryContext — frozen memory snapshot', () => {
     const frozen = await buildMemoryContext(8000, scope);
     expect(frozen).toContain('prefers concise answers');
     expect(frozen).not.toContain('learned mid-turn');
+  });
+  // ─── Budget enforcement (the dynamic segment is billed UNCACHED every round-trip) ───
+
+  it('enforces the token budget as a real ceiling, not a suggestion', async () => {
+    // Regression: `budget` used to be advisory — only the daily-logs half honored
+    // it, so every other section (bounded stores, ledger, repo/notes guides) was
+    // bounded at WRITE time but never as a SUM. Measured on a real vault: asking
+    // for 8000 returned 9761 tokens and asking for 2000 returned 7069 (3.5x over).
+    // This block is the `dynamic` segment, injected AFTER the prompt-cache
+    // breakpoint, so every excess token is re-billed on EVERY round-trip of EVERY
+    // turn — a tool-using turn is 2+ round-trips.
+    const store = getBoundedMemory();
+    for (let i = 0; i < 12; i++) {
+      await store.add(`## Rule ${i}\n\n${'padding text '.repeat(60)}`);
+    }
+    // Daily logs are the biggest real-world contributor — seed a fat one.
+    await fsp.mkdir(DAILY_DIR, { recursive: true });
+    await fsp.writeFile(
+      path.join(DAILY_DIR, `${formatDateKey(new Date())}.md`),
+      `## Work log\n\n${'a long line of daily activity detail. '.repeat(400)}`,
+      'utf-8',
+    );
+
+    // Compare ENFORCED vs UNENFORCED on identical inputs: a huge budget leaves
+    // everything in, a tight one must be materially smaller. This is the real
+    // contract (the non-droppable identity/rules core is a hard floor, so we
+    // cannot assert an absolute number here).
+    const unenforced = await buildMemoryContext(1_000_000, undefined);
+    const enforced = await buildMemoryContext(1500, undefined);
+    expect(estimateTokens(enforced)).toBeLessThan(estimateTokens(unenforced) / 2);
+    // Recent activity is dropped FIRST (most re-readable via file_read).
+    expect(unenforced).toContain('a long line of daily activity detail');
+    expect(enforced).not.toContain('a long line of daily activity detail');
+  });
+
+  it('tells the model what it omitted instead of dropping silently', async () => {
+    // A silent drop reads as "none exist" — the model must know to go fetch it.
+    await fsp.mkdir(DAILY_DIR, { recursive: true });
+    await fsp.writeFile(
+      path.join(DAILY_DIR, `${formatDateKey(new Date())}.md`),
+      `## Work log\n\n${'verbose daily detail. '.repeat(500)}`,
+      'utf-8',
+    );
+    const out = await buildMemoryContext(500, undefined);
+    expect(out).toMatch(/Context budget: omitted/);
+    expect(out).toContain('Recent activity');
+  });
+
+  it('never drops identity or behavior rules, however tight the budget', async () => {
+    const user = getBoundedMemory(undefined, 'user');
+    await user.add('## Identity\n\nEvan, software engineer');
+    const store = getBoundedMemory();
+    await store.add('## Never Force Push\n\na behavior rule that must survive');
+
+    const out = await buildMemoryContext(1, undefined); // absurdly tight
+    expect(out).toContain('Evan, software engineer');
+    expect(out).toContain('a behavior rule that must survive');
   });
 });

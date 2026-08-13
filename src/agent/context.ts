@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getConfig } from '../core/config-manager.js';
 import { buildSkillsPrompt } from '../core/skill-loader.js';
-import { getDailyLogsWithinBudget } from '../core/daily-log.js';
+import { getDailyLogsWithinBudget, estimateTokens } from '../core/daily-log.js';
 import { getBoundedMemory, promptScope } from '../core/bounded-memory.js';
 import { getCompactionSummary } from '../core/chat-history.js';
 import { getWorkingMemory, isWorkingMemoryEmpty } from '../core/working-memory.js';
@@ -139,7 +139,7 @@ export async function buildMemoryContext(budget: number = 8000, scope?: string):
     ? `\n\n## Recent tasks (newest first — scan this before task_search when asked "which task did/does X")\n${taskLedger}`
     : '';
 
-  return `## Projects
+  const assembled = `## Projects
 ${taskProjects}${ledgerSection}
 
 ## User profile (who the user is — bounded, update via memory_manage target:user)
@@ -152,6 +152,87 @@ ${globalMemoryBlock ?? '(No global memory yet. Save behavior rules with memory_m
 ${dailyLogs || '(No recent activity.)'}
 
 Use \`memory_notes_search\` for semantic search across all memory and notes. Use \`file_read\` to read full documents.`;
+
+  // `budget` USED TO BE ADVISORY, and only the daily-logs half honored it: asking
+  // for 2000 returned 7069 tokens (3.5x over), asking for 8000 returned 9761.
+  // Every other section ("bounded" stores, the task ledger, repo/notes guides) is
+  // bounded at WRITE time, which bounds each store individually but never bounds
+  // their SUM — so the block grew silently as stores filled up.
+  //
+  // Why that costs real money and latency: this whole block is the `dynamic`
+  // segment, injected AFTER the prompt-cache breakpoint (deliberately — it changes
+  // per turn, so caching it would bust the far larger stable prefix). Uncached
+  // means it is re-billed as fresh input tokens on EVERY round-trip of EVERY turn,
+  // and a tool-using turn is 2+ round-trips. Measured on this vault: 10,625
+  // uncached tokens per round-trip, ~17,050 total uncached input.
+  //
+  // So the budget is now enforced as a real ceiling. Trimming happens at SECTION
+  // granularity, dropping whole trailing sections lowest-value-first, because half
+  // a markdown section is worse than no section (the model can still `file_read`
+  // or `memory_notes_search` for anything dropped — nothing here is unreachable).
+  return enforceContextBudget(assembled, budget);
+}
+
+/**
+ * Trim an assembled context block to `budget` tokens by dropping whole trailing
+ * sections, lowest-value-first, and appending a visible note about what was cut.
+ *
+ * Order is deliberate: "Recent activity" (daily logs) is the most re-readable via
+ * `file_read`, so it goes first; identity/behavior rules go last because dropping
+ * them changes how the agent BEHAVES rather than just what it knows.
+ */
+function enforceContextBudget(text: string, budget: number): string {
+  if (estimateTokens(text) <= budget) return text;
+
+  // Lowest value first. Each entry is the section heading as it appears above.
+  //
+  // "Recent activity" is FIRST for a measured reason: on this vault it was 3,895
+  // of the ~10.6K tokens, and its content is raw daily work logs — the single most
+  // re-readable thing here (`file_read` + `memory_notes_search` both reach it).
+  // Identity/behavior rules are intentionally NOT droppable: losing them changes
+  // how the agent behaves, not just what it knows.
+  const DROP_ORDER = [
+    '## Recent activity',
+    '## Notes vault guide',
+    '## Your repositories',
+    '## Recent tasks',
+  ];
+
+  let out = text;
+  const dropped: string[] = [];
+  for (const heading of DROP_ORDER) {
+    if (estimateTokens(out) <= budget) break;
+    const start = out.indexOf(`\n${heading}`);
+    if (start < 0) continue;
+    // Find this section's END. CAREFUL: the bounded memory/user stores render
+    // their OWN entries as `## Title` too, so "next `## `" is NOT a reliable
+    // section boundary — it would stop at a store entry and leave the rest of the
+    // dropped section behind (measured: a naive scan freed only 583 of 3895
+    // tokens). Only the known top-level headings terminate a section.
+    const TOP_LEVEL = [
+      '\n## Projects',
+      '\n## Recent tasks',
+      '\n## User profile',
+      '\n## Your long-term memory',
+      '\n## Your repositories',
+      '\n## Notes vault guide',
+      '\n## Recent activity',
+    ];
+    let end = out.length;
+    for (const marker of TOP_LEVEL) {
+      const at = out.indexOf(marker, start + heading.length + 1);
+      if (at > 0 && at < end) end = at;
+    }
+    out = out.slice(0, start) + out.slice(end);
+    dropped.push(heading.replace('## ', ''));
+  }
+
+  if (dropped.length > 0) {
+    // Tell the model what is missing so it knows to go fetch it rather than
+    // assuming the omission means "none exist" — a silent drop reads as absence.
+    out += `\n\n(Context budget: omitted ${dropped.join(', ')} — retrieve with \`memory_notes_search\` or \`file_read\` if needed.)`;
+  }
+  return out;
 }
 
 /**
