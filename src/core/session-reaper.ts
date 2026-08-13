@@ -128,7 +128,7 @@ export class SessionReaper {
 
     // Remove from sessions.json
     const ids = new Set(toReap.map(s => s.claudeSessionId))
-    const removed = await deleteSessionRecords(ids)
+    const removed = await deleteSessionRecords(ids, 'reaper-environment-retention')
 
     log.session.info('session reaper: reaped', {
       reaped: removed,
