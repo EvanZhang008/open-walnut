@@ -8,6 +8,7 @@ import {
   emitSessionStatusChanged,
   getRecentSessions,
   getSessionByClaudeId,
+  resolveSessionByIdOrPrefix,
   getSessionStatusSnapshots,
   getSessionSummaries,
   getSessionsForTask,
@@ -661,18 +662,43 @@ sessionsRouter.get('/:sessionId/vscode-uri', async (req: Request, res: Response,
 // GET /api/sessions/:sessionId
 sessionsRouter.get('/:sessionId', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    let session = await getSessionByClaudeId(String(req.params.sessionId))
+    const requestedId = String(req.params.sessionId)
+    // Accept a unique id prefix: the UI only ever displays the first 8 chars, so
+    // that string lands in deep links and would otherwise 404 forever (the client
+    // retries a missing session for ~15s, then leaves a dead column behind).
+    const resolution = await resolveSessionByIdOrPrefix(requestedId)
+    if (resolution.status === 'ambiguous') {
+      // Refuse to guess — same contract as an ambiguous short git SHA.
+      res.status(409).json({
+        code: 'SESSION_ID_AMBIGUOUS',
+        error: 'session id prefix matches more than one session — use the full id',
+      })
+      return
+    }
+    let session = resolution.status === 'found' ? resolution.session : null
     if (!session) {
       // Record lost but transcript may survive (inc-2026-08-10 "Untitled
       // session"): self-heal from the canonical JSONL instead of 404ing a
       // session whose /history still renders. Cheap on genuine 404s — the
-      // recovery module negative-caches misses.
+      // recovery module negative-caches misses. Runs after prefix resolution
+      // because recovery needs the full id to find the transcript.
       const { recoverSessionRecordFromJsonl } = await import('../../core/sessions/session-record-recovery.js')
-      session = await recoverSessionRecordFromJsonl(String(req.params.sessionId))
+      session = await recoverSessionRecordFromJsonl(requestedId)
     }
     if (!session) {
       res.status(404).json({ error: 'session not found' })
       return
+    }
+    // Canonical id — live-session maps are keyed by the full id, so a prefix must
+    // never be passed downstream.
+    const sessionId = session.claudeSessionId
+    if (resolution.status === 'found' && resolution.resolvedByPrefix) {
+      // Logged so a code path that truncates ids stays visible instead of being
+      // silently absorbed by prefix resolution.
+      log.web.warn('session resolved from an id prefix — caller should use the full id', {
+        requestedId,
+        sessionId,
+      })
     }
     const [enriched] = await enrichWithHostnames(await enrichWithLiveStatus([session]))
     // Include provider-neutral live pending permissions. ACP sessions attach
@@ -684,7 +710,7 @@ sessionsRouter.get('/:sessionId', async (req: Request, res: Response, next: Next
       reason?: string
     }> = []
     try {
-      const sessionId = String(req.params.sessionId)
+      // Canonical id from the resolved record — NOT req.params, which may be a prefix.
       const liveSession = session.engine === 'codex'
         ? await sessionRunner.findOrAttachAcpSession(sessionId)
         : sessionRunner.findByClaudeId(sessionId)
@@ -693,7 +719,7 @@ sessionsRouter.get('/:sessionId', async (req: Request, res: Response, next: Next
         : []
     } catch (err) {
       log.web.warn('failed to restore pending session permissions', {
-        sessionId: String(req.params.sessionId),
+        sessionId,
         error: err instanceof Error ? err.message : String(err),
       })
     }

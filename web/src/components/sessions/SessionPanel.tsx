@@ -157,6 +157,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     session?.engine,
   );
   const [loading, setLoading] = useState(true);
+  // Set once the ~15s retry window closes on a 404 — the id resolves to nothing.
+  const [missing, setMissing] = useState(false);
   const { optimisticMsgs, sendError, send, interruptSend, stopTurn, retryFailed, dismissFailed, handleMessagesDelivered, handleBatchCompleted, handleBatchFailed, handleEditQueued, handleDeleteQueued, addExternalQueued } = useSessionSend(sessionId);
   // isStreaming is bubbled up from the single useSessionStream instance that lives
   // inside SessionChatHistory (via onStreamingChange). We used to mount a second
@@ -316,6 +318,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     setSession(null);
     setLoading(true);
+    setMissing(false);
     setTaskTitle(null);
     setSessionTask(null);
     const load = (attempt: number) => {
@@ -331,6 +334,21 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
           if (s === null && attempt < MISSING_SESSION_RETRIES) {
             retryTimer = setTimeout(() => { if (!cancelled) load(attempt + 1); }, MISSING_SESSION_RETRY_MS);
             return;
+          }
+          // Retries exhausted on a 404: this id does not resolve. Say so instead
+          // of settling into an indistinguishable empty "Untitled session" header
+          // — a dead column otherwise re-runs this 30-retry loop on every reload
+          // and reads as "new sessions are broken".
+          if (s === null) setMissing(true);
+          // The server accepts a unique id PREFIX (the UI displays only 8 chars,
+          // so prefixes reach us via deep links). Adopt the canonical id so the
+          // column — and the WS stream/RPCs keyed off it — use the full id from
+          // here on, instead of re-resolving a prefix on every request.
+          if (s?.claudeSessionId && s.claudeSessionId !== sessionId) {
+            log.info('session-panel', 'adopting canonical session id from prefix', {
+              requestedId: sessionId, sessionId: s.claudeSessionId,
+            });
+            onSessionReplaced?.(sessionId, s.claudeSessionId);
           }
           setSession(s);
           setLoading(false);
@@ -881,6 +899,27 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
       })()}
     </button>
   );
+
+  // The id resolved to nothing after the full retry window. Say so explicitly:
+  // the previous behaviour rendered an ordinary empty panel, indistinguishable
+  // from a slow load, and the column stayed in sessionStorage so every reload
+  // replayed the retry loop — which reads as "sessions are broken".
+  if (missing) {
+    return (
+      <div className="session-panel" data-session-id={sessionId} data-session-missing="true">
+        <div className="session-panel-missing">
+          <p className="session-panel-missing-title">Session not found</p>
+          <p className="session-panel-missing-body">
+            No session matches <code>{sessionId}</code>. It may have been deleted, or the
+            link used a partial id that no longer resolves.
+          </p>
+          <button className="btn btn-sm btn-primary" onClick={() => onClose(sessionId)}>
+            Close panel
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <PlanContentContext.Provider value={planContentValue}>
