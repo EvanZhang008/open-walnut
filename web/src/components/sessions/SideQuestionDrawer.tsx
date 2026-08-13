@@ -21,6 +21,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { renderMarkdown } from '@/components/chat/ChatMessage';
 import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
+import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import {
   listSideQuestions,
   askSideQuestion,
@@ -198,6 +199,7 @@ export function SideQuestionDrawer({ sessionId }: SideQuestionDrawerProps) {
                 placeholder="Ask about this session…"
                 disabled={disabled || asking}
                 autoFocus
+                {...NO_AUTOFILL_PROPS}
               />
               <button className="btn btn-sm btn-primary" onClick={submit} disabled={disabled || asking || !question.trim()}>
                 Ask

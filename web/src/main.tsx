@@ -11,6 +11,7 @@ import { initMainThreadTracer, startPhase, endPhase, tracePhase } from './utils/
 import { initUiPrefsSync } from './utils/ui-prefs-sync';
 import { selectionIntersects } from './utils/selection-guard';
 import { initSessionStatusStore } from './stores/init-session-status-store';
+import { installGlobalAutofillSuppression } from './utils/no-autofill';
 import './styles/globals.css';
 
 // Persist browser console logs to disk (view with: open-walnut logs -s browser)
@@ -26,6 +27,9 @@ initLongTaskMonitor();
 initMainThreadTracer();
 // Cache server version/mode for crash reports (survives to server-down crashes).
 initAppInfo();
+// No login form anywhere in Walnut — suppress password-manager autofill popups
+// (iCloud Passwords etc.) on every input/textarea, present and future.
+installGlobalAutofillSuppression();
 
 // Clear text selection instantly on mousedown to avoid macOS inactive-selection pink flash.
 // Scoped (was unconditional, which broke copy entirely): never on right/middle click —

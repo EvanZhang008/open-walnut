@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef, memo, useMemo } from 'react';
 import type { Task } from '@open-walnut/core';
 import { resolveTaskSessionId } from '@/utils/session-status';
+import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
 import { ChatInput } from '@/components/chat/ChatInput';
 import { useSessionSend } from '@/hooks/useSessionSend';
@@ -80,8 +81,9 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
     if (isActive) cardRef.current?.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
   }, [isActive]);
 
-  // Red highlight for phases that need human attention
-  const needsAttention = task.phase === 'AGENT_COMPLETE' || task.phase === 'AWAIT_HUMAN_ACTION';
+  // Red highlight while the task is UNREAD (stored marker, not derived from
+  // phase — opening the task clears the marker but leaves the phase alone).
+  const unread = Boolean(task.unread);
 
   const handleClick = useCallback(() => {
     if (isActive) {
@@ -114,7 +116,7 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
     {FullscreenBackdrop}
     <div
       ref={cardRef}
-      className={`dock-task-card${isActive ? ' dock-task-active' : ''}${needsAttention ? ' dock-task-attention' : ''}${fullscreenClass}`}
+      className={`dock-task-card${isActive ? ' dock-task-active' : ''}${unread ? ' dock-task-unread' : ''}${fullscreenClass}`}
       data-task-id={task.id}
       onClick={(e) => { if (!isFullscreen && (e.target === e.currentTarget || (e.target as HTMLElement).closest('.dock-task-header'))) handleClick(); }}
       role="button"
@@ -124,7 +126,7 @@ const DockTaskCard = memo(function DockTaskCard({ task, isActive, onActivate, on
       <div className="dock-task-header">
         <div className="dock-task-header-top">
           <span className="dock-task-title" title={task.title}>{task.title}</span>
-          <span className={`dock-task-phase-badge${needsAttention ? ' dock-task-phase-attention' : ''}${isStreaming ? ' dock-task-phase-streaming' : ''}`}>
+          <span className={`dock-task-phase-badge${unread ? ' dock-task-phase-unread' : ''}${isStreaming ? ' dock-task-phase-streaming' : ''}`}>
             {PHASE_LABELS[task.phase ?? ''] ?? task.phase ?? 'To Do'}
           </span>
           {sessionId && (
@@ -267,6 +269,7 @@ const DockQuickAdd = memo(function DockQuickAdd({ onAdd }: DockQuickAddProps) {
         onChange={(e) => setTitle(e.target.value)}
         placeholder="Add to Focus…"
         aria-label="New focus task title"
+        {...NO_AUTOFILL_PROPS}
         onKeyDown={(e) => {
           if (e.key === 'Enter') { e.preventDefault(); submit(); }
           if (e.key === 'Escape') { setTitle(''); setOpen(false); }
