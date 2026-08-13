@@ -144,6 +144,25 @@ async function resolveTaskRef(taskId: string): Promise<string> {
   }
 }
 
+/**
+ * True when this agent's turns are answered by a lane-bound `claude` session
+ * instead of the in-process agent loop (`config.agent.provider: 'claude-code'`).
+ *
+ * Read per turn, not once at boot: the flag is a live config value, and a config
+ * edit must take effect on the NEXT background turn without a restart. Any
+ * failure (unreadable config, unknown provider string) degrades to `false` — the
+ * in-process loop — so a broken config can never leave a producer with no engine.
+ */
+async function useButlerLaneEngine(agentId: string): Promise<boolean> {
+  if (agentId !== 'general') return false
+  try {
+    const { getConfig, resolveAgentEngineProvider } = await import('../core/config-manager.js')
+    return resolveAgentEngineProvider(await getConfig()) === 'claude-code'
+  } catch {
+    return false
+  }
+}
+
 const DEFAULT_PORT = 3456
 const SYNC_INTERVAL_MS = 30_000 // Default plugin sync interval (30s)
 const MAX_ERROR_NOTIFICATION_BODY = 600
@@ -760,7 +779,37 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // broadcastCronNotification above).
         const { getMainConversationId } = await import('../core/conversations.js')
         const conversationId = await getMainConversationId('general')
+        // Hoisted above the engine branch so both engines send the byte-identical prompt.
+        const cronPrompt = `[Scheduled Job "${jobName}"] ${prompt}`
         try {
+          // ── Engine branch: butler lane (config.agent.provider='claude-code') ──
+          if (await useButlerLaneEngine('general')) {
+            const laneTs = new Date().toISOString()
+            // The in-process path persists the prompt as part of result.newMessages;
+            // here the model context lives in the CLI's own transcript, so only the
+            // human-visible notification is persisted (same shape heartbeat uses).
+            await chatHistory.addNotification({
+              role: 'user', content: cronPrompt, source: 'cron', cronJobName: jobName,
+              notification: true, agentId: 'general', conversationId, timestamp: laneTs,
+            })
+            const { runLaneTurn } = await import('../core/sessions/lane-turn.js')
+            const { sessionId: laneSessionId, resultText } =
+              await runLaneTurn('general', conversationId, cronPrompt, { source: 'cron' })
+            if (resultText === null) {
+              // Same contract as the in-process failure: the catch below broadcasts
+              // agent:error and re-throws so the cron system records a failed run.
+              throw new Error('cron lane turn timed out or errored')
+            }
+            await chatHistory.addNotification({
+              role: 'assistant', content: resultText, source: 'cron', cronJobName: jobName,
+              notification: true, sessionId: laneSessionId, agentId: 'general', conversationId,
+            })
+            broadcastEvent('agent:response', { text: resultText, source: 'cron', agentId: 'general', conversationId })
+            log.cron.info('cron lane turn done', { jobName, sessionId: laneSessionId, resultLength: resultText.length })
+            // No triggerBackgroundCompaction on the lane path — the CLI compacts its own context.
+            return
+          }
+
           const { runAgentLoop } = await import('../agent/loop.js')
           const { estimateMessagesTokens } = await import('../core/daily-log.js')
           // Load history inside the queue (reads fresh state after any preceding turn)
@@ -771,7 +820,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             historyMessages: history.length,
             historyTokens: `~${Math.round(historyTokens / 1000)}K`,
           })
-          const cronPrompt = `[Scheduled Job "${jobName}"] ${prompt}`
           const result = await runAgentLoop(cronPrompt, history, {
             onTextDelta: (delta) => broadcastEvent('agent:text-delta', { delta, source: 'cron', agentId: 'general', conversationId }),
             onThinking: (text) => broadcastEvent('agent:thinking', { text, agentId: 'general', conversationId }),
@@ -2836,8 +2884,34 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
               const taskTitle = task ? `${task.project || 'Inbox'} / ${task.title}` : taskId
               const taskRef = task ? `[${task.id}]` : `[${taskId}]`
 
-              // AI needs the full triage analysis to summarize for the user
+              // AI needs the full triage analysis to summarize for the user.
+              // Built ABOVE the engine branch so both engines send the same prompt.
               const prompt = `[Triage Update] Task "${taskTitle}" ${taskRef}\n\n${cleanedResult}\n\n<task_note>\n${taskNote}\n</task_note>\n\nInform the user concisely (2-4 sentences) about this task's status.\nFocus on what the triage analysis says — that's the new information.\nThe task note provides full context if needed.\nDo not use tools.`
+
+              // ── Engine branch: butler lane (config.agent.provider='claude-code') ──
+              // Skips the whole in-process block below (bail pre-check, system-prompt
+              // estimation, runAgentLoop): the CLI owns its own context, so estimating
+              // OUR history against OUR model window would gate a turn that isn't
+              // ours to gate.
+              if (await useButlerLaneEngine('general')) {
+                const { runLaneTurn } = await import('../core/sessions/lane-turn.js')
+                const { sessionId: laneSessionId, resultText } =
+                  await runLaneTurn('general', conversationId, prompt, { source: 'triage' })
+                if (resultText === null) {
+                  log.web.warn('triage lane turn produced no result (timeout or error)', { taskId, sessionId: laneSessionId })
+                  broadcastEvent('agent:error', { error: `Triage notify failed for task ${taskId}: lane turn timed out or errored`, agentId: 'general', conversationId })
+                  return
+                }
+                broadcastEvent('agent:response', { text: resultText, source: 'triage', agentId: 'general', conversationId })
+                await chatHistory.addNotification({
+                  role: 'assistant', content: resultText, source: 'triage',
+                  notification: true, taskId, sessionId: laneSessionId,
+                  agentId: 'general', conversationId,
+                })
+                log.web.info('triage lane turn done', { taskId, sessionId: laneSessionId, resultLength: resultText.length })
+                // No triggerBackgroundCompaction on the lane path — the CLI compacts itself.
+                return
+              }
 
               const { runAgentLoop } = await import('../agent/loop.js')
               const { estimateMessagesTokens, estimateFullPayload } = await import('../core/daily-log.js')
@@ -3325,20 +3399,25 @@ async function startHeartbeatIfConfigured(): Promise<void> {
       runAgentTurn: async (prompt) => {
         // Run heartbeat as a main-agent turn, serialized with chat and triage
         return enqueueMainAgentTurn('heartbeat', async () => {
-          const { runAgentLoop } = await import('../agent/loop.js')
-          const { estimateMessagesTokens } = await import('../core/daily-log.js')
           // Background turn → general's stable MAIN conversation (see rationale in
           // broadcastCronNotification above).
           const { getMainConversationId } = await import('../core/conversations.js')
           const conversationId = await getMainConversationId('general')
+          // Engine for this turn — a lane turn never enters the in-process loop, so
+          // it needs neither the API history nor the agent module.
+          const laneEngine = await useButlerLaneEngine('general')
 
           // Load chat history (fresh state after any preceding turn)
-          const history = await chatHistory.getApiMessages('general', conversationId)
-          const historyTokens = estimateMessagesTokens(history)
-          log.heartbeat.info('running heartbeat agent turn', {
-            historyMessages: history.length,
-            historyTokens: `~${Math.round(historyTokens / 1000)}K`,
-          })
+          let history: Awaited<ReturnType<typeof chatHistory.getApiMessages>> = []
+          if (!laneEngine) {
+            const { estimateMessagesTokens } = await import('../core/daily-log.js')
+            history = await chatHistory.getApiMessages('general', conversationId)
+            const historyTokens = estimateMessagesTokens(history)
+            log.heartbeat.info('running heartbeat agent turn', {
+              historyMessages: history.length,
+              historyTokens: `~${Math.round(historyTokens / 1000)}K`,
+            })
+          }
 
           const heartbeatUserContent = '[Heartbeat] Periodic self-check…'
           const heartbeatTs = new Date().toISOString()
@@ -3359,6 +3438,44 @@ async function startHeartbeatIfConfigured(): Promise<void> {
             agentId: 'general', conversationId,
           })
 
+          // Turn-end persistence shared by BOTH engines: a silent "all clear" is
+          // stored as one compact line instead of the routine full response.
+          const persistSilentHeartbeat = () => chatHistory.addNotification({
+            role: 'assistant',
+            content: '**Heartbeat** — all clear, nothing needs attention.',
+            source: 'heartbeat',
+            notification: true,
+            agentId: 'general', conversationId,
+          })
+
+          // ── Engine branch: butler lane (config.agent.provider='claude-code') ──
+          // Everything above ran for both engines (trigger broadcast + persist).
+          if (laneEngine) {
+            const { runLaneTurn } = await import('../core/sessions/lane-turn.js')
+            const { sessionId: laneSessionId, resultText } =
+              await runLaneTurn('general', conversationId, prompt, { source: 'heartbeat' })
+            // heartbeat-runner records the error and emits heartbeat:error.
+            if (resultText === null) throw new Error('heartbeat lane turn timed out')
+            if (resultText) {
+              broadcastEvent('agent:response', { text: resultText, source: 'heartbeat', agentId: 'general', conversationId })
+            }
+            if (isHeartbeatOk(resultText)) {
+              await persistSilentHeartbeat()
+            } else {
+              // The model context lives in the CLI's transcript, so the substantive
+              // answer is persisted as one assistant notification (with a link back
+              // to the session that produced it) rather than as API messages.
+              await chatHistory.addNotification({
+                role: 'assistant', content: resultText, source: 'heartbeat',
+                notification: true, sessionId: laneSessionId,
+                agentId: 'general', conversationId,
+              })
+            }
+            // No triggerBackgroundCompaction on the lane path — the CLI compacts itself.
+            return resultText
+          }
+
+          const { runAgentLoop } = await import('../agent/loop.js')
           const result = await runAgentLoop(prompt, history, {
             onTextDelta: (delta) => broadcastEvent('agent:text-delta', { delta, source: 'heartbeat', agentId: 'general', conversationId }),
             onThinking: (text) => broadcastEvent('agent:thinking', { text, agentId: 'general', conversationId }),
@@ -3401,13 +3518,7 @@ async function startHeartbeatIfConfigured(): Promise<void> {
           if (isSilent) {
             // For silent heartbeats, persist a compact notification instead of full AI messages
             // to avoid bloating chat history with routine "all clear" responses
-            await chatHistory.addNotification({
-              role: 'assistant',
-              content: '**Heartbeat** — all clear, nothing needs attention.',
-              source: 'heartbeat',
-              notification: true,
-              agentId: 'general', conversationId,
-            })
+            await persistSilentHeartbeat()
           } else {
             // Substantive response — persist full AI messages with heartbeat source
             await chatHistory.addAIMessages(newApiMsgs, { source: 'heartbeat', agentId: 'general', conversationId })
