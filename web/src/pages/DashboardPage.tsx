@@ -139,8 +139,12 @@ export function DashboardPage() {
     return keys;
   }, [tasks]);
 
+  // `every` is vacuously true on an empty set, so with ZERO tasks loaded the
+  // toolbar claimed everything was collapsed and offered "Expand all" — clicking
+  // it then wrote an empty set over the user's persisted per-project collapse
+  // state. No visible groups means nothing is collapsed.
   const allGroupsCollapsed = useMemo(
-    () => [...visibleProjectKeys].every((k) => collapsed.has(k)),
+    () => visibleProjectKeys.size > 0 && [...visibleProjectKeys].every((k) => collapsed.has(k)),
     [visibleProjectKeys, collapsed],
   );
 
