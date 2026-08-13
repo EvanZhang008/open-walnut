@@ -4367,6 +4367,31 @@ input:focus, textarea:focus, select:focus {
   text-overflow: ellipsis;
 }
 
+/* Engine badge — which engine answers butler turns (see EngineBadge.tsx). */
+.chat-engine-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  margin-left: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  color: var(--fg-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: default;
+}
+
+.chat-engine-badge.lane {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary));
+  color: var(--accent);
+}
+
 /* ── Agent tab bar (Walnut | conv 1 | conv 2 | … | +) ──
    Replaces the old AgentDropdown trigger. Lives inside .chat-header-meta. */
 

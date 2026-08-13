@@ -941,6 +941,12 @@ export function ProvidersSection({ config, onSave }: Props) {
     await loadProviders();
   };
 
+  // The engine flag (config.agent.provider) is a separate axis from these
+  // credentials: 'claude-code' routes butler turns into a `claude` CLI session,
+  // which brings its own auth — so this whole section stops being what answers
+  // chat. Users read "Bedrock selected" as "Bedrock is answering"; say otherwise.
+  const laneEngineActive = config.agent?.provider === 'claude-code';
+
   return (
     <SectionCard
       id="providers"
@@ -948,6 +954,22 @@ export function ProvidersSection({ config, onSave }: Props) {
       description="Choose your AI provider and model."
       showSave={false}
     >
+      {laneEngineActive && (
+        <p className="text-sm" style={{
+          margin: '0 0 12px',
+          padding: '8px 12px',
+          borderRadius: 8,
+          border: '1px solid color-mix(in srgb, var(--accent) 40%, var(--border))',
+          background: 'color-mix(in srgb, var(--accent) 8%, transparent)',
+          color: 'var(--fg-secondary)',
+        }}>
+          Butler chat is currently running on the <strong>Claude Code engine</strong>{' '}
+          (<code style={{ fontSize: 11 }}>agent.provider: claude-code</code>) — a
+          long-lived <code style={{ fontSize: 11 }}>claude</code> session with its own
+          authentication. The provider selected below still powers everything else
+          (subagents, summaries, background analysis), just not the main chat replies.
+        </p>
+      )}
       {loading ? (
         <p className="text-sm text-muted">Loading providers...</p>
       ) : (
