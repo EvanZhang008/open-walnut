@@ -33,6 +33,7 @@ import { computeExpectedDaemonVersion } from './daemon-version-check.js'
 import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { DAEMON_BINARIES_DIR, IS_EPHEMERAL } from '../constants.js'
 import { buildRemotePreamble } from './session-io.js'
+import { buildDaemonStartCmd } from './daemon-start-cmd.js'
 import type { SshTarget } from './session-io.js'
 import { localDaemon } from './local-daemon.js'
 
@@ -1217,6 +1218,30 @@ export class DaemonConnection {
         return false
       }
 
+      // Upgrade-vs-live-work guard (same contract as local-daemon.ts): the
+      // daemon advertises open ACP turns in acp-busy.json; killing it mid-turn
+      // writes turn-interrupted:shutdown into live user work. Defer while busy
+      // (stale >2min = not busy, so this can never wedge upgrades).
+      try {
+        const busyRaw = (await this.sshExec(
+          'cat /tmp/open-walnut/acp-busy.json 2>/dev/null || true', 5_000,
+        )).trim()
+        if (busyRaw) {
+          const busy = JSON.parse(busyRaw) as { busySids?: string[]; updatedAt?: number }
+          if (
+            typeof busy.updatedAt === 'number'
+            && Date.now() - busy.updatedAt < 2 * 60_000
+            && Array.isArray(busy.busySids) && busy.busySids.length > 0
+          ) {
+            log.session.warn('DaemonConnection: daemon upgrade DEFERRED (ACP turns open)', {
+              host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)',
+              busySids: busy.busySids,
+            })
+            return false
+          }
+        }
+      } catch {}
+
       // Mismatch (or legacy daemon that predates daemon.version) → upgrade.
       log.session.info('DaemonConnection: daemon version mismatch — stopping for upgrade', {
         host: this.hostKey, expected, remoteVersion: remoteVersion || '(missing)',
@@ -1806,57 +1831,41 @@ export class DaemonConnection {
    */
   private async startDaemon(): Promise<number> {
     try {
-      // Determine the start command based on what was deployed.
-      // Binary: direct execution. Source: needs node PATH discovery.
+      // Start command is built by the PURE builder in daemon-start-cmd.ts —
+      // env vars ride as structured data (rendered `nohup env K=V cmd`; a
+      // bare `nohup K=V cmd` makes nohup exec 'K=V' as the program — the
+      // 2026-08-12 clouddev outage), and the generated shell is EXECUTED
+      // against a fake runtime in tests/providers/daemon-start-cmd.test.ts.
+      // Rationale for the probe/confirm shell shapes lives in that module.
       //
-      // Why `--status` AFTER `cat daemon.port`: the port file can linger from
-      // a previous daemon that crashed, making `cat daemon.port` look like
-      // success while the current spawn is already dead. `--status` (binary)
-      // or `kill -0 <pid>` (source) confirms a running process, not just a
-      // leftover port file. Without this, pre-2026-05-05 startup reported
-      // "success" while a glibc-crashed node left the daemon dead — caller
-      // happily tunneled to a port nobody was listening on.
-      // Binary has `--status` subcommand; source daemon doesn't, so use `kill -0`
-      // on its PID file instead. See daemon-source.ts — no --status handler.
-      // Readiness probe: POLL for the port file + live pid, up to ~45s.
-      // A fixed `sleep 2` raced daemon boot on loaded hosts (a busy dev box
-      // took ~20s from nohup to port write) — the probe declared failure
-      // while the daemon was still booting, connect() threw, and overlapping
-      // retries then stop-for-upgrade'd each other's half-booted daemons in a
-      // loop. Net effect: a 43-minute host outage that only self-healed when
-      // a retry landed after some earlier spawn finished booting. The poll
-      // breaks the loop by letting the FIRST attempt succeed.
-      const waitReady =
-        'for i in $(seq 1 22); do ' +
-        'DPID=$(cat /tmp/open-walnut/daemon.pid 2>/dev/null); ' +
-        '[ -s /tmp/open-walnut/daemon.port ] && [ -n "$DPID" ] && kill -0 "$DPID" 2>/dev/null && break; ' +
-        'sleep 2; done'
-      const confirmRunning =
-        'cat /tmp/open-walnut/daemon.port && echo && ' +
-        'DPID=$(cat /tmp/open-walnut/daemon.pid 2>/dev/null) && ' +
-        '[ -n "$DPID" ] && kill -0 "$DPID" 2>/dev/null && echo "{\\"running\\":true}"'
+      // Why `--status` / `kill -0` AFTER `cat daemon.port`: the port file can
+      // linger from a previous daemon that crashed, making `cat daemon.port`
+      // look like success while the current spawn is already dead. Binary has
+      // a `--status` subcommand; source daemon doesn't, so it uses `kill -0`
+      // on the PID file. See daemon-source.ts — no --status handler.
+
+      // Opt-in session-only cron policy (config session.cron_policy): the
+      // daemon reads WALNUT_ENFORCE_SESSION_CRON at boot, so it must be in
+      // the spawn env. Default 'unrestricted' → no var → daemon does nothing.
+      const daemonEnv: Record<string, string> = {}
+      try {
+        const { getConfig } = await import('../core/config-manager.js')
+        if ((await getConfig()).session?.cron_policy === 'session-only') {
+          daemonEnv.WALNUT_ENFORCE_SESSION_CRON = '1'
+        }
+      } catch { /* config unavailable — default policy */ }
 
       let startCmd: string
       if (this._deployedViaSource && this._bunPath) {
-        // Source deployed under bun — exec bun by absolute path (no preamble).
-        // The daemon source itself sources ~/.zshrc / ~/.bashrc on startup to
-        // populate process.env.PATH so cmdStart's spawn('claude', ...) finds the
-        // CLI. See daemon-source.ts "PATH setup" block.
-        startCmd = `nohup ${this._bunPath} /tmp/open-walnut/daemon.cjs --start > /tmp/open-walnut/daemon-start.log 2>&1 & ` +
-          `${waitReady}; ${confirmRunning}`
+        startCmd = buildDaemonStartCmd({ runtime: 'bun', execPath: this._bunPath, env: daemonEnv })
       } else if (!this._deployedViaSource && await this.getLocalBinaryPath()) {
-        // Binary deploy — run directly, no PATH setup needed
-        const remotePath = await this.getRemoteDaemonPath()
-        startCmd = `nohup ${remotePath} --start > /tmp/open-walnut/daemon-start.log 2>&1 & ` +
-          `${waitReady}; cat /tmp/open-walnut/daemon.port && echo && ${remotePath} --status`
+        startCmd = buildDaemonStartCmd({ runtime: 'binary', execPath: await this.getRemoteDaemonPath(), env: daemonEnv })
       } else {
-        // Source deploy under node — needs node PATH discovery.
-        // `[ -n "$DPID" ]` guards against empty pid file (cat succeeds but
-        // yields empty → `kill -0 ""` behavior is shell-dependent; some emit
-        // the current shell's pid).
-        const preamble = buildRemotePreamble(this.ssh.shell_setup)
-        startCmd = `${preamble}; nohup node /tmp/open-walnut/daemon.cjs --start > /tmp/open-walnut/daemon-start.log 2>&1 & ` +
-          `${waitReady}; ${confirmRunning}`
+        startCmd = buildDaemonStartCmd({
+          runtime: 'node',
+          env: daemonEnv,
+          preamble: buildRemotePreamble(this.ssh.shell_setup),
+        })
       }
 
       const output = await this.sshExec(startCmd, 60_000)
@@ -1886,7 +1895,10 @@ export class DaemonConnection {
         try { startLog = await this.sshExec('cat /tmp/open-walnut/daemon-start.log 2>/dev/null', 5_000) } catch {}
 
         let hint = ''
-        if (/GLIBC_\d/.test(startLog)) {
+        if (/^(nohup|env): /m.test(startLog)) {
+          hint = ' [malformed start command: the nohup/env wrapper could not exec the daemon '
+            + '(bad path or malformed env prefix) — this is a walnut bug, not a host problem]'
+        } else if (/GLIBC_\d/.test(startLog)) {
           hint = ' [glibc mismatch: the node binary on PATH requires newer glibc than this host has. '
             + 'Check `node -v` on the remote — if it errors, install an older nvm-managed node (v16 on AL2/RHEL7). '
             + 'Prefer binary daemon deploy which avoids node entirely.]'
