@@ -28,6 +28,16 @@ export interface TaskUpdatedEvent {
   count?: number;
 }
 export interface TaskCompletedEvent { task: Task }
+/** Emitted only on a REAL phase transition (oldPhase !== newPhase), from every
+ *  mutation path. `source` tells hooks who drove the change. */
+export interface TaskPhaseChangedEvent {
+  task: Task;
+  oldPhase: TaskPhase;
+  newPhase: TaskPhase;
+  /** 'api' | 'agent' | 'session' | 'sync' | 'bulk' | 'migration' | 'hook:<id>' */
+  source: string;
+  sessionId?: string;
+}
 export interface TaskStarredEvent { task: Task; starred: boolean }
 export interface TaskDeletedEvent { id?: string; task: Task }
 /** `project` is the single grouping layer; '' = Inbox. */
@@ -344,6 +354,17 @@ export interface SessionSystemEventPayload {
   variant: 'compact' | 'error' | 'info';
   message: string;
   detail?: string;
+}
+
+/** A CLI scheduled task (cron) fired inside a session (daemon-detected marker). */
+export interface SessionCronFiredEvent {
+  sessionId: string;
+  taskId?: string;
+  cronTaskId?: string;
+  /** Session that created the cron — differs from sessionId on a foreign fire. */
+  createdBySessionId?: string;
+  /** True when the directory-scoped scheduler lock adopted another session's task. */
+  foreign: boolean;
 }
 
 /** A single background task / dynamic-workflow subagent for the progress UI. */
@@ -744,6 +765,7 @@ export interface EventPayloadMap {
   'task:created': TaskCreatedEvent;
   'task:updated': TaskUpdatedEvent;
   'task:completed': TaskCompletedEvent;
+  'task:phase-changed': TaskPhaseChangedEvent;
   'task:starred': TaskStarredEvent;
   'task:deleted': TaskDeletedEvent;
   'task:reordered': TaskReorderedEvent;
@@ -779,6 +801,7 @@ export interface EventPayloadMap {
   'session:model-catalog': SessionModelCatalogEvent;
   'session:side-question-done': SessionSideQuestionDoneEvent;
   'session:side-question-error': SessionSideQuestionErrorEvent;
+  'session:cron-fired': SessionCronFiredEvent;
 
   'session:team-info': SessionTeamInfoEvent;
   'session:team-agent-delta': SessionTeamAgentDeltaEvent;

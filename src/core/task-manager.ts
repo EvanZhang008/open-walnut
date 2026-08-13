@@ -6,7 +6,7 @@ import { generateId, isLegacyInboxGroup, isRetiredQuickStartGroup } from '../uti
 import { initDirectories } from './init.js';
 import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
-import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, readMarkerPatch, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
+import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
 import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES } from './phase.js';
 import { registry } from './integration-registry.js';
 import { getDb, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction, TASK_DB_PATH } from './task-db.js';
@@ -876,6 +876,23 @@ function emitProjectCreated(name: string, source: TaskSource): void {
     ['web-ui', 'main-agent'],
     { source: 'task-manager' },
   );
+}
+
+/**
+ * Emit task:phase-changed when a phase transition ACTUALLY happened.
+ * Rides beside (never replaces) the existing TASK_UPDATED/TASK_COMPLETED
+ * emits — hook consumers get old/new phase without diffing update payloads.
+ * Call AFTER the store write with the pre-mutation phase captured by the caller.
+ */
+function emitPhaseChanged(task: Task, oldPhase: TaskPhase, source: string): void {
+  if (task.phase === oldPhase) return;
+  bus.emit(EventNames.TASK_PHASE_CHANGED, {
+    task,
+    oldPhase,
+    newPhase: task.phase,
+    source,
+    sessionId: task.session_id,
+  }, ['web-ui'], { source });
 }
 
 /**
@@ -2173,7 +2190,7 @@ export async function completeTask(idPrefix: string): Promise<{ task: Task }> {
   // Lock-internal phase: write local store. Push runs OUTSIDE the lock because
   // autoPushIfConfigured() acquires the same lock when setting sync_error;
   // holding the lock during the await would self-deadlock the whole task system.
-  const task = await withWriteLock(async () => {
+  const { task, oldPhase } = await withWriteLock(async () => {
     const store = await readStore();
     const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
 
@@ -2187,6 +2204,7 @@ export async function completeTask(idPrefix: string): Promise<{ task: Task }> {
     }
 
     const t = matches[0];
+    const oldPhase = t.phase;
     guardActiveChildren(store, t);
     applyPhase(t, 'COMPLETE');
     // Auto-unpin completed tasks so they don't linger in Focus Bar
@@ -2201,7 +2219,7 @@ export async function completeTask(idPrefix: string): Promise<{ task: Task }> {
     t.updated_at = new Date().toISOString();
 
     await writeStore(store);
-    return t;
+    return { task: t, oldPhase };
   });
 
   // Sync push (outside lock). Failure propagates to caller — plugin tasks must
@@ -2211,6 +2229,7 @@ export async function completeTask(idPrefix: string): Promise<{ task: Task }> {
     throw new Error(`Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}`);
   }
   autoCompleteTaskSessions(task);
+  emitPhaseChanged(task, oldPhase, 'api');
 
   return { task };
 }
@@ -2222,7 +2241,7 @@ export async function toggleComplete(idPrefix: string): Promise<{ task: Task }> 
   // Lock-internal: write local store. Push runs outside the lock to avoid
   // self-deadlock (autoPushIfConfigured re-acquires the same lock on plugin
   // not loaded → set sync_error).
-  const task = await withWriteLock(async () => {
+  const { task, oldPhase } = await withWriteLock(async () => {
     const store = await readStore();
     const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
 
@@ -2236,6 +2255,7 @@ export async function toggleComplete(idPrefix: string): Promise<{ task: Task }> 
     }
 
     const t = matches[0];
+    const oldPhase = t.phase;
     if (t.phase === 'COMPLETE') {
       applyPhase(t, 'TODO');
     } else {
@@ -2253,7 +2273,7 @@ export async function toggleComplete(idPrefix: string): Promise<{ task: Task }> 
     t.updated_at = new Date().toISOString();
 
     await writeStore(store);
-    return t;
+    return { task: t, oldPhase };
   });
 
   // Sync push (outside lock). Failure propagates to caller — toggle should not
@@ -2266,6 +2286,7 @@ export async function toggleComplete(idPrefix: string): Promise<{ task: Task }> 
 
   const eventName = task.phase === 'COMPLETE' ? EventNames.TASK_COMPLETED : EventNames.TASK_UPDATED;
   bus.emit(eventName, { task }, ['web-ui', 'main-agent'], { source: 'internal' });
+  emitPhaseChanged(task, oldPhase, 'api');
   return { task };
 }
 
@@ -2316,10 +2337,11 @@ export async function setPhaseBulk(
   if (!idPrefixes.length) return { changed: [], failed: [], syncFailed: [] };
   if (!VALID_PHASES.has(phase)) throw new Error(`Invalid phase "${phase}"`);
 
-  const { changed, failed } = await withWriteLock(async () => {
+  const { changed, failed, oldPhases } = await withWriteLock(async () => {
     const store = await readStore();
     const applied: Task[] = [];
     const skipped: BatchTaskOutcome[] = [];
+    const priorPhases = new Map<string, TaskPhase>();
     const now = new Date().toISOString();
 
     for (const prefix of [...new Set(idPrefixes)]) {
@@ -2353,6 +2375,7 @@ export async function setPhaseBulk(
           continue;
         }
       }
+      priorPhases.set(t.id, t.phase);
       applyPhase(t, phase);
       if (phase === 'COMPLETE' && t.pinned) {
         t.pinned = false;
@@ -2363,7 +2386,7 @@ export async function setPhaseBulk(
       applied.push(t);
     }
 
-    if (applied.length === 0) return { changed: applied, failed: skipped };
+    if (applied.length === 0) return { changed: applied, failed: skipped, oldPhases: priorPhases };
 
     // Compact pin orders ONCE for the whole batch (completeTask does this per call).
     if (phase === 'COMPLETE') {
@@ -2371,7 +2394,7 @@ export async function setPhaseBulk(
       pinned.forEach((x, i) => { x.pin_order = i; });
     }
     await writeStore(store);
-    return { changed: applied, failed: skipped };
+    return { changed: applied, failed: skipped, oldPhases: priorPhases };
   });
 
   // Outside the lock (autoPushIfConfigured re-acquires it → self-deadlock).
@@ -2387,6 +2410,8 @@ export async function setPhaseBulk(
       syncFailed.push({ id: task.id, title: task.title, ok: false, error: `Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}` });
     }
     if (task.phase === 'COMPLETE') autoCompleteTaskSessions(task);
+    const prior = oldPhases.get(task.id);
+    if (prior !== undefined) emitPhaseChanged(task, prior, 'bulk');
   }
 
   return { changed, failed, syncFailed };
@@ -2403,9 +2428,8 @@ export interface UpdateTaskInput {
   /** Move the task to another project. '' moves it to Inbox. */
   project?: string;
   starred?: boolean;
-  /** Canonical read marker; legacy callers may still use needs_attention. */
+  /** Read/unread marker. false = the human has seen the latest agent output. */
   unread?: boolean;
-  needs_attention?: boolean;
   parent_task_id?: string;  // Set or change parent. Empty string = remove parent.
   sprint?: string;          // Set sprint name (empty string clears)
   add_tags?: string[];      // Idempotent add
@@ -2495,7 +2519,7 @@ export async function updateTask(
   // Lock-internal phase: validate + mutate + persist. Returns enough state for
   // the post-lock push. Push runs OUTSIDE the lock because autoPushIfConfigured
   // re-acquires the lock when stamping sync_error → self-deadlock if held.
-  const { task, migrationResult, parentChangeAction, cwdChanged, oldCwd, createdProject } = await withWriteLock(async () => {
+  const { task, oldPhase, migrationResult, parentChangeAction, cwdChanged, oldCwd, createdProject } = await withWriteLock(async () => {
   const store = await readStore();
   const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
 
@@ -2509,6 +2533,7 @@ export async function updateTask(
   }
 
   const task = matches[0];
+  const oldPhase = task.phase;
   let migrationResult: MigratedTask[] | undefined;
 
   if (updates.title !== undefined) {
@@ -2609,8 +2634,7 @@ export async function updateTask(
   if (updates.start_date !== undefined) task.start_date = updates.start_date || undefined;
   if (updates.end_date !== undefined) task.end_date = updates.end_date || undefined;
   if (updates.starred !== undefined) task.starred = updates.starred;
-  const unread = updates.unread ?? updates.needs_attention;
-  if (unread !== undefined) Object.assign(task, readMarkerPatch(unread));
+  if (updates.unread !== undefined) task.unread = updates.unread;
   // Track parent change for plugin notification (fired after writeStore)
   let parentChangeAction: (() => void) | undefined;
   if (updates.parent_task_id !== undefined) {
@@ -2747,15 +2771,17 @@ export async function updateTask(
     applyDependencyMutations(store, task, updates);
   }
 
-  // Read markers are viewer state, not task content. Clearing one on focus must
-  // NOT bump updated_at, or the task jumps in updated_at-ordered lists.
+  // The read marker (`unread`) is metadata about the VIEWER, not task content.
+  // Clearing it when the user opens the task must NOT bump updated_at —
+  // otherwise the task jumps to the top of any updated_at-ordered list a few
+  // seconds after the user merely selects it.
   const changedKeys = Object.keys(updates).filter((k) => (updates as Record<string, unknown>)[k] !== undefined);
   const onlyReadMarker = changedKeys.length > 0 && changedKeys.every((k) => READ_MARKER_KEYS.includes(k));
   if (!onlyReadMarker) task.updated_at = new Date().toISOString();
 
   await writeStore(store);
 
-  return { task, migrationResult, parentChangeAction, cwdChanged, oldCwd, createdProject };
+  return { task, oldPhase, migrationResult, parentChangeAction, cwdChanged, oldCwd, createdProject };
   });
 
   // ── Post-lock phase: push to plugin (network I/O) + side effects ──
@@ -2830,6 +2856,7 @@ export async function updateTask(
   // etc.) also auto-emit internally. Only updateTaskRaw() is silent (by design).
   const targets = ['web-ui', ...(eventOptions?.extraTargets ?? [])];
   bus.emit(EventNames.TASK_UPDATED, { task }, targets, { source: eventOptions?.source ?? 'internal' });
+  emitPhaseChanged(task, oldPhase, eventOptions?.source ?? 'internal');
 
   // When a task's cwd changes, migrate JSONL history for each linked session so
   // `claude --resume` still finds the conversation under the new cwd-encoded dir.
@@ -4434,6 +4461,7 @@ export async function addTaskFull(taskData: Omit<Task, 'id'>): Promise<Task> {
       return false;
     });
     if (existing) {
+      const priorPhase = existing.phase;
       existing.title = taskData.title;
       if (taskData.phase) {
         applyPhase(existing, taskData.phase);
@@ -4467,6 +4495,7 @@ export async function addTaskFull(taskData: Omit<Task, 'id'>): Promise<Task> {
       if (taskData.external_url) existing.external_url = taskData.external_url;
       existing.updated_at = taskData.updated_at ?? new Date().toISOString();
       await writeStore(store);
+      emitPhaseChanged(existing, priorPhase, 'sync');
       return existing;
     }
   }
@@ -4684,11 +4713,13 @@ export async function updateTaskRaw(
   opts?: { emitEvent?: boolean; push?: boolean; source?: string },
 ): Promise<{ changed: boolean; task?: Task }> {
   await ensureInit();
+  let rawOldPhase: TaskPhase | undefined;
   const updated = await withWriteLock(async () => {
     const db = getDb()!;
     const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, any> | undefined;
     if (!row) return undefined;
     const task = rowToTask(row);
+    rawOldPhase = task.phase;
 
     const prepared = prepareRawUpdate(task, updates);
     if (!prepared) return undefined;
@@ -4697,9 +4728,9 @@ export async function updateTaskRaw(
     // taskToRow() already handles column mapping + JSON encoding + payload spill.
     const patchRow = taskToRow(prepared);
     // payload is a SINGLE column holding ALL non-column fields (group_id,
-    // needs_attention, …). taskToRow(prepared) rebuilds it from the PATCH alone,
+    // unread, …). taskToRow(prepared) rebuilds it from the PATCH alone,
     // so a patch that touches any payload field (e.g. session phase transitions
-    // set needs_attention) would overwrite the whole column and silently drop
+    // set the read marker) would overwrite the whole column and silently drop
     // every untouched payload field — notably group_id, which made grouped
     // session tasks "lose" their group. Recompute payload from the fully-merged
     // task so untouched payload fields survive the partial update.
@@ -4739,6 +4770,7 @@ export async function updateTaskRaw(
   if (opts?.emitEvent) {
     const eventName = updated.phase === 'COMPLETE' ? EventNames.TASK_COMPLETED : EventNames.TASK_UPDATED;
     bus.emit(eventName, { task: updated }, ['web-ui', 'main-agent'], { source: opts.source ?? 'internal' });
+    if (rawOldPhase !== undefined) emitPhaseChanged(updated, rawOldPhase, opts.source ?? 'session');
   }
 
   return { changed: true, task: updated };

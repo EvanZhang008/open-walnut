@@ -24,7 +24,7 @@ const NOTIFICATIONS_FILE = path.join(WALNUT_HOME, 'notifications.json');
 const MAX_NOTIFICATIONS = 200;
 
 /** Persistent kinds that can land in the feed. Ephemeral kinds never persist. */
-export type NotificationKind = 'permission' | 'cron' | 'operation-error' | 'skill';
+export type NotificationKind = 'permission' | 'cron' | 'operation-error' | 'skill' | 'hook';
 export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
 
 export interface NotificationRecord {

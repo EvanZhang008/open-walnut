@@ -1,10 +1,12 @@
 /**
- * Session Lifecycle Hook types.
+ * Unified hook types — session lifecycle + task lifecycle + cron.
  *
  * Defines hook points, payloads, and registration interfaces.
+ * (Not to be confused with src/hooks/ — Walnut acting as a Claude Code CLI
+ * process-hook client — or tests/hooks/ — React hook tests.)
  */
 
-import type { Task, SessionRecord, SessionMode } from '../types.js';
+import type { Task, SessionRecord, SessionMode, TaskPhase } from '../types.js';
 
 /** All available session hook points.
  *
@@ -25,7 +27,45 @@ export type SessionHookPoint =
   | 'onTurnComplete'
   | 'onTurnError';
 
-/** Base context shared by all hook payloads. */
+/** Task lifecycle hook points (fired from task: bus events). */
+export type TaskHookPoint =
+  | 'onTaskCreated'
+  | 'onTaskUpdated'
+  | 'onTaskPhaseChanged'
+  | 'onTaskCompleted';
+
+/** Cron hook points (session-scoped: fired from session:cron-fired). */
+export type CronHookPoint = 'onCronFired';
+
+/** All hook points across domains — one flat union so a single hook
+ *  definition can listen across domains. */
+export type HookPoint = SessionHookPoint | TaskHookPoint | CronHookPoint;
+
+export type HookDomain = 'session' | 'task' | 'cron';
+
+/** Which domain each hook point belongs to — drives the dispatcher's O(1)
+ *  "any hooks in this domain?" gate before any payload work happens. */
+export const HOOK_POINT_DOMAIN: Record<HookPoint, HookDomain> = {
+  onSessionStart: 'session',
+  onMessageSend: 'session',
+  onTurnStart: 'session',
+  onToolUse: 'session',
+  onToolResult: 'session',
+  onPlanComplete: 'session',
+  onModeChange: 'session',
+  onTurnComplete: 'session',
+  onTurnError: 'session',
+  onTaskCreated: 'task',
+  onTaskUpdated: 'task',
+  onTaskPhaseChanged: 'task',
+  onTaskCompleted: 'task',
+  onCronFired: 'cron',
+};
+
+/** Base context shared by all hook payloads.
+ *  Field shape is load-bearing: builtins cast payloads to the On*Payload
+ *  interfaces below, all of which extend this. The generic fields (domain,
+ *  event) are optional so pre-existing session payloads stay assignable. */
 export interface SessionHookContext {
   sessionId: string;
   taskId?: string;
@@ -33,7 +73,30 @@ export interface SessionHookContext {
   session?: SessionRecord;
   timestamp: string;
   traceId: string;
+  /** Discriminator for cross-domain handlers. Absent = session (legacy). */
+  domain?: 'session' | 'cron';
+  /** Bus event name that fired this hook. */
+  event?: string;
 }
+
+/** Context for task-domain hook points. No sessionId requirement — a task
+ *  event fires whether or not a session is attached. */
+export interface TaskHookContext {
+  domain: 'task';
+  taskId: string;
+  task: Task;
+  /** The task's attached session, when it has one. */
+  sessionId?: string;
+  oldPhase?: TaskPhase;
+  newPhase?: TaskPhase;
+  /** Bus event source ('api' | 'agent' | 'sync' | 'hook:<id>' | …). */
+  eventSource?: string;
+  timestamp: string;
+  traceId: string;
+  event?: string;
+}
+
+export type HookContext = SessionHookContext | TaskHookContext;
 
 /** onSessionStart payload */
 export interface OnSessionStartPayload extends SessionHookContext {
@@ -98,11 +161,41 @@ export interface OnTurnErrorPayload extends SessionHookContext {
   isSessionError: boolean;
 }
 
-/** Filter criteria for hook matching. */
+/** onCronFired payload — a CLI scheduled task fired inside this session. */
+export interface OnCronFiredPayload extends SessionHookContext {
+  cronTaskId?: string;
+  /** Session that created the cron (differs from sessionId on a foreign fire). */
+  createdBySessionId?: string;
+  /** True when the fire was adopted from another session (directory-lock adoption). */
+  foreign: boolean;
+}
+
+/** Filter criteria for hook matching.
+ *  Strict-deny semantics for every dimension: a specified dimension whose
+ *  corresponding context data is missing DENIES rather than passing through. */
 export interface SessionHookFilter {
   modes?: SessionMode[];
   /** Project names. A hook filtered on projects never fires for Inbox tasks. */
   projects?: string[];
+  /** Task domain: fire only when the task lands in one of these phases. */
+  phases?: TaskPhase[];
+  /** Task domain: fire only when transitioning FROM one of these phases. */
+  fromPhases?: TaskPhase[];
+  /** Allowlist of bus event sources ('api', 'user', 'agent', 'sync', …). */
+  sources?: string[];
+  /** Fire only when the task has an attached session. */
+  requiresSession?: boolean;
+  /** Code-only escape hatch (builtin/.mjs hooks; config defs cannot supply this). */
+  predicate?: (ctx: HookContext) => boolean;
+}
+
+/** Alias — the filter shape is domain-agnostic now. */
+export type HookFilter = SessionHookFilter;
+
+/** Declarative action a config-defined hook can perform (see hooks/actions.ts). */
+export interface HookActionRef {
+  type: string;
+  [key: string]: unknown;
 }
 
 /** A registered hook definition. */
@@ -111,9 +204,11 @@ export interface SessionHookDefinition {
   name: string;
   description?: string;
   /** Which hook points this handler listens to. */
-  hooks: SessionHookPoint[];
+  hooks: HookPoint[];
   /** Inline handler function. Mutually exclusive with agentId. */
   handler?: (payload: SessionHookContext) => void | Promise<void>;
+  /** Declarative action (config-defined hooks) — executed by hooks/actions.ts. */
+  action?: HookActionRef;
   /** Dispatch to a subagent instead of inline handler. */
   agentId?: string;
   agentModel?: string;
@@ -121,11 +216,20 @@ export interface SessionHookDefinition {
   priority?: number;
   /** Timeout in ms. Default: 30_000 for handlers, 120_000 for agents. */
   timeoutMs?: number;
-  /** Optional filter — only fire for matching sessions. */
+  /** Optional filter — only fire for matching sessions/tasks. */
   filter?: SessionHookFilter;
   source?: 'builtin' | 'config' | 'file';
+  /** Where enforcement runs. Default 'walnut'. Daemon policies are inventory
+   *  entries only — the dispatcher never executes them. */
+  runtime?: 'walnut' | 'daemon';
   enabled?: boolean;
+  /** Set when enforcement lives outside the dispatcher (inline session reader,
+   *  daemon policy) — the entry exists for registry/UI visibility only. */
+  enforcedElsewhere?: { where: string; note: string };
 }
+
+/** Alias for the unified system — same shape, domain-agnostic naming. */
+export type HookDefinition = SessionHookDefinition;
 
 /** Config section for session hooks in config.yaml. */
 export interface SessionHooksConfig {

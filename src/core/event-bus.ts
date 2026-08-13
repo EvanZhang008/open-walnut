@@ -24,6 +24,11 @@ export const EventNames = {
   TASK_REORDERED: 'task:reordered',
   TASK_UNBLOCKED: 'task:unblocked',
   TASK_GROUPS_CHANGED: 'task:groups-changed',
+  /** Emitted (beside TASK_UPDATED) only when a task's phase actually changed.
+   *  Fires from ALL mutation paths — REST PATCH, agent task_update, session
+   *  state machine, complete/toggle, bulk, sync pull — so hook consumers
+   *  don't have to diff TASK_UPDATED payloads. */
+  TASK_PHASE_CHANGED: 'task:phase-changed',
 
   // Calendar (external calendar events cache refreshed / event written)
   CALENDAR_UPDATED: 'calendar:updated',
@@ -69,6 +74,10 @@ export const EventNames = {
   SESSION_MODEL_CATALOG: 'session:model-catalog',
   SESSION_PERMISSION_REQUEST: 'session:permission-request',
   SESSION_PERMISSION_RESOLVED: 'session:permission-resolved',
+  /** A CLI scheduled task (cron) fired inside a session. Deliberately in the
+   *  session: family (it is always session-scoped) so the hook dispatcher's
+   *  existing 'session:' bus interest covers it — no new global wake-ups. */
+  SESSION_CRON_FIRED: 'session:cron-fired',
 
   // Side question ("/btw") — native Claude Code side_question round-trip results.
   // The drawer subscribes to these to update without polling.
@@ -211,6 +220,7 @@ const KEY_BUS_EVENTS = new Set([
   'session:status-changed',
   'subagent:start', 'subagent:result', 'subagent:error',
   'task:created', 'task:updated', 'task:completed', 'task:deleted', 'task:unblocked',
+  'task:phase-changed', 'session:cron-fired',
 ]);
 
 // ── EventBus ──

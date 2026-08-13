@@ -578,41 +578,72 @@ describe('updateTask — starred', () => {
   });
 });
 
-describe('updateTask — needs_attention (read marker)', () => {
-  it('accepts unread, mirrors the legacy marker, and preserves updated_at', async () => {
+describe('updateTask — unread (read marker)', () => {
+  it('does NOT bump updated_at when only clearing unread', async () => {
     const { task } = await addTask({ title: 'Unread task' });
-    const before = task.updated_at;
-    await new Promise((r) => setTimeout(r, 5));
-
-    const { task: marked } = await updateTask(task.id, { unread: true });
-
-    expect(marked.unread).toBe(true);
-    expect(marked.needs_attention).toBe(true);
-    expect(marked.updated_at).toBe(before);
-  });
-
-  it('does NOT bump updated_at when only clearing needs_attention', async () => {
-    const { task } = await addTask({ title: 'Attention task' });
-    await updateTask(task.id, { needs_attention: true });
+    await updateTask(task.id, { unread: true });
     const { task: marked } = await updateTask(task.id, { title: 'Marked' });
     const before = marked.updated_at;
 
     // Wait a tick so a (wrong) timestamp bump would be observable.
     await new Promise((r) => setTimeout(r, 5));
-    const { task: cleared } = await updateTask(task.id, { needs_attention: false });
+    const { task: cleared } = await updateTask(task.id, { unread: false });
 
-    expect(cleared.needs_attention).toBe(false);
+    expect(cleared.unread).toBe(false);
     expect(cleared.updated_at).toBe(before);
   });
 
-  it('still bumps updated_at when needs_attention changes alongside content', async () => {
+  it('still bumps updated_at when unread changes alongside content', async () => {
     const { task } = await addTask({ title: 'Combo task' });
     const before = task.updated_at;
     await new Promise((r) => setTimeout(r, 5));
 
-    const { task: updated } = await updateTask(task.id, { needs_attention: false, title: 'Renamed' });
+    const { task: updated } = await updateTask(task.id, { unread: false, title: 'Renamed' });
     expect(updated.title).toBe('Renamed');
     expect(updated.updated_at).not.toBe(before);
+  });
+
+  it('clears the marker on COMPLETE so a done task never carries a dot', async () => {
+    const { task } = await addTask({ title: 'Completed task' });
+    await updateTask(task.id, { unread: true });
+
+    const { task: done } = await updateTask(task.id, { phase: 'COMPLETE' }, { source: 'api' });
+    expect(done.unread).toBeFalsy();
+  });
+
+  // A phase set through updateTask (REST phase picker, agent task_update, plugin
+  // sync) does NOT go through applySessionPhase, so wiring the marker only into
+  // the session machine left this path dot-less: a task dragged to AGENT_COMPLETE
+  // by hand looked read while a session-driven one lit up. Both now derive from
+  // readMarkerForPhase, so they agree by construction.
+  it('derives the marker from the phase on the updateTask path too', async () => {
+    const { task } = await addTask({ title: 'Manual phase task' });
+
+    const { task: handedBack } = await updateTask(task.id, { phase: 'AGENT_COMPLETE' }, { source: 'api' });
+    expect(handedBack.unread).toBe(true);
+
+    // The read event: opening the task clears the dot WITHOUT moving the phase.
+    const { task: read } = await updateTask(task.id, { unread: false });
+    expect(read.phase).toBe('AGENT_COMPLETE');
+    expect(read.unread).toBe(false);
+
+    // A new turn supersedes whatever was pending.
+    const { task: running } = await updateTask(task.id, { phase: 'IN_PROGRESS' }, { source: 'api' });
+    expect(running.unread).toBe(false);
+
+    // The error path marks it too.
+    const { task: awaiting } = await updateTask(task.id, { phase: 'AWAIT_HUMAN_ACTION' }, { source: 'api' });
+    expect(awaiting.unread).toBe(true);
+  });
+
+  it('an explicit marker in the same patch beats the phase-implied one', async () => {
+    const { task } = await addTask({ title: 'Explicit-wins task' });
+    // "Mark it complete-ish but keep it read" — the caller said so, honor it.
+    const { task: updated } = await updateTask(
+      task.id, { phase: 'AGENT_COMPLETE', unread: false }, { source: 'api' },
+    );
+    expect(updated.phase).toBe('AGENT_COMPLETE');
+    expect(updated.unread).toBe(false);
   });
 });
 
@@ -806,3 +837,4 @@ describe('autoPushIfConfigured sync_error lifecycle', () => {
     expect(result.success).toBe(true);
   });
 });
+

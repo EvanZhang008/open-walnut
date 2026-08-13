@@ -1,66 +1,42 @@
 /**
- * Unit tests for task phase hook registry.
+ * Unit tests for the human-verified-auto-push hook — rewritten against the
+ * unified hook system (the standalone task-phase-hooks module was folded in).
  *
- * B1: getHookInfoList() returns enriched fields
- * B4: getHooksForPhase() filter + sort
+ * Asserts the same four facts the old registry tests locked:
+ *  1. the hook exists and targets HUMAN_VERIFIED
+ *  2. its action is a send-message with the "User has verified" text
+ *  3. it requires an active session
+ *  4. priority 100, no fromPhases constraint
  */
 import { describe, it, expect } from 'vitest';
-import { getHookInfoList, getHooksForPhase } from '../../src/core/task-phase-hooks/index.js';
+import { builtinTaskHooks } from '../../src/core/session-hooks/builtins-task.js';
+import { describeAction, type HookAction } from '../../src/core/hooks/actions.js';
 
-describe('getHookInfoList (B1)', () => {
-  it('returns a non-empty array with the human-verified-auto-push hook', () => {
-    const list = getHookInfoList();
-    expect(list.length).toBeGreaterThan(0);
+const hook = builtinTaskHooks.find(h => h.id === 'human-verified-auto-push');
 
-    const first = list[0];
-    expect(first.id).toBe('human-verified-auto-push');
-    expect(first.actionType).toBe('send_message');
-    expect(first.triggerPhase).toBe('HUMAN_VERIFIED');
+describe('human-verified-auto-push (unified hook system)', () => {
+  it('exists and triggers on onTaskPhaseChanged into HUMAN_VERIFIED', () => {
+    expect(hook).toBeDefined();
+    expect(hook!.hooks).toEqual(['onTaskPhaseChanged']);
+    expect(hook!.filter?.phases).toEqual(['HUMAN_VERIFIED']);
   });
 
-  it('actionDetail starts with Send message and contains User has verified', () => {
-    const list = getHookInfoList();
-    const first = list[0];
-
-    expect(first.actionDetail).toMatch(/^Send message: "/);
-    expect(first.actionDetail).toContain('User has verified');
+  it('sends the code-review + commit instruction to the session', () => {
+    expect(hook!.action?.type).toBe('send_message_to_session');
+    const detail = describeAction(hook!.action as HookAction);
+    expect(detail).toMatch(/^Send message: "/);
+    expect(detail).toContain('User has verified');
   });
 
-  it('conditions is ["Requires active session"]', () => {
-    const list = getHookInfoList();
-    const first = list[0];
-
-    expect(first.conditions).toEqual(['Requires active session']);
+  it('requires an active session and only fires for human sources', () => {
+    expect(hook!.filter?.requiresSession).toBe(true);
+    // 'agent' deliberately absent: an agent marking its own task HUMAN_VERIFIED
+    // must not receive synthetic user approval to auto-commit.
+    expect(hook!.filter?.sources).toEqual(['api', 'user']);
   });
 
-  it('priority is 100 and fromPhases is undefined', () => {
-    const list = getHookInfoList();
-    const first = list[0];
-
-    expect(first.priority).toBe(100);
-    expect(first.fromPhases).toBeUndefined();
-  });
-});
-
-describe('getHooksForPhase (B4)', () => {
-  it('HUMAN_VERIFIED returns 1+ hooks with correct shape', () => {
-    const hooks = getHooksForPhase('HUMAN_VERIFIED');
-    expect(hooks.length).toBeGreaterThanOrEqual(1);
-
-    const hook = hooks[0];
-    expect(hook.id).toBe('human-verified-auto-push');
-    expect(hook.triggerPhase).toBe('HUMAN_VERIFIED');
-    expect(hook.action).toBeDefined();
-    expect(hook.action.type).toBe('send_message');
-  });
-
-  it('TODO returns empty array (no hooks registered for TODO)', () => {
-    const hooks = getHooksForPhase('TODO');
-    expect(hooks).toEqual([]);
-  });
-
-  it('NONEXISTENT returns empty array', () => {
-    const hooks = getHooksForPhase('NONEXISTENT');
-    expect(hooks).toEqual([]);
+  it('priority 100, no fromPhases constraint', () => {
+    expect(hook!.priority).toBe(100);
+    expect(hook!.filter?.fromPhases).toBeUndefined();
   });
 });

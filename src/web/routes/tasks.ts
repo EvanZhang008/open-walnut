@@ -813,8 +813,8 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
       res.status(400).json({ error: 'starred must be a boolean' })
       return
     }
-    if (req.body.needs_attention !== undefined && typeof req.body.needs_attention !== 'boolean') {
-      res.status(400).json({ error: 'needs_attention must be a boolean' })
+    if (req.body.unread !== undefined && typeof req.body.unread !== 'boolean') {
+      res.status(400).json({ error: 'unread must be a boolean' })
       return
     }
     if (req.body.parent_task_id !== undefined && typeof req.body.parent_task_id !== 'string') {
@@ -848,28 +848,14 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
         }
       }
     }
-    // Capture full task before update (for hook condition checks — needs session_id which updateTask doesn't return)
-    const taskBeforeUpdate = req.body.phase ? await getTask(id) : undefined
-    const previousPhase = taskBeforeUpdate?.phase
-
     // asyncPush: the UI's PATCH must ack as soon as the local write lands — awaiting
     // the external sync round-trip (2-3s each) held browser connections long enough
     // to saturate the 6-per-origin pool and time out every other request (2026-07-31).
     // Push failures still surface via sync_error + TASK_UPDATED, which the UI renders.
+    // Phase-transition automation (e.g. human-verified-auto-push) now rides the
+    // task:phase-changed bus event emitted inside updateTask — no inline executor.
     const result = await updateTask(id, req.body, { source: 'api', extraTargets: ['main-agent'], asyncPush: true })
     log.web.info('task updated via REST', { taskId: id, fields: Object.keys(req.body) })
-
-    // Phase hooks: declarative automation triggered by phase transitions.
-    // Only fires via REST (UI phase picker) — agent task_update calls bypass this intentionally.
-    // Uses taskBeforeUpdate for session_id (result.task is storage-only, lacks runtime fields).
-    if (req.body.phase && previousPhase && req.body.phase !== previousPhase && taskBeforeUpdate) {
-      const { executePhaseHooks } = await import('../../core/task-phase-hooks/index.js')
-      const hookTask = { ...taskBeforeUpdate, ...result.task, session_id: taskBeforeUpdate.session_id }
-      const hookResults = await executePhaseHooks(hookTask, req.body.phase, previousPhase)
-      if (hookResults.some(r => r.executed)) {
-        log.web.info('phase hooks executed', { taskId: id, phase: req.body.phase, hookResults })
-      }
-    }
 
     res.json(result)
   } catch (err) {

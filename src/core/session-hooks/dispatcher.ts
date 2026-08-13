@@ -1,66 +1,131 @@
 /**
- * SessionHookDispatcher — global bus subscriber that maps session events
- * to hook points and dispatches to registered handlers.
+ * HookDispatcher — global bus subscriber that maps bus events to hook points
+ * and dispatches to registered handlers. Domain-agnostic: session lifecycle,
+ * task lifecycle, and cron fires all route through here.
  *
- * Subscribes as 'session-hooks' with { global: true } to receive all events.
- * Re-emitted events (reemit: true) are automatically skipped for GLOBAL subscribers
- * by the bus delivery loop — named subscribers in the destination list still receive
+ * Subscribes as 'session-hooks' with { global: true }. Re-emitted events
+ * (reemit: true) are automatically skipped for GLOBAL subscribers by the bus
+ * delivery loop — named subscribers in the destination list still receive
  * them normally. This prevents double-dispatch when main-ai re-emits enriched
  * session:result data to web-ui for browser display.
- * Fast path: events not starting with 'session:' are skipped immediately.
+ *
+ * Fast paths, in order: (1) domain gate — events whose domain has NO registered
+ * hooks are dropped before any payload work; (2) filter-before-enrich — the
+ * per-session context cache is only consulted after a hook point matched.
  */
 
 import { bus, EventNames } from '../event-bus.js';
 import type { BusEvent } from '../event-bus.js';
-import type { SessionMode } from '../types.js';
 import type {
-  SessionHookPoint,
+  HookPoint,
+  HookDomain,
   SessionHookDefinition,
   SessionHookContext,
+  HookContext,
+  TaskHookContext,
   SessionHooksConfig,
-  OnSessionStartPayload,
-  OnMessageSendPayload,
-  OnTurnStartPayload,
-  OnToolUsePayload,
-  OnToolResultPayload,
-  OnPlanCompletePayload,
-  OnModeChangePayload,
-  OnTurnCompletePayload,
-  OnTurnErrorPayload,
 } from './types.js';
+import { HOOK_POINT_DOMAIN } from './types.js';
 import { PayloadBuilder } from './payload.js';
+import {
+  deriveSessionHookPoints,
+  getOrCreateSessionState,
+  type SessionState,
+  type DerivedHookPoint,
+} from './derive/session.js';
+import { deriveTaskHookPoints, buildTaskContext } from './derive/task.js';
 import { log } from '../../logging/index.js';
-
-// ── Per-session derived state ──
-
-interface SessionState {
-  awaitingFirstResponse: boolean;
-  turnIndex: number;
-  lastMode?: SessionMode;
-  lastActivityAt: number;
-}
 
 const DEFAULT_HANDLER_TIMEOUT_MS = 30_000;
 const DEFAULT_AGENT_TIMEOUT_MS = 120_000;
 
-export class SessionHookDispatcher {
+/** Bus events the dispatcher subscribes to.
+ *  KEEP IN SYNC with domainForEvent() below (pattern: git-versioning.ts).
+ *  Task names are EXPLICIT (not the 'task:' prefix) — task:starred/reordered/
+ *  groups-changed/deleted/unblocked deliberately excluded: no hook points map
+ *  to them, and task:updated alone already fires per sync tick. */
+const HOOK_BUS_INTEREST = [
+  'session:', // all session streaming — turn-start derivation needs text-delta etc.
+  'task:created', 'task:updated', 'task:completed', 'task:phase-changed',
+];
+
+function domainForEvent(name: string): HookDomain | null {
+  if (name.startsWith('session:')) return 'session'; // session:cron-fired handled inside session derivation → onCronFired (domain 'cron')
+  if (name === EventNames.TASK_CREATED || name === EventNames.TASK_UPDATED
+    || name === EventNames.TASK_COMPLETED || name === EventNames.TASK_PHASE_CHANGED) return 'task';
+  return null;
+}
+
+export class HookDispatcher {
   private hooks: SessionHookDefinition[] = [];
   private sessionState = new Map<string, SessionState>();
   private payloadBuilder = new PayloadBuilder();
   private pruneTimer: ReturnType<typeof setInterval> | null = null;
+  /** Domains that have ≥1 registered hook — the O(1) event gate. */
+  private domainsInUse = new Set<HookDomain>();
+  /** Domains allowed to dispatch (cloud replica gates task/cron off). */
+  private enabledDomains: Set<HookDomain> | null = null;
 
   constructor(_config?: SessionHooksConfig) {}
 
   /**
    * Register hook definitions and subscribe to the event bus.
    */
-  init(hookDefs: SessionHookDefinition[], config?: SessionHooksConfig): void {
+  init(hookDefs: SessionHookDefinition[], config?: SessionHooksConfig, opts?: { domains?: HookDomain[] }): void {
     // Clear existing prune timer to prevent leak if init() is called multiple times
     if (this.pruneTimer) {
       clearInterval(this.pruneTimer);
       this.pruneTimer = null;
     }
 
+    this.enabledDomains = opts?.domains ? new Set(opts.domains) : null;
+    this.setHooks(hookDefs, config);
+
+    // Subscriber name 'session-hooks' is load-bearing: tests assert
+    // bus.has('session-hooks') and external teardown unsubscribes by name.
+    bus.subscribe('session-hooks', (event) => {
+      this.handleEvent(event).catch(err => {
+        log.session.error('hook dispatcher error', {
+          event: event.name,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+      // interest mirrors handleEvent's own domain gate: hooks genuinely need ALL
+      // session: streaming (turn-start detection from text-delta, tool-use→
+      // onToolUse/ExitPlanMode, tool-result→cwd-rename) plus the four explicit
+      // task events; everything else (audio:/cron:/…) drops at the bus.
+    }, { global: true, interest: HOOK_BUS_INTEREST });
+
+    // Periodic cache cleanup (.unref() so it doesn't prevent Node process exit in tests)
+    this.pruneTimer = setInterval(() => this.payloadBuilder.prune(), 60_000);
+    (this.pruneTimer as NodeJS.Timeout).unref?.();
+
+    log.session.info('hook dispatcher initialized', {
+      hookCount: this.hooks.length,
+      hookIds: this.hooks.map(h => h.id),
+      domains: [...this.domainsInUse],
+    });
+  }
+
+  /**
+   * Recompute the merged hook list from new defs/config WITHOUT resubscribing.
+   * Used by the config:changed live-reload path — the bus interest set is
+   * static, so a reload is a pure in-memory swap.
+   */
+  reload(hookDefs: SessionHookDefinition[], config?: SessionHooksConfig): void {
+    this.setHooks(hookDefs, config);
+    log.session.info('hook dispatcher reloaded', {
+      hookCount: this.hooks.length,
+      hookIds: this.hooks.map(h => h.id),
+    });
+  }
+
+  /** Live defs (post-merge, enabled only) — consumed by the hooks registry. */
+  getHooks(): readonly SessionHookDefinition[] {
+    return this.hooks;
+  }
+
+  private setHooks(hookDefs: SessionHookDefinition[], config?: SessionHooksConfig): void {
     // Merge config overrides
     this.hooks = hookDefs.map(h => {
       const override = config?.overrides?.[h.id];
@@ -85,27 +150,15 @@ export class SessionHookDispatcher {
     // Sort by priority (lower = first)
     this.hooks.sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
 
-    bus.subscribe('session-hooks', (event) => {
-      this.handleEvent(event).catch(err => {
-        log.session.error('session hook dispatcher error', {
-          event: event.name,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-      // interest === handleEvent's own fast path (`if (!name.startsWith('session:')) return`):
-      // session-hooks genuinely needs ALL session: streaming (turn-start detection from
-      // text-delta, tool-use→onToolUse/ExitPlanMode, tool-result→cwd-rename), so we keep
-      // every session: event and drop everything else (task:/audio:/cron:/…) at the bus.
-    }, { global: true, interest: ['session:'] });
-
-    // Periodic cache cleanup (.unref() so it doesn't prevent Node process exit in tests)
-    this.pruneTimer = setInterval(() => this.payloadBuilder.prune(), 60_000);
-    (this.pruneTimer as NodeJS.Timeout).unref?.();
-
-    log.session.info('session hook dispatcher initialized', {
-      hookCount: this.hooks.length,
-      hookIds: this.hooks.map(h => h.id),
-    });
+    // Recompute the domain gate. Daemon-policy / inventory-only entries never
+    // dispatch, so they don't arm a domain.
+    this.domainsInUse.clear();
+    for (const h of this.hooks) {
+      if (h.runtime === 'daemon' || h.enforcedElsewhere) continue;
+      for (const p of h.hooks) {
+        this.domainsInUse.add(HOOK_POINT_DOMAIN[p]);
+      }
+    }
   }
 
   /**
@@ -115,6 +168,9 @@ export class SessionHookDispatcher {
     if (hook.enabled === false) return;
     this.hooks.push(hook);
     this.hooks.sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100));
+    if (!hook.runtime || hook.runtime === 'walnut') {
+      for (const p of hook.hooks) this.domainsInUse.add(HOOK_POINT_DOMAIN[p]);
+    }
   }
 
   /**
@@ -142,8 +198,20 @@ export class SessionHookDispatcher {
   private async handleEvent(event: BusEvent): Promise<void> {
     const name = event.name;
 
-    // Fast path: only process session-related events
-    if (!name.startsWith('session:')) return;
+    // Fast path 1: domain gate — unknown domain, domain disabled (cloud
+    // replica), or no hooks registered for it → drop before any payload work.
+    // Session events always pass the domainsInUse check when session hooks
+    // exist; cron rides the session prefix (session:cron-fired) and is gated
+    // by its own hook-point match below.
+    const domain = domainForEvent(name);
+    if (!domain) return;
+    if (this.enabledDomains && !this.enabledDomains.has(domain)) return;
+    if (domain === 'session') {
+      // session prefix carries both 'session' and 'cron' hook points
+      if (!this.domainsInUse.has('session') && !this.domainsInUse.has('cron')) return;
+    } else if (!this.domainsInUse.has(domain)) {
+      return;
+    }
 
     // Guard: skip session:result/session:error/session:send from embedded subagent sessions.
     // Without this, a summary subagent's session:result would re-trigger the summary
@@ -156,7 +224,20 @@ export class SessionHookDispatcher {
       return;
     }
 
-    const hookPoints = this.mapEventToHookPoints(event);
+    // Guard: task events produced by a hook action must not re-enter the
+    // pipeline (hook → updateTask → task:phase-changed → hook = loop).
+    if (domain === 'task' && event.source?.startsWith('hook:')) return;
+
+    if (domain === 'task') {
+      await this.handleTaskEvent(event);
+      return;
+    }
+
+    const hookPoints = deriveSessionHookPoints(
+      event,
+      this.sessionState,
+      (sid) => this.payloadBuilder.clearSession(sid),
+    );
     if (hookPoints.length === 0) return;
 
     // Extract sessionId and taskId from event data
@@ -167,7 +248,7 @@ export class SessionHookDispatcher {
     if (!sessionId) return;
 
     // Track activity for turn-state bookkeeping.
-    this.getOrCreateState(sessionId).lastActivityAt = Date.now();
+    getOrCreateSessionState(this.sessionState, sessionId).lastActivityAt = Date.now();
 
     for (const { hookPoint, extraPayload } of hookPoints) {
       const matching = this.hooks.filter(h => h.hooks.includes(hookPoint));
@@ -175,10 +256,10 @@ export class SessionHookDispatcher {
 
       // Build context (cached per session)
       const context = await this.payloadBuilder.build(sessionId, taskId, event.traceId);
-      const payload = { ...context, ...extraPayload };
+      const payload = { ...context, event: name, ...extraPayload };
 
       // Filter hooks by session criteria
-      const filtered = matching.filter(h => this.matchesFilter(h, context));
+      const filtered = matching.filter(h => this.matchesFilter(h, payload));
 
       // Dispatch all matching hooks in parallel with timeout
       await Promise.allSettled(
@@ -187,197 +268,33 @@ export class SessionHookDispatcher {
     }
   }
 
-  private mapEventToHookPoints(event: BusEvent): Array<{ hookPoint: SessionHookPoint; extraPayload: Record<string, unknown> }> {
-    const data = event.data as Record<string, unknown>;
-    const results: Array<{ hookPoint: SessionHookPoint; extraPayload: Record<string, unknown> }> = [];
-    const sessionId = (data.sessionId ?? '') as string;
+  private async handleTaskEvent(event: BusEvent): Promise<void> {
+    const hookPoints = deriveTaskHookPoints(event);
+    if (hookPoints.length === 0) return;
 
-    switch (event.name) {
-      case EventNames.SESSION_STARTED: {
-        results.push({
-          hookPoint: 'onSessionStart',
-          extraPayload: {
-            mode: (data.mode ?? data.provider) as string | undefined,
-            host: data.host as string | undefined,
-            project: data.project as string | undefined,
-          } satisfies Partial<OnSessionStartPayload>,
-        });
-        // Init session state
-        this.sessionState.set(sessionId, {
-          awaitingFirstResponse: false,
-          turnIndex: 0,
-          lastMode: data.mode as SessionMode | undefined,
-          lastActivityAt: Date.now(),
-        });
-        break;
-      }
+    // Zero-IO context — the Task rides the bus event.
+    const context = buildTaskContext(event, event.traceId);
+    if (!context) return;
 
-      case EventNames.SESSION_SEND: {
-        const state = this.getOrCreateState(sessionId);
-        state.awaitingFirstResponse = true;
-        // Skip onMessageSend for automated sources (triage session_send, subagent-runner,
-        // peer-session gateway sends). User-initiated sources (web-ui, cli, web-api) fire hooks normally.
-        if (event.source !== 'agent' && event.source !== 'subagent-runner' && event.source !== 'peer') {
-          results.push({
-            hookPoint: 'onMessageSend',
-            extraPayload: {
-              message: data.message as string,
-              isResume: state.turnIndex > 0,
-              source: event.source,
-            } satisfies Partial<OnMessageSendPayload>,
-          });
-        }
-        break;
-      }
+    for (const { hookPoint, extraPayload } of hookPoints) {
+      const matching = this.hooks.filter(h => h.hooks.includes(hookPoint));
+      if (matching.length === 0) continue;
 
-      case EventNames.SESSION_TEXT_DELTA:
-      case EventNames.SESSION_TOOL_USE: {
-        const state = this.getOrCreateState(sessionId);
-        state.lastActivityAt = Date.now();
+      const payload: TaskHookContext = { ...context, ...extraPayload };
+      const filtered = matching.filter(h => this.matchesFilter(h, payload));
 
-        // Derived: onTurnStart fires on first response after send
-        if (state.awaitingFirstResponse) {
-          state.awaitingFirstResponse = false;
-          state.turnIndex++;
-          results.push({
-            hookPoint: 'onTurnStart',
-            extraPayload: {
-              turnIndex: state.turnIndex,
-            } satisfies Partial<OnTurnStartPayload>,
-          });
-        }
-
-        // Tool use events
-        if (event.name === EventNames.SESSION_TOOL_USE) {
-          const toolName = (data.toolName ?? data.name ?? '') as string;
-          results.push({
-            hookPoint: 'onToolUse',
-            extraPayload: {
-              toolName,
-              toolUseId: data.toolUseId as string,
-              input: data.input as Record<string, unknown> | undefined,
-            } satisfies Partial<OnToolUsePayload>,
-          });
-
-          // Derived: onPlanComplete when ExitPlanMode is called
-          if (toolName === 'ExitPlanMode') {
-            results.push({
-              hookPoint: 'onPlanComplete',
-              extraPayload: {
-                planFile: data.planContent as string | undefined,
-              } satisfies Partial<OnPlanCompletePayload>,
-            });
-          }
-        }
-        break;
-      }
-
-      case EventNames.SESSION_TOOL_RESULT: {
-        results.push({
-          hookPoint: 'onToolResult',
-          extraPayload: {
-            toolUseId: data.toolUseId as string,
-            result: data.result as string,
-          } satisfies Partial<OnToolResultPayload>,
-        });
-        break;
-      }
-
-      case EventNames.SESSION_STATUS_CHANGED: {
-        const state = this.getOrCreateState(sessionId);
-        const newMode = data.mode as SessionMode | undefined;
-        const oldMode = state.lastMode;
-
-        // Derived: onModeChange when mode differs
-        if (newMode && oldMode && newMode !== oldMode) {
-          results.push({
-            hookPoint: 'onModeChange',
-            extraPayload: {
-              previousMode: oldMode,
-              newMode,
-            } satisfies Partial<OnModeChangePayload>,
-          });
-          state.lastMode = newMode;
-        }
-        break;
-      }
-
-      case EventNames.SESSION_RESULT: {
-        // Skip hooks entirely when team subagents OR background workflow tasks are
-        // still active. The lead session emits intermediate `result` events while
-        // polling for teammate messages, and a dynamic-workflow turn emits one result
-        // per background subagent completion — neither should trigger triage
-        // (onTurnComplete). The session manager already withholds the SESSION_RESULT
-        // emit during background work; this is defense-in-depth on the flag.
-        if (data.teamActive || data.backgroundActive) {
-          log.session.info('SESSION_RESULT skipped — background work active', {
-            sessionId, teamActive: data.teamActive, backgroundActive: data.backgroundActive,
-          });
-          break;
-        }
-
-        const isError = data.isError as boolean | undefined;
-        const state = this.getOrCreateState(sessionId);
-
-        if (isError) {
-          results.push({
-            hookPoint: 'onTurnError',
-            extraPayload: {
-              error: data.result as string ?? data.error as string ?? 'unknown error',
-              isSessionError: false,
-            } satisfies Partial<OnTurnErrorPayload>,
-          });
-        } else {
-          results.push({
-            hookPoint: 'onTurnComplete',
-            extraPayload: {
-              result: data.result as string ?? '',
-              totalCost: data.totalCost as number | undefined,
-              duration: data.duration as number | undefined,
-              turnIndex: state.turnIndex,
-              isPlanSession: state.lastMode === 'plan',
-            } satisfies Partial<OnTurnCompletePayload>,
-          });
-        }
-        break;
-      }
-
-      case EventNames.SESSION_ERROR: {
-        // delivery_failed = message never reached the CLI (SSH/daemon down) —
-        // no turn ran, so onTurnError hooks (triage, notify, …) must not fire.
-        // The batch is back in 'pending'; the UI was told via SESSION_BATCH_FAILED.
-        if (data.errorKind === 'delivery_failed') break;
-        results.push({
-          hookPoint: 'onTurnError',
-          extraPayload: {
-            error: data.error as string ?? 'unknown error',
-            isSessionError: true,
-          } satisfies Partial<OnTurnErrorPayload>,
-        });
-        break;
-      }
-
-      case EventNames.SESSION_ENDED: {
-        // No hook point maps here anymore. session:ended is a UI-refresh signal
-        // emitted after EVERY turn (server.ts), NOT a real end-of-session — the
-        // former 'onSessionEnd'/'onSessionIdle' hook points were removed because
-        // that misnomer made hooks fire per-turn (the session-summary-gist bug).
-        // Keep only the state cleanup: payload cache is rebuilt fresh next turn.
-        this.sessionState.delete(sessionId);
-        this.payloadBuilder.clearSession(sessionId);
-        break;
-      }
+      await Promise.allSettled(
+        filtered.map(h => this.dispatchHook(h, hookPoint, payload)),
+      );
     }
-
-    return results;
   }
 
   // ── Hook dispatch ──
 
   private async dispatchHook(
     hook: SessionHookDefinition,
-    hookPoint: SessionHookPoint,
-    payload: SessionHookContext,
+    hookPoint: HookPoint,
+    payload: HookContext,
   ): Promise<void> {
     const timeoutMs = hook.timeoutMs
       ?? (hook.agentId ? DEFAULT_AGENT_TIMEOUT_MS : DEFAULT_HANDLER_TIMEOUT_MS);
@@ -387,7 +304,7 @@ export class SessionHookDispatcher {
         // Inline handler with timeout (clear timer when handler resolves to prevent leak)
         let timer: ReturnType<typeof setTimeout>;
         await Promise.race([
-          Promise.resolve(hook.handler(payload)).then(
+          Promise.resolve(hook.handler(payload as SessionHookContext)).then(
             (v) => { clearTimeout(timer); return v; },
             (e) => { clearTimeout(timer); throw e; },
           ),
@@ -395,21 +312,27 @@ export class SessionHookDispatcher {
             timer = setTimeout(() => reject(new Error(`Hook "${hook.id}" timed out after ${timeoutMs}ms`)), timeoutMs);
           }),
         ]);
+      } else if (hook.action) {
+        // Declarative action (config-defined hooks)
+        const { executeHookAction } = await import('../hooks/actions.js');
+        await executeHookAction(hook, payload);
       } else if (hook.agentId) {
         // Dispatch to subagent
-        const taskMessage = `[Session Hook: ${hookPoint}] Session ${payload.sessionId}${payload.taskId ? ` for task ${payload.taskId}` : ''}\n\nContext:\n${JSON.stringify(payload, null, 2)}`;
+        const sessionId = 'sessionId' in payload ? payload.sessionId : undefined;
+        const taskId = 'taskId' in payload ? payload.taskId : undefined;
+        const taskMessage = `[Session Hook: ${hookPoint}] Session ${sessionId}${taskId ? ` for task ${taskId}` : ''}\n\nContext:\n${JSON.stringify(payload, null, 2)}`;
         bus.emit('subagent:start', {
           agentId: hook.agentId,
           task: taskMessage,
-          taskId: payload.taskId,
+          taskId,
           model: hook.agentModel,
         }, ['subagent-runner'], { source: `session-hook:${hook.id}` });
       }
     } catch (err) {
-      log.session.warn(`session hook "${hook.id}" failed on ${hookPoint}`, {
+      log.session.warn(`hook "${hook.id}" failed on ${hookPoint}`, {
         hookId: hook.id,
         hookPoint,
-        sessionId: payload.sessionId,
+        sessionId: 'sessionId' in payload ? payload.sessionId : undefined,
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -417,34 +340,54 @@ export class SessionHookDispatcher {
 
   // ── Helpers ──
 
-  private getOrCreateState(sessionId: string): SessionState {
-    let state = this.sessionState.get(sessionId);
-    if (!state) {
-      state = {
-        awaitingFirstResponse: false,
-        turnIndex: 0,
-        lastActivityAt: Date.now(),
-      };
-      this.sessionState.set(sessionId, state);
-    }
-    return state;
-  }
-
-  private matchesFilter(hook: SessionHookDefinition, context: SessionHookContext): boolean {
+  private matchesFilter(hook: SessionHookDefinition, context: HookContext): boolean {
     if (!hook.filter) return true;
-    const { modes, projects } = hook.filter;
+    const { modes, projects, phases, fromPhases, sources, requiresSession, predicate } = hook.filter;
 
     // Strict filtering: when a filter dimension is specified but the context
     // lacks the corresponding data, deny rather than silently pass through.
-    // This prevents hooks from running on unintended sessions.
+    // This prevents hooks from running on unintended sessions/tasks.
+    const isTask = 'domain' in context && context.domain === 'task';
+    const taskCtx = isTask ? context as TaskHookContext : null;
+    const sessionCtx = !isTask ? context as SessionHookContext : null;
+
     if (modes) {
-      if (!context.session?.mode) return false;
-      if (!modes.includes(context.session.mode)) return false;
+      if (!sessionCtx?.session?.mode) return false;
+      if (!modes.includes(sessionCtx.session.mode)) return false;
     }
     if (projects) {
-      if (!context.task?.project) return false;
-      if (!projects.includes(context.task.project)) return false;
+      const project = taskCtx?.task?.project ?? sessionCtx?.task?.project;
+      if (!project) return false;
+      if (!projects.includes(project)) return false;
+    }
+    if (phases) {
+      const phase = taskCtx?.newPhase ?? taskCtx?.task?.phase ?? sessionCtx?.task?.phase;
+      if (!phase) return false;
+      if (!phases.includes(phase)) return false;
+    }
+    if (fromPhases) {
+      if (!taskCtx?.oldPhase) return false;
+      if (!fromPhases.includes(taskCtx.oldPhase)) return false;
+    }
+    if (sources) {
+      const source = taskCtx?.eventSource;
+      if (!source) return false;
+      if (!sources.includes(source)) return false;
+    }
+    if (requiresSession) {
+      const sid = taskCtx ? (taskCtx.sessionId ?? taskCtx.task?.session_id) : sessionCtx?.sessionId;
+      if (!sid) return false;
+    }
+    if (predicate) {
+      try {
+        if (!predicate(context)) return false;
+      } catch {
+        return false;
+      }
     }
     return true;
   }
 }
+
+/** Back-compat alias — external code and tests construct SessionHookDispatcher. */
+export class SessionHookDispatcher extends HookDispatcher {}
