@@ -4,7 +4,7 @@ Five layers, chosen so the one you run most often is the one that costs least. R
 
 | Layer | Command | Scope | Time | When |
 |---|---|---|---|---|
-| **L1 quick** | `npm run test:quick` | 306 pure-logic files | ~3 min (1 worker, machine-wide default) | every code change |
+| **L1 quick** | `npm run test:quick` | 311 fast test files | ~3 min (1 worker, machine-wide default) | every code change |
 | **L2 focus** | `npm run test:focus <path>` | whatever you name | 0.3–30 s | while working on one module |
 | **L3 pre-commit** | `npm run test:pre-commit` | the tiers your diff can break | 1–6 min | before a larger commit |
 | **L4 CI** | GitHub Actions, automatic | everything + lint + build | ~6 min wall-clock, free | every push and PR |
@@ -24,7 +24,7 @@ Rules that keep it honest and cheap:
 
 `vitest.quick.config.ts` runs everything EXCEPT the 26 files measured over 2 s (`tests/setup/slow-tests.ts`), the two end-to-end-heavy directories (`tests/e2e`, `tests/commands`), and the four frontend-rooted ones under `tests/web/` whose deps live in `web/node_modules`. Those 26 are slow because they start something real — a `claude` CLI, a local daemon, a git subprocess, an HTTP server — so they are exactly the wrong thing to run on every save.
 
-The split is by **measured time**, not by a hand-drawn "unit vs integration" line. A new fast test is therefore included automatically; only a test that actually becomes slow needs a list entry. `npm run test:slow` runs exactly the complement, and `tests/setup/quick-tier.test.ts` asserts the two sets partition the suite with no overlap and no orphans (306 + 26 = 332).
+The split is by **measured time**, not by a hand-drawn "unit vs integration" line. A new fast test is therefore included automatically; only a test that actually becomes slow needs a list entry. `npm run test:slow` runs exactly the complement, and `tests/setup/quick-tier.test.ts` asserts the two sets partition the suite with no overlap and no orphans (311 + 26 = 337).
 
 ## L2 — focus one path
 
@@ -56,13 +56,13 @@ npm run test:focus -- -t 'reorder'                   # one test by name
 
 Blocking tiers (`quick`, `frontend`) and report-only ones (`slow`, `e2e`) are **separate jobs**, not one matrix with `continue-on-error: ${{ matrix.blocking == false }}`. Job-level `continue-on-error` has murky interaction with `needs.<job>.result` — a tolerated failure can still surface as `success` downstream — and the single check branch protection depends on must not rest on ambiguous semantics.
 
-All CI jobs force CPU-only QMD on Linux so parallel test workers do not launch doomed Vulkan builds. Report-only jobs additionally run with one worker and an isolated daemon directory; they tolerate failure on the test step itself, so known failures appear as warnings while checkout, dependency, and build failures still turn the job red.
+All CI jobs force CPU-only QMD on Linux so test workers do not launch doomed Vulkan builds. The quick gate and report-only jobs run with one worker because four workers oversubscribed the 4-core runner and produced changing, unrelated timeout failures across successive runs. Report-only jobs also use an isolated daemon directory and tolerate failure on the test step itself, so known failures appear as warnings while checkout, dependency, and build failures still turn the job red. The lightweight frontend tier remains parallel.
 
 Branch protection should require the **`CI OK`** job, not individual matrix legs — leg names change whenever the matrix does, which silently orphans a required-check rule.
 
 ### Why some tiers are report-only
 
-Measured 2026-07-25 against a clean clone of `main` (`844dc84`): the quick tier has **118 pre-existing failures on the committed tree** — stale test imports of exports deleted in 2026-05, tests that need a real `claude` CLI or daemon, assorted contract drift, and a few load-dependent flakes. A tier with a non-zero baseline cannot be a pass/fail gate: it would paint `main` permanently red, and an always-red check teaches everyone to ignore it.
+The quick tier currently has **one known failure on the committed tree**. A tier with a non-zero baseline cannot be a raw pass/fail gate: it would paint `main` permanently red, and an always-red check teaches everyone to ignore it.
 
 So the quick tier goes through a **baseline gate** instead:
 
@@ -93,7 +93,7 @@ scripts/ci-status.sh brief      # paste-ready digest: commit, failed jobs, error
 
 ## Machine safety
 
-The suite is capped at **2 worker processes locally** (`tests/setup/worker-budget.ts`), tiers run sequentially (`scripts/test-parallel.mjs`), and a machine-wide gate admits one run group at a time (`tests/setup/test-gate.ts`). These caps exist because uncapped fan-out hard-crashed this Mac twice in July 2026. CI lifts the worker cap to 4 because a runner is an isolated single-purpose box.
+The suite is capped at **2 worker processes locally** (`tests/setup/worker-budget.ts`), tiers run sequentially (`scripts/test-parallel.mjs`), and a machine-wide gate admits one run group at a time (`tests/setup/test-gate.ts`). These caps exist because uncapped fan-out hard-crashed this Mac twice in July 2026. CI configs default to 4 workers, but quick, slow, and e2e explicitly override that to one; only the lightweight frontend tier keeps the parallel default.
 
 Do not raise the local budget to "speed things up" — run L1, or L2 on the file you're editing.
 
@@ -101,7 +101,7 @@ Do not raise the local budget to "speed things up" — run L1, or L2 on the file
 
 | Tier | Files | Time | Notes |
 |---|---|---|---|
-| quick | 306 | 51 s @4w | the every-change layer |
+| quick | 311 | ~3 min @1w | the every-change layer |
 | slow | 26 | 311 s | real daemons/CLIs/servers |
 | focus | any | — | `vitest.focus.config.ts` — runs whatever you name, incl. slow/e2e files |
 | unit | 224 | — | `tests/{core,providers,agent,utils,logging,hooks,unit}` |

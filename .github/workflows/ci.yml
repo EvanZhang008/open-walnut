@@ -14,9 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # tests/setup/worker-budget.ts reads CI to lift the deliberately-low local
-  # worker cap (2 → 4). A runner is an isolated single-purpose box, so the
-  # machine-safety reasoning behind the low local budget doesn't apply here.
+  # tests/setup/worker-budget.ts defaults CI jobs to 4 workers. Resource-heavy
+  # tiers override that per command where parallelism causes timeout flakes.
   CI: 'true'
   # Headless runners have no usable Vulkan device. QMD's auto mode otherwise
   # launches repeated doomed native builds across the parallel test workers.
@@ -59,13 +58,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 311 pure-logic files, ~51s on 4 workers. Gated through the BASELINE
-          # check, not raw pass/fail: main carries 119 pre-existing failures
-          # (measured 2026-07-25 in a clean clone), so `npm run test:quick`
-          # could never be a gate. test:baseline fails only on failures absent
+          # Gated through the BASELINE check, not raw pass/fail: main carries
+          # one known failure, so test:baseline fails only on failures absent
           # from tests/setup/known-failures.json — i.e. real regressions.
+          #
+          # Several nominally-fast files initialize servers and CPU-only QMD.
+          # Four workers oversubscribe the 4-core runner and have produced
+          # different unrelated timeout failures across successive runs, so
+          # keep this gate serial for deterministic signal.
           - tier: quick
-            cmd: npm run test:baseline
+            cmd: npm run test:baseline -- --maxWorkers=1
           # 158 tests, ~10s, baseline ZERO. Plain pass/fail is correct here.
           - tier: frontend
             cmd: npm run test:frontend:ci
