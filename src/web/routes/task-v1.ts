@@ -5,6 +5,8 @@
  *
  *   GET    /tasks/:id                → { task } (full detail incl. note/description/summary/deps)
  *   DELETE /tasks/:id?force=true     → 204 (409 conflict when sessions are active)
+ *   POST   /tasks/:id/complete       → { task } (completeTask semantics, CLI parity)
+ *   POST   /tasks/:id/start          → { action, taskId, title, sessionId? }
  *   POST   /tasks/:id/star           → { task, starred }
  *   POST   /tasks/:id/notes          → { task } (append timestamped note)
  *   PUT    /tasks/:id/note           → { task } (replace whole note)
@@ -21,13 +23,15 @@
  *   PUT    /focus/tasks/:id/tier     → TierResult
  *   GET    /focus/tiers              → { tiers }
  *
- * Cloud companion (REPLICA): all Class A. The replica has a REAL local task
- * store (seeded by the projection import), and every mutation here goes
- * through task-manager which emits TASK_* bus events — the cloud outbox
- * subscriber (server.ts) turns those into op files that ride git-sync back to
- * the primary (task-outbox.ts). Nothing here needs a bridge. Detail responses
- * serve the FULL local task row (not the slim projection) so note/description
- * read back — the frozen GET /v1/tasks list stays slim and untouched.
+ * Cloud companion (REPLICA): all Class A EXCEPT POST /tasks/:id/start (Class
+ * C — 501; a replica has no session-runner, see the handler). The replica has
+ * a REAL local task store (seeded by the projection import), and every
+ * mutation here goes through task-manager which emits TASK_* bus events — the
+ * cloud outbox subscriber (server.ts) turns those into op files that ride
+ * git-sync back to the primary (task-outbox.ts). Nothing else here needs a
+ * bridge. Detail responses serve the FULL local task row (not the slim
+ * projection) so note/description read back — the frozen GET /v1/tasks list
+ * stays slim and untouched.
  *
  * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
  */
@@ -35,6 +39,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { log } from '../../logging/index.js'
 import { bus, EventNames } from '../../core/event-bus.js'
+import { CLOUD_MODE } from '../../constants.js'
 import type { Task, TaskPhase } from '../../core/types.js'
 
 export const taskV1Router = Router()
@@ -155,6 +160,86 @@ taskV1Router.delete('/tasks/:id', async (req: Request, res: Response, next: Next
         return
       }
       if (sendTaskManagerError(res, err)) return
+      throw err
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/v1/tasks/:id/complete — completeTask() semantics.
+//
+// WHY this is not just PATCH { status: 'done' }: updateTask's status→phase
+// branch applies the phase but does NOT auto-unpin, and it AWAITS nothing on
+// the pin_order compaction that completeTask performs — a completed task would
+// linger in the Focus bar. completeTask also propagates a sync-push failure to
+// the caller (a plugin-backed task that didn't reach its remote store is a real
+// error), whereas the v1 PATCH uses asyncPush and swallows it into a log line.
+// The CLI's `done` command has always had completeTask semantics, so it needs
+// this endpoint rather than the PATCH.
+taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const id = paramStr(req.params.id)
+    const tm = await import('../../core/task-manager.js')
+    try {
+      const result = await tm.completeTask(id)
+      log.web.info('task completed via api-v1', { taskId: result.task.id })
+      bus.emit(EventNames.TASK_COMPLETED, { task: result.task }, ['web-ui', 'main-agent'], { source: 'api-v1' })
+      res.json(result)
+    } catch (err) {
+      if (err instanceof tm.ActiveChildrenError) {
+        sendError(res, 409, 'conflict', err.message, { active_children: err.activeCount })
+        return
+      }
+      if (sendTaskManagerError(res, err)) return
+      throw err
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/v1/tasks/:id/start { resume?, prompt? } — start (or resume) a
+// session for an EXISTING task. Distinct from POST /api/v1/sessions, whose
+// body requires an absolute `cwd`: the CLI's `start <task_id>` names only a
+// task and lets the session-runner resolve cwd from the task/project chain.
+// Core lives in core/sessions/task-start.ts (shared with the CLI's direct
+// escape hatch).
+taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    // Class C on a REPLICA: the cloud box has no session-runner/daemon, so the
+    // SESSION_START emit would be a silent 200 no-op. POST /sessions already
+    // relays launches over the bridge — point callers there.
+    if (CLOUD_MODE) {
+      sendError(res, 501, 'not_supported_cloud',
+        'Starting a session for a task runs on the primary box only — use POST /api/v1/sessions, which relays over the bridge')
+      return
+    }
+    const id = paramStr(req.params.id)
+    const { resume, prompt } = (req.body ?? {}) as { resume?: unknown; prompt?: unknown }
+    if (resume !== undefined && typeof resume !== 'boolean') {
+      sendError(res, 400, 'bad_request', 'resume must be a boolean')
+      return
+    }
+    if (prompt !== undefined && typeof prompt !== 'string') {
+      sendError(res, 400, 'bad_request', 'prompt must be a string')
+      return
+    }
+    const { startSessionForTask } = await import('../../core/sessions/task-start.js')
+    const { QuickStartError } = await import('../../core/sessions/quick-start.js')
+    const { launchErrorCode } = await import('../../core/sessions/mobile-launch.js')
+    try {
+      res.json(await startSessionForTask({
+        taskIdPrefix: id,
+        ...(resume !== undefined ? { resume } : {}),
+        ...(prompt !== undefined ? { prompt } : {}),
+        source: 'api-v1',
+      }))
+    } catch (err) {
+      if (err instanceof QuickStartError) {
+        sendError(res, err.statusCode, launchErrorCode(err.statusCode), err.message)
+        return
+      }
       throw err
     }
   } catch (err) {

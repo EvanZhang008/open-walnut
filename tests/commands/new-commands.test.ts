@@ -18,7 +18,25 @@ beforeAll(() => {
 beforeEach(async () => {
   tmpHome = path.join(os.tmpdir(), `walnut-cmd-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   await fs.mkdir(tmpHome, { recursive: true });
-  env = { ...process.env, HOME: tmpHome } as Record<string, string>;
+  env = {
+    ...process.env,
+    HOME: tmpHome,
+    // HOME alone is NOT enough (same trap commands.test.ts documents): the child
+    // inherits OPEN_WALNUT_HOME from the vitest globalSetup — one store shared by
+    // every test in this file — and it OUTRANKS HOME. That leak is why `projects`
+    // saw tasks created by earlier tests.
+    OPEN_WALNUT_HOME: tmpHome,
+    // Deterministic `recall`: with QMD enabled the CLI child queries a semantic
+    // index that was never built (the process exits before any indexing sweep),
+    // so a just-created task scores 0 hits. '1' takes search()'s BM25 keyword
+    // leg, which is what a "find the task I just added" assertion means.
+    WALNUT_DISABLE_SEARCH: '1',
+    // MANDATORY: the CLI now defaults to HTTP against http://127.0.0.1:3456 (the
+    // PRODUCTION server on a developer's Mac), and only the direct path honours
+    // this temp home. HTTP coverage lives in tests/commands/cli-http-client.test.ts
+    // against its own port-0 server.
+    WALNUT_CLI_DIRECT: '1',
+  } as Record<string, string>;
 });
 
 afterEach(async () => {

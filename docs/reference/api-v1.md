@@ -72,6 +72,8 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | DELETE | `/api/v1/notes/*path` | Delete a note |
 | GET | `/api/v1/tasks/:id` | Full task detail (description/note readback + deps) |
 | DELETE | `/api/v1/tasks/:id?force=true` | Delete a task (409 on active sessions unless forced) |
+| POST | `/api/v1/tasks/:id/complete` | Complete a task (auto-unpins + awaits sync push; ≠ `PATCH status:done`) |
+| POST | `/api/v1/tasks/:id/start` | Start/resume a session for an existing task (cwd resolved server-side; 501 on REPLICA) |
 | POST | `/api/v1/tasks/:id/star` | Toggle star |
 | POST | `/api/v1/tasks/:id/notes` | Append a timestamped note entry |
 | PUT | `/api/v1/tasks/:id/note` | Replace the whole note |
@@ -453,6 +455,29 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
 - `DELETE /api/v1/tasks/:id[?force=true]` → `204`. With active sessions:
   `409 conflict` + `active_session_ids` unless `force=true` (query or body),
   which stops the sessions first, then deletes.
+- `POST /api/v1/tasks/:id/complete` (additive, 2026-08) → `200 { "task" }` —
+  full `completeTask()` semantics. NOT the same as `PATCH { status: "done" }`:
+  this one also auto-unpins the task from the Focus bar (and compacts the
+  remaining `pin_order`s) and AWAITS the external-sync push, so a
+  plugin-backed task that failed to reach its remote store answers an error
+  instead of a silent `200`. `409 conflict` + `active_children` when the task
+  still has non-COMPLETE children. Added for the CLI's `open-walnut done`,
+  which has always had these semantics.
+- `POST /api/v1/tasks/:id/start` (additive, 2026-08) body
+  `{ "resume"?: bool, "prompt"?: string }` →
+  `200 { "action": "start"|"resume", "taskId", "title", "sessionId"?,
+  "resume_missed"? }` — start (or resume) a session for an EXISTING task.
+  Distinct from `POST /api/v1/sessions`, whose body requires an absolute
+  `cwd`: this one names only a task and lets the session-runner resolve cwd
+  from the task/project chain (`task.cwd` → parent chain → project
+  `default_cwd` → project memory dir). `resume: true` sends `prompt` into an
+  already-live (`running`/`idle`) session for the task and returns
+  `action: "resume"` + its `sessionId`; with no live session it starts a new
+  one and sets `resume_missed: true`. `200` means ACCEPTED, not spawned (the
+  spawn is async in session-runner), same as `POST /sessions`.
+  Class C: `501 not_supported_cloud` on a REPLICA (no session-runner there) —
+  use `POST /api/v1/sessions`, which relays over the bridge.
+  Added for the CLI's `open-walnut start <task_id>`.
 - `POST /api/v1/tasks/:id/star` → `200 { "task", "starred" }` (toggle).
 - `POST /api/v1/tasks/:id/notes` body `{ "content" }` → `200 { "task" }` —
   appends a timestamped note entry.

@@ -23,7 +23,18 @@ beforeEach(async () => {
   // HOME in resolveOpenWalnutHome(). Without overriding it every CLI run in every
   // file shares one store — leftover project rows then decide the canonical
   // spelling of a project this test creates ("Walnut" vs "walnut").
-  env = { ...process.env, HOME: tmpHome, OPEN_WALNUT_HOME: tmpHome } as Record<string, string>;
+  // WALNUT_CLI_DIRECT=1 is MANDATORY here, not a preference: the CLI now
+  // defaults to HTTP against http://127.0.0.1:3456 — the PRODUCTION server on a
+  // developer's Mac. Without this pin, every `add`/`done` below would write into
+  // the user's real task store. This file's whole premise is an isolated temp
+  // home, which only the direct path honours; the HTTP path is covered by
+  // tests/commands/cli-http-client.test.ts against its own port-0 server.
+  env = {
+    ...process.env,
+    HOME: tmpHome,
+    OPEN_WALNUT_HOME: tmpHome,
+    WALNUT_CLI_DIRECT: '1',
+  } as Record<string, string>;
 });
 
 afterEach(async () => {

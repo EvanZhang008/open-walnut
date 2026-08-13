@@ -1,9 +1,8 @@
 import chalk from 'chalk';
-import { getSessionsForTask } from '../core/session-tracker.js';
-import { listTasks } from '../core/task-manager.js';
-import { bus, EventNames } from '../core/event-bus.js';
 import { outputJson } from '../utils/json-output.js';
+import { apiPost, reportApiError } from '../utils/api-client.js';
 import type { GlobalOptions } from '../core/types.js';
+import type { TaskStartResult } from '../core/sessions/task-start.js';
 
 interface StartOptions {
   resume?: boolean;
@@ -13,69 +12,47 @@ interface StartOptions {
 /**
  * open-walnut start <task_id> - Start a Claude Code session for a task.
  *
- * Emits session:start or session:send to the event bus.
- * In CLI mode, the session runner must be initialized separately
- * (it auto-inits when using `open-walnut web`).
+ * Runs on the SERVER: POST /api/v1/tasks/:id/start emits SESSION_START in the
+ * process that owns the session-runner, so the CLI never spawns a CLI or writes
+ * the session registry itself. (POST /api/v1/sessions can't express this — its
+ * body requires an absolute `cwd`, while this command names only a task and
+ * lets the runner resolve cwd from the task/project chain.)
  */
 export async function runStart(
   taskIdPrefix: string,
   options: StartOptions,
   globals: GlobalOptions,
 ): Promise<void> {
-  // Find the matching task
-  const tasks = await listTasks();
-  const matches = tasks.filter((t) => t.id.startsWith(taskIdPrefix));
-
-  if (matches.length === 0) {
-    if (globals.json) {
-      outputJson({ error: `No task found matching "${taskIdPrefix}"` });
-    } else {
-      console.error(chalk.red(`No task found matching "${taskIdPrefix}"`));
-    }
-    process.exitCode = 1;
+  if (process.env.WALNUT_CLI_DIRECT === '1') {
+    await runStartDirect(taskIdPrefix, options, globals);
     return;
   }
 
-  if (matches.length > 1) {
-    if (globals.json) {
-      outputJson({ error: `Ambiguous ID "${taskIdPrefix}" matches ${matches.length} tasks` });
-    } else {
-      console.error(chalk.red(`Ambiguous ID "${taskIdPrefix}" matches ${matches.length} tasks. Be more specific.`));
-    }
-    process.exitCode = 1;
-    return;
-  }
-
-  const task = matches[0];
-
-  // Initialize the session runner for CLI usage
-  const { sessionRunner } = await import('../providers/claude-code-session.js');
-  sessionRunner.init();
-
-  // Resume mode: find an existing session for this task
-  if (options.resume) {
-    const sessions = await getSessionsForTask(task.id);
-    const existing = sessions.find(
-      (s) => s.process_status === 'running' || s.process_status === 'idle',
+  try {
+    const result = await apiPost<TaskStartResult>(
+      `/api/v1/tasks/${encodeURIComponent(taskIdPrefix)}/start`,
+      {
+        ...(options.resume ? { resume: true } : {}),
+        ...(options.prompt !== undefined ? { prompt: options.prompt } : {}),
+      },
     );
+    printStart(result, globals);
+  } catch (err) {
+    reportApiError(err, globals);
+  }
+}
 
-    if (existing) {
-      const prompt = options.prompt ?? `Continuing work on: ${task.title}`;
-
-      if (globals.json) {
-        outputJson({ action: 'resume', sessionId: existing.claudeSessionId });
-      } else {
-        console.log(chalk.yellow(`Resuming session: ${existing.claudeSessionId.slice(0, 16)}`));
-      }
-
-      const { sendMessageToSession } = await import('../core/session-message-queue.js');
-      await sendMessageToSession(existing.claudeSessionId, prompt, {
-        source: 'cli',
-        taskId: task.id,
-      });
-      return;
+function printStart(result: TaskStartResult, globals: GlobalOptions): void {
+  if (result.action === 'resume') {
+    if (globals.json) {
+      outputJson({ action: 'resume', sessionId: result.sessionId });
+    } else {
+      console.log(chalk.yellow(`Resuming session: ${(result.sessionId ?? '').slice(0, 16)}`));
     }
+    return;
+  }
 
+  if (result.resume_missed) {
     if (globals.json) {
       outputJson({ warning: 'No existing session found, starting new one' });
     } else {
@@ -83,19 +60,44 @@ export async function runStart(
     }
   }
 
-  // Start a new session
-  const prompt = options.prompt ?? `Working on task: ${task.title}`;
-
-  bus.emit(EventNames.SESSION_START, {
-    taskId: task.id,
-    message: prompt,
-    project: task.project,
-  }, ['session-runner'], { source: 'cli' });
-
   if (globals.json) {
-    outputJson({ action: 'start', taskId: task.id });
+    outputJson({ action: 'start', taskId: result.taskId });
   } else {
-    console.log(chalk.green('Started session for task:'), task.title);
+    console.log(chalk.green('Started session for task:'), result.title);
     console.log(chalk.dim('Session running via claude -p (non-blocking).'));
+  }
+}
+
+/**
+ * LEGACY direct path — spawns the session runner IN THIS PROCESS (a second
+ * writer of the session registry). Enabled only by WALNUT_CLI_DIRECT=1; the
+ * rollback lever for the HTTP migration.
+ */
+async function runStartDirect(
+  taskIdPrefix: string,
+  options: StartOptions,
+  globals: GlobalOptions,
+): Promise<void> {
+  const { startSessionForTask } = await import('../core/sessions/task-start.js');
+  // The bus emit only reaches a runner that exists in THIS process.
+  const { sessionRunner } = await import('../providers/claude-code-session.js');
+  sessionRunner.init();
+
+  try {
+    const result = await startSessionForTask({
+      taskIdPrefix,
+      ...(options.resume ? { resume: true } : {}),
+      ...(options.prompt !== undefined ? { prompt: options.prompt } : {}),
+      source: 'cli',
+    });
+    printStart(result, globals);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (globals.json) {
+      outputJson({ error: message });
+    } else {
+      console.error(chalk.red(message));
+    }
+    process.exitCode = 1;
   }
 }

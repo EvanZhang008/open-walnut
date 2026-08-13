@@ -48,6 +48,7 @@ config.test!.exclude = [
 config.test!.include = [
   'tests/commands/**/*.test.ts',
   'tests/integrations/**/*.test.ts',
+  'tests/mcp/**/*.test.ts',
   'tests/web/**/*.test.ts',
   'tests/session-server/**/*.test.ts',
 ];

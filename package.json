@@ -92,6 +92,7 @@
     "@aws-sdk/client-sts": "^3.996.0",
     "@azure/msal-node": "^5.0.3",
     "@google/generative-ai": "^0.24.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@mozilla/readability": "^0.6.0",
     "@slack/web-api": "^7.14.0",
     "@tiptap/extension-image": "^3.20.1",
@@ -110,7 +111,8 @@
     "marked-terminal": "^7.3.0",
     "openai": "^6.29.0",
     "sharp": "^0.34.5",
-    "ws": "^8.19.0"
+    "ws": "^8.19.0",
+    "zod": "^4.3.6"
   },
   "optionalDependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "^0.12.0",

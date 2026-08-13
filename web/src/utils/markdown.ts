@@ -31,9 +31,209 @@ const doubleTildeDelTokenizer: NonNullable<MarkedExtension['tokenizer']> = {
 
 // Applied to the global singleton so chat, the Files/Changed markdown preview,
 // the context inspector and copy-as-rich-text all share one del contract.
-// Deliberately the ONLY global retune: the notes instance also escapes raw inline
-// HTML, which would break the chat path (it pre-injects task-ref/file-link HTML).
+// The notes instance also escapes raw inline HTML, which would break the chat
+// path (it pre-injects task-ref/file-link HTML), so that retune stays local.
 marked.use({ tokenizer: doubleTildeDelTokenizer });
+
+// ── Global inline extensions: legacy [id|label] task pills + inline image paths ──
+// These mutate the GLOBAL marked singleton, so they apply to EVERY renderer that
+// parses through it (chat, session timeline, file preview, context inspector).
+// They lived in ChatMessage.tsx historically; they belong here because the
+// session renderer depends on them implicitly — removing ChatMessage must not
+// change session rendering.
+
+marked.setOptions({
+  breaks: true,
+  gfm: true,
+});
+
+// Task ID pattern with human-readable title: [<id>|<title>]
+// e.g. [m1k5q7zr8-a3f1|HomeLab / Fix tax filing] — renders as a clickable pill showing the title
+const TASK_ID_TITLED_RE = /\[([a-z0-9]{7,10}-[a-f0-9]{4})\|([^\]]+)\]/;
+// ⚠ PERF: marked calls each inline extension's start() once per inline token
+// with src = the ENTIRE remaining text. An unbounded scan there is quadratic
+// in message size (a 15KB transcript message costs seconds; this froze page
+// boot for 10-16s on 2026-07-23). Two rules keep it linear:
+//   1. tokenizer() only accepts matches at index 0 → use a ^-anchored twin
+//      (O(1) reject instead of scanning the tail).
+//   2. start() scans a BOUNDED WINDOW of the tail. When nothing matches in
+//      the window, it returns the window boundary as a bogus hint — marked
+//      cuts the inlineText token there and calls start() again on the rest,
+//      so the lexer advances in ≤window steps (linear total) and a match
+//      beyond the window is still found by a later call. Without the bogus
+//      hint, inlineText (which does NOT stop at '/') would swallow a
+//      special-char-free run past the match and the token would be lost.
+const START_SCAN_WINDOW = 2048;
+// Slack so a match STARTING inside the window isn't cut mid-path by the slice.
+const START_SCAN_SLACK = 1024;
+const TASK_ID_TITLED_AT_START_RE = new RegExp(`^${TASK_ID_TITLED_RE.source}`);
+
+// Image path patterns that should render as inline <img> tags:
+// 1. /api/images/<hash>.ext — uploaded images served by the app
+// 2. /api/local-image?path=... — already-proxied local image URLs
+// 3. Absolute Unix paths with 2+ segments (/dir/file.png) — local files proxied via /api/local-image
+//    Allows spaces in paths (common in macOS screenshots like "Screenshot 2026-02-17 at 11.12.47 PM.png")
+const IMAGE_PATH_RE = /(\/api\/(?:images|local-image\?path=)[\w./%?=&-]+\.(?:png|jpe?g|gif|webp)|\/[\w. /-]+\/[\w. -]+\.(?:png|jpe?g|gif|webp))/i;
+// Anchored twin for tokenizer() (see PERF note above). The `\/[\w. /-]+\/…`
+// alternative backtracks heavily on long path-ish runs (dir listings, file
+// dumps); anchoring bounds the scan to the run at src[0] instead of the tail.
+const IMAGE_PATH_AT_START_RE = new RegExp(`^${IMAGE_PATH_RE.source}`, 'i');
+// Cheap start() precheck: most messages contain no image extension at all —
+// a simple alternation test (no backtracking) prunes the expensive scan.
+const IMAGE_EXT_HINT_RE = /\.(?:png|jpe?g|gif|webp)/i;
+// Global-flag twin for the start() scan loop — lastIndex stepping replaces
+// the old slice(offset) loop, which copied the remaining string per step.
+const IMAGE_PATH_SCAN_RE = new RegExp(IMAGE_PATH_RE.source, 'ig');
+
+/** Check if a local URL matches an image path that should be rendered inline */
+export function isImageHref(href: string): boolean {
+  // Only match local paths (starting with /) to avoid hijacking external URLs
+  return href.startsWith('/') && IMAGE_PATH_RE.test(href);
+}
+
+/** Extract /api/images/... path from a full URL like http://localhost:3456/api/images/xxx.png */
+export function extractApiImagePath(href: string): string | null {
+  const m = href.match(/\/api\/images\/[\w.%-]+\.(?:png|jpe?g|gif|webp)/i);
+  return m ? m[0] : null;
+}
+
+/** HTML-escape a string for safe insertion */
+export function escapeHtmlText(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** Build an inline image tag from an image path */
+export function renderImageTag(imgPath: string): string {
+  const isApiUrl = imgPath.startsWith('/api/');
+  const src = isApiUrl ? imgPath : `/api/local-image?path=${encodeURIComponent(imgPath)}`;
+  const escapedSrc = escapeHtmlText(src);
+  const filename = imgPath.split('/').pop()?.split('?')[0] || imgPath;
+  return `<img src="${escapedSrc}" alt="${escapeHtmlText(filename)}" class="inline-image" data-lightbox-src="${escapedSrc}" loading="lazy" />`;
+}
+
+/** Build image + caption block: image preview with the path text shown below */
+export function renderImageBlock(imgPath: string, captionText: string): string {
+  return `<span class="inline-image-block">${renderImageTag(imgPath)}<span class="inline-image-path">${escapeHtmlText(captionText)}</span></span>`;
+}
+
+marked.use({
+  renderer: {
+    // Override codespan renderer: detect image paths inside backtick code spans.
+    // Only matches when the entire code span is an image path (avoids false positives
+    // on code like `convert /tmp/foo.png to jpg`).
+    codespan({ text }) {
+      const decoded = text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"');
+      const m = decoded.trim().match(IMAGE_PATH_RE);
+      if (m && m[0] === decoded.trim()) {
+        return renderImageBlock(m[1], decoded.trim());
+      }
+      return false as unknown as string;
+    },
+    // Override link renderer: when href points to an image path, render as image + caption
+    link({ href, tokens }) {
+      if (href) {
+        // Check local image paths
+        if (isImageHref(href)) {
+          const text = this.parser.parseInline(tokens).replace(/<[^>]*>/g, '');
+          const caption = (text && text !== href) ? text : href;
+          return renderImageBlock(href, caption);
+        }
+        // Check full URLs containing /api/images/ (e.g. http://localhost:3456/api/images/xxx.png)
+        const apiPath = extractApiImagePath(href);
+        if (apiPath) {
+          const text = this.parser.parseInline(tokens).replace(/<[^>]*>/g, '');
+          const caption = (text && text !== href) ? text : href;
+          return renderImageBlock(apiPath, caption);
+        }
+      }
+      // marked v15: return false to fall through to the default link renderer
+      return false as unknown as string;
+    },
+  },
+  extensions: [
+    {
+      name: 'taskLink',
+      level: 'inline',
+      start(src: string) {
+        // Bounded window (see PERF note): full-tail scans here are quadratic.
+        const windowed = src.length > START_SCAN_WINDOW + START_SCAN_SLACK;
+        const hay = windowed ? src.slice(0, START_SCAN_WINDOW + START_SCAN_SLACK) : src;
+        // Precheck: no '[' → no possible match in the window; skips the regex.
+        if (hay.includes('[')) {
+          const idx = hay.match(TASK_ID_TITLED_RE)?.index;
+          // Windowed: reject slack-region hits (cut mid-window is unreliable);
+          // the boundary hint below re-scans them next round. Unwindowed: hay
+          // is the full src, any hit is trustworthy.
+          if (idx !== undefined && (!windowed || idx < START_SCAN_WINDOW)) return idx;
+        }
+        // Nothing in the window: hint the boundary so marked cuts the text
+        // token there and re-runs start() on the rest (see PERF note).
+        return windowed ? START_SCAN_WINDOW : undefined;
+      },
+      tokenizer(src: string) {
+        // marked v15: start() hints where the token begins, but tokenizer receives
+        // src already sliced to that position — match must be at index 0. Use the
+        // anchored twin so a non-match rejects in O(1) instead of scanning the tail.
+        const match = TASK_ID_TITLED_AT_START_RE.exec(src);
+        if (match && match.index === 0) {
+          return {
+            type: 'taskLink',
+            raw: match[0],
+            taskId: match[1],
+            title: match[2],
+          };
+        }
+      },
+      renderer(token) {
+        const { taskId, title } = token as unknown as { taskId: string; title: string };
+        const escaped = escapeHtmlText(title);
+        return `<a href="/tasks/${taskId}" class="task-link" data-task-id="${taskId}">${escaped}</a>`;
+      },
+    },
+    {
+      name: 'imagePath',
+      level: 'inline',
+      start(src: string) {
+        // Bounded window (see PERF note): full-tail scans here are quadratic.
+        const windowed = src.length > START_SCAN_WINDOW + START_SCAN_SLACK;
+        const hay = windowed ? src.slice(0, START_SCAN_WINDOW + START_SCAN_SLACK) : src;
+        // Precheck: no image extension in the window → no possible match. This
+        // is the common case; skips the backtracking-prone path regex entirely.
+        if (IMAGE_EXT_HINT_RE.test(hay)) {
+          // Find first match preceded by whitespace or start-of-text (not
+          // mid-URL/code). lastIndex stepping — no per-step slice() copies.
+          IMAGE_PATH_SCAN_RE.lastIndex = 0;
+          let m: RegExpExecArray | null;
+          while ((m = IMAGE_PATH_SCAN_RE.exec(hay)) !== null) {
+            // Windowed: slack-region hits defer to the boundary hint (a match
+            // cut mid-window is unreliable). Unwindowed: hay is the full src.
+            if (windowed && m.index >= START_SCAN_WINDOW) break;
+            if (m.index === 0 || /\s/.test(hay[m.index - 1])) return m.index;
+            IMAGE_PATH_SCAN_RE.lastIndex = m.index + 1;
+          }
+        }
+        // Nothing in the window: hint the boundary so marked cuts the text
+        // token there and re-runs start() on the rest (see PERF note).
+        return windowed ? START_SCAN_WINDOW : undefined;
+      },
+      tokenizer(src: string) {
+        // Must match at start of src (marked slices to our start() index) —
+        // anchored twin rejects non-matches without scanning the whole tail.
+        const match = IMAGE_PATH_AT_START_RE.exec(src);
+        if (!match) return;
+        return {
+          type: 'imagePath',
+          raw: match[0],
+          path: match[1],
+        };
+      },
+      renderer(token) {
+        const { path: imgPath } = token as unknown as { path: string };
+        return renderImageBlock(imgPath, imgPath);
+      },
+    },
+  ],
+});
 
 /** Task-ref regex: matches <task-ref id="..." label="..."/> or <task-ref id="..."/> */
 const TASK_REF_RE = /<task-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?>/g;
@@ -44,14 +244,23 @@ const SESSION_REF_RE = /<session-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?
 const LEGACY_REF_RE = /\[([a-z0-9]{7,10}-[a-f0-9]{4})\|([^\]]+)\]/g;
 
 /**
+ * Undo the emitter's attribute escaping (taskRefTag escapes `"` → `&quot;`)
+ * when a label leaves attribute context. Without this, a title containing a
+ * double quote renders as literal `&quot;` in pills and notifications.
+ */
+function decodeRefAttr(s: string): string {
+  return s.replace(/&quot;/g, '"');
+}
+
+/**
  * Strip entity refs down to plain-text labels (no links) — for plain-text
  * surfaces like the notification feed where anchors can't render. Mirrors the
  * server-side stripEntityRefs (src/utils/entity-refs.ts).
  */
 export function stripEntityRefsToText(text: string): string {
   return text
-    .replace(TASK_REF_RE, (_m, id: string, label?: string) => label || id)
-    .replace(SESSION_REF_RE, (_m, id: string, label?: string) => label || id)
+    .replace(TASK_REF_RE, (_m, id: string, label?: string) => decodeRefAttr(label || id))
+    .replace(SESSION_REF_RE, (_m, id: string, label?: string) => decodeRefAttr(label || id))
     .replace(LEGACY_REF_RE, (_m, _id: string, label: string) => label);
 }
 
@@ -78,13 +287,15 @@ export function extractFirstRefIds(text: string): { sessionId?: string; taskId?:
 export function entityRefsToHtml(text: string): string {
   let result = text;
   result = result.replace(TASK_REF_RE, (_match, id: string, label?: string) => {
-    const display = label || id;
-    const escaped = display.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // Decode the emitter's attribute escaping first, then HTML-escape for the
+    // anchor body — otherwise `&quot;` double-escapes to a literal `&quot;`.
+    const display = decodeRefAttr(label || id);
+    const escaped = display.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     return `<a href="/tasks/${id}" class="task-link" data-task-id="${id}">${escaped}</a>`;
   });
   result = result.replace(SESSION_REF_RE, (_match, id: string, label?: string) => {
-    const display = label || id;
-    const escaped = display.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const display = decodeRefAttr(label || id);
+    const escaped = display.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     return `<a href="/sessions?id=${id}" class="session-link" data-session-id="${id}">${escaped}</a>`;
   });
   return result;

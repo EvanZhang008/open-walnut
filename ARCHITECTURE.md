@@ -466,6 +466,19 @@ See `web/src/AGENTS.md` for detailed UX implementation (message isolation, task 
 
 ---
 
+## CLI — an HTTP client, never a second writer
+
+`open-walnut add|tasks|done|recall|projects|sessions|start` are HTTP clients of the running server's `/api/v1` facade (`src/utils/api-client.ts`; base URL `OPEN_WALNUT_API_URL`, default `http://127.0.0.1:3456`). They used to import `core/task-manager` and write SQLite from the CLI process, which made every invocation a SECOND WRITER racing the server — two processes each holding a stale in-memory store delete each other's rows. The server is now the single writer; localhost requests bypass auth, so no token plumbing is needed.
+
+- Task-mutating commands (`add`, `done`) print a `<task-ref id="…" label="…"/>` line so an AI session running them through Bash can cite the task (the web UI renders these as clickable pills). `--json` carries the same string in a `ref` field. Tag construction lives in `taskRefTag()` (`src/utils/entity-refs.ts`), next to the regex that parses it back.
+- Server down → ONE friendly line ("start it with: open-walnut web") + exit 1, never a stack trace (`reportApiError`).
+- `WALNUT_CLI_DIRECT=1` is the rollback lever: each command falls back to its original in-process path, kept as a clearly-marked `runXxxDirect` function in the same file. Anything that must run against an isolated temp store (the `tests/commands/*` CLI-subprocess tests) MUST set it — otherwise the child talks to production :3456.
+- `open-walnut start <task_id>` posts to `POST /api/v1/tasks/:id/start` so the SESSION_START emit happens in the process that owns the session-runner. Core: `src/core/sessions/task-start.ts` (shared with the direct path). `POST /api/v1/sessions` can't serve this — its body requires an absolute `cwd`, while `start` names only a task and lets the runner resolve cwd from the task/project chain.
+- `open-walnut done` posts to `POST /api/v1/tasks/:id/complete`, NOT `PATCH {status:'done'}`: only `completeTask()` auto-unpins from the Focus bar and awaits the external-sync push.
+- Out of scope (still direct, by design): `chat`, `web`, `logs`, `sync`, `auth`, `device`, `dashboard`, `session-server`, and the legacy `subtask`/`lists` stubs.
+
+---
+
 ## Testing — Full Guide
 
 See `AGENTS.md` (root) for the full test pyramid, tier descriptions, and test quality checklist.

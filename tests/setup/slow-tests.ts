@@ -79,6 +79,7 @@ export const SLOW_TEST_FILES = [
 /**
  * Directories that are heavy END TO END — every file inside starts a server or a
  * browser, so the quick tier skips the whole directory instead of enumerating it.
- * (tests/e2e is 97/103 heavy; tests/commands is 2/2.)
+ * (tests/e2e is 97/103 heavy; tests/commands is 2/2; tests/mcp starts a real
+ * server + an in-process MCP client pair, ~13s.)
  */
-export const SLOW_TEST_DIRS = ['tests/e2e/**', 'tests/commands/**'] as const
+export const SLOW_TEST_DIRS = ['tests/e2e/**', 'tests/commands/**', 'tests/mcp/**'] as const

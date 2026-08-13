@@ -14,10 +14,25 @@ const ENTITY_REF_RE = /<(task|session)-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?
 /** Legacy bracket ref: [mr9i88ys-87a4|Some Label] → Some Label. */
 const LEGACY_REF_RE = /\[([a-z0-9]{7,10}-[a-f0-9]{4})\|([^\]]+)\]/g
 
+/**
+ * Build a `<task-ref/>` tag. Shared so every emitter (the butler's tools, the
+ * CLI's task-mutating commands) produces byte-identical markup for the UI's
+ * pill renderer + the ENTITY_REF_RE above.
+ */
+export function taskRefTag(id: string, label: string): string {
+  const esc = (s: string): string => s.replace(/"/g, '&quot;')
+  return `<task-ref id="${esc(id)}" label="${esc(label)}"/>`
+}
+
+/** Undo taskRefTag's attribute escaping when a label leaves attribute context. */
+function decodeAttr(s: string): string {
+  return s.replace(/&quot;/g, '"')
+}
+
 /** Replace every ref (XML + legacy bracket) with its label (or id if unlabeled). */
 export function stripEntityRefs(text: string): string {
   return text
-    .replace(ENTITY_REF_RE, (_m, _kind, id: string, label?: string) => label || id)
+    .replace(ENTITY_REF_RE, (_m, _kind, id: string, label?: string) => decodeAttr(label || id))
     .replace(LEGACY_REF_RE, (_m, _id, label: string) => label)
 }
 

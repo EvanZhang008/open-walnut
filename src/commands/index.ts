@@ -222,6 +222,16 @@ export function registerCommands(program: Command): void {
     });
 
   program
+    .command('mcp')
+    .description('Start a stdio MCP server exposing Walnut tools (for AI coding agents)')
+    .option('--readonly', 'Expose read-only tools only')
+    .option('--api-url <url>', 'Walnut server base URL (default: OPEN_WALNUT_API_URL or http://127.0.0.1:3456)')
+    .action(async (options: Record<string, unknown>) => {
+      const { runMcp } = await import('./mcp.js');
+      await runMcp(options as { readonly?: boolean; apiUrl?: string });
+    });
+
+  program
     .command('session-server')
     .description('Start the session server (WebSocket wrapping Claude Agent SDK)')
     .option('--port <port>', 'Server port', '7890')
