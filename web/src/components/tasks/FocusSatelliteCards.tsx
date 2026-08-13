@@ -9,10 +9,11 @@ import { useSortable } from '@dnd-kit/sortable';
 import { useDroppable, useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { TaskKebabMenu } from './TaskKebabMenu';
+import { TaskStartButton } from './TaskStartButton';
 import { PersonIcon } from '../common/PersonIcon';
 import * as ICONS from '../common/Icons';
-
 import { taskCircleClass } from '@/utils/session-status';
+
 /** Sortable id for a group's chip in a tier — encodes the tier so a group split
  *  across tiers renders distinct chips without an id collision. Kept in sync with
  *  the parser in TodoPanel (`group:<gid>:<tier>`). */
@@ -147,9 +148,15 @@ interface SortableTierCardProps {
   onExpandDetail?: (task: Task) => void;
   onClearFocus?: () => void;
   onOpenSession?: (sessionId: string) => void;
+  /** One-click ▶ — launch a session for this task. SAME handler the list rows get
+   *  (MainPage.handleStartSessionForTask), so a pinned card behaves identically:
+   *  title-only → a bound draft, described task → a direct launch. */
+  onStartSession?: (task: Task) => void;
   onSetPhase?: (id: string, phase: string) => void;
   onUpdateTitle?: (id: string, title: string) => void;
   onDelete?: (id: string) => void;
+  /** Move this task to another project ('' = Inbox) — kebab "Project" select. */
+  onMoveToProject?: (taskId: string, project: string) => void;
   /** Virtual-group cluster info for this card — drives the rail/rounding on every
    *  member. The header chip itself is now rendered standalone by TodoPanel (see
    *  GroupChip), so the rename/dissolve/hide callbacks live there, not here. */
@@ -165,7 +172,7 @@ interface SortableTierCardProps {
   isGroupTarget?: boolean;
 }
 
-export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onSetStartDate, onStar, onExpandDetail, onClearFocus, onOpenSession, onSetPhase, onUpdateTitle, onDelete, groupInfo, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget }: SortableTierCardProps) {
+export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onSetStartDate, onStar, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, groupInfo, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget }: SortableTierCardProps) {
   const {
     attributes,
     listeners,
@@ -248,8 +255,12 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
     opacity: isDragging ? 0.5 : undefined,
   };
 
-  const needsAttention = task.phase === 'AGENT_COMPLETE' || task.phase === 'AWAIT_HUMAN_ACTION';
   const isDone = task.status === 'done' || task.phase === 'COMPLETE';
+  // Stored marker, not a phase derivation — see the note on PinnedCard in
+  // TodoPanel.tsx. This card is the Focus/Satellite strip the user pointed at:
+  // it used to stay red forever because opening a task clears the marker but
+  // never changes the phase this line was reading.
+  const unread = !isDone && Boolean(task.unread);
   const cardClass = tier === 'focus' ? 'todo-focus-card' : 'todo-pinned-card';
   // Virtual-group cluster classes — reuse the main list's rail/rounding styling.
   const groupClass = groupInfo
@@ -265,7 +276,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       style={style}
       data-task-id={task.id}
       data-group-id={groupInfo?.groupId}
-      className={`${cardClass}${groupClass}${isFocused ? ' todo-pinned-card-active' : ''}${needsAttention ? ' todo-pinned-card-attention' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isSelected ? ' task-multi-selected' : ''}${isGroupTarget ? ' todo-panel-item-group-target' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}`}
+      className={`${cardClass}${groupClass}${isFocused ? ' todo-pinned-card-active' : ''}${unread ? ' todo-pinned-card-unread' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isSelected ? ' task-multi-selected' : ''}${isGroupTarget ? ' todo-panel-item-group-target' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}`}
       onClick={(e) => {
         if (isEditing) return;
         // Select mode: a click anywhere toggles selection (no navigation/edit).
@@ -293,6 +304,11 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
         <span className="todo-pinned-drag-handle" {...attributes} {...listeners} title="Drag to reorder">
           &#x2630;
         </span>
+      )}
+      {/* Unread dot — same affordance as the main list row, so the Focus and
+          Satellite strips read the same way as the list. */}
+      {unread && (
+        <span className="task-unread-dot" role="img" aria-label="Unread — agent output you haven't seen" title="Unread — click to open and mark read" />
       )}
       {/* Phase icon — one click toggles To Do ↔ Complete */}
       <button
@@ -323,6 +339,12 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       >
         {task.title}
       </span>
+      {/* ▶ — hover-revealed, immediately before the kebab, exactly as on the list
+          rows. Hidden in select mode: a press there means "toggle selection", so a
+          launch button would be a mis-click trap. */}
+      {!selectMode && (
+        <TaskStartButton task={task} isDone={isDone} onStartSession={onStartSession} />
+      )}
       <TaskKebabMenu
         task={task}
         isFocused={isFocused}
@@ -341,6 +363,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
         onSetTier={onSetTier}
         onOpenSession={onOpenSession}
         onStartSelect={onStartSelect}
+        onMoveToProject={onMoveToProject}
         onDelete={onDelete}
       />
     </div>

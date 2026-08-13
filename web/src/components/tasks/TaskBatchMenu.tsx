@@ -9,7 +9,7 @@
 
 import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import type { FocusTier } from '@/api/focus';
-import { TaskActionMenuItems } from './TaskKebabMenu';
+import { TaskActionMenuItems, MoveToProjectSection } from './TaskKebabMenu';
 import * as ICONS from '../common/Icons';
 
 interface TaskBatchMenuProps {
@@ -24,6 +24,8 @@ interface TaskBatchMenuProps {
   onPinAllToTier: (tier: FocusTier) => void;
   onSetDateAll: (date: string | null) => void;
   onSetStartDateAll: (date: string | null) => void;
+  /** Move every selected task to a project ('' = Inbox). */
+  onMoveAllToProject: (project: string) => void;
   /** Mark every selected task COMPLETE. */
   onCompleteAll: () => void;
   /** Reopen (phase → TODO) every selected task. Only offered when the selection
@@ -35,7 +37,7 @@ interface TaskBatchMenuProps {
   onDeleteAll: () => void;
 }
 
-export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPinAllToTier, onSetDateAll, onSetStartDateAll, onCompleteAll, onReopenAll, doneCount, onDeleteAll }: TaskBatchMenuProps) {
+export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPinAllToTier, onSetDateAll, onSetStartDateAll, onMoveAllToProject, onCompleteAll, onReopenAll, doneCount, onDeleteAll }: TaskBatchMenuProps) {
   const [open, setOpen] = useState(false);
   // Fixed-position coords for the dropdown. The selection bar is position:sticky at the
   // bottom of the .todo-panel-list scroll container (overflow:auto), so a plain
@@ -73,7 +75,11 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        // The Project picker's list is its own portal (MoveToProjectSection).
+        if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout')) return;
+        setOpen(false);
+      }
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
     // A scroll/resize moves the button out from under the position:fixed menu, so the
@@ -184,6 +190,13 @@ export function TaskBatchMenu({ count, canGroup, onGroup, onSetPriorityAll, onPi
             onSetTier={(t) => onPinAllToTier(t)}
             onSetDate={(d) => onSetDateAll(d)}
             onSetStartDate={(d) => onSetStartDateAll(d)}
+            afterAction={close}
+          />
+
+          {/* Move every selected task to a project — same picker as the kebab. */}
+          <MoveToProjectSection
+            current={null}
+            onMove={onMoveAllToProject}
             afterAction={close}
           />
         </div>

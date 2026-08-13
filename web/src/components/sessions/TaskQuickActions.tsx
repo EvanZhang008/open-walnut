@@ -20,6 +20,7 @@ import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '@/compone
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { TIER_OPTIONS, tierColor, PRIORITY_OPTIONS } from './task-meta-constants';
+import { MoveToProjectSection } from '@/components/tasks/TaskKebabMenu';
 
 /* ── Phase constants ─────────────────────────────────────────────── */
 
@@ -136,11 +137,14 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     const handleClick = (e: MouseEvent) => {
       if (kebabBtnRef.current?.contains(e.target as Node)) return;
       if (kebabMenuRef.current?.contains(e.target as Node)) return;
+      // The Project picker's list is its own portal (MoveToProjectSection).
+      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout')) return;
       closeKebab();
     };
     const handleKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeKebab(); };
     const handleScroll = (e: Event) => {
       if (kebabMenuRef.current?.contains(e.target as Node)) return;
+      if ((e.target as HTMLElement).closest?.('.task-kebab-project-flyout')) return;
       const r = kebabBtnRef.current?.getBoundingClientRect();
       if (r && (r.bottom < 0 || r.top > window.innerHeight)) closeKebab();
     };
@@ -164,7 +168,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
         ...prev,
         phase: phase as TaskPhase,
         status: completing ? 'done' as const : phase === 'TODO' ? 'todo' as const : 'in_progress' as const,
-        ...(completing ? { completed_at: now, session_id: undefined, plan_session_id: undefined, exec_session_id: undefined, session_status: undefined, plan_session_status: undefined, exec_session_status: undefined, needs_attention: undefined } : {}),
+        ...(completing ? { completed_at: now, session_id: undefined, plan_session_id: undefined, exec_session_id: undefined, session_status: undefined, plan_session_status: undefined, exec_session_status: undefined, unread: undefined } : {}),
         updated_at: now,
       };
     });
@@ -205,16 +209,18 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     closeKebab();
   }, [task, closeKebab]);
 
-  const handleToggleAttention = useCallback(() => {
+  /** Manual read/unread flip — the "mark as unread" escape hatch (you glanced at
+   *  a task but want it to keep nagging). */
+  const handleToggleUnread = useCallback(() => {
     if (!task) return;
     const id = task.id;
-    let nextAttention = false;
+    let nextUnread = false;
     setTask(prev => {
       if (!prev) return prev;
-      nextAttention = !prev.needs_attention;
-      return { ...prev, needs_attention: nextAttention };
+      nextUnread = !prev.unread;
+      return { ...prev, unread: nextUnread };
     });
-    updateTask(id, { needs_attention: nextAttention }).catch(() => {
+    updateTask(id, { unread: nextUnread }).catch(() => {
       fetchTask(id).then(setTask).catch(() => {});
     });
     closeKebab();
@@ -235,6 +241,19 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     const id = task.id;
     setTask(prev => prev ? { ...prev, start_date: date ?? undefined } : prev);
     updateTask(id, { start_date: date ?? '' }).catch(() => {
+      fetchTask(id).then(setTask).catch(() => {});
+    });
+    closeKebab();
+  }, [task, closeKebab]);
+
+  // Kebab "Project" select — this kebab self-manages via the tasks API (no
+  // TasksContext here), so the move is a plain update; the WS task:updated
+  // echo refreshes every other surface.
+  const handleMoveToProject = useCallback((project: string) => {
+    if (!task) return;
+    const id = task.id;
+    setTask(prev => prev ? { ...prev, project } : prev);
+    updateTask(id, { project }).catch(() => {
       fetchTask(id).then(setTask).catch(() => {});
     });
     closeKebab();
@@ -320,14 +339,14 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
             <span>{task.starred ? 'Unstar' : 'Star'}</span>
           </button>
 
-          {/* Attention */}
+          {/* Read / unread */}
           {!isDone && (
             <button
-              className={`task-kebab-item${task.needs_attention ? ' task-kebab-item-active' : ''}`}
-              onClick={(e) => { e.stopPropagation(); handleToggleAttention(); }}
+              className={`task-kebab-item${task.unread ? ' task-kebab-item-active' : ''}`}
+              onClick={(e) => { e.stopPropagation(); handleToggleUnread(); }}
             >
-              <span className="task-kebab-icon" style={{ color: task.needs_attention ? 'var(--error)' : undefined }}>●</span>
-              <span>{task.needs_attention ? 'Clear attention' : 'Needs attention'}</span>
+              <span className="task-kebab-icon" style={{ color: task.unread ? 'var(--error)' : undefined }}>●</span>
+              <span>{task.unread ? 'Mark read' : 'Mark unread'}</span>
             </button>
           )}
 
@@ -416,6 +435,9 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
               inline
             />
           </div>
+
+          {/* Move to project — same section as the TodoPanel kebab */}
+          <MoveToProjectSection current={task.project || ''} onMove={handleMoveToProject} afterAction={closeKebab} />
 
           {/* Source badge — combined with external link if available */}
           {(() => {

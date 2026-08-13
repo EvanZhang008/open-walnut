@@ -136,7 +136,9 @@ test('a stale semantic response cannot replace a newer query', async ({ page }) 
   await expect(searchInput).toHaveValue(secondQuery);
 
   await newerResult.getByRole('button', { name: 'More actions' }).click();
-  await newerResult.getByRole('button', { name: 'Details', exact: true }).click();
+  // The kebab dropdown portals to <body> (escapes clipping ancestors), so the
+  // Details entry is NOT inside the row's subtree — locate it via the menu.
+  await page.locator('.task-kebab-menu').getByRole('button', { name: 'Details', exact: true }).click();
   await expect(page.locator('.task-detail-modal .todo-detail-title'))
     .toHaveText('Local only task');
   await expect(searchInput).toHaveValue(secondQuery);
