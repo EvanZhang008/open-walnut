@@ -167,10 +167,17 @@ chatHistoryRouter.get('/triage', async (req: Request, res: Response, next: NextF
 })
 
 // POST /api/chat/clear?agentId=general&conversationId=conv-...
+//
+// Also retires the conversation's lane session (see archiveLaneForConversation):
+// clearing only Walnut's store would leave the CLI still holding the transcript,
+// so a user clearing for privacy would not actually have forgotten anything.
 chatHistoryRouter.post('/clear', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { agentId, conversationId } = await resolveChatRef(req)
     await chatHistory.clear(agentId, conversationId)
+    const { archiveLaneForConversation } = await import('../../core/sessions/butler-lane.js')
+    const retired = await archiveLaneForConversation(agentId ?? 'general', conversationId)
+    log.web.info('chat conversation cleared', { agentId, conversationId, retiredLaneSessionId: retired ?? undefined })
     res.json({ ok: true })
   } catch (err) {
     next(err)

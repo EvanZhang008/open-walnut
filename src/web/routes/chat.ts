@@ -679,10 +679,28 @@ function abortKey(ws: WebSocket, agentId: string): string {
 export function registerChatRpc(): void {
   // Register stop method — aborts the calling client's active agent turn
   registerMethod('chat:stop', async (payload: unknown, client: WebSocket) => {
-    const { agentId: stopAgentId } = (payload ?? {}) as { agentId?: string; conversationId?: string }
+    const { agentId: stopAgentId, conversationId: stopConvId } = (payload ?? {}) as { agentId?: string; conversationId?: string }
     const effectiveAgentId = stopAgentId ? validateAgentId(stopAgentId) : 'general'
     activeAbortControllers.get(abortKey(client, effectiveAgentId))?.abort()
     cancelQuestion(effectiveAgentId) // Also cancel any pending user_ask tool
+    // Lane engine: the turn is running in a `claude` CLI, so the AbortController
+    // above stops nothing. Interrupt the lane's session through the canonical
+    // path. Unconditional (no engine-flag read): the lookup is one indexed
+    // sqlite read and resolves null on the in-process engine, which never has a
+    // lane record — cheaper than re-reading config on every stop.
+    try {
+      const conversationId = stopConvId
+        ? validateConversationId(stopConvId)
+        : await getActiveConversationId(effectiveAgentId)
+      const { interruptLaneForConversation } = await import('../../core/sessions/butler-lane.js')
+      await interruptLaneForConversation(effectiveAgentId, conversationId)
+    } catch (err) {
+      // A failed lane stop must never surface as an RPC error — the in-process
+      // abort above already happened, and the client's stop is done either way.
+      log.web.warn('chat:stop lane interrupt failed', {
+        agentId: effectiveAgentId, error: err instanceof Error ? err.message : String(err),
+      })
+    }
   })
 
   // Answer structured questions from the QuestionCard UI

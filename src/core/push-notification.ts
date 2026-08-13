@@ -112,6 +112,32 @@ async function maybePush(title: string, body: string, data?: Record<string, unkn
 }
 
 /**
+ * (agentId, conversationId) when this session is a butler chat lane, else null.
+ *
+ * A lane-bound session answers a butler CHAT turn, so its result/error must read
+ * as the butler talking — not as "some session finished". The event payload
+ * carries no lane, so it's read off the record (one cheap indexed sqlite read).
+ * Failure-safe by design: a record-read throw resolves null, which falls the
+ * caller back to the generic session copy rather than dropping the push.
+ */
+async function laneIdsFor(
+  sessionId: string | undefined,
+): Promise<{ agentId: string; conversationId: string } | null> {
+  if (!sessionId) return null
+  try {
+    const { getSessionByClaudeId } = await import('./session-tracker.js')
+    const { parseLaneKey } = await import('./sessions/butler-lane.js')
+    const record = await getSessionByClaudeId(sessionId)
+    return parseLaneKey(record?.lane)
+  } catch (err) {
+    log.web.warn('push: lane lookup failed, using generic copy', {
+      sessionId, error: err instanceof Error ? err.message : String(err),
+    })
+    return null
+  }
+}
+
+/**
  * Initialize push notification service — subscribe to event bus.
  */
 export function initPushNotifications(): void {
@@ -132,6 +158,18 @@ export function initPushNotifications(): void {
         case EventNames.SESSION_RESULT: {
           const data = eventData<typeof EventNames.SESSION_RESULT>(event)
           const sessionId = data.sessionId
+          const lane = await laneIdsFor(sessionId)
+          if (lane) {
+            // A lane-bound session IS the butler answering a chat turn, not an
+            // external coding session — "Session 3f2a1b0c finished" would be
+            // meaningless to the user. Push the reply itself, from Walnut.
+            await maybePush(
+              'Walnut',
+              data.result ? data.result.slice(0, 150) : 'New response',
+              { type: 'session_result', sessionId, agentId: lane.agentId, conversationId: lane.conversationId }
+            )
+            break
+          }
           await maybePush(
             'Session Complete',
             `Session ${sessionId?.slice(0, 8) ?? ''} finished`,
@@ -147,6 +185,15 @@ export function initPushNotifications(): void {
           // notification (deduped) covers it.
           if (data.errorKind === 'delivery_failed') break
           const error = data.error
+          const lane = await laneIdsFor(data.sessionId)
+          if (lane) {
+            await maybePush(
+              'Walnut',
+              `The butler hit an error: ${error?.slice(0, 150) ?? 'unknown error'}`,
+              { type: 'session_error', sessionId: data.sessionId, agentId: lane.agentId, conversationId: lane.conversationId }
+            )
+            break
+          }
           await maybePush(
             'Session Error',
             error?.slice(0, 150) ?? 'A session encountered an error',

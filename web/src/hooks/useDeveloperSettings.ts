@@ -81,14 +81,24 @@ export function setShowUiOnlyTriage(value: boolean): void {
   setShowUiOnlyCategory('triage', value);
 }
 
+/** True when the user has EXPLICITLY set a category toggle (vs. sitting on the default). */
+function hasExplicitOverride(category: UiOnlyCategory): boolean {
+  try {
+    return localStorage.getItem(`${KEY_PREFIX}${category}`) !== null;
+  } catch { return false; }
+}
+
 /**
  * Check if a message should be hidden based on current UI Only settings.
  * Returns true if the message should be HIDDEN.
  *
  * Only hides messages with `notification: true` — agent turn responses
  * (which lack the notification flag) are always shown.
+ *
+ * `content` is optional and only consulted for the lane carve-out below; every
+ * existing caller may keep passing (source, notification).
  */
-export function shouldHideUiOnlyMessage(source?: string, notification?: boolean): boolean {
+export function shouldHideUiOnlyMessage(source?: string, notification?: boolean, content?: unknown): boolean {
   // Errors are never hidden. They used to be dropped here on the claim that they
   // had "a dedicated durable notification surface" — no such surface existed, so
   // a total outage looked identical to a short reply (2026-07-26: 18h of
@@ -100,5 +110,18 @@ export function shouldHideUiOnlyMessage(source?: string, notification?: boolean)
   if (!category) return false;
   const isKnown = UI_ONLY_CATEGORIES.some(c => c.key === category);
   if (!isKnown) return false;
+  // Butler LANE notices are visible by default. On the lane engine the turn runs
+  // in a `claude` session, so this session-ref breadcrumb is the ONLY thing the
+  // chat timeline ever gets for that turn — hidden by the `session` category's
+  // defaultOn:false, the user saw literally nothing after sending a message. A
+  // ref notice therefore ignores the DEFAULT, but still honors an EXPLICIT
+  // opt-out (a user who turned the session category off means it).
+  // Scoped to entries carrying a '<session-ref' tag so ordinary "Session Result"
+  // summaries (from external coding sessions) stay hidden by default as before.
+  if (category === 'session'
+      && typeof content === 'string' && content.includes('<session-ref')
+      && !hasExplicitOverride('session')) {
+    return false;
+  }
   return !getSnapshotForCategory(category);
 }

@@ -74,7 +74,7 @@ export function ChatPage() {
           </div>
         )}
         {mergeAdjacentErrors(messages
-          .filter((msg) => !shouldHideUiOnlyMessage(msg.source, msg.notification)))
+          .filter((msg) => !shouldHideUiOnlyMessage(msg.source, msg.notification, msg.content)))
           .map((msg) => (
           <ChatMessage
                 key={msg.key}

@@ -57,6 +57,113 @@ export function parseLaneKey(lane: string | undefined | null): { agentId: string
   return { agentId, conversationId };
 }
 
+/**
+ * Retire the session bound to this conversation's lane — the "clear conversation"
+ * half of the lane lifecycle.
+ *
+ * Clearing chat history only empties WALNUT's store; the CLI on the other side
+ * still holds the whole transcript in its own JSONL and would keep answering from
+ * it, so a user who cleared for privacy reasons did not actually forget anything.
+ * Two effects, in this order:
+ *
+ *   1. stop the live CLI (canonical `terminateSession`, force — a lane owning
+ *      crons must not 409 a clear), then
+ *   2. archive the record, which is what makes the NEXT resolve mint a fresh
+ *      session (`getSessionByLane` excludes archived rows).
+ *
+ * Stop-before-archive is the order that leaves a consistent record: terminate
+ * writes process_status='stopped', so the row ends up archived AND terminal —
+ * the shape every reaper/list already expects. (The write goes through
+ * `updateSessionRecord`, not `patchSession`, deliberately: patchSession's
+ * "stop it before archiving" 400 is a guard for a HUMAN archiving a live
+ * session, and it would turn a failed terminate into a failed clear.)
+ *
+ * Neither step may block the clear — a dead CLI, an already-reaped record, or a
+ * daemon that is simply gone are all normal — so every failure is warned and
+ * swallowed. Worst case the archive still lands and the orphan CLI is reaped by
+ * the idle timer.
+ *
+ * Returns the session id it retired, or null when the lane had no session.
+ */
+export async function archiveLaneForConversation(
+  agentId: string,
+  conversationId: string,
+): Promise<string | null> {
+  const lane = butlerLaneKey(agentId, conversationId);
+  let sessionId: string | null = null;
+  try {
+    const record = await getSessionByLane(lane);
+    if (!record) return null;
+    sessionId = record.claudeSessionId;
+
+    try {
+      const { terminateSession } = await import('./session-lifecycle.js');
+      await terminateSession(sessionId, { force: true });
+    } catch (err) {
+      log.session.warn('butler lane: stopping the CLI failed; archiving anyway', {
+        lane, sessionId, error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    const { updateSessionRecord } = await import('../session-tracker.js');
+    await updateSessionRecord(sessionId, {
+      archived: true,
+      archive_reason: 'chat_cleared',
+    });
+    log.session.info('butler lane: archived on chat clear', { lane, sessionId });
+    return sessionId;
+  } catch (err) {
+    log.session.warn('butler lane: archive on clear failed', {
+      lane, sessionId, error: err instanceof Error ? err.message : String(err),
+    });
+    return sessionId;
+  }
+}
+
+/**
+ * Stop the turn currently running in this conversation's lane — the lane half of
+ * the butler's "stop" button.
+ *
+ * Aborting the in-process AbortController is meaningless on the lane engine: the
+ * work is happening in a `claude` CLI the daemon owns, so without this a stop was
+ * a silent no-op — the CLI kept working and kept spending tokens. Reuses the SAME
+ * canonical path the session composer's stop button uses — bus SESSION_INTERRUPT
+ * → the runner's handler, which routes CLI / SDK / ACP and settles the in-flight
+ * batch. Deliberately NOT a kill: no signal is ever sent from here.
+ *
+ * Only fires for a session the record says is live ('running'/'idle'); a stopped
+ * or archived lane has nothing to interrupt. Never throws — a stop that fails to
+ * reach a dead CLI must not turn into an error for the user.
+ *
+ * Returns the session id it interrupted, or null when there was nothing to stop.
+ */
+export async function interruptLaneForConversation(
+  agentId: string,
+  conversationId: string,
+): Promise<string | null> {
+  const lane = butlerLaneKey(agentId, conversationId);
+  try {
+    const record = await getSessionByLane(lane);
+    if (!record) return null;
+    if (record.process_status !== 'running' && record.process_status !== 'idle') return null;
+    bus.emit(
+      EventNames.SESSION_INTERRUPT,
+      { sessionId: record.claudeSessionId },
+      ['session-runner'],
+      { source: 'butler-lane' },
+    );
+    log.session.info('butler lane: interrupt requested', {
+      lane, sessionId: record.claudeSessionId, processStatus: record.process_status,
+    });
+    return record.claudeSessionId;
+  } catch (err) {
+    log.session.warn('butler lane: interrupt failed', {
+      lane, error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
 export interface LaneSession {
   /** The `claude` session id backing this conversation. */
   sessionId: string;

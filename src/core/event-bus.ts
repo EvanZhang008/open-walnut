@@ -43,6 +43,7 @@ export const EventNames = {
   // Session events
   SESSION_START: 'session:start',
   SESSION_SEND: 'session:send',
+  SESSION_INTERRUPT: 'session:interrupt',
   SESSION_STARTED: 'session:started',
   SESSION_ENDED: 'session:ended',
   SESSION_DELETED: 'session:deleted',

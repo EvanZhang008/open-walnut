@@ -1848,7 +1848,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               </div>
             )}
             {mergeAdjacentErrors(chat.messages
-              .filter((msg) => !shouldHideUiOnlyMessage(msg.source, msg.notification)))
+              .filter((msg) => !shouldHideUiOnlyMessage(msg.source, msg.notification, msg.content)))
               .map((msg) => (
               <ChatMessage
                 key={msg.key}

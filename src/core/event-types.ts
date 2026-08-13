@@ -104,6 +104,13 @@ export interface SessionSendEvent {
   interrupt?: boolean;
 }
 
+/** Bare turn-stop (composer stop button): interrupt the running turn WITHOUT
+ *  sending a message. Distinct from SessionSendEvent{interrupt:true}, which
+ *  interrupts AND delivers the queued message. */
+export interface SessionInterruptEvent {
+  sessionId: string;
+}
+
 export interface SessionStartedEvent {
   sessionId?: string;
   taskId?: string;
@@ -747,6 +754,7 @@ export interface EventPayloadMap {
 
   'session:start': SessionStartEvent;
   'session:send': SessionSendEvent;
+  'session:interrupt': SessionInterruptEvent;
   'session:started': SessionStartedEvent;
   'session:ended': SessionEndedEvent;
   'session:deleted': SessionDeletedEvent;

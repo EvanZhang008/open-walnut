@@ -140,13 +140,18 @@ butlerV1Router.get('/chat/stats', async (req: Request, res: Response, next: Next
 })
 
 // POST /api/v1/chat/clear?agentId&conversationId — clear the conversation.
+// Retires the lane session too (same reason as the web route): the CLI holds its
+// own copy of the transcript, so leaving it alive means "clear" cleared nothing
+// from the model's point of view.
 butlerV1Router.post('/chat/clear', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const ids = await resolveChatTarget(req, res)
     if (!ids) return
     const chatHistory = await import('../../core/chat-history.js')
     await chatHistory.clear(ids.agentId, ids.conversationId)
-    log.web.info('butler conversation cleared via api-v1', ids)
+    const { archiveLaneForConversation } = await import('../../core/sessions/butler-lane.js')
+    const retired = await archiveLaneForConversation(ids.agentId, ids.conversationId)
+    log.web.info('butler conversation cleared via api-v1', { ...ids, retiredLaneSessionId: retired ?? undefined })
     res.json({ ok: true })
   } catch (err) {
     next(err)
@@ -249,7 +254,25 @@ butlerV1Router.post('/conversations/:id/stop', async (req: Request, res: Respons
     const questionCancelled = hasPendingQuestion(agentId)
     const stopped = abortAgentTurns(agentId)
     cancelQuestion(agentId)
-    log.web.info('butler turn stopped via api-v1', { agentId, conversationId, stopped, questionCancelled })
+    // Lane engine: the work lives in a `claude` CLI, which no AbortController can
+    // reach — interrupt the lane session too (canonical bus path, never a signal).
+    // Unconditional: resolves null when this conversation has no lane record.
+    let laneInterrupted: string | null = null
+    try {
+      const { interruptLaneForConversation } = await import('../../core/sessions/butler-lane.js')
+      laneInterrupted = await interruptLaneForConversation(agentId, conversationId)
+    } catch (err) {
+      // Never fail the client's stop over the lane half.
+      log.web.warn('api-v1 stop: lane interrupt failed', {
+        agentId, conversationId, error: err instanceof Error ? err.message : String(err),
+      })
+    }
+    log.web.info('butler turn stopped via api-v1', {
+      agentId, conversationId, stopped, questionCancelled,
+      laneSessionId: laneInterrupted ?? undefined,
+    })
+    // Response shape stays frozen ({ stopped, questionCancelled }) — the lane id
+    // is logged, not added to the contract.
     res.json({ stopped, questionCancelled })
   } catch (err) {
     next(err)
