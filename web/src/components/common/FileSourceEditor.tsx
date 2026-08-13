@@ -43,7 +43,7 @@ export interface EditorSelection {
   text: string;
   /** 1-based line of the selection start. */
   line: number;
-  /** Viewport coordinates of the selection start (pill anchor). */
+  /** Viewport coordinates of the POINTER at mouseup (pill anchor). */
   x: number;
   y: number;
 }
@@ -174,7 +174,7 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
         // line. DOM-level handler (not a CM extension) so the browser's own
         // selection has settled by the time we read state.
         EditorView.domEventHandlers({
-          mouseup: (_e, view) => {
+          mouseup: (e, view) => {
             const cb = onSelectTextRef.current;
             if (!cb) return false;
             const range = view.state.selection.main;
@@ -182,9 +182,10 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
             const text = view.state.sliceDoc(range.from, range.to).trim();
             if (!text) { cb(null); return false; }
             const line = view.state.doc.lineAt(range.from).number;
-            const coords = view.coordsAtPos(range.from);
-            if (!coords) { cb(null); return false; }
-            cb({ text, line, x: coords.left, y: coords.top });
+            // Anchor = the pointer at release — the pill hugs the cursor
+            // (drag down → below the selection, drag up → above; the side is
+            // decided by SelectionAskPill from this point).
+            cb({ text, line, x: e.clientX, y: e.clientY });
             return false;
           },
         }),
