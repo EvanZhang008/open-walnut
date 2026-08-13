@@ -773,10 +773,13 @@ export class SessionHealthMonitor {
       const isRemote = !!session.host
       let idleTimeoutMs = configOverrideMs
         ?? (isRemote ? DEFAULT_REMOTE_IDLE_TIMEOUT_MS : DEFAULT_LOCAL_IDLE_TIMEOUT_MS)
-      // Cron-armed sessions (/loop): the CLI's in-process scheduler only looks
-      // idle between fires, and killing the process silently kills the loop
-      // (session-only crons are never on disk — incident 2026-08-07: a 5-min
-      // /loop died at the 2h idle kill with no error anywhere). Extended, not
+      // Cron-armed sessions (/loop): the CLI's scheduler only looks idle
+      // between fires, and killing the process kills a non-durable loop
+      // (incident 2026-08-07: a 5-min /loop died at the 2h idle kill with no
+      // error anywhere). A durable job would instead survive and be adopted by
+      // a stranger sharing the cwd — which is why Walnut denies durable creates
+      // (daemon-core.ts INVARIANT), leaving kill-loses-the-loop as the only
+      // case to protect against here. Extended, not
       // disabled: the CLI auto-expires recurring crons after 7 days, so a
       // session idle beyond that has a dead scheduler and is safe to reclaim.
       if (runner?.isCronArmed?.(session.claudeSessionId)) {
@@ -880,6 +883,14 @@ export class SessionHealthMonitor {
         thresholdMinutes: Math.round(idleTimeoutMs / 60_000),
         source: mgr ? 'lastEventAt' : 'file-mtime',
       })
+
+      // Mark BEFORE any signal: an unmarked kill reaches the session's liveness
+      // monitor as an unexplained death and used to be reported as "session init
+      // failed" (red toast quoting stale spawn-time stderr, 2026-08-10).
+      try {
+        const { sessionRunner: r } = await import('../providers/claude-code-session.js')
+        r.markExpectedTeardown(session.claudeSessionId, 'idle_timeout')
+      } catch { /* runner unavailable — the kill is still correct */ }
 
       // Graceful kill via session manager if available (handles both local + remote),
       // otherwise fall back to local PID signals.
@@ -1281,6 +1292,12 @@ export class SessionHealthMonitor {
           pid: s.pid,
           process_status: s.process_status,
         })
+
+        // Mark first so the death reads as expected, not as an init failure.
+        try {
+          const { sessionRunner: r } = await import('../providers/claude-code-session.js')
+          r.markExpectedTeardown(s.claudeSessionId, 'orphan_cleanup')
+        } catch { /* runner unavailable — the kill is still correct */ }
 
         // Kill entire process group (-pid) to also clean up MCP child processes
         safeKillProcessGroup(s.pid, 'SIGTERM')

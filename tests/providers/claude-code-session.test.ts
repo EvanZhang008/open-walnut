@@ -29,8 +29,9 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 // ── Mock constants (isolate file I/O to temp dir) ──
 vi.mock('../../src/constants.js', () => createMockConstants());
 
-import { ClaudeCodeSession, SessionRunner, shellQuote, outputFileCheckResult } from '../../src/providers/claude-code-session.js';
+import { ClaudeCodeSession, SessionRunner, shellQuote, outputFileCheckResult, stripCliStartupNoise, isBenignSshStderr } from '../../src/providers/claude-code-session.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
+import { log } from '../../src/logging/index.js';
 import type { BusEvent } from '../../src/core/event-bus.js';
 import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js';
 import { enqueueMessage, getQueue, markProcessing, resetCache as resetQueueCache } from '../../src/core/session-message-queue.js';
@@ -2276,6 +2277,119 @@ describe('ClaudeCodeSession.forceSettlePermissionRequests', () => {
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════
+//  AskUserQuestion — the CLI's multiple-choice tool reaches the human.
+//
+//  Two halves are pinned here:
+//  (a) a bypass session must NOT auto-approve it (auto-approving replies with
+//      the input unchanged, i.e. answers={}, and the CLI then reports a
+//      fabricated "User has answered your questions" with nothing in it);
+//  (b) resolvePermissionRequest's updatedInputPatch is shallow-merged OVER the
+//      original tool input in the allow response, which is how the human's
+//      chosen labels become the tool's `answers` argument.
+// ═══════════════════════════════════════════════════════════════════
+
+describe('ClaudeCodeSession AskUserQuestion answers injection', () => {
+  const ASK_INPUT = {
+    questions: [{
+      question: 'Which database?',
+      header: 'DB',
+      options: [{ label: 'Postgres' }, { label: 'SQLite' }],
+    }],
+  };
+
+  function makeAskSession(mode: string) {
+    const session = useDaemon(new ClaudeCodeSession('task-askq', 'proj', MOCK_CLI));
+    const writes: string[] = [];
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    (session as any)._transport = {
+      writeRaw: (json: string) => { writes.push(json); return Promise.resolve(true); },
+      stopTail: () => {}, kill: () => {}, detach: () => {},
+    };
+    (session as any)._active = true;
+    (session as any).claudeSessionId = 'askq-sid-1';
+    (session as any)._mode = mode;
+    // Feed a real control_request through production code, not by hand.
+    (session as any).handleStreamLine(JSON.stringify({
+      type: 'control_request',
+      request_id: 'req-askq-1',
+      request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input: ASK_INPUT },
+    }));
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    return { session, writes };
+  }
+
+  it('a BYPASS session leaves it pending for the human instead of auto-approving', async () => {
+    const { session, writes } = makeAskSession('bypass');
+    // Let the bypass branch's async config read settle — if the exemption regressed,
+    // an allow control_response lands in `writes` within this window.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(session.hasPendingPermission).toBe(true);
+    expect(writes.filter((w) => w.includes('control_response'))).toEqual([]);
+    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+    expect((session as any)._permissionReEmitTimers.size).toBe(1);
+    session.forceSettlePermissionRequests('test cleanup');
+  });
+
+  it('a BYPASS session still auto-approves every OTHER tool (behavior unchanged)', async () => {
+    const session = useDaemon(new ClaudeCodeSession('task-askq-other', 'proj', MOCK_CLI));
+    const writes: string[] = [];
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    (session as any)._transport = {
+      writeRaw: (json: string) => { writes.push(json); return Promise.resolve(true); },
+      stopTail: () => {}, kill: () => {}, detach: () => {},
+    };
+    (session as any)._active = true;
+    (session as any).claudeSessionId = 'askq-sid-2';
+    (session as any)._mode = 'bypass';
+    (session as any).handleStreamLine(JSON.stringify({
+      type: 'control_request',
+      request_id: 'req-bash-1',
+      request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls' } },
+    }));
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    await new Promise((r) => setTimeout(r, 30));
+    const allow = writes.map((w) => JSON.parse(w)).find((w) => w.type === 'control_response');
+    expect(allow).toBeTruthy();
+    expect(allow.response.response.behavior).toBe('allow');
+    expect(session.hasPendingPermission).toBe(false);
+  });
+
+  it('merges answers into updatedInput, preserving every original input key', () => {
+    const { session, writes } = makeAskSession('default');
+    const answers = { 'Which database?': 'Postgres' };
+
+    /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+    const ok = (session as any).resolvePermissionRequest('req-askq-1', true, undefined, { answers });
+    expect(ok).toBe(true);
+
+    const resp = writes.map((w) => JSON.parse(w)).find((w) => w.type === 'control_response');
+    expect(resp).toBeTruthy();
+    expect(resp.response.request_id).toBe('req-askq-1');
+    expect(resp.response.response.behavior).toBe('allow');
+    // The tool call() reads BOTH `questions` (to know what it asked) and `answers`
+    // (to echo back), so the patch must be a merge, never a replacement.
+    expect(resp.response.response.updatedInput).toEqual({ ...ASK_INPUT, answers });
+  });
+
+  it('without a patch the allow response still sends the input verbatim', () => {
+    const { session, writes } = makeAskSession('default');
+    session.resolvePermissionRequest('req-askq-1', true);
+    const resp = writes.map((w) => JSON.parse(w)).find((w) => w.type === 'control_response');
+    expect(resp.response.response.updatedInput).toEqual(ASK_INPUT);
+    expect(resp.response.response.updatedInput).not.toHaveProperty('answers');
+  });
+
+  it('a deny (Dismiss) carries the message and no updatedInput', () => {
+    const { session, writes } = makeAskSession('default');
+    session.resolvePermissionRequest('req-askq-1', false, 'User dismissed the questions');
+    const resp = writes.map((w) => JSON.parse(w)).find((w) => w.type === 'control_response');
+    expect(resp.response.response.behavior).toBe('deny');
+    expect(resp.response.response.message).toBe('User dismissed the questions');
+    expect(resp.response.response.updatedInput).toBeUndefined();
+  });
+});
+
 describe('ClaudeCodeSession.applyPermissionMode', () => {
   function makeSessionWithStubTransport() {
     const session = useDaemon(new ClaudeCodeSession('task-pmode', 'proj', MOCK_CLI));
@@ -3426,5 +3540,251 @@ describe('ClaudeCodeSession result-text fallback (#858)', () => {
     });
 
     expect(deltas.join('')).toContain('Answer with no usage block.');
+  });
+});
+
+/**
+ * Regression: a session that ALREADY initialized must not report its shutdown as
+ * "session init failed" (2026-08-10). Marking a task done runs completeTaskSessions,
+ * which SIGINTs the linked CLI; the liveness monitor then saw an unexplained death
+ * and ran the init-failure branch, whose diagnostics re-read the spawn-time `.err`
+ * file — so a 2-hour-old session's shutdown surfaced as a red toast quoting the
+ * CLI's harmless managed-settings advisory. log.session.error() is what toasts
+ * (log-error → notification bridge), so the level is the contract under test.
+ */
+describe('handleProcessDeath — init failure vs ordinary shutdown', () => {
+  /** A session with a live-looking transport whose isAlive() reports death. */
+  function makeDeadSession(id: string, opts: { initialized: boolean; stderr?: string }) {
+    const session = useDaemon(new ClaudeCodeSession(`task-${id}`, 'proj', MOCK_CLI));
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const s = session as any;
+    s.claudeSessionId = id;
+    s.pid = 4242;
+    s._active = true;
+    s._exitCode = 0;
+    // Writing the .err file is what made the old code quote stale startup noise.
+    if (opts.stderr !== undefined) {
+      const errFile = path.join(SESSION_STREAMS_DIR, `${id}.jsonl`);
+      fs.mkdirSync(SESSION_STREAMS_DIR, { recursive: true });
+      fs.writeFileSync(errFile + '.err', opts.stderr);
+      s._outputFile = errFile;
+    }
+    // The real init path resolves sessionReady with the (pre-assigned) id.
+    if (opts.initialized) s._resolveSessionReady(id);
+    s._transport = {
+      isRemote: false,
+      isAlive: async () => false,
+      deletePipe: () => {}, flushTail: () => {}, stopTail: () => {},
+    };
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    return session;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const die = (session: ClaudeCodeSession) => (session as any).handleProcessDeath();
+
+  const MANAGED_SETTINGS_NOISE =
+    'Managed settings contain invalid entries (remaining valid policies are still enforced):\n'
+    + '  /Library/Application Support/ClaudeCode/managed-settings.json (allowedMcpServers[]): '
+    + 'Invalid entry was ignored: failed validation';
+
+  let errors: { msg: string; meta?: Record<string, unknown> }[];
+  let warns: string[];
+  let infos: string[];
+
+  beforeEach(() => {
+    errors = []; warns = []; infos = [];
+    vi.spyOn(log.session, 'error').mockImplementation(((msg: string, meta?: Record<string, unknown>) => {
+      errors.push({ msg, meta });
+    }) as never);
+    vi.spyOn(log.session, 'warn').mockImplementation(((msg: string) => { warns.push(msg); }) as never);
+    vi.spyOn(log.session, 'info').mockImplementation(((msg: string) => { infos.push(msg); }) as never);
+  });
+
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('a death BEFORE init still reports an init failure (real startup crash)', () => {
+    die(makeDeadSession('death-preinit', { initialized: false, stderr: 'claude: command not found' }));
+
+    expect(errors.map((e) => e.msg)).toContain('session init failed — process died before init event');
+  });
+
+  it('a death AFTER init does NOT log at error level (no spurious toast)', () => {
+    die(makeDeadSession('death-postinit', { initialized: true, stderr: MANAGED_SETTINGS_NOISE }));
+
+    expect(errors).toEqual([]);
+    expect(warns).toContain('session process exited unexpectedly after init');
+  });
+
+  it('an intentional teardown (task completed) logs at info, not error', () => {
+    const session = makeDeadSession('death-expected', { initialized: true, stderr: MANAGED_SETTINGS_NOISE });
+    session.markExpectedTeardown('task_completed');
+
+    die(session);
+
+    expect(errors).toEqual([]);
+    expect(warns).not.toContain('session process exited unexpectedly after init');
+    expect(infos).toContain('session process exited (expected teardown)');
+  });
+
+  it('never quotes the CLI managed-settings advisory as a death cause', () => {
+    // Same noise, but on the genuine init-failure path — the message is a startup
+    // advisory the CLI prints while continuing normally, so it explains nothing.
+    die(makeDeadSession('death-noise', { initialized: false, stderr: MANAGED_SETTINGS_NOISE }));
+
+    const initFailure = errors.find((e) => e.msg.startsWith('session init failed'));
+    expect(initFailure).toBeDefined();
+    expect(initFailure?.meta?.stderr).toBeUndefined();
+  });
+
+  it('an attached session (init is historic fact) never reports an init failure', async () => {
+    const record = {
+      claudeSessionId: 'death-attached', taskId: 'task-death-attached', project: 'proj',
+      process_status: 'running' as const, mode: 'default' as const,
+      startedAt: new Date().toISOString(), lastActiveAt: new Date().toISOString(),
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const session = await ClaudeCodeSession.attachToExisting(record as any, MOCK_CLI, daemonUrl());
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    (session as any).pid = 4242;
+    (session as any)._transport = {
+      isRemote: false, isAlive: async () => false,
+      deletePipe: () => {}, flushTail: () => {}, stopTail: () => {},
+    };
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+
+    die(session);
+
+    expect(errors.filter((e) => e.msg.startsWith('session init failed'))).toEqual([]);
+  });
+});
+
+describe('handleRemoteProcessExit — daemon-reported exit is not always an error', () => {
+  // The daemon path (used by BOTH remote hosts and the __local__ daemon) is the one
+  // that actually fired the false "Session Error" toast: marking a task done sends
+  // SIGINT to the CLI we spawned, the daemon reports exit -1, and the CLI's spawn-time
+  // .err file — holding only the managed-settings advisory — got quoted as the cause.
+  // handleProcessDeath already suppressed this; this path did not (2026-08-10).
+  const MANAGED_SETTINGS_NOISE =
+    'Managed settings contain invalid entries (remaining valid policies are still enforced):\n'
+    + '  /Library/Application Support/ClaudeCode/managed-settings.json (allowedMcpServers[]): '
+    + 'Invalid entry was ignored: failed validation';
+
+  function makeRemoteSession(id: string) {
+    const session = useDaemon(new ClaudeCodeSession(`task-${id}`, 'proj', MOCK_CLI));
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const s = session as any;
+    s.claudeSessionId = id;
+    s.pid = 4242;
+    s._active = true;
+    s._resolveSessionReady(id);
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    return session;
+  }
+
+  const exit = (session: ClaudeCodeSession, code: number, stderr?: string) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any).handleRemoteProcessExit(code, stderr);
+
+  const errorOf = (event?: BusEvent) => String((event?.data as { error?: string } | undefined)?.error);
+
+  let errors: { msg: string; meta?: Record<string, unknown> }[];
+  let warns: string[];
+  let infos: string[];
+  let busErrors: BusEvent[];
+
+  beforeEach(() => {
+    errors = []; warns = []; infos = []; busErrors = [];
+    vi.spyOn(log.session, 'error').mockImplementation(((msg: string, meta?: Record<string, unknown>) => {
+      errors.push({ msg, meta });
+    }) as never);
+    vi.spyOn(log.session, 'warn').mockImplementation(((msg: string) => { warns.push(msg); }) as never);
+    vi.spyOn(log.session, 'info').mockImplementation(((msg: string) => { infos.push(msg); }) as never);
+    bus.subscribe('main-ai', (event: BusEvent) => {
+      if (event.name === EventNames.SESSION_ERROR) busErrors.push(event);
+    });
+  });
+
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('an intentional teardown (task marked done) is not an error, despite exit -1', () => {
+    const session = makeRemoteSession('remote-expected');
+    session.markExpectedTeardown('task_completed');
+
+    exit(session, -1, MANAGED_SETTINGS_NOISE);
+
+    expect(errors).toEqual([]);
+    expect(busErrors).toEqual([]);
+    expect(infos).toContain('remote session process exited (expected teardown)');
+    expect(session.processStatus).toBe('stopped');
+  });
+
+  it('an unexpected exit whose only stderr is startup noise does not raise an error', () => {
+    exit(makeRemoteSession('remote-noise-only'), -1, MANAGED_SETTINGS_NOISE);
+
+    expect(errors).toEqual([]);
+    expect(busErrors).toEqual([]);
+    expect(warns).toContain('remote session exited with only CLI startup advisories');
+  });
+
+  it('a REAL remote failure still raises an error', () => {
+    const session = makeRemoteSession('remote-real');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._host = 'clouddev';
+    exit(session, 127, 'claude: command not found');
+
+    expect(errors.map((e) => e.msg)).toContain('remote session process exited with error');
+    expect(busErrors).toHaveLength(1);
+    expect(errorOf(busErrors[0])).toContain('Claude CLI not found on remote host');
+  });
+
+  it('a real failure arriving WITH startup noise reports only the real cause', () => {
+    exit(makeRemoteSession('remote-mixed'), 1, `${MANAGED_SETTINGS_NOISE}\nError: ENOSPC: no space left on device`);
+
+    const err = errorOf(busErrors[0]);
+    expect(err).toContain('ENOSPC');
+    expect(err).not.toContain('Managed settings contain invalid entries');
+  });
+
+  it('a LOCAL daemon session never claims to be "Remote" in its error message', () => {
+    // The __local__ daemon takes the same exit path; "Remote session exited …
+    // Check remote host configuration" on a local session sent users to the
+    // wrong settings page (2026-08-10).
+    exit(makeRemoteSession('local-real'), 1, 'Error: something actually broke');
+
+    expect(busErrors).toHaveLength(1);
+    const err = errorOf(busErrors[0]);
+    expect(err).toContain('Session process exited with code 1');
+    expect(err).not.toContain('Remote');
+  });
+
+  it('a remote session (host set) still says "Remote session exited"', () => {
+    const session = makeRemoteSession('remote-labelled');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._host = 'clouddev';
+    exit(session, 1, 'Error: something actually broke');
+
+    expect(errorOf(busErrors[0])).toContain('Remote session exited with code 1');
+  });
+});
+
+describe('CLI startup advisories are classified as noise, not failure', () => {
+  const ADVISORY =
+    'Managed settings contain invalid entries (remaining valid policies are still enforced):\n'
+    + '  /Library/Application Support/ClaudeCode/managed-settings.json (allowedMcpServers[]): '
+    + 'Invalid entry was ignored: failed validation';
+
+  it('strips the advisory but keeps real diagnostics', () => {
+    expect(stripCliStartupNoise(ADVISORY)).toBe('');
+    expect(stripCliStartupNoise(`${ADVISORY}\nError: connect ECONNREFUSED`))
+      .toBe('Error: connect ECONNREFUSED');
+    expect(stripCliStartupNoise('Error: connect ECONNREFUSED'))
+      .toBe('Error: connect ECONNREFUSED');
+  });
+
+  it('treats an advisory-only stderr as benign, a real error as not', () => {
+    expect(isBenignSshStderr(ADVISORY)).toBe(true);
+    expect(isBenignSshStderr(`${ADVISORY}\nclaude: command not found`)).toBe(false);
+    expect(isBenignSshStderr('claude: command not found')).toBe(false);
   });
 });

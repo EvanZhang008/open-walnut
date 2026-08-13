@@ -237,7 +237,15 @@ interface StreamToolProgressEvent {
   type: 'tool_progress'
 }
 
-type StreamEvent = StreamInitEvent | StreamStatusEvent | StreamMessageEvent | StreamResultEvent | StreamControlRequestEvent | StreamControlResponseEvent | StreamPartialEvent | StreamToolProgressEvent
+/** control_cancel_request: the CLI WITHDRAWS a pending control_request it
+ *  previously emitted (turn aborted / resume / restart). Must clear the
+ *  matching pending permission or the session sticks "Waiting" forever. */
+interface StreamControlCancelRequestEvent {
+  type: 'control_cancel_request'
+  request_id?: string
+}
+
+type StreamEvent = StreamInitEvent | StreamStatusEvent | StreamMessageEvent | StreamResultEvent | StreamControlRequestEvent | StreamControlResponseEvent | StreamPartialEvent | StreamToolProgressEvent | StreamControlCancelRequestEvent
 
 /**
  * Map a CLI permissionMode string (JSONL/stream system events) to our internal
@@ -318,8 +326,39 @@ function isBenignSshStderr(stderr: string): boolean {
     if (/^Killed:\s*\d+$/i.test(line) || /killed by signal (1|15)\b/i.test(line)) return true
     // SSH mux messages
     if (/^(Shared connection to .+ closed|ControlSocket .+)$/i.test(line)) return true
+    // CLI startup advisories the user cannot act on from Walnut (see
+    // stripCliStartupNoise). "Benign" here means only "not worth quoting as a death
+    // reason" — it is NOT evidence the process exited cleanly. The advisory is
+    // written at spawn and replayed on death, so it appears on healthy exits and
+    // crashes alike; callers must still consult the exit code before treating a
+    // death as a success (see handleRemoteProcessExit's suppressibleExit).
+    if (CLI_STARTUP_NOISE.some(re => re.test(line))) return true
     return false
   })
+}
+
+/**
+ * CLI startup advisories that are NOT failures. The `.err` file is written at spawn
+ * and read again on process death, so these lines get quoted as if they were the
+ * cause of death — e.g. a session that ran fine for 2h reported the managed-settings
+ * advisory it printed at startup as its death reason (2026-08-10). The CLI itself
+ * says the remaining valid policies are still enforced; it continues normally.
+ */
+const CLI_STARTUP_NOISE: RegExp[] = [
+  /^Managed settings contain invalid entries/i,
+  /Invalid entry was ignored: failed validation$/i,
+]
+
+/** Drop CLI startup advisories from stderr, so only real diagnostics get quoted. */
+function stripCliStartupNoise(stderr: string): string {
+  return stderr
+    .split('\n')
+    .filter(line => {
+      const t = line.trim()
+      return t.length > 0 && !CLI_STARTUP_NOISE.some(re => re.test(t))
+    })
+    .join('\n')
+    .trim()
 }
 
 // Re-export types and helpers from session-io for backwards compatibility
@@ -327,7 +366,7 @@ export type { SshTarget } from './session-io.js'
 export { shellQuote } from './session-io.js'
 
 // Exported for testing
-export { outputFileCheckResult }
+export { outputFileCheckResult, stripCliStartupNoise, isBenignSshStderr }
 
 /**
  * Immediate fail-closed contract for ACP providers that do not advertise
@@ -620,9 +659,13 @@ export class ClaudeCodeSession {
 
   // ── Cron (/loop) tracking ──
   /** True when a CronCreate was seen and not every cron has been CronDelete'd.
-   *  The CLI's cron scheduler lives in-process (session-only crons are never
-   *  on disk), so the health monitor's idle timeout must use the extended
-   *  cron threshold instead of killing the CLI between fires. Deliberately
+   *  The CLI's cron EXECUTION timer lives in-process, and Walnut only permits
+   *  non-durable (session-scoped) crons, so killing the CLI loses the loop —
+   *  the health monitor's idle timeout must use the extended cron threshold
+   *  instead of killing between fires. (`durable:true` would additionally
+   *  persist to {cwd}/.claude/scheduled_tasks.json and be adopted by another
+   *  session in the same directory; see the INVARIANT block in daemon-core.ts,
+   *  which denies those.) Deliberately
    *  NOT cleared by turn end or user anchor — crons span turns by design. */
   private _cronArmed = false
   /** CronCreate tool_use ids seen (used to resolve job ids from tool_results). */
@@ -1098,6 +1141,15 @@ export class ClaudeCodeSession {
   private _lastPlanWriteContent: string | null = null
   /** True when we've already auto-replied to AskUserQuestion this turn. Reset on new turn. */
   private _askUserIntercepted = false
+  /**
+   * True when this process was spawned with `--permission-prompt-tool stdio`
+   * (config.session.permission_prompt, default on). With the prompt tool active,
+   * AskUserQuestion DOES reach the human (as a permission card in the UI), so the
+   * "-p mode, the user can never see it" correction must not be injected. Default
+   * true because the flag defaults on; only an explicit `permission_prompt: false`
+   * flips it.
+   */
+  private _permissionPromptEnabled = true
   /** Pending permission requests awaiting user decision (non-bypass modes). */
   private _pendingPermissionRequests = new Map<string, {
     request_id: string
@@ -1210,6 +1262,16 @@ export class ClaudeCodeSession {
   readonly sessionReady: Promise<string>
   private _resolveSessionReady!: (id: string) => void
   private _rejectSessionReady!: (err: Error) => void
+  /** True once sessionReady settled (init seen / id pre-assigned+persisted). A death
+   *  AFTER this point is an ordinary end-of-life, NOT "init failed" — see
+   *  handleProcessDeath: reporting a long-lived session's shutdown as a startup
+   *  failure produced a red "session init failed" toast every time the user marked
+   *  a task done (completeTaskSessions SIGINTs the CLI, 2026-08-10). */
+  private _sessionReadySettled = false
+  /** Set by callers that kill this session on purpose (task completion, capacity
+   *  eviction, idle timeout). Suppresses the death-path error toast/SESSION_ERROR:
+   *  the user already knows, and the session record's status_reason carries the why. */
+  private _expectedTeardown = false
 
   constructor(
     readonly taskId: string,
@@ -1218,8 +1280,10 @@ export class ClaudeCodeSession {
   ) {
     this.cliCommand = cliCommand ?? 'claude'
     this.sessionReady = new Promise<string>((resolve, reject) => {
-      this._resolveSessionReady = resolve
-      this._rejectSessionReady = reject
+      // Wrapped so EVERY settle path flips _sessionReadySettled — the death path
+      // keys "init failure vs ordinary shutdown" off it.
+      this._resolveSessionReady = (id) => { this._sessionReadySettled = true; resolve(id) }
+      this._rejectSessionReady = (err) => { this._sessionReadySettled = true; reject(err) }
     })
     // Prevent unhandled rejection if nobody awaits sessionReady (e.g., taskless sessions)
     this.sessionReady.catch(() => {})
@@ -1553,7 +1617,8 @@ export class ClaudeCodeSession {
     // For remote sessions, control_response is routed through the daemon's `sendRaw`
     // command (see RemoteSessionManager.writeRaw → daemon-core.handleSendRawCommand).
     // Controlled by config.session.permission_prompt (default: true).
-    if (permissionPrompt !== false) {
+    this._permissionPromptEnabled = permissionPrompt !== false
+    if (this._permissionPromptEnabled) {
       args.push('--permission-prompt-tool', 'stdio')
     }
 
@@ -1590,6 +1655,7 @@ export class ClaudeCodeSession {
     this._exitStderr = undefined
     this.resultEmitted = false
     this._turnResultEmitted = false
+    this._expectedTeardown = false    // Fresh process — a prior intentional kill must not mask THIS process's real crash
     this._idleDebt = 0                // Fresh process — a dead process's owed idles never arrive
     this._lastResultCost = undefined  // Fresh session — no previous cost to compare
     this._costWatermark.reset()       // Fresh process — its total_cost_usd restarts at 0
@@ -1668,13 +1734,15 @@ export class ClaudeCodeSession {
           this._processStatus = 'error'
           this._activity = undefined
           this.clearStallDiagTimer()
+          // Startup advisories are not the cause of death — strip before quoting.
+          const initStderr = stderr ? stripCliStartupNoise(stderr) : ''
           const parts = [`Process exited with code ${code} before initialization`]
           if (host) parts.push(`[${host}]`)
-          if (stderr) parts.push(stderr.slice(0, 500))
+          if (initStderr) parts.push(initStderr.slice(0, 500))
           const errMsg = parts.join(' — ')
           log.session.error('session process died before init', {
             taskId: this.taskId, exitCode: code, host, fromPlanSessionId: this.fromPlanSessionId,
-            stderr: stderr?.slice(0, 500),
+            stderr: initStderr.slice(0, 500) || undefined,
           })
           this.emitStatusChanged('AGENT_COMPLETE', errMsg)
           bus.emit(EventNames.SESSION_ERROR, {
@@ -1705,6 +1773,22 @@ export class ClaudeCodeSession {
       this.pid = result.pid
       this._outputFile = result.outputFile
       this._turnStartOffset = result.fileSize
+
+      // Stale-watermark guard on the (re)spawn path: fileSize is the stream
+      // file's CURRENT size — a consumed line-end offset can never exceed the
+      // size of the append-only file it was measured in, so watermark >
+      // fileSize proves the watermark belongs to a DEAD incarnation (e.g. a
+      // --resume respawn after the streams-dir move recreated the file at
+      // offset ~0 — inc-1786428350008). Keeping it would positionally
+      // suppress this session's next real result. In-memory only; the durable
+      // record heals via the attach/reconcile epoch paths.
+      if (this._consumedOffset > result.fileSize) {
+        log.session.warn('spawn: consumedOffset exceeds stream file size — dead-incarnation watermark, resetting', {
+          taskId: this.taskId, sessionId: this.claudeSessionId ?? undefined,
+          staleConsumedOffset: this._consumedOffset, fileSize: result.fileSize, resume: isResume,
+        })
+        this._consumedOffset = -1
+      }
 
       // Register in the global session manager registry (for liveness checks, health monitor)
       if (this.claudeSessionId) {
@@ -1841,6 +1925,9 @@ export class ClaudeCodeSession {
   ): Promise<ClaudeCodeSession> {
     const session = new ClaudeCodeSession(record.taskId, record.project, cliCommand)
     session._testDaemonUrl = testDaemonUrl
+    // An attached session's init is historic fact (the record exists because the CLI
+    // already initialized), so a later death must not be reported as an init failure.
+    session._sessionReadySettled = true
     session.claudeSessionId = record.claudeSessionId
     session.pid = record.pid ?? null
     session._outputFile = record.outputFile ?? null
@@ -1852,6 +1939,16 @@ export class ClaudeCodeSession {
     session.planFile = record.planFile ?? null
     session.planCompleted = record.planCompleted ?? false
     session._host = record.host ?? null
+    // Restore _permissionPromptEnabled. The record does NOT persist spawn args, so
+    // the only authority available here is the same config key the spawn path reads
+    // (config.session.permission_prompt). Without this, a server restart would leave
+    // the field at its `true` default and an installation that turned the prompt tool
+    // OFF would stop getting the "-p mode, the user can't see AskUserQuestion"
+    // correction. Best-effort: a config read failure keeps the default.
+    try {
+      const { getConfig } = await import('../core/config-manager.js')
+      session._permissionPromptEnabled = (await getConfig()).session?.permission_prompt !== false
+    } catch { /* keep default true — the CLI flag defaults on */ }
     // Restore model from session record so context % works after server restart.
     // _initModel is in-memory only (set from init events); old init events aren't
     // re-processed since the JSONL tailer starts from current offset.
@@ -1936,6 +2033,48 @@ export class ClaudeCodeSession {
       })
       session.resultEmitted = taskPhasePastInProgress
         || record.process_status === 'error'
+    }
+
+    // ── Stale-watermark heal (incident inc-1786428350008) ──
+    // The watermark seeded above is a byte position in ONE file incarnation.
+    // When the stream file was recreated (the /tmp→HOME streams move, a reboot
+    // wiping /tmp, a fresh same-sid spawn), the record still carries the DEAD
+    // file's offset — every event in the new (smaller) file sits "below" it,
+    // so the replay guard suppresses the real end-of-turn result and the task
+    // never reaches AGENT_COMPLETE. When the evidence proves the mismatch
+    // (offset beyond EOF, or file epoch differs), drop the in-memory seed and
+    // durably reset the record: consumedOffset 0 paired with the new epoch is
+    // the tracker's sanctioned regression (epoch-reset arbitration). Without
+    // an epoch from the daemon (pre-epoch fs.stat) the durable write is
+    // skipped — the in-memory reset still unblocks this process lifetime.
+    if (typeof streamEvidence !== 'string' && session._consumedOffset >= 0) {
+      try {
+        const { isStaleWatermark } = await import('../core/session-reconcile.js')
+        if (isStaleWatermark(record, streamEvidence)) {
+          log.session.warn('attachToExisting: consumedOffset belongs to a dead stream-file incarnation — resetting watermark', {
+            sessionId: record.claudeSessionId,
+            staleConsumedOffset: session._consumedOffset,
+            fileSize: streamEvidence.fileSize,
+            recordEpoch: record.streamEpoch ?? null,
+            fileEpoch: streamEvidence.streamEpoch ?? null,
+          })
+          session._consumedOffset = -1
+          if (streamEvidence.streamEpoch && record.claudeSessionId) {
+            const { updateSessionRecord } = await import('../core/session-tracker.js')
+            await updateSessionRecord(record.claudeSessionId, {
+              consumedOffset: 0,
+              streamEpoch: streamEvidence.streamEpoch,
+            }).catch(() => {})
+            record.consumedOffset = 0
+            record.streamEpoch = streamEvidence.streamEpoch
+          }
+        }
+      } catch (err) {
+        log.session.warn('attachToExisting: stale-watermark check failed', {
+          sessionId: record.claudeSessionId,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
     }
 
     // Create the session manager for attach (all sessions go through daemon now).
@@ -2147,7 +2286,7 @@ export class ClaudeCodeSession {
     // Attach the transport: recovers FIFO (local) or reconnects WebSocket (daemon),
     // then starts tailing from AFTER the data we already recovered.
     //
-    // fromOffset semantics: the daemon stream file is /tmp/open-walnut-streams/<sid>.jsonl,
+    // fromOffset semantics: the daemon stream file is ~/.open-walnut/tmp/streams/<sid>.jsonl,
     // which is DIFFERENT from the canonical claude-projects JSONL. The daemon's
     // addSubscriber() replays bytes [fromOffset, currentOffset) of its stream file.
     //
@@ -2172,7 +2311,7 @@ export class ClaudeCodeSession {
     if (session._transport && record.claudeSessionId) {
       const isRemote = !!session._transport.isRemote
       // Local sessions have the SAME two-file mismatch as remote: daemon offsets
-      // are byte positions in the STREAM file (/tmp/open-walnut-streams/<sid>.jsonl),
+      // are byte positions in the STREAM file (~/.open-walnut/tmp/streams/<sid>.jsonl),
       // while jsonlByteLength measures the canonical ~/.claude/projects JSONL — a
       // different, much smaller file. Falling back to it after a walnut restart
       // (fileSize=0) made the daemon replay [canonical_size, stream_size) — the
@@ -2208,6 +2347,44 @@ export class ClaudeCodeSession {
         // The daemon tracks control_request state and returns it on attach.
         // Single slot: the `claude -p` protocol has at most one outstanding
         // can_use_tool at a time, so pendingCtrl carries at most one request.
+        // Authoritative cross-check (incident a172ce49): the daemon's pendingCtrl
+        // is the live truth for "is the CLI actually blocked on a permission?".
+        // The CLI withdraws requests on abort/restart (control_cancel_request),
+        // and record.pendingPermission historically never learned about it — so
+        // Layer 2 can resurrect a request nobody can answer (respond → 404,
+        // Waiting badge forever). Any recovered request the daemon does NOT
+        // vouch for is stale: drop it, stop its re-emit timer, settle the UI,
+        // and clear the persisted copy. Runs BEFORE pendingCtrl adoption so a
+        // stale Layer-2 entry can't block adopting the daemon's genuine one.
+        // Only runs when attach succeeded — on attach failure we keep the
+        // fail-safe "stay pending for recovery" behavior.
+        const authoritativeReqId = attachResult?.pendingCtrl?.reqId ?? null
+        for (const staleId of [...session._pendingPermissionRequests.keys()]) {
+          if (staleId === authoritativeReqId) continue
+          const stale = session._pendingPermissionRequests.get(staleId)
+          session._pendingPermissionRequests.delete(staleId)
+          session._clearPermissionReEmitTimer(staleId)
+          session._resolvedPermissionRequestIds.add(staleId)
+          log.session.info('dropped stale recovered permission — daemon has no matching pendingCtrl', {
+            sessionId: record.claudeSessionId,
+            requestId: staleId,
+            toolName: stale?.request.tool_name,
+            daemonPendingReqId: authoritativeReqId,
+          })
+          bus.emit(EventNames.SESSION_PERMISSION_RESOLVED, {
+            sessionId: record.claudeSessionId,
+            taskId: record.taskId,
+            requestId: staleId,
+            toolName: stale?.request.tool_name,
+            allowed: false,
+            cancelled: true,
+          }, ['*'], { source: 'session-runner' })
+        }
+        if (record.pendingPermission && record.pendingPermission.requestId !== authoritativeReqId) {
+          import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+            updateSessionRecord(record.claudeSessionId, { pendingPermission: undefined }),
+          ).catch(() => {})
+        }
         if (attachResult?.pendingCtrl && session._pendingPermissionRequests.size === 0) {
           const pc = attachResult.pendingCtrl
           session._pendingPermissionRequests.set(pc.reqId, {
@@ -2250,7 +2427,10 @@ export class ClaudeCodeSession {
       // Snapshot before iterating: resolvePermissionRequest() deletes from the map
       const pendingSnapshot = [...session._pendingPermissionRequests.values()]
       for (const pending of pendingSnapshot) {
-        if (session._mode === 'bypass' && autoApproveBypassed) {
+        // AskUserQuestion is EXEMPT from bypass auto-approve here too — same reason
+        // as the live can_use_tool handler: auto-allowing sends empty `answers` and
+        // the CLI tells the model the user answered nothing. Re-emit to the UI instead.
+        if (session._mode === 'bypass' && autoApproveBypassed && pending.request.tool_name !== 'AskUserQuestion') {
           // Bypass mode + auto-approve ON: approve immediately to unblock Claude Code.
           log.session.info('auto-approving recovered control_request (bypass mode)', {
             sessionId: record.claudeSessionId,
@@ -2346,6 +2526,7 @@ export class ClaudeCodeSession {
       this._activity = undefined
       this.resultEmitted = false
       this._turnResultEmitted = false  // New turn starting — allow result emission
+      this._expectedTeardown = false   // Live turn on this process — a stale teardown mark must not mask a real crash
       // ── THE QUEUED-SEND turn-start edge (incident ed347bde, 2026-08-05) ──
       // This FIFO write is a genuine idle→running turn-start, and for the most
       // common shape it is the EARLIEST evidence of the new turn: walnut queues
@@ -2511,6 +2692,18 @@ export class ClaudeCodeSession {
     this._rejectAllSideQuestions('session stopped')
   }
 
+  /**
+   * Mark this session's imminent death as intentional (task marked done, capacity
+   * eviction, idle timeout). Callers that signal the CLI directly — i.e. WITHOUT
+   * going through interrupt()/gracefulStop(), which already suppress the death path
+   * via resultEmitted — must call this FIRST, so the liveness monitor logs the exit
+   * as expected instead of raising an error notification.
+   */
+  markExpectedTeardown(reason: string): void {
+    this._expectedTeardown = true
+    log.session.debug('session teardown expected', { taskId: this.taskId, sessionId: this.claudeSessionId ?? undefined, reason })
+  }
+
   /** Reject + clear any in-flight side questions (e.g. on session teardown) so the
    *  drawer's promise settles instead of hanging until its own timeout. */
   private _rejectAllSideQuestions(reason: string | Error): void {
@@ -2584,9 +2777,9 @@ export class ClaudeCodeSession {
     this._processStatus = 'stopped'
     this.stopLivenessMonitor()
 
-    // Reject sessionReady with detailed diagnostics.
-    // For local sessions, read stderr from the .err file on disk.
-    // For remote sessions, the local path doesn't exist — use _exitStderr from daemon exit event.
+    // Diagnostics for the death. For local sessions, read stderr from the .err file
+    // on disk; for remote sessions the local path doesn't exist — use _exitStderr
+    // from the daemon exit event.
     let initStderr = ''
     if (this._outputFile) {
       try {
@@ -2596,22 +2789,42 @@ export class ClaudeCodeSession {
     if (!initStderr && this._exitStderr) {
       initStderr = this._exitStderr.slice(0, 2048)
     }
-    const parts = ['process died before session init']
+    initStderr = stripCliStartupNoise(initStderr)
+    // A death only means "init failed" while sessionReady is still unsettled. Once
+    // the id is known (init line seen, or pre-assigned + persisted) this is the
+    // ordinary end of a long-lived CLI — and if WE asked for it (task completion,
+    // capacity eviction, idle timeout) it isn't even noteworthy. Reporting those as
+    // an init failure fired a red toast quoting stale spawn-time stderr every time
+    // the user marked a task done (2026-08-10).
+    const wasInitFailure = !this._sessionReadySettled
+    const parts = [wasInitFailure ? 'process died before session init' : 'session process exited']
     if (this._host) parts.push(`[SSH → ${this._host}]`)
     if (this._exitCode !== null) parts.push(`[exit code: ${this._exitCode}]`)
     if (this.pid) parts.push(`[pid: ${this.pid}]`)
     if (initStderr) parts.push(`stderr: ${initStderr}`)
     else parts.push('(no stderr captured)')
     const errMsg = parts.join(' ')
-    log.session.error('session init failed — process died before init event', {
+    const deathMeta = {
       taskId: this.taskId,
+      sessionId: this.claudeSessionId ?? undefined,
       pid: this.pid,
       exitCode: this._exitCode,
       host: this._host,
       stderr: initStderr || undefined,
       outputFile: this._outputFile,
       timeSinceSpawnMs: this._spawnTs ? Date.now() - this._spawnTs : undefined,
-    })
+    }
+    if (wasInitFailure) {
+      log.session.error('session init failed — process died before init event', deathMeta)
+    } else if (this._expectedTeardown) {
+      log.session.info('session process exited (expected teardown)', deathMeta)
+    } else {
+      // Unexpected death of an initialized session: real signal, but not an
+      // init failure. warn (not error) so it doesn't toast — the session's own
+      // status/errorMessage already surfaces it in the session panel.
+      log.session.warn('session process exited unexpectedly after init', deathMeta)
+    }
+    // Idempotent no-op when sessionReady already resolved.
     this._rejectSessionReady(new Error(errMsg))
 
     // If no result was emitted by the tailer, determine fallback behavior.
@@ -2749,14 +2962,86 @@ export class ClaudeCodeSession {
    * user never sees what went wrong (exit code, stderr, command not found, etc.).
    */
   private handleRemoteProcessExit(code: number, stderr?: string): void {
+    // The daemon replays the CLI's spawn-time `.err` file on death, so startup
+    // advisories arrive here as if they caused the exit. Strip them before they
+    // can be quoted as a death reason (2026-08-10: marking a task done killed the
+    // CLI we spawned, and the managed-settings advisory it printed at startup was
+    // reported as "Session Error" on a turn that had already succeeded).
+    const cleanStderr = stderr ? stripCliStartupNoise(stderr) : ''
+
+    // A teardown WE asked for (task completed, capacity eviction, idle timeout) is
+    // not an error, regardless of the CLI's exit code — SIGINT surfaces as -1 here.
+    if (this._expectedTeardown) {
+      this._active = false
+      this._processStatus = 'stopped'
+      this._activity = undefined
+      this.pid = null
+      log.session.info('remote session process exited (expected teardown)', {
+        taskId: this.taskId,
+        sessionId: this.claudeSessionId,
+        exitCode: code,
+        host: this._host,
+        stderr: cleanStderr.slice(0, 200) || undefined,
+      })
+      if (this.claudeSessionId) {
+        const sid = this.claudeSessionId
+        import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+          updateSessionRecord(sid, {
+            process_status: 'stopped',
+            status_reason: 'expected_teardown',
+            status_changed_by: 'system',
+            pid: undefined,
+          } as Record<string, unknown>),
+        ).catch((err) => {
+          log.session.warn('failed to persist expected teardown', { sessionId: sid, error: String(err) })
+        })
+      }
+      this.emitStatusChanged('AGENT_COMPLETE')
+      return
+    }
+
+    // Unexpected exit whose ONLY stderr was startup noise: still not something the
+    // user can act on, and the turn already produced its result. Keep it out of the
+    // error channel (which toasts) but log it as a warning — a real signal, just not
+    // an error the user must see.
+    //
+    // EXIT CODE STILL DECIDES. The advisory is written at spawn and replayed on
+    // death, so its presence says nothing about WHY the process exited: a 127
+    // (`claude` missing from the remote PATH) prints the same advisory and nothing
+    // else, and silencing that turned an actionable "CLI not found" into a session
+    // that looks quietly finished. Only a code that is plausibly a clean or
+    // signalled stop may be suppressed; a real failure code falls through to the
+    // error path.
+    const suppressibleExit = code === 0 || code === -1 || code === 143 || code === 130
+    if (!cleanStderr && stderr && suppressibleExit) {
+      this._active = false
+      this._processStatus = 'stopped'
+      this._activity = undefined
+      this.pid = null
+      log.session.warn('remote session exited with only CLI startup advisories', {
+        taskId: this.taskId,
+        sessionId: this.claudeSessionId,
+        exitCode: code,
+        host: this._host,
+        suppressedStderr: stderr.slice(0, 200),
+      })
+      this.emitStatusChanged('AGENT_COMPLETE')
+      return
+    }
+
     const parts: string[] = []
     if (code === 127) {
-      parts.push('Claude CLI not found on remote host')
+      parts.push(this._host ? 'Claude CLI not found on remote host' : 'Claude CLI not found')
     } else {
-      parts.push(`Remote session exited with code ${code}`)
+      // "Remote" ONLY when there is an actual remote host — the __local__ daemon
+      // takes this path too, and telling a local user to "check remote host
+      // configuration" sent them to the wrong settings page (2026-08-10).
+      parts.push(this._host
+        ? `Remote session exited with code ${code}`
+        : `Session process exited with code ${code}`)
     }
     if (this._host) parts.push(`[${this._host}]`)
-    if (stderr) parts.push(stderr.slice(0, 500))
+    if (cleanStderr) parts.push(cleanStderr.slice(0, 500))
     const errMsg = parts.join(' — ')
 
     log.session.error('remote session process exited with error', {
@@ -2764,7 +3049,7 @@ export class ClaudeCodeSession {
       sessionId: this.claudeSessionId,
       exitCode: code,
       host: this._host,
-      stderr: stderr?.slice(0, 200),
+      stderr: cleanStderr.slice(0, 200) || undefined,
     })
 
     this._active = false
@@ -3159,6 +3444,13 @@ export class ClaudeCodeSession {
                   // Original record not found — fall back to creating a fresh record
                   await this.persistSessionRecord(newId, this._cwd ?? undefined)
                 }
+                // Move any still-queued messages to the new identity. Without
+                // this, rows enqueued against the OLD id strand forever: the
+                // old record no longer resolves, so every startup recovery
+                // retries them into "No active session found" (inc-2026-08-10:
+                // one message stuck 27 days). Mirrors the ACP identity
+                // migration's queue move.
+                await migrateSessionQueue(expectedId, newId)
               } else {
                 await this.persistSessionRecord(newId, this._cwd ?? undefined)
               }
@@ -3266,6 +3558,13 @@ export class ClaudeCodeSession {
               sessionId: sid, taskId: this.taskId,
               cronTaskId: sys.cron_task_id, createdBy: sys.cron_created_by, foreign,
             })
+            // Structured hook event (→ onCronFired) beside the display emit.
+            bus.emit(EventNames.SESSION_CRON_FIRED, {
+              sessionId: sid, taskId: this.taskId,
+              cronTaskId: sys.cron_task_id ? String(sys.cron_task_id) : undefined,
+              createdBySessionId: sys.cron_created_by ? String(sys.cron_created_by) : undefined,
+              foreign,
+            }, ['main-ai'], { source: 'session-runner' })
           } else if (sys.subtype === 'error_during_execution') {
             bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
               sessionId: sid, taskId: this.taskId,
@@ -3916,20 +4215,36 @@ export class ClaudeCodeSession {
               this.emitStatusChanged('IN_PROGRESS')
             }
 
-            // ── AskUserQuestion auto-intercept ──
-            // In -p (non-interactive) mode, AskUserQuestion never reaches the user.
-            // Claude often calls it repeatedly (7+ times), wasting tokens.
-            // Auto-inject a corrective message once per turn so Claude stops trying.
-            if (block.name === 'AskUserQuestion' && !this._askUserIntercepted && this._transport?.hasPipe) {
+            // ── AskUserQuestion auto-intercept (only WITHOUT the permission prompt tool) ──
+            // In -p (non-interactive) mode with no `--permission-prompt-tool`,
+            // AskUserQuestion never reaches the user. Claude often calls it
+            // repeatedly (7+ times), wasting tokens. Auto-inject a corrective
+            // message once per turn so Claude stops trying.
+            // Gated on !_permissionPromptEnabled: when the prompt tool IS active
+            // (the default), the tool's control_request is forwarded to walnut and
+            // rendered as a real question card, so the human DOES answer — telling
+            // the model "the user cannot see AskUserQuestion" would then be a lie.
+            // Registered in the unified hook registry as an inline intervention
+            // ('askuserquestion-p-mode-correction') — enforcement stays here
+            // because it needs the live control pipe + per-turn state; the
+            // hooks.overrides toggle is honored via isInlineHookEnabled.
+            if (block.name === 'AskUserQuestion' && !this._permissionPromptEnabled
+              && !this._askUserIntercepted && this._transport?.hasPipe) {
               this._askUserIntercepted = true
               const correction = 'You are running in non-interactive (-p) mode. '
                 + 'The user cannot see AskUserQuestion — it will always fail here. '
                 + 'Instead, print your questions or assumptions directly in your text output, and wait for user response.'
-              Promise.resolve(this._transport?.writeMessage(correction)).then((injected) => {
-                log.session.info('auto-intercepted AskUserQuestion in -p mode', {
-                  sessionId: this.claudeSessionId,
-                  taskId: this.taskId,
-                  injected: injected ?? false,
+              Promise.all([
+                import('../core/config-manager.js').then(({ getConfig }) => getConfig()),
+                import('../core/hooks/registry.js'),
+              ]).then(([cfg, { isInlineHookEnabled }]) => {
+                if (!isInlineHookEnabled('askuserquestion-p-mode-correction', cfg)) return undefined
+                return Promise.resolve(this._transport?.writeMessage(correction)).then((injected) => {
+                  log.session.info('auto-intercepted AskUserQuestion in -p mode', {
+                    sessionId: this.claudeSessionId,
+                    taskId: this.taskId,
+                    injected: injected ?? false,
+                  })
                 })
               }).catch(() => {})
             }
@@ -4660,13 +4975,23 @@ export class ClaudeCodeSession {
           // handled by the daemon itself — it `continue`s past auto-decided requests so
           // walnut never sees them. The code below is retained as a safety fallback but
           // is effectively dead code for daemon-backed sessions.
-          if (this._mode === 'bypass') {
+          // AskUserQuestion is EXEMPT from bypass auto-approve. It is a
+          // requiresUserInteraction tool whose result echoes `answers` from the
+          // permission response's updatedInput, so auto-allowing hands the model a
+          // fabricated "user answered your questions" with NO answers. Falling into
+          // the else-branch below runs the ordinary emit-to-UI path (pending map +
+          // persisted pendingPermission + re-emit timer + SESSION_PERMISSION_REQUEST)
+          // so the human answers for real. Behavior for every other tool is unchanged.
+          if (this._mode === 'bypass' && request.tool_name !== 'AskUserQuestion') {
             // Bypass mode: check auto_approve_bypass config (default: true).
             // Config read is async — use .then() since handleStreamLine is sync.
             // Add sentinel BEFORE async gap so hasPendingPermission is true during config read.
             this._pendingPermissionRequests.set(request_id, { request_id, request })
             import('../core/config-manager.js').then(({ getConfig }) => getConfig()).then(cfg => {
               if (!this._active) return  // Session killed during async gap — discard
+              // Withdrawn during the async gap (control_cancel_request removed the
+              // sentinel) — don't answer a request the CLI no longer has open.
+              if (!this._pendingPermissionRequests.has(request_id)) return
               const autoApprove = cfg.session?.auto_approve_bypass !== false
               if (autoApprove) {
                 this._pendingPermissionRequests.delete(request_id)
@@ -4693,12 +5018,13 @@ export class ClaudeCodeSession {
               }
             }).catch(() => {
               if (!this._active) return  // Session killed during async gap — discard
+              if (!this._pendingPermissionRequests.has(request_id)) return // withdrawn (cancel) during gap
               // Config read failed — default to auto-approve in bypass
               this._pendingPermissionRequests.delete(request_id)
               this.respondToControlRequest(request_id, request, true)
             })
           } else {
-            // Non-bypass modes: emit to UI for user decision.
+            // Non-bypass modes (and AskUserQuestion in any mode): emit to UI for user decision.
             // Store the pending request so the API route can resolve it later.
             this._pendingPermissionRequests.set(request_id, { request_id, request })
             log.session.info('control_request pending — waiting for user decision', {
@@ -4824,6 +5150,52 @@ export class ClaudeCodeSession {
             answerLen: answer.length,
           })
           pending.resolve(answer)
+        }
+        break
+      }
+
+      // ── control_cancel_request: the CLI WITHDRAWS a pending control_request ──
+      // Emitted when the request's turn is aborted CLI-side (interrupt, resume,
+      // process restart re-planning). Before this handler existed the cancel fell
+      // into the control_* swallow below, so the pending permission NEVER cleared:
+      // permanent Waiting badge, 60s re-emit loop, and a stale card whose
+      // allow/deny 404s (incident a172ce49 — two ExitPlanMode requests each
+      // cancelled by the CLI, session stuck "Waiting" for days).
+      case 'control_cancel_request': {
+        const cc = event as unknown as { type: 'control_cancel_request'; request_id?: string }
+        const requestId = cc.request_id
+        if (!requestId) break
+        // Poison the id first: a daemon replay of the ORIGINAL control_request
+        // after this cancel must not resurrect the prompt.
+        this._resolvedPermissionRequestIds.add(requestId)
+        const pending = this._pendingPermissionRequests.get(requestId)
+        this._pendingPermissionRequests.delete(requestId)
+        this._clearPermissionReEmitTimer(requestId)
+        log.session.info('control_cancel_request — CLI withdrew pending permission request', {
+          sessionId: this.claudeSessionId,
+          taskId: this.taskId,
+          requestId,
+          toolName: pending?.request.tool_name,
+          wasPending: !!pending,
+        })
+        if (this.claudeSessionId) {
+          // Settle the UI card (renders as dismissed/denied) and stop the Waiting badge.
+          bus.emit(EventNames.SESSION_PERMISSION_RESOLVED, {
+            sessionId: this.claudeSessionId,
+            taskId: this.taskId,
+            requestId,
+            toolName: pending?.request.tool_name,
+            allowed: false,
+            cancelled: true,
+          }, ['*'], { source: 'session-runner' })
+          // Clear the persisted Layer-2 copy — but only if it belongs to THIS
+          // request; a newer pending permission must not be wiped by an old cancel.
+          import('../core/session-tracker.js').then(async ({ getSessionByClaudeId, updateSessionRecord }) => {
+            const record = await getSessionByClaudeId(this.claudeSessionId!)
+            if (record?.pendingPermission?.requestId === requestId) {
+              await updateSessionRecord(this.claudeSessionId!, { pendingPermission: undefined })
+            }
+          }).catch(() => {})
         }
         break
       }
@@ -5013,6 +5385,10 @@ export class ClaudeCodeSession {
   /**
    * Send a control_response to Claude Code via the FIFO.
    * @param allow — true to allow, false to deny
+   * @param updatedInputPatch — shallow-merged OVER request.input in the allow
+   *   response. The CLI hands `updatedInput` back to the tool as its arguments,
+   *   so this is how a human decision becomes tool input — used by
+   *   AskUserQuestion to inject `answers` (question text → chosen label).
    * @returns true if the response was written (or at least attempted), false if no transport
    */
   private respondToControlRequest(
@@ -5020,9 +5396,13 @@ export class ClaudeCodeSession {
     request: { tool_name?: string; input?: Record<string, unknown> },
     allow: boolean,
     denyMessage?: string,
+    updatedInputPatch?: Record<string, unknown>,
   ): boolean {
     const result = allow
-      ? { behavior: 'allow' as const, updatedInput: request.input }
+      ? {
+        behavior: 'allow' as const,
+        updatedInput: updatedInputPatch ? { ...(request.input ?? {}), ...updatedInputPatch } : request.input,
+      }
       : { behavior: 'deny' as const, message: denyMessage ?? 'User denied permission' }
     // SDKControlResponseSchema wraps ControlResponseSchema: outer `response` is transport,
     // inner `response` is the permission result. Format mismatch = Claude Code hangs silently.
@@ -5828,13 +6208,21 @@ export class ClaudeCodeSession {
   /**
    * Resolve a pending permission request from the UI.
    * Called by the API route when the user clicks allow/deny.
+   *
+   * `updatedInputPatch` is shallow-merged over the original tool input in the
+   * allow response — the AskUserQuestion card uses it to send `{ answers }`.
    */
-  resolvePermissionRequest(requestId: string, allow: boolean, denyMessage?: string): boolean {
+  resolvePermissionRequest(
+    requestId: string,
+    allow: boolean,
+    denyMessage?: string,
+    updatedInputPatch?: Record<string, unknown>,
+  ): boolean {
     const pending = this._pendingPermissionRequests.get(requestId)
     if (!pending) return false
     this._pendingPermissionRequests.delete(requestId)
     this._clearPermissionReEmitTimer(requestId)
-    const written = this.respondToControlRequest(requestId, pending.request, allow, denyMessage)
+    const written = this.respondToControlRequest(requestId, pending.request, allow, denyMessage, updatedInputPatch)
 
     if (!written) {
       // Transport gone — re-add so recovery / re-attach can retry the response.
@@ -6146,13 +6534,17 @@ export class SessionRunner {
   /**
    * Add a session to activeProcessing with a safety timeout, and open a
    * turn-ledger promissory note for it. The timeout auto-clears the entry
-   * after 60s to prevent permanent stuck state (e.g., if SESSION_RESULT
+   * (default 60s) to prevent permanent stuck state (e.g., if SESSION_RESULT
    * arrives with a mismatched session ID) — that timeout used to be a bare
    * guess with no distinguishable cause; it now rejects the ledger promise
    * with 'no_result' via `abortTurn`, so any caller awaiting this turn gets a
    * precise failure instead of silently having activeProcessing cleared.
+   * ACP callers pass a larger budget: their turn identity can't rename
+   * mid-turn (immutable runtimeId), so the mismatch failure mode the 60s
+   * guess covers doesn't exist there, and real ACP turns routinely run
+   * minutes — the short timer fired a false 'no_result' on every one.
    */
-  private setActiveProcessing(sessionId: string, batchCount: number, messageIds?: string[]): void {
+  private setActiveProcessing(sessionId: string, batchCount: number, messageIds?: string[], safetyTimeoutMs = 60_000): void {
     this.activeProcessing.add(sessionId)
     this.batchCounts.set(sessionId, batchCount)
     if (messageIds) this.batchMessageIds.set(sessionId, [...messageIds])
@@ -6191,7 +6583,7 @@ export class SessionRunner {
     // costs only a status-badge fallback, so leave the overwrite alone.
     const timer = setTimeout(() => {
       if (this.activeProcessing.has(sessionId)) {
-        log.session.warn('activeProcessing safety timeout (60s): force-clearing stuck entry (batch ids retained)', { sessionId })
+        log.session.warn(`activeProcessing safety timeout (${Math.round(safetyTimeoutMs / 1000)}s): force-clearing stuck entry (batch ids retained)`, { sessionId })
         this.activeProcessing.delete(sessionId)
         this.batchCounts.delete(sessionId)
         this.activeProcessingTimers.delete(sessionId)
@@ -6199,7 +6591,7 @@ export class SessionRunner {
         // Try to process next messages if any accumulated while stuck
         this.processNext(sessionId).catch(() => {})
       }
-    }, 60_000)
+    }, safetyTimeoutMs)
     timer.unref()
     this.activeProcessingTimers.set(sessionId, timer)
   }
@@ -6334,6 +6726,47 @@ export class SessionRunner {
             await this.handleSendSdk(sendData.sessionId, sendData.message, sendData.mode as SessionMode | undefined, sendData.interrupt)
           } else {
             await this.handleSend(sendData)
+          }
+        }
+          break
+
+        case EventNames.SESSION_INTERRUPT: {
+          // Bare turn-stop (composer stop button): interrupt the running CLI
+          // WITHOUT queuing a message. Reuses handleSend's interrupt prelude
+          // (session.interrupt() + batch cleanup) but never calls processNext —
+          // there is nothing to deliver, and the queue (if any) stays put until
+          // the user actually sends.
+          const { sessionId } = eventData<'session:interrupt'>(event)
+          if (!sessionId) break
+          log.session.info('bare interrupt requested', { sessionId })
+          const acp = this.findAcpSession(sessionId)
+          if (acp) {
+            this.acpAbortInProgress.add(sessionId)
+            try { await this.acpContract(acp).abortTurn() }
+            catch (err) { log.session.warn('bare interrupt: acp abort failed', { sessionId, error: err instanceof Error ? err.message : String(err) }) }
+            finally { this.acpAbortInProgress.delete(sessionId) }
+            break
+          }
+          if (this.sdkSessionMap.has(sessionId)) {
+            try { await this.sdkClient?.interrupt({ sessionId }) }
+            catch (err) { log.session.warn('bare interrupt: sdk interrupt failed', { sessionId, error: err instanceof Error ? err.message : String(err) }) }
+            break
+          }
+          for (const [, session] of this.sessions) {
+            if (session.sessionId === sessionId) {
+              await session.interrupt()
+              break
+            }
+          }
+          if (this.activeProcessing.has(sessionId)) {
+            const oldBatchCount = this.batchCounts.get(sessionId) ?? 1
+            const oldBatchIds = this.batchMessageIds.get(sessionId)
+            this.clearActiveProcessing(sessionId, { kind: 'stopped' })
+            bus.emit(EventNames.SESSION_BATCH_COMPLETED, {
+              sessionId,
+              count: oldBatchCount,
+              ...(oldBatchIds && oldBatchIds.length > 0 ? { messageIds: oldBatchIds } : {}),
+            }, ['main-ai'], { source: 'session-runner' })
           }
         }
           break
@@ -6848,6 +7281,16 @@ export class SessionRunner {
     return undefined
   }
 
+  /**
+   * Tell the in-memory session (if any) that the kill about to be delivered is
+   * intentional, so its liveness monitor reports an expected exit instead of a
+   * red "session init failed" error notification. Safe no-op when the session
+   * isn't in memory (already reaped, or another server owns it).
+   */
+  markExpectedTeardown(claudeSessionId: string, reason: string): void {
+    this.findSessionByClaudeId(claudeSessionId)?.markExpectedTeardown(reason)
+  }
+
   /** Public lookup for health monitor — returns hung-detection timestamps for a session. */
   getSessionTimestamps(claudeSessionId: string): { lastClaudeOutputAt: number; lastMessageDeliveryAt: number } | undefined {
     const session = this.findSessionByClaudeId(claudeSessionId)
@@ -6861,9 +7304,11 @@ export class SessionRunner {
     return session?.teamActive ?? false
   }
 
-  /** Check if a session has an armed in-process cron (/loop). Used by the health
-   *  monitor: a cron-armed session looks idle between fires, but killing the CLI
-   *  silently kills the loop (session-only crons are never on disk). */
+  /** Check if a session has an armed cron (/loop). Used by the health monitor
+   *  and by the terminate route (409 cron_owner): a cron-armed session looks
+   *  idle between fires, but killing the CLI silently kills a session-scoped
+   *  loop — and only CronDelete stops one for good, since `--resume` revives it
+   *  from history replay. */
   isCronArmed(claudeSessionId: string): boolean {
     const session = this.findSessionByClaudeId(claudeSessionId)
     return session?.cronArmed ?? false
@@ -7075,7 +7520,7 @@ export class SessionRunner {
         await replaceSessionIdLinks(record.taskId, sessionId, replacementId)
       }
       await migrateSessionQueue(sessionId, replacementId)
-      await deleteSessionRecords(new Set([sessionId]))
+      await deleteSessionRecords(new Set([sessionId]), 'acp-identity-migration-attach')
       emitAcpIdentityBoundary(record.taskId, sessionId, replacementId)
       migratedFrom = sessionId
       record = replacement
@@ -7092,6 +7537,7 @@ export class SessionRunner {
         acpConfig: record.acpConfig,
         directWsUrl: this._testDaemonUrl,
         artifacts: this._testAcpArtifacts,
+        onWorkerDead: (s) => this.scheduleAcpDrainAfterDeath(s),
       })
       this.acpAttachingSessions.add(session)
       let establishedId: string
@@ -7137,6 +7583,22 @@ export class SessionRunner {
       log.session.info('acp: re-attached session from record', {
         sessionId: establishedId, runtimeId: session.runtimeId,
       })
+      // A turn's terminal fact may have landed while NO AcpSession was alive
+      // to observe it (server-restart window): nothing projected session:result,
+      // so processNext never fired and queued messages waited for an unrelated
+      // poke (2026-08-10 incident: 4-minute stall until a browser GET attached
+      // us). Turn state is worker-authoritative after establish(), so drain
+      // now — drainAcpQueue's activity gate keeps a genuinely running turn
+      // queued, and a rejected send reverts to pending.
+      const drainTarget = session
+      setImmediate(() => {
+        void this.drainAcpQueue(drainTarget, establishedId).catch((err) => {
+          log.session.warn('acp: post-attach queue drain failed', {
+            sessionId: establishedId,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        })
+      })
       return session
     } catch (err) {
       if (session) {
@@ -7168,6 +7630,28 @@ export class SessionRunner {
     }
     await session.kill().catch(() => {})
     session.detach()
+  }
+
+  /**
+   * Worker death without a terminal journal fact leaves queued messages
+   * stranded: no session:result → no processNext → the queue waits for an
+   * unrelated poke. The daemon repairs the journal tail on the NEXT acpStart,
+   * so drain shortly after death — abort paths are excluded (their own drain
+   * runs after the abort completes), and drainAcpQueue's own send path
+   * lazy-resumes the provider thread.
+   */
+  private scheduleAcpDrainAfterDeath(session: AcpSession): void {
+    const sid = session.sessionId ?? session.runtimeId
+    if (this.acpAbortInProgress.has(sid) || this.acpAbortInProgress.has(session.runtimeId)) return
+    setTimeout(() => {
+      if (this.acpDestroyed) return
+      if (this.acpAbortInProgress.has(sid) || this.acpAbortInProgress.has(session.runtimeId)) return
+      void this.drainAcpQueue(session, sid).catch((err) => {
+        log.session.warn('acp: post-death queue drain failed', {
+          sessionId: sid, error: err instanceof Error ? err.message : String(err),
+        })
+      })
+    }, 1_000).unref()
   }
 
   /** Lookup an ACP session by its trackingId (providerSessionId or runtimeId). */
@@ -7339,6 +7823,7 @@ export class SessionRunner {
       mode: (data.mode as SessionMode | undefined) ?? 'default',
       directWsUrl: this._testDaemonUrl,
       artifacts: this._testAcpArtifacts,
+      onWorkerDead: (s) => this.scheduleAcpDrainAfterDeath(s),
     })
     // Key by runtimeId first; re-key to providerSessionId once known so
     // findAcpSession hits on both (records/API use providerSessionId).
@@ -7422,7 +7907,12 @@ export class SessionRunner {
     const msgs = await markNextProcessing(sessionId)
     if (msgs.length === 0) return
     const [message] = msgs
-    this.setActiveProcessing(sessionId, 1, [message.id])
+    // ACP turns are worker-authoritative (journal turn-ended/interrupted facts)
+    // and their identity never renames mid-turn — the 60s Claude-shaped safety
+    // guess fired on EVERY ACP turn >60s (measured 63s/205s/1281s turns), each
+    // time rejecting the turn ledger with a false 'no_result'. Budget ACP at
+    // the worker's own op ceiling instead.
+    this.setActiveProcessing(sessionId, 1, [message.id], 10 * 60_000)
 
     let releaseSettlement!: () => void
     const settlement = new Promise<void>((resolve) => {
@@ -8378,11 +8868,15 @@ export class SessionRunner {
   }
 
   /**
-   * Resolve the cold-resume spawn args (model + effort) from the persisted record.
-   * Model/mode/effort changes are applied LIVE via control_requests (applyModel /
-   * applyPermissionMode / applyEffort — no respawn); the record fields read here are
-   * the durable fallback so a cold --resume re-applies them (control_requests are
-   * in-memory only, lost when the CLI dies). Shared by processNext + reinitialize.
+   * Resolve the cold-resume spawn args (model + effort + profile) from the
+   * persisted record. Model/mode/effort changes are applied LIVE via
+   * control_requests (applyModel / applyPermissionMode / applyEffort — no
+   * respawn); the record fields read here are the durable fallback so a cold
+   * --resume re-applies them (control_requests are in-memory only, lost when the
+   * CLI dies). The PROFILE has no live channel at all — `--system-prompt`,
+   * `--mcp-config` and `--allowedTools` are spawn-time only — so re-emitting it
+   * here is the ONLY thing that keeps a reaped session's identity intact.
+   * Shared by processNext + reinitialize.
    */
   private async resolveResumeArgs(sessionId: string): Promise<{
     model?: string
@@ -8795,7 +9289,14 @@ export class SessionRunner {
       if (!targetSession) {
         // Session not in memory — create a new one to resume
         const { getSessionByClaudeId } = await import('../core/session-tracker.js')
-        const record = await getSessionByClaudeId(sessionId)
+        let record = await getSessionByClaudeId(sessionId)
+        if (!record) {
+          // Record lost but the canonical JSONL may survive (inc-2026-08-10):
+          // self-heal so the queued message can ride --resume instead of being
+          // stranded pending forever and retried on every server boot.
+          const { recoverSessionRecordFromJsonl } = await import('../core/sessions/session-record-recovery.js')
+          record = await recoverSessionRecordFromJsonl(sessionId)
+        }
         if (record) {
           const session = new ClaudeCodeSession(record.taskId, record.project, this.cliCommand)
           session._testDaemonUrl = this._testDaemonUrl

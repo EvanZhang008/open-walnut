@@ -4,9 +4,14 @@
  * This uses the real Homepage Quick Session flow and the real mock-daemon
  * pipeline. The mock Claude CLI exits non-zero for the exact prompt "error",
  * producing the same session:error event used in production.
+ *
+ * The launch route is now a DRAFT session column ("+" → an empty column whose
+ * cwd pill opens the same picker); the draft morphs into the `pending:` column
+ * in place on Start, so the error surface asserted below is unchanged.
  */
 import fs from 'node:fs/promises'
 import { test, expect, type Page } from '@playwright/test'
+import { draftComposer, openDraftOnCwd } from './draft-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SCREENSHOT_DIR = '/tmp/error-notification-routing'
@@ -26,20 +31,14 @@ async function startFailingQuickSession(page: Page): Promise<void> {
   await page.goto('/')
   await expect(page.locator('.main-page')).toBeVisible()
 
-  await page.locator('.quick-access-pill', { hasText: /Quick session|\+ Session/ }).click()
-  await expect(page.locator('.session-path-selector')).toBeVisible()
-
-  const localTab = page.locator('.sps-host-tab', { hasText: 'Local' })
-  if (await localTab.isVisible()) await localTab.click()
-
-  const pathInput = page.locator('.sps-search-input')
-  await pathInput.fill(`${fixtureRoot}/projects/walnut`)
-  await pathInput.press('Shift+Enter')
+  await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
 
   const quickStartResponse = page.waitForResponse((response) =>
     response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/api/sessions/quick-start')
-  const chatInput = page.locator('.main-page-chat .chat-input-textarea')
+  // Send from the DRAFT column's composer (the main chat's textarea would go to
+  // the butler instead of launching a session).
+  const chatInput = draftComposer(page)
   await chatInput.fill('error')
   await chatInput.press('Enter')
   await quickStartResponse

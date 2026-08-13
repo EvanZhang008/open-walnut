@@ -87,10 +87,21 @@ const RULES: Rule[] = [
   // --- Remote session exit (generic) ---
   {
     pattern: /Remote session exited with code/i,
+    guard: (ctx) => !!ctx.host,
     suggestion: {
       suggestion: 'Check remote host configuration.',
       settingsHash: 'remote-hosts',
       settingsLabel: 'Remote Hosts',
+    },
+  },
+  // --- Local session exit (generic) — same daemon path, but "Remote Hosts" would
+  // be the wrong door for a local session (2026-08-10). ---
+  {
+    pattern: /Session process exited with code/i,
+    suggestion: {
+      suggestion: 'Retry to resume the conversation.',
+      settingsHash: 'sessions',
+      settingsLabel: 'Sessions',
     },
   },
 
