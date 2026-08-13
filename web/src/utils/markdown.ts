@@ -1,5 +1,6 @@
-import { marked, Marked, type MarkedExtension } from 'marked';
+import { marked, Marked, type MarkedExtension, type Tokens } from 'marked';
 import DOMPurify from 'dompurify';
+import { trimUrlCjkTail } from './url-display';
 
 /**
  * GFM `del` retuned to require DOUBLE tildes — shared by EVERY renderer here.
@@ -29,11 +30,58 @@ const doubleTildeDelTokenizer: NonNullable<MarkedExtension['tokenizer']> = {
   },
 };
 
+/**
+ * GFM autolink (`url`) retuned to stop at CJK punctuation — shared by EVERY
+ * renderer here, same pattern as the del retune above.
+ *
+ * marked's url rule only stops at whitespace, but Chinese/Japanese prose puts
+ * no space around punctuation, so "打开 https://a.com/x,个人账户,enroll CSCA"
+ * rendered with half the sentence inside the link — a repeatedly-reported bug
+ * (2026-08-12). The cut rules live in url-display.ts (`trimUrlCjkTail`), shared
+ * with the plain-text tokenizer so both surfaces agree on where a URL ends.
+ *
+ * Mechanics: run the DEFAULT url tokenizer first (it owns mailto/www./backpedal
+ * semantics), then shrink its match. `this.rules` is set by the lexer before
+ * any tokenizing, so calling the prototype method through `this` is safe.
+ * Returning a shorter `raw` is how marked resumes lexing at the cut point —
+ * the sliced-off prose goes through inlineText as normal text.
+ *
+ * Explicit `[text](href)` markdown links are untouched: those parse via the
+ * `link` tokenizer, not `url`. Returning `undefined` (not `false`) when the
+ * default finds nothing — `false` would re-run the default a second time.
+ */
+const cjkAwareUrlTokenizer: NonNullable<MarkedExtension['tokenizer']> = {
+  url(src: string): Tokens.Link | undefined {
+    const proto = Object.getPrototypeOf(this) as { url(s: string): Tokens.Link | undefined };
+    const token = proto.url.call(this, src);
+    if (!token || token.href.startsWith('mailto:')) return token;
+    let cut = trimUrlCjkTail(token.raw);
+    if (cut === token.raw) return token;
+    // Re-run marked's own backpedal on the shortened run — the cut can expose
+    // trailing halfwidth punctuation the default pass only handled for the
+    // ORIGINAL tail ("https://a.com/x.。下" → cut leaves "…/x.").
+    let prev: string;
+    do {
+      prev = cut;
+      cut = this.rules.inline._backpedal.exec(cut)?.[0] ?? '';
+    } while (prev !== cut);
+    // Degenerate stub after the cut ("https://" from "打开https://。") — let
+    // the whole run fall through to plain text instead of a broken anchor.
+    // Only requires SOMETHING after the scheme: the cut may legally end in a
+    // CJK letter (wiki/机器学习), which `\w` would reject.
+    if (!/^(?:https?:\/\/|www\.)./i.test(cut)) return undefined;
+    // Default tokenizer prefixes http:// for bare www. matches — keep that.
+    const href = token.raw.startsWith('www.') ? `http://${cut}` : cut;
+    return { ...token, raw: cut, text: cut, href, tokens: [{ type: 'text', raw: cut, text: cut }] };
+  },
+};
+
 // Applied to the global singleton so chat, the Files/Changed markdown preview,
 // the context inspector and copy-as-rich-text all share one del contract.
 // The notes instance also escapes raw inline HTML, which would break the chat
 // path (it pre-injects task-ref/file-link HTML), so that retune stays local.
 marked.use({ tokenizer: doubleTildeDelTokenizer });
+marked.use({ tokenizer: cjkAwareUrlTokenizer });
 
 // ── Global inline extensions: legacy [id|label] task pills + inline image paths ──
 // These mutate the GLOBAL marked singleton, so they apply to EVERY renderer that
@@ -819,10 +867,14 @@ function linkifyPathsInCode(html: string, sessionCwd?: string): string {
 
     // Linkify full URLs as external links ("render all", not a partial file link).
     // Runs last; file passes left URL text intact, and our file-link anchors carry
-    // no http (data-file-path is a fs path), so this won't touch them.
+    // no http (data-file-path is a fs path), so this won't touch them. Same CJK
+    // cut as the autolink tokenizer — code often quotes URLs inside CJK prose.
     out = out.replace(/https?:\/\/[^\s"'`<>]+/g, (url) => {
+      const cut = trimUrlCjkTail(url);
+      if (cut.length <= 'https://'.length) return url;
       changed = true;
-      return `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`;
+      const rest = url.slice(cut.length);
+      return `<a href="${cut}" target="_blank" rel="noopener noreferrer">${cut}</a>${rest}`;
     });
 
     return changed ? open + out + close : full;
@@ -1084,9 +1136,10 @@ export function resolveImagePath(path: string, cwd?: string): string | null {
  */
 const noteMarked = new Marked({ breaks: true, gfm: true });
 noteMarked.use({
-  // Same double-tilde contract as the global singleton (single source above) —
-  // this is a separate Marked instance, so it needs its own registration.
-  tokenizer: doubleTildeDelTokenizer,
+  // Same double-tilde + CJK-autolink contracts as the global singleton (single
+  // source above) — this is a separate Marked instance, so it needs its own
+  // registration.
+  tokenizer: { ...doubleTildeDelTokenizer, ...cjkAwareUrlTokenizer },
   renderer: {
     html({ text }: { text: string }) {
       return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

@@ -79,6 +79,30 @@ describe('tokenizeUrls', () => {
       expect(tokenizeUrls(input).map(t => t.text).join('')).toBe(input);
     }
   });
+
+  // CJK prose has no spaces around punctuation, so the URL run must be cut at
+  // the first CJK punctuation mark (same contract as the markdown autolink —
+  // trimUrlCjkTail is shared; the 2026-08-12 chat report).
+  it('cuts the URL at fullwidth punctuation inside CJK prose', () => {
+    const url = tokenizeUrls('打开 https://x.dev/a,个人账户,enroll 继续').find(t => t.kind === 'url')!;
+    expect(url.href).toBe('https://x.dev/a');
+  });
+
+  it('cuts at a halfwidth comma followed by a CJK char', () => {
+    const url = tokenizeUrls('看 https://x.dev/a,然后继续').find(t => t.kind === 'url')!;
+    expect(url.href).toBe('https://x.dev/a');
+  });
+
+  it('keeps CJK letters in the path (wiki slugs)', () => {
+    const url = tokenizeUrls('看 https://zh.wikipedia.org/wiki/机器学习 吧').find(t => t.kind === 'url')!;
+    expect(url.href).toBe('https://zh.wikipedia.org/wiki/机器学习');
+  });
+
+  it('CJK round-trip: token texts still rebuild the input', () => {
+    for (const input of ['打开 https://x.dev/a,个人账户 继续', '见 https://x.dev/b。下一句']) {
+      expect(tokenizeUrls(input).map(t => t.text).join('')).toBe(input);
+    }
+  });
 });
 
 describe('extractUrls', () => {
