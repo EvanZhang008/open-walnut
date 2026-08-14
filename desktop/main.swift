@@ -28,6 +28,26 @@ func saveConfig(_ config: WalnutConfig) {
     }
 }
 
+/// PID of the server *this app* spawned, persisted across app crashes. Used to
+/// tell "our own orphan" (safe to reclaim) apart from a server the user started
+/// themselves (e.g. a dev checkout's `npm run dev:prod` — NEVER kill that).
+func serverPidFilePath() -> URL {
+    return configFilePath().deletingLastPathComponent().appendingPathComponent("server.pid")
+}
+
+func recordSpawnedServerPid(_ pid: Int32) {
+    try? String(pid).write(to: serverPidFilePath(), atomically: true, encoding: .utf8)
+}
+
+func clearSpawnedServerPid() {
+    try? FileManager.default.removeItem(at: serverPidFilePath())
+}
+
+func recordedSpawnedServerPid() -> Int32? {
+    guard let raw = try? String(contentsOf: serverPidFilePath(), encoding: .utf8) else { return nil }
+    return Int32(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+}
+
 let REPO_URL = "https://github.com/EvanZhang008/open-walnut.git"
 
 // MARK: - App Delegate
@@ -508,7 +528,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.message = "Select your .open-walnut directory"
+        panel.message = "Select your .open-walnut directory — or a built open-walnut dev checkout"
         panel.prompt = "Use This Folder"
 
         if FileManager.default.fileExists(atPath: defaultPath) {
@@ -520,10 +540,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             let home = url.path
             let sourceDir = home + "/source"
 
-            // Check if source/dist/cli.js exists
+            // Layout A — a data home (~/.open-walnut) with a bundled source/ dir.
             if FileManager.default.fileExists(atPath: sourceDir + "/dist/cli.js") {
                 self?.walnutHome = home
                 self?.walnutSourceDir = sourceDir
+                self?.finishSetup()
+            // Layout B — a dev checkout itself (dist/cli.js at the root). Run
+            // straight from it: no clone, no pull, no second source tree. Data
+            // still lives in the standard ~/.open-walnut home.
+            } else if FileManager.default.fileExists(atPath: home + "/dist/cli.js") {
+                let dataHome = NSHomeDirectory() + "/.open-walnut"
+                try? FileManager.default.createDirectory(atPath: dataHome, withIntermediateDirectories: true)
+                self?.walnutHome = dataHome
+                self?.walnutSourceDir = home
                 self?.finishSetup()
             } else {
                 // Maybe they have source elsewhere in the folder or it needs bootstrap
@@ -637,24 +666,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Returns the PID of an orphaned Walnut server listening on `port`, or nil.
-    /// "Orphaned" = a `cli.js web` process whose parent is PID 1 (its launching
-    /// app died without cleanly terminating it). We only reclaim orphans so we
-    /// never kill a legitimately-owned server (another app instance or a
-    /// shell-launched dev server, whose parent is still alive).
+    /// "Orphaned" = the exact server process THIS app spawned on a previous run
+    /// (PID recorded in server.pid) that outlived the app. We only reclaim our
+    /// own orphan — never a server started by someone else. A ppid==1 heuristic
+    /// alone is NOT enough: a dev server launched from a shell that later exits
+    /// also reparents to PID 1, and killing it torpedoes the user's own setup.
     func orphanedWalnutServerPid(onPort port: Int) -> pid_t? {
+        guard let recordedPid = recordedSpawnedServerPid() else { return nil }
         // 1. Find the PID listening on the TCP port.
         guard let lsof = runShellRaw("lsof -nP -iTCP:\(port) -sTCP:LISTEN -t 2>/dev/null | head -1"),
               let pid = Int32(lsof.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             return nil
         }
-        // 2. Confirm it's a Walnut server (cli.js web) and read its parent PID.
-        guard let psOut = runShellRaw("ps -o ppid=,command= -p \(pid) 2>/dev/null") else {
+        // 2. Only our own recorded child counts (guards against PID reuse by
+        //    also confirming it still looks like a Walnut server).
+        guard pid == recordedPid else { return nil }
+        guard let psOut = runShellRaw("ps -o command= -p \(pid) 2>/dev/null"),
+              psOut.contains("cli.js"), psOut.contains("web") else {
+            // Recorded PID no longer a Walnut server (reused) — stale record.
+            clearSpawnedServerPid()
             return nil
         }
-        let trimmed = psOut.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.contains("cli.js") && trimmed.contains("web") else { return nil }
-        let ppid = trimmed.split(separator: " ", maxSplits: 1).first.flatMap { Int32($0) }
-        return ppid == 1 ? pid : nil
+        return pid
     }
 
     func tryStartServerOnPort(index: Int) {
@@ -718,6 +751,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             try process.run()
+            // Persist the child's PID so a future launch (after an app crash)
+            // can recognize this exact process as OUR orphan and reclaim it.
+            recordSpawnedServerPid(process.processIdentifier)
         } catch {
             DispatchQueue.main.async { [weak self] in
                 self?.showError("Failed to start server: \(error.localizedDescription)")
@@ -727,6 +763,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         process.terminationHandler = { [weak self] proc in
             DispatchQueue.main.async {
+                clearSpawnedServerPid() // it died on its own — nothing to reclaim
                 guard let self = self, !portConfirmed else { return }
                 self.serverProcess = nil
                 self.tryStartServerOnPort(index: index + 1)
@@ -796,6 +833,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if ownsServer, let proc = serverProcess, proc.isRunning {
             proc.terminate()
+            clearSpawnedServerPid() // clean shutdown — no orphan to reclaim later
             DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
                 if proc.isRunning {
                     proc.interrupt()
