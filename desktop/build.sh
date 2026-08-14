@@ -92,6 +92,24 @@ else
     echo "  Warning: walnut-icon.png not found at $ICON_SRC, skipping icon."
 fi
 
+# Sign with a real identity when one exists (Developer ID > Apple Development),
+# falling back to ad-hoc. This matters beyond Gatekeeper: macOS ties permission
+# grants (microphone TCC) to the signing identity. Ad-hoc identity = the binary
+# hash, so EVERY rebuild looked like a brand-new app and re-prompted for the
+# mic. A certificate identity is stable across rebuilds — grant once, keep it.
+# (`|| true`: grep exits 1 on no-match, which set -euo pipefail would fatal.)
+IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | { grep -o '"Developer ID Application[^"]*"' || true; } | head -1 | tr -d '"')
+if [ -z "$IDENTITY" ]; then
+    IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | { grep -o '"Apple Development[^"]*"' || true; } | head -1 | tr -d '"')
+fi
+if [ -n "$IDENTITY" ]; then
+    echo "Code signing with: $IDENTITY"
+    codesign --force --sign "$IDENTITY" "$APP_BUNDLE"
+else
+    echo "No signing identity found — ad-hoc signing (permission prompts repeat after each rebuild)."
+    codesign --force --sign - "$APP_BUNDLE"
+fi
+
 echo ""
 echo "Done! Built: $APP_BUNDLE"
 echo ""

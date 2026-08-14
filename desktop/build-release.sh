@@ -102,9 +102,22 @@ if [ -f "$ICON_SRC" ]; then
     rm -rf "$ICONSET"
 fi
 
-# Ad-hoc code sign (allows the app to run without an Apple Developer ID)
-echo "Ad-hoc code signing..."
-codesign --force --deep --sign - "$APP_BUNDLE"
+# Sign with a real identity when one exists (Developer ID > Apple Development),
+# falling back to ad-hoc. macOS ties permission grants (microphone TCC) to the
+# signing identity — ad-hoc changes every rebuild, so users were re-prompted
+# for the mic on each update. A certificate identity keeps grants sticky.
+# (`|| true`: grep exits 1 on no-match, which set -euo pipefail would fatal.)
+IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | { grep -o '"Developer ID Application[^"]*"' || true; } | head -1 | tr -d '"')
+if [ -z "$IDENTITY" ]; then
+    IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | { grep -o '"Apple Development[^"]*"' || true; } | head -1 | tr -d '"')
+fi
+if [ -n "$IDENTITY" ]; then
+    echo "Code signing with: $IDENTITY"
+    codesign --force --deep --sign "$IDENTITY" "$APP_BUNDLE"
+else
+    echo "No signing identity found — ad-hoc signing..."
+    codesign --force --deep --sign - "$APP_BUNDLE"
+fi
 
 echo ""
 echo "=== Creating DMG ==="
