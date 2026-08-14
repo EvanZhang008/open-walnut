@@ -1,11 +1,12 @@
 import { test, expect, type Page } from '@playwright/test'
 
 /**
- * The sidebar carries ONLY daily surfaces. Management pages (Agents, Skills,
- * Commands, Memory, the Tasks table) and audio recording moved behind
- * Settings → Manage / Audio Capture, and the collapsible "Other" group is gone.
+ * The APP sidebar carries ONLY daily surfaces. Management pages (Agents, Skills,
+ * Commands, Memory, the Tasks table) moved into the SETTINGS sidebar's "Manage"
+ * group, audio recording moved into Settings → Audio Capture, and the collapsible
+ * "Other" group is gone.
  *
- * This pins the shape so the icon wall can't grow back: the sidebar was a
+ * This pins the shape so the icon wall can't grow back: the app sidebar was a
  * 13-item column of unlabelled glyphs when collapsed (the default), which is
  * exactly the state a user reported as unreadable.
  */
@@ -20,9 +21,9 @@ async function expandSidebar(page: Page): Promise<void> {
   }
 }
 
-test('sidebar shows only the daily surfaces — no management pages, no Other group', async ({ page }) => {
+test('app sidebar shows only the daily surfaces — no management pages, no Other group', async ({ page }) => {
   await page.goto('/settings')
-  await expect(page.locator('#manage')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 30_000 })
   await expandSidebar(page)
 
   const labels = (await page.locator('.sidebar-nav .sidebar-link').allTextContents()).map((t) => t.trim())
@@ -38,23 +39,31 @@ test('sidebar shows only the daily surfaces — no management pages, no Other gr
   }
 })
 
-test('Settings → Manage is the route into every management page', async ({ page }) => {
+test('the Settings SIDEBAR carries every management page', async ({ page }) => {
   await page.goto('/settings')
-  await expect(page.locator('#manage')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 30_000 })
 
+  // They live IN the settings sidebar (not as cards in the content area), above
+  // the section list, under a "Manage" caption.
+  const nav = page.locator('.settings-nav')
+  await expect(nav.locator('.settings-nav-group-label', { hasText: 'Manage' })).toBeVisible()
   for (const id of ['agents', 'skills', 'commands', 'memory', 'tasks']) {
-    await expect(page.getByTestId(`manage-link-${id}`)).toBeVisible()
+    const link = page.getByTestId(`settings-nav-${id}`)
+    await expect(link).toBeVisible()
+    // Inside the nav, and a real anchor (it routes away, it does not scroll).
+    await expect(nav.getByTestId(`settings-nav-${id}`)).toHaveCount(1)
+    await expect(link).toHaveAttribute('href', /./)
   }
 
-  // One card actually navigates (real click, no page.goto).
-  await page.getByTestId('manage-link-skills').click()
+  // One link actually navigates (real click, no page.goto).
+  await page.getByTestId('settings-nav-skills').click()
   await expect(page).toHaveURL(/\/skills$/)
   await expect(page.locator('.skills-page')).toBeVisible({ timeout: 30_000 })
 
   // And back out to the Tasks table, the surface the old "Other" group hosted.
   await page.locator('.sidebar a[href="/settings"]').click()
-  await expect(page.locator('#manage')).toBeVisible({ timeout: 30_000 })
-  await page.getByTestId('manage-link-tasks').click()
+  await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 30_000 })
+  await page.getByTestId('settings-nav-tasks').click()
   await expect(page).toHaveURL(/\/tasks$/)
   await expect(page.getByTestId('tasks-table')).toBeVisible({ timeout: 30_000 })
 })

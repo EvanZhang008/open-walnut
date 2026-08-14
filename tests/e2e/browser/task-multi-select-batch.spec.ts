@@ -225,7 +225,7 @@ test.skip('/tasks page selection bar can complete and delete a multi-selection',
 
   // Real UI navigation: Settings → Manage → Tasks table.
   await page.locator('.sidebar a[href="/settings"]').click()
-  await page.getByTestId('manage-link-tasks').click()
+  await page.getByTestId('settings-nav-tasks').click()
   await expect(page).toHaveURL(/\/tasks/)
   await page.waitForLoadState('networkidle')
 
