@@ -7,17 +7,33 @@ interface NavItem {
 }
 
 /**
- * Management pages, at the TOP of the settings sidebar. These ROUTE AWAY (they are
- * their own full pages) rather than scrolling to a section, which is why they are
- * NavLinks and not nav buttons. They used to sit in the app's main sidebar and made
- * it an unreadable icon wall; this is their home now.
+ * The settings sidebar has TWO groups, split by what the entry IS rather than by
+ * how it navigates:
+ *
+ * - Manage: browse-and-edit lists of things the AI uses (agents, skills, commands,
+ *   memories, repos, hooks). Some are their own full pages (NavLink, marked with a
+ *   chevron) and some are sections on this page (scroll button) — the group is about
+ *   the content, not the mechanism.
+ * - Configure: the knobs. Every entry scrolls to a section here.
+ *
+ * Agents/Skills/Commands/Memory used to live in the app's main sidebar and turned it
+ * into an unreadable icon wall; this is their home now. The Tasks table is NOT here:
+ * it is a daily surface, so it stayed in the app sidebar.
+ *
+ * There is no "Memory" entry under Configure: the old MemorySection's entire body was
+ * a button to /memory, which the Manage link above now is.
  */
-const PAGE_LINKS: Array<{ to: string; label: string; testId: string }> = [
+const MANAGE_PAGES: Array<{ to: string; label: string; testId: string }> = [
   { to: '/agents', label: 'Agents', testId: 'settings-nav-agents' },
   { to: '/skills', label: 'Skills', testId: 'settings-nav-skills' },
   { to: '/commands', label: 'Commands', testId: 'settings-nav-commands' },
   { to: '/memory', label: 'Memory', testId: 'settings-nav-memory' },
-  { to: '/tasks', label: 'Tasks table', testId: 'settings-nav-tasks' },
+];
+
+/** Manage entries that are sections on this page, not separate routes. */
+const MANAGE_SECTIONS: NavItem[] = [
+  { id: 'repositories', label: 'Repositories' },
+  { id: 'hooks', label: 'Hooks' },
 ];
 
 const NAV_ITEMS: NavItem[] = [
@@ -29,7 +45,6 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'calendar', label: 'Calendar' },
   { id: 'plugin-store', label: 'Plugin Store' },
   { id: 'search', label: 'Search & Embeddings' },
-  { id: 'memory', label: 'Memory' },
   { id: 'stt', label: 'Speech-to-Text' },
   { id: 'audio-capture', label: 'Audio Capture' },
   { id: 'heartbeat', label: 'Heartbeat' },
@@ -38,8 +53,6 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'devices', label: 'Devices' },
   { id: 'cloud', label: 'Cloud Companion' },
   { id: 'advanced', label: 'Advanced' },
-  { id: 'repositories', label: 'Repositories', divider: true },
-  { id: 'hooks', label: 'Hooks' },
   { id: 'usage', label: 'Usage & Costs', divider: true },
   { id: 'timeline', label: 'Timeline' },
   { id: 'bug-report', label: 'Bug Report', divider: true },
@@ -51,10 +64,24 @@ interface SettingsNavProps {
 }
 
 export function SettingsNav({ activeSection, onNavigate }: SettingsNavProps) {
+  const sectionButton = (item: NavItem) => (
+    <span key={item.id}>
+      {item.divider && <div className="settings-nav-divider" />}
+      <button
+        type="button"
+        className={`settings-nav-item${activeSection === item.id ? ' settings-nav-active' : ''}`}
+        data-testid={`settings-nav-${item.id}`}
+        onClick={() => onNavigate(item.id)}
+      >
+        {item.label}
+      </button>
+    </span>
+  );
+
   return (
     <nav className="settings-nav" aria-label="Settings sections">
       <span className="settings-nav-group-label">Manage</span>
-      {PAGE_LINKS.map((link) => (
+      {MANAGE_PAGES.map((link) => (
         <NavLink
           key={link.to}
           to={link.to}
@@ -64,20 +91,10 @@ export function SettingsNav({ activeSection, onNavigate }: SettingsNavProps) {
           {link.label}
         </NavLink>
       ))}
+      {MANAGE_SECTIONS.map(sectionButton)}
       <div className="settings-nav-divider" />
       <span className="settings-nav-group-label">Configure</span>
-      {NAV_ITEMS.map((item) => (
-        <span key={item.id}>
-          {item.divider && <div className="settings-nav-divider" />}
-          <button
-            type="button"
-            className={`settings-nav-item${activeSection === item.id ? ' settings-nav-active' : ''}`}
-            onClick={() => onNavigate(item.id)}
-          >
-            {item.label}
-          </button>
-        </span>
-      ))}
+      {NAV_ITEMS.map(sectionButton)}
     </nav>
   );
 }

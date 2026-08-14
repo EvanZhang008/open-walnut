@@ -166,12 +166,10 @@ async function openTaskDetail(page: Page, task: Locator): Promise<Locator> {
   return modal
 }
 
-/** The Tasks table lives in the Settings sidebar's "Manage" group now. */
+/** Top-level app-sidebar link — the Tasks table is a daily surface, not a setting. */
 async function navigateToTasks(page: Page, mobile = false): Promise<void> {
   if (mobile) await page.getByRole('button', { name: 'Toggle sidebar' }).click()
-  await page.locator('.sidebar a[href="/settings"]').click()
-  await expect(page).toHaveURL(/\/settings/)
-  await page.getByTestId('settings-nav-tasks').click()
+  await page.locator('.sidebar a[href="/tasks"]').click()
   await expect(page).toHaveURL(/\/tasks$/)
   if (mobile) {
     await expect(page.locator('.sidebar-overlay')).toHaveCount(0)

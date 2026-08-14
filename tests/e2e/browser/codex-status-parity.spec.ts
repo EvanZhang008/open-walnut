@@ -33,11 +33,9 @@ async function openCodexQuickStart(page: Page): Promise<Locator> {
   return openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`, { engine: 'Codex' })
 }
 
-/** The Tasks table lives in the Settings sidebar's "Manage" group now. */
+/** Top-level app-sidebar link — the Tasks table is a daily surface, not a setting. */
 async function navigateToTasks(page: Page): Promise<void> {
-  await page.locator('.sidebar a[href="/settings"]').click()
-  await expect(page).toHaveURL(/\/settings/)
-  await page.getByTestId('settings-nav-tasks').click()
+  await page.locator('.sidebar a[href="/tasks"]').click()
   await expect(page).toHaveURL(/\/tasks$/)
   await expect(page.getByTestId('tasks-table')).toBeVisible()
 }

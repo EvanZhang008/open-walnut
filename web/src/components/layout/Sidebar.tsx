@@ -11,10 +11,10 @@ const SS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
 const SS_TODO_VISIBLE_KEY = 'open-walnut-home-todo-visible';
 const SS_CALENDAR_VISIBLE_KEY = 'open-walnut-home-calendar-visible';
 
-// The sidebar carries ONLY the daily surfaces (panels + Home/Notes/Calendar/
+// The sidebar carries ONLY the daily surfaces (panels + Home/Tasks/Notes/Calendar/
 // Routines) plus Settings. Management pages (Agents, Skills, Commands, Memory,
-// the Tasks table) and audio recording live under Settings → Manage /
-// Audio Capture, so this list can never grow back into an unreadable icon wall.
+// Repositories, Hooks) and audio recording live in the Settings sidebar's Manage
+// group / Audio Capture, so this list can never grow back into an icon wall.
 
 interface SidebarProps {
   asideRef: RefObject<HTMLElement | null>;
@@ -161,6 +161,10 @@ export function Sidebar({
           <HomeIcon />
           <span className="sidebar-label">Home</span>
         </NavLink>
+        <NavLink to="/tasks" className={navLinkClass} title={collapsed ? 'Tasks' : undefined}>
+          <TasksIcon />
+          <span className="sidebar-label">Tasks</span>
+        </NavLink>
         <NavLink to="/notes" className={navLinkClass} title={collapsed ? 'Notes' : undefined}>
           <NotesIcon />
           <span className="sidebar-label">Notes</span>
@@ -247,6 +251,15 @@ function HomeIcon() {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
       <polyline points="9 22 9 12 15 12 15 22" />
+    </svg>
+  );
+}
+
+function TasksIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 11l3 3L22 4" />
+      <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
     </svg>
   );
 }

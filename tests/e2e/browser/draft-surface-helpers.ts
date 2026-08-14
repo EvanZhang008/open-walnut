@@ -103,18 +103,15 @@ export async function restVisibility(loc: Locator): Promise<{ opacity: number; h
 /**
  * Navigate to /tasks the way a user does — through the UI, never `page.goto`.
  *
- * The link is NOT in the app sidebar: that carries only the daily surfaces now.
- * The Tasks table lives in the SETTINGS sidebar's "Manage" group, so the real route
- * in is Settings → "Tasks table". Same dance as
- * tests/e2e/browser/codex-status-parity.spec.ts and session-status-store.spec.ts;
- * lifted here so a third copy can't drift.
+ * Top-level app-sidebar link. It briefly lived behind Settings while the sidebar was
+ * decluttered, but the Tasks table is a daily surface, not configuration, so it came
+ * back out. Same dance as tests/e2e/browser/codex-status-parity.spec.ts and
+ * session-status-store.spec.ts; lifted here so a third copy can't drift.
  */
 export async function navigateToTasksPage(page: Page): Promise<void> {
-  const settings = page.locator('.sidebar a[href="/settings"]')
-  await expect(settings).toBeVisible({ timeout: 30_000 })
-  await settings.click()
-  await expect(page).toHaveURL(/\/settings/)
-  await page.getByTestId('settings-nav-tasks').click()
+  const link = page.locator('.sidebar a[href="/tasks"]')
+  await expect(link).toBeVisible({ timeout: 30_000 })
+  await link.click()
   await expect(page).toHaveURL(/\/tasks$/)
   await expect(page.getByTestId('tasks-table')).toBeVisible({ timeout: 30_000 })
 }

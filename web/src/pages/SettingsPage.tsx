@@ -34,7 +34,6 @@ import { IntegrationsSection } from '@/components/settings/sections/Integrations
 import { CalendarSection } from '@/components/settings/sections/CalendarSection';
 import { PluginStoreSection } from '@/components/settings/sections/PluginStoreSection';
 import { SearchSection } from '@/components/settings/sections/SearchSection';
-import { MemorySection } from '@/components/settings/sections/MemorySection';
 import { HeartbeatSection } from '@/components/settings/sections/HeartbeatSection';
 import { RemoteHostsSection } from '@/components/settings/sections/RemoteHostsSection';
 import { AdvancedSection } from '@/components/settings/sections/AdvancedSection';
@@ -48,15 +47,19 @@ import { DevicesSection } from '@/components/settings/sections/DevicesSection';
 import { CloudSection } from '@/components/settings/sections/CloudSection';
 import { BugReportSection } from '@/components/settings/sections/BugReportSection';
 
+// DOM order — must match the rendered order below, since scroll tracking walks this
+// list backwards to find the topmost section. Repositories/Hooks lead: they belong to
+// the sidebar's "Manage" group, which sits above "Configure".
 const SECTION_IDS = [
+  'repositories', 'hooks',
   'providers', 'general', 'sessions', 'focus-tiers',
-  'integrations', 'calendar', 'plugin-store', 'search', 'memory', 'stt', 'audio-capture', 'heartbeat', 'remote-hosts', 'devices', 'cloud', 'advanced',
-  'repositories', 'hooks', 'usage', 'timeline', 'bug-report',
+  'integrations', 'calendar', 'plugin-store', 'search', 'stt', 'audio-capture', 'heartbeat', 'remote-hosts', 'devices', 'cloud', 'advanced',
+  'usage', 'timeline', 'bug-report',
 ];
 
 export function SettingsPage() {
   const { config, loading, error, saveSection, reload } = useSettingsConfig();
-  const [activeSection, setActiveSection] = useState('providers');
+  const [activeSection, setActiveSection] = useState(SECTION_IDS[0]);
   const contentRef = useRef<HTMLDivElement>(null);
 
   // Track active section via scroll position
@@ -126,6 +129,10 @@ export function SettingsPage() {
             <h1 className="page-title">Settings</h1>
             <p className="page-subtitle">Configure everything from one place</p>
           </div>
+          {/* Manage group first — matches the settings sidebar's order, so scrolling
+              and clicking the nav agree. */}
+          <SectionErrorBoundary name="Repositories"><ReposSection /></SectionErrorBoundary>
+          <SectionErrorBoundary name="Hooks"><HooksSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="AI Provider"><ProvidersSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="General"><GeneralSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Tasks & Sessions"><SessionsSection config={config} onSave={saveSection} /></SectionErrorBoundary>
@@ -134,7 +141,6 @@ export function SettingsPage() {
           <SectionErrorBoundary name="Calendar"><CalendarSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Plugin Store"><PluginStoreSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Search"><SearchSection config={config} onSave={saveSection} /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Memory"><MemorySection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Speech-to-Text"><SttSection config={config} onSave={saveSection} onReload={reload} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Audio Capture"><AudioCaptureSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Heartbeat"><HeartbeatSection config={config} onSave={saveSection} /></SectionErrorBoundary>
@@ -142,8 +148,6 @@ export function SettingsPage() {
           <SectionErrorBoundary name="Devices"><DevicesSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Cloud Companion"><CloudSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Advanced"><AdvancedSection config={config} onSave={saveSection} /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Repositories"><ReposSection /></SectionErrorBoundary>
-          <SectionErrorBoundary name="Hooks"><HooksSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Usage & Costs"><UsageSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Timeline"><TimelineSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Bug Report"><BugReportSection /></SectionErrorBoundary>
