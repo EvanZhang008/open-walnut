@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo, Component, type ReactNode, type ErrorInfo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { copyTextDeferred } from '@/utils/clipboard';
 import { SessionChatHistory } from './SessionChatHistory';
 import { SessionNotesPill, SessionNotesBar, useSessionNote } from './SessionNotes';
 import { SessionFileExplorer } from './SessionFileExplorer';
@@ -137,15 +138,16 @@ interface SessionPanelProps {
   onSessionClick?: (sessionId: string) => void;
   /** Called when "Clear Context & Execute" creates a new session — receives (oldId, newId). */
   onSessionReplaced?: (oldSessionId: string, newSessionId: string) => void;
-  /** Called immediately when Fork is clicked — parent can show a pending panel. */
-  onForkPending?: (cwd: string, host?: string) => void;
-  /** Called when fork API returns — parent stores taskId for WS-based session resolution. */
-  onForkResolved?: (taskId: string, sessionId?: string) => void;
-  /** Called when fork API fails — parent should show error on the pending panel. */
-  onForkFailed?: (errorMessage?: string) => void;
+  /** Fork opens a pre-bound draft column (the shared "+" surface) — this is
+   *  MainPage's openDraftColumn, narrowed to the fork seed shape. */
+  onOpenForkDraft?: (seed: {
+    forkOf: { sessionId: string; title?: string };
+    cwd: string; host: string | null; hostLabel?: string;
+    project?: string; model?: string; cwdPinned: true;
+  }) => void;
 }
 
-export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, locked, onToggleLock, onTaskClick, onOpenTaskDetail, onSessionClick, onSessionReplaced, onForkPending, onForkResolved, onForkFailed }: SessionPanelProps) {
+export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, locked, onToggleLock, onTaskClick, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft }: SessionPanelProps) {
   const navigate = useNavigate();
   const { notify } = useNotifications();
   const confirmDialog = useConfirm();
@@ -761,17 +763,23 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     log.info('session-panel', 'investigate button clicked', { sessionId, taskId: session?.taskId });
     setInvestigating(true);
     setInvestigateResult(null);
+    // Kick off capture, then hand the PENDING text promise to the clipboard
+    // synchronously — Safari/WKWebView reject a write issued after the await
+    // (user-gesture expired), which silently dropped the copy there.
+    const capture = investigateSession(sessionId, session?.taskId);
+    const clipPromise = capture.then(({ incident }) => buildInvestigationClip({
+      sessionId,
+      taskId: session?.taskId,
+      incidentId: incident.id,
+      bundlePath: incident.bundlePath,
+      host: session?.host,
+    }));
+    const copyDone = copyTextDeferred(clipPromise).catch(() => 'failed' as const);
     try {
-      const { incident } = await investigateSession(sessionId, session?.taskId);
+      const { incident } = await capture;
       log.info('session-panel', 'investigate captured evidence', { sessionId, incidentId: incident.id, bundlePath: incident.bundlePath });
-      const clip = buildInvestigationClip({
-        sessionId,
-        taskId: session?.taskId,
-        incidentId: incident.id,
-        bundlePath: incident.bundlePath,
-        host: session?.host,
-      });
-      await navigator.clipboard.writeText(clip).catch(() => {});
+      const copyResult = await copyDone;
+      if (copyResult === 'failed') log.warn('session-panel', 'investigate clipboard copy failed', { sessionId, incidentId: incident.id });
       setInvestigateResult({ kind: 'ok', id: incident.id });
       clearTimeout(investigateTimerRef.current);
       investigateTimerRef.current = setTimeout(() => setInvestigateResult(null), 6000);
@@ -1110,12 +1118,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             )}
             <SessionForkButton
               sessionId={sessionId}
-              cwd={session?.cwd}
-              taskId={session?.taskId}
-              engine={session?.engine}
-              onForkStarted={(cwd, host) => { onForkPending?.(cwd, host); }}
-              onForkComplete={(newTaskId, newSessionId) => { onForkResolved?.(newTaskId, newSessionId); onTaskClick?.(newTaskId); }}
-              onForkFailed={(errMsg) => onForkFailed?.(errMsg)}
+              session={session}
+              sourceTitle={headerTitle}
+              onOpenForkDraft={onOpenForkDraft}
             />
             <button
               className={`session-action-chip${activeView === 'changed' ? ' session-action-chip-active' : ''}`}

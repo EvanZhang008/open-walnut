@@ -7,6 +7,7 @@
  * (restart / investigate / open-notes …) and pass them down.
  */
 import { useState, useRef, useEffect } from 'react';
+import { copyTextRobust } from '@/utils/clipboard';
 import { ICON_SEARCH, ICON_REFRESH, ICON_STOP, ICON_VSCODE } from '../common/Icons';
 import { openSessionInVscode } from './openSessionInVscode';
 import {
@@ -99,11 +100,12 @@ function CopyItem({ label, value, onAfter }: { label: string; value: string; onA
       className="task-kebab-item"
       onClick={(e) => {
         e.stopPropagation();
-        navigator.clipboard.writeText(value).then(() => {
+        void copyTextRobust(value).then((r) => {
+          if (r === 'failed') return;
           setCopied(true);
           clearTimeout(timerRef.current);
           timerRef.current = setTimeout(() => { setCopied(false); onAfter?.(); }, 900);
-        }).catch(() => {});
+        });
       }}
       title={`Copy: ${value}`}
     >

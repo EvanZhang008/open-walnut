@@ -67,6 +67,10 @@ cat > "$CONTENTS/Info.plist" << 'EOF'
         <key>NSAllowsLocalNetworking</key>
         <true/>
     </dict>
+    <!-- Without this key WKWebView hides navigator.mediaDevices entirely,
+         which silently removes the web console's voice-input mic button. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Walnut uses the microphone for voice input (speech-to-text).</string>
 </dict>
 </plist>
 EOF

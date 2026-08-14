@@ -880,10 +880,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        // Native clipboard bridge: WKWebView refuses navigator.clipboard writes
+        // once the triggering user-gesture has expired (async capture-then-copy
+        // flows). The web console prefers this handler when present.
+        config.userContentController.add(self, name: "walnutClipboard")
 
         webView = WKWebView(frame: window.contentView!.bounds, configuration: config)
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
+        webView.uiDelegate = self
 
         window.contentView = webView
         window.title = "Walnut — localhost:\(port)"
@@ -1290,6 +1295,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func openInBrowser() {
         guard let port = serverPort else { return }
         NSWorkspace.shared.open(URL(string: "http://localhost:\(port)")!)
+    }
+}
+
+// MARK: - Web ↔ native bridges
+
+extension AppDelegate: WKScriptMessageHandler {
+    // window.webkit.messageHandlers.walnutClipboard.postMessage("text")
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "walnutClipboard", let text = message.body as? String else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+extension AppDelegate: WKUIDelegate {
+    // Voice input: our own localhost UI is the only origin — grant the mic
+    // without the per-site prompt (macOS still shows its one-time system prompt).
+    func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+                 initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType,
+                 decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        decisionHandler(origin.host == "localhost" && type == .microphone ? .grant : .deny)
     }
 }
 
