@@ -106,16 +106,38 @@ fi
 # falling back to ad-hoc. macOS ties permission grants (microphone TCC) to the
 # signing identity — ad-hoc changes every rebuild, so users were re-prompted
 # for the mic on each update. A certificate identity keeps grants sticky.
+# A REVOKED certificate is worse than no certificate: macOS refuses to launch
+# the app with a misleading "can't use this version of the application" alert
+# (and may quarantine it), so every candidate is signed then verified, and we
+# fall back to ad-hoc unless the result actually passes assessment.
 # (`|| true`: grep exits 1 on no-match, which set -euo pipefail would fatal.)
-IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | { grep -o '"Developer ID Application[^"]*"' || true; } | head -1 | tr -d '"')
-if [ -z "$IDENTITY" ]; then
-    IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | { grep -o '"Apple Development[^"]*"' || true; } | head -1 | tr -d '"')
-fi
-if [ -n "$IDENTITY" ]; then
-    echo "Code signing with: $IDENTITY"
-    codesign --force --deep --sign "$IDENTITY" "$APP_BUNDLE"
-else
-    echo "No signing identity found — ad-hoc signing..."
+CANDIDATES=$(security find-identity -v -p codesigning 2>/dev/null \
+    | { grep -o '"\(Developer ID Application\|Apple Development\)[^"]*"' || true; } | tr -d '"')
+
+SIGNED_WITH=""
+while IFS= read -r ID; do
+    [ -n "$ID" ] || continue
+    if ! codesign --force --deep --sign "$ID" "$APP_BUNDLE" 2>/dev/null; then
+        echo "  Skipping identity (codesign failed): $ID"
+        continue
+    fi
+    # Only CERTIFICATE TRUST failures (CSSMERR_*: revoked, expired) make an app
+    # unlaunchable. A plain "rejected" is expected for an Apple Development
+    # cert — that assesses *distribution*, and the app still runs locally with
+    # a stable identity, which is all the TCC grant needs.
+    ASSESS=$(spctl -a -vv "$APP_BUNDLE" 2>&1 || true)
+    case "$ASSESS" in
+        *CSSMERR*)
+            echo "  Skipping unusable identity: $ID ($ASSESS)" ;;
+        *)
+            SIGNED_WITH="$ID"
+            echo "Code signing with: $ID"
+            break ;;
+    esac
+done <<< "$CANDIDATES"
+
+if [ -z "$SIGNED_WITH" ]; then
+    echo "No usable signing identity — ad-hoc signing..."
     codesign --force --deep --sign - "$APP_BUNDLE"
 fi
 
