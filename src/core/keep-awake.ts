@@ -317,13 +317,18 @@ async function applyDisableSleep(desired: boolean, notify?: KeepAwakeNotify): Pr
     log.web.info(desired ? 'keep-awake HOLDING — sleep disabled (lid-closed safe)' : 'keep-awake released — normal sleep restored');
     return true;
   }
-  state.needsSudo = true;
-  if (!notifiedNeedsSudo) {
-    notifiedNeedsSudo = true;
+  if (!state.needsSudo) {
     log.web.warn('keep-awake cannot run pmset without a password — sudoers rule missing', { stderr: res.stderr.slice(0, 200) });
+  }
+  state.needsSudo = true;
+  // Notify ONLY when a hold is actually needed (sessions running, lid might
+  // close any second). The just-enabled-it case surfaces inline in Settings —
+  // the user is sitting right there; a notification would be noise.
+  if (desired && !notifiedNeedsSudo) {
+    notifiedNeedsSudo = true;
     notify?.(
       'Keep-Awake Needs a One-Time Setup',
-      `Keep-Awake is enabled but Walnut cannot toggle sleep without a password. Run this once in a terminal:\n${getSudoSetupCommand()}`,
+      'Sessions are running but Walnut cannot keep the Mac awake yet. Open Settings → Advanced → Keep Mac Awake for the one-time setup command.',
       'keep-awake:needs-sudo',
     );
   }

@@ -243,8 +243,17 @@ export function AdvancedSection({ config, onSave }: Props) {
 
         {/* Keep Awake (macOS console only — hidden when the route reports unsupported) */}
         {kaStatus?.state.supported !== false && (
-          <details className="settings-collapsible">
-            <summary className="settings-collapsible-title">Keep Mac Awake During Sessions (Even Lid Closed)</summary>
+          <details className="settings-collapsible" onToggle={(e) => { if ((e.currentTarget as HTMLDetailsElement).open) refreshKaStatus(); }}>
+            <summary className="settings-collapsible-title">
+              Keep Mac Awake During Sessions (Even Lid Closed)
+              {kaStatus?.state.enabled && (
+                kaStatus.state.needsSudo
+                  ? <span style={{ marginLeft: 8, fontWeight: 400, color: 'var(--warning, #b58900)' }}>⚠️ Setup needed</span>
+                  : kaStatus.state.holding
+                    ? <span style={{ marginLeft: 8, fontWeight: 400 }}>🟢 Active</span>
+                    : <span className="text-muted" style={{ marginLeft: 8, fontWeight: 400 }}>✓ On</span>
+              )}
+            </summary>
             <div className="settings-collapsible-body">
               <p className="text-sm text-muted" style={{ margin: '0 0 12px 0' }}>
                 While Claude Code sessions run, the Mac stays on and connected —
@@ -257,6 +266,20 @@ export function AdvancedSection({ config, onSave }: Props) {
                 <input type="checkbox" name="ka-enabled" defaultChecked={keepAwake.enabled === true} style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
                 Enable Keep-Awake
               </label>
+              {kaStatus?.state.enabled && kaStatus.state.needsSudo && (
+                <div style={{ border: '1px solid var(--warning, #b58900)', borderRadius: 6, padding: '10px 12px', marginBottom: 12 }}>
+                  <p style={{ margin: '0 0 6px 0', fontWeight: 600, color: 'var(--warning, #b58900)' }}>
+                    ⚠️ One-time setup required — Keep-Awake can&rsquo;t work yet
+                  </p>
+                  <p className="text-sm" style={{ margin: '0 0 6px 0' }}>
+                    Copy this into Terminal once (it lets Walnut toggle sleep, nothing else):
+                  </p>
+                  <pre className="settings-raw-config" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>{kaStatus.sudoSetupCommand}</pre>
+                  <button type="button" className="btn-secondary" style={{ marginTop: 8 }} onClick={refreshKaStatus}>
+                    I ran it — check again
+                  </button>
+                </div>
+              )}
               <div className="form-row">
                 <div className="form-group">
                   <label htmlFor="ka-battery">Battery Floor (%)</label>
@@ -314,14 +337,6 @@ export function AdvancedSection({ config, onSave }: Props) {
                     {kaStatus.state.battery ? ` · battery ${kaStatus.state.battery.pct}%${kaStatus.state.battery.onAc ? ' (AC)' : ''}` : ''}
                     {kaStatus.state.online === false ? ' · offline' : ''}
                   </span>
-                  {kaStatus.state.enabled && kaStatus.state.needsSudo && (
-                    <div>
-                      <p style={{ margin: '8px 0 4px 0', color: 'var(--warning, #b58900)' }}>
-                        One-time setup needed — run this in a terminal so Walnut may toggle sleep:
-                      </p>
-                      <pre className="settings-raw-config" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{kaStatus.sudoSetupCommand}</pre>
-                    </div>
-                  )}
                   {kaStatus.state.lastHotspotAttempt && (
                     <span className="text-muted">
                       Last hotspot attempt: {kaStatus.state.lastHotspotAttempt.ok ? 'joined' : 'failed'} ({kaStatus.state.lastHotspotAttempt.detail})
