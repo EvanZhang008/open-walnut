@@ -106,13 +106,19 @@ fi
 # falling back to ad-hoc. macOS ties permission grants (microphone TCC) to the
 # signing identity — ad-hoc changes every rebuild, so users were re-prompted
 # for the mic on each update. A certificate identity keeps grants sticky.
-# A REVOKED certificate is worse than no certificate: macOS refuses to launch
-# the app with a misleading "can't use this version of the application" alert
-# (and may quarantine it), so every candidate is signed then verified, and we
-# fall back to ad-hoc unless the result actually passes assessment.
+# DISTRIBUTABLE build: only "Developer ID Application" is acceptable — never an
+# "Apple Development" cert. A Development cert buys other users nothing (it is
+# not a Gatekeeper-trusted distribution identity), and it is an active hazard:
+# it expires yearly, and an expired/revoked identity makes the app refuse to
+# launch on EVERY user's machine behind a misleading "can't use this version of
+# the application" alert. Ad-hoc never expires, so it is the safer fallback.
+# Pair a Developer ID signature with notarization for a warning-free first run:
+#   xcrun notarytool submit Walnut.dmg --apple-id <id> --team-id <team> --wait
+#   xcrun stapler staple Walnut.dmg
+# A REVOKED certificate is still checked for below (sign, then assess).
 # (`|| true`: grep exits 1 on no-match, which set -euo pipefail would fatal.)
 CANDIDATES=$(security find-identity -v -p codesigning 2>/dev/null \
-    | { grep -o '"\(Developer ID Application\|Apple Development\)[^"]*"' || true; } | tr -d '"')
+    | { grep -o '"Developer ID Application[^"]*"' || true; } | tr -d '"')
 
 SIGNED_WITH=""
 while IFS= read -r ID; do
@@ -137,7 +143,10 @@ while IFS= read -r ID; do
 done <<< "$CANDIDATES"
 
 if [ -z "$SIGNED_WITH" ]; then
-    echo "No usable signing identity — ad-hoc signing..."
+    echo "No Developer ID Application certificate — ad-hoc signing."
+    echo "  Recipients will hit Gatekeeper on first open (right-click → Open, or"
+    echo "  xattr -dr com.apple.quarantine Walnut.app). This is expected and safe;"
+    echo "  an Apple Development cert is deliberately NOT used here (see above)."
     codesign --force --deep --sign - "$APP_BUNDLE"
 fi
 

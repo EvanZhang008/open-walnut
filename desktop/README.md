@@ -33,8 +33,23 @@ Two scripts, same output bundle (`Walnut.app` in this directory):
 # Fast, native-arch build — best for local development / testing
 ./build.sh
 
-# Distributable: universal binary (arm64 + x86_64), ad-hoc signed, + Walnut.dmg
+# Distributable: universal binary (arm64 + x86_64) + Walnut.dmg
 ./build-release.sh
+```
+
+### Signing
+
+The two scripts deliberately accept different identities:
+
+- `build.sh` (local) takes any certificate, **Developer ID or Apple Development**. A stable signing identity is what makes macOS remember permission grants (the microphone prompt), so a plain rebuild does not re-prompt. Ad-hoc identities change every build, which re-prompts every time.
+- `build-release.sh` (for other people) takes **only Developer ID Application**, and falls back to ad-hoc otherwise. An Apple Development certificate is worthless to recipients (Gatekeeper does not trust it for distribution) and actively dangerous: it expires yearly, and an expired or revoked identity makes the app refuse to launch behind a misleading "you can't use this version of the application" alert. Ad-hoc never expires, so it is the safer fallback.
+- Both scripts assess the signature after applying it and move to the next identity when the certificate itself is untrusted (revoked or expired).
+
+For a warning-free first run for other users, sign with a Developer ID and notarize:
+
+```bash
+xcrun notarytool submit Walnut.dmg --apple-id <id> --team-id <team> --wait
+xcrun stapler staple Walnut.dmg
 ```
 
 Then either launch it in place or install it:
@@ -49,8 +64,9 @@ disk image you can hand to other users.
 
 ## First run
 
-Because the app is **ad-hoc signed** (no paid Apple Developer ID), Gatekeeper
-will warn the first time. Right-click `Walnut.app` → **Open** → **Open**, or:
+Unless the release build was signed with a Developer ID and notarized (see
+[Signing](#signing)), Gatekeeper warns the first time. Right-click `Walnut.app`
+→ **Open** → **Open**, or:
 
 ```bash
 xattr -dr com.apple.quarantine Walnut.app
