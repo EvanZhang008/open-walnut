@@ -673,6 +673,88 @@ export function FileContentView({
     };
   }, [onSelectCode, htmlPreviewLive, filePath]);
 
+  // ── HTML preview scroll memory ─────────────────────────────────────────────
+  // The HTML preview scrolls inside its IFRAME's own document, so the parent-
+  // document capture listener above never hears it and the chase can't reach its
+  // scroller — HTML files were the one text kind that never remembered their
+  // position. The frame is same-origin by construction (we serve the bytes), so
+  // save/restore happen inside the frame itself. Restore re-runs on EVERY load
+  // (unlike the md latch): each load is a fresh document parked at the top, so
+  // re-applying the offset is a resume, not a mid-read yank. PDFs stay out —
+  // the browser's PDF viewer document is a closed plugin, not scriptable.
+  useEffect(() => {
+    if (!htmlPreviewLive) return;
+    const frame = htmlFrameRef.current;
+    if (!frame) return;
+    const key = `${host ?? 'local'} ${filePath}`;
+    let win: Window | null = null;
+    let raf = 0;
+    let saveTimer: ReturnType<typeof setTimeout> | undefined;
+    let chaseTop: number | null = null;
+    let lastSetTop = -1;
+    let chaseDeadline = 0;
+
+    const onFrameScroll = () => {
+      if (!win) return;
+      const top = win.scrollY;
+      // A scroll that isn't the echo of our own set = the user took over.
+      if (chaseTop != null && Math.abs(top - lastSetTop) > 1) chaseTop = null;
+      lastSeenRef.current = { key, top };
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        const seen = lastSeenRef.current;
+        if (seen?.key === key) saveFileScroll(host, filePath, { top: seen.top });
+      }, 250);
+    };
+
+    // Chase across frames, same reason as the outer restore: the page may still
+    // be laying out (scripts, images) so a one-shot set clamps against a
+    // fraction of the final height and long pages "resume" near the top.
+    const tick = () => {
+      if (chaseTop != null && win) {
+        const doc = win.document.scrollingElement ?? win.document.documentElement;
+        if (doc) {
+          const max = doc.scrollHeight - win.innerHeight;
+          const top = Math.max(0, Math.min(chaseTop, max));
+          if (Math.abs(win.scrollY - top) > 1) {
+            lastSetTop = top;
+            win.scrollTo(0, top);
+            lastSeenRef.current = { key, top };
+          }
+          if (max >= chaseTop) chaseTop = null;
+        }
+      }
+      if (chaseTop != null && Date.now() < chaseDeadline) raf = requestAnimationFrame(tick);
+    };
+
+    const attach = () => {
+      // Cross-origin navigation inside the preview throws — no memory then.
+      try { win = frame.contentWindow; } catch { win = null; return; }
+      if (!win) return;
+      win.removeEventListener('scroll', onFrameScroll); // load+readyState can both fire
+      win.addEventListener('scroll', onFrameScroll, { passive: true });
+      const saved = line ? null : loadFileScroll(host, filePath);
+      if (saved && saved.top > 0) {
+        chaseTop = saved.top;
+        chaseDeadline = Date.now() + 5000;
+        cancelAnimationFrame(raf);
+        raf = requestAnimationFrame(tick);
+      }
+    };
+    frame.addEventListener('load', attach);
+    if (frame.contentDocument?.readyState === 'complete') attach();
+    return () => {
+      frame.removeEventListener('load', attach);
+      try { win?.removeEventListener('scroll', onFrameScroll); } catch { /* frame gone */ }
+      cancelAnimationFrame(raf);
+      clearTimeout(saveTimer);
+      // Flush the last LIVE value — the debounce would drop the final position
+      // when the panel closes (and the detached frame reads 0 by then).
+      const seen = lastSeenRef.current;
+      if (seen?.key === key) saveFileScroll(host, filePath, { top: seen.top });
+    };
+  }, [htmlPreviewLive, filePath, host, line]);
+
   // Live selection rect for the pill, translated to top-viewport coords when
   // the selection lives inside the HTML preview iframe.
   const resolveSelectionRect = useCallback((): DOMRect | null => {

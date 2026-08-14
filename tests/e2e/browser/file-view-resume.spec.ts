@@ -50,9 +50,11 @@ async function closeFiles(panel: ReturnType<Page['locator']>) {
   await expect(panel.locator('.session-file-explorer')).toHaveCount(0)
 }
 
-/** The element that actually scrolls a markdown preview. */
+/** The element that actually scrolls a markdown preview. Editable markdown now
+ *  renders the WYSIWYG editor as its Preview tab (editable-files change), so the
+ *  scroller is `.fv-wysiwyg-editor` there; read-only renders keep `.fv-md-preview`. */
 function mdPreview(explorer: ReturnType<Page['locator']>) {
-  return explorer.locator('.fv-md-preview')
+  return explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')
 }
 
 test.beforeEach(async ({ page }) => {
@@ -70,8 +72,10 @@ test('lone ~ approximations do not strike out the paragraph', async ({ page }) =
   await expect(preview).toContainText('~550K objects')
 
   // THE regression: the whole span between `~550K` and `~20 min` used to render
-  // inside a <del>. The only strike in this file is the real `~~…~~` one.
-  const struck = await preview.locator('del').allInnerTexts()
+  // struck out. The only strike in this file is the real `~~…~~` one. The
+  // marked pipeline emits <del>; the WYSIWYG editor (now the Preview tab for
+  // editable markdown) emits <s> — match either.
+  const struck = await preview.locator('del, s').allInnerTexts()
   expect(struck).toEqual(['retracted claim'])
 
   // The approximations survive as literal text, and the bold run that sat inside
@@ -82,7 +86,7 @@ test('lone ~ approximations do not strike out the paragraph', async ({ page }) =
   await expect(strong).toHaveCount(1)
   const strikeOnBold = await strong.evaluate((el) => {
     // line-through applied by an ancestor <del> shows up on the computed style.
-    return getComputedStyle(el).textDecorationLine.includes('line-through') || !!el.closest('del')
+    return getComputedStyle(el).textDecorationLine.includes('line-through') || !!el.closest('del, s')
   })
   expect(strikeOnBold).toBe(false)
 
@@ -152,6 +156,38 @@ test('scroll memory is per file — switching files does not carry the offset ov
   ).toBeGreaterThan(400)
 
   await page.screenshot({ path: `${SCREENSHOT_DIR}/step4-per-file-offsets.png` })
+})
+
+test('HTML preview remembers its scroll position too', async ({ page }) => {
+  const panel = await openSessionPanel(page)
+  let explorer = await openFiles(panel)
+
+  // The HTML preview renders inside a same-origin IFRAME whose own window
+  // scrolls — the regression was that only the parent document was listened
+  // to, so HTML files never saved a position.
+  await explorer.locator('.sfe-name', { hasText: 'drag-fixture.html' }).click()
+  let frame = explorer.locator('iframe.fv-html-preview')
+  await expect(frame).toBeVisible({ timeout: 10_000 })
+  let inner = page.frameLocator('iframe.fv-html-preview').locator('body')
+  await expect(inner).toContainText('Drag fixture preview', { timeout: 10_000 })
+
+  await frame.evaluate((el: HTMLIFrameElement) => el.contentWindow!.scrollTo(0, 1200))
+  await expect.poll(() => frame.evaluate((el: HTMLIFrameElement) => el.contentWindow!.scrollY)).toBeGreaterThan(1000)
+  await page.waitForTimeout(500) // debounced save
+
+  await closeFiles(panel)
+  explorer = await openFiles(panel)
+  frame = explorer.locator('iframe.fv-html-preview')
+  await expect(frame).toBeVisible({ timeout: 10_000 })
+  inner = page.frameLocator('iframe.fv-html-preview').locator('body')
+  await expect(inner).toContainText('Drag fixture preview', { timeout: 10_000 })
+
+  await expect.poll(
+    () => frame.evaluate((el: HTMLIFrameElement) => el.contentWindow!.scrollY),
+    { timeout: 10_000, message: 'HTML preview should resume at the saved offset' },
+  ).toBeGreaterThan(1000)
+
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/step5-html-resumed.png` })
 })
 
 test('scrolling back to the top is remembered as the top', async ({ page }) => {
