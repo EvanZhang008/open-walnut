@@ -131,3 +131,34 @@ describe('diffAgainstManifest', () => {
     expect(diff.unchanged).toHaveLength(1);
   });
 });
+
+// Path-traversal guard: bucket-provided manifest entries must not escape the
+// restore target (review finding — restore.ts containment check).
+describe('restore path containment', () => {
+  it('rejects manifest entries that escape the target dir', async () => {
+    const { restoreFromBackup } = await import('../../../src/core/backup/restore.js');
+    const evilManifest = {
+      version: 1, createdAt: 'x', hostname: 'h', walnutVersion: '1', fileCount: 1, totalBytes: 1,
+      files: [{ path: '.sqlite-snapshots/../../../../evil.txt', size: 1, mtimeMs: 1 }],
+    };
+    const client = {
+      send: async (cmd: { constructor: { name: string } }) => {
+        if (cmd.constructor.name === 'GetObjectCommand') {
+          return { Body: Object.assign(
+            (async function* () { yield Buffer.from('x'); })(),
+            { transformToString: async () => JSON.stringify(evilManifest) },
+          ) };
+        }
+        return {};
+      },
+    };
+    const target = path.join(root, 'restore-target');
+    await expect(
+      restoreFromBackup(
+        { bucket: 'b', auth: { method: 'access_keys', aws_access_key_id: 'a', aws_secret_access_key: 's' } },
+        target,
+        { client: client as never },
+      ),
+    ).rejects.toThrow(/escapes the restore target/);
+  });
+});

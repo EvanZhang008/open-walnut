@@ -11,11 +11,9 @@ import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import type { Readable } from 'node:stream';
 import { GetObjectCommand, ListObjectVersionsCommand, S3Client } from '@aws-sdk/client-s3';
-import { makeS3Client, MANIFEST_KEY } from './s3-backup.js';
+import { dataKey, makeS3Client, manifestKey } from './s3-backup.js';
 import { SQLITE_SNAPSHOT_PREFIX } from './scan.js';
 import type { BackupConfig, BackupManifest } from './types.js';
-
-const keyPrefix = (cfg: BackupConfig): string => (cfg.prefix?.replace(/\/+$/, '') || 'walnut');
 
 export interface RestorePoint {
   versionId?: string;
@@ -29,7 +27,7 @@ export async function listRestorePoints(
   client?: S3Client,
 ): Promise<RestorePoint[]> {
   const s3 = client ?? makeS3Client(cfg);
-  const key = `${keyPrefix(cfg)}/${MANIFEST_KEY}`;
+  const key = manifestKey(cfg);
   const resp = await s3.send(
     new ListObjectVersionsCommand({ Bucket: cfg.bucket, Prefix: key }),
   );
@@ -70,7 +68,7 @@ export async function restoreFromBackup(
   const manifestResp = await s3.send(
     new GetObjectCommand({
       Bucket: cfg.bucket,
-      Key: `${keyPrefix(cfg)}/${MANIFEST_KEY}`,
+      Key: manifestKey(cfg),
       ...(options.versionId ? { VersionId: options.versionId } : {}),
     }),
   );
@@ -82,16 +80,22 @@ export async function restoreFromBackup(
   // files were later overwritten would need per-object version resolution —
   // out of scope for v1; the manifest tells us if sizes mismatch (integrity
   // check below) so a wrong mix is detected, not silently accepted.
+  const resolvedTarget = path.resolve(targetDir);
   let restored = 0;
   for (const entry of manifest.files) {
     // Snapshots restore to their real path: .sqlite-snapshots/tasks/tasks.sqlite → tasks/tasks.sqlite
     const destRel = entry.path.startsWith(`${SQLITE_SNAPSHOT_PREFIX}/`)
       ? entry.path.slice(SQLITE_SNAPSHOT_PREFIX.length + 1)
       : entry.path;
-    const dest = path.join(targetDir, destRel);
+    // The manifest is bucket-provided data — a tampered entry with '..' or an
+    // absolute path must not be able to write outside the restore target.
+    const dest = path.resolve(resolvedTarget, destRel);
+    if (!dest.startsWith(resolvedTarget + path.sep)) {
+      throw new Error(`Manifest entry escapes the restore target — refusing to restore: ${entry.path}`);
+    }
     await fs.mkdir(path.dirname(dest), { recursive: true });
     const obj = await s3.send(
-      new GetObjectCommand({ Bucket: cfg.bucket, Key: `${keyPrefix(cfg)}/data/${entry.path}` }),
+      new GetObjectCommand({ Bucket: cfg.bucket, Key: dataKey(cfg, entry.path) }),
     );
     if (!obj.Body) throw new Error(`Object missing for ${entry.path}`);
     await pipeline(obj.Body as Readable, createWriteStream(dest));

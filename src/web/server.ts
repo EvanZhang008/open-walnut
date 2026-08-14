@@ -1009,7 +1009,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/search', searchRouter)
   app.use('/api/memory', memoryRouter)
   app.use('/api/config', configRouter)
-  app.use('/api/backup', backupRouter)
+  // Primary box only: these endpoints sign real AWS requests with the box's
+  // credential (incl. an EC2 instance role in the cloud). A replica reachable
+  // by any paired device must not offer them — same audience rationale as the
+  // cloud-mode config redaction above.
+  if (!CLOUD_MODE) {
+    app.use('/api/backup', backupRouter)
+  }
   app.use('/api/projects', projectsRouter)
   app.use('/api/favorites', favoritesRouter)
   app.use('/api/ui-prefs', uiPrefsRouter)

@@ -128,8 +128,10 @@ export function BackupSection({ config, onSave }: Props) {
   const handleRunNow = async () => {
     setRunError(null);
     try {
-      // Long timeout: a first 5GB backup takes a while; status events keep the UI live.
-      await apiPost('/api/backup/run', {}, { timeoutMs: 2 * 3600_000 });
+      // Fire-and-forget: the server answers 202 and the run continues in the
+      // background; progress/completion arrive via backup:status events.
+      await apiPost('/api/backup/run', {});
+      setStatus((prev) => (prev ? { ...prev, running: true } : prev));
     } catch (err) {
       setRunError((err as Error).message);
     }

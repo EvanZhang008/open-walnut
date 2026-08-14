@@ -8,7 +8,7 @@
  */
 import { log } from '../../logging/index.js';
 import { getConfig } from '../config-manager.js';
-import { isBackupRunning, runBackup } from './s3-backup.js';
+import { fetchRemoteManifest, isBackupRunning, runBackup } from './s3-backup.js';
 import type { BackupConfig, BackupHealth, BackupRunResult } from './types.js';
 
 const MIN_INTERVAL_HOURS = 1;
@@ -91,10 +91,25 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
       const cfg = config.backup;
       health.configured = Boolean(cfg?.enabled && cfg.bucket);
       if (health.configured && !isBackupRunning()) {
+        // The schedule anchor must survive restarts (dev:prod restarts this
+        // server several times a day; lastRunAtMs alone would make every boot
+        // "due" and re-upload all sqlite snapshots). The durable anchor is the
+        // remote manifest's createdAt — fetch it once per process.
+        if (lastRunAtMs === 0) {
+          try {
+            const previous = await fetchRemoteManifest(cfg!);
+            if (previous) {
+              lastRunAtMs = Date.parse(previous.createdAt) || 0;
+              health.lastBackupAt = previous.createdAt;
+              emitStatus();
+            }
+          } catch {
+            /* unreachable bucket — the run itself will surface the error */
+          }
+        }
         const hours = Math.max(cfg!.interval_hours ?? DEFAULT_INTERVAL_HOURS, MIN_INTERVAL_HOURS);
         const dueAtMs = lastRunAtMs + hours * 3_600_000;
-        // First tick after boot backs up immediately only if never run — a
-        // successful run in this process anchors the schedule.
+        // Never backed up anywhere (no manifest) → first tick runs immediately.
         if (Date.now() >= dueAtMs) {
           await execute(cfg!);
         }

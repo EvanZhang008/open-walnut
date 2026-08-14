@@ -26,6 +26,8 @@ import { fromIni, fromNodeProviderChain } from '@aws-sdk/credential-providers';
 import type { AwsCredentialIdentity, AwsCredentialIdentityProvider } from '@smithy/types';
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
+import { getVersion } from '../version.js';
+import { mapLimit } from '../plugin-skill-loader.js';
 import { diffAgainstManifest, scanDataDir, SQLITE_SNAPSHOT_PREFIX } from './scan.js';
 import { snapshotSqliteDbs } from './sqlite-snapshot.js';
 import type {
@@ -70,9 +72,11 @@ export function makeS3Client(cfg: BackupConfig): S3Client {
   });
 }
 
-const keyPrefix = (cfg: BackupConfig): string => (cfg.prefix?.replace(/\/+$/, '') || 'walnut');
-const dataKey = (cfg: BackupConfig, rel: string): string => `${keyPrefix(cfg)}/data/${rel}`;
-const manifestKey = (cfg: BackupConfig): string => `${keyPrefix(cfg)}/${MANIFEST_KEY}`;
+// Bucket layout lives HERE only — restore.ts imports these so the two sides
+// can never drift apart on where a backup was written.
+export const keyPrefix = (cfg: BackupConfig): string => (cfg.prefix?.replace(/\/+$/, '') || 'walnut');
+export const dataKey = (cfg: BackupConfig, rel: string): string => `${keyPrefix(cfg)}/data/${rel}`;
+export const manifestKey = (cfg: BackupConfig): string => `${keyPrefix(cfg)}/${MANIFEST_KEY}`;
 
 export interface TestConnectionResult {
   ok: boolean;
@@ -208,32 +212,50 @@ async function doRunBackup(cfg: BackupConfig, opts: RunBackupOptions): Promise<B
     await fs.mkdir(stagingDir, { recursive: true });
     const scanned = await scanDataDir(dataDir);
     const snapshots = await snapshotSqliteDbs(dataDir, stagingDir);
-    const all = [...scanned, ...snapshots];
+    const all = [...scanned, ...snapshots.entries];
 
     const diff = diffAgainstManifest(all, previous);
+    // A DB whose snapshot FAILED this run looks "deleted locally" to the diff.
+    // Deleting its previous backup (and dropping it from the manifest) would
+    // turn a transient snapshot error into real data loss — keep the previous
+    // entry alive instead and let a later run refresh it.
+    const failedSnapshotPaths = new Set(
+      snapshots.failed.map((rel) => `${SQLITE_SNAPSHOT_PREFIX}/${rel}`),
+    );
+    const preserved = (previous?.files ?? []).filter((f) => failedSnapshotPaths.has(f.path));
+    diff.remove = diff.remove.filter((rel) => !failedSnapshotPaths.has(rel));
+
     const totalBytes = all.reduce((n, f) => n + f.size, 0);
     const uploadTotal = diff.upload.reduce((n, f) => n + f.size, 0);
     log.session.info('backup: run starting', {
       files: all.length, upload: diff.upload.length, remove: diff.remove.length,
       unchanged: diff.unchanged.length, uploadBytes: uploadTotal, bucket: cfg.bucket,
+      snapshotFailures: snapshots.failed.length,
     });
 
-    // Upload changed files, bounded concurrency.
+    // Upload changed files, bounded concurrency. Per-file failures are
+    // isolated (same policy as sqlite snapshots): one live-mutating file must
+    // not abort the whole run. A failed/vanished file keeps its PREVIOUS
+    // manifest entry when it had one, so restore never loses it.
     let uploadedBytes = 0;
-    const queue = [...diff.upload];
-    const uploadOne = async (entry: ManifestEntry): Promise<void> => {
+    const uploadOne = async (entry: ManifestEntry): Promise<ManifestEntry | null> => {
       const isSnapshot = entry.path.startsWith(`${SQLITE_SNAPSHOT_PREFIX}/`);
       const localPath = isSnapshot
         ? path.join(stagingDir, entry.path.slice(SQLITE_SNAPSHOT_PREFIX.length + 1))
         : path.join(dataDir, entry.path);
-      if (entry.size <= MULTIPART_THRESHOLD_BYTES) {
+      // Re-stat at upload time: live-written files (chat history, outbox JSON)
+      // routinely change size between scan and upload, and a stream body with
+      // a stale ContentLength either fails the put or stores a torn object.
+      const st = await fs.stat(localPath);
+      const fresh: ManifestEntry = { path: entry.path, size: st.size, mtimeMs: Math.floor(st.mtimeMs) };
+      if (fresh.size <= MULTIPART_THRESHOLD_BYTES) {
         // ContentLength is required when the body is a stream.
         await s3.send(
           new PutObjectCommand({
             Bucket: cfg.bucket,
             Key: dataKey(cfg, entry.path),
             Body: createReadStream(localPath),
-            ContentLength: entry.size,
+            ContentLength: fresh.size,
           }),
         );
       } else {
@@ -250,32 +272,51 @@ async function doRunBackup(cfg: BackupConfig, opts: RunBackupOptions): Promise<B
         });
         await upload.done();
       }
-      uploadedBytes += entry.size;
+      uploadedBytes += fresh.size;
       opts.onProgress?.(uploadedBytes, uploadTotal);
+      return fresh;
     };
-    const workers = Array.from({ length: Math.min(UPLOAD_CONCURRENCY, queue.length) }, async () => {
-      for (;;) {
-        const entry = queue.shift();
-        if (!entry) return;
-        await uploadOne(entry);
+    const prevByPath = new Map((previous?.files ?? []).map((f) => [f.path, f]));
+    const uploadFailures: string[] = [];
+    const uploadedEntries = await mapLimit(diff.upload, UPLOAD_CONCURRENCY, async (entry) => {
+      try {
+        return await uploadOne(entry);
+      } catch (err) {
+        uploadFailures.push(entry.path);
+        log.session.warn('backup: file upload failed — skipping', {
+          file: entry.path,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        // Keep the previous backup's entry (if any) so the manifest stays
+        // truthful about what the bucket actually holds for this path.
+        return prevByPath.get(entry.path) ?? null;
       }
     });
-    await Promise.all(workers);
 
     // Delete files gone locally (versioning keeps their old versions).
     for (const rel of diff.remove) {
       await s3.send(new DeleteObjectCommand({ Bucket: cfg.bucket, Key: dataKey(cfg, rel) }));
     }
 
-    // Manifest LAST — its presence marks this backup complete.
+    // Manifest LAST — its presence marks this backup complete. It lists what
+    // the BUCKET holds: freshly-uploaded entries (re-stat'd sizes), unchanged
+    // entries, and preserved previous entries for failed snapshots/uploads.
+    const uploadedByPath = new Map(
+      uploadedEntries.filter((e): e is ManifestEntry => e !== null).map((e) => [e.path, e]),
+    );
+    const manifestFiles = [
+      ...diff.unchanged,
+      ...uploadedByPath.values(),
+      ...preserved,
+    ].sort((a, b) => a.path.localeCompare(b.path));
     const manifest: BackupManifest = {
       version: 1,
       createdAt: new Date().toISOString(),
       hostname,
-      walnutVersion: await readWalnutVersion(),
-      fileCount: all.length,
+      walnutVersion: getVersion(),
+      fileCount: manifestFiles.length,
       totalBytes,
-      files: all,
+      files: manifestFiles,
     };
     await s3.send(
       new PutObjectCommand({
@@ -288,18 +329,23 @@ async function doRunBackup(cfg: BackupConfig, opts: RunBackupOptions): Promise<B
 
     await fs.rm(stagingDir, { recursive: true, force: true });
     const durationMs = Date.now() - start;
+    const uploadedOk = diff.upload.length - uploadFailures.length;
     log.session.info('backup: run complete', {
-      uploaded: diff.upload.length, removed: diff.remove.length, durationMs, uploadedBytes,
+      uploaded: uploadedOk, failed: uploadFailures.length,
+      removed: diff.remove.length, durationMs, uploadedBytes,
     });
     return {
       ok: true,
-      uploaded: diff.upload.length,
+      uploaded: uploadedOk,
       removed: diff.remove.length,
       unchanged: diff.unchanged.length,
       totalBytes,
       uploadedBytes,
       durationMs,
       versioningEnabled,
+      ...(uploadFailures.length > 0
+        ? { error: `${uploadFailures.length} file(s) skipped (still covered by the previous backup where possible): ${uploadFailures.slice(0, 5).join(', ')}` }
+        : {}),
     };
   } catch (err) {
     await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
@@ -309,12 +355,3 @@ async function doRunBackup(cfg: BackupConfig, opts: RunBackupOptions): Promise<B
   }
 }
 
-async function readWalnutVersion(): Promise<string> {
-  try {
-    const pkgPath = new URL('../../../package.json', import.meta.url);
-    const raw = await fs.readFile(pkgPath, 'utf-8');
-    return (JSON.parse(raw) as { version?: string }).version ?? '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
-}

@@ -14,20 +14,31 @@ import { log } from '../../logging/index.js';
 import { findCanonicalSqlite, SQLITE_SNAPSHOT_PREFIX } from './scan.js';
 import type { ManifestEntry } from './types.js';
 
+export interface SqliteSnapshotResult {
+  entries: ManifestEntry[];
+  /** Data-dir-relative paths of DBs whose snapshot FAILED this run. The
+   *  caller must exempt these from the manifest's remove-diff — otherwise a
+   *  transient snapshot failure reads as "deleted locally" and the previous
+   *  backup's copy gets deleted from the bucket. */
+  failed: string[];
+}
+
 /**
  * Snapshot every canonical DB under `root` into `stagingDir`, preserving the
  * relative layout (tasks/tasks.sqlite → <staging>/tasks/tasks.sqlite).
  * Returns manifest entries keyed under SQLITE_SNAPSHOT_PREFIX.
  *
  * A DB that fails to snapshot is skipped with a warning rather than failing
- * the whole backup — 90% of a backup beats 0%.
+ * the whole backup — 90% of a backup beats 0% — but is reported in `failed`
+ * so the previous backup of that DB is preserved, not deleted.
  */
 export async function snapshotSqliteDbs(
   root: string,
   stagingDir: string,
-): Promise<ManifestEntry[]> {
+): Promise<SqliteSnapshotResult> {
   const dbs = await findCanonicalSqlite(root);
   const entries: ManifestEntry[] = [];
+  const failed: string[] = [];
   for (const rel of dbs) {
     const src = path.join(root, rel);
     const dest = path.join(stagingDir, rel);
@@ -47,11 +58,12 @@ export async function snapshotSqliteDbs(
         mtimeMs: Math.floor(st.mtimeMs),
       });
     } catch (err) {
+      failed.push(rel);
       log.session.warn('backup: sqlite snapshot failed — skipping this DB', {
         db: rel,
         error: err instanceof Error ? err.message : String(err),
       });
     }
   }
-  return entries;
+  return { entries, failed };
 }
