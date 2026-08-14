@@ -71,9 +71,17 @@ cat > "$CONTENTS/Info.plist" << 'EOF'
 </plist>
 EOF
 
-# Create .icns from the PNG icon
+# Create .icns from the PNG icon — first rounding it into the macOS Big Sur
+# icon shape (824pt squircle on a transparent 1024 canvas), so it sits in the
+# Dock like every other app instead of a full-bleed square.
 if [ -f "$ICON_SRC" ]; then
     echo "Creating app icon..."
+    ROUNDED_ICON="$SCRIPT_DIR/.icon-rounded.png"
+    if swift "$SCRIPT_DIR/make-icon.swift" "$ICON_SRC" "$ROUNDED_ICON" 2>/dev/null; then
+        ICON_SRC="$ROUNDED_ICON"
+    else
+        echo "  Warning: icon rounding failed, using the square source."
+    fi
     ICONSET="$SCRIPT_DIR/AppIcon.iconset"
     mkdir -p "$ICONSET"
     sips -z 16 16     "$ICON_SRC" --out "$ICONSET/icon_16x16.png"      > /dev/null 2>&1

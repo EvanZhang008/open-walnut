@@ -274,6 +274,22 @@ input:focus, textarea:focus, select:focus {
   box-shadow: 0 0 0 3px var(--accent-subtle);
 }
 
+/* Native <select> chrome varies wildly per engine — Safari/WKWebView renders
+   the legacy aqua double-arrow stepper. Flatten it everywhere: no native
+   appearance, our own chevron glyph, room for it on the right. Component
+   styles that recolor a select must use `background-color`, never the
+   `background` shorthand (which would wipe the chevron image). */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5l3 3 3-3' fill='none' stroke='%23868690' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 12px;
+  padding-right: 28px;
+  cursor: pointer;
+}
+
 /* iOS-style text selection: translucent accent wash, keep original text color
    (solid blue + forced white read harsh, especially over code). */
 ::selection {
@@ -14702,15 +14718,14 @@ a.task-kebab-info:hover {
 /* Model select dropdown */
 .model-select {
   width: 100%;
-  padding: 6px 10px;
+  padding: 6px 28px 6px 10px; /* right gap hosts the shared chevron glyph */
   font-size: 13px;
   font-family: var(--font-mono);
   border: 1px solid var(--border-strong);
   border-radius: 6px;
-  background: var(--bg);
+  background-color: var(--bg);
   color: var(--fg);
   cursor: pointer;
-  appearance: auto;
 }
 
 .model-select:focus {
@@ -16236,16 +16251,17 @@ a.task-kebab-info:hover {
   font-weight: 600;
 }
 .sps-meta-model-select {
-  padding: 2px 8px;
+  padding: 2px 22px 2px 8px;
   border-radius: 10px;
   border: 1px solid var(--border);
-  background: transparent;
+  background-color: transparent;
   color: var(--fg);
   font-size: 11px;
   font-weight: 500;
   cursor: pointer;
+  background-position: right 6px center;
 }
-.sps-meta-model-select:hover { background: var(--accent-subtle); }
+.sps-meta-model-select:hover { background-color: var(--accent-subtle); }
 .sps-meta-more {
   position: relative;
   margin-left: auto;
@@ -21790,10 +21806,10 @@ td.usage-share-col {
 .skill-form-select {
   width: 100%;
   max-width: 360px;
-  padding: 7px 10px;
+  padding: 7px 28px 7px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--bg);
+  background-color: var(--bg);
   color: var(--fg);
   font-size: 13px;
 }
@@ -23188,10 +23204,11 @@ a.file-link:hover {
   -webkit-appearance: none;
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 3px 8px;
+  padding: 3px 22px 3px 8px;
+  background-position: right 6px center;
 }
 .fv-speed-select:hover {
-  background: var(--bg-tertiary);
+  background-color: var(--bg-tertiary);
 }
 
 /* Fullscreen button sits at the right end of the toolbar */
@@ -24042,12 +24059,13 @@ a.file-link:hover {
 .session-diff-base-label { font-weight: 600; }
 .session-diff-base-select select {
   border: 1px solid var(--border);
-  background: var(--bg);
+  background-color: var(--bg);
   color: var(--fg);
   border-radius: 6px;
-  padding: 3px 6px;
+  padding: 3px 22px 3px 6px;
   font-size: 12px;
   cursor: pointer;
+  background-position: right 6px center;
 }
 .session-diff-base-select select:hover { border-color: var(--accent); }
 
@@ -25224,7 +25242,7 @@ a.file-link:hover {
 
 .routine-model-select {
   border: none;
-  background: transparent;
+  background-color: transparent;
   color: var(--color-text-muted, inherit);
   font-size: 12px;
   cursor: pointer;
@@ -26921,10 +26939,11 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   height: 30px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--bg);
+  background-color: var(--bg);
   color: var(--fg);
   font-size: 12.5px;
-  padding: 0 6px;
+  padding: 0 22px 0 6px;
+  background-position: right 6px center;
 }
 
 .cal-event-form-error {
