@@ -245,12 +245,18 @@ function handleMismatch(ctx: {
       `\n⚠️  DAEMON VERSION GUARD CANNOT CONVERGE — continuing WITHOUT guard.`
       + `\n    Rebuild completed but versions are still ${stillOff.map(([a, v]) => `${a}=${v}`).join(', ')},`
       + `\n    expected ${ctx.expected}.`
-      + `\n    This almost certainly means the shell hash algorithm in`
-      + `\n    scripts/build-daemon.sh has drifted from computeExpectedDaemonVersion()`
-      + `\n    in daemon-version-check.ts. They must compute the SAME hash over:`
+      + `\n    Most likely cause: a STALE dist/ bundle. This check runs from the`
+      + `\n    compiled dist/cli.js, whose embedded file list can lag src/. If dist/`
+      + `\n    was built before scripts/build-daemon.sh's SOURCES list last changed,`
+      + `\n    the two hash over DIFFERENT files and can never agree. Fix: rebuild —`
+      + `\n        npm run web:build`
+      + `\n    (dist/ is gitignored, so this changes nothing tracked.)`
+      + `\n    Less likely: the shell hash algorithm in scripts/build-daemon.sh has`
+      + `\n    genuinely drifted from computeExpectedDaemonVersion() in`
+      + `\n    daemon-version-check.ts. They must compute the SAME hash over:`
       + `\n      files: ${DAEMON_SOURCE_FILES.join(', ')}`
       + `\n      algorithm: sha256, per-file path + NUL + content + NUL, truncate to 12 hex chars`
-      + `\n    This is a guard bug, NOT a reason to kill the server — startup continues.\n`,
+      + `\n    Either way this is a guard bug, NOT a reason to kill the server — startup continues.\n`,
     )
     return true
   }
