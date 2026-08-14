@@ -69,6 +69,33 @@ export function registerCommands(program: Command): void {
       await runStart(taskId, options, cmd.optsWithGlobals());
     });
 
+  const backup = program
+    .command('backup')
+    .description('S3 backup of the data directory');
+  const backupCredFlags = (c: Command): Command => c
+    .option('--bucket <bucket>', 'S3 bucket (overrides config backup.bucket)')
+    .option('--region <region>', 'AWS region')
+    .option('--prefix <prefix>', 'Key prefix (default: walnut)')
+    .option('--profile <profile>', 'AWS profile (bare-machine restores)');
+  backupCredFlags(backup.command('run').description('Run a backup now'))
+    .action(async (options: Record<string, unknown>) => {
+      const { runBackupRun } = await import('./backup.js');
+      await runBackupRun(options);
+    });
+  backupCredFlags(backup.command('list').description('List restore points'))
+    .action(async (options: Record<string, unknown>) => {
+      const { runBackupList } = await import('./backup.js');
+      await runBackupList(options);
+    });
+  backupCredFlags(backup.command('restore').description('Restore a backup into a fresh directory'))
+    .option('--at <versionId>', 'Manifest version to restore (from `backup list`)')
+    .option('--to <dir>', 'Target directory (default: ~/.open-walnut-restored-<ts>)')
+    .option('--force', 'Allow restoring into a non-empty directory')
+    .action(async (options: Record<string, unknown>) => {
+      const { runBackupRestore } = await import('./backup.js');
+      await runBackupRestore(options);
+    });
+
   program
     .command('sync')
     .description('Sync ~/.open-walnut via git and/or Microsoft To-Do')

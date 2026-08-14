@@ -35,6 +35,7 @@ import { CalendarSection } from '@/components/settings/sections/CalendarSection'
 import { PluginStoreSection } from '@/components/settings/sections/PluginStoreSection';
 import { SearchSection } from '@/components/settings/sections/SearchSection';
 import { HeartbeatSection } from '@/components/settings/sections/HeartbeatSection';
+import { BackupSection } from '@/components/settings/sections/BackupSection';
 import { RemoteHostsSection } from '@/components/settings/sections/RemoteHostsSection';
 import { AdvancedSection } from '@/components/settings/sections/AdvancedSection';
 import { SttSection } from '@/components/settings/sections/SttSection';
@@ -53,7 +54,7 @@ import { BugReportSection } from '@/components/settings/sections/BugReportSectio
 const SECTION_IDS = [
   'repositories', 'hooks',
   'providers', 'general', 'sessions', 'focus-tiers',
-  'integrations', 'calendar', 'plugin-store', 'search', 'stt', 'audio-capture', 'heartbeat', 'remote-hosts', 'devices', 'cloud', 'advanced',
+  'integrations', 'calendar', 'plugin-store', 'search', 'stt', 'audio-capture', 'heartbeat', 'backup', 'remote-hosts', 'devices', 'cloud', 'advanced',
   'usage', 'timeline', 'bug-report',
 ];
 
@@ -144,6 +145,7 @@ export function SettingsPage() {
           <SectionErrorBoundary name="Speech-to-Text"><SttSection config={config} onSave={saveSection} onReload={reload} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Audio Capture"><AudioCaptureSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Heartbeat"><HeartbeatSection config={config} onSave={saveSection} /></SectionErrorBoundary>
+          <SectionErrorBoundary name="S3 Backup"><BackupSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Remote Hosts"><RemoteHostsSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Devices"><DevicesSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Cloud Companion"><CloudSection /></SectionErrorBoundary>

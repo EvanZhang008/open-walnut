@@ -1006,6 +1006,8 @@ export interface Config {
     premount_walnut_mcp?: boolean;
   };
   heartbeat?: import('../heartbeat/types.js').HeartbeatConfig;
+  /** S3 backup of the data dir — see src/core/backup/. Primary box only. */
+  backup?: import('./backup/types.js').BackupConfig;
   /** Keep the Mac awake (lid closed included) while local sessions run.
    *  Advanced, opt-in, macOS console only — see src/core/keep-awake.ts. */
   keep_awake?: import('./keep-awake.js').KeepAwakeConfig;

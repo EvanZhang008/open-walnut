@@ -23,6 +23,7 @@ import { sessionsRouter } from './routes/sessions.js'
 import { searchRouter } from './routes/search.js'
 import { memoryRouter } from './routes/memory.js'
 import { configRouter } from './routes/config.js'
+import { backupRouter, setBackupScheduler } from './routes/backup.js'
 import { projectsRouter } from './routes/projects.js'
 import { favoritesRouter } from './routes/favorites.js'
 import { uiPrefsRouter } from './routes/ui-prefs.js'
@@ -265,6 +266,7 @@ let qmdWatcherHandle: { stop: () => void } | null = null
 let qmdSyncStop: (() => Promise<void>) | null = null
 let gitAutoCommitHandle: { stop: () => void; health: GitAutoCommitHealth } | null = null
 let diskWatermarkHandle: { stop: () => void; poll: () => Promise<unknown> } | null = null
+let backupSchedulerHandle: import('../core/backup/backup-scheduler.js').BackupSchedulerHandle | null = null
 let keepAwakeHandle: import('../core/keep-awake.js').KeepAwakeHandle | null = null
 let gitMaintenanceHandle: { stop: () => void } | null = null
 let taskProjectionHandle: { stop: () => void } | null = null
@@ -1007,6 +1009,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/search', searchRouter)
   app.use('/api/memory', memoryRouter)
   app.use('/api/config', configRouter)
+  app.use('/api/backup', backupRouter)
   app.use('/api/projects', projectsRouter)
   app.use('/api/favorites', favoritesRouter)
   app.use('/api/ui-prefs', uiPrefsRouter)
@@ -1660,6 +1663,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // GET /api/v1/tasks (legacy git-synced tasks/projection.json rides along
     // while sync.legacy_projection_files is on). Cloud mode only reads.
     if (!CLOUD_MODE) {
+      // S3 backup scheduler (primary box only): a cloud replica backing up its
+      // git-synced copy would race the primary and double-pay for uploads.
+      // Self-gates on config backup.enabled; the routes 400 when unset here.
+      const { startBackupScheduler } = await import('../core/backup/backup-scheduler.js')
+      backupSchedulerHandle = startBackupScheduler({
+        emit: broadcastEvent,
+        notify: (n) => publishErrorNotification(n),
+      })
+      setBackupScheduler(backupSchedulerHandle)
+
       // Keep-Awake (macOS console only): holds the Mac awake while local CLI
       // sessions run — opt-in via config keep_awake.enabled, released on low
       // battery / prolonged offline. See src/core/keep-awake.ts.
@@ -4034,6 +4047,11 @@ export async function stopServer(): Promise<void> {
   if (diskWatermarkHandle) {
     diskWatermarkHandle.stop()
     diskWatermarkHandle = null
+  }
+  if (backupSchedulerHandle) {
+    backupSchedulerHandle.stop()
+    setBackupScheduler(null)
+    backupSchedulerHandle = null
   }
   if (keepAwakeHandle) {
     keepAwakeHandle.stop()
