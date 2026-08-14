@@ -48,7 +48,8 @@ async function selectProject(page: Page, project: string): Promise<void> {
   if (!await page.locator('.vd-panel').isVisible()) {
     await page.getByRole('button', { name: 'View options' }).click()
   }
-  await page.locator('.vd-cat').filter({
+  // :not([data-filter-value]) — the query filter panel duplicates .vd-cat markup.
+  await page.locator('.vd-cat:not([data-filter-value])').filter({
     has: page.locator('.vd-cat-name').filter({ hasText: new RegExp(`^${project}$`) }),
   }).click()
   await page.keyboard.press('Escape')

@@ -15,7 +15,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
-      "@open-walnut/core": ["../src/core/types"]
+      "@open-walnut/core": ["../src/core/types"],
+      "@open-walnut/task-query": ["../src/core/task-query"]
     }
   },
   "include": ["src"]

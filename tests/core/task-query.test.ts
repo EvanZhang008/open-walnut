@@ -1,14 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
   COMPLETION_TO_PHASES,
+  MAX_QUERY_LIMIT,
+  QUERY_TASK_PHASES,
   TaskQueryError,
   compareTasksForQuery,
+  computeBlockedIds,
   matchesTaskQuery,
+  normalizeTaskPriority,
   normalizeTaskQuery,
   type TaskCompletion,
   type TaskQuery,
   type TaskQuerySort,
 } from '../../src/core/task-query.js';
+import { PHASE_ORDER } from '../../src/core/phase.js';
 import type { Task, TaskPhase, TaskPriority } from '../../src/core/types.js';
 
 const NOW = new Date('2026-01-15T12:00:00.000Z');
@@ -49,6 +54,15 @@ function expectQueryError(raw: TaskQuery, code?: string): void {
 }
 
 describe('completion semantics', () => {
+  // task-query.ts lists the 7 phases literally instead of importing PHASE_ORDER:
+  // phase.ts drags in the logger (node:fs/os), and this module ships to the
+  // browser bundle. This test is the seam that keeps the copy honest.
+  it('keeps its phase list identical to PHASE_ORDER', () => {
+    expect([...QUERY_TASK_PHASES]).toEqual([...PHASE_ORDER]);
+    const mapped = Object.values(COMPLETION_TO_PHASES).flatMap((phases) => [...phases]);
+    expect(mapped.slice().sort()).toEqual([...PHASE_ORDER].sort());
+  });
+
   it('maps all seven phases to exactly one completion bucket', () => {
     const expected: Record<TaskPhase, TaskCompletion> = {
       TODO: 'todo',
@@ -97,6 +111,21 @@ describe('field composition', () => {
     });
 
     expect(fixtures.filter((fixture) => matchesTaskQuery(fixture, normalized)).map(({ id }) => id)).toEqual(['match']);
+  });
+
+  it('folds a legacy priority into the canonical vocabulary', () => {
+    // Rows written before the 4-tier vocabulary carry 'high'/'medium'/'low'.
+    // sanitizePriority normalizes on WRITE only, so the query layer has to fold.
+    expect(normalizeTaskPriority('high' as TaskPriority)).toBe('immediate');
+    expect(normalizeTaskPriority('medium' as TaskPriority)).toBe('backlog');
+    expect(normalizeTaskPriority('low' as TaskPriority)).toBe('backlog');
+    expect(normalizeTaskPriority('important')).toBe('important');
+    expect(normalizeTaskPriority(undefined)).toBeUndefined();
+
+    const legacy = task({ priority: 'high' as TaskPriority });
+    expect(matchesTaskQuery(legacy, query({ priorities: ['immediate'] }))).toBe(true);
+    expect(matchesTaskQuery(legacy, query({ priorities: ['backlog'] }))).toBe(false);
+    expect(matchesTaskQuery(task({ priority: 'medium' as TaskPriority }), query({ priorities: ['backlog'] }))).toBe(true);
   });
 
   it('matches priorities, sources, sprints, parent ids, and group ids exactly', () => {
@@ -273,8 +302,35 @@ describe('normalizeTaskQuery', () => {
     expectQueryError({ time: { basis: 'updated', until: '2026-02-30T00:00:00.000Z' } }, 'invalid_timestamp');
   });
 
-  it.each([0, 201])('rejects limit %s', (limit) => {
+  it.each([0, MAX_QUERY_LIMIT + 1])('rejects limit %s', (limit) => {
     expectQueryError({ limit }, 'invalid_limit');
+  });
+
+  it('accepts the documented maximum limit', () => {
+    expect(query({ limit: MAX_QUERY_LIMIT }).limit).toBe(MAX_QUERY_LIMIT);
+  });
+});
+
+describe('computeBlockedIds', () => {
+  it('blocks only on a RESOLVABLE non-COMPLETE dependency', () => {
+    const done = task({ id: 'done', phase: 'COMPLETE' });
+    const open = task({ id: 'open', phase: 'IN_PROGRESS' });
+    const fixtures = [
+      done,
+      open,
+      task({ id: 'no-deps' }),
+      task({ id: 'waits-on-open', depends_on: ['open'] }),
+      task({ id: 'waits-on-done', depends_on: ['done'] }),
+      task({ id: 'waits-on-both', depends_on: ['done', 'open'] }),
+      // An id nobody resolves does NOT block (same as isTaskBlocked).
+      task({ id: 'waits-on-ghost', depends_on: ['gone'] }),
+      task({ id: 'empty-deps', depends_on: [] }),
+    ];
+    expect([...computeBlockedIds(fixtures)].sort()).toEqual(['waits-on-both', 'waits-on-open']);
+  });
+
+  it('returns an empty set for an empty list', () => {
+    expect(computeBlockedIds([]).size).toBe(0);
   });
 });
 
@@ -308,6 +364,19 @@ describe('compareTasksForQuery', () => {
     expect(fixtures.sort((a, b) => compareTasksForQuery(a, b, 'priority')).map(({ id }) => id)).toEqual([
       'immediate', 'important-new', 'important-old', 'backlog', 'none', 'missing',
     ]);
+  });
+
+  it('ranks a legacy priority with its canonical tier, not below none', () => {
+    const fixtures = [
+      task({ id: 'none', priority: 'none' }),
+      task({ id: 'legacy-high', priority: 'high' as TaskPriority, created_at: '2026-01-09T00:00:00.000Z' }),
+      task({ id: 'immediate', priority: 'immediate', created_at: '2026-01-11T00:00:00.000Z' }),
+      task({ id: 'backlog', priority: 'backlog' }),
+    ];
+    // 'high' folds to immediate, so it sits with the immediates (created_at
+    // tie-break) rather than falling below 'none' on an unknown-rank 0.
+    expect(fixtures.sort((a, b) => compareTasksForQuery(a, b, 'priority')).map(({ id }) => id))
+      .toEqual(['immediate', 'legacy-high', 'backlog', 'none']);
   });
 
   it('sorts title_asc with localeCompare', () => {

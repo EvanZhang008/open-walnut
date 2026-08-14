@@ -8,7 +8,8 @@ import { VALID_PHASES } from '../../core/phase.js'
 import {
   addTask,
   listTasks,
-  listTasksSlim,
+  queryTasks,
+  queryTasksSlim,
   getTask,
   completeTask,
   toggleComplete,
@@ -41,6 +42,13 @@ import {
 } from '../../core/task-manager.js'
 import { listSessions } from '../../core/session-tracker.js'
 import { bus, EventNames } from '../../core/event-bus.js'
+import {
+  LEGACY_STATUS_TO_COMPLETION,
+  MAX_QUERY_LIMIT,
+  TaskQueryError,
+  type TaskQuery,
+  type TaskQueryTime,
+} from '../../core/task-query.js'
 import { VALID_PRIORITIES, type Task, type ProcessStatus, type SessionMode } from '../../core/types.js'
 import { parseQuickTask } from '../../core/quick-task-parse.js'
 import { buildProjectDigest, type ProjectDigest } from '../../core/quick-task-digest.js'
@@ -253,84 +261,186 @@ function param(value: string | string[]): string {
 const VALID_STATUSES = ['todo', 'in_progress', 'done']
 const VALID_PHASES_ARRAY = [...VALID_PHASES]
 
-// GET /api/tasks — list with optional filters
+// ── GET /api/tasks query parsing ──
+//
+// The route is a THIN adapter: it turns query-string text into a TaskQuery and
+// hands the semantics to queryTasks(). There are deliberately no route-local
+// filter predicates any more — a second copy of "what does pinned mean" is
+// exactly how REST, the agent tool and the two UIs drifted apart before.
+//
+// Legacy singulars (status/project/source/tags/sprint) fold into the canonical
+// arrays. Canonical `completion` supersedes `status`; there is NO implicit
+// hiding of COMPLETE on REST (that default lives only in the agent-tool adapter).
+
+/** A rejected query param. Carries the message the route returns as 400. */
+class QueryParamError extends Error {}
+
+/**
+ * Read one query param as a string. Express 5's simple query parser turns
+ * `?x=1&x=2` into an array, so a bare `.split()` on `req.query` values would
+ * throw (→ 500) instead of answering 400. Repeats take the LAST value (matching
+ * how a comma list would read). The object branch is purely defensive: the
+ * simple parser never produces one, but a swapped-in extended parser would.
+ */
+function queryString(value: unknown, name: string): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) {
+    const last = value[value.length - 1]
+    if (typeof last === 'string') return last
+  }
+  throw new QueryParamError(`${name} must be a single value`)
+}
+
+/** Comma-separated list → trimmed values. Empty entries are kept ('' = Inbox). */
+function csv(value: string): string[] {
+  return value.split(',').map((v) => v.trim())
+}
+
+function parseBoolParam(value: string, name: string): boolean {
+  if (value === 'true') return true
+  if (value === 'false') return false
+  throw new QueryParamError(`${name} must be "true" or "false"`)
+}
+
+function parsePositiveIntParam(value: string, name: string): number {
+  if (!/^\d+$/.test(value)) throw new QueryParamError(`${name} must be a positive integer`)
+  const parsed = Number(value)
+  if (parsed < 1) throw new QueryParamError(`${name} must be a positive integer`)
+  return parsed
+}
+
+/**
+ * Query string → TaskQuery. Throws QueryParamError for shapes the shared
+ * normalizer can't see (unknown time_basis without a window, last_hours AND
+ * last_days together); every other invalid value is caught by
+ * normalizeTaskQuery's TaskQueryError inside queryTasks().
+ */
+function parseTaskQueryParams(rawQuery: Record<string, unknown>): TaskQuery {
+  const query: TaskQuery = {}
+  // Normalize every param this parser reads to `string | undefined` up front, so
+  // no branch below has to worry about Express's array/object shapes.
+  const raw: Record<string, string | undefined> = {}
+  for (const name of [
+    'completion', 'status', 'phases', 'projects', 'project', 'priorities',
+    'sources', 'source', 'sprints', 'sprint', 'tags_any', 'tags', 'tags_all',
+    'pinned', 'starred', 'unread', 'blocked', 'parent_task_id',
+    'group_id', 'time_basis', 'last_hours', 'last_days', 'time_from',
+    'time_until', 'sort', 'limit',
+  ]) {
+    raw[name] = queryString(rawQuery[name], name)
+  }
+
+  // completion wins over the legacy status alias when both are present.
+  if (raw.completion !== undefined) {
+    query.completion = csv(raw.completion) as TaskQuery['completion']
+  } else if (raw.status !== undefined) {
+    const statuses = csv(raw.status)
+    const unknown = statuses.find((s) => !VALID_STATUSES.includes(s))
+    if (unknown !== undefined) throw new QueryParamError(`status must be one of: ${VALID_STATUSES.join(', ')}`)
+    query.completion = statuses.map((s) => LEGACY_STATUS_TO_COMPLETION[s])
+  }
+  if (raw.phases !== undefined) query.phases = csv(raw.phases) as TaskQuery['phases']
+
+  // Legacy singulars fold into the canonical arrays. `project=''` is meaningful
+  // (Inbox) so presence, not truthiness, decides.
+  if (raw.projects !== undefined) query.projects = csv(raw.projects)
+  else if (raw.project !== undefined) query.projects = [raw.project]
+  if (raw.priorities !== undefined) query.priorities = csv(raw.priorities) as TaskQuery['priorities']
+  if (raw.sources !== undefined) query.sources = csv(raw.sources)
+  else if (raw.source !== undefined) query.sources = [raw.source]
+  if (raw.sprints !== undefined) query.sprints = csv(raw.sprints)
+  else if (raw.sprint !== undefined) query.sprints = [raw.sprint]
+
+  // An empty value means NO CONDITION on every tag param (`?tags_any=`,
+  // `?tags_all=`, legacy `?tags=` alike). Setting tagsAny to [] would instead
+  // mean "match nothing" (`[].some` is false), which no caller asks for by
+  // typing an empty value.
+  if (raw.tags_any !== undefined) {
+    const values = csv(raw.tags_any).filter(Boolean)
+    if (values.length > 0) query.tagsAny = values
+  } else if (raw.tags !== undefined) {
+    const legacy = csv(raw.tags).filter(Boolean)
+    if (legacy.length > 0) query.tagsAny = legacy
+  }
+  if (raw.tags_all !== undefined) {
+    const values = csv(raw.tags_all).filter(Boolean)
+    if (values.length > 0) query.tagsAll = values
+  }
+
+  for (const name of ['pinned', 'starred', 'unread', 'blocked'] as const) {
+    if (raw[name] !== undefined) query[name] = parseBoolParam(raw[name]!, name)
+  }
+  if (raw.parent_task_id !== undefined) query.parentTaskId = raw.parent_task_id
+  if (raw.group_id !== undefined) query.groupId = raw.group_id
+
+  if (raw.time_basis !== undefined) {
+    if (raw.last_hours !== undefined && raw.last_days !== undefined) {
+      throw new QueryParamError('last_hours and last_days are mutually exclusive')
+    }
+    const time: TaskQueryTime = { basis: raw.time_basis as TaskQueryTime['basis'] }
+    if (raw.last_hours !== undefined) {
+      time.last = { value: parsePositiveIntParam(raw.last_hours, 'last_hours'), unit: 'hours' }
+    } else if (raw.last_days !== undefined) {
+      time.last = { value: parsePositiveIntParam(raw.last_days, 'last_days'), unit: 'days' }
+    }
+    if (raw.time_from !== undefined) time.from = raw.time_from
+    if (raw.time_until !== undefined) time.until = raw.time_until
+    query.time = time
+  } else if (raw.last_hours !== undefined || raw.last_days !== undefined
+             || raw.time_from !== undefined || raw.time_until !== undefined) {
+    throw new QueryParamError('time_basis is required when a time window is given')
+  }
+
+  if (raw.sort !== undefined) query.sort = raw.sort as TaskQuery['sort']
+  if (raw.limit !== undefined) {
+    if (!/^\d+$/.test(raw.limit)) {
+      throw new QueryParamError(`limit must be an integer from 1 to ${MAX_QUERY_LIMIT}`)
+    }
+    query.limit = Number(raw.limit)
+  }
+  return query
+}
+
+// GET /api/tasks — list with optional filters (see parseTaskQueryParams)
 // ?slim=1 — omit note and conversation_log fields (~400KB savings)
+// ?fields=list — slim + drop summary/description/ext (home list payload)
 tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const t0 = Date.now()
-    const { status, project, source, tags, sprint, slim, fields } = req.query as Record<string, string | undefined>
-    // fields=list implies slim + drops summary/description/ext for the home
-    // list payload (~2.6MB saved); the regular ?slim=1 path keeps them inline.
-    const isMinimal = fields === 'list'
-    const isSlim = slim === '1' || isMinimal
+    const rawQuery = req.query as Record<string, unknown>
 
-    // Slim path: listTasksSlim pushes status/source filters into SQL and never
-    // materializes note/conversation_log. enrich + isTaskBlocked only touch
-    // session_id / depends_on / phase fields so they work on the SlimTask shape
-    // too (cast via unknown for the enrichment helper).
-    //
-    // `project` stays a JS filter rather than a SQL pushdown: it's a
-    // case-INSENSITIVE match (project identity is NOCASE) and '' must mean
-    // Inbox, which the `?project=` query string can't distinguish from "absent".
-    if (isSlim) {
-      const rawSlim = (await listTasksSlim({ status, source, minimal: isMinimal }))
-        .filter((t) => !t.title.startsWith('.metadata'))
-      const tList = Date.now()
-      let filtered: SlimTask[] = project
-        ? rawSlim.filter((t) => (t.project || '').toLowerCase() === project.toLowerCase())
-        : rawSlim
-      if (tags) {
-        const tagSet = new Set(tags.split(',').map(t => t.trim()).filter(Boolean))
-        if (tagSet.size > 0) {
-          filtered = filtered.filter((t) => t.tags?.some(tag => tagSet.has(tag)))
-        }
-      }
-      if (sprint) {
-        filtered = filtered.filter((t) => t.sprint === sprint)
-      }
-      const tFilter = Date.now()
-      // enrichTasksWithSessionStatus reads session_id / session_ids / slot IDs
-      // and writes session_status / plan_session_status / exec_session_status —
-      // none of which overlap note/conversation_log. Safe to reuse on SlimTask
-      // via a Task cast (the helper only reads/writes shared fields).
-      const enriched = (await enrichTasksWithSessionStatus(filtered as unknown as Task[])) as unknown as SlimTask[]
-      const tEnrich = Date.now()
-      const tasksWithBlocked = enriched.map((t) => ({
-        ...t,
-        ...(t.depends_on?.length ? { is_blocked: isTaskBlocked(t as unknown as Task, enriched as unknown as Task[]) } : {}),
-      }))
-      res.json({ tasks: tasksWithBlocked })
-      const tDone = Date.now()
-      const total = tDone - t0
-      if (total > 200) {
-        log.web.warn('GET /api/tasks slow', {
-          total, listMs: tList - t0, filterMs: tFilter - tList, enrichMs: tEnrich - tFilter,
-          serializeMs: tDone - tEnrich, taskCount: rawSlim.length, filteredCount: filtered.length, slim: true,
-        })
-      }
-      return
+    let query: TaskQuery
+    let isMinimal: boolean
+    let isSlim: boolean
+    try {
+      const fields = queryString(rawQuery.fields, 'fields')
+      // fields=list implies slim + drops summary/description/ext for the home
+      // list payload (~2.6MB saved); the regular ?slim=1 path keeps them inline.
+      isMinimal = fields === 'list'
+      isSlim = queryString(rawQuery.slim, 'slim') === '1' || isMinimal
+      query = parseTaskQueryParams(rawQuery)
+    } catch (err) {
+      if (err instanceof QueryParamError) { res.status(400).json({ error: err.message }); return }
+      throw err
     }
 
-    // Non-slim path unchanged — full Task payload.
-    const tasks = (await listTasks({ status })).filter((t) => !t.title.startsWith('.metadata'))
+    let queried: Task[] | SlimTask[]
+    try {
+      queried = isSlim
+        ? await queryTasksSlim(query, { minimal: isMinimal })
+        : await queryTasks(query)
+    } catch (err) {
+      if (err instanceof TaskQueryError) { res.status(400).json({ error: err.message }); return }
+      throw err
+    }
     const tList = Date.now()
-    let filtered = project
-      ? tasks.filter((t) => (t.project || '').toLowerCase() === project.toLowerCase())
-      : tasks
-    if (source) {
-      filtered = filtered.filter((t) => t.source === source)
-    }
-    if (tags) {
-      const tagSet = new Set(tags.split(',').map(t => t.trim()).filter(Boolean))
-      if (tagSet.size > 0) {
-        filtered = filtered.filter((t) => t.tags?.some(tag => tagSet.has(tag)))
-      }
-    }
-    if (sprint) {
-      filtered = filtered.filter((t) => t.sprint === sprint)
-    }
-    const tFilter = Date.now()
-    const enriched = await enrichTasksWithSessionStatus(filtered)
+
+    // enrichTasksWithSessionStatus reads session_id / session_ids / slot IDs
+    // and writes session_status / plan_session_status / exec_session_status —
+    // none of which overlap note/conversation_log. Safe to reuse on SlimTask
+    // via a Task cast (the helper only reads/writes shared fields).
+    const enriched = await enrichTasksWithSessionStatus(queried as unknown as Task[])
     const tEnrich = Date.now()
     const tasksWithBlocked = enriched.map((t) => ({
       ...t,
@@ -341,8 +451,8 @@ tasksRouter.get('/', async (req: Request, res: Response, next: NextFunction) => 
     const total = tDone - t0
     if (total > 200) {
       log.web.warn('GET /api/tasks slow', {
-        total, listMs: tList - t0, filterMs: tFilter - tList, enrichMs: tEnrich - tFilter,
-        serializeMs: tDone - tEnrich, taskCount: tasks.length, filteredCount: filtered.length, slim: false,
+        total, queryMs: tList - t0, enrichMs: tEnrich - tList,
+        serializeMs: tDone - tEnrich, taskCount: queried.length, slim: isSlim,
       })
     }
   } catch (err) {

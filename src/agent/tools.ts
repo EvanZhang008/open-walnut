@@ -10,6 +10,7 @@ import {
   ProjectSourceConflictError,
   CircularDependencyError,
   isTaskBlocked,
+  queryTasks,
   updateTask,
   addNote,
   updateNote,
@@ -34,6 +35,14 @@ import {
   listGroups,
 } from '../core/task-manager.js';
 import { VALID_PHASES } from '../core/phase.js';
+import {
+  LEGACY_STATUS_TO_COMPLETION,
+  MAX_QUERY_LIMIT,
+  TaskQueryError,
+  computeBlockedIds,
+  type TaskQuery,
+  type TaskQueryTime,
+} from '../core/task-query.js';
 import {
   bm25ScoreTasks,
   expandChildTasks,
@@ -272,11 +281,201 @@ function buildSessionLimitBlocked(host: string | undefined, limitResult: Session
   return json(result);
 }
 
+// ── task_query (type=task) adapter ─────────────────────────────────────────
+//
+// Legacy shape in, canonical TaskQuery out. Two compat behaviors live HERE and
+// nowhere else (the canonical contract has neither):
+//   1. no completion/phases/phase/status given → exclude COMPLETE;
+//   2. where.parent_task_id is a PREFIX match (the REST/canonical field is exact).
+
+/** where.parent_task_id stayed a prefix here, so it can't ride the SQL pushdown. */
+function parentPrefixMatches(task: Task, prefix: string): boolean {
+  return task.parent_task_id?.startsWith(prefix) === true;
+}
+
+/**
+ * Legacy `true`/'true' booleans from a model that stringified the value. Any
+ * other string throws so the model SEES `pinned must be true or false` and
+ * retries — silently reading 'yes' as false returns a wrong answer instead.
+ */
+function looseBool(value: unknown, field: string): boolean {
+  if (value === true || value === 'true') return true;
+  if (value === false || value === 'false') return false;
+  throw new Error(`${field} must be true or false`);
+}
+
+function buildToolTaskQuery(params: Record<string, unknown>, where: Record<string, unknown>): TaskQuery {
+  const query: TaskQuery = {};
+
+  // A bare string (a model that skipped the array) is accepted as a 1-element
+  // list; it must NOT fall through to the legacy default below.
+  if (typeof where.completion === 'string') {
+    query.completion = [where.completion] as TaskQuery['completion'];
+  } else if (Array.isArray(where.completion)) {
+    query.completion = where.completion as TaskQuery['completion'];
+  }
+  if (where.phase) query.phases = [where.phase as TaskPhase];
+  else if (where.status && query.completion === undefined) {
+    // Legacy status alias → completion group (todo/in_progress/done).
+    const mapped = LEGACY_STATUS_TO_COMPLETION[String(where.status)];
+    if (mapped) query.completion = [mapped];
+  }
+  // LEGACY DEFAULT, adapter-only: bare task_query hides completed tasks.
+  if (query.completion === undefined && query.phases === undefined) {
+    query.completion = ['todo', 'in_progress'];
+  }
+
+  if (where.project !== undefined) query.projects = [String(where.project)];
+  if (where.priority) query.priorities = [where.priority as TaskPriority];
+  if (where.source) query.sources = [String(where.source)];
+  if (where.sprint) query.sprints = [String(where.sprint)];
+  if (Array.isArray(where.tags) && where.tags.length > 0) query.tagsAny = where.tags as string[];
+  if (Array.isArray(where.tags_all) && where.tags_all.length > 0) query.tagsAll = where.tags_all as string[];
+  if (where.pinned !== undefined) query.pinned = looseBool(where.pinned, 'pinned');
+  if (where.starred !== undefined) query.starred = looseBool(where.starred, 'starred');
+  if (where.unread !== undefined) query.unread = looseBool(where.unread, 'unread');
+  if (where.blocked !== undefined) query.blocked = looseBool(where.blocked, 'blocked');
+  if (where.group_id) query.groupId = String(where.group_id);
+
+  if (where.time && typeof where.time === 'object' && !Array.isArray(where.time)) {
+    const raw = where.time as Record<string, unknown>;
+    const time: TaskQueryTime = { basis: raw.basis as TaskQueryTime['basis'] };
+    if (raw.last_n_hours !== undefined) time.last = { value: Number(raw.last_n_hours), unit: 'hours' };
+    else if (raw.last_n_days !== undefined) time.last = { value: Number(raw.last_n_days), unit: 'days' };
+    if (raw.from !== undefined) time.from = String(raw.from);
+    if (raw.until !== undefined) time.until = String(raw.until);
+    query.time = time;
+  }
+
+  if (params.sort !== undefined) query.sort = params.sort as TaskQuery['sort'];
+  if (params.limit !== undefined) query.limit = Number(params.limit);
+  return query;
+}
+
+async function runTaskQueryTool(
+  params: Record<string, unknown>,
+  where: Record<string, unknown>,
+  matchMode: string,
+): Promise<string> {
+  const parentPrefix = where.parent_task_id ? String(where.parent_task_id) : undefined;
+  let query: TaskQuery;
+  try {
+    query = buildToolTaskQuery(params, where);
+  } catch (err) {
+    return `Error: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  // `match: 'contains'` is a project-name convenience the canonical contract
+  // doesn't carry — resolve it to the concrete matching project names first.
+  if (matchMode === 'contains' && where.project !== undefined && String(where.project) !== '') {
+    const wanted = String(where.project).toLowerCase();
+    const known = new Set<string>([
+      ...Object.keys(await getStoreProjects()),
+      ...(await listTasks({})).map((t) => t.project || '').filter(Boolean),
+    ]);
+    query.projects = [...known].filter((name) => name.toLowerCase().includes(wanted));
+  }
+
+  let tasks: Task[];
+  try {
+    // Limit is applied here only when no prefix compat filter follows it —
+    // otherwise the prefix drop would eat limit slots.
+    tasks = await queryTasks(parentPrefix ? { ...query, limit: undefined } : query);
+  } catch (err) {
+    if (err instanceof TaskQueryError) return `Error: ${err.message}`;
+    throw err;
+  }
+  if (parentPrefix) {
+    tasks = tasks.filter((t) => parentPrefixMatches(t, parentPrefix));
+    if (query.limit !== undefined) tasks = tasks.slice(0, query.limit);
+  }
+
+  // The full task list is needed only by the empty-result hints and by the
+  // blocked flag (dependencies can point outside the result). Load it LAZILY —
+  // most queries return rows without dependencies and never touch it.
+  let allTasksCache: Task[] | undefined;
+  const loadAllTasks = async (): Promise<Task[]> => {
+    if (allTasksCache === undefined) {
+      allTasksCache = (await listTasks({})).filter((t) => !t.title.startsWith('.metadata'));
+    }
+    return allTasksCache;
+  };
+
+  if (tasks.length === 0) {
+    const allTasks = await loadAllTasks();
+    // Smart hints when a project was specified
+    if (where.project !== undefined) {
+      const wanted = String(where.project);
+      const label = wanted === '' ? 'Inbox' : wanted;
+      // Honor matchMode here too, or a `contains` miss reports the wrong hint
+      // ("no project matching" vs "N completed").
+      const inProject = allTasks.filter((t) => {
+        const project = (t.project || '').toLowerCase();
+        if (wanted === '') return project === '';
+        return matchMode === 'contains'
+          ? project.includes(wanted.toLowerCase())
+          : project === wanted.toLowerCase();
+      });
+      if (inProject.length > 0) {
+        const doneCount = inProject.filter((t) => t.phase === 'COMPLETE').length;
+        return `No active tasks in '${label}'. ${doneCount} completed — use where.phase='COMPLETE'.`;
+      }
+      if (wanted === '') return 'Inbox is empty.';
+      const available = [...new Set(allTasks.map((t) => t.project || '').filter(Boolean))];
+      return `No project matching '${wanted}'. Available: [${available.join(', ')}]`;
+    }
+    return 'No tasks found.';
+  }
+
+  const includeNoteFlags = params.fields === 'all';
+  // One shared blocked set (computeBlockedIds builds ONE id map) instead of
+  // isTaskBlocked() rebuilding a Map per returned row. Only computed when some
+  // returned row actually declares dependencies.
+  const blockedIds = tasks.some((t) => t.depends_on?.length)
+    ? computeBlockedIds(await loadAllTasks())
+    : undefined;
+  return json(tasks.map((t) => {
+    const entry: Record<string, unknown> = {
+      id: t.id,
+      title: t.title,
+      priority: t.priority,
+      project: t.project || '',
+      phase: t.phase,
+      // status/pinned/timestamps are always present now so a time-windowed or
+      // sorted result is explainable without a follow-up task_get.
+      status: t.status,
+      pinned: Boolean(t.pinned),
+      created_at: t.created_at,
+      updated_at: t.updated_at,
+    };
+    if (t.completed_at) entry.completed_at = t.completed_at;
+    if (t.starred) entry.starred = true;
+    if (t.unread) entry.unread = true;
+    if (t.due_date) entry.due_date = t.due_date;
+    if (t.start_date) entry.start_date = t.start_date;
+    if (t.end_date) entry.end_date = t.end_date;
+    if (t.sprint) entry.sprint = t.sprint;
+    if (t.tags?.length) entry.tags = t.tags;
+    if (t.depends_on?.length) entry.depends_on = t.depends_on;
+    if (blockedIds?.has(t.id)) entry.blocked = true;
+    if (t.plan_session_id) entry.plan_session = t.plan_session_id;
+    if (t.exec_session_id) entry.exec_session = t.exec_session_id;
+    if (t.parent_task_id) entry.parent_task_id = t.parent_task_id;
+    if (t.group_id) entry.group_id = t.group_id;
+    if (includeNoteFlags) {
+      entry.has_description = !!t.description;
+      entry.has_summary = !!t.summary;
+      entry.has_note = !!t.note;
+      entry.has_conversation_log = !!t.conversation_log;
+    }
+    return entry;
+  }));
+}
+
 export const tools: ToolDefinition[] = [
   // ── Task Tools ──
   {
     name: 'task_query',
-    description: 'Query tasks or projects. Use `type` to pick the entity level. For tasks: defaults to non-completed. Use where.phase=\'COMPLETE\' (or where.status=\'done\') when the user asks about completed tasks or wants to delete/clean up.',
+    description: 'Query tasks or projects. Use `type` to pick the entity level. For tasks: defaults to non-completed. Use where.completion=[\'complete\'] (or where.phase=\'COMPLETE\') when the user asks about completed tasks or wants to delete/clean up. Different where fields AND together; arrays inside one field OR.',
     input_schema: {
       type: 'object',
       properties: {
@@ -287,26 +486,55 @@ export const tools: ToolDefinition[] = [
         },
         where: {
           type: 'object',
-          description: 'Filter conditions. Project: { name }. Task: { phase, project, priority, starred }. Legacy: status (todo/in_progress/done) still works as a convenience alias.',
+          description: 'Filter conditions. Project: { name }. Task: any combination of the fields below (AND). Legacy: status (todo/in_progress/done) still works as a convenience alias.',
           properties: {
             name: { type: 'string', description: 'Filter projects by name.' },
-            phase: { type: 'string', enum: ['TODO', 'IN_PROGRESS', 'AGENT_COMPLETE', 'AWAIT_HUMAN_ACTION', 'HUMAN_VERIFIED', 'POST_WORK_COMPLETED', 'COMPLETE'], description: 'Filter by 7-state phase (preferred).' },
+            completion: {
+              type: 'array',
+              items: { type: 'string', enum: ['todo', 'in_progress', 'complete'] },
+              description: 'Coarse 3-group state (OR within the array). todo=TODO; in_progress=the five middle phases; complete=COMPLETE. Combine with phase to narrow further (they AND).',
+            },
+            phase: { type: 'string', enum: ['TODO', 'IN_PROGRESS', 'AGENT_COMPLETE', 'AWAIT_HUMAN_ACTION', 'HUMAN_VERIFIED', 'POST_WORK_COMPLETED', 'COMPLETE'], description: 'Filter by exact 7-state phase.' },
             status: { type: 'string', enum: ['todo', 'in_progress', 'done'], description: 'Legacy 3-state filter. Maps to phases: todo→TODO, in_progress→IN_PROGRESS+AGENT_COMPLETE+AWAIT_HUMAN_ACTION+HUMAN_VERIFIED+POST_WORK_COMPLETED, done→COMPLETE.' },
             project: { type: 'string', description: 'Filter by project name. Pass "" to get Inbox (tasks with no project).' },
             priority: { type: 'string', enum: ['immediate', 'important', 'backlog', 'none'] },
+            source: { type: 'string', description: 'Filter by task source (exact), e.g. "local".' },
+            pinned: { type: 'boolean', description: 'Filter pinned/unpinned tasks. Combine with completion to find e.g. recently finished pinned work.' },
             starred: { type: 'boolean', description: 'Filter starred/favorite tasks (includes individually starred tasks and tasks in favorited projects).' },
             unread: { type: 'boolean', description: 'Filter to UNREAD tasks — the agent produced output the human has not opened yet. Set automatically when a session turn ends; cleared when the human opens the task.' },
             parent_task_id: { type: 'string', description: 'Filter to children of a parent task (by ID prefix).' },
             group_id: { type: 'string', description: 'Filter to members of a virtual group (exact group id, e.g. "g_xxx").' },
             tags: { type: 'array', items: { type: 'string' }, description: 'Filter to tasks with any of these tags (OR match).' },
+            tags_all: { type: 'array', items: { type: 'string' }, description: 'Filter to tasks carrying every one of these tags (AND match).' },
             blocked: { type: 'boolean', description: 'Filter to tasks that are blocked/unblocked by dependencies.' },
             sprint: { type: 'string', description: 'Filter by sprint name (exact match).' },
+            time: {
+              type: 'object',
+              description: 'Filter by a created/updated time window. Give basis plus EITHER last_n_hours/last_n_days (relative) OR from/until (absolute ISO-8601).',
+              properties: {
+                basis: { type: 'string', enum: ['created', 'updated', 'created_or_updated'], description: 'Which timestamp the window applies to.' },
+                last_n_hours: { type: 'number', description: 'Relative window: the last N hours (positive integer, max 8760).' },
+                last_n_days: { type: 'number', description: 'Relative window: the last N days (positive integer, max 365).' },
+                from: { type: 'string', description: 'Absolute window start, ISO-8601 (inclusive).' },
+                until: { type: 'string', description: 'Absolute window end, ISO-8601 (exclusive).' },
+              },
+              required: ['basis'],
+            },
           },
+        },
+        sort: {
+          type: 'string',
+          enum: ['updated_desc', 'created_desc', 'completed_desc', 'priority', 'title_asc'],
+          description: 'Result order. Default: "updated_desc". Always tie-broken by id.',
+        },
+        limit: {
+          type: 'number',
+          description: `Max tasks to return (1-${MAX_QUERY_LIMIT}). Applied after filtering and sorting. Default: no limit.`,
         },
         match: {
           type: 'string',
           enum: ['exact', 'contains'],
-          description: 'String match mode for where values. Default: "exact".',
+          description: 'String match mode for project/name values. Default: "exact".',
         },
         fields: {
           type: 'string',
@@ -320,27 +548,22 @@ export const tools: ToolDefinition[] = [
       const where = (params.where as Record<string, unknown>) || {};
       const matchMode = (params.match as string) || 'exact';
 
-      const allTasks = (await listTasks({})).filter((t) => !t.title.startsWith('.metadata'));
-
-      // String matcher helper
-      const strMatch = (value: string, filter: string): boolean => {
-        if (matchMode === 'contains') {
-          return value.toLowerCase().includes(filter.toLowerCase());
-        }
-        return value.toLowerCase() === filter.toLowerCase();
-      };
-
-      // Apply project name filter to the full task list.
-      // where.project='' is meaningful (Inbox), so test for presence not truthiness.
-      let filtered = allTasks;
-      if (where.project !== undefined) {
-        const wanted = String(where.project);
-        filtered = wanted === ''
-          ? filtered.filter((t) => !(t.project || ''))
-          : filtered.filter((t) => strMatch(t.project || '', wanted));
+      // The task listing is a thin adapter over queryTasks(); only the
+      // entity-level project summary below still walks the task list itself.
+      if (type === 'task') {
+        return await runTaskQueryTool(params, where, matchMode);
       }
 
       if (type === 'project') {
+        // Project-name matcher — only this branch matches names by string.
+        const strMatch = (value: string, filter: string): boolean => {
+          if (matchMode === 'contains') {
+            return value.toLowerCase().includes(filter.toLowerCase());
+          }
+          return value.toLowerCase() === filter.toLowerCase();
+        };
+
+        const allTasks = (await listTasks({})).filter((t) => !t.title.startsWith('.metadata'));
         // Merge the registry (includes empty projects) with task-derived data.
         const storeProjects = await getStoreProjects();
         const nameSet = new Set<string>([
@@ -385,116 +608,7 @@ export const tools: ToolDefinition[] = [
         return json(results);
       }
 
-      // type === 'task'
-      let tasks = filtered;
-
-      // Apply phase/status filter (phase takes priority)
-      if (where.phase) {
-        tasks = tasks.filter((t) => t.phase === where.phase);
-      } else if (where.status) {
-        tasks = tasks.filter((t) => t.status === where.status);
-      } else {
-        // Default: exclude completed tasks
-        tasks = tasks.filter((t) => t.phase !== 'COMPLETE');
-      }
-
-      // Apply priority filter
-      if (where.priority) {
-        tasks = tasks.filter((t) => t.priority === where.priority);
-      }
-
-      // Apply starred filter
-      if (where.starred !== undefined) {
-        const config = await getConfig();
-        const favProjs = config.favorites?.projects ?? [];
-        const wantStarred = where.starred === true || where.starred === 'true';
-        tasks = tasks.filter((t) => {
-          const proj = (t.project || '').toLowerCase();
-          const isStarred = !!t.starred || (!!proj && favProjs.some(p => p.toLowerCase() === proj));
-          return wantStarred ? isStarred : !isStarred;
-        });
-      }
-
-      // Apply unread filter
-      if (where.unread !== undefined) {
-        const wantUnread = where.unread === true || where.unread === 'true';
-        tasks = tasks.filter((t) => Boolean(t.unread) === wantUnread);
-      }
-
-      // Apply parent_task_id filter
-      if (where.parent_task_id) {
-        const parentPrefix = where.parent_task_id as string;
-        tasks = tasks.filter((t) => t.parent_task_id?.startsWith(parentPrefix));
-      }
-
-      // Apply group_id filter (exact match — group ids are full, not prefixes)
-      if (where.group_id) {
-        tasks = tasks.filter((t) => t.group_id === where.group_id);
-      }
-
-      // Apply tags filter (OR match: task has any of the specified tags)
-      if (where.tags && Array.isArray(where.tags) && (where.tags as string[]).length > 0) {
-        const filterTags = new Set(where.tags as string[]);
-        tasks = tasks.filter((t) => t.tags?.some(tag => filterTags.has(tag)));
-      }
-
-      // Apply blocked filter (tasks with incomplete dependencies)
-      if (where.blocked !== undefined) {
-        const wantBlocked = where.blocked === true || where.blocked === 'true';
-        tasks = tasks.filter((t) => wantBlocked ? isTaskBlocked(t, allTasks) : !isTaskBlocked(t, allTasks));
-      }
-
-      // Apply sprint filter (exact match)
-      if (where.sprint) {
-        tasks = tasks.filter((t) => t.sprint === where.sprint);
-      }
-
-      if (tasks.length === 0) {
-        // Smart hints when a project was specified
-        if (where.project !== undefined) {
-          const wanted = String(where.project);
-          const label = wanted === '' ? 'Inbox' : wanted;
-          if (filtered.length > 0) {
-            const doneCount = filtered.filter((t) => t.phase === 'COMPLETE').length;
-            return `No active tasks in '${label}'. ${doneCount} completed — use where.phase='COMPLETE'.`;
-          }
-          if (wanted === '') return 'Inbox is empty.';
-          const available = [...new Set(allTasks.map((t) => t.project || '').filter(Boolean))];
-          return `No project matching '${wanted}'. Available: [${available.join(', ')}]`;
-        }
-        return 'No tasks found.';
-      }
-
-      const includeNoteFlags = params.fields === 'all';
-      return json(tasks.map((t) => {
-        const entry: Record<string, unknown> = {
-          id: t.id,
-          title: t.title,
-          priority: t.priority,
-          project: t.project || '',
-          phase: t.phase,
-        };
-        if (t.starred) entry.starred = true;
-        if (t.unread) entry.unread = true;
-        if (t.due_date) entry.due_date = t.due_date;
-        if (t.start_date) entry.start_date = t.start_date;
-        if (t.end_date) entry.end_date = t.end_date;
-        if (t.sprint) entry.sprint = t.sprint;
-        if (t.tags?.length) entry.tags = t.tags;
-        if (t.depends_on?.length) entry.depends_on = t.depends_on;
-        if (isTaskBlocked(t, allTasks)) entry.blocked = true;
-        if (t.plan_session_id) entry.plan_session = t.plan_session_id;
-        if (t.exec_session_id) entry.exec_session = t.exec_session_id;
-        if (t.parent_task_id) entry.parent_task_id = t.parent_task_id;
-        if (t.group_id) entry.group_id = t.group_id;
-        if (includeNoteFlags) {
-          entry.has_description = !!t.description;
-          entry.has_summary = !!t.summary;
-          entry.has_note = !!t.note;
-          entry.has_conversation_log = !!t.conversation_log;
-        }
-        return entry;
-      }));
+      return `Error: unknown type '${type}'. Use type='task' or type='project'.`;
     },
   },
 

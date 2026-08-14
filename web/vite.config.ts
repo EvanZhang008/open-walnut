@@ -8,6 +8,10 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, 'src'),
       '@open-walnut/core': path.resolve(__dirname, '../src/core/types.ts'),
+      // Separate alias (NOT folded into @open-walnut/core): task-query.ts is the
+      // shared pure query model — browser-safe, no db/config/logging imports —
+      // reused verbatim by REST, the agent tool and both task surfaces.
+      '@open-walnut/task-query': path.resolve(__dirname, '../src/core/task-query.ts'),
     },
   },
   server: {

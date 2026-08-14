@@ -18,6 +18,7 @@ const config = mergeConfig(
       alias: {
         '@': path.resolve(import.meta.dirname, 'web/src'),
         '@open-walnut/core': path.resolve(import.meta.dirname, 'src/core/types.ts'),
+        '@open-walnut/task-query': path.resolve(import.meta.dirname, 'src/core/task-query.ts'),
       },
     },
     test: {

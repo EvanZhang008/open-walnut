@@ -1,5 +1,7 @@
 export type ProcessStatus = 'running' | 'idle' | 'stopped' | 'error';
-export type TaskPhase = 'TODO' | 'IN_PROGRESS' | 'AGENT_COMPLETE' | 'AWAIT_HUMAN_ACTION' | 'HUMAN_VERIFIED' | 'POST_WORK_COMPLETED' | 'COMPLETE';
+/** Canonical 7-state task phase — re-exported from core so the union can never
+ *  drift from the server's (this file used to keep a hand-copied duplicate). */
+export type { TaskPhase } from '@open-walnut/core';
 /** Mirrors SessionMode in src/core/types.ts — all six Claude permission modes. */
 export type SessionMode = 'bypass' | 'accept' | 'default' | 'plan' | 'auto' | 'dontAsk';
 export type SessionProvider = 'cli' | 'sdk' | 'embedded';

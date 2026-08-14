@@ -47,6 +47,19 @@ function futureDay(days: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
+// ── Deterministic clock for the composable-query fixtures ──
+//
+// ONE captured seed time, so every task-query timestamp below is a fixed offset
+// from the same instant. A relative window ("updated in the last 6 hours") is
+// only assertable if the fixture's age can't drift between rows — writing
+// `new Date().toISOString()` per row (what every older fixture does) would put
+// two rows on either side of a boundary on a slow, loaded machine.
+const SEED_NOW = Date.now()
+const HOUR_MS = 60 * 60 * 1000
+const DAY_MS = 24 * HOUR_MS
+/** ISO timestamp `msAgo` before the seed instant. */
+const agoIso = (msAgo: number): string => new Date(SEED_NOW - msAgo).toISOString()
+
 // Ensure directories exist
 await fs.rm(tmpBase, { recursive: true, force: true })
 const tasksDir = path.join(tmpBase, 'tasks')
@@ -393,6 +406,119 @@ await fs.writeFile(
         active_session_ids: [],
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+
+      // ── Composable task-query fixtures (task-filters.spec.ts) ──
+      //
+      // Every row here carries a FIXED age (offset from SEED_NOW) so relative
+      // windows are assertable, and lives in its OWN project (Lantern / Meadow)
+      // so a project condition selects an exact set no other spec's data can
+      // join. Titles carry the `tq-` marker for the same reason.
+      //
+      // `pinned: true` + `phase: 'COMPLETE'` on ONE row is deliberate and is the
+      // combination the whole feature exists for: the tier area hides completed
+      // pins (splitTiers / useFocusBar both drop them), so before the query model
+      // this task was unreachable in the UI. It is safe for the existing pinned
+      // specs precisely BECAUSE it is completed — it never enters a tier list,
+      // never appears in /api/focus/tasks, and so can't shift any tier ordering,
+      // count, or drag geometry they assert.
+      {
+        id: 'pw-tq-pinned-done-recent',
+        title: 'tq pinned done recent',
+        status: 'done',
+        phase: 'COMPLETE',
+        priority: 'important',
+        project: 'Lantern',
+        source: 'local',
+        pinned: true,
+        pin_order: 0,
+        focus_tier: 'focus',
+        session_ids: [],
+        active_session_ids: [],
+        created_at: agoIso(3 * DAY_MS),
+        updated_at: agoIso(HOUR_MS),
+        completed_at: agoIso(HOUR_MS),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        // Same project + same 6h window, but NOT pinned — proves the pinned leg
+        // of the composed query is doing work (drop it and this row joins).
+        id: 'pw-tq-open-recent',
+        title: 'tq open recent unpinned',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'immediate',
+        project: 'Lantern',
+        source: 'local',
+        session_ids: [],
+        active_session_ids: [],
+        created_at: agoIso(3 * DAY_MS),
+        updated_at: agoIso(2 * HOUR_MS),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        // Completed like the pinned row, in the same project, but OUTSIDE the
+        // 6h/24h windows — proves the time leg is doing work.
+        id: 'pw-tq-done-stale',
+        title: 'tq done stale',
+        status: 'done',
+        phase: 'COMPLETE',
+        priority: 'none',
+        project: 'Lantern',
+        source: 'local',
+        session_ids: [],
+        active_session_ids: [],
+        created_at: agoIso(9 * DAY_MS),
+        updated_at: agoIso(3 * DAY_MS),
+        completed_at: agoIso(3 * DAY_MS),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        // A second project so a project condition can be shown to EXCLUDE, not
+        // just include. Recent enough to pass the 24h "recently updated" preset.
+        id: 'pw-tq-other-project-recent',
+        title: 'tq other project recent',
+        status: 'todo',
+        phase: 'TODO',
+        priority: 'important',
+        project: 'Meadow',
+        source: 'local',
+        session_ids: [],
+        active_session_ids: [],
+        created_at: agoIso(4 * DAY_MS),
+        updated_at: agoIso(2 * HOUR_MS),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        // Meadow's stale twin: same project, outside every relative window, so
+        // "project Meadow + recently updated" has something real to drop.
+        id: 'pw-tq-other-project-stale',
+        title: 'tq other project stale',
+        status: 'todo',
+        phase: 'AWAIT_HUMAN_ACTION',
+        priority: 'backlog',
+        project: 'Meadow',
+        source: 'local',
+        session_ids: [],
+        active_session_ids: [],
+        created_at: agoIso(20 * DAY_MS),
+        updated_at: agoIso(8 * DAY_MS),
         description: '',
         summary: '',
         note: '',

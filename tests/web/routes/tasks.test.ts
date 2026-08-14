@@ -98,6 +98,209 @@ describe('GET /api/tasks', () => {
   });
 });
 
+// The route is a thin adapter over queryTasks(); these cover the parsing
+// contract (which params exist, what a bad value does) rather than re-testing
+// the shared predicate semantics (tests/core/task-query.test.ts owns those).
+describe('GET /api/tasks — canonical query params', () => {
+  /** Ids in response order. */
+  async function idsFor(qs: string): Promise<string[]> {
+    const res = await request(createApp()).get(`/api/tasks${qs}`);
+    expect(res.status).toBe(200);
+    return (res.body.tasks as { id: string }[]).map((t) => t.id);
+  }
+
+  async function expect400(qs: string): Promise<string> {
+    const res = await request(createApp()).get(`/api/tasks${qs}`);
+    expect(res.status).toBe(400);
+    expect(typeof res.body.error).toBe('string');
+    return res.body.error as string;
+  }
+
+  it('completion=complete returns only COMPLETE tasks', async () => {
+    await addTask({ title: 'Open' });
+    const { task: done } = await addTask({ title: 'Closed' });
+    const { completeTask } = await import('../../../src/core/task-manager.js');
+    await completeTask(done.id);
+
+    expect(await idsFor('?completion=complete')).toEqual([done.id]);
+    expect(await idsFor('?completion=todo')).not.toContain(done.id);
+    // No implicit hiding of COMPLETE on REST.
+    expect(await idsFor('')).toHaveLength(2);
+  });
+
+  it('completion accepts a comma-separated OR list', async () => {
+    const { task: todo } = await addTask({ title: 'Todo' });
+    const { task: done } = await addTask({ title: 'Done' });
+    const { completeTask } = await import('../../../src/core/task-manager.js');
+    await completeTask(done.id);
+
+    expect(new Set(await idsFor('?completion=todo,complete'))).toEqual(new Set([todo.id, done.id]));
+  });
+
+  it('phases filters on the exact 7-state phase', async () => {
+    const { task } = await addTask({ title: 'Mid-flight' });
+    const { updateTask } = await import('../../../src/core/task-manager.js');
+    await updateTask(task.id, { phase: 'AGENT_COMPLETE' });
+    await addTask({ title: 'Fresh' });
+
+    expect(await idsFor('?phases=AGENT_COMPLETE')).toEqual([task.id]);
+    expect(await idsFor('?phases=AGENT_COMPLETE,TODO')).toHaveLength(2);
+  });
+
+  it('projects / priorities / sources / sprints accept arrays', async () => {
+    const { task: a } = await addTask({ title: 'A', project: 'Acme', priority: 'immediate' });
+    const { task: b } = await addTask({ title: 'B', project: 'Marina', priority: 'backlog' });
+    const { updateTask } = await import('../../../src/core/task-manager.js');
+    await updateTask(a.id, { sprint: 'S1' });
+
+    expect(new Set(await idsFor('?projects=Acme,Marina'))).toEqual(new Set([a.id, b.id]));
+    expect(await idsFor('?priorities=immediate')).toEqual([a.id]);
+    expect(await idsFor('?sources=local')).toHaveLength(2);
+    expect(await idsFor('?sprints=S1')).toEqual([a.id]);
+  });
+
+  it('pinned / starred / unread / blocked take true|false', async () => {
+    const { task: pinned } = await addTask({ title: 'Pinned' });
+    const { task: plain } = await addTask({ title: 'Plain' });
+    const { togglePin } = await import('../../../src/core/task-manager.js');
+    await togglePin(pinned.id);
+
+    expect(await idsFor('?pinned=true')).toEqual([pinned.id]);
+    expect(await idsFor('?pinned=false')).toEqual([plain.id]);
+    expect(await idsFor('?starred=true')).toEqual([]);
+    // The param is `unread`; the pre-v6 `needs_attention` spelling never shipped
+    // on this route and is NOT accepted (an unknown param is simply ignored).
+    expect(new Set(await idsFor('?unread=false'))).toEqual(new Set([pinned.id, plain.id]));
+    expect(await idsFor('?unread=true')).toEqual([]);
+    expect(new Set(await idsFor('?needs_attention=true'))).toEqual(new Set([pinned.id, plain.id]));
+    expect(new Set(await idsFor('?blocked=false'))).toEqual(new Set([pinned.id, plain.id]));
+  });
+
+  it('tags_any is an OR match and tags_all an AND match', async () => {
+    const { task: both } = await addTask({ title: 'Both', tags: ['red', 'blue'] });
+    const { task: one } = await addTask({ title: 'One', tags: ['red'] });
+
+    expect(new Set(await idsFor('?tags_any=red'))).toEqual(new Set([both.id, one.id]));
+    expect(await idsFor('?tags_all=red,blue')).toEqual([both.id]);
+  });
+
+  it('an EMPTY tag param means no condition, not match-nothing', async () => {
+    const { task: tagged } = await addTask({ title: 'Tagged', tags: ['red'] });
+    const { task: bare } = await addTask({ title: 'Untagged' });
+    const all = new Set([tagged.id, bare.id]);
+
+    // Legacy `?tags=` always meant "no filter"; tags_any/tags_all must agree.
+    expect(new Set(await idsFor('?tags='))).toEqual(all);
+    expect(new Set(await idsFor('?tags_any='))).toEqual(all);
+    expect(new Set(await idsFor('?tags_all='))).toEqual(all);
+    // Commas-only is the same empty list once blanks are dropped.
+    expect(new Set(await idsFor('?tags_any=,'))).toEqual(all);
+  });
+
+  it('parent_task_id is an EXACT match on REST', async () => {
+    const { task: parent } = await addTask({ title: 'Parent' });
+    const { task: child } = await addTask({ title: 'Child', parent_task_id: parent.id });
+
+    expect(await idsFor(`?parent_task_id=${parent.id}`)).toEqual([child.id]);
+    expect(await idsFor(`?parent_task_id=${parent.id.slice(0, 5)}`)).toEqual([]);
+  });
+
+  it('group_id filters group members (payload-stored field)', async () => {
+    const { task: a } = await addTask({ title: 'Group A' });
+    const { task: b } = await addTask({ title: 'Group B' });
+    await addTask({ title: 'Outsider' });
+    const { groupTasks } = await import('../../../src/core/task-manager.js');
+    const { group_id } = await groupTasks([a.id, b.id], 'Pair');
+
+    expect(new Set(await idsFor(`?group_id=${group_id}`))).toEqual(new Set([a.id, b.id]));
+  });
+
+  it('time_basis + last_hours filters on a relative window', async () => {
+    const { task: recent } = await addTask({ title: 'Recent' });
+    const { task: old } = await addTask({ title: 'Old' });
+    const { updateTaskRaw } = await import('../../../src/core/task-manager.js');
+    const longAgo = new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString();
+    await updateTaskRaw(old.id, { created_at: longAgo, updated_at: longAgo });
+
+    expect(await idsFor('?time_basis=updated&last_hours=6')).toEqual([recent.id]);
+    expect(new Set(await idsFor('?time_basis=updated&last_days=7'))).toEqual(new Set([recent.id, old.id]));
+    expect(await idsFor('?time_basis=created_or_updated&last_hours=6')).toEqual([recent.id]);
+  });
+
+  it('time_from / time_until accept an absolute half-open window', async () => {
+    const { task } = await addTask({ title: 'Stamped' });
+    const { updateTaskRaw } = await import('../../../src/core/task-manager.js');
+    await updateTaskRaw(task.id, { updated_at: '2026-03-05T12:00:00.000Z' });
+
+    expect(await idsFor('?time_basis=updated&time_from=2026-03-01T00:00:00Z&time_until=2026-03-10T00:00:00Z'))
+      .toEqual([task.id]);
+    // until is EXCLUSIVE.
+    expect(await idsFor('?time_basis=updated&time_from=2026-03-01T00:00:00Z&time_until=2026-03-05T12:00:00Z'))
+      .toEqual([]);
+  });
+
+  it('an extreme time_until still matches a recent row (widened bound is clamped)', async () => {
+    const { task } = await addTask({ title: 'Recent' });
+
+    // The candidate SQL widens `until` by 1s; year 9999 + 1s renders as
+    // '+010000-01-01T…' whose leading '+' sorts BELOW every digit, so the
+    // candidate WHERE used to match NOTHING and real rows never reached JS.
+    expect(await idsFor('?time_basis=updated&time_until=9999-12-31T23:59:59Z')).toEqual([task.id]);
+    expect(await idsFor('?time_basis=created_or_updated&time_until=9999-12-31T23:59:59Z')).toEqual([task.id]);
+    // The symmetric lower bound: year 0000 - 1s would render '-000001-…'.
+    expect(await idsFor('?time_basis=updated&time_from=0000-01-01T00:00:00Z')).toEqual([task.id]);
+  });
+
+  it('sort and limit apply after filtering', async () => {
+    const { task: first } = await addTask({ title: 'Alpha' });
+    const { task: second } = await addTask({ title: 'Beta' });
+    // Stamp distinct created_at values — two addTask calls can land in the SAME
+    // millisecond, and created_desc would then tie-break on the random id.
+    const { updateTaskRaw } = await import('../../../src/core/task-manager.js');
+    await updateTaskRaw(first.id, { created_at: '2026-03-01T00:00:00.000Z' });
+    await updateTaskRaw(second.id, { created_at: '2026-03-02T00:00:00.000Z' });
+
+    expect(await idsFor('?sort=title_asc')).toEqual([first.id, second.id]);
+    expect(await idsFor('?sort=title_asc&limit=1')).toEqual([first.id]);
+    expect(await idsFor('?sort=created_desc')).toEqual([second.id, first.id]);
+  });
+
+  it('rejects invalid enums, limits and time windows with 400', async () => {
+    expect(await expect400('?completion=finished')).toMatch(/completion/i);
+    expect(await expect400('?phases=SHIPPED')).toMatch(/phase/i);
+    expect(await expect400('?priorities=urgent')).toMatch(/priority/i);
+    expect(await expect400('?sort=random')).toMatch(/sort/i);
+    expect(await expect400('?status=archived')).toMatch(/status/i);
+    expect(await expect400('?limit=0')).toMatch(/limit/i);
+    expect(await expect400('?limit=500')).toMatch(/limit/i);
+    expect(await expect400('?pinned=1')).toMatch(/pinned/i);
+    expect(await expect400('?time_basis=updated&last_hours=3&last_days=1')).toMatch(/mutually exclusive/i);
+    expect(await expect400('?last_days=1')).toMatch(/time_basis/i);
+    expect(await expect400('?time_basis=updated&last_days=400')).toMatch(/exceed/i);
+    expect(await expect400('?time_basis=updated&time_from=2026-13-45T00:00:00Z')).toMatch(/timestamp/i);
+  });
+
+  it('tolerates a repeated param instead of throwing on the array shape', async () => {
+    const { task } = await addTask({ title: 'Only', project: 'Acme' });
+    // Express hands `?x=1&x=2` to the route as an ARRAY. Splitting that directly
+    // would throw (→ 500); the parser takes the last value instead.
+    expect(await idsFor('?projects=Nope&projects=Acme')).toEqual([task.id]);
+    expect(await idsFor('?limit=200&limit=1')).toHaveLength(1);
+    // A repeated INVALID value still answers 400, not 500.
+    expect(await expect400('?limit=1&limit=abc')).toMatch(/limit/i);
+  });
+
+  it('slim and minimal projections return the same ids as the full payload', async () => {
+    await addTask({ title: 'One', project: 'Acme' });
+    await addTask({ title: 'Two', project: 'Acme' });
+
+    const full = await idsFor('?projects=Acme&sort=title_asc');
+    expect(full).toHaveLength(2);
+    expect(await idsFor('?projects=Acme&sort=title_asc&slim=1')).toEqual(full);
+    expect(await idsFor('?projects=Acme&sort=title_asc&fields=list')).toEqual(full);
+  });
+});
+
 describe('GET /api/tasks/enriched', () => {
   it('returns enriched tasks with computed fields', async () => {
     await addTask({ title: 'Overdue task', due_date: '2020-01-01' });
@@ -267,6 +470,11 @@ describe('POST /api/tasks/:id/notes', () => {
 });
 
 describe('PATCH /api/tasks/reorder', () => {
+  // Manual order is persisted as the store's ROW ORDER (see reorderTasks — it
+  // permutes array slots and touches no field). It is a UI presentation concern,
+  // NOT a query dimension, so these assert it through listTasks (which returns
+  // store order); GET /api/tasks answers in its own documented sort order
+  // (updated_desc by default) and is asserted separately below.
   it('reorders tasks within a project group and persists', async () => {
     const { task: t1 } = await addTask({ title: 'First', project: 'HomeLab' });
     const { task: t2 } = await addTask({ title: 'Second', project: 'HomeLab' });
@@ -280,12 +488,9 @@ describe('PATCH /api/tasks/reorder', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
 
-    // Verify order persisted via GET
-    const listRes = await request(app).get('/api/tasks?project=HomeLab');
-    expect(listRes.status).toBe(200);
-    expect(listRes.body.tasks[0].id).toBe(t3.id);
-    expect(listRes.body.tasks[1].id).toBe(t1.id);
-    expect(listRes.body.tasks[2].id).toBe(t2.id);
+    const { listTasks } = await import('../../../src/core/task-manager.js');
+    const stored = (await listTasks({ project: 'HomeLab' })).map((t) => t.id);
+    expect(stored).toEqual([t3.id, t1.id, t2.id]);
   });
 
   it("reorders the Inbox group (project: '') — '' is a valid group, not a missing field", async () => {
@@ -300,7 +505,19 @@ describe('PATCH /api/tasks/reorder', () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
 
-    const listRes = await request(app).get('/api/tasks');
+    const { listTasks } = await import('../../../src/core/task-manager.js');
+    expect((await listTasks({ project: '' })).map((t) => t.id)).toEqual([t2.id, t1.id]);
+  });
+
+  it('GET /api/tasks answers in updated_desc order, not store order', async () => {
+    const { task: t1 } = await addTask({ title: 'First', project: 'HomeLab' });
+    const { task: t2 } = await addTask({ title: 'Second', project: 'HomeLab' });
+
+    const app = createApp();
+    // Put t1 first in STORE order…
+    await request(app).patch('/api/tasks/reorder').send({ project: 'HomeLab', taskIds: [t1.id, t2.id] });
+    // …the query still answers newest-updated first (t2 was created later).
+    const listRes = await request(app).get('/api/tasks?projects=HomeLab');
     expect(listRes.body.tasks.map((t: { id: string }) => t.id)).toEqual([t2.id, t1.id]);
   });
 

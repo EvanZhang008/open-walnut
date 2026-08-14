@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useOrdering } from '@/hooks/useOrdering';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
@@ -9,6 +9,27 @@ import { TasksPageTable } from '@/components/tasks/TasksPageTable';
 import { TaskForm, type TaskFormData } from '@/components/tasks/TaskForm';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import type { TpSort } from '@/components/tasks/tasks-page-sort';
+import {
+  ViewDropdown,
+  DEFAULT_TASK_QUERY_FILTER_STATE,
+  logTaskQueryChange,
+  toTaskQuery,
+  type TaskQueryFilterState,
+} from '@/components/tasks/ViewDropdown';
+import { TaskFilterChips } from '@/components/tasks/TaskFilterChips';
+import {
+  buildTaskQueryContext,
+  deriveSourceOptions,
+  deriveSprintOptions,
+  safeNormalizeTaskQuery,
+} from '@/components/tasks/task-query-state';
+import {
+  matchesTaskQuery,
+  type NormalizedTaskQuery,
+  type TaskQueryContext,
+} from '@open-walnut/task-query';
+import type { Task } from '@open-walnut/core';
+import { visibleInterval } from '@/utils/page-visibility';
 import '@/styles/tasks-page.css';
 
 const LS_SORT = 'walnut-tasks-page-sort';
@@ -42,16 +63,66 @@ export function DashboardPage() {
   const { tasks, loading, error, toggleComplete, create, deleteTask, update, star } = useTasksContext();
   const { projectOrder, reorderProjects } = useOrdering();
   const { projectNames, sourceByName, favoriteByName, refresh: refreshRegistry } = useProjectRegistry();
-  const { toggleFavoriteProject } = useFavorites();
+  const { toggleFavoriteProject, isProjectFavorite } = useFavorites();
 
-  // null = All Tasks, '' = Inbox, otherwise a project name.
+  // null = All Tasks, '' = Inbox, otherwise a project name. The rail NAVIGATES,
+  // so it is deliberately not a query condition: the query panel's own `projects`
+  // chips are the refinement, and mixing the two would make "clear all filters"
+  // silently move the board off the project the user was looking at.
   const [activeProject, setActiveProject] = useState<string | null>(null);
-  const [showTodo, setShowTodo] = useState(true);
-  const [showDone, setShowDone] = useState(false);
-  const [filterP0, setFilterP0] = useState(false);
-  const [filterP1, setFilterP1] = useState(false);
   const [search, setSearch] = useState('');
   const [showForm, setShowForm] = useState(false);
+
+  // The SAME canonical query state the home panel uses. Seeded with
+  // completion: ['todo','in_progress'] to preserve this page's shipped default
+  // (Todo on, Done off): hiding completed tasks is an explicit choice a surface
+  // makes, never a rule buried inside the shared evaluator.
+  const [query, setQuery] = useState<TaskQueryFilterState>(() => ({
+    ...DEFAULT_TASK_QUERY_FILTER_STATE,
+    completion: ['todo', 'in_progress'],
+  }));
+
+  const handleQueryChange = useCallback((next: TaskQueryFilterState) => {
+    setQuery(next);
+    logTaskQueryChange('tasks-page', next);
+  }, []);
+
+  // The two toolbar status chips map onto the completion dimension. An EMPTY
+  // completion array means "no condition", i.e. show everything — so both chips
+  // read as ON there, matching what the table actually shows.
+  const noCompletionCondition = query.completion.length === 0;
+  const showTodoChip = noCompletionCondition
+    || query.completion.includes('todo') || query.completion.includes('in_progress');
+  const showDoneChip = noCompletionCondition || query.completion.includes('complete');
+
+  // Both chip handlers compute the next state with the CURRENT `query` rather
+  // than a setQuery updater: logging is a side effect, and an updater callback
+  // can run twice (StrictMode) or be replayed, which would double-log. They're
+  // click handlers on a single state field, so there is no batching race to lose.
+  const toggleCompletionChip = useCallback((which: 'todo' | 'done') => {
+    const hadTodo = query.completion.length === 0
+      || query.completion.includes('todo') || query.completion.includes('in_progress');
+    const hadDone = query.completion.length === 0 || query.completion.includes('complete');
+    let todo = which === 'todo' ? !hadTodo : hadTodo;
+    let done = which === 'done' ? !hadDone : hadDone;
+    // At least one side stays on — an empty status set would show nothing and
+    // read as data loss (this page's long-standing rule).
+    if (!todo && !done) { if (which === 'todo') done = true; else todo = true; }
+    const completion: TaskQueryFilterState['completion'] = [];
+    if (todo) completion.push('todo', 'in_progress');
+    if (done) completion.push('complete');
+    // Both on = no condition at all, so the chips stop showing up as filters.
+    handleQueryChange({ ...query, completion: todo && done ? [] : completion });
+  }, [query, handleQueryChange]);
+
+  const togglePriorityChip = useCallback((value: 'immediate' | 'important') => {
+    handleQueryChange({
+      ...query,
+      priorities: query.priorities.includes(value)
+        ? query.priorities.filter((p) => p !== value)
+        : [...query.priorities, value],
+    });
+  }, [query, handleQueryChange]);
 
   // ── table view state (persisted) ──
   const [sort, setSort] = useState<TpSort | null>(readSort);
@@ -168,32 +239,59 @@ export function DashboardPage() {
     done: inScope.filter((t) => t.status === 'done').length,
   }), [inScope]);
 
+  // Value lists for the query panel — registry names union task-derived ones, so
+  // a zero-task project is still selectable. '' (Inbox) leads: it's a real value.
+  const queryProjectOptions = useMemo(
+    () => ['', ...railProjects.map((p) => p.name)],
+    [railProjects],
+  );
+  const querySourceOptions = useMemo(() => deriveSourceOptions(tasks), [tasks]);
+  const querySprintOptions = useMemo(() => deriveSprintOptions(tasks), [tasks]);
+
+  // ── the shared evaluator ──
+  //
+  // Identical model to the home panel (src/core/task-query.ts): the only reason
+  // /tasks and / can agree on "project X, updated in the last 24h" is that this
+  // is literally the same predicate. Presentation (column sort, grouping,
+  // collapse) stays in TasksPageTable, which is still a pure display component.
+
+  // Re-evaluate relative windows on a minute tick, matching the home panel.
+  // visibleInterval, not setInterval: a hidden tab must not burn re-renders
+  // (and gets ONE catch-up tick when it comes back).
+  const [minuteTick, setMinuteTick] = useState(0);
+  useEffect(() => visibleInterval(() => setMinuteTick((n) => n + 1), 60_000), []);
+
+  // The tick only reaches the memo while a relative window is actually set —
+  // otherwise every minute re-normalized the query and re-ran the filter pass
+  // over the whole table for a guaranteed-identical result.
+  const timeTick = query.timePreset === null ? 0 : minuteTick;
+
+  // ONE captured `now` per evaluation, so a window can't slide mid-pass.
+  const normalized = useMemo<NormalizedTaskQuery | null>(
+    () => safeNormalizeTaskQuery(toTaskQuery(query), new Date()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- timeTick re-arms relative time windows
+    [query, timeTick],
+  );
+
+  // Same context builder the home panel uses. Favorites come from the CONFIG
+  // hook, not the registry's folded flag: a favorite whose project has no
+  // registry row exists in config only, and the two surfaces must agree on which
+  // rows count as starred.
+  const queryContext = useMemo<TaskQueryContext>(
+    () => buildTaskQueryContext(tasks, isProjectFavorite, query.blocked !== undefined),
+    [tasks, isProjectFavorite, query.blocked],
+  );
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return inScope.filter((t) => {
-      const done = t.status === 'done';
-      if (done && !showDone) return false;
-      if (!done && !showTodo) return false;
-      if ((filterP0 || filterP1)
-        && !((filterP0 && t.priority === 'immediate') || (filterP1 && t.priority === 'important'))) return false;
+    return inScope.filter((t: Task) => {
+      if (normalized && !matchesTaskQuery(t, normalized, queryContext)) return false;
+      // Local title/project text match — the candidate role search plays here
+      // (this page has no semantic search service). It ANDs with the query.
       if (q && !t.title.toLowerCase().includes(q) && !(t.project ?? '').toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [inScope, showTodo, showDone, filterP0, filterP1, search]);
-
-  // ── actions ──
-  const toggleStatusChip = useCallback((which: 'todo' | 'done') => {
-    // At least one of Todo/Done stays active (an empty status set shows nothing).
-    if (which === 'todo') {
-      const next = !showTodo;
-      setShowTodo(next);
-      if (!next && !showDone) setShowDone(true);
-    } else {
-      const next = !showDone;
-      setShowDone(next);
-      if (!next && !showTodo) setShowTodo(true);
-    }
-  }, [showTodo, showDone]);
+  }, [inScope, normalized, queryContext, search]);
 
   const handleGhostCreate = useCallback(async (title: string, project?: string) => {
     // Grouped ghost rows pass their own project; the top ghost falls back to
@@ -277,18 +375,46 @@ export function DashboardPage() {
         <div className="tp-toolbar">
           <span className="tp-title" title={boardTitle}>{boardTitle}</span>
           <span className="tp-stats">{stats.todo} todo · {stats.done} done</span>
-          <button type="button" className={`tp-chip${showTodo ? ' on' : ''}`} onClick={() => toggleStatusChip('todo')}>
+          {/* The high-frequency conditions stay one click away as chips; every
+              other dimension lives in the shared View panel next to them. Both
+              write the SAME query state, so a chip and a panel chip can never
+              disagree. */}
+          <button
+            type="button"
+            className={`tp-chip${showTodoChip ? ' on' : ''}`}
+            onClick={() => toggleCompletionChip('todo')}
+          >
             ○ Todo
           </button>
-          <button type="button" className={`tp-chip${showDone ? ' on' : ''}`} onClick={() => toggleStatusChip('done')}>
+          <button
+            type="button"
+            className={`tp-chip${showDoneChip ? ' on' : ''}`}
+            onClick={() => toggleCompletionChip('done')}
+          >
             ✓ Done
           </button>
-          <button type="button" className={`tp-chip${filterP0 ? ' on' : ''}`} onClick={() => setFilterP0((v) => !v)}>
+          <button
+            type="button"
+            className={`tp-chip${query.priorities.includes('immediate') ? ' on' : ''}`}
+            onClick={() => togglePriorityChip('immediate')}
+          >
             <span className="tp-p-dot p0" />P0
           </button>
-          <button type="button" className={`tp-chip${filterP1 ? ' on' : ''}`} onClick={() => setFilterP1((v) => !v)}>
+          <button
+            type="button"
+            className={`tp-chip${query.priorities.includes('important') ? ' on' : ''}`}
+            onClick={() => togglePriorityChip('important')}
+          >
             <span className="tp-p-dot p1" />P1
           </button>
+          <ViewDropdown
+            onClearAll={() => handleQueryChange({ ...DEFAULT_TASK_QUERY_FILTER_STATE, sort: query.sort })}
+            query={query}
+            onQueryChange={handleQueryChange}
+            queryProjectOptions={queryProjectOptions}
+            querySourceOptions={querySourceOptions}
+            querySprintOptions={querySprintOptions}
+          />
           {isAll && (
             <>
               <button
@@ -320,6 +446,9 @@ export function DashboardPage() {
           />
           <button type="button" className="tp-newtask-btn" onClick={() => setShowForm(true)}>＋ Task</button>
         </div>
+
+        {/* Same chips component as the home panel: one removable chip per value. */}
+        <TaskFilterChips query={query} onQueryChange={handleQueryChange} />
 
         <TasksPageTable
           tasks={filtered}

@@ -53,13 +53,20 @@ export interface TaskDetail extends Task {
   children?: TaskFamilyReference[];
 }
 
-export interface TaskFilter {
-  status?: string;
-  priority?: string;
-  /** Project name. Matched case-insensitively by the server. Cannot express
-   *  "Inbox" (the absence of a project) — omit it and filter client-side. */
-  project?: string;
-}
+/**
+ * The canonical query contract, shared verbatim with REST and the agent tool
+ * (`src/core/task-query.ts`). Replaces the old drifted client-side filter type,
+ * whose three loose string fields matched neither the server's parser nor either
+ * UI surface.
+ *
+ * Re-exported here only so UI modules keep importing their task types from one
+ * place. `fetchTasks` deliberately takes NO query: it fetches the full minimal
+ * list and every condition is evaluated in the browser, because `/` and `/tasks`
+ * share one task cache and a server-filtered fetch would starve whichever
+ * surface didn't ask for it. Server-side filtering has its own callers
+ * (`GET /api/tasks?…`, the agent tool); it is not this function's job.
+ */
+export type { TaskQuery } from '@open-walnut/task-query';
 
 export type { QuickTaskParse } from '@open-walnut/core';
 
@@ -114,13 +121,8 @@ export interface UpdateTaskInput {
   set_depends_on?: string[];
 }
 
-export async function fetchTasks(filter?: TaskFilter, opts?: { slim?: boolean; minimal?: boolean }): Promise<Task[]> {
+export async function fetchTasks(opts?: { slim?: boolean; minimal?: boolean }): Promise<Task[]> {
   const params: Record<string, string> = {};
-  if (filter) {
-    for (const [k, v] of Object.entries(filter)) {
-      if (v) params[k] = v;
-    }
-  }
   if (opts?.minimal) {
     // List payload: drops note/conversation_log AND summary/description/ext
     // (~2.6MB on top of the slim ~400KB). The detail pane lazy-loads the full

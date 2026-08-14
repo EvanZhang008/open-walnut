@@ -401,6 +401,15 @@ const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS tasks_updated_at ON tasks(updated_at);
   CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parent_task_id);
 
+  -- Composable task query (queryTasks in task-manager.ts) pushes time windows and
+  -- phase sets into SQL. The trailing id keeps the query's stable tie-breaker
+  -- (id ASC) inside the index, so a windowed top-N never needs the table.
+  -- CREATE INDEX IF NOT EXISTS is idempotent → no PRAGMA user_version bump.
+  -- Deliberately NOT indexed: pinned (a low-selectivity boolean).
+  CREATE INDEX IF NOT EXISTS tasks_created_at_id ON tasks(created_at, id);
+  CREATE INDEX IF NOT EXISTS tasks_updated_at_id ON tasks(updated_at, id);
+  CREATE INDEX IF NOT EXISTS tasks_phase_updated_at_id ON tasks(phase, updated_at, id);
+
   -- Plugin ext-id indexes are no longer baked into SCHEMA_SQL — each plugin
   -- declares its own ext-index spec via PluginApi.registerExtIndex, and the
   -- loader calls ensureExtIndexes() after plugins finish loading. This keeps

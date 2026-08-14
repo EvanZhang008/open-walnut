@@ -138,16 +138,20 @@ describe('task tools', () => {
     });
   });
 
-  it('query_tasks returns created tasks', async () => {
+  it('query_tasks returns created tasks in updated_desc order', async () => {
     await executeTool('task_create', { title: 'Task A', priority: 'immediate', project: 'work' });
     await executeTool('task_create', { title: 'Task B', project: 'personal' });
 
     const result = await executeTool('task_query', {});
-    const parsed = JSON.parse(result);
+    const parsed = JSON.parse(result) as { title: string; priority: string; updated_at: string }[];
     expect(parsed).toHaveLength(2);
-    expect(parsed[0].title).toBe('Task A');
-    expect(parsed[0].priority).toBe('immediate');
-    expect(parsed[1].title).toBe('Task B');
+    expect(new Set(parsed.map((t) => t.title))).toEqual(new Set(['Task A', 'Task B']));
+    expect(parsed.find((t) => t.title === 'Task A')!.priority).toBe('immediate');
+    // Default sort is updated_desc (was: raw store order). Asserted as an
+    // invariant, not a fixed pair — same-millisecond creates tie on updated_at
+    // and then break on the random-suffixed id.
+    const stamps = parsed.map((t) => Date.parse(t.updated_at));
+    expect(stamps).toEqual([...stamps].sort((a, b) => b - a));
   });
 
   it('query_tasks filters by status', async () => {
@@ -273,6 +277,176 @@ describe('task tools', () => {
 
     const result = await executeTool('task_query', { where: { project: '' } });
     expect(result).toBe('Inbox is empty.');
+  });
+
+  // ── task_query as a queryTasks() adapter ──
+  //
+  // The task listing no longer holds its own predicates; these cover the schema
+  // additions plus the two behaviors that stay adapter-local (default-hide
+  // COMPLETE, parent_task_id prefix match).
+  describe('task_query canonical schema', () => {
+    /** Query and return the parsed rows ([] when the tool returned a message). */
+    async function rows(params: Record<string, unknown>): Promise<Record<string, unknown>[]> {
+      const raw = await executeTool('task_query', params);
+      return raw.startsWith('[') ? JSON.parse(raw) : [];
+    }
+
+    /** Create a task and return its id. */
+    async function make(title: string, opts: Record<string, unknown> = {}): Promise<string> {
+      const created = await executeTool('task_create', { title, ...opts });
+      return created.match(/id="([^"]+)"/)![1];
+    }
+
+    it('declares completion, pinned, source, tags_all, time, sort and limit', () => {
+      const schema = tools.find((t) => t.name === 'task_query')!.input_schema as {
+        properties: Record<string, { properties?: Record<string, unknown> }>;
+      };
+      expect(schema.properties).toHaveProperty('sort');
+      expect(schema.properties).toHaveProperty('limit');
+      const where = schema.properties.where.properties!;
+      for (const key of ['completion', 'pinned', 'source', 'tags_all', 'time']) {
+        expect(where).toHaveProperty(key);
+      }
+    });
+
+    it('hides COMPLETE by default and includes it for any explicit state filter', async () => {
+      const open = await make('Still open');
+      const closed = await make('Wrapped up');
+      const { updateTask } = await import('../../src/core/task-manager.js');
+      await updateTask(closed, { phase: 'COMPLETE' });
+
+      expect((await rows({})).map((t) => t.id)).toEqual([open]);
+      expect((await rows({ where: { completion: ['complete'] } })).map((t) => t.id)).toEqual([closed]);
+      expect((await rows({ where: { phase: 'COMPLETE' } })).map((t) => t.id)).toEqual([closed]);
+      expect((await rows({ where: { status: 'done' } })).map((t) => t.id)).toEqual([closed]);
+      expect(new Set((await rows({ where: { completion: ['todo', 'complete'] } })).map((t) => t.id)))
+        .toEqual(new Set([open, closed]));
+    });
+
+    it('accepts a BARE-STRING completion instead of falling back to the legacy default', async () => {
+      const open = await make('Still open');
+      const closed = await make('Wrapped up');
+      const { updateTask } = await import('../../src/core/task-manager.js');
+      await updateTask(closed, { phase: 'COMPLETE' });
+
+      // A model that passed the value unwrapped used to miss the array check,
+      // hit the "hide COMPLETE" default, and get back the OPPOSITE rows.
+      expect((await rows({ where: { completion: 'complete' } })).map((t) => t.id)).toEqual([closed]);
+      expect((await rows({ where: { completion: 'todo' } })).map((t) => t.id)).toEqual([open]);
+      // A bare string also suppresses the legacy `status` alias, same as an array.
+      expect((await rows({ where: { completion: 'complete', status: 'todo' } })).map((t) => t.id))
+        .toEqual([closed]);
+    });
+
+    it('rejects an unrecognized boolean string instead of silently reading it as false', async () => {
+      const pinned = await make('Pin me');
+      await make('Leave me');
+      const { togglePin } = await import('../../src/core/task-manager.js');
+      await togglePin(pinned);
+
+      // 'yes' used to map to false and quietly return the UNPINNED rows.
+      expect(await executeTool('task_query', { where: { pinned: 'yes' } }))
+        .toMatch(/^Error: pinned must be true or false/);
+      expect(await executeTool('task_query', { where: { blocked: '1' } }))
+        .toMatch(/^Error: blocked must be true or false/);
+      // The legacy stringified forms still work.
+      expect((await rows({ where: { pinned: 'true' } })).map((t) => t.id)).toEqual([pinned]);
+    });
+
+    it('answers an unknown type with a readable error instead of undefined', async () => {
+      expect(await executeTool('task_query', { type: 'planet' })).toMatch(/^Error: unknown type/);
+    });
+
+    it('ANDs completion with an explicit phase instead of letting one win', async () => {
+      const closed = await make('Wrapped up');
+      const { updateTask } = await import('../../src/core/task-manager.js');
+      await updateTask(closed, { phase: 'COMPLETE' });
+
+      // COMPLETE is not in the in_progress group → empty intersection.
+      expect(await rows({ where: { completion: ['in_progress'], phase: 'COMPLETE' } })).toEqual([]);
+      expect((await rows({ where: { completion: ['complete'], phase: 'COMPLETE' } })).map((t) => t.id))
+        .toEqual([closed]);
+    });
+
+    it('filters by pinned and by source', async () => {
+      const pinned = await make('Pin me');
+      const plain = await make('Leave me');
+      const { togglePin } = await import('../../src/core/task-manager.js');
+      await togglePin(pinned);
+
+      expect((await rows({ where: { pinned: true } })).map((t) => t.id)).toEqual([pinned]);
+      expect((await rows({ where: { pinned: false } })).map((t) => t.id)).toEqual([plain]);
+      expect(new Set((await rows({ where: { source: 'local' } })).map((t) => t.id)))
+        .toEqual(new Set([pinned, plain]));
+      expect(await rows({ where: { source: 'nowhere' } })).toEqual([]);
+    });
+
+    it('filters by tags_all (AND) alongside tags (OR)', async () => {
+      const both = await make('Both tags', { tags: ['red', 'blue'] });
+      const one = await make('One tag', { tags: ['red'] });
+
+      expect(new Set((await rows({ where: { tags: ['red'] } })).map((t) => t.id)))
+        .toEqual(new Set([both, one]));
+      expect((await rows({ where: { tags_all: ['red', 'blue'] } })).map((t) => t.id)).toEqual([both]);
+    });
+
+    it('filters by a relative time window', async () => {
+      const recent = await make('Just now');
+      const old = await make('Long ago');
+      const { updateTaskRaw } = await import('../../src/core/task-manager.js');
+      const longAgo = new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString();
+      await updateTaskRaw(old, { created_at: longAgo, updated_at: longAgo });
+
+      expect((await rows({ where: { time: { basis: 'updated', last_n_hours: 6 } } })).map((t) => t.id))
+        .toEqual([recent]);
+      expect(new Set((await rows({ where: { time: { basis: 'updated', last_n_days: 7 } } })).map((t) => t.id)))
+        .toEqual(new Set([recent, old]));
+      expect((await rows({ where: { time: { basis: 'created_or_updated', last_n_hours: 6 } } })).map((t) => t.id))
+        .toEqual([recent]);
+    });
+
+    it('applies sort then limit', async () => {
+      const alpha = await make('Alpha');
+      const beta = await make('Beta');
+      // Distinct created_at: two creates can share a millisecond, and
+      // created_desc would then tie-break on the random id suffix.
+      const { updateTaskRaw } = await import('../../src/core/task-manager.js');
+      await updateTaskRaw(alpha, { created_at: '2026-03-01T00:00:00.000Z' });
+      await updateTaskRaw(beta, { created_at: '2026-03-02T00:00:00.000Z' });
+
+      expect((await rows({ sort: 'title_asc' })).map((t) => t.id)).toEqual([alpha, beta]);
+      expect((await rows({ sort: 'title_asc', limit: 1 })).map((t) => t.id)).toEqual([alpha]);
+      expect((await rows({ sort: 'created_desc' })).map((t) => t.id)).toEqual([beta, alpha]);
+    });
+
+    it('keeps parent_task_id as a prefix match', async () => {
+      const parent = await make('Parent task');
+      const child = await make('Child task', { parent_task_id: parent });
+
+      expect((await rows({ where: { parent_task_id: parent.slice(0, 5) } })).map((t) => t.id))
+        .toEqual([child]);
+      expect((await rows({ where: { parent_task_id: parent } })).map((t) => t.id)).toEqual([child]);
+    });
+
+    it('includes status, pinned and timestamps in each compact row', async () => {
+      await make('Explainable');
+      const [row] = await rows({});
+      expect(row.status).toBe('todo');
+      expect(row.pinned).toBe(false);
+      expect(typeof row.created_at).toBe('string');
+      expect(typeof row.updated_at).toBe('string');
+    });
+
+    it('reports an invalid query as a tool error string', async () => {
+      await make('Anything');
+      expect(await executeTool('task_query', { where: { completion: ['finished'] } }))
+        .toMatch(/^Error: .*completion/i);
+      expect(await executeTool('task_query', { limit: 999 })).toMatch(/^Error: .*limit/i);
+      expect(await executeTool('task_query', { sort: 'sideways' })).toMatch(/^Error: .*sort/i);
+      expect(await executeTool('task_query', {
+        where: { time: { basis: 'updated', last_n_hours: 6, from: '2026-01-01T00:00:00Z' } },
+      })).toMatch(/^Error: .*cannot be combined/i);
+    });
   });
 
   it('get_task returns task details', async () => {

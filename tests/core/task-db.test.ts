@@ -34,7 +34,9 @@ import {
   deleteTasksBulk,
   listTasks,
   getTask,
+  taskQueryCandidateSql,
 } from '../../src/core/task-manager.js';
+import type { TaskQuery } from '../../src/core/task-query.js';
 import { WALNUT_HOME, TASKS_FILE, TASKS_DIR } from '../../src/constants.js';
 import type { Task } from '../../src/core/types.js';
 
@@ -121,6 +123,99 @@ describe('task-db: schema idempotency', () => {
     await fsp.mkdir(TASKS_DIR, { recursive: true });
     closeDb();
     expect(getDb()).not.toBeNull();
+  });
+});
+
+// ── 1b. Query indexes ──────────────────────────────────────────────────────
+//
+// The composable task query pushes phase sets and time windows into SQL as a
+// CANDIDATE reduction; task-query.ts's matchesTaskQuery is the semantic truth
+// and re-checks everything. So a plan here is a performance statement only:
+// a SCAN costs a bigger candidate set, never a wrong answer.
+//
+// Every plan below is EXPLAINed against the SQL taskQueryCandidateSql() really
+// emits — a hand-written approximation would let the emitted shape drift while
+// the test stayed green.
+
+describe('task-db: composable-query indexes', () => {
+  const indexNames = (): string[] =>
+    (getDb()!.prepare("SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name")
+      .all() as { name: string }[]).map((r) => r.name);
+
+  /** Seed enough rows that the planner prefers an index over a table scan. */
+  function seedRows(count: number): void {
+    const db = getDb()!;
+    const insert = db.prepare(
+      'INSERT INTO tasks (id, title, phase, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+    const base = Date.parse('2026-01-01T00:00:00.000Z');
+    transaction(() => {
+      for (let i = 0; i < count; i++) {
+        const stamp = new Date(base + i * 60_000).toISOString();
+        insert.run(`idx-${i}`, `Task ${i}`, i % 2 === 0 ? 'TODO' : 'COMPLETE', 'todo', stamp, stamp);
+      }
+    });
+  }
+
+  /** EXPLAIN the real candidate SQL for a query. */
+  function candidatePlan(query: TaskQuery): string {
+    const { sql, params } = taskQueryCandidateSql(query, { now: new Date('2026-01-01T12:00:00.000Z') });
+    return (getDb()!.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(params) as { detail: string }[])
+      .map((r) => r.detail)
+      .join(' | ');
+  }
+
+  it('declares the created/updated/phase composite indexes', () => {
+    const names = indexNames();
+    expect(names).toContain('tasks_created_at_id');
+    expect(names).toContain('tasks_updated_at_id');
+    expect(names).toContain('tasks_phase_updated_at_id');
+  });
+
+  it('creates them idempotently (no user_version bump needed)', () => {
+    const before = indexNames();
+    const versionBefore = getDb()!.pragma('user_version', { simple: true }) as number;
+    closeDb();
+    // Re-opening re-runs SCHEMA_SQL; CREATE INDEX IF NOT EXISTS must be a no-op.
+    // getDb() explicitly, so the assertion below can't be the thing that reopens.
+    expect(getDb()).not.toBeNull();
+    expect(indexNames()).toEqual(before);
+    expect(getDb()!.pragma('user_version', { simple: true })).toBe(versionBefore);
+  });
+
+  it('the emitted phase filter rides tasks_phase_updated_at_id', () => {
+    seedRows(500);
+    // Phase is a plain `phase IN (…)`, so the composite index's leading column
+    // applies and the planner uses it.
+    const plan = candidatePlan({ phases: ['TODO', 'IN_PROGRESS'] });
+    expect(plan).toContain('USING INDEX tasks_phase_updated_at_id');
+    expect(plan).not.toContain('SCAN tasks');
+  });
+
+  it('the emitted time window is a SCAN — the GLOB shape guard defeats the index', () => {
+    seedRows(500);
+    // buildTaskQueryWhere wraps each bound in
+    // `((<canonical GLOBs> AND bounds) OR NOT <canonical GLOBs>)` so a row in a
+    // non-lexicographic timestamp shape stays a candidate. That OR is not
+    // index-usable, so the candidate pass scans. Acceptable: JS is the semantic
+    // truth and this table holds thousands, not millions, of rows.
+    const plan = candidatePlan({ time: { basis: 'updated', last: { value: 6, unit: 'hours' } } });
+    expect(plan).toContain('SCAN tasks');
+
+    const both = candidatePlan({ time: { basis: 'created_or_updated', last: { value: 6, unit: 'hours' } } });
+    expect(both).toContain('SCAN tasks');
+  });
+
+  it('phase + time window still uses the phase index to cut candidates', () => {
+    seedRows(500);
+    // The unindexable time OR is ANDed with the indexable phase set, so the
+    // planner can still seek on phase and evaluate the window per row.
+    const plan = candidatePlan({
+      phases: ['TODO', 'IN_PROGRESS'],
+      time: { basis: 'updated', last: { value: 6, unit: 'hours' } },
+    });
+    expect(plan).toContain('USING INDEX tasks_phase_updated_at_id');
+    expect(plan).not.toContain('SCAN tasks');
   });
 });
 

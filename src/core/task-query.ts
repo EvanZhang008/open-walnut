@@ -1,6 +1,5 @@
 import type { Task, TaskPhase, TaskPriority } from './types.js';
 import { VALID_PRIORITIES } from './types.js';
-import { PHASE_ORDER } from './phase.js';
 
 export type TaskCompletion = 'todo' | 'in_progress' | 'complete';
 export type TimeBasis = 'created' | 'updated' | 'created_or_updated';
@@ -50,9 +49,20 @@ export class TaskQueryError extends Error {
   }
 }
 
-// Canonical enum lists live in phase.ts/types.ts — referencing them here keeps
-// query validation from drifting when a phase or priority is added.
-const TASK_PHASES: readonly TaskPhase[] = PHASE_ORDER;
+// This module is imported by the browser bundle, so it may only import from
+// types.ts (types + plain literals). phase.ts pulls in the logger, which pulls
+// in node:fs/os — so PHASE_ORDER can't be reused here and the 7 phases are
+// listed literally. tests/core/task-query.test.ts locks this list against
+// PHASE_ORDER so a new phase can't land in one place only.
+export const QUERY_TASK_PHASES: readonly TaskPhase[] = [
+  'TODO',
+  'IN_PROGRESS',
+  'AGENT_COMPLETE',
+  'AWAIT_HUMAN_ACTION',
+  'HUMAN_VERIFIED',
+  'POST_WORK_COMPLETED',
+  'COMPLETE',
+];
 const TASK_PRIORITIES: readonly TaskPriority[] = VALID_PRIORITIES;
 const COMPLETIONS: readonly TaskCompletion[] = ['todo', 'in_progress', 'complete'];
 const TIME_BASES: readonly TimeBasis[] = ['created', 'updated', 'created_or_updated'];
@@ -74,6 +84,14 @@ const ARRAY_FIELDS = [
   'tagsAll',
 ] as const;
 
+/** Max rows one query may return. Mirrored in the REST 400 message + tool schema. */
+export const MAX_QUERY_LIMIT = 200;
+
+// HUMAN_VERIFIED and POST_WORK_COMPLETED count as in_progress ON PURPOSE: this
+// mirrors PHASE_TO_STATUS (only COMPLETE is "done" to a human), NOT
+// TERMINAL_PHASES in phase.ts (which is about "the agent may stop working").
+// Don't "fix" this to follow phase.ts — a task the human hasn't signed off on
+// must stay visible in the in_progress bucket.
 export const COMPLETION_TO_PHASES: Record<TaskCompletion, readonly TaskPhase[]> = {
   todo: ['TODO'],
   in_progress: [
@@ -85,6 +103,40 @@ export const COMPLETION_TO_PHASES: Record<TaskCompletion, readonly TaskPhase[]> 
   ],
   complete: ['COMPLETE'],
 };
+
+/**
+ * Legacy 3-state `status` vocabulary → completion bucket. Both the agent tool
+ * and the REST route accept `status` as a convenience alias, so the mapping
+ * lives here instead of being copied into each adapter.
+ */
+export const LEGACY_STATUS_TO_COMPLETION: Readonly<Record<string, TaskCompletion>> = {
+  todo: 'todo',
+  in_progress: 'in_progress',
+  done: 'complete',
+};
+
+/**
+ * Priority values written before the 4-tier vocabulary. Same mapping as
+ * sanitizePriority() in task-manager.ts, which normalizes on WRITE — rows
+ * written before it existed still carry these strings, so every reader of
+ * task.priority has to fold them too.
+ */
+export const LEGACY_PRIORITY: Readonly<Record<string, TaskPriority>> = {
+  high: 'immediate',
+  medium: 'backlog',
+  low: 'backlog',
+};
+
+/**
+ * Canonicalize a stored priority. A value that is neither canonical nor legacy
+ * (absent, garbage) passes through UNCHANGED rather than becoming 'none': it
+ * then misses both the priorities filter and PRIORITY_RANK, which is what keeps
+ * such a row sorting below a real 'none'.
+ */
+export function normalizeTaskPriority(priority: TaskPriority | undefined): TaskPriority | undefined {
+  if (priority === undefined) return undefined;
+  return LEGACY_PRIORITY[priority as string] ?? priority;
+}
 
 function queryError(code: string, message: string): never {
   throw new TaskQueryError(code, message);
@@ -154,7 +206,7 @@ export function normalizeTaskQuery(raw: TaskQuery, now: Date): NormalizedTaskQue
 
   for (const field of ARRAY_FIELDS) validateStringArray(raw, field);
   validateEnumArray(raw.completion, COMPLETIONS, 'completion');
-  validateEnumArray(raw.phases, TASK_PHASES, 'phase');
+  validateEnumArray(raw.phases, QUERY_TASK_PHASES, 'phase');
   validateEnumArray(raw.priorities, TASK_PRIORITIES, 'priority');
   validateEnum(raw.sort, QUERY_SORTS, 'sort');
 
@@ -169,8 +221,8 @@ export function normalizeTaskQuery(raw: TaskQuery, now: Date): NormalizedTaskQue
     }
   }
   if (raw.limit !== undefined
-      && (!Number.isInteger(raw.limit) || raw.limit < 1 || raw.limit > 200)) {
-    queryError('invalid_limit', 'limit must be an integer from 1 to 200');
+      && (!Number.isInteger(raw.limit) || raw.limit < 1 || raw.limit > MAX_QUERY_LIMIT)) {
+    queryError('invalid_limit', `limit must be an integer from 1 to ${MAX_QUERY_LIMIT}`);
   }
 
   let time: NormalizedTaskQuery['time'];
@@ -247,6 +299,27 @@ export interface TaskQueryContext {
   blockedIds?: ReadonlySet<string>;
 }
 
+/**
+ * Ids of every task blocked by an incomplete dependency. ONE id→task map for the
+ * whole list (isTaskBlocked in task-manager.ts builds a fresh Map per task,
+ * which is quadratic over a few thousand rows). Semantics are identical:
+ * a dependency id that resolves to nothing does NOT block, and only a
+ * non-COMPLETE phase on a resolvable dependency does.
+ */
+export function computeBlockedIds(tasks: readonly Task[]): Set<string> {
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  const blocked = new Set<string>();
+  for (const task of tasks) {
+    if (!task.depends_on?.length) continue;
+    const isBlocked = task.depends_on.some((depId) => {
+      const dep = byId.get(depId);
+      return dep !== undefined && dep.phase !== 'COMPLETE';
+    });
+    if (isBlocked) blocked.add(task.id);
+  }
+  return blocked;
+}
+
 function matchesArray<T>(actual: T, accepted: readonly T[] | undefined): boolean {
   return accepted === undefined || accepted.includes(actual);
 }
@@ -269,7 +342,8 @@ export function matchesTaskQuery(task: Task, query: NormalizedTaskQuery, ctx: Ta
   const project = (task.project || '').toLowerCase();
   if (query.projects !== undefined
       && !query.projects.some((candidate) => candidate.toLowerCase() === project)) return false;
-  if (!matchesArray(task.priority, query.priorities)) return false;
+  // Legacy 'high'/'medium'/'low' rows must answer the canonical filter.
+  if (!matchesArray(normalizeTaskPriority(task.priority), query.priorities)) return false;
   if (!matchesArray(task.source, query.sources)) return false;
   if (!matchesArray(task.sprint, query.sprints)) return false;
 
@@ -332,7 +406,8 @@ export function compareTasksForQuery(a: Task, b: Task, sort: TaskQuerySort): num
   else if (sort === 'created_desc') result = compareTimestampDesc(a.created_at, b.created_at);
   else if (sort === 'completed_desc') result = compareTimestampDesc(a.completed_at, b.completed_at);
   else if (sort === 'priority') {
-    result = (PRIORITY_RANK[b.priority] ?? 0) - (PRIORITY_RANK[a.priority] ?? 0);
+    const rank = (task: Task): number => PRIORITY_RANK[normalizeTaskPriority(task.priority)!] ?? 0;
+    result = rank(b) - rank(a);
     if (result === 0) result = compareTimestampDesc(a.created_at, b.created_at);
   } else if (sort === 'title_asc') {
     result = a.title.localeCompare(b.title);

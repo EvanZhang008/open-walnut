@@ -17691,6 +17691,25 @@ a.task-kebab-info:hover {
   padding: 2px 4px;
 }
 
+/* Task surfaces reuse the usage chip visuals but sit in a DENSE toolbar area,
+   so they drop the usage dashboard's 18px section gap and shrink a step. */
+.usage-filter-chips.task-filter-chips {
+  gap: 6px;
+  margin: 0;
+  padding: 4px 10px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.task-filter-chips .usage-chip,
+.task-filter-chips .usage-filter-chips-label,
+.task-filter-chips .usage-chip-clear-all {
+  font-size: 11px;
+}
+
+.task-filter-chips .usage-chip {
+  padding: 2px 6px 2px 8px;
+}
+
 /* Section headers with a hint on the right */
 .usage-section-head {
   display: flex;

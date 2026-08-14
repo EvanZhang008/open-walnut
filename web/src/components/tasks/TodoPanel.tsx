@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect, useRef, memo, Fragment, type CSSProperties, type ReactNode } from 'react';
+import { useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, memo, Fragment, type CSSProperties, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { SESSION_MODE_LABELS } from '@open-walnut/core';
 import type { Task as CoreTask, SessionRecord } from '@open-walnut/core';
@@ -62,7 +62,32 @@ import { CSS } from '@dnd-kit/utilities';
 import { dragBus } from '@/utils/drag-bus';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskBatchMenu } from './TaskBatchMenu';
-import { ViewDropdown, type SortBy, type GroupBy, type DateFilter } from './ViewDropdown';
+import {
+  ViewDropdown,
+  DEFAULT_TASK_QUERY_FILTER_STATE,
+  hasActiveTaskQuery,
+  isPinnedFiltered,
+  logTaskQueryChange,
+  timeWindowLabel,
+  toTaskQuery,
+  type SortBy,
+  type GroupBy,
+  type DateFilter,
+  type TaskQueryFilterState,
+} from './ViewDropdown';
+import { TaskFilterChips } from './TaskFilterChips';
+import {
+  buildTaskQueryContext,
+  deriveSourceOptions,
+  deriveSprintOptions,
+  safeNormalizeTaskQuery,
+} from './task-query-state';
+import {
+  matchesTaskQuery,
+  type NormalizedTaskQuery,
+  type TaskQuery,
+  type TaskQueryContext,
+} from '@open-walnut/task-query';
 import { STARRED_TAB, INBOX_TAB, LS_TAB_KEY } from './task-tabs';
 import { DatePicker, formatDateDisplay, formatDateTimeDisplay, isOverdue, parseDateLocal } from '../common/DatePicker';
 import { PersonIcon } from '../common/PersonIcon';
@@ -229,11 +254,6 @@ const PHASE_LABEL: Record<string, string> = {
   POST_WORK_COMPLETED: 'Post-Work Done',
   COMPLETE: 'Complete',
 };
-
-const PHASE_ORDER: string[] = [
-  'TODO', 'IN_PROGRESS', 'AGENT_COMPLETE', 'AWAIT_HUMAN_ACTION',
-  'HUMAN_VERIFIED', 'POST_WORK_COMPLETED', 'COMPLETE',
-];
 
 const PRIORITY_ICON: Record<string, string> = {
   immediate: '!!',
@@ -2069,9 +2089,24 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const [showCompleted, setShowCompleted] = useState(false);
   const [priorityFilter, setPriorityFilter] = useState('');
   const [phaseFilter, setPhaseFilter] = useState('');
-  const [sessionFilter, setSessionFilter] = useState('');
-  const [sourceFilter, setSourceFilter] = useState<string>('all');
   const [tagFilter, setTagFilter] = useState('');
+  // Canonical composable query (src/core/task-query.ts) — the same model REST
+  // and the agent tool use. Starts neutral: the legacy showCompleted toggle
+  // still owns "hide done" on this surface, so seeding a completion condition
+  // here would double-apply it and fight the toggle.
+  const [taskQueryState, setTaskQueryState] = useState<TaskQueryFilterState>(DEFAULT_TASK_QUERY_FILTER_STATE);
+  /** An explicit pinned condition (Yes OR No) routes pinned tasks through the
+   *  normal filtered list and suppresses the separate Focus/Pinned area — no
+   *  duplicate rows, and a completed-but-pinned task becomes reachable. */
+  const pinnedQueryActive = isPinnedFiltered(taskQueryState);
+  // The focus-override effect (far above the query memos in source order, and
+  // deliberately not re-run on filter changes) reads these predicates through
+  // refs. Both are published from a post-commit effect below, never during
+  // render: a render can be thrown away or replayed (StrictMode, Suspense), so
+  // assigning a ref in the render body can leave the ref pointing at a predicate
+  // from a render React discarded.
+  const matchesQueryRef = useRef<(t: Task) => boolean>(() => true);
+  const completedBypassRef = useRef<(t: Task) => boolean>(() => false);
   const [dateFilter, setDateFilter] = useState<DateFilter>(readDateFilter);
   const [sortBy, setSortBy] = useState<SortBy>(readSortBy);
   // Ephemeral toast shown when a manual action (drag / move up / move left)
@@ -2137,7 +2172,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return visibleInterval(() => setTick((t) => t + 1), 60_000);
   }, []);
 
-  const integrations = useIntegrations();
   // Registry projects (incl. zero-task ones) + provider source for the badges.
   const projectRegistry = useProjectRegistry();
   // Project header "+ → Add task": open that group's ghost add row (the group's
@@ -2335,7 +2369,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // `searchSection` override; the persisted tab is untouched, so clearing the query
   // restores the pre-search view.
   isSearchModeRef.current = isSearchMode;
-  const effectiveSection: TodoSection = isSearchMode ? (searchSection ?? 'all') : activeSection;
+  const rawSection: TodoSection = isSearchMode ? (searchSection ?? 'all') : activeSection;
+  // A pinned condition empties the tier regions on purpose (dedup — the pins are
+  // in the main list now), so a tier TAB would be a blank panel. Show the Tasks
+  // list instead. Ephemeral: the persisted tab is untouched, so clearing the
+  // condition returns the user to the tier they were on.
+  const isTierSection = (s: TodoSection) =>
+    s === 'focus' || s === 'satellite' || s === 'backlog' || s === 'wait' || s.startsWith('ct_');
+  const effectiveSection: TodoSection = pinnedQueryActive && isTierSection(rawSection) ? 'tasks' : rawSection;
   activeSectionRef.current = effectiveSection;
   // Drop the ephemeral override when the query is cleared, so the next search
   // starts from the All default again.
@@ -2566,16 +2607,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // into the filtered list. It fades out when focus moves away.
     // Note: activeProject is NOT checked here — tab-switching above already ensures
     // the task's project is visible. Override only handles toolbar filters.
-    // SYNC: these conditions must match the filter logic in the `filtered` useMemo
+    // Row conditions go through the SAME shared predicate the list uses (read via
+    // a ref: this effect's deps deliberately don't include filter state), so
+    // "would the list hide this?" can no longer drift from "does the list hide it".
     const isDone = task.status === 'done';
     const wouldBeHidden =
-      (isDone && !showCompleted && phaseFilter !== 'COMPLETE') ||
-      (!!priorityFilter && effectivePriority(task.priority) !== priorityFilter) ||
-      (!!phaseFilter && !matchesPhaseFilter(phaseFilter, task.phase)) ||
-      (!!sessionFilter && task.phase !== sessionFilter) ||
-      (sourceFilter !== 'all' && (task.source || 'ms-todo') !== sourceFilter) ||
-      (!!dateFilter && !isDone && !matchesDateFilter(task, dateFilter, tasks)) ||
-      (!!tagFilter && (!task.tags || !task.tags.includes(tagFilter)));
+      (isDone && !completedBypassRef.current(task) && !showCompleted && phaseFilter !== 'COMPLETE') ||
+      !matchesQueryRef.current(task) ||
+      (!!dateFilter && !isDone && !matchesDateFilter(task, dateFilter, tasks));
 
     if (wouldBeHidden && !pinnedOnly) {
       // Cancel any in-progress fade-out from a previous override
@@ -3675,6 +3714,29 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return Array.from(tagSet).sort();
   }, [tasks]);
 
+  // Value lists for the query panel — derived from the loaded tasks (plus the
+  // registry for projects, so a zero-task project is still selectable).
+  const queryProjectOptions = useMemo(() => {
+    const byLower = new Map<string, string>();
+    for (const name of projectRegistry.projectNames) byLower.set(name.toLowerCase(), name);
+    for (const t of tasks) {
+      const project = t.project || '';
+      if (project && !byLower.has(project.toLowerCase())) byLower.set(project.toLowerCase(), project);
+    }
+    // '' is a REAL selectable value (Inbox), and it must lead: it's where quick
+    // capture lands, so it's the most-used bucket.
+    return ['', ...[...byLower.values()].sort((a, b) => a.localeCompare(b))];
+  }, [tasks, projectRegistry.projectNames]);
+
+  const querySourceOptions = useMemo(() => deriveSourceOptions(tasks), [tasks]);
+  const querySprintOptions = useMemo(() => deriveSprintOptions(tasks), [tasks]);
+
+  const handleQueryChange = useCallback((next: TaskQueryFilterState) => {
+    setTaskQueryState(next);
+    logTaskQueryChange('todo-panel', next);
+    clearFocusOverride();
+  }, [clearFocusOverride]);
+
   // Helper: check if a task is visible in starred view via its ancestor chain.
   // Walks up parent_task_id links (max 10 depth) checking if any ancestor is starred
   // or belongs to a favorited project.
@@ -3687,32 +3749,137 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return isDescendantVisibleInStarred(parent);
   }, [tasks, favorites]);
 
-  const filtered = useMemo(() => {
-    // First pass: apply all filters to get directly-matching tasks
+  // ── The ONE task-row predicate ──
+  //
+  // Row conditions (completion/phase/priority/project/source/sprint/tags/
+  // pinned/starred/blocked/time) go through the shared evaluator, so this
+  // surface, /tasks, REST and the agent tool cannot drift. What stays local is
+  // deliberately NOT expressible as a task-row query: the due-date view filter
+  // (ancestor date inheritance + "now" relative to a start_date), the
+  // recent-completion grace window, manual ordering, and grouping.
+
+  // The legacy single-value selects still exist in the panel toolbar. They fold
+  // into the SAME query object instead of being a second predicate layer —
+  // otherwise "AND all active filters" would be two independent code paths again.
+  const legacyFolds = useCallback((query: TaskQuery): TaskQuery => {
+    const next: TaskQuery = { ...query };
+    // Legacy 'TODO' meant "anything not COMPLETE" (matchesPhaseFilter), which is
+    // completion todo+in_progress, NOT the exact TODO phase.
+    if (phaseFilter === 'TODO') {
+      next.completion = ['todo', 'in_progress'];
+    } else if (phaseFilter) {
+      next.phases = [...(next.phases ?? []), phaseFilter as TaskPhase];
+    }
+    if (priorityFilter) next.priorities = [...(next.priorities ?? []), priorityFilter as TaskPriority];
+    if (tagFilter) next.tagsAny = [...(next.tagsAny ?? []), tagFilter];
+    return next;
+  }, [phaseFilter, priorityFilter, tagFilter]);
+
+  // ONE `now` for BOTH normalizations: relative windows must not slide mid-pass,
+  // and search-mode results must agree with the plain list.
+  //
+  // `timeTick` gates the 60s timer into this chain ONLY while a relative window
+  // is actually set. `_tick` fires unconditionally (the per-row ▶ start pill
+  // needs it), and having it as a raw dep re-normalized the query and re-ran the
+  // whole filter/sort/tier memo chain every minute on an unfiltered panel, for a
+  // guaranteed-identical result.
+  //
+  // Two normalized forms because they have different audiences:
+  //  • queryOnly   — the canonical conditions the user set in the query panel.
+  //                  Search results AND with THESE (an active filter is a real
+  //                  refinement the chips advertise).
+  //  • withLegacy  — plus the legacy toolbar selects. Only the plain list uses
+  //                  it; search deliberately bypasses them (2026-08-09 ruling,
+  //                  pinned by todo-search-ignores-filters.spec.ts — the Date
+  //                  select defaults to "Now", so intersecting made deferred
+  //                  tasks unfindable).
+  const timeTick = taskQueryState.timePreset === null ? 0 : _tick;
+  const { queryOnly, withLegacy } = useMemo<{
+    queryOnly: NormalizedTaskQuery | null;
+    withLegacy: NormalizedTaskQuery | null;
+  }>(() => {
+    const now = new Date();
+    const canonical = toTaskQuery(taskQueryState);
+    return {
+      queryOnly: safeNormalizeTaskQuery(canonical, now),
+      withLegacy: safeNormalizeTaskQuery(legacyFolds(canonical), now),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- timeTick re-arms relative time windows
+  }, [taskQueryState, legacyFolds, timeTick]);
+
+  // Context the pure evaluator can't derive from a task row on its own — shared
+  // verbatim with /tasks (see task-query-state.ts).
+  const queryContext = useMemo<TaskQueryContext>(
+    () => buildTaskQueryContext(tasks, favorites?.isProjectFavorite, taskQueryState.blocked !== undefined),
+    [tasks, favorites?.isProjectFavorite, taskQueryState.blocked],
+  );
+
+  /** Full predicate for the plain list: canonical query AND legacy selects.
+   *  Legacy 'high'/'medium'/'low' priorities are folded by the shared evaluator
+   *  itself (normalizeTaskPriority), so nothing is rewritten here — task object
+   *  identity matters to the pinned-drag freeze memos. */
+  const matchesQuery = useCallback((t: Task): boolean => (
+    withLegacy === null || matchesTaskQuery(t, withLegacy, queryContext)
+  ), [withLegacy, queryContext]);
+
+  /** Canonical conditions only — what search results are intersected with. */
+  const matchesCanonicalQuery = useCallback((t: Task): boolean => (
+    queryOnly === null || matchesTaskQuery(t, queryOnly, queryContext)
+  ), [queryOnly, queryContext]);
+
+  /** With `pinned: true` a completed-BUT-pinned task must be reachable —
+   *  otherwise the answer to "show me my pins" is silently truncated, which is
+   *  the whole reason pins move into the normal stream. The bypass is scoped to
+   *  the rows the condition selects, so `pinned: false` (and every other query)
+   *  keeps honoring the showCompleted toggle for ordinary tasks. */
+  const completedBypass = useCallback(
+    (t: Task): boolean => taskQueryState.pinned === true && !!t.pinned,
+    [taskQueryState.pinned],
+  );
+
+  // Publish both predicates for the focus-override effect OUTSIDE render: a
+  // render can be discarded or replayed (StrictMode, Suspense), so assigning a
+  // ref in the render body can leave it pointing at a predicate from a render
+  // React threw away.
+  //
+  // useLayoutEffect, NOT useEffect: the consumer is a passive effect declared
+  // EARLIER in this component, and passive effects run in declaration order, so
+  // publishing from a passive effect here would hand that consumer the PREVIOUS
+  // commit's predicates. Measured: a plain useEffect made
+  // pinned-drag-storm.spec.ts fail every run (the one-commit-stale wouldBeHidden
+  // verdict flips, the extra setOverrideTick render remounts cards mid-drag, and
+  // dnd-kit's measureRect loops into React #185). Layout effects all run before
+  // any passive effect, so the consumer still sees this commit's predicates.
+  useLayoutEffect(() => {
+    matchesQueryRef.current = matchesQuery;
+    completedBypassRef.current = completedBypass;
+  }, [matchesQuery, completedBypass]);
+
+  const filterResult = useMemo(() => {
+    // matchedIds: the REAL hits. Everything the user is told (result count,
+    // chips) counts only these.
     // SYNC: keep in sync with wouldBeHidden in focus effect
-    const directList = tasks.filter((t) => {
+    const matchedList = tasks.filter((t) => {
       // Focus override: always include the focused/fading task regardless of filters
       if (focusOverrideRef.current === t.id || fadingOverrideRef.current === t.id) return true;
 
-      if (!showCompleted && t.status === 'done' && phaseFilter !== 'COMPLETE') {
+      if (!completedBypass(t) && !showCompleted && t.status === 'done' && phaseFilter !== 'COMPLETE') {
         // Keep recently-completed tasks visible for the grace period (visual feedback
         // + exit animation) before hiding them.
         if (!keepWhileCompleting(t)) return false;
       }
-      if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
-      if (phaseFilter && !matchesPhaseFilter(phaseFilter, t.phase)) return false;
-      if (sessionFilter) {
-        if (t.phase !== sessionFilter) return false;
-      }
 
-      // Source/provider filter (treat undefined as 'ms-todo')
-      if (sourceFilter !== 'all') {
-        const taskSource = t.source || 'ms-todo';
-        if (taskSource !== sourceFilter) return false;
-      }
+      // Every task-row condition, shared with REST / the agent tool / /tasks.
+      if (!matchesQuery(t)) return false;
 
-      // Tag filter
-      if (tagFilter && (!t.tags || !t.tags.includes(tagFilter))) return false;
+      // `pinned: true` inherits the tier area's cross-project contract: pinning
+      // means "keep this in front of me no matter which project tab I'm on". The
+      // tab NAVIGATES and the Date select is a VIEW; neither may silently
+      // subtract from the answer to "show me my pins" — ★ is the default tab and
+      // Date defaults to "Now", so both would otherwise eat the pin list (a
+      // pinned task with a deferred due date used to disappear entirely).
+      // Checked BEFORE the date filter for exactly that reason.
+      if (taskQueryState.pinned === true && t.pinned) return true;
 
       // Date filter (skip for completed tasks — they don't need date filtering)
       // Child tasks inherit parent's due_date if they have none.
@@ -3730,35 +3897,40 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       if (activeProject && (t.project || INBOX_TAB) !== activeProject) return false;
       return true;
     });
-    // Build included-ID set from first pass results
-    const directlyMatched = new Set<string>(directList.map(t => t.id));
+    const matchedIds = new Set<string>(matchedList.map((t) => t.id));
 
-    // Second pass (iterative): include child tasks at any depth whose ancestor passed
-    // the first-pass filter. Project and other filters are relaxed for children —
-    // only the completed-hiding rule is enforced. Repeat until no new tasks are added
-    // so that grandchildren (and deeper) are also included.
-    const result = [...directList];
+    // contextIds: descendants pulled in for HIERARCHY CONTEXT only, at any
+    // depth. They are RENDERED but are not filter hits: a parent matching must
+    // never make its whole subtree count as matches, or the result count and the
+    // chips would over-report. Only the completed-hiding rule applies to them.
+    const result = [...matchedList];
+    const included = new Set<string>(matchedIds);
     let added = true;
     while (added) {
       added = false;
       for (const t of tasks) {
-        if (directlyMatched.has(t.id)) continue; // already included
+        if (included.has(t.id)) continue; // already included
         if (!t.parent_task_id) continue; // not a child task
         // Respect completed filter even for children (but keep recently-completed visible)
-        if (!showCompleted && t.status === 'done' && phaseFilter !== 'COMPLETE' && !keepWhileCompleting(t)) continue;
+        if (!completedBypass(t) && !showCompleted && t.status === 'done' && phaseFilter !== 'COMPLETE' && !keepWhileCompleting(t)) continue;
         // parent_task_id uses a prefix convention: check if any visible task's id
         // starts with this task's parent_task_id (handles composite/prefixed IDs)
         const parentVisible = result.some(p => p.id.startsWith(t.parent_task_id!));
         if (parentVisible) {
           result.push(t);
-          directlyMatched.add(t.id);
+          included.add(t.id);
           added = true;
         }
       }
     }
-    return result;
+    return { list: result, matchedIds };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- isDescendantVisibleInStarred is stable (useCallback); focusOverrideRef/fadingOverrideRef read via _overrideTick
-  }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, dateFilter, _tick, _overrideTick, recentTick, activeProject, favorites, isDescendantVisibleInStarred]);
+  }, [tasks, showCompleted, phaseFilter, matchesQuery, completedBypass, taskQueryState.pinned, dateFilter, _tick, _overrideTick, recentTick, activeProject, favorites, isDescendantVisibleInStarred]);
+
+  /** Rows to RENDER = real hits + their descendant context. */
+  const filtered = filterResult.list;
+  /** Real hits only — what counts and chips report. */
+  const matchedIds = filterResult.matchedIds;
 
   // Whether a completed task will actually disappear after the grace period —
   // mirrors the visibility filter (`isDone && !showCompleted && phaseFilter !== 'COMPLETE'`).
@@ -3779,49 +3951,58 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (!task) return undefined;
     const reasons: string[] = [];
     const isDone = task.status === 'done';
-    if (isDone && !showCompleted && phaseFilter !== 'COMPLETE') reasons.push('hidden by completed filter');
+    if (isDone && !completedBypass(task) && !showCompleted && phaseFilter !== 'COMPLETE') reasons.push('hidden by completed filter');
     if (priorityFilter && effectivePriority(task.priority) !== priorityFilter) reasons.push(`priority ≠ ${priorityFilter}`);
     if (phaseFilter && !matchesPhaseFilter(phaseFilter, task.phase)) reasons.push(`phase ≠ ${phaseFilter}`);
-    if (sessionFilter && task.phase !== sessionFilter) reasons.push(`session ≠ ${sessionFilter}`);
-    if (sourceFilter !== 'all' && (task.source || 'ms-todo') !== sourceFilter) reasons.push(`source ≠ ${sourceFilter}`);
     if (dateFilter && !isDone && !matchesDateFilter(task, dateFilter, tasks)) reasons.push(`outside "${DATE_LABELS[dateFilter] || dateFilter}" date filter`);
     if (tagFilter && (!task.tags || !task.tags.includes(tagFilter))) reasons.push(`missing tag "${tagFilter}"`);
+    // Canonical query conditions get ONE combined reason: they're composable, so
+    // enumerating each mismatch would be a paragraph. The chips above the list
+    // already name every active condition.
+    if (!matchesCanonicalQuery(task) && hasActiveTaskQuery(taskQueryState)) {
+      const window = timeWindowLabel(taskQueryState);
+      reasons.push(window ? `outside the active filters (${window})` : 'outside the active filters');
+    }
     return reasons.length > 0 ? reasons.join(' · ') : undefined;
-  }, [overrideReasonTaskId, tasks, showCompleted, phaseFilter, priorityFilter, sessionFilter, sourceFilter, dateFilter, tagFilter]);
+  }, [overrideReasonTaskId, tasks, showCompleted, phaseFilter, priorityFilter, dateFilter, tagFilter, completedBypass, matchesCanonicalQuery, taskQueryState]);
 
-  // Explicit toolbar filters ONLY (priority, phase, session, source, tag, date) —
-  // deliberately excludes the project and Starred tabs, which are navigation
-  // affordances rather than refinement choices. Used by the Pinned/Recent
-  // visibility set below, so a pin/recent card is never hidden merely because the
-  // user navigated to a different project tab — pins are a cross-project focus
-  // view by design. NOT used by search: search ignores all view controls
-  // (see `searchMatches`).
+  // Every REFINEMENT the user set, and nothing that is mere navigation:
+  //   • the full canonical query (including its own `projects` condition, which
+  //     IS a refinement — the user picked those project chips in the View panel);
+  //   • the legacy toolbar selects, folded into that same query (phase, priority,
+  //     tag), plus the due-date view filter.
+  // What it deliberately does NOT apply is the legacy nav PROJECT TAB and the ★
+  // tab: those navigate rather than refine. Used by the Pinned/Recent visibility
+  // set below, so a pin/recent card never disappears merely because the user
+  // switched project tabs — pins are a cross-project focus view by design. NOT
+  // used by search, which ignores all view controls (see `searchMatches`).
   const passesExplicitFilters = useCallback((t: Task): boolean => {
-    if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
-    if (phaseFilter && !matchesPhaseFilter(phaseFilter, t.phase)) return false;
-    if (sessionFilter && t.phase !== sessionFilter) return false;
-    if (sourceFilter !== 'all' && (t.source || 'ms-todo') !== sourceFilter) return false;
-    if (tagFilter && (!t.tags || !t.tags.includes(tagFilter))) return false;
+    if (!matchesQuery(t)) return false;
     if (dateFilter && t.status !== 'done' && !matchesDateFilter(t, dateFilter, tasks)) return false;
     return true;
-  }, [priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, dateFilter, tasks]);
+  }, [matchesQuery, dateFilter, tasks]);
 
   // --- Search filtering: search spans the WHOLE task set ---
-  // Search deliberately ignores EVERY view control — the project tab, the
-  // completed toggle, AND the toolbar filters (priority, phase, source, tag,
-  // session, date). Search is a lookup tool, not a refinement of the current
-  // view: typing a title you know exists must find it, or the feature is
-  // untrustworthy. The old behavior intersected with the toolbar filters, and
-  // since the Date filter DEFAULTS to "Now" (which hides any task whose
-  // start_date is still in the future), a deferred task was silently
-  // unfindable — the user got "No tasks match" for a task they were looking
-  // straight at yesterday. A row already carries its own explanation of why it
-  // isn't in the plain list: the project context pill plus the "▶ <date>"
-  // deferred-start pill.
+  // Search's job is CANDIDATES + RANKING, not view state. It ignores the legacy
+  // view controls — the project tab, the completed toggle, and the legacy
+  // selects (priority, phase, source, tag, date). Typing a title you know
+  // exists must find it, or the feature is untrustworthy: the Date select
+  // DEFAULTS to "Now" (which hides any task whose start_date is still in the
+  // future), so the old intersect made a deferred task silently unfindable. A
+  // row carries its own explanation of why it isn't in the plain list (project
+  // context pill + the "▶ <date>" deferred-start pill).
+  //
+  // The CANONICAL query conditions DO still AND on top, and that asymmetry is
+  // the rule: a condition the user just set in the View panel is explicit and
+  // chip-advertised, whereas the legacy selects carry shipped defaults nobody
+  // chose. Nothing in the canonical query is active by default, so this can't
+  // resurrect the unfindable-task bug.
   const searchMatches = useMemo(() => {
     if (!isSearchMode) return filtered;
 
-    const eligibleTasks = tasks;
+    const eligibleTasks = hasActiveTaskQuery(taskQueryState)
+      ? tasks.filter(matchesCanonicalQuery)
+      : tasks;
     const lowerQuery = searchQuery.trim().toLowerCase();
     // Keep the urgent pass on small metadata fields; descriptions and summaries can
     // contain enough text to block an input frame across a large task collection.
@@ -3858,7 +4039,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       ...metadataMatches,
       ...serverMatches.filter((task) => !metadataTaskIds.has(task.id)),
     ]);
-  }, [tasks, filtered, isSearchMode, searchQuery, searchResults]);
+  }, [tasks, filtered, isSearchMode, searchQuery, searchResults, taskQueryState, matchesCanonicalQuery]);
 
   // Counts and cross-section visibility use the complete match set, but the main
   // list mounts a bounded number of rows so neither search phase can stall typing.
@@ -3892,9 +4073,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     [tasks, isSearchMode, searchMatches, passesExplicitFilters],
   );
   const visibleTaskIds = useFrozenWhile(visibleTaskIdsLive, isPinnedDragActive);
+  // PINNED DEDUP — ONE source for every tier consumer below (tier id lists, the
+  // display arrays, the tab badges, the section mount conditions). With an
+  // explicit pinned condition the pins already flow through the normal filtered
+  // list, so the separate Focus/Pinned area empties out; otherwise every pinned
+  // hit would render twice (once per surface) and be double-counted. Recent is
+  // untouched: it's an activity feed, not a second copy of the pinned tiers.
+  const tierVisibleTaskIds = pinnedQueryActive ? EMPTY_ID_SET : visibleTaskIds;
   const visiblePinnedTasks = useMemo(
-    () => pinnedTasks.filter((task) => visibleTaskIds.has(task.id)),
-    [pinnedTasks, visibleTaskIds],
+    () => pinnedTasks.filter((task) => tierVisibleTaskIds.has(task.id)),
+    [pinnedTasks, tierVisibleTaskIds],
   );
   const visibleRecentTasks = useMemo(
     () => recentTasks.filter((task) => visibleTaskIds.has(task.id)),
@@ -3905,20 +4093,20 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     [recentStaticId, visibleRecentTasks],
   );
   const visibleFocusIds = useMemo(
-    () => focusIds_arr.filter((id) => id.startsWith('group:') || visibleTaskIds.has(id)),
-    [focusIds_arr, visibleTaskIds],
+    () => focusIds_arr.filter((id) => id.startsWith('group:') || tierVisibleTaskIds.has(id)),
+    [focusIds_arr, tierVisibleTaskIds],
   );
   const visibleSatelliteIds = useMemo(
-    () => satelliteIds_arr.filter((id) => id.startsWith('group:') || visibleTaskIds.has(id)),
-    [satelliteIds_arr, visibleTaskIds],
+    () => satelliteIds_arr.filter((id) => id.startsWith('group:') || tierVisibleTaskIds.has(id)),
+    [satelliteIds_arr, tierVisibleTaskIds],
   );
   const visibleBacklogIds = useMemo(
-    () => backlogIds_arr.filter((id) => id.startsWith('group:') || visibleTaskIds.has(id)),
-    [backlogIds_arr, visibleTaskIds],
+    () => backlogIds_arr.filter((id) => id.startsWith('group:') || tierVisibleTaskIds.has(id)),
+    [backlogIds_arr, tierVisibleTaskIds],
   );
   const visibleWaitIds = useMemo(
-    () => waitIds_arr.filter((id) => id.startsWith('group:') || visibleTaskIds.has(id)),
-    [waitIds_arr, visibleTaskIds],
+    () => waitIds_arr.filter((id) => id.startsWith('group:') || tierVisibleTaskIds.has(id)),
+    [waitIds_arr, tierVisibleTaskIds],
   );
   // Per-custom-tier render model: visible ids + display tasks + group meta in one
   // memo (the built-ins keep their three separate memos; a custom tier bundles them
@@ -3926,12 +4114,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   const customTierRender = useMemo(() => {
     const map: Record<string, { visibleIds: string[]; display: Task[]; groupMeta: Map<string, GroupRenderInfo> }> = {};
     for (const def of customTiers ?? []) {
-      const visibleIds = (customIds_arr[def.id] ?? []).filter((id) => id.startsWith('group:') || visibleTaskIds.has(id));
+      const visibleIds = (customIds_arr[def.id] ?? []).filter((id) => id.startsWith('group:') || tierVisibleTaskIds.has(id));
       const display = visibleIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task);
       map[def.id] = { visibleIds, display, groupMeta: buildTierGroupMeta(display, taskGroups) };
     }
     return map;
-  }, [customTiers, customIds_arr, visibleTaskIds, pinnedTaskMap, taskGroups]);
+  }, [customTiers, customIds_arr, tierVisibleTaskIds, pinnedTaskMap, taskGroups]);
   const focusTasksDisplay = useMemo(
     () => visibleFocusIds.map((id) => pinnedTaskMap.get(id)).filter((task): task is Task => !!task),
     [pinnedTaskMap, visibleFocusIds],
@@ -4103,106 +4291,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
     return result;
   }, [filtered, sortOrder]);
-
-  // Cross-filter counts: each dimension counts tasks matching all OTHER active filters
-  const filterCounts = useMemo(() => {
-    // Shared predicates to avoid duplication across filter dimensions.
-    const matchesProject = (t: Task) => {
-      if (activeProject === STARRED_TAB) {
-        return !!t.starred || (!!t.project && (favorites?.isProjectFavorite(t.project) ?? false)) || isDescendantVisibleInStarred(t);
-      }
-      return !activeProject || (t.project || INBOX_TAB) === activeProject;
-    };
-    const matchesPrioritySessionSource = (t: Task) => {
-      if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
-      if (sessionFilter && t.phase !== sessionFilter) return false;
-      if (sourceFilter !== 'all' && (t.source || 'ms-todo') !== sourceFilter) return false;
-      if (tagFilter && (!t.tags || !t.tags.includes(tagFilter))) return false;
-      return true;
-    };
-
-    // baseTasks: respects showCompleted (used for "All" counts and most dimensions)
-    const baseTasks = tasks.filter((t) => {
-      if (!showCompleted && t.status === 'done' && phaseFilter !== 'COMPLETE') {
-        return false;
-      }
-      return matchesProject(t);
-    });
-
-    // Priority counts (apply phase + session + source + tag filters)
-    const forPriority = baseTasks.filter((t) => {
-      if (phaseFilter && !matchesPhaseFilter(phaseFilter, t.phase)) return false;
-      if (sessionFilter && t.phase !== sessionFilter) return false;
-      if (sourceFilter !== 'all' && (t.source || 'ms-todo') !== sourceFilter) return false;
-      if (tagFilter && (!t.tags || !t.tags.includes(tagFilter))) return false;
-      return true;
-    });
-    const priority: Record<string, number> = { immediate: 0, important: 0, backlog: 0, none: 0 };
-    for (const t of forPriority) {
-      const p = effectivePriority(t.priority); // legacy fallback
-      if (p && priority[p] !== undefined) priority[p]++;
-    }
-
-    // Phase counts: include all done tasks so COMPLETE count is accurate even when
-    // showCompleted is off. Clicking COMPLETE overrides showCompleted (line ~1055),
-    // so the count must reflect what the user would see after clicking.
-    // Note: sum(phase counts) > totalForPhase when showCompleted=false — this is intentional.
-    const forPhase = tasks.filter((t) => matchesProject(t) && matchesPrioritySessionSource(t));
-    const phase: Record<string, number> = {};
-    for (const p of PHASE_ORDER) phase[p] = 0;
-    for (const t of forPhase) if (t.phase && phase[t.phase] !== undefined) phase[t.phase]++;
-
-    // totalForPhase: "All" chip count respects showCompleted so it matches visible tasks
-    const totalForPhase = baseTasks.filter(matchesPrioritySessionSource).length;
-
-    // Session counts (apply priority + phase + source + tag filters)
-    const forSession = baseTasks.filter((t) => {
-      if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
-      if (phaseFilter && !matchesPhaseFilter(phaseFilter, t.phase)) return false;
-      if (sourceFilter !== 'all' && (t.source || 'ms-todo') !== sourceFilter) return false;
-      if (tagFilter && (!t.tags || !t.tags.includes(tagFilter))) return false;
-      return true;
-    });
-    const session: Record<string, number> = {};
-    for (const p of PHASE_ORDER) session[p] = 0;
-    for (const t of forSession) {
-      if (t.phase && session[t.phase] !== undefined) session[t.phase]++;
-    }
-
-    // Source counts (apply priority + phase + session + tag filters)
-    const forSource = baseTasks.filter((t) => {
-      if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
-      if (phaseFilter && !matchesPhaseFilter(phaseFilter, t.phase)) return false;
-      if (sessionFilter && t.phase !== sessionFilter) return false;
-      if (tagFilter && (!t.tags || !t.tags.includes(tagFilter))) return false;
-      return true;
-    });
-    // Build source counts dynamically from registered integrations
-    const source: Record<string, number> = { all: forSource.length };
-    for (const integ of integrations) source[integ.id] = 0;
-    source['local'] = 0;
-    for (const t of forSource) {
-      const s = t.source || 'ms-todo';
-      if (source[s] === undefined) source[s] = 0;
-      source[s]++;
-    }
-
-    // Tag counts (apply priority + phase + session + source filters)
-    const forTags = baseTasks.filter((t) => {
-      if (priorityFilter && effectivePriority(t.priority) !== priorityFilter) return false;
-      if (phaseFilter && !matchesPhaseFilter(phaseFilter, t.phase)) return false;
-      if (sessionFilter && t.phase !== sessionFilter) return false;
-      if (sourceFilter !== 'all' && (t.source || 'ms-todo') !== sourceFilter) return false;
-      return true;
-    });
-    const tagCounts: Record<string, number> = {};
-    for (const t of forTags) {
-      if (t.tags) for (const tag of t.tags) tagCounts[tag] = (tagCounts[tag] ?? 0) + 1;
-    }
-
-    return { priority, phase, session, source, tagCounts, totalForPriority: forPriority.length, totalForPhase, totalForSession: forSession.length, totalForTags: forTags.length };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks, showCompleted, priorityFilter, phaseFilter, sessionFilter, sourceFilter, tagFilter, activeProject, favorites, isDescendantVisibleInStarred]);
 
   // Projects created THIS session via the bottom "New Project" row. They have
   // zero tasks so the task-derived grouping below wouldn't show them — surface
@@ -5284,7 +5372,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     backlog: backlogTasksDisplay.length,
     wait: waitTasksDisplay.length,
     recent: visibleRecentTasks.length,
-    tasks: isSearchMode ? searchMatches.length : filtered.length,
+    // Real hits only — descendant CONTEXT rows never inflate the badge.
+    tasks: isSearchMode ? searchMatches.length : matchedIds.size,
   };
   for (const def of customTiers ?? []) {
     sectionCounts[def.id] = customTierRender[def.id]?.display.length ?? 0;
@@ -5332,14 +5421,26 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             setPriorityFilter('');
             setTagFilter('');
             setDateFilter(''); persistDateFilter('');
-            setSessionFilter('');
-            setSourceFilter('all');
+            setTaskQueryState((prev) => ({ ...DEFAULT_TASK_QUERY_FILTER_STATE, sort: prev.sort }));
             clearFocusOverride();
           }}
+          query={taskQueryState}
+          onQueryChange={handleQueryChange}
+          queryProjectOptions={queryProjectOptions}
+          querySourceOptions={querySourceOptions}
+          querySprintOptions={querySprintOptions}
         />
         {/* Multi-select grouping is entered from each task's ⋮ menu ("Select…") or
             Cmd/Ctrl/Shift-click — no separate toolbar button (keeps the bar clean). */}
       </div>
+
+      {/* Active conditions strip: one removable chip per value, above the tabs so
+          it reads as "what this whole panel is showing". */}
+      <TaskFilterChips
+        query={taskQueryState}
+        onQueryChange={handleQueryChange}
+        onClearAll={clearFocusOverride}
+      />
 
       {/* Section tabs — one section owns the panel at a time (see TodoSectionTabs). */}
       <TodoSectionTabs active={effectiveSection} onChange={handleSectionChange} counts={sectionCounts} customTiers={customTiers} />
@@ -5792,7 +5893,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       <div className="todo-pinned-header todo-tasks-header" onClick={() => toggleSection('tasks')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleSection('tasks'); }} style={{ cursor: 'pointer' }}>
         <span className={`todo-pinned-chevron${tasksCollapsed ? '' : ' todo-pinned-chevron-open'}`}>{'▸'}</span>
         <span className="todo-pinned-label">Tasks</span>
-        <span className="todo-pinned-count">{isSearchMode ? searchMatches.length : filtered.length}</span>
+        <span className="todo-pinned-count">{isSearchMode ? searchMatches.length : matchedIds.size}</span>
       </div>
       )}
 

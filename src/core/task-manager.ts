@@ -8,6 +8,17 @@ import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
 import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
 import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES } from './phase.js';
+import {
+  COMPLETION_TO_PHASES,
+  compareTasksForQuery,
+  computeBlockedIds,
+  matchesTaskQuery,
+  normalizeTaskQuery,
+  type NormalizedTaskQuery,
+  type TaskQuery,
+  type TaskQueryContext,
+  type TaskQuerySort,
+} from './task-query.js';
 import { registry } from './integration-registry.js';
 import { getDb, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction, TASK_DB_PATH } from './task-db.js';
 import { runMigrationIfNeeded } from './task-db-migration.js';
@@ -1960,16 +1971,11 @@ export interface ListTasksSlimFilter extends ListTasksFilter {
 }
 
 /**
- * Slim list — omits `note` and `conversation_log` at the storage layer so we
- * don't materialize their strings in memory when the caller only needs
- * presence booleans. SELECT skips the heavy columns; has_note /
- * has_conversation_log are computed in SQL.
+ * The SELECT column expression for the slim / minimal projections. Extracted so
+ * listTasksSlim and queryTasksSlim can never drift in which columns they omit
+ * (the frontend keys off the exact resulting shape).
  */
-export async function listTasksSlim(filter: ListTasksSlimFilter = {}): Promise<SlimTask[]> {
-  await ensureInit();
-
-  const db = getDb()!;
-  const minimal = filter.minimal === true;
+function slimSelectSql(minimal: boolean): string {
   // Column list mirrors EXPLICIT_TASK_COLUMNS minus note/conversation_log.
   // Keep `payload` so custom fields (Task type additions without a dedicated
   // column) still round-trip, matching rowToTask's payload-merge behavior.
@@ -2006,6 +2012,21 @@ export async function listTasksSlim(filter: ListTasksSlimFilter = {}): Promise<S
       + ' AND ext IS NOT NULL AND json_valid(ext)'
       + ' AND json_extract(ext, \'$.\' || source) IS NOT NULL) AS has_synced';
   }
+  return sqlCols;
+}
+
+/**
+ * Slim list — omits `note` and `conversation_log` at the storage layer so we
+ * don't materialize their strings in memory when the caller only needs
+ * presence booleans. SELECT skips the heavy columns; has_note /
+ * has_conversation_log are computed in SQL.
+ */
+export async function listTasksSlim(filter: ListTasksSlimFilter = {}): Promise<SlimTask[]> {
+  await ensureInit();
+
+  const db = getDb()!;
+  const minimal = filter.minimal === true;
+  const sqlCols = slimSelectSql(minimal);
 
   const where: string[] = [];
   const params: Record<string, string> = {};
@@ -2065,6 +2086,276 @@ function rowToSlimTask(row: Record<string, any>, minimal = false): SlimTask {
     slim.has_synced = row.has_synced === 1 || row.has_synced === true;
   }
   return slim;
+}
+
+// ── Composable task query ──────────────────────────────────────────────────
+//
+// ONE service behind `task_query`, `GET /api/tasks` and (via the shared pure
+// module) the two web surfaces. Split of responsibility:
+//
+//   SQL          → candidate reduction only. Every pushdown must be a SUPERSET
+//                  of the shared predicate, never narrower, or a real match is lost.
+//   task-query.ts → the final semantic truth (matchesTaskQuery + comparator).
+//
+// So an imperfectly-pushable dimension costs a bigger scan, never a wrong answer.
+
+/** Timestamp columns a time window can be pushed down onto. */
+type TimestampColumn = 'created_at' | 'updated_at';
+
+/**
+ * The two timestamp shapes that compare correctly LEXICOGRAPHICALLY (UTC, fixed
+ * width). Rows in any other shape (offset timestamps from an external sync
+ * source, garbage, '') are deliberately kept as candidates and judged in JS.
+ * In GLOB, `.` is a literal and `[0-9]` a class — no escaping needed.
+ */
+const ISO_UTC_GLOBS = [
+  '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z',
+  '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9].[0-9][0-9][0-9]Z',
+] as const;
+
+/**
+ * A lexicographic timestamp bound must stay inside the 4-digit-year ISO range.
+ * `new Date(...).toISOString()` renders anything outside it in expanded form
+ * ('+010000-01-01T…' / '-000001-…'), and a leading '+' / '-' sorts BELOW every
+ * digit — so a widened upper bound near year 9999 would match NO row at all and
+ * real rows would never reach the JS predicate. Clamping is exact, not just
+ * safe: a value in the canonical GLOB shape always has a 4-digit year, so it
+ * can never fall outside these two bounds.
+ */
+const MIN_ISO_BOUND = '0000-01-01T00:00:00.000Z';
+const MAX_ISO_BOUND = '9999-12-31T23:59:59.999Z';
+const MIN_ISO_BOUND_MS = Date.parse(MIN_ISO_BOUND);
+const MAX_ISO_BOUND_MS = Date.parse(MAX_ISO_BOUND);
+
+function isoBound(ms: number): string {
+  if (ms <= MIN_ISO_BOUND_MS) return MIN_ISO_BOUND;
+  if (ms >= MAX_ISO_BOUND_MS) return MAX_ISO_BOUND;
+  return new Date(ms).toISOString();
+}
+
+/**
+ * The ASCII whitespace JS `String.trim()` strips, as a SQL string literal for
+ * `trim(x, chars)`. SQLite's 1-arg trim() only strips U+0020, so the sentinel
+ * pushdown has to name the set explicitly to mirror JS. (JS also trims a few
+ * Unicode spaces; those are a non-issue for the `.metadata` prefix check.)
+ */
+const SQL_ASCII_WHITESPACE = "' ' || char(9) || char(10) || char(11) || char(12) || char(13)";
+
+export interface TaskQueryCandidateSql {
+  conds: string[];
+  params: Record<string, unknown>;
+}
+
+/**
+ * Build the parameterized WHERE for the candidate SELECT. Column names come from
+ * literals in this function only; every user-supplied value is bound.
+ *
+ * Exported for tests (EXPLAIN QUERY PLAN against the SQL we really emit).
+ */
+export function buildTaskQueryWhere(q: NormalizedTaskQuery, excludeSentinels: boolean): TaskQueryCandidateSql {
+  const conds: string[] = [];
+  const params: Record<string, unknown> = {};
+  if (excludeSentinels) {
+    // Mirrors isRetiredSentinelTitle (trim, then '.metadata' prefix). SQLite's
+    // 1-arg trim() strips spaces only, so pass the ASCII whitespace set
+    // explicitly to match JS trim(). The IS NULL arm keeps it a superset (a NULL
+    // title makes the GLOB NULL = excluded, while isRetiredSentinelTitle treats
+    // a missing title as not-a-sentinel).
+    conds.push(`(title IS NULL OR trim(title, ${SQL_ASCII_WHITESPACE}) NOT GLOB '.metadata*')`);
+  }
+  let seq = 0;
+  const bind = (value: unknown): string => {
+    const key = `q${seq++}`;
+    params[key] = value;
+    return `@${key}`;
+  };
+  const inList = (col: string, values: readonly string[], collate = ''): string =>
+    `${col}${collate} IN (${values.map(bind).join(', ')})`;
+
+  // completion and explicit phases AND together (they do NOT override each
+  // other), so intersect the two phase sets. An empty intersection can never
+  // match — emit a false literal rather than dropping the condition.
+  const phaseSets: TaskPhase[][] = [];
+  if (q.completion) phaseSets.push(q.completion.flatMap((c) => [...COMPLETION_TO_PHASES[c]]));
+  if (q.phases) phaseSets.push([...q.phases]);
+  if (phaseSets.length > 0) {
+    let phases = phaseSets[0];
+    for (const set of phaseSets.slice(1)) phases = phases.filter((p) => set.includes(p));
+    const unique = [...new Set(phases)];
+    conds.push(unique.length > 0 ? inList('phase', unique) : '0');
+  }
+
+  if (q.projects) {
+    const values = [...new Set(q.projects.map((p) => p.toLowerCase()))];
+    if (values.length === 0) {
+      conds.push('0'); // `[].some(...)` is false — nothing matches.
+    } else {
+      const parts: string[] = [];
+      // project is nullable in SQL; '' (Inbox) must match both NULL and ''.
+      if (values.includes('')) parts.push("(project IS NULL OR project = '')");
+      const named = values.filter((v) => v !== '');
+      if (named.length > 0) {
+        parts.push(inList('project', named, ' COLLATE NOCASE'));
+        // SQLite NOCASE folds ASCII only, JS toLowerCase folds all of Unicode
+        // (e.g. 'K' U+212A lowercases to 'k'), so NOCASE alone can DROP a row
+        // the shared predicate matches. Keep every project holding a non-ASCII
+        // character as a candidate and let JS fold it. `[ -~]` = printable
+        // ASCII, so `[^ -~]` catches non-ASCII plus control chars.
+        parts.push("(project IS NOT NULL AND project GLOB '*[^ -~]*')");
+      }
+      conds.push(`(${parts.join(' OR ')})`);
+    }
+  }
+
+  for (const [col, values] of [
+    ['priority', q.priorities],
+    ['source', q.sources],
+    ['sprint', q.sprints],
+  ] as const) {
+    if (!values) continue;
+    if (values.length === 0) { conds.push('0'); continue; }
+    conds.push(inList(col, [...new Set(values)]));
+  }
+
+  if (q.pinned !== undefined) {
+    // Mirrors `Boolean(task.pinned)`: only the INTEGER 1 reads as pinned.
+    conds.push(q.pinned ? 'pinned = 1' : '(pinned IS NULL OR pinned != 1)');
+  }
+  if (q.parentTaskId !== undefined) {
+    conds.push(`parent_task_id = ${bind(q.parentTaskId)}`);
+  }
+  if (q.groupId !== undefined) {
+    // group_id has no column — it rides the payload JSON blob.
+    conds.push(`(payload IS NOT NULL AND json_valid(payload)`
+      + ` AND json_extract(payload, '$.group_id') = ${bind(q.groupId)})`);
+  }
+
+  // Tags: json_each over the JSON array column. `json_type != 'array'` is an
+  // escape hatch — a scalar tags value means JS-side `String.includes` runs
+  // instead, which json_each can't reproduce, so keep the row as a candidate.
+  const tagExists = (tag: string): string =>
+    `EXISTS (SELECT 1 FROM json_each(tasks.tags) WHERE json_each.value = ${bind(tag)})`;
+  const tagGuard = (inner: string): string =>
+    `(tags IS NOT NULL AND json_valid(tags) AND (json_type(tags) != 'array' OR ${inner}))`;
+  if (q.tagsAny) {
+    if (q.tagsAny.length === 0) conds.push('0');
+    else conds.push(tagGuard(`(${q.tagsAny.map(tagExists).join(' OR ')})`));
+  }
+  // `tagsAll: []` matches everything (`[].every` is true) — emit no condition.
+  if (q.tagsAll && q.tagsAll.length > 0) {
+    conds.push(tagGuard(q.tagsAll.map(tagExists).join(' AND ')));
+  }
+
+  if (q.time) {
+    const { fromMs, untilMs } = q.time;
+    // Bounds are widened by 1s so a lexicographic-vs-numeric quirk (a stored
+    // '…:00Z' vs a '…:00.000Z' bound) can never EXCLUDE a real match. JS
+    // re-applies the exact window, including `until` exclusivity.
+    const windowFor = (col: TimestampColumn): string => {
+      const bounds: string[] = [];
+      if (Number.isFinite(fromMs)) bounds.push(`${col} >= ${bind(isoBound(fromMs - 1000))}`);
+      if (Number.isFinite(untilMs)) bounds.push(`${col} <= ${bind(isoBound(untilMs + 1000))}`);
+      if (bounds.length === 0) return '1';
+      const canonical = `(${ISO_UTC_GLOBS.map((g) => `${col} GLOB ${bind(g)}`).join(' OR ')})`;
+      // NULL col → both branches NULL/false → excluded, exactly like JS.
+      return `((${canonical} AND ${bounds.join(' AND ')}) OR NOT ${canonical})`;
+    };
+    if (q.time.basis === 'created') conds.push(windowFor('created_at'));
+    else if (q.time.basis === 'updated') conds.push(windowFor('updated_at'));
+    // created_or_updated: the OR is parenthesized as a whole before ANDing.
+    else conds.push(`(${windowFor('created_at')} OR ${windowFor('updated_at')})`);
+  }
+
+  // Deliberately NOT pushed down: starred (needs config favorites), blocked
+  // (needs the whole dependency graph), unread (a payload boolean whose JSON
+  // encodings aren't worth a fragile expression).
+
+  return { conds, params };
+}
+
+/**
+ * The candidate SELECT this module runs for a query, as text. Exported for the
+ * EXPLAIN QUERY PLAN tests so they assert plans of the REAL SQL.
+ */
+export function taskQueryCandidateSql(
+  query: TaskQuery,
+  opts: { now?: Date; excludeSentinels?: boolean } = {},
+): { sql: string; params: Record<string, unknown> } {
+  const normalized = normalizeTaskQuery(query, opts.now ?? new Date());
+  const { conds, params } = buildTaskQueryWhere(normalized, opts.excludeSentinels !== false);
+  const whereSql = conds.length > 0 ? ` WHERE ${conds.join(' AND ')}` : '';
+  return { sql: `SELECT * FROM tasks${whereSql}`, params };
+}
+
+async function runTaskQuery(
+  query: TaskQuery,
+  projection: 'full' | 'slim' | 'minimal',
+): Promise<Task[] | SlimTask[]> {
+  await ensureInit();
+  // ONE captured clock for the whole evaluation — a relative window must not
+  // straddle a second boundary between normalization and matching.
+  const normalized = normalizeTaskQuery(query, new Date());
+  const db = getDb()!;
+
+  const { conds, params } = buildTaskQueryWhere(normalized, true);
+  const sort: TaskQuerySort = normalized.sort ?? 'updated_desc';
+
+  // No SQL ORDER BY / LIMIT: SQL reduces candidates, JS decides. Ordering in SQL
+  // would be lexicographic over the raw text while the shared comparator uses
+  // Date.parse, so the two disagree on any non-canonical stamp — and a SQL LIMIT
+  // on a candidate set the JS predicate still narrows returns too few rows.
+  const whereSql = conds.length > 0 ? ` WHERE ${conds.join(' AND ')}` : '';
+  const selectSql = projection === 'full' ? '*' : slimSelectSql(projection === 'minimal');
+  const rows = db.prepare(`SELECT ${selectSql} FROM tasks${whereSql}`)
+    .all(params) as Record<string, any>[];
+
+  const candidates: Task[] = projection === 'full'
+    ? rows.map(rowToTask)
+    // Slim rows never carry note/conversation_log; neither the predicate nor the
+    // comparator reads those, so they evaluate identically to a full Task.
+    : rows.map((r) => rowToSlimTask(r, projection === 'minimal')) as unknown as Task[];
+
+  const ctx: TaskQueryContext = {};
+  if (normalized.starred !== undefined) {
+    const config = await getConfig();
+    ctx.favoriteProjects = new Set((config.favorites?.projects ?? []).map((p) => p.toLowerCase()));
+  }
+  if (normalized.blocked !== undefined) {
+    // Dependencies can point outside the candidate set, so the blocked set is
+    // computed over the FULL task list. Only paid for when blocked is queried.
+    // computeBlockedIds builds ONE id map — the per-task isTaskBlocked() would
+    // rebuild it for every row (quadratic at a few thousand tasks).
+    ctx.blockedIds = computeBlockedIds((await readStore()).tasks);
+  }
+
+  // The sentinel exclusion is already in SQL; re-check in JS so a shape SQLite's
+  // trim() misses (e.g. a Unicode-space-prefixed title) still can't leak out.
+  const matched = candidates.filter((t) =>
+    !isRetiredSentinelTitle(t.title) && matchesTaskQuery(t, normalized, ctx));
+  matched.sort((a, b) => compareTasksForQuery(a, b, sort));
+  // The ONE truncation point: after the derived filter + stable sort.
+  const limited = normalized.limit !== undefined ? matched.slice(0, normalized.limit) : matched;
+  return projection === 'full' ? limited : (limited as unknown as SlimTask[]);
+}
+
+/**
+ * Composable task query — the ONE backend entry point for structured task
+ * filtering. Throws `TaskQueryError` on an invalid query (callers map it to 400).
+ */
+export async function queryTasks(query: TaskQuery): Promise<Task[]> {
+  return await runTaskQuery(query, 'full') as Task[];
+}
+
+/**
+ * queryTasks with the slim / minimal column projection (same filtering, sorting
+ * and limit — only the returned fields differ). Separate from queryTasks so the
+ * hot list payload never materializes note/conversation_log strings.
+ */
+export async function queryTasksSlim(
+  query: TaskQuery,
+  opts: { minimal?: boolean } = {},
+): Promise<SlimTask[]> {
+  return await runTaskQuery(query, opts.minimal ? 'minimal' : 'slim') as SlimTask[];
 }
 
 // ── Dependency helpers (used inside withWriteLock) ──

@@ -306,7 +306,7 @@ interface UseTasksReturn {
   setGroupHidden: (groupId: string, hidden: boolean) => void;
 }
 
-export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
+export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [taskGroups, setTaskGroups] = useState<Record<string, string>>({});
   const [hiddenGroups, setHiddenGroups] = useState<Set<string>>(new Set());
@@ -407,7 +407,10 @@ export function useTasks(filter?: tasksApi.TaskFilter): UseTasksReturn {
     log.info('tasks', 'fetch started', { attempt, filter, wsState: wsClient.state });
     // minimal: home list never renders summary/description/ext — the detail
     // pane lazy-loads them on focus. Cuts the list payload ~4MB -> ~0.4MB.
-    tasksApi.fetchTasks(filter, { minimal: true })
+    // fetchTasks takes no query: `/` and `/tasks` share this one cache, so every
+    // condition is evaluated in the browser (see api/tasks.ts). `filter` stays a
+    // refetch key + log field only.
+    tasksApi.fetchTasks({ minimal: true })
       .then((tasks) => {
         if (generation !== fetchGeneration.current) return;
         const elapsed = Math.round(performance.now() - t0);
