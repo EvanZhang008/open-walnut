@@ -1037,6 +1037,35 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     setError(null);
     const ctrl = new AbortController();
     const light = isSessionBase;
+    // Converge by POLLING the SWR endpoint (cheap: cache/stat only) until the
+    // background recompute lands (stale flag clears). The previous approach — a
+    // blocking light fetch queued behind the recompute — sat on one HTTP
+    // request for the whale's full 50-80s cold parse and DIED at the client's
+    // 60s timeout, leaving the tab stuck on a stale list.
+    const POLL_MS = 3000;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+    const pollUntilFresh = (attempt: number): void => {
+      if (ctrl.signal.aborted) return;
+      setRefreshingBg(true);
+      pollTimer = setTimeout(() => {
+        fetchSessionChanges(sessionId, { base, scope, light: true, swr: true, signal: ctrl.signal })
+          .then((res) => {
+            if (ctrl.signal.aborted) return;
+            if (res.stale) {
+              // Still recomputing — keep the currently-shown list, poll again
+              // (cap ~5min so an abandoned tab doesn't poll forever).
+              if (attempt < 100) pollUntilFresh(attempt + 1);
+              else setRefreshingBg(false);
+              return;
+            }
+            setData(res);
+            fileContentRef.current.clear();
+            setContentVersion((v) => v + 1);
+            setRefreshingBg(false);
+          })
+          .catch(() => { if (!ctrl.signal.aborted) setRefreshingBg(false); });
+      }, POLL_MS);
+    };
     fetchSessionChanges(sessionId, { refresh, base, scope, light, swr: light && !refresh, signal: ctrl.signal })
       .then((res) => {
         setData(res);
@@ -1044,20 +1073,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
           fileContentRef.current.clear();
           setContentVersion((v) => v + 1);
         }
-        // SWR served a possibly-outdated list — converge: a blocking light
-        // fetch queues behind the background recompute and lands fresh.
-        if (res.stale && light) {
-          setRefreshingBg(true);
-          fetchSessionChanges(sessionId, { base, scope, light: true, signal: ctrl.signal })
-            .then((fresh) => {
-              if (ctrl.signal.aborted) return;
-              setData(fresh);
-              fileContentRef.current.clear();
-              setContentVersion((v) => v + 1);
-            })
-            .catch(() => { /* stale list stays — refresh button recovers */ })
-            .finally(() => { if (!ctrl.signal.aborted) setRefreshingBg(false); });
-        }
+        if (res.stale && light) pollUntilFresh(0);
       })
       .catch((err) => {
         if (ctrl.signal.aborted) return;
@@ -1066,7 +1082,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         log.warn('session-changes', 'fetch failed', { sessionId, base, scope, error: msg });
       })
       .finally(() => { if (!ctrl.signal.aborted) setLoading(false); });
-    return () => ctrl.abort();
+    return () => { ctrl.abort(); if (pollTimer) clearTimeout(pollTimer); };
   }, [sessionId, base, scope, isSessionBase]);
 
   useEffect(() => {

@@ -285,6 +285,12 @@ interface SubagentCacheEntry {
 
 const SUBAGENT_READ_PARALLELISM = 4;
 
+/** Step-3 current-content reads (one fs.read RPC each). Bounded: an unbounded
+ *  Promise.all on a cold whale queued 500-1000 reads on one daemon WS and blew
+ *  the 30s per-command timeout for the tail — silent empty records. 16 keeps
+ *  the pipe busy without starving the timeout. */
+const CONTENT_READ_PARALLELISM = 16;
+
 /** Minimal reader surface (structural — the real DaemonFileReader satisfies it). */
 interface SubagentReader {
   listDirDetailed(p: string): Promise<Array<{ name: string; type: string; size?: number }>>;
@@ -646,6 +652,10 @@ interface CacheEntry {
    *  encodings). Without this, such sessions could never stat → never cache →
    *  full re-read on EVERY request (the 46s Changed-tab pain). */
   resolvedPath?: string;
+  /** Paths whose content read FAILED (transport error, not ENOENT) last
+   *  compute — their records carry empty content, so the reuse path must
+   *  re-read them instead of perpetuating the poisoned record. */
+  failedPaths?: Set<string>;
   /** Chars accounted against the cache byte budget, frozen at insert time.
    *  Stored (not recomputed on delete) because `inc.mainFileMap` grows in place
    *  between recomputes — recomputing at delete would drift cacheChars negative. */
@@ -790,6 +800,76 @@ function lastLineOf(complete: string): string {
   return withoutFinal.slice(withoutFinal.lastIndexOf('\n') + 1);
 }
 
+// ── Streaming full parse (bounded memory) ──
+
+function isByteCeilingError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes('byte ceiling');
+}
+
+/** Reader surface for the streaming parse (DaemonFileReader satisfies it). */
+interface RangeByteReader {
+  readRangeBytes(p: string, start: number, length: number): Promise<{ buf: Buffer; fileSize: number; eof: boolean } | null>;
+}
+
+const STREAM_WINDOW = 1024 * 1024;
+
+/**
+ * Stream-parse an ENTIRE JSONL into `fileMap` in bounded windows, never
+ * materializing the file as one string. Whale transcripts legitimately exceed
+ * the whole-file read ceiling (34MB+ observed) — a readFileRange(0) full read
+ * REJECTS them, which used to make the Changed tab fail outright for such
+ * sessions. Windows are newline-aligned before decoding (a '\n' is one byte in
+ * UTF-8, so complete blocks are always decode-safe); the carry — bytes after
+ * the last newline seen — rides to the next window. Peak memory ≈ one window
+ * + the longest line, regardless of file size.
+ *
+ * Returns byte-exact incremental anchors (same semantics the readFileRange(0)
+ * path produced): `parsedBytes`/`lastLineStart` are true file byte offsets.
+ * `headBlock` is the first decoded block (for extractCwdFromJsonlContent —
+ * cwd is on the first user line). Returns null on ENOENT.
+ */
+async function streamParseJsonlFull(
+  reader: RangeByteReader,
+  jsonlPath: string,
+  fileMap: Map<string, FileAccum>,
+  deadlineMs: number,
+): Promise<{ parsedBytes: number; lastLineStart: number; lastLine: string; tail: string; headBlock: string } | null> {
+  let offset = 0;                 // next file byte to request
+  let carry: Buffer<ArrayBufferLike> = Buffer.alloc(0); // bytes after the last '\n' seen so far
+  let carryStartAbs = 0;          // absolute file offset where `carry` begins
+  let lastLine = '';
+  let lastLineStart = 0;
+  let headBlock = '';
+  for (;;) {
+    if (Date.now() > deadlineMs) throw new Error('Session file stream-parse timeout');
+    const res = await reader.readRangeBytes(jsonlPath, offset, STREAM_WINDOW);
+    if (res === null) return null; // ENOENT
+    if (res.buf.length > 0) {
+      const buf = carry.length ? Buffer.concat([carry, res.buf]) : res.buf;
+      const lastNl = buf.lastIndexOf(0x0a);
+      if (lastNl !== -1) {
+        const completeBytes = lastNl + 1;
+        const text = buf.subarray(0, completeBytes).toString('utf-8');
+        collectOpsFromJsonl(text, fileMap);
+        if (!headBlock) headBlock = text;
+        // The block starts right after a '\n' (or at byte 0), so its last line
+        // is fully contained in `text` — the carry never holds a newline.
+        lastLine = lastLineOf(text);
+        lastLineStart = carryStartAbs + completeBytes - Buffer.byteLength(lastLine, 'utf-8') - 1;
+        // Copy the remainder so the big window buffer can be freed.
+        carry = Buffer.from(buf.subarray(completeBytes));
+        carryStartAbs += completeBytes;
+      } else {
+        carry = buf;
+      }
+      offset += res.buf.length;
+    }
+    if (res.eof) break;
+  }
+  // carryStartAbs = offset just past the last '\n' = the parsed-bytes anchor.
+  return { parsedBytes: carryStartAbs, lastLineStart, lastLine, tail: carry.toString('utf-8'), headBlock };
+}
+
 // ── Disk snapshot (light result) — instant list across server restarts ──
 //
 // The in-memory cache dies with the process; a whale session's first Changed
@@ -837,11 +917,15 @@ async function readDiskSnapshot(key: string): Promise<SessionChangesResult | nul
 
 /**
  * Stale-while-revalidate wrapper: return SOMETHING paintable immediately.
- *  1. In-memory cache → serve it (stale:true) + background recompute.
- *  2. Disk snapshot   → serve it (stale:true, light:true) + background recompute.
- *  3. Nothing         → block on the normal compute (cold first open).
- * The background recompute dedups through the same inflightByKey chain, so a
- * follow-up blocking fetch queues behind it and lands on the mtime fast-path.
+ *  1. In-memory cache, file mtime UNCHANGED → the result is CURRENT: serve it
+ *     with no flags (this is what lets the frontend's convergence POLL stop).
+ *  2. In-memory cache, mtime moved/unknown → serve it (stale:true) +
+ *     background recompute.
+ *  3. Disk snapshot → serve it (stale:true, light:true) + background recompute.
+ *  4. Nothing       → block on the normal compute (cold first open).
+ * The background kick is DEDUPED against the in-flight chain: the frontend
+ * polls this endpoint every few seconds while stale, and each poll must not
+ * queue another whale recompute behind the running one.
  */
 export async function computeSessionChangesSwr(
   sessionId: string,
@@ -851,10 +935,22 @@ export async function computeSessionChangesSwr(
 ): Promise<SessionChangesResult> {
   const key = cacheKey(sessionId, host);
   const kickRefresh = (): void => {
+    if (inflightByKey.has(key)) return; // a compute is already running/queued
     void computeSessionChanges(sessionId, cwd, host, outputFile).catch(() => { /* logged inside */ });
   };
   const entry = cacheGet(key);
   if (entry) {
+    // Freshness probe (one fs.stat): mtime unchanged → the cached result IS
+    // current (same check as the compute's fast-path), so don't mark it stale.
+    try {
+      const jsonlPath = entry.resolvedPath
+        ?? (cwd && isSafeForProjectEncoding(cwd) ? remoteJsonlPath(sessionId, cwd) : null);
+      if (jsonlPath) {
+        const { DaemonFileReader } = await import('./daemon-file-reader.js');
+        const st = await new DaemonFileReader(host ?? '__local__').stat(jsonlPath);
+        if (st && st.mtimeMs === entry.mtimeMs) return entry.result;
+      }
+    } catch { /* stat failed — treat as stale */ }
     kickRefresh();
     return { ...entry.result, stale: true, refreshing: true };
   }
@@ -1017,8 +1113,17 @@ async function computeSessionChangesInner(
       if (prior && prior.lastLineCheck && statSize >= prior.parsedBytes) {
         // Incremental: re-read from the START of the last parsed line (a known
         // line boundary — utf-8 safe) so we can verify it's byte-identical
-        // before trusting the append-only assumption.
-        const range = await withTimeout(reader.readFileRange(jsonlPath, prior.lastLineStart));
+        // before trusting the append-only assumption. A ceiling rejection here
+        // (>32MB appended since last parse — possible after a long-idle cache
+        // entry survives while the session keeps running) must NOT bail to the
+        // legacy whole-file read (which re-throws the ceiling): fall through to
+        // the streaming full parse instead.
+        let range: { content: string; fileSize: number } | null = null;
+        try {
+          range = await withTimeout(reader.readFileRange(jsonlPath, prior.lastLineStart));
+        } catch (err) {
+          if (!isByteCeilingError(err)) throw err;
+        }
         if (range !== null) {
           const nl = range.content.indexOf('\n');
           const firstLine = nl === -1 ? range.content : range.content.slice(0, nl);
@@ -1066,29 +1171,31 @@ async function computeSessionChangesInner(
         }
       }
       if (fileMap === null) {
-        // Full parse that ESTABLISHES incremental state. Read the raw file via
-        // readFileRange(0) — byte-exact chunked transfer — so parsedBytes is a
-        // true file byte offset (readSessionJsonlContent may append synthetic
-        // stream events, which would corrupt byte accounting).
-        const range = await withTimeout(reader.readFileRange(jsonlPath, 0));
-        if (range !== null) {
-          const { complete, tail } = splitCompleteLines(range.content);
-          const mainFileMap = new Map<string, FileAccum>();
-          collectOpsFromJsonl(complete, mainFileMap);
-          effectiveCwd = extractCwdFromJsonlContent(range.content) ?? cwd;
-          const lastLine = complete ? lastLineOf(complete) : '';
-          const parsedBytes = Buffer.byteLength(complete, 'utf-8');
+        // Full parse that ESTABLISHES incremental state — STREAMED in bounded
+        // windows (readRangeBytes), never the file as one string: whale
+        // transcripts exceed the whole-file read ceiling (34MB+ observed), and
+        // the old readFileRange(0) read was REJECTED for them, failing the tab
+        // outright. parsedBytes/lastLineStart stay true file byte offsets
+        // (readSessionJsonlContent may append synthetic stream events, which
+        // would corrupt byte accounting — another reason to read raw).
+        const mainFileMap = new Map<string, FileAccum>();
+        const streamed = await streamParseJsonlFull(
+          reader, jsonlPath, mainFileMap, Date.now() + READ_TIMEOUT,
+        );
+        if (streamed !== null) {
+          effectiveCwd = extractCwdFromJsonlContent(streamed.headBlock) ?? cwd;
           inc = {
-            parsedBytes,
-            lastLineStart: complete ? parsedBytes - Buffer.byteLength(lastLine, 'utf-8') - 1 : 0,
-            lastLineCheck: complete ? lineCheckOf(lastLine) : null,
+            parsedBytes: streamed.parsedBytes,
+            lastLineStart: streamed.lastLineStart,
+            lastLineCheck: streamed.parsedBytes > 0 ? lineCheckOf(streamed.lastLine) : null,
             mainFileMap,
             effectiveCwd,
           };
           fileMap = cloneFileMap(mainFileMap);
-          if (tail) collectOpsFromJsonl(tail, fileMap);
+          if (streamed.tail) collectOpsFromJsonl(streamed.tail, fileMap);
           parseMode = 'full';
         }
+        // streamed === null (ENOENT) → fileMap stays null → legacy fallbacks.
       }
     } catch (err) {
       log.session.debug('session-changes: incremental read failed, falling back to legacy', {
@@ -1177,21 +1284,31 @@ async function computeSessionChangesInner(
   }
   let reusedRecords = 0;
   const changesByPath = new Map<string, SessionFileChange>();
-  await Promise.all(
-    [...fileMap.values()].map(async (accum) => {
-      if (changedPaths && !changedPaths.has(accum.filePath)) {
+  // Reads run in a BOUNDED pool, not one Promise.all over every file: a cold
+  // whale fires 500-1000 concurrent fs.read RPCs down ONE daemon WS, and the
+  // queue pushes tail commands past the 30s command timeout — those files came
+  // back as silent empty/partial records ("nothing changed" in the UI).
+  const failedPaths = new Set<string>();
+  const readEntries = [...fileMap.values()];
+  let nextRead = 0;
+  const tRead = Date.now();
+  const readWorker = async (): Promise<void> => {
+    while (nextRead < readEntries.length) {
+      const accum = readEntries[nextRead++]!;
+      if (changedPaths && !changedPaths.has(accum.filePath)
+          && !cached?.failedPaths?.has(accum.filePath)) {
         const prior = priorChanges.get(accum.filePath);
         if (prior) {
           reusedRecords++;
           changesByPath.set(accum.filePath, { ...prior, relPath: accum.filePath });
-          return;
+          continue;
         }
         // Dropped last time (clean no-op / orphan / excluded) with unchanged
         // ops → same verdict; skip without a read. No record in changesByPath
         // = the grouping loop drops it again.
         if (cached?.droppedPaths?.has(accum.filePath)) {
           reusedRecords++;
-          return;
+          continue;
         }
         // Genuinely unknown (first sight without ops change is rare — e.g.
         // cache built by an older build) — fall through to a real read.
@@ -1200,7 +1317,11 @@ async function computeSessionChangesInner(
       try {
         current = await reader.readFile(accum.filePath);
       } catch {
+        // Transport failure (NOT ENOENT — that's a null return). The record
+        // below carries empty content + partial; remember the path so the
+        // next recompute RE-READS it instead of reusing the poisoned record.
         current = null;
+        failedPaths.add(accum.filePath);
       }
       const isDeleted = accum.ops[accum.ops.length - 1]?.kind === 'delete';
       const deletedBefore = isDeleted && !isRemote
@@ -1212,8 +1333,12 @@ async function computeSessionChangesInner(
       // the repo root is known (grouping step below).
       if (renamedFrom !== undefined) change.oldRelPath = renamedFrom;
       changesByPath.set(accum.filePath, change);
-    }),
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(CONTENT_READ_PARALLELISM, readEntries.length) }, readWorker),
   );
+  const readMs = Date.now() - tRead;
 
   // 4. Group by repo root.
   //    Resolve the cwd repo root once (anchors cwd/submodule classification).
@@ -1321,10 +1446,16 @@ async function computeSessionChangesInner(
   const anyPartial = groups.some((g) => g.files.some((f) => f.partial));
   const result: SessionChangesResult = { sessionId, groups, fileCount, anyPartial };
 
-  if (mtimeMs !== undefined) cacheSet(key, { mtimeMs, result, inc, subCache, subDir, droppedPaths, gitRootByDir, resolvedPath });
+  if (mtimeMs !== undefined) {
+    cacheSet(key, {
+      mtimeMs, result, inc, subCache, subDir, droppedPaths, gitRootByDir, resolvedPath,
+      ...(failedPaths.size ? { failedPaths } : {}),
+    });
+  }
   void writeDiskSnapshot(key, result);
   log.session.info('session-changes computed', {
-    sessionId, host: host ?? '__local__', parseMode, fileCount, reusedRecords, durationMs: Date.now() - t0,
+    sessionId, host: host ?? '__local__', parseMode, fileCount, reusedRecords,
+    readMs, failedReads: failedPaths.size, durationMs: Date.now() - t0,
   });
   return result;
 }

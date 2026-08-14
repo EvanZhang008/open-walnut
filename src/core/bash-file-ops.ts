@@ -197,7 +197,9 @@ export function parseBashFileOps(command: string, cwd: string | undefined): Bash
         const isFdRedirect = prev !== undefined && /^\d+$/.test(prev);
         const target = rawToks[k + 1];
         if (isFdRedirect) toks.pop(); // drop the fd number we already pushed
-        else if (target && isSafeOperand(target)) {
+        // `>&2` / `>& 2` duplicates an fd — its "target" is never a file
+        // (observed phantom: a Changed row literally named `&2`).
+        else if (target && !target.startsWith('&') && isSafeOperand(target)) {
           const abs = resolveOperand(target, runningCwd);
           if (abs) ops.push({ kind: 'create', path: abs });
         }

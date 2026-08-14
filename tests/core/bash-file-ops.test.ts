@@ -163,4 +163,11 @@ describe('parseBashFileOps — heredoc bodies and JS arrows are NOT file ops', (
   it('a bare `=>` in an unquoted fragment is not a redirect', () => {
     expect(parseBashFileOps('node -e console.log([1].map((x)=>x))', '/w')).toEqual([]);
   });
+
+  it('`>&2` fd duplication does not fabricate a file named `&2`', () => {
+    expect(parseBashFileOps('echo "warn" >&2', '/w')).toEqual([]);
+    // The real thing still works right next to it.
+    expect(parseBashFileOps('echo hi > out.txt && echo "warn" >&2', '/w'))
+      .toEqual([{ kind: 'create', path: '/w/out.txt' }]);
+  });
 });

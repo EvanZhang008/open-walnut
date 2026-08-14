@@ -163,6 +163,24 @@ class MockLocalDaemonFileReader {
     }
   }
 
+  /** One raw byte window [start, start+length) — mirrors the real reader's
+   *  readRangeBytes (ceiling-free: callers loop bounded windows). */
+  async readRangeBytes(
+    remotePath: string,
+    start: number,
+    length: number,
+  ): Promise<{ buf: Buffer; fileSize: number; eof: boolean } | null> {
+    const abs = await this.resolve(remotePath);
+    if (!abs) return null;
+    try {
+      const buf = await fsp.readFile(abs);
+      const slice = buf.subarray(Math.min(start, buf.length), Math.min(start + length, buf.length));
+      return { buf: Buffer.from(slice), fileSize: buf.length, eof: start + slice.length >= buf.length };
+    } catch {
+      return null;
+    }
+  }
+
   async listDir(remotePath: string): Promise<string[]> {
     const abs = await this.resolve(remotePath);
     if (!abs) return [];

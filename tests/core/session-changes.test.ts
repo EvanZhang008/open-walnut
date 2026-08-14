@@ -881,6 +881,69 @@ describe('computeSessionChanges — incremental parse cache', () => {
     const res2 = await computeSessionChanges(sid, repo);
     expect(res2).toBe(res1); // identity: the exact cached object
   });
+
+  it('a JSONL over the whole-file read ceiling still parses (streamed full parse)', async () => {
+    // Whale transcripts (34MB+ observed) exceed DaemonFileReader's whole-file
+    // ceiling; the old readFileRange(0) full read was rejected and the tab
+    // errored. The streaming parse reads bounded windows and must succeed.
+    const prevLimit = process.env.WALNUT_MAX_FILE_READ_BYTES;
+    process.env.WALNUT_MAX_FILE_READ_BYTES = '4096';
+    try {
+      const repo = path.join(workRoot, 'repo');
+      await gitInit(repo);
+      const f = path.join(repo, 'whale.ts');
+      await putFile(f, 'whale v2\n');
+
+      const sid = `inc-ceiling-${Date.now()}`;
+      // Padding lines push the file WELL past the 4KB ceiling.
+      const padLines = Array.from({ length: 40 }, (_, i) => (
+        { type: 'user', cwd: repo, message: { role: 'user', content: `pad-${i}-${'x'.repeat(400)}` } }
+      ));
+      await writeSessionJsonl(sid, repo, [
+        { type: 'user', cwd: repo, message: { role: 'user', content: 'go' } },
+        ...padLines,
+        assistantToolUse(repo, [{ name: 'Edit', input: { file_path: f, old_string: 'whale v1', new_string: 'whale v2' } }]),
+      ]);
+
+      const res = await computeSessionChanges(sid, repo);
+      expect(res.groups.flatMap(g => g.files.map(x => x.filePath))).toContain(f);
+      expect(res.groups.flatMap(g => g.files)[0]!.before).toBe('whale v1\n');
+    } finally {
+      if (prevLimit === undefined) delete process.env.WALNUT_MAX_FILE_READ_BYTES;
+      else process.env.WALNUT_MAX_FILE_READ_BYTES = prevLimit;
+    }
+  });
+
+  it('streamed full parse establishes VALID incremental state (append after works)', async () => {
+    // The streaming parse computes parsedBytes/lastLineStart/lastLineCheck
+    // itself — if any byte accounting drifts, the next append's line
+    // verification fails and every recompute silently degrades to a full
+    // parse. Prove an append after a streamed parse takes the incremental path
+    // by checking the appended edit lands AND the first file's record persists.
+    const repo = path.join(workRoot, 'repo');
+    await gitInit(repo);
+    const f1 = path.join(repo, 'one.ts');
+    const f2 = path.join(repo, 'two.ts');
+    await putFile(f1, 'one v2\n');
+
+    const sid = `inc-stream-append-${Date.now()}`;
+    await writeSessionJsonl(sid, repo, [
+      { type: 'user', cwd: repo, message: { role: 'user', content: 'go' } },
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: f1, old_string: 'one v1', new_string: 'one v2' } }]),
+    ]);
+    expect((await computeSessionChanges(sid, repo)).fileCount).toBe(1);
+
+    await putFile(f2, 'two v2\n');
+    await appendSessionJsonl(sid, repo, [
+      assistantToolUse(repo, [{ name: 'Edit', input: { file_path: f2, old_string: 'two v1', new_string: 'two v2' } }]),
+    ]);
+    const res = await computeSessionChanges(sid, repo);
+    const files = res.groups.flatMap(g => g.files);
+    expect(files.map(x => x.filePath).sort()).toEqual([f1, f2].sort());
+    // Both records must be REAL reconstructions, not empty placeholders.
+    expect(files.find(x => x.filePath === f1)!.before).toBe('one v1\n');
+    expect(files.find(x => x.filePath === f2)!.before).toBe('two v1\n');
+  });
 });
 
 // ── Subagent per-file parse cache (size-keyed) ──
@@ -978,10 +1041,20 @@ describe('computeSessionChangesSwr', () => {
     expect(cold.stale).toBeUndefined();
     expect(cold.fileCount).toBe(1);
 
-    // Warm: cached → instant result flagged stale+refreshing.
-    const warm = await computeSessionChangesSwr(sid, repo);
-    expect(warm.stale).toBe(true);
-    expect(warm.refreshing).toBe(true);
-    expect(warm.fileCount).toBe(1);
+    // Warm, file UNCHANGED: the freshness probe (one stat) sees the same
+    // mtime → the cached result IS current → served with NO stale flag.
+    // This is what lets the frontend's convergence poll terminate.
+    const warmFresh = await computeSessionChangesSwr(sid, repo);
+    expect(warmFresh.stale).toBeUndefined();
+    expect(warmFresh.fileCount).toBe(1);
+
+    // Warm, file CHANGED (mtime moved): instant stale result + refreshing.
+    const p = path.join(tmpBase, 'projects', encodeProjectPath(repo), `${sid}.jsonl`);
+    const later = new Date(Date.now() + 10_000);
+    await fsp.utimes(p, later, later);
+    const warmStale = await computeSessionChangesSwr(sid, repo);
+    expect(warmStale.stale).toBe(true);
+    expect(warmStale.refreshing).toBe(true);
+    expect(warmStale.fileCount).toBe(1);
   });
 });
