@@ -20,7 +20,7 @@ import {
   type ConversationMeta,
 } from '@/api/conversations';
 
-const ACTIVE_CONV_KEY = (agentId: string) => `walnut:activeConv:${agentId}`;
+export const ACTIVE_CONV_KEY = (agentId: string) => `walnut:activeConv:${agentId}`;
 
 export interface UseConversationsReturn {
   conversations: ConversationMeta[];

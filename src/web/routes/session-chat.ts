@@ -190,6 +190,31 @@ export function registerSessionChatRpc(): void {
       enqueueMessage: augmentedMessage,
     })
 
+    // Lane-bound session (thin-layer main-AI chat): the transcript lives in the
+    // CLI's JSONL, so chat-history's touchConversation never runs — feed the
+    // conversation metadata (lastMessageAt / auto-title) from the send instead,
+    // and broadcast so the tab bar picks the title up live. Fire-and-forget.
+    if (record?.lane) {
+      void (async () => {
+        try {
+          const { parseLaneKey } = await import('../../core/sessions/butler-lane.js')
+          const ids = parseLaneKey(record.lane)
+          if (!ids) return
+          const { touchLaneConversation, listConversations } = await import('../../core/conversations.js')
+          await touchLaneConversation(ids.agentId, ids.conversationId, data.message as string)
+          const metas = await listConversations(ids.agentId)
+          const conversation = metas.find((c) => c.id === ids.conversationId)
+          if (conversation) {
+            broadcastEvent(EventNames.CONVERSATION_UPDATED, { agentId: ids.agentId, conversation })
+          }
+        } catch (err) {
+          log.web.debug('lane conversation touch failed (non-critical)', {
+            sessionId: data.sessionId, error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      })()
+    }
+
     // Return the AUGMENTED text alongside the id. The optimistic bubble holds the
     // user's ORIGINAL text (what they typed), but the CLI — and therefore the
     // canonical JSONL echo that history parses — sees `augmentedMessage` (image

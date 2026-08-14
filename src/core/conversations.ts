@@ -486,6 +486,40 @@ export async function setPinned(agentId: string, conversationId: string, pinned:
 }
 
 /**
+ * Bump conversation metadata for a LANE turn (thin-layer chat). The turn's
+ * transcript lives in the lane session's own JSONL — chat-history never sees
+ * it — so lastMessageAt/messageCount/auto-title must be fed from the send
+ * itself or the tab bar and History dropdown go permanently stale.
+ * Best-effort: metadata can never fail a send.
+ */
+export async function touchLaneConversation(
+  agentId: string,
+  conversationId: string,
+  messageText: string,
+): Promise<void> {
+  try {
+    validateConversationId(conversationId);
+    await migrateIfNeeded(agentId);
+    await withIndexLock(agentId, async () => {
+      const index = await readIndex(agentId);
+      const meta = index.conversations.find((c) => c.id === conversationId);
+      if (!meta) return;
+      meta.lastMessageAt = new Date().toISOString();
+      meta.messageCount += 1;
+      if (meta.title === 'New Conversation' || !meta.title) {
+        const derived = deriveTitle(messageText);
+        if (derived) meta.title = derived;
+      }
+      await writeIndex(agentId, index);
+    });
+  } catch (err) {
+    log.agent.debug('touchLaneConversation failed (non-critical)', {
+      agentId, conversationId, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
  * Update lastMessageAt + messageCount after a turn persists. Best-effort: must
  * not throw into the chat flow. Called by chat-history.writeStore path.
  */

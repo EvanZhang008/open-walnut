@@ -361,9 +361,12 @@ describe("agent.provider = 'claude-code' → lane session", () => {
     }
   })
 
-  it("persists the turn's tool calls as tool_use/tool_result blocks (visible after reload)", async () => {
-    // The relay makes tools visible LIVE; this asserts the durable half — the
-    // same tool-pill history the in-process loop leaves behind.
+  it('does NOT duplicate tool blocks into chat history (the CLI JSONL is the one transcript)', async () => {
+    // Thin-layer contract: the lane session's own JSONL holds the full turn
+    // (tools included) and the session timeline renders it directly. Persisting
+    // tool_use/tool_result into chat-history again would be a second, divergent
+    // copy of the same transcript — assert the answer lands and the tool blocks
+    // do NOT.
     laneToolCalls = [
       { id: 'tu-1', name: 'Bash', input: { command: 'curl tasks' }, result: '42 tasks' },
       { id: 'tu-2', name: 'Read', input: { file_path: '/tmp/x' }, result: 'contents' },
@@ -379,26 +382,11 @@ describe("agent.provider = 'claude-code' → lane session", () => {
 
       const modelMsgs = await chatHistory.getApiMessages('general', conv)
       const flat = JSON.stringify(modelMsgs)
-      // Both tool calls survive with their pairing ids intact.
-      for (const id of ['tu-1', 'tu-2']) {
-        expect(flat).toContain(`"tool_use"`)
-        expect(flat).toContain(id)
-      }
-      expect(flat).toContain('42 tasks')
-      // Valid API pairing: every tool_result's id matches a preceding tool_use.
-      const useIds: string[] = []
-      const resultIds: string[] = []
-      for (const m of modelMsgs as Array<{ content: unknown }>) {
-        if (!Array.isArray(m.content)) continue
-        for (const b of m.content as Array<{ type?: string; id?: string; tool_use_id?: string }>) {
-          if (b.type === 'tool_use' && b.id) useIds.push(b.id)
-          if (b.type === 'tool_result' && b.tool_use_id) resultIds.push(b.tool_use_id)
-        }
-      }
-      expect(useIds).toEqual(['tu-1', 'tu-2'])
-      expect(resultIds).toEqual(['tu-1', 'tu-2'])
+      expect(flat).toContain('you have 42 tasks')
+      expect(flat).not.toContain('"tool_use"')
+      expect(flat).not.toContain('"tool_result"')
 
-      // And the display side shows the answer as the final assistant text.
+      // The display side still shows the answer as the final assistant text.
       const page = await chatHistory.getDisplayEntries(1, 50, 'general', conv)
       const answer = page.messages.find((e) => e.role === 'assistant'
         && JSON.stringify(e.content).includes('you have 42 tasks'))
@@ -406,5 +394,34 @@ describe("agent.provider = 'claude-code' → lane session", () => {
     } finally {
       ws.close()
     }
+  })
+
+  it('POST /api/agents/:agentId/conversations/:cid/lane-session resolves the lane (thin-layer mount point)', async () => {
+    await boot({ provider: 'claude-code' })
+    const { getActiveConversationId } = await import('../../../src/core/conversations.js')
+    const conv = await getActiveConversationId('general')
+
+    // First call mints the session (created: true) …
+    const res1 = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-session`, { method: 'POST' })
+    expect(res1.status).toBe(200)
+    const body1 = await res1.json() as { sessionId: string; cwd?: string; created: boolean }
+    expect(body1.sessionId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(body1.created).toBe(true)
+    drainQueue(body1.sessionId)
+
+    // … the second returns the SAME lane (no rival session).
+    const res2 = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-session`, { method: 'POST' })
+    const body2 = await res2.json() as { sessionId: string; created: boolean }
+    expect(body2.sessionId).toBe(body1.sessionId)
+    expect(body2.created).toBe(false)
+  })
+
+  it('lane-session endpoint answers 409 when the engine flag is off', async () => {
+    await boot({})
+    const { getActiveConversationId } = await import('../../../src/core/conversations.js')
+    const conv = await getActiveConversationId('general')
+    const res = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-session`, { method: 'POST' })
+    expect(res.status).toBe(409)
+    expect(started).toHaveLength(0)
   })
 })

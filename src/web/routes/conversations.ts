@@ -10,6 +10,7 @@
  *   PUT    /api/agents/:agentId/conversations/active   {conversationId} -> { activeConversationId }
  *   PATCH  /api/agents/:agentId/conversations/:cid     {title?, pinned?} -> { conversation }
  *   DELETE /api/agents/:agentId/conversations/:cid     -> 204
+ *   POST   /api/agents/:agentId/conversations/:cid/lane-session -> { sessionId, cwd, created }
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
@@ -102,6 +103,31 @@ export function createConversationsRouter(): Router {
         res.status(404).json({ error: err.message })
         return
       }
+      next(err)
+    }
+  })
+
+  // POST /api/agents/:agentId/conversations/:cid/lane-session
+  // Resolve (or create) the lane session backing this conversation — the thin-layer
+  // chat surface mounts the session timeline directly on it and sends through the
+  // ordinary session queue. Created idle (empty first message): the first user
+  // message rides session:send, exactly like every other session. 409 when the
+  // engine flag is off — the in-process loop has no lane, and minting one anyway
+  // would leave an orphan CLI.
+  router.post('/:agentId/conversations/:cid/lane-session', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const agentId = validateAgentId(req.params.agentId as string)
+      const cid = validateConversationId(req.params.cid as string)
+      const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
+      if (agentId !== 'general' || resolveAgentEngineProvider(await getConfig()) !== 'claude-code') {
+        res.status(409).json({ error: 'Lane engine is not active for this agent' })
+        return
+      }
+      const { getOrCreateLaneSession } = await import('../../core/sessions/butler-lane.js')
+      const lane = await getOrCreateLaneSession(agentId, cid)
+      const { WALNUT_HOME } = await import('../../constants.js')
+      res.json({ sessionId: lane.sessionId, cwd: WALNUT_HOME, created: lane.created })
+    } catch (err) {
       next(err)
     }
   })

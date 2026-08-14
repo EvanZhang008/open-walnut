@@ -13,7 +13,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { fetchConfig } from '@/api/config';
 import { useEvent } from '@/hooks/useWebSocket';
 
-type Engine = 'walnut-agent' | 'claude-code';
+export type Engine = 'walnut-agent' | 'claude-code';
 
 /** Mirror of the server's resolveAgentEngineProvider: anything but the exact
  *  string 'claude-code' (unset, 'walnut-agent', hand-edited junk) degrades to
@@ -22,16 +22,22 @@ function resolveEngine(provider: unknown): Engine {
   return provider === 'claude-code' ? 'claude-code' : 'walnut-agent';
 }
 
-export function EngineBadge() {
+/** Live engine flag — refetches on config:changed. null until the first fetch
+ *  resolves (callers treat null as "in-process" so the flag-off UI is default). */
+export function useChatEngine(): Engine | null {
   const [engine, setEngine] = useState<Engine | null>(null);
-
   const load = useCallback(() => {
     fetchConfig()
       .then((c) => setEngine(resolveEngine(c.agent?.provider)))
-      .catch(() => { /* keep the last known value; null just hides the badge */ });
+      .catch(() => { /* keep the last known value */ });
   }, []);
   useEffect(load, [load]);
   useEvent('config:changed', load);
+  return engine;
+}
+
+export function EngineBadge() {
+  const engine = useChatEngine();
 
   if (!engine) return null;
   const isLane = engine === 'claude-code';

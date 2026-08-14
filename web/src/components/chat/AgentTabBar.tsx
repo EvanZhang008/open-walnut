@@ -1,21 +1,22 @@
 /**
  * AgentTabBar — horizontal tab strip that replaces the old AgentDropdown.
  *
- * Layout:  [● Walnut ▾] | conv 1 | conv 2 | … | +
+ * Layout:  [● Walnut ▾] | Main | 📌 pinned… | (active) | History ▾ | +
  *
  *   - The "Walnut" tab shows the active agent; clicking it opens a small dropdown
- *     to switch agents / create a new one (agents only — conversations live in the
- *     tabs now).
- *   - Each conversation is a tab: click to switch, double-click to rename inline,
- *     hover to reveal × (the Main conversation can't be deleted).
- *   - Trailing "+" creates a new conversation. The conversation strip scrolls
- *     horizontally when it overflows; the Walnut tab and + stay pinned.
+ *     to switch agents / create a new one. Each agent row carries a ＋ that opens
+ *     a NEW conversation directly under that agent.
+ *   - Only Main (always first, undeletable), PINNED conversations, and the active
+ *     conversation render as tabs — everything else lives in the History dropdown
+ *     (searchable, time-grouped, pin/unpin per row). Tabs never overflow again.
+ *   - Tab interactions: click to switch, double-click to rename inline, hover ×
+ *     to delete, hover 📌 to unpin.
  *
- * The agent dropdown reuses the inline-style popover from the former AgentDropdown;
+ * The dropdowns reuse the inline-style popover from the former AgentDropdown;
  * the tab chrome itself is CSS-classed (see globals.css ".agent-tab-*").
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type { AgentDefinition } from '@/api/agents';
 import type { ConversationMeta } from '@/api/conversations';
 
@@ -27,11 +28,26 @@ interface AgentTabBarProps {
   activeConversationId: string | null;
   onSwitchConversation: (conversationId: string) => void;
   onNewConversation: () => void;
+  /** New conversation under a SPECIFIC agent (agent dropdown's per-row ＋). */
+  onNewConversationForAgent?: (agentId: string) => void;
   onDeleteConversation: (conversationId: string) => void;
   onRenameConversation: (conversationId: string, title: string) => void;
+  /** Pin/unpin — pinned conversations stay visible as tabs. */
+  onTogglePin?: (conversationId: string) => void;
   onCreateAgent: (name: string, description: string, systemPrompt?: string) => void;
   onCreateAgentByChat: () => void;
   onToggleAgentVisibility: (agentId: string, visible: boolean) => void;
+}
+
+/** Time bucket for the History dropdown (by lastMessageAt). */
+function historyGroup(iso: string): 'Today' | 'This week' | 'Older' {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return 'Older';
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (t >= startOfDay) return 'Today';
+  if (t >= startOfDay - 6 * 86_400_000) return 'This week';
+  return 'Older';
 }
 
 /** Slugify a name into a stable agent id (lowercase, dashes, alnum only). */
@@ -48,11 +64,14 @@ export function AgentTabBar(props: AgentTabBarProps) {
   const {
     agents, activeAgentId, onSwitchAgent,
     conversations, activeConversationId, onSwitchConversation,
-    onNewConversation, onDeleteConversation, onRenameConversation,
+    onNewConversation, onNewConversationForAgent,
+    onDeleteConversation, onRenameConversation, onTogglePin,
     onCreateAgent, onCreateAgentByChat, onToggleAgentVisibility,
   } = props;
 
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyQuery, setHistoryQuery] = useState('');
   const [showNewAgent, setShowNewAgent] = useState(false);
   const [newAgentName, setNewAgentName] = useState('');
   const [newAgentDesc, setNewAgentDesc] = useState('');
@@ -60,9 +79,31 @@ export function AgentTabBar(props: AgentTabBarProps) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const agentWrapRef = useRef<HTMLDivElement>(null);
+  const historyWrapRef = useRef<HTMLDivElement>(null);
 
   const activeAgent = agents.find((a) => a.id === activeAgentId);
   const activeAgentName = activeAgent?.name ?? activeAgentId;
+
+  // Tabs: Main first (server sort guarantees it), then pinned, plus the active
+  // conversation even when unpinned (so a history pick is visible). The rest
+  // live in the History dropdown.
+  const tabConvs = useMemo(
+    () => conversations.filter((c) => c.isMain || c.pinned || c.id === activeConversationId),
+    [conversations, activeConversationId],
+  );
+  const historyConvs = useMemo(() => {
+    const q = historyQuery.trim().toLowerCase();
+    const rest = conversations.filter((c) => !c.isMain);
+    const matched = q ? rest.filter((c) => c.title.toLowerCase().includes(q)) : rest;
+    const groups: Record<string, ConversationMeta[]> = {};
+    for (const c of matched) {
+      const g = historyGroup(c.lastMessageAt || c.createdAt);
+      (groups[g] ??= []).push(c);
+    }
+    return (['Today', 'This week', 'Older'] as const)
+      .filter((g) => groups[g]?.length)
+      .map((g) => ({ label: g, items: groups[g] }));
+  }, [conversations, historyQuery]);
 
   // Close agent dropdown on outside click.
   useEffect(() => {
@@ -75,6 +116,18 @@ export function AgentTabBar(props: AgentTabBarProps) {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [agentMenuOpen]);
+
+  // Close History dropdown on outside click; reset its search when it closes.
+  useEffect(() => {
+    if (!historyOpen) { setHistoryQuery(''); return; }
+    const handler = (e: MouseEvent) => {
+      if (historyWrapRef.current && !historyWrapRef.current.contains(e.target as Node)) {
+        setHistoryOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [historyOpen]);
 
   // Reset the new-agent sub-form whenever the dropdown closes.
   useEffect(() => {
@@ -135,6 +188,17 @@ export function AgentTabBar(props: AgentTabBarProps) {
                     <span style={{ width: 6, height: 6, borderRadius: '50%', background: isActive ? 'var(--accent)' : 'var(--fg-muted)', display: 'inline-block', flexShrink: 0 }} />
                     <span style={ellipsisStyle}>{agent.name}</span>
                   </button>
+                  {/* Per-agent ＋ — jump to this agent AND open a fresh conversation. */}
+                  {onNewConversationForAgent && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onNewConversationForAgent(agent.id); setAgentMenuOpen(false); }}
+                      style={iconBtnStyle}
+                      title={`New chat with ${agent.name}`}
+                      aria-label={`New chat with ${agent.name}`}
+                    >
+                      +
+                    </button>
+                  )}
                   {/* Eye toggle — can't hide 'general' */}
                   {!isGeneral && (
                     <button
@@ -201,9 +265,9 @@ export function AgentTabBar(props: AgentTabBarProps) {
 
       <span className="agent-tab-divider" />
 
-      {/* ── Conversation tabs (scrollable) ── */}
+      {/* ── Conversation tabs: Main + pinned + active (rest → History) ── */}
       <div className="agent-tab-conv-scroll">
-        {conversations.map((conv) => {
+        {tabConvs.map((conv) => {
           const isActive = conv.id === activeConversationId;
           const isRenaming = renamingId === conv.id;
           if (isRenaming) {
@@ -233,7 +297,17 @@ export function AgentTabBar(props: AgentTabBarProps) {
               role="tab"
               aria-selected={isActive}
             >
-              {conv.pinned && !conv.isMain && <span title="Pinned">{'\u{1F4CC}'}{/* 📌 */}</span>}
+              {/* Pin toggle — click to unpin (tab then retreats into History). */}
+              {conv.pinned && !conv.isMain && (
+                <button
+                  className="agent-tab-pin"
+                  onClick={(e) => { e.stopPropagation(); onTogglePin?.(conv.id); }}
+                  title="Unpin"
+                  aria-label="Unpin conversation"
+                >
+                  {'\u{1F4CC}'}{/* 📌 */}
+                </button>
+              )}
               {/* Main shows a fixed "Main" label; other conversations show their (LLM-generated) title. */}
               <span className="agent-tab-conv-title">{conv.isMain ? 'Main' : conv.title}</span>
               {/* Main conversation can't be deleted (it owns notifications & cron). */}
@@ -250,6 +324,77 @@ export function AgentTabBar(props: AgentTabBarProps) {
             </div>
           );
         })}
+      </div>
+
+      {/* ── History ▾ — every non-Main conversation, time-grouped + searchable ── */}
+      <div className="agent-tab-history-wrap" ref={historyWrapRef}>
+        <button
+          className={`agent-tab agent-tab-history${historyOpen ? ' open' : ''}`}
+          onClick={() => setHistoryOpen((v) => !v)}
+          title="Conversation history"
+        >
+          <span className="agent-tab-label">History</span>
+          <span className="agent-tab-caret">▾</span>
+        </button>
+
+        {historyOpen && (
+          <div style={historyPopoverStyle}>
+            <div style={{ padding: '4px 8px 6px' }}>
+              <input
+                autoFocus
+                value={historyQuery}
+                onChange={(e) => setHistoryQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Escape') setHistoryOpen(false); }}
+                placeholder="Search conversations…"
+                style={inputStyle}
+              />
+            </div>
+            {historyConvs.length === 0 && (
+              <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--fg-muted)' }}>
+                {historyQuery.trim() ? 'No matches' : 'No past conversations'}
+              </div>
+            )}
+            {historyConvs.map((group) => (
+              <div key={group.label}>
+                <div style={sectionLabelStyle}>{group.label}</div>
+                {group.items.map((conv) => {
+                  const isActive = conv.id === activeConversationId;
+                  return (
+                    <div key={conv.id} style={rowStyle(isActive)} className="agent-dd-row">
+                      <button
+                        onClick={() => { onSwitchConversation(conv.id); setHistoryOpen(false); }}
+                        style={rowMainBtnStyle(isActive)}
+                        title={conv.title}
+                      >
+                        <span style={ellipsisStyle}>{conv.title}</span>
+                      </button>
+                      {onTogglePin && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onTogglePin(conv.id); }}
+                          style={{ ...iconBtnStyle, opacity: conv.pinned ? 1 : undefined }}
+                          className={conv.pinned ? undefined : 'agent-dd-hover-btn'}
+                          title={conv.pinned ? 'Unpin' : 'Pin as tab'}
+                          aria-label={conv.pinned ? 'Unpin conversation' : 'Pin conversation'}
+                        >
+                          {'\u{1F4CC}'}{/* 📌 */}
+                        </button>
+                      )}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onDeleteConversation(conv.id); }}
+                        style={iconBtnStyle}
+                        className="agent-dd-hover-btn"
+                        title="Delete conversation"
+                        aria-label="Delete conversation"
+                      >
+                        {'×'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <button
@@ -272,6 +417,24 @@ const popoverStyle: React.CSSProperties = {
   left: 0,
   minWidth: 240,
   maxWidth: 320,
+  maxHeight: 420,
+  overflowY: 'auto',
+  background: 'var(--bg-elevated, var(--bg))',
+  border: '1px solid var(--border)',
+  borderRadius: 8,
+  boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
+  zIndex: 1000,
+  padding: '6px 0',
+};
+
+// History dropdown hangs off the RIGHT edge of its trigger (the trigger sits near
+// the bar's right side, so left-anchoring would push it off-viewport).
+const historyPopoverStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: 'calc(100% + 4px)',
+  right: 0,
+  minWidth: 260,
+  maxWidth: 340,
   maxHeight: 420,
   overflowY: 'auto',
   background: 'var(--bg-elevated, var(--bg))',

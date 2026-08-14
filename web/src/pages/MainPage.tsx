@@ -5,7 +5,8 @@ import { SESSION_MODELS } from '@open-walnut/core';
 import { getHostCatalog } from '@/hooks/useModelCatalog';
 import { useChat, mergeAdjacentErrors, type TaskContext, type ImageAttachment } from '@/hooks/useChat';
 import { useAgentConsole } from '@/hooks/useAgentConsole';
-import { useConversations } from '@/hooks/useConversations';
+import { useConversations, ACTIVE_CONV_KEY } from '@/hooks/useConversations';
+import { createConversation } from '@/api/conversations';
 import { usePlanMode } from '@/hooks/usePlanMode';
 import { useWebSocket, useEvent } from '@/hooks/useWebSocket';
 import { useTasksContext } from '@/contexts/TasksContext';
@@ -45,7 +46,10 @@ import { fetchConfig, fetchInstallDir } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
 import { QuickAccessBar } from '@/components/chat/QuickAccessBar';
 import { AgentTabBar, slugifyAgentId } from '@/components/chat/AgentTabBar';
-import { EngineBadge } from '@/components/chat/EngineBadge';
+import { EngineBadge, useChatEngine } from '@/components/chat/EngineBadge';
+import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
+import { useSessionSend } from '@/hooks/useSessionSend';
+import { useLaneSession } from '@/hooks/useLaneSession';
 import { createAgentDef, updateAgentDef } from '@/api/agents';
 import { log } from '@/utils/log';
 import { visibleInterval } from '@/utils/page-visibility';
@@ -259,6 +263,21 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const agentConsole = useAgentConsole();
   const conversations = useConversations(agentConsole.activeAgentId);
   const chat = useChat(agentConsole.activeAgentId, conversations.activeConversationId);
+
+  // ── Thin-layer lane chat (config.agent.provider='claude-code') ──
+  // The main AI IS a Claude Code session: the chat panel mounts the session
+  // timeline (SessionChatHistory — tool cards, collapse, diffs, the works)
+  // directly on the conversation's lane session, and sends ride the ordinary
+  // session queue. The old chat framework (useChat streaming + ChatMessage)
+  // stays byte-identical for the in-process engine and non-general agents.
+  const chatEngine = useChatEngine();
+  const [laneResetNonce, setLaneResetNonce] = useState(0);
+  const laneActive = chatEngine === 'claude-code' && agentConsole.activeAgentId === 'general';
+  const lane = useLaneSession(
+    laneActive, agentConsole.activeAgentId, conversations.activeConversationId, laneResetNonce,
+  );
+  const laneSend = useSessionSend(laneActive ? lane.sessionId : null);
+  const [laneStreaming, setLaneStreaming] = useState(false);
   const { health, loading: healthLoading } = useSystemHealth();
   const { mode: chatMode, toggleMode, getPlanPayload } = usePlanMode();
   const { connectionState } = useWebSocket();
@@ -354,6 +373,24 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       console.error('MainPage: failed to create agent', err);
     }
   }, [agentConsole]);
+
+  // Agent dropdown's per-row ＋: open a NEW conversation under that agent. For the
+  // active agent this is just create(); for another agent, create server-side first
+  // (the server marks it active), then switch — useConversations' remount fetch
+  // picks the fresh conversation up as active.
+  const handleNewConversationForAgent = useCallback(async (agentId: string) => {
+    try {
+      if (agentId === agentConsole.activeAgentId) {
+        await conversations.create();
+        return;
+      }
+      const meta = await createConversation(agentId);
+      try { localStorage.setItem(ACTIVE_CONV_KEY(agentId), meta.id); } catch { /* hint only */ }
+      agentConsole.switchAgent(agentId);
+    } catch (err) {
+      log.warn('frontend', 'MainPage: new conversation for agent failed', { agentId, error: String(err) });
+    }
+  }, [agentConsole, conversations]);
 
   // ── "Create by chat" (R2) ──
   // Routes the user into Walnut's own chat with a fresh, isolated conversation seeded
@@ -2200,6 +2237,43 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }
   }, [launchQuickStart, openDraftColumn, openSessionOrToast]);
 
+  // Lane stop: interrupt the CLI turn through the session path (chat:stop's
+  // AbortController means nothing to a lane turn).
+  const handleLaneStop = useCallback(() => {
+    if (lane.sessionId) void laneSend.stopTurn(lane.sessionId);
+  }, [lane.sessionId, laneSend]);
+
+  // Lane clear: the existing clear endpoint archives the lane server-side
+  // (archiveLaneForConversation), so afterwards force a re-resolve — the next
+  // resolve mints a fresh session.
+  const handleClearChat = useCallback(() => {
+    chat.clearMessages();
+    if (laneActive) setLaneResetNonce((n) => n + 1);
+  }, [chat, laneActive]);
+
+  // Lane send: through the ordinary session queue (session:send), exactly like
+  // any session composer. ensure() covers the send-before-resolve window (the
+  // eager resolve usually wins). No task-context / plan-mode prefixes here —
+  // the lane persona carries its own instructions; those extras stay with the
+  // in-process engine.
+  const handleLaneSend = useCallback((text: string, images?: ImageAttachment[]) => {
+    const trimmed = text.trim();
+    if (!trimmed && !(images?.length)) return;
+    if (lane.sessionId) {
+      void laneSend.send(lane.sessionId, trimmed, images);
+    } else {
+      lane.ensure()
+        .then((sid) => laneSend.send(sid, trimmed, images))
+        .catch((err) => {
+          notify({
+            kind: 'operation-error', severity: 'error', title: 'Main AI unavailable',
+            body: String(err instanceof Error ? err.message : err), persistent: true,
+            dedupKey: `lane-resolve:${conversations.activeConversationId ?? 'unknown'}`,
+          });
+        });
+    }
+  }, [lane, laneSend, notify, conversations.activeConversationId]);
+
   const handleSendMessage = useCallback((text: string, images?: ImageAttachment[]) => {
     const qsp = quickStartPathRef.current;
 
@@ -2220,6 +2294,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       const metaSnapshot = quickStartMetaRef.current;
       quickStartMetaRef.current = null;
       launchQuickStart(qsp, metaSnapshot, text, images);
+      return;
+    }
+
+    // Lane engine: the session queue is the send path. A focused task rides as
+    // one plain-text line — the lane persona resolves task details itself via
+    // the REST recipes (no in-process context enrichment on this engine).
+    if (laneActive) {
+      const laneText = focusedTask
+        ? `[Regarding task "${focusedTask.title}" (id: ${focusedTask.id})]\n${text}`
+        : text;
+      handleLaneSend(laneText, images);
+      if (focusedTask) setFocusedTask(null);
       return;
     }
 
@@ -2266,12 +2352,12 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       const plan = getPlanPayload();
       chat.sendMessage(text, undefined, images, undefined, plan.mode, plan.planModeFirst, plan.planModeOff);
     }
-  }, [chat, focusedTask, getPlanPayload, launchQuickStart, tasks]);
+  }, [chat, focusedTask, getPlanPayload, launchQuickStart, tasks, laneActive, handleLaneSend]);
 
   const handleCommand = useCallback((cmd: SlashCommand, args?: string) => {
     const ctx: CommandContext = {
       sendMessage: (text: string) => handleSendMessage(text),
-      clearMessages: () => chat.clearMessages(),
+      clearMessages: () => handleClearChat(),
       addLocalMessage: (content: string) => chat.addLocalMessage(content),
       navigate: navigateRef?.current ?? (() => {}),
       args,
@@ -2279,7 +2365,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       conversationId: conversations.activeConversationId ?? undefined,
     };
     cmd.execute(ctx);
-  }, [handleSendMessage, chat, navigateRef, agentConsole.activeAgentId, conversations.activeConversationId]);
+  }, [handleSendMessage, handleClearChat, chat, navigateRef, agentConsole.activeAgentId, conversations.activeConversationId]);
 
   const chatTitle = focusedTask
     ? `Chat — ${focusedTask.title}`
@@ -2406,8 +2492,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             connectionState={connectionState}
             inspectorOpen={inspector.isOpen}
             onToggleInspector={inspector.toggle}
-            hasMessages={chat.messages.length > 0}
-            onClear={chat.clearMessages}
+            hasMessages={laneActive ? !!lane.sessionId : chat.messages.length > 0}
+            onClear={handleClearChat}
             agentSwitcher={(
               <AgentTabBar
                 agents={agentConsole.agents}
@@ -2417,8 +2503,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 activeConversationId={conversations.activeConversationId}
                 onSwitchConversation={conversations.switchTo}
                 onNewConversation={() => { void conversations.create(); }}
+                onNewConversationForAgent={handleNewConversationForAgent}
                 onDeleteConversation={(cid) => { void conversations.remove(cid); }}
                 onRenameConversation={(cid, title) => { void conversations.rename(cid, title); }}
+                onTogglePin={(cid) => { void conversations.togglePin(cid); }}
                 onCreateAgent={handleCreateAgent}
                 onCreateAgentByChat={handleCreateAgentByChat}
                 onToggleAgentVisibility={handleToggleAgentVisibility}
@@ -2446,6 +2534,47 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             onStartSession={() => setPathSelectorOpen(true)}
           />
 
+          {laneActive && lane.sessionId ? (
+            /* Thin layer: the conversation IS a Claude Code session — render its
+               JSONL timeline with the full session component set (tool cards,
+               collapse, diffs). Keyed by session id so a conversation switch or
+               clear (new lane) remounts cleanly. The composer overlay below is
+               shared; .chat-panel supplies the same scroll + bottom padding. */
+            <div className="chat-panel chat-lane-history">
+              <SessionChatHistory
+                key={lane.sessionId}
+                sessionId={lane.sessionId}
+                sessionCwd={lane.cwd}
+                optimisticMessages={laneSend.optimisticMsgs}
+                onMessagesDelivered={laneSend.handleMessagesDelivered}
+                onBatchCompleted={laneSend.handleBatchCompleted}
+                onBatchFailed={laneSend.handleBatchFailed}
+                onEditQueued={(queueId, newText) => { if (lane.sessionId) laneSend.handleEditQueued(lane.sessionId, queueId, newText); }}
+                onDeleteQueued={(queueId) => { if (lane.sessionId) laneSend.handleDeleteQueued(lane.sessionId, queueId); }}
+                onRetryFailed={(queueId) => { if (lane.sessionId) laneSend.retryFailed(queueId, lane.sessionId); }}
+                onDismissFailed={laneSend.dismissFailed}
+                onAgentQueued={laneSend.addExternalQueued}
+                onStreamingChange={setLaneStreaming}
+                onTaskClick={handleFocusTaskById}
+                onSessionClick={handleSessionClick}
+              />
+            </div>
+          ) : laneActive ? (
+            <div className="chat-panel chat-lane-history">
+              {lane.error ? (
+                <div className="empty-state">
+                  <p style={{ color: 'var(--color-error, #ff3b30)' }}>Main AI session unavailable: {lane.error}</p>
+                </div>
+              ) : (
+                <div className="empty-state">
+                  <p>
+                    <span className="spinner" style={{ width: 12, height: 12, borderWidth: 2, display: 'inline-block', marginRight: 8, verticalAlign: '-2px' }} />
+                    Connecting to the main AI session…
+                  </p>
+                </div>
+              )}
+            </div>
+          ) : (
           <ChatPanel messageCount={chat.messages.length} prependedRef={chat.prependedRef}>
             {chat.hasMore && (
               <div className="chat-load-more">
@@ -2496,6 +2625,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               </div>
             )}
           </ChatPanel>
+          )}
 
           {/* G4 glass composer overlay — QuickAccessBar pills + quick-start bar +
               ChatInput ride together on one glass surface floating over the chat
@@ -2591,10 +2721,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             <ChatInput
               onSend={handleSendMessage}
               onCommand={handleCommand}
-              onStop={chat.stopGeneration}
+              onStop={laneActive ? handleLaneStop : chat.stopGeneration}
               onClearQueue={chat.clearQueue}
               disabled={connectionState !== 'connected'}
-              isStreaming={chat.isStreaming}
+              isStreaming={laneActive ? laneStreaming : chat.isStreaming}
               placeholder={quickStartPath?.intent === 'fix-walnut'
                 ? 'Describe what’s wrong — e.g. "sessions panel keeps spinning". Paste a screenshot (⌘V) to help.'
                 : undefined}

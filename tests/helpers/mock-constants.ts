@@ -66,6 +66,10 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
       if (!id || !/^conv-[A-Za-z0-9-]+$/.test(id)) throw new Error(`Invalid conversation id: ${id}`);
       return id;
     },
+    validateAgentId: (agentId: string) => {
+      if (!/^[a-z0-9_-]{1,64}$/i.test(agentId)) throw new Error(`Invalid agentId: ${JSON.stringify(agentId)}`);
+      return agentId;
+    },
     agentMemoryDir: (agentId?: string) => {
       if (!agentId || agentId === 'general') return tmpBase;
       return path.join(tmpBase, 'memory', 'agents', agentId);
