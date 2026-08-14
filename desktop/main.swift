@@ -884,6 +884,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // once the triggering user-gesture has expired (async capture-then-copy
         // flows). The web console prefers this handler when present.
         config.userContentController.add(self, name: "walnutClipboard")
+        // Kill macOS autocorrect/spellcheck inside the app: the system's
+        // black suggestion bubble ("Flash ×") pops over search fields and the
+        // composer. Web content can't opt out globally, so tag every editable
+        // element at the focus boundary (covers dynamically-created ones too).
+        let disableAutocorrect = """
+        document.addEventListener('focusin', (e) => {
+          const el = e.target;
+          if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
+            el.setAttribute('autocorrect', 'off');
+            el.setAttribute('autocapitalize', 'off');
+            el.spellcheck = false;
+          }
+        }, true);
+        """
+        config.userContentController.addUserScript(WKUserScript(
+            source: disableAutocorrect, injectionTime: .atDocumentEnd, forMainFrameOnly: false))
 
         webView = WKWebView(frame: window.contentView!.bounds, configuration: config)
         webView.autoresizingMask = [.width, .height]
