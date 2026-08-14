@@ -172,14 +172,27 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     setValue(prefillText);
     // Persist immediately (don't rely on the later-declared debounced saveDraft).
     try { if (draftKeyRef.current) localStorage.setItem(draftKeyRef.current, prefillText); } catch { /* unavailable */ }
-    requestAnimationFrame(() => {
+    // Focus + caret-to-end, RETRIED until the box is actually focusable. A
+    // hidden textarea (`display:none` — e.g. the session's chat column is
+    // collapsed) silently swallows focus(), so the caret stayed on <body> and
+    // everything the user typed next was lost. The caller reveals the composer
+    // in the same state batch; these retries cover the frames where a parent
+    // animates/mounts it slightly later.
+    let frames = 0;
+    let raf = 0;
+    const tryFocus = () => {
       const el = textareaRef.current;
       if (!el) return;
+      if (el.offsetParent === null && frames++ < 20) { raf = requestAnimationFrame(tryFocus); return; }
       el.focus();
       el.setSelectionRange(prefillText.length, prefillText.length);
       el.style.height = 'auto';
       el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
-    });
+      // Still not focused (a competing focus handler won the frame) → one retry.
+      if (document.activeElement !== el && frames++ < 20) raf = requestAnimationFrame(tryFocus);
+    };
+    raf = requestAnimationFrame(tryFocus);
+    return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefillNonce]);
 

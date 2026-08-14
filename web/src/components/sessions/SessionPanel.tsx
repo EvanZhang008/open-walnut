@@ -521,6 +521,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
     // a quote reads the same from either surface (a path outside the cwd stays absolute).
     setPrefillText(buildSelectionPrefill(displayPathForPrefill(filePath, session?.cwd), line, code));
     setPrefillNonce((n) => n + 1);
+    // REVEAL the composer first: while the chat column is collapsed it is
+    // `display:none`, so ChatInput's focus() lands on <body> and every keystroke
+    // the user then types is LOST (2026-08-13 report: "the cursor doesn't go to
+    // the input box"). Asking about a selection means "take me to the chat".
+    setChatCollapsed(false);
   }, [session?.cwd]);
   // A line comment from the diff → send straight to this session's main agent.
   const handleDiffComment = useCallback((message: string) => {

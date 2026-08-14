@@ -621,6 +621,12 @@ export function FileContentView({
   const commitSelection = useCallback(() => {
     if (!selection || !onSelectCode) return;
     onSelectCode(filePath, selection.line, selection.text);
+    // LEAVE FULLSCREEN: the fullscreen shell is a fixed inset:0 overlay at
+    // z-index 10000, so it covers the composer the prefill just landed in. The
+    // focus/caret were actually correct, but the user saw an unchanged file and
+    // read it as "the button did nothing" (2026-08-13 report). Asking is a
+    // move-to-the-chat action, so the reading overlay steps aside.
+    setFullscreen(false);
     setSelection(null);
     window.getSelection()?.removeAllRanges();
     // An HTML-preview selection lives in the iframe's document — clear it there.
@@ -634,6 +640,7 @@ export function FileContentView({
   // doc; the prefill degrades to a file-level reference (still correct).
   const handleAskSelection = useCallback((text: string) => {
     onSelectCode?.(filePath, undefined, text);
+    setFullscreen(false); // same reason as commitSelection: uncover the composer
   }, [onSelectCode, filePath]);
 
   // HTML preview: the rendered page lives in a same-origin IFRAME, so the
