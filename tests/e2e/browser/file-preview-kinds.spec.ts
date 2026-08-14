@@ -112,8 +112,9 @@ test('clicking a vault note previews IN PLACE — no jump to /notes', async ({ p
 
   await selectFile(explorer, 'vault-note.md')
 
-  // The note's CONTENT is on screen inside the session panel...
-  await expect(explorer.locator('.fv-md-preview')).toContainText('VAULT_NOTE_MARKER', { timeout: 10_000 })
+  // The note's CONTENT is on screen inside the session panel... (plain md's
+  // Preview tab is the WYSIWYG editor since e46b8f00, not .fv-md-preview)
+  await expect(explorer.locator('.fv-wysiwyg-editor')).toContainText('VAULT_NOTE_MARKER', { timeout: 10_000 })
   // ...and the app did NOT navigate away. This is the regression under test.
   expect(page.url()).toBe(urlBefore)
   await expect(page.locator('.notes-page, .notes-layout')).toHaveCount(0)
@@ -189,8 +190,9 @@ test('any route change out of a fullscreen split view drops the backdrop', async
 test('a non-note .md shows NO "Open in Notes" button', async ({ page }) => {
   const explorer = await openFilesPanel(page)
   // nested-fence.md lives in the project fixture dir, outside the vault.
+  // (Plain md's Preview tab is the WYSIWYG editor since e46b8f00.)
   await selectFile(explorer, 'nested-fence.md')
-  await expect(explorer.locator('.fv-md-preview')).toBeVisible({ timeout: 10_000 })
+  await expect(explorer.locator('.fv-wysiwyg-editor')).toBeVisible({ timeout: 10_000 })
   await expect(explorer.locator('button.fv-notes-btn')).toHaveCount(0)
 })
 

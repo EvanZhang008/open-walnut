@@ -100,7 +100,11 @@ test('Refresh re-lists the directory, surfacing a file created after load', asyn
 test('markdown preview renders nested fences as code, not literal <a> tags', async ({ page }) => {
   const explorer = await openFilesPanel(page)
 
-  await explorer.locator('.sfe-name', { hasText: 'nested-fence.md' }).click()
+  // The .mdx twin, NOT nested-fence.md: plain markdown's Preview tab became the
+  // WYSIWYG editor (e46b8f00), which never runs the linkifier — asserting on it
+  // made this regression test vacuous. MDX is excluded from WYSIWYG, so it still
+  // renders through the read-only markdown pipeline where the bug lived.
+  await explorer.locator('.sfe-name', { hasText: 'nested-fence.mdx' }).click()
   const preview = explorer.locator('.fv-md-preview')
   await expect(preview).toBeVisible({ timeout: 10_000 })
 

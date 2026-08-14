@@ -109,13 +109,16 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator('.todo-search-input')).toBeVisible({ timeout: 30_000 })
 })
 
+// NOTE: previews assert on `.fv-md-preview, .fv-wysiwyg-editor` — plain
+// editable markdown renders in the WYSIWYG editor since e46b8f00; the read-only
+// .fv-md-preview remains only for MDX/truncated files.
 test('a file opened from a chat link is remembered by the Files chip (the reported bug)', async ({ page }) => {
   const panel = await openSessionPanel(page)
 
   // 1. Open the file by clicking its path in the chat. The explorer roots at the
   //    file's parent dir and previews it.
   let explorer = await clickChatFileLink(panel)
-  await expect(explorer.locator('.fv-md-preview')).toContainText('LINKED_FROM_CHAT_MARKER', { timeout: 15_000 })
+  await expect(explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')).toContainText('LINKED_FROM_CHAT_MARKER', { timeout: 15_000 })
   await page.screenshot({ path: `${SCREENSHOT_DIR}/step1-opened-from-chat.png` })
 
   // 2. One Files-chip click RE-ROOTS the explorer to the session cwd (the panel
@@ -123,7 +126,7 @@ test('a file opened from a chat link is remembered by the Files chip (the report
   //    vanish here, because the "last file read" was keyed by the tree root and
   //    the new root had no memory of it. It must stay open and stay revealed.
   await panel.getByRole('button', { name: 'Files' }).click()
-  await expect(explorer.locator('.fv-md-preview')).toContainText('LINKED_FROM_CHAT_MARKER', { timeout: 15_000 })
+  await expect(explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')).toContainText('LINKED_FROM_CHAT_MARKER', { timeout: 15_000 })
   await expect(
     explorer.locator('.session-file-explorer-node.selected .sfe-name', { hasText: 'linked-from-chat.md' }),
   ).toHaveCount(1, { timeout: 15_000 })
@@ -134,7 +137,7 @@ test('a file opened from a chat link is remembered by the Files chip (the report
   await closeFiles(panel)
   explorer = await openFiles(panel)
   await expect(explorer.locator('.sfe-preview-empty')).toHaveCount(0, { timeout: 15_000 })
-  await expect(explorer.locator('.fv-md-preview')).toContainText('LINKED_FROM_CHAT_MARKER', { timeout: 15_000 })
+  await expect(explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')).toContainText('LINKED_FROM_CHAT_MARKER', { timeout: 15_000 })
 
   // 4. "go there automatically" — the tree expanded through deep/nested so the
   //    restored file is a VISIBLE selected row, not just preview-pane content.
@@ -152,9 +155,9 @@ test('‹ › walk back and forward through the files viewed, browser style', as
   await expect(forward(explorer)).toBeDisabled()
 
   await explorer.locator('.sfe-name', { hasText: 'incident-report.md' }).click()
-  await expect(explorer.locator('.fv-md-preview')).toContainText('Controller restart loop', { timeout: 15_000 })
+  await expect(explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')).toContainText('Controller restart loop', { timeout: 15_000 })
   await explorer.locator('.sfe-name', { hasText: 'second-doc.md' }).click()
-  await expect(explorer.locator('.fv-md-preview')).toContainText('Second doc', { timeout: 15_000 })
+  await expect(explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')).toContainText('Second doc', { timeout: 15_000 })
 
   // Two files deep: Back is live, Forward is not.
   await expect(back(explorer)).toBeEnabled()
@@ -162,14 +165,14 @@ test('‹ › walk back and forward through the files viewed, browser style', as
 
   // Back → the previous file, and the tree selection follows it.
   await back(explorer).click()
-  await expect(explorer.locator('.fv-md-preview')).toContainText('Controller restart loop', { timeout: 15_000 })
+  await expect(explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')).toContainText('Controller restart loop', { timeout: 15_000 })
   expect(await selectedName(explorer)).toBe('incident-report.md')
   await expect(forward(explorer)).toBeEnabled()
   await page.screenshot({ path: `${SCREENSHOT_DIR}/step3-back.png` })
 
   // Forward → the file we left. Back must NOT have truncated the tail.
   await forward(explorer).click()
-  await expect(explorer.locator('.fv-md-preview')).toContainText('Second doc', { timeout: 15_000 })
+  await expect(explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')).toContainText('Second doc', { timeout: 15_000 })
   expect(await selectedName(explorer)).toBe('second-doc.md')
   await expect(forward(explorer)).toBeDisabled()
   await page.screenshot({ path: `${SCREENSHOT_DIR}/step4-forward.png` })
@@ -180,15 +183,15 @@ test('⌘[ / ⌘] drive the same history from the keyboard', async ({ page }) =>
   const explorer = await openFiles(panel)
 
   await explorer.locator('.sfe-name', { hasText: 'incident-report.md' }).click()
-  await expect(explorer.locator('.fv-md-preview')).toContainText('Controller restart loop', { timeout: 15_000 })
+  await expect(explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')).toContainText('Controller restart loop', { timeout: 15_000 })
   await explorer.locator('.sfe-name', { hasText: 'second-doc.md' }).click()
-  await expect(explorer.locator('.fv-md-preview')).toContainText('Second doc', { timeout: 15_000 })
+  await expect(explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')).toContainText('Second doc', { timeout: 15_000 })
 
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
   await page.keyboard.press(`${mod}+BracketLeft`)
-  await expect(explorer.locator('.fv-md-preview')).toContainText('Controller restart loop', { timeout: 15_000 })
+  await expect(explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')).toContainText('Controller restart loop', { timeout: 15_000 })
   await page.keyboard.press(`${mod}+BracketRight`)
-  await expect(explorer.locator('.fv-md-preview')).toContainText('Second doc', { timeout: 15_000 })
+  await expect(explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')).toContainText('Second doc', { timeout: 15_000 })
   await page.screenshot({ path: `${SCREENSHOT_DIR}/step5-keyboard.png` })
 })
 
@@ -197,17 +200,17 @@ test('the history survives closing and reopening the panel', async ({ page }) =>
   let explorer = await openFiles(panel)
 
   await explorer.locator('.sfe-name', { hasText: 'incident-report.md' }).click()
-  await expect(explorer.locator('.fv-md-preview')).toContainText('Controller restart loop', { timeout: 15_000 })
+  await expect(explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')).toContainText('Controller restart loop', { timeout: 15_000 })
   await explorer.locator('.sfe-name', { hasText: 'second-doc.md' }).click()
-  await expect(explorer.locator('.fv-md-preview')).toContainText('Second doc', { timeout: 15_000 })
+  await expect(explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')).toContainText('Second doc', { timeout: 15_000 })
 
   await closeFiles(panel)
   explorer = await openFiles(panel)
   // Reopening restores the file WITHOUT pushing it again, so Back still reaches
   // the earlier file instead of the stack having collapsed to one entry.
-  await expect(explorer.locator('.fv-md-preview')).toContainText('Second doc', { timeout: 15_000 })
+  await expect(explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')).toContainText('Second doc', { timeout: 15_000 })
   await expect(back(explorer)).toBeEnabled()
   await back(explorer).click()
-  await expect(explorer.locator('.fv-md-preview')).toContainText('Controller restart loop', { timeout: 15_000 })
+  await expect(explorer.locator('.fv-md-preview, .fv-wysiwyg-editor')).toContainText('Controller restart loop', { timeout: 15_000 })
   await page.screenshot({ path: `${SCREENSHOT_DIR}/step6-history-persisted.png` })
 })

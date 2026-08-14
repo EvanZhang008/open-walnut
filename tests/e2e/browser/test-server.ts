@@ -517,6 +517,13 @@ await fs.writeFile(
     '',
   ].join('\n'),
 )
+// Same content as .mdx: plain .md now opens in the WYSIWYG editor (which never
+// runs the linkifier), so the read-only render path — where the nested-fence
+// regression lives — is only reachable through an extension canWysiwyg excludes.
+await fs.copyFile(
+  path.join(vscodeFixtureRoot, 'nested-fence.md'),
+  path.join(vscodeFixtureRoot, 'nested-fence.mdx'),
+)
 // Files-panel resume fixture (file-view-resume.spec.ts). Two jobs in one file:
 //  1. `~N` approximations in prose — marked's default del tokenizer paired the
 //     lone tildes and struck out everything between them (the 2026-07-28 report).

@@ -81,6 +81,7 @@ const LS_OPEN_ROOTS = 'open-walnut-file-explorer-open-roots';
 // v2 key: re-baseline everyone — old persisted drags left the tree eating half
 // the panel; the preview pane is the star, the tree is navigation chrome.
 const LS_TREE_WIDTH = 'open-walnut-file-explorer-tree-width2';
+const LS_TREE_COLLAPSED = 'open-walnut-file-explorer-tree-collapsed';
 const TREE_WIDTH_DEFAULT = 200;
 const TREE_WIDTH_MIN = 140;
 const TREE_WIDTH_MAX = 600;
@@ -133,6 +134,18 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
   // Changed-repo quick-access roots (collapsed by default; cwd root expanded).
   const [changedRoots, setChangedRoots] = useState<RootSection[]>([]);
   const [openRoots, setOpenRoots] = useState<Set<string>>(new Set());
+  // Tree pane collapse — same affordance as the Changed tab's tree toggle and
+  // the split chat column: hide navigation chrome, give the preview the width.
+  const [treeCollapsed, setTreeCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem(LS_TREE_COLLAPSED) === '1'; } catch { return false; }
+  });
+  const toggleTreeCollapsed = useCallback(() => {
+    // Persist OUTSIDE the updater: StrictMode double-invokes updaters, and this
+    // key syncs to the server via ui-prefs — an impure updater would double-PUT.
+    const next = !treeCollapsed;
+    try { localStorage.setItem(LS_TREE_COLLAPSED, next ? '1' : '0'); } catch { /* denied */ }
+    setTreeCollapsed(next);
+  }, [treeCollapsed]);
   // Tree pane width — drag the divider to resize; persisted globally.
   // The preview pane immediately right of this divider renders an <iframe> for
   // HTML files, which is why this drag used to stick: a raw document mouseup
@@ -616,6 +629,16 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
   return (
     <div className="session-file-explorer" ref={explorerRef}>
       <div className="session-file-explorer-toolbar">
+        <button
+          type="button"
+          className="sfe-btn sfe-tree-toggle"
+          onClick={toggleTreeCollapsed}
+          title={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
+          aria-label={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
+          aria-expanded={!treeCollapsed}
+        >
+          {treeCollapsed ? '☰' : '⟨'}
+        </button>
         <div className="sfe-nav-group">
           <button
             type="button"
@@ -707,6 +730,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
       </div>
 
       <div className="session-file-explorer-body">
+        {!treeCollapsed && (
         <div className="session-file-explorer-tree" style={{ width: `${treeWidth}px` }}>
           {rootError && <div className="sfe-error">{rootError}</div>}
           {rootSections.map((section) => {
@@ -772,7 +796,9 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
             );
           })}
         </div>
+        )}
 
+        {!treeCollapsed && (
         <div
           className="sfe-divider"
           onPointerDown={onDividerPointerDown}
@@ -780,6 +806,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
           role="separator"
           aria-orientation="vertical"
         />
+        )}
 
         <div className="session-file-explorer-preview">
           {selectedFile ? (

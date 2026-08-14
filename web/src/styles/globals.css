@@ -18512,6 +18512,16 @@ td.usage-share-col {
 .sfe-btn:disabled:hover { background: var(--bg); }
 .sfe-btn:disabled:active { transform: none; }
 
+/* Hide/show the tree pane — same glyphs as the Changed tab's tree toggle. */
+.sfe-tree-toggle {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+}
+.sfe-tree-toggle:hover { color: var(--fg); }
+
 /* Back / Forward pair: one segmented control, like a browser's. */
 .sfe-nav-group {
   display: inline-flex;
