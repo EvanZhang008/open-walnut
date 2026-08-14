@@ -244,12 +244,14 @@ export function AdvancedSection({ config, onSave }: Props) {
         {/* Keep Awake (macOS console only — hidden when the route reports unsupported) */}
         {kaStatus?.state.supported !== false && (
           <details className="settings-collapsible">
-            <summary className="settings-collapsible-title">Keep Mac Awake During Sessions</summary>
+            <summary className="settings-collapsible-title">Keep Mac Awake During Sessions (Even Lid Closed)</summary>
             <div className="settings-collapsible-body">
               <p className="text-sm text-muted" style={{ margin: '0 0 12px 0' }}>
-                Advanced. Keeps the Mac running with the lid closed while local Claude Code
-                sessions are active. Releases automatically on low battery or after a long
-                offline stretch. Requires a one-time admin setup (shown below when needed).
+                While Claude Code sessions run, the Mac stays on and connected —
+                <strong> even with the lid closed</strong>. Great for commutes: toss the
+                closed MacBook in your bag on your iPhone hotspot and sessions keep working.
+                It sleeps again when sessions end, battery hits the floor, or it stays
+                offline too long.
               </p>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
                 <input type="checkbox" name="ka-enabled" defaultChecked={keepAwake.enabled === true} style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
@@ -300,16 +302,14 @@ export function AdvancedSection({ config, onSave }: Props) {
                 </div>
               </div>
               <p className="text-sm text-muted" style={{ margin: '4px 0 12px 0' }}>
-                Hotspot join is best-effort: an iPhone hotspot is only visible while it is
-                broadcasting (Personal Hotspot screen open, or &ldquo;Allow Others to Join&rdquo;
-                with Maximize Compatibility).
+                If offline, Walnut tries this hotspot (the iPhone must have Personal Hotspot on).
               </p>
               {kaStatus && (
                 <div className="text-sm" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <span>
                     Status: {kaStatus.state.holding
-                      ? '🟢 Holding awake'
-                      : kaStatus.state.enabled ? `⚪ Not holding (${kaStatus.state.reason})` : '⚪ Disabled'}
+                      ? '🟢 Staying awake — safe to close the lid'
+                      : kaStatus.state.enabled ? `⚪ Will sleep normally (${kaStatus.state.reason})` : '⚪ Disabled'}
                     {' · '}{kaStatus.state.runningLocalSessions} local session{kaStatus.state.runningLocalSessions === 1 ? '' : 's'} running
                     {kaStatus.state.battery ? ` · battery ${kaStatus.state.battery.pct}%${kaStatus.state.battery.onAc ? ' (AC)' : ''}` : ''}
                     {kaStatus.state.online === false ? ' · offline' : ''}
