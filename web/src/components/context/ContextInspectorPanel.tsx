@@ -118,13 +118,19 @@ export function ContextInspectorPanel({ data, loading, error, onRefresh }: Conte
   if (!data) return null;
 
   const { sections, totalTokens } = data;
+  const isLane = data.engine === 'claude-code';
 
   return (
     <div className="context-inspector">
       <div className="context-inspector-header">
         <span className="context-inspector-title">Agent Context Inspector</span>
+        {isLane && (
+          <span className="context-token-badge" title="Main-AI turns run in a Claude Code session; this shows the session's launch config.">
+            Claude Code engine
+          </span>
+        )}
         <span className="context-token-badge context-token-badge-total">
-          Total: ~{totalTokens.toLocaleString()} tokens
+          {isLane ? 'System prompt' : 'Total'}: ~{totalTokens.toLocaleString()} tokens
         </span>
         <button
           className="btn btn-sm"
@@ -139,11 +145,13 @@ export function ContextInspectorPanel({ data, loading, error, onRefresh }: Conte
       <div className="context-inspector-body">
         <ContextSection title="Model Config" tokens={sections.modelConfig.tokens}>
           <pre className="context-pre">
-            {`model: ${sections.modelConfig.content.model}\nmax_tokens: ${sections.modelConfig.content.max_tokens}\nregion: ${sections.modelConfig.content.region}`}
+            {isLane
+              ? `model: ${sections.modelConfig.content.model}\nsession: ${sections.modelConfig.content.region}`
+              : `model: ${sections.modelConfig.content.model}\nmax_tokens: ${sections.modelConfig.content.max_tokens}\nregion: ${sections.modelConfig.content.region}`}
           </pre>
         </ContextSection>
 
-        <ContextSection title="Role & Rules" tokens={sections.roleAndRules.tokens}>
+        <ContextSection title={isLane ? 'System Prompt (launch --system-prompt)' : 'Role & Rules'} tokens={sections.roleAndRules.tokens}>
           <ContextMarkdown content={sections.roleAndRules.content} />
         </ContextSection>
 
@@ -210,29 +218,35 @@ export function ContextInspectorPanel({ data, loading, error, onRefresh }: Conte
           </ContextSection>
         )}
 
-        <ContextSection title="Tools" tokens={sections.tools.tokens} count={sections.tools.count}>
-          <div className="context-tools-list">
-            {sections.tools.content.map((tool) => (
-              <ToolCard key={tool.name} tool={tool} />
-            ))}
-          </div>
-        </ContextSection>
+        {/* Lane engine: the CLI owns tools + transcript — hollow lists here would
+            just repeat the old engine's shape with zeros. */}
+        {!isLane && (
+          <>
+            <ContextSection title="Tools" tokens={sections.tools.tokens} count={sections.tools.count}>
+              <div className="context-tools-list">
+                {sections.tools.content.map((tool) => (
+                  <ToolCard key={tool.name} tool={tool} />
+                ))}
+              </div>
+            </ContextSection>
 
-        <ContextSection
-          title="API Messages"
-          tokens={sections.apiMessages.tokens}
-          count={sections.apiMessages.count}
-        >
-          <div className="context-messages-list">
-            {sections.apiMessages.content.length === 0 ? (
-              <div className="text-sm text-muted" style={{ padding: 8 }}>(No messages yet)</div>
-            ) : (
-              sections.apiMessages.content.map((msg, i) => (
-                <ApiMessageBlock key={i} message={msg} index={i} />
-              ))
-            )}
-          </div>
-        </ContextSection>
+            <ContextSection
+              title="API Messages"
+              tokens={sections.apiMessages.tokens}
+              count={sections.apiMessages.count}
+            >
+              <div className="context-messages-list">
+                {sections.apiMessages.content.length === 0 ? (
+                  <div className="text-sm text-muted" style={{ padding: 8 }}>(No messages yet)</div>
+                ) : (
+                  sections.apiMessages.content.map((msg, i) => (
+                    <ApiMessageBlock key={i} message={msg} index={i} />
+                  ))
+                )}
+              </div>
+            </ContextSection>
+          </>
+        )}
       </div>
     </div>
   );

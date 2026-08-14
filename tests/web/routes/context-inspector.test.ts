@@ -138,4 +138,32 @@ describe('GET /api/context', () => {
     expect(messages.count).toBe(0);
     expect(messages.content).toEqual([]);
   });
+
+  it("lane engine (agent.provider='claude-code') shows the session launch config, not the in-process assembly", async () => {
+    const yaml = await import('js-yaml');
+    const path = await import('node:path');
+    const { CONFIG_FILE } = await import('../../../src/constants.js');
+    await fs.mkdir(path.dirname(CONFIG_FILE), { recursive: true });
+    await fs.writeFile(CONFIG_FILE, yaml.dump({
+      version: 1,
+      user: { name: 'Ada' },
+      provider: { type: 'claude-code' },
+      agent: { provider: 'claude-code' },
+    }), 'utf-8');
+
+    const app = createApp();
+    const res = await request(app).get('/api/context');
+
+    expect(res.status).toBe(200);
+    expect(res.body.engine).toBe('claude-code');
+    // The prompt shown is the lane's --system-prompt (butler persona), and the
+    // engine note explains ownership of tools/compaction.
+    const role = res.body.sections.roleAndRules.content as string;
+    expect(role).toContain('Claude Code session');
+    expect(role).toContain('COORDINATOR');
+    // In-process tool schemas / message history must NOT be presented as fed.
+    expect(res.body.sections.tools.count).toBe(0);
+    expect(res.body.sections.apiMessages.count).toBe(0);
+    expect(res.body.sections.skills.tokens).toBe(0);
+  });
 });

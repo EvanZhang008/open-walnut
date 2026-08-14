@@ -1,11 +1,20 @@
 /**
  * Context Inspector route — exposes the full agent context for debugging.
  * GET /api/context returns every section the agent sees each turn.
+ *
+ * ENGINE-AWARE: the sections depend on which engine answers the turn.
+ *   - walnut-agent (in-process loop): the full prompt assembly this file has
+ *     always shown (role, skills index, memory, 52 tool schemas, apiMessages).
+ *   - claude-code (butler lane): the turn runs in a `claude` CLI session, so
+ *     none of that assembly is fed to the model. The honest view is the lane's
+ *     LAUNCH CONFIG — the exact `--system-prompt`, model/effort/cwd, MCP
+ *     mounts — plus the last turn's exact input-token count. Tools, skills
+ *     discovery, and compaction are owned by the CLI itself.
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { validateAgentId, validateConversationId } from '../../constants.js'
-import { getConfig } from '../../core/config-manager.js'
+import { validateAgentId, validateConversationId, WALNUT_HOME } from '../../constants.js'
+import { getConfig, resolveAgentEngineProvider } from '../../core/config-manager.js'
 import { DEFAULT_MODEL } from '../../agent/model.js'
 import { DEFAULT_MAX_TOKENS } from '../../agent/providers/defaults.js'
 import { buildRoleSection, buildSystemPrompt, buildTaskProjectsSection, getNotesContext } from '../../agent/context.js'
@@ -35,6 +44,65 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
       conversationId = await getActiveConversationId(agentId ?? 'general')
     }
     const config = await getConfig()
+
+    // ── Lane engine (claude-code): show the SESSION's real context, not the
+    // in-process assembly (which is not what the model sees on this engine). ──
+    const engine = resolveAgentEngineProvider(config)
+    if (engine === 'claude-code' && (!agentId || agentId === 'general')) {
+      const { butlerLaneKey } = await import('../../core/sessions/butler-lane.js')
+      const { getSessionByLane } = await import('../../core/session-tracker.js')
+      const { butlerProfile } = await import('../../core/sessions/profiles.js')
+      const { getLastTurnTokens } = await import('../../core/token-truth.js')
+
+      const lane = butlerLaneKey(agentId ?? 'general', conversationId)
+      const record = await getSessionByLane(lane)
+      // No lane yet (first message not sent) → show what the NEXT spawn will feed.
+      const profile = record?.profile ?? butlerProfile(config.user.name ?? 'the user')
+      const systemPrompt = profile.systemPrompt ?? ''
+      const mcpServers = profile.mcpServers ?? {}
+      const lastTurnTokens = getLastTurnTokens(conversationId) ?? 0
+
+      const modelConfig = {
+        model: record?.model ?? record?.cliModel ?? 'claude default',
+        max_tokens: 0,
+        region: `${record?.host ?? 'local'} · cwd ${record?.cwd ?? WALNUT_HOME}`,
+      }
+      const engineNote = [
+        '## Engine: Claude Code session',
+        '',
+        'Main-AI turns run in a long-lived `claude` CLI session, not the in-process loop. The prompt below is the EXACT `--system-prompt` the session was launched with (full replace). Everything else — tools, skill discovery, memory files under its cwd, and context compaction — is owned by the Claude Code CLI itself, exactly like a coding session.',
+        '',
+        record
+          ? `- Session: \`${record.claudeSessionId}\` (${record.process_status}${record.effectiveEffort || record.effort ? `, effort ${record.effectiveEffort ?? record.effort}` : ''})`
+          : '- Session: not started yet — this is what the first message will launch.',
+        `- Last turn exact input tokens: ${lastTurnTokens > 0 ? `~${lastTurnTokens.toLocaleString()}` : 'unknown (no turn yet)'}`,
+        Object.keys(mcpServers).length > 0
+          ? `- MCP mounts: ${Object.entries(mcpServers).map(([k, v]) => `\`${k}\` (${(v as { command?: string }).command ?? '?'})`).join(', ')} — blocked by machine policy on some hosts; the persona falls back to the HTTP API.`
+          : '- MCP mounts: none',
+        '- Compaction: the CLI auto-compacts its own transcript near the context limit (no Walnut-side compaction on this engine).',
+        `- Tools: the CLI's native tool set (Bash, Read, Edit, …)${Object.keys(mcpServers).length > 0 ? ' + MCP tools when the mount is allowed' : ''} — the in-process tool schemas are NOT sent.`,
+      ].join('\n')
+
+      const promptTokens = estimateTokens(systemPrompt)
+      res.json({
+        engine: 'claude-code',
+        sections: {
+          modelConfig: { content: modelConfig, tokens: 0 },
+          roleAndRules: { content: engineNote + '\n\n---\n\n' + systemPrompt, tokens: promptTokens },
+          skills: { content: '(Owned by the Claude Code CLI — it discovers skills itself; the in-process skills index is not injected.)', tokens: 0 },
+          compactionSummary: { content: '(Owned by the Claude Code CLI — it auto-compacts its own transcript.)', tokens: 0 },
+          taskProjects: { content: '(Not injected — the session reads tasks live via MCP/HTTP when asked.)', tokens: 0 },
+          userProfile: { content: '(Not injected per turn — memory lives in files under the session cwd.)', tokens: 0 },
+          globalMemory: { content: '(Not injected per turn — memory lives in files under the session cwd.)', tokens: 0 },
+          notesContext: { content: '', tokens: 0 },
+          dailyLogs: { content: '', tokens: 0 },
+          tools: { content: [], tokens: 0, count: 0 },
+          apiMessages: { content: [], tokens: 0, count: 0 },
+        },
+        totalTokens: promptTokens,
+      })
+      return
+    }
 
     // Non-General console agent — simplified context view
     if (agentId && agentId !== 'general') {

@@ -24,6 +24,8 @@ export interface ApiMessage {
 }
 
 export interface ContextInspectorResponse {
+  /** Which engine this context belongs to. Absent = in-process loop (legacy). */
+  engine?: 'claude-code' | 'walnut-agent';
   sections: {
     modelConfig: ContextSection<ModelConfig>;
     roleAndRules: ContextSection;
