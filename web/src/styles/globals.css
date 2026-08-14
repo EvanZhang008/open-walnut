@@ -4699,13 +4699,20 @@ select {
   background: var(--bg-tertiary);
 }
 
-/* History ▾ trigger — sits after the pinned tabs, before + */
+/* Conversation dropdown trigger — the ONE switcher (no tab strip) */
 .agent-tab-history-wrap {
   position: relative;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
 }
 
-.agent-tab-history.open {
+.agent-tab-conv-trigger {
+  max-width: 260px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.agent-tab-conv-trigger.open {
   border-color: var(--accent);
 }
 

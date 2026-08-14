@@ -1,19 +1,19 @@
 /**
- * AgentTabBar — horizontal tab strip that replaces the old AgentDropdown.
+ * AgentTabBar — ONE simple conversation dropdown, no horizontal tab strip.
  *
- * Layout:  [● Walnut ▾] | Main | 📌 pinned… | (active) | History ▾ | +
+ * Layout:  [● Walnut ▾] | [current conversation ▾] [+]
  *
  *   - The "Walnut" tab shows the active agent; clicking it opens a small dropdown
  *     to switch agents / create a new one. Each agent row carries a ＋ that opens
  *     a NEW conversation directly under that agent.
- *   - Only Main (always first, undeletable), PINNED conversations, and the active
- *     conversation render as tabs — everything else lives in the History dropdown
- *     (searchable, time-grouped, pin/unpin per row). Tabs never overflow again.
- *   - Tab interactions: click to switch, double-click to rename inline, hover ×
- *     to delete, hover 📌 to unpin.
+ *   - The conversation trigger shows the ACTIVE conversation's title; clicking it
+ *     opens the single dropdown: search, Main pinned at the top (undeletable),
+ *     then 📌 Pinned, then Today / This week / Older. Rows switch on click and
+ *     reveal pin/delete on hover. Double-click the trigger to rename (not Main).
+ *   - Trailing "+" starts a new conversation.
  *
  * The dropdowns reuse the inline-style popover from the former AgentDropdown;
- * the tab chrome itself is CSS-classed (see globals.css ".agent-tab-*").
+ * the trigger chrome is CSS-classed (see globals.css ".agent-tab-*").
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -84,25 +84,30 @@ export function AgentTabBar(props: AgentTabBarProps) {
   const activeAgent = agents.find((a) => a.id === activeAgentId);
   const activeAgentName = activeAgent?.name ?? activeAgentId;
 
-  // Tabs: Main first (server sort guarantees it), then pinned, plus the active
-  // conversation even when unpinned (so a history pick is visible). The rest
-  // live in the History dropdown.
-  const tabConvs = useMemo(
-    () => conversations.filter((c) => c.isMain || c.pinned || c.id === activeConversationId),
-    [conversations, activeConversationId],
-  );
-  const historyConvs = useMemo(() => {
+  const activeConv = conversations.find((c) => c.id === activeConversationId);
+  const activeConvLabel = activeConv?.isMain ? 'Main' : (activeConv?.title ?? 'Main');
+
+  // Dropdown sections: Main pinned at the top, then 📌 Pinned, then the rest
+  // time-grouped (Today / This week / Older). Search filters all of it.
+  const menuSections = useMemo(() => {
     const q = historyQuery.trim().toLowerCase();
-    const rest = conversations.filter((c) => !c.isMain);
-    const matched = q ? rest.filter((c) => c.title.toLowerCase().includes(q)) : rest;
+    const match = (c: ConversationMeta) =>
+      !q || (c.isMain ? 'main' : c.title.toLowerCase()).includes(q);
+    const main = conversations.filter((c) => c.isMain && match(c));
+    const pinned = conversations.filter((c) => !c.isMain && c.pinned && match(c));
+    const rest = conversations.filter((c) => !c.isMain && !c.pinned && match(c));
     const groups: Record<string, ConversationMeta[]> = {};
-    for (const c of matched) {
+    for (const c of rest) {
       const g = historyGroup(c.lastMessageAt || c.createdAt);
       (groups[g] ??= []).push(c);
     }
-    return (['Today', 'This week', 'Older'] as const)
-      .filter((g) => groups[g]?.length)
-      .map((g) => ({ label: g, items: groups[g] }));
+    const sections: Array<{ label: string | null; items: ConversationMeta[] }> = [];
+    if (main.length) sections.push({ label: null, items: main });
+    if (pinned.length) sections.push({ label: 'Pinned', items: pinned });
+    for (const g of ['Today', 'This week', 'Older'] as const) {
+      if (groups[g]?.length) sections.push({ label: g, items: groups[g] });
+    }
+    return sections;
   }, [conversations, historyQuery]);
 
   // Close agent dropdown on outside click.
@@ -265,77 +270,36 @@ export function AgentTabBar(props: AgentTabBarProps) {
 
       <span className="agent-tab-divider" />
 
-      {/* ── Conversation tabs: Main + pinned + active (rest → History) ── */}
-      <div className="agent-tab-conv-scroll">
-        {tabConvs.map((conv) => {
-          const isActive = conv.id === activeConversationId;
-          const isRenaming = renamingId === conv.id;
-          if (isRenaming) {
-            return (
-              <input
-                key={conv.id}
-                autoFocus
-                className="agent-tab-rename-input"
-                value={renameValue}
-                onChange={(e) => setRenameValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') commitRename(conv.id);
-                  if (e.key === 'Escape') { setRenamingId(null); setRenameValue(''); }
-                }}
-                onBlur={() => commitRename(conv.id)}
-              />
-            );
-          }
-          return (
-            <div
-              key={conv.id}
-              className={`agent-tab agent-tab-conv${isActive ? ' active' : ''}`}
-              onClick={() => onSwitchConversation(conv.id)}
-              // Main is the agent's fixed thread — its label is always "Main", not renameable.
-              onDoubleClick={conv.isMain ? undefined : () => { setRenamingId(conv.id); setRenameValue(conv.title); }}
-              title={conv.isMain ? 'Main — receives notifications & cron. Can\'t be renamed or deleted.' : `${conv.title} — double-click to rename`}
-              role="tab"
-              aria-selected={isActive}
-            >
-              {/* Pin toggle — click to unpin (tab then retreats into History). */}
-              {conv.pinned && !conv.isMain && (
-                <button
-                  className="agent-tab-pin"
-                  onClick={(e) => { e.stopPropagation(); onTogglePin?.(conv.id); }}
-                  title="Unpin"
-                  aria-label="Unpin conversation"
-                >
-                  {'\u{1F4CC}'}{/* 📌 */}
-                </button>
-              )}
-              {/* Main shows a fixed "Main" label; other conversations show their (LLM-generated) title. */}
-              <span className="agent-tab-conv-title">{conv.isMain ? 'Main' : conv.title}</span>
-              {/* Main conversation can't be deleted (it owns notifications & cron). */}
-              {!conv.isMain && (
-                <button
-                  className="agent-tab-close"
-                  onClick={(e) => { e.stopPropagation(); onDeleteConversation(conv.id); }}
-                  title="Delete conversation"
-                  aria-label="Delete conversation"
-                >
-                  {'×'}
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* ── History ▾ — every non-Main conversation, time-grouped + searchable ── */}
+      {/* ── ONE conversation dropdown — trigger shows the active conversation ── */}
       <div className="agent-tab-history-wrap" ref={historyWrapRef}>
-        <button
-          className={`agent-tab agent-tab-history${historyOpen ? ' open' : ''}`}
-          onClick={() => setHistoryOpen((v) => !v)}
-          title="Conversation history"
-        >
-          <span className="agent-tab-label">History</span>
-          <span className="agent-tab-caret">▾</span>
-        </button>
+        {renamingId && activeConv && renamingId === activeConv.id ? (
+          <input
+            autoFocus
+            className="agent-tab-rename-input"
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitRename(renamingId);
+              if (e.key === 'Escape') { setRenamingId(null); setRenameValue(''); }
+            }}
+            onBlur={() => commitRename(renamingId)}
+          />
+        ) : (
+          <button
+            className={`agent-tab agent-tab-conv-trigger${historyOpen ? ' open' : ''}`}
+            onClick={() => setHistoryOpen((v) => !v)}
+            // Main is the agent's fixed thread — never renameable.
+            onDoubleClick={activeConv && !activeConv.isMain
+              ? () => { setHistoryOpen(false); setRenamingId(activeConv.id); setRenameValue(activeConv.title); }
+              : undefined}
+            title={activeConv?.isMain
+              ? 'Main — receives notifications & cron. Click to switch conversation.'
+              : `${activeConvLabel} — click to switch, double-click to rename`}
+          >
+            <span className="agent-tab-conv-title">{activeConvLabel}</span>
+            <span className="agent-tab-caret">▾</span>
+          </button>
+        )}
 
         {historyOpen && (
           <div style={historyPopoverStyle}>
@@ -349,14 +313,14 @@ export function AgentTabBar(props: AgentTabBarProps) {
                 style={inputStyle}
               />
             </div>
-            {historyConvs.length === 0 && (
+            {menuSections.length === 0 && (
               <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--fg-muted)' }}>
-                {historyQuery.trim() ? 'No matches' : 'No past conversations'}
+                No matches
               </div>
             )}
-            {historyConvs.map((group) => (
-              <div key={group.label}>
-                <div style={sectionLabelStyle}>{group.label}</div>
+            {menuSections.map((group, gi) => (
+              <div key={group.label ?? `main-${gi}`}>
+                {group.label && <div style={sectionLabelStyle}>{group.label}</div>}
                 {group.items.map((conv) => {
                   const isActive = conv.id === activeConversationId;
                   return (
@@ -364,30 +328,36 @@ export function AgentTabBar(props: AgentTabBarProps) {
                       <button
                         onClick={() => { onSwitchConversation(conv.id); setHistoryOpen(false); }}
                         style={rowMainBtnStyle(isActive)}
-                        title={conv.title}
+                        title={conv.isMain ? 'Main — receives notifications & cron. Can\'t be renamed or deleted.' : conv.title}
                       >
-                        <span style={ellipsisStyle}>{conv.title}</span>
+                        {conv.pinned && !conv.isMain && <span style={{ fontSize: 10, flexShrink: 0 }}>{'\u{1F4CC}'}</span>}
+                        <span style={{ ...ellipsisStyle, fontWeight: conv.isMain ? 600 : undefined }}>
+                          {conv.isMain ? 'Main' : conv.title}
+                        </span>
                       </button>
-                      {onTogglePin && (
+                      {!conv.isMain && onTogglePin && (
                         <button
                           onClick={(e) => { e.stopPropagation(); onTogglePin(conv.id); }}
-                          style={{ ...iconBtnStyle, opacity: conv.pinned ? 1 : undefined }}
-                          className={conv.pinned ? undefined : 'agent-dd-hover-btn'}
-                          title={conv.pinned ? 'Unpin' : 'Pin as tab'}
+                          style={iconBtnStyle}
+                          className="agent-dd-hover-btn"
+                          title={conv.pinned ? 'Unpin' : 'Pin'}
                           aria-label={conv.pinned ? 'Unpin conversation' : 'Pin conversation'}
                         >
                           {'\u{1F4CC}'}{/* 📌 */}
                         </button>
                       )}
-                      <button
-                        onClick={(e) => { e.stopPropagation(); onDeleteConversation(conv.id); }}
-                        style={iconBtnStyle}
-                        className="agent-dd-hover-btn"
-                        title="Delete conversation"
-                        aria-label="Delete conversation"
-                      >
-                        {'×'}
-                      </button>
+                      {/* Main conversation can't be deleted (it owns notifications & cron). */}
+                      {!conv.isMain && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onDeleteConversation(conv.id); }}
+                          style={iconBtnStyle}
+                          className="agent-dd-hover-btn"
+                          title="Delete conversation"
+                          aria-label="Delete conversation"
+                        >
+                          {'×'}
+                        </button>
+                      )}
                     </div>
                   );
                 })}
@@ -427,12 +397,12 @@ const popoverStyle: React.CSSProperties = {
   padding: '6px 0',
 };
 
-// History dropdown hangs off the RIGHT edge of its trigger (the trigger sits near
-// the bar's right side, so left-anchoring would push it off-viewport).
+// Conversation dropdown — anchored to the trigger's left edge (the trigger sits
+// right after the agent tab, well clear of the viewport's right edge).
 const historyPopoverStyle: React.CSSProperties = {
   position: 'absolute',
   top: 'calc(100% + 4px)',
-  right: 0,
+  left: 0,
   minWidth: 260,
   maxWidth: 340,
   maxHeight: 420,

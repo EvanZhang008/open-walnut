@@ -2298,11 +2298,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     }
 
     // Lane engine: the session queue is the send path. A focused task rides as
-    // one plain-text line — the lane persona resolves task details itself via
-    // the REST recipes (no in-process context enrichment on this engine).
+    // a task-ref tag (renders as a clickable pill in the bubble, and the lane
+    // persona reads the id from it) — never a raw bracketed text dump.
     if (laneActive) {
+      // Same attr contract as server taskRefTag: escape ONLY `"` — the
+      // renderer's decodeRefAttr undoes only &quot;, so escaping & here
+      // would double-render as a literal &amp; in the pill.
+      const esc = (s: string) => s.replace(/"/g, '&quot;');
       const laneText = focusedTask
-        ? `[Regarding task "${focusedTask.title}" (id: ${focusedTask.id})]\n${text}`
+        ? `Re: <task-ref id="${esc(focusedTask.id)}" label="${esc(focusedTask.title)}"/>\n${text}`
         : text;
       handleLaneSend(laneText, images);
       if (focusedTask) setFocusedTask(null);
