@@ -22,6 +22,47 @@ import { log } from '../../logging/index.js'
 
 export const hooksRouter = Router()
 
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === 'object' && !Array.isArray(v)
+
+/**
+ * Recursively merge a patch into the current value, KEEPING every sibling key
+ * the patch doesn't mention.
+ *
+ * Plain objects merge key-by-key; anything else (scalars, arrays) replaces. An
+ * array must replace rather than merge: `enabled_modes: ['plan']` means exactly
+ * that list, not "add plan to whatever was there".
+ */
+function deepMerge(current: unknown, patch: unknown): unknown {
+  if (!isPlainObject(current) || !isPlainObject(patch)) return patch
+  const out: Record<string, unknown> = { ...current }
+  for (const [key, value] of Object.entries(patch)) {
+    out[key] = deepMerge(current[key], value)
+  }
+  return out
+}
+
+/**
+ * Build the updateConfig payload for a daemon-policy toggle.
+ *
+ * Returns ONLY the top-level keys the patch touches (updateConfig replaces
+ * top-level keys wholesale, and sending the whole config back would make every
+ * toggle rewrite unrelated sections) — but each of those keys is DEEP-MERGED
+ * with its current value, so flipping `session.turn_retry.enabled` preserves
+ * both `session.cron_policy` (sibling one level up) and the user's
+ * `turn_retry.budget_hours` (sibling inside the patched object).
+ */
+function deepMergePatch(
+  current: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(patch)) {
+    out[key] = deepMerge(current[key], value)
+  }
+  return out
+}
+
 hooksRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     res.json(await getHookInventory())
@@ -73,14 +114,13 @@ hooksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
       // Merge nested: the patch's top-level keys replace wholesale in
       // updateConfig, so fold current values in first (session.cron_policy
       // must not wipe session.idle_timeout_minutes etc.).
-      const merged: Record<string, unknown> = {}
-      for (const [key, value] of Object.entries(patch)) {
-        const current = (config as unknown as Record<string, unknown>)[key]
-        merged[key] = (current && typeof current === 'object' && value && typeof value === 'object')
-          ? { ...current, ...value }
-          : value
-      }
-      await updateConfig(merged)
+      //
+      // The merge must be RECURSIVE, not one level: a policy whose configPath is
+      // two deep (session.turn_retry.enabled) patches
+      // { session: { turn_retry: { enabled } } }, and a shallow spread would
+      // replace the whole turn_retry object — silently resetting the user's
+      // budget_hours / backoff to defaults just because they flipped the toggle.
+      await updateConfig(deepMergePatch(config as unknown as Record<string, unknown>, patch))
       log.web.info('daemon policy toggled via /api/hooks', { id, enabled })
       res.json({ ok: true, id, enabled, requiresDaemonRestart: true, note: policy.note })
       return

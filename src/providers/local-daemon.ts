@@ -352,11 +352,23 @@ export class LocalDaemon {
     // reads WALNUT_ENFORCE_SESSION_CRON at boot, so it must ride the spawn env.
     // Best-effort: absent/unreadable config = default 'unrestricted' = no env
     // var = daemon does nothing.
+    // Turn-error auto-retry (config session.turn_retry) rides the same
+    // read-at-boot contract. Scrub any INHERITED values first: this env is built
+    // from ...process.env, so a var left over from whatever spawned us must not
+    // silently enable retries the user's config has turned off.
+    delete env.WALNUT_TURN_RETRY
+    delete env.WALNUT_TURN_RETRY_BUDGET_MS
+    delete env.WALNUT_TURN_RETRY_MAX_ATTEMPTS
+    delete env.WALNUT_TURN_RETRY_BACKOFF_MS
+    delete env.WALNUT_TURN_RETRY_BACKOFF_MAX_MS
     try {
       const { getConfig } = await import('../core/config-manager.js')
-      if ((await getConfig()).session?.cron_policy === 'session-only') {
+      const cfg = await getConfig()
+      if (cfg.session?.cron_policy === 'session-only') {
         env.WALNUT_ENFORCE_SESSION_CRON = '1'
       }
+      const { buildTurnRetryEnv } = await import('./daemon-core.js')
+      Object.assign(env, buildTurnRetryEnv(cfg.session?.turn_retry))
     } catch { /* config not loaded yet — default policy */ }
     // Scrub any INHERITED watchdog pid before (maybe) setting our own: for the
     // prod dir parentWatchdogEnv() returns {} and would otherwise leave a stale

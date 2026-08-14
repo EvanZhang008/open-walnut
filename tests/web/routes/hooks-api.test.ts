@@ -158,6 +158,48 @@ describe('PATCH /api/hooks/:id', () => {
     expect(inventory.find(h => h.id === 'session-only-cron-policy')!.enabled).toBe(true);
   });
 
+  it('a NESTED daemon-policy toggle preserves both sibling levels of config', async () => {
+    // Regression (caught in real-UI verification): turn-error-auto-retry's
+    // configPath is TWO levels deep (session.turn_retry.enabled). A merge that
+    // only kept the patch's own keys wrote `session: { turn_retry: { enabled } }`
+    // and silently erased session.cron_policy AND the user's tuning values —
+    // flipping a checkbox would reset their 12h budget and their cron policy.
+    await fetch(apiUrl('/api/config'), {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        session: {
+          cron_policy: 'session-only',
+          idle_timeout_minutes: 45,
+          turn_retry: { enabled: true, budget_hours: 8, max_attempts: 77 },
+        },
+      }),
+    });
+
+    const res = await fetch(apiUrl('/api/hooks/turn-error-auto-retry'), {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(res.status).toBe(200);
+
+    const raw = yaml.load(await fs.readFile(path.join(WALNUT_HOME, 'config.yaml'), 'utf8')) as {
+      session?: {
+        cron_policy?: string;
+        idle_timeout_minutes?: number;
+        turn_retry?: { enabled?: boolean; budget_hours?: number; max_attempts?: number };
+      };
+    };
+    // The toggle itself applied...
+    expect(raw.session?.turn_retry?.enabled).toBe(false);
+    // ...siblings INSIDE the patched object survived...
+    expect(raw.session?.turn_retry?.budget_hours).toBe(8);
+    expect(raw.session?.turn_retry?.max_attempts).toBe(77);
+    // ...and siblings one level UP survived too.
+    expect(raw.session?.cron_policy).toBe('session-only');
+    expect(raw.session?.idle_timeout_minutes).toBe(45);
+  });
+
   it('readonly hook → 409', async () => {
     const res = await fetch(apiUrl('/api/hooks/auto-deny-stale-permissions'), {
       method: 'PATCH',

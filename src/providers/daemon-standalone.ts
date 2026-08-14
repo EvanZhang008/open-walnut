@@ -38,6 +38,16 @@ import {
   durableCronCorrectionMessage,
   cronFireMarkerText,
   stripCronTaskById,
+  parseTurnErrorLine,
+  resolveTurnRetryConfig,
+  decideTurnRetry,
+  applyTurnRetry,
+  clearTurnRetryStreak,
+  newTurnRetryState,
+  turnRetryMessage,
+  turnRetryMarkerText,
+  turnRetryGiveUpText,
+  type TurnRetryState,
   type CoreSessionData,
   type RegistryEntry as CoreRegistryEntry,
   type SessionMode,
@@ -423,6 +433,12 @@ interface SessionData {
   // file was recreated and v restarted at 0" (incident 019a7fe5). null when
   // stat failed; recomputed lazily by streamEpochOf.
   streamEpoch?: string | null
+  // Turn-error auto-retry (see daemon-core decideTurnRetry). Streak bookkeeping
+  // persists in the registry so a daemon restart can't reset a 12h budget to 0.
+  turnRetry?: TurnRetryState
+  // Pending retry timer — cleared by any real send (the human took over) and by
+  // reapSession, so a resume can never fire behind a user's back or after death.
+  turnRetryTimer?: ReturnType<typeof setTimeout> | null
 }
 
 interface AgentSub {
@@ -2208,6 +2224,163 @@ function checkDurableCronCreate(sid: string, session: SessionData, line: string)
       { sid, toolUseId: key, mode: session.mode })
   }
 }
+// ── Turn-error auto-retry (policy in daemon-core: decideTurnRetry) ──
+//
+// Read ONCE at boot: the Mac sets these in the daemon spawn env from user
+// config, so a config change takes effect on the next daemon restart (same
+// contract as WALNUT_ENFORCE_SESSION_CRON — see DAEMON_RESTART_NOTE).
+const TURN_RETRY_CFG = resolveTurnRetryConfig(process.env)
+
+/**
+ * A turn ended with is_error. Decide whether to resume it, and if so schedule
+ * the resume after a backoff.
+ *
+ * Called from the tailer on every `result` line. Two jobs:
+ *   - a CLEAN result clears the failure streak (so the 12h budget bounds ONE
+ *     outage, not the session's lifetime), and
+ *   - an ERROR result runs the policy and either schedules a resume or writes a
+ *     "gave up" marker for the human.
+ *
+ * The retry is delivered as a normal FIFO user message when the CLI is still
+ * alive, and as a --resume respawn when it died — reusing the exact paths a
+ * human "continue" would take, so no delivery invariant is special-cased.
+ */
+function checkTurnRetry(sid: string, session: SessionData, line: string, v: number) {
+  if (!TURN_RETRY_CFG.enabled) return
+  const { isTurnError, text } = parseTurnErrorLine(line)
+
+  if (!isTurnError) {
+    // Clean turn-over → the streak is over. Only persist when something changed.
+    if (line.includes('"type":"result"') && session.turnRetry) {
+      if (clearTurnRetryStreak(session.turnRetry)) {
+        logMsg('info', 'turn-retry streak cleared by a successful turn', { sid })
+        persistRegistry()
+      }
+    }
+    return
+  }
+
+  if (!session.turnRetry) session.turnRetry = newTurnRetryState()
+  const now = Date.now()
+  const decision = decideTurnRetry({ errorText: text, state: session.turnRetry, cfg: TURN_RETRY_CFG, nowMs: now, v })
+
+  if (!decision.retry) {
+    if (decision.reason === 'duplicate-line') return
+    logMsg('warn', 'turn-retry declined', {
+      sid, reason: decision.reason, errorText: text,
+      attempts: session.turnRetry.attempts,
+    })
+    // Only tell the human when we actually STOPPED a retry cycle we had begun,
+    // or when the error was retryable-looking but out of budget. A plain
+    // terminal error on a session that never retried needs no extra row: the
+    // CLI's own error is already in the timeline.
+    if (decision.reason !== 'terminal' || session.turnRetry.attempts > 0) {
+      appendSystemMarker(sid, session, 'turn_retry_stopped', turnRetryGiveUpText(decision.reason, text))
+    }
+    return
+  }
+
+  applyTurnRetry(session.turnRetry, now, v)
+  persistRegistry()
+  logMsg('warn', 'turn-retry scheduled', {
+    sid, attempt: decision.attempt, delayMs: decision.delayMs,
+    elapsedMs: decision.elapsedMs, budgetMs: TURN_RETRY_CFG.budgetMs, errorText: text,
+  })
+  appendSystemMarker(sid, session, 'turn_retry', turnRetryMarkerText({
+    attempt: decision.attempt, delayMs: decision.delayMs, errorText: text,
+    budgetMs: TURN_RETRY_CFG.budgetMs, elapsedMs: decision.elapsedMs,
+  }))
+
+  // Replace any pending timer — the newest failure owns the schedule.
+  if (session.turnRetryTimer) { clearTimeout(session.turnRetryTimer); session.turnRetryTimer = null }
+  const attempt = decision.attempt
+  session.turnRetryTimer = setTimeout(() => {
+    session.turnRetryTimer = null
+    try { fireTurnRetry(sid, attempt, text) } catch (err) {
+      logMsg('error', 'turn-retry fire threw', { sid, error: (err as Error).message })
+    }
+  }, decision.delayMs)
+}
+
+/**
+ * Deliver the retry.
+ *
+ * Re-resolves the session from the map rather than closing over it: across a
+ * 10-minute backoff the entry can be reaped and REPLACED (a new CLI for the
+ * same sid), and nudging a stale object would write to a dead FIFO.
+ */
+function fireTurnRetry(sid: string, attempt: number, errorText: string | null) {
+  const session = sessions.get(sid)
+  if (!session) {
+    logMsg('info', 'turn-retry aborted — session gone', { sid, attempt })
+    return
+  }
+  const message = turnRetryMessage(attempt, errorText)
+
+  // Live CLI → plain FIFO write, exactly like a user message.
+  if (session.state === 'running' && session.pid) {
+    let alive = true
+    try { process.kill(session.pid, 0) } catch { alive = false }
+    if (alive) {
+      const payload = JSON.stringify({ type: 'user', message: { role: 'user', content: message } })
+      const ok = writeFifoRaw(session.pipePath, payload)
+      logMsg(ok ? 'info' : 'error', 'turn-retry ' + (ok ? 'injected via FIFO' : 'FIFO write FAILED'), { sid, attempt })
+      if (ok) return
+      // FIFO gone but the process looked alive — fall through to the respawn path.
+    }
+  }
+
+  // Dead CLI → cold resume. bridgeResume rebuilds argv from the registry record
+  // (patched to --resume this sid), which is the same path the Mac uses when it
+  // finds a session dead, so mode/model/permission flags are preserved.
+  logMsg('info', 'turn-retry resuming dead session', { sid, attempt })
+  cmdBridgeResume(RETRY_WS_SINK, 0, { cmd: 'bridgeResume', sid, message })
+}
+
+/**
+ * A retry is daemon-initiated, so there is no client socket to answer. The
+ * command handlers all take a ws to reply on, so give them a sink that drops
+ * the reply but still records failures — a silent drop would hide a broken
+ * resume for 12 hours.
+ */
+const RETRY_WS_SINK = {
+  readyState: 1,
+  send: (raw: string) => {
+    try {
+      const parsed = JSON.parse(raw) as { error?: string }
+      if (parsed?.error) logMsg('error', 'turn-retry resume returned an error', { error: parsed.error })
+    } catch { /* non-JSON reply — nothing to report */ }
+    return 1
+  },
+  close: () => {},
+} as unknown as ServerWebSocket<WsData>
+
+/** Append a `type:"system"` marker to the stream file so the session timeline
+ *  shows what the daemon did. Same pattern as the cron-fire marker: stream file
+ *  only, never the canonical JSONL. */
+function appendSystemMarker(sid: string, session: SessionData, subtype: string, content: string) {
+  try {
+    const marker = JSON.stringify({
+      type: 'system', subtype, content,
+      uuid: crypto.randomUUID(), session_id: sid,
+      timestamp: new Date().toISOString(),
+    }) + '\n'
+    fs.appendFileSync(session.jsonlPath, marker)
+  } catch (err) {
+    logMsg('warn', 'system marker append failed', { sid, subtype, error: (err as Error).message })
+  }
+}
+
+/** Cancel a pending retry. Called when a REAL send arrives (the human took over
+ *  — never inject behind them) and from the death funnel. */
+function cancelTurnRetry(sid: string, reason: string) {
+  const session = sessions.get(sid)
+  if (!session?.turnRetryTimer) return
+  clearTimeout(session.turnRetryTimer)
+  session.turnRetryTimer = null
+  logMsg('info', 'turn-retry canceled', { sid, reason })
+}
+
 function checkCronFires(sid: string, session: SessionData) {
   const now = Date.now()
   if (session.lastCronCheckTs && now - session.lastCronCheckTs < CRON_CHECK_THROTTLE_MS) return
@@ -2434,6 +2607,16 @@ function ensureWatcher(sid: string) {
         // ── Durable-cron invariant, corrective half (see checkDurableCronCreate) ──
         if (line.includes('CronCreate')) {
           try { checkDurableCronCreate(sid, s, line) } catch {}
+        }
+
+        // ── Turn-error auto-retry (see checkTurnRetry) ──
+        // Gate on the result-line substring only; the parse + is_error check
+        // lives in the policy. Clean results come through too, because a
+        // successful turn is what clears the failure streak.
+        if (line.includes('"type":"result"')) {
+          try { checkTurnRetry(sid, s, line, v) } catch (err) {
+            logMsg('warn', 'turn-retry check threw', { sid, error: (err as Error).message })
+          }
         }
 
         // ── L2: materialize daemon-authoritative task state ──
@@ -2816,6 +2999,11 @@ function cmdAttach(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
 // only maps the SendResult envelope onto the WS reply format.
 function cmdSend(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const { sid, message } = cmd as { sid: string; message: string }
+  // A real send means someone (the user, a task hook, the Mac) is driving this
+  // session now — drop any pending auto-retry so we never inject behind them.
+  // The retry's own delivery does NOT come through here (it writes the FIFO
+  // directly / goes via cmdBridgeResume), so this can't cancel itself.
+  cancelTurnRetry(sid, 'superseded-by-send')
   const result = core.handleSendCommand(sid, message)
   if ('error' in result) return sendError(ws, id, result.error)
   sendOk(ws, id, result as unknown as Record<string, unknown>)
@@ -2876,6 +3064,12 @@ function cmdStop(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, un
 
   const pid = session.pid
   logMsg('info', 'cmdStop: stopping session (process group kill)', { sid, pid })
+
+  // An explicit stop is a human decision — it must never be undone by a pending
+  // auto-retry respawning the CLI a few minutes later. Cancel the timer AND
+  // clear the streak so an in-flight `result` line can't re-arm one either.
+  cancelTurnRetry(sid, 'session-stopped')
+  if (session.turnRetry) clearTurnRetryStreak(session.turnRetry)
 
   // 3-phase process group kill: SIGINT → SIGTERM → SIGKILL
   // kill(-pid) targets the entire process group (Claude + MCP servers)
@@ -3783,6 +3977,77 @@ function hasRecentSchedulerFiring(sid: string, withinMs: number): boolean {
   }
 }
 
+// ── Session keep-alive protection: ONE authoritative verdict, with a source ──
+// Every "why is this idle session still alive?" decision flows through here,
+// and the same verdict is exposed on getState so what a human sees while
+// debugging IS what the kill path used. History: each cross-turn state the
+// CLI keeps in-process became an incident when the reaper didn't know about
+// it — /loop crons (2026-08-07), running bg tasks (inc-1786222771315), and
+// teamActive was never wired daemon-side at all. New cross-turn state = add
+// ONE branch here, nowhere else.
+// PRINCIPLE: protected sessions are extended, never exempt — the ceilings
+// below exist only as immortal-process backstops (wedged task framework /
+// expired scheduler), not as work budgets.
+interface SessionProtection {
+  source: 'cron' | 'team' | 'bg-task' | 'turn-retry' | null
+  killMs: number
+  detail?: string
+}
+
+function deriveSessionProtection(session: SessionData, sid: string, now: number): SessionProtection {
+  // Cron (7d = the CLI's own recurring-cron auto-expiry). TWO signals, either
+  // arms: fold (CronCreate seen in THIS stream — covers session-only crons,
+  // which never touch disk) or disk ({cwd}/.claude/scheduled_tasks.json —
+  // durable crons; the fold goes blind on stream wipe/rebuild, on --resume
+  // respawn (history replay re-arms the CLI scheduler with NO new CronCreate
+  // line — lab 2026-08-10 P4b), and on adopted foreign tasks).
+  if (Object.keys(session.foldState.cronIds).length > 0) {
+    return { source: 'cron', killMs: SESSION_CRON_IDLE_KILL_MS, detail: 'fold' }
+  }
+  if (session.cwd) {
+    // 10-min TTL cache: scans run every 60s per session; staleness only
+    // delays the *lift* of protection, never a kill.
+    if (session.diskCronCache && now - session.diskCronCache.at < 10 * 60_000) {
+      if (session.diskCronCache.armed) {
+        return { source: 'cron', killMs: SESSION_CRON_IDLE_KILL_MS, detail: 'disk-cache' }
+      }
+    } else {
+      let tasksJson: string | null = null
+      let lockJson: string | null = null
+      try { tasksJson = fs.readFileSync(path.join(session.cwd, '.claude', 'scheduled_tasks.json'), 'utf-8') } catch {}
+      try { lockJson = fs.readFileSync(path.join(session.cwd, '.claude', 'scheduled_tasks.lock'), 'utf-8') } catch {}
+      const disk = hasDiskCronInterest({ sid, tasksJson, lockJson, nowMs: now })
+      session.diskCronCache = { at: now, armed: disk.armed, reason: disk.reason }
+      if (disk.armed) {
+        return { source: 'cron', killMs: SESSION_CRON_IDLE_KILL_MS, detail: 'disk:' + (disk.reason ?? '') }
+      }
+    }
+  }
+  // In-process team (Claude Code team mode): the lead session polls teammates
+  // between turns with no JSONL output of its own. The Mac health monitor has
+  // skipped team-active sessions since day one; the daemon reaper never knew.
+  if (session.foldState.teamActive) {
+    return { source: 'team', killMs: SESSION_BG_IDLE_KILL_MS }
+  }
+  // Running background task (daemon's OWN taskState — the same fold the
+  // watcher feeds): wait-style bash tasks write to output_file, not the
+  // stream, so the session looks idle for the task's whole lifetime
+  // (inc-1786222771315). isBackgrounded tasks are already excluded by
+  // runningTaskCount.
+  if (session.taskState.derivedRunning > 0) {
+    return { source: 'bg-task', killMs: SESSION_BG_IDLE_KILL_MS }
+  }
+  // Pending turn-retry: the session is deliberately SILENT during the backoff
+  // (up to 10 min), which is exactly what "idle" looks like to the reaper. This
+  // is cross-turn state the reaper must know about, or the 30-min idle kill
+  // silently eats a session that was waiting out an upstream outage — the retry
+  // would then fire against a corpse and the whole feature would look flaky.
+  if (session.turnRetryTimer) {
+    return { source: 'turn-retry', killMs: SESSION_BG_IDLE_KILL_MS, detail: 'backoff-pending' }
+  }
+  return { source: null, killMs: SESSION_IDLE_KILL_MS }
+}
+
 function scanIdleSessions() {
   const now = Date.now()
 
@@ -4515,6 +4780,13 @@ if (action === '--start') {
     port,
     pid: process.pid,
     startedAt: DAEMON_START_TS,
+    // Retry policy is read from the env ONCE at boot, so log it here: this line
+    // is the only way to answer "is this daemon actually retrying, and with what
+    // budget?" without shell access to its environ.
+    turnRetry: TURN_RETRY_CFG.enabled
+      ? { budgetMs: TURN_RETRY_CFG.budgetMs, maxAttempts: TURN_RETRY_CFG.maxAttempts,
+          backoffBaseMs: TURN_RETRY_CFG.backoffBaseMs, backoffMaxMs: TURN_RETRY_CFG.backoffMaxMs }
+      : false,
   })
 
   // Start session idle scanner (every 60s)

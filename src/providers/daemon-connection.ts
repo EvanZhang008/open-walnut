@@ -34,6 +34,7 @@ import { REQUIRED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { DAEMON_BINARIES_DIR, IS_EPHEMERAL } from '../constants.js'
 import { buildRemotePreamble } from './session-io.js'
 import { buildDaemonStartCmd } from './daemon-start-cmd.js'
+import { buildTurnRetryEnv } from './daemon-core.js'
 import type { SshTarget } from './session-io.js'
 import { localDaemon } from './local-daemon.js'
 
@@ -1850,9 +1851,14 @@ export class DaemonConnection {
       const daemonEnv: Record<string, string> = {}
       try {
         const { getConfig } = await import('../core/config-manager.js')
-        if ((await getConfig()).session?.cron_policy === 'session-only') {
+        const cfg = await getConfig()
+        if (cfg.session?.cron_policy === 'session-only') {
           daemonEnv.WALNUT_ENFORCE_SESSION_CRON = '1'
         }
+        // Turn-error auto-retry: the Mac owns POLICY (user config), the daemon
+        // owns EXECUTION (it survives Mac sleep / tunnel loss). Only emitted
+        // when enabled, so a default install ships a daemon that does nothing.
+        Object.assign(daemonEnv, buildTurnRetryEnv(cfg.session?.turn_retry))
       } catch { /* config unavailable — default policy */ }
 
       let startCmd: string

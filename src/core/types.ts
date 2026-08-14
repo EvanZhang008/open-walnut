@@ -941,6 +941,31 @@ export interface Config {
      *    directory, delivered as if the user had typed it. Enable this if you
      *    run multiple sessions in shared project directories. */
     cron_policy?: 'unrestricted' | 'session-only';
+    /** Auto-retry a turn that died to a TRANSIENT upstream failure (API timeout,
+     *  stalled stream, mid-response 5xx). Enforced by the SESSION DAEMON, so it
+     *  keeps retrying while this Mac is asleep or the SSH tunnel is down — the
+     *  overnight window an unattended run actually needs to survive.
+     *
+     *  Only errors positively identified as transient are retried; anything
+     *  unrecognized (and every model refusal, auth failure, context overflow or
+     *  user abort) is terminal. See daemon-core.ts classifyTurnError.
+     *
+     *  Read at daemon spawn → a change applies on the next daemon restart. */
+    turn_retry?: {
+      /** Default false. Opt-in: this spends tokens without a human present. */
+      enabled?: boolean;
+      /** Wall-clock budget for ONE failure streak, in hours. Default 12.
+       *  A successful turn resets the streak, so this bounds one outage, not
+       *  the session's lifetime. */
+      budget_hours?: number;
+      /** Hard attempt cap inside the budget (backstop against a fast-fail
+       *  loop). Default 200. */
+      max_attempts?: number;
+      /** First backoff, in seconds; doubles per attempt. Default 30. */
+      backoff_seconds?: number;
+      /** Backoff ceiling, in seconds. Default 600 (10 min). */
+      backoff_max_seconds?: number;
+    };
     /** Mount the walnut MCP server (`open-walnut mcp`) into ACP/Codex sessions
      *  so they can call walnut task tools. Default false: the provider spawns
      *  the mount on the EXECUTION host, where `open-walnut` may not be on PATH. */

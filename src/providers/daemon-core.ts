@@ -49,6 +49,10 @@ export interface RegistryEntry {
   parented: boolean
   mode?: SessionMode
   pendingCtrl?: PendingCtrl | null
+  /** Turn-retry streak (see decideTurnRetry). Persisted so a daemon restart
+   *  mid-outage RESUMES the same 12h budget instead of granting a fresh one —
+   *  otherwise a restart loop would make the budget unbounded. */
+  turnRetry?: TurnRetryState | null
 }
 
 /**
@@ -79,6 +83,9 @@ export interface CoreSessionData {
   orphanPollTimer: ReturnType<typeof setInterval> | null
   mode: SessionMode
   pendingCtrl: PendingCtrl | null
+  /** Turn-retry streak — see decideTurnRetry. Optional so adapters that don't
+   *  implement the retry policy stay type-compatible. */
+  turnRetry?: TurnRetryState
 }
 
 export interface DaemonCoreDeps<S extends CoreSessionData = CoreSessionData> {
@@ -285,6 +292,8 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         parented: s.parented,
         mode: s.mode,
         pendingCtrl: s.pendingCtrl ?? undefined,
+        // Carry the retry streak across daemon restarts (budget continuity).
+        turnRetry: s.turnRetry ?? undefined,
       }
     }
     const body = JSON.stringify({ version: 1, sessions: out })
@@ -1221,6 +1230,344 @@ export function decideBridgeRestart(s: BridgeConfigureState): BridgeRestartDecis
   if (s.redialPending) return { restart: false }
   if (s.dialAgeMs != null && s.dialAgeMs < s.dialTimeoutMs) return { restart: false }
   return { restart: true, reason: 'reconcile' }
+}
+
+// ── Turn-error auto-retry (upstream transient failures) ──
+//
+// A `claude -p` turn can die to a TRANSIENT upstream failure — a Bedrock/API
+// degradation window, a stalled stream, a mid-response 5xx. The CLI exhausts
+// its own finite retry budget (CLAUDE_CODE_MAX_RETRIES, ~30min) and ends the
+// turn with `{"type":"result","is_error":true,"result":"API Error: ..."}`. The
+// session is otherwise healthy and fully resumable: the turn just never
+// finished. An unattended run (cron, background task, overnight work) then sits
+// dead until a human notices — which is what happened on 2026-08-13, where the
+// user hand-typed "continue" to restart a turn 12 times.
+//
+// WHY THE DAEMON OWNS THIS (and not the Mac's session-auto-continue.ts):
+// the daemon runs ON the execution host and owns the CLI process, the FIFO, and
+// the stream file. It keeps retrying while the Mac sleeps, while the SSH tunnel
+// is down, and across walnut server restarts — exactly the overnight window
+// where an unattended run needs to survive. The Mac-side watcher can only act
+// when the Mac is awake and connected, so it cannot be the guarantee.
+//
+// The Mac still owns POLICY (it reads the user's config and passes the budget
+// down as spawn env); the daemon owns EXECUTION.
+//
+// ── The retryable/terminal split is the whole safety story ──
+// Retrying a TERMINAL error is an infinite loop that burns tokens forever. The
+// classifier is therefore an ALLOWLIST: only errors we have positively
+// identified as transient are retried, and anything unrecognized is treated as
+// terminal. Adding a pattern is a deliberate act.
+//
+// Text corpus audited from 3 days of this machine's logs (2026-08-11..13):
+//    42×  "API Error: The operation timed out."                  → RETRY
+//     9×  "API Error: Server error mid-response."                → RETRY
+//     8×  "API Error: Stream idle timeout - no chunks received"  → RETRY
+//     2×  "API Error: Response stalled mid-stream."              → RETRY
+//     1×  "API Error: The system encountered an unexpected error during processing." → RETRY
+//     9×  "API Error: <model> can't help with this."             → TERMINAL (a
+//         model REFUSAL. Retrying re-asks the same refused question forever —
+//         the single most important non-retry in this list.)
+//
+// Deliberately terminal (never retried), beyond anything unrecognized:
+//   - refusals / "can't help with this" / "start a new session"
+//   - auth + spend-limit failures (credentials and account state won't fix
+//     themselves, and a 12h hammer on a 401 is an abuse pattern)
+//   - context-window overflow (the SAME prompt overflows identically on retry)
+//   - user-initiated aborts and cancellations (the human said stop)
+//   - invalid-request / 400-class errors (a bad request stays bad)
+
+/** Transient upstream failures — safe to resume, the same input can succeed. */
+const RETRYABLE_TURN_ERROR_PATTERNS: RegExp[] = [
+  /operation timed out/i,
+  /request timed out/i,
+  /\bapi_timeout\b/i,
+  /server error mid-response/i,
+  /stream idle timeout/i,
+  /no chunks received/i,
+  /response stalled mid-stream/i,
+  /unexpected error during processing/i,
+  /\b(?:429|500|502|503|504|529)\b/,
+  /too many requests/i,
+  /rate limit/i,
+  /overloaded/i,
+  /service unavailable/i,
+  /bad gateway/i,
+  /gateway timeout/i,
+  /internal server error/i,
+  /connection (?:error|reset|closed|refused)/i,
+  /socket hang up/i,
+  /\bECONNRESET\b|\bETIMEDOUT\b|\bECONNREFUSED\b|\bEPIPE\b|\bEAI_AGAIN\b|\bENOTFOUND\b/,
+  /fetch failed/i,
+  /network error/i,
+  /premature close/i,
+  /terminated/i,
+]
+
+/**
+ * Terminal signatures, checked FIRST and winning over any retryable match.
+ *
+ * Order matters: a refusal text ("… can't help with this. Start a new session
+ * to continue.") carries no retryable token today, but a future error string
+ * could carry both a refusal and the word "timeout". A retry loop on a refusal
+ * is strictly worse than a missed retry, so terminal always wins.
+ */
+const TERMINAL_TURN_ERROR_PATTERNS: RegExp[] = [
+  /can'?t help with this/i,
+  /start a new session/i,
+  /\brefus(?:al|ed|es)\b/i,
+  /\bstop_reason["\s:]*['"]?refusal/i,
+  /prompt too long/i,
+  /context (?:window|length) (?:exceeded|too long)/i,
+  /exceeds? the maximum/i,
+  /too many tokens/i,
+  /invalid[_\s-]?request/i,
+  /\b400\b/,
+  /\b401\b|\b403\b/,
+  /unauthorized|forbidden|authentication|credential|expired token|invalid api key/i,
+  /quota exceeded|insufficient (?:quota|funds|credit)|bil{2}ing/i,
+  /permission denied/i,
+  /not\s+found:\s*model|model .* (?:not found|does not exist|unavailable in)/i,
+  /aborted by user|user (?:aborted|cancell?ed|interrupted)|request cancell?ed/i,
+  /\bECANCELED\b/,
+]
+
+export type TurnErrorClass = 'retryable' | 'terminal'
+
+/**
+ * Classify a turn's error text. ALLOWLIST semantics: unrecognized → terminal.
+ *
+ * Exported for the parity test and for unit tests that pin every corpus string.
+ */
+export function classifyTurnError(text: string | null | undefined): TurnErrorClass {
+  if (!text) return 'terminal'
+  for (const re of TERMINAL_TURN_ERROR_PATTERNS) if (re.test(text)) return 'terminal'
+  for (const re of RETRYABLE_TURN_ERROR_PATTERNS) if (re.test(text)) return 'retryable'
+  return 'terminal'
+}
+
+/** Is this stream line a turn-over `result` carrying an error? */
+export function parseTurnErrorLine(line: string): { isTurnError: boolean; text: string | null } {
+  // Substring pre-gate keeps the hot path free — the tailer sees every line.
+  // NOTE: the gate CANNOT be on `subtype`: a real timeout result carries
+  // `"subtype":"success"` alongside `"is_error":true` (verified in live stream
+  // files 2026-08-13). `is_error` is the only trustworthy signal.
+  if (!line.includes('"type":"result"') || !line.includes('"is_error":true')) {
+    return { isTurnError: false, text: null }
+  }
+  try {
+    const parsed = JSON.parse(line) as { type?: string; is_error?: boolean; result?: unknown }
+    if (parsed.type !== 'result' || parsed.is_error !== true) return { isTurnError: false, text: null }
+    return { isTurnError: true, text: typeof parsed.result === 'string' ? parsed.result : null }
+  } catch {
+    return { isTurnError: false, text: null }
+  }
+}
+
+/** Per-session retry bookkeeping. In-memory + persisted in the registry so a
+ *  daemon restart doesn't reset a session's 12h budget to zero. */
+export interface TurnRetryState {
+  /** Attempts made in the CURRENT failure streak (reset by any success). */
+  attempts: number
+  /** Wall-clock ms of the streak's FIRST attempt — anchors the time budget. */
+  streakStartedAt: number | null
+  /** ts of the last attempt (for backoff spacing + observability). */
+  lastAttemptAt: number | null
+  /** Stream-file offset (v) of the last result line we acted on — dedupes a
+   *  re-read of the same line after a watcher heal / overlap re-read. */
+  lastHandledV: number | null
+}
+
+export interface TurnRetryConfig {
+  enabled: boolean
+  /** Total wall-clock budget for one failure streak (default 12h). */
+  budgetMs: number
+  /** Hard cap on attempts inside the budget (backstop against a fast-fail loop). */
+  maxAttempts: number
+  /** First backoff delay; doubles per attempt up to backoffMaxMs. */
+  backoffBaseMs: number
+  backoffMaxMs: number
+}
+
+export const TURN_RETRY_DEFAULTS: Readonly<TurnRetryConfig> = {
+  enabled: false,          // opt-in: the public build must not auto-spend tokens unasked
+  budgetMs: 12 * 3600_000, // 12h — the user's ask ("at least 12h")
+  maxAttempts: 200,
+  backoffBaseMs: 30_000,   // 30s
+  backoffMaxMs: 600_000,   // 10min ceiling: a degradation window outlasts a long backoff
+}
+
+/**
+ * Resolve the retry config from daemon spawn env (set by the Mac from user
+ * config — see daemon-connection.ts startDaemon).
+ *
+ * `WALNUT_TURN_RETRY=1` is the master switch. A 0/absent value means the daemon
+ * does nothing at all, which is the default for a generic install.
+ */
+export function resolveTurnRetryConfig(env: Record<string, string | undefined>): TurnRetryConfig {
+  const num = (raw: string | undefined, def: number, min: number, max: number): number => {
+    const n = raw != null && raw !== '' ? Number(raw) : def
+    if (!Number.isFinite(n)) return def
+    return Math.max(min, Math.min(max, Math.trunc(n)))
+  }
+  return {
+    enabled: env.WALNUT_TURN_RETRY === '1',
+    // 0 is meaningful (disable by budget) so the floor is 0, not 60s.
+    budgetMs: num(env.WALNUT_TURN_RETRY_BUDGET_MS, TURN_RETRY_DEFAULTS.budgetMs, 0, 7 * 86_400_000),
+    maxAttempts: num(env.WALNUT_TURN_RETRY_MAX_ATTEMPTS, TURN_RETRY_DEFAULTS.maxAttempts, 0, 10_000),
+    backoffBaseMs: num(env.WALNUT_TURN_RETRY_BACKOFF_MS, TURN_RETRY_DEFAULTS.backoffBaseMs, 1_000, 3_600_000),
+    backoffMaxMs: num(env.WALNUT_TURN_RETRY_BACKOFF_MAX_MS, TURN_RETRY_DEFAULTS.backoffMaxMs, 1_000, 3_600_000),
+  }
+}
+
+/**
+ * The other half of the config contract: user config → daemon spawn env.
+ *
+ * Lives next to resolveTurnRetryConfig deliberately — the writer and the reader
+ * of these env names must change together, and a silent typo here would look
+ * exactly like "the feature doesn't work".
+ *
+ * Returns {} when disabled so a default install spawns a daemon with no retry
+ * env at all. Values are converted from human units (hours/seconds in config)
+ * to ms, and clamped by resolveTurnRetryConfig on the daemon side.
+ */
+export function buildTurnRetryEnv(cfg: {
+  enabled?: boolean
+  budget_hours?: number
+  max_attempts?: number
+  backoff_seconds?: number
+  backoff_max_seconds?: number
+} | undefined): Record<string, string> {
+  if (!cfg?.enabled) return {}
+  const env: Record<string, string> = { WALNUT_TURN_RETRY: '1' }
+  const put = (key: string, value: number | undefined, mult: number) => {
+    // A non-finite or negative value is a config typo: omit it and let the
+    // daemon apply its own default rather than shipping NaN into the env.
+    if (value == null || !Number.isFinite(value) || value < 0) return
+    env[key] = String(Math.trunc(value * mult))
+  }
+  put('WALNUT_TURN_RETRY_BUDGET_MS', cfg.budget_hours, 3600_000)
+  put('WALNUT_TURN_RETRY_MAX_ATTEMPTS', cfg.max_attempts, 1)
+  put('WALNUT_TURN_RETRY_BACKOFF_MS', cfg.backoff_seconds, 1_000)
+  put('WALNUT_TURN_RETRY_BACKOFF_MAX_MS', cfg.backoff_max_seconds, 1_000)
+  return env
+}
+
+export type TurnRetryDecision =
+  | { retry: true; attempt: number; delayMs: number; elapsedMs: number }
+  | { retry: false; reason: 'disabled' | 'terminal' | 'budget-exhausted' | 'attempts-exhausted' | 'duplicate-line' }
+
+/**
+ * THE decision function: given a failed turn, should the daemon resume it?
+ *
+ * Pure — no clock, no I/O, no logging. `nowMs` and the current state come in,
+ * the verdict comes out, so every branch is unit-testable and the two daemon
+ * twins can share one behavior. The caller applies the returned attempt/delay
+ * and persists the mutated state.
+ *
+ * Budget semantics: the 12h window is measured from the FIRST failure of the
+ * current streak, NOT per attempt. A streak that has been failing for 11h59m
+ * gets one more try; at 12h00m it stops and leaves the session dead for a human.
+ * Any successful turn clears the streak (see clearTurnRetryStreak), so a session
+ * that fails at 09:00, recovers, then fails again at 20:00 gets a FULL fresh
+ * 12h — the budget bounds one outage, not the session's lifetime.
+ */
+export function decideTurnRetry(args: {
+  errorText: string | null
+  state: TurnRetryState
+  cfg: TurnRetryConfig
+  nowMs: number
+  /** Stream offset of the result line, for the duplicate guard. */
+  v?: number | null
+}): TurnRetryDecision {
+  const { errorText, state, cfg, nowMs } = args
+  if (!cfg.enabled) return { retry: false, reason: 'disabled' }
+
+  // Same result line seen twice (watcher heal re-read, overlap) → not a new
+  // failure. Without this, one error could burn the whole attempt budget.
+  if (args.v != null && state.lastHandledV != null && args.v <= state.lastHandledV) {
+    return { retry: false, reason: 'duplicate-line' }
+  }
+
+  if (classifyTurnError(errorText) === 'terminal') return { retry: false, reason: 'terminal' }
+  if (cfg.maxAttempts <= 0) return { retry: false, reason: 'attempts-exhausted' }
+
+  // Budget is anchored on the streak start; the first failure of a streak
+  // anchors it at `nowMs` and therefore always has elapsed 0.
+  const streakStart = state.streakStartedAt ?? nowMs
+  const elapsedMs = nowMs - streakStart
+  if (cfg.budgetMs <= 0 || elapsedMs >= cfg.budgetMs) {
+    return { retry: false, reason: 'budget-exhausted' }
+  }
+  if (state.attempts >= cfg.maxAttempts) return { retry: false, reason: 'attempts-exhausted' }
+
+  const attempt = state.attempts + 1
+  // Exponential backoff, capped. Attempt 1 waits backoffBaseMs: an upstream
+  // degradation window is minutes-to-hours long, so an instant retry just
+  // spends a spawn to hit the same wall.
+  const raw = cfg.backoffBaseMs * Math.pow(2, state.attempts)
+  const delayMs = Math.min(cfg.backoffMaxMs, Number.isFinite(raw) ? raw : cfg.backoffMaxMs)
+  return { retry: true, attempt, delayMs, elapsedMs }
+}
+
+/** Fold an accepted retry decision into the state (caller persists). */
+export function applyTurnRetry(state: TurnRetryState, nowMs: number, v: number | null | undefined): void {
+  state.streakStartedAt = state.streakStartedAt ?? nowMs
+  state.attempts += 1
+  state.lastAttemptAt = nowMs
+  if (v != null) state.lastHandledV = v
+}
+
+/**
+ * Clear the streak after a CLEAN turn.
+ *
+ * Called on any `result` line with is_error false/absent. This is what makes the
+ * budget bound "one outage" instead of "the session's whole life", and it is
+ * also the reason a long-lived session doesn't slowly accumulate attempts until
+ * it can never retry again.
+ */
+export function clearTurnRetryStreak(state: TurnRetryState): boolean {
+  if (state.attempts === 0 && state.streakStartedAt == null) return false
+  state.attempts = 0
+  state.streakStartedAt = null
+  state.lastAttemptAt = null
+  return true
+}
+
+export function newTurnRetryState(): TurnRetryState {
+  return { attempts: 0, streakStartedAt: null, lastAttemptAt: null, lastHandledV: null }
+}
+
+/** The message injected to resume an interrupted turn. Deliberately marked as
+ *  automated so the model doesn't mistake it for a new user instruction. */
+export function turnRetryMessage(attempt: number, errorText: string | null): string {
+  const what = errorText ? errorText.replace(/\s+/g, ' ').trim().slice(0, 200) : 'an upstream API error'
+  return '[Walnut auto-retry — automated message, not from the user] '
+    + `The previous turn was interrupted by a transient upstream failure (${what}) `
+    + `and did not finish. This is retry attempt ${attempt}. `
+    + 'Please continue exactly where you left off. Do not restart the task from the beginning, '
+    + 'and do not re-run work you already completed — check what you had already done first.'
+}
+
+/** Human-readable stream marker text (session timeline system row). */
+export function turnRetryMarkerText(a: {
+  attempt: number; delayMs: number; errorText: string | null; budgetMs: number; elapsedMs: number
+}): string {
+  const mins = Math.round(a.delayMs / 60_000)
+  const wait = a.delayMs < 60_000 ? `${Math.round(a.delayMs / 1000)}s` : `${mins}min`
+  const budgetH = Math.round(a.budgetMs / 3600_000)
+  const usedMin = Math.round(a.elapsedMs / 60_000)
+  return `Turn failed (${a.errorText ?? 'upstream error'}). Walnut is auto-retrying in ${wait} `
+    + `— attempt ${a.attempt}, ${usedMin}min into the ${budgetH}h retry budget.`
+}
+
+/** Marker text when the daemon gives up (budget/attempts spent, or terminal). */
+export function turnRetryGiveUpText(reason: string, errorText: string | null): string {
+  const why = reason === 'budget-exhausted' ? 'the retry budget is spent'
+    : reason === 'attempts-exhausted' ? 'the retry attempt cap is reached'
+    : 'the error is not retryable'
+  return `Turn failed (${errorText ?? 'upstream error'}) and Walnut stopped auto-retrying because ${why}. `
+    + 'Send a message to resume this session manually.'
 }
 
 export function defaultReadStartTime(fs: typeof import('node:fs'), pid: number): string | null {

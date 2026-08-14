@@ -47,6 +47,16 @@ export const DAEMON_POLICIES: DaemonPolicyDescriptor[] = [
     note: 'Always on (observation, not intervention).',
   },
   {
+    id: 'turn-error-auto-retry',
+    name: 'Auto-retry turns killed by upstream errors',
+    description: 'When a turn dies to a TRANSIENT upstream failure (API timeout, stalled stream, mid-response 5xx), the daemon resumes it with exponential backoff for up to the configured budget (default 12h). Runs ON the execution host, so it keeps retrying while this Mac is asleep or the SSH tunnel is down. Only errors positively identified as transient are retried: model refusals, auth failures, context overflow, user aborts, and anything unrecognized are treated as terminal and left for a human.',
+    on: ['daemon:turn-result'],
+    configPath: 'session.turn_retry.enabled',
+    isEnabled: (c) => c.session?.turn_retry?.enabled === true,
+    setter: (enabled) => ({ session: { turn_retry: { enabled } } } as Partial<Config>),
+    note: DAEMON_RESTART_NOTE,
+  },
+  {
     id: 'permission-auto-respond-by-mode',
     name: 'Permission auto-respond (bypass mode)',
     description: 'In bypass mode with auto_approve_bypass, the daemon answers CLI permission control requests automatically instead of forwarding them to the UI.',

@@ -773,6 +773,17 @@ export function parseSessionMessages(content: string): SessionHistoryMessage[] {
       } else if (sub === 'informational' || sub === 'model_refusal_fallback' || sub === 'scheduled_task_fire') {
         sysText = content || undefined;
         sysVariant = 'info';
+      } else if (sub === 'turn_retry') {
+        // Daemon auto-retry of a turn killed by a transient upstream failure.
+        // Info, not error: the turn error itself already rendered as api_error,
+        // and this row is the recovery telling the user it's being handled.
+        sysText = content || undefined;
+        sysVariant = 'info';
+      } else if (sub === 'turn_retry_stopped') {
+        // The daemon gave up (budget/attempts spent, or a terminal error). This
+        // one IS an error: nothing further is coming without the user acting.
+        sysText = content || undefined;
+        sysVariant = 'error';
       }
       if (sysText) {
         messageMap.set(raw.uuid, {

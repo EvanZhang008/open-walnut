@@ -1476,3 +1476,185 @@ describe('control_cancel_request pendingCtrl clear daemon-standalone vs daemon-s
     }
   })
 })
+
+describe('turn-error auto-retry daemon-core vs daemon-source parity', () => {
+  const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+  const templateSrc = readFile(sourcePath)
+  const coreSrc = readFile(corePath)
+
+  // The retry policy is duplicated into the SSH-deployed template (it can't
+  // import daemon-core). A divergence here means one host silently retries with
+  // different safety rules than the other — the exact class of bug this file exists
+  // to prevent.
+
+  /**
+   * Extract a function body by BRACE MATCHING rather than slicing a fixed number
+   * of bytes. A fixed window silently truncates the moment a comment grows, which
+   * turns a real assertion into a false failure (and, worse, could pass on the
+   * wrong half of a function).
+   */
+  const fnBody = (src: string, name: string): string => {
+    const at = src.indexOf('function ' + name)
+    expect(at, `${name} missing`).toBeGreaterThan(-1)
+    // Find the BODY brace, not the first brace: a TS signature can carry an
+    // inline object type (`function f(args: { a: string })`) whose braces would
+    // otherwise be matched instead, truncating the body to the parameter list.
+    // Walk the parameter parens to their close first, then take the next `{`.
+    const paren = src.indexOf('(', at)
+    expect(paren, `${name}: no parameter list`).toBeGreaterThan(-1)
+    let parenDepth = 0
+    let afterParams = -1
+    for (let i = paren; i < src.length; i++) {
+      if (src[i] === '(') parenDepth++
+      else if (src[i] === ')') {
+        parenDepth--
+        if (parenDepth === 0) { afterParams = i; break }
+      }
+    }
+    expect(afterParams, `${name}: unbalanced parameter list`).toBeGreaterThan(-1)
+    // A return-type annotation can ALSO be an object literal type
+    // (`): { isTurnError: boolean }`), so the body brace is the one that ends
+    // its line — `{\n` — rather than simply the next `{` after the parens.
+    const open = src.slice(afterParams).search(/\{[ \t]*(?:\/\/[^\n]*)?\n/) + afterParams
+    expect(open, `${name}: no opening body brace`).toBeGreaterThan(afterParams - 1)
+    let depth = 0
+    for (let i = open; i < src.length; i++) {
+      const ch = src[i]
+      if (ch === '{') depth++
+      else if (ch === '}') {
+        depth--
+        if (depth === 0) return src.slice(at, i + 1)
+      }
+    }
+    // Unbalanced (shouldn't happen in valid source) — return the rest so the
+    // caller's assertion reports the real content, not an empty string.
+    return src.slice(at)
+  }
+
+  it('both classifiers check TERMINAL patterns before retryable ones', () => {
+    // Order is the safety property: a text carrying both a refusal and a
+    // timeout token must classify terminal, or a refusal starts a 12h loop.
+    // Assert ORDER inside classifyTurnError's own body. The two twins iterate
+    // differently (`.some()` in TS vs an indexed `for` in the plain-JS template),
+    // so match on the pattern-array NAMES rather than the loop syntax.
+    for (const src of [coreSrc, templateSrc]) {
+      const body = fnBody(src, 'classifyTurnError')
+      const terminal = body.indexOf('TERMINAL_TURN_ERROR_PATTERNS')
+      const retryable = body.indexOf('RETRYABLE_TURN_ERROR_PATTERNS')
+      expect(terminal, 'no terminal check in classifyTurnError').toBeGreaterThan(-1)
+      expect(retryable, 'no retryable check in classifyTurnError').toBeGreaterThan(-1)
+      expect(terminal, 'retryable patterns are tested BEFORE terminal ones — a refusal could retry')
+        .toBeLessThan(retryable)
+    }
+  })
+
+  it('both default an unrecognized error to terminal (allowlist semantics)', () => {
+    for (const src of [coreSrc, templateSrc]) {
+      const body = fnBody(src, 'classifyTurnError')
+      // The final fall-through must be terminal, never retryable.
+      expect(body).toMatch(/return 'terminal'[\s\S]{0,20}\}$|return 'terminal';?\s*\}/m)
+      expect(body).toMatch(/if \(!text\) return 'terminal'/)
+    }
+  })
+
+  it('both refuse to retry a model refusal and an auth failure', () => {
+    for (const src of [coreSrc, templateSrc]) {
+      expect(src).toMatch(/can'\?t help with this/)
+      expect(src).toMatch(/start a new session/)
+      expect(src).toMatch(/unauthorized\|forbidden\|authentication/)
+    }
+  })
+
+  it('both retry every transient signature seen in the real log corpus', () => {
+    for (const src of [coreSrc, templateSrc]) {
+      expect(src).toMatch(/operation timed out/)
+      expect(src).toMatch(/server error mid-response/)
+      expect(src).toMatch(/stream idle timeout/)
+      expect(src).toMatch(/response stalled mid-stream/)
+      expect(src).toMatch(/unexpected error during processing/)
+    }
+  })
+
+  it('both gate the result-line parse on is_error, NOT on subtype', () => {
+    // A real timeout result carries "subtype":"success" next to
+    // "is_error":true. Gating on subtype makes the whole feature dead code.
+    for (const src of [coreSrc, templateSrc]) {
+      const body = fnBody(src, 'parseTurnErrorLine')
+      expect(body).toMatch(/"is_error":true/)
+      expect(body).toMatch(/is_error !== true/)
+      expect(body).not.toMatch(/subtype ===/)
+    }
+  })
+
+  it('both anchor the budget on the streak start, not on each attempt', () => {
+    for (const src of [coreSrc, templateSrc]) {
+      const body = fnBody(src, 'decideTurnRetry')
+      // elapsed is measured from streakStartedAt; re-anchoring per attempt would
+      // make the 12h budget unbounded.
+      expect(body).toMatch(/streakStartedAt/)
+      expect(body).toMatch(/elapsedMs >= cfg\.budgetMs/)
+      expect(body).toMatch(/budget-exhausted/)
+      expect(body).toMatch(/attempts >= cfg\.maxAttempts/)
+    }
+  })
+
+  it('both dedupe a re-read of the same result line', () => {
+    for (const src of [coreSrc, templateSrc]) {
+      expect(src).toMatch(/lastHandledV/)
+      expect(src).toMatch(/duplicate-line/)
+    }
+  })
+
+  it('both default to DISABLED and enable only on an exact "1"', () => {
+    for (const src of [coreSrc, templateSrc]) {
+      expect(src).toMatch(/WALNUT_TURN_RETRY === '1'/)
+    }
+  })
+
+  it('both clear the streak on a successful turn', () => {
+    for (const src of [coreSrc, templateSrc]) {
+      expect(src).toMatch(/function clearTurnRetryStreak/)
+    }
+    for (const src of [standaloneSrc, templateSrc]) {
+      const body = fnBody(src, 'checkTurnRetry')
+      expect(body).toMatch(/clearTurnRetryStreak\(session\.turnRetry\)/)
+    }
+  })
+
+  it('both cancel a pending retry on a real send and on an explicit stop', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/cancelTurnRetry\(sid, 'superseded-by-send'\)/)
+      expect(src).toMatch(/cancelTurnRetry\(sid, 'session-stopped'\)/)
+    }
+  })
+
+  it('both protect a session in retry backoff from the idle reaper', () => {
+    // The backoff is deliberate silence, which reads as idle. Without this the
+    // 30-min idle kill eats the session and the retry fires against a corpse.
+    for (const src of [standaloneSrc, templateSrc]) {
+      const body = fnBody(src, 'deriveSessionProtection')
+      expect(body).toMatch(/turnRetryTimer/)
+      expect(body).toMatch(/source: 'turn-retry'/)
+    }
+  })
+
+  it('both re-resolve the session from the map at fire time', () => {
+    // Across a 10-min backoff the entry can be reaped and REPLACED; a closed-over
+    // stale object would write to a dead FIFO.
+    for (const src of [standaloneSrc, templateSrc]) {
+      const body = fnBody(src, 'fireTurnRetry')
+      expect(body).toMatch(/sessions\.get\(sid\)/)
+      expect(body).toMatch(/turn-retry aborted — session gone/)
+    }
+  })
+
+  it('both prefer a live FIFO write and fall back to a --resume respawn', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const body = fnBody(src, 'fireTurnRetry')
+      const fifo = body.indexOf('writeFifoRaw(session.pipePath, payload)')
+      const resume = body.indexOf('cmdBridgeResume(RETRY_WS_SINK')
+      expect(fifo, 'no FIFO delivery path').toBeGreaterThan(-1)
+      expect(resume, 'no resume fallback').toBeGreaterThan(fifo)
+    }
+  })
+})

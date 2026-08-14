@@ -2688,6 +2688,272 @@ function checkDurableCronCreate(sid, session, line) {
   }
 }
 
+// ── Turn-error auto-retry ──
+// Mirrors daemon-core.ts (classifyTurnError / parseTurnErrorLine /
+// resolveTurnRetryConfig / decideTurnRetry / applyTurnRetry /
+// clearTurnRetryStreak / turnRetryMessage / turnRetryMarkerText /
+// turnRetryGiveUpText) + daemon-standalone.ts checkTurnRetry/fireTurnRetry.
+// Template can't import; the parity test locks the sync.
+//
+// A turn killed by a TRANSIENT upstream failure (timeout, stalled stream,
+// mid-response 5xx) leaves a healthy, resumable session with an unfinished
+// turn. The daemon resumes it for up to a configured budget (default 12h) so an
+// unattended overnight run survives an outage window without a human typing
+// "continue" — and it works while the Mac is asleep or the tunnel is down,
+// which is why this lives in the daemon and not on the Mac.
+//
+// SAFETY: the classifier is an ALLOWLIST. Unrecognized errors are TERMINAL, and
+// terminal patterns are checked FIRST, so a model refusal ("can't help with
+// this") can never start a 12h loop re-asking the same refused question.
+var RETRYABLE_TURN_ERROR_PATTERNS = [
+  /operation timed out/i,
+  /request timed out/i,
+  /\\bapi_timeout\\b/i,
+  /server error mid-response/i,
+  /stream idle timeout/i,
+  /no chunks received/i,
+  /response stalled mid-stream/i,
+  /unexpected error during processing/i,
+  /\\b(?:429|500|502|503|504|529)\\b/,
+  /too many requests/i,
+  /rate limit/i,
+  /overloaded/i,
+  /service unavailable/i,
+  /bad gateway/i,
+  /gateway timeout/i,
+  /internal server error/i,
+  /connection (?:error|reset|closed|refused)/i,
+  /socket hang up/i,
+  /\\bECONNRESET\\b|\\bETIMEDOUT\\b|\\bECONNREFUSED\\b|\\bEPIPE\\b|\\bEAI_AGAIN\\b|\\bENOTFOUND\\b/,
+  /fetch failed/i,
+  /network error/i,
+  /premature close/i,
+  /terminated/i,
+];
+var TERMINAL_TURN_ERROR_PATTERNS = [
+  /can'?t help with this/i,
+  /start a new session/i,
+  /\\brefus(?:al|ed|es)\\b/i,
+  /\\bstop_reason["\\s:]*['"]?refusal/i,
+  /prompt too long/i,
+  /context (?:window|length) (?:exceeded|too long)/i,
+  /exceeds? the maximum/i,
+  /too many tokens/i,
+  /invalid[_\\s-]?request/i,
+  /\\b400\\b/,
+  /\\b401\\b|\\b403\\b/,
+  /unauthorized|forbidden|authentication|credential|expired token|invalid api key/i,
+  /quota exceeded|insufficient (?:quota|funds|credit)|bil{2}ing/i,
+  /permission denied/i,
+  /not\\s+found:\\s*model|model .* (?:not found|does not exist|unavailable in)/i,
+  /aborted by user|user (?:aborted|cancell?ed|interrupted)|request cancell?ed/i,
+  /\\bECANCELED\\b/,
+];
+function classifyTurnError(text) {
+  if (!text) return 'terminal';
+  for (var i = 0; i < TERMINAL_TURN_ERROR_PATTERNS.length; i++) {
+    if (TERMINAL_TURN_ERROR_PATTERNS[i].test(text)) return 'terminal';
+  }
+  for (var j = 0; j < RETRYABLE_TURN_ERROR_PATTERNS.length; j++) {
+    if (RETRYABLE_TURN_ERROR_PATTERNS[j].test(text)) return 'retryable';
+  }
+  return 'terminal';
+}
+// NOTE: the gate CANNOT be on subtype — a real timeout result carries
+// "subtype":"success" alongside "is_error":true. is_error is the only signal.
+function parseTurnErrorLine(line) {
+  if (line.indexOf('"type":"result"') === -1 || line.indexOf('"is_error":true') === -1) {
+    return { isTurnError: false, text: null };
+  }
+  var parsed;
+  try { parsed = JSON.parse(line); } catch { return { isTurnError: false, text: null }; }
+  if (!parsed || parsed.type !== 'result' || parsed.is_error !== true) {
+    return { isTurnError: false, text: null };
+  }
+  return { isTurnError: true, text: typeof parsed.result === 'string' ? parsed.result : null };
+}
+function resolveTurnRetryConfig(env) {
+  function num(raw, def, min, max) {
+    var n = raw != null && raw !== '' ? Number(raw) : def;
+    if (!isFinite(n)) return def;
+    return Math.max(min, Math.min(max, Math.trunc(n)));
+  }
+  return {
+    enabled: env.WALNUT_TURN_RETRY === '1',
+    budgetMs: num(env.WALNUT_TURN_RETRY_BUDGET_MS, 12 * 3600000, 0, 7 * 86400000),
+    maxAttempts: num(env.WALNUT_TURN_RETRY_MAX_ATTEMPTS, 200, 0, 10000),
+    backoffBaseMs: num(env.WALNUT_TURN_RETRY_BACKOFF_MS, 30000, 1000, 3600000),
+    backoffMaxMs: num(env.WALNUT_TURN_RETRY_BACKOFF_MAX_MS, 600000, 1000, 3600000),
+  };
+}
+var TURN_RETRY_CFG = resolveTurnRetryConfig(process.env);
+function newTurnRetryState() {
+  return { attempts: 0, streakStartedAt: null, lastAttemptAt: null, lastHandledV: null };
+}
+// Budget is anchored on the streak START, not per attempt — re-anchoring each
+// attempt would make the budget unbounded.
+function decideTurnRetry(args) {
+  var state = args.state, cfg = args.cfg, nowMs = args.nowMs;
+  if (!cfg.enabled) return { retry: false, reason: 'disabled' };
+  if (args.v != null && state.lastHandledV != null && args.v <= state.lastHandledV) {
+    return { retry: false, reason: 'duplicate-line' };
+  }
+  if (classifyTurnError(args.errorText) === 'terminal') return { retry: false, reason: 'terminal' };
+  if (cfg.maxAttempts <= 0) return { retry: false, reason: 'attempts-exhausted' };
+  var streakStart = state.streakStartedAt != null ? state.streakStartedAt : nowMs;
+  var elapsedMs = nowMs - streakStart;
+  if (cfg.budgetMs <= 0 || elapsedMs >= cfg.budgetMs) return { retry: false, reason: 'budget-exhausted' };
+  if (state.attempts >= cfg.maxAttempts) return { retry: false, reason: 'attempts-exhausted' };
+  var raw = cfg.backoffBaseMs * Math.pow(2, state.attempts);
+  var delayMs = Math.min(cfg.backoffMaxMs, isFinite(raw) ? raw : cfg.backoffMaxMs);
+  return { retry: true, attempt: state.attempts + 1, delayMs: delayMs, elapsedMs: elapsedMs };
+}
+function applyTurnRetry(state, nowMs, v) {
+  state.streakStartedAt = state.streakStartedAt != null ? state.streakStartedAt : nowMs;
+  state.attempts += 1;
+  state.lastAttemptAt = nowMs;
+  if (v != null) state.lastHandledV = v;
+}
+function clearTurnRetryStreak(state) {
+  if (state.attempts === 0 && state.streakStartedAt == null) return false;
+  state.attempts = 0;
+  state.streakStartedAt = null;
+  state.lastAttemptAt = null;
+  return true;
+}
+function turnRetryMessage(attempt, errorText) {
+  var what = errorText ? String(errorText).replace(/\\s+/g, ' ').trim().slice(0, 200) : 'an upstream API error';
+  return '[Walnut auto-retry — automated message, not from the user] '
+    + 'The previous turn was interrupted by a transient upstream failure (' + what + ') '
+    + 'and did not finish. This is retry attempt ' + attempt + '. '
+    + 'Please continue exactly where you left off. Do not restart the task from the beginning, '
+    + 'and do not re-run work you already completed — check what you had already done first.';
+}
+function turnRetryMarkerText(a) {
+  var wait = a.delayMs < 60000
+    ? Math.round(a.delayMs / 1000) + 's'
+    : Math.round(a.delayMs / 60000) + 'min';
+  return 'Turn failed (' + (a.errorText || 'upstream error') + '). Walnut is auto-retrying in ' + wait
+    + ' — attempt ' + a.attempt + ', ' + Math.round(a.elapsedMs / 60000) + 'min into the '
+    + Math.round(a.budgetMs / 3600000) + 'h retry budget.';
+}
+function turnRetryGiveUpText(reason, errorText) {
+  var why = reason === 'budget-exhausted' ? 'the retry budget is spent'
+    : reason === 'attempts-exhausted' ? 'the retry attempt cap is reached'
+    : 'the error is not retryable';
+  return 'Turn failed (' + (errorText || 'upstream error') + ') and Walnut stopped auto-retrying because '
+    + why + '. Send a message to resume this session manually.';
+}
+function appendSystemMarker(sid, session, subtype, content) {
+  try {
+    var marker = JSON.stringify({
+      type: 'system', subtype: subtype, content: content,
+      uuid: crypto.randomUUID(), session_id: sid,
+      timestamp: new Date().toISOString(),
+    }) + '\\n';
+    fs.appendFileSync(session.jsonlPath, marker);
+  } catch (err) {
+    logMsg('warn', 'system marker append failed', { sid: sid, subtype: subtype, error: err.message });
+  }
+}
+function checkTurnRetry(sid, session, line, v) {
+  if (!TURN_RETRY_CFG.enabled) return;
+  var parsedErr = parseTurnErrorLine(line);
+  if (!parsedErr.isTurnError) {
+    // A clean turn ends the streak, so the budget bounds ONE outage.
+    if (line.indexOf('"type":"result"') !== -1 && session.turnRetry) {
+      if (clearTurnRetryStreak(session.turnRetry)) {
+        logMsg('info', 'turn-retry streak cleared by a successful turn', { sid: sid });
+        persistRegistry();
+      }
+    }
+    return;
+  }
+  if (!session.turnRetry) session.turnRetry = newTurnRetryState();
+  var now = Date.now();
+  var decision = decideTurnRetry({
+    errorText: parsedErr.text, state: session.turnRetry, cfg: TURN_RETRY_CFG, nowMs: now, v: v,
+  });
+  if (!decision.retry) {
+    if (decision.reason === 'duplicate-line') return;
+    logMsg('warn', 'turn-retry declined', {
+      sid: sid, reason: decision.reason, errorText: parsedErr.text,
+      attempts: session.turnRetry.attempts,
+    });
+    if (decision.reason !== 'terminal' || session.turnRetry.attempts > 0) {
+      appendSystemMarker(sid, session, 'turn_retry_stopped',
+        turnRetryGiveUpText(decision.reason, parsedErr.text));
+    }
+    return;
+  }
+  applyTurnRetry(session.turnRetry, now, v);
+  persistRegistry();
+  logMsg('warn', 'turn-retry scheduled', {
+    sid: sid, attempt: decision.attempt, delayMs: decision.delayMs,
+    elapsedMs: decision.elapsedMs, budgetMs: TURN_RETRY_CFG.budgetMs, errorText: parsedErr.text,
+  });
+  appendSystemMarker(sid, session, 'turn_retry', turnRetryMarkerText({
+    attempt: decision.attempt, delayMs: decision.delayMs, errorText: parsedErr.text,
+    budgetMs: TURN_RETRY_CFG.budgetMs, elapsedMs: decision.elapsedMs,
+  }));
+  if (session.turnRetryTimer) { clearTimeout(session.turnRetryTimer); session.turnRetryTimer = null; }
+  var attempt = decision.attempt;
+  var errText = parsedErr.text;
+  session.turnRetryTimer = setTimeout(function () {
+    session.turnRetryTimer = null;
+    try { fireTurnRetry(sid, attempt, errText); } catch (err) {
+      logMsg('error', 'turn-retry fire threw', { sid: sid, error: err.message });
+    }
+  }, decision.delayMs);
+}
+// Re-resolve the session from the map: across a 10-min backoff the entry can be
+// reaped and REPLACED, and nudging a stale object writes to a dead FIFO.
+function fireTurnRetry(sid, attempt, errorText) {
+  var session = sessions.get(sid);
+  if (!session) {
+    logMsg('info', 'turn-retry aborted — session gone', { sid: sid, attempt: attempt });
+    return;
+  }
+  var message = turnRetryMessage(attempt, errorText);
+  if (session.state === 'running' && session.pid) {
+    var alive = true;
+    try { process.kill(session.pid, 0); } catch { alive = false; }
+    if (alive) {
+      var payload = JSON.stringify({ type: 'user', message: { role: 'user', content: message } });
+      var ok = writeFifoRaw(session.pipePath, payload);
+      logMsg(ok ? 'info' : 'error',
+        'turn-retry ' + (ok ? 'injected via FIFO' : 'FIFO write FAILED'),
+        { sid: sid, attempt: attempt });
+      if (ok) return;
+    }
+  }
+  logMsg('info', 'turn-retry resuming dead session', { sid: sid, attempt: attempt });
+  cmdBridgeResume(RETRY_WS_SINK, 0, { cmd: 'bridgeResume', sid: sid, message: message });
+}
+// A retry is daemon-initiated, so there's no client socket to answer on. Drop
+// the reply but still surface failures — a silent drop would hide a broken
+// resume for 12 hours.
+var RETRY_WS_SINK = {
+  readyState: 1,
+  send: function (raw) {
+    try {
+      var parsed = JSON.parse(raw);
+      if (parsed && parsed.error) {
+        logMsg('error', 'turn-retry resume returned an error', { error: parsed.error });
+      }
+    } catch { /* non-JSON reply */ }
+    return 1;
+  },
+  close: function () {},
+};
+function cancelTurnRetry(sid, reason) {
+  var session = sessions.get(sid);
+  if (!session || !session.turnRetryTimer) return;
+  clearTimeout(session.turnRetryTimer);
+  session.turnRetryTimer = null;
+  logMsg('info', 'turn-retry canceled', { sid: sid, reason: reason });
+}
+
 function ensureWatcher(sid) {
   const session = sessions.get(sid);
   if (!session) return;
@@ -2847,6 +3113,15 @@ function ensureWatcher(sid) {
         // ── Durable-cron invariant, corrective half (see checkDurableCronCreate) ──
         if (line.includes('CronCreate')) {
           try { checkDurableCronCreate(sid, s, line); } catch {}
+        }
+
+        // ── Turn-error auto-retry (see checkTurnRetry) ──
+        // Clean results come through too: a successful turn is what clears the
+        // failure streak. Keep in sync with daemon-standalone.ts.
+        if (line.includes('"type":"result"')) {
+          try { checkTurnRetry(sid, s, line, v); } catch (err) {
+            logMsg('warn', 'turn-retry check threw', { sid, error: err.message });
+          }
         }
 
         // ── L2: materialize daemon-authoritative task state ──
@@ -3140,6 +3415,11 @@ function cmdSend(ws, id, cmd) {
   const { sid, message } = cmd;
   if (!sid || !message) return sendError(ws, id, 'send: missing sid or message');
 
+  // A real send means someone is driving this session now — drop any pending
+  // auto-retry so we never inject behind them. The retry's own delivery does
+  // NOT come through here, so this can't cancel itself.
+  cancelTurnRetry(sid, 'superseded-by-send');
+
   const session = sessions.get(sid);
   if (!session) return sendOk(ws, id, { ok: false, reason: 'not_found' });
   if (session.state === 'dead') {
@@ -3306,6 +3586,12 @@ function cmdStop(ws, id, cmd) {
 
   const pid = session.pid;
   logMsg('info', 'cmdStop: stopping session (process group kill)', { sid, pid });
+
+  // An explicit stop is a human decision — never undone by a pending auto-retry
+  // respawning the CLI minutes later. Cancel the timer AND clear the streak so
+  // an in-flight result line can't re-arm one either.
+  cancelTurnRetry(sid, 'session-stopped');
+  if (session.turnRetry) clearTurnRetryStreak(session.turnRetry);
 
   // 3-phase process group kill: SIGINT → SIGTERM → SIGKILL
   try {
@@ -4460,6 +4746,49 @@ function hasRecentSchedulerFiring(sid, withinMs) {
   }
 }
 
+// Session keep-alive protection: ONE authoritative verdict with a source.
+// Every "why is this idle session still alive?" decision flows through here;
+// getState exposes the same verdict. New cross-turn CLI state = add ONE
+// branch here. Keep in sync with daemon-standalone.ts (full rationale there).
+function deriveSessionProtection(session, sid, now) {
+  if (Object.keys(session.foldState.cronIds || {}).length > 0) {
+    return { source: 'cron', killMs: SESSION_CRON_IDLE_KILL_MS, detail: 'fold' };
+  }
+  if (session.cwd) {
+    // 10-min TTL cache — staleness only delays lift of protection, never a kill.
+    if (session.diskCronCache && now - session.diskCronCache.at < 10 * 60000) {
+      if (session.diskCronCache.armed) {
+        return { source: 'cron', killMs: SESSION_CRON_IDLE_KILL_MS, detail: 'disk-cache' };
+      }
+    } else {
+      var tasksJson = null, lockJson = null;
+      try { tasksJson = fs.readFileSync(path.join(session.cwd, '.claude', 'scheduled_tasks.json'), 'utf-8'); } catch {}
+      try { lockJson = fs.readFileSync(path.join(session.cwd, '.claude', 'scheduled_tasks.lock'), 'utf-8'); } catch {}
+      var disk = hasDiskCronInterest({ sid: sid, tasksJson: tasksJson, lockJson: lockJson, nowMs: now });
+      session.diskCronCache = { at: now, armed: disk.armed, reason: disk.reason };
+      if (disk.armed) {
+        return { source: 'cron', killMs: SESSION_CRON_IDLE_KILL_MS, detail: 'disk:' + (disk.reason || '') };
+      }
+    }
+  }
+  // In-process team: lead session polls teammates with no JSONL output.
+  if (session.foldState.teamActive) {
+    return { source: 'team', killMs: SESSION_BG_IDLE_KILL_MS };
+  }
+  // Running background task (daemon's OWN taskState) — inc-1786222771315.
+  if ((session.taskState && session.taskState.derivedRunning > 0) === true) {
+    return { source: 'bg-task', killMs: SESSION_BG_IDLE_KILL_MS };
+  }
+  // Pending turn-retry: the session is deliberately silent during the backoff
+  // (up to 10 min), which reads as "idle" to the reaper. Without this branch the
+  // idle kill eats a session that was waiting out an upstream outage, and the
+  // retry then fires against a corpse.
+  if (session.turnRetryTimer) {
+    return { source: 'turn-retry', killMs: SESSION_BG_IDLE_KILL_MS, detail: 'backoff-pending' };
+  }
+  return { source: null, killMs: SESSION_IDLE_KILL_MS };
+}
+
 function scanIdleSessions() {
   const now = Date.now();
   for (const [sid, session] of sessions) {
@@ -4825,7 +5154,14 @@ if (action === '--start') {
     fs.writeFileSync(INSTANCE_ID_FILE, DAEMON_INSTANCE_ID);
     fs.writeFileSync(VERSION_FILE, DAEMON_VERSION);
     console.log(port); // Print port for parent to capture
-    logMsg('info', 'daemon started', { port, pid: process.pid, startedAt: DAEMON_START_TS });
+    // turnRetry: read from env ONCE at boot, so this line is the only way to
+    // answer "is this daemon retrying, and with what budget?" without shell
+    // access to its environ. Keep in sync with daemon-standalone.ts.
+    logMsg('info', 'daemon started', { port, pid: process.pid, startedAt: DAEMON_START_TS,
+      turnRetry: TURN_RETRY_CFG.enabled
+        ? { budgetMs: TURN_RETRY_CFG.budgetMs, maxAttempts: TURN_RETRY_CFG.maxAttempts,
+            backoffBaseMs: TURN_RETRY_CFG.backoffBaseMs, backoffMaxMs: TURN_RETRY_CFG.backoffMaxMs }
+        : false });
 
     // Start session idle scanner (every 60s)
     setInterval(scanIdleSessions, SESSION_SCAN_INTERVAL_MS);
