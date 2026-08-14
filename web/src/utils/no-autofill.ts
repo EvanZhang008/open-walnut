@@ -22,7 +22,17 @@ export const NO_AUTOFILL_PROPS = {
  * (React never diffs attributes it didn't render, so external stamping sticks).
  */
 export function installGlobalAutofillSuppression(): void {
+  // Text-entry fields only. Checkboxes/radios/etc. never trigger autofill, and
+  // stamping them is actively harmful: a checkbox inside a ProseMirror editor
+  // (notes task list) is owned by PM's own MutationObserver — our setAttribute
+  // makes PM re-render the node, the fresh <input> re-triggers our observer,
+  // and the two observers ping-pong forever (700k mutations/4s, froze the
+  // whole app — 2026-08-13 incident).
+  const TEXT_FIELDS =
+    'textarea, input:not([type]), input[type="text"], input[type="search"], input[type="email"], input[type="url"], input[type="tel"], input[type="number"], input[type="password"]';
   const stamp = (el: Element) => {
+    // Never touch editor-owned DOM (ProseMirror/contenteditable) — see above.
+    if (el.closest('.ProseMirror, [contenteditable="true"]')) return;
     if (!el.hasAttribute('autocomplete')) el.setAttribute('autocomplete', 'off');
     if (!el.hasAttribute('data-1p-ignore')) el.setAttribute('data-1p-ignore', '');
     if (!el.hasAttribute('data-lpignore')) el.setAttribute('data-lpignore', 'true');
@@ -30,8 +40,8 @@ export function installGlobalAutofillSuppression(): void {
     if (!el.hasAttribute('data-form-type')) el.setAttribute('data-form-type', 'other');
   };
   const scan = (root: Element) => {
-    if (root.matches('input, textarea')) stamp(root);
-    for (const el of root.querySelectorAll('input, textarea')) stamp(el);
+    if (root.matches(TEXT_FIELDS)) stamp(root);
+    for (const el of root.querySelectorAll(TEXT_FIELDS)) stamp(el);
   };
   scan(document.documentElement);
   // Cheap per-batch work: text-node mutations (streaming output) are filtered
