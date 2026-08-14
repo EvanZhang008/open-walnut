@@ -147,6 +147,14 @@ interface SessionChatHistoryProps {
   /** Bubbles the hook's isStreaming up so parents don't need to mount their
    *  own useSessionStream (which would double RPCs + defensive-clear paths). */
   onStreamingChange?: (isStreaming: boolean) => void;
+  /**
+   * Bump to jump the timeline to the bottom, exactly like clicking the ↓ arrow.
+   * Unconditional by design — the caller is acting ON the user's behalf (they
+   * clicked "Ask about this", so the composer is where they now are), which is
+   * why this ignores isAtBottom and the selection guard that the automatic
+   * follow-bottom paths respect. 0/undefined = no-op (initial mount).
+   */
+  scrollToBottomNonce?: number;
 }
 
 /** Memoized text block that caches renderMarkdownWithRefs output */
@@ -804,7 +812,7 @@ const NEAR_BOTTOM_PX = 80;  // px from bottom to consider "at bottom"
 const TRIPWIRE_SETTLE_MS = (typeof window !== 'undefined'
   && (window as unknown as { __tripwireSettleMs?: number }).__tripwireSettleMs) || 8_000;
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce }: SessionChatHistoryProps) {
   // Slow-commit detector: renderT0 is per-render-pass (closure), the layout
   // effect runs after THAT pass commits — the delta is the synchronous
   // render+commit cost of this whole conversation subtree. This is the
@@ -1629,6 +1637,28 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (!el) return;
     el.scrollTop = el.scrollHeight;
     isAtBottom.current = true;
+
+  // Parent-requested jump to the bottom (a quote-to-ask prefill). Deliberately
+  // NOT gated on isAtBottom or the selection guard: those protect the AUTOMATIC
+  // follow paths from yanking a reader around, but this is the user's own
+  // action — they clicked "Ask about this", so the composer is where they are
+  // now, and the timeline must show the end of the conversation. Chased across
+  // a few frames because the prefill grows the composer (multi-line quote),
+  // which shrinks this scroller a frame or two later.
+  useEffect(() => {
+    if (!scrollToBottomNonce) return;
+    let frames = 0;
+    let raf = 0;
+    const chase = () => {
+      const el = containerRef.current;
+      if (!el) return;
+      el.scrollTop = el.scrollHeight;
+      isAtBottom.current = true;
+      setShowScrollArrow(false);
+      if (frames++ < 6) raf = requestAnimationFrame(chase);
+    };
+    raf = requestAnimationFrame(chase);
+    return () => cancelAnimationFrame(raf);
     setShowScrollArrow(false);
   }, []);
 

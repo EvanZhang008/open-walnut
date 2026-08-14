@@ -84,6 +84,16 @@ function composer(panel: Locator) {
   return panel.locator('textarea.chat-input-textarea')
 }
 
+/** The scrolling timeline element of the session panel. */
+function timeline(panel: Locator) {
+  return panel.locator('.session-history')
+}
+
+/** Distance from the bottom of the timeline, in px. */
+async function distanceFromBottom(scroller: Locator): Promise<number> {
+  return scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)
+}
+
 test.beforeEach(async ({ page }) => {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
@@ -146,4 +156,33 @@ test('fullscreen file view steps aside so the composer is visible', async ({ pag
 
   await page.keyboard.type('summarize this section')
   await expect(input).toHaveValue(/summarize this section$/)
+})
+
+test('the timeline jumps to the bottom, so the prefilled composer is in context', async ({ page }) => {
+  const panel = await openSessionPanel(page)
+  const scroller = timeline(panel)
+  const scrollable = await scroller.evaluate((el) => el.scrollHeight - el.clientHeight)
+  test.skip(scrollable < 500, `fixture timeline is not scrollable enough (${scrollable}px of slack)`)
+
+  const explorer = await openFiles(panel)
+  const editor = await openReportSource(explorer)
+
+  // Scroll up with a REAL wheel gesture, not `scrollTop = 0`. Only the wheel
+  // makes the component's own scroll handler set isAtBottom=false; a scripted
+  // scrollTop write is silently undone by the next follow-bottom pass, which
+  // made an earlier version of this test pass without the fix (vacuously).
+  const box = await scroller.boundingBox()
+  if (!box) throw new Error('timeline has no box')
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  for (let i = 0; i < 12; i++) {
+    await page.mouse.wheel(0, -400)
+    await page.waitForTimeout(60)
+  }
+  await expect.poll(() => distanceFromBottom(scroller)).toBeGreaterThan(500)
+
+  await selectAndAsk(page, editor)
+
+  // The prefill is useless if the conversation it refers to is off-screen.
+  // Measured without the fix: still ~2900px up. With it: 0.
+  await expect.poll(() => distanceFromBottom(scroller), { timeout: 5_000 }).toBeLessThan(30)
 })

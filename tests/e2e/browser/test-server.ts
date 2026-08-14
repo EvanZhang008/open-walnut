@@ -640,6 +640,24 @@ await fs.writeFile(
           content: [{ type: 'text', text: `Wrote them to ${linkedPath} — take a look.` }],
         },
       }),
+      // Filler turns AFTER the file-link message, so the timeline actually
+      // overflows its scroller. ask-about-this-focus.spec.ts needs a scrollable
+      // history to prove the "jump to the bottom" contract; specs that want the
+      // file link still find it (they match by text and take .first()).
+      ...Array.from({ length: 30 }, (_, i) => [
+        JSON.stringify({
+          type: 'user',
+          sessionId: 'pw-vscode-session',
+          timestamp: new Date(sessionFixtureNow - 34_000 + i * 400).toISOString(),
+          message: { role: 'user', content: `filler question ${i + 1}` },
+        }),
+        JSON.stringify({
+          type: 'assistant',
+          sessionId: 'pw-vscode-session',
+          timestamp: new Date(sessionFixtureNow - 33_800 + i * 400).toISOString(),
+          message: { role: 'assistant', content: [{ type: 'text', text: `filler answer ${i + 1}` }] },
+        }),
+      ]).flat(),
       '',
     ].join('\n'),
   )

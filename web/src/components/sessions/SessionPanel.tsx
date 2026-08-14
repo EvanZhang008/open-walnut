@@ -1433,6 +1433,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             onSessionClick={onSessionClick}
             onFileOpen={handleFileOpen}
             onStreamingChange={setIsStreaming}
+            // Same nonce that drives the prefill: asking about a selection must
+            // also SHOW the end of the conversation, or the composer fills in
+            // while the timeline still sits wherever the user last scrolled.
+            scrollToBottomNonce={prefillNonce}
           />
         </div>
 
