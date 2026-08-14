@@ -22,6 +22,17 @@ vi.mock('../../../src/utils/session-liveness.js', () => ({
   isSessionProcessAlive: async () => false,
 }));
 
+// Retry's resume path pre-flights the CLI conversation JSONL (2026-08-13
+// incident). Report it present so the resume-contract tests keep exercising
+// resume; the preflight itself is covered by session-retry-preflight.test.ts.
+vi.mock('../../../src/core/session-file-reader.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/core/session-file-reader.js')>();
+  return {
+    ...actual,
+    findLocalJsonlPath: async () => '/fake/projects/x/session.jsonl',
+  };
+});
+
 // Mock daemon-connection (used by enrichWithLiveStatus)
 vi.mock('../../../src/providers/daemon-connection.js', () => ({
   isDaemonConnected: () => false,

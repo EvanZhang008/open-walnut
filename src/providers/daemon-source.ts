@@ -1814,7 +1814,9 @@ function cmdBridgeResume(ws, id, cmd) {
   logMsg('info', 'bridgeResume: respawning dead session', {
     sid: sid, cwd: cwd, recordLost: !session || !session.args || session.args.length === 0,
   });
-  cmdStart(ws, id, {
+  // cmdStart is async (FIFO write continuation) — return the promise so the
+  // dispatcher's rejection handler owns any throw.
+  return cmdStart(ws, id, {
     cmd: 'start',
     sid: sid,
     args: args,
@@ -2278,7 +2280,7 @@ function cmdMobileEvent(ws, id, cmd) {
 }
 
 // ── Start a Claude session ──
-function cmdStart(ws, id, cmd) {
+async function cmdStart(ws, id, cmd) {
   const { sid, args, cwd, message, resume, mode } = cmd;
   // message is OPTIONAL: empty/absent spawns the CLI without writing a user turn
   // to the FIFO — the process emits its init event (+ SessionStart hook, fresh
@@ -2303,7 +2305,7 @@ function cmdStart(ws, id, cmd) {
       if (oldAlive) {
         const payload = JSON.stringify({ type: 'user', message: { role: 'user', content: message } });
         let wrote = 'fail';
-        try { wrote = writeFifoFully(existing.pipePath, Buffer.from(payload + '\\n')); } catch {}
+        try { wrote = await chainFifoWrite(sid, existing, Buffer.from(payload + '\\n')); } catch {}
         if (wrote === 'ok') {
           if (mode) existing.mode = mode;
           // Hand out a COMPLETE-line boundary, never a raw stat().size: this
@@ -2571,21 +2573,16 @@ function buildControlResponse(requestId, request, allow, message) {
 function writeFifoRaw(pipePath, raw) {
   try {
     const buf = Buffer.from(raw.endsWith('\\n') ? raw : raw + '\\n');
-    return writeFifoFully(pipePath, buf) === 'ok';
+    return writeFifoQuick(pipePath, buf) === 'ok';
   } catch { return false; }
 }
 
-// Write a full buffer to a FIFO with O_NONBLOCK + retry. PIPE_BUF on macOS is
-// 512 bytes; a single non-blocking writeSync of a larger buffer may return a
-// partial count, and stopping there leaves the pipe corrupted (CLI's stdin
-// line parser will splice the truncated fragment with whatever bytes follow,
-// causing JSON.parse to fail and the CLI to exit). Loop on partial writes,
-// short-retry on EAGAIN, surface ENXIO when the reader is gone.
-//
-// Returns: 'ok' (full write), 'ENXIO' (no reader), 'EAGAIN' (no progress
-// within budget), or 'partial' (some bytes written but not all — caller MUST
-// reap because the pipe now holds half a JSON line).
-function writeFifoFully(pipePath, buf) {
+// SYNC FIFO write for fire-and-forget callers (auto-allow control_responses,
+// cron provenance injection). Those fire only when the CLI is ALIVE and
+// draining stdin (it just emitted a control_request / turn line), so a short
+// 500ms busy-wait budget is safe and keeps the write atomic from the caller's
+// perspective. The boot-race path (user sends) uses writeFifoFullyAsync.
+function writeFifoQuick(pipePath, buf) {
   let fd;
   try {
     fd = fs.openSync(pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
@@ -2604,7 +2601,6 @@ function writeFifoFully(pipePath, buf) {
         consecutiveEagain++;
       } catch (err) {
         if (err && err.code === 'EAGAIN') {
-          if (offset === 0 && consecutiveEagain === 0) return 'EAGAIN';
           consecutiveEagain++;
         } else {
           throw err;
@@ -2619,6 +2615,73 @@ function writeFifoFully(pipePath, buf) {
   } finally {
     try { fs.closeSync(fd); } catch {}
   }
+}
+
+// Write a full buffer to a FIFO with O_NONBLOCK + ASYNC retry. PIPE_BUF on
+// macOS is 512 bytes; a single non-blocking writeSync of a larger buffer may
+// return a partial count, and stopping there leaves the pipe corrupted (CLI's
+// stdin line parser will splice the truncated fragment with whatever bytes
+// follow, causing JSON.parse to fail and the CLI to exit).
+//
+// BOOT RACE (2026-08-13 incident): a freshly-spawned CLI takes 2-7s before it
+// reads stdin at all; a first-turn prompt easily exceeds the kernel pipe
+// buffer, so the write stalls until the CLI starts draining. The old sync
+// writer busy-blocked (Atomics.wait) for a 500ms budget then gave up mid-line,
+// and the caller reaped a healthy booting process. This version awaits between
+// retries and keeps the fd open across the whole attempt (closing mid-payload
+// is what makes a partial unrecoverable). Keep in sync with daemon-core.ts.
+//
+// Returns: 'ok' (full write), 'ENXIO' (no reader / reader closed), 'EAGAIN'
+// (ZERO bytes accepted within deadline — pipe intact, retriable), or 'partial'
+// (prefix written but unfinished at deadline — caller MUST reap: the pipe now
+// holds half a JSON line).
+const FIFO_WRITE_DEADLINE_MS = 20000;
+async function writeFifoFullyAsync(pipePath, buf, deadline, isAbandoned) {
+  const RETRY_INTERVAL_MS = 25;
+  let fd;
+  try {
+    fd = fs.openSync(pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+  } catch (err) {
+    if (err && err.code === 'ENXIO') return 'ENXIO';
+    throw err;
+  }
+  try {
+    let offset = 0;
+    while (offset < buf.length) {
+      try {
+        const n = fs.writeSync(fd, buf, offset, buf.length - offset);
+        if (n > 0) { offset += n; continue; }
+      } catch (err) {
+        if (err && err.code === 'EPIPE') return 'ENXIO';
+        if (!err || err.code !== 'EAGAIN') throw err;
+      }
+      if (Date.now() >= deadline || (isAbandoned && isAbandoned())) {
+        return offset === 0 ? 'EAGAIN' : 'partial';
+      }
+      await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL_MS));
+    }
+    return 'ok';
+  } finally {
+    try { fs.closeSync(fd); } catch {}
+  }
+}
+
+// Serialize FIFO writes per session — async writes yield between retries, so
+// two concurrent sends could interleave partial writes and splice two half
+// lines into one corrupted line. Chain each write behind the previous one.
+// Returns the write outcome, or 'dead' if the session was reaped while queued.
+// Keep in sync with daemon-core.ts chainFifoWrite.
+async function chainFifoWrite(sid, session, buf) {
+  const deadline = Date.now() + FIFO_WRITE_DEADLINE_MS;
+  const prev = session.fifoWriteChain || Promise.resolve();
+  const run = prev.catch(() => {}).then(async () => {
+    if (session.state === 'dead' || sessions.get(sid) !== session) return 'dead';
+    return writeFifoFullyAsync(session.pipePath, buf, deadline, () => session.state === 'dead');
+  });
+  session.fifoWriteChain = run;
+  const result = await run;
+  if (session.fifoWriteChain === run) session.fifoWriteChain = undefined;
+  return result;
 }
 
 // ── File watching for JSONL streaming ──
@@ -3621,7 +3684,7 @@ function cmdAttach(ws, id, cmd) {
 }
 
 // ── Send message ──
-function cmdSend(ws, id, cmd) {
+async function cmdSend(ws, id, cmd) {
   const { sid, message } = cmd;
   if (!sid || !message) return sendError(ws, id, 'send: missing sid or message');
 
@@ -3650,13 +3713,18 @@ function cmdSend(ws, id, cmd) {
 
   try {
     const buf = Buffer.from(payload + '\\n');
-    const result = writeFifoFully(session.pipePath, buf);
+    const result = await chainFifoWrite(sid, session, buf);
     if (result === 'ok') {
       sendOk(ws, id, { ok: true });
+    } else if (result === 'dead') {
+      // Reaped while queued/retrying — reaper already ran, just report it.
+      sendOk(ws, id, { ok: false, reason: 'session_dead', exitCode: session.exitCode });
     } else if (result === 'ENXIO') {
       reapSession(sid, -1, 'send-enxio');
       sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: session.exitCode });
     } else if (result === 'EAGAIN') {
+      // Zero bytes accepted within the deadline: pipe full but INTACT — a
+      // booting CLI gets another chance on retry instead of being reaped.
       sendOk(ws, id, { ok: false, reason: 'EAGAIN', retriable: true });
     } else {
       // partial — pipe is now corrupted, reap so caller stops trying.
@@ -3670,7 +3738,7 @@ function cmdSend(ws, id, cmd) {
 
 // Send raw (permission-prompt-tool control_response passthrough)
 // Writes 'raw' verbatim to the FIFO, no user-message wrapping.
-function cmdSendRaw(ws, id, cmd) {
+async function cmdSendRaw(ws, id, cmd) {
   const { sid, raw } = cmd;
   if (!sid || !raw) return sendError(ws, id, 'sendRaw: missing sid or raw');
 
@@ -3689,7 +3757,7 @@ function cmdSendRaw(ws, id, cmd) {
 
   try {
     const buf = Buffer.from(raw.endsWith('\\n') ? raw : raw + '\\n');
-    const result = writeFifoFully(session.pipePath, buf);
+    const result = await chainFifoWrite(sid, session, buf);
     if (result === 'ok') {
       if (session.pendingCtrl) {
         try {
@@ -3705,6 +3773,8 @@ function cmdSendRaw(ws, id, cmd) {
         } catch {}
       }
       sendOk(ws, id, { ok: true });
+    } else if (result === 'dead') {
+      sendOk(ws, id, { ok: false, reason: 'session_dead', exitCode: session.exitCode });
     } else if (result === 'ENXIO') {
       reapSession(sid, -1, 'sendRaw-enxio');
       sendOk(ws, id, { ok: false, reason: 'ENXIO', exitCode: session.exitCode });

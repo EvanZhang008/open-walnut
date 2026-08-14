@@ -44,6 +44,19 @@ vi.mock('../../../src/utils/session-liveness.js', () => ({
   isSessionProcessAlive: vi.fn().mockResolvedValue(false),
 }));
 
+// The resume path now pre-flights that the CLI's conversation JSONL exists
+// (2026-08-13 incident: --resume on a never-persisted conversation loops
+// forever). These tests exercise the resume CONTRACT, so report the file as
+// present; the preflight's own behavior is covered by
+// tests/core/session-retry-preflight.test.ts.
+vi.mock('../../../src/core/session-file-reader.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/core/session-file-reader.js')>();
+  return {
+    ...actual,
+    findLocalJsonlPath: vi.fn().mockResolvedValue('/fake/projects/x/session.jsonl'),
+  };
+});
+
 // Mock config-manager — use importOriginal to avoid missing-export errors
 vi.mock('../../../src/core/config-manager.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/core/config-manager.js')>();

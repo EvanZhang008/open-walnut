@@ -455,9 +455,50 @@ export type RetryResult =
   | { status: 'pending'; taskId: string; oldSessionId: string };
 
 /**
+ * Pre-flight for the --resume path: does the CLI's canonical conversation
+ * JSONL (~/.claude/projects/<encoded-cwd>/<sid>.jsonl) actually exist on the
+ * session's execution host?
+ *
+ * WHY (2026-08-13 incident): a CLI killed within ~2s of its FIRST spawn never
+ * persists a conversation at all. Every `claude --resume <sid>` then exits 1
+ * with "No conversation found", so the retry button was an unfixable loop —
+ * the user pressed it twice, spawned two more doomed processes. The existing
+ * conversation-lost auto-archive only fires AFTER such a doomed spawn fails;
+ * this check skips the doomed spawn entirely and reroutes to a fresh session.
+ *
+ * Returns true when the file exists, false when provably absent, and true on
+ * any probe error (daemon unreachable etc.) — fail OPEN, --resume itself will
+ * produce the authoritative error.
+ */
+async function resumeConversationExists(record: SessionRecord): Promise<boolean> {
+  // Only the claude CLI has this on-disk layout; ACP/other engines manage
+  // their own persistence — don't second-guess them.
+  if (record.provider && record.provider !== 'cli') return true;
+  if (record.engine && record.engine !== 'claude') return true;
+  try {
+    if (!record.host || record.host === '__local__') {
+      const { findLocalJsonlPath } = await import('../session-file-reader.js');
+      return (await findLocalJsonlPath(record.claudeSessionId, record.cwd ?? undefined)) !== null;
+    }
+    // DaemonFileReader directly (not the SessionFileReader interface): we only
+    // need the path probe, findSession would pull the whole file's content.
+    const { DaemonFileReader } = await import('../daemon-file-reader.js');
+    const reader = new DaemonFileReader(record.host);
+    return (await reader.findSessionPath(record.claudeSessionId)) !== null;
+  } catch (err) {
+    log.session.warn('retry: conversation pre-flight probe failed — assuming resumable', {
+      sessionId: record.claudeSessionId, host: record.host,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return true;
+  }
+}
+
+/**
  * Retry a failed/stopped session. Three paths, identical to the web route:
- * (1) process alive → clear error state; (2) process dead → --resume via the
- * message queue; (3) never initialized → archive + start a new session.
+ * (1) process alive → clear error state; (2) process dead + conversation on
+ * disk → --resume via the message queue; (3) never initialized OR conversation
+ * never persisted → archive + start a new session.
  */
 export async function retrySession(sessionId: string): Promise<RetryResult> {
   const { getSessionByClaudeId, updateSessionRecord, emitSessionStatusChanged } = await import('../session-tracker.js');
@@ -487,21 +528,31 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
       return { status: 'reconnected', sessionId };
     }
 
-    // Process dead: resume via --resume. If the pending queue already holds the
-    // user's original message, re-trigger processNext (sends the ORIGINAL text).
-    const { sendMessageToSession, getQueue } = await import('../session-message-queue.js');
-    const pendingMsgs = await getQueue(sessionId);
-    if (pendingMsgs.length > 0) {
-      bus.emit(EventNames.SESSION_SEND, { sessionId, taskId: record.taskId }, ['session-runner'], { source: 'retry' });
-      log.session.info('session retry: re-processing pending queue messages', { sessionId, taskId: record.taskId, count: pendingMsgs.length });
-      return { status: 'resuming', sessionId, restoredMessages: pendingMsgs.length };
+    // Process dead. --resume only works if the CLI persisted a conversation;
+    // otherwise fall through to the fresh-start path below (same handling as
+    // "failed before init" — because that's what it effectively is).
+    if (await resumeConversationExists(record)) {
+      // Resume via --resume. If the pending queue already holds the user's
+      // original message, re-trigger processNext (sends the ORIGINAL text).
+      const { sendMessageToSession, getQueue } = await import('../session-message-queue.js');
+      const pendingMsgs = await getQueue(sessionId);
+      if (pendingMsgs.length > 0) {
+        bus.emit(EventNames.SESSION_SEND, { sessionId, taskId: record.taskId }, ['session-runner'], { source: 'retry' });
+        log.session.info('session retry: re-processing pending queue messages', { sessionId, taskId: record.taskId, count: pendingMsgs.length });
+        return { status: 'resuming', sessionId, restoredMessages: pendingMsgs.length };
+      }
+      await sendMessageToSession(sessionId, 'continue', { source: 'retry', taskId: record.taskId });
+      log.session.info('session retry: resuming via --resume (no pending messages)', { sessionId, taskId: record.taskId });
+      return { status: 'resuming', sessionId };
     }
-    await sendMessageToSession(sessionId, 'continue', { source: 'retry', taskId: record.taskId });
-    log.session.info('session retry: resuming via --resume (no pending messages)', { sessionId, taskId: record.taskId });
-    return { status: 'resuming', sessionId };
+    log.session.warn('session retry: conversation never persisted — starting fresh instead of --resume', {
+      sessionId, taskId: record.taskId, host: record.host, cwd: record.cwd,
+    });
   }
 
-  // Fallback: no claudeSessionId (failed before init) → archive + start new.
+  // Fresh start: no claudeSessionId (failed before init) or the conversation
+  // JSONL never made it to disk (killed during first spawn) → archive + new.
+  const conversationLost = !!record.claudeSessionId;
   const { getTask } = await import('../task-manager.js');
   let task;
   try {
@@ -511,7 +562,10 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
   }
   if (!task) throw new SessionControlError('Associated task not found', 404);
 
-  await updateSessionRecord(sessionId, { archived: true, archive_reason: 'retry' });
+  await updateSessionRecord(sessionId, {
+    archived: true,
+    archive_reason: conversationLost ? 'conversation_never_persisted' : 'retry',
+  });
   try {
     const { clearSession, clearSessionSlot } = await import('../task-manager.js');
     await clearSession(task.id, sessionId);
@@ -520,9 +574,18 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
 
   let retryMessage = 'Retry session';
   try {
-    const { messages } = await readProviderSessionHistory(sessionId, record, record.host, false);
-    const firstUser = messages.find((m) => m.role === 'user');
-    if (firstUser?.text) retryMessage = firstUser.text;
+    // Prefer the pending queue (the exact message the user tried to send);
+    // fall back to the walnut-side stream history's first user message.
+    const { getQueue } = await import('../session-message-queue.js');
+    const pendingMsgs = await getQueue(sessionId);
+    const pendingText = pendingMsgs.map((m) => m.message).filter(Boolean).join('\n');
+    if (pendingText) {
+      retryMessage = pendingText;
+    } else {
+      const { messages } = await readProviderSessionHistory(sessionId, record, record.host, false);
+      const firstUser = messages.find((m) => m.role === 'user');
+      if (firstUser?.text) retryMessage = firstUser.text;
+    }
   } catch { /* history may be unavailable */ }
 
   bus.emit(EventNames.SESSION_START, {
@@ -535,8 +598,8 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
     host: record.host,
   }, ['session-runner'], { source: 'retry' });
 
-  log.session.info('session retry: no claudeSessionId, started new session', {
-    oldSessionId: sessionId, taskId: task.id,
+  log.session.info('session retry: started new session', {
+    oldSessionId: sessionId, taskId: task.id, conversationLost,
   });
   return { status: 'pending', taskId: task.id, oldSessionId: sessionId };
 }

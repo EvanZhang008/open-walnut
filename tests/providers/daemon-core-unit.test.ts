@@ -484,38 +484,38 @@ describe('handleSendCommand', () => {
     return sess
   }
 
-  it('returns not_found for unknown sid', () => {
+  it('returns not_found for unknown sid', async () => {
     const core = createDaemonCore(h.deps)
-    const r = core.handleSendCommand('nope', 'hi')
+    const r = await core.handleSendCommand('nope', 'hi')
     expect(r).toEqual({ ok: false, reason: 'not_found' })
   })
 
-  it('returns error for missing sid/message', () => {
+  it('returns error for missing sid/message', async () => {
     const core = createDaemonCore(h.deps)
-    expect(core.handleSendCommand(undefined, 'x')).toHaveProperty('error')
-    expect(core.handleSendCommand('sid', undefined)).toHaveProperty('error')
+    expect(await core.handleSendCommand(undefined, 'x')).toHaveProperty('error')
+    expect(await core.handleSendCommand('sid', undefined)).toHaveProperty('error')
   })
 
-  it('returns session_dead if state=dead', () => {
+  it('returns session_dead if state=dead', async () => {
     const core = createDaemonCore(h.deps)
     h.sessions.set('s', makeSession('s', { state: 'dead', exitCode: 7 }))
-    const r = core.handleSendCommand('s', 'hi')
+    const r = await core.handleSendCommand('s', 'hi')
     expect(r).toEqual({ ok: false, reason: 'session_dead', exitCode: 7 })
   })
 
-  it('precheck-dead: kill(pid,0) throws → reap + return session_dead', () => {
+  it('precheck-dead: kill(pid,0) throws → reap + return session_dead', async () => {
     const core = createDaemonCore(h.deps)
     const sid = 'precheck-dead'
     h.sessions.set(sid, makeSession(sid, { pid: 3001, exitCode: null }))
     // pidAlive does NOT include 3001 → kill throws
 
-    const r = core.handleSendCommand(sid, 'hi')
+    const r = await core.handleSendCommand(sid, 'hi')
     expect(r).toMatchObject({ ok: false, reason: 'session_dead' })
     expect(h.sessions.get(sid)!.state).toBe('dead')
     expect(h.sessions.get(sid)!.exitReason).toBe('send-precheck-dead')
   })
 
-  it('ENXIO: FIFO with no reader → reap + return ENXIO', () => {
+  it('ENXIO: FIFO with no reader → reap + return ENXIO', async () => {
     const core = createDaemonCore(h.deps)
     const sid = 'enxio'
     // Create FIFO but DO NOT open for reading
@@ -525,17 +525,17 @@ describe('handleSendCommand', () => {
     h.sessions.set(sid, makeSession(sid, { pid: 3002, pipePath }))
     h.pidAlive.add(3002)  // pass precheck
 
-    const r = core.handleSendCommand(sid, 'hi')
+    const r = await core.handleSendCommand(sid, 'hi')
     expect(r).toMatchObject({ ok: false, reason: 'ENXIO' })
     expect(h.sessions.get(sid)!.state).toBe('dead')
     expect(h.sessions.get(sid)!.exitReason).toBe('send-enxio')
   })
 
-  it('ok: writes to FIFO when reader exists', () => {
+  it('ok: writes to FIFO when reader exists', async () => {
     const core = createDaemonCore(h.deps)
     const sess = setupLiveSession('ok', { pid: 3003 })
 
-    const r = core.handleSendCommand('ok', 'hi there')
+    const r = await core.handleSendCommand('ok', 'hi there')
     expect(r).toEqual({ ok: true })
 
     // Cleanup: close read fd
@@ -569,7 +569,7 @@ describe('handleSendRawCommand', () => {
     return sess
   }
 
-  it('clears and persists matching pendingCtrl after a successful FIFO write', () => {
+  it('clears and persists matching pendingCtrl after a successful FIFO write', async () => {
     const core = createDaemonCore(h.deps)
     const sess = setupLiveSession('raw-clears-pending', 'req-1')
     core.persistRegistry()
@@ -578,14 +578,14 @@ describe('handleSendRawCommand', () => {
       type: 'control_response',
       response: { subtype: 'success', request_id: 'req-1', response: { behavior: 'allow' } },
     })
-    expect(core.handleSendRawCommand('raw-clears-pending', raw)).toEqual({ ok: true })
+    expect(await core.handleSendRawCommand('raw-clears-pending', raw)).toEqual({ ok: true })
     expect(sess.pendingCtrl).toBeNull()
     expect(core.readRegistry()['raw-clears-pending']?.pendingCtrl).toBeUndefined()
 
     try { fs.closeSync((sess as unknown as { _readFd: number })._readFd) } catch {}
   })
 
-  it('does not clear pendingCtrl when the FIFO write fails', () => {
+  it('does not clear pendingCtrl when the FIFO write fails', async () => {
     const core = createDaemonCore(h.deps)
     const sid = 'raw-failed-write'
     const pipePath = path.join(h.streamsDir, `${sid}.pipe`)
@@ -607,7 +607,7 @@ describe('handleSendRawCommand', () => {
       type: 'control_response',
       response: { subtype: 'success', request_id: 'req-2', response: { behavior: 'allow' } },
     })
-    expect(core.handleSendRawCommand(sid, raw)).toMatchObject({ ok: false, reason: 'ENXIO' })
+    expect(await core.handleSendRawCommand(sid, raw)).toMatchObject({ ok: false, reason: 'ENXIO' })
     expect(sess.pendingCtrl?.reqId).toBe('req-2')
   })
 })

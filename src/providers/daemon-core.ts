@@ -95,6 +95,10 @@ export interface CoreSessionData {
   ttftSendTs?: number | null
   /** One-shot flag: first stream_event line since ttftSendTs already logged. */
   ttftSawFirstLine?: boolean
+  /** Per-session FIFO write serializer. Async writes (writeFifoFullyAsync) must
+   *  not interleave — two concurrent partial writes would splice their bytes
+   *  into one corrupted line. Each send chains behind the previous one. */
+  fifoWriteChain?: Promise<unknown>
 }
 
 export interface DaemonCoreDeps<S extends CoreSessionData = CoreSessionData> {
@@ -112,6 +116,10 @@ export interface DaemonCoreDeps<S extends CoreSessionData = CoreSessionData> {
   streamsDir: string
   registryFile: string
   orphanPollIntervalMs?: number
+  /** Total budget for one FIFO send (chain wait + write), ms. Must stay under
+   *  the walnut client's 30s RPC timeout so the strict-ack always settles.
+   *  Default 20s — covers CLI boot (measured 2–7s before it reads stdin). */
+  fifoWriteDeadlineMs?: number
   logger: (level: string, msg: string, meta?: Record<string, unknown>) => void
   /** Broadcasts `{ev:'session_state', sid, state, ...extra}` to all wsClients. */
   broadcastSessionStateFn: (payload: Record<string, unknown>) => void
@@ -183,15 +191,20 @@ export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
    * Strict-ack send handler. Takes sid + message, returns the SendResult the
    * client should receive. Side-effects: may call reapSession on precheck-dead
    * or ENXIO to converge the death funnel synchronously with the request.
+   *
+   * ASYNC since the boot-race fix (2026-08-13 incident): a freshly-spawned CLI
+   * takes 2–7s before it starts draining stdin, so a full FIFO must be retried
+   * with an async continuation (bounded by fifoWriteDeadlineMs) instead of the
+   * old 500ms sync budget that reaped a healthy booting process.
    */
-  handleSendCommand: (sid: string | undefined, message: string | undefined) => SendResult
+  handleSendCommand: (sid: string | undefined, message: string | undefined) => Promise<SendResult>
   /**
    * Same as handleSendCommand but writes `raw` to the FIFO verbatim without
    * the `{type:"user",...}` wrapping. Used for control_response messages from
    * the --permission-prompt-tool stdio protocol — the CLI expects its own
    * control envelope and rejects anything wrapped in user-message shape.
    */
-  handleSendRawCommand: (sid: string | undefined, raw: string | undefined) => SendResult
+  handleSendRawCommand: (sid: string | undefined, raw: string | undefined) => Promise<SendResult>
   /**
    * Append a walnut-injected user marker line to the session's stream file.
    * The CLI never echoes stdin user messages to its stream-json stdout, so
@@ -234,6 +247,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
   const clearIntervalFn = deps.clearIntervalFn ?? clearInterval
   const setTimeoutFn = deps.setTimeoutFn ?? setTimeout
   const orphanPollIntervalMs = deps.orphanPollIntervalMs ?? 1000
+  const fifoWriteDeadlineMs = deps.fifoWriteDeadlineMs ?? 20_000
 
   /**
    * Read the last line of the JSONL output and decide whether the CLI
@@ -617,7 +631,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
    * session_dead / precheck-dead / ENXIO / EAGAIN / partial / OK); adapters
    * own the FIFO write path (provided via writeFifoFn) and the wire dispatch.
    */
-  function handleSendCommand(sid: string | undefined, message: string | undefined): SendResult {
+  async function handleSendCommand(sid: string | undefined, message: string | undefined): Promise<SendResult> {
     if (!sid || !message) return { error: 'send: missing sid or message' }
 
     const session = sessions.get(sid)
@@ -638,12 +652,10 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       }
     }
 
-    // FIFO write — adapter can plug in a different writer, but the default
-    // (see daemon-standalone.ts) is fs.openSync + writeSync + closeSync.
     try {
       const payload = JSON.stringify({ type: 'user', message: { role: 'user', content: message } })
       const buf = Buffer.from(payload + '\n')
-      const result = writeFifoFully(session.pipePath, buf)
+      const result = await chainFifoWrite(sid, session, buf)
       if (result === 'ok') {
         // TTFT anchor: the tailer logs send→first-line / send→first-text
         // latencies against this (CLI-side half of the text-latency attribution).
@@ -651,14 +663,23 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         session.ttftSawFirstLine = false
         return { ok: true }
       }
+      if (result === 'dead') {
+        // Session was reaped while this write waited in the chain/retry loop —
+        // the reaper already ran; just report the death.
+        return { ok: false, reason: 'session_dead', exitCode: session.exitCode }
+      }
       if (result === 'ENXIO') {
         reapSession(sid, -1, 'send-enxio')
         return { ok: false, reason: 'ENXIO', exitCode: session.exitCode }
       }
+      // ZERO bytes accepted within the deadline: the pipe is full but intact
+      // (no truncated line entered it), so this is retriable — do NOT reap. A
+      // booting CLI that needs longer than the deadline gets another chance on
+      // the caller's retry instead of being killed (the 2026-08-13 incident).
       if (result === 'EAGAIN') return { ok: false, reason: 'EAGAIN', retriable: true }
-      // partial_write here means we wrote a prefix but couldn't finish within the
-      // retry budget — pipe is now corrupted (CLI's stdin parser will choke on
-      // the truncated JSON). Treat as terminal: reap so caller sees session_dead.
+      // partial: a prefix entered the pipe but couldn't finish within the
+      // deadline — the FIFO now holds half a JSON line and the CLI's stdin
+      // parser will choke on it. Terminal: reap so the caller sees session_dead.
       reapSession(sid, -1, 'send-partial-write')
       return { ok: false, reason: 'session_dead', exitCode: session.exitCode }
     } catch (err) {
@@ -672,7 +693,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
    * Shares the pre-flight kill check, ENXIO death-funnel, and EAGAIN retry
    * semantics with handleSendCommand.
    */
-  function handleSendRawCommand(sid: string | undefined, raw: string | undefined): SendResult {
+  async function handleSendRawCommand(sid: string | undefined, raw: string | undefined): Promise<SendResult> {
     if (!sid || !raw) return { error: 'sendRaw: missing sid or raw' }
 
     const session = sessions.get(sid)
@@ -692,7 +713,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
 
     try {
       const buf = Buffer.from(raw.endsWith('\n') ? raw : raw + '\n')
-      const result = writeFifoFully(session.pipePath, buf)
+      const result = await chainFifoWrite(sid, session, buf)
       if (result === 'ok') {
         // control_response travels Walnut → FIFO and is not echoed to stdout,
         // so the stream watcher cannot observe it. Clear daemon-authoritative
@@ -715,6 +736,9 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
           } catch { /* non-JSON raw payload — nothing to acknowledge */ }
         }
         return { ok: true }
+      }
+      if (result === 'dead') {
+        return { ok: false, reason: 'session_dead', exitCode: session.exitCode }
       }
       if (result === 'ENXIO') {
         reapSession(sid, -1, 'sendRaw-enxio')
@@ -779,20 +803,73 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
   }
 
   /**
-   * Write a full buffer to a FIFO using O_NONBLOCK + retry loop. Required for
-   * payloads larger than PIPE_BUF (512 bytes on macOS): a single non-blocking
-   * writeSync may return a partial count, and stopping there leaves the pipe
-   * in a corrupted state (the reader's line parser will splice the truncated
-   * fragment into whatever bytes arrive next, causing JSON.parse to fail and
-   * the CLI to exit). We loop on partial writes and short-retry on EAGAIN so
-   * either the whole buffer lands atomically or we surface ENXIO/EAGAIN.
+   * Serialize FIFO writes per session, then write with the async retry loop.
    *
-   * Returns 'ok' on full write, 'ENXIO' if reader is gone, 'EAGAIN' if the
-   * pipe stayed full past the retry budget without progress, or 'partial' if
-   * we made some progress but couldn't finish (caller should reap — pipe now
-   * holds half a JSON line).
+   * WHY THE CHAIN: writeFifoFullyAsync yields between retries (setTimeout, no
+   * Atomics.wait busy-block), so two concurrent sends to the same sid could
+   * interleave their partial writes and splice two half-lines into one
+   * corrupted line. Chaining each write behind the previous one restores the
+   * per-session atomicity the old fully-sync writer had — without freezing the
+   * daemon's event loop for the whole retry budget.
+   *
+   * Returns the write outcome, or 'dead' if the session was reaped while this
+   * write was queued/retrying (reaper unlinks the FIFO; don't double-reap).
    */
-  function writeFifoFully(pipePath: string, buf: Buffer): 'ok' | 'ENXIO' | 'EAGAIN' | 'partial' {
+  async function chainFifoWrite(
+    sid: string,
+    session: S,
+    buf: Buffer,
+  ): Promise<'ok' | 'ENXIO' | 'EAGAIN' | 'partial' | 'dead'> {
+    // Absolute deadline fixed BEFORE queuing behind the chain: chain wait +
+    // own write share ONE budget, so the strict-ack always settles inside the
+    // walnut client's 30s RPC timeout even when writes stack up.
+    const deadline = clock() + fifoWriteDeadlineMs
+    const prev = session.fifoWriteChain ?? Promise.resolve()
+    const run = prev.catch(() => {}).then(async () => {
+      // Re-check state after waiting in the chain — a predecessor's failure
+      // (or the orphan poll) may have reaped the session meanwhile.
+      if (session.state === 'dead' || sessions.get(sid) !== session) return 'dead' as const
+      return writeFifoFullyAsync(session.pipePath, buf, deadline, () => session.state === 'dead')
+    })
+    session.fifoWriteChain = run
+    const result = await run
+    // Drop the chain pointer once the tail settles so it doesn't grow unbounded.
+    if (session.fifoWriteChain === run) session.fifoWriteChain = undefined
+    return result
+  }
+
+  /**
+   * Write a full buffer to a FIFO using O_NONBLOCK + async retry loop.
+   * Required for payloads larger than PIPE_BUF (512 bytes on macOS): a single
+   * non-blocking writeSync may return a partial count, and stopping there
+   * leaves the pipe in a corrupted state (the reader's line parser will splice
+   * the truncated fragment into whatever bytes arrive next, causing JSON.parse
+   * to fail and the CLI to exit).
+   *
+   * BOOT RACE (2026-08-13 incident): a freshly-spawned CLI takes 2–7s to boot
+   * before it reads stdin at all. A first-turn prompt easily exceeds the ~64KB
+   * kernel pipe buffer, so the write goes partial and stalls until the CLI
+   * starts draining. The old writer busy-blocked the daemon (Atomics.wait) for
+   * a 500ms budget, then gave up mid-line and the caller reaped a perfectly
+   * healthy process ('sendRaw-partial-write' 2s after spawn). This version
+   * awaits between retries (daemon stays responsive) and keeps trying until
+   * fifoWriteDeadlineMs — generous enough to cover CLI boot.
+   *
+   * The fd stays open across the whole attempt: closing mid-payload is what
+   * makes a partial unrecoverable, since the pipe already holds the prefix.
+   *
+   * Returns 'ok' on full write, 'ENXIO' if reader is gone, 'EAGAIN' if ZERO
+   * bytes were accepted within the deadline (pipe intact — retriable), or
+   * 'partial' if a prefix landed but couldn't finish within the deadline
+   * (caller must reap — pipe now holds half a JSON line).
+   */
+  async function writeFifoFullyAsync(
+    pipePath: string,
+    buf: Buffer,
+    deadline: number,
+    isAbandoned?: () => boolean,
+  ): Promise<'ok' | 'ENXIO' | 'EAGAIN' | 'partial'> {
+    const RETRY_INTERVAL_MS = 25
     let fd: number
     try {
       fd = fs.openSync(pipePath, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)
@@ -803,33 +880,28 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     }
     try {
       let offset = 0
-      let consecutiveEagain = 0
-      const MAX_EAGAIN_RETRIES = 50  // ~500ms total at 10ms per retry
       while (offset < buf.length) {
         try {
           const n = fs.writeSync(fd, buf, offset, buf.length - offset)
           if (n > 0) {
             offset += n
-            consecutiveEagain = 0
             continue
           }
-          // n === 0 shouldn't happen on a pipe but guard anyway
-          consecutiveEagain++
         } catch (err) {
           const code = (err as NodeJS.ErrnoException).code
-          if (code === 'EAGAIN') {
-            if (offset === 0 && consecutiveEagain === 0) return 'EAGAIN'
-            consecutiveEagain++
-          } else {
-            throw err
+          if (code === 'EPIPE') {
+            // Reader closed mid-write. A prefix may already be in the pipe, but
+            // with no reader left nobody can consume the corruption — treat as
+            // the reader-gone signal.
+            return 'ENXIO'
           }
+          if (code !== 'EAGAIN') throw err
         }
-        if (consecutiveEagain >= MAX_EAGAIN_RETRIES) {
+        // Pipe full (EAGAIN) or zero-byte write: wait for the reader to drain.
+        if (clock() >= deadline || isAbandoned?.()) {
           return offset === 0 ? 'EAGAIN' : 'partial'
         }
-        // Brief sync sleep to let the reader drain. Keeps the FIFO write
-        // atomic from the daemon's RPC handler perspective.
-        try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10) } catch {}
+        await new Promise<void>((resolve) => setTimeoutFn(resolve, RETRY_INTERVAL_MS))
       }
       return 'ok'
     } finally {

@@ -73,6 +73,7 @@ export async function buildDeps(opts: {
   killProcessGroupImpl?: (pid: number, signal: string) => boolean
   clockImpl?: () => number
   orphanPollIntervalMs?: number
+  fifoWriteDeadlineMs?: number
 } = {}): Promise<{
   deps: DaemonCoreDeps<TestSession>
   sessions: Map<string, TestSession>
@@ -125,6 +126,7 @@ export async function buildDeps(opts: {
     streamsDir,
     registryFile,
     orphanPollIntervalMs: opts.orphanPollIntervalMs ?? 1000,
+    fifoWriteDeadlineMs: opts.fifoWriteDeadlineMs,
     logger,
     broadcastSessionStateFn,
     broadcastExitToWatchersFn,

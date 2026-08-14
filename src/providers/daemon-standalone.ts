@@ -791,8 +791,11 @@ function buildSpawnPreamble(): string {
 //
 // Used by the auto-allow path (which bypasses cmdSendRaw / daemon-core). Must
 // handle payloads larger than PIPE_BUF (512B on macOS) — a control_response
-// embedding a tool input can easily exceed that. See writeFifoFully docs in
-// daemon-core.ts for why a single non-blocking writeSync isn't safe.
+// embedding a tool input can easily exceed that. See writeFifoFullyAsync docs
+// in daemon-core.ts for why a single non-blocking writeSync isn't safe. This
+// SYNC variant (500ms busy-wait budget) is only safe here because auto-allow
+// fires while the CLI is provably alive and draining stdin (it just emitted
+// the control_request); user sends go through the async path in daemon-core.
 function writeFifoRaw(pipePath: string, raw: string): boolean {
   try {
     const buf = Buffer.from(raw.endsWith('\n') ? raw : raw + '\n')
@@ -1531,7 +1534,9 @@ function cmdBridgeResume(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   logMsg('info', 'bridgeResume: respawning dead session', {
     sid, cwd, recordLost: !session || !session.args || session.args.length === 0,
   })
-  cmdStart(ws, id, {
+  // cmdStart is async (FIFO write continuation) — return the promise so the
+  // dispatcher's rejection handler owns any throw.
+  return cmdStart(ws, id, {
     cmd: 'start',
     sid,
     args,
@@ -2030,7 +2035,7 @@ function cmdAcpSubscribe(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
 }
 
 // ── Start a Claude session ──
-function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const { sid, args, cwd, message, resume, mode } = cmd as {
     sid: string; args: string[]; cwd: string; message?: string; resume?: boolean; mode?: string
   }
@@ -2068,7 +2073,7 @@ function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, u
       let oldAlive = false
       try { process.kill(existing.pid, 0); oldAlive = true } catch {}
       if (oldAlive) {
-        const sendResult = core.handleSendCommand(sid, message)
+        const sendResult = await core.handleSendCommand(sid, message)
         if (sendResult.ok) {
           if (mode) existing.mode = mode as SessionMode
           // Hand out a COMPLETE-line boundary, never a raw stat().size: this
@@ -3221,23 +3226,23 @@ function cmdAttach(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, 
 // ── Send message ──
 // Logic lives in daemon-core.handleSendCommand (strict-ack). This wrapper
 // only maps the SendResult envelope onto the WS reply format.
-function cmdSend(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+async function cmdSend(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const { sid, message } = cmd as { sid: string; message: string }
   // A real send means someone (the user, a task hook, the Mac) is driving this
   // session now — drop any pending auto-retry so we never inject behind them.
   // The retry's own delivery does NOT come through here (it writes the FIFO
   // directly / goes via cmdBridgeResume), so this can't cancel itself.
   cancelTurnRetry(sid, 'superseded-by-send')
-  const result = core.handleSendCommand(sid, message)
+  const result = await core.handleSendCommand(sid, message)
   if ('error' in result) return sendError(ws, id, result.error)
   sendOk(ws, id, result as unknown as Record<string, unknown>)
 }
 
 // ── Send raw (permission-prompt-tool control_response passthrough) ──
 // Same strict-ack protocol as cmdSend; the FIFO receives `raw` verbatim.
-function cmdSendRaw(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+async function cmdSendRaw(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const { sid, raw } = cmd as { sid: string; raw: string }
-  const result = core.handleSendRawCommand(sid, raw)
+  const result = await core.handleSendRawCommand(sid, raw)
   if ('error' in result) return sendError(ws, id, result.error)
   sendOk(ws, id, result as unknown as Record<string, unknown>)
 }
