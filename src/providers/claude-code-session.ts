@@ -9215,6 +9215,29 @@ export class SessionRunner {
         }
       }
 
+      // The local daemon can be mid-restart exactly when a queued message
+      // arrives — its death is often WHY the message queued. Every delivery
+      // path below (attachToExisting, --resume spawn) calls
+      // createSessionManager, which THROWS 'Local daemon not running' if the
+      // ws url isn't up yet. ensureLocalDaemon() joins the in-flight spawn
+      // (in-flight guard in local-daemon.ts) instead of failing the turn —
+      // observed as a chat ERROR bubble 6s into a daemon respawn.
+      if (!targetSession) {
+        try {
+          const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+          const rec = await getSessionByClaudeId(sessionId)
+          if (!rec?.host || rec.host === '__local__') {
+            const { ensureLocalDaemon } = await import('./session-manager.js')
+            await ensureLocalDaemon()
+          }
+        } catch (err) {
+          // Let the delivery paths below produce their own (existing) errors.
+          log.session.warn('processNext: local daemon ensure failed', {
+            sessionId, error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }
+
       // Resolve cold-resume spawn args (model/effort) from the record — the durable
       // fallback re-applied on a cold --resume (live control_requests are in-memory only).
       const {

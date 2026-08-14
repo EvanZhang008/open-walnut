@@ -951,6 +951,28 @@ export function registerChatRpc(): void {
           // else. Interest-scoped like every other session-event consumer.
           const relayName = `chat-lane-relay-${turnId}`
           let relaySessionId: string | null = null
+
+          // ── Turn transcript accumulator ──
+          // The relay above only makes the tools visible LIVE; on reload the
+          // in-process engine's chats still show their tool pills because the
+          // loop persisted tool_use/tool_result blocks. Rebuild the same shape
+          // from the relayed events so a lane turn's tool calls survive too:
+          //   assistant[text?, tool_use…] → user[tool_result…] → assistant[…]
+          // (valid API pairing, which matters if the engine flag is ever
+          // flipped back and this history is re-sent to the in-process loop).
+          const laneTurnMsgs: Array<{ role: 'assistant' | 'user'; content: unknown[] }> = []
+          let curAssistant: unknown[] = []
+          let curResults: unknown[] | null = null
+          let curText = ''
+          const resultsSeen = new Set<string>()
+          const closeResults = (): void => {
+            if (curResults) { laneTurnMsgs.push({ role: 'user', content: curResults }); curResults = null }
+          }
+          const flushTextBlock = (): void => {
+            if (curText) { curAssistant.push({ type: 'text', text: curText }); curText = '' }
+          }
+          /** Cap persisted tool results — the CLI transcript keeps the full copy. */
+          const TOOL_RESULT_PERSIST_CAP = 20_000
           // Thinking arrives as deltas, but agent:thinking consumers render one
           // block per event — buffer and flush per contiguous thinking run. A
           // TIMED flush (1.5s) caps how long the buffer can sit: a turn that opens
@@ -979,7 +1001,11 @@ export function registerChatRpc(): void {
               flushThinking()
               // No sessionId in the payload: useChat drops agent:text-delta
               // events that carry one (they'd be a session's, not the chat's).
-              if (d.delta) broadcastEvent(EventNames.AGENT_TEXT_DELTA, { delta: d.delta, agentId, conversationId })
+              if (d.delta) {
+                broadcastEvent(EventNames.AGENT_TEXT_DELTA, { delta: d.delta, agentId, conversationId })
+                closeResults()
+                curText += d.delta
+              }
             } else if (event.name === EventNames.SESSION_THINKING_DELTA) {
               if (d.delta) {
                 thinkingBuf += d.delta
@@ -993,11 +1019,29 @@ export function registerChatRpc(): void {
               broadcastEvent(EventNames.AGENT_TOOL_CALL, {
                 toolName: d.toolName, input: d.input, toolUseId: d.toolUseId, agentId, conversationId,
               })
+              closeResults()
+              flushTextBlock()
+              if (d.toolUseId) {
+                curAssistant.push({ type: 'tool_use', id: d.toolUseId, name: d.toolName ?? 'tool', input: d.input ?? {} })
+              }
             } else if (event.name === EventNames.SESSION_TOOL_RESULT) {
               // toolName is not on the session event; the client matches by toolUseId.
               broadcastEvent(EventNames.AGENT_TOOL_RESULT, {
                 toolName: '', result: d.result, toolUseId: d.toolUseId, agentId, conversationId,
               })
+              // Pairing rule: every tool_result must answer a tool_use from the
+              // assistant message CLOSED right before it — so the first result
+              // after a tool_use run closes the assistant message.
+              if (d.toolUseId && !resultsSeen.has(d.toolUseId)) {
+                resultsSeen.add(d.toolUseId)
+                flushTextBlock()
+                if (curAssistant.length > 0) { laneTurnMsgs.push({ role: 'assistant', content: curAssistant }); curAssistant = [] }
+                curResults ??= []
+                curResults.push({
+                  type: 'tool_result', tool_use_id: d.toolUseId,
+                  content: typeof d.result === 'string' ? d.result.slice(0, TOOL_RESULT_PERSIST_CAP) : '',
+                })
+              }
             }
           }, { global: true, interest: [
             EventNames.SESSION_TEXT_DELTA, EventNames.SESSION_THINKING_DELTA,
@@ -1043,17 +1087,27 @@ export function registerChatRpc(): void {
               throw new Error('The main AI did not answer this turn (timed out or errored).')
             }
 
-            // Persist the answer as an ORDINARY assistant message — the same shape
-            // the in-process loop persists, so a page reload shows the reply
-            // itself. Refs are resolved BEFORE persisting (labels back-filled into
-            // the tags), matching resolveMessagesEntityRefs on the in-process path.
+            // Persist the WHOLE turn — tool_use/tool_result pairs and the final
+            // text — the same shape the in-process loop persists, so a page
+            // reload shows the tool pills too, not just the answer. Refs are
+            // resolved BEFORE persisting (labels back-filled into the tags),
+            // matching resolveMessagesEntityRefs on the in-process path.
             // (Deliberate duplication with the CLI's own transcript: this chat's
             // history is what the chat panel reads back.)
             const resolvedText = await resolveEntityRefs(resultText)
-            await chatHistory.addAIMessages(
-              [{ role: 'assistant', content: [{ type: 'text', text: resolvedText }] }] as MessageParam[],
-              { agentId, conversationId },
-            )
+            closeResults()
+            flushTextBlock()
+            if (curAssistant.length > 0) { laneTurnMsgs.push({ role: 'assistant', content: curAssistant }); curAssistant = [] }
+            // The accumulator's trailing text and `resultText` are the same
+            // answer seen two ways (deltas vs the CLI's result line) — keep the
+            // authoritative result line, dropping the delta-built text block.
+            const persistMsgs = laneTurnMsgs.map((m, i) => {
+              if (i !== laneTurnMsgs.length - 1 || m.role !== 'assistant') return m
+              const rest = m.content.filter((b) => (b as { type?: string }).type !== 'text')
+              return { ...m, content: rest }
+            }).filter((m) => m.content.length > 0)
+            persistMsgs.push({ role: 'assistant', content: [{ type: 'text', text: resolvedText }] })
+            await chatHistory.addAIMessages(persistMsgs as MessageParam[], { agentId, conversationId })
             broadcastEvent(EventNames.AGENT_RESPONSE, { text: resolvedText, agentId, conversationId })
             log.web.info('chat lane turn completed', {
               agentId, conversationId, sessionId, resultLength: resultText.length,

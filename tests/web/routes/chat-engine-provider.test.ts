@@ -98,7 +98,11 @@ function drainQueue(sessionId: string): void {
  * Fake session-runner: records starts, drains sends, answers each turn with a
  * synthetic session:result (the chat RPC AWAITS the lane turn, so a runner that
  * never answers would hang every lane test to its timeout), never spawns anything.
+ * When `laneToolCalls` is set, it streams tool_use/tool_result pairs first —
+ * the shape the relay's transcript accumulator persists.
  */
+let laneToolCalls: Array<{ id: string; name: string; input: Record<string, unknown>; result: string }> = []
+
 function installFakeRunner(): void {
   bus.subscribe('session-runner', (event: BusEvent) => {
     let sid: string | undefined
@@ -114,6 +118,12 @@ function installFakeRunner(): void {
     drainQueue(sid)
     const sessionId = sid
     setTimeout(() => {
+      for (const tc of laneToolCalls) {
+        bus.emit(EventNames.SESSION_TOOL_USE, { sessionId, toolName: tc.name, toolUseId: tc.id, input: tc.input },
+          ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
+        bus.emit(EventNames.SESSION_TOOL_RESULT, { sessionId, toolUseId: tc.id, result: tc.result },
+          ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
+      }
       bus.emit(EventNames.SESSION_RESULT, { sessionId, result: laneReply, isError: false },
         ['main-ai', 'session-runner'], { source: 'session-runner' })
     }, 5)
@@ -180,6 +190,7 @@ beforeEach(() => {
   started = []
   sent = []
   laneReply = 'lane answer'
+  laneToolCalls = []
 })
 
 afterEach(async () => {
@@ -345,6 +356,53 @@ describe("agent.provider = 'claude-code' → lane session", () => {
       const breadcrumb = page.messages.find((e) => typeof e.content === 'string'
         && (e.content as string).includes('<session-ref'))
       expect(breadcrumb, 'no session-ref breadcrumb should be persisted').toBeUndefined()
+    } finally {
+      ws.close()
+    }
+  })
+
+  it("persists the turn's tool calls as tool_use/tool_result blocks (visible after reload)", async () => {
+    // The relay makes tools visible LIVE; this asserts the durable half — the
+    // same tool-pill history the in-process loop leaves behind.
+    laneToolCalls = [
+      { id: 'tu-1', name: 'Bash', input: { command: 'curl tasks' }, result: '42 tasks' },
+      { id: 'tu-2', name: 'Read', input: { file_path: '/tmp/x' }, result: 'contents' },
+    ]
+    laneReply = 'you have 42 tasks'
+    await boot({ provider: 'claude-code' })
+    const ws = await connectWs()
+    try {
+      await sendRpc(ws, 'chat', { message: 'how many tasks' })
+      const chatHistory = await import('../../../src/core/chat-history.js')
+      const { getActiveConversationId } = await import('../../../src/core/conversations.js')
+      const conv = await getActiveConversationId('general')
+
+      const modelMsgs = await chatHistory.getApiMessages('general', conv)
+      const flat = JSON.stringify(modelMsgs)
+      // Both tool calls survive with their pairing ids intact.
+      for (const id of ['tu-1', 'tu-2']) {
+        expect(flat).toContain(`"tool_use"`)
+        expect(flat).toContain(id)
+      }
+      expect(flat).toContain('42 tasks')
+      // Valid API pairing: every tool_result's id matches a preceding tool_use.
+      const useIds: string[] = []
+      const resultIds: string[] = []
+      for (const m of modelMsgs as Array<{ content: unknown }>) {
+        if (!Array.isArray(m.content)) continue
+        for (const b of m.content as Array<{ type?: string; id?: string; tool_use_id?: string }>) {
+          if (b.type === 'tool_use' && b.id) useIds.push(b.id)
+          if (b.type === 'tool_result' && b.tool_use_id) resultIds.push(b.tool_use_id)
+        }
+      }
+      expect(useIds).toEqual(['tu-1', 'tu-2'])
+      expect(resultIds).toEqual(['tu-1', 'tu-2'])
+
+      // And the display side shows the answer as the final assistant text.
+      const page = await chatHistory.getDisplayEntries(1, 50, 'general', conv)
+      const answer = page.messages.find((e) => e.role === 'assistant'
+        && JSON.stringify(e.content).includes('you have 42 tasks'))
+      expect(answer).toBeTruthy()
     } finally {
       ws.close()
     }
