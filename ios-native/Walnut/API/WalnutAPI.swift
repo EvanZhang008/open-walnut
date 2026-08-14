@@ -371,6 +371,22 @@ struct WalnutAPI {
         return components?.url
     }
 
+    /// Authenticated URL for a file's RAW bytes with a real Content-Type
+    /// (GET /api/v1/file-content?raw=1) — what the HTML preview WKWebView
+    /// loads, mirroring the web console's preview iframe. `host` "" / nil =
+    /// the primary box. Callers must attach the Bearer header themselves.
+    static func rawFileContentURL(path: String, host: String? = nil) -> URL? {
+        guard let base = AppConfig.serverURL else { return nil }
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.path = "/api/v1/file-content"
+        var items = [URLQueryItem(name: "path", value: path), URLQueryItem(name: "raw", value: "1")]
+        if let host, !host.isEmpty {
+            items.append(URLQueryItem(name: "host", value: host))
+        }
+        components?.queryItems = items
+        return components?.url
+    }
+
     /// Authenticated URL for an absolute-path image (chat/session pictures,
     /// screenshots the agent saved). GET /api/v1/media serves it from local
     /// disk, the session's exec host (daemon), or over the cloud bridge.

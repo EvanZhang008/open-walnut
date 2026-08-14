@@ -10,6 +10,8 @@ struct ChatTimelineBody: View {
     var keyboardGeometryFrozen: () -> Bool = { false }
     var onRefresh: (() async -> Void)? = nil
 
+    @State private var previewTarget: FilePreviewTarget?
+
     var body: some View {
         ZStack {
             if chat.messages.isEmpty && !chat.loadingMessages && !chat.streaming {
@@ -38,6 +40,9 @@ struct ChatTimelineBody: View {
                         }
                     case .loadEarlier:
                         Task { await chat.loadOlder() }
+                    case .previewFile(let path):
+                        // Butler chat always runs on the primary box.
+                        previewTarget = FilePreviewTarget(path: path, host: nil)
                     default:
                         break
                     }
@@ -46,6 +51,9 @@ struct ChatTimelineBody: View {
             )
         }
         .redacted(reason: chat.loadingMessages && chat.messages.isEmpty ? .placeholder : [])
+        .sheet(item: $previewTarget) { target in
+            HTMLFilePreviewSheet(path: target.path, host: target.host)
+        }
     }
 }
 

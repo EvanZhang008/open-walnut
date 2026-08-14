@@ -11,12 +11,17 @@ import SwiftUI
 /// exposes repin via `repinSignal`.
 struct SessionTimelineBody: View {
     let store: SessionConversationStore
+    /// Exec host for file-preview links ("" / nil = the primary box) — the
+    /// raw file-content fetch must read the SESSION's disk, not the Mac's.
+    var previewHost: String? = nil
     /// Extra scroll-to-bottom pulses from the page (keyboard repin).
     var repinSignal: Int = 0
     /// Keyboard transition freeze from KeyboardBottomRepin.
     var keyboardGeometryFrozen: () -> Bool = { false }
     /// Pull-to-refresh (SwiftUI .refreshable can't reach the hosted list).
     var onRefresh: (() async -> Void)? = nil
+
+    @State private var previewTarget: FilePreviewTarget?
 
     var body: some View {
         ZStack {
@@ -50,12 +55,17 @@ struct SessionTimelineBody: View {
                         if let message = store.messages.first(where: { $0.id == messageID }) {
                             store.discardFailed(message)
                         }
+                    case .previewFile(let path):
+                        previewTarget = FilePreviewTarget(path: path, host: previewHost)
                     default:
                         break
                     }
                 },
                 onRefresh: onRefresh
             )
+        }
+        .sheet(item: $previewTarget) { target in
+            HTMLFilePreviewSheet(path: target.path, host: target.host)
         }
     }
 }

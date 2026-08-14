@@ -573,73 +573,91 @@ function assertOverwritable(current: string, filePath: string): void {
   }
 }
 
+/**
+ * Serve a file's bytes directly with a real Content-Type so the client treats
+ * it as a standalone document — the ONE raw-mode implementation shared by the
+ * internal route (?raw=1, the web console's HTML preview iframe) and
+ * GET /api/v1/file-content?raw=1 (the iOS app's WKWebView HTML preview).
+ * Serving via `src`/URL gives the page its own document URL, so in-page
+ * anchors and scripts resolve against the file itself instead of the SPA.
+ *
+ * Runs the SAME sandbox as the JSON payload path (assertPathAllowed): both
+ * edges throw FileContentError for invalid/forbidden requests, which each
+ * caller maps onto its own error envelope.
+ */
+export async function serveRawFileContent(
+  req: Request,
+  res: Response,
+  rawPath: unknown,
+  rawHost: string | undefined,
+  download: boolean,
+): Promise<void> {
+  const { filePath, isRemote } = assertPathAllowed(rawPath, rawHost, 'read')
+  const ext = path.extname(filePath).slice(1).toLowerCase()
+
+  // Media/PDF/image playback + universal download: byte-exact streaming with
+  // Range support. Text decoding would corrupt these, so they take their own path.
+  // hasOwn guard: a file named e.g. "x.constructor" must not hit Object.prototype.
+  const inlineType = Object.hasOwn(RAW_INLINE_MIME, ext) ? RAW_INLINE_MIME[ext] : undefined
+  if (download || inlineType) {
+    const ctype = inlineType ?? 'application/octet-stream'
+    await serveRawBytes(req, res, filePath, isRemote ? rawHost : undefined, ctype, download)
+    return
+  }
+
+  // Read may throw on a remote transport failure (DaemonFileReader.readFile
+  // only returns null for ENOENT). Catch it so the viewer gets a clean
+  // text/plain error instead of the outer error handler's JSON/stack body.
+  let content: string | null = null
+  try {
+    if (isRemote) {
+      const reader = await createFileReader(rawHost as string)
+      content = await reader.readFile(filePath)
+    } else {
+      content = await fsp.readFile(filePath, 'utf-8')
+    }
+  } catch (err) {
+    const msg = isRemote
+      ? `Cannot reach remote host: ${err instanceof Error ? err.message : String(err)}`
+      : 'File not found'
+    res.status(isRemote ? 502 : 404).type('text/plain').send(msg)
+    return
+  }
+  if (content === null) {
+    res.status(404).type('text/plain').send('File not found')
+    return
+  }
+  const ctype = ext === 'htm' || ext === 'html' ? 'text/html; charset=utf-8'
+    : ext === 'svg' ? 'image/svg+xml'
+    : 'text/plain; charset=utf-8'
+  // The doc runs with the server's origin (web: iframe sandbox allow-scripts +
+  // allow-same-origin; iOS: WKWebView on a non-persistent data store). Acceptable
+  // for a personal tool serving files the user explicitly opened; no
+  // untrusted-upload surface.
+  res.type(ctype).send(content)
+}
+
 fileContentRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const rawPath = req.query.path
-    const host = req.query.host
+    const host = typeof req.query.host === 'string' ? req.query.host : undefined
 
-    // ONE sandbox for both verbs — see assertPathAllowed. Its FileContentError
-    // throws are mapped to the same {error} bodies by this handler's catch, so
-    // the wire contract is unchanged from the inlined checks this replaced.
-    // (Remote `host=` reads run on the target daemon and keep their own scope.
-    // The Mac/trusted-LAN FileViewer is intentionally unconfined — it's the
-    // owner's own machine.)
-    const { filePath, isRemote } = assertPathAllowed(rawPath, typeof host === 'string' ? host : undefined, 'read')
-
-    const ext = path.extname(filePath).slice(1).toLowerCase()
-
-    // Raw mode: serve the file's bytes directly with a real Content-Type so the
-    // browser treats it as a standalone document. Used by the HTML preview iframe
-    // (via `src`), which gives the page its own URL — so in-page anchors, relative
-    // links and scripts resolve against the file itself instead of the Walnut SPA.
+    // Raw mode — shared implementation (see serveRawFileContent above).
     const raw = req.query.raw === '1' || req.query.raw === 'true'
     const download = req.query.download === '1' || req.query.download === 'true'
-
-    // Media/PDF/image playback + universal download: byte-exact streaming with
-    // Range support. Text decoding would corrupt these, so they take their own path.
-    // hasOwn guard: a file named e.g. "x.constructor" must not hit Object.prototype.
-    const inlineType = Object.hasOwn(RAW_INLINE_MIME, ext) ? RAW_INLINE_MIME[ext] : undefined
-    if (raw && (download || inlineType)) {
-      const ctype = inlineType ?? 'application/octet-stream'
-      await serveRawBytes(req, res, filePath, isRemote ? (host as string) : undefined, ctype, download)
-      return
-    }
-
     if (raw) {
-      // Read may throw on a remote transport failure (DaemonFileReader.readFile
-      // only returns null for ENOENT). Catch it so the iframe gets a clean
-      // text/plain error instead of the outer error handler's JSON/stack body.
-      let content: string | null = null
-      try {
-        if (isRemote) {
-          const reader = await createFileReader(host as string)
-          content = await reader.readFile(filePath)
-        } else {
-          content = await fsp.readFile(filePath, 'utf-8')
-        }
-      } catch (err) {
-        const msg = isRemote
-          ? `Cannot reach remote host: ${err instanceof Error ? err.message : String(err)}`
-          : 'File not found'
-        res.status(isRemote ? 502 : 404).type('text/plain').send(msg)
-        return
-      }
-      if (content === null) {
-        res.status(404).type('text/plain').send('File not found')
-        return
-      }
-      const ctype = ext === 'htm' || ext === 'html' ? 'text/html; charset=utf-8'
-        : ext === 'svg' ? 'image/svg+xml'
-        : 'text/plain; charset=utf-8'
-      // The framed doc runs as the SPA's own origin (sandbox allow-scripts +
-      // allow-same-origin in FileContentView). Acceptable for a localhost personal
-      // tool serving files the user explicitly opened; no untrusted-upload surface.
-      res.type(ctype).send(content)
+      await serveRawFileContent(req, res, rawPath, host, download)
       return
     }
 
     // JSON viewer payload — the shared core (also serves /api/v1/file-content).
-    res.json(await readFileContentPayload(rawPath, isRemote ? (host as string) : undefined))
+    // ONE sandbox for both modes and both verbs — see assertPathAllowed. Its
+    // FileContentError throws are mapped to the same {error} bodies by this
+    // handler's catch, so the wire contract is unchanged.
+    // (Remote `host=` reads run on the target daemon and keep their own scope.
+    // The Mac/trusted-LAN FileViewer is intentionally unconfined — it's the
+    // owner's own machine.)
+    res.json(await readFileContentPayload(rawPath, host))
   } catch (err) {
     if (err instanceof FileContentError) {
       res.status(err.statusCode).json({ error: err.message })

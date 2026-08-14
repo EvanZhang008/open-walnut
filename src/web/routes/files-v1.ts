@@ -94,9 +94,13 @@ filesV1Router.get('/files/resolve-path', async (req: Request, res: Response, nex
   }
 })
 
-// GET /api/v1/file-content?path=&host= — the FileViewer JSON payload (text
-// content, truncated at 512 KB, binary-detected). Missing files come back as
-// 200 with `error` set (the viewer contract), not 404.
+// GET /api/v1/file-content?path=&host=[&raw=1] — the FileViewer JSON payload
+// (text content, truncated at 512 KB, binary-detected). Missing files come
+// back as 200 with `error` set (the viewer contract), not 404.
+// `raw=1` (additive, 2026-08): serve the file's BYTES with a real
+// Content-Type instead of the JSON envelope — the iOS app points a WKWebView
+// at this URL for HTML previews (same mechanism as the web console's iframe
+// on the internal route). Same sandbox as the JSON path (shared core).
 filesV1Router.get('/file-content', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const host = typeof req.query.host === 'string' && req.query.host ? req.query.host : undefined
@@ -107,8 +111,13 @@ filesV1Router.get('/file-content', async (req: Request, res: Response, next: Nex
       sendError(res, 501, 'not_supported_cloud', 'Remote file content is not readable through the cloud companion (the bridge has no arbitrary-read channel)')
       return
     }
-    const { readFileContentPayload, FileContentError } = await import('./file-content.js')
+    const { readFileContentPayload, serveRawFileContent, FileContentError } = await import('./file-content.js')
     try {
+      if (req.query.raw === '1' || req.query.raw === 'true') {
+        const download = req.query.download === '1' || req.query.download === 'true'
+        await serveRawFileContent(req, res, req.query.path, host, download)
+        return
+      }
       res.json(await readFileContentPayload(req.query.path, host))
     } catch (err) {
       if (err instanceof FileContentError) {

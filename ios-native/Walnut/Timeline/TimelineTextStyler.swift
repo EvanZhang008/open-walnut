@@ -196,6 +196,7 @@ enum TimelineTextStyler {
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) {
             MarkdownParser.linkifyBareURLs(&attributed)
+            MarkdownParser.linkifyPreviewableFilePaths(&attributed)
             let style = paragraphStyle(spacing: 0, lineSpacing: 3)
             return styledInline(attributed, font: font, color: color, paragraph: style)
         }

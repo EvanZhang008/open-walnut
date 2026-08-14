@@ -112,6 +112,9 @@ enum TimelineRowAction {
     case copyText(String)
     case openURL(URL)
     case tapImage(UIImage)
+    /// Open a server-side file in the in-app preview (HTML → WKWebView).
+    /// Raised when a tapped link is a FilePreviewLink rather than a web URL.
+    case previewFile(path: String)
     case toggleExpanded(rowID: String)
     case loadEarlier
 }

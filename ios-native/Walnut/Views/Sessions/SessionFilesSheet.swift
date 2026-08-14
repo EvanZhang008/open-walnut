@@ -152,6 +152,9 @@ struct SessionDirectoryList: View {
 
 /// Plain-text file viewer over GET /v1/file-content. Binary and too-large
 /// states degrade to clear copy; a missing file is a 200 with `error` set.
+/// HTML files default to a rendered WKWebView preview (raw=1 URL — the same
+/// document the web console's preview iframe loads), with a Source toggle
+/// falling back to this text body.
 struct SessionFileViewer: View {
     let name: String
     let path: String
@@ -163,62 +166,82 @@ struct SessionFileViewer: View {
     @State private var content: SessionFileContent?
     @State private var loaded = false
     @State private var loadError: String?
+    @State private var showSource = false
+
+    private var isHTMLPreviewable: Bool { FilePreviewLink.isPreviewablePath(path) }
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                if !loaded {
-                    HStack { ProgressView(); Text("Loading…").foregroundStyle(.secondary) }
-                        .padding(.top, 40)
-                } else if let loadError {
-                    ContentUnavailableView {
-                        Label("Can't open file", systemImage: "doc.questionmark")
-                    } description: {
-                        Text(loadError)
-                    }
-                    .padding(.top, 40)
-                } else if let content {
-                    if let serverError = content.error {
-                        ContentUnavailableView {
-                            Label("Can't open file", systemImage: "doc.questionmark")
-                        } description: {
-                            Text(serverError)
-                        }
-                        .padding(.top, 40)
-                    } else if content.binary == true {
-                        ContentUnavailableView {
-                            Label("Binary file", systemImage: "doc.zipper")
-                        } description: {
-                            Text("This file isn't text — open it on your Mac.")
-                        }
-                        .padding(.top, 40)
-                    } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            if content.truncated == true {
-                                Label("Large file — showing the first 512 KB.", systemImage: "scissors")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Text(content.content ?? "")
-                                .font(.system(.caption, design: .monospaced))
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .padding(12)
-                    }
+            Group {
+                if isHTMLPreviewable && !showSource {
+                    HTMLFilePreview(path: path, host: host.isEmpty ? nil : host)
+                } else {
+                    sourceBody
                 }
             }
             .navigationTitle(name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                if isHTMLPreviewable {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button(showSource ? "Preview" : "Source") { showSource.toggle() }
+                            .accessibilityIdentifier("session.files.viewer.sourceToggle")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
             }
             .accessibilityIdentifier("session.files.viewer")
-            .task { await load() }
         }
     }
 
+    private var sourceBody: some View {
+        ScrollView {
+            if !loaded {
+                HStack { ProgressView(); Text("Loading…").foregroundStyle(.secondary) }
+                    .padding(.top, 40)
+            } else if let loadError {
+                ContentUnavailableView {
+                    Label("Can't open file", systemImage: "doc.questionmark")
+                } description: {
+                    Text(loadError)
+                }
+                .padding(.top, 40)
+            } else if let content {
+                if let serverError = content.error {
+                    ContentUnavailableView {
+                        Label("Can't open file", systemImage: "doc.questionmark")
+                    } description: {
+                        Text(serverError)
+                    }
+                    .padding(.top, 40)
+                } else if content.binary == true {
+                    ContentUnavailableView {
+                        Label("Binary file", systemImage: "doc.zipper")
+                    } description: {
+                        Text("This file isn't text — open it on your Mac.")
+                    }
+                    .padding(.top, 40)
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if content.truncated == true {
+                            Label("Large file — showing the first 512 KB.", systemImage: "scissors")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(content.content ?? "")
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(12)
+                }
+            }
+        }
+        .task { await load() }
+    }
+
     private func load() async {
+        guard !loaded else { return }
         do {
             content = try await api.fileContent(path: path, host: host.isEmpty ? nil : host)
         } catch let error as APIError where error.isCancelled {

@@ -343,6 +343,7 @@ struct SessionConversationView: View {
     private var messageList: some View {
         SessionTimelineBody(
             store: store,
+            previewHost: session.host,
             repinSignal: repinSignal,
             keyboardGeometryFrozen: { keyboardGeometryFrozen || programmaticGeometryFrozen },
             onRefresh: { await store.open() }

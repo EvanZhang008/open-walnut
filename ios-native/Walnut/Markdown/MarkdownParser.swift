@@ -324,6 +324,7 @@ enum MarkdownParser {
             }
         }
         linkifyBareURLs(&attributed)
+        linkifyPreviewableFilePaths(&attributed)
         return attributed
     }
 
@@ -356,6 +357,45 @@ enum MarkdownParser {
             attributed[lower..<trimmedUpper].link = url
             attributed[lower..<trimmedUpper].foregroundColor = .accentColor
             attributed[lower..<trimmedUpper].underlineStyle = .single
+        }
+    }
+
+    /// Bare absolute `.html`/`.htm` paths become tappable walnut-file:// links
+    /// (the timeline opens them as the in-app WKWebView preview) — the HTML
+    /// counterpart of splitBarePathImages: agents write "report saved to
+    /// /tmp/x/report.html" constantly, and the web console makes those paths
+    /// clickable, so must the phone. Same segment charset and URL-tail
+    /// boundary guard as barePathRegex.
+    private static let bareHTMLPathRegex = try? NSRegularExpression(
+        pattern: #"/[\w.\-]+(?:/[\w.\- ]*[\w.\-])+\.html?\b"#,
+        options: [.caseInsensitive]
+    )
+
+    static func linkifyPreviewableFilePaths(_ attributed: inout AttributedString) {
+        guard let regex = bareHTMLPathRegex else { return }
+        let plain = String(attributed.characters)
+        guard plain.range(of: ".htm", options: .caseInsensitive) != nil else { return }
+        let ns = plain as NSString
+        for match in regex.matches(in: plain, range: NSRange(location: 0, length: ns.length)) {
+            // Reject a match that is really the tail of a URL/longer token
+            // (same boundary rule as splitBarePathImages).
+            if match.range.location > 0 {
+                let prev = ns.character(at: match.range.location - 1)
+                let urlish = Unicode.Scalar(prev).map {
+                    CharacterSet.alphanumerics.contains($0)
+                        || $0 == "/" || $0 == "." || $0 == "-" || $0 == "%"
+                } ?? true
+                if urlish { continue }
+            }
+            guard let range = Range(match.range, in: plain),
+                  let lower = AttributedString.Index(range.lowerBound, within: attributed),
+                  let upper = AttributedString.Index(range.upperBound, within: attributed) else { continue }
+            // Skip runs already linked ([text](url) or a bare URL above).
+            if attributed[lower..<upper].runs.contains(where: { $0.link != nil }) { continue }
+            guard let url = FilePreviewLink.url(for: ns.substring(with: match.range)) else { continue }
+            attributed[lower..<upper].link = url
+            attributed[lower..<upper].foregroundColor = .accentColor
+            attributed[lower..<upper].underlineStyle = .single
         }
     }
 
