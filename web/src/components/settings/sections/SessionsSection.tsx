@@ -29,13 +29,6 @@ export function SessionsSection({ config, onSave }: Props) {
   const [enabledModes, setEnabledModes] = useState<SessionMode[]>(config.session?.enabled_modes ?? DEFAULT_MODES);
   const [sdkEnabled, setSdkEnabled] = useState(config.session_server?.enabled ?? false);
   const [sdkPort, setSdkPort] = useState<number | undefined>(config.session_server?.port ?? 7890);
-  // Turn-error auto-retry (config.session.turn_retry) — enforced by the DAEMON,
-  // so a change needs a daemon restart to take effect (surfaced in the UI note).
-  const [retryEnabled, setRetryEnabled] = useState(config.session?.turn_retry?.enabled === true);
-  const [retryBudgetHours, setRetryBudgetHours] = useState<number | undefined>(config.session?.turn_retry?.budget_hours ?? 12);
-  const [retryMaxAttempts, setRetryMaxAttempts] = useState<number | undefined>(config.session?.turn_retry?.max_attempts ?? 200);
-  const [retryBackoffSeconds, setRetryBackoffSeconds] = useState<number | undefined>(config.session?.turn_retry?.backoff_seconds ?? 30);
-  const [retryBackoffMaxSeconds, setRetryBackoffMaxSeconds] = useState<number | undefined>(config.session?.turn_retry?.backoff_max_seconds ?? 600);
   // Triage throttling (config.agent.triage)
   type TriageNotifyMode = 'off' | 'buffered' | 'realtime';
   const [triageNotifyMode, setTriageNotifyMode] = useState<TriageNotifyMode>(config.agent?.triage?.notify_mode ?? 'off');
@@ -52,11 +45,6 @@ export function SessionsSection({ config, onSave }: Props) {
     setSdkPort(config.session_server?.port ?? 7890);
     setTriageNotifyMode(config.agent?.triage?.notify_mode ?? 'off');
     setTriageDebounce(config.agent?.triage?.debounce_minutes ?? 4);
-    setRetryEnabled(config.session?.turn_retry?.enabled === true);
-    setRetryBudgetHours(config.session?.turn_retry?.budget_hours ?? 12);
-    setRetryMaxAttempts(config.session?.turn_retry?.max_attempts ?? 200);
-    setRetryBackoffSeconds(config.session?.turn_retry?.backoff_seconds ?? 30);
-    setRetryBackoffMaxSeconds(config.session?.turn_retry?.backoff_max_seconds ?? 600);
   }, [config]);
 
   // Normalize the per-host limits to numbers. The KeyValueEditor yields strings while a
@@ -88,13 +76,6 @@ export function SessionsSection({ config, onSave }: Props) {
         permission_prompt: permissionPrompt,
         auto_approve_bypass: autoApproveBypass,
         enabled_modes: enabledModes,
-        turn_retry: {
-          enabled: retryEnabled,
-          budget_hours: retryBudgetHours ?? 12,
-          max_attempts: retryMaxAttempts ?? 200,
-          backoff_seconds: retryBackoffSeconds ?? 30,
-          backoff_max_seconds: retryBackoffMaxSeconds ?? 600,
-        },
       },
       session_limits: normalizeLimits(sessionLimits),
       session_server: {
@@ -111,7 +92,6 @@ export function SessionsSection({ config, onSave }: Props) {
       sessionLimits: normalizeLimits(sessionLimits),
       permissionPrompt, autoApproveBypass, enabledModes, sdkEnabled, sdkPort,
       triageNotifyMode, triageDebounce: triageDebounce ?? 3,
-      retryEnabled, retryBudgetHours, retryMaxAttempts, retryBackoffSeconds, retryBackoffMaxSeconds,
     }),
     baseline: JSON.stringify({
       idleTimeout: config.session?.idle_timeout_minutes ?? 30,
@@ -127,14 +107,6 @@ export function SessionsSection({ config, onSave }: Props) {
       sdkPort: config.session_server?.port ?? 7890,
       triageNotifyMode: config.agent?.triage?.notify_mode ?? 'off',
       triageDebounce: config.agent?.triage?.debounce_minutes ?? 4,
-      // Defaults MUST match the live-state initializers above, or the baseline
-      // differs from the rendered value and merely opening Settings writes the
-      // config back unchanged (which for this section would restart daemons).
-      retryEnabled: config.session?.turn_retry?.enabled === true,
-      retryBudgetHours: config.session?.turn_retry?.budget_hours ?? 12,
-      retryMaxAttempts: config.session?.turn_retry?.max_attempts ?? 200,
-      retryBackoffSeconds: config.session?.turn_retry?.backoff_seconds ?? 30,
-      retryBackoffMaxSeconds: config.session?.turn_retry?.backoff_max_seconds ?? 600,
     }),
     save: handleSave,
   });
@@ -209,96 +181,10 @@ export function SessionsSection({ config, onSave }: Props) {
         </div>
       )}
 
-      <div className="form-group">
-        <ToggleSwitch
-          id="turn-retry-enabled"
-          checked={retryEnabled}
-          onChange={setRetryEnabled}
-          label="Auto-retry turns killed by upstream errors"
-        />
-        <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-          When a turn dies to a temporary upstream failure (<code>API Error: The operation timed out</code>,
-          a stalled stream, a mid-response 5xx), resume it automatically with exponential backoff instead of
-          leaving the session stopped until you notice.
-        </p>
-        <div style={{ marginTop: 6, padding: '6px 10px', background: 'var(--bg-subtle)', borderRadius: 6, fontSize: 12, color: 'var(--text-muted)' }}>
-          Runs in the <strong>session daemon on the execution host</strong>, so retries continue while this
-          Mac is asleep or the SSH tunnel is down. Applies to local and remote sessions alike.
-          <p style={{ margin: '4px 0 0' }}>
-            <strong>Never retried:</strong> model refusals, auth or account failures, context-window overflow,
-            anything you cancelled, and any error not positively recognized as temporary. Sending a message
-            yourself cancels a pending retry.
-          </p>
-          <p style={{ margin: '4px 0 0' }}>
-            Takes effect after the daemon restarts (next session start on that host after a deploy).
-          </p>
-        </div>
-      </div>
-
-      {retryEnabled && (
-        <div className="form-group" style={{ marginLeft: 16, borderLeft: '2px solid var(--border)', paddingLeft: 12 }}>
-          <div className="form-row">
-            <div className="form-group">
-              <label htmlFor="turn-retry-budget">Retry Budget</label>
-              <NumberInput
-                id="turn-retry-budget"
-                value={retryBudgetHours}
-                onChange={setRetryBudgetHours}
-                suffix="hours"
-                placeholder="12"
-                min={0}
-              />
-              <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-                How long to keep retrying one outage. The clock starts at the first failure and resets after
-                any successful turn. 0 = off.
-              </p>
-            </div>
-
-            <div className="form-group">
-              <label htmlFor="turn-retry-max-attempts">Max Attempts</label>
-              <NumberInput
-                id="turn-retry-max-attempts"
-                value={retryMaxAttempts}
-                onChange={setRetryMaxAttempts}
-                placeholder="200"
-                min={0}
-              />
-              <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-                Backstop for an error that fails instantly over and over.
-              </p>
-            </div>
-          </div>
-
-          <div className="form-row">
-            <div className="form-group">
-              <label htmlFor="turn-retry-backoff">First Backoff</label>
-              <NumberInput
-                id="turn-retry-backoff"
-                value={retryBackoffSeconds}
-                onChange={setRetryBackoffSeconds}
-                suffix="seconds"
-                placeholder="30"
-                min={1}
-              />
-            </div>
-
-            <div className="form-group">
-              <label htmlFor="turn-retry-backoff-max">Max Backoff</label>
-              <NumberInput
-                id="turn-retry-backoff-max"
-                value={retryBackoffMaxSeconds}
-                onChange={setRetryBackoffMaxSeconds}
-                suffix="seconds"
-                placeholder="600"
-                min={1}
-              />
-              <p className="text-sm text-muted" style={{ marginTop: 2 }}>
-                The wait doubles each attempt up to this ceiling.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Turn-error auto-retry is a DAEMON POLICY, so it lives in Settings →
+          Hooks with the rest of the automatic behaviors (and its knobs are
+          declared there as hook settings). Deliberately not duplicated here:
+          two editors for one config key means whichever page saved last wins. */}
 
       <div className="form-group">
         <label>Enabled Session Modes</label>

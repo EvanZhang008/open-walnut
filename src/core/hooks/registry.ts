@@ -10,6 +10,7 @@ import { getSessionHookDispatcher } from '../session-hooks/index.js';
 import { HOOK_POINT_DOMAIN } from '../session-hooks/types.js';
 import type { HookDefinition, HookDomain } from '../session-hooks/types.js';
 import { DAEMON_POLICIES } from './daemon-policies.js';
+import { resolveSetting, type HookSettingInfo } from './settings.js';
 import { describeAction, type HookAction } from './actions.js';
 import { getConfig } from '../config-manager.js';
 import type { Config } from '../types.js';
@@ -35,6 +36,10 @@ export interface HookInfo {
    *  - readonly: not toggleable */
   mutable: 'config-override' | 'config-path' | 'readonly';
   configPath?: string;
+  /** Tunable knobs with their CURRENT values, rendered under the toggle in
+   *  Settings → Hooks and written back via PATCH { settings: {...} }. Absent or
+   *  empty = the hook is a plain on/off switch. */
+  settings?: HookSettingInfo[];
   note?: string;
 }
 
@@ -194,6 +199,7 @@ export async function getHookInventory(): Promise<HookInfo[]> {
       conditions: [],
       mutable: policy.setter ? 'config-path' : 'readonly',
       configPath: policy.configPath ?? undefined,
+      settings: policy.settings?.map(s => resolveSetting(s, config)),
       note: policy.note,
     });
   }

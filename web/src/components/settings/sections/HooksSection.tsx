@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { fetchHooks, patchHook, type HookInfo } from '@/api/hooks';
+import { fetchHooks, patchHook, type HookInfo, type HookSetting } from '@/api/hooks';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { ToggleSwitch } from '@/components/settings/inputs/ToggleSwitch';
+import { NumberInput } from '@/components/settings/inputs/NumberInput';
 import { log } from '@/utils/log';
 
 const ACTION_ICON: Record<string, string> = {
@@ -35,7 +36,76 @@ const RUNTIME_GROUPS: Array<{ key: string; title: string; subtitle: string; matc
   },
 ];
 
-function HookCard({ hook, onToggle }: { hook: HookInfo; onToggle: (h: HookInfo, enabled: boolean) => void }) {
+/**
+ * Editable knobs a hook declares (HookInfo.settings). Rendered from the
+ * descriptor, so a new knob on any hook needs no code here.
+ *
+ * Commits on blur / Enter rather than per keystroke: each write hits config.yaml
+ * and (for daemon policies) is announced as "needs a daemon restart", so firing
+ * one per typed digit would be both wasteful and confusing.
+ */
+function HookSettings({
+  hook, onCommit,
+}: {
+  hook: HookInfo;
+  onCommit: (h: HookInfo, key: string, value: number | boolean) => void;
+}) {
+  const settings = hook.settings ?? [];
+  // Local draft so typing isn't fought by the server value mid-edit.
+  const [draft, setDraft] = useState<Record<string, number | boolean>>({});
+  useEffect(() => { setDraft({}); }, [hook.settings]);
+  if (settings.length === 0) return null;
+
+  const valueOf = (s: HookSetting) => (draft[s.key] !== undefined ? draft[s.key] : s.value);
+
+  const commit = (s: HookSetting) => {
+    const next = draft[s.key];
+    if (next === undefined || next === s.value) return;
+    onCommit(hook, s.key, next);
+  };
+
+  return (
+    <div className="hook-card-settings">
+      {settings.map((s) => (
+        <div key={s.key} className="hook-card-setting">
+          <label className="hook-card-setting-label" htmlFor={`hook-setting-${hook.id}-${s.key}`}>
+            {s.label}
+          </label>
+          {s.type === 'boolean' ? (
+            <ToggleSwitch
+              id={`hook-setting-${hook.id}-${s.key}`}
+              checked={valueOf(s) === true}
+              onChange={(v) => onCommit(hook, s.key, v)}
+            />
+          ) : (
+            <NumberInput
+              id={`hook-setting-${hook.id}-${s.key}`}
+              value={typeof valueOf(s) === 'number' ? (valueOf(s) as number) : undefined}
+              onChange={(v) => setDraft((prev) => ({
+                // Clearing the field must not write `undefined` — fall back to
+                // the declared default so config never holds a null knob.
+                ...prev, [s.key]: v === undefined ? (s.default as number) : v,
+              }))}
+              onBlur={() => commit(s)}
+              onEnter={() => commit(s)}
+              suffix={s.unit}
+              placeholder={String(s.default)}
+              min={s.min}
+              max={s.max}
+            />
+          )}
+          {s.help && <p className="hook-card-setting-help">{s.help}</p>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HookCard({ hook, onToggle, onSettingCommit }: {
+  hook: HookInfo;
+  onToggle: (h: HookInfo, enabled: boolean) => void;
+  onSettingCommit: (h: HookInfo, key: string, value: number | boolean) => void;
+}) {
   const toggleable = hook.mutable !== 'readonly';
   return (
     <div className={`hook-card${hook.enabled ? '' : ' hook-card-disabled'}`}>
@@ -84,6 +154,10 @@ function HookCard({ hook, onToggle }: { hook: HookInfo; onToggle: (h: HookInfo, 
         )}
       </div>
 
+      {/* Knobs only while the hook is ON — showing tuning for something that
+          isn't running reads as "configured and active" when it isn't. */}
+      {hook.enabled && <HookSettings hook={hook} onCommit={onSettingCommit} />}
+
       {hook.note && <p className="hook-card-note">{hook.note}</p>}
     </div>
   );
@@ -121,6 +195,25 @@ export function HooksSection() {
       });
   }, [reload]);
 
+  const onSettingCommit = useCallback((hook: HookInfo, key: string, value: number | boolean) => {
+    // Optimistic: reflect the new value immediately, reload reconciles.
+    setHooks((prev) => prev.map((h) => (h.id === hook.id
+      ? { ...h, settings: h.settings?.map((s) => (s.key === key ? { ...s, value } : s)) }
+      : h)));
+    patchHook(hook.id, { settings: { [key]: value } })
+      .then((result) => {
+        if (result.requiresDaemonRestart) {
+          setBanner(`"${hook.name}" updated — takes effect after the session daemon restarts.`);
+        }
+        reload();
+      })
+      .catch((err) => {
+        log.warn('settings', 'hook setting update failed', { hookId: hook.id, key, error: String(err) });
+        setBanner(`Failed to update "${hook.name}": ${err instanceof Error ? err.message : String(err)}`);
+        reload();
+      });
+  }, [reload]);
+
   if (loading) return <div id="hooks"><LoadingSpinner /></div>;
   if (error) return <div id="hooks"><div className="empty-state"><p>Error: {error}</p></div></div>;
 
@@ -147,7 +240,12 @@ export function HooksSection() {
             <p className="hook-group-subtitle">{group.subtitle}</p>
             <div className="hooks-list">
               {groupHooks.map((hook) => (
-                <HookCard key={hook.id} hook={hook} onToggle={onToggle} />
+                <HookCard
+                  key={hook.id}
+                  hook={hook}
+                  onToggle={onToggle}
+                  onSettingCommit={onSettingCommit}
+                />
               ))}
             </div>
           </div>

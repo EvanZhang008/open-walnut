@@ -32,6 +32,11 @@ interface HookInfo {
   conditions: string[];
   mutable: string;
   configPath?: string;
+  settings?: Array<{
+    key: string; label: string; path: string; type: 'number' | 'boolean';
+    unit?: string; default: number | boolean; min?: number; max?: number;
+    help?: string; value: number | boolean;
+  }>;
   note?: string;
 }
 
@@ -198,6 +203,120 @@ describe('PATCH /api/hooks/:id', () => {
     // ...and siblings one level UP survived too.
     expect(raw.session?.cron_policy).toBe('session-only');
     expect(raw.session?.idle_timeout_minutes).toBe(45);
+  });
+
+  it('exposes a daemon policy\'s declared settings with current values', async () => {
+    await fetch(apiUrl('/api/config'), {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session: { turn_retry: { enabled: true, budget_hours: 9 } } }),
+    });
+    const inventory = await (await fetch(apiUrl('/api/hooks'))).json() as HookInfo[];
+    const hook = inventory.find(h => h.id === 'turn-error-auto-retry')!;
+    expect(hook.settings, 'settings missing from the inventory').toBeTruthy();
+    const budget = hook.settings!.find(s => s.key === 'budget_hours')!;
+    expect(budget.value).toBe(9);          // stored value wins
+    expect(budget.unit).toBe('hours');
+    // An unset knob reports its default, so the UI never renders a blank.
+    expect(hook.settings!.find(s => s.key === 'max_attempts')!.value).toBe(200);
+  });
+
+  it('PATCH { settings } writes the knob and preserves everything around it', async () => {
+    await fetch(apiUrl('/api/config'), {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        session: {
+          cron_policy: 'session-only',
+          idle_timeout_minutes: 45,
+          turn_retry: { enabled: true, budget_hours: 12, max_attempts: 200 },
+        },
+      }),
+    });
+
+    const res = await fetch(apiUrl('/api/hooks/turn-error-auto-retry'), {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ settings: { budget_hours: 6 } }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { requiresDaemonRestart?: boolean; settings?: Array<{ key: string; value: unknown }> };
+    expect(body.requiresDaemonRestart).toBe(true);
+    // The response echoes server state, so the UI needn't guess.
+    expect(body.settings?.find(s => s.key === 'budget_hours')?.value).toBe(6);
+
+    const raw = yaml.load(await fs.readFile(path.join(WALNUT_HOME, 'config.yaml'), 'utf8')) as {
+      session?: {
+        cron_policy?: string; idle_timeout_minutes?: number;
+        turn_retry?: { enabled?: boolean; budget_hours?: number; max_attempts?: number };
+      };
+    };
+    expect(raw.session?.turn_retry?.budget_hours).toBe(6);
+    expect(raw.session?.turn_retry?.enabled).toBe(true);       // toggle untouched
+    expect(raw.session?.turn_retry?.max_attempts).toBe(200);   // sibling knob untouched
+    expect(raw.session?.cron_policy).toBe('session-only');     // unrelated policy untouched
+    expect(raw.session?.idle_timeout_minutes).toBe(45);
+  });
+
+  it('applies enabled + settings in ONE write', async () => {
+    // Two sequential writes would each read-modify-write `session`, and the
+    // second would be based on a pre-first snapshot — losing the first.
+    const res = await fetch(apiUrl('/api/hooks/turn-error-auto-retry'), {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true, settings: { budget_hours: 3, backoff_seconds: 45 } }),
+    });
+    expect(res.status).toBe(200);
+    const raw = yaml.load(await fs.readFile(path.join(WALNUT_HOME, 'config.yaml'), 'utf8')) as {
+      session?: { turn_retry?: { enabled?: boolean; budget_hours?: number; backoff_seconds?: number } };
+    };
+    expect(raw.session?.turn_retry?.enabled).toBe(true);
+    expect(raw.session?.turn_retry?.budget_hours).toBe(3);
+    expect(raw.session?.turn_retry?.backoff_seconds).toBe(45);
+  });
+
+  it('rejects a bad setting value and writes NOTHING', async () => {
+    await fetch(apiUrl('/api/config'), {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session: { turn_retry: { enabled: true, budget_hours: 7 } } }),
+    });
+
+    const tooBig = await fetch(apiUrl('/api/hooks/turn-error-auto-retry'), {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ settings: { budget_hours: 99999 } }),
+    });
+    expect(tooBig.status).toBe(400);
+
+    const unknown = await fetch(apiUrl('/api/hooks/turn-error-auto-retry'), {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ settings: { not_a_knob: 1 } }),
+    });
+    expect(unknown.status).toBe(400);
+
+    const notAnObject = await fetch(apiUrl('/api/hooks/turn-error-auto-retry'), {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ settings: [1, 2, 3] }),
+    });
+    expect(notAnObject.status).toBe(400);
+
+    // The rejected writes left the stored value alone.
+    const raw = yaml.load(await fs.readFile(path.join(WALNUT_HOME, 'config.yaml'), 'utf8')) as {
+      session?: { turn_retry?: { budget_hours?: number } };
+    };
+    expect(raw.session?.turn_retry?.budget_hours).toBe(7);
+  });
+
+  it('rejects settings on a hook that declares none', async () => {
+    const res = await fetch(apiUrl('/api/hooks/session-only-cron-policy'), {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ settings: { budget_hours: 6 } }),
+    });
+    expect(res.status).toBe(400);
   });
 
   it('readonly hook → 409', async () => {

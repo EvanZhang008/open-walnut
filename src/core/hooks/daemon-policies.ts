@@ -9,6 +9,7 @@
  */
 
 import type { Config } from '../types.js';
+import type { HookSettingDescriptor } from './settings.js';
 
 export interface DaemonPolicyDescriptor {
   id: string;
@@ -21,6 +22,9 @@ export interface DaemonPolicyDescriptor {
   isEnabled: (config: Config) => boolean;
   /** Apply an enable/disable to a config patch. Absent = read-only. */
   setter?: (enabled: boolean) => Partial<Config>;
+  /** Tunable knobs shown under the toggle in Settings → Hooks. Declared as
+   *  data so the API/UI need no per-policy code (see hooks/settings.ts). */
+  settings?: HookSettingDescriptor[];
   note: string;
 }
 
@@ -54,6 +58,53 @@ export const DAEMON_POLICIES: DaemonPolicyDescriptor[] = [
     configPath: 'session.turn_retry.enabled',
     isEnabled: (c) => c.session?.turn_retry?.enabled === true,
     setter: (enabled) => ({ session: { turn_retry: { enabled } } } as Partial<Config>),
+    // Defaults MUST match TURN_RETRY_DEFAULTS in providers/daemon-core.ts —
+    // otherwise the UI shows one budget while the daemon enforces another.
+    settings: [
+      {
+        key: 'budget_hours',
+        label: 'Retry budget',
+        path: 'session.turn_retry.budget_hours',
+        type: 'number',
+        unit: 'hours',
+        default: 12,
+        min: 0,
+        max: 168,
+        help: 'How long to keep retrying one outage. The clock starts at the first failure and resets after any successful turn. 0 disables retrying.',
+      },
+      {
+        key: 'max_attempts',
+        label: 'Max attempts',
+        path: 'session.turn_retry.max_attempts',
+        type: 'number',
+        default: 200,
+        min: 0,
+        max: 10_000,
+        help: 'Backstop for an error that fails instantly over and over.',
+      },
+      {
+        key: 'backoff_seconds',
+        label: 'First backoff',
+        path: 'session.turn_retry.backoff_seconds',
+        type: 'number',
+        unit: 'seconds',
+        default: 30,
+        min: 1,
+        max: 3_600,
+        help: 'Wait before the first retry. It doubles on each attempt.',
+      },
+      {
+        key: 'backoff_max_seconds',
+        label: 'Max backoff',
+        path: 'session.turn_retry.backoff_max_seconds',
+        type: 'number',
+        unit: 'seconds',
+        default: 600,
+        min: 1,
+        max: 3_600,
+        help: 'Ceiling for the doubling wait.',
+      },
+    ],
     note: DAEMON_RESTART_NOTE,
   },
   {
