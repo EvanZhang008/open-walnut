@@ -86,6 +86,15 @@ export interface CoreSessionData {
   /** Turn-retry streak — see decideTurnRetry. Optional so adapters that don't
    *  implement the retry policy stay type-compatible. */
   turnRetry?: TurnRetryState
+  /** ── TTFT instrumentation (inc-1786665503510) ──
+   *  Epoch ms of the last FIFO send; the tailer logs "first stream_event after
+   *  send" and "first text_delta after send" latencies against it, then clears
+   *  it. This is the CLI-side half of the text-latency attribution: a big gap
+   *  HERE is Bedrock TTFB / model behavior, not walnut's pipeline. Optional so
+   *  test fixtures stay type-compatible. */
+  ttftSendTs?: number | null
+  /** One-shot flag: first stream_event line since ttftSendTs already logged. */
+  ttftSawFirstLine?: boolean
 }
 
 export interface DaemonCoreDeps<S extends CoreSessionData = CoreSessionData> {
@@ -635,7 +644,13 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       const payload = JSON.stringify({ type: 'user', message: { role: 'user', content: message } })
       const buf = Buffer.from(payload + '\n')
       const result = writeFifoFully(session.pipePath, buf)
-      if (result === 'ok') return { ok: true }
+      if (result === 'ok') {
+        // TTFT anchor: the tailer logs send→first-line / send→first-text
+        // latencies against this (CLI-side half of the text-latency attribution).
+        session.ttftSendTs = clock()
+        session.ttftSawFirstLine = false
+        return { ok: true }
+      }
       if (result === 'ENXIO') {
         reapSession(sid, -1, 'send-enxio')
         return { ok: false, reason: 'ENXIO', exitCode: session.exitCode }

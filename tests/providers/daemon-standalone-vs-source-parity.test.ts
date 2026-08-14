@@ -562,24 +562,38 @@ describe('L1/L2 daemon-standalone vs daemon-source parity (versioned events + ta
     expect(templateSrc).not.toMatch(/isBackgrounded\s*=\s*parsed\.patch\s*&&\s*parsed\.patch\.is_backgrounded\s*[^=]/)
   })
 
-  // inc-1786222771315 — the idle reaper must not kill a session whose OWN
-  // taskState still counts a running background task (wait-style bash tasks
-  // write to output_file, not the JSONL, so the stream goes silent for the
-  // task's whole lifetime). Same shape as the cron guard: extended threshold
-  // (3 days — an immortal-process backstop for a wedged task framework, NOT
-  // a working-session budget), never disabled.
-  it('both extend the idle-kill threshold when a background task is running (bgActive)', () => {
+  // inc-1786222771315 + the /loop incident before it — every keep-alive
+  // decision flows through ONE verdict function with a source, and getState
+  // exposes the same verdict. The reaper knowing about a cross-turn state
+  // only via scattered inline checks is exactly how team/cron/bg-task each
+  // became an incident.
+  it('both derive keep-alive protection through deriveSessionProtection', () => {
+    const fnRe = /function deriveSessionProtection\(/
+    expect(standaloneSrc).toMatch(fnRe)
+    expect(templateSrc).toMatch(fnRe)
+    // the scan consumes the verdict (not its own inline logic)
+    const useRe = /deriveSessionProtection\(session,\s*sid,\s*now\)/
+    expect(standaloneSrc).toMatch(useRe)
+    expect(templateSrc).toMatch(useRe)
+    // getState exposes the same verdict (debuggability = same source of truth)
+    const stateRe = /protection:\s*deriveSessionProtection\(session,\s*sid,\s*Date\.now\(\)\)/
+    expect(standaloneSrc).toMatch(stateRe)
+    expect(templateSrc).toMatch(stateRe)
+  })
+  it('deriveSessionProtection covers all three cross-turn states with extended ceilings', () => {
     const constRe = /SESSION_BG_IDLE_KILL_MS\s*=\s*3\s*\*\s*24\s*\*\s*60\s*\*\s*60\s*\*\s*1000/
     expect(standaloneSrc).toMatch(constRe)
     expect(templateSrc).toMatch(constRe)
-    // bgActive derives from the daemon's own fold, not a cached flag
-    const deriveRe = /taskState.*derivedRunning\s*>\s*0/
-    expect(standaloneSrc).toMatch(deriveRe)
-    expect(templateSrc).toMatch(deriveRe)
-    // and it must participate in the kill-threshold selection
-    const killRe = /bgActive\s*\?\s*SESSION_BG_IDLE_KILL_MS/
-    expect(standaloneSrc).toMatch(killRe)
-    expect(templateSrc).toMatch(killRe)
+    for (const src of [standaloneSrc, templateSrc]) {
+      // cron → 7d, team → 3d, bg-task → 3d; each verdict names its source
+      expect(src).toMatch(/source:\s*['"]cron['"],\s*killMs:\s*SESSION_CRON_IDLE_KILL_MS/)
+      expect(src).toMatch(/source:\s*['"]team['"],\s*killMs:\s*SESSION_BG_IDLE_KILL_MS/)
+      expect(src).toMatch(/source:\s*['"]bg-task['"],\s*killMs:\s*SESSION_BG_IDLE_KILL_MS/)
+      // bg-task derives from the daemon's own fold, not a cached flag
+      expect(src).toMatch(/taskState.*derivedRunning\s*>\s*0/)
+      // team derives from the fold's teamActive
+      expect(src).toMatch(/foldState\.teamActive/)
+    }
   })
 })
 
@@ -660,16 +674,17 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
       // Live tailer (carryLen since C26).
       expect(src).toMatch(/if \(carryLen > TAILER_CARRY_MAX\)/)
       expect(src).toMatch(/tailer carry overflow — dropping oversized partial line/)
-      // C13: the rebuild + the death drain reuse the SAME cap. Without it, a
+      // C13: the rebuilds + the death drain reuse the SAME cap. Without it, a
       // single >32MB line (which the live tailer deliberately drops) got
       // re-materialized by repeated Buffer.concat — O(n²) copying per rebuild.
       expect(src).toMatch(/fold rebuild carry overflow — dropping oversized partial line/)
       expect(src).toMatch(/fold drain carry overflow — dropping oversized partial line/)
+      expect(src).toMatch(/task rebuild carry overflow — dropping oversized partial line/)
       expect((src.match(/if \(carry\.length > TAILER_CARRY_MAX\)/g) ?? []).length,
-        'rebuild + drain must both cap the carry').toBe(2)
+        'fold rebuild + drain + task rebuild must all cap the carry').toBe(3)
       // After a drop, the rest of the oversized line must be skipped too.
       expect((src.match(/discardThroughNextNewline = true/g) ?? []).length,
-        'tailer + rebuild + drain must all realign after a dropped line').toBeGreaterThanOrEqual(3)
+        'tailer + rebuilds + drain must all realign after a dropped line').toBeGreaterThanOrEqual(4)
     }
   })
 
@@ -1283,10 +1298,14 @@ describe('idle-reaper disk cron signal daemon-standalone vs daemon-source parity
 
   it('both idle scans consult hasDiskCronInterest when the fold shows no cron', () => {
     for (const src of [standaloneSrc, templateSrc]) {
-      expect(src).toMatch(/foldCronArmed/)
-      // TS uses shorthand ({ sid, … }), the JS template spells it out ({ sid: sid, … })
-      expect(src).toMatch(/hasDiskCronInterest\(\{ sid(?:: sid)?, tasksJson(?:: tasksJson)?, lockJson(?:: lockJson)?, nowMs: now \}\)/)
-      expect(src).toMatch(/disk scheduled_tasks arms cron protection/)
+      // The fold signal (cronIds) is checked FIRST; the disk check only runs
+      // when the fold shows nothing (deriveSessionProtection's branch order).
+      const foldIdx = src.search(/foldState\.cronIds/)
+      const diskIdx = src.search(/hasDiskCronInterest\(\{ sid(?:: sid)?, tasksJson(?:: tasksJson)?, lockJson(?:: lockJson)?, nowMs: now \}\)/)
+      expect(foldIdx).toBeGreaterThan(-1)
+      expect(diskIdx).toBeGreaterThan(-1)
+      // both signals resolve to the same 'cron' verdict, disk with provenance
+      expect(src).toMatch(/source:\s*['"]cron['"],\s*killMs:\s*SESSION_CRON_IDLE_KILL_MS,\s*detail:\s*['"]disk:/)
     }
   })
   it('both cache the disk check per session with a 10-minute TTL', () => {
@@ -1656,5 +1675,127 @@ describe('turn-error auto-retry daemon-core vs daemon-source parity', () => {
       expect(fifo, 'no FIFO delivery path').toBeGreaterThan(-1)
       expect(resume, 'no resume fallback').toBeGreaterThan(fifo)
     }
+  })
+})
+
+// ── Silent-death guards (2026-08-13 phone-send data-loss family) ──
+// The daemon died silently ≥7 times over 2026-08-11..13, several mid
+// phone-bridge send (marker written, message lost). Three layers, all of
+// which must exist on BOTH twins: (1) uncaughtException/unhandledRejection →
+// breadcrumb + exit(1); (2) handleCommand dispatch wrapped in try/catch so a
+// throwing handler answers the caller instead of killing the process;
+// (3) the whale-file task rebuild is streamed, never a whole-file read.
+describe('silent-death guards daemon-standalone vs daemon-source parity', () => {
+  const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+  const templateSrc = readFile(sourcePath)
+
+  it('both register uncaughtException + unhandledRejection funnels into daemonCrash', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/process\.on\('uncaughtException',[\s\S]{0,80}daemonCrash\('uncaughtException'/)
+      expect(src).toMatch(/process\.on\('unhandledRejection',[\s\S]{0,80}daemonCrash\('unhandledRejection'/)
+      // The funnel logs, breadcrumbs, and EXITS 1 (supervisor respawns clean).
+      const body = src.slice(src.indexOf('function daemonCrash'))
+      const crash = body.slice(0, body.indexOf('\n}'))
+      expect(crash).toMatch(/FATAL: ' \+ kind \+ ' — daemon exiting/)
+      expect(crash).toMatch(/writeExitBreadcrumb\(kind, err\)/)
+      expect(crash).toMatch(/process\.exit\(1\)/)
+    }
+  })
+
+  it('both write an exit breadcrumb file named daemon-exit-<instanceId>.log with vitals', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/daemon-exit-.{0,10}DAEMON_INSTANCE_ID/)
+      const at = src.indexOf('function writeExitBreadcrumb')
+      expect(at).toBeGreaterThan(-1)
+      const body = src.slice(at, src.indexOf('\n}', at))
+      for (const field of ['uptimeSec', 'rssMb', 'heapMb', 'sessions:', 'stack:']) {
+        expect(body, `breadcrumb missing ${field}`).toContain(field)
+      }
+      // The breadcrumb itself must be throw-proof.
+      expect(body).toMatch(/catch \{ \/\* the breadcrumb must never be the thing that crashes \*\/ \}/)
+    }
+  })
+
+  it('both wrap the command dispatch so a throwing handler replies instead of dying', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      // handleCommand delegates through a try/catch to dispatchCommand…
+      const hc = src.slice(src.indexOf('function handleCommand'), src.indexOf('function dispatchCommand'))
+      expect(hc).toMatch(/try \{/)
+      expect(hc).toMatch(/dispatchCommand\(ws, id(?: as number)?, cmd\)/)
+      expect(hc).toMatch(/handleCommand: handler threw — replying with error instead of dying/)
+      expect(hc).toMatch(/internal daemon error handling/)
+      // …and an async handler's rejection is caught too (fs.* return promises).
+      expect(hc).toMatch(/typeof (?:\(out as Promise<unknown>\)\.then|out\.then) === 'function'/)
+      // …and a valid-JSON-but-not-object frame can't throw before the guard.
+      expect(hc).toMatch(/if \(!cmd \|\| typeof cmd !== 'object'\) return sendError/)
+      // The switch itself must live in dispatchCommand (nothing dispatches outside the guard).
+      expect(src).toMatch(/function dispatchCommand\(ws(?:: ServerWebSocket<WsData>)?, id(?:: number)?, cmd(?:: Record<string, unknown>)?\) \{\s*\n\s*switch \(cmd\.cmd\)/)
+    }
+  })
+
+  it('both stream rebuildTaskStateFromJsonl in chunks (no whole-file readFileSync)', () => {
+    for (const [name, src] of [['standalone', standaloneSrc], ['template', templateSrc]] as const) {
+      const at = src.indexOf('function rebuildTaskStateFromJsonl')
+      expect(at).toBeGreaterThan(-1)
+      const body = src.slice(at, src.indexOf('\n}', at))
+      expect(body, `${name}: task rebuild still materializes the whole file`)
+        .not.toMatch(/readFileSync/)
+      expect(body).toMatch(/FOLD_REBUILD_CHUNK/)
+      // Byte-level pre-filter: only task_* lines get decoded.
+      expect(body).toMatch(/TASK_LINE_MARKER/)
+      expect(src).toMatch(/TASK_LINE_MARKER = Buffer\.from\('"task_'\)/)
+    }
+  })
+})
+
+// ── session.message durable relay (the cloud-send asymmetry fix) ──
+// Phone sends must ride the SAME durable queue as web sends. The daemon's
+// role is a narrow relay (identical shape to session.control): forward UP to
+// the trusted walnut client, answer with the relayed result. Lock the shape
+// on BOTH twins: allowlist membership, dispatch cases, trusted-client pick,
+// fail-fast, timeout map, and that message-result stays OFF the bridge.
+describe('session.message relay daemon-standalone vs daemon-source parity', () => {
+  const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+  const templateSrc = readFile(sourcePath)
+
+  it('both allowlist session.message on the bridge and dispatch it + message-result', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const allowStart = src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set([')
+      expect(allowStart).toBeGreaterThan(-1)
+      const allowBody = src.slice(allowStart, src.indexOf('])', allowStart))
+      expect(allowBody).toContain("'session.message'")
+      // Containment intact: the trusted-answer verb stays off the bridge.
+      expect(allowBody).not.toContain("'message-result'")
+      expect(src).toMatch(/case 'session\.message': return cmdMessageRelay/)
+      expect(src).toMatch(/case 'message-result': return cmdMessageResult/)
+      expect(src).toMatch(/function cmdMessageRelay/)
+      expect(src).toMatch(/function cmdMessageResult/)
+    }
+  })
+
+  it('both relay session.message to a TRUSTED client and never touch the FIFO/jsonl themselves', () => {
+    for (const src of [standaloneSrc, templateSrc]) {
+      const start = src.search(/function cmdMessageRelay/)
+      expect(start).toBeGreaterThan(-1)
+      const body = src.slice(start, src.indexOf('\n}', start))
+      expect(body).toContain("'session.message: no primary server connected'")
+      expect(body).toMatch(/sendEvent\(target, 'message-request',/)
+      // The stable messageId must ride the relay (idempotence anchor).
+      expect(body).toMatch(/messageId/)
+      // The daemon must NOT deliver anything itself from this command.
+      expect(body).not.toMatch(/writeFifo|appendFileSync|cmdSend\(|cmdStart\(/)
+      expect(src).toMatch(/MESSAGE_RELAY_TIMEOUT_MS = 45[_]?000/)
+    }
+  })
+
+  it("'session.message' is advertised but NOT required (old daemons must stay usable)", () => {
+    const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
+    const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES = [')
+    const reqEnd = capsSrc.indexOf('] as const', reqStart)
+    expect(reqStart).toBeGreaterThan(-1)
+    expect(capsSrc.slice(reqStart, reqEnd)).not.toMatch(/'session\.message'/)
+    const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES = [')
+    const advEnd = capsSrc.indexOf('] as const', advStart)
+    expect(capsSrc.slice(advStart, advEnd)).toMatch(/'session\.message'/)
   })
 })

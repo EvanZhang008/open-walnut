@@ -372,19 +372,30 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
       }
     }
   } else if (type === 'result') {
-    const origin = parsed.origin as { kind?: string } | undefined
-    if (!origin || origin.kind !== 'task-notification') {
-      // task-notification-origin results are bg-summary bookkeeping, never
-      // turn-over. endOffset rides the daemon `v` coordinate for the
-      // positional replay veto downstream.
-      const numTurns = parsed.num_turns
-      next.lastResult = {
-        isError: parsed.is_error === true,
-        ...(typeof numTurns === 'number' ? { numTurns } : {}),
-        endOffset: lineEndV,
-      }
-      next.trailingIdle = false // this result's own companion idle must still arrive
+    // EVERY result — including origin:task-notification — is a turn verdict
+    // HERE. The CLI's notification FOLLOWUP turn (bg task completes while
+    // idle → CLI autonomously runs init + state:running + summary) opens an
+    // anchor in this fold like any other turn, and its closing result carries
+    // origin:task-notification. The previous exclusion ("bg-summary
+    // bookkeeping, never turn-over" — mirroring the walnut-side handlers,
+    // where it protects task-phase transitions) made the fold ASYMMETRIC:
+    // anchor accepted, verdict refused → lastResult stayed null → the trailing
+    // idle could never settle → turnActive=true forever. Under enforce the
+    // snapshot is the sole status writer, so the record wedged at 'running'
+    // for a CLI that was provably idle (incident b07ee156, 2026-08-14).
+    // Safety: counting it here cannot end a LIVE turn prematurely — settle
+    // still requires a trailing idle with zero gating work, and any subsequent
+    // running/init resets lastResult. Walnut's live/phase handlers keep their
+    // own task-notification exclusion; this fold only decides cliState.
+    // endOffset rides the daemon `v` coordinate for the positional replay
+    // veto downstream.
+    const numTurns = parsed.num_turns
+    next.lastResult = {
+      isError: parsed.is_error === true,
+      ...(typeof numTurns === 'number' ? { numTurns } : {}),
+      endOffset: lineEndV,
     }
+    next.trailingIdle = false // this result's own companion idle must still arrive
   } else if (type === 'assistant') {
     const msg = parsed.message as { content?: unknown } | undefined
     const blocks = msg ? msg.content : undefined

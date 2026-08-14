@@ -562,9 +562,18 @@ Each execution host's daemon dials OUT to the cloud companion over
 can talk to live sessions even when the primary box is asleep. On the
 primary box the same endpoints serve directly — no bridge involved.
 
-- `POST /api/v1/sessions/:id/messages` body `{ "text": "...", "images"? }` →
+- `POST /api/v1/sessions/:id/messages` body `{ "text": "...", "images"?, "messageId"? }` →
   `202 { "messageId" }`. The message is delivered into the running CLI
   session (mid-turn sends are fine — the session reads them between turns).
+  - `messageId` (additive) — a client-supplied stable id (`qm-…`, ≤64 chars of
+    `[A-Za-z0-9-]`) that makes the send IDEMPOTENT: a retry after a lost 202
+    reuses the original id and collapses onto the already-queued/delivered
+    message instead of sending twice. Omit it and the server mints one (the
+    returned `messageId`). Malformed values are ignored (fresh id minted).
+    Clients that retry SHOULD send the `messageId` from their first attempt.
+  - Durability (cloud): sends land in the primary's persistent message queue
+    (the same store desktop sends use) before delivery, so a daemon/CLI death
+    mid-flight becomes delayed delivery — retry on `503`, never assume loss.
   - `images` (additive) — same shape/limits as the conversation endpoint
     (`[ { "data": "<raw base64>", "mediaType": "image/png" } ]`, ≤5, png/jpeg/
     gif/webp). Each image is saved to disk and the message is prefixed with
@@ -1038,6 +1047,15 @@ rejected, 4096-char cap.
   REPLICA answers `501 not_supported_cloud`, and replica-LOCAL reads are
   confined to the safe `/tmp/open-walnut*` roots with secret-path denials
   (`403` mapped to `not_supported_cloud`).
+  **`raw=1` (additive, 2026-08):** serve the file's BYTES with a real
+  Content-Type instead of the JSON envelope — `text/html` for `.html`/`.htm`,
+  `image/svg+xml` for `.svg`, media/PDF/image types stream byte-exact with
+  Range support, everything else `text/plain`. `download=1` forces
+  `Content-Disposition: attachment`. This is what the iOS app points its
+  WKWebView at for HTML previews (same mechanism as the web console's
+  preview iframe). Identical sandbox to the JSON path (one shared
+  implementation); errors come back as plain-text bodies with the same
+  status codes (404 missing, 502 remote transport).
 - `PUT /api/v1/file-content` `{ path, host?, content, expectedHash? }` →
   `{ "ok", "size", "contentHash" }` — save an edit made in the Files-panel
   editor. Shares the read path's sandbox verbatim (one `assertPathAllowed` for

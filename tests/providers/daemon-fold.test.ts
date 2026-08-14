@@ -232,10 +232,25 @@ describe('foldLine — result and state transitions', () => {
     expect(s.turnActive).toBe(false)
   })
 
-  it('notification-origin result is bookkeeping — never recorded, never settles', () => {
+  it('notification-origin result IS a turn verdict here — the followup turn settles (incident b07ee156)', () => {
+    // The CLI's notification FOLLOWUP turn (bg task completes while idle →
+    // autonomous init + running + summary) CLOSES with a notification-origin
+    // result. Excluding it made the fold asymmetric — anchor accepted, verdict
+    // refused — wedging turnActive=true forever for a provably idle CLI.
+    // Walnut's live/phase handlers keep their own exclusion; this fold only
+    // decides cliState.
     const s = fold([userEvent(), notificationOriginResult(), stateEvent('idle')])
-    expect(s.lastResult).toBe(null)
-    expect(s.turnActive).toBe(true)
+    expect(s.lastResult).not.toBe(null)
+    expect(s.turnActive).toBe(false)
+  })
+
+  it('INCIDENT b07ee156 SHAPE: real turn settles, then the notification followup also settles', () => {
+    const s = fold([
+      userEvent(), resultEvent(), stateEvent('idle'),          // real turn ends
+      stateEvent('running'), initEvent(),                      // followup opens (anchor-equivalent)
+      notificationOriginResult(), stateEvent('idle'),          // followup closes
+    ])
+    expect(s.turnActive).toBe(false)
   })
 
   it('a fresh result resets trailingIdle (its own companion idle must still arrive)', () => {

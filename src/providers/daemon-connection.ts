@@ -109,6 +109,24 @@ interface PendingCommand {
   traceId?: string
 }
 
+// ── Mobile-relay enqueue ledger (post-delivery idempotency) ──
+// The durable queue dedupes by messageId only while the row is still queued;
+// once delivered+drained, a phone retry (lost ack) would re-enqueue the same
+// turn. This bounded in-memory ledger of recently accepted qm-mobile ids
+// closes that window. Module-scope on purpose: reconnects create fresh
+// DaemonConnection instances but replays must still dedupe. Restart loses it —
+// acceptable, since the retry window (phone tap) is minutes, not days.
+const MOBILE_ENQUEUE_LEDGER_MAX = 500
+const recentMobileEnqueues = new Set<string>()
+function rememberMobileEnqueue(messageId: string): void {
+  recentMobileEnqueues.add(messageId)
+  if (recentMobileEnqueues.size > MOBILE_ENQUEUE_LEDGER_MAX) {
+    // Set iteration is insertion-ordered — drop the oldest.
+    const oldest = recentMobileEnqueues.values().next().value
+    if (oldest !== undefined) recentMobileEnqueues.delete(oldest)
+  }
+}
+
 // ── DaemonConnection ──
 
 export class DaemonConnection {
@@ -804,6 +822,72 @@ export class DaemonConnection {
       await this.send('control-result', reply)
     } catch (err) {
       log.session.warn('DaemonConnection: control-result send failed', {
+        host: this.hostKey, relayId, message: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  /**
+   * Answer a daemon-relayed session-message request (a phone sending into a
+   * session over the cloud bridge). Enqueues into the SAME durable message
+   * queue web sends use — sendMessageToSession → session-runner delivery
+   * (FIFO / mid-turn / --resume) with crash-safe reconnect redelivery. This
+   * replaces the cloud path's old direct marker+send/bridgeResume sequence,
+   * whose non-atomicity lost messages when the daemon died mid-sequence
+   * (2026-08-13 family). The stable messageId (qm-mobile-*) makes the
+   * enqueue idempotent end-to-end.
+   */
+  private async handleMessageRequest(event: DaemonEvent): Promise<void> {
+    const relayId = (event as unknown as { relayId?: unknown }).relayId
+    const sessionId = (event as unknown as { sessionId?: unknown }).sessionId
+    const message = (event as unknown as { message?: unknown }).message
+    const messageId = (event as unknown as { messageId?: unknown }).messageId
+    if (typeof relayId !== 'number') return
+    let reply: Record<string, unknown>
+    try {
+      if (typeof sessionId !== 'string' || typeof message !== 'string' || message === ''
+        || typeof messageId !== 'string' || messageId === '') {
+        reply = { relayId, error: 'invalid message relay payload', errorKind: 'bad_request' }
+      } else if (recentMobileEnqueues.has(messageId)) {
+        // Post-delivery idempotency: the queue-level dedupe only sees rows
+        // still IN the queue. A phone retry after a lost ack, arriving after
+        // the message was delivered and drained, would re-enqueue a duplicate
+        // turn — this ledger closes that window.
+        log.session.info('DaemonConnection: message relay replay deduped (ledger)', {
+          host: this.hostKey, relayId, sessionId, messageId,
+        })
+        reply = { relayId, result: { messageId } }
+      } else {
+        const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+        const record = await getSessionByClaudeId(sessionId)
+        if (!record) {
+          reply = { relayId, error: `Session not found: ${sessionId}`, errorKind: 'not_found' }
+        } else {
+          const { sendMessageToSession } = await import('../core/session-message-queue.js')
+          const msg = await sendMessageToSession(sessionId, message, {
+            source: 'mobile',
+            taskId: record.taskId,
+            messageId,
+          })
+          rememberMobileEnqueue(messageId)
+          log.session.info('DaemonConnection: message relay enqueued (durable)', {
+            host: this.hostKey, relayId, sessionId, messageId: msg.id,
+          })
+          reply = { relayId, result: { messageId: msg.id } }
+        }
+      }
+    } catch (err) {
+      const message2 = err instanceof Error ? err.message : String(err)
+      log.session.warn('DaemonConnection: message relay failed', { host: this.hostKey, relayId, message: message2 })
+      reply = { relayId, error: message2, errorKind: 'internal' }
+    }
+    try {
+      await this.send('message-result', reply)
+    } catch (err) {
+      // The enqueue is durable — even if this ack never reaches the daemon
+      // (bridge flap), the message delivers via the queue; the phone's retry
+      // dedupes on messageId.
+      log.session.warn('DaemonConnection: message-result send failed', {
         host: this.hostKey, relayId, message: err instanceof Error ? err.message : String(err),
       })
     }
@@ -2177,6 +2261,12 @@ export class DaemonConnection {
         void this.handleControlRequest(event)
         return
       }
+      // Message relay (cloud phone send → durable queue): same internal
+      // handling — session-level eventHandlers never see it.
+      if (event.ev === 'message-request') {
+        void this.handleMessageRequest(event)
+        return
+      }
       // Agent-gateway relay (wn CLI peers.list/peers.send): same internal
       // handling — session-level eventHandlers never see it.
       if (event.ev === 'gateway-request') {
@@ -2251,6 +2341,12 @@ export class DaemonConnection {
       }
       if ('ev' in msg && (msg as { ev?: string }).ev === 'control-request') {
         void this.handleControlRequest(msg as unknown as DaemonEvent)
+      }
+      // message-request also targets the daemon's FIRST trusted client — after
+      // a main-WS reconnect that can be this bulk socket; dropping it would
+      // strand every phone send until the next reconnect.
+      if ('ev' in msg && (msg as { ev?: string }).ev === 'message-request') {
+        void this.handleMessageRequest(msg as unknown as DaemonEvent)
       }
       // gateway-request also targets the daemon's FIRST trusted client — after
       // a main-WS reconnect that can be this bulk socket; dropping it here

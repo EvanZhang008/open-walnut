@@ -165,24 +165,46 @@ export async function loadQueue(): Promise<void> {
 /**
  * Enqueue a message for a session. Persists immediately.
  * Returns the queued message (with generated ID).
+ *
+ * `opts.id` — caller-supplied stable message id (e.g. the cloud relay's
+ * `qm-mobile-*`). IDEMPOTENT: if a row with this id is already queued for the
+ * session, that row is returned unchanged instead of enqueuing a duplicate.
+ * This is the exactly-once anchor for phone sends: a bridge-relay replay (the
+ * daemon died after the primary enqueued but before the ack reached the
+ * phone, so the phone retried) collapses onto the original row, and queue
+ * redelivery after a daemon respawn delivers it once.
  */
-export async function enqueueMessage(sessionId: string, message: string): Promise<QueuedMessage> {
+export async function enqueueMessage(
+  sessionId: string,
+  message: string,
+  opts?: { id?: string },
+): Promise<QueuedMessage> {
   const msg: QueuedMessage = {
-    id: generateId(),
+    id: opts?.id ?? generateId(),
     sessionId,
     message,
     status: 'pending',
     enqueuedAt: new Date().toISOString(),
     seq: ++enqueueSeq,
   };
-  const queueDepth = await mutateStore((s) => {
+  const outcome = await mutateStore((s) => {
     if (!s.queues[sessionId]) {
       s.queues[sessionId] = [];
     }
+    if (opts?.id) {
+      const existing = s.queues[sessionId].find((m) => m.id === opts.id);
+      if (existing) return { queueDepth: s.queues[sessionId].length, existing };
+    }
     s.queues[sessionId].push(msg);
-    return s.queues[sessionId].length;
+    return { queueDepth: s.queues[sessionId].length, existing: null };
   });
-  log.session.info('message enqueued', { sessionId, messageId: msg.id, queueDepth });
+  if (outcome.existing) {
+    log.session.info('message enqueue deduped by id (already queued)', {
+      sessionId, messageId: outcome.existing.id, queueDepth: outcome.queueDepth,
+    });
+    return outcome.existing;
+  }
+  log.session.info('message enqueued', { sessionId, messageId: msg.id, queueDepth: outcome.queueDepth });
   return msg;
 }
 
@@ -197,6 +219,9 @@ export async function enqueueMessage(sessionId: string, message: string): Promis
  * @param opts.interrupt - if true, interrupt the current turn before sending
  * @param opts.enqueueMessage - if provided, enqueue this text (may include image refs);
  *   the original `message` is used for bus events (UI display). Defaults to `message`.
+ * @param opts.messageId - caller-supplied stable id (cloud relay `qm-mobile-*`).
+ *   Idempotent: a duplicate id collapses onto the already-queued row (see
+ *   enqueueMessage) so bridge replays / phone retries can't double-deliver.
  */
 export async function sendMessageToSession(
   sessionId: string,
@@ -207,10 +232,11 @@ export async function sendMessageToSession(
     mode?: string;
     interrupt?: boolean;
     enqueueMessage?: string;
+    messageId?: string;
   },
 ): Promise<QueuedMessage> {
   const { bus, EventNames } = await import('./event-bus.js');
-  const msg = await enqueueMessage(sessionId, opts?.enqueueMessage ?? message);
+  const msg = await enqueueMessage(sessionId, opts?.enqueueMessage ?? message, { id: opts?.messageId });
   const source = opts?.source ?? 'unknown';
 
   // Tell session-runner to process the queued message

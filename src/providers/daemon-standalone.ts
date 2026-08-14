@@ -492,6 +492,12 @@ const BRIDGE_ALLOWED_COMMANDS = new Set([
   // walnut-server shape as session.launch — the daemon executes NOTHING
   // itself, the primary re-validates everything.
   'session.control',
+  // Narrow message relay: forwarded UP to the connected walnut server, which
+  // enqueues into the DURABLE session message queue (same store + reconnect
+  // redelivery as web sends). The asymmetry fix for the 2026-08-13 phone-send
+  // data-loss family — a daemon death mid-sequence becomes delayed delivery,
+  // not loss. The daemon writes NOTHING itself from this command.
+  'session.message',
 ])
 
 // DUP-DEBUG: per-process counter and lookup map for stable ws ids.
@@ -527,6 +533,56 @@ function logMsg(level: string, msg: string, data?: Record<string, unknown>) {
   try { fs.appendFileSync(LOG_FILE, entry + '\n') } catch {}
   if (level === 'error') console.error(msg, data || '')
 }
+
+// ── Exit breadcrumb + last-resort crash guards ──
+// The daemon died SILENTLY ≥7 times over 2026-08-11..13 (mid phone-bridge
+// sends): no log line, no exit trace, stderr discarded by the spawner. This
+// mirrors the server's /tmp/open-walnut-exit.log pattern: every JS-visible
+// death appends one line to daemon-exit-<instanceId>.log in the daemon dir.
+// A crash with NO breadcrumb but a stderr tail (local-daemon.ts now captures
+// it) = a runtime-level death (OOM / native abort) that JS can never see.
+// Keep in sync with daemon-source.ts.
+const EXIT_BREADCRUMB_FILE = path.join(DAEMON_DIR, `daemon-exit-${DAEMON_INSTANCE_ID}.log`)
+function writeExitBreadcrumb(kind: string, err: unknown): void {
+  try {
+    const mem = process.memoryUsage()
+    let sessionCount = -1
+    try { sessionCount = sessions.size } catch { /* module-init crash: map not born yet */ }
+    fs.appendFileSync(EXIT_BREADCRUMB_FILE, JSON.stringify({
+      ts: new Date().toISOString(),
+      kind,
+      pid: process.pid,
+      instanceId: DAEMON_INSTANCE_ID,
+      uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000),
+      rssMb: Math.round(mem.rss / 1024 / 1024),
+      heapMb: Math.round(mem.heapUsed / 1024 / 1024),
+      sessions: sessionCount,
+      error: err instanceof Error ? err.message : (err === undefined ? undefined : String(err)),
+      stack: err instanceof Error ? err.stack : undefined,
+    }) + '\n')
+  } catch { /* the breadcrumb must never be the thing that crashes */ }
+}
+
+/** Fatal-path funnel: structured log + breadcrumb, then exit(1) so the
+ *  supervisor (LocalDaemon.ensureRunning / next Mac reconnect) respawns a
+ *  clean process instead of us limping on with unknown state. */
+function daemonCrash(kind: 'uncaughtException' | 'unhandledRejection', err: unknown): void {
+  try {
+    logMsg('error', 'FATAL: ' + kind + ' — daemon exiting', {
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    })
+  } catch {}
+  writeExitBreadcrumb(kind, err)
+  process.exit(1)
+}
+
+// Registered at module scope so even a startup-phase crash (reconcile,
+// migration) leaves a breadcrumb. exit(1), never limp on: after an arbitrary
+// throw the in-memory session state is unknowable, and a clean respawn
+// re-adopts every live CLI from the registry (Phase C reconcile).
+process.on('uncaughtException', (err) => daemonCrash('uncaughtException', err))
+process.on('unhandledRejection', (reason) => daemonCrash('unhandledRejection', reason))
 
 /**
  * Structured state-transition log. Emit BEFORE mutating state so the log line
@@ -875,16 +931,57 @@ function applyTaskEvent(ts: TaskState, parsed: Record<string, unknown>, v: numbe
 // daemon generation has no in-memory state) — the jsonl is the durable log, so this recovers
 // the exact state the previous generation held, including any terminal events Walnut's live
 // stream missed. `v` is computed identically to the watcher (end-of-line byte offset).
+//
+// STREAMED, never readFileSync: the old whole-file read materialized a whale
+// jsonl (156MB observed) as one string + a split() array on every
+// attach/resume/adopt — RSS 104MB→789MB in ~30s before a silent Bun death
+// (the 2026-08-13 phone-send data-loss family). Same 1MB-chunk + byte-carry
+// shape as rebuildFoldStateFromJsonl; the '"task_' substring pre-filter means
+// almost no line is ever decoded. Keep in sync with daemon-source.ts.
+const TASK_LINE_MARKER = Buffer.from('"task_')
 function rebuildTaskStateFromJsonl(jsonlPath: string, now: number): TaskState {
   const ts = emptyTaskState()
-  let text: string
-  try { text = fs.readFileSync(jsonlPath, 'utf-8') } catch { return ts }
-  let lineStartV = 0
-  for (const line of text.split('\n')) {
-    const v = lineStartV + Buffer.byteLength(line, 'utf-8') + 1
-    lineStartV = v
-    if (!line.trim() || !line.includes('"task_')) continue
-    try { applyTaskEvent(ts, JSON.parse(line) as Record<string, unknown>, v, now) } catch {}
+  let fd: number
+  try { fd = fs.openSync(jsonlPath, 'r') } catch { return ts }
+  try {
+    const buf = Buffer.alloc(FOLD_REBUILD_CHUNK)
+    let filePos = 0
+    let v = 0
+    let carry: Buffer = Buffer.alloc(0)
+    let discardThroughNextNewline = false
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, FOLD_REBUILD_CHUNK, filePos)
+      if (n <= 0) break
+      filePos += n
+      const chunk = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n)
+      let start = 0
+      for (;;) {
+        const nl = chunk.indexOf(10, start)
+        if (nl === -1) break
+        v += (nl - start) + 1
+        if (discardThroughNextNewline) discardThroughNextNewline = false
+        // Byte-level pre-filter on JUST this line's slice (no copy): only
+        // task_* lines are ever decoded to a string.
+        else if (chunk.subarray(start, nl).includes(TASK_LINE_MARKER)) {
+          const line = chunk.subarray(start, nl).toString('utf-8')
+          if (line.trim() && line.includes('"task_')) {
+            try { applyTaskEvent(ts, JSON.parse(line), v, now) } catch {}
+          }
+        }
+        start = nl + 1
+      }
+      carry = Buffer.from(chunk.subarray(start))
+      if (carry.length > TAILER_CARRY_MAX) {
+        logMsg('error', 'task rebuild carry overflow — dropping oversized partial line', {
+          jsonlPath, carryBytes: carry.length, cap: TAILER_CARRY_MAX, filePos,
+        })
+        v = filePos
+        carry = Buffer.alloc(0)
+        discardThroughNextNewline = true
+      }
+    }
+  } catch { /* partial rebuild is still safe — recent state wins on the live stream */ } finally {
+    try { fs.closeSync(fd) } catch {}
   }
   return ts
 }
@@ -1237,6 +1334,10 @@ const acp = createAcpDaemon<ServerWebSocket<WsData>>({
 function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
   let cmd: Record<string, unknown>
   try { cmd = JSON.parse(msg) } catch { return sendError(ws, null, 'invalid JSON') }
+  // Valid JSON ≠ a command frame: "null"/"42"/"\"x\"" parse fine but the
+  // destructure below would THROW on null (a poison frame that predates the
+  // dispatch guard — one bad client frame killed the whole daemon).
+  if (!cmd || typeof cmd !== 'object') return sendError(ws, null, 'invalid JSON')
   const { id } = cmd
 
   // Structured per-command receive log. Traces (traceId) originate at walnut
@@ -1258,6 +1359,34 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     return sendError(ws, id as number, 'command not permitted over bridge: ' + cmd.cmd)
   }
 
+  // One command must never kill the daemon: a throw anywhere in a handler
+  // (the pre-guard era: a whale-file rebuild OOM inside cmdAttach took the
+  // whole process down MID phone-send — marker written, message lost) becomes
+  // an error reply to the caller. Async handlers (fs.*) return promises — a
+  // rejection there would otherwise surface as unhandledRejection and trip
+  // the fatal guard above, so it is caught here too.
+  // Keep in sync with daemon-source.ts.
+  const replyError = (err: unknown) => {
+    logMsg('error', 'handleCommand: handler threw — replying with error instead of dying', {
+      cmd: cmd.cmd, id, sid,
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    })
+    sendError(ws, id as number, 'internal daemon error handling ' + cmd.cmd + ': '
+      + (err instanceof Error ? err.message : String(err)))
+  }
+  try {
+    const out = dispatchCommand(ws, id as number, cmd) as unknown
+    if (out && typeof (out as Promise<unknown>).then === 'function') {
+      (out as Promise<unknown>).catch(replyError)
+    }
+    return
+  } catch (err) {
+    return replyError(err)
+  }
+}
+
+function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   switch (cmd.cmd) {
     case 'start': return cmdStart(ws, id as number, cmd)
     case 'attach': return cmdAttach(ws, id as number, cmd)
@@ -1292,6 +1421,10 @@ function handleCommand(ws: ServerWebSocket<WsData>, msg: string) {
     case 'launch-result': return cmdLaunchResult(ws, id as number, cmd)
     case 'session.control': return cmdControlRelay(ws, id as number, cmd)
     case 'control-result': return cmdControlResult(ws, id as number, cmd)
+    case 'session.message': return cmdMessageRelay(ws, id as number, cmd)
+    // NOT in BRIDGE_ALLOWED_COMMANDS: only the trusted SSH-tunneled walnut
+    // client may answer message relays (same rule as control-result).
+    case 'message-result': return cmdMessageResult(ws, id as number, cmd)
     // NOT in BRIDGE_ALLOWED_COMMANDS: reverse direction — the trusted walnut
     // server pushes slim mobile feed events DOWN, the daemon relays them to
     // the cloud bridge (see cmdMobileEvent).
@@ -1599,6 +1732,74 @@ function cmdControlResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
       error: error ?? 'control failed',
       errorKind: errorKind ?? 'internal',
       ...(errorCode ? { errorCode } : {}),
+    }))
+  }
+  sendOk(ws, id, {})
+}
+
+// ── Message relay: bridge phone send → the connected walnut server's durable queue ──
+// Mirror of the control relay above (same trusted-client pick, same timeout
+// map, same errorKind passthrough). The daemon writes NOTHING itself — the
+// walnut server enqueues the message into the SAME durable queue web sends
+// use (sendMessageToSession), so a daemon/CLI death anywhere after the
+// enqueue converts to delayed redelivery instead of loss (the 2026-08-13
+// phone-send data-loss family). messageId (qm-mobile-*) rides through for
+// end-to-end idempotence. Keep in sync with daemon-source.ts.
+
+const MESSAGE_RELAY_TIMEOUT_MS = 45_000
+let messageRelayCounter = 0
+const messageRelayPending = new Map<number, {
+  ws: ServerWebSocket<WsData>; id: number; timer: ReturnType<typeof setTimeout>
+}>()
+
+function cmdMessageRelay(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { sid, sessionId, message, messageId } = cmd as {
+    sid?: string; sessionId?: string; message?: string; messageId?: string
+  }
+  const targetSid = sessionId ?? sid
+  if (!targetSid || typeof message !== 'string' || message === '' || !messageId) {
+    return sendError(ws, id, 'session.message: missing sessionId, message, or messageId')
+  }
+  // Pick any trusted client (never the bridge adapter — that would bounce the
+  // request straight back to the cloud). Normally there is exactly one: the
+  // walnut server's DaemonConnection.
+  let target: ServerWebSocket<WsData> | null = null
+  for (const client of wsClients) {
+    if (client.data?.origin !== 'bridge') { target = client; break }
+  }
+  if (!target) {
+    return sendError(ws, id, 'session.message: no primary server connected')
+  }
+  const relayId = ++messageRelayCounter
+  const timer = setTimeout(() => {
+    messageRelayPending.delete(relayId)
+    sendError(ws, id, 'session.message: primary server timed out')
+  }, MESSAGE_RELAY_TIMEOUT_MS)
+  messageRelayPending.set(relayId, { ws, id, timer })
+  logMsg('info', 'session.message: relaying to primary server', { relayId, sid: targetSid, messageId })
+  sendEvent(target, 'message-request', { relayId, sessionId: targetSid, message, messageId })
+}
+
+function cmdMessageResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const { relayId, result, error, errorKind } = cmd as {
+    relayId?: number; result?: Record<string, unknown>; error?: string; errorKind?: string
+  }
+  const pending = typeof relayId === 'number' ? messageRelayPending.get(relayId) : undefined
+  if (!pending) {
+    // Late result after timeout — ack and drop.
+    return sendOk(ws, id, { stale: true })
+  }
+  messageRelayPending.delete(relayId as number)
+  clearTimeout(pending.timer)
+  if (result && !error) {
+    logMsg('info', 'session.message: relay complete', { relayId })
+    sendOk(pending.ws, pending.id, { result })
+  } else {
+    // Carry errorKind through so the cloud route maps the precise 4xx/503.
+    safeSend(pending.ws, JSON.stringify({
+      id: pending.id, ok: false,
+      error: error ?? 'message enqueue failed',
+      errorKind: errorKind ?? 'internal',
     }))
   }
   sendOk(ws, id, {})
@@ -2595,6 +2796,28 @@ function ensureWatcher(sid: string) {
           })
         }
 
+        // ── TTFT instrumentation (inc-1786665503510): send → first output ──
+        // Anchored by handleSendCommand (ttftSendTs). Two one-shot lines per
+        // turn: first stream_event of any kind (model started answering — the
+        // Bedrock TTFB proxy), and first text_delta (user-visible prose began).
+        // A huge sendToFirstTextMs with a normal sendToFirstLineMs = the model
+        // spent the gap thinking/tooling (upstream behavior, not a walnut bug).
+        // Substring gates keep the hot path parse-free; cleared at result.
+        if (s.ttftSendTs && line.includes('"type":"stream_event"')) {
+          if (!s.ttftSawFirstLine) {
+            s.ttftSawFirstLine = true
+            logMsg('info', 'ttft: first stream_event after send', {
+              sid, sendToFirstLineMs: Date.now() - s.ttftSendTs,
+            })
+          }
+          if (line.includes('"text_delta"')) {
+            logMsg('info', 'ttft: first text_delta after send', {
+              sid, sendToFirstTextMs: Date.now() - s.ttftSendTs,
+            })
+            s.ttftSendTs = null // one-shot: only the FIRST text of the turn
+          }
+        }
+
         // ── Scheduled-task fire detection (see checkCronFires) ──
         // A cron fire's ONLY stream evidence is a bare turn start: the CLI
         // re-emits init + session_state_changed{running} with no user line.
@@ -2614,6 +2837,7 @@ function ensureWatcher(sid: string) {
         // lives in the policy. Clean results come through too, because a
         // successful turn is what clears the failure streak.
         if (line.includes('"type":"result"')) {
+          s.ttftSendTs = null // turn over — a stale TTFT anchor must not leak into replays
           try { checkTurnRetry(sid, s, line, v) } catch (err) {
             logMsg('warn', 'turn-retry check threw', { sid, error: (err as Error).message })
           }
@@ -3156,6 +3380,9 @@ function cmdGetState(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string
       alive: session.state === 'running',
       state: session.state,
       taskState: session.taskState,
+      // The reaper's OWN keep-alive verdict, with its source — so what a
+      // debugger sees here is exactly what the kill path will use.
+      protection: deriveSessionProtection(session, sid, Date.now()),
       // C1: assembled on demand — the PULL half of snapshot flow.
       snapshot: assembleSessionSnapshot(session),
     })
@@ -4097,60 +4324,18 @@ function scanIdleSessions() {
 
     const idleMs = now - mtimeMs
 
-    // A CronCreate'd /loop lives in the CLI process — the loop only looks
-    // "idle" between fires, and killing the process kills the loop silently.
-    // TWO signals, either arms the protection:
-    //   1. fold — CronCreate tool_use seen in THIS stream file (covers
-    //      session-only crons, which never touch disk).
-    //   2. disk — {cwd}/.claude/scheduled_tasks.json (durable crons). The fold
-    //      goes blind on stream wipe/rebuild, on --resume respawn (history
-    //      replay re-arms the CLI scheduler with NO new CronCreate line —
-    //      lab 2026-08-10 P4b), and on adopted foreign tasks; the disk file is
-    //      the CLI's own source of truth for all of those.
-    // Extend the threshold to the CLI's own 7-day cron auto-expiry instead of
-    // disabling the reaper.
-    const foldCronArmed = Object.keys(session.foldState.cronIds).length > 0
-    let cronArmed = foldCronArmed
-    if (!cronArmed && session.cwd) {
-      // 10-min TTL cache: the scan runs every 60s per session; the underlying
-      // file changes on the CLI's own schedule (create/fire), and staleness
-      // only delays the *lift* of protection, never a kill.
-      if (session.diskCronCache && now - session.diskCronCache.at < 10 * 60_000) {
-        cronArmed = session.diskCronCache.armed
-      } else {
-        let tasksJson: string | null = null
-        let lockJson: string | null = null
-        try { tasksJson = fs.readFileSync(path.join(session.cwd, '.claude', 'scheduled_tasks.json'), 'utf-8') } catch {}
-        try { lockJson = fs.readFileSync(path.join(session.cwd, '.claude', 'scheduled_tasks.lock'), 'utf-8') } catch {}
-        const disk = hasDiskCronInterest({ sid, tasksJson, lockJson, nowMs: now })
-        session.diskCronCache = { at: now, armed: disk.armed, reason: disk.reason }
-        if (disk.armed) {
-          cronArmed = true
-          logMsg('info', 'idle scan: disk scheduled_tasks arms cron protection', {
-            sid, pid, reason: disk.reason, liveTasks: disk.liveTasks,
-          })
-        }
-      }
-    }
-    // A running background task (daemon's OWN taskState — same fold the
-    // watcher feeds) also outlives JSONL silence: wait-style bash tasks write
-    // to output_file, not the stream. Killing the CLI kills the task
-    // (incident inc-1786222771315). Same pattern as cron: extended, not
-    // disabled. isBackgrounded tasks are already excluded by runningTaskCount.
-    const bgActive = session.taskState.derivedRunning > 0
-    const killMs = cronArmed ? SESSION_CRON_IDLE_KILL_MS
-      : bgActive ? SESSION_BG_IDLE_KILL_MS
-      : SESSION_IDLE_KILL_MS
+    // ONE authoritative verdict with a source — see deriveSessionProtection.
+    const prot = deriveSessionProtection(session, sid, now)
 
     if (idleMs < SESSION_IDLE_WARNING_MS) {
       // Active — skip
       continue
-    } else if (idleMs < killMs) {
+    } else if (idleMs < prot.killMs) {
       // Warning zone — log but don't kill
       const idleMinutes = Math.round(idleMs / 60_000)
       logMsg('warn', 'idle scan: session idle with no subscribers', {
         sid, pid, idleMinutes,
-        threshold: cronArmed ? '7d (cron active)' : bgActive ? '24h (bg task running)' : '2hr',
+        protectedBy: prot.source, thresholdMs: prot.killMs, detail: prot.detail,
       })
     } else {
       // Kill zone — no subscribers + no output past threshold. FINAL CHECK
@@ -4158,7 +4343,7 @@ function scanIdleSessions() {
       // (HOME, survives /tmp wipes). A recent firing/scheduled line means a
       // live loop the fold failed to see (stream file wiped + rebuild, or a
       // tool_result shape change) — refuse to kill, re-check next scan.
-      if (!cronArmed && hasRecentSchedulerFiring(sid, SESSION_IDLE_KILL_MS)) {
+      if (prot.source !== 'cron' && hasRecentSchedulerFiring(sid, SESSION_IDLE_KILL_MS)) {
         logMsg('warn', 'idle scan: kill vetoed — CLI scheduler debug log shows recent cron firing', {
           sid, pid, idleMinutes: Math.round(idleMs / 60_000),
         })
@@ -4166,7 +4351,7 @@ function scanIdleSessions() {
       }
       const idleMinutes = Math.round(idleMs / 60_000)
       logMsg('warn', 'idle scan: killing idle session (no subscribers, no output)', {
-        sid, pid, idleMinutes, cronArmed, bgActive,
+        sid, pid, idleMinutes, protectedBy: prot.source, thresholdMs: prot.killMs, detail: prot.detail,
       })
       killSessionProcessGroup(pid, sid)
     }

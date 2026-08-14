@@ -99,6 +99,14 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * CLI (daemon relays `gateway-request` events UP; the server answers with
  * the `gateway-result` command). Optional: on an old daemon `wn` simply
  * exits 6 (socket absent) until the next auto-deploy upgrades it.
+ *
+ * 'session.message' — narrow bridge message relay (phone → cloud → daemon →
+ * connected walnut server, which enqueues into the DURABLE session message
+ * queue — same store, delivery paths, and reconnect redelivery as web sends).
+ * This is the asymmetry fix for the 2026-08-13 phone-send data-loss family:
+ * the old direct marker+send/bridgeResume sequence had no queue, so a daemon
+ * death between steps lost the message. Optional: on an old daemon the cloud
+ * route falls back to the direct sequence (now marker-after-delivery).
  */
 export const ADVERTISED_DAEMON_CAPABILITIES = [
   ...REQUIRED_DAEMON_CAPABILITIES,
@@ -108,6 +116,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'session.control',
   'mobile-event',
   'agent-gateway',
+  'session.message',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

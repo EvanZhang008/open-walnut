@@ -395,15 +395,24 @@ export class LocalDaemon {
     const [cmd, args] = isSourceScript
       ? [process.execPath, [binaryPath, '--start']]
       : [binaryPath, ['--start']]
+    // stderr → daemon-stderr.log (append, rotated). The daemon died silently
+    // ≥7 times over 2026-08-11..13 with stdio:'ignore' discarding the only
+    // evidence a runtime-level crash (Bun OOM/native abort) ever leaves — the
+    // JS-level guards write daemon-exit-*.log, but a runtime death bypasses JS
+    // entirely; this file is the last-resort black box. An inherited FILE fd
+    // (not a pipe) keeps the detached daemon independent of our lifetime.
+    const stderrFd = this.openStderrLog()
     const proc = spawn(cmd, args, {
       detached: true,
-      stdio: 'ignore',
+      stdio: ['ignore', 'ignore', stderrFd ?? 'ignore'],
       // Pass our daemonDir to the spawned binary so it writes its port/pid/streams
       // into the SAME dir this LocalDaemon instance watches. Without this the
       // daemonDir override is inert (binary defaults to /tmp/open-walnut). For
       // production daemonDir === '/tmp/open-walnut' so this is a no-op.
       env,
     })
+    // The child holds its own dup of the fd; release ours immediately.
+    if (stderrFd !== null) { try { fs.closeSync(stderrFd) } catch { /* already closed */ } }
     this._spawnedPid = proc.pid ?? null
     proc.unref()
 
@@ -430,6 +439,30 @@ export class LocalDaemon {
     if (result.instanceId) this._instanceId = result.instanceId
 
     return port
+  }
+
+  /**
+   * Open <daemonDir>/daemon-stderr.log for append, rotating to .1 when it
+   * exceeds the cap so an error loop can't grow it without bound. Returns
+   * null on any failure — stderr capture is diagnostics, never a reason to
+   * refuse spawning the daemon.
+   */
+  private openStderrLog(): number | null {
+    const STDERR_LOG_MAX_BYTES = 5 * 1024 * 1024
+    const logPath = path.join(this.daemonDir, 'daemon-stderr.log')
+    try {
+      try {
+        if (fs.statSync(logPath).size > STDERR_LOG_MAX_BYTES) {
+          fs.renameSync(logPath, logPath + '.1') // keep exactly one generation
+        }
+      } catch { /* absent or unstat-able — fresh file below */ }
+      return fs.openSync(logPath, 'a')
+    } catch (err) {
+      log.session.warn('daemon stderr log open failed — spawning without capture', {
+        logPath, error: err instanceof Error ? err.message : String(err),
+      })
+      return null
+    }
   }
 
   private findDaemonBinary(): string {

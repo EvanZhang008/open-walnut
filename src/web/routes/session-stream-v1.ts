@@ -12,11 +12,19 @@
  * interest set for streaming.
  *
  * Cloud box: proxied over the daemon bridge (ws/bridge-registry.ts). The
- * session's host comes from the git-synced projection; sends run the same
- * three-step sequence the Mac uses (status precheck → appendUserMarker →
- * FIFO send), so the Mac's byte-offset replay absorbs phone turns with zero
- * coordination. A dead CLI is 409 session_dead (resume/respawn stays a
- * Mac-side responsibility); no bridge is 503 bridge_offline.
+ * session's host comes from the git-synced projection. Sends ride the narrow
+ * `session.message` relay: daemon → connected walnut server → the SAME
+ * durable message queue web sends use (sendMessageToSession + reconnect
+ * redelivery), so a daemon/CLI death anywhere mid-flight converts to delayed
+ * delivery instead of loss (the 2026-08-13 phone-send data-loss family:
+ * the old direct marker→send/bridgeResume sequence had no queue, and a
+ * silent daemon death between the steps ate the message while the marker
+ * left a ghost user bubble). Old daemons (no session.message) and a
+ * primary-down window fall back to the direct sequence — reordered to
+ * deliver FIRST and append the transcript marker only after confirmed
+ * delivery, so a ghost bubble can no longer outlive its message. No bridge
+ * is 503 bridge_offline (retryable); only a genuinely unknown/dead session
+ * is 404/409.
  *
  * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
  */
@@ -227,7 +235,13 @@ async function saveImagesViaBridge(host: string, sessionId: string, images: Sess
   return savedPaths
 }
 
-async function cloudSend(res: Response, sessionId: string, text: string, images: SessionImage[] = []): Promise<void> {
+async function cloudSend(
+  res: Response,
+  sessionId: string,
+  text: string,
+  images: SessionImage[] = [],
+  clientMessageId?: string,
+): Promise<void> {
   const projected = await projectedSession(sessionId)
   if (!projected) {
     sendError(res, 404, 'not_found', `Session not found: ${sessionId}`)
@@ -244,72 +258,52 @@ async function cloudSend(res: Response, sessionId: string, text: string, images:
       const pathList = savedPaths.map((p) => `- ${p}`).join('\n')
       text = `[Images attached — use the Read tool to view them]\n${pathList}\n\n${text}`
     }
-    // Liveness precheck — if the CLI is gone (dead record, or the record
-    // itself was lost to a daemon restart), attempt a bridgeResume instead
-    // of 409. This lets the phone send to idle/stopped/error sessions
-    // without the Mac being online. The daemon gates the resume on the
-    // session's jsonl existing on that host.
-    let status = await bridgeRequest(host, 'status', { sid: sessionId })
-    // Just-launched race (caught by the live suite, 2026-08-07): the 201 is
-    // "accepted", the CLI spawn on the primary is ASYNC — a send fired
-    // milliseconds later finds status.exists=false, falls into the resume
-    // path, and the daemon rightly refuses (no jsonl yet) → 409 on a session
-    // that is seconds from being alive. While the launch seed is fresh, poll
-    // for the spawn instead of declaring death; fall through to the normal
-    // paths if it still hasn't appeared (a genuinely failed spawn surfaces
-    // as session error status anyway).
-    if (status.exists !== true) {
-      const { getLaunchSeed } = await import('../../core/sessions/launch-seed.js')
-      if (getLaunchSeed(sessionId)) {
-        const SPAWN_POLL_MS = 1_000
-        const SPAWN_WAIT_MAX_MS = 20_000
-        const deadline = Date.now() + SPAWN_WAIT_MAX_MS
-        while (Date.now() < deadline) {
-          await new Promise((r) => setTimeout(r, SPAWN_POLL_MS))
-          status = await bridgeRequest(host, 'status', { sid: sessionId })
-          if (status.exists === true) break
-        }
-        log.web.info('mobile send waited for just-launched spawn', {
-          sessionId, host, spawned: status.exists === true,
-        })
-      }
+    // Stable id: a client-supplied one (phone retry) makes the durable-queue
+    // enqueue idempotent end-to-end — the relay dedupes on it, so a retry
+    // after a lost ack cannot double-deliver.
+    const messageId = clientMessageId ?? `qm-mobile-${crypto.randomBytes(6).toString('hex')}`
+
+    // ── Durable path (default): session.message relay → the primary's queue ──
+    // The primary enqueues into the SAME persistent store web sends use;
+    // session-runner owns delivery (FIFO / mid-turn / --resume) and the
+    // reconnect redelivery drains anything a daemon death stranded. 50s so
+    // the daemon's own 45s relay timeout surfaces its precise error first.
+    const relayed: Record<string, unknown> = await bridgeRequest(host, 'session.message', {
+      sessionId, message: text, messageId,
+    }, 50_000).catch((err: unknown) => {
+      if (err instanceof BridgeOfflineError) throw err
+      // Transport-level failure mid-relay (bridge WS died, request timer):
+      // the enqueue MAY have committed on the primary. Do NOT fall back to
+      // the direct path (double-delivery risk) — report retryable; a retry
+      // with the same messageId dedupes at the queue.
+      return { ok: false, error: err instanceof Error ? err.message : String(err), transport: true }
+    })
+    if (relayed.ok === true) {
+      log.web.info('mobile session send enqueued via relay (durable)', {
+        sessionId, host, messageId, imageCount: images.length,
+      })
+      res.status(202).json({ messageId })
+      return
     }
-    const messageId = `qm-mobile-${crypto.randomBytes(6).toString('hex')}`
-    if (status.exists === true && status.alive === true) {
-      // Live path — append marker + FIFO write (same as before).
-      await bridgeRequest(host, 'appendUserMarker', { sid: sessionId, message: text, messageId })
-      const sent = await bridgeRequest(host, 'send', { sid: sessionId, message: text })
-      if (sent.ok !== true) {
-        const reason = String(sent.reason ?? sent.error ?? 'unknown')
-        if (reason === 'ENXIO' || reason === 'session_dead' || reason === 'not_found') {
-          sendError(res, 409, 'session_dead', 'Session process died mid-send')
-        } else {
-          sendError(res, 503, 'bridge_offline', `Send failed: ${reason}`)
-        }
-        return
-      }
-    } else {
-      // Dead/lost path — resume. The daemon rebuilds argv from its stored
-      // record when it survived, else from the cwd/model hints we pass from
-      // the projection. Marker first (best-effort — it needs a record, and
-      // the jsonl survives death) so the transcript shows the user's
-      // message; bridgeResume then writes it as the initial stdin line,
-      // same as the Mac's --resume spawn path in session-runner.
-      if (status.exists === true) {
-        await bridgeRequest(host, 'appendUserMarker', { sid: sessionId, message: text, messageId }).catch(() => {})
-      }
-      const resumed = await bridgeRequest(host, 'bridgeResume', {
-        sid: sessionId, message: text, cwd: projected.cwd, model: projected.model,
-      }, 30_000)
-      if (!resumed.pid) {
-        const reason = String(resumed.error ?? 'resume failed')
-        sendError(res, 409, 'session_dead', reason)
-        return
-      }
-      log.web.info('mobile session resumed via bridge', { sessionId, host, messageId, pid: resumed.pid })
+    const relayErr = String(relayed.error ?? 'unknown')
+    if (relayed.errorKind === 'not_found') {
+      sendError(res, 404, 'not_found', relayErr)
+      return
     }
-    log.web.info('mobile session send via bridge', { sessionId, host, messageId, imageCount: images.length })
-    res.status(202).json({ messageId })
+    // Fallback is safe ONLY when the primary provably never saw the message:
+    // an old daemon (unknown command) or no connected primary (Mac offline —
+    // the direct path is exactly what keeps phone→session working then).
+    // Anything else (relay timeout, internal error) might have enqueued.
+    const canFallback = relayErr.startsWith('unknown command')
+      || relayErr.includes('no primary server connected')
+    if (!canFallback) {
+      sendError(res, 503, 'bridge_offline', `Send relay failed: ${relayErr}`)
+      return
+    }
+    log.web.info('mobile send falling back to direct bridge sequence', {
+      sessionId, host, messageId, reason: relayErr,
+    })
+    await cloudSendDirect(res, host, projected, sessionId, text, messageId)
   } catch (err) {
     if (err instanceof CloudImageError) {
       sendError(res, 400, err.code, err.message)
@@ -321,6 +315,85 @@ async function cloudSend(res: Response, sessionId: string, text: string, images:
     }
     sendError(res, 503, 'bridge_offline', err instanceof Error ? err.message : String(err))
   }
+}
+
+/**
+ * Direct bridge sequence — the pre-queue path, kept for old daemons and for
+ * the Mac-offline window (bridgeResume works with no primary connected).
+ * REORDERED to be loss-safe: deliver FIRST, append the transcript marker only
+ * after the daemon confirmed delivery. The old marker-first order is what
+ * produced ghost user bubbles — the daemon died between the marker append and
+ * the FIFO write/resume, so the transcript showed a message the CLI never
+ * received. The marker may now land milliseconds after the CLI starts the
+ * turn (it never echoes stdin, so nothing else marks the turn start); that
+ * tiny anchor skew is the price of never showing a bubble for a lost message.
+ */
+async function cloudSendDirect(
+  res: Response,
+  host: string,
+  projected: { cwd?: string; model?: string },
+  sessionId: string,
+  text: string,
+  messageId: string,
+): Promise<void> {
+  const { bridgeRequest } = await import('../ws/bridge-registry.js')
+  // Liveness precheck — if the CLI is gone (dead record, or the record itself
+  // was lost to a daemon restart), attempt a bridgeResume instead of 409.
+  let status = await bridgeRequest(host, 'status', { sid: sessionId })
+  // Just-launched race (caught by the live suite, 2026-08-07): the 201 is
+  // "accepted", the CLI spawn on the primary is ASYNC — a send fired
+  // milliseconds later finds status.exists=false, falls into the resume
+  // path, and the daemon rightly refuses (no jsonl yet) → 409 on a session
+  // that is seconds from being alive. While the launch seed is fresh, poll
+  // for the spawn instead of declaring death.
+  if (status.exists !== true) {
+    const { getLaunchSeed } = await import('../../core/sessions/launch-seed.js')
+    if (getLaunchSeed(sessionId)) {
+      const SPAWN_POLL_MS = 1_000
+      const SPAWN_WAIT_MAX_MS = 20_000
+      const deadline = Date.now() + SPAWN_WAIT_MAX_MS
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, SPAWN_POLL_MS))
+        status = await bridgeRequest(host, 'status', { sid: sessionId })
+        if (status.exists === true) break
+      }
+      log.web.info('mobile send waited for just-launched spawn', {
+        sessionId, host, spawned: status.exists === true,
+      })
+    }
+  }
+  if (status.exists === true && status.alive === true) {
+    // Live path — FIFO write first, marker only after the confirmed write.
+    const sent = await bridgeRequest(host, 'send', { sid: sessionId, message: text })
+    if (sent.ok !== true) {
+      const reason = String(sent.reason ?? sent.error ?? 'unknown')
+      if (reason === 'ENXIO' || reason === 'session_dead' || reason === 'not_found') {
+        sendError(res, 409, 'session_dead', 'Session process died mid-send')
+      } else {
+        sendError(res, 503, 'bridge_offline', `Send failed: ${reason}`)
+      }
+      return
+    }
+    await bridgeRequest(host, 'appendUserMarker', { sid: sessionId, message: text, messageId }).catch(() => {})
+  } else {
+    // Dead/lost path — resume. The daemon rebuilds argv from its stored
+    // record when it survived, else from the cwd/model hints we pass from
+    // the projection; bridgeResume writes the message as the initial stdin
+    // line, same as the Mac's --resume spawn path in session-runner.
+    const resumed = await bridgeRequest(host, 'bridgeResume', {
+      sid: sessionId, message: text, cwd: projected.cwd, model: projected.model,
+    }, 30_000)
+    if (!resumed.pid) {
+      const reason = String(resumed.error ?? 'resume failed')
+      sendError(res, 409, 'session_dead', reason)
+      return
+    }
+    // Marker only after the confirmed respawn (loss-safe order).
+    await bridgeRequest(host, 'appendUserMarker', { sid: sessionId, message: text, messageId }).catch(() => {})
+    log.web.info('mobile session resumed via bridge', { sessionId, host, messageId, pid: resumed.pid })
+  }
+  log.web.info('mobile session send via bridge (direct fallback)', { sessionId, host, messageId })
+  res.status(202).json({ messageId })
 }
 
 // ─── Cloud fresh transcript: raw jsonl over the bridge → slim tail ──────────
@@ -476,7 +549,14 @@ sessionStreamV1Router.post('/sessions/:id/messages', async (req: Request, res: R
       // `image.save` daemon command (deliberately NOT fs.write — see the
       // containment note in daemon-standalone.ts), then referenced by path in
       // the augmented text the same way the primary-box path does below.
-      await cloudSend(res, sessionId, text, images)
+      //
+      // Additive: `messageId` lets a retrying client reuse its original id so
+      // the durable-queue enqueue is idempotent (a retry after a lost ack can
+      // never double-deliver). Shape-gated to the queue's own qm- vocabulary.
+      const rawMid = req.body?.messageId
+      const clientMessageId = typeof rawMid === 'string' && /^qm-[A-Za-z0-9-]{1,64}$/.test(rawMid)
+        ? rawMid : undefined
+      await cloudSend(res, sessionId, text, images, clientMessageId)
       return
     }
 
@@ -510,11 +590,18 @@ sessionStreamV1Router.post('/sessions/:id/messages', async (req: Request, res: R
       }
     }
 
+    // Additive idempotency (parity with the cloud relay): a retrying phone
+    // reuses its original qm- id, so a retry after a lost 202 can't enqueue
+    // the same turn twice.
+    const rawMid = req.body?.messageId
+    const clientMessageId = typeof rawMid === 'string' && /^qm-[A-Za-z0-9-]{1,64}$/.test(rawMid)
+      ? rawMid : undefined
     const { sendMessageToSession } = await import('../../core/session-message-queue.js')
     const msg = await sendMessageToSession(sessionId, text, {
       source: 'mobile',
       taskId: record.taskId,
       ...(enqueueText ? { enqueueMessage: enqueueText } : {}),
+      ...(clientMessageId ? { messageId: clientMessageId } : {}),
     })
     log.web.info('mobile session send accepted', { sessionId, messageId: msg.id, imageCount: images.length })
     res.status(202).json({ messageId: msg.id })

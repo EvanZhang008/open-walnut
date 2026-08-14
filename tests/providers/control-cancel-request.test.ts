@@ -112,3 +112,49 @@ describe('control_cancel_request settles the pending permission', () => {
     expect(session.hasPendingPermission).toBe(true)
   })
 })
+
+describe('resetConsumedOffsetFromSnapshot (incident 267a4b68 — live watermark epoch reset)', () => {
+  let session: ClaudeCodeSession
+
+  beforeEach(() => {
+    session = new ClaudeCodeSession('task-wm', 'proj', 'true')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(session as any).claudeSessionId = 'sid-wm-reset'
+  })
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const wm = () => (session as any)._consumedOffset as number
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const setWm = (v: number) => { (session as any)._consumedOffset = v }
+
+  it('regresses the in-memory watermark when the snapshot layer proves an epoch change', () => {
+    setWm(134_248_535) // dead-incarnation coordinate
+    session.resetConsumedOffsetFromSnapshot(115_135_073)
+    expect(wm()).toBe(115_135_073)
+  })
+
+  it('never moves the watermark FORWARD (normal advance owns that path)', () => {
+    setWm(1_000)
+    session.resetConsumedOffsetFromSnapshot(50_000)
+    expect(wm()).toBe(1_000)
+  })
+
+  it('rejects invalid sentinels (negative / non-integer / MAX_SAFE_INTEGER)', () => {
+    setWm(134_248_535)
+    session.resetConsumedOffsetFromSnapshot(-1)
+    session.resetConsumedOffsetFromSnapshot(1.5)
+    session.resetConsumedOffsetFromSnapshot(Number.MAX_SAFE_INTEGER)
+    expect(wm()).toBe(134_248_535)
+  })
+
+  it('END-TO-END guard effect: a real result above the reset watermark is no longer "replayed"', () => {
+    setWm(134_248_535)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(session as any)._currentEventV = 115_134_908
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((session as any)._isReplayedByOffset()).toBe(true) // the incident: real result judged replay
+    session.resetConsumedOffsetFromSnapshot(115_000_000)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((session as any)._isReplayedByOffset()).toBe(false) // after reset: processed for real
+  })
+})

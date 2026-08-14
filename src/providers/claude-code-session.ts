@@ -509,6 +509,23 @@ export class ClaudeCodeSession {
    *  -1 = no watermark (old daemon / never seen a v). */
   private _consumedOffset = -1
 
+  /** Stamp this turn's first thinking/text/tool emit time (once per turn, main
+   *  lane only). INFO log on each first — so a live `walnut-logs.sh session
+   *  <sid>` shows exactly when each kind of content first reached the UI bus,
+   *  and the gap to turn-start is attributable per layer. */
+  private _stampFirstEmit(kind: 'thinking' | 'text' | 'tool'): void {
+    const field = kind === 'thinking' ? '_firstThinkingTs' : kind === 'text' ? '_firstTextTs' : '_firstToolTs'
+    if (this[field] !== undefined) return
+    const now = Date.now()
+    this[field] = now
+    const sinceTurnStartMs = this._turnStartTs !== undefined ? now - this._turnStartTs : null
+    log.session.info(`first ${kind} emit of turn`, {
+      sessionId: this.claudeSessionId,
+      taskId: this.taskId,
+      sinceTurnStartMs,
+    })
+  }
+
   /** True when the event being processed sits at or below the consumed watermark —
    *  i.e. it is a REPLAY of something this server already fully processed. Only
    *  meaningful when both sides have positions; without them, returns undefined
@@ -570,6 +587,20 @@ export class ClaudeCodeSession {
    *  runner writes it across instances). */
   _lastDeliveryMs: number | undefined
   _lastDeliveryPath: string | undefined
+  /** ── TTFT instrumentation (inc-1786665503510: "text shows only at the very end") ──
+   *  Epoch ms of the turn-start edge (idle→running FIFO write / send()); anchor
+   *  for all first-* latencies below. Undefined between turns. */
+  private _turnStartTs: number | undefined
+  /** Epoch ms when this turn's FIRST main-lane thinking/text/tool event was
+   *  emitted to the UI bus. Each is stamped exactly once per turn, then the
+   *  result handler logs turn-start→first-X latencies + feeds the metrics
+   *  registry (session.first_thinking / first_text / first_tool). Distinguishes
+   *  "model produced text late" (upstream/model behavior — firstTextMs huge,
+   *  everything else on time) from "walnut sat on the text" (JSONL had it
+   *  early; compare against the daemon's CLI-side timing). */
+  private _firstThinkingTs: number | undefined
+  private _firstTextTs: number | undefined
+  private _firstToolTs: number | undefined
   private livenessTimer: ReturnType<typeof setInterval> | null = null
   private _outputFile: string | null = null
   private cliCommand: string
@@ -1339,6 +1370,26 @@ export class ClaudeCodeSession {
   }
 
   /**
+   * Epoch-reset the in-memory consumed watermark from the snapshot layer.
+   * The ONLY sanctioned backwards move (mirrors the record-side epoch
+   * arbitration in applyUpdateToSession): a stream-file incarnation change
+   * makes the old coordinate meaningless, and the live replay guards
+   * (_isReplayedByOffset) read THIS field — a healed record alone leaves a
+   * live instance swallowing every real result (incident 267a4b68: turn ended
+   * at v=115M, watermark from the pre-move file said 134M, result + idle both
+   * "suppressed as replay", record stuck Running until the next user message).
+   */
+  resetConsumedOffsetFromSnapshot(v: number): void {
+    if (!Number.isInteger(v) || v < 0 || v >= Number.MAX_SAFE_INTEGER) return
+    if (this._consumedOffset <= v) return // not a regression — normal advance handles it
+    log.session.warn('consumedOffset epoch reset (in-memory, from snapshot layer)', {
+      sessionId: this.claudeSessionId, taskId: this.taskId,
+      staleConsumedOffset: this._consumedOffset, resetTo: v,
+    })
+    this._consumedOffset = v
+  }
+
+  /**
    * Mark this session's process as dead externally (e.g. pre-flight check
    * discovered the PID is gone before a FIFO write).
    * Clears the pipe so the next processNext() falls through to --resume.
@@ -1667,6 +1718,12 @@ export class ClaudeCodeSession {
     this._lastEmittedText.clear()
     this._currentStreamMsgId = null
     this._warnedUnknownTypes.clear()
+    // TTFT anchor for the spawn path (init-only spawns get re-anchored by the
+    // first real writeMessage; a stale anchor is overwritten there).
+    this._turnStartTs = initOnly ? undefined : Date.now()
+    this._firstThinkingTs = undefined
+    this._firstTextTs = undefined
+    this._firstToolTs = undefined
     // Fresh process ⇒ the OLD process's background tasks/teams are dead (they
     // were its children). Stale 'running' entries here make
     // hasActiveBackgroundWork() true forever → the new turn's completion is
@@ -2555,6 +2612,11 @@ export class ClaudeCodeSession {
       this._lastEmittedText.clear()     // Fresh turn — reset progressive delta tracking
       this._currentStreamMsgId = null   // Fresh turn — stream_event message tracking
       this._warnedUnknownTypes.clear()  // Fresh turn — reset unknown-event warn set
+      // TTFT anchor: this FIFO write is the earliest turn-start evidence.
+      this._turnStartTs = Date.now()
+      this._firstThinkingTs = undefined
+      this._firstTextTs = undefined
+      this._firstToolTs = undefined
     }
     this.emitStatusChanged('IN_PROGRESS')
     // Persist running state to session tracker so API consumers (frontend tree, etc.)
@@ -4033,7 +4095,10 @@ export class ClaudeCodeSession {
             // Main-lane answer delivered — the result-text fallback must stay off
             // for this turn. Recorded even past MAX_FULL_TEXT: the cap truncates
             // what we keep, it does not undo what the UI already rendered.
-            if (!parentToolUseId) this._emittedAssistantText = true
+            if (!parentToolUseId) {
+              this._emittedAssistantText = true
+              this._stampFirstEmit('text')
+            }
             log.session.debug('JSONL event: text-delta', { sessionId: this.claudeSessionId, taskId: this.taskId, parentToolUseId })
             bus.emit(EventNames.SESSION_TEXT_DELTA, {
               sessionId: this.claudeSessionId,
@@ -4255,6 +4320,7 @@ export class ClaudeCodeSession {
                 ?? (typeof block.input?.plan === 'string' && block.input.plan ? block.input.plan : null))
               : null
 
+            if (!parentToolUseId) this._stampFirstEmit('tool')
             log.session.debug('JSONL event: tool-use', {
               // DUP-DEBUG: ccsId tags each emit with its session instance.
               // Two emits with same toolUseId but different ccsId → two
@@ -4806,6 +4872,13 @@ export class ClaudeCodeSession {
           resultLen: resultText?.length ?? 0,
           deliveryMs: this._lastDeliveryMs,
           deliveryPath: this._lastDeliveryPath,
+          // TTFT: turn-start → first thinking/text/tool emit (null = never seen).
+          firstThinkingMs: this._turnStartTs !== undefined && this._firstThinkingTs !== undefined
+            ? this._firstThinkingTs - this._turnStartTs : null,
+          firstTextMs: this._turnStartTs !== undefined && this._firstTextTs !== undefined
+            ? this._firstTextTs - this._turnStartTs : null,
+          firstToolMs: this._turnStartTs !== undefined && this._firstToolTs !== undefined
+            ? this._firstToolTs - this._turnStartTs : null,
           teamActive: this._teamActive,
           backgroundActive: this.hasActiveBackgroundWork(),
         })
@@ -5280,6 +5353,7 @@ export class ClaudeCodeSession {
             // the UI. stream_event lines carry no parent_tool_use_id (verified
             // across the local corpus), so every delta here is main-lane.
             this._emittedAssistantText = true
+            this._stampFirstEmit('text')
             bus.emit(EventNames.SESSION_TEXT_DELTA, {
               sessionId: this.claudeSessionId,
               taskId: this.taskId,
@@ -5292,6 +5366,7 @@ export class ClaudeCodeSession {
             // trim(): a whitespace-only delta would otherwise create a new
             // (empty-looking) thinking block in the UI stream.
             if (!text.trim()) break
+            this._stampFirstEmit('thinking')
             bus.emit(EventNames.SESSION_THINKING_DELTA, {
               sessionId: this.claudeSessionId,
               taskId: this.taskId,
