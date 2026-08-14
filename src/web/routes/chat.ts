@@ -952,9 +952,14 @@ export function registerChatRpc(): void {
           const relayName = `chat-lane-relay-${turnId}`
           let relaySessionId: string | null = null
           // Thinking arrives as deltas, but agent:thinking consumers render one
-          // block per event — buffer and flush per contiguous thinking run.
+          // block per event — buffer and flush per contiguous thinking run. A
+          // TIMED flush (1.5s) caps how long the buffer can sit: a turn that opens
+          // with a long thinking phase would otherwise paint NOTHING until its
+          // first tool call — reads as "sent a message, app is dead".
           let thinkingBuf = ''
+          let thinkingTimer: ReturnType<typeof setTimeout> | undefined
           const flushThinking = (): void => {
+            if (thinkingTimer) { clearTimeout(thinkingTimer); thinkingTimer = undefined }
             if (thinkingBuf.trim()) {
               broadcastEvent(EventNames.AGENT_THINKING, { text: thinkingBuf, agentId, conversationId })
             }
@@ -976,7 +981,10 @@ export function registerChatRpc(): void {
               // events that carry one (they'd be a session's, not the chat's).
               if (d.delta) broadcastEvent(EventNames.AGENT_TEXT_DELTA, { delta: d.delta, agentId, conversationId })
             } else if (event.name === EventNames.SESSION_THINKING_DELTA) {
-              if (d.delta) thinkingBuf += d.delta
+              if (d.delta) {
+                thinkingBuf += d.delta
+                thinkingTimer ??= setTimeout(flushThinking, 1500)
+              }
             } else if (event.name === EventNames.SESSION_TOOL_USE) {
               flushThinking()
               // Real per-tool working-memory counting (the in-process loop's

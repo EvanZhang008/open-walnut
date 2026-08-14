@@ -204,6 +204,9 @@ describe('the SESSION_START a lane emits', () => {
     expect(ev.profile?.systemPrompt).toContain('You are a COORDINATOR, not an executor')
     // Walnut's data reaches the CLI over MCP, not native tools.
     expect(ev.profile?.mcpServers).toEqual(walnutMcpProfile().mcpServers)
+    // Latency guard: without an explicit effort the CLI inherits the user's
+    // global effortLevel (xhigh on coding-tuned machines → 100s+ chat turns).
+    expect(ev.effort).toBe('medium')
   })
 })
 

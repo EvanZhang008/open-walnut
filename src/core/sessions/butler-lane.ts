@@ -218,16 +218,39 @@ async function resolveLane(
   conversationId: string,
   firstMessage: string,
 ): Promise<LaneSession> {
+  const config = await getConfig();
+  const profile = butlerProfile(config.user?.name ?? 'the user');
+  // Chat latency matters more than reasoning depth here. Without an explicit
+  // effort the CLI inherits the user's global settings.json effortLevel (often
+  // xhigh, tuned for coding sessions) — measured 100s+ for "what tasks do I have
+  // today". Config `agent.session_effort` still wins when the user set one.
+  const effort = config.agent?.session_effort ?? 'medium';
+
   const existing = await getSessionByLane(lane);
   if (existing) {
+    // Profile drift repair: the prompt/effort live on the RECORD (spawn-time
+    // args, no live channel), so a lane minted before a butlerProfile upgrade
+    // would otherwise keep the stale persona forever. Refreshing the record here
+    // makes the next cold resume (~idle timeout) pick the current one up; the
+    // live CLI process keeps the old prompt until then, which is acceptable.
+    if (existing.profile?.systemPrompt !== profile.systemPrompt) {
+      const { updateSessionRecord } = await import('../session-tracker.js');
+      await updateSessionRecord(existing.claudeSessionId, { profile, effort }).catch((err) => {
+        log.session.warn('butler lane: profile refresh failed', {
+          lane, sessionId: existing.claudeSessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+      log.session.info('butler lane: stale profile refreshed on record', {
+        lane, sessionId: existing.claudeSessionId,
+      });
+    }
     log.session.info('butler lane: reusing session', {
       lane, sessionId: existing.claudeSessionId, processStatus: existing.process_status,
     });
     return { sessionId: existing.claudeSessionId, created: false };
   }
 
-  const config = await getConfig();
-  const profile = butlerProfile(config.user?.name ?? 'the user');
   const sessionId = crypto.randomUUID();
   const title = agentId === 'general' ? 'Main AI chat' : `Main AI chat (${agentId})`;
 
@@ -239,6 +262,7 @@ async function resolveLane(
     title,
     profile,
     lane,
+    effort,
     // No turn has begun from the record's point of view (the CLI isn't up yet);
     // 'running' here would paint a phantom "working…" badge.
     initialProcessStatus: 'idle',
@@ -254,6 +278,7 @@ async function resolveLane(
     title,
     profile,
     lane,
+    effort,
     preassignedSessionId: sessionId,
   }, ['session-runner'], { source: 'butler-lane' });
 
