@@ -905,6 +905,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         webView.autoresizingMask = [.width, .height]
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        // Restore the user's page zoom (⌘+ / ⌘-) from the previous launch.
+        let savedZoom = UserDefaults.standard.double(forKey: Self.zoomDefaultsKey)
+        if savedZoom > 0 { webView.pageZoom = savedZoom }
 
         window.contentView = webView
         window.title = "Walnut — localhost:\(port)"
@@ -1291,6 +1294,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let viewMenu = NSMenu(title: "View")
         viewMenu.addItem(NSMenuItem(title: "Reload", action: #selector(reloadPage), keyEquivalent: "r"))
         viewMenu.addItem(NSMenuItem(title: "Open in Browser", action: #selector(openInBrowser), keyEquivalent: "b"))
+        viewMenu.addItem(NSMenuItem.separator())
+        // Browser-style page zoom. "+" is the unshifted "=" key, so bind "="
+        // (with Cmd) — macOS renders it as ⌘+ and both keys work.
+        viewMenu.addItem(NSMenuItem(title: "Zoom In", action: #selector(zoomIn), keyEquivalent: "="))
+        viewMenu.addItem(NSMenuItem(title: "Zoom Out", action: #selector(zoomOut), keyEquivalent: "-"))
+        viewMenu.addItem(NSMenuItem(title: "Actual Size", action: #selector(zoomReset), keyEquivalent: "0"))
         viewMenuItem.submenu = viewMenu
         mainMenu.addItem(viewMenuItem)
 
@@ -1307,6 +1316,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func reloadPage() {
         webView?.reload()
     }
+
+    // MARK: - Page zoom (⌘+ / ⌘- / ⌘0), persisted across launches
+
+    static let zoomDefaultsKey = "walnutPageZoom"
+    static let zoomLevels: [Double] = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
+
+    func applyZoom(_ zoom: Double) {
+        webView?.pageZoom = zoom
+        UserDefaults.standard.set(zoom, forKey: Self.zoomDefaultsKey)
+    }
+
+    func stepZoom(by step: Int) {
+        guard let webView = webView else { return }
+        let current = webView.pageZoom
+        // Nearest level, then step — keeps repeated ⌘+/⌘- on the ladder even
+        // if the stored value drifts.
+        let idx = Self.zoomLevels.enumerated().min(by: { abs($0.1 - current) < abs($1.1 - current) })!.0
+        let next = min(max(idx + step, 0), Self.zoomLevels.count - 1)
+        applyZoom(Self.zoomLevels[next])
+    }
+
+    @objc func zoomIn() { stepZoom(by: 1) }
+    @objc func zoomOut() { stepZoom(by: -1) }
+    @objc func zoomReset() { applyZoom(1.0) }
 
     @objc func openInBrowser() {
         guard let port = serverPort else { return }
