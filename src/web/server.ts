@@ -256,6 +256,7 @@ const pollingPluginIds = new Set<string>()
 let pluginSoftReload: () => Promise<void> = async () => {}
 let cronServiceInstance: CronService | null = null
 let healthMonitor: SessionHealthMonitor | null = null
+let changesPrewarmer: import('../core/session-changes-prewarm.js').SessionChangesPrewarmer | null = null
 let sessionReaper: SessionReaper | null = null
 let heartbeatHandle: HeartbeatRunnerHandle | null = null
 let recordingReaperHandle: { stop: () => void } | null = null
@@ -1927,6 +1928,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     healthMonitor = new SessionHealthMonitor()
     healthMonitor.start()
     startupPhase('health monitor started')
+
+    // -- Start session-changes pre-warmer --
+    // Computes every recent session's Changed-tab data in the background
+    // (startup sweep + after each turn + periodic), strictly one at a time and
+    // paced, so the first tab open never pays the 40-80s whale parse itself.
+    const { SessionChangesPrewarmer } = await import('../core/session-changes-prewarm.js')
+    changesPrewarmer = new SessionChangesPrewarmer()
+    changesPrewarmer.start()
 
     // -- Start session reaper (periodic cleanup of high-volume triage session records) --
     sessionReaper = new SessionReaper()
@@ -3943,6 +3952,10 @@ export async function stopServer(): Promise<void> {
   if (healthMonitor) {
     healthMonitor.stop()
     healthMonitor = null
+  }
+  if (changesPrewarmer) {
+    changesPrewarmer.stop()
+    changesPrewarmer = null
   }
   if (sessionReaper) {
     sessionReaper.stop()

@@ -1020,6 +1020,12 @@ export async function computeSessionChanges(
 
 const inflightByKey = new Map<string, Promise<SessionChangesResult>>();
 
+/** True while a compute for this session is running/queued (SWR kick + the
+ *  background pre-warmer use this to avoid queuing duplicate work). */
+export function hasInflightSessionChanges(sessionId: string, host?: string): boolean {
+  return inflightByKey.has(cacheKey(sessionId, host));
+}
+
 async function computeSessionChangesInner(
   key: string,
   sessionId: string,
