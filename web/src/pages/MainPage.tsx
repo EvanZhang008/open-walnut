@@ -2582,11 +2582,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 openDraftColumn();
                 setQuickTaskOpen(false);
               }}
-              onSessionSearchClick={() => {
-                setSessionSearchOpen(true);
-                setPathSelectorOpen(false);
-                setQuickTaskOpen(false);
-              }}
               onFixWalnutClick={walnutInstallDir ? handleFixWalnut : undefined}
               mode={chatMode}
               onModeToggle={toggleMode}

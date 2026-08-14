@@ -25771,7 +25771,10 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   background: var(--bg); /* fallback; transparent + card glass when supported */
 }
 .chat-page .chat-panel {
-  padding-bottom: calc(var(--chat-composer-h, 120px) + 8px);
+  /* 24px clearance (was 8px): at 8px the last bubble's bottom edge sat inside
+     the composer's glass wash and read as "blurred/cut off" at rest. Content
+     still passes under the glass mid-scroll — this only fixes the rest state. */
+  padding-bottom: calc(var(--chat-composer-h, 120px) + 24px);
 }
 /* Same floating-card treatment as the session composer (radius + shadow always). */
 .chat-composer-overlay .chat-input-box {
