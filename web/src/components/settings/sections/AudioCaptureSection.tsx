@@ -3,6 +3,15 @@ import type { Config } from '@open-walnut/core';
 import { SectionCard } from '../inputs/SectionCard';
 import { fetchAudioApps, type AppInfo } from '@/api/audio';
 import { useAutoSave } from '@/hooks/useAutoSave';
+import { useAudioCapture } from '@/hooks/useAudioCapture';
+
+function formatDuration(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
 
 /** Well-known music/entertainment apps to pre-populate the exclude list. */
 const DEFAULT_EXCLUDE_APPS = [
@@ -24,6 +33,9 @@ export function AudioCaptureSection({ config, onSave }: Props) {
   const [newApp, setNewApp] = useState('');
   const [runningApps, setRunningApps] = useState<AppInfo[]>([]);
   const [loadingApps, setLoadingApps] = useState(false);
+  // The start/stop control lives here (not the sidebar) — recording is still an
+  // experimental feature, so it should not occupy a top-level nav slot.
+  const audio = useAudioCapture();
 
   // Sync from config when it changes externally
   useEffect(() => {
@@ -91,6 +103,38 @@ export function AudioCaptureSection({ config, onSave }: Props) {
       onSave={handleSave}
       showSave={false}
     >
+      {/* Start/stop control — moved out of the sidebar (experimental feature). */}
+      <div className="form-group">
+        <label>Recording</label>
+        {audio.available === false ? (
+          <p className="text-sm text-muted" style={{ margin: 0 }}>
+            System audio capture is not available on this machine.
+          </p>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button
+              type="button"
+              className={`btn${audio.recording ? ' btn-danger' : ''}`}
+              onClick={audio.toggleRecording}
+              disabled={audio.loading || audio.available === null}
+              data-testid="settings-recording-toggle"
+            >
+              {audio.loading ? 'Starting...' : audio.recording ? 'Stop recording' : 'Start recording'}
+            </button>
+            {audio.recording && (
+              <span className="text-sm" style={{ color: 'var(--error)', fontVariantNumeric: 'tabular-nums' }}>
+                {formatDuration(audio.totalDuration)}
+              </span>
+            )}
+          </div>
+        )}
+        {audio.lastError && (
+          <p className="text-sm" style={{ color: 'var(--error)', margin: '6px 0 0' }}>
+            {audio.lastError}
+          </p>
+        )}
+      </div>
+
       {/* Exclude list */}
       <div className="form-group">
         <label>Excluded Apps</label>

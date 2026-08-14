@@ -385,40 +385,6 @@ select {
   margin: 6px 12px;
 }
 
-/* Collapsible "Other" group */
-.sidebar-group-toggle {
-  background: none;
-  border: none;
-  cursor: pointer;
-  width: 100%;
-  text-align: left;
-  font-family: inherit;
-}
-
-.sidebar-group-toggle .sidebar-group-chevron {
-  width: 14px;
-  height: 14px;
-  margin-left: auto;
-  transition: transform 0.15s ease;
-}
-
-.sidebar-group-toggle .sidebar-group-chevron.expanded {
-  transform: rotate(90deg);
-}
-
-.sidebar-group-items .sidebar-link {
-  padding-left: 32px;
-}
-
-.sidebar.collapsed .sidebar-group-items .sidebar-link {
-  padding-left: 0;
-}
-
-.sidebar.collapsed .sidebar-group-chevron {
-  display: none;
-}
-
-
 /* Sidebar collapse */
 
 .sidebar {
@@ -19553,6 +19519,45 @@ td.usage-share-col {
   margin: 0 0 4px;
   font-size: 16px;
   font-weight: 600;
+}
+
+/* Settings → Manage: the management pages that used to crowd the sidebar. */
+.settings-manage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.settings-manage-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: flex-start;
+  text-align: left;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--bg-secondary, transparent);
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.settings-manage-card:hover {
+  border-color: var(--accent, var(--primary));
+  background: var(--bg-tertiary, var(--bg-secondary));
+}
+
+.settings-manage-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.settings-manage-hint {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--fg-muted, var(--text-muted));
 }
 
 .settings-banner {

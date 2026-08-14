@@ -1,5 +1,5 @@
 import { useState, useEffect, type RefObject } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink } from 'react-router-dom';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
 import { useAudioCapture } from '@/hooks/useAudioCapture';
 import { useNotifications } from '@/contexts/notifications';
@@ -10,10 +10,11 @@ import { subscribeVoiceStatus, getVoiceStatus, type VoiceStatus } from '@/utils/
 const SS_CHAT_VISIBLE_KEY = 'open-walnut-home-chat-visible';
 const SS_TODO_VISIBLE_KEY = 'open-walnut-home-todo-visible';
 const SS_CALENDAR_VISIBLE_KEY = 'open-walnut-home-calendar-visible';
-const LS_OTHER_OPEN_KEY = 'open-walnut-sidebar-other-open';
 
-/** Secondary pages tucked into the collapsible "Other" group. */
-const OTHER_ROUTES = ['/tasks', '/commands'];
+// The sidebar carries ONLY the daily surfaces (panels + Home/Notes/Calendar/
+// Routines) plus Settings. Management pages (Agents, Skills, Commands, Memory,
+// the Tasks table) and audio recording live under Settings → Manage /
+// Audio Capture, so this list can never grow back into an unreadable icon wall.
 
 interface SidebarProps {
   asideRef: RefObject<HTMLElement | null>;
@@ -41,23 +42,6 @@ export function Sidebar({
   // Live voice status (transcribing spinner / failure dot) from any MicButton.
   const [voiceStatus, setVoiceStatusState] = useState<VoiceStatus>(getVoiceStatus());
   useEffect(() => subscribeVoiceStatus(setVoiceStatusState), []);
-  const location = useLocation();
-
-  // "Other" group — collapsed by default; remembered across reloads and
-  // auto-expanded when the current route lives inside it (so the active
-  // link is never hidden).
-  const [otherOpen, setOtherOpen] = useState<boolean>(
-    () => localStorage.getItem(LS_OTHER_OPEN_KEY) === 'true'
-  );
-  const routeInOther = OTHER_ROUTES.some((r) => location.pathname.startsWith(r));
-  const otherExpanded = otherOpen || routeInOther;
-  const toggleOther = () => {
-    setOtherOpen((prev) => {
-      const next = !(prev || routeInOther);
-      localStorage.setItem(LS_OTHER_OPEN_KEY, String(next));
-      return next;
-    });
-  };
 
   // Bridge audio capture errors into the unified toaster. useAudioCapture still
   // owns lastError (it resets recording state + handles the no-WS local failure);
@@ -191,65 +175,17 @@ export function Sidebar({
           <span className="sidebar-label">Routines</span>
         </NavLink>
 
-        <NavLink to="/agents" className={navLinkClass} title={collapsed ? 'Agents' : undefined}>
-          <AgentsIcon />
-          <span className="sidebar-label">Agents</span>
-        </NavLink>
-        <NavLink to="/skills" className={navLinkClass} title={collapsed ? 'Skills' : undefined}>
-          <SkillsIcon />
-          <span className="sidebar-label">Skills</span>
-        </NavLink>
-
-        {/* Other — collapsed group for secondary pages */}
-        <button
-          className={`sidebar-link sidebar-group-toggle${otherExpanded ? ' expanded' : ''}`}
-          onClick={toggleOther}
-          title={collapsed ? 'Other' : undefined}
-          aria-expanded={otherExpanded}
-        >
-          <MoreIcon />
-          <span className="sidebar-label">Other</span>
-          <ChevronIcon expanded={otherExpanded} />
-        </button>
-        {otherExpanded && (
-          <div className="sidebar-group-items">
-            <NavLink to="/tasks" className={navLinkClass} title={collapsed ? 'Tasks' : undefined}>
-              <TasksIcon />
-              <span className="sidebar-label">Tasks</span>
-            </NavLink>
-            <NavLink to="/commands" className={navLinkClass} title={collapsed ? 'Commands' : undefined}>
-              <CommandsIcon />
-              <span className="sidebar-label">Commands</span>
-            </NavLink>
-            {audio.available && (
-              <button
-                className={`sidebar-link sidebar-recording-btn${audio.recording ? ' recording-active' : ''}${audio.loading ? ' recording-loading' : ''}`}
-                onClick={audio.toggleRecording}
-                disabled={audio.loading}
-                title={collapsed
-                  ? (audio.loading ? 'Starting...' : audio.recording ? `Recording ${formatDuration(audio.totalDuration)}` : 'Start recording')
-                  : undefined}
-                aria-label={audio.loading ? 'Starting...' : audio.recording ? 'Stop recording' : 'Start recording'}
-              >
-                <RecordingIcon recording={audio.recording} loading={audio.loading} />
-                <span className="sidebar-label">
-                  {audio.loading ? 'Starting...' : audio.recording ? formatDuration(audio.totalDuration) : 'Record'}
-                </span>
-              </button>
-            )}
-          </div>
-        )}
-
         <NavLink to="/settings" className={navLinkClass} title={collapsed ? 'Settings' : undefined}>
           <SettingsIcon />
           <span className="sidebar-label">Settings</span>
         </NavLink>
       </nav>
 
-      {/* Notification — bottom area (recording lives in the Other group; while
-          recording it surfaces here too so the live timer is never hidden) */}
+      {/* Notification — bottom area. Recording is started from Settings → Audio
+          Capture; only an ACTIVE recording shows here, so the live timer and its
+          stop control are never hidden while audio is being captured. */}
       <div className="sidebar-notification-area">
-        {audio.available && audio.recording && !otherExpanded && (
+        {audio.available && audio.recording && (
           <button
             className="sidebar-link sidebar-recording-btn recording-active"
             onClick={audio.toggleRecording}
@@ -315,14 +251,6 @@ function HomeIcon() {
   );
 }
 
-function TasksIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M9 11l3 3L22 4" />
-      <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-    </svg>
-  );
-}
 
 function SettingsIcon() {
   return (
@@ -341,40 +269,6 @@ function ScheduleIcon() {
     </svg>
   );
 }
-
-
-function AgentsIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="8" r="4" />
-      <path d="M20 21a8 8 0 1 0-16 0" />
-      <line x1="12" y1="12" x2="12" y2="16" />
-      <circle cx="12" cy="18" r="2" />
-    </svg>
-  );
-}
-
-function SkillsIcon() {
-  // Scroll/parchment — skills are the butler's learned scrolls.
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M19 17V5a2 2 0 0 0-2-2H4" />
-      <path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3" />
-      <path d="M15 8h-5" />
-      <path d="M15 12h-5" />
-    </svg>
-  );
-}
-
-function CommandsIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="4 17 10 11 4 5" />
-      <line x1="12" y1="19" x2="20" y2="19" />
-    </svg>
-  );
-}
-
 
 
 function NotesIcon() {
@@ -425,31 +319,6 @@ function HamburgerIcon() {
   );
 }
 
-function MoreIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="5" cy="12" r="1.5" />
-      <circle cx="12" cy="12" r="1.5" />
-      <circle cx="19" cy="12" r="1.5" />
-    </svg>
-  );
-}
-
-function ChevronIcon({ expanded }: { expanded: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={`sidebar-group-chevron${expanded ? ' expanded' : ''}`}
-    >
-      <polyline points="9 18 15 12 9 6" />
-    </svg>
-  );
-}
 
 function ChatBubbleIcon() {
   return (

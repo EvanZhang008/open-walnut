@@ -5,6 +5,7 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
+  { id: 'manage', label: 'Manage' },
   { id: 'providers', label: 'AI Provider' },
   { id: 'general', label: 'General' },
   { id: 'sessions', label: 'Tasks & Sessions' },

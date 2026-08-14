@@ -101,21 +101,20 @@ export async function restVisibility(loc: Locator): Promise<{ opacity: number; h
 }
 
 /**
- * Navigate to /tasks the way a user does — through the sidebar, never `page.goto`.
+ * Navigate to /tasks the way a user does — through the UI, never `page.goto`.
  *
- * The link is NOT top-level: `/tasks` lives inside the collapsible "Other" group,
- * which starts CLOSED (`open-walnut-sidebar-other-open` defaults to false, and the
- * auto-expand only fires once the route is already active), so its `<a>` is not in
- * the DOM at all while home is showing. Expanding first is a required step, not
- * defensive clicking — a spec that skipped it timed out waiting for the anchor. Same
- * dance as tests/e2e/browser/codex-status-parity.spec.ts and
- * session-status-store.spec.ts; lifted here so a third copy can't drift.
+ * The link is NOT in the sidebar: the sidebar now carries only the daily surfaces,
+ * and the Tasks table lives behind Settings → Manage. So the real route in is
+ * Settings → the "Tasks table" card. Same dance as
+ * tests/e2e/browser/codex-status-parity.spec.ts and session-status-store.spec.ts;
+ * lifted here so a third copy can't drift.
  */
 export async function navigateToTasksPage(page: Page): Promise<void> {
-  const other = page.getByRole('button', { name: /Other/i })
-  await expect(other).toBeVisible({ timeout: 30_000 })
-  if ((await other.getAttribute('aria-expanded')) !== 'true') await other.click()
-  await page.locator('.sidebar a[href="/tasks"]').click()
+  const settings = page.locator('.sidebar a[href="/settings"]')
+  await expect(settings).toBeVisible({ timeout: 30_000 })
+  await settings.click()
+  await expect(page).toHaveURL(/\/settings/)
+  await page.getByTestId('manage-link-tasks').click()
   await expect(page).toHaveURL(/\/tasks$/)
   await expect(page.getByTestId('tasks-table')).toBeVisible({ timeout: 30_000 })
 }

@@ -166,11 +166,12 @@ async function openTaskDetail(page: Page, task: Locator): Promise<Locator> {
   return modal
 }
 
+/** The Tasks table is a management surface now — reached via Settings → Manage. */
 async function navigateToTasks(page: Page, mobile = false): Promise<void> {
   if (mobile) await page.getByRole('button', { name: 'Toggle sidebar' }).click()
-  const other = page.getByRole('button', { name: /Other/i })
-  if (await other.getAttribute('aria-expanded') !== 'true') await other.click()
-  await page.locator('a[href="/tasks"]').click()
+  await page.locator('.sidebar a[href="/settings"]').click()
+  await expect(page).toHaveURL(/\/settings/)
+  await page.getByTestId('manage-link-tasks').click()
   await expect(page).toHaveURL(/\/tasks$/)
   if (mobile) {
     await expect(page.locator('.sidebar-overlay')).toHaveCount(0)

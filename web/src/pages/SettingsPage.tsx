@@ -26,6 +26,7 @@ class SectionErrorBoundary extends Component<{ name: string; children: ReactNode
 }
 
 // Sections
+import { ManageSection } from '@/components/settings/sections/ManageSection';
 import { ProvidersSection } from '@/components/settings/sections/ProvidersSection';
 import { GeneralSection } from '@/components/settings/sections/GeneralSection';
 import { SessionsSection } from '@/components/settings/sections/SessionsSection';
@@ -49,14 +50,14 @@ import { CloudSection } from '@/components/settings/sections/CloudSection';
 import { BugReportSection } from '@/components/settings/sections/BugReportSection';
 
 const SECTION_IDS = [
-  'providers', 'general', 'sessions', 'focus-tiers',
+  'manage', 'providers', 'general', 'sessions', 'focus-tiers',
   'integrations', 'calendar', 'plugin-store', 'search', 'memory', 'stt', 'audio-capture', 'heartbeat', 'remote-hosts', 'devices', 'cloud', 'advanced',
   'repositories', 'hooks', 'usage', 'timeline', 'bug-report',
 ];
 
 export function SettingsPage() {
   const { config, loading, error, saveSection, reload } = useSettingsConfig();
-  const [activeSection, setActiveSection] = useState('providers');
+  const [activeSection, setActiveSection] = useState('manage');
   const contentRef = useRef<HTMLDivElement>(null);
 
   // Track active section via scroll position
@@ -126,6 +127,7 @@ export function SettingsPage() {
             <h1 className="page-title">Settings</h1>
             <p className="page-subtitle">Configure everything from one place</p>
           </div>
+          <SectionErrorBoundary name="Manage"><ManageSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="AI Provider"><ProvidersSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="General"><GeneralSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Tasks & Sessions"><SessionsSection config={config} onSave={saveSection} /></SectionErrorBoundary>
