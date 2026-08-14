@@ -461,6 +461,39 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     expect(capsSrc.slice(advStart, advEnd)).toMatch(/'session\.launch'/)
   })
 
+  // Session-changes host-local compute (changes.compute / changes.file):
+  // the pipeline lives in session-changes-core.ts. The binary twin bundles it;
+  // the source twin require()s a deployed SIDECAR (changes-core.cjs) and must
+  // advertise 'changes-v1' only when that sidecar actually loaded — otherwise
+  // the server falls back to its reader-based compute.
+  it("both twins dispatch changes.compute/changes.file; 'changes-v1' advertised but NOT required", () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/case 'changes\.compute': return cmdChangesCompute/)
+      expect(src).toMatch(/case 'changes\.file': return cmdChangesFile/)
+      expect(src).toMatch(/function cmdChangesCompute/)
+      expect(src).toMatch(/function cmdChangesFile/)
+    }
+    const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
+    const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES = [')
+    const reqEnd = capsSrc.indexOf('] as const', reqStart)
+    expect(reqStart).toBeGreaterThan(-1)
+    expect(capsSrc.slice(reqStart, reqEnd)).not.toMatch(/'changes-v1'/)
+    const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES = [')
+    const advEnd = capsSrc.indexOf('] as const', advStart)
+    expect(capsSrc.slice(advStart, advEnd)).toMatch(/'changes-v1'/)
+  })
+  it("source twin gates 'changes-v1' on the sidecar load (static caps exclude it)", () => {
+    // The static caps literal excludes the capability…
+    expect(templateSrc).toMatch(/filter\(\(c\) => c !== 'changes-v1'\)/)
+    // …hello answers with the runtime-gated list…
+    expect(templateSrc).toMatch(/capabilities:\s*daemonCapabilities\(\)/)
+    expect(templateSrc).toMatch(/if \(changesCore\) caps\.push\('changes-v1'\)/)
+    // …and both handlers refuse cleanly when the sidecar is absent.
+    expect(templateSrc).toMatch(/changes\.compute: core sidecar not available/)
+    expect(templateSrc).toMatch(/changes\.file: core sidecar not available/)
+  })
+
   it('both twins scrub WALNUT_DAEMON_PARENT_PID from the CLI spawn env', () => {
     // Env-carrier chain: isolated daemon → CLI → `npm run dev:prod` → PROD daemon
     // inherits a dead parent pid, watchdog trips, prod sessions die.
@@ -1086,11 +1119,15 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
     expect(reqStart).toBeGreaterThan(-1)
     expect(capsSrc.slice(reqStart, reqEnd)).not.toMatch(/'snapshot-v1'/)
     expect(capsSrc).toMatch(/ADVERTISED_DAEMON_CAPABILITIES\s*=\s*\[\s*\n?\s*\.\.\.REQUIRED_DAEMON_CAPABILITIES,\s*\n?\s*'snapshot-v1',/)
-    // Both twins answer hello with the ADVERTISED list (template via placeholder).
+    // Both twins answer hello with the ADVERTISED list (template via the
+    // placeholder-seeded runtime list — daemonCapabilities() wraps
+    // __DAEMON_CAPABILITIES__ to add sidecar-gated caps).
     expect(standaloneSrc).toMatch(/capabilities:\s*ADVERTISED_DAEMON_CAPABILITIES/)
-    expect(templateSrc).toMatch(/capabilities:\s*__DAEMON_CAPABILITIES__/)
-    // getDaemonSource substitutes the ADVERTISED list into that placeholder.
-    expect(templateSrc).toMatch(/JSON\.stringify\(\[\.\.\.ADVERTISED_DAEMON_CAPABILITIES\]\)/)
+    expect(templateSrc).toMatch(/capabilities:\s*daemonCapabilities\(\)/)
+    expect(templateSrc).toMatch(/__DAEMON_CAPABILITIES__\.slice\(\)/)
+    // getDaemonSource substitutes the ADVERTISED list into that placeholder
+    // (minus 'changes-v1', which the source twin can't implement).
+    expect(templateSrc).toMatch(/JSON\.stringify\(\[\.\.\.ADVERTISED_DAEMON_CAPABILITIES\]\.filter\(\(c\) => c !== 'changes-v1'\)\)/)
   })
 
   it('getDaemonSource validates the fold injection and throws on corruption', () => {

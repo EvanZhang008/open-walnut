@@ -49,6 +49,8 @@ SOURCES=(
   src/providers/acp-worker/worker-main.ts
   src/providers/acp-worker/journal.ts
   src/providers/acp-worker/protocol.ts
+  src/providers/session-changes-core.ts
+  src/core/bash-file-ops.ts
 )
 
 # sha256 of daemon source files, per-file path + NUL + content + NUL, then
@@ -108,6 +110,14 @@ echo "$VERSION" > "$OUTDIR/daemon-darwin-arm64.version"
   --outfile "$OUTDIR/acp-worker.js" \
   src/providers/acp-worker/worker-main.ts
 echo "$VERSION" > "$OUTDIR/acp-worker.js.version"
+
+# Session-changes sidecar — a plain CJS bundle of session-changes-core.ts.
+# Source-template daemons (bun deploys) can't import modules, so deploySource
+# ships this next to daemon.cjs and the template require()s it lazily; the
+# daemon advertises 'changes-v1' only when the sidecar loads.
+"$BUN" build --minify --target=node --format=cjs \
+  --outfile "$OUTDIR/changes-core.cjs" \
+  src/providers/session-changes-core.ts
 
 # Invalidate stale .gz caches — DaemonConnection.deployBinary reuses them
 # if present, which would ship an old binary under a new version label.

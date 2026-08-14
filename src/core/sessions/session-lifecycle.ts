@@ -833,14 +833,21 @@ export async function getSessionFileChange(
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new SessionControlError('Session not found', 404);
 
-  const { computeSessionChanges, peekSessionFileChange } = await import('../session-changes.js');
+  const { computeSessionChanges, peekSessionFileChange, fetchSessionFileChangeViaDaemon } =
+    await import('../session-changes.js');
 
   // Serve from the cache even if it's outdated: a click must not queue behind
   // a 20-40s whale recompute holding the in-flight chain. Slightly-stale
   // content self-corrects (the list refresh clears the frontend's per-file
-  // cache and re-fetches).
+  // cache and re-fetches). Daemon-backed entries are light, so peek declines
+  // them and the daemon serves the content from ITS full-output cache.
   const peeked = peekSessionFileChange(sessionId, record.host, filePath);
   if (peeked) return { sessionId, ...peeked };
+
+  try {
+    const viaDaemon = await fetchSessionFileChangeViaDaemon(sessionId, record.cwd, record.host, filePath);
+    if (viaDaemon) return { sessionId, ...viaDaemon };
+  } catch { /* fall through to the compute path */ }
 
   let result: import('../session-changes.js').SessionChangesResult;
   try {
@@ -852,7 +859,12 @@ export async function getSessionFileChange(
   }
   for (const group of result.groups) {
     const file = group.files.find((f) => f.filePath === filePath);
-    if (file) return { sessionId, repoRoot: group.repoRoot, file };
+    if (file) {
+      // A light result carries no before/after (daemon path with changes.file
+      // unavailable) — an empty diff would look like "no change". Report it.
+      if (result.light) throw new SessionControlError('File content temporarily unavailable', 503);
+      return { sessionId, repoRoot: group.repoRoot, file };
+    }
   }
   throw new SessionControlError('File not in session changes', 404);
 }

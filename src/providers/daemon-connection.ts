@@ -215,7 +215,7 @@ export class DaemonConnection {
    * it's open. Everything else (fs.ls, status, sends, events) stays on the
    * main WS. Membership is by response size, not command family.
    */
-  private static readonly BULK_COMMANDS = new Set(['fs.read', 'fs.readRange', 'fs.readImage', 'git.diff'])
+  private static readonly BULK_COMMANDS = new Set(['fs.read', 'fs.readRange', 'fs.readImage', 'git.diff', 'changes.compute', 'changes.file'])
   /** Delay before re-dialing the bulk channel after it drops (main stays up). */
   private static BULK_REDIAL_DELAY_MS = 10_000
   /** Within this window, refuse a second upgrade toward the same expected version. */
@@ -1928,6 +1928,30 @@ export class DaemonConnection {
       // look like success while the current spawn is already dead. Binary has
       // a `--status` subcommand; source daemon doesn't, so it uses `kill -0`
       // on the PID file. See daemon-source.ts — no --status handler.
+      // Session-changes sidecar (changes-core.cjs, ~13KB): the template can't
+      // inline the pipeline, so it require()s this file next to daemon.cjs and
+      // advertises 'changes-v1' only when the load succeeds. Best-effort: a
+      // missing sidecar (npm-package install without dist/daemon-binaries)
+      // just means the server keeps its reader-based fallback for this host.
+      try {
+        const sidecar = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, 'changes-core.cjs'), 'utf-8')
+        const scArgs = [...this.baseSshArgs, this.sshHostString, 'cat > /tmp/open-walnut/changes-core.cjs']
+        const scProc = spawn('ssh', scArgs, { stdio: ['pipe', 'pipe', 'pipe'] })
+        scProc.stdin!.on('error', () => {})
+        await new Promise<void>((resolve, reject) => {
+          scProc.on('close', (code) => {
+            if (code === 0) resolve()
+            else reject(new Error(`changes-core sidecar deploy failed with code ${code}`))
+          })
+          scProc.on('error', reject)
+          scProc.stdin!.end(sidecar)
+        })
+      } catch (err) {
+        log.session.info('DaemonConnection: changes-core sidecar not deployed (reader fallback stays)', {
+          host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+        })
+      }
+
 
       // Opt-in session-only cron policy (config session.cron_policy): the
       // daemon reads WALNUT_ENFORCE_SESSION_CRON at boot, so it must be in

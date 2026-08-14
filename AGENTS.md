@@ -126,6 +126,29 @@ Personal AI butler: tasks + knowledge + AI sessions. **Tasks are the atom.** `Pr
   Opt back in with `WALNUT_BUTLER_CLAUDE_SKILLS=1`. Measured: excluding them cut the Skills
   prompt section from 10.2K → 3.9K tokens (77 → 34 entries).
 
+### Design Principle: host-local work belongs to the DAEMON, not the server
+
+**Every host does its own work through its daemon; the walnut server stays a lightweight
+coordinator.** If a computation only touches files/processes on ONE host (parsing that host's
+session JSONLs, reading file contents, running git), it runs IN THE DAEMON on that host, and
+only the (small) result crosses the tunnel — never the raw bytes, and never "N RPCs per file".
+Ship data to the server on demand, at the granularity the UI actually consumes (a list, ONE
+file's diff), not wholesale.
+
+Why (each learned the hard way): raw-bytes-over-tunnel hits the WS frame kills and the 32MB
+read ceiling (whale JSONLs); per-file RPC fan-out floods the daemon socket and starves its
+command timeout; and parse work on the server burns the ONE event loop every route shares.
+The daemon has local fs + git + CPU right next to the data — a whale parse that took 40-80s
+of chunked tunnel reads is seconds host-local.
+
+Precedents: `git.diff` (daemon runs the whole diff host-side), `changes.compute`/`changes.file`
+(daemon parses session JSONLs + reads contents host-side, returns a light list / one file),
+snapshot-v1 (daemon folds its own stream files). When adding a feature that reads session/host
+data, default to a daemon command + a thin server relay; only fall back to DaemonFileReader
+byte-shuttling when the daemon genuinely can't own the work (e.g. cross-host aggregation).
+Capability-gate new commands (`daemon-capabilities.ts`) so old daemons degrade to the fallback
+path instead of erroring.
+
 ### Remote Session Daemon (resilience model)
 
 **Topology:** walnut (Mac) ←ssh tunnel→ daemon (remote bun binary) ←spawn→ `claude -p` CLI. Goal: tunnel/daemon crashes don't lose sessions.

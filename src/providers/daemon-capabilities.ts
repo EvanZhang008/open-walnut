@@ -114,9 +114,19 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'image.save',
   'session.launch',
   'session.control',
+ *
+ * 'changes-v1' — host-local session-changes compute (changes.compute /
+ * changes.file). The daemon parses the session's JSONLs + reads file contents
+ * ON ITS OWN HOST and returns a light list / one file's diff — the design-
+ * principle path (host-local work belongs to the daemon; only small results
+ * cross the tunnel). Binary daemons bundle the pipeline; source-deployed
+ * daemons require() a sidecar (changes-core.cjs, shipped by deploySource) and
+ * advertise this capability only when that load succeeds — otherwise the
+ * server uses its reader-based fallback compute (old daemons likewise).
   'mobile-event',
   'agent-gateway',
   'session.message',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]
+  'changes-v1',

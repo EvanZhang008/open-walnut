@@ -46,227 +46,28 @@ import {
   resolveSubagentDir,
   extractCwdFromJsonlContent,
 } from './session-file-reader.js';
-import { parseBashFileOps } from './bash-file-ops.js';
+import {
+  collectOpsFromJsonl,
+  mergeFileMapInto,
+  reconstructFile,
+  isExcludedPath,
+  groupMeta,
+  type FileAccum,
+  type SessionFileChange,
+  type SessionRepoGroup,
+  type SessionChangesResult,
+} from '../providers/session-changes-core.js';
 import { WALNUT_HOME } from '../constants.js';
 import { log } from '../logging/index.js';
 
-// ── Public types (shared shape with the frontend api wrapper) ──
-
-/** A single file the session changed, with reconstructed before/after content. */
-export interface SessionFileChange {
-  /** Absolute path as recorded in the JSONL. */
-  filePath: string;
-  /** Path relative to its repo root (display). */
-  relPath: string;
-  /** Content when the session first touched the file (after reverse-applying ops). */
-  before: string;
-  /** Current content on disk (what the user sees now). */
-  after: string;
-  /** How the file was changed — 'added' (Write/touch/cp/`>` to a new/empty file),
-   *  'deleted' (rm/`git rm`, or current content empty), 'renamed' (mv/`git mv`),
-   *  or 'modified'. */
-  status: 'added' | 'modified' | 'deleted' | 'renamed';
-  /** For a rename (mv/git mv), the repo-relative ORIGINAL path. Absent otherwise.
-   *  `filePath`/`relPath` hold the destination; this is the source. */
-  oldRelPath?: string;
-  /** Number of distinct Edit/Write/MultiEdit + Bash file ops the session applied. */
-  ops: number;
-  /** True when before/after could not be fully reconstructed (e.g. an Edit's
-   *  old_string no longer matches the current file because another process
-   *  changed it). The diff still renders; this flags reduced fidelity. */
-  partial: boolean;
-}
-
-/** A group of changed files sharing a repo root. */
-export interface SessionRepoGroup {
-  /** Absolute repo root (or best-effort common dir when no .git found). */
-  repoRoot: string;
-  /** Short label for the group header, e.g. "walnut", "vendor/lib (submodule)". */
-  label: string;
-  /** 'cwd' (the session's working dir repo), 'other' (a different repo), or
-   *  'submodule' (a .git nested inside another repo). */
-  kind: 'cwd' | 'other' | 'submodule';
-  files: SessionFileChange[];
-}
-
-export interface SessionChangesResult {
-  sessionId: string;
-  groups: SessionRepoGroup[];
-  /** Total changed files across all groups (after .claude filtering). */
-  fileCount: number;
-  /** True if any file was reconstructed only partially. */
-  anyPartial: boolean;
-  /** SWR markers (computeSessionChangesSwr): this result was served from cache
-   *  and MAY be outdated; a recompute is running — follow up with a normal
-   *  (blocking) fetch to converge on fresh data. */
-  stale?: boolean;
-  refreshing?: boolean;
-  /** True when before/after content is absent (disk-restored light result —
-   *  the file list is real, diffs need the follow-up fetch). */
-  light?: boolean;
-}
-
-// ── Internal: per-file accumulated ops ──
-
-type FileOp =
-  | { kind: 'edit'; oldString: string; newString: string; replaceAll: boolean }
-  | { kind: 'write'; content: string }
-  // Bash-derived path ops (no content payload — reconstructed from disk + git):
-  | { kind: 'create' }
-  | { kind: 'delete' }
-  | { kind: 'rename'; from: string };
-
-interface FileAccum {
-  filePath: string;
-  cwd?: string;
-  /** Ops in chronological order (oldest first). */
-  ops: FileOp[];
-}
-
-// ── JSONL line shape (only the fields we read) ──
-
-interface RawLine {
-  type?: string;
-  cwd?: string;
-  message?: {
-    content?: string | Array<{
-      type?: string;
-      name?: string;
-      input?: Record<string, unknown>;
-    }>;
-  };
-}
-
-const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
-
-/** Extract file ops from one JSONL content string, appending to `fileMap`. */
-function collectOpsFromJsonl(content: string, fileMap: Map<string, FileAccum>): void {
-  for (const line of content.split('\n')) {
-    if (!line) continue;
-    let raw: RawLine;
-    try {
-      raw = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (raw.type !== 'assistant') continue;
-    const blocks = raw.message?.content;
-    if (!Array.isArray(blocks)) continue;
-    const lineCwd = typeof raw.cwd === 'string' ? raw.cwd : undefined;
-
-    for (const block of blocks) {
-      if (block.type !== 'tool_use' || !block.name) continue;
-      const input = block.input;
-      if (!input) continue;
-
-      // Bash file ops (mv/git mv/rm/git rm/cp/touch/`>` redirection) — moves,
-      // renames, deletes and shell-created files leave NO Edit/Write op, so parse
-      // the recorded command string into structured create/delete/rename ops.
-      if (block.name === 'Bash') {
-        const command = typeof input.command === 'string' ? input.command : undefined;
-        if (!command) continue;
-        for (const op of parseBashFileOps(command, lineCwd)) {
-          if (op.kind === 'rename' && op.from) {
-            // A rename RETIRES the source path and carries its history to the dest:
-            // migrate any prior ops (edits/create on the old path) onto the
-            // destination accum, then drop the source so we don't show a phantom
-            // "modified" for a file that no longer exists.
-            const srcAccum = fileMap.get(op.from);
-            const destAccum = fileMap.get(op.path) ?? { filePath: op.path, cwd: lineCwd, ops: [] };
-            if (!destAccum.cwd && lineCwd) destAccum.cwd = lineCwd;
-            if (srcAccum) {
-              destAccum.ops.push(...srcAccum.ops);
-              fileMap.delete(op.from);
-            }
-            destAccum.ops.push({ kind: 'rename', from: op.from });
-            fileMap.set(op.path, destAccum);
-            continue;
-          }
-          const accum = fileMap.get(op.path) ?? { filePath: op.path, cwd: lineCwd, ops: [] };
-          if (!accum.cwd && lineCwd) accum.cwd = lineCwd;
-          accum.ops.push(op.kind === 'delete' ? { kind: 'delete' } : { kind: 'create' });
-          fileMap.set(op.path, accum);
-        }
-        continue;
-      }
-
-      if (!EDIT_TOOLS.has(block.name)) continue;
-      const filePath = typeof input.file_path === 'string' ? input.file_path
-        : typeof input.notebook_path === 'string' ? input.notebook_path
-          : undefined;
-      if (!filePath) continue;
-
-      const accum = fileMap.get(filePath) ?? { filePath, cwd: lineCwd, ops: [] };
-      if (!accum.cwd && lineCwd) accum.cwd = lineCwd;
-
-      if (block.name === 'Write') {
-        if (typeof input.content === 'string') {
-          accum.ops.push({ kind: 'write', content: input.content });
-        }
-      } else if (block.name === 'Edit') {
-        if (typeof input.old_string === 'string' && typeof input.new_string === 'string') {
-          accum.ops.push({
-            kind: 'edit',
-            oldString: input.old_string,
-            newString: input.new_string,
-            replaceAll: input.replace_all === true,
-          });
-        }
-      } else if (block.name === 'MultiEdit') {
-        // MultiEdit applies edits[] in order.
-        const edits = Array.isArray(input.edits) ? input.edits : [];
-        for (const e of edits as Array<Record<string, unknown>>) {
-          if (typeof e.old_string === 'string' && typeof e.new_string === 'string') {
-            accum.ops.push({
-              kind: 'edit',
-              oldString: e.old_string,
-              newString: e.new_string,
-              replaceAll: e.replace_all === true,
-            });
-          }
-        }
-      } else if (block.name === 'NotebookEdit') {
-        // Notebook cells: best-effort treat new_source as an edit onto old (often
-        // only new_source is present → treated as additive content).
-        const newSrc = typeof input.new_source === 'string' ? input.new_source : undefined;
-        if (newSrc !== undefined) {
-          accum.ops.push({ kind: 'edit', oldString: '', newString: newSrc, replaceAll: false });
-        }
-      }
-
-      fileMap.set(filePath, accum);
-    }
-  }
-}
-
-/**
- * Merge one parsed fileMap into another, replaying ops in order. Rename ops
- * re-run their migration against the DESTINATION map (mirrors the sequential
- * semantics of parsing all content into one shared map): a rename in subagent B
- * still migrates ops subagent A accumulated on the old path.
- */
-function mergeFileMapInto(src: Map<string, FileAccum>, dest: Map<string, FileAccum>): void {
-  for (const [filePath, accum] of src) {
-    for (const op of accum.ops) {
-      if (op.kind === 'rename') {
-        const srcAccum = dest.get(op.from);
-        const destAccum = dest.get(filePath) ?? { filePath, cwd: accum.cwd, ops: [] };
-        if (!destAccum.cwd && accum.cwd) destAccum.cwd = accum.cwd;
-        if (srcAccum && srcAccum !== destAccum) {
-          destAccum.ops.push(...srcAccum.ops);
-          dest.delete(op.from);
-        }
-        destAccum.ops.push(op);
-        dest.set(filePath, destAccum);
-      } else {
-        const destAccum = dest.get(filePath) ?? { filePath, cwd: accum.cwd, ops: [] };
-        if (!destAccum.cwd && accum.cwd) destAccum.cwd = accum.cwd;
-        destAccum.ops.push(op);
-        dest.set(filePath, destAccum);
-      }
-    }
-  }
-}
+// The compute PRIMITIVES (op parse, reverse-apply reconstruction, grouping
+// policy) live in providers/session-changes-core.ts, shared verbatim with the
+// daemon's host-local pipeline (`changes.compute`) so both paths produce
+// identical results. This module owns the SERVER-side concerns: reader-based
+// remote I/O (the fallback for daemons without changes-v1), the mtime +
+// incremental cache, SWR, and disk snapshots.
+export { isExcludedPath } from '../providers/session-changes-core.js';
+export type { SessionFileChange, SessionRepoGroup, SessionChangesResult } from '../providers/session-changes-core.js';
 
 // ── Subagent per-file parse cache ──
 //
@@ -405,110 +206,6 @@ async function readDeletedBeforeLocal(absPath: string): Promise<string | null> {
   }
 }
 
-// ── before reconstruction (reverse-apply ops onto current content) ──
-
-/** Reverse one edit: turn newString back into oldString in `text`. */
-function reverseEdit(text: string, op: { oldString: string; newString: string; replaceAll: boolean }): { text: string; ok: boolean } {
-  if (op.newString === op.oldString) return { text, ok: true };
-  // Empty newString (pure deletion-of-nothing / insertion): re-insert is ambiguous; skip.
-  if (op.newString === '') return { text, ok: false };
-  const idx = text.indexOf(op.newString);
-  if (idx === -1) return { text, ok: false }; // current file no longer contains it
-  if (op.replaceAll) {
-    return { text: text.split(op.newString).join(op.oldString), ok: true };
-  }
-  // Replace the FIRST occurrence only (mirrors Edit semantics).
-  return {
-    text: text.slice(0, idx) + op.oldString + text.slice(idx + op.newString.length),
-    ok: true,
-  };
-}
-
-/**
- * Reconstruct {before, after, status, partial} for a file from its current
- * on-disk content + the chronological ops the session applied.
- *
- * @param current       Disk content of the file (the destination path for a
- *                       rename); null when the file no longer exists.
- * @param accum          The file's accumulated ops (oldest first).
- * @param deletedBefore  For a deleted file, its content at the git base (from
- *                       `git show HEAD:path`), so the diff can show what was
- *                       removed. null when unavailable (remote / no git / untracked).
- */
-function reconstructFile(
-  current: string | null,
-  accum: FileAccum,
-  deletedBefore?: string | null,
-): Omit<SessionFileChange, 'filePath' | 'relPath' | 'oldRelPath'> & { renamedFrom?: string } {
-  const ops = accum.ops;
-  const lastOp = ops[ops.length - 1];
-  let partial = false;
-
-  // Find the last rename (its `from` is the display source). A later delete of a
-  // renamed dest is handled by the delete branch below.
-  let renamedFrom: string | undefined;
-  for (let i = ops.length - 1; i >= 0; i--) {
-    const op = ops[i];
-    if (op.kind === 'rename') { renamedFrom = op.from; break; }
-  }
-
-  // ── Deleted: the file's last op was a `rm`, or it's gone from disk. `after` is
-  //    empty; `before` is the pre-delete content (git-show injected, else best-
-  //    effort). Edits/renames before the delete are moot — the file is gone. ──
-  if (lastOp?.kind === 'delete') {
-    const before = deletedBefore ?? '';
-    if (deletedBefore == null) partial = true; // couldn't recover the removed content
-    return { before, after: '', status: 'deleted', ops: ops.length, partial };
-  }
-
-  // `after`: the current content. If the file was deleted on disk (read=null) but
-  // the session's last op was a Write, fall back to that Write's content as the
-  // best available "after". If null and last op was an edit, we can't show after.
-  let after: string;
-  if (current != null) {
-    after = current;
-  } else if (lastOp?.kind === 'write') {
-    after = lastOp.content;
-    partial = true;
-  } else {
-    after = '';
-    partial = true;
-  }
-
-  // `before`: reverse-apply ops newest→oldest onto `after`. rename/create are
-  // content-boundary markers, not text edits:
-  //   - create: the file did not exist before this op → reset `before` to ''.
-  //   - rename: content-preserving (bytes unchanged) → skip in text terms.
-  let before = after;
-  for (let i = ops.length - 1; i >= 0; i--) {
-    const op = ops[i];
-    if (op.kind === 'write' || op.kind === 'create') {
-      // A Write/create established the whole file. Everything before it is unknown
-      // from `after` alone; reset `before` to '' and keep walking earlier ops
-      // (edits to a pre-existing file, if any, reconstruct the original).
-      before = '';
-    } else if (op.kind === 'rename' || op.kind === 'delete') {
-      // rename: bytes unchanged. delete here is not the last op (handled above) —
-      // an intermediate delete+recreate; treat as a content boundary too.
-      if (op.kind === 'delete') before = '';
-    } else {
-      const r = reverseEdit(before, op);
-      before = r.text;
-      if (!r.ok) partial = true;
-    }
-  }
-
-  // Status. A rename is a rename even when the content is byte-identical (a pure
-  // move) — it takes precedence over modified/added so the move is visible.
-  let status: SessionFileChange['status'];
-  if (renamedFrom !== undefined) status = 'renamed';
-  else if (before === '' && after !== '') status = 'added';
-  else if (after === '' && before !== '') status = 'deleted';
-  else status = 'modified';
-
-  return { before, after, status, ops: ops.length, partial, renamedFrom };
-}
-
 // ── repo grouping ──
 
 /** Find the nearest ancestor dir containing a `.git` entry (file or dir). Async,
@@ -536,64 +233,6 @@ export async function findGitRoot(startDir: string, reader: { readFile: (p: stri
     dir = parent;
   }
   return null;
-}
-
-/** Decide the group label + kind for a repo root relative to the session cwd. */
-function groupMeta(repoRoot: string, sessionCwd: string | undefined, cwdRepoRoot: string | null): { label: string; kind: SessionRepoGroup['kind'] } {
-  const name = path.basename(repoRoot) || repoRoot;
-  if (cwdRepoRoot && repoRoot === cwdRepoRoot) {
-    return { label: name, kind: 'cwd' };
-  }
-  // A repo nested INSIDE the cwd repo root is a submodule.
-  if (cwdRepoRoot && repoRoot.startsWith(cwdRepoRoot + path.sep)) {
-    const rel = path.relative(cwdRepoRoot, repoRoot);
-    return { label: `${rel} (submodule)`, kind: 'submodule' };
-  }
-  return { label: name, kind: 'other' };
-}
-
-// ── bookkeeping / agent-memory filtering ──
-
-/** True if a path is Claude/Walnut bookkeeping (plans + Claude Code's per-project
- *  memory dir) — agent scratch, not project code under review. */
-function isBookkeepingPath(filePath: string): boolean {
-  return /(^|\/)\.claude\/(plans|projects)\//.test(filePath);
-}
-
-/**
- * True if a path is an AGENT MEMORY STORE entry — the butler's (or a subagent's)
- * persistent memory, not project code. The Changed view is for reviewing code a
- * session wrote; an agent distilling notes into its own MEMORY.md is noise.
- *
- * Walnut's memory store lives at `<WALNUT_HOME>/memory/` with a fixed layout
- * (projects/ agents/ repos/ daily/ topics/ compaction/ sessions/ vault/
- * knowledge/ + index.md / working-memory.md), plus the global `<WALNUT_HOME>/
- * MEMORY.md`. WALNUT_HOME differs per environment (`~/.open-walnut` locally,
- * `/tmp/walnut-test-*` in tests, the REMOTE host's home for cloud sessions), so
- * we match the STRUCTURE — a `memory/` segment followed by a store subdir or a
- * canonical memory file — never a fixed prefix. This deliberately does NOT match
- * source files that merely contain "memory" in their name (e.g.
- * `src/core/memory-search.ts`, `web/src/components/memory/Panel.tsx`,
- * `src/core/working-memory.ts`): those live under `src/`/`web/`, not under a
- * `memory/` store dir, and aren't `.md`. Claude Code's per-project memory
- * (`.claude/projects/<enc>/memory/MEMORY.md`) is already handled by
- * isBookkeepingPath; the bare-`MEMORY.md` rule here additionally catches the
- * all-caps agent-memory convention wherever it sits. */
-function isAgentMemoryPath(filePath: string): boolean {
-  return (
-    /(^|\/)memory\/(projects|agents|repos|daily|topics|compaction|sessions|vault|knowledge)\//.test(filePath)
-    || /(^|\/)memory\/(index|working-memory)\.md$/.test(filePath)
-    || /(^|\/)MEMORY\.md$/.test(filePath)
-  );
-}
-
-/** Paths excluded from the Changed view entirely (agent scratch / memory, not
- *  reviewable code). A group made only of these is dropped. Exported so the git
- *  comparison path (session-git-diff.ts, scope=all) applies the IDENTICAL filter
- *  — otherwise switching to "All in repo" would re-surface the memory files this
- *  hides in the default session scope. */
-export function isExcludedPath(filePath: string): boolean {
-  return isBookkeepingPath(filePath) || isAgentMemoryPath(filePath);
 }
 
 // ── mtime cache + incremental parse state ──
@@ -656,6 +295,11 @@ interface CacheEntry {
    *  compute — their records carry empty content, so the reuse path must
    *  re-read them instead of perpetuating the poisoned record. */
   failedPaths?: Set<string>;
+  /** True when this entry came from the daemon's changes.compute — the result
+   *  is LIGHT (no before/after; per-file content rides changes.file), so peek
+   *  must not serve file content from it. mtimeMs/resolvedPath are the daemon-
+   *  reported JSONL stat, so the SWR freshness probe works unchanged. */
+  daemonBacked?: boolean;
   /** Chars accounted against the cache byte budget, frozen at insert time.
    *  Stored (not recomputed on delete) because `inc.mainFileMap` grows in place
    *  between recomputes — recomputing at delete would drift cacheChars negative. */
@@ -977,6 +621,9 @@ export function peekSessionFileChange(
 ): { repoRoot: string; file: SessionFileChange } | null {
   const entry = cacheGet(cacheKey(sessionId, host));
   if (!entry) return null;
+  // Daemon-backed entries are LIGHT (no before/after) — serving one here would
+  // paint an empty diff. Return null so the caller fetches via changes.file.
+  if (entry.daemonBacked) return null;
   for (const group of entry.result.groups) {
     const file = group.files.find((f) => f.filePath === filePath);
     if (file) return { repoRoot: group.repoRoot, file };
@@ -1026,6 +673,67 @@ export function hasInflightSessionChanges(sessionId: string, host?: string): boo
   return inflightByKey.has(cacheKey(sessionId, host));
 }
 
+// ── Daemon-side compute (capability 'changes-v1') ──
+// Design-principle path (AGENTS.md): the daemon parses the session's JSONLs +
+// reads file contents ON ITS OWN HOST; only the LIGHT list crosses the tunnel,
+// and per-file diffs ride changes.file on selection. The reader-based pipeline
+// below remains as the fallback for daemons without the capability (source
+// deploys, old binaries) — results are identical (same core module).
+
+const CHANGES_RPC_TIMEOUT_MS = 120_000;
+
+/** The daemon connection for a host IF it's already connected and speaks
+ *  changes-v1. Never dials: a cold dial belongs to the reader path's laziness,
+ *  and a disconnected host should fall back, not block. */
+async function changesCapableConnection(host: string | undefined): Promise<import('../providers/daemon-connection.js').DaemonConnection | null> {
+  try {
+    const { getConnectedDaemonConnection } = await import('../providers/daemon-connection.js');
+    const conn = getConnectedDaemonConnection(host ?? '__local__');
+    if (conn && conn.hasCapability('changes-v1')) return conn;
+  } catch { /* provider layer unavailable (tests) */ }
+  return null;
+}
+
+/** Fetch the light list from the daemon. Returns null when the daemon can't
+ *  serve it (no capability / no session file / RPC failure) — caller falls
+ *  back to the reader-based compute. */
+async function computeViaDaemon(
+  sessionId: string,
+  cwd: string | undefined,
+  host: string | undefined,
+  refresh: boolean,
+): Promise<{ result: SessionChangesResult; mtimeMs: number; jsonlPath: string } | null> {
+  const conn = await changesCapableConnection(host);
+  if (!conn) return null;
+  const res = await conn.send('changes.compute', {
+    sid: sessionId, ...(cwd ? { cwd } : {}), ...(refresh ? { refresh: true } : {}),
+  }, CHANGES_RPC_TIMEOUT_MS);
+  if (!res.ok || res.found !== true || !res.result) return null;
+  const result = res.result as SessionChangesResult;
+  if (!Array.isArray(result.groups)) return null;
+  return {
+    result,
+    mtimeMs: typeof res.mtimeMs === 'number' ? res.mtimeMs : -1,
+    jsonlPath: typeof res.jsonlPath === 'string' ? res.jsonlPath : '',
+  };
+}
+
+/** One file's full record from the daemon (blocking, but host-local so fast). */
+export async function fetchSessionFileChangeViaDaemon(
+  sessionId: string,
+  cwd: string | undefined,
+  host: string | undefined,
+  filePath: string,
+): Promise<{ repoRoot: string; file: SessionFileChange } | null> {
+  const conn = await changesCapableConnection(host);
+  if (!conn) return null;
+  const res = await conn.send('changes.file', {
+    sid: sessionId, path: filePath, ...(cwd ? { cwd } : {}),
+  }, CHANGES_RPC_TIMEOUT_MS);
+  if (!res.ok || res.found !== true || !res.file) return null;
+  return { repoRoot: res.repoRoot as string, file: res.file as SessionFileChange };
+}
+
 async function computeSessionChangesInner(
   key: string,
   sessionId: string,
@@ -1035,6 +743,36 @@ async function computeSessionChangesInner(
   opts?: { noCache?: boolean },
 ): Promise<SessionChangesResult> {
   const t0 = Date.now();
+
+  // Daemon-side compute first (both hosts and __local__ run a daemon). The
+  // daemon result is LIGHT (no before/after) — cached + snapshotted like any
+  // result; per-file content loads through changes.file on selection. noCache
+  // (?refresh=1) also goes through: the daemon's own mtime check handles it.
+  try {
+    const daemonResult = await computeViaDaemon(sessionId, cwd, host, opts?.noCache === true);
+    if (daemonResult) {
+      const light: SessionChangesResult = { ...daemonResult.result, light: true };
+      // The daemon reports the JSONL's real (mtimeMs, jsonlPath) so the SWR
+      // freshness probe works unchanged: probe stats the same file the daemon
+      // keyed its cache on. daemonBacked marks the entry as content-light.
+      cacheSet(key, {
+        mtimeMs: daemonResult.mtimeMs, result: light,
+        gitRootByDir: new Map(),
+        resolvedPath: daemonResult.jsonlPath || undefined,
+        daemonBacked: true,
+      });
+      void writeDiskSnapshot(key, light);
+      log.session.info('session-changes computed', {
+        sessionId, host: host ?? '__local__', parseMode: 'daemon', fileCount: light.fileCount,
+        durationMs: Date.now() - t0,
+      });
+      return light;
+    }
+  } catch (err) {
+    log.session.debug('session-changes: daemon compute failed — falling back to reader path', {
+      sessionId, host: host ?? '__local__', error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   // mtime fast-path + incremental parse. The canonical JSONL is append-only, so:
   //   mtime unchanged            → cached result verbatim.

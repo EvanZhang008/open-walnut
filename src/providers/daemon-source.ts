@@ -91,7 +91,13 @@ export function getDaemonSource(): string {
   // adds a second placeholder copy and forgets it, (2) someone typos the
   // placeholder so no substitution happens and the daemon ships with a
   // literal `__DAEMON_CAPABILITIES__` that crashes at parse time.
-  const capsLiteral = JSON.stringify([...ADVERTISED_DAEMON_CAPABILITIES])
+  // 'changes-v1' is sidecar-gated for source deploys: the host-local changes
+  // pipeline (session-changes-core.ts) can't be inlined into this string
+  // template, so deploySource ships it as a separate CJS bundle
+  // (changes-core.cjs) and the template advertises 'changes-v1' at runtime
+  // only when that sidecar loads. The STATIC list therefore excludes it —
+  // daemonCapabilities() in the template adds it back on successful load.
+  const capsLiteral = JSON.stringify([...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => c !== 'changes-v1'))
   const placeholder = '__DAEMON_CAPABILITIES__'
   const matches = DAEMON_SOURCE.split(placeholder).length - 1
   if (matches !== 1) {
@@ -1705,6 +1711,8 @@ function dispatchCommand(ws, id, cmd) {
     case 'fs.readRange': return cmdFsReadRange(ws, id, cmd);
     case 'git.diff': return cmdGitDiff(ws, id, cmd);
     case 'list': return cmdList(ws, id);
+    case 'changes.compute': return cmdChangesCompute(ws, id, cmd);
+    case 'changes.file': return cmdChangesFile(ws, id, cmd);
     case 'bridge.configure': return cmdBridgeConfigure(ws, id, cmd);
     case 'bridgeResume': return cmdBridgeResume(ws, id, cmd);
     case 'stt': return cmdSttRelay(ws, id, cmd);
@@ -1743,7 +1751,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'ping': return sendOk(ws, id, { pong: true });
     case 'hello': return sendOk(ws, id, {
       version: DAEMON_VERSION,
-      capabilities: __DAEMON_CAPABILITIES__,
+      capabilities: daemonCapabilities(),
       instanceId: DAEMON_INSTANCE_ID,
       startedAt: DAEMON_START_TS,
       uptimeSec: Math.floor((Date.now() - DAEMON_START_TS) / 1000),
@@ -4727,6 +4735,132 @@ let bridgeDialTimer = null;
 let bridgeDialStartedAt = null;
 let bridgeBackoffMs = 1000;
 let bridgeGeneration = 0;
+// ── Session changes (host-local compute — capability 'changes-v1') ──
+// The pipeline lives in a SIDECAR bundle (changes-core.cjs) deployed next to
+// this script — this template can't import modules (and must not contain
+// backticks), so the core is require()d at startup and 'changes-v1' is
+// advertised only when the sidecar loaded. Cache + serial gate mirror
+// daemon-standalone.ts: per-sid full output keyed on (mtimeMs, size), one
+// compute at a time daemon-wide, same-sid followers coalesce.
+let changesCore = null;
+try { changesCore = require(path.join(__dirname, 'changes-core.cjs')); } catch (err) { changesCore = null; }
+
+function daemonCapabilities() {
+  const caps = __DAEMON_CAPABILITIES__.slice();
+  if (changesCore) caps.push('changes-v1');
+  return caps;
+}
+
+const changesCache = new Map();
+const CHANGES_CACHE_MAX_SESSIONS = 12;
+let changesInflight = Promise.resolve();
+const changesInflightBySid = new Map();
+
+async function computeChangesCached(sid, cwd, refresh) {
+  // mtime+size fast-path — no lock needed for a pure cache hit. refresh
+  // ("re-read the data") skips it but still reuses subCache/gitRoot memos.
+  const cached = changesCache.get(sid);
+  if (cached && !refresh) {
+    try {
+      const st = await fs.promises.stat(cached.output.jsonlPath);
+      if (st.mtimeMs === cached.mtimeMs && st.size === cached.size) {
+        cached.lastUsed = Date.now();
+        return cached;
+      }
+    } catch (err) { /* stat failed → recompute below */ }
+  }
+  const existing = changesInflightBySid.get(sid);
+  if (existing) return existing;
+  const run = (async () => {
+    // Daemon-wide serial gate: chain onto whatever compute is running.
+    const prev = changesInflight;
+    let release;
+    changesInflight = new Promise((r) => { release = r; });
+    await prev.catch(() => {});
+    try {
+      const prior = changesCache.get(sid);
+      const output = await changesCore.computeHostLocalChanges({
+        sessionId: sid,
+        cwd: cwd,
+        claudeHome: path.join(HOME_DIR, '.claude'),
+        subCache: prior ? prior.subCache : undefined,
+        gitRootByDir: prior ? prior.gitRootByDir : undefined,
+      });
+      if (!output) return null;
+      const entry = {
+        mtimeMs: output.mtimeMs,
+        size: output.size,
+        output: output,
+        subCache: (prior && prior.subCache) || new Map(),
+        gitRootByDir: (prior && prior.gitRootByDir) || new Map(),
+        lastUsed: Date.now(),
+      };
+      changesCache.set(sid, entry);
+      // LRU bound — whale outputs hold full before/after strings.
+      if (changesCache.size > CHANGES_CACHE_MAX_SESSIONS) {
+        let oldest = null;
+        let oldestTs = Infinity;
+        for (const [k, v] of changesCache) {
+          if (v.lastUsed < oldestTs) { oldestTs = v.lastUsed; oldest = k; }
+        }
+        if (oldest && oldest !== sid) changesCache.delete(oldest);
+      }
+      return entry;
+    } finally {
+      release();
+      changesInflightBySid.delete(sid);
+    }
+  })();
+  changesInflightBySid.set(sid, run);
+  return run;
+}
+
+async function cmdChangesCompute(ws, id, cmd) {
+  if (!changesCore) return sendError(ws, id, 'changes.compute: core sidecar not available on this host');
+  const sid = cmd.sid;
+  if (!sid) return sendError(ws, id, 'changes.compute: missing sid');
+  const cwd = typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : undefined;
+  const refresh = cmd.refresh === true;
+  try {
+    const entry = await computeChangesCached(sid, cwd, refresh);
+    if (!entry) return sendOk(ws, id, { found: false, result: null });
+    // The wire result is ALWAYS light — per-file content rides changes.file.
+    sendOk(ws, id, {
+      found: true,
+      result: changesCore.toLightChangesResult(entry.output.result),
+      mtimeMs: entry.mtimeMs,
+      jsonlPath: entry.output.jsonlPath,
+    });
+  } catch (err) {
+    sendError(ws, id, 'changes.compute failed: ' + err.message);
+  }
+}
+
+async function cmdChangesFile(ws, id, cmd) {
+  if (!changesCore) return sendError(ws, id, 'changes.file: core sidecar not available on this host');
+  const sid = cmd.sid;
+  const filePath = cmd.path;
+  if (!sid) return sendError(ws, id, 'changes.file: missing sid');
+  if (!filePath) return sendError(ws, id, 'changes.file: missing path');
+  const cwd = typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : undefined;
+  try {
+    // Serve from the cached full output even when slightly stale (mtime
+    // moved): a file click must not wait behind a whale recompute. The list
+    // refresh converges the frontend's per-file cache.
+    let entry = changesCache.get(sid);
+    if (!entry) entry = await computeChangesCached(sid, cwd, false);
+    if (!entry) return sendOk(ws, id, { found: false });
+    entry.lastUsed = Date.now();
+    for (const group of entry.output.result.groups) {
+      const file = group.files.find((f) => f.filePath === filePath);
+      if (file) return sendOk(ws, id, { found: true, repoRoot: group.repoRoot, file: file });
+    }
+    sendOk(ws, id, { found: false });
+  } catch (err) {
+    sendError(ws, id, 'changes.file failed: ' + err.message);
+  }
+}
+
 let bridgeLastInbound = 0;
 
 const BRIDGE_BACKOFF_MAX_MS = 60000;

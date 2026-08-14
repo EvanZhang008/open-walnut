@@ -67,6 +67,12 @@ import { computeGitDiff, GitDiffError, type GitDiffBase } from './git-diff-core.
 import {
   GATEWAY_SOCKET_FILENAME,
   GATEWAY_MAX_LINE_BYTES,
+import {
+  computeHostLocalChanges,
+  toLightChangesResult,
+  type HostLocalComputeOutput,
+  type FileAccum as ChangesFileAccum,
+} from './session-changes-core.js'
   gatewayHubTimeoutMs,
   parseGatewayLine,
   resolveCallerSid,
@@ -1421,6 +1427,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'stt': return cmdSttRelay(ws, id as number, cmd)
     case 'stt-result': return cmdSttResult(ws, id as number, cmd)
     case 'session.launch': return cmdLaunchRelay(ws, id as number, cmd)
+    case 'changes.compute': return cmdChangesCompute(ws, id as number, cmd)
+    case 'changes.file': return cmdChangesFile(ws, id as number, cmd)
     case 'launch-result': return cmdLaunchResult(ws, id as number, cmd)
     case 'session.control': return cmdControlRelay(ws, id as number, cmd)
     case 'control-result': return cmdControlResult(ws, id as number, cmd)
@@ -4074,6 +4082,133 @@ function cmdList(ws: ServerWebSocket<WsData>, id: number) {
 // queues on drop and flushes in FIFO order when Bun fires `drain`.
 // Regression: tests/providers/daemon-ws-backpressure.test.ts (real binary).
 const SEND_QUEUE_MAX_BYTES = 256 * 1024 * 1024
+
+// ── Session changes (host-local compute — capability 'changes-v1') ──
+// The design-principle path (AGENTS.md): this host parses its OWN session
+// JSONLs and reads its OWN files; only a light list / one file's diff crosses
+// the tunnel. The pipeline lives in session-changes-core.ts (shared with the
+// server's fallback compute so both produce identical results).
+//
+// Cache: per-sid full output keyed on the main JSONL's (mtimeMs, size), plus
+// the subagent size-cache and git-root memo reused ACROSS recomputes. Serial
+// gate: one compute at a time daemon-wide (a whale parse is CPU+fs heavy; two
+// in parallel would starve session I/O), followers of the same sid coalesce.
+interface ChangesCacheEntry {
+  mtimeMs: number
+  size: number
+  output: HostLocalComputeOutput
+  subCache: Map<string, { size: number; fileMap: Map<string, ChangesFileAccum> }>
+  gitRootByDir: Map<string, string | null>
+  lastUsed: number
+}
+const changesCache = new Map<string, ChangesCacheEntry>()
+const CHANGES_CACHE_MAX_SESSIONS = 12
+let changesInflight: Promise<void> = Promise.resolve()
+const changesInflightBySid = new Map<string, Promise<ChangesCacheEntry | null>>()
+
+async function computeChangesCached(sid: string, cwd: string | undefined, refresh?: boolean): Promise<ChangesCacheEntry | null> {
+  // mtime+size fast-path — no lock needed for a pure cache hit. refresh
+  // ("re-read the data") skips it but still reuses subCache/gitRoot memos.
+  const cached = changesCache.get(sid)
+  if (cached && !refresh) {
+    try {
+      const st = await fs.promises.stat(cached.output.jsonlPath)
+      if (st.mtimeMs === cached.mtimeMs && st.size === cached.size) {
+        cached.lastUsed = Date.now()
+        return cached
+      }
+    } catch { /* stat failed → recompute below */ }
+  }
+  // Coalesce concurrent requests for the same sid.
+  const existing = changesInflightBySid.get(sid)
+  if (existing) return existing
+  const run = (async (): Promise<ChangesCacheEntry | null> => {
+    // Daemon-wide serial gate: chain onto whatever compute is running.
+    const prev = changesInflight
+    let release!: () => void
+    changesInflight = new Promise<void>((r) => { release = r })
+    await prev.catch(() => { /* prior failure doesn't gate us */ })
+    try {
+      const prior = changesCache.get(sid)
+      const output = await computeHostLocalChanges({
+        sessionId: sid,
+        cwd,
+        claudeHome: path.join(HOME_DIR, '.claude'),
+        subCache: prior?.subCache,
+        gitRootByDir: prior?.gitRootByDir,
+      })
+      if (!output) return null
+      const entry: ChangesCacheEntry = {
+        mtimeMs: output.mtimeMs,
+        size: output.size,
+        output,
+        subCache: prior?.subCache ?? new Map(),
+        gitRootByDir: prior?.gitRootByDir ?? new Map(),
+        lastUsed: Date.now(),
+      }
+      changesCache.set(sid, entry)
+      // LRU bound — whale outputs hold full before/after strings.
+      if (changesCache.size > CHANGES_CACHE_MAX_SESSIONS) {
+        let oldest: string | null = null
+        let oldestTs = Infinity
+        for (const [k, v] of changesCache) {
+          if (v.lastUsed < oldestTs) { oldestTs = v.lastUsed; oldest = k }
+        }
+        if (oldest && oldest !== sid) changesCache.delete(oldest)
+      }
+      return entry
+    } finally {
+      release()
+      changesInflightBySid.delete(sid)
+    }
+  })()
+  changesInflightBySid.set(sid, run)
+  return run
+}
+
+async function cmdChangesCompute(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const sid = cmd.sid as string
+  if (!sid) return sendError(ws, id, 'changes.compute: missing sid')
+  const cwd = typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : undefined
+  const refresh = cmd.refresh === true
+  try {
+    const entry = await computeChangesCached(sid, cwd, refresh)
+    if (!entry) return sendOk(ws, id, { found: false, result: null })
+    // The wire result is ALWAYS light — per-file content rides changes.file.
+    sendOk(ws, id, {
+      found: true,
+      result: toLightChangesResult(entry.output.result),
+      mtimeMs: entry.mtimeMs,
+      jsonlPath: entry.output.jsonlPath,
+    })
+  } catch (err) {
+    sendError(ws, id, 'changes.compute failed: ' + (err as Error).message)
+  }
+}
+
+async function cmdChangesFile(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const sid = cmd.sid as string
+  const filePath = cmd.path as string
+  if (!sid) return sendError(ws, id, 'changes.file: missing sid')
+  if (!filePath) return sendError(ws, id, 'changes.file: missing path')
+  const cwd = typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : undefined
+  try {
+    // Serve from the cached full output even when slightly stale (mtime moved):
+    // a file click must not wait behind a whale recompute. The list refresh
+    // converges the frontend's per-file cache.
+    let entry = changesCache.get(sid)
+    if (!entry) entry = (await computeChangesCached(sid, cwd)) ?? undefined
+    if (!entry) return sendOk(ws, id, { found: false })
+    entry.lastUsed = Date.now()
+    for (const group of entry.output.result.groups) {
+      const file = group.files.find((f) => f.filePath === filePath)
+      if (file) return sendOk(ws, id, { found: true, repoRoot: group.repoRoot, file })
+    }
+    sendOk(ws, id, { found: false })
+  } catch (err) {
+    sendError(ws, id, 'changes.file failed: ' + (err as Error).message)
+  }
+}
 
 function enqueueForDrain(ws: ServerWebSocket<WsData>, payload: string) {
   const data = ws.data
