@@ -783,6 +783,57 @@ export async function getSessionByLane(lane: string): Promise<SessionRecord | nu
   return row ? rowToSession(row) : null;
 }
 
+/**
+ * Minimum prefix length accepted by {@link resolveSessionByIdOrPrefix}. 8 hex
+ * chars (32 bits) is what the UI renders in its session-id chips and in
+ * "Session <id> finished" notifications, so it is the shortest string a user can
+ * plausibly have in hand. Shorter is refused rather than guessed at.
+ */
+export const SESSION_ID_MIN_PREFIX = 8;
+
+export type SessionIdResolution =
+  | { status: 'found'; session: SessionRecord; resolvedByPrefix: boolean }
+  | { status: 'not-found' }
+  | { status: 'ambiguous' };
+
+/**
+ * Resolve a session by exact id, or by a unique id PREFIX.
+ *
+ * Why prefixes are accepted at all: the UI displays only the first 8 chars of a
+ * session id (chips, notification titles), so that truncated string inevitably
+ * ends up in URLs and deep links — and an exact-match-only lookup answers 404
+ * for an id the app itself put on screen. Same contract as a short git SHA:
+ * unique prefix resolves, ambiguous prefix is an error rather than a guess.
+ *
+ * Callers MUST use `session.claudeSessionId` (the canonical id) for any
+ * follow-up lookup — live-session maps are keyed by the full id, so passing the
+ * prefix through would miss.
+ */
+export async function resolveSessionByIdOrPrefix(idOrPrefix: string): Promise<SessionIdResolution> {
+  const exact = await getSessionByClaudeId(idOrPrefix);
+  if (exact) return { status: 'found', session: exact, resolvedByPrefix: false };
+
+  // Only hex + dashes, at least SESSION_ID_MIN_PREFIX chars, and shorter than a
+  // full id (a full-length miss is a genuine 404, not a prefix). The charset
+  // check also keeps LIKE wildcards ('%', '_') out of the pattern.
+  const looksLikePrefix =
+    idOrPrefix.length >= SESSION_ID_MIN_PREFIX &&
+    idOrPrefix.length < 36 &&
+    /^[0-9a-f-]+$/i.test(idOrPrefix);
+  if (!looksLikePrefix) return { status: 'not-found' };
+
+  const db = getDb();
+  if (!db) return { status: 'not-found' };
+  // LIMIT 2 — we only need to know "exactly one" vs "more than one".
+  const rows = db.prepare(
+    'SELECT * FROM sessions WHERE claude_session_id LIKE ? ESCAPE \'\\\' LIMIT 2',
+  ).all(`${idOrPrefix}%`) as Array<Record<string, any>>;
+
+  if (rows.length === 0) return { status: 'not-found' };
+  if (rows.length > 1) return { status: 'ambiguous' };
+  return { status: 'found', session: rowToSession(rows[0]), resolvedByPrefix: true };
+}
+
 /** Bounded callers can hydrate full status snapshots without loading history rows. */
 export async function getSessionStatusSnapshots(
   providerSessionIds: string[],

@@ -136,6 +136,19 @@ export function removeSessionColumn(cols: SessionSlot[], id: string): SessionSlo
 export function replaceSessionColumn(cols: SessionSlot[], oldId: string, newId: string): SessionSlot[] {
   const idx = cols.findIndex(c => c.id === oldId);
   if (idx === -1) return cols;
+  if (oldId === newId) return cols;
+  // newId may already occupy another slot — e.g. a column opened from a deep link
+  // with a truncated id adopts its canonical id while the full id is already open.
+  // A blind overwrite would leave two slots with the same id (duplicate React keys
+  // and two panels streaming one session), so collapse into one slot instead,
+  // keeping the target position and locking if either slot was locked.
+  const existing = cols.findIndex(c => c.id === newId);
+  if (existing !== -1) {
+    const locked = cols[existing].locked || cols[idx].locked;
+    return cols
+      .filter((_, i) => i !== idx)
+      .map(c => (c.id === newId ? { id: newId, locked } : c));
+  }
   const next = [...cols];
   next[idx] = { id: newId, locked: cols[idx].locked };
   return next;

@@ -1016,3 +1016,76 @@ describe('POST /api/sessions/:sessionId/execute', () => {
     expect(res.body.planPreserved).toBe(true);
   }, 40_000);
 });
+
+// ── Session id prefix resolution ──
+//
+// Regression: the UI renders only the first 8 chars of a session id (chips,
+// "Session <id> finished" notifications), so that truncated string reaches
+// GET /api/sessions/:id via deep links. Exact-match-only lookup answered 404,
+// SessionPanel retried 30x/500ms (~15s) and then left a dead column in
+// sessionStorage that replayed the loop on every reload — observed as 144 404s
+// for one id, and reported as "new sessions are broken" even though the session
+// existed and was running the whole time.
+describe('GET /api/sessions/:sessionId — id prefix resolution', () => {
+  const FULL = '8f3095b3-abfc-47d7-93db-e1ba726151e8';
+
+  it('resolves a unique 8-char prefix to the canonical session', async () => {
+    await createSessionRecord(FULL, 'task-1', 'project-a');
+    const app = createApp();
+
+    const res = await request(app).get('/api/sessions/8f3095b3');
+
+    expect(res.status).toBe(200);
+    // Canonical id comes back so the client can adopt it (streams/RPCs are keyed
+    // by the full id, so it must stop using the prefix).
+    expect(res.body.session.claudeSessionId).toBe(FULL);
+  });
+
+  it('still resolves the full id exactly', async () => {
+    await createSessionRecord(FULL, 'task-1', 'project-a');
+    const app = createApp();
+
+    const res = await request(app).get(`/api/sessions/${FULL}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.session.claudeSessionId).toBe(FULL);
+  });
+
+  it('404s an unknown prefix', async () => {
+    await createSessionRecord(FULL, 'task-1', 'project-a');
+    const app = createApp();
+
+    const res = await request(app).get('/api/sessions/deadbeef');
+
+    expect(res.status).toBe(404);
+  });
+
+  it('409s an ambiguous prefix rather than guessing', async () => {
+    await createSessionRecord('abcd1234-0000-0000-0000-000000000001', 'task-1', 'p');
+    await createSessionRecord('abcd1234-0000-0000-0000-000000000002', 'task-2', 'p');
+    const app = createApp();
+
+    const res = await request(app).get('/api/sessions/abcd1234');
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('SESSION_ID_AMBIGUOUS');
+  });
+
+  it('refuses a prefix shorter than 8 chars (too weak to guess from)', async () => {
+    await createSessionRecord(FULL, 'task-1', 'project-a');
+    const app = createApp();
+
+    const res = await request(app).get('/api/sessions/8f30');
+
+    expect(res.status).toBe(404);
+  });
+
+  it('does not treat LIKE wildcards as a prefix match', async () => {
+    await createSessionRecord(FULL, 'task-1', 'project-a');
+    const app = createApp();
+
+    // '%' / '_' would match everything if interpolated into LIKE unescaped.
+    expect((await request(app).get('/api/sessions/8f3095b_')).status).toBe(404);
+    expect((await request(app).get(`/api/sessions/${encodeURIComponent('8f3095b%')}`)).status).toBe(404);
+  });
+});

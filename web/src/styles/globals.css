@@ -8158,6 +8158,36 @@ body.walnut-dragging {
   overflow: hidden;
 }
 
+/* Terminal state for a session id that resolves to nothing (deleted session, or a
+   partial id from an old deep link). Mirrors the error-boundary layout. */
+.session-panel-missing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 100%;
+  padding: 24px;
+  text-align: center;
+}
+
+.session-panel-missing-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.session-panel-missing-body {
+  margin: 0;
+  max-width: 34ch;
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.session-panel-missing-body code {
+  word-break: break-all;
+}
+
 .session-panel-header {
   padding: 12px 14px 10px;
   border-bottom: 1px solid var(--border);

@@ -352,4 +352,24 @@ describe('sessionColumns: removeSessionColumn / replaceSessionColumn', () => {
       { id: 'a', locked: true },
     ]);
   });
+
+  it('replace is a no-op when oldId === newId', () => {
+    const cols = [slot('a'), slot('b')];
+    expect(replaceSessionColumn(cols, 'b', 'b')).toBe(cols);
+  });
+
+  // A column opened from a deep link with a truncated id adopts its canonical id
+  // while the full id may already be open. Overwriting blindly left two slots with
+  // the same id — duplicate React keys and two panels streaming one session.
+  it('replace collapses into the existing slot when newId is already open', () => {
+    const cols = [slot('full'), slot('prefix')];
+    const next = replaceSessionColumn(cols, 'prefix', 'full');
+    expect(next.map(s => s.id)).toEqual(['full']);
+  });
+
+  it('replace keeps the lock when either collapsed slot was locked', () => {
+    expect(replaceSessionColumn([slot('full'), slot('prefix', true)], 'prefix', 'full')[0].locked).toBe(true);
+    expect(replaceSessionColumn([slot('full', true), slot('prefix')], 'prefix', 'full')[0].locked).toBe(true);
+    expect(replaceSessionColumn([slot('full'), slot('prefix')], 'prefix', 'full')[0].locked).toBe(false);
+  });
 });
