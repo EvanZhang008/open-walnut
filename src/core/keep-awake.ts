@@ -74,6 +74,8 @@ export interface KeepAwakeState {
   online: boolean | null;
   offlineSince: string | null;
   needsSudo: boolean;
+  /** True once the sudoers rule is verified installed (sudo -n -l probe). */
+  setupDone: boolean | null;
   lastHotspotAttempt: { at: string; ok: boolean; detail: string } | null;
   checkedAt: string | null;
 }
@@ -145,6 +147,7 @@ let state: KeepAwakeState = {
   online: null,
   offlineSince: null,
   needsSudo: false,
+  setupDone: null,
   lastHotspotAttempt: null,
   checkedAt: null,
 };
@@ -174,6 +177,7 @@ export function resetKeepAwakeForTest(): void {
     online: null,
     offlineSince: null,
     needsSudo: false,
+    setupDone: null,
     lastHotspotAttempt: null,
     checkedAt: null,
   };
@@ -190,6 +194,42 @@ export function resetKeepAwakeForTest(): void {
 export function getSudoSetupCommand(): string {
   const user = os.userInfo().username;
   return `echo '${user} ALL=(ALL) NOPASSWD: /usr/bin/pmset disablesleep 1, /usr/bin/pmset disablesleep 0' | sudo tee /etc/sudoers.d/walnut-keep-awake >/dev/null && sudo chmod 440 /etc/sudoers.d/walnut-keep-awake`;
+}
+
+/**
+ * Is the sudoers rule installed? `sudo -n -l <cmd>` exits 0 iff the exact
+ * command is runnable without a password — a pure probe: no password prompt,
+ * no pmset touched, no state changed. This is what drives the UI's
+ * green-vs-setup-needed indicator even while the feature is off or idle.
+ */
+export async function checkSudoSetup(): Promise<boolean> {
+  const res = await execImpl('/usr/bin/sudo', ['-n', '-l', '/usr/bin/pmset', 'disablesleep', '1']);
+  return res.ok;
+}
+
+/**
+ * One-click setup: write the sudoers rule via osascript's
+ * `with administrator privileges`, which pops the NATIVE macOS password
+ * dialog — no Terminal, no copy-paste. Works because Walnut runs in the
+ * user's GUI session on the console Mac.
+ *
+ * The written content is fixed server-side (never user input). On success the
+ * caller should re-poll so a pending hold engages immediately.
+ */
+export async function runSudoSetup(): Promise<{ ok: boolean; detail: string }> {
+  const user = os.userInfo().username;
+  const line = `${user} ALL=(ALL) NOPASSWD: /usr/bin/pmset disablesleep 1, /usr/bin/pmset disablesleep 0`;
+  // printf (not echo) so the shell inside osascript needs no quoting gymnastics.
+  const shellCmd = `printf '%s\\n' '${line}' > /etc/sudoers.d/walnut-keep-awake && chmod 440 /etc/sudoers.d/walnut-keep-awake`;
+  const script = `do shell script "${shellCmd.replace(/"/g, '\\"')}" with administrator privileges with prompt "Walnut one-time setup: allow toggling sleep so sessions keep running with the lid closed."`;
+  const res = await execImpl('/usr/bin/osascript', ['-e', script]);
+  if (res.ok) {
+    log.web.info('keep-awake sudoers rule installed via native auth dialog');
+    return { ok: true, detail: 'installed' };
+  }
+  const canceled = /canceled|cancelled|-128/i.test(res.stderr);
+  if (!canceled) log.web.warn('keep-awake one-click setup failed', { stderr: res.stderr.slice(0, 200) });
+  return { ok: false, detail: canceled ? 'canceled' : res.stderr.trim().slice(0, 200) || 'failed' };
 }
 
 // ── Pure decision logic (unit-tested directly) ──────────────────────────────
@@ -363,6 +403,12 @@ export async function pollKeepAwakeOnce(notify: KeepAwakeNotify | undefined = mo
   }
   const enabled = cfg.enabled === true;
 
+  // Probe (not prompt): is the sudoers rule installed? Cheap and local; keeps
+  // the settings indicator truthful even while disabled or idle.
+  const setupDone = await checkSudoSetup().catch(() => false);
+  state.setupDone = setupDone;
+  state.needsSudo = !setupDone;
+
   if (!enabled) {
     // Never touch pmset while disabled — but if WE were holding (this process
     // set it), release before going quiet.
@@ -422,6 +468,7 @@ export async function pollKeepAwakeOnce(notify: KeepAwakeNotify | undefined = mo
     online,
     offlineSince: offlineSinceMs === null ? null : new Date(offlineSinceMs).toISOString(),
     needsSudo: state.needsSudo,
+    setupDone: state.setupDone,
     lastHotspotAttempt: state.lastHotspotAttempt,
     checkedAt: new Date(now).toISOString(),
   };

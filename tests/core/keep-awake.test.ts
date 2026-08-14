@@ -10,6 +10,8 @@ import {
   pollKeepAwakeOnce,
   getKeepAwakeState,
   getSudoSetupCommand,
+  checkSudoSetup,
+  runSudoSetup,
   rankHotspotCandidates,
   listHotspotCandidates,
   resetKeepAwakeForTest,
@@ -32,6 +34,7 @@ interface FakeWorld {
   online: boolean;
   nowMs: number;
   sudoFails: boolean;
+  osascriptResult: { ok: boolean; stdout: string; stderr: string };
   execCalls: Array<{ cmd: string; args: string[] }>;
 }
 
@@ -54,6 +57,9 @@ function installWorld(): void {
         ? { ok: false, stdout: '', stderr: 'sudo: a password is required' }
         : { ok: true, stdout: '', stderr: '' };
     }
+    if (cmd === '/usr/bin/osascript') {
+      return world.osascriptResult;
+    }
     if (cmd === '/usr/sbin/networksetup' && args[0] === '-listallhardwareports') {
       return { ok: true, stdout: 'Hardware Port: Wi-Fi\nDevice: en0\n', stderr: '' };
     }
@@ -67,10 +73,11 @@ function installWorld(): void {
   });
 }
 
-/** pmset disablesleep calls observed so far, as '1'/'0' strings in order. */
+/** pmset disablesleep MUTATIONS observed so far ('1'/'0' in order). Excludes
+ *  the read-only `sudo -n -l` setup probe, which also mentions disablesleep. */
 function disableSleepCalls(): string[] {
   return world.execCalls
-    .filter((c) => c.cmd === '/usr/bin/sudo' && c.args.includes('disablesleep'))
+    .filter((c) => c.cmd === '/usr/bin/sudo' && c.args.includes('disablesleep') && !c.args.includes('-l'))
     .map((c) => c.args[c.args.length - 1]);
 }
 
@@ -90,6 +97,7 @@ beforeEach(() => {
     online: true,
     nowMs: 1_000_000_000,
     sudoFails: false,
+    osascriptResult: { ok: true, stdout: '', stderr: '' },
     execCalls: [],
   };
   installWorld();
@@ -323,6 +331,35 @@ describe('hotspot SSID discovery', () => {
     const candidates = await listHotspotCandidates();
     expect(candidates[0]).toEqual({ ssid: 'Evan’s iPhone', likely: true });
     expect(candidates).toHaveLength(3);
+  });
+});
+
+describe('setup detection and one-click install', () => {
+  it('checkSudoSetup probes with sudo -n -l and never mutates pmset', async () => {
+    expect(await checkSudoSetup()).toBe(true);
+    world.sudoFails = true;
+    expect(await checkSudoSetup()).toBe(false);
+    expect(disableSleepCalls()).toEqual([]); // probe is read-only
+  });
+
+  it('poll exposes setupDone so the UI can show installed-vs-needed', async () => {
+    await pollKeepAwakeOnce();
+    expect(getKeepAwakeState().setupDone).toBe(true);
+    world.sudoFails = true;
+    await pollKeepAwakeOnce();
+    expect(getKeepAwakeState().setupDone).toBe(false);
+  });
+
+  it('runSudoSetup succeeds via osascript', async () => {
+    expect(await runSudoSetup()).toEqual({ ok: true, detail: 'installed' });
+    const call = world.execCalls.find((c) => c.cmd === '/usr/bin/osascript');
+    expect(call?.args[1]).toContain('administrator privileges');
+    expect(call?.args[1]).toContain('walnut-keep-awake');
+  });
+
+  it('runSudoSetup reports a user-canceled dialog distinctly', async () => {
+    world.osascriptResult = { ok: false, stdout: '', stderr: 'execution error: User canceled. (-128)' };
+    expect(await runSudoSetup()).toEqual({ ok: false, detail: 'canceled' });
   });
 });
 

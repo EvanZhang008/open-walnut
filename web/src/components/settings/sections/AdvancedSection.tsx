@@ -16,6 +16,7 @@ interface KeepAwakeStatus {
     battery: { pct: number; onAc: boolean } | null;
     online: boolean | null;
     needsSudo: boolean;
+    setupDone: boolean | null;
     lastHotspotAttempt: { at: string; ok: boolean; detail: string } | null;
     checkedAt: string | null;
   };
@@ -58,6 +59,26 @@ export function AdvancedSection({ config, onSave }: Props) {
       setKaDetecting(false);
     }
   }, []);
+  // One-click setup: server pops the native macOS password dialog (osascript).
+  const [kaSettingUp, setKaSettingUp] = useState(false);
+  const [kaSetupError, setKaSetupError] = useState<string | null>(null);
+  const runKaSetup = useCallback(async () => {
+    setKaSettingUp(true);
+    setKaSetupError(null);
+    try {
+      const res = await apiPost<{ ok: boolean; detail: string; state: KeepAwakeStatus['state'] }>('/api/keep-awake/setup');
+      if (res.ok) {
+        setKaStatus((prev) => prev ? { ...prev, state: res.state } : prev);
+      } else if (res.detail !== 'canceled') {
+        setKaSetupError(res.detail);
+      }
+    } catch (err) {
+      setKaSetupError((err as Error).message);
+    } finally {
+      setKaSettingUp(false);
+    }
+  }, []);
+
   const pickSsid = useCallback((ssid: string) => {
     const input = document.getElementById('ka-ssid') as HTMLInputElement | null;
     if (!input) return;
@@ -266,20 +287,26 @@ export function AdvancedSection({ config, onSave }: Props) {
                 <input type="checkbox" name="ka-enabled" defaultChecked={keepAwake.enabled === true} style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
                 Enable Keep-Awake
               </label>
-              {kaStatus?.state.enabled && kaStatus.state.needsSudo && (
+              {kaStatus?.state.setupDone === false ? (
                 <div style={{ border: '1px solid var(--warning, #b58900)', borderRadius: 6, padding: '10px 12px', marginBottom: 12 }}>
-                  <p style={{ margin: '0 0 6px 0', fontWeight: 600, color: 'var(--warning, #b58900)' }}>
-                    ⚠️ One-time setup required — Keep-Awake can&rsquo;t work yet
+                  <p style={{ margin: '0 0 8px 0', fontWeight: 600, color: 'var(--warning, #b58900)' }}>
+                    ⚠️ One-time setup needed — click below and enter your Mac password
                   </p>
-                  <p className="text-sm" style={{ margin: '0 0 6px 0' }}>
-                    Copy this into Terminal once (it lets Walnut toggle sleep, nothing else):
-                  </p>
-                  <pre className="settings-raw-config" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>{kaStatus.sudoSetupCommand}</pre>
-                  <button type="button" className="btn-secondary" style={{ marginTop: 8 }} onClick={refreshKaStatus}>
-                    I ran it — check again
+                  <button type="button" className="btn-primary" onClick={runKaSetup} disabled={kaSettingUp}>
+                    {kaSettingUp ? 'Waiting for password dialog…' : 'Set Up Now'}
                   </button>
+                  {kaSetupError && (
+                    <p className="text-sm" style={{ margin: '8px 0 0 0', color: 'var(--error, #dc322f)' }}>
+                      Failed: {kaSetupError}. Manual fallback — run in Terminal:
+                      <br /><code style={{ wordBreak: 'break-all' }}>{kaStatus.sudoSetupCommand}</code>
+                    </p>
+                  )}
                 </div>
-              )}
+              ) : kaStatus?.state.setupDone === true ? (
+                <p className="text-sm" style={{ margin: '0 0 12px 0', color: 'var(--success, #2aa198)' }}>
+                  ✅ Setup complete — Walnut can keep the Mac awake.
+                </p>
+              ) : null}
               <div className="form-row">
                 <div className="form-group">
                   <label htmlFor="ka-battery">Battery Floor (%)</label>
