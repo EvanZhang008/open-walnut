@@ -730,15 +730,14 @@ async function runApiV1Turn(
   await enqueueAgentTurn(agentId, 'api-v1', async () => {
     // ── Engine selection (config.agent.provider) ──
     // 'claude-code' delivers the turn into the conversation's lane session instead
-    // of running the in-process loop. Scoped to the butler ('general') for the same
-    // reason as chat.ts: a custom console agent carries its own system prompt +
-    // tool filter, which the butler lane profile does not model.
-    // A failure to read config degrades to the in-process loop — never "no engine".
+    // of running the in-process loop. EVERY console agent rides the lane engine
+    // (per-agent persona via consoleAgentProfile — see butler-lane.resolveLane),
+    // mirroring chat.ts. A failure to read config degrades to the in-process
+    // loop — never "no engine".
     let useLaneEngine = false
     try {
       const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
-      useLaneEngine = agentId === DEFAULT_AGENT_ID
-        && resolveAgentEngineProvider(await getConfig()) === 'claude-code'
+      useLaneEngine = resolveAgentEngineProvider(await getConfig()) === 'claude-code'
     } catch (err) {
       log.web.warn('api-v1 engine resolution failed; using the in-process loop', {
         conversationId, turnId, agentId, error: err instanceof Error ? err.message : String(err),
