@@ -40,7 +40,8 @@ import type { ImageAttachment } from '@/api/chat';
 import { quickParseTask, type QuickTaskParse } from '@/api/tasks';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { DraftLaunchBar } from './DraftLaunchBar';
-import { MetaModelSelect } from './path-selector/MetaFooter';
+import { useModelOptions } from './path-selector/MetaFooter';
+import { ModelPicker } from './ModelPicker';
 import { draftComposerKey, type DraftColumn } from './draft-column';
 import type { QuickStartPath, QuickStartTaskMeta } from './SessionPathSelector';
 
@@ -64,6 +65,64 @@ const PARSE_MIN_CHARS = 12;
  *  whole briefing, so the request carries the OPENING of it — the project/tier
  *  signal is in the first sentence, and a 400 would just mean no suggestions. */
 const PARSE_MAX_CHARS = 500;
+
+/**
+ * DraftModelPill — the draft composer's model control: a pill (same classes as
+ * a real session's model pill) opening the SHARED two-pane picker
+ * (provider rail | models). One pattern everywhere; on a draft BOTH providers
+ * are clickable (the engine is still a choice here), picking Codex clears the
+ * model (ACP discovers models at session start).
+ */
+function DraftModelPill({ meta, onMetaChange, host }: {
+  meta: QuickStartTaskMeta;
+  onMetaChange: (updater: (m: QuickStartTaskMeta) => QuickStartTaskMeta) => void;
+  host?: string | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const { options, autoResolved } = useModelOptions(host);
+  const remoteHost = !!host && host !== '__local__';
+  // Remote tabs always launch Claude (codex is local-only; quick-start drops a
+  // stale codex flag) — mirror effective behavior, same rule as EngineToggle.
+  const isCodex = meta.engine === 'codex' && !remoteHost;
+  const selectedLabel = meta.model
+    ? options.find((o) => o.value === meta.model)?.label ?? meta.model
+    : autoResolved ? `Auto (${autoResolved})` : 'Auto';
+  return (
+    <>
+      <button
+        type="button"
+        className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill draft-model-select"
+        title={isCodex
+          ? 'Codex (via ACP) — models are discovered at session start. Click to change provider.'
+          : `Session model: ${selectedLabel} — click to switch model / provider`}
+        data-model={meta.model ?? ''}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {isCodex ? 'Codex' : selectedLabel}
+      </button>
+      {open && (
+        <ModelPicker
+          currentModel={meta.model}
+          host={host ?? undefined}
+          engine={isCodex ? 'codex' : 'claude'}
+          onSwitch={(model) => {
+            setOpen(false);
+            onMetaChange((m) => ({ ...m, model: model || undefined }));
+          }}
+          onClose={() => setOpen(false)}
+          // A draft can still change provider — flipping clears the model:
+          // the two catalogs don't overlap, and Codex has no pre-start rows.
+          onProviderSwitch={(provider) => {
+            onMetaChange((m) => ({ ...m, engine: provider === 'codex' ? 'codex' : undefined, model: undefined }));
+          }}
+          providerLockReason={(provider) =>
+            provider === 'codex' && remoteHost ? 'Codex sessions are local-only for now' : null}
+          autoRow={{ resolvedLabel: autoResolved, active: !meta.model }}
+        />
+      )}
+    </>
+  );
+}
 
 interface Props {
   draft: DraftColumn;
@@ -277,13 +336,13 @@ export function DraftSessionPanel({
           controlsSlot={(
             <div className="session-mode-bar draft-actions-bar">
               {/* The model belongs with the message — same place a real session
-                  keeps its model pill (the mode bar). Reuses the launcher's own
-                  option source, so the two surfaces can't offer different rows. */}
-              <MetaModelSelect
+                  keeps its model pill (the mode bar). Opens the SHARED two-pane
+                  provider|models picker, so every composer offers the same
+                  surface; on a draft both providers stay clickable. */}
+              <DraftModelPill
                 meta={draft.meta}
-                onChange={(updater) => onMetaChange(draft.id, updater)}
+                onMetaChange={(updater) => onMetaChange(draft.id, updater)}
                 host={draft.host}
-                className="draft-model-select"
               />
               {/* A bound draft is already a task — offering to create one would
                   make a duplicate. */}

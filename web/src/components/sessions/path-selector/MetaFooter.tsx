@@ -34,7 +34,7 @@ interface Props {
  *  is folded into the Auto option (Auto = no --model = CLI default) — but its
  *  resolvedModel is surfaced in the Auto label ("Auto (Opus 5 1M)") so the
  *  user knows WHAT Auto launches before starting. */
-function useModelOptions(host?: string | null): {
+export function useModelOptions(host?: string | null): {
   options: Array<{ value: string; label: string }>;
   /** Short display name of the model Auto resolves to on this host ('' = unknown). */
   autoResolved: string;

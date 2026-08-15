@@ -278,22 +278,27 @@ test('Codex model picker switches models on Homepage', async ({ page }) => {
   const homePill = panel.getByRole('button', { name: /GPT Best/ })
   await expect(homePill).toBeVisible({ timeout: 15_000 })
   await homePill.click()
-  const homeMenu = panel.getByRole('listbox', { name: 'Codex models' })
+  // The shared two-pane picker: provider rail (Claude greyed+locked — a live
+  // codex session can't switch engines in place) | the ACP model rows.
+  const homeMenu = panel.locator('.model-picker')
   await expect(homeMenu).toBeVisible()
+  await expect(homeMenu.locator('.provider-rail-item[data-provider="codex"]')).toHaveClass(/provider-rail-item-active/)
+  await expect(homeMenu.locator('.provider-rail-item[data-provider="claude"]')).toHaveClass(/provider-rail-item-locked/)
   const homeSwitchResponse = page.waitForResponse((candidate) =>
     candidate.request().method() === 'POST'
       && new URL(candidate.url()).pathname === `/api/sessions/${sessionId}/model`)
-  await homeMenu.getByRole('option', { name: /Mock GPT Fast/ }).click()
+  await homeMenu.locator('.model-picker-option', { hasText: 'Mock GPT Fast' })
+    .locator('.model-picker-btn').click()
   expect((await homeSwitchResponse).status()).toBe(200)
   const switchedPill = panel.getByRole('button', { name: /GPT Fast/ })
   await expect(switchedPill).toBeVisible()
 
-  // Re-open the picker and confirm the switched model is marked selected.
+  // Re-open the picker and confirm the switched model is marked active.
   await switchedPill.click()
-  const reopenedMenu = panel.getByRole('listbox', { name: 'Codex models' })
+  const reopenedMenu = panel.locator('.model-picker')
   await expect(reopenedMenu).toBeVisible()
-  await expect(reopenedMenu.getByRole('option', { name: /Mock GPT Fast/ }))
-    .toHaveAttribute('aria-selected', 'true')
+  await expect(reopenedMenu.locator('.model-picker-option', { hasText: 'Mock GPT Fast' }))
+    .toHaveClass(/model-picker-option-active/)
   await page.keyboard.press('Escape')
 
   await fs.mkdir(MODEL_PICKER_SCREENSHOT_DIR, { recursive: true })

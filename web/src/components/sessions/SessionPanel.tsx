@@ -9,7 +9,7 @@ import { SessionTerminal } from './SessionTerminal';
 import { SessionDiffView } from './SessionDiffView';
 import { buildSelectionPrefill, displayPathForPrefill } from './diffPrefill';
 import type { SessionSplitView } from './sessionSplitView';
-import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED } from '../common/Icons';
+import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from '../common/Icons';
 import { openPopout } from '@/popout/openPopout';
 import { UserMessagesSummary } from './UserMessagesSummary';
 // PlanPreviewSection replaced by inline plan popover in meta bar
@@ -21,7 +21,7 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
-import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, terminateSession, investigateSession, setSessionEffort, setSessionModel } from '@/api/sessions';
+import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, terminateSession, investigateSession, setSessionEffort, setSessionModel, setCodexSessionModel } from '@/api/sessions';
 import { terminalPrewarm } from '@/api/terminal';
 import { log } from '@/utils/log';
 import { runWhenVisible } from '@/utils/page-visibility';
@@ -34,8 +34,7 @@ import { timeAgo } from '@/utils/time';
 import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
 import { SessionKebabSection } from './SessionKebabSection';
-import { ModelPicker } from './ModelPicker';
-import { CodexModelPicker } from './CodexModelPicker';
+import { ModelPicker, shortCodexModelName } from './ModelPicker';
 import { modelSupportsEffort, SESSION_EFFORTS, SESSION_MODE_LABELS } from '@open-walnut/core';
 import { TaskQuickActions } from './TaskQuickActions';
 import { useFullscreen } from '@/hooks/useFullscreen';
@@ -212,6 +211,33 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
       setSession(prev => prev ? { ...prev, model: prevModel } : prev);
     });
   }, [sessionId, session?.model]);
+
+  // Codex (ACP) model switch — optimistic, revert + notify on failure. Same
+  // contract the retired standalone CodexModelPicker had, now driven from the
+  // shared two-pane picker's codex pane.
+  const handleCodexModelSwitch = useCallback((modelId: string) => {
+    setModelPickerOpen(false);
+    const previous = session?.acpModel;
+    if (modelId === previous) return;
+    setSession(prev => prev ? { ...prev, acpModel: modelId } : prev);
+    setCodexSessionModel(sessionId, modelId).catch((error) => {
+      setSession(prev => prev ? { ...prev, acpModel: previous } : prev);
+      log.error('session-panel', 'codex model switch failed', {
+        sessionId,
+        modelId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      notify({
+        kind: 'operation-error',
+        severity: 'error',
+        title: 'Codex model switch failed',
+        body: error instanceof Error ? error.message : String(error),
+        persistent: false,
+        dedupKey: `codex-model-switch:${sessionId}:${Date.now()}`,
+        sessionId,
+      });
+    });
+  }, [sessionId, session?.acpModel, notify]);
 
   const handleEffortSwitch = useCallback((effort: import('@open-walnut/core').SessionEffort) => {
     setModelPickerOpen(false);
@@ -843,17 +869,20 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
 
   // Model info pill — moved from the header meta row into the composer's
   // controls row (rendered inside both ChatInput controlsSlot mode bars).
-  // Codex sessions get the CodexModelPicker; its menu is re-anchored to open
-  // UPWARD when inside the mode bar (see .session-mode-bar .codex-model-menu).
+  // BOTH engines open the SAME two-pane picker (provider rail | models) —
+  // a Codex session just opens it on the codex pane, with Claude greyed.
   const modelInfoPill = session?.engine === 'codex' ? (
-    <CodexModelPicker
-      sessionId={sessionId}
-      currentModelId={session.acpModel}
-      contextPercent={contextPercent}
-      onModelChange={(acpModel) => {
-        setSession((previous) => previous ? { ...previous, acpModel } : previous);
-      }}
-    />
+    <button
+      type="button"
+      className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill"
+      title="Switch Codex model"
+      onClick={() => setModelPickerOpen((v) => !v)}
+    >
+      {session.acpModel ? shortCodexModelName(session.acpModel) : 'Codex'}
+      {contextPercent != null && (
+        <span className="session-detail-context-pct"> {contextPercent}%</span>
+      )}
+    </button>
   ) : (
     // No rawModel yet ≠ no pill: a todo-launcher quick start (empty first
     // message) idles with a model-less record until its first real turn, and
@@ -1150,19 +1179,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             {session?.lastActiveAt && <span className="session-panel-time">{timeAgo(session.lastActiveAt)}</span>}
             </div>{/* .session-meta-row-2-chips */}
             <div className="session-panel-window-controls">
-              {/* VS Code-style layout toggle: right compartment filled while the
-                  chat column shows. Only meaningful in split view. */}
-              {splitOpen && (
-                <button
-                  className="task-action-btn session-chat-collapse-btn"
-                  onClick={() => setChatCollapsed(!chatCollapsed)}
-                  title={chatCollapsed ? 'Show chat' : 'Hide chat'}
-                  aria-label={chatCollapsed ? 'Show chat' : 'Hide chat'}
-                  aria-expanded={!chatCollapsed}
-                >
-                  {chatCollapsed ? ICON_PANEL_RIGHT : ICON_PANEL_RIGHT_FILLED}
-                </button>
-              )}
               {!loading && session?.taskId && (
                 <button
                   className="task-action-btn session-panel-locate"
@@ -1401,14 +1417,33 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               )}
             </div>
           )}
-          {splitOpen && !chatCollapsed && (
-            <div className="session-panel-chat-resize" {...chatPanel.handleProps} title="Drag to resize chat" />
+          {splitOpen && (
+            chatCollapsed ? (
+              <button
+                className="pane-collapsed-rail pane-rail-right session-chat-collapsed-rail"
+                onClick={() => setChatCollapsed(false)}
+                title="Show chat"
+                aria-label="Show chat"
+                aria-expanded={false}
+              >{ICON_CHEVRON_LEFT}<span className="pane-rail-label">Chat</span></button>
+            ) : (
+              <div className="session-panel-chat-resize" {...chatPanel.handleProps} title="Drag to resize chat" />
+            )
           )}
           <div
             className="session-panel-chat-col"
             ref={splitOpen ? chatPanel.panelRef : undefined}
             style={splitOpen && !chatCollapsed ? { width: chatPanel.width, flex: `0 0 ${chatPanel.width}` } : undefined}
           >
+            {splitOpen && !chatCollapsed && (
+              <button
+                className="pane-collapse-btn pane-collapse-btn-right session-chat-collapse-btn"
+                onClick={() => setChatCollapsed(true)}
+                title="Collapse chat"
+                aria-label="Collapse chat"
+                aria-expanded
+              >{ICON_CHEVRON_RIGHT}</button>
+            )}
         <div className="session-panel-body" ref={bodyRef}>
           <SessionChatHistory
             key={sessionId}
@@ -1556,6 +1591,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               onSwitch={handleModelSwitch}
               onEffortSwitch={handleEffortSwitch}
               onClose={() => setModelPickerOpen(false)}
+              // Live session: engine is a spawn-time fact. The rail shows both
+              // providers but the other one renders greyed + locked (no
+              // onProviderSwitch) — start a new session to change engines.
+              engine={session?.engine === 'codex' ? 'codex' : 'claude'}
+              codexCurrentModelId={session?.acpModel}
+              onCodexSwitch={session?.engine === 'codex' ? handleCodexModelSwitch : undefined}
             />
           )}
         </div>

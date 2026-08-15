@@ -11,11 +11,93 @@ import {
   normalizeSessionModelCatalogId,
 } from '@open-walnut/core';
 import type { SessionEffort, SessionModelCatalogEntry } from '@open-walnut/core';
-import { fetchSessionLiveSettings, fetchSessionModelCatalog } from '@/api/sessions';
-import type { SessionLiveSettings, SessionModelCatalog } from '@/api/sessions';
+import { fetchCodexModelCatalog, fetchSessionLiveSettings, fetchSessionModelCatalog } from '@/api/sessions';
+import type { CodexModelInfo, SessionLiveSettings, SessionModelCatalog } from '@/api/sessions';
 import { useHostModelCatalog, seedHostCatalog } from '@/hooks/useModelCatalog';
 
 const EFFORTS = SESSION_EFFORTS;
+
+// ── Provider rail (the picker's LEFT pane) ──────────────────────────────────
+// One pattern for every session surface: provider | models. On a LIVE session
+// the other provider is greyed out + locked (an engine is a spawn-time fact —
+// switching means a new session); a DRAFT passes onSwitch and both are
+// clickable. Stroke/fill SVGs, no emoji (house rule).
+
+export type ProviderId = 'claude' | 'codex';
+
+const PROVIDER_LABELS: Record<ProviderId, string> = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+};
+
+function ClaudeMark() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="#d97757" aria-hidden>
+      <path d="M12 3l1.2 5.1L17 4.9l-2.2 4.7 5.2-.4-4.5 2.8 4.5 2.8-5.2-.4L17 19.1l-3.8-3.2L12 21l-1.2-5.1L7 19.1l2.2-4.7-5.2.4 4.5-2.8-4.5-2.8 5.2.4L7 4.9l3.8 3.2z" />
+    </svg>
+  );
+}
+
+function CodexMark() {
+  return (
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden>
+      <circle cx="12" cy="12" r="7.5" />
+      <path d="M12 4.5v15M4.9 8.2l14.2 7.6M4.9 15.8l14.2-7.6" />
+    </svg>
+  );
+}
+
+const PROVIDER_ICONS: Record<ProviderId, React.FC> = {
+  claude: ClaudeMark,
+  codex: CodexMark,
+};
+
+export function ProviderRail({ active, onSwitch, lockReason }: {
+  active: ProviderId;
+  /** Called when the user picks the OTHER provider. Omitted = the other
+   *  provider is locked (live session: the engine can't change in place). */
+  onSwitch?: (provider: ProviderId) => void;
+  /** Per-provider lock override — e.g. Codex is local-only, so a remote draft
+   *  locks it even though the draft could otherwise switch. Return a reason
+   *  string to lock that provider, or null to leave it switchable. */
+  lockReason?: (provider: ProviderId) => string | null;
+}) {
+  return (
+    <div className="model-picker-rail" role="tablist" aria-label="Provider">
+      {(Object.keys(PROVIDER_LABELS) as ProviderId[]).map((id) => {
+        const isActive = id === active;
+        const reason = isActive ? null
+          : lockReason?.(id)
+          ?? (onSwitch ? null : `This session runs on ${PROVIDER_LABELS[active]} — start a new session to use ${PROVIDER_LABELS[id]}`);
+        const locked = !isActive && reason !== null;
+        const Icon = PROVIDER_ICONS[id];
+        return (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={isActive}
+            aria-disabled={locked || undefined}
+            className={`provider-rail-item${isActive ? ' provider-rail-item-active' : ''}${locked ? ' provider-rail-item-locked' : ''}`}
+            title={locked ? reason! : PROVIDER_LABELS[id]}
+            data-provider={id}
+            onClick={() => { if (!isActive && !locked) onSwitch?.(id); }}
+          >
+            <Icon />
+            {locked && (
+              <span className="provider-rail-lock" aria-hidden>
+                <svg viewBox="0 0 24 24" width="8" height="8" fill="none" stroke="currentColor" strokeWidth="2.4">
+                  <rect x="5" y="11" width="14" height="9" rx="2" />
+                  <path d="M8 11V7a4 4 0 018 0v4" />
+                </svg>
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 /** Short display form of a full runtime model ID (e.g. "us.anthropic.claude-sonnet-4-6[1m]" → "sonnet-4-6 1M"). */
 function shortModelLabel(raw?: string | null): string {
@@ -33,6 +115,21 @@ function fmtTokens(n?: number | null): string {
   return String(n);
 }
 
+/** "gpt-best" → "GPT Best" — display form of a Codex/ACP model id (moved here
+ *  from the retired CodexModelPicker; the pill label in SessionPanel uses it). */
+export function shortCodexModelName(modelId: string): string {
+  return modelId
+    .replace(/^(?:openai|codex|mock)[.:/_\s-]+/i, '')
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.toLowerCase() === 'gpt'
+      ? 'GPT'
+      : part.toLowerCase() === 'codex'
+        ? 'Codex'
+        : part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
 interface ModelPickerProps {
   currentModel?: string;
   /** Explicit reasoning effort saved for the session; undefined uses the CLI's configured default. */
@@ -46,19 +143,43 @@ interface ModelPickerProps {
   /** Switch model — applied live via apply_flag_settings (no respawn); the NEXT
    *  turn uses the new model. No Now/Next-turn split needed anymore. */
   onSwitch: (model: string) => void;
-  /** Switch reasoning effort (same live apply_flag_settings mechanism). */
-  onEffortSwitch: (effort: SessionEffort) => void;
+  /** Switch reasoning effort (same live apply_flag_settings mechanism).
+   *  Omitted → the effort section is hidden (a DRAFT has no effort field:
+   *  the CLI's own settings decide at spawn). */
+  onEffortSwitch?: (effort: SessionEffort) => void;
   onClose: () => void;
+  /** Which provider's pane is showing. Default 'claude'. */
+  engine?: ProviderId;
+  /** Provider switch (rail click). Passed by DRAFT surfaces only — a live
+   *  session's engine is a spawn-time fact, so live callers omit it and the
+   *  other provider renders greyed + locked. */
+  onProviderSwitch?: (provider: ProviderId) => void;
+  /** Per-provider extra lock (e.g. Codex is local-only → locked on a remote
+   *  draft even though the draft could otherwise switch). */
+  providerLockReason?: (provider: ProviderId) => string | null;
+  /** Codex pane: the session's current ACP model id (record.acpModel). */
+  codexCurrentModelId?: string;
+  /** Codex pane: switch the live session's ACP model. */
+  onCodexSwitch?: (modelId: string) => void;
+  /** DRAFT pane: prepend an "Auto" row (no --model at spawn — the CLI/config
+   *  default decides). Picking it calls onSwitch('') — the draft caller maps
+   *  '' back to undefined. Also hides the catalog's own 'default' row, which
+   *  would duplicate it. */
+  autoRow?: { resolvedLabel: string; active: boolean };
 }
 
-export function ModelPicker({ currentModel, currentEffort, sessionId, host, onSwitch, onEffortSwitch, onClose }: ModelPickerProps) {
+export function ModelPicker({
+  currentModel, currentEffort, sessionId, host, onSwitch, onEffortSwitch, onClose,
+  engine = 'claude', onProviderSwitch, providerLockReason, codexCurrentModelId, onCodexSwitch, autoRow,
+}: ModelPickerProps) {
   // ── LIVE pull: the moment the picker opens, ask the CLI what it's ACTUALLY
   // using (get_settings → applied). Until it answers (or when the session isn't
   // live), fall back to the record props — but never present those as CLI truth.
+  const isCodexPane = engine === 'codex';
   const [liveSettings, setLiveSettings] = React.useState<SessionLiveSettings | null>(null);
   const [pulling, setPulling] = React.useState(false);
   React.useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || isCodexPane) return; // get_settings is a Claude-CLI protocol call
     let cancelled = false;
     setPulling(true);
     fetchSessionLiveSettings(sessionId)
@@ -66,7 +187,29 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, host, onSw
       .catch(() => { /* pull failed → keep record fallback, no claim of truth */ })
       .finally(() => { if (!cancelled) setPulling(false); });
     return () => { cancelled = true; };
-  }, [sessionId]);
+  }, [sessionId, isCodexPane]);
+
+  // ── Codex pane: ACP catalog for a LIVE codex session (onCodexSwitch set).
+  // A codex DRAFT has no catalog to offer — ACP discovers models at session
+  // start — so the pane renders an explanatory row instead (codexModels null).
+  const [codexModels, setCodexModels] = React.useState<CodexModelInfo[] | null>(null);
+  const [codexCurrent, setCodexCurrent] = React.useState<string | undefined>(codexCurrentModelId);
+  const [codexLoading, setCodexLoading] = React.useState(false);
+  React.useEffect(() => { setCodexCurrent(codexCurrentModelId); }, [codexCurrentModelId, sessionId]);
+  React.useEffect(() => {
+    if (!isCodexPane || !sessionId || !onCodexSwitch) return;
+    let cancelled = false;
+    setCodexLoading(true);
+    fetchCodexModelCatalog(sessionId)
+      .then((c) => {
+        if (cancelled) return;
+        setCodexModels(c.models);
+        setCodexCurrent(c.currentModelId);
+      })
+      .catch(() => { if (!cancelled) setCodexModels([]); })
+      .finally(() => { if (!cancelled) setCodexLoading(false); });
+    return () => { cancelled = true; };
+  }, [isCodexPane, sessionId, onCodexSwitch]);
 
   // ── Catalog: instant from the host-level cache (localStorage-seeded, WS-live
   // via useHostModelCatalog — the server pushes session:model-catalog on every
@@ -79,7 +222,7 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, host, onSw
   const hostCatalog = useHostModelCatalog(host);
   const [fetched, setFetched] = React.useState<SessionModelCatalog | null>(null);
   React.useEffect(() => {
-    if (!sessionId || hostCatalog) return; // cache hit → no round-trip needed
+    if (!sessionId || hostCatalog || isCodexPane) return; // cache hit → no round-trip needed
     let cancelled = false;
     fetchSessionModelCatalog(sessionId)
       .then((c) => {
@@ -93,7 +236,7 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, host, onSw
       })
       .catch(() => { /* keep fallback rows — degraded, never broken */ });
     return () => { cancelled = true; };
-  }, [sessionId, hostCatalog]);
+  }, [sessionId, hostCatalog, isCodexPane]);
   const models: SessionModelCatalogEntry[] = hostCatalog?.models ?? fetched?.models ?? sessionModelsAsCatalog();
   const catalogIsLive = !!hostCatalog || fetched?.source === 'cli';
   // NOTE on switch failure: the panel closes the picker on Switch, so staleness
@@ -235,11 +378,68 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, host, onSw
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  return (
-    <div className="model-picker">
+  // ── Codex pane rows (live: ACP catalog; draft: explanatory placeholder).
+  const codexPane = (
+    <>
       <div className="model-picker-header">
         <span className="model-picker-title">Switch Model</span>
-        <span className="model-picker-current">Current: {activeRow?.displayName ?? shortModelLabel(liveModel)}</span>
+        <span className="model-picker-current">
+          Current: {codexCurrent ? shortCodexModelName(codexCurrent) : 'Codex'}
+        </span>
+        <button className="model-picker-close" onClick={onClose} type="button">&times;</button>
+      </div>
+      <div className="model-picker-options">
+        {onCodexSwitch ? (
+          codexLoading ? (
+            <div className="model-picker-status">Loading Codex models…</div>
+          ) : !codexModels || codexModels.length === 0 ? (
+            <div className="model-picker-status">No Codex models reported by this session.</div>
+          ) : (
+            codexModels.map((m) => {
+              const isActive = m.modelId === codexCurrent;
+              return (
+                <div key={m.modelId} className={`model-picker-option${isActive ? ' model-picker-option-active' : ''}`}>
+                  <div className="model-picker-option-name">{m.name}</div>
+                  <div className="model-picker-option-desc">{m.description ?? ''}</div>
+                  {isActive ? (
+                    <div className="model-picker-option-badge">Active</div>
+                  ) : (
+                    <div className="model-picker-option-actions">
+                      <button
+                        className="btn btn-sm model-picker-btn"
+                        type="button"
+                        onClick={() => onCodexSwitch(m.modelId)}
+                      >
+                        Switch
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )
+        ) : (
+          <div className="model-picker-status">
+            Codex models come from ACP discovery when the session starts — the launch uses the Codex default.
+          </div>
+        )}
+      </div>
+    </>
+  );
+
+  return (
+    <div className="model-picker">
+      <ProviderRail active={engine} onSwitch={onProviderSwitch} lockReason={providerLockReason} />
+      <div className="model-picker-pane">
+      {isCodexPane ? codexPane : (<>
+      <div className="model-picker-header">
+        <span className="model-picker-title">Switch Model</span>
+        <span className="model-picker-current">
+          Current: {activeRow?.displayName
+            ?? (autoRow && !liveModel
+              ? (autoRow.resolvedLabel ? `Auto (${autoRow.resolvedLabel})` : 'Auto')
+              : shortModelLabel(liveModel))}
+        </span>
         {sessionId && (
           <button
             className={`model-picker-refresh model-picker-refresh-${refreshState}`}
@@ -364,7 +564,10 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, host, onSw
       )}
 
       {/* Reasoning effort — a session-wide setting, decoupled from which model is picked.
-          Applied live via apply_flag_settings; active chip reflects the CLI's true value. */}
+          Applied live via apply_flag_settings; active chip reflects the CLI's true value.
+          Hidden when the caller has no effort channel (a draft: the CLI's own
+          settings decide at spawn). */}
+      {onEffortSwitch && (
       <div className="model-picker-effort">
         <div className="model-picker-effort-label">
           Reasoning effort
@@ -403,20 +606,36 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, host, onSw
           })}
         </div>
       </div>
+      )}
 
       <div className="model-picker-options">
         {/* Out-of-catalog live model: the session runs something no catalog row
             claims (allowlist tightened mid-session, refusal fallback, resumed
             onto a now-restricted model). Show it truthfully — selected nowhere,
             switchable nowhere — instead of pretending a row is active. */}
-        {liveModel && !activeRow && (
+        {liveModel && !activeRow && !autoRow && (
           <div className="model-picker-option model-picker-option-active" data-testid="picker-out-of-catalog">
             <div className="model-picker-option-name">{shortModelLabel(liveModel)}</div>
             <div className="model-picker-option-desc">Current model — not in this session's selectable catalog</div>
             <div className="model-picker-option-badge">Active</div>
           </div>
         )}
-        {models.map((m) => {
+        {autoRow && (
+          <div className={`model-picker-option${autoRow.active ? ' model-picker-option-active' : ''}`} data-testid="picker-auto-row">
+            <div className="model-picker-option-name">{autoRow.resolvedLabel ? `Auto (${autoRow.resolvedLabel})` : 'Auto'}</div>
+            <div className="model-picker-option-desc">No --model flag — the CLI/config default decides</div>
+            {autoRow.active ? (
+              <div className="model-picker-option-badge">Active</div>
+            ) : (
+              <div className="model-picker-option-actions">
+                <button className="btn btn-sm model-picker-btn" type="button" onClick={() => onSwitch('')}>
+                  Switch
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        {models.filter((m) => !(autoRow && m.value === 'default')).map((m) => {
           const isActive = activeRow?.value === m.value;
           const isRequestedNotApplied = modelMismatch && requestedRow?.value === m.value;
           return (
@@ -481,6 +700,8 @@ export function ModelPicker({ currentModel, currentEffort, sessionId, host, onSw
           Switch
         </button>
       </div>
+      </>)}
+      </div>{/* .model-picker-pane */}
     </div>
   );
 }

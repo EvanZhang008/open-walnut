@@ -2310,33 +2310,6 @@ select {
   background: var(--bg-hover, rgba(127, 127, 127, 0.12));
 }
 
-.codex-model-picker {
-  position: relative;
-  display: inline-flex;
-}
-
-.codex-model-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 80;
-  width: min(280px, calc(100vw - 24px));
-  max-height: 280px;
-  overflow-y: auto;
-  padding: 4px;
-  background: var(--card-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  box-shadow: var(--card-shadow-hover);
-}
-
-.codex-model-menu-status {
-  display: block;
-  padding: 10px;
-  color: var(--fg-muted);
-  font-size: 12px;
-}
-
 /* Codex mode pill dropdown — ChatGPT-parity approval menu: icon column,
    name + description rows, check on the RIGHT, full-access row in warning
    orange. Opens UPWARD (pill sits in the bottom mode bar; downward would
@@ -2439,54 +2412,6 @@ select {
 .session-control-option-danger .session-control-option-description,
 .session-control-option-danger .session-control-option-icon {
   color: var(--warning, #e8833a);
-}
-
-.codex-model-option {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 6px;
-  width: 100%;
-  padding: 7px 8px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--fg-primary);
-  text-align: left;
-  cursor: pointer;
-}
-
-.codex-model-option:hover,
-.codex-model-option-active {
-  background: var(--bg-hover, rgba(127, 127, 127, 0.12));
-}
-
-.codex-model-option:disabled {
-  cursor: wait;
-  opacity: 0.65;
-}
-
-.codex-model-option-check {
-  color: var(--accent);
-  font-weight: 700;
-}
-
-.codex-model-option-copy {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-}
-
-.codex-model-option-name {
-  overflow-wrap: anywhere;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.codex-model-option-description {
-  overflow-wrap: anywhere;
-  color: var(--fg-muted);
-  font-size: 11px;
-  line-height: 1.35;
 }
 
 .session-detail-context-pct {
@@ -16479,8 +16404,96 @@ a.task-kebab-info:hover {
   border-radius: var(--radius-md);
   box-shadow: var(--card-shadow-hover);
   z-index: 60;
-  padding: 12px;
+  /* Two panes: provider rail | model pane. The pane carries the old 12px
+     padding; the picker itself just lays the two out. */
+  padding: 0;
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
   animation: commandPaletteIn 0.15s ease-out;
+}
+
+.model-picker-pane {
+  flex: 1;
+  min-width: 0;
+  padding: 12px;
+}
+
+/* ── Provider rail (left pane): one icon per engine. The active one carries an
+   accent edge; on a live session the other is greyed + locked (engine is a
+   spawn-time fact), on a draft both are clickable. */
+.model-picker-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 8px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-secondary);
+  flex: none;
+}
+
+.provider-rail-item {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg-primary);
+  cursor: pointer;
+}
+
+.provider-rail-item:hover {
+  background: var(--bg-hover, rgba(127, 127, 127, 0.12));
+}
+
+.provider-rail-item-active {
+  background: var(--accent-subtle);
+}
+
+.provider-rail-item-active::after {
+  content: "";
+  position: absolute;
+  right: -8px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.provider-rail-item-locked,
+.provider-rail-item-locked:hover {
+  opacity: 0.35;
+  filter: grayscale(1);
+  cursor: not-allowed;
+  background: transparent;
+}
+
+.provider-rail-lock {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 13px;
+  height: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--fg-muted);
+}
+
+/* Codex pane / empty-state rows */
+.model-picker-status {
+  padding: 10px;
+  font-size: 12px;
+  color: var(--fg-muted);
 }
 
 .model-picker-header {
@@ -18569,18 +18582,82 @@ td.usage-share-col {
 .sfe-btn:disabled:hover { background: var(--bg); }
 .sfe-btn:disabled:active { transform: none; }
 
-/* Tree show/hide — a VS Code-style layout toggle in the toolbar (window
-   glyph, side compartment filled while the pane is visible). Final design
-   after chevrons, rails, and labels all failed discoverability: users know
-   this icon from editors, and a toolbar button has a fixed, findable home.
-   Shared by the Files tab and the Changed tab. */
-.sfe-tree-toggle {
-  flex-shrink: 0;
-  padding: 3px 6px;
+/* ── Pane collapse (shared): Files tree, Changed tree, split chat column ──
+   Design pick 2026-08-13 (option 9), tuned 2026-08-15: slim but SELF-LABELED.
+   A bare hover-only rail was unidentifiable ("就一个杠, 人怎么知道它是这个"),
+   so the collapsed rail always shows its chevron + a vertical text label. */
+.pane-collapsed-rail {
+  flex: 0 0 20px;
+  border: none;
+  padding: 8px 0 0;
+  background: var(--bg-secondary, var(--card-bg));
+  cursor: pointer;
   color: var(--fg-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  transition: background 0.15s, color 0.15s;
 }
-.sfe-tree-toggle:hover { color: var(--fg); }
-.sfe-tree-toggle svg { display: block; }
+.pane-rail-left { border-right: 1px solid var(--border); }
+.pane-rail-right { border-left: 1px solid var(--border); }
+.pane-collapsed-rail:hover {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary, var(--card-bg)));
+  color: var(--accent);
+}
+.pane-collapsed-rail svg { flex: none; }
+/* What this rail restores, spelled out — readable without hovering. */
+.pane-rail-label {
+  writing-mode: vertical-rl;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: inherit;
+  user-select: none;
+}
+
+/* Sticky anchor: the tree pane is its own scroller, so the chevron needs
+   this to stay pinned while rows scroll. Real height (not 0) so the strip is
+   RESERVED — at height:0 the always-visible button sat on top of the first
+   row's "N changed" badge. */
+.pane-collapse-anchor {
+  position: sticky;
+  top: 0;
+  height: 26px;
+  flex: none;
+  z-index: 5;
+  background: inherit;
+}
+/* Visible at rest (border + card background) — the near-transparent version
+   was invisible until hovered, so nobody could find how to collapse. */
+.pane-collapse-btn {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--card-bg);
+  color: var(--fg-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.pane-collapse-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--fg);
+}
+/* Right-side pane (chat column): chevron sits top-LEFT, pointing right. */
+.pane-collapse-btn-right {
+  right: auto;
+  left: 3px;
+}
 
 /* Back / Forward pair: one segmented control, like a browser's. */
 .sfe-nav-group {
@@ -24035,9 +24112,10 @@ a.file-link:hover {
 }
 .session-panel-chat-resize:hover::after { opacity: 0.6; }
 
-/* Chat show/hide is the VS Code-style layout toggle in the header's
-   window-controls row (.session-chat-collapse-btn, a plain .task-action-btn) —
-   no collapsed rail, no floating chevron. */
+/* Chat collapse rail + chevron: visuals come from the shared .pane-collapsed-rail
+   / .pane-collapse-btn classes (see "Pane collapse (shared)"). Only the chat
+   column's stacking context needs pinning here. */
+.session-chat-collapse-btn { z-index: 5; }
 /* When closed, the chat column is a transparent wrapper. */
 .session-panel-chat-col {
   display: contents;
@@ -25643,7 +25721,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .filter-more-menu,
 .cron-menu,
 .agent-menu,
-.codex-model-menu,
 .vd-panel,
 .model-picker,
 .session-fork-popover,
@@ -25669,7 +25746,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   .filter-more-menu,
   .cron-menu,
   .agent-menu,
-  .codex-model-menu,
   .vd-panel,
   .model-picker,
   .session-fork-popover,
@@ -25925,8 +26001,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 /* ── Composer model pill (moved from the session header, 2026-07-25) ──
    Ghost/iOS aesthetic: muted text, hover accent, no grey box. Truncates on
    narrow panels instead of overflowing the controls row. */
-.session-mode-bar .composer-model-pill,
-.session-mode-bar .codex-model-picker .session-detail-model-pill {
+.session-mode-bar .composer-model-pill {
   margin: 0;
   padding: 3px 8px;
   font-weight: 500;
@@ -25938,18 +26013,10 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.session-mode-bar .composer-model-pill:hover,
-.session-mode-bar .codex-model-picker .session-detail-model-pill:hover {
+.session-mode-bar .composer-model-pill:hover {
   background: var(--accent-subtle);
   color: var(--accent);
 }
-/* CodexModelPicker menu opens DOWNWARD in the header; flipped upward when the
-   pill lives in the composer controls row. */
-.session-mode-bar .codex-model-menu {
-  top: auto;
-  bottom: calc(100% + 6px);
-}
-
 /* ── The material (gated): milky bg + blur, hairlines, soft shadow ── */
 @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
 

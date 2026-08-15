@@ -199,7 +199,9 @@ test('pin-tier header "+" opens a draft with that tier preset in the meta row', 
   // still refreshes the model select from that folder's memory. Nothing in the
   // fixture remembers a model, so assert the weaker invariant the DOM exposes —
   // the select stays on Auto rather than being pinned to a stale value.
-  await expect(panel.locator('.draft-model-select')).toHaveValue('')
+  // (The control is a PILL opening the shared two-pane picker now — the chosen
+  // model rides its data-model attribute, '' = Auto.)
+  await expect(panel.locator('.draft-model-select')).toHaveAttribute('data-model', '')
 
   // A tier seed leaves everything else neutral (this is not a project route).
   await expect(draftProjectPill(panel)).toHaveText('Inbox')
