@@ -42,7 +42,7 @@ You are running as a Claude Code session (a \`claude\` CLI process) that Walnut 
 
 - All open tasks: \`curl -s 'localhost:3456/api/tasks?slim=1' | jq '[.tasks[] | select(.phase != "COMPLETE" and .phase != "POST_ACTION_COMPLETE")]'\`
 - One task: \`curl -s localhost:3456/api/tasks/<id>\` — create: \`curl -s -X POST localhost:3456/api/tasks -H 'Content-Type: application/json' -d '{"title":"…","project":"…"}'\`
-- Search everything: \`curl -s 'localhost:3456/api/search?q=<query>'\` — projects: \`curl -s localhost:3456/api/projects\`
+- Search everything: \`curl -s -G localhost:3456/api/search --data-urlencode 'q=<query>' -d slim=1 | jq '.results'\` — always \`slim=1\` (one line per hit) and always \`--data-urlencode\` (bare \`?q=\` breaks on spaces/CJK). Task/session rows carry a \`ref\`; task rows also phase/project; memory rows have neither — their \`id\` is a file path you can Read. Extract fields with jq; NEVER pipe through \`head -c\` (it cuts mid-JSON and drops results). Projects: \`curl -s localhost:3456/api/projects\`
 - "today's tasks" = open tasks that are overdue, due today, or pinned/focus — filter the open-tasks JSON with jq; one curl is enough.
 
 **Paste \`ref\` tags verbatim.** API/MCP results carry \`ref\` tags (e.g. \`<task-ref id="…"/>\`). Copy them into your reply exactly as returned — that is what renders as a clickable pill for the user. Never rewrite, summarize, or invent one.
@@ -60,11 +60,25 @@ You are running as a Claude Code session (a \`claude\` CLI process) that Walnut 
  * `allowedTools` is deliberately left UNDEFINED: the butler runs on the user's
  * own machine and full tool access is today's behavior. Narrowing it is a later
  * polish item, not an MVP requirement.
+ *
+ * `skillsIndex` is Walnut's own skills index (buildSessionSkillsPrompt) — the
+ * caller resolves it (async I/O) so this stays pure. It covers ONLY the sources
+ * no CLI engine auto-discovers (workspace/walnut/shipped skills), never
+ * ~/.claude/skills/, so it composes with — instead of duplicating — whatever the
+ * engine loads natively, and survives a provider switch unchanged.
+ *
+ * `memoryContext` is Walnut's standing-memory block (buildLaneMemoryContext) —
+ * same deal: caller resolves the file I/O, this function just folds it in. It
+ * rides the system prompt precisely so it is ENGINE-NEUTRAL — never delivered
+ * through an engine's own context-file convention (CLAUDE.md, AGENTS.md, …),
+ * which can change name/format outside our control.
  */
-export function butlerProfile(name: string): SessionProfile {
+export function butlerProfile(name: string, skillsIndex?: string, memoryContext?: string): SessionProfile {
+  const skillsSection = skillsIndex?.trim() ? `\n\n${skillsIndex}` : ''
+  const memorySection = memoryContext?.trim() ? `\n\n${memoryContext}` : ''
   return mergeProfiles(
     {
-      systemPrompt: `${buildRoleSection(name)}\n\n${BUTLER_SESSION_ADDENDUM}`,
+      systemPrompt: `${buildRoleSection(name)}\n\n${BUTLER_SESSION_ADDENDUM}${memorySection}${skillsSection}`,
       systemPromptMode: 'replace',
     },
     walnutMcpProfile(),

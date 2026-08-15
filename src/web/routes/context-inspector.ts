@@ -49,7 +49,7 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
     // in-process assembly (which is not what the model sees on this engine). ──
     const engine = resolveAgentEngineProvider(config)
     if (engine === 'claude-code' && (!agentId || agentId === 'general')) {
-      const { butlerLaneKey } = await import('../../core/sessions/butler-lane.js')
+      const { butlerLaneKey, buildLaneMemoryContext, LANE_MEMORY_HEADER } = await import('../../core/sessions/butler-lane.js')
       const { getSessionByLane } = await import('../../core/session-tracker.js')
       const { butlerProfile } = await import('../../core/sessions/profiles.js')
       const { buildSessionSkillsPrompt } = await import('../../core/skill-loader.js')
@@ -59,22 +59,14 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
       const record = await getSessionByLane(lane)
       // No lane yet (first message not sent) → show what the NEXT spawn will feed.
       const profile = record?.profile
-        ?? butlerProfile(config.user.name ?? 'the user', await buildSessionSkillsPrompt().catch(() => ''))
+        ?? butlerProfile(
+          config.user.name ?? 'the user',
+          await buildSessionSkillsPrompt().catch(() => ''),
+          await buildLaneMemoryContext().catch(() => ''),
+        )
       const systemPrompt = profile.systemPrompt ?? ''
       const mcpServers = profile.mcpServers ?? {}
       const lastTurnTokens = getLastTurnTokens(conversationId) ?? 0
-
-      // Memory rides {cwd}/CLAUDE.md @imports (butler-lane.ts ensureLaneClaudeMd)
-      // — show the imported files' CURRENT content, since that is what the next
-      // spawn/resume reads natively.
-      const fsp = await import('node:fs/promises')
-      const pathMod = await import('node:path')
-      const readOr = (p: string) => fsp.readFile(p, 'utf-8').catch(() => '')
-      const [agentsMd, memoryMd, userMd] = await Promise.all([
-        readOr(pathMod.join(WALNUT_HOME, 'AGENTS.md')),
-        readOr(pathMod.join(WALNUT_HOME, 'memory', 'MEMORY.md')),
-        readOr(pathMod.join(WALNUT_HOME, 'memory', 'USER.md')),
-      ])
 
       const modelConfig = {
         model: record?.model ?? record?.cliModel ?? 'claude default',
@@ -84,7 +76,7 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
       const engineNote = [
         '## Engine: Claude Code session',
         '',
-        'Main-AI turns run in a long-lived `claude` CLI session, not the in-process loop. The prompt below is the EXACT `--system-prompt` the session was launched with (full replace, Walnut skills index included). Memory (AGENTS.md / MEMORY.md / USER.md) loads natively through the session cwd\'s CLAUDE.md @imports — shown in their own sections below. Tools and context compaction are owned by the Claude Code CLI itself, exactly like a coding session.',
+        'Main-AI turns run in a long-lived `claude` CLI session, not the in-process loop. The prompt below is the EXACT `--system-prompt` the session was launched with (full replace) — Walnut injects the persona, standing memory, and its skills index into it, engine-neutrally. Tools and context compaction are owned by the session CLI itself, exactly like a coding session.',
         '',
         record
           ? `- Session: \`${record.claudeSessionId}\` (${record.process_status}${record.effectiveEffort || record.effort ? `, effort ${record.effectiveEffort ?? record.effort}` : ''})`
@@ -97,16 +89,18 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
         `- Tools: the CLI's native tool set (Bash, Read, Edit, …)${Object.keys(mcpServers).length > 0 ? ' + MCP tools when the mount is allowed' : ''} — the in-process tool schemas are NOT sent.`,
       ].join('\n')
 
-      // Walnut skills index rides inside the system prompt — split it out so the
-      // Skills section shows the real thing instead of "(owned by the CLI)".
+      // The skills index and the standing-memory block both ride INSIDE the
+      // system prompt — split them out so their sections show the real injected
+      // content (order in the prompt: persona → memory → skills).
       const skillsMarker = '## Walnut skills (mandatory)'
       const skillsIdx = systemPrompt.lastIndexOf(skillsMarker)
       const skillsContent = skillsIdx >= 0 ? systemPrompt.slice(skillsIdx) : ''
+      const memoryIdx = systemPrompt.lastIndexOf(LANE_MEMORY_HEADER)
+      const memoryContent = memoryIdx >= 0
+        ? systemPrompt.slice(memoryIdx, skillsIdx > memoryIdx ? skillsIdx : undefined).trim()
+        : ''
 
       const promptTokens = estimateTokens(systemPrompt)
-      const memoryTokens = estimateTokens(memoryMd)
-      const userTokens = estimateTokens(userMd)
-      const notesTokens = estimateTokens(agentsMd)
       res.json({
         engine: 'claude-code',
         sections: {
@@ -115,14 +109,16 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
           skills: { content: skillsContent, tokens: estimateTokens(skillsContent) },
           compactionSummary: { content: '(Owned by the Claude Code CLI — it auto-compacts its own transcript.)', tokens: 0 },
           taskProjects: { content: '(Not injected — the session reads tasks live via MCP/HTTP when asked.)', tokens: 0 },
-          userProfile: { content: userMd, tokens: userTokens },
-          globalMemory: { content: memoryMd, tokens: memoryTokens },
-          notesContext: { content: agentsMd, tokens: notesTokens },
+          userProfile: { content: '(Injected inside Global Memory below — see the standing-memory block.)', tokens: 0 },
+          globalMemory: { content: memoryContent, tokens: estimateTokens(memoryContent) },
+          notesContext: { content: '(Injected inside Global Memory above — home directory guide section.)', tokens: 0 },
           dailyLogs: { content: '(On demand — memory/daily/<date>.md files the session Reads when asked, not injected per turn.)', tokens: 0 },
           tools: { content: [], tokens: 0, count: 0 },
           apiMessages: { content: [], tokens: 0, count: 0 },
         },
-        totalTokens: promptTokens + memoryTokens + userTokens + notesTokens,
+        // Memory + skills are substrings of the system prompt — promptTokens
+        // already covers everything injected.
+        totalTokens: promptTokens,
       })
       return
     }

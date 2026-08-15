@@ -240,37 +240,53 @@ describe('butlerProfile', () => {
 })
 
 // ══════════════════════════════════════════════════════════════════
-//  4. ensureLaneClaudeMd — memory via {cwd}/CLAUDE.md @imports
+//  4. Standing memory — Walnut-owned injection into the system prompt
+//     (engine-neutral: never delivered via CLAUDE.md/AGENTS.md conventions)
 // ══════════════════════════════════════════════════════════════════
 
-describe('ensureLaneClaudeMd', () => {
-  it('writes the managed CLAUDE.md with memory imports when none exists', async () => {
-    const { ensureLaneClaudeMd } = await import('../../src/core/sessions/butler-lane.js')
-    await ensureLaneClaudeMd()
-    const content = await fsp.readFile(`${WALNUT_HOME}/CLAUDE.md`, 'utf-8')
-    expect(content).toContain('walnut:butler-lane-context')
-    for (const imp of ['@AGENTS.md', '@memory/MEMORY.md', '@memory/USER.md']) {
-      expect(content).toContain(imp)
-    }
+describe('buildLaneMemoryContext', () => {
+  it('folds AGENTS.md + memory/MEMORY.md + memory/USER.md into one prompt block', async () => {
+    const { buildLaneMemoryContext, LANE_MEMORY_HEADER } = await import('../../src/core/sessions/butler-lane.js')
+    await fsp.mkdir(`${WALNUT_HOME}/memory`, { recursive: true })
+    await fsp.writeFile(`${WALNUT_HOME}/AGENTS.md`, '# Vault layout\nPARA method\n', 'utf-8')
+    await fsp.writeFile(`${WALNUT_HOME}/memory/MEMORY.md`, '## Deploy rule\nuse dev:prod\n', 'utf-8')
+    await fsp.writeFile(`${WALNUT_HOME}/memory/USER.md`, '## Name\nAda\n', 'utf-8')
+
+    const block = await buildLaneMemoryContext()
+    expect(block).toContain(LANE_MEMORY_HEADER)
+    expect(block).toContain('PARA method')
+    expect(block).toContain('Deploy rule')
+    expect(block).toContain('## Name')
   })
 
-  it('refreshes a stale MANAGED copy but never touches a user-authored file', async () => {
-    const { ensureLaneClaudeMd } = await import('../../src/core/sessions/butler-lane.js')
-    // Stale managed copy (has the marker, older body) → rewritten.
-    await fsp.writeFile(`${WALNUT_HOME}/CLAUDE.md`, '<!-- walnut:butler-lane-context v1 -->\nold body\n', 'utf-8')
-    await ensureLaneClaudeMd()
-    expect(await fsp.readFile(`${WALNUT_HOME}/CLAUDE.md`, 'utf-8')).toContain('@memory/MEMORY.md')
+  it('missing files contribute nothing and never throw', async () => {
+    const { buildLaneMemoryContext, LANE_MEMORY_HEADER } = await import('../../src/core/sessions/butler-lane.js')
+    const block = await buildLaneMemoryContext()
+    expect(block).toContain(LANE_MEMORY_HEADER)
+    expect(block).not.toContain('### Global memory')
+  })
+
+  it('the lane spawn carries the memory block inside profile.systemPrompt', async () => {
+    await fsp.mkdir(`${WALNUT_HOME}/memory`, { recursive: true })
+    await fsp.writeFile(`${WALNUT_HOME}/memory/MEMORY.md`, '## Marker entry XYZZY\nbody\n', 'utf-8')
+    await getOrCreateLaneSession('general', 'conv-meminject', { firstMessage: 'hi' })
+    expect(started).toHaveLength(1)
+    const prompt = started[0].profile?.systemPrompt ?? ''
+    expect(prompt).toContain('Standing memory (injected by Walnut)')
+    expect(prompt).toContain('Marker entry XYZZY')
+  })
+
+  it('cleanupLaneClaudeMd removes only the retired MANAGED file, never a user-authored one', async () => {
+    const { cleanupLaneClaudeMd } = await import('../../src/core/sessions/butler-lane.js')
+    // Retired managed copy (has the marker) → removed.
+    await fsp.writeFile(`${WALNUT_HOME}/CLAUDE.md`, '<!-- walnut:butler-lane-context v1 -->\nold imports\n', 'utf-8')
+    await cleanupLaneClaudeMd()
+    await expect(fsp.readFile(`${WALNUT_HOME}/CLAUDE.md`, 'utf-8')).rejects.toThrow()
 
     // User-authored file (no marker) → byte-identical after the call.
     const userFile = '# My own instructions\ndo not touch\n'
     await fsp.writeFile(`${WALNUT_HOME}/CLAUDE.md`, userFile, 'utf-8')
-    await ensureLaneClaudeMd()
+    await cleanupLaneClaudeMd()
     expect(await fsp.readFile(`${WALNUT_HOME}/CLAUDE.md`, 'utf-8')).toBe(userFile)
-  })
-
-  it('is invoked by lane resolution (spawn path)', async () => {
-    await getOrCreateLaneSession('general', 'conv-claudemd', { firstMessage: 'hi' })
-    const content = await fsp.readFile(`${WALNUT_HOME}/CLAUDE.md`, 'utf-8')
-    expect(content).toContain('walnut:butler-lane-context')
   })
 })

@@ -216,48 +216,60 @@ export function getOrCreateLaneSession(
 }
 
 /**
- * Marker line identifying the lane-managed CLAUDE.md in WALNUT_HOME. A file
- * without it is the USER's and is never touched.
+ * Header marking the Walnut-injected standing-memory block inside the lane's
+ * system prompt. The inspector splits on it for display.
  */
-const LANE_CLAUDE_MD_MARKER = '<!-- walnut:butler-lane-context v1 -->';
-
-const LANE_CLAUDE_MD = `${LANE_CLAUDE_MD_MARKER}
-# Main AI home directory
-
-Walnut's persistent memory loads below via imports — treat it as standing
-context, exactly like the old per-turn memory sections.
-
-@AGENTS.md
-@memory/MEMORY.md
-@memory/USER.md
-
-Daily activity logs live in memory/daily/<date>.md — read recent ones on
-demand when the user asks "what happened / what did I do".
-`;
+export const LANE_MEMORY_HEADER = '## Standing memory (injected by Walnut)';
 
 /**
- * Make the CLI load Walnut's memory natively: `--system-prompt` REPLACES the
- * system prompt but Claude Code still reads {cwd}/CLAUDE.md (verified by probe),
- * and @imports resolve from it. The old in-process engine injected MEMORY.md /
- * USER.md / notes context into every turn; this file is the lane engine's
- * equivalent — written once, refreshed when OUR managed copy drifts, and a
- * user-authored CLAUDE.md (no marker) is left strictly alone.
+ * Fold Walnut's persistent memory into ONE engine-neutral prompt block.
  *
- * Never throws: a lane that can't get the file still answers.
+ * Deliberately NOT delivered via any engine's context-file convention
+ * (CLAUDE.md @imports, AGENTS.md discovery, …): those are per-engine file
+ * formats that can change name or shape under us. The memory lives in Walnut's
+ * own files and Walnut itself injects the content into the profile's system
+ * prompt — identical for claude, codex, or any future lane engine. Edits to the
+ * files land on the next cold resume (same cadence as persona drift repair).
+ *
+ * Never throws — a missing file contributes nothing.
  */
-export async function ensureLaneClaudeMd(homeDir: string = WALNUT_HOME): Promise<void> {
+export async function buildLaneMemoryContext(homeDir: string = WALNUT_HOME): Promise<string> {
+  const readOr = async (rel: string): Promise<string> => {
+    try { return (await fs.readFile(path.join(homeDir, rel), 'utf-8')).trim(); } catch { return ''; }
+  };
+  const [agentsMd, memoryMd, userMd] = await Promise.all([
+    readOr('AGENTS.md'),
+    readOr('memory/MEMORY.md'),
+    readOr('memory/USER.md'),
+  ]);
+  const parts = [
+    LANE_MEMORY_HEADER,
+    'Walnut injects this at session start — standing context, the same role the old per-turn memory sections played. The live files under your working directory are the source of truth; your edits to them are picked up on the next session start.',
+  ];
+  if (agentsMd) parts.push(`### Home directory guide (AGENTS.md)\n\n${agentsMd}`);
+  if (memoryMd) parts.push(`### Global memory (memory/MEMORY.md)\n\n${memoryMd}`);
+  if (userMd) parts.push(`### User profile (memory/USER.md)\n\n${userMd}`);
+  parts.push('Daily activity logs live in memory/daily/<date>.md — Read recent ones on demand when the user asks "what happened / what did I do".');
+  return parts.join('\n\n');
+}
+
+/** Marker of the retired lane-managed CLAUDE.md (memory used to ride @imports). */
+const LANE_CLAUDE_MD_MARKER = '<!-- walnut:butler-lane-context v1 -->';
+
+/**
+ * Remove the previously-managed {cwd}/CLAUDE.md. Memory now rides the profile
+ * injection above; leaving the old file would double-feed claude-engine lanes.
+ * Marker-guarded — a user-authored CLAUDE.md is never touched. Never throws.
+ */
+export async function cleanupLaneClaudeMd(homeDir: string = WALNUT_HOME): Promise<void> {
   const file = path.join(homeDir, 'CLAUDE.md');
   try {
     const current = await fs.readFile(file, 'utf-8').catch(() => null);
-    if (current === LANE_CLAUDE_MD) return;
-    if (current !== null && !current.includes(LANE_CLAUDE_MD_MARKER)) {
-      log.session.info('butler lane: user-authored CLAUDE.md present, leaving it alone', { file });
-      return;
-    }
-    await fs.writeFile(file, LANE_CLAUDE_MD, 'utf-8');
-    log.session.info('butler lane: managed CLAUDE.md written', { file, refreshed: current !== null });
+    if (current === null || !current.includes(LANE_CLAUDE_MD_MARKER)) return;
+    await fs.rm(file, { force: true });
+    log.session.info('butler lane: retired managed CLAUDE.md removed (memory now injected via profile)', { file });
   } catch (err) {
-    log.session.warn('butler lane: ensuring CLAUDE.md failed; lane runs without memory imports', {
+    log.session.warn('butler lane: removing retired CLAUDE.md failed', {
       file, error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -270,16 +282,18 @@ async function resolveLane(
   firstMessage: string,
 ): Promise<LaneSession> {
   const config = await getConfig();
-  // Memory reaches the model through {cwd}/CLAUDE.md @imports (native CLI
-  // loading) — do this for EXISTING lanes too: the file is read at spawn, so a
-  // refresh lands on the next cold resume, same cadence as profile drift.
-  await ensureLaneClaudeMd();
+  // One-time cleanup of the retired CLAUDE.md delivery path (see
+  // cleanupLaneClaudeMd) — memory now rides the profile injection below.
+  await cleanupLaneClaudeMd();
   // Walnut's own skills (workspace / ~/.open-walnut/skills / shipped) — no CLI
   // engine ever discovers these, so the lane prompt carries the index itself.
   // ~/.claude/skills is excluded (Claude Code loads it natively). Failure is
   // non-fatal: a lane without the index still answers.
   const skillsIndex = await buildSessionSkillsPrompt().catch(() => '');
-  const profile = butlerProfile(config.user?.name ?? 'the user', skillsIndex);
+  // Standing memory — Walnut-owned injection, engine-neutral (see
+  // buildLaneMemoryContext). Rides the SAME profile as the persona.
+  const memoryContext = await buildLaneMemoryContext().catch(() => '');
+  const profile = butlerProfile(config.user?.name ?? 'the user', skillsIndex, memoryContext);
   // Chat latency matters more than reasoning depth here. Without an explicit
   // effort the CLI inherits the user's global settings.json effortLevel (often
   // xhigh, tuned for coding sessions) — measured 100s+ for "what tasks do I have

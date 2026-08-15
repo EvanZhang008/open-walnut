@@ -167,9 +167,9 @@ describe('GET /api/context', () => {
     // Skills ARE fed on this engine — the walnut skills index rides inside the
     // system prompt, and the section splits it out for display.
     expect(res.body.sections.skills.content).toContain('Walnut skills');
-    // Memory sections show the CLAUDE.md @import files' current content
-    // (empty in this fixture, but the fields must exist and be strings).
-    expect(typeof res.body.sections.globalMemory.content).toBe('string');
-    expect(typeof res.body.sections.userProfile.content).toBe('string');
+    // Standing memory rides INSIDE the system prompt too (engine-neutral
+    // injection) — the Global Memory section splits that block out.
+    expect(res.body.sections.globalMemory.content).toContain('Standing memory (injected by Walnut)');
+    expect(role).toContain('Standing memory (injected by Walnut)');
   });
 });
