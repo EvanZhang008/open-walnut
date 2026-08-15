@@ -24039,27 +24039,35 @@ a.file-link:hover {
   flex-direction: column;
   overflow: hidden;
   position: relative;
-  /* Always-visible separator between the main (files/diff/terminal) area and
-     the chat — the drag handle itself stays transparent at rest. */
-  border-left: 1px solid var(--border);
+  /* No border-left: the 1px drag handle (.session-panel-chat-resize) IS the
+     separator now — a border here would double it into a 2px line. */
 }
 /* When the chat is collapsed, the diff column takes the whole width. */
 .session-panel-split.is-chat-collapsed .session-panel-chat-col {
   display: none !important;
 }
 
-/* Drag handle between the diff and the chat column. Thin + transparent at
-   rest (matches .todo-pinned-splitter / .session-resize-handle elsewhere) —
-   only the centered ::after pill reveals on hover, so it doesn't read as a
-   permanent thick bar down the middle of the panel. */
+/* Drag handle between the diff and the chat column. VISUALLY a 1px hairline
+   (the 6px transparent version read as a thick white band cutting the
+   full-width bar in two); the grab zone stays comfortable via the ::before
+   overlay, which hangs over both neighbours without taking layout space. */
 .session-panel-chat-resize {
-  flex: 0 0 6px;
+  flex: 0 0 1px;
   cursor: col-resize;
   position: relative;
-  background: transparent;
+  background: var(--border);
   transition: background 0.15s;
 }
-.session-panel-chat-resize:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+.session-panel-chat-resize::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  right: -3px;
+  cursor: col-resize;
+}
+.session-panel-chat-resize:hover { background: color-mix(in srgb, var(--accent) 45%, var(--border)); }
 
 .session-panel-chat-resize::after {
   content: '';
