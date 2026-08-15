@@ -51,6 +51,9 @@ interface SessionDiffViewProps {
    *  and SENDS it to this session's main agent. When absent, falls back to
    *  onSelectCode (prefill only). Returns true if the send was accepted. */
   onComment?: (message: string) => boolean | void | Promise<boolean | void>;
+  /** Chat segment of the full-width bar (the panel's chat toggle) — see
+   *  SessionFileExplorer.barRightSlot. */
+  barRightSlot?: ReactNode;
 }
 
 /** An in-progress inline comment anchored to a line range within one file. */
@@ -985,7 +988,7 @@ function CompareHelp({ base }: { base: SessionDiffBase }) {
 
 // ── Main view ─────────────────────────────────────────────────────────────────
 
-export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCode, onComment }: SessionDiffViewProps) {
+export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCode, onComment, barRightSlot }: SessionDiffViewProps) {
   const [data, setData] = useState<SessionChangesResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1360,6 +1363,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
             {ICON_REFRESH}
           </button>
         </div>
+        {barRightSlot}
       </div>
 
       {empty ? (

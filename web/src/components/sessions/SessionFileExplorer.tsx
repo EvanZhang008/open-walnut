@@ -12,7 +12,7 @@
  *
  * Expanded-dir state persists in localStorage, keyed per host + resolved root.
  */
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { fetchDirList, downloadFileUrl, type DirEntry } from '@/api/files';
@@ -56,6 +56,12 @@ interface SessionFileExplorerProps {
    * → no pill; the standalone FileViewer overlay has no chat input to prefill.
    */
   onSelectCode?: (filePath: string, line: number | undefined, code: string) => void;
+  /**
+   * The chat segment of the full-width bar. In split view the panel passes its
+   * chat toggle here so the ONE bar reads: [tree toggle] nav … | chat [toggle]
+   * — both layout controls live on the same bar, at its two corners.
+   */
+  barRightSlot?: ReactNode;
 }
 
 interface TreeNode {
@@ -119,7 +125,7 @@ function lastSegment(p: string): string {
   return trimmed.slice(trimmed.lastIndexOf('/') + 1) || trimmed;
 }
 
-export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryScope, onSelectCode }: SessionFileExplorerProps) {
+export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryScope, onSelectCode, barRightSlot }: SessionFileExplorerProps) {
   const [root, setRoot] = useState<string>(cwd || '~');
   const [showHidden, setShowHidden] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -730,6 +736,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
             <span>Hidden</span>
           </label>
         </div>
+        {barRightSlot}
       </div>
 
       <div className="session-file-explorer-body">

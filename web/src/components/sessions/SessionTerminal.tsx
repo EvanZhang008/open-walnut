@@ -17,7 +17,7 @@
  * NO_DTACH result and we render an install-hint card instead of mounting xterm.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -37,9 +37,12 @@ interface SessionTerminalProps {
    * modal — used by the session full-screen split's left column.
    */
   embedded?: boolean;
+  /** Chat segment of the full-width bar (the panel's chat toggle) — see
+   *  SessionFileExplorer.barRightSlot. Embedded mode only. */
+  barRightSlot?: ReactNode;
 }
 
-export function SessionTerminal({ sessionId, label, host, onClose, embedded = false }: SessionTerminalProps) {
+export function SessionTerminal({ sessionId, label, host, onClose, embedded = false, barRightSlot }: SessionTerminalProps) {
   const confirm = useConfirm();
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -187,6 +190,7 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
                 &#x2715;
               </button>
             )}
+            {barRightSlot}
           </div>
         </div>
 

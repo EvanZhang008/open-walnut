@@ -9,7 +9,7 @@ import { SessionTerminal } from './SessionTerminal';
 import { SessionDiffView } from './SessionDiffView';
 import { buildSelectionPrefill, displayPathForPrefill } from './diffPrefill';
 import type { SessionSplitView } from './sessionSplitView';
-import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from '../common/Icons';
+import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED } from '../common/Icons';
 import { openPopout } from '@/popout/openPopout';
 import { UserMessagesSummary } from './UserMessagesSummary';
 // PlanPreviewSection replaced by inline plan popover in meta bar
@@ -1384,65 +1384,84 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
         <div className={`session-panel-split${splitOpen ? ' is-changed-open' : ''}${splitOpen && chatCollapsed ? ' is-chat-collapsed' : ''}`}>
           {splitOpen && sessionId && (
             <div className="session-panel-diff-col">
-              {activeView === 'changed' && (
-                <SessionDiffView sessionId={sessionId} sessionCwd={session?.cwd} sessionHost={session?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} />
-              )}
-              {activeView === 'files' && (
-                <SessionFileExplorer
-                  cwd={fileViewTarget?.path ?? session?.cwd}
-                  host={session?.host}
-                  sessionId={sessionId}
-                  initialLine={fileViewTarget?.line}
-                  // ONE memory key for both ways in, and one PER SESSION. `cwd`
-                  // above differs per entry (chat file click → the file's parent
-                  // dir; Files chip → session cwd), so a root-keyed "last file
-                  // read" never matched across them. Keyed on the session id, not
-                  // the cwd: sessions are fully isolated, and two sessions in the
-                  // same repo share a cwd — that leaked one's open file into the
-                  // other. The session id is unique by construction.
-                  memoryScope={sessionScope(sessionId)}
-                  // Same sink the Changed tab uses — a quote from a whole file and
-                  // a quote from a diff compose the identical prefill.
-                  onSelectCode={handleSelectCode}
-                />
-              )}
-              {activeView === 'terminal' && (
-                <SessionTerminal
-                  sessionId={sessionId}
-                  label={session?.cwd ?? session?.host ?? 'Terminal'}
-                  host={session?.host}
-                  onClose={() => toggleView('terminal')}
-                  embedded
-                />
-              )}
+              {(() => {
+                // Chat toggle while the chat is COLLAPSED: parks at the far right
+                // of the left view's toolbar, so the (now full-width) bar keeps
+                // both layout controls at its two corners. While the chat is open
+                // the toggle lives in the chat column's own bar segment below.
+                const chatBarSlot = chatCollapsed ? (
+                  <button
+                    type="button"
+                    className="sfe-btn sfe-tree-toggle session-chat-collapse-btn"
+                    onClick={() => setChatCollapsed(false)}
+                    title="Show chat"
+                    aria-label="Show chat"
+                    aria-expanded={false}
+                  >{ICON_PANEL_RIGHT}</button>
+                ) : null;
+                return (
+                  <>
+                    {activeView === 'changed' && (
+                      <SessionDiffView sessionId={sessionId} sessionCwd={session?.cwd} sessionHost={session?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} barRightSlot={chatBarSlot} />
+                    )}
+                    {activeView === 'files' && (
+                      <SessionFileExplorer
+                        cwd={fileViewTarget?.path ?? session?.cwd}
+                        host={session?.host}
+                        sessionId={sessionId}
+                        initialLine={fileViewTarget?.line}
+                        // ONE memory key for both ways in, and one PER SESSION. `cwd`
+                        // above differs per entry (chat file click → the file's parent
+                        // dir; Files chip → session cwd), so a root-keyed "last file
+                        // read" never matched across them. Keyed on the session id, not
+                        // the cwd: sessions are fully isolated, and two sessions in the
+                        // same repo share a cwd — that leaked one's open file into the
+                        // other. The session id is unique by construction.
+                        memoryScope={sessionScope(sessionId)}
+                        // Same sink the Changed tab uses — a quote from a whole file and
+                        // a quote from a diff compose the identical prefill.
+                        onSelectCode={handleSelectCode}
+                        barRightSlot={chatBarSlot}
+                      />
+                    )}
+                    {activeView === 'terminal' && (
+                      <SessionTerminal
+                        sessionId={sessionId}
+                        label={session?.cwd ?? session?.host ?? 'Terminal'}
+                        host={session?.host}
+                        onClose={() => toggleView('terminal')}
+                        embedded
+                        barRightSlot={chatBarSlot}
+                      />
+                    )}
+                  </>
+                );
+              })()}
             </div>
           )}
-          {splitOpen && (
-            chatCollapsed ? (
-              <button
-                className="pane-collapsed-rail pane-rail-right session-chat-collapsed-rail"
-                onClick={() => setChatCollapsed(false)}
-                title="Show chat"
-                aria-label="Show chat"
-                aria-expanded={false}
-              >{ICON_CHEVRON_LEFT}<span className="pane-rail-label">Chat</span></button>
-            ) : (
-              <div className="session-panel-chat-resize" {...chatPanel.handleProps} title="Drag to resize chat" />
-            )
+          {splitOpen && !chatCollapsed && (
+            <div className="session-panel-chat-resize" {...chatPanel.handleProps} title="Drag to resize chat" />
           )}
           <div
             className="session-panel-chat-col"
             ref={splitOpen ? chatPanel.panelRef : undefined}
             style={splitOpen && !chatCollapsed ? { width: chatPanel.width, flex: `0 0 ${chatPanel.width}` } : undefined}
           >
+            {/* The chat's own segment of the full-width bar: the left view's
+                toolbar + this strip read as ONE bar split by the column divider,
+                with the two layout toggles at the bar's two corners. */}
             {splitOpen && !chatCollapsed && (
-              <button
-                className="pane-collapse-btn pane-collapse-btn-right session-chat-collapse-btn"
-                onClick={() => setChatCollapsed(true)}
-                title="Collapse chat"
-                aria-label="Collapse chat"
-                aria-expanded
-              >{ICON_CHEVRON_RIGHT}</button>
+              <div className="session-chat-bar">
+                <span className="session-chat-bar-title">Chat</span>
+                <button
+                  type="button"
+                  className="sfe-btn sfe-tree-toggle session-chat-collapse-btn"
+                  onClick={() => setChatCollapsed(true)}
+                  title="Hide chat"
+                  aria-label="Hide chat"
+                  aria-expanded
+                >{ICON_PANEL_RIGHT_FILLED}</button>
+              </div>
             )}
         <div className="session-panel-body" ref={bodyRef}>
           <SessionChatHistory
