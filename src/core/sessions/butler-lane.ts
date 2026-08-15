@@ -21,11 +21,14 @@
  */
 
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
 import { bus, EventNames } from '../event-bus.js';
 import { getConfig } from '../config-manager.js';
 import { getSessionByLane, createSessionRecord } from '../session-tracker.js';
 import { butlerProfile } from './profiles.js';
+import { buildSessionSkillsPrompt } from '../skill-loader.js';
 import { log } from '../../logging/index.js';
 
 /** The lane key a butler conversation's session is bound to. */
@@ -212,6 +215,54 @@ export function getOrCreateLaneSession(
   return promise;
 }
 
+/**
+ * Marker line identifying the lane-managed CLAUDE.md in WALNUT_HOME. A file
+ * without it is the USER's and is never touched.
+ */
+const LANE_CLAUDE_MD_MARKER = '<!-- walnut:butler-lane-context v1 -->';
+
+const LANE_CLAUDE_MD = `${LANE_CLAUDE_MD_MARKER}
+# Main AI home directory
+
+Walnut's persistent memory loads below via imports — treat it as standing
+context, exactly like the old per-turn memory sections.
+
+@AGENTS.md
+@memory/MEMORY.md
+@memory/USER.md
+
+Daily activity logs live in memory/daily/<date>.md — read recent ones on
+demand when the user asks "what happened / what did I do".
+`;
+
+/**
+ * Make the CLI load Walnut's memory natively: `--system-prompt` REPLACES the
+ * system prompt but Claude Code still reads {cwd}/CLAUDE.md (verified by probe),
+ * and @imports resolve from it. The old in-process engine injected MEMORY.md /
+ * USER.md / notes context into every turn; this file is the lane engine's
+ * equivalent — written once, refreshed when OUR managed copy drifts, and a
+ * user-authored CLAUDE.md (no marker) is left strictly alone.
+ *
+ * Never throws: a lane that can't get the file still answers.
+ */
+export async function ensureLaneClaudeMd(homeDir: string = WALNUT_HOME): Promise<void> {
+  const file = path.join(homeDir, 'CLAUDE.md');
+  try {
+    const current = await fs.readFile(file, 'utf-8').catch(() => null);
+    if (current === LANE_CLAUDE_MD) return;
+    if (current !== null && !current.includes(LANE_CLAUDE_MD_MARKER)) {
+      log.session.info('butler lane: user-authored CLAUDE.md present, leaving it alone', { file });
+      return;
+    }
+    await fs.writeFile(file, LANE_CLAUDE_MD, 'utf-8');
+    log.session.info('butler lane: managed CLAUDE.md written', { file, refreshed: current !== null });
+  } catch (err) {
+    log.session.warn('butler lane: ensuring CLAUDE.md failed; lane runs without memory imports', {
+      file, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 async function resolveLane(
   lane: string,
   agentId: string,
@@ -219,7 +270,16 @@ async function resolveLane(
   firstMessage: string,
 ): Promise<LaneSession> {
   const config = await getConfig();
-  const profile = butlerProfile(config.user?.name ?? 'the user');
+  // Memory reaches the model through {cwd}/CLAUDE.md @imports (native CLI
+  // loading) — do this for EXISTING lanes too: the file is read at spawn, so a
+  // refresh lands on the next cold resume, same cadence as profile drift.
+  await ensureLaneClaudeMd();
+  // Walnut's own skills (workspace / ~/.open-walnut/skills / shipped) — no CLI
+  // engine ever discovers these, so the lane prompt carries the index itself.
+  // ~/.claude/skills is excluded (Claude Code loads it natively). Failure is
+  // non-fatal: a lane without the index still answers.
+  const skillsIndex = await buildSessionSkillsPrompt().catch(() => '');
+  const profile = butlerProfile(config.user?.name ?? 'the user', skillsIndex);
   // Chat latency matters more than reasoning depth here. Without an explicit
   // effort the CLI inherits the user's global settings.json effortLevel (often
   // xhigh, tuned for coding sessions) — measured 100s+ for "what tasks do I have

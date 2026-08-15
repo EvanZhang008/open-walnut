@@ -164,6 +164,12 @@ describe('GET /api/context', () => {
     // In-process tool schemas / message history must NOT be presented as fed.
     expect(res.body.sections.tools.count).toBe(0);
     expect(res.body.sections.apiMessages.count).toBe(0);
-    expect(res.body.sections.skills.tokens).toBe(0);
+    // Skills ARE fed on this engine — the walnut skills index rides inside the
+    // system prompt, and the section splits it out for display.
+    expect(res.body.sections.skills.content).toContain('Walnut skills');
+    // Memory sections show the CLAUDE.md @import files' current content
+    // (empty in this fixture, but the fields must exist and be strings).
+    expect(typeof res.body.sections.globalMemory.content).toBe('string');
+    expect(typeof res.body.sections.userProfile.content).toBe('string');
   });
 });

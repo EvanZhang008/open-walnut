@@ -52,15 +52,29 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
       const { butlerLaneKey } = await import('../../core/sessions/butler-lane.js')
       const { getSessionByLane } = await import('../../core/session-tracker.js')
       const { butlerProfile } = await import('../../core/sessions/profiles.js')
+      const { buildSessionSkillsPrompt } = await import('../../core/skill-loader.js')
       const { getLastTurnTokens } = await import('../../core/token-truth.js')
 
       const lane = butlerLaneKey(agentId ?? 'general', conversationId)
       const record = await getSessionByLane(lane)
       // No lane yet (first message not sent) → show what the NEXT spawn will feed.
-      const profile = record?.profile ?? butlerProfile(config.user.name ?? 'the user')
+      const profile = record?.profile
+        ?? butlerProfile(config.user.name ?? 'the user', await buildSessionSkillsPrompt().catch(() => ''))
       const systemPrompt = profile.systemPrompt ?? ''
       const mcpServers = profile.mcpServers ?? {}
       const lastTurnTokens = getLastTurnTokens(conversationId) ?? 0
+
+      // Memory rides {cwd}/CLAUDE.md @imports (butler-lane.ts ensureLaneClaudeMd)
+      // — show the imported files' CURRENT content, since that is what the next
+      // spawn/resume reads natively.
+      const fsp = await import('node:fs/promises')
+      const pathMod = await import('node:path')
+      const readOr = (p: string) => fsp.readFile(p, 'utf-8').catch(() => '')
+      const [agentsMd, memoryMd, userMd] = await Promise.all([
+        readOr(pathMod.join(WALNUT_HOME, 'AGENTS.md')),
+        readOr(pathMod.join(WALNUT_HOME, 'memory', 'MEMORY.md')),
+        readOr(pathMod.join(WALNUT_HOME, 'memory', 'USER.md')),
+      ])
 
       const modelConfig = {
         model: record?.model ?? record?.cliModel ?? 'claude default',
@@ -70,7 +84,7 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
       const engineNote = [
         '## Engine: Claude Code session',
         '',
-        'Main-AI turns run in a long-lived `claude` CLI session, not the in-process loop. The prompt below is the EXACT `--system-prompt` the session was launched with (full replace). Everything else — tools, skill discovery, memory files under its cwd, and context compaction — is owned by the Claude Code CLI itself, exactly like a coding session.',
+        'Main-AI turns run in a long-lived `claude` CLI session, not the in-process loop. The prompt below is the EXACT `--system-prompt` the session was launched with (full replace, Walnut skills index included). Memory (AGENTS.md / MEMORY.md / USER.md) loads natively through the session cwd\'s CLAUDE.md @imports — shown in their own sections below. Tools and context compaction are owned by the Claude Code CLI itself, exactly like a coding session.',
         '',
         record
           ? `- Session: \`${record.claudeSessionId}\` (${record.process_status}${record.effectiveEffort || record.effort ? `, effort ${record.effectiveEffort ?? record.effort}` : ''})`
@@ -83,23 +97,32 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
         `- Tools: the CLI's native tool set (Bash, Read, Edit, …)${Object.keys(mcpServers).length > 0 ? ' + MCP tools when the mount is allowed' : ''} — the in-process tool schemas are NOT sent.`,
       ].join('\n')
 
+      // Walnut skills index rides inside the system prompt — split it out so the
+      // Skills section shows the real thing instead of "(owned by the CLI)".
+      const skillsMarker = '## Walnut skills (mandatory)'
+      const skillsIdx = systemPrompt.lastIndexOf(skillsMarker)
+      const skillsContent = skillsIdx >= 0 ? systemPrompt.slice(skillsIdx) : ''
+
       const promptTokens = estimateTokens(systemPrompt)
+      const memoryTokens = estimateTokens(memoryMd)
+      const userTokens = estimateTokens(userMd)
+      const notesTokens = estimateTokens(agentsMd)
       res.json({
         engine: 'claude-code',
         sections: {
           modelConfig: { content: modelConfig, tokens: 0 },
           roleAndRules: { content: engineNote + '\n\n---\n\n' + systemPrompt, tokens: promptTokens },
-          skills: { content: '(Owned by the Claude Code CLI — it discovers skills itself; the in-process skills index is not injected.)', tokens: 0 },
+          skills: { content: skillsContent, tokens: estimateTokens(skillsContent) },
           compactionSummary: { content: '(Owned by the Claude Code CLI — it auto-compacts its own transcript.)', tokens: 0 },
           taskProjects: { content: '(Not injected — the session reads tasks live via MCP/HTTP when asked.)', tokens: 0 },
-          userProfile: { content: '(Not injected per turn — memory lives in files under the session cwd.)', tokens: 0 },
-          globalMemory: { content: '(Not injected per turn — memory lives in files under the session cwd.)', tokens: 0 },
-          notesContext: { content: '', tokens: 0 },
-          dailyLogs: { content: '', tokens: 0 },
+          userProfile: { content: userMd, tokens: userTokens },
+          globalMemory: { content: memoryMd, tokens: memoryTokens },
+          notesContext: { content: agentsMd, tokens: notesTokens },
+          dailyLogs: { content: '(On demand — memory/daily/<date>.md files the session Reads when asked, not injected per turn.)', tokens: 0 },
           tools: { content: [], tokens: 0, count: 0 },
           apiMessages: { content: [], tokens: 0, count: 0 },
         },
-        totalTokens: promptTokens,
+        totalTokens: promptTokens + memoryTokens + userTokens + notesTokens,
       })
       return
     }

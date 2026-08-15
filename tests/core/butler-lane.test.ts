@@ -238,3 +238,39 @@ describe('butlerProfile', () => {
     expect(prompt).toContain('coordinator, not an executor')
   })
 })
+
+// ══════════════════════════════════════════════════════════════════
+//  4. ensureLaneClaudeMd — memory via {cwd}/CLAUDE.md @imports
+// ══════════════════════════════════════════════════════════════════
+
+describe('ensureLaneClaudeMd', () => {
+  it('writes the managed CLAUDE.md with memory imports when none exists', async () => {
+    const { ensureLaneClaudeMd } = await import('../../src/core/sessions/butler-lane.js')
+    await ensureLaneClaudeMd()
+    const content = await fsp.readFile(`${WALNUT_HOME}/CLAUDE.md`, 'utf-8')
+    expect(content).toContain('walnut:butler-lane-context')
+    for (const imp of ['@AGENTS.md', '@memory/MEMORY.md', '@memory/USER.md']) {
+      expect(content).toContain(imp)
+    }
+  })
+
+  it('refreshes a stale MANAGED copy but never touches a user-authored file', async () => {
+    const { ensureLaneClaudeMd } = await import('../../src/core/sessions/butler-lane.js')
+    // Stale managed copy (has the marker, older body) → rewritten.
+    await fsp.writeFile(`${WALNUT_HOME}/CLAUDE.md`, '<!-- walnut:butler-lane-context v1 -->\nold body\n', 'utf-8')
+    await ensureLaneClaudeMd()
+    expect(await fsp.readFile(`${WALNUT_HOME}/CLAUDE.md`, 'utf-8')).toContain('@memory/MEMORY.md')
+
+    // User-authored file (no marker) → byte-identical after the call.
+    const userFile = '# My own instructions\ndo not touch\n'
+    await fsp.writeFile(`${WALNUT_HOME}/CLAUDE.md`, userFile, 'utf-8')
+    await ensureLaneClaudeMd()
+    expect(await fsp.readFile(`${WALNUT_HOME}/CLAUDE.md`, 'utf-8')).toBe(userFile)
+  })
+
+  it('is invoked by lane resolution (spawn path)', async () => {
+    await getOrCreateLaneSession('general', 'conv-claudemd', { firstMessage: 'hi' })
+    const content = await fsp.readFile(`${WALNUT_HOME}/CLAUDE.md`, 'utf-8')
+    expect(content).toContain('walnut:butler-lane-context')
+  })
+})
