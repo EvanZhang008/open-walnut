@@ -10,7 +10,6 @@ import { QuickAccessBar } from '@/components/chat/QuickAccessBar';
 import { useOverlayHeightVar } from '@/hooks/useHeightVar';
 import type { SlashCommand, CommandContext } from '@/commands/types';
 import { shouldHideUiOnlyMessage, useUiOnlySettings } from '@/hooks/useDeveloperSettings';
-import { EngineBadge } from '@/components/chat/EngineBadge';
 
 export function ChatPage() {
   const navigate = useNavigate();
@@ -45,7 +44,6 @@ export function ChatPage() {
           <h1 className="page-title">Chat</h1>
           <p className="page-subtitle">
             Chat with Walnut
-            <EngineBadge />
             {connectionState !== 'connected' && (
               <span className="text-xs" style={{ color: 'var(--warning)', marginLeft: 8 }}>
                 ({connectionState})

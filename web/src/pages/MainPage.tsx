@@ -46,7 +46,7 @@ import { fetchConfig, fetchInstallDir } from '@/api/config';
 import { ContextInspectorPanel } from '@/components/context/ContextInspectorPanel';
 import { QuickAccessBar } from '@/components/chat/QuickAccessBar';
 import { AgentTabBar, slugifyAgentId } from '@/components/chat/AgentTabBar';
-import { EngineBadge, useChatEngine } from '@/components/chat/EngineBadge';
+import { useChatEngine } from '@/components/chat/EngineBadge';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { useLaneSession } from '@/hooks/useLaneSession';
@@ -114,7 +114,6 @@ function ChatHeaderRow({ title, connectionState, inspectorOpen, onToggleInspecto
     <div className="chat-header-row">
       <div className="chat-header-meta">
         {agentSwitcher || <span className="chat-header-title">{title}</span>}
-        <EngineBadge />
         {connectionState !== 'connected' && (
           <span className="text-xs" style={{ color: 'var(--warning)' }}>({connectionState})</span>
         )}

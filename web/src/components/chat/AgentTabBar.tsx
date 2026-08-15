@@ -6,7 +6,7 @@
  *   - The single trigger shows BOTH the active agent (as a small tinted chip)
  *     and the active conversation title. Double-click renames (not Main).
  *   - Clicking it opens a two-pane dropdown: LEFT lists agents (click = switch
- *     agent; hover reveals ＋ new-chat and 👁 visibility), RIGHT lists the
+ *     agent; hover reveals + new-chat and eye visibility), RIGHT lists the
  *     active agent's conversations — search, Main (bold, undeletable), Pinned,
  *     then Today / This week / Older with hover pin/delete, and a
  *     "+ New conversation" row at the bottom.
@@ -49,6 +49,32 @@ function historyGroup(iso: string): 'Today' | 'This week' | 'Older' {
   return 'Older';
 }
 
+/** Line-icon set (stroke currentColor, matching the app's SVG icons — no emoji). */
+function PinIcon({ size = 12 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 17v5" />
+      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+    </svg>
+  );
+}
+
+function EyeIcon({ size = 12, off = false }: { size?: number; off?: boolean }) {
+  return off ? (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+      <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+      <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+      <line x1="2" x2="22" y1="2" y2="22" />
+    </svg>
+  ) : (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
 /** Slugify a name into a stable agent id (lowercase, dashes, alnum only). */
 export function slugifyAgentId(name: string): string {
   return name
@@ -84,7 +110,7 @@ export function AgentTabBar(props: AgentTabBarProps) {
   const activeConv = conversations.find((c) => c.id === activeConversationId);
   const activeConvLabel = activeConv?.isMain ? 'Main' : (activeConv?.title ?? 'Main');
 
-  // Right pane sections: Main pinned at the top, then 📌 Pinned, then the rest
+  // Right pane sections: Main pinned at the top, then Pinned, then the rest
   // time-grouped (Today / This week / Older). Search filters all of it.
   const menuSections = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -220,7 +246,7 @@ export function AgentTabBar(props: AgentTabBarProps) {
                         title={visible ? 'Hide from console' : 'Show in console'}
                         aria-label={visible ? 'Hide agent' : 'Show agent'}
                       >
-                        {visible ? '\u{1F441}' : '\u{1F441}‍\u{1F5E8}'}{/* 👁 / 👁‍🗨 (struck) */}
+                        <EyeIcon off={visible} />
                       </button>
                     )}
                   </div>
@@ -301,7 +327,7 @@ export function AgentTabBar(props: AgentTabBarProps) {
                               style={rowMainBtnStyle(isActive)}
                               title={conv.isMain ? 'Main — receives notifications & cron. Can\'t be renamed or deleted.' : conv.title}
                             >
-                              {conv.pinned && !conv.isMain && <span style={{ fontSize: 10, flexShrink: 0 }}>{'\u{1F4CC}'}</span>}
+                              {conv.pinned && !conv.isMain && <span style={{ flexShrink: 0, display: 'inline-flex', color: 'var(--fg-muted)' }}><PinIcon size={11} /></span>}
                               <span style={{ ...ellipsisStyle, fontWeight: conv.isMain ? 600 : undefined }}>
                                 {conv.isMain ? 'Main' : conv.title}
                               </span>
@@ -314,7 +340,7 @@ export function AgentTabBar(props: AgentTabBarProps) {
                                 title={conv.pinned ? 'Unpin' : 'Pin'}
                                 aria-label={conv.pinned ? 'Unpin conversation' : 'Pin conversation'}
                               >
-                                {'\u{1F4CC}'}{/* 📌 */}
+                                <PinIcon />
                               </button>
                             )}
                             {/* Main conversation can't be deleted (it owns notifications & cron). */}
