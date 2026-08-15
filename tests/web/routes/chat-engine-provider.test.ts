@@ -208,7 +208,7 @@ describe('agent.provider unset (default) → in-process loop', () => {
     await boot({})
     const ws = await connectWs()
     try {
-      const res = await sendRpc(ws, 'chat', { message: 'hello butler' })
+      const res = await sendRpc(ws, 'chat', { message: 'hello Personal AI' })
       expect(res.ok).toBe(true)
       // No lane id in the reply — unchanged contract for every existing client.
       expect(res.payload).toBeUndefined()
@@ -241,7 +241,7 @@ describe('agent.provider unset (default) → in-process loop', () => {
   })
 
   it('an unknown provider string degrades to the in-process loop', async () => {
-    // A hand-edited config must never leave the butler with "no engine".
+    // A hand-edited config must never leave the Personal AI with "no engine".
     await boot({ provider: 'wat' })
     const ws = await connectWs()
     try {
@@ -265,7 +265,7 @@ describe("agent.provider = 'claude-code' → lane session", () => {
       expect(laneSessionId).toMatch(/^[0-9a-f-]{36}$/)
       expect(runAgentLoop).not.toHaveBeenCalled()
 
-      // One spawn, carrying the butler profile + the conversation's lane.
+      // One spawn, carrying the Personal AI profile + the conversation's lane.
       expect(started).toHaveLength(1)
       const { getActiveConversationId } = await import('../../../src/core/conversations.js')
       const conv = await getActiveConversationId('general')
@@ -273,7 +273,7 @@ describe("agent.provider = 'claude-code' → lane session", () => {
       expect(started[0].preassignedSessionId).toBe(laneSessionId)
       expect(started[0].message).toContain('plan my week')
       expect(started[0].profile?.systemPromptMode).toBe('replace')
-      expect(started[0].profile?.systemPrompt).toContain('You are a COORDINATOR, not an executor')
+      expect(started[0].profile?.systemPrompt).toContain('Choose one mode for each request')
       expect(started[0].profile?.mcpServers?.walnut).toEqual({ command: 'open-walnut', args: ['mcp'] })
 
       const { getSessionByLane } = await import('../../../src/core/session-tracker.js')
@@ -306,7 +306,7 @@ describe("agent.provider = 'claude-code' → lane session", () => {
 
   it('does the turn-boundary memory bookkeeping the in-process loop would have done', async () => {
     // The lane path skips agent/loop.ts entirely, and with it the two things every
-    // main-butler turn owes memory: clearing the consolidation breaker, and
+    // Personal AI turn owes memory: clearing the consolidation breaker, and
     // re-pinning the frozen memory-prompt snapshot for this conversation. Without
     // them a single failed consolidation wedges the breaker for the process's life
     // and the prompt scope never advances.
