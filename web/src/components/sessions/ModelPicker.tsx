@@ -409,7 +409,9 @@ export function ModelPicker({
   const popRef = React.useRef<HTMLDivElement>(null);
   const popped = !!anchorRef;
   const placement = useMenuPlacement(popped, anchorRef ?? popRef, popRef, {
-    preferSide: 'up', margin: 12, onAnchorLost: onClose,
+    // Centered ON the clicked pill (user call 2026-08-15), flipped up from
+    // the bottom mode bar, clamped to the viewport by the hook.
+    preferSide: 'up', align: 'center', margin: 12, onAnchorLost: onClose,
   });
   React.useEffect(() => {
     if (!popped) return;
