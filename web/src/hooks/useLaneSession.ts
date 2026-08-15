@@ -30,6 +30,16 @@ export interface UseLaneSessionReturn {
 
 interface Resolved { sessionId: string; cwd?: string }
 
+/**
+ * Resolved lanes, keyed `${agentId}:${conversationId}:${resetNonce}` — a lane
+ * binding is stable (clear bumps the nonce, which is part of the key), so a
+ * revisited conversation renders its timeline IMMEDIATELY from cache instead
+ * of unmounting everything behind a "Connecting…" spinner while the resolve
+ * round-trips. The background resolve still runs and corrects the cache if
+ * the server re-minted (e.g. the old lane was archived server-side).
+ */
+const resolvedCache = new Map<string, Resolved>();
+
 export function useLaneSession(
   enabled: boolean,
   agentId: string,
@@ -63,6 +73,7 @@ export function useLaneSession(
       `/api/agents/${aid}/conversations/${cid}/lane-session`,
       {},
     ).then((r) => {
+      resolvedCache.set(k, { sessionId: r.sessionId, cwd: r.cwd });
       if (keyRef.current === k) setState({ sessionId: r.sessionId, cwd: r.cwd, error: null });
       log.info('frontend', 'useLaneSession: resolved', {
         agentId: aid, conversationId: cid, sessionId: r.sessionId, created: r.created ?? false,
@@ -82,9 +93,13 @@ export function useLaneSession(
   }, []);
 
   useEffect(() => {
-    setState({ sessionId: null, error: null });
+    // Cache hit → render the timeline instantly (no spinner unmount); the
+    // resolve below still refreshes the binding in the background.
+    const cached = resolvedCache.get(key);
+    setState(cached ? { sessionId: cached.sessionId, cwd: cached.cwd, error: null } : { sessionId: null, error: null });
     if (!enabled || !conversationId) return;
     resolve().catch(() => { /* state carries the error; sends retry via ensure() */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- key is derived from these deps
   }, [enabled, agentId, conversationId, resetNonce, resolve]);
 
   const ensure = useCallback((): Promise<string> => resolve().then((r) => r.sessionId), [resolve]);
