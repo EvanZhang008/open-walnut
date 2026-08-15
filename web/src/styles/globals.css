@@ -18582,15 +18582,49 @@ td.usage-share-col {
 .sfe-btn:disabled:hover { background: var(--bg); }
 .sfe-btn:disabled:active { transform: none; }
 
-/* Hide/show the tree pane — same glyphs as the Changed tab's tree toggle. */
-.sfe-tree-toggle {
-  flex-shrink: 0;
-  padding: 1px 7px;
-  font-size: 13px;
-  line-height: 1.4;
+/* Hide/show the tree pane — the SAME affordance as the split chat column:
+   collapsed = a thin click-to-restore rail (.session-chat-collapsed-rail twin),
+   expanded = a floating chevron pinned to the pane corner. */
+.sfe-tree-collapsed-rail {
+  flex: 0 0 32px;
+  border: none;
+  border-right: 1px solid var(--border);
+  background: var(--card-bg);
+  cursor: pointer;
+  font-size: 14px;
   color: var(--fg-muted);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 10px;
 }
-.sfe-tree-toggle:hover { color: var(--fg); }
+.sfe-tree-collapsed-rail:hover { background: var(--bg-tertiary); color: var(--fg); }
+
+/* Zero-height sticky anchor so the chevron stays pinned while the tree
+   (which is its own scroller) scrolls under it. */
+.sfe-tree-collapse-anchor {
+  position: sticky;
+  top: 0;
+  height: 0;
+  z-index: 5;
+}
+.sfe-tree-collapse-btn {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--fg-muted);
+  border-radius: 5px;
+  width: 22px;
+  height: 22px;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sfe-tree-collapse-btn:hover { color: var(--fg); background: var(--bg-tertiary); }
 
 /* Back / Forward pair: one segmented control, like a browser's. */
 .sfe-nav-group {
@@ -24383,18 +24417,9 @@ a.file-link:hover {
   font-size: 13px;
 }
 
-/* Toolbar: tree toggle + (md) Rendered toggle */
-.session-diff-tree-toggle {
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg-muted);
-  border-radius: 6px;
-  padding: 2px 8px;
-  font-size: 13px;
-  cursor: pointer;
-  line-height: 1.4;
-}
-.session-diff-tree-toggle:hover { color: var(--fg); }
+/* Toolbar: (md) Rendered toggle. (The tree collapse control moved into the
+   tree pane itself — .sfe-tree-collapse-btn / .sfe-tree-collapsed-rail,
+   shared with the Files tab.) */
 .session-diff-rendered-toggle {
   border: 1px solid var(--accent);
   background: var(--bg);

@@ -1287,13 +1287,6 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   return (
     <div className="session-diff-view" ref={containerRef} onMouseUp={handleMouseUp}>
       <div className="session-diff-toolbar">
-        <button
-          className="session-diff-tree-toggle"
-          onClick={() => setTreeCollapsed((c) => !c)}
-          title={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
-        >
-          {treeCollapsed ? '☰' : '⟨'}
-        </button>
         <span className="session-diff-toolbar-title">
           {empty ? 'No file changes' : `${data!.fileCount} file${data!.fileCount === 1 ? '' : 's'} changed`}
           {refreshingBg && <span className="session-diff-refreshing" title="List served from cache — re-scanning in the background">↻</span>}
@@ -1379,9 +1372,29 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         </div>
       ) : (
         <div className="session-diff-body">
+          {/* Collapsed: thin click-to-restore rail — same affordance as the
+              chat column and the Files tab tree. */}
+          {treeCollapsed && (
+            <button
+              className="sfe-tree-collapsed-rail"
+              onClick={() => setTreeCollapsed(false)}
+              title="Show file tree"
+              aria-label="Show file tree"
+              aria-expanded={false}
+            >☰</button>
+          )}
           {!treeCollapsed && (
             <>
               <div className="session-diff-tree" ref={tree.panelRef} style={{ width: tree.width }}>
+                <div className="sfe-tree-collapse-anchor">
+                  <button
+                    className="sfe-tree-collapse-btn"
+                    onClick={() => setTreeCollapsed(true)}
+                    title="Collapse file tree"
+                    aria-label="Hide file tree"
+                    aria-expanded
+                  >⟨</button>
+                </div>
                 {data!.anyPartial && (
                   <div className="session-diff-partial-note" title="Some files changed on disk after the session edited them — those diffs are reconstructed best-effort.">
                     {ICON_WARNING} some diffs reconstructed

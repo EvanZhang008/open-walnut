@@ -629,16 +629,6 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
   return (
     <div className="session-file-explorer" ref={explorerRef}>
       <div className="session-file-explorer-toolbar">
-        <button
-          type="button"
-          className="sfe-btn sfe-tree-toggle"
-          onClick={toggleTreeCollapsed}
-          title={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
-          aria-label={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
-          aria-expanded={!treeCollapsed}
-        >
-          {treeCollapsed ? '☰' : '⟨'}
-        </button>
         <div className="sfe-nav-group">
           <button
             type="button"
@@ -730,8 +720,33 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
       </div>
 
       <div className="session-file-explorer-body">
+        {/* Collapsed: the tree shrinks to a thin click-to-restore rail — the
+            SAME affordance as the split chat column's rail, so the two sides
+            of the panel collapse/restore identically. */}
+        {treeCollapsed && (
+          <button
+            className="sfe-tree-collapsed-rail"
+            onClick={toggleTreeCollapsed}
+            title="Show file tree"
+            aria-label="Show file tree"
+            aria-expanded={false}
+          >☰</button>
+        )}
         {!treeCollapsed && (
         <div className="session-file-explorer-tree" style={{ width: `${treeWidth}px` }}>
+          {/* Floating collapse chevron, top-right of the tree — twin of the
+              chat column's .session-chat-collapse-btn. The tree IS the
+              scroller, so the button needs a zero-height sticky anchor to
+              stay pinned instead of scrolling away with the rows. */}
+          <div className="sfe-tree-collapse-anchor">
+            <button
+              className="sfe-tree-collapse-btn"
+              onClick={toggleTreeCollapsed}
+              title="Collapse file tree"
+              aria-label="Hide file tree"
+              aria-expanded
+            >⟨</button>
+          </div>
           {rootError && <div className="sfe-error">{rootError}</div>}
           {rootSections.map((section) => {
             const isOpen = openRoots.has(section.path);
