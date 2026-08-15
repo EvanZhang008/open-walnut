@@ -45,31 +45,35 @@ export async function forkLaneConversation(
   if (!source.cwd) {
     throw new SessionControlError('Source session has no working directory — cannot fork', 400);
   }
-  // Guard: a conversation with no delivered message has NO CLI JSONL behind its
-  // lane — the fork's `--resume <src> --fork-session` would die with "No
-  // conversation found". The CONVERSATION's messageCount is the honest signal
-  // (touchLaneConversation feeds it on every real send); the session record's
-  // own messageCount can read >0 for a lane whose CLI never persisted (observed:
-  // a spawn that died in the fd-storm window). Fail-open when the meta is
-  // missing — a wrongly-blocked fork is worse than a fork that errors visibly.
+  // Which id `--resume` targets. A lane with no delivered message has NO CLI
+  // JSONL (the fork spawn is init-only — it writes nothing until its first
+  // stdin turn), so resuming it dies with "No conversation found". The
+  // CONVERSATION's messageCount is the honest signal (touchLaneConversation
+  // feeds it on every real send). For an untouched FORK, walk one hop up and
+  // resume the ANCESTOR the fork itself would have resumed — by induction that
+  // one has history. Only a message-less lane with no ancestor is unforkable.
+  let resumeFromId = source.claudeSessionId;
   let sourceTitle = source.title ?? 'Chat';
   try {
     const convs = await listConversations(agentId);
     const meta = convs.find((c) => c.id === conversationId);
     if (meta) {
       sourceTitle = meta.isMain ? 'Main' : meta.title;
-      // A session that is itself a fork persisted its JSONL at spawn
-      // (--fork-session writes immediately), so it is forkable even before
-      // any new message lands in the conversation.
-      if (meta.messageCount === 0 && !source.forkedFromSessionId) {
-        throw new SessionControlError('This conversation is empty — nothing to fork', 409);
+      if (meta.messageCount === 0) {
+        if (!source.forkedFromSessionId) {
+          throw new SessionControlError('This conversation is empty — nothing to fork', 409);
+        }
+        resumeFromId = source.forkedFromSessionId;
       }
     }
   } catch (err) {
     if (err instanceof SessionControlError) throw err;
     /* title/guard read failed — cosmetic; never block the fork on it */
   }
-  const forkTitle = `Fork of ${sourceTitle}`.slice(0, 60);
+  // Strip a previous fork decoration so titles don't compound without bound
+  // ("Fork of Fork of Fork of …" — same rule task forks apply).
+  const baseTitle = sourceTitle.replace(/^(Fork of\s+)+/i, '').trim() || sourceTitle;
+  const forkTitle = `Fork of ${baseTitle}`.slice(0, 60);
 
   // New conversation first (server sets it active), then bind the forked
   // session to ITS lane before the spawn — same seed-before-spawn contract as
@@ -85,7 +89,7 @@ export async function forkLaneConversation(
     ...(source.profile ? { profile: source.profile } : {}),
     ...(source.effort ? { effort: source.effort } : {}),
     lane,
-    forkedFromSessionId: source.claudeSessionId,
+    forkedFromSessionId: resumeFromId,
     initialProcessStatus: 'idle',
     initialStatusReason: 'awaiting_spawn',
   });
@@ -103,12 +107,12 @@ export async function forkLaneConversation(
     ...(source.cliModel ? { model: source.cliModel } : {}),
     lane,
     preassignedSessionId: forkSessionId,
-    forkedFromSessionId: source.claudeSessionId,
+    forkedFromSessionId: resumeFromId,
   }, ['session-runner'], { source: 'lane-fork' });
 
   log.session.info('lane fork: conversation forked', {
     agentId, conversationId, newConversationId: conversation.id,
-    sourceSessionId: source.claudeSessionId, forkSessionId,
+    sourceSessionId: source.claudeSessionId, resumeFromId, forkSessionId,
   });
 
   return { conversation, sessionId: forkSessionId };

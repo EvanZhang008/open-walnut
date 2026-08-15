@@ -1612,7 +1612,13 @@ export class ClaudeCodeSession {
     // handleStart), which is how a UI-initiated start gets a session id in its HTTP
     // response. Adopt that one when present; otherwise mint here so bus/RPC callers
     // that don't supply one still get the fast path.
-    const initOnly = !message && !resumeSessionId
+    //
+    // A FORK spawn with an empty message is init-only too: `--resume X
+    // --fork-session` + no stdin runs no turn (draft semantics — the process
+    // warms up and waits). Excluding it here painted a permanent "working…"
+    // status on lane forks. A plain resume with an empty message stays NON-init
+    // (the reinitialize/restart path owns its own status).
+    const initOnly = !message && (!resumeSessionId || !!forkSession)
     let preassignedId: string | null = null
     if (!resumeSessionId || forkSession) {
       preassignedId = opts?.preassignedSessionId ?? crypto.randomUUID()
