@@ -2,11 +2,10 @@
  * Subagent context builders:
  * - buildSubagentSystemPrompt(): system prompt for embedded subagents
  * - buildSubagentToolSet(): filtered tool set per agent definition
- * - buildAgentsSection(): section for main agent's system prompt
  */
 
 import { tools, type ToolDefinition } from './tools.js';
-import { getAllAgents, migrateToolNames } from '../core/agent-registry.js';
+import { migrateToolNames } from '../core/agent-registry.js';
 import { getConfig } from '../core/config-manager.js';
 import type { AgentDefinition } from '../core/types.js';
 
@@ -113,25 +112,4 @@ export async function buildSubagentToolSet(
   ]);
 
   return injectAgentId(tools.filter((t) => !denied.has(t.name)));
-}
-
-/**
- * Build the agents section for the main agent's system prompt.
- * Summarizes available agent definitions so the main agent knows
- * what agents it can dispatch via session_start.
- */
-export async function buildAgentsSection(): Promise<string> {
-  const agents = await getAllAgents();
-  if (agents.length === 0) return '';
-
-  const lines = agents.map((a) => {
-    const parts = [`- **${a.name}** (id: \`${a.id}\`, runner: ${a.runner})`];
-    if (a.description) parts.push(`  ${a.description}`);
-    if (a.model) parts.push(`  Model: ${a.model}`);
-    return parts.join('\n');
-  });
-
-  return `## Available agents
-You can dispatch tasks to these agents using session_start with runner="embedded" and agent_id:
-${lines.join('\n')}`;
 }

@@ -9,17 +9,17 @@
  *   ~/.claude/skills/      — claude skills (Claude Code CLI's own store)
  *
  * TWO discovery scopes — do not collapse them:
- *   getPromptSearchDirs() — what the BUTLER's prompt index is built from. Excludes
+ *   getPromptSearchDirs() — what the PERSONAL AI's prompt index is built from. Excludes
  *     ~/.claude/skills/ because those belong to the Claude Code CLI (the executor):
- *     deploy-cdk, close-session-with-commit, plan-with-context… The butler is a
- *     COORDINATOR that never runs the work itself, so those entries are dead weight
- *     in its prompt (measured: 60 of 71 'general' skills, most of a 10K-token index),
- *     and the CLI already discovers them natively in its own process.
+ *     deploy-cdk, close-session-with-commit, plan-with-context… Those project-work
+ *     skills are dead weight in this injected index (measured: 60 of 71 'general'
+ *     skills, most of a 10K-token index), and the Claude Code CLI already discovers
+ *     them natively in its own process when it handles either work mode.
  *   getSearchDirs() — every source, used by the skills management UI (skill-store) and
  *     by skill_view name resolution, so a claude skill stays visible and readable.
  *
- * Opt back in with WALNUT_BUTLER_CLAUDE_SKILLS=1 (single-surface setups where the
- * butler really should see the CLI's skills).
+ * Opt back in with WALNUT_PERSONAL_AI_CLAUDE_SKILLS=1 (single-surface setups where the
+ * Personal AI really should see the CLI's skills).
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -63,14 +63,14 @@ interface SkillFrontmatter {
 
 // ─── discovery ──────────────────────────────────────────────────────
 
-/** Sources the BUTLER's prompt index is built from — no ~/.claude/skills/ (see file header). */
+/** Sources the PERSONAL AI's prompt index is built from — no ~/.claude/skills/ (see file header). */
 function getPromptSearchDirs(): string[] {
   const dirs = [
     path.resolve('skills'),       // workspace-local (highest priority)
     GLOBAL_SKILLS_DIR,            // ~/.open-walnut/skills/
     BUILTIN_SKILLS_DIR,           // dist/data/skills/ (shipped with walnut)
   ];
-  if (process.env.WALNUT_BUTLER_CLAUDE_SKILLS === '1') dirs.push(CLAUDE_SKILLS_DIR);
+  if (process.env.WALNUT_PERSONAL_AI_CLAUDE_SKILLS === '1') dirs.push(CLAUDE_SKILLS_DIR);
   return dirs;
 }
 
@@ -261,10 +261,8 @@ function screenIndexEntry(s: SkillMeta): SkillMeta {
   };
 }
 
-function formatSkillsPrompt(skills: SkillMeta[]): string {
-  if (skills.length === 0) return '';
-
-  const preamble = `## Skills (mandatory)
+/** Preamble for the in-process loop, whose skill tools are skill_view/skill_manage. */
+const LOOP_SKILLS_PREAMBLE = `## Skills (mandatory)
 Before replying: scan ALL <available_skills> <description> entries — this scan is not optional.
 - Skills come in two types: **action** (procedures/how-tos to follow) and **knowledge** (curated domain facts to consult).
 - If any skill might apply, ERR ON THE SIDE OF LOADING IT: read its SKILL.md at <location> (skill_view or read). Loading an unneeded skill is cheap; missing a needed one causes wrong answers.
@@ -272,6 +270,24 @@ Before replying: scan ALL <available_skills> <description> entries — this scan
 - Multiple relevant skills? Load each relevant one — knowledge skills especially are meant to be consulted together.
 - If a skill you loaded is outdated, missing a step, or wrong, patch it with skill_manage(action='patch') before finishing the task.
 - Only skip loading when you are confident none apply.`;
+
+/**
+ * Preamble for CLI session engines (Personal AI lane on claude/codex/…): same index,
+ * but the loading verb is the engine's own file-read tool, and it must not
+ * confuse these with skills the engine discovered natively in its own store.
+ */
+const SESSION_SKILLS_PREAMBLE = `## Walnut skills (mandatory)
+These are Walnut's OWN skills — they live outside any CLI's native skill store, so no engine auto-discovers them; this injected index is the only way you see them. They are IN ADDITION to whatever skills your runtime loaded natively.
+Before replying: scan ALL <available_skills> <description> entries — this scan is not optional.
+- Skills come in two types: **action** (procedures/how-tos to follow) and **knowledge** (curated domain facts to consult).
+- If any skill might apply, ERR ON THE SIDE OF LOADING IT: read its SKILL.md at <location> with your file-read tool. Loading an unneeded skill is cheap; missing a needed one causes wrong answers.
+- Skills encode the user's preferred approach, conventions, and quality standards — load them even for tasks you already know how to do, because the skill defines how it should be done HERE.
+- Multiple relevant skills? Load each relevant one — knowledge skills especially are meant to be consulted together.
+- If a skill you loaded is outdated, missing a step, or wrong, fix its SKILL.md in place (plain file).
+- Only skip loading when you are confident none apply.`;
+
+function formatSkillsPrompt(skills: SkillMeta[], preamble: string = LOOP_SKILLS_PREAMBLE): string {
+  if (skills.length === 0) return '';
 
   // Group by category so the index stays scannable as the skill count grows.
   const byCategory = new Map<string, SkillMeta[]>();
@@ -305,13 +321,15 @@ Before replying: scan ALL <available_skills> <description> entries — this scan
 // ─── cache + public API ─────────────────────────────────────────────
 
 let cachedPrompt: string | undefined;
+let cachedSessionPrompt: string | undefined;
 /** All sources (incl. ~/.claude/skills) — management UI + skill_view resolution. */
 let cachedSkills: (SkillMeta & { dirName: string })[] | undefined;
-/** Prompt scope only (no ~/.claude/skills) — what the butler's index is built from. */
+/** Prompt scope only (no ~/.claude/skills) — what the Personal AI's index is built from. */
 let cachedPromptSkills: (SkillMeta & { dirName: string })[] | undefined;
 
 export function clearSkillsCache(): void {
   cachedPrompt = undefined;
+  cachedSessionPrompt = undefined;
   cachedSkills = undefined;
   cachedPromptSkills = undefined;
 }
@@ -369,7 +387,7 @@ async function getEligibleSkills(): Promise<(SkillMeta & { dirName: string })[]>
   return cachedSkills;
 }
 
-/** Eligible skills the butler's prompt index is built from (excludes ~/.claude/skills). */
+/** Eligible skills the Personal AI's prompt index is built from (excludes ~/.claude/skills). */
 async function getPromptSkills(): Promise<(SkillMeta & { dirName: string })[]> {
   if (cachedPromptSkills === undefined) cachedPromptSkills = await loadEligibleSkills(getPromptSearchDirs());
   return cachedPromptSkills;
@@ -380,6 +398,22 @@ export async function buildSkillsPrompt(): Promise<string> {
   const skills = await getPromptSkills();
   cachedPrompt = formatSkillsPrompt(skills);
   return cachedPrompt;
+}
+
+/**
+ * Skills index for a CLI SESSION engine (the Personal AI lane) — the "be smart" rule:
+ * inject exactly the sources NO engine ever auto-discovers (workspace skills/,
+ * ~/.open-walnut/skills/, shipped dist/data/skills/), and never ~/.claude/skills/
+ * — the Claude Code CLI loads that store natively (injecting it = double copy),
+ * and for other engines (codex, opencode…) those are executor skills that were
+ * excluded from the Personal AI's index on purpose. Same scope on every engine, so
+ * switching provider tomorrow changes nothing about what the Personal AI can see.
+ */
+export async function buildSessionSkillsPrompt(): Promise<string> {
+  if (cachedSessionPrompt !== undefined) return cachedSessionPrompt;
+  const skills = await getPromptSkills();
+  cachedSessionPrompt = formatSkillsPrompt(skills, SESSION_SKILLS_PREAMBLE);
+  return cachedSessionPrompt;
 }
 
 /** List all eligible skills with dirName, name, and description (for UI/API). */

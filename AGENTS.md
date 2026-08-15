@@ -1,10 +1,10 @@
-# Open Walnut — Personal Intelligent Butler
+# Open Walnut — Personal AI
 
 > **ACP reference implementation:** https://github.com/agentclientprotocol/claude-agent-acp (public).
 > **References**: [ARCHITECTURE.md](./ARCHITECTURE.md) | per-directory `AGENTS.md` files are
 > concise quick-references; the **deep implementation details live in skills** (auto-discovered,
 > load on demand): `walnut-core-internals` (src/core/), `walnut-agent-loop` (src/agent/),
-> `walnut-web-frontend` (web/src/), `walnut-testing` (tests/), `walnut-logging` (src/logging/).
+> `walnut-web-frontend` (web/src/), `walnut-testing` (tests/), `walnut-ops` (incidents + src/logging/).
 > Load the matching skill before non-trivial work in that area.
 > **Important docs:** browse [`docs/`](./docs/README.md) first; model work starts with
 > [Claude model configuration](./docs/reference/claude-model-configuration.md).
@@ -82,7 +82,7 @@ scripts/walnut-sandbox.sh token   [region]       # use host AWS_BEARER_TOKEN_BED
 scripts/walnut-sandbox.sh keys    [region]       # use host AWS access keys
 scripts/walnut-sandbox.sh profile <name> [region]# use a ~/.aws profile (incl. credential_process)
 scripts/walnut-sandbox.sh test  '{...}'          # POST /api/config/test-connection (real round-trip)
-scripts/walnut-sandbox.sh chat  "msg"            # one message to the butler → prints its reply
+scripts/walnut-sandbox.sh chat  "msg"            # one message to the Personal AI → prints its reply
 scripts/walnut-sandbox.sh record out.mp4         # record the onboarding chain (needs a bearer token)
 scripts/walnut-sandbox.sh status | stop          # health | stop+wipe
 ```
@@ -95,14 +95,14 @@ scripts/walnut-sandbox.sh status | stop          # health | stop+wipe
   via `tsup`, but if you edit server code and forget to rebuild, the sandbox runs STALE server logic.
   A `400 invalid beta flag` on `chat` while `test` passes is the classic symptom of a stale `dist`
   (an old build that still sent the removed `extended-cache-ttl` beta). Rebuild (`npx tsup`) and re-run.
-- **Verified-good provider behavior (do NOT "fix"):** the butler does NOT send `extended-cache-ttl`
+- **Verified-good provider behavior (do NOT "fix"):** the Personal AI does NOT send `extended-cache-ttl`
   to Bedrock — the 1h cache is GA and rides `cache_control.ttl:'1h'` directly (`src/agent/cache.ts`,
   `DEFAULT_TTL='1h'`). opus-4-8 uses `thinking:{type:'adaptive'}` + the `interleaved-thinking` beta.
   This combo + a `~/.aws` profile is confirmed working end-to-end against real Bedrock.
 
 ## What Is Walnut
 
-Personal AI butler: tasks + knowledge + AI sessions. **Tasks are the atom.** `Project → Task → Subtask` — Project is the single grouping layer; a task with no project lives in the **Inbox** (`project = ''`). Event Bus connects everything. See [ARCHITECTURE.md](./ARCHITECTURE.md).
+Personal AI: tasks + knowledge + AI sessions. **Tasks are the atom.** `Project → Task → Subtask` — Project is the single grouping layer; a task with no project lives in the **Inbox** (`project = ''`). Event Bus connects everything. See [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ### Key Rules for Implementation
 
@@ -117,13 +117,13 @@ Personal AI butler: tasks + knowledge + AI sessions. **Tasks are the atom.** `Pr
   Task/Session work, demos, and recordings.
 - Concurrency: `tasks.json`/`sessions.json` use in-process + cross-process file locks
 - **Skill discovery has TWO scopes — don't collapse them** (`src/core/skill-loader.ts`). The
-  butler's injected index (`buildSkillsPrompt` → `getPromptSearchDirs()`) covers workspace
+  Personal AI's injected index (`buildSkillsPrompt` → `getPromptSearchDirs()`) covers workspace
   `skills/` + `~/.open-walnut/skills/` + shipped `dist/data/skills/` — deliberately **NOT**
-  `~/.claude/skills/`, which is the Claude Code CLI's own store (deploy/close-session/plan
-  skills for an *executor*; the butler is a coordinator that never runs the work, and the CLI
-  discovers them natively in its own process anyway). Management/`skill_view` scope
+  `~/.claude/skills/`, which is the Claude Code CLI's own store. The CLI discovers those
+  deploy/close-session/plan skills natively when needed, so injecting them again would duplicate
+  its own context. Management/`skill_view` scope
   (`getSearchDirs()`) still covers all four, so a claude skill stays listable and readable.
-  Opt back in with `WALNUT_BUTLER_CLAUDE_SKILLS=1`. Measured: excluding them cut the Skills
+  Opt back in with `WALNUT_PERSONAL_AI_CLAUDE_SKILLS=1`. Measured: excluding them cut the Skills
   prompt section from 10.2K → 3.9K tokens (77 → 34 entries).
 
 ### Design Principle: host-local work belongs to the DAEMON, not the server
@@ -182,7 +182,7 @@ Upstream docs say "session-scoped". They are wrong, and a 2026-08-09 incident he
 
 Consequences to keep in mind: killing a process is *never* a reliable way to stop a cron (only `CronDelete` is); recurring tasks auto-expire after 7 days; a creator schedules its own tasks without holding the lock (the lock only gates adopting *foreign* tasks); `CLAUDE_CODE_DISABLE_CRON=1` stops a bystander from ever adopting.
 
-**Walnut can enforce `durable:false` — OPT-IN via config `session.cron_policy: 'session-only'`** (default `'unrestricted'` does nothing; the policy denies tool calls, injects corrective messages, and rewrites the user's `scheduled_tasks.json`, which a generic install must not do unasked). When enabled, walnut sets `WALNUT_ENFORCE_SESSION_CRON=1` at daemon spawn (local + remote) and the daemon enforces at three points (`src/providers/daemon-core.ts`, the block above `isDurableCronRequest`), in order of how much they can be argued with: (1) the `can_use_tool` intercept DENIES a durable `CronCreate`; (2) for a bypass session, which never asks permission, the tailer FIFO-injects a "CronDelete + recreate non-durable" correction — **advisory, and a live CLI verifiably refused it** on 2026-08-11, reasoning that an automated message is not user authorization (correct reasoning, which is why it can't be the guarantee); (3) `reapSession` strips the dying session's own rows from `scheduled_tasks.json` (`stripDurableTasksForSession`) — the model has no say, and death is exactly when a durable row becomes adoptable. Foreign fires get a `scheduled_task_fire` stream marker + a model-visible provenance warning (`detectCronFires`) regardless of policy (observation, not intervention). Idle reapers treat a cron-armed session as long-lived (`hasDiskCronInterest`, 7d), and terminating one needs `force:true` (409 `cron_owner`). `WALNUT_ALLOW_DURABLE_CRON=1` on the daemon overrides the enforcement even when opted in — better yet use crontab/launchd starting its own dedicated session for cross-session jobs.
+**Walnut can enforce `durable:false` — OPT-IN, delivered as daemon hooks (hooks-v1)**. Default posture is ZERO hooks: a generic install denies nothing, injects nothing, and never rewrites the user's `scheduled_tasks.json`. Two ways to opt in: (a) config sugar `session.cron_policy: 'session-only'` compiles the built-in rule set, or (b) install the self-contained template `src/data/hook-templates/session-only-cron.yaml` into `~/.open-walnut/hooks/` and edit freely (your file wins over the sugar by id). The server compiles `~/.open-walnut/hooks/*.yaml` with `runtime: daemon` into ONE rules JSON (`src/core/hooks/daemon-hooks.ts`) and pushes it via the `hooks.configure` RPC (NOT bridge-reachable; hash-skipped no-ops) at connect + hot on config change — no daemon restart needed on `hooks-v1` daemons; older daemons fall back to `WALNUT_ENFORCE_SESSION_CRON=1` set at spawn. The daemon interprets rules (never executes pushed code) at four points (`src/providers/daemon-core.ts` `evalDaemonHookRules`), in order of how much they can be argued with: (1) `cron.create` → `deny` the durable `CronCreate` at the `can_use_tool` intercept; (2) `cron.created` → `inject` a fixed "CronDelete + recreate non-durable" correction for bypass sessions which never ask — **advisory, and a live CLI verifiably refused it** on 2026-08-11, reasoning that an automated message is not user authorization (correct reasoning, which is why it can't be the guarantee); (3) `cron.fire` (foreign) → `evict` the orphaned row from disk — a foreign fire proves nobody in this process will ever CronDelete it, and eviction is the only thing that ends the hourly hijack loop (2026-08-13: 22 fires); (4) `session.reap` → `strip-own-rows` from `scheduled_tasks.json` — the model has no say, and death is exactly when a durable row becomes adoptable. Foreign fires always get a `scheduled_task_fire` stream marker for the HUMAN (observation), but deliberately NO model-visible message (the old injected warning burned a turn + context per fire and stopped nothing). Idle reapers treat a cron-armed session as long-lived (`hasDiskCronInterest`, 7d), and terminating one needs `force:true` (409 `cron_owner`). `WALNUT_ALLOW_DURABLE_CRON=1` on the daemon is the emergency kill-all override — better yet use crontab/launchd starting its own dedicated session for cross-session jobs.
 
 **Debugging send/delivery latency (quick refs):**
 - Both local (`__local__`) AND remote sessions go through the daemon / `RemoteSessionManager`. There is no separate "local" transport — don't assume a stall is SSH-specific.
@@ -219,7 +219,7 @@ death).
 | Chat history | `src/core/chat-history.ts` | skill `walnut-core-internals` |
 | Usage tracking | `src/core/usage/` | [ARCHITECTURE.md](./ARCHITECTURE.md) |
 | Git sync (data hub) | `src/integrations/git-sync.ts` | Mac ⇄ EC2 data plane; secrets NEVER ride it |
-| Logging | `src/logging/` | skill `walnut-logging` + [src/logging/AGENTS.md](./src/logging/AGENTS.md) |
+| Logging & ops | `src/logging/` | skill `walnut-ops` + [src/logging/AGENTS.md](./src/logging/AGENTS.md) |
 | Testing | `tests/` | skill `walnut-testing` + [tests/AGENTS.md](./tests/AGENTS.md) |
 
 ## Development

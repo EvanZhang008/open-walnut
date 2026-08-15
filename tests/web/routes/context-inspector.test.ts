@@ -89,7 +89,7 @@ describe('GET /api/context', () => {
 
     const role = res.body.sections.roleAndRules.content as string;
     expect(role).toContain('Walnut');
-    expect(role).toContain('personal intelligent butler');
+    expect(role).toContain('project manager');
   });
 
   it('tools section lists all agent tools with count', async () => {
@@ -156,11 +156,23 @@ describe('GET /api/context', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.engine).toBe('claude-code');
-    // The prompt shown is the lane's --system-prompt (butler persona), and the
+    // The prompt shown is the lane's --system-prompt (Personal AI persona), and the
     // engine note explains ownership of tools/compaction.
     const role = res.body.sections.roleAndRules.content as string;
     expect(role).toContain('Claude Code session');
-    expect(role).toContain('COORDINATOR');
+    expect(role).toContain('Choose one mode for each request');
+    for (const removed of [
+      '## Error handling and integrity',
+      '## Communication style',
+      '## Task hierarchy',
+      '## Available tools',
+      '## Session management',
+      '## Proactive execution',
+      '## Task sync',
+      '## Available agents',
+    ]) {
+      expect(role).not.toContain(removed);
+    }
     // In-process tool schemas / message history must NOT be presented as fed.
     expect(res.body.sections.tools.count).toBe(0);
     expect(res.body.sections.apiMessages.count).toBe(0);

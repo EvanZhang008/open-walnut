@@ -20,7 +20,6 @@ vi.mock('../../src/agent/model.js', () => ({
 
 import { WALNUT_HOME } from '../../src/constants.js';
 import { isToolResultError } from '../../src/agent/loop.js';
-import { buildRoleSection } from '../../src/agent/context.js';
 
 beforeEach(async () => {
   tmpDir = WALNUT_HOME;
@@ -118,21 +117,5 @@ describe('isToolResultError', () => {
     it('returns false for empty array', () => {
       expect(isToolResultError([])).toBe(false);
     });
-  });
-});
-
-describe('buildRoleSection includes tool error handling', () => {
-  it('contains the error-handling section', () => {
-    const section = buildRoleSection('TestUser');
-    // Renamed from "## Tool error handling" in ae0cd90 when the section grew to
-    // cover non-tool failures too (don't-bypass / no-silent-fallback / no-speculation).
-    expect(section).toContain('## Error handling and integrity');
-  });
-
-  it('contains is_error guidance for the model', () => {
-    const section = buildRoleSection('TestUser');
-    expect(section).toContain('is_error');
-    expect(section).toContain('Retry with corrected parameters');
-    expect(section).toContain('Never claim success after a failed tool call');
   });
 });
