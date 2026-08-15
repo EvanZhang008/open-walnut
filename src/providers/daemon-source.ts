@@ -271,18 +271,36 @@ process.umask(0o077);
 function runWnMinimal(argv) {
   var out = function (s) { process.stdout.write(s + '\\n'); };
   var errOut = function (s) { process.stderr.write(s + '\\n'); };
-  var usage = 'usage: wn peers list [--json] | wn peers send <target> <text...>';
+  var usage = 'usage: wn peers list [--json] | wn peers send <target> <text...> | wn tools list|call <op> [json]';
   if (argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help') { out(usage); process.exit(0); }
-  if (argv[0] !== 'peers') { errOut('wn: unknown command; ' + usage); process.exit(2); }
+  if (argv[0] !== 'peers' && argv[0] !== 'tools') { errOut('wn: unknown command; ' + usage); process.exit(2); }
   // Mirror wn-cli.ts: --json is recognized only BEFORE positional args, so
   // message text can legitimately contain the token '--json'.
   var json = false;
+  var head = argv[0];
   var rest = argv.slice(1);
   while (rest.length && rest[0] === '--json') { json = true; rest.shift(); }
   var sub = rest.shift();
   while (rest.length && rest[0] === '--json') { json = true; rest.shift(); }
   var op, args;
-  if (sub === 'list' && rest.length === 0) { op = 'peers.list'; args = {}; }
+  if (head === 'tools') {
+    // Minimal tools twin: list + call (+ help via list). Same hub capabilities
+    // as the full wn-cli.ts; keep in sync.
+    if (sub === 'list' && rest.length === 0) { op = 'tools.list'; args = {}; }
+    else if ((sub === 'call' || sub === 'help') && rest.length >= 1) {
+      if (sub === 'help') { op = 'tools.list'; args = {}; }
+      else {
+        var callArgs = {};
+        if (rest[1] !== undefined) {
+          try { callArgs = JSON.parse(rest[1]); } catch (e) { errOut('wn: invalid JSON arguments'); process.exit(2); }
+          if (callArgs === null || typeof callArgs !== 'object' || Array.isArray(callArgs)) { errOut('wn: arguments must be a JSON object'); process.exit(2); }
+        }
+        op = 'tools.call';
+        args = { name: rest[0], args: callArgs };
+      }
+    } else { errOut('wn: ' + usage); process.exit(2); }
+  }
+  else if (sub === 'list' && rest.length === 0) { op = 'peers.list'; args = {}; }
   else if (sub === 'send' && rest.length >= 2) {
     op = 'peers.send';
     args = { target: rest[0], text: rest.slice(1).join(' ') };
@@ -336,6 +354,13 @@ function runWnMinimal(argv) {
           var p = peers[i];
           out((p.self ? '*' : ' ') + ' ' + p.shortId + '  ' + (p.title || '(untitled)') + '  ' + (p.host || 'local') + '  ' + (p.status || '?'));
         }
+      } else if (op === 'tools.list') {
+        var ops = (resp.result && resp.result.ops) || [];
+        for (var j = 0; j < ops.length; j++) {
+          out('  ' + ops[j].name + '  ' + (ops[j].title || '') + (ops[j].readonly ? ' (read)' : ' (write)'));
+        }
+      } else if (op === 'tools.call') {
+        out(JSON.stringify(resp.result, null, 2));
       } else {
         var r = resp.result || {};
         out('sent to ' + String(r.targetSid || '').slice(0, 8) + ' "' + (r.targetTitle || '') + '" (queue depth ' + (r.queueDepth || 0) + ')');
@@ -2086,7 +2111,7 @@ var GATEWAY_SOCK_PATH = path.join(DAEMON_DIR, 'agent-gateway.sock');
 var GATEWAY_SHIM_DIR = path.join(DAEMON_DIR, 'bin');
 var GATEWAY_SHIM_PATH = path.join(GATEWAY_SHIM_DIR, 'wn');
 var GATEWAY_MAX_LINE_BYTES = 256 * 1024;
-var GATEWAY_OPS = ['peers.list', 'peers.send'];
+var GATEWAY_OPS = ['peers.list', 'peers.send', 'tools.list', 'tools.call'];
 // 20s default (shorter than the 45s launch relay — peers ops have no long
 // validation chain); WALNUT_GATEWAY_TIMEOUT_MS overrides (tests only).
 var GATEWAY_HUB_TIMEOUT_MS = (function () {

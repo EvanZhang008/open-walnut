@@ -91,9 +91,74 @@ export async function handleGatewayCapability(
       return handlePeersList(callerSid, d);
     case 'peers.send':
       return handlePeersSend(callerSid, payload ?? {}, host, d);
+    case 'tools.list':
+      return handleToolsList();
+    case 'tools.call':
+      return handleToolsCall(callerSid, payload ?? {}, d);
     default:
       return err('bad_request', `unsupported capability: ${JSON.stringify(capability)}`);
   }
+}
+
+// ── tools.list / tools.call — the op registry over the gateway ──────────────
+//
+// A `wn tools ...` call inside ANY Walnut-managed session (local or remote)
+// lands here and dispatches into the SAME registry executor the MCP server and
+// the `walnut tools` CLI use, against this hub's own local API. Remote policy
+// is per-op (`tags.remote`): destructive ops refuse the gateway transport.
+
+async function handleToolsList(): Promise<CapabilityOutcome> {
+  const { listOps } = await import('../../ops/index.js');
+  return {
+    ok: true,
+    result: {
+      ops: listOps().map((o) => ({
+        name: o.name,
+        title: o.title,
+        description: o.description,
+        readonly: o.tags.readonly,
+        remote: o.tags.remote,
+      })),
+    },
+  };
+}
+
+/** Reuse the peers throttle so a runaway agent can't hammer the hub. */
+async function handleToolsCall(
+  callerSid: string,
+  payload: Record<string, unknown>,
+  deps: CapabilityRouterDeps,
+): Promise<CapabilityOutcome> {
+  const name = payload.name;
+  if (typeof name !== 'string' || !name) {
+    return err('bad_request', 'tools.call requires a non-empty string "name"');
+  }
+  const args = payload.args;
+  if (args !== undefined && (typeof args !== 'object' || args === null || Array.isArray(args))) {
+    return err('bad_request', 'tools.call "args" must be a JSON object');
+  }
+  const { getOp, executeOp } = await import('../../ops/index.js');
+  const op = getOp(name);
+  if (!op) {
+    return err('bad_request', `unknown op: ${name} — run \`wn tools list\``);
+  }
+  if (op.tags.remote === 'deny') {
+    return err('bad_request', `${name} is local-only (destructive) — run it on the Walnut host via \`walnut tools call\``);
+  }
+  // Writes ride the same per-sender rate budget as peer sends; reads are free.
+  if (!op.tags.readonly) {
+    const decision = deps.throttle.admitWrite(callerSid);
+    if (!decision.allowed) {
+      return err('throttled', 'too many gateway writes — slow down', { retryAfterMs: decision.retryAfterMs });
+    }
+  }
+  const r = await executeOp(name, (args ?? {}) as Record<string, unknown>);
+  if (!r.ok) return err('internal', r.message);
+  // GatewayResponse.result must be an object — wrap non-object op results.
+  const result = (typeof r.result === 'object' && r.result !== null && !Array.isArray(r.result))
+    ? r.result as Record<string, unknown>
+    : { value: r.result };
+  return { ok: true, result };
 }
 
 // ── peers.list ──

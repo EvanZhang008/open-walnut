@@ -258,6 +258,18 @@ export function registerCommands(program: Command): void {
       await runMcp(options as { readonly?: boolean; apiUrl?: string });
     });
 
+  // The registry catalog: same list/help/call contract as the MCP surface,
+  // driven from the shared op registry (src/ops/). `allowUnknownOption` +
+  // variadic args: subcommand parsing happens in runTools, not commander.
+  program
+    .command('tools [args...]')
+    .description('List, inspect, and invoke Walnut operations (list | help <op> | call <op> \'{json}\')')
+    .allowUnknownOption(true)
+    .action(async (args: string[] | undefined, _options: Record<string, unknown>, cmd) => {
+      const { runTools } = await import('./tools.js');
+      await runTools(args ?? [], cmd.optsWithGlobals());
+    });
+
   program
     .command('session-server')
     .description('Start the session server (WebSocket wrapping Claude Agent SDK)')

@@ -31,7 +31,7 @@ export function gatewayHubTimeoutMs(): number {
 
 // ── Protocol types ──
 
-export const GATEWAY_OPS = ['peers.list', 'peers.send'] as const;
+export const GATEWAY_OPS = ['peers.list', 'peers.send', 'tools.list', 'tools.call'] as const;
 export type GatewayOp = (typeof GATEWAY_OPS)[number];
 
 /** Full error-code table (plan §2d) — shared by the wn CLI and the socket protocol. */

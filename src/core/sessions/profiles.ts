@@ -7,19 +7,43 @@
  * built on the spawn path, and the resume path rebuilds them from the record.
  */
 
+import path from 'node:path'
 import { buildRoleSection, buildWorkModesSection } from '../../agent/context.js'
 import type { SessionProfile } from '../types.js'
 
 /**
- * Mount the Walnut MCP server (`open-walnut mcp`) into a session, giving the
- * CLI structured access to tasks / projects / sessions / search instead of
- * prose instructions. The `open-walnut` bin is on PATH wherever Walnut is
- * installed; the server talks to the local API (see src/mcp/server.ts).
+ * The walnut CLI entry of THIS running install, when identifiable.
+ *
+ * The bare bin name `open-walnut` proved unreliable: whether it exists on
+ * PATH depends on how the package was linked (this very machine only links
+ * `walnut`), and a dead command means the MCP mount silently never comes up —
+ * the session falls back to raw curl. The server process IS the CLI package
+ * (`node dist/cli.js web ...`), so its own argv[1] is the one entry we can
+ * trust absolutely. Guarded by a basename allowlist so a test runner
+ * (vitest) is never mistaken for the CLI.
+ */
+const CLI_ENTRY: string | null = (() => {
+  const entry = process.argv[1]
+  if (!entry) return null
+  const base = path.basename(entry)
+  return base === 'cli.js' || base === 'open-walnut.js' || base === 'walnut.js' || base === 'open-walnut' || base === 'walnut'
+    ? path.resolve(entry)
+    : null
+})()
+
+/**
+ * Mount the Walnut MCP server into a session, giving the CLI structured access
+ * to tasks / projects / sessions / search instead of prose instructions. The
+ * mount targets this install's own CLI entry via the running node binary
+ * (PATH-independent); the bare bin name is only a fallback for exotic setups.
+ * The server talks to the local API (see src/mcp/server.ts).
  */
 export function walnutMcpProfile(): SessionProfile {
   return {
     mcpServers: {
-      walnut: { command: 'open-walnut', args: ['mcp'] },
+      walnut: CLI_ENTRY
+        ? { command: process.execPath, args: [CLI_ENTRY, 'mcp'] }
+        : { command: 'open-walnut', args: ['mcp'] },
     },
   }
 }
