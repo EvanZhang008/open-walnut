@@ -20,7 +20,7 @@ import { presetPanelView } from './todo-panel-helpers'
  * Flow: home page → find the task row → plain click (a task with a session
  * opens the SessionPanel inline). Both panel axes are preset via localStorage:
  * the SECTION tab to 'all' (the panel defaults to Focus, which doesn't mount the
- * main task list) and the PROJECT chip to '' = All (default is ★ Starred).
+ * main task list) and the PROJECT chip to '' = All.
  */
 async function openSessionPanel(page: import('@playwright/test').Page) {
   await presetPanelView(page)

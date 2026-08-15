@@ -116,8 +116,8 @@ test('grabbing a resize handle closes an open kebab menu', async ({ page }) => {
   await page.waitForLoadState('networkidle')
   await page.waitForTimeout(1000)
 
-  // The main lane defaults to a starred/favorites scope, so surface a row via
-  // search rather than assuming one is listed.
+  // Surface a row via search rather than assuming one is listed under the
+  // panel's default section/project axes.
   await page.locator('.todo-search-input').fill('pw')
   const task = page.locator('.todo-panel-item').first()
   await expect(task).toBeVisible({ timeout: 10_000 })

@@ -372,7 +372,6 @@
   text-align: left;
 }
 .tp-row.done .tp-row-title { color: var(--fg-muted); text-decoration: line-through; }
-.tp-row-star { color: var(--tp-p1); font-size: 11px; flex: none; }
 
 .tp-status-circle {
   width: 15px;

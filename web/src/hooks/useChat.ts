@@ -53,7 +53,6 @@ export interface TaskContext {
   status: string;
   phase?: string;
   priority?: string;
-  starred?: boolean;
   due_date?: string;
   source?: string;
   description: string;

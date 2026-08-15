@@ -5,14 +5,13 @@ import { isPlaceholderColumnId } from '@/utils/column-ids';
 
 // `?proj=` <-> internal tab id mapping lives in components/tasks/task-tabs.ts,
 // next to the sentinel definitions it encodes (and unit-testable without this
-// hook's React/DOM deps). Sentinel tokens are '_'-namespaced so a project
-// legitimately NAMED "starred"/"inbox" stays deep-linkable; the legacy bare
-// 'starred' token is still accepted on read.
+// hook's React/DOM deps). The sentinel token is '_'-namespaced so a project
+// legitimately NAMED "inbox" stays deep-linkable.
 
 export interface UrlPending {
   taskId: string | null;
   sessionIds: string[];
-  /** Active task-panel tab: a project name, a tab sentinel (STARRED_TAB / INBOX_TAB), or null when absent. */
+  /** Active task-panel tab: a project name, the INBOX_TAB sentinel, or null when absent. */
   project: string | null;
 }
 

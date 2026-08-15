@@ -122,13 +122,6 @@ describe('Task lifecycle E2E', () => {
     expect(body.task.title).toBe('Updated E2E task');
   });
 
-  it('star task', async () => {
-    const res = await fetch(apiUrl(`/api/tasks/${taskId}/star`), { method: 'POST' });
-    expect(res.status).toBe(200);
-    const body = await res.json() as { starred: boolean };
-    expect(body.starred).toBe(true);
-  });
-
   it('add note', async () => {
     const res = await fetch(apiUrl(`/api/tasks/${taskId}/notes`), {
       method: 'POST',

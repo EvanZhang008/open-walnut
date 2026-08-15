@@ -11,7 +11,7 @@
  *      not sit where the user aims for a fixed control. Within one draft the row
  *      is STABLE — membership is a pure function of the cache, picks never
  *      reshuffle it (the current folder's chip just renders active).
- *   2. provider/task — engine toggle · pin tier · "⋯ More" (star / priority /
+ *   2. provider/task — engine toggle · pin tier · "⋯ More" (priority /
  *      unread). The SAME MetaFooter the folder picker uses, minus its model
  *      select (`hideModel`): the model belongs with the message, so the draft
  *      renders it inside the composer's controls row, exactly where a real
@@ -123,8 +123,8 @@ export function DraftLaunchBar({
   const currentKey = chipKey({ cwd: draft.cwd, host: draft.host ?? null });
   const isAi = (field: DraftAiField) => !!draft.aiFields?.has(field);
   // The meta row carries ONE badge for its AI-fillable fields (tier / priority /
-  // star / the More menu's dates) — see the row's comment below.
-  const metaHasAi = isAi('pinTier') || isAi('priority') || isAi('starred')
+  // the More menu's dates) — see the row's comment below.
+  const metaHasAi = isAi('pinTier') || isAi('priority')
     || isAi('dueDate') || isAi('startDate') || isAi('endDate');
 
   return (
@@ -164,7 +164,7 @@ export function DraftLaunchBar({
       {!pickerOpen && (
         <div className="draft-meta-row">
           {/* ONE badge for the whole row rather than three inside MetaFooter: the
-              tier/priority/star controls are SHARED with the picker's footer, and
+              tier/priority controls are SHARED with the picker's footer, and
               teaching them about a draft-only concept would leak it everywhere.
               The slot is an absolute OVERLAY on the row's right edge (see the
               CSS): out of the flex flow, so it can neither indent this row

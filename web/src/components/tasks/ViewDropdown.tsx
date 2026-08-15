@@ -24,7 +24,7 @@
 import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { ICON_SLIDERS } from '../common/Icons';
-import { STARRED_TAB, INBOX_TAB } from './task-tabs';
+import { INBOX_TAB } from './task-tabs';
 import { log } from '@/utils/log';
 import { PHASE_LABELS } from '@/utils/session-status';
 import type { TaskPhase, TaskPriority } from '@open-walnut/core';
@@ -63,7 +63,6 @@ export interface TaskQueryFilterState {
   sprints: string[];
   tagsAny: string[];
   pinned: TriState;
-  starred: TriState;
   blocked: TriState;
   timeBasis: TimeBasis;
   /** `null` = no time window at all. */
@@ -89,7 +88,6 @@ export const DEFAULT_TASK_QUERY_FILTER_STATE: TaskQueryFilterState = {
   sprints: [],
   tagsAny: [],
   pinned: undefined,
-  starred: undefined,
   blocked: undefined,
   timeBasis: 'updated',
   timePreset: null,
@@ -188,7 +186,6 @@ export function toTaskQuery(state: TaskQueryFilterState): TaskQuery {
   if (state.sprints.length) query.sprints = [...state.sprints];
   if (state.tagsAny.length) query.tagsAny = [...state.tagsAny];
   if (state.pinned !== undefined) query.pinned = state.pinned;
-  if (state.starred !== undefined) query.starred = state.starred;
   if (state.blocked !== undefined) query.blocked = state.blocked;
   const time = taskQueryTime(state);
   if (time) query.time = time;
@@ -233,7 +230,6 @@ export interface ViewDropdownProps {
   activeProject?: string;
   onProjectChange?: (project: string) => void;
   projectCounts?: Record<string, number>;
-  hasStarredContent?: boolean;
 
   phaseFilter?: string;
   onPhaseFilterChange?: (v: string) => void;
@@ -303,7 +299,7 @@ const DATE_FILTER_OPTIONS = [
 const LIST_BOX_STYLE = { maxHeight: 88, overflowY: 'auto' as const };
 
 export function ViewDropdown({
-  projects, activeProject, onProjectChange, projectCounts, hasStarredContent,
+  projects, activeProject, onProjectChange, projectCounts,
   phaseFilter, onPhaseFilterChange, priorityFilter, onPriorityFilterChange,
   tagFilter, onTagFilterChange, availableTags,
   dateFilter, onDateFilterChange,
@@ -375,11 +371,10 @@ export function ViewDropdown({
     return () => document.removeEventListener('keydown', handler);
   }, [open]);
 
-  // Build project chips: [★, All, ...projects]. Inbox rides in the project list
+  // Build project chips: [All, ...projects]. Inbox rides in the project list
   // when the caller includes it (INBOX_TAB), since '' is taken by the All chip.
   const catChips: { id: string; label: string; count?: number }[] = [];
   if (hasProjectChips) {
-    if (hasStarredContent) catChips.push({ id: STARRED_TAB, label: '★' });
     catChips.push({ id: '', label: 'All' });
     for (const project of projects ?? []) {
       catChips.push({ id: project, label: project === INBOX_TAB ? 'Inbox' : project, count: projectCounts?.[project] });
@@ -573,7 +568,6 @@ function QuerySection({ query, patch, projectOptions, sourceOptions, sprintOptio
 
       <div className="vd-grid">
         <TriStateField label="Pinned" value={query.pinned} onChange={(v) => patch({ pinned: v })} />
-        <TriStateField label="Starred" value={query.starred} onChange={(v) => patch({ starred: v })} />
         <TriStateField label="Blocked" value={query.blocked} onChange={(v) => patch({ blocked: v })} />
       </div>
 

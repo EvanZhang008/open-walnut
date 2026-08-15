@@ -31,7 +31,7 @@ describe('Local plugin: registerSync', () => {
       'createTask', 'deleteTask',
       'updateTitle', 'updateDescription', 'updateSummary', 'updateNote',
       'updateConversationLog', 'updatePriority', 'updatePhase', 'updateDueDate',
-      'updateStar', 'updateProject', 'updateDependencies',
+      'updateProject', 'updateDependencies',
       'pushTask',
       'associateSubtask', 'disassociateSubtask',
       'syncPoll',
@@ -65,7 +65,6 @@ describe('Local plugin: registerSync', () => {
     await expect(sync.updatePriority(task, 'high')).resolves.not.toThrow();
     await expect(sync.updatePhase(task, 'IN_PROGRESS')).resolves.not.toThrow();
     await expect(sync.updateDueDate(task, '2026-01-01')).resolves.not.toThrow();
-    await expect(sync.updateStar(task, true)).resolves.not.toThrow();
     await expect(sync.updateProject(task, 'Project')).resolves.not.toThrow();
     await expect(sync.updateDependencies(task, ['dep-1'])).resolves.not.toThrow();
     await expect(sync.associateSubtask(task, childTask)).resolves.not.toThrow();

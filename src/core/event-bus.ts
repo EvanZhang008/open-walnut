@@ -19,7 +19,6 @@ export const EventNames = {
   TASK_CREATED: 'task:created',
   TASK_UPDATED: 'task:updated',
   TASK_COMPLETED: 'task:completed',
-  TASK_STARRED: 'task:starred',
   TASK_DELETED: 'task:deleted',
   TASK_REORDERED: 'task:reordered',
   TASK_UNBLOCKED: 'task:unblocked',

@@ -332,7 +332,6 @@ function buildToolTaskQuery(params: Record<string, unknown>, where: Record<strin
   if (Array.isArray(where.tags) && where.tags.length > 0) query.tagsAny = where.tags as string[];
   if (Array.isArray(where.tags_all) && where.tags_all.length > 0) query.tagsAll = where.tags_all as string[];
   if (where.pinned !== undefined) query.pinned = looseBool(where.pinned, 'pinned');
-  if (where.starred !== undefined) query.starred = looseBool(where.starred, 'starred');
   if (where.unread !== undefined) query.unread = looseBool(where.unread, 'unread');
   if (where.blocked !== undefined) query.blocked = looseBool(where.blocked, 'blocked');
   if (where.group_id) query.groupId = String(where.group_id);
@@ -448,7 +447,6 @@ async function runTaskQueryTool(
       updated_at: t.updated_at,
     };
     if (t.completed_at) entry.completed_at = t.completed_at;
-    if (t.starred) entry.starred = true;
     if (t.unread) entry.unread = true;
     if (t.due_date) entry.due_date = t.due_date;
     if (t.start_date) entry.start_date = t.start_date;
@@ -500,7 +498,6 @@ export const tools: ToolDefinition[] = [
             priority: { type: 'string', enum: ['immediate', 'important', 'backlog', 'none'] },
             source: { type: 'string', description: 'Filter by task source (exact), e.g. "local".' },
             pinned: { type: 'boolean', description: 'Filter pinned/unpinned tasks. Combine with completion to find e.g. recently finished pinned work.' },
-            starred: { type: 'boolean', description: 'Filter starred/favorite tasks (includes individually starred tasks and tasks in favorited projects).' },
             unread: { type: 'boolean', description: 'Filter to UNREAD tasks — the agent produced output the human has not opened yet. Set automatically when a session turn ends; cleared when the human opens the task.' },
             parent_task_id: { type: 'string', description: 'Filter to children of a parent task (by ID prefix).' },
             group_id: { type: 'string', description: 'Filter to members of a virtual group (exact group id, e.g. "g_xxx").' },
@@ -821,7 +818,7 @@ export const tools: ToolDefinition[] = [
     name: 'task_update',
     description: `Update a task or a project. Supports multiple fields in a single call.
 
-For tasks (type='task'): update structural fields (priority, phase, project, starred, unread, due_date, start_date, end_date, title, pinned, focus_tier) and/or text fields (description, summary, note, append_note) in one call. Use phase='AGENT_COMPLETE' to mark a task done (only humans can set COMPLETE). Use pinned + focus_tier to pin/unpin tasks for the Focus Bar. Pass project='' to move a task to Inbox.
+For tasks (type='task'): update structural fields (priority, phase, project, unread, due_date, start_date, end_date, title, pinned, focus_tier) and/or text fields (description, summary, note, append_note) in one call. Use phase='AGENT_COMPLETE' to mark a task done (only humans can set COMPLETE). Use pinned + focus_tier to pin/unpin tasks for the Focus Bar. Pass project='' to move a task to Inbox.
 
 For projects (type='project'): set default_host and default_cwd for session defaults, or rename the project across all its tasks (old_name + new_name; renaming onto an existing project merges them).`,
     input_schema: {
@@ -837,7 +834,6 @@ For projects (type='project'): set default_host and default_cwd for session defa
         due_date: { type: 'string', description: 'New due date — the deadline (YYYY-MM-DD, or ISO datetime). Empty string clears.' },
         start_date: { type: 'string', description: 'New start date — when to begin working (YYYY-MM-DD, or ISO datetime). Tasks with a future start_date are hidden from the "Now" view until then. Empty string clears.' },
         end_date: { type: 'string', description: 'New end of the working block (YYYY-MM-DD, or ISO datetime). With start_date it gives the task a duration on the calendar; independent of due_date. Empty string clears.' },
-        starred: { type: 'boolean', description: 'Star or unstar the task.' },
         unread: { type: 'boolean', description: 'Read/unread marker (red dot in UI). true = there is agent output the human has not seen. Normally managed automatically by the session lifecycle — set it manually only to re-flag a task for review.' },
         parent_task_id: { type: 'string', description: 'Set or change the parent task. Pass empty string to remove parent.' },
         sprint: { type: 'string', description: 'Set sprint name (e.g. "Feb16-Feb27"). Empty string clears. Plugins map this to platform-specific sprint/iteration fields.' },
@@ -944,7 +940,7 @@ For projects (type='project'): set default_host and default_cwd for session defa
           params.phase !== undefined ||
           params.project !== undefined || params.due_date !== undefined ||
           params.start_date !== undefined || params.end_date !== undefined ||
-          params.starred !== undefined || params.unread !== undefined ||
+          params.unread !== undefined ||
           params.parent_task_id !== undefined || params.sprint !== undefined ||
           params.add_tags !== undefined || params.remove_tags !== undefined ||
           params.set_tags !== undefined ||
@@ -963,7 +959,6 @@ For projects (type='project'): set default_host and default_cwd for session defa
               end_date: params.end_date as string | undefined,
               // Trim at the boundary like task_create does ('' stays '', = Inbox).
               project: params.project === undefined ? undefined : String(params.project).trim(),
-              starred: (params.starred === true || params.starred === 'true') ? true : (params.starred === false || params.starred === 'false') ? false : undefined,
               unread: (params.unread === true || params.unread === 'true') ? true : (params.unread === false || params.unread === 'false') ? false : undefined,
               parent_task_id: params.parent_task_id as string | undefined,
               sprint: params.sprint as string | undefined,
@@ -978,8 +973,7 @@ For projects (type='project'): set default_host and default_cwd for session defa
             if (params.phase === 'AGENT_COMPLETE') {
               bus.emit(EventNames.TASK_COMPLETED, { task }, ['web-ui'], { source: 'agent' });
             }
-            const starLabel = task.starred === true && params.starred != null ? ' (starred)' : task.starred === false && params.starred != null ? ' (unstarred)' : '';
-            results.push(`structural fields updated${starLabel}`);
+            results.push('structural fields updated');
           } catch (err) {
             if (err instanceof CircularDependencyError) {
               return `Error: Adding that dependency would create a circular chain. ${err.message}`;

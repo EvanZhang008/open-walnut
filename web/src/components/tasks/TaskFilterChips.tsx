@@ -114,7 +114,7 @@ function buildTaskFilterChips(
     });
   }
 
-  for (const [field, label] of [['pinned', 'Pinned'], ['starred', 'Starred'], ['blocked', 'Blocked']] as const) {
+  for (const [field, label] of [['pinned', 'Pinned'], ['blocked', 'Blocked']] as const) {
     const value = query[field];
     if (value === undefined) continue;
     chips.push({

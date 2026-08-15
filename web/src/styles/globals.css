@@ -1535,19 +1535,6 @@ select {
   font-size: 12px;
 }
 
-/* ===== Star Button ===== */
-
-.star-button {
-  font-size: 16px;
-  color: var(--fg-muted);
-  padding: 2px;
-  transition: color 0.15s;
-}
-
-.star-button:hover {
-  color: var(--warning);
-}
-
 /* ===== Task List / Groups ===== */
 
 .task-group {

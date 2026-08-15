@@ -46,9 +46,9 @@ async function updateTaskPhase(
 
 // Helper: make every task visible. Two independent axes must both be "All":
 //  • SECTION tab — the panel defaults to Focus, where the main list isn't mounted
-//  • PROJECT chip — defaults to ★ (Starred), which hides non-starred tasks. It
-//    lives in the View dropdown now; the old `.todo-panel-tabs` strip this used to
-//    click no longer exists, so these tests were timing out on a dead selector.
+//  • PROJECT chip — lives in the View dropdown; the old `.todo-panel-tabs` strip
+//    this used to click no longer exists, so these tests were timing out on a
+//    dead selector.
 async function showAllTasks(page: import('@playwright/test').Page) {
   await showEverything(page)
   // Wait for task list to update

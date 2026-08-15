@@ -48,7 +48,6 @@ function formatTaskDetails(task: Task): string {
     `Project: ${task.project || 'Inbox'}`,
   ];
 
-  if (task.starred) lines.push('Starred: yes');
   if (task.unread) lines.push('Unread: yes (output the human has not opened)');
   if (task.parent_task_id) lines.push(`Parent Task: ${task.parent_task_id}`);
   if (task.start_date) lines.push(`Start: ${task.start_date}`);

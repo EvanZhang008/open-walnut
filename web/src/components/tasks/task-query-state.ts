@@ -53,8 +53,6 @@ export function safeNormalizeTaskQuery(query: TaskQuery, now: Date): NormalizedT
 /**
  * Context the pure evaluator cannot derive from a task row on its own.
  *
- *  - `favoriteProjects` — effective-starred = starred task OR favorited project.
- *    Keys are lowercased; project identity is case-insensitive everywhere.
  *  - `blockedIds` — a dependency-graph condition. matchesTaskQuery THROWS when
  *    `query.blocked` is set without it (so "never computed" can't read as
  *    "nothing is blocked"), which is why it's built only when the condition is
@@ -62,16 +60,8 @@ export function safeNormalizeTaskQuery(query: TaskQuery, now: Date): NormalizedT
  */
 export function buildTaskQueryContext(
   tasks: readonly Task[],
-  isProjectFavorite: ((project: string) => boolean) | undefined,
   needsBlocked: boolean,
 ): TaskQueryContext {
-  const favoriteProjects = new Set<string>();
-  for (const task of tasks) {
-    const project = (task.project || '').toLowerCase();
-    if (project && !favoriteProjects.has(project) && isProjectFavorite?.(project)) {
-      favoriteProjects.add(project);
-    }
-  }
-  if (!needsBlocked) return { favoriteProjects };
-  return { favoriteProjects, blockedIds: computeBlockedIds(tasks) };
+  if (!needsBlocked) return {};
+  return { blockedIds: computeBlockedIds(tasks) };
 }

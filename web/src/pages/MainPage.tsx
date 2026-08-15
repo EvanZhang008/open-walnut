@@ -282,7 +282,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const { health, loading: healthLoading } = useSystemHealth();
   const { connectionState } = useWebSocket();
   const { notify } = useNotifications();
-  const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, toggleComplete, setPhase, star, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, showOperationError, taskGroups, hiddenGroups, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden } = useTasksContext();
+  const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, toggleComplete, setPhase, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, showOperationError, taskGroups, hiddenGroups, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden } = useTasksContext();
   const favorites = useFavorites();
   const focusBar = useFocusBarContext();
   const pinnedTaskIdSet = useMemo(() => new Set(focusBar.pinnedIds), [focusBar.pinnedIds]);
@@ -492,7 +492,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   });
 
   // Active project tab — mirrors TodoPanel's tab for URL sync (may be a tab
-  // sentinel: STARRED_TAB / INBOX_TAB). Initialized from the SAME localStorage key
+  // sentinel: INBOX_TAB). Initialized from the SAME localStorage key
   // TodoPanel writes, imported rather than re-spelled: this used to read
   // 'open-walnut-todo-active-tab' while TodoPanel wrote 'walnut-todo-active-tab',
   // so the initial URL never reflected the restored tab.
@@ -1163,7 +1163,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    *
    * Purely additive back-fill of the launch pills — which fields it MAY write is
    * `applyDraftParse`'s rule, not this handler's: project only while unclaimed,
-   * tier/priority/star only while `metaTouched` is false, and NEITHER may latch an
+   * tier/priority only while `metaTouched` is false, and NEITHER may latch an
    * authority flag (an AI value must not masquerade as a user pick, or it would
    * switch off per-directory launch memory). Registry lookup only — no fetch.
    */
@@ -1186,7 +1186,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   );
 
   /** A launch-meta edit from the draft's launch bar (model / engine / pin tier /
-   *  star / unread / priority). Every route in is a USER action, so this is also
+   *  unread / priority). Every route in is a USER action, so this is also
    *  the one place that flips `metaTouched` — from then on the row's meta is
    *  authoritative and per-directory launch memory stops overwriting it (same
    *  contract as SessionPathSelector's `launchTouchedRef`). */
@@ -1198,7 +1198,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // metaTouched already stops the AI from writing these — dropping the ✦
       // badges keeps the display honest about who chose what.
       ? {
-          ...clearAiFields(d, ['pinTier', 'priority', 'starred', 'dueDate', 'startDate', 'endDate']),
+          ...clearAiFields(d, ['pinTier', 'priority', 'dueDate', 'startDate', 'endDate']),
           meta: updater(d.meta), metaTouched: true,
         }
       : d)));
@@ -1677,7 +1677,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     } catch { /* non-critical */ }
   }, [openSessionOrToast]);
 
-  const handleCreate = useCallback(async (input: { title: string; priority: string; project?: string; description?: string; due_date?: string; start_date?: string; end_date?: string; starred?: boolean; pinnedTier?: string; capture?: boolean }) => {
+  const handleCreate = useCallback(async (input: { title: string; priority: string; project?: string; description?: string; due_date?: string; start_date?: string; end_date?: string; pinnedTier?: string; capture?: boolean }) => {
     const tier = input.pinnedTier;
     // Quick-capture ("Add to <tier>…" inline rows, Focus Dock) routes to the user's
     // configured Default Platform + Project instead of the active tab's project — so a
@@ -1714,7 +1714,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         : undefined,
     );
     try {
-      if (input.starred && task?.id) star(task.id);
       if (tier && task?.id) {
         // Locate the task in the PINNED region only. The new card already renders in
         // its tier (optimistic pin), so scroll there — but do NOT let TodoPanel switch
@@ -1733,7 +1732,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       console.warn('Quick add post-create side-effect failed', err);
     }
     return task;
-  }, [create, star, focusBar, taskDefaults]);
+  }, [create, focusBar, taskDefaults]);
 
   // Inline "+" in the Focus Dock — create a task and pin it straight to the Focus tier.
   // capture:true routes it to the configured Default Platform/Project (fast local Inbox
@@ -1956,7 +1955,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // applies its own default tier. Without the null, unpinning inside a
       // fix-walnut re-edit was silently overridden back to the server default.
       const taskMeta = metaSnapshot ? {
-        starred: metaSnapshot.starred,
         unread: metaSnapshot.unread,
         priority: metaSnapshot.priority,
         pinTier: metaSnapshot.pinTier ?? null,
@@ -2110,7 +2108,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         ...(draft?.project ? { project: draft.project } : {}),
         ...(description ? { description } : {}),
         ...(draft?.meta.pinTier ? { pinnedTier: draft.meta.pinTier } : {}),
-        ...(draft?.meta.starred ? { starred: true } : {}),
         ...(draft?.meta.dueDate ? { due_date: draft.meta.dueDate } : {}),
         ...(draft?.meta.startDate ? { start_date: draft.meta.startDate } : {}),
         ...(draft?.meta.endDate ? { end_date: draft.meta.endDate } : {}),
@@ -2326,7 +2323,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         status: focusedTask.status,
         phase: focusedTask.phase,
         priority: focusedTask.priority,
-        starred: focusedTask.starred,
         due_date: focusedTask.due_date,
         source: focusedTask.source,
         description: truncate(focusedTask.description, 350) ?? focusedTask.description,
@@ -2392,7 +2388,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           onSetPhase={handleSetPhase}
           onCreate={handleCreate}
           onUpdate={handleUpdate}
-          onStar={star}
           onDelete={deleteTask}
           onBatchSetPhase={handleBatchSetPhase}
           onBatchDelete={handleBatchDelete}
@@ -2642,14 +2637,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 <span className="qsb-label">{quickStartPath.intent === 'fix-walnut' ? '\u{1F527} Fix Walnut' : 'Quick Start'}</span>
                 {quickStartPath.host && <span className="qsb-host">{quickStartPath.hostLabel ?? quickStartPath.host}</span>}
                 {/* Compact, read-only model chip. Click it (or /session) to re-open the
-                    picker and edit ALL launch settings (model / star / pin / priority) —
+                    picker and edit ALL launch settings (model / pin / priority) —
                     the picker restores the prior choice via initialMeta. Keeping the
                     collapsed bar chip-only (no inline <select>) fixes the narrow-view
                     overflow and saves a row of controls. */}
                 <button
                   className="qsb-model-chip"
                   onClick={() => { setPathSelectorOpen(true); setQuickTaskOpen(false); }}
-                  title="Edit launch settings (engine, model, star, pin, priority)"
+                  title="Edit launch settings (engine, model, pin, priority)"
                 >
                   {/* Chip label: codex engine → "Codex" (its models are discovered at
                       session start, no pre-start pick); legacy alias → static label;

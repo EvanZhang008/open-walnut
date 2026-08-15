@@ -147,12 +147,11 @@ export function MetaFooter({ meta, onChange, compact, host, hideModel = false }:
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
   const moreBtnRef = useRef<HTMLButtonElement>(null);
-  // Count fields the user actually CHANGED from the quick-start defaults —
-  // starred=true IS a default, so a fresh open must show an inactive badge, not
-  // "More · 1". Only counts controls that LIVE in the menu: the pin tier moved
-  // to the primary row, where its own active state is already visible.
-  const nonDefaultCount = Number(meta.starred !== DEFAULT_META.starred)
-    + Number(meta.unread !== DEFAULT_META.unread)
+  // Count fields the user actually CHANGED from the quick-start defaults, so a
+  // fresh open shows an inactive badge, not "More · 1". Only counts controls that
+  // LIVE in the menu: the pin tier moved to the primary row, where its own active
+  // state is already visible.
+  const nonDefaultCount = Number(meta.unread !== DEFAULT_META.unread)
     + Number(meta.priority !== DEFAULT_META.priority)
     + Number(!!meta.startDate) + Number(!!meta.endDate) + Number(!!meta.dueDate);
 
@@ -226,17 +225,6 @@ export function MetaFooter({ meta, onChange, compact, host, hideModel = false }:
                     onChange={(dueDate) => onChange(m => ({ ...m, dueDate: dueDate ?? undefined }))}
                   />
                 </div>
-              </div>
-              <div className="sps-meta-row">
-                <button
-                  type="button"
-                  className={`sps-meta-toggle${meta.starred ? ' active' : ''}`}
-                  onClick={() => onChange(m => ({ ...m, starred: !m.starred }))}
-                  title="Star this task"
-                >
-                  <span className="sps-meta-toggle-icon">{meta.starred ? '★' : '☆'}</span>
-                  <span>Star</span>
-                </button>
               </div>
               <div className="sps-meta-row">
                 <button

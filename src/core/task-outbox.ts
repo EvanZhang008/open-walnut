@@ -73,15 +73,15 @@ export type TaskOp =
 /**
  * Fields an 'update' op may write onto an existing primary row.
  *
- * VERSION SKEW: a cloud box running pre-category-removal code keeps emitting ops
- * that carry `category`. Dropping the key from this list is the whole tolerance
- * mechanism — an unknown field is simply never copied into the patch, so an old
- * op degrades to "project + the other fields" instead of failing or resurrecting
- * the retired column. No op-format version number needed.
+ * VERSION SKEW: a cloud box running older code keeps emitting ops that carry
+ * retired fields (`category`, `starred`). Dropping the key from this list is the
+ * whole tolerance mechanism — an unknown field is simply never copied into the
+ * patch, so an old op degrades to "project + the other fields" instead of
+ * failing or resurrecting the retired column. No op-format version number needed.
  */
 const UPDATE_WHITELIST: (keyof Task)[] = [
   'title', 'status', 'phase', 'priority', 'project',
-  'due_date', 'start_date', 'end_date', 'completed_at', 'starred', 'pinned', 'tags', 'summary',
+  'due_date', 'start_date', 'end_date', 'completed_at', 'pinned', 'tags', 'summary',
   'description', 'note', 'sprint', 'unread', 'updated_at',
 ];
 
@@ -387,7 +387,6 @@ export async function importProjectionOnCloud(): Promise<number> {
         ...(p.start_date ? { start_date: p.start_date } : {}),
         ...(p.end_date ? { end_date: p.end_date } : {}),
         ...(p.completed_at ? { completed_at: p.completed_at } : {}),
-        ...(p.starred ? { starred: true } : {}),
         ...(p.pinned ? { pinned: true } : {}),
         ...(p.tags?.length ? { tags: p.tags } : {}),
       } as Task);
@@ -408,7 +407,6 @@ export async function importProjectionOnCloud(): Promise<number> {
           start_date: (p.start_date ?? null) as Task['start_date'],
           end_date: (p.end_date ?? null) as Task['end_date'],
           completed_at: p.completed_at,
-          starred: p.starred,
           pinned: p.pinned,
           tags: p.tags,
           summary: p.summary,

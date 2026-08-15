@@ -3,7 +3,7 @@
  * replica has a real local task store; every v1 task mutation emits a TASK_*
  * bus event that the cloud dispatch subscriber (server.ts cloud branch) sends
  * to the primary over the `server.tasks.apply` bridge RPC. Verifies the two op
- * kinds the endpoints produce: star → update op, delete → delete op.
+ * kinds the endpoints produce: PATCH → update op, delete → delete op.
  *
  * No bridge is registered in this harness, so every dispatch takes the
  * OFFLINE FALLBACK: the op lands in cache/task-queue/ (NON-git) instead of the
@@ -79,15 +79,27 @@ afterAll(async () => {
 })
 
 describe('Wave-1 task mutations dispatch to the primary on a REPLICA', () => {
-  it('POST /v1/tasks/:id/star → 200 + update op queued (bridge down)', async () => {
-    const { task } = await addTask({ title: 'Cloud star target' })
+  it('PATCH /v1/tasks/:id → 200 + update op queued (bridge down)', async () => {
+    const { task } = await addTask({ title: 'Cloud patch target' })
+    const res = await fetch(apiUrl(`/api/v1/tasks/${task.id}`), {
+      method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ title: 'Cloud patched' }),
+    })
+    expect(res.status).toBe(200)
+    expect(await waitForOp((op) => op.type === 'update' && op.task?.id === task.id)).toBe(true)
+  })
+
+  // The retired star endpoint stays mounted for the frozen contract: it answers
+  // the documented shape with `starred: false` and writes NOTHING, so an older
+  // iOS build's decoder keeps working instead of failing the request.
+  it('POST /v1/tasks/:id/star → 200 { starred: false } and mutates nothing', async () => {
+    const { task } = await addTask({ title: 'Cloud star no-op target' })
     const res = await fetch(apiUrl(`/api/v1/tasks/${task.id}/star`), {
       method: 'POST', headers: authHeaders(),
     })
     expect(res.status).toBe(200)
-    const body = await res.json() as { starred: boolean }
-    expect(body.starred).toBe(true)
-    expect(await waitForOp((op) => op.type === 'update' && op.task?.id === task.id)).toBe(true)
+    const body = await res.json() as { starred: boolean; task: { id: string } }
+    expect(body.starred).toBe(false)
+    expect(body.task.id).toBe(task.id)
   })
 
   it('DELETE /v1/tasks/:id → 204 + delete op queued (bridge down)', async () => {

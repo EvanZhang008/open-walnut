@@ -17,7 +17,6 @@ const noopLocalSync: IntegrationSync = {
   updatePriority: async () => {},
   updatePhase: async () => {},
   updateDueDate: async () => {},
-  updateStar: async () => {},
   updateProject: async () => {},
   updateDependencies: async () => {},
   associateSubtask: async () => {},

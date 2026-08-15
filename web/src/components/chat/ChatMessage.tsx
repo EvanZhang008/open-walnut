@@ -190,7 +190,6 @@ function TaskContextSection({ ctx, onSessionClick }: TaskContextSectionProps) {
               {ctx.priority === 'high' ? '!!' : ctx.priority === 'medium' ? '!' : '\u2013'} {ctx.priority}
             </span>
           )}
-          {ctx.starred && <span style={{ fontSize: 11, color: 'var(--warning)' }}>{'\u2605'}</span>}
           {subtasksTotal > 0 && (
             <span style={{ fontSize: 10, color: 'var(--fg-muted)' }}>{subtasksDone}/{subtasksTotal}</span>
           )}

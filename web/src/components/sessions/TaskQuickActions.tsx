@@ -9,7 +9,7 @@
 import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task, TaskPhase, TaskPriority } from '@open-walnut/core';
-import { fetchTask, updateTask, starTask } from '@/api/tasks';
+import { fetchTask, updateTask } from '@/api/tasks';
 import { ApiError } from '@/api/client';
 import { useEvent } from '@/hooks/useWebSocket';
 import * as ICONS from '@/components/common/Icons';
@@ -116,10 +116,6 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     const d = data as { task?: Task };
     if (d.task && d.task.id === taskId) setTask(d.task);
   });
-  useEvent('task:starred', (data) => {
-    const d = data as { task?: Task };
-    if (d.task && d.task.id === taskId) setTask(d.task);
-  });
 
   // Close kebab on outside click, Escape, or once the trigger scrolls away.
   // The menu now scrolls internally, so a scroll event originating INSIDE it
@@ -194,16 +190,6 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     const id = task.id;
     setTask(prev => prev ? { ...prev, priority } : prev);
     updateTask(id, { priority }).catch(() => {
-      fetchTask(id).then(setTask).catch(() => {});
-    });
-    closeKebab();
-  }, [task, closeKebab]);
-
-  const handleToggleStar = useCallback(() => {
-    if (!task) return;
-    const id = task.id;
-    setTask(prev => prev ? { ...prev, starred: !prev.starred } : prev);
-    starTask(id).catch(() => {
       fetchTask(id).then(setTask).catch(() => {});
     });
     closeKebab();
@@ -329,15 +315,6 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
               <div className="task-kebab-divider" />
             </>
           )}
-
-          {/* Star */}
-          <button
-            className={`task-kebab-item${task.starred ? ' task-kebab-item-active' : ''}`}
-            onClick={(e) => { e.stopPropagation(); handleToggleStar(); }}
-          >
-            <span className="task-kebab-icon">{task.starred ? ICONS.ICON_STAR_FILLED : ICONS.ICON_STAR_EMPTY}</span>
-            <span>{task.starred ? 'Unstar' : 'Star'}</span>
-          </button>
 
           {/* Read / unread */}
           {!isDone && (

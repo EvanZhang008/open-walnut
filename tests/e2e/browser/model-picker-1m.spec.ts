@@ -49,9 +49,8 @@ const CLI_CATALOG = {
 }
 
 async function openSessionPanel(page: import('@playwright/test').Page) {
-  // Two panel axes both hide the seeded task by default: the SECTION tab (Focus,
-  // which doesn't mount the main task list) and the PROJECT chip (★ starred, now
-  // in the View dropdown). Preset both to "All" before the first render.
+  // The SECTION tab defaults to Focus, which doesn't mount the main task list.
+  // Preset both axes to "All" before the first render.
   await presetPanelView(page)
   await page.goto('/')
   await page.waitForLoadState('networkidle')

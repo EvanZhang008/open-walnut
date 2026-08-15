@@ -159,7 +159,7 @@ describe('GET /api/tasks — canonical query params', () => {
     expect(await idsFor('?sprints=S1')).toEqual([a.id]);
   });
 
-  it('pinned / starred / unread / blocked take true|false', async () => {
+  it('pinned / unread / blocked take true|false', async () => {
     const { task: pinned } = await addTask({ title: 'Pinned' });
     const { task: plain } = await addTask({ title: 'Plain' });
     const { togglePin } = await import('../../../src/core/task-manager.js');
@@ -167,7 +167,9 @@ describe('GET /api/tasks — canonical query params', () => {
 
     expect(await idsFor('?pinned=true')).toEqual([pinned.id]);
     expect(await idsFor('?pinned=false')).toEqual([plain.id]);
-    expect(await idsFor('?starred=true')).toEqual([]);
+    // `starred` is a RETIRED param — unknown params are ignored, not rejected,
+    // so an old client's link degrades to "no condition" instead of 400/empty.
+    expect(new Set(await idsFor('?starred=true'))).toEqual(new Set([pinned.id, plain.id]));
     // The param is `unread`; the pre-v6 `needs_attention` spelling never shipped
     // on this route and is NOT accepted (an unknown param is simply ignored).
     expect(new Set(await idsFor('?unread=false'))).toEqual(new Set([pinned.id, plain.id]));
@@ -436,22 +438,6 @@ describe('POST /api/tasks/:id/complete', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.task.status).toBe('done');
-  });
-});
-
-describe('POST /api/tasks/:id/star', () => {
-  it('toggles starred state', async () => {
-    const { task } = await addTask({ title: 'Starrable' });
-
-    const app = createApp();
-
-    const res1 = await request(app).post(`/api/tasks/${task.id}/star`);
-    expect(res1.status).toBe(200);
-    expect(res1.body.starred).toBe(true);
-
-    const res2 = await request(app).post(`/api/tasks/${task.id}/star`);
-    expect(res2.status).toBe(200);
-    expect(res2.body.starred).toBe(false);
   });
 });
 

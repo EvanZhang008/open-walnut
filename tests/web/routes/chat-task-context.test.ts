@@ -85,14 +85,13 @@ describe('buildTaskContextPrefix', () => {
     expect(prefix).not.toContain('A'.repeat(501));
   });
 
-  it('includes phase, priority, starred, source, due_date, created_at', () => {
+  it('includes phase, priority, source, due_date, created_at', () => {
     const prefix = buildTaskContextPrefix({
       id: 'abc-123',
       title: 'Big Feature',
       phase: 'IN_PROGRESS',
       status: 'in_progress',
       priority: 'immediate',
-      starred: true,
       source: 'plugin-a',
       due_date: '2026-03-01',
       created_at: '2026-01-15T08:00:00Z',
@@ -101,7 +100,6 @@ describe('buildTaskContextPrefix', () => {
 
     expect(prefix).toContain('Phase: IN_PROGRESS');
     expect(prefix).toContain('Priority: immediate');
-    expect(prefix).toContain('Starred: yes');
     expect(prefix).toContain('Source: plugin-a');
     expect(prefix).toContain('Due: 2026-03-01');
     expect(prefix).toContain('Created: 2026-01-15T08:00:00Z');
@@ -114,18 +112,6 @@ describe('buildTaskContextPrefix', () => {
       priority: 'none',
     });
     expect(prefix).not.toContain('Priority:');
-  });
-
-  it('omits starred when false or undefined', () => {
-    const prefix = buildTaskContextPrefix({
-      id: 'x',
-      title: 'test',
-      starred: false,
-    });
-    expect(prefix).not.toContain('Starred:');
-
-    const prefix2 = buildTaskContextPrefix({ id: 'x', title: 'test' });
-    expect(prefix2).not.toContain('Starred:');
   });
 
   it('truncates long descriptions at 300 chars with [truncated] suffix', () => {
@@ -247,7 +233,6 @@ describe('enrichTaskContext', () => {
     status: 'todo' as const,
     phase: 'IN_PROGRESS' as const,
     priority: 'medium' as const,
-    starred: false,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-02T00:00:00Z',
     note: '## Goal\nFix the tax filing issue',

@@ -132,23 +132,6 @@ describe('Fix 1: WS events carry { task } wrapper', () => {
     await delay(50);
   });
 
-  it('task:starred event has task field with starred boolean', async () => {
-    const task = await createTask('Star for WS test');
-    const ws = await connectWs();
-    const eventPromise = waitForWsEvent(ws, 'task:starred');
-
-    await fetch(apiUrl(`/api/tasks/${task.id}/star`), { method: 'POST' });
-
-    const event = await eventPromise;
-    const data = event.data as { task?: { id: string; starred: boolean } };
-
-    expect(data.task).toBeDefined();
-    expect(data.task!.id).toBe(task.id);
-
-    ws.close();
-    await delay(50);
-  });
-
   it('task:updated event from PATCH has task field', async () => {
     const task = await createTask('Update for WS test');
     const ws = await connectWs();
@@ -411,14 +394,6 @@ describe('Full pipeline: REST → Core → Bus → WS delivery', () => {
     expect(reopenData.task.id).toBe(task.id);
     expect(reopenData.task.status).toBe('todo');
 
-    // Step 4: Star — WS should receive task:starred
-    const starPromise = waitForWsEvent(ws, 'task:starred');
-    await fetch(apiUrl(`/api/tasks/${task.id}/star`), { method: 'POST' });
-
-    const starEvent = await starPromise;
-    const starData = starEvent.data as { task: { id: string; starred: boolean } };
-    expect(starData.task.id).toBe(task.id);
-
     ws.close();
     await delay(50);
   });
@@ -446,83 +421,32 @@ describe('Full pipeline: REST → Core → Bus → WS delivery', () => {
   });
 });
 
-// ── Starred via PATCH /api/tasks/:id E2E ──
+// ── The retired `starred` field is INERT on PATCH ──
+//
+// The starred system was removed from the product (pin + focus_tier is the
+// working set). PATCH must still accept the key from an old client rather than
+// 400 it, and must not write it back onto the row.
 
-describe('Starred via PATCH update_task', () => {
-  it('PATCH starred=true sets starred, GET confirms, PATCH starred=false reverts', async () => {
-    const task = await createTask('Star via PATCH test');
+describe('retired starred field on PATCH /api/tasks/:id', () => {
+  it('accepts starred in the body, writes nothing, and touches no other field', async () => {
+    const task = await createTask('Retired star field', { project: 'work', priority: 'immediate' });
 
-    // Baseline: starred should not be true
-    const baseline = await fetch(apiUrl(`/api/tasks/${task.id}`));
-    const baseTask = ((await baseline.json()) as { task: { starred?: boolean } }).task;
-    expect(baseTask.starred).not.toBe(true);
-
-    // PATCH starred=true
     const patchRes = await fetch(apiUrl(`/api/tasks/${task.id}`), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ starred: true }),
     });
-    const patchTask = ((await patchRes.json()) as { task: { starred: boolean } }).task;
-    expect(patchTask.starred).toBe(true);
-
-    // GET confirms persistence
-    const getRes = await fetch(apiUrl(`/api/tasks/${task.id}`));
-    const getTask = ((await getRes.json()) as { task: { starred: boolean } }).task;
-    expect(getTask.starred).toBe(true);
-
-    // PATCH starred=false
-    const revertRes = await fetch(apiUrl(`/api/tasks/${task.id}`), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ starred: false }),
-    });
-    const revertTask = ((await revertRes.json()) as { task: { starred: boolean } }).task;
-    expect(revertTask.starred).toBe(false);
-
-    // GET confirms revert
-    const finalRes = await fetch(apiUrl(`/api/tasks/${task.id}`));
-    const finalTask = ((await finalRes.json()) as { task: { starred: boolean } }).task;
-    expect(finalTask.starred).toBe(false);
-  });
-
-  it('PATCH starred=true emits task:updated WS event with starred field', async () => {
-    const task = await createTask('Star WS event test');
-    const ws = await connectWs();
-    const eventPromise = waitForWsEvent(ws, 'task:updated');
-
-    await fetch(apiUrl(`/api/tasks/${task.id}`), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ starred: true }),
-    });
-
-    const event = await eventPromise;
-    const data = event.data as { task: { id: string; starred: boolean } };
-
-    expect(data.task).toBeDefined();
-    expect(data.task.id).toBe(task.id);
-    expect(data.task.starred).toBe(true);
-
-    ws.close();
-    await delay(50);
-  });
-
-  it('starring does not affect other task fields', async () => {
-    const task = await createTask('No side effects', { project: 'work', priority: 'immediate' });
-
-    await fetch(apiUrl(`/api/tasks/${task.id}`), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ starred: true }),
-    });
+    // Not a 400 — an old client's body degrades to a no-op.
+    expect(patchRes.status).toBe(200);
 
     const res = await fetch(apiUrl(`/api/tasks/${task.id}`));
-    const updated = ((await res.json()) as { task: { title: string; project: string; priority: string; starred: boolean } }).task;
+    const updated = ((await res.json()) as {
+      task: { title: string; project: string; priority: string; starred?: boolean };
+    }).task;
 
-    expect(updated.title).toBe('No side effects');
+    expect(updated.starred).not.toBe(true);
+    expect(updated.title).toBe('Retired star field');
     expect(updated.project).toBe('work');
     expect(updated.priority).toBe('immediate');
-    expect(updated.starred).toBe(true);
   });
 });

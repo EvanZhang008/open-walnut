@@ -61,9 +61,6 @@ export default function register(api: PluginApi): void {
       const { autoPushTask } = await import('./sync.js');
       await autoPushTask(task);
     },
-    async updateStar(_task: Task) {
-      // Could add/remove labels in future
-    },
     async updateProject(task: Task) {
       const { autoPushTask } = await import('./sync.js');
       await autoPushTask(task);

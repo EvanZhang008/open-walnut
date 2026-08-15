@@ -20,7 +20,6 @@ export interface QuickTaskParse {
   end_date?: string;
   pinTier?: string;  // built-in 'focus' | 'satellite' | 'backlog' | 'wait', or a custom tier id ('ct_*')
   priority?: Exclude<TaskPriority, 'none'>;
-  starred?: boolean;
   /** Target project. Omitted/empty = Inbox. */
   project?: string;
   /** True when `project` is a name the model invented (not in the known list) —
@@ -579,7 +578,6 @@ export interface Task {
    *  it gives the task a duration on calendar surfaces; independent of due_date
    *  (the deadline). Meaningless without a start_date. */
   end_date?: string;
-  starred?: boolean;
   pinned?: boolean;
   pin_order?: number;  // lower = higher in list, undefined = not pinned
   focus_tier?: string;  // undefined = satellite (default); 'focus' | 'backlog' | 'wait' built-ins, or a custom tier id ('ct_*')

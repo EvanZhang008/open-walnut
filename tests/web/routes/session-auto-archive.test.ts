@@ -196,13 +196,13 @@ describe('POST /api/sessions/quick-start (retry mode)', () => {
 
 // ── Test 3: Quick-start new-task taskMeta WITHOUT pinTier ──
 //
-// Repro: a fresh quick-start with taskMeta that supplies starred/unread/priority
+// Repro: a fresh quick-start with taskMeta that supplies unread/priority
 // but NO pinTier must apply those fields and leave the task UNPINNED.
 // The new-task branch only calls togglePin()+setFocusTier() when taskMeta.pinTier
 // is truthy, so an absent pinTier must not pin the task or set a focus_tier.
 
 describe('POST /api/sessions/quick-start (new task, taskMeta without pinTier)', () => {
-  it('applies starred/unread/priority but leaves the task unpinned', async () => {
+  it('applies unread/priority but leaves the task unpinned', async () => {
     const app = createApp();
     const res = await request(app)
       .post('/api/sessions/quick-start')
@@ -210,7 +210,6 @@ describe('POST /api/sessions/quick-start (new task, taskMeta without pinTier)', 
         cwd: '/tmp/test',
         message: 'Start a fresh task',
         taskMeta: {
-          starred: true,
           unread: true,
           priority: 'important',
           // pinTier intentionally omitted
@@ -222,7 +221,6 @@ describe('POST /api/sessions/quick-start (new task, taskMeta without pinTier)', 
 
     const task = await getTask(res.body.taskId);
     // Metadata applied …
-    expect(task.starred).toBe(true);
     expect(task.unread).toBe(true);
     expect(task.priority).toBe('important');
     // … but the task is NOT pinned and carries no focus tier.
@@ -238,7 +236,6 @@ describe('POST /api/sessions/quick-start (new task, taskMeta without pinTier)', 
         cwd: '/tmp/test',
         message: 'Start another task',
         taskMeta: {
-          starred: true,
           pinTier: null,
         },
       });

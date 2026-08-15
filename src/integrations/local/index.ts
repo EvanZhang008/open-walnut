@@ -16,7 +16,6 @@ const noopSync: IntegrationSync = {
   updatePriority: async () => {},
   updatePhase: async () => {},
   updateDueDate: async () => {},
-  updateStar: async () => {},
   updateProject: async () => {},
   updateDependencies: async () => {},
   pushTask: async (): Promise<PushResult> => ({ serverTimestamp: new Date().toISOString() }),

@@ -60,10 +60,10 @@ function readCollapsed(): Set<string> {
 
 /** /tasks — dense two-pane workspace: project rail (left) + task table (right). */
 export function DashboardPage() {
-  const { tasks, loading, error, toggleComplete, create, deleteTask, update, star } = useTasksContext();
+  const { tasks, loading, error, toggleComplete, create, deleteTask, update } = useTasksContext();
   const { projectOrder, reorderProjects } = useOrdering();
   const { projectNames, sourceByName, favoriteByName, refresh: refreshRegistry } = useProjectRegistry();
-  const { toggleFavoriteProject, isProjectFavorite } = useFavorites();
+  const { toggleFavoriteProject } = useFavorites();
 
   // null = All Tasks, '' = Inbox, otherwise a project name. The rail NAVIGATES,
   // so it is deliberately not a query condition: the query panel's own `projects`
@@ -273,13 +273,10 @@ export function DashboardPage() {
     [query, timeTick],
   );
 
-  // Same context builder the home panel uses. Favorites come from the CONFIG
-  // hook, not the registry's folded flag: a favorite whose project has no
-  // registry row exists in config only, and the two surfaces must agree on which
-  // rows count as starred.
+  // Same context builder the home panel uses.
   const queryContext = useMemo<TaskQueryContext>(
-    () => buildTaskQueryContext(tasks, isProjectFavorite, query.blocked !== undefined),
-    [tasks, isProjectFavorite, query.blocked],
+    () => buildTaskQueryContext(tasks, query.blocked !== undefined),
+    [tasks, query.blocked],
   );
 
   const filtered = useMemo(() => {
@@ -458,7 +455,6 @@ export function DashboardPage() {
           onDelete={deleteTask}
           onCreate={handleGhostCreate}
           onUpdate={update}
-          onStar={star}
           favoriteByName={favoriteByName}
           onToggleFavorite={handleToggleFavorite}
           onProjectChanged={handleProjectChanged}

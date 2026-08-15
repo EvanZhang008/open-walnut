@@ -113,7 +113,6 @@ function makePlugin(overrides: {
       updatePriority: vi.fn(),
       updatePhase: vi.fn(),
       updateDueDate: vi.fn(),
-      updateStar: vi.fn(),
       updateProject: vi.fn(),
       updateDependencies: vi.fn(),
       pushTask: vi.fn().mockResolvedValue({ serverTimestamp: new Date().toISOString() }),

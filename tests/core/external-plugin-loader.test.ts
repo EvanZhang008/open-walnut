@@ -49,7 +49,6 @@ const NOOP_SYNC_SOURCE = `{
   updatePriority: async () => {},
   updatePhase: async () => {},
   updateDueDate: async () => {},
-  updateStar: async () => {},
   updateProject: async () => {},
   updateDependencies: async () => {},
   associateSubtask: async () => {},

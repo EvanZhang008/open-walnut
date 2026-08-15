@@ -97,9 +97,8 @@ export function createClaudeCodeExecutor(): ExecutorDefinition {
         host: config.host,
         model: config.model,
         taskTitle: config.taskTitle || `Routine: ${job.name}`,
-        // Routines are background automation — don't star them like a human
-        // Quick Start, and don't grab the focus tier.
-        taskMeta: { starred: false },
+        // Routines are background automation — don't grab the focus tier.
+        taskMeta: {},
         project: 'Routines',
         source: 'routine',
       });

@@ -88,7 +88,7 @@ import {
   type TaskQuery,
   type TaskQueryContext,
 } from '@open-walnut/task-query';
-import { STARRED_TAB, INBOX_TAB, LS_TAB_KEY } from './task-tabs';
+import { INBOX_TAB, LS_TAB_KEY } from './task-tabs';
 import { DatePicker, formatDateDisplay, formatDateTimeDisplay, isOverdue, parseDateLocal } from '../common/DatePicker';
 import { PersonIcon } from '../common/PersonIcon';
 import { useVerticalSplitter } from '@/hooks/useVerticalSplitter';
@@ -127,9 +127,8 @@ interface TodoPanelProps {
   loading: boolean;
   onComplete: (id: string) => void;
   onSetPhase?: (id: string, phase: string) => void;
-  onCreate: (input: { title: string; priority: string; project?: string; starred?: boolean; pinnedTier?: FocusTier; capture?: boolean }) => Promise<Task | unknown>;
+  onCreate: (input: { title: string; priority: string; project?: string; pinnedTier?: FocusTier; capture?: boolean }) => Promise<Task | unknown>;
   onUpdate?: (id: string, updates: { title?: string }) => void;
-  onStar?: (id: string) => void;
   onDelete?: (id: string) => void;
   /** Multi-select batch ops — ONE round-trip for the whole selection (a fan-out over
    *  onSetPhase/onDelete would rewrite the store N times and flicker the list row by
@@ -321,7 +320,9 @@ function persistSet(key: string, set: Set<string>) {
 }
 
 function readTab(): string {
-  try { return localStorage.getItem(LS_TAB_KEY) ?? STARRED_TAB; } catch { return STARRED_TAB; }
+  // '' = the All chip. (Before the starred system was retired this defaulted to
+  // the ★ tab; a persisted '\u2605' now self-heals to All via the stale-tab effect.)
+  try { return localStorage.getItem(LS_TAB_KEY) ?? ''; } catch { return ''; }
 }
 
 function persistTab(tab: string) {
@@ -414,7 +415,6 @@ interface SortableTaskItemProps {
   /** Enter multi-select mode with this task picked (kebab "Select…" entry). */
   onStartSelect?: (taskId: string) => void;
   onSetPhase: (id: string, phase: string) => void;
-  onStar?: (id: string) => void;
   onDelete?: (id: string) => void;
   onSetPriority?: (id: string, priority: string) => void;
   onUpdateTitle?: (id: string, title: string) => void;
@@ -580,7 +580,7 @@ function buildTierGroupMeta(displayed: Task[], labels?: Record<string, string>):
   return map;
 }
 
-function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onStar, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onStartSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveToProject, isPinned, pinnedTier, searchContext, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup }: SortableTaskItemProps) {
+function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onStartSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveToProject, isPinned, pinnedTier, searchContext, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup }: SortableTaskItemProps) {
   const {
     attributes,
     listeners,
@@ -886,7 +886,6 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVan
             onExpandDetail={onExpandDetail}
             onClearFocus={onClearFocus}
             onSetPriority={onSetPriority}
-            onStar={onStar}
             onPinTask={onPinTask}
             onUnpinTask={onUnpinTask}
             onSetTier={onSetTier}
@@ -1878,7 +1877,6 @@ interface RecentCardProps {
   onSetPriority?: (id: string, priority: string) => void;
   onSetDate?: (id: string, date: string | null) => void;
   onSetStartDate?: (id: string, date: string | null) => void;
-  onStar?: (id: string) => void;
   onSetTier?: (id: string, tier: FocusTier) => void;
   onExpandDetail?: (task: Task) => void;
   onClearFocus?: () => void;
@@ -1894,7 +1892,7 @@ interface RecentCardProps {
 
 // ── SortableRecentCard — draggable recent-activity card with kebab menu ──
 
-function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onPinTask, onUnpinTask, isPinned, pinnedTier, pinnedTierLabel, onSetPriority, onSetDate, onSetStartDate, onStar, onSetTier, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject }: RecentCardProps) {
+function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onPinTask, onUnpinTask, isPinned, pinnedTier, pinnedTierLabel, onSetPriority, onSetDate, onSetStartDate, onSetTier, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject }: RecentCardProps) {
   // Static cards: done (tiers filter them out — a drag would silently vanish) and
   // pinned (already placed in a tier; that tier card is the draggable one). Static
   // cards register under a NAMESPACED sortable id — the raw task.id is already
@@ -2058,7 +2056,6 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
         onSetPriority={onSetPriority}
         onSetDate={onSetDate}
         onSetStartDate={onSetStartDate}
-        onStar={onStar}
         onPinTask={onPinTask}
         onUnpinTask={onUnpinTask}
         onSetTier={onSetTier}
@@ -2073,7 +2070,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
 
 // ── TodoPanel ──
 
-export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onStar, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, openSessionIds, openSessionTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden }: TodoPanelProps) {
+export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onComplete, onSetPhase, onCreate, onUpdate, onDelete, onBatchSetPhase, onBatchDelete, onSetPriority, onFocusTask, onClearFocus, focusedTaskId, focusNonce, focusScope, favorites, ordering, onReorder, onMoveTask, onReparentTask, onBakeOrder, onOpenSession, onStartSession, onOpenTriageForTask, onPinTask, onUnpinTask, onReorderPinned, onSetTier, onSetDate, onSetStartDate, pinnedTaskIds, focusTaskIds, backlogTaskIds, waitTaskIds, customTiers: customTiersLive, customTiersLoaded, customTierIds, suppressDetail, openSessionIds, openSessionTaskIds, onOperationError, externalProject, onProjectChange, onOpenLauncher, onOpenLauncherForProject, onOpenLauncherForTier, taskGroups, hiddenGroups, onGroupTasks, onAddToGroup, onUngroupTask, onUngroupTasks, onRenameGroup, onSetGroupHidden }: TodoPanelProps) {
   // TEMP drag-flash trace — remove after diagnosis
   const __renderCountRef = useRef(0);
   __renderCountRef.current += 1;
@@ -2117,7 +2114,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     notify({ kind: 'sort', severity: 'info', title: 'Sort', body: msg, persistent: false, dedupKey: 'sort' });
   }, [notify]);
   const [groupBy, setGroupBy] = useState<GroupBy>(readGroupBy);
-  // Active project tab. '' = All, STARRED_TAB = ★, INBOX_TAB = Inbox, else a project name.
+  // Active project tab. '' = All, INBOX_TAB = Inbox, else a project name.
   const [activeProject, setActiveProject] = useState(readTab);
 
   // Focus override: when a focused task would be hidden by filters, store its ID here
@@ -2557,25 +2554,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const pinnedOnly = focusScope === 'pinned';
     scrollLog('focus-effect-run', { taskId: focusedTaskId.substring(0, 12), isNewFocus, proj: task.project, activeTab: activeProject, scope: focusScope ?? 'all' });
 
-    // Switch to the task's project tab (unless already showing All, or Starred with this
-    // task visible). `proj` is the GROUP key ('' = Inbox); `projTab` is the TAB id, where
-    // '' is taken by the All chip so Inbox rides the INBOX_TAB sentinel instead.
+    // Switch to the task's project tab (unless already showing All). `proj` is the
+    // GROUP key ('' = Inbox); `projTab` is the TAB id, where '' is taken by the All
+    // chip so Inbox rides the INBOX_TAB sentinel instead.
     const proj = task.project || '';
     const projTab = proj || INBOX_TAB;
     if (isUserLocate && !pinnedOnly) {
-      if (activeProject !== '' && activeProject !== projTab && activeProject !== STARRED_TAB) {
+      if (activeProject !== '' && activeProject !== projTab) {
         setActiveProject(projTab);
         persistTab(projTab);
         onProjectChange?.(projTab);
-      } else if (activeProject === STARRED_TAB) {
-        // If task isn't visible under starred tab, switch to its project
-        const isStarred = !!task.starred;
-        const isProjFav = !!proj && (favorites?.isProjectFavorite(proj) ?? false);
-        if (!isStarred && !isProjFav && !isDescendantVisibleInStarred(task)) {
-          setActiveProject(projTab);
-          persistTab(projTab);
-          onProjectChange?.(projTab);
-        }
       }
 
       // Expand the collapsed project group (collapse keys are plain project names)
@@ -3643,29 +3631,22 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     return hasInbox ? [...names, INBOX_TAB] : names;
   }, [tasks, ordering?.projectOrder]);
 
-  // Show starred tab when there are starred tasks or favorited projects
-  const hasStarredContent = useMemo(() => {
-    const hasStarredTasks = tasks.some((t) => t.starred);
-    const hasFavorites = favorites?.hasFavorites ?? false;
-    return hasStarredTasks || hasFavorites;
-  }, [tasks, favorites?.hasFavorites]);
-
   // Self-heal a stale project tab (same shape as the custom-tier heal above):
   // the persisted tab may name a project that was renamed/deleted/emptied since,
   // and ViewDropdown renders no chip for it — so the list filters to zero with no
-  // visible way back. Fall back to the default (★ when there's starred content,
-  // else All). MUST wait for the task list to actually load: healing against the
-  // empty pre-fetch snapshot would overwrite the user's tab on every page load.
+  // visible way back. Fall back to All. This is also what retires a persisted ★
+  // tab from the removed starred system: it has no chip, so it heals to All.
+  // MUST wait for the task list to actually load: healing against the empty
+  // pre-fetch snapshot would overwrite the user's tab on every page load.
   useEffect(() => {
     if (loading || tasks.length === 0) return;
-    // '' (All) and the ★ sentinel are always legal; everything else must have a chip.
-    if (activeProject === '' || activeProject === STARRED_TAB) return;
+    // '' (All) is always legal; everything else must have a chip.
+    if (activeProject === '') return;
     if (projectTabs.includes(activeProject)) return;
-    const fallback = hasStarredContent ? STARRED_TAB : '';
-    setActiveProject(fallback);
-    persistTab(fallback);
-    onProjectChange?.(fallback);
-  }, [loading, tasks.length, activeProject, projectTabs, hasStarredContent, onProjectChange]);
+    setActiveProject('');
+    persistTab('');
+    onProjectChange?.('');
+  }, [loading, tasks.length, activeProject, projectTabs, onProjectChange]);
 
   /** Every legal `collapsedProjects` key right now: real project names + '' when Inbox exists. */
   const liveGroupKeys = useMemo(() => {
@@ -3737,22 +3718,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     clearFocusOverride();
   }, [clearFocusOverride]);
 
-  // Helper: check if a task is visible in starred view via its ancestor chain.
-  // Walks up parent_task_id links (max 10 depth) checking if any ancestor is starred
-  // or belongs to a favorited project.
-  const isDescendantVisibleInStarred = useCallback((t: Task): boolean => {
-    if (!t.parent_task_id) return false;
-    const parent = tasks.find(p => p.id.startsWith(t.parent_task_id!));
-    if (!parent) return false;
-    if (parent.starred) return true;
-    if (parent.project && favorites?.isProjectFavorite(parent.project)) return true;
-    return isDescendantVisibleInStarred(parent);
-  }, [tasks, favorites]);
-
   // ── The ONE task-row predicate ──
   //
   // Row conditions (completion/phase/priority/project/source/sprint/tags/
-  // pinned/starred/blocked/time) go through the shared evaluator, so this
+  // pinned/blocked/time) go through the shared evaluator, so this
   // surface, /tasks, REST and the agent tool cannot drift. What stays local is
   // deliberately NOT expressible as a task-row query: the due-date view filter
   // (ancestor date inheritance + "now" relative to a start_date), the
@@ -3810,8 +3779,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // Context the pure evaluator can't derive from a task row on its own — shared
   // verbatim with /tasks (see task-query-state.ts).
   const queryContext = useMemo<TaskQueryContext>(
-    () => buildTaskQueryContext(tasks, favorites?.isProjectFavorite, taskQueryState.blocked !== undefined),
-    [tasks, favorites?.isProjectFavorite, taskQueryState.blocked],
+    () => buildTaskQueryContext(tasks, taskQueryState.blocked !== undefined),
+    [tasks, taskQueryState.blocked],
   );
 
   /** Full predicate for the plain list: canonical query AND legacy selects.
@@ -3885,14 +3854,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // Child tasks inherit parent's due_date if they have none.
       if (dateFilter && t.status !== 'done' && !matchesDateFilter(t, dateFilter, tasks)) return false;
 
-      // Starred tab: show starred tasks + tasks in favorited projects
-      // Also include children of starred parents (handles prefix parent_task_id)
-      if (activeProject === STARRED_TAB) {
-        const isStarred = !!t.starred;
-        const isProjFavorite = !!t.project && (favorites?.isProjectFavorite(t.project) ?? false);
-        return isStarred || isProjFavorite || isDescendantVisibleInStarred(t);
-      }
-
       // Tab ids: '' = All (no scoping), INBOX_TAB = the no-project bucket.
       if (activeProject && (t.project || INBOX_TAB) !== activeProject) return false;
       return true;
@@ -3924,8 +3885,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
     }
     return { list: result, matchedIds };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- isDescendantVisibleInStarred is stable (useCallback); focusOverrideRef/fadingOverrideRef read via _overrideTick
-  }, [tasks, showCompleted, phaseFilter, matchesQuery, completedBypass, taskQueryState.pinned, dateFilter, _tick, _overrideTick, recentTick, activeProject, favorites, isDescendantVisibleInStarred]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- focusOverrideRef/fadingOverrideRef read via _overrideTick
+  }, [tasks, showCompleted, phaseFilter, matchesQuery, completedBypass, taskQueryState.pinned, dateFilter, _tick, _overrideTick, recentTick, activeProject]);
 
   /** Rows to RENDER = real hits + their descendant context. */
   const filtered = filterResult.list;
@@ -5333,7 +5294,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           isSessionOpen={openSessionTaskIds?.has(task.id) ?? false}
           isDetailOpen={focusedTaskId === task.id && !suppressDetail}
           onClick={handlePinnedCardClick} onSetTier={onSetTier} onUnpinTask={onUnpinTask}
-          onPinTask={onPinTask} onSetPriority={onSetPriority} onSetDate={onSetDate} onSetStartDate={onSetStartDate} onStar={onStar}
+          onPinTask={onPinTask} onSetPriority={onSetPriority} onSetDate={onSetDate} onSetStartDate={onSetStartDate}
           onExpandDetail={handleExpandDetail} onClearFocus={onClearFocus} onOpenSession={onOpenSession}
           onStartSession={onStartSession}
           onSetPhase={setPhaseOrComplete} onUpdateTitle={onUpdate ? handleUpdateTitle : undefined}
@@ -5344,7 +5305,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       );
     }
     return out;
-  }, [pinnedTaskMap, taskGroups, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onStar, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject]);
+  }, [pinnedTaskMap, taskGroups, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject]);
 
   // The regular task list gets its own PINNED/RECENT-style collapsible bar.
   // Outside the stacked view the Tasks tab IS the list — it can't be folded away.
@@ -5399,7 +5360,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           activeProject={activeProject}
           onProjectChange={(p) => { setActiveProject(p); persistTab(p); onProjectChange?.(p); }}
           projectCounts={projectCounts}
-          hasStarredContent={hasStarredContent}
           phaseFilter={phaseFilter}
           onPhaseFilterChange={(v) => { setPhaseFilter(v); clearFocusOverride(); }}
           priorityFilter={priorityFilter}
@@ -5824,8 +5784,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                         onSetPriority={onSetPriority}
                         onSetDate={onSetDate}
                         onSetStartDate={onSetStartDate}
-                        onStar={onStar}
-                        onSetTier={onSetTier}
+                                    onSetTier={onSetTier}
                         onExpandDetail={handleExpandDetail}
                         onClearFocus={onClearFocus}
                         onOpenSession={onOpenSession}
@@ -5976,8 +5935,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   onSelectToggle={onSelectToggle}
                   onStartSelect={onStartSelect}
                     onSetPhase={setPhaseOrComplete}
-                    onStar={onStar}
-                    onDelete={onDelete}
+                            onDelete={onDelete}
                     onSetPriority={onSetPriority}
                     onSetDate={onSetDate}
                     onSetStartDate={onSetStartDate}
@@ -6028,8 +5986,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                   onSelectToggle={onSelectToggle}
                   onStartSelect={onStartSelect}
                   onSetPhase={setPhaseOrComplete}
-                  onStar={onStar}
-                  onDelete={onDelete}
+                        onDelete={onDelete}
                   onSetPriority={onSetPriority}
                   onSetDate={onSetDate}
                   onSetStartDate={onSetStartDate}
@@ -6142,8 +6099,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                                 onSelectToggle={onSelectToggle}
                                 onStartSelect={onStartSelect}
                                 onSetPhase={setPhaseOrComplete}
-                                onStar={onStar}
-                                onDelete={onDelete}
+                                                    onDelete={onDelete}
                                 onSetPriority={onSetPriority}
                                 onSetDate={onSetDate}
                                 onSetStartDate={onSetStartDate}

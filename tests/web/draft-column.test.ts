@@ -39,7 +39,7 @@ function draft(over: Partial<DraftColumn> = {}): DraftColumn {
     id: 'draft:1',
     cwd: '',
     host: null,
-    meta: { starred: true, unread: false, priority: 'none', pinTier: 'satellite', model: undefined, engine: undefined },
+    meta: { unread: false, priority: 'none', pinTier: 'satellite', model: undefined, engine: undefined },
     ...over,
   };
 }
@@ -179,11 +179,10 @@ describe('applyDraftParse — AI may only fill what nobody claimed (R9)', () => 
     expect(out.aiFields?.has('cwd')).toBe(false);
   });
 
-  it('fills tier/priority/star while metaTouched is false — WITHOUT setting it', () => {
-    const out = applyDraftParse(draft(), { pinTier: 'focus', priority: 'important', starred: false }, noDefaults);
+  it('fills tier/priority while metaTouched is false — WITHOUT setting it', () => {
+    const out = applyDraftParse(draft(), { pinTier: 'focus', priority: 'important' }, noDefaults);
     expect(out.meta.pinTier).toBe('focus');
     expect(out.meta.priority).toBe('important');
-    expect(out.meta.starred).toBe(false);
     // THE regression guard: metaTouched is also the per-directory launch-memory
     // switch, so an AI write must never latch it.
     expect(out.metaTouched).toBeUndefined();

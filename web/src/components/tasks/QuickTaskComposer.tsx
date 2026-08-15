@@ -24,7 +24,6 @@ interface Props {
     due_date?: string;
     start_date?: string;
     end_date?: string;
-    starred?: boolean;
     pinnedTier?: PinTier;
   }) => Promise<unknown>;
 }
@@ -43,7 +42,6 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
 
   const emptyDraft = useCallback((): ConfirmDraft => ({
     title: '',
-    starred: false,
     aiFields: new Set(),
     start: initialDatesRef.current?.start,
     end: initialDatesRef.current?.end,
@@ -126,7 +124,6 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
       if (result.end_date && !edited.has('end')) { next.end = result.end_date; next.aiFields.add('end'); }
       if (result.pinTier && !edited.has('pin')) { next.pin = result.pinTier; next.aiFields.add('pin'); }
       if (result.priority && !edited.has('priority')) { next.priority = result.priority; next.aiFields.add('priority'); }
-      if (result.starred !== undefined && !edited.has('star')) { next.starred = !!result.starred; next.aiFields.add('star'); }
       const project = result.project?.trim();
       if (project && !edited.has('project')) {
         next.project = project;
@@ -180,7 +177,6 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
         if (ai.has('end') && !edited.has('end')) next.end = seed?.end;
         if (ai.has('pin') && !edited.has('pin')) next.pin = undefined;
         if (ai.has('priority') && !edited.has('priority')) next.priority = undefined;
-        if (ai.has('star') && !edited.has('star')) next.starred = false;
         if (ai.has('project') && !edited.has('project')) { next.project = undefined; next.projectIsNew = false; }
       }
       // Live mirror: the form always shows exactly what Enter would create.
@@ -196,7 +192,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
       const aiFields = new Set(current.aiFields);
       for (const key of Object.keys(patch)) {
         if (key === 'aiFields') continue;
-        const field = (key === 'starred' ? 'star' : key) as ConfirmField;
+        const field = key as ConfirmField;
         aiFields.delete(field);
         // Clearing the title hands it back to the sentence mirror; anything
         // else marks the field user-owned so AI/mirror won't overwrite it.
@@ -225,7 +221,6 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
       ...(source.start ? { start_date: source.start } : {}),
       ...(source.end && source.start ? { end_date: source.end } : {}),
       ...(source.pin ? { pinnedTier: source.pin } : {}),
-      ...(source.starred ? { starred: true } : {}),
       ...(project ? { project } : {}),
     }))
       .then(() => reset())

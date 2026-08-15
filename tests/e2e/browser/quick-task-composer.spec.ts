@@ -6,7 +6,6 @@ interface ApiTask {
   priority: string
   project: string
   due_date?: string
-  starred?: boolean
 }
 
 async function openComposer(page: Page): Promise<void> {
@@ -285,11 +284,9 @@ test('panel overrides pin, project, priority, and star before create', async ({ 
   // The tier is now the USER's pick, so the ✦ must go — otherwise the panel keeps
   // crediting the AI for a value the user just overrode.
   await expect(pinnedField.locator('.qtc-confirm-ai')).toHaveCount(0)
-  // Chips: 0=start, 1=due, 2=priority, 3=star (Start leads; empty Due is a '+ Due' ghost).
+  // Chips: 0=start, 1=due, 2=priority (Start leads; empty Due is a '+ Due' ghost).
   await panel.locator('.qtc-chip').nth(2).click()
   await expect(panel.locator('.qtc-chip').nth(2)).toContainText('Immediate')
-  await panel.locator('.qtc-chip').nth(3).click()
-  await expect(panel.locator('.qtc-chip').nth(3)).toContainText('Starred')
   await expect(panel.locator('.qtc-confirm-project')).toHaveValue(parsedProject)
   await panel.locator('.qtc-confirm-project').fill(selectedProject)
   await panel.locator('.qtc-confirm-primary').click()
@@ -297,7 +294,6 @@ test('panel overrides pin, project, priority, and star before create', async ({ 
   const created = await waitForNewTask(request, title, existingIds)
   expect(created.project).toBe(selectedProject)
   expect(created.priority).toBe('immediate')
-  await expect.poll(async () => (await listTasks(request)).find((task) => task.id === created.id)?.starred).toBe(true)
   await expect.poll(async () => {
     const response = await request.get('/api/focus/tasks')
     const body = await response.json() as { satellite_tasks?: string[] }

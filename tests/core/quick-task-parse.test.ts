@@ -36,16 +36,15 @@ describe('parseQuickTask', () => {
 
   it('returns every valid parsed field in an envelope', async () => {
     sendMessageMock.mockResolvedValue(textResult(
-      '{"title":"File my tax","due_date":"2026-07-15T10:00:00","pinTier":"focus","priority":"important","starred":true}',
+      '{"title":"File my tax","due_date":"2026-07-15T10:00:00","pinTier":"focus","priority":"important"}',
     ));
 
-    const result = await parseQuickTask('file my tax tomorrow at 10am pinned focus important and starred');
+    const result = await parseQuickTask('file my tax tomorrow at 10am pinned focus important');
     expect(result).toEqual(parseOnly({
       title: 'File my tax',
       due_date: '2026-07-15T10:00:00',
       pinTier: 'focus',
       priority: 'important',
-      starred: true,
     }));
     expect(result.model).toContain('haiku');
   });

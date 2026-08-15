@@ -49,7 +49,7 @@ describe('C1: MS To-Do plugin registration', () => {
     const methods: (keyof IntegrationSync)[] = [
       'createTask', 'deleteTask', 'updateTitle', 'updateDescription',
       'updateSummary', 'updateNote', 'updateConversationLog', 'updatePriority',
-      'updatePhase', 'updateDueDate', 'updateStar', 'updateProject',
+      'updatePhase', 'updateDueDate', 'updateProject',
       'updateDependencies', 'pushTask', 'associateSubtask', 'disassociateSubtask', 'syncPoll',
     ];
     for (const m of methods) {

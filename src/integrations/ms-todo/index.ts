@@ -60,10 +60,6 @@ export default function register(api: PluginApi): void {
       const { autoPushTask } = await import('../microsoft-todo.js');
       await autoPushTask(task);
     },
-    async updateStar(task: Task) {
-      const { autoPushTask } = await import('../microsoft-todo.js');
-      await autoPushTask(task);
-    },
     /**
      * A single task moved between projects → re-push it, which resolves the target
      * list (creating one if the project has no remote list yet) and migrates the

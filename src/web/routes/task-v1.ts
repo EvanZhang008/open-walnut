@@ -7,7 +7,7 @@
  *   DELETE /tasks/:id?force=true     → 204 (409 conflict when sessions are active)
  *   POST   /tasks/:id/complete       → { task } (completeTask semantics, CLI parity)
  *   POST   /tasks/:id/start          → { action, taskId, title, sessionId? }
- *   POST   /tasks/:id/star           → { task, starred }
+ *   POST   /tasks/:id/star           → { task, starred: false } (RETIRED no-op)
  *   POST   /tasks/:id/notes          → { task } (append timestamped note)
  *   PUT    /tasks/:id/note           → { task } (replace whole note)
  *   PUT    /tasks/:id/description    → { task }
@@ -247,15 +247,21 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
   }
 })
 
-// POST /api/v1/tasks/:id/star — toggle star. → { task, starred }
+// POST /api/v1/tasks/:id/star — RETIRED no-op kept for the frozen contract.
+//
+// The starred flag was removed from the product (pin + focus_tier is the working
+// set). This endpoint stays mounted, still resolves the id (so a bad id is still
+// a 404/400), and still answers the documented `{ task, starred }` shape — but
+// `starred` is always false and nothing is written. An older iOS build whose
+// decoder requires the field keeps working instead of failing the request; its
+// star control simply never latches. Any stored `starred: true` on disk is inert.
 taskV1Router.post('/tasks/:id/star', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = paramStr(req.params.id)
-    const { toggleStar } = await import('../../core/task-manager.js')
+    const { getTask } = await import('../../core/task-manager.js')
     try {
-      const result = await toggleStar(id)
-      bus.emit(EventNames.TASK_STARRED, { task: result.task, starred: result.starred }, ['web-ui'], { source: 'api-v1' })
-      res.json(result)
+      const task = await getTask(id)
+      res.json({ task, starred: false })
     } catch (err) {
       if (sendTaskManagerError(res, err)) return
       throw err

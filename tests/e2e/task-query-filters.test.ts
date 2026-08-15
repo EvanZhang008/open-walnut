@@ -220,18 +220,16 @@ describe('REST composable filters', () => {
     expect(await getTasks('?tags=')).toHaveLength(Object.keys(ids).length);
   });
 
-  it('starred=false and blocked=false evaluate the derived dimensions', async () => {
-    // No fixture is starred or blocked, so the false side returns everything.
-    expect(await getTasks('?starred=false')).toHaveLength(Object.keys(ids).length);
-    expect(await getTasks('?starred=true')).toEqual([]);
+  it('blocked=false evaluates the derived dimension', async () => {
+    // No fixture is blocked, so the false side returns everything.
     expect(await getTasks('?blocked=false')).toHaveLength(Object.keys(ids).length);
     expect(await getTasks('?blocked=true')).toEqual([]);
   });
 
-  it('applies limit AFTER a derived predicate (starred) rather than in SQL', async () => {
+  it('applies limit AFTER a derived predicate (blocked) rather than in SQL', async () => {
     // With a derived filter present the limit must be honored on the FINAL set;
-    // an SQL-side limit could have been consumed by rows starred=false drops.
-    const limited = await getTasks('?starred=false&sort=updated_desc&limit=3');
+    // an SQL-side limit could have been consumed by rows blocked=false drops.
+    const limited = await getTasks('?blocked=false&sort=updated_desc&limit=3');
     expect(limited).toHaveLength(3);
     const all = await getTasks('?sort=updated_desc');
     expect(limited.map((t) => t.id)).toEqual(all.slice(0, 3).map((t) => t.id));

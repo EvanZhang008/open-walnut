@@ -40,7 +40,7 @@ interface Props {
 }
 
 export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent }: Props) {
-  const { tasks, star } = useTasksContext();
+  const { tasks } = useTasksContext();
   const projectRegistry = useProjectRegistry();
   const anchorRef = useRef<HTMLElement | null>(seed.anchorEl ?? null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -149,8 +149,8 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
             initialDates={initialDates}
             onCreate={async (input) => {
               // pinnedTier needs the Focus Bar plumbing MainPage owns — out of
-              // scope on the calendar; starred still applies post-create.
-              const task = await onCreateTask({
+              // scope on the calendar.
+              await onCreateTask({
                 title: input.title,
                 priority: input.priority,
                 project: input.project,
@@ -158,7 +158,6 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
                 start_date: input.start_date,
                 end_date: input.end_date,
               });
-              if (input.starred && task?.id) star(task.id);
               onClose();
             }}
           />

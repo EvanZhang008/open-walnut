@@ -25,7 +25,6 @@ import {
   updateNote,
   updateDescription,
   updateSummary,
-  toggleStar,
   reorderTasks,
   getAllTags,
   CircularDependencyError,
@@ -324,7 +323,7 @@ function parseTaskQueryParams(rawQuery: Record<string, unknown>): TaskQuery {
   for (const name of [
     'completion', 'status', 'phases', 'projects', 'project', 'priorities',
     'sources', 'source', 'sprints', 'sprint', 'tags_any', 'tags', 'tags_all',
-    'pinned', 'starred', 'unread', 'blocked', 'parent_task_id',
+    'pinned', 'unread', 'blocked', 'parent_task_id',
     'group_id', 'time_basis', 'last_hours', 'last_days', 'time_from',
     'time_until', 'sort', 'limit',
   ]) {
@@ -368,7 +367,7 @@ function parseTaskQueryParams(rawQuery: Record<string, unknown>): TaskQuery {
     if (values.length > 0) query.tagsAll = values
   }
 
-  for (const name of ['pinned', 'starred', 'unread', 'blocked'] as const) {
+  for (const name of ['pinned', 'unread', 'blocked'] as const) {
     if (raw[name] !== undefined) query[name] = parseBoolParam(raw[name]!, name)
   }
   if (raw.parent_task_id !== undefined) query.parentTaskId = raw.parent_task_id
@@ -919,10 +918,6 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
       res.status(400).json({ error: `phase must be one of: ${VALID_PHASES_ARRAY.join(', ')}` })
       return
     }
-    if (req.body.starred !== undefined && typeof req.body.starred !== 'boolean') {
-      res.status(400).json({ error: 'starred must be a boolean' })
-      return
-    }
     if (req.body.unread !== undefined && typeof req.body.unread !== 'boolean') {
       res.status(400).json({ error: 'unread must be a boolean' })
       return
@@ -1022,18 +1017,6 @@ tasksRouter.post('/:id/toggle-complete', async (req: Request, res: Response, nex
       res.status(409).json({ error: err.message, active_children: err.activeCount })
       return
     }
-    next(err)
-  }
-})
-
-// POST /api/tasks/:id/star
-tasksRouter.post('/:id/star', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const id = param(req.params.id)
-    const result = await toggleStar(id)
-    bus.emit(EventNames.TASK_STARRED, { task: result.task, starred: result.starred }, ['web-ui'], { source: 'api' })
-    res.json(result)
-  } catch (err) {
     next(err)
   }
 })

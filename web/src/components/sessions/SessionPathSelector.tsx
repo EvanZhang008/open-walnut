@@ -38,7 +38,6 @@ export interface QuickStartPath {
  *  This is the UI state shape (all fields required so React controlled inputs stay stable).
  *  The wire-format counterpart in `@/api/sessions` has every field optional — see that file. */
 export interface QuickStartTaskMeta {
-  starred: boolean;
   /** Start the task already marked unread, so it carries a dot before you ever
    *  look at its output. */
   unread: boolean;

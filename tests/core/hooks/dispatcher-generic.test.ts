@@ -106,14 +106,13 @@ describe('HookDispatcher task domain', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it('excluded task events (starred/deleted/reordered) never reach handlers', async () => {
+  it('excluded task events (deleted/reordered) never reach handlers', async () => {
     const handler = vi.fn();
     dispatcher.init([
       makeHook({ hooks: ['onTaskCreated', 'onTaskUpdated', 'onTaskCompleted', 'onTaskPhaseChanged'], handler }),
     ]);
 
     const task = makeTask();
-    bus.emit(EventNames.TASK_STARRED, { task, starred: true }, ['web-ui'], { source: 'api' });
     bus.emit(EventNames.TASK_DELETED, { id: task.id, task }, ['web-ui'], { source: 'api' });
     bus.emit(EventNames.TASK_REORDERED, { project: 'p', taskIds: [] }, ['web-ui'], { source: 'api' });
     await tick();

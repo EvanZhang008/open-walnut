@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { renderNoteMarkdown } from '@/utils/markdown';
-import { fetchTask, toggleCompleteTask, starTask, addNote, updateNote, updateDescription, deleteTask, addTag, removeTag, addDependency, removeDependency, updateTask, type TaskDetail } from '@/api/tasks';
+import { fetchTask, toggleCompleteTask, addNote, updateNote, updateDescription, deleteTask, addTag, removeTag, addDependency, removeDependency, updateTask, type TaskDetail } from '@/api/tasks';
 import { TaskFieldEditor } from '@/components/tasks/TaskFieldEditor';
 import { PluginFieldPills } from '@/components/tasks/PluginFieldPicker';
 import { DatePicker } from '@/components/common/DatePicker';
@@ -10,7 +10,6 @@ import { fetchSessionsForTask, updateSession } from '@/api/sessions';
 import type { SessionRecord } from '@open-walnut/core';
 import { PriorityBadge } from '@/components/common/PriorityBadge';
 import { StatusBadge } from '@/components/common/StatusBadge';
-import { StarButton } from '@/components/common/StarButton';
 import { TagEditor } from '@/components/tasks/TagEditor';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -193,11 +192,6 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
     if (updated.id === taskId) setTask(updated);
     else if (updated.parent_task_id === taskId) loadTask();
   });
-  useEvent('task:starred', (data) => {
-    const { task: updated } = data as { task?: Task };
-    if (!updated) { loadTask(); return; }
-    if (updated.id === taskId) setTask(updated);
-  });
   useEvent('task:created', (data) => {
     const { task: created } = data as { task?: Task };
     if (created?.parent_task_id === taskId) loadTask();
@@ -243,12 +237,6 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
       // Without this, the promise rejection is silently swallowed.
       showOperationError(err instanceof Error ? err.message : String(err));
     }
-  };
-
-  const handleStar = async () => {
-    if (!id) return;
-    const updated = await starTask(id);
-    setTask(updated);
   };
 
   const handleDateChange = async (date: string | null) => {
@@ -314,13 +302,12 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
 
   return (
     <div className="task-detail-v2">
-      {/* One-line header: back / ★ / title / status / actions — no scrolling to act. */}
+      {/* One-line header: back / title / status / actions — no scrolling to act. */}
       <div className="tdv2-head">
         {/* Back button is meaningless in a pop-out window (no in-app history). */}
         {!isPopout && (
           <button className="btn tdv2-back" onClick={handleBack}>&larr;</button>
         )}
-        <StarButton starred={!!task.starred} onClick={handleStar} />
         <h1 className="tdv2-title" title={task.title}>{task.title}</h1>
         <StatusBadge status={task.status} phase={task.phase} />
         {!isPopout && (

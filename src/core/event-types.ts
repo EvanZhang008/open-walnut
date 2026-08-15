@@ -38,7 +38,6 @@ export interface TaskPhaseChangedEvent {
   source: string;
   sessionId?: string;
 }
-export interface TaskStarredEvent { task: Task; starred: boolean }
 export interface TaskDeletedEvent { id?: string; task: Task }
 /** `project` is the single grouping layer; '' = Inbox. */
 export interface TaskReorderedEvent { project: string; taskIds: string[] }
@@ -766,7 +765,6 @@ export interface EventPayloadMap {
   'task:updated': TaskUpdatedEvent;
   'task:completed': TaskCompletedEvent;
   'task:phase-changed': TaskPhaseChangedEvent;
-  'task:starred': TaskStarredEvent;
   'task:deleted': TaskDeletedEvent;
   'task:reordered': TaskReorderedEvent;
   'task:unblocked': TaskUnblockedEvent;

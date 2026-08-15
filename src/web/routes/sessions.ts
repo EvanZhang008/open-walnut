@@ -242,8 +242,9 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       taskId?: string // retry mode: reuse existing task instead of creating a new one
       /** File the new task under this project (created if unknown). Omitted/empty = Inbox. */
       project?: string
+      // A retired `starred` key from an older client is silently ignored (this
+      // is a body cast — unlisted JSON fields never reach quickStartSession).
       taskMeta?: {
-        starred?: boolean
         /** Start the new task marked unread. */
         unread?: boolean
         priority?: 'immediate' | 'important' | 'backlog' | 'none'

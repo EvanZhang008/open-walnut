@@ -41,7 +41,7 @@ const DEFAULT_AGENT_TIMEOUT_MS = 120_000;
 
 /** Bus events the dispatcher subscribes to.
  *  KEEP IN SYNC with domainForEvent() below (pattern: git-versioning.ts).
- *  Task names are EXPLICIT (not the 'task:' prefix) — task:starred/reordered/
+ *  Task names are EXPLICIT (not the 'task:' prefix) — task:reordered/
  *  groups-changed/deleted/unblocked deliberately excluded: no hook points map
  *  to them, and task:updated alone already fires per sync tick. */
 const HOOK_BUS_INTEREST = [

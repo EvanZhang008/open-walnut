@@ -37,7 +37,6 @@ interface TaskKebabMenuProps {
   onExpandDetail?: (task: Task) => void;
   onClearFocus?: () => void;
   onSetPriority?: (id: string, priority: string) => void;
-  onStar?: (id: string) => void;
   onPinTask?: (id: string) => void;
   onUnpinTask?: (id: string) => void;
   onSetTier?: (id: string, tier: FocusTier) => void;
@@ -369,7 +368,7 @@ export function MoveToProjectSection({ current, onMove, afterAction }: {
   );
 }
 
-export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onStar, onPinTask, onUnpinTask, onSetTier, onOpenSession, onStartSession, onSetDate, onSetStartDate, onUnparent, onMoveUp, onUngroup, isGroupHidden, onUnhideGroup, onStartSelect, onMoveToProject, onDelete }: TaskKebabMenuProps) {
+export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onPinTask, onUnpinTask, onSetTier, onOpenSession, onStartSession, onSetDate, onSetStartDate, onUnparent, onMoveUp, onUngroup, isGroupHidden, onUnhideGroup, onStartSelect, onMoveToProject, onDelete }: TaskKebabMenuProps) {
   const integrations = useIntegrations();
   const sessionId = resolveTaskSessionId(task);
   const storedSessionStatus = useSessionStatus(sessionId);
@@ -554,21 +553,6 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
             <span className="task-kebab-icon">{ICONS.ICON_INFO}</span>
             <span>{isDetailOpen ? 'Close details' : 'Details'}</span>
           </button>
-
-          {/* Star */}
-          {onStar && (
-            <button
-              className={`task-kebab-item${task.starred ? ' task-kebab-item-active' : ''}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onStar(task.id);
-                closeMenu();
-              }}
-            >
-              <span className="task-kebab-icon">{task.starred ? ICONS.ICON_STAR_FILLED : ICONS.ICON_STAR_EMPTY}</span>
-              <span>{task.starred ? 'Unstar' : 'Star'}</span>
-            </button>
-          )}
 
           {/* Select — enter multi-select mode with this task picked, to group several together */}
           {onStartSelect && (

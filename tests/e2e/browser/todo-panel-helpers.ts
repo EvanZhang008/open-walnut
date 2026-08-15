@@ -8,9 +8,10 @@
  *     to `Focus`, where the main task list (`.todo-panel-item` rows) is NOT
  *     mounted at all. `All` is the stacked view where every region renders.
  *   • PROJECT chip (`.vd-cat`, inside the View dropdown) — which project is in
- *     scope. Defaults to ★ (Starred), which hides non-starred tasks. Project is
- *     now the ONLY grouping axis (the category layer was removed); `Inbox` is the
- *     chip for tasks with no project.
+ *     scope. Defaults to `All` (no project scoping; before the starred system was
+ *     retired this defaulted to ★, which hid non-starred rows). Project is now the
+ *     ONLY grouping axis (the category layer was removed); `Inbox` is the chip for
+ *     tasks with no project.
  *
  * Before the section tabs existed everything was always mounted, so specs only
  * had to deal with the project axis. Any spec that locates `.todo-panel-item`

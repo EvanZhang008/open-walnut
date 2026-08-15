@@ -144,7 +144,6 @@ interface SortableTierCardProps {
   onSetPriority?: (id: string, priority: string) => void;
   onSetDate?: (id: string, date: string | null) => void;
   onSetStartDate?: (id: string, date: string | null) => void;
-  onStar?: (id: string) => void;
   onExpandDetail?: (task: Task) => void;
   onClearFocus?: () => void;
   onOpenSession?: (sessionId: string) => void;
@@ -172,7 +171,7 @@ interface SortableTierCardProps {
   isGroupTarget?: boolean;
 }
 
-export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onSetStartDate, onStar, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, groupInfo, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget }: SortableTierCardProps) {
+export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onSetStartDate, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, groupInfo, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget }: SortableTierCardProps) {
   const {
     attributes,
     listeners,
@@ -357,7 +356,6 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
         onSetPriority={onSetPriority}
         onSetDate={onSetDate}
         onSetStartDate={onSetStartDate}
-        onStar={onStar}
         onPinTask={onPinTask}
         onUnpinTask={onUnpinTask}
         onSetTier={onSetTier}

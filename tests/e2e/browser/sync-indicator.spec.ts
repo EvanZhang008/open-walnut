@@ -62,15 +62,15 @@ test.describe('TaskCard SyncIndicator', () => {
 })
 
 // ── TodoPanel source status (main-page kebab menu) ──
-// The TodoPanel defaults to the starred tab (no tasks starred = empty).
-// Select the "All" project chip first to reveal all tasks.
+// The TodoPanel's SECTION tab defaults to Focus, where the main task list isn't
+// mounted. Show everything first to reveal the rows.
 
 test.describe('TodoPanel source badge', () => {
   async function showAllTasks(page: import('@playwright/test').Page) {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
     // Both axes: the SECTION tab defaults to Focus (where `.todo-panel-item` rows
-    // aren't mounted at all) and the PROJECT chip defaults to ★ Starred.
+    // aren't mounted at all) and the PROJECT chip scopes by project.
     await showEverything(page)
   }
 

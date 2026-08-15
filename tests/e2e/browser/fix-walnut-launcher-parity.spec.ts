@@ -48,11 +48,10 @@ test('fix walnut pill inherits the sticky launcher tier instead of forcing Focus
 
   const payload = (await launchRequest).postDataJSON() as {
     intent?: string
-    taskMeta?: { pinTier?: string | null; starred?: boolean }
+    taskMeta?: { pinTier?: string | null }
   }
   expect(payload.intent).toBe('fix-walnut')
   expect(payload.taskMeta?.pinTier).toBe('wait')
-  expect(payload.taskMeta?.starred).toBe(true)
 
   // Find the task the launch created. Title is server-built as "Fix Walnut: <report>".
   const titleNeedle = report.slice(0, 40)

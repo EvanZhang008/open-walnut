@@ -7,7 +7,7 @@ import {
   nextValue,
 } from '@/components/sessions/task-meta-constants';
 
-export type ConfirmField = 'title' | 'due' | 'start' | 'end' | 'pin' | 'priority' | 'star' | 'project';
+export type ConfirmField = 'title' | 'due' | 'start' | 'end' | 'pin' | 'priority' | 'project';
 
 export interface ConfirmDraft {
   title: string;
@@ -18,7 +18,6 @@ export interface ConfirmDraft {
   /** Built-in tier name or a custom tier id (`ct_*`). */
   pin?: string;
   priority?: 'immediate' | 'important' | 'backlog';
-  starred: boolean;
   /** Target project. Empty/undefined = Inbox. */
   project?: string;
   /** The AI invented this project name — it doesn't exist yet. Drives the "new" badge. */
@@ -136,14 +135,6 @@ export function QuickTaskConfirm({
             onClick={() => onChange({ priority: nextValue(PRIORITY_CYCLE, draft.priority) as ConfirmDraft['priority'] })}
           >
             {priorityLabel} <AiBadge visible={draft.aiFields.has('priority')} />
-          </button>
-          <button
-            type="button"
-            className={`qtc-chip${draft.aiFields.has('star') ? ' qtc-chip-ai' : ''}`}
-            disabled={submitting}
-            onClick={() => onChange({ starred: !draft.starred })}
-          >
-            {draft.starred ? '★ Starred' : '☆ Star'} <AiBadge visible={draft.aiFields.has('star')} />
           </button>
         </div>
         {datePickerOpen && (

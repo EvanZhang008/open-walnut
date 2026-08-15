@@ -131,8 +131,7 @@ export class GitVersioningService {
       case EventNames.TASK_UPDATED:
       case EventNames.TASK_COMPLETED:
       case EventNames.TASK_DELETED:
-      case EventNames.TASK_REORDERED:
-      case EventNames.TASK_STARRED: {
+      case EventNames.TASK_REORDERED: {
         const title = (data?.task as { title?: string })?.title;
         const action = name.split(':')[1]; // 'created', 'updated', etc.
         const detail = title ? `${action} "${title.slice(0, 50)}"` : action;

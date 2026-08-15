@@ -36,7 +36,7 @@ const OPTIMISTIC_STARTING_STATUS = { process_status: 'running' as const };
 function tasksShallowEqual(a: Task, b: Task): boolean {
   const scalarKeys: (keyof Task)[] = [
     'title', 'status', 'phase', 'priority', 'project',
-    'parent_task_id', 'group_id', 'starred', 'due_date', 'start_date', 'completed_at', 'updated_at',
+    'parent_task_id', 'group_id', 'due_date', 'start_date', 'completed_at', 'updated_at',
     'sync_error', 'external_url', 'unread', 'source', 'sprint',
     'cwd', 'session_id', 'plan_session_id', 'exec_session_id',
     // Session-resume touch updates ONLY this field now (the pin-bump side
@@ -125,13 +125,6 @@ function applyReorder(tasks: Task[], project: string, taskIds: string[]): Task[]
 
 // ── Optimistic prediction functions ──
 
-function applyToggleStar(tasks: Task[], id: string): Task[] {
-  const now = new Date().toISOString();
-  return tasks.map(t => t.id === id
-    ? { ...t, starred: !t.starred, updated_at: now }
-    : t);
-}
-
 /** Clear session slots and the read marker — mirrors server applyPhase('COMPLETE').
  *  The marker must go too, or a completed task keeps its dot alive. */
 function clearSessionSlots(t: Task): Task {
@@ -191,7 +184,7 @@ function applyPhaseChangeMany(tasks: Task[], ids: Set<string>, phase: string): T
 /** Only spread direct-value task fields for optimistic update (not instruction fields like add_tags). */
 const OPTIMISTIC_FIELDS = new Set([
   'title', 'status', 'phase', 'priority', 'project',
-  'due_date', 'start_date', 'unread', 'parent_task_id', 'starred',
+  'due_date', 'start_date', 'unread', 'parent_task_id',
 ]);
 
 function applyFieldUpdate(tasks: Task[], id: string, updates: Record<string, unknown>): Task[] {
@@ -261,7 +254,6 @@ interface UseTasksReturn {
   update: (id: string, updates: tasksApi.UpdateTaskInput) => void;
   toggleComplete: (id: string) => void;
   setPhase: (id: string, phase: string) => void;
-  star: (id: string) => void;
   /** Reorder within ONE project group. `project: ''` = Inbox. */
   reorder: (project: string, taskIds: string[]) => void;
   /** Move a task to another project ('' = Inbox), optionally next to a sibling. */
@@ -360,7 +352,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
 
   // Suppress WS echoes of our own optimistic operations.
   // Counter-based: each guardEcho increments the count, each consumed echo decrements.
-  // This correctly handles rapid repeated operations (e.g. double-click star).
+  // This correctly handles rapid repeated operations (e.g. double-click complete).
   // Auto-expire after 5s as safety net (decrements so counter never stays stuck).
   const echoGuard = useRef(new Map<string, number>());
   const guardEcho = useCallback((key: string) => {
@@ -557,21 +549,6 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     });
   });
 
-  useEvent('task:starred', (data) => {
-    const { task } = data as { task?: Task };
-    if (!task) { refetch(); return; }
-    if (consumeEcho(`star:${task.id}`)) return;
-    setTasks((prev) => {
-      const idx = prev.findIndex((t) => t.id === task.id);
-      if (idx === -1) return prev;
-      const merged = mergeTask(prev[idx], task);
-      if (tasksShallowEqual(prev[idx], merged)) return prev;
-      const next = prev.slice();
-      next[idx] = merged;
-      return next;
-    });
-  });
-
   useEvent('task:deleted', (data) => {
     const { id } = data as { id: string };
     setTasks((prev) => prev.filter((t) => t.id !== id));
@@ -681,12 +658,6 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     guardEcho(`phase:${id}`);
     setTasks(prev => applyPhaseChange(prev, id, phase));
     withRetry(() => tasksApi.updateTask(id, { phase })).catch(onOpError);
-  }, [guardEcho, onOpError]);
-
-  const star = useCallback((id: string) => {
-    guardEcho(`star:${id}`);
-    setTasks(prev => applyToggleStar(prev, id));
-    withRetry(() => tasksApi.starTask(id)).catch(onOpError);
   }, [guardEcho, onOpError]);
 
   const reorder = useCallback((project: string, taskIds: string[]) => {
@@ -980,5 +951,5 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       .catch((err) => { onOpError(err); refetchGroups(); });
   }, [onOpError, refetchGroups]);
 
-  return { tasks, taskGroups, hiddenGroups, loading, refreshing, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, star, reorder, moveTask, reparentTask, bakeOrder, deleteTask, batchSetPhase, batchDelete, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb };
+  return { tasks, taskGroups, hiddenGroups, loading, refreshing, error, operationError, clearOperationError, showOperationError, refetch, create, update, toggleComplete, setPhase, reorder, moveTask, reparentTask, bakeOrder, deleteTask, batchSetPhase, batchDelete, patchTasksLocal, guardEcho, groupTasks: groupTasksCb, addToGroup: addToGroupCb, ungroupTasks: ungroupTasksCb, renameGroup: renameGroupCb, setGroupHidden: setGroupHiddenCb };
 }

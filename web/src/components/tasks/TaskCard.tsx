@@ -2,7 +2,6 @@ import type { MouseEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { PriorityBadge } from '../common/PriorityBadge';
-import { StarButton } from '../common/StarButton';
 import { TagChip } from './TagChip';
 import { TaskSessionPill } from './SessionPill';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
@@ -27,7 +26,6 @@ export interface CardGroupInfo {
 interface TaskCardProps {
   task: TaskListProjection;
   onComplete: (id: string) => void;
-  onStar: (id: string) => void;
   onDelete?: (id: string) => void;
   childStats?: { done: number; total: number };
   /** Virtual-group treatment: tinted rail on every member, chip above the lead. */
@@ -97,7 +95,7 @@ export function SyncIndicator({ task }: { task: TaskListProjection }) {
   );
 }
 
-export function TaskCard({ task, onComplete, onStar, onDelete, childStats, groupInfo, isSelected, onSelectToggle, onRenameGroup, onUngroup }: TaskCardProps) {
+export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, isSelected, onSelectToggle, onRenameGroup, onUngroup }: TaskCardProps) {
   const navigate = useNavigate();
   const confirm = useConfirm();
 
@@ -157,8 +155,6 @@ export function TaskCard({ task, onComplete, onStar, onDelete, childStats, group
       >
         {task.phase === 'COMPLETE' ? '\u25CF' : '\u25CB'}
       </button>
-
-      <StarButton starred={!!task.starred} onClick={() => onStar(task.id)} />
 
       {groupInfo && onUngroup && (
         <button

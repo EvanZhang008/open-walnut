@@ -16,7 +16,6 @@ import type { Task, SessionEngine } from '../types.js';
 import { spillLargePromptToFile } from './quick-start-spill.js';
 
 export interface QuickStartTaskMeta {
-  starred?: boolean;
   /** Start the new task already marked unread. */
   unread?: boolean;
   priority?: 'immediate' | 'important' | 'backlog' | 'none';
@@ -117,7 +116,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
 
   if (existingTaskId) {
     // Retry mode: reuse existing task, archive error sessions.
-    // Note: footer taskMeta picks (starred/unread/priority/pinTier) are
+    // Note: footer taskMeta picks (unread/priority/pinTier) are
     // intentionally IGNORED on retry — we preserve the original task's metadata.
     // getTask THROWS on an unknown id (it never returns null) and is a PREFIX
     // matcher with three failure modes: no match, ambiguous prefix, and a
@@ -166,11 +165,8 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       if (err instanceof ProjectSourceConflictError) throw new QuickStartError(err.message, 409);
       throw err;
     }
-    // Merge taskMeta into initial update; `starred` defaults to true for quick-start.
-    const updates: Partial<Task> = {
-      starred: taskMeta?.starred ?? true,
-      cwd,
-    };
+    // Merge taskMeta into the initial update.
+    const updates: Partial<Task> = { cwd };
     if (taskMeta?.unread) updates.unread = true;
     // 'none' is a sentinel meaning "don't write priority" — lets a future retry
     // branch or other caller omit the field without clearing an existing value.

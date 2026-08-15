@@ -124,7 +124,9 @@ describe('getOrCreateLaneSession', () => {
 
   it('gives different agents on the same conversation id different sessions', async () => {
     const g = await getOrCreateLaneSession('general', 'conv-shared', { firstMessage: 'g' })
-    const r = await getOrCreateLaneSession('research', 'conv-shared', { firstMessage: 'r' })
+    // Must be a REAL console agent: resolveLane now looks the id up in the
+    // registry (55c33352) and throws on unknown ids. 'mentor' is a builtin.
+    const r = await getOrCreateLaneSession('mentor', 'conv-shared', { firstMessage: 'r' })
     expect(r.sessionId).not.toBe(g.sessionId)
   })
 
@@ -234,8 +236,10 @@ describe('butlerProfile', () => {
     }
     expect(prompt).toContain('Claude Code session')
     expect(prompt).toContain('verbatim')
-    // Still a coordinator even though the CLI hands it file/shell tools.
-    expect(prompt).toContain('coordinator, not an executor')
+    // Still a coordinator for project work even though the CLI hands it
+    // file/shell tools (conversation deliverables are explicitly inline).
+    expect(prompt).toContain('coordinator for project work, not an executor')
+    expect(prompt).toContain('Conversation deliverables')
   })
 })
 

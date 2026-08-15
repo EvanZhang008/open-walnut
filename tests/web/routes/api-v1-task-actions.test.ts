@@ -97,15 +97,28 @@ describe('DELETE /api/v1/tasks/:id', () => {
   })
 })
 
-describe('POST /api/v1/tasks/:id/star', () => {
-  it('toggles star on and off', async () => {
+// RETIRED endpoint, still mounted for the frozen /api/v1 contract: the starred
+// system was removed from the product, so this answers the documented
+// `{ task, starred }` shape with a constant false and writes nothing. An older
+// iOS build whose decoder REQUIRES the field keeps working; its star control
+// simply never latches.
+describe('POST /api/v1/tasks/:id/star (retired no-op)', () => {
+  it('answers { task, starred: false } and never latches', async () => {
     const id = await makeTask('Starrable')
     const app = createApp()
-    const on = await request(app).post(`/api/v1/tasks/${id}/star`)
-    expect(on.status).toBe(200)
-    expect(on.body.starred).toBe(true)
-    const off = await request(app).post(`/api/v1/tasks/${id}/star`)
-    expect(off.body.starred).toBe(false)
+    const first = await request(app).post(`/api/v1/tasks/${id}/star`)
+    expect(first.status).toBe(200)
+    expect(first.body.starred).toBe(false)
+    expect(first.body.task.id).toBe(id)
+    const second = await request(app).post(`/api/v1/tasks/${id}/star`)
+    expect(second.body.starred).toBe(false)
+  })
+
+  it('still 404s an unknown id', async () => {
+    const app = createApp()
+    const res = await request(app).post('/api/v1/tasks/nope-nope-nope/star')
+    expect(res.status).toBe(404)
+    expect(res.body.error.code).toBe('not_found')
   })
 })
 

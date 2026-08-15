@@ -442,7 +442,7 @@ describe('renameProject — ms-todo remote list', () => {
 
 // ── Config name lists follow rename / delete ───────────────────────────────
 // favorites.projects and ordering.projects are plain NAME lists, so a rename
-// that skipped them silently unstarred the project and dropped it out of the
+// that skipped them silently unfavorited the project and dropped it out of the
 // user's hand-ordering.
 
 describe('project rename/delete → config lists', () => {

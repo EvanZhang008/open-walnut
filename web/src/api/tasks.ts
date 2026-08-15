@@ -107,8 +107,6 @@ export interface UpdateTaskInput {
   due_date?: string | null;
   start_date?: string | null;
   end_date?: string | null;
-  /** Idempotent star set (unlike POST /:id/star which toggles). */
-  starred?: boolean;
   /** Read/unread marker — true = agent output the human hasn't opened. */
   unread?: boolean;
   parent_task_id?: string;  // Set parent (task ID) or '' to remove parent
@@ -166,11 +164,6 @@ export async function completeTask(id: string): Promise<Task> {
 
 export async function toggleCompleteTask(id: string): Promise<Task> {
   const res = await apiPost<{ task: Task }>(`/api/tasks/${id}/toggle-complete`);
-  return seedTask(res.task);
-}
-
-export async function starTask(id: string): Promise<Task> {
-  const res = await apiPost<{ task: Task; starred: boolean }>(`/api/tasks/${id}/star`);
   return seedTask(res.task);
 }
 

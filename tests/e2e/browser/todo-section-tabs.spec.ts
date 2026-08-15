@@ -60,9 +60,8 @@ test.describe('todo panel section tabs', () => {
     const strip = page.locator('.todo-section-tabs')
     await expect(strip).toBeVisible({ timeout: 20_000 })
 
-    // The PROJECT chip defaults to ★ (Starred), which would filter the unstarred
-    // seed tasks out of the tiers — a separate axis from the section tabs. Pick
-    // "All" so the tiers actually have cards to lay out.
+    // The PROJECT chip is a separate axis from the section tabs; pick "All" so
+    // no project scoping can filter the seed tasks out of the tiers.
     await page.getByRole('button', { name: 'View options' }).click()
     await page.locator('.vd-cat').filter({
       has: page.locator('.vd-cat-name').filter({ hasText: /^All$/ }),

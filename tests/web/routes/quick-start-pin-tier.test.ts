@@ -96,7 +96,7 @@ describe('POST /api/sessions/quick-start — taskMeta.pinTier=focus', () => {
     expect(task!.focus_tier).toBe('focus');
   });
 
-  it('defaults starred=true and leaves the task in Inbox (no project supplied)', async () => {
+  it('leaves the task in Inbox (no project supplied)', async () => {
     const app = createApp();
     const res = await request(app)
       .post('/api/sessions/quick-start')
@@ -108,7 +108,6 @@ describe('POST /api/sessions/quick-start — taskMeta.pinTier=focus', () => {
 
     expect(res.status).toBe(200);
     const task = await getTask(res.body.taskId);
-    expect(task!.starred).toBe(true);
     // The hardcoded `Local / 'Quick Start'` staging group is gone: an unfiled
     // quick-start lands in Inbox and the auto-organize pass (disabled in tests)
     // is what may later file it under a real project.

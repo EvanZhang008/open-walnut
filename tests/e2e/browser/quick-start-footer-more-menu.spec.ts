@@ -31,7 +31,6 @@ test('Quick Start footer keeps primary controls visible and opens task settings 
   await expect(tiers).toBeVisible()
   await expect(tiers.getByRole('button', { name: 'Satellite' })).toHaveAttribute('aria-pressed', 'true')
 
-  await expect(footer.getByTitle('Star this task')).toHaveCount(0)
   await expect(footer.getByTitle('Start this task marked unread')).toHaveCount(0)
   await expect(footer.getByText('Priority', { exact: true })).toHaveCount(0)
 
@@ -40,7 +39,9 @@ test('Quick Start footer keeps primary controls visible and opens task settings 
 
   const popover = footer.getByRole('dialog', { name: 'More task settings' })
   await expect(popover).toBeVisible()
-  await expect(popover.getByTitle('Star this task')).toBeVisible()
+  // The retired star toggle is gone from the menu entirely (pin + focus tier is
+  // the working set now).
+  await expect(popover.getByTitle('Star this task')).toHaveCount(0)
   await expect(popover.getByTitle('Start this task marked unread')).toBeVisible()
   await expect(popover.getByText('Priority', { exact: true })).toBeVisible()
   // The task dates trio lives here too (start leads; end/due ghost when empty) —
@@ -51,8 +52,10 @@ test('Quick Start footer keeps primary controls visible and opens task settings 
 
   await page.screenshot({ path: '/tmp/quick-start-footer/more-open.png' })
 
+  // Toggling a menu-owned field flips the "More · N" changed-from-default badge.
+  // (This used to click the star toggle; unread is the remaining boolean there.)
   const before = await more.textContent()
-  await popover.getByTitle('Star this task').click()
+  await popover.getByTitle('Start this task marked unread').click()
   await expect(more).toHaveClass(/active/)
   await expect(more).not.toHaveText(before ?? '')
 

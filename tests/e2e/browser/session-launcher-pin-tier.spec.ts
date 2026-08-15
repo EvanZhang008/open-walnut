@@ -162,10 +162,9 @@ test('the launcher sends the picked tier in the quick-start payload', async ({ p
   await chatInput.press('Enter')
 
   const payload = (await launchRequest).postDataJSON() as {
-    taskMeta?: { pinTier?: string | null; starred?: boolean }
+    taskMeta?: { pinTier?: string | null }
   }
   expect(payload.taskMeta?.pinTier).toBe('satellite')
-  expect(payload.taskMeta?.starred).toBe(true)
 })
 
 /**

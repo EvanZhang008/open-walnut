@@ -52,12 +52,12 @@ afterEach(async () => {
 describe('POST /api/tasks/quick-parse', () => {
   it('returns the parsed task shape for valid text without envelope metadata', async () => {
     sendMessageMock.mockResolvedValue(textResult(
-      '{"title":"File my tax","due_date":"2026-07-15T10:00:00","pinTier":"focus","priority":"important","starred":true}',
+      '{"title":"File my tax","due_date":"2026-07-15T10:00:00","pinTier":"focus","priority":"important"}',
     ));
 
     const res = await request(createApp())
       .post('/api/tasks/quick-parse')
-      .send({ text: 'file my tax tomorrow at 10am pinned focus important and starred', ...validBody });
+      .send({ text: 'file my tax tomorrow at 10am pinned focus important', ...validBody });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
@@ -65,7 +65,6 @@ describe('POST /api/tasks/quick-parse', () => {
       due_date: '2026-07-15T10:00:00',
       pinTier: 'focus',
       priority: 'important',
-      starred: true,
     });
     expect(res.body).not.toHaveProperty('parseMs');
     expect(res.body).not.toHaveProperty('model');

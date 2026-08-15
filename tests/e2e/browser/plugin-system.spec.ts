@@ -24,7 +24,7 @@ async function showAllTasksInTodoPanel(page: import('@playwright/test').Page) {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   // Both axes: the SECTION tab defaults to Focus (main list not mounted) and the
-  // PROJECT chip defaults to ★ Starred. Projects live in the View dropdown now.
+  // PROJECT chip scopes by project. Projects live in the View dropdown now.
   await showEverything(page)
   await page.waitForTimeout(300)
 }

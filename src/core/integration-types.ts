@@ -69,7 +69,6 @@ export interface IntegrationSync {
   updatePriority(task: Task, priority: TaskPriority): Promise<void>;
   updatePhase(task: Task, phase: TaskPhase): Promise<void>;
   updateDueDate(task: Task, date: string | null): Promise<void>;
-  updateStar(task: Task, starred: boolean): Promise<void>;
   /** The task moved to a different project (the single grouping layer). */
   updateProject(task: Task, project: string): Promise<void>;
   updateDependencies(task: Task, dependsOn: string[]): Promise<void>;

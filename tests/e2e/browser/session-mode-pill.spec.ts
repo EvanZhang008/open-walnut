@@ -79,7 +79,7 @@ test.describe('SessionPill real-time mode change', () => {
     }, null, { timeout: 5000 })
 
     // Both panel axes to "All": the SECTION tab (default Focus doesn't mount the
-    // main task list) and the PROJECT chip (default ★ Starred hides these tasks;
+    // main task list) and the PROJECT chip (project scoping can hide these tasks;
     // it lives in the View dropdown now, not the removed `.todo-panel-tab` strip).
     await showEverything(page)
     await page.waitForTimeout(300)
@@ -125,7 +125,7 @@ test.describe('SessionPill real-time mode change', () => {
     }, null, { timeout: 5000 })
 
     // Both panel axes to "All": the SECTION tab (default Focus doesn't mount the
-    // main task list) and the PROJECT chip (default ★ Starred hides these tasks;
+    // main task list) and the PROJECT chip (project scoping can hide these tasks;
     // it lives in the View dropdown now, not the removed `.todo-panel-tab` strip).
     await showEverything(page)
     await page.waitForTimeout(300)

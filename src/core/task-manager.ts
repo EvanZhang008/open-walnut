@@ -2266,9 +2266,9 @@ export function buildTaskQueryWhere(q: NormalizedTaskQuery, excludeSentinels: bo
     else conds.push(`(${windowFor('created_at')} OR ${windowFor('updated_at')})`);
   }
 
-  // Deliberately NOT pushed down: starred (needs config favorites), blocked
-  // (needs the whole dependency graph), unread (a payload boolean whose JSON
-  // encodings aren't worth a fragile expression).
+  // Deliberately NOT pushed down: blocked (needs the whole dependency graph),
+  // unread (a payload boolean whose JSON encodings aren't worth a fragile
+  // expression).
 
   return { conds, params };
 }
@@ -2316,10 +2316,6 @@ async function runTaskQuery(
     : rows.map((r) => rowToSlimTask(r, projection === 'minimal')) as unknown as Task[];
 
   const ctx: TaskQueryContext = {};
-  if (normalized.starred !== undefined) {
-    const config = await getConfig();
-    ctx.favoriteProjects = new Set((config.favorites?.projects ?? []).map((p) => p.toLowerCase()));
-  }
   if (normalized.blocked !== undefined) {
     // Dependencies can point outside the candidate set, so the blocked set is
     // computed over the FULL task list. Only paid for when blocked is queried.
@@ -2718,7 +2714,6 @@ export interface UpdateTaskInput {
   end_date?: string;        // When the working block ends (empty string clears)
   /** Move the task to another project. '' moves it to Inbox. */
   project?: string;
-  starred?: boolean;
   /** Read/unread marker. false = the human has seen the latest agent output. */
   unread?: boolean;
   parent_task_id?: string;  // Set or change parent. Empty string = remove parent.
@@ -2924,7 +2919,6 @@ export async function updateTask(
   if (updates.due_date !== undefined) task.due_date = updates.due_date || undefined;
   if (updates.start_date !== undefined) task.start_date = updates.start_date || undefined;
   if (updates.end_date !== undefined) task.end_date = updates.end_date || undefined;
-  if (updates.starred !== undefined) task.starred = updates.starred;
   if (updates.unread !== undefined) task.unread = updates.unread;
   // Track parent change for plugin notification (fired after writeStore)
   let parentChangeAction: (() => void) | undefined;
@@ -4264,32 +4258,6 @@ export async function getDashboardData(): Promise<DashboardData> {
     recent_sessions: [],
     stats,
   };
-}
-
-/**
- * Toggle the starred state on a task by partial ID match.
- */
-export async function toggleStar(idPrefix: string): Promise<{ task: Task; starred: boolean }> {
-  return withWriteLock(async () => {
-  const store = await readStore();
-  const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
-
-  if (matches.length === 0) {
-    throw new Error(`No task found matching ID prefix "${idPrefix}"`);
-  }
-  if (matches.length > 1) {
-    throw new Error(
-      `Ambiguous ID prefix "${idPrefix}" matches ${matches.length} tasks. Be more specific.`,
-    );
-  }
-
-  const task = matches[0];
-  task.starred = !task.starred;
-  task.updated_at = new Date().toISOString();
-
-  await writeStore(store);
-  return { task, starred: !!task.starred };
-  });
 }
 
 // ── Pin helpers (task-level pin state) ──

@@ -308,13 +308,13 @@ describe('task-db: payload fallback', () => {
       project: 'Work',
       // Field not in TASK_COLUMNS — should spill into payload.
       custom_field: 'surprise',
-      starred: true,
+      extra_flag: true,
     };
     const row = taskToRow(task as Partial<Task>);
     expect(row.payload).toBeTruthy();
     const decoded = JSON.parse(row.payload as string);
     expect(decoded.custom_field).toBe('surprise');
-    expect(decoded.starred).toBe(true);
+    expect(decoded.extra_flag).toBe(true);
 
     const insertCols = [...TASK_COLUMNS, 'payload'];
     const insertSql =
@@ -330,7 +330,7 @@ describe('task-db: payload fallback', () => {
     >;
     const merged = rowToTask(fetched) as Record<string, unknown>;
     expect(merged.custom_field).toBe('surprise');
-    expect(merged.starred).toBe(true);
+    expect(merged.extra_flag).toBe(true);
   });
 
   // ── Retired-key denylist ─────────────────────────────────────────────────

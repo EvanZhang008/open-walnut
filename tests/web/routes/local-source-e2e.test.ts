@@ -188,19 +188,6 @@ describe('Local source task — full E2E lifecycle', () => {
     }
   });
 
-  // ─── STAR ─────────────────────────────────────────────────
-  it('toggles star on', async () => {
-    const res = await request(app).post(`/api/tasks/${taskId}/star`);
-    expect(res.status).toBe(200);
-    expect(res.body.task.starred).toBe(true);
-  });
-
-  it('toggles star off', async () => {
-    const res = await request(app).post(`/api/tasks/${taskId}/star`);
-    expect(res.status).toBe(200);
-    expect(res.body.task.starred).toBe(false);
-  });
-
   // ─── TAGS ─────────────────────────────────────────────────
   it('adds tags via add_tags', async () => {
     const res = await request(app)

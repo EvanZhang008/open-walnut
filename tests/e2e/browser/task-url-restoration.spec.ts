@@ -4,12 +4,13 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 const SCREENSHOT_DIR = '/tmp/test-and-verify';
 const TARGET_S1 = '2532066a-e210-4702-be34-ed01008adbde';
 const TARGET_S2 = 'c520a153-6fb8-489d-b18f-c9e0d7ab9f48';
-// `_starred` is the url token for the ★ tab. Sentinel tab tokens are namespaced
-// with '_' so a project legitimately NAMED "starred"/"inbox" stays deep-linkable
-// — the mapping is injective in both directions. See the `?proj=` section of
-// web/src/components/tasks/task-tabs.ts (the pre-2026-08 bare `starred` token is
-// intentionally no longer decoded as the sentinel).
-const TARGET_PATH = `/?s1=${TARGET_S1}&s2=${TARGET_S2}&proj=_starred`;
+// `_inbox` is the url token for the Inbox tab (tasks with no project). Sentinel
+// tab tokens are namespaced with '_' so a project legitimately NAMED "inbox"
+// stays deep-linkable — the mapping is injective in both directions. See the
+// `?proj=` section of web/src/components/tasks/task-tabs.ts (the pre-2026-08 bare
+// `inbox` token is intentionally no longer decoded as the sentinel). This used to
+// deep-link the ★ tab, which was retired with the starred system.
+const TARGET_PATH = `/?s1=${TARGET_S1}&s2=${TARGET_S2}&proj=_inbox`;
 const TARGET_TITLES = [
   'Deep link primary session',
   'Deep link secondary session',
@@ -31,14 +32,17 @@ async function createTask(
   return body.task.id;
 }
 
-async function createStarredTask(
+/** A task with NO project, so the Inbox chip the deep link names actually renders. */
+async function createInboxTask(
   request: APIRequestContext,
   title: string,
 ): Promise<string> {
-  const taskId = await createTask(request, title);
-  const response = await request.post(`/api/tasks/${taskId}/star`);
-  expect(response.status()).toBe(200);
-  return taskId;
+  const response = await request.post('/api/tasks', {
+    data: { title, source: 'local' },
+  });
+  expect(response.status()).toBe(201);
+  const body = await response.json() as { task: { id: string } };
+  return body.task.id;
 }
 
 async function expectExactTargetUrl(page: Page): Promise<void> {
@@ -275,7 +279,7 @@ test('exact taskless deep link survives a malformed task list on cold start', as
   request,
 }) => {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  await createStarredTask(request, `Cold deep-link starred fixture ${suffix}`);
+  await createInboxTask(request, `Cold deep-link inbox fixture ${suffix}`);
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true });
 
   let listRequests = 0;
@@ -325,8 +329,8 @@ test('exact taskless deep link is restored by Back during a failed warm refresh'
   request,
 }) => {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const [starredTaskId, helperTaskId] = await Promise.all([
-    createStarredTask(request, `Warm deep-link starred fixture ${suffix}`),
+  const [inboxTaskId, helperTaskId] = await Promise.all([
+    createInboxTask(request, `Warm deep-link inbox fixture ${suffix}`),
     createTask(request, `Warm deep-link helper fixture ${suffix}`),
   ]);
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true });
@@ -380,7 +384,7 @@ test('exact taskless deep link is restored by Back during a failed warm refresh'
   failList = true;
   const groupResponse = await request.post('/api/tasks/groups', {
     data: {
-      task_ids: [starredTaskId, helperTaskId],
+      task_ids: [inboxTaskId, helperTaskId],
       label: `Warm deep-link group ${suffix}`,
     },
   });

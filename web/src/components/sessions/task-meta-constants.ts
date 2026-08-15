@@ -11,7 +11,6 @@ import type { QuickStartTaskMeta } from './SessionPathSelector';
  *  "More · N" changed-from-default badge can import it without a runtime import
  *  cycle — both it and the picker share one definition of "default". */
 export const DEFAULT_META: QuickStartTaskMeta = {
-  starred: true,         // mirrors existing quick-start behavior (task.starred = true)
   unread: false,         // the phase machine marks it unread when the turn ends
   priority: 'none',
   // Satellite, not Focus: a launched session is "in flight", not necessarily

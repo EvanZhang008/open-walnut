@@ -47,7 +47,6 @@ Fields:
 - end_date: only if the note states a time RANGE for the work ("3-5pm", "from 2 to 4", "下午3点到5点") — the range's end, same format rules. Requires start_date (the range's start). Never use it for deadlines; those are due_date.
 ${buildPinTierRule(customTiers)}
 - priority: immediate|important|backlog — only when urgency is stated (urgent/asap -> immediate, important/重要 -> important, later/someday -> backlog).
-- starred: true only when the note explicitly says star it.
 - project: the ONE best-matching project NAME from the "Your projects" list, judged by similarity between the note and that project's summary and example task titles. Copy the name EXACTLY as written. A task without a project lands in Inbox, which is fine and normal — OMIT the field for one-off items (an errand, a call, a single reminder) that don't belong to an ongoing stream of work.
 - project_is_new: set to true ONLY when you supply a project name that is NOT in the list. Do that sparingly — only when the note clearly starts a NEW ongoing stream of work that deserves its own project (a new repo, a new trip, a new recurring commitment). Then \`project\` is your proposed new name (short, in the note's language) and the user confirms it in the UI. For anything else, either match an existing project or omit.
 Omit every field that is not clearly present.`;
@@ -272,8 +271,6 @@ export async function parseQuickTask(
     if (parsed.priority === 'immediate' || parsed.priority === 'important' || parsed.priority === 'backlog') {
       output.priority = parsed.priority;
     }
-    if (parsed.starred === true) output.starred = true;
-
     // Project: an existing name always wins over the model's new-name claim (it
     // can set project_is_new on a name that IS in the list). A name outside the
     // list is only accepted through the explicit new-project escape hatch —

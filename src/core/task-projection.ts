@@ -57,7 +57,6 @@ export interface ProjectedTask {
   created_at: string
   updated_at: string
   completed_at?: string
-  starred?: boolean
   pinned?: boolean
   /** Read/unread marker — true = agent output the human hasn't opened. Additive
    *  (omitted when false), so an older iOS build that doesn't decode it is fine. */
@@ -98,7 +97,6 @@ export function projectTask(t: Task): ProjectedTask {
     created_at: t.created_at,
     updated_at: t.updated_at,
     ...(t.completed_at ? { completed_at: t.completed_at } : {}),
-    ...(t.starred ? { starred: true } : {}),
     ...(t.pinned ? { pinned: true } : {}),
     ...(t.unread ? { unread: true } : {}),
     ...(t.tags && t.tags.length > 0 ? { tags: t.tags } : {}),

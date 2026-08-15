@@ -540,44 +540,6 @@ describe('linkSessionSlot / clearSessionSlot', () => {
 
 });
 
-describe('updateTask — starred', () => {
-  it('sets starred to true', async () => {
-    const { task } = await addTask({ title: 'Star me' });
-    expect(task.starred).not.toBe(true);
-
-    const { task: updated } = await updateTask(task.id, { starred: true });
-    expect(updated.starred).toBe(true);
-  });
-
-  it('sets starred to false (unstar)', async () => {
-    const { task } = await addTask({ title: 'Unstar me' });
-    // Star it first
-    await updateTask(task.id, { starred: true });
-    // Now unstar
-    const { task: updated } = await updateTask(task.id, { starred: false });
-    expect(updated.starred).toBe(false);
-  });
-
-  it('persists starred across reads', async () => {
-    const { task } = await addTask({ title: 'Persist star' });
-    await updateTask(task.id, { starred: true });
-
-    const tasks = await listTasks();
-    const found = tasks.find(t => t.id === task.id);
-    expect(found?.starred).toBe(true);
-  });
-
-  it('does not change starred when not provided', async () => {
-    const { task } = await addTask({ title: 'No star change' });
-    await updateTask(task.id, { starred: true });
-
-    // Update title only — starred should remain true
-    const { task: updated } = await updateTask(task.id, { title: 'Renamed' });
-    expect(updated.starred).toBe(true);
-    expect(updated.title).toBe('Renamed');
-  });
-});
-
 describe('updateTask — unread (read marker)', () => {
   it('does NOT bump updated_at when only clearing unread', async () => {
     const { task } = await addTask({ title: 'Unread task' });
@@ -763,7 +725,6 @@ describe('autoPushIfConfigured sync_error lifecycle', () => {
       updatePriority: vi.fn().mockResolvedValue(undefined),
       updatePhase: vi.fn().mockResolvedValue(undefined),
       updateDueDate: vi.fn(),
-      updateStar: vi.fn(),
       updateProject: vi.fn(),
       updateDependencies: vi.fn().mockResolvedValue(undefined),
       pushTask: vi.fn().mockResolvedValue({ serverTimestamp: new Date().toISOString() }),

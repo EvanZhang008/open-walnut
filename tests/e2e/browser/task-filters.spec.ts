@@ -103,7 +103,7 @@ async function toggleQueryChip(panel: Locator, group: string, value: string): Pr
     .locator(`.vd-cat[data-filter-value="${value}"]`).first().click()
 }
 
-/** Set a tri-state (Pinned / Starred / Blocked) to Any | Yes | No. */
+/** Set a tri-state (Pinned / Blocked) to Any | Yes | No. */
 async function setTriState(panel: Locator, label: string, choice: 'any' | 'yes' | 'no'): Promise<void> {
   await panel.locator('.vd-query .vd-field', { hasText: label })
     .locator(`.vd-seg-btn[data-tri-state="${choice}"]`).first().click()

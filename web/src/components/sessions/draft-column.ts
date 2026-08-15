@@ -31,7 +31,7 @@ export function draftComposerKey(draftId: string): string {
 /** A draft field the background AI parse filled in (✦-badged in the launch bar).
  *  `cwd` only ever comes from an AI-chosen project's `default_cwd`. */
 export type DraftAiField =
-  'project' | 'cwd' | 'pinTier' | 'priority' | 'starred' | 'dueDate' | 'startDate' | 'endDate';
+  'project' | 'cwd' | 'pinTier' | 'priority' | 'dueDate' | 'startDate' | 'endDate';
 
 /** Who put the current `project` on the row — the ownership rule the AI backfill
  *  obeys. 'seed' = a project/tier "+" seeded it, 'user' = an explicit pick (pill
@@ -228,7 +228,7 @@ export type ProjectDefaultLookup = (project: string) => { cwd: string; host: str
  *   · `project` — only while `projectSource` is unset or a previous 'ai' write.
  *     A 'user' pick (project pill / quick chip) or a 'seed' (project & tier "+")
  *     is FINAL.
- *   · `pinTier` / `priority` / `starred` — only while `metaTouched` is false, and
+ *   · `pinTier` / `priority` — only while `metaTouched` is false, and
  *     applying them must NOT set it: `metaTouched` means "the human chose", and it
  *     is also the per-directory launch-memory switch, so latching it here would
  *     silently freeze the model at whatever folder was selected first.
@@ -241,7 +241,7 @@ export function applyDraftParse(
   draft: DraftColumn,
   parse: {
     project?: string; project_is_new?: boolean;
-    pinTier?: string; priority?: QuickStartTaskMeta['priority']; starred?: boolean;
+    pinTier?: string; priority?: QuickStartTaskMeta['priority'];
     due_date?: string; start_date?: string; end_date?: string;
   },
   projectDefault: ProjectDefaultLookup,
@@ -283,9 +283,6 @@ export function applyDraftParse(
     }
     if (parse.priority && parse.priority !== meta.priority) {
       meta.priority = parse.priority; ai.add('priority'); metaChanged = true;
-    }
-    if (parse.starred !== undefined && !!parse.starred !== meta.starred) {
-      meta.starred = !!parse.starred; ai.add('starred'); metaChanged = true;
     }
     // Dates ("by Friday", "3-5pm") — same ownership rule as tier/priority: any
     // user edit of the meta (metaTouched) freezes ALL of it, dates included.

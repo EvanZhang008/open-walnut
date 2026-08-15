@@ -17,7 +17,6 @@ export interface TasksContextValue {
   update: (id: string, updates: UpdateTaskInput) => void;
   toggleComplete: (id: string) => void;
   setPhase: (id: string, phase: string) => void;
-  star: (id: string) => void;
   /** Reorder within ONE project group. `project: ''` = Inbox. */
   reorder: (project: string, taskIds: string[]) => void;
   /** Move a task to another project ('' = Inbox), optionally next to a sibling. */

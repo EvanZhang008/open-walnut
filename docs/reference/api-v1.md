@@ -382,10 +382,12 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
 - `GET /api/v1/tasks?status=todo|in_progress|done` →
   `{ "tasks": [ProjectedTask], "syncedAt": "<ISO>" }`
 - `ProjectedTask`: `{ id, title, status, phase, priority, project,
-  due_date?, start_date?, created_at, updated_at, completed_at?, starred?,
+  due_date?, start_date?, created_at, updated_at, completed_at?,
   pinned?, unread?, tags?, summary? }` — `summary` is truncated to ~500 chars.
   `category` was removed in projection v2 (2026-08); `project` is the single
-  grouping layer (`""` = Inbox).
+  grouping layer (`""` = Inbox). `starred?` was removed in 2026-08 when the
+  starred system was retired (pin + focus tier is the working set); it is an
+  optional field, so a client that still decodes it just never sees it.
   `start_date` (added 2026-07) is the "when to begin" time that defers a task
   out of the web Now view; additive and optional, so older clients ignore it.
   `unread` (added 2026-08-09) is the read/unread marker — present and `true` only
@@ -478,7 +480,11 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
   Class C: `501 not_supported_cloud` on a REPLICA (no session-runner there) —
   use `POST /api/v1/sessions`, which relays over the bridge.
   Added for the CLI's `open-walnut start <task_id>`.
-- `POST /api/v1/tasks/:id/star` → `200 { "task", "starred" }` (toggle).
+- `POST /api/v1/tasks/:id/star` → `200 { "task", "starred": false }` — RETIRED
+  no-op. The starred system was removed in 2026-08; the route stays mounted for
+  this frozen contract, still resolves the id (unknown id → `404`), and still
+  answers the documented shape so an older client's decoder keeps working. It
+  writes nothing, and `starred` is always `false`.
 - `POST /api/v1/tasks/:id/notes` body `{ "content" }` → `200 { "task" }` —
   appends a timestamped note entry.
 - `PUT /api/v1/tasks/:id/note` | `/description` | `/summary` body

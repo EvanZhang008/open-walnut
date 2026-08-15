@@ -14,7 +14,7 @@ export const favoritesRouter = Router()
 /**
  * Project identity is case-INSENSITIVE (task_projects is NOCASE), so favorites
  * must compare that way too — otherwise favoriting "HomeLab" leaves a task on
- * "homelab" unstarred and the toggle appears dead. Resolve to the registry's
+ * "homelab" unfavorited and the toggle appears dead. Resolve to the registry's
  * canonical spelling on add so the stored string matches what the UI renders.
  * The registry lookup is best-effort: a project with no row yet (or an
  * unavailable task DB) falls back to the caller's spelling.

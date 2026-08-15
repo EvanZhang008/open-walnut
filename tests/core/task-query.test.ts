@@ -155,9 +155,9 @@ describe('field composition', () => {
 
   it('matches explicit false against absent booleans while undefined does not filter', () => {
     const fixture = task();
-    expect(matchesTaskQuery(fixture, query({ pinned: false, starred: false, unread: false, blocked: false }), { blockedIds: new Set() })).toBe(true);
+    expect(matchesTaskQuery(fixture, query({ pinned: false, unread: false, blocked: false }), { blockedIds: new Set() })).toBe(true);
     expect(matchesTaskQuery(task({ pinned: true }), query({ pinned: false }))).toBe(false);
-    expect(matchesTaskQuery(task({ pinned: true, starred: true, unread: true }), query())).toBe(true);
+    expect(matchesTaskQuery(task({ pinned: true, unread: true }), query())).toBe(true);
   });
 
   it('matches the unread marker in both directions, treating absent as read', () => {
@@ -167,21 +167,6 @@ describe('field composition', () => {
     expect(matchesTaskQuery(task(), query({ unread: false }))).toBe(true);
     expect(matchesTaskQuery(task(), query({ unread: true }))).toBe(false);
     expect(matchesTaskQuery(task({ unread: false }), query({ unread: false }))).toBe(true);
-  });
-
-  it('computes effective starred from the task or a favorite project', () => {
-    const fixture = task({ project: 'Walnut' });
-    expect(matchesTaskQuery(fixture, query({ starred: true }), {
-      favoriteProjects: new Set(['walnut']),
-    })).toBe(true);
-    expect(matchesTaskQuery(task({ starred: true }), query({ starred: true }))).toBe(true);
-    expect(matchesTaskQuery(fixture, query({ starred: false }), {
-      favoriteProjects: new Set(['walnut']),
-    })).toBe(false);
-    // Inbox tasks ('' project) can't be favorite-starred.
-    expect(matchesTaskQuery(task({ project: '' }), query({ starred: true }), {
-      favoriteProjects: new Set(['walnut']),
-    })).toBe(false);
   });
 
   it('uses blockedIds as the blocked source of truth', () => {

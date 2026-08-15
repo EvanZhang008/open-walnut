@@ -25,7 +25,6 @@ export interface TaskQuery {
   tagsAny?: string[];
   tagsAll?: string[];
   pinned?: boolean;
-  starred?: boolean;
   /** Read/unread marker — true = agent output the human hasn't opened. */
   unread?: boolean;
   blocked?: boolean;
@@ -210,7 +209,7 @@ export function normalizeTaskQuery(raw: TaskQuery, now: Date): NormalizedTaskQue
   validateEnumArray(raw.priorities, TASK_PRIORITIES, 'priority');
   validateEnum(raw.sort, QUERY_SORTS, 'sort');
 
-  for (const field of ['pinned', 'starred', 'unread', 'blocked'] as const) {
+  for (const field of ['pinned', 'unread', 'blocked'] as const) {
     if (raw[field] !== undefined && typeof raw[field] !== 'boolean') {
       queryError('invalid_boolean', `${field} must be a boolean`);
     }
@@ -290,8 +289,6 @@ export function normalizeTaskQuery(raw: TaskQuery, now: Date): NormalizedTaskQue
 }
 
 export interface TaskQueryContext {
-  /** Lowercased favorite project names (for effective-starred). */
-  favoriteProjects?: ReadonlySet<string>;
   /** Set of task ids currently blocked by incomplete dependencies. REQUIRED
    *  when query.blocked is set — matchesTaskQuery throws if it's absent, so
    *  "caller never computed it" can't silently read as "nothing is blocked"
@@ -358,11 +355,6 @@ export function matchesTaskQuery(task: Task, query: NormalizedTaskQuery, ctx: Ta
       throw new Error('matchesTaskQuery: query.blocked requires ctx.blockedIds (caller must compute the blocked set)');
     }
     if (ctx.blockedIds.has(task.id) !== query.blocked) return false;
-  }
-  if (query.starred !== undefined) {
-    const effectiveStarred = task.starred === true
-      || ctx.favoriteProjects?.has(project) === true;
-    if (effectiveStarred !== query.starred) return false;
   }
 
   if (query.parentTaskId !== undefined && task.parent_task_id !== query.parentTaskId) return false;

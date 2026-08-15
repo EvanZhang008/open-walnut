@@ -26,7 +26,6 @@ interface TasksPageTableProps {
   onCreate: (title: string, project?: string) => void | Promise<void>;
   /** Inline cell edits (priority / due / project move) — TasksContext.update. */
   onUpdate: (id: string, updates: { priority?: string; due_date?: string | null; start_date?: string | null; project?: string }) => void;
-  onStar: (id: string) => void;
   /** lowercased favorite project names — group-header kebab state. */
   favoriteByName: Set<string>;
   onToggleFavorite: (project: string) => void;
@@ -249,7 +248,6 @@ export function TasksPageTable({
   onDelete,
   onCreate,
   onUpdate,
-  onStar,
   favoriteByName,
   onToggleFavorite,
   onProjectChanged,
@@ -363,7 +361,6 @@ export function TasksPageTable({
           >
             {t.status === 'done' ? '✓' : ''}
           </button>
-          {t.starred && <span className="tp-row-star">★</span>}
           <button
             type="button"
             className="tp-row-title"
@@ -372,16 +369,8 @@ export function TasksPageTable({
             {t.title}
           </button>
           <SyncIndicator task={t as TaskListProjection} />
-          {/* hover quick actions — star / delete / kebab. Session opens via its pill. */}
+          {/* hover quick actions — delete / kebab. Session opens via its pill. */}
           <span className="tp-row-acts">
-            <button
-              type="button"
-              className="tp-act-btn"
-              title={t.starred ? 'Unstar' : 'Star'}
-              onClick={(e) => { e.stopPropagation(); onStar(t.id); }}
-            >
-              {t.starred ? ICONS.ICON_STAR_FILLED : ICONS.ICON_STAR_EMPTY}
-            </button>
             <button
               type="button"
               className="tp-act-btn tp-act-del"
@@ -401,7 +390,6 @@ export function TasksPageTable({
               isDone={t.status === 'done'}
               onExpandDetail={(task) => navigate(`/tasks/${task.id}`)}
               onSetPriority={(id, p) => onUpdate(id, { priority: p })}
-              onStar={onStar}
               onOpenSession={openSession}
               onSetDate={(id, d) => onUpdate(id, { due_date: d ?? '' })}
               // `?? ''` is the clear convention the store understands (task-manager

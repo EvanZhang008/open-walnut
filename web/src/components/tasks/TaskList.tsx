@@ -8,7 +8,6 @@ import type { BatchTaskOutcome } from '@/api/tasks';
 interface TaskListProps {
   tasks: Task[];
   onComplete: (id: string) => void;
-  onStar: (id: string) => void;
   onDelete?: (id: string) => void;
   /** Multi-select batch ops — one round-trip for the whole selection. Without these
    *  the selection bar can only group, which is what made multi-select look broken. */
@@ -44,7 +43,6 @@ function clusterByGroup(tasks: Task[]): Task[] {
 export function TaskList({
   tasks,
   onComplete,
-  onStar,
   onDelete,
   onBatchSetPhase,
   onBatchDelete,
@@ -186,7 +184,6 @@ export function TaskList({
       key={task.id}
       task={task}
       onComplete={onComplete}
-      onStar={onStar}
       onDelete={onDelete}
       childStats={childStats.get(task.id)}
       groupInfo={groupRenderMap.get(task.id)}

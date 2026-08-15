@@ -123,7 +123,7 @@ describe.skipIf(!PLUGIN_INSTALLED)('External plugin registration', () => {
     const methods: (keyof IntegrationSync)[] = [
       'createTask', 'deleteTask', 'updateTitle', 'updateDescription',
       'updateSummary', 'updateNote', 'updateConversationLog', 'updatePriority',
-      'updatePhase', 'updateDueDate', 'updateStar', 'updateProject',
+      'updatePhase', 'updateDueDate', 'updateProject',
       'updateDependencies', 'associateSubtask', 'disassociateSubtask', 'syncPoll',
     ];
     for (const m of methods) {

@@ -601,7 +601,6 @@ export function prewarmWorkingDirs(): void {
 }
 
 export interface QuickStartTaskMeta {
-  starred?: boolean;
   /** Start the new task already marked unread. */
   unread?: boolean;
   priority?: 'immediate' | 'important' | 'backlog' | 'none';

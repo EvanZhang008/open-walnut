@@ -358,7 +358,7 @@ describe('sessionAutoTitleHook', () => {
           deleteTask: noop,
           updateTitle: noop, updateDescription: noop, updateSummary: noop,
           updateNote: noop, updateConversationLog: noop, updatePriority: noop,
-          updatePhase: noop, updateDueDate: noop, updateStar: noop,
+          updatePhase: noop, updateDueDate: noop,
           updateProject: noop, updateDependencies: noop,
           associateSubtask: noop, disassociateSubtask: noop,
           pushTask: async () => ({ serverTimestamp: new Date().toISOString() }),
