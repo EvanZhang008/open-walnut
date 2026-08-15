@@ -2907,6 +2907,29 @@ select {
   text-decoration: underline;
 }
 
+/* Entity-ref pills INSIDE the blue user bubble. The default pill rules
+   (.markdown-body a.task-link, later in this file) paint accent text on an
+   accent-subtle background — on the solid-accent bubble that is blue-on-blue,
+   i.e. an invisible-but-clickable pill (the "Re: <task>" quote prefix rendered
+   as blank space, 2026-08-15). Higher specificity (3 classes) so source order
+   no longer matters: white-tint the pill so it reads on the accent background.
+   .chat-message-user is the legacy chat engine's bubble — same hazard. */
+.session-msg-user .markdown-body a.task-link,
+.session-msg-user .markdown-body a.session-link,
+.chat-message-user .markdown-body a.task-link,
+.chat-message-user .markdown-body a.session-link {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+  text-decoration: none;
+}
+
+.session-msg-user .markdown-body a.task-link:hover,
+.session-msg-user .markdown-body a.session-link:hover,
+.chat-message-user .markdown-body a.task-link:hover,
+.chat-message-user .markdown-body a.session-link:hover {
+  background: rgba(255, 255, 255, 0.34);
+}
+
 .session-msg-assistant {
   align-self: stretch;
   background: transparent;
