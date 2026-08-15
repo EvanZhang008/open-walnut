@@ -1382,7 +1382,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               title="Show file tree"
               aria-label="Show file tree"
               aria-expanded={false}
-            >{ICON_CHEVRON_RIGHT}</button>
+            >{ICON_CHEVRON_RIGHT}<span className="pane-rail-label">Files</span></button>
           )}
           {!treeCollapsed && (
             <>

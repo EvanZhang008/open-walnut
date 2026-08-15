@@ -18583,19 +18583,21 @@ td.usage-share-col {
 .sfe-btn:disabled:active { transform: none; }
 
 /* ── Pane collapse (shared): Files tree, Changed tree, split chat column ──
-   Design pick 2026-08-13 (option 9): slim + quiet.
-   Expanded  → an 18px translucent chevron pinned to the pane's inner corner.
-   Collapsed → a 16px bare rail; a chevron fades in on hover. */
+   Design pick 2026-08-13 (option 9), tuned 2026-08-15: slim but SELF-LABELED.
+   A bare hover-only rail was unidentifiable ("就一个杠, 人怎么知道它是这个"),
+   so the collapsed rail always shows its chevron + a vertical text label. */
 .pane-collapsed-rail {
-  flex: 0 0 16px;
+  flex: 0 0 20px;
   border: none;
-  padding: 0;
+  padding: 8px 0 0;
   background: var(--bg-secondary, var(--card-bg));
   cursor: pointer;
-  color: transparent;
+  color: var(--fg-muted);
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  gap: 8px;
   transition: background 0.15s, color 0.15s;
 }
 .pane-rail-left { border-right: 1px solid var(--border); }
@@ -18605,25 +18607,41 @@ td.usage-share-col {
   color: var(--accent);
 }
 .pane-collapsed-rail svg { flex: none; }
+/* What this rail restores, spelled out — readable without hovering. */
+.pane-rail-label {
+  writing-mode: vertical-rl;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: inherit;
+  user-select: none;
+}
 
-/* Zero-height sticky anchor: the tree pane is its own scroller, so the
-   chevron needs this to stay pinned while rows scroll under it. */
+/* Sticky anchor: the tree pane is its own scroller, so the chevron needs
+   this to stay pinned while rows scroll. Real height (not 0) so the strip is
+   RESERVED — at height:0 the always-visible button sat on top of the first
+   row's "N changed" badge. */
 .pane-collapse-anchor {
   position: sticky;
   top: 0;
-  height: 0;
+  height: 26px;
+  flex: none;
   z-index: 5;
+  background: inherit;
 }
+/* Visible at rest (border + card background) — the near-transparent version
+   was invisible until hovered, so nobody could find how to collapse. */
 .pane-collapse-btn {
   position: absolute;
   top: 3px;
   right: 3px;
-  width: 18px;
-  height: 18px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: color-mix(in srgb, var(--fg-muted) 55%, transparent);
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--card-bg);
+  color: var(--fg-muted);
   cursor: pointer;
   display: flex;
   align-items: center;

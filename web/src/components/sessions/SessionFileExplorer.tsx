@@ -721,7 +721,8 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
 
       <div className="session-file-explorer-body">
         {/* Collapsed: a slim click-to-restore rail (design pick 2026-08-13,
-            option 9 — same affordance as the chat column's rail). */}
+            option 9 — same affordance as the chat column's rail). The vertical
+            label keeps it identifiable — a bare rail read as decoration. */}
         {treeCollapsed && (
           <button
             type="button"
@@ -730,7 +731,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
             title="Show file tree"
             aria-label="Show file tree"
             aria-expanded={false}
-          >{ICON_CHEVRON_RIGHT}</button>
+          >{ICON_CHEVRON_RIGHT}<span className="pane-rail-label">Files</span></button>
         )}
         {!treeCollapsed && (
         <div className="session-file-explorer-tree" style={{ width: `${treeWidth}px` }}>

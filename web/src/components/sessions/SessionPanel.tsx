@@ -1396,7 +1396,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                 title="Show chat"
                 aria-label="Show chat"
                 aria-expanded={false}
-              >{ICON_CHEVRON_LEFT}</button>
+              >{ICON_CHEVRON_LEFT}<span className="pane-rail-label">Chat</span></button>
             ) : (
               <div className="session-panel-chat-resize" {...chatPanel.handleProps} title="Drag to resize chat" />
             )
