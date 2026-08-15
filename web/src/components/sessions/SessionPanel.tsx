@@ -177,6 +177,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
 
   // Model picker state
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  // The clicked model pill — the popout picker anchors here (portal to <body>,
+  // so a narrow session column can't clip the panel).
+  const modelPillRef = useRef<HTMLElement | null>(null);
   // CSS-promotion fullscreen (same instance, no remount)
   const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen();
 
@@ -876,7 +879,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
       type="button"
       className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill"
       title="Switch Codex model"
-      onClick={() => setModelPickerOpen((v) => !v)}
+      onClick={(e) => { modelPillRef.current = e.currentTarget; setModelPickerOpen((v) => !v); }}
     >
       {session.acpModel ? shortCodexModelName(session.acpModel) : 'Codex'}
       {contextPercent != null && (
@@ -892,7 +895,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
       type="button"
       className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill"
       title={`${rawModel || (autoResolved ? `Auto — CLI default resolves to ${autoResolved} on this host` : 'Model not reported yet (Auto)')} — click to switch model / effort`}
-      onClick={() => setModelPickerOpen((v) => !v)}
+      onClick={(e) => { modelPillRef.current = e.currentTarget; setModelPickerOpen((v) => !v); }}
     >
       {displayModel || (autoResolved ? `Auto (${autoResolved})` : 'Auto')}
       {contextPercent != null && (
@@ -1616,6 +1619,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               engine={session?.engine === 'codex' ? 'codex' : 'claude'}
               codexCurrentModelId={session?.acpModel}
               onCodexSwitch={session?.engine === 'codex' ? handleCodexModelSwitch : undefined}
+              anchorRef={modelPillRef}
             />
           )}
         </div>

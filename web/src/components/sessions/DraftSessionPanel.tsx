@@ -79,6 +79,8 @@ function DraftModelPill({ meta, onMetaChange, host }: {
   host?: string | null;
 }) {
   const [open, setOpen] = useState(false);
+  // The clicked pill — anchor for the popout picker (portalled, clip-proof).
+  const pillRef = useRef<HTMLElement | null>(null);
   const { options, autoResolved } = useModelOptions(host);
   const remoteHost = !!host && host !== '__local__';
   // Remote tabs always launch Claude (codex is local-only; quick-start drops a
@@ -96,7 +98,7 @@ function DraftModelPill({ meta, onMetaChange, host }: {
           ? 'Codex (via ACP) — models are discovered at session start. Click to change provider.'
           : `Session model: ${selectedLabel} — click to switch model / provider`}
         data-model={meta.model ?? ''}
-        onClick={() => setOpen((v) => !v)}
+        onClick={(e) => { pillRef.current = e.currentTarget; setOpen((v) => !v); }}
       >
         {isCodex ? 'Codex' : selectedLabel}
       </button>
@@ -118,6 +120,7 @@ function DraftModelPill({ meta, onMetaChange, host }: {
           providerLockReason={(provider) =>
             provider === 'codex' && remoteHost ? 'Codex sessions are local-only for now' : null}
           autoRow={{ resolvedLabel: autoResolved, active: !meta.model }}
+          anchorRef={pillRef}
         />
       )}
     </>

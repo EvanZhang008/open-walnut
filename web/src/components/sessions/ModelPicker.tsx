@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import {
   SESSION_EFFORTS,
   DEFAULT_SESSION_EFFORT,
@@ -14,8 +15,24 @@ import type { SessionEffort, SessionModelCatalogEntry } from '@open-walnut/core'
 import { fetchCodexModelCatalog, fetchSessionLiveSettings, fetchSessionModelCatalog } from '@/api/sessions';
 import type { CodexModelInfo, SessionLiveSettings, SessionModelCatalog } from '@/api/sessions';
 import { useHostModelCatalog, seedHostCatalog } from '@/hooks/useModelCatalog';
+import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { formatModelName } from '@/hooks/useSessionUsage';
 
 const EFFORTS = SESSION_EFFORTS;
+
+/** Row label with the REAL version — "Opus 4.8 1M", not "Opus". The catalog's
+ *  displayName is bare family (upstream generates it that way), but the row
+ *  value/resolvedModel carries the full ID, so derive the versioned name from
+ *  it. Falls back to displayName when no version is derivable (legacy alias
+ *  rows like 'opus', GPT rows whose displayName is already right). */
+export function catalogRowLabel(m: SessionModelCatalogEntry): string {
+  const derived = formatModelName(m.resolvedModel ?? m.value);
+  const versioned = /^(Opus|Sonnet|Haiku|Fable) \d/.test(derived) ? derived : null;
+  if (m.value === 'default') {
+    return versioned ? `Default (${versioned})` : (m.displayName || 'Default');
+  }
+  return versioned ?? m.displayName ?? m.value;
+}
 
 // ── Provider rail (the picker's LEFT pane) ──────────────────────────────────
 // One pattern for every session surface: provider | models. On a LIVE session
@@ -166,11 +183,18 @@ interface ModelPickerProps {
    *  '' back to undefined. Also hides the catalog's own 'default' row, which
    *  would duplicate it. */
   autoRow?: { resolvedLabel: string; active: boolean };
+  /** POP OUT of the host column: portal to <body>, placed by useMenuPlacement
+   *  against this anchor (the clicked pill). Without it the picker renders
+   *  in place (position:absolute above the mode bar) and a narrow session
+   *  column CLIPS it — set the ref from the pill's onClick
+   *  (`anchorRef.current = e.currentTarget`). */
+  anchorRef?: React.RefObject<HTMLElement | null>;
 }
 
 export function ModelPicker({
   currentModel, currentEffort, sessionId, host, onSwitch, onEffortSwitch, onClose,
   engine = 'claude', onProviderSwitch, providerLockReason, codexCurrentModelId, onCodexSwitch, autoRow,
+  anchorRef,
 }: ModelPickerProps) {
   // ── LIVE pull: the moment the picker opens, ask the CLI what it's ACTUALLY
   // using (get_settings → applied). Until it answers (or when the session isn't
@@ -377,6 +401,28 @@ export function ModelPicker({
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
+  // ── POPOUT (anchorRef callers): portal to <body>, placed by useMenuPlacement
+  // against the clicked pill — a narrow session column can no longer clip the
+  // panel (user report 2026-08-15: half the picker was cut off). preferSide
+  // 'up' because every pill lives in a bottom mode bar. Outside-click closes;
+  // the pill's own click is exempt (it already toggles).
+  const popRef = React.useRef<HTMLDivElement>(null);
+  const popped = !!anchorRef;
+  const placement = useMenuPlacement(popped, anchorRef ?? popRef, popRef, {
+    preferSide: 'up', margin: 12, onAnchorLost: onClose,
+  });
+  React.useEffect(() => {
+    if (!popped) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (popRef.current?.contains(t)) return;
+      if (anchorRef?.current?.contains(t)) return;
+      onClose();
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [popped, onClose, anchorRef]);
+
   // ── Codex pane rows (live: ACP catalog; draft: explanatory placeholder).
   const codexPane = (
     <>
@@ -424,16 +470,24 @@ export function ModelPicker({
     </>
   );
 
-  return (
-    <div className="model-picker">
+  const panel = (
+    <div
+      className={`model-picker${popped ? ' model-picker-popout' : ''}`}
+      ref={popRef}
+      style={popped ? menuPlacementStyle(placement) : undefined}
+      // Portal menus still bubble React events into the host row's drag
+      // sensors — stop pointerdown at the boundary (menu hard rule).
+      onPointerDown={popped ? (e) => e.stopPropagation() : undefined}
+    >
       <ProviderRail active={engine} onSwitch={onProviderSwitch} lockReason={providerLockReason} />
       <div className="model-picker-pane">
       {isCodexPane ? codexPane : (<>
       <div className="model-picker-header">
         <span className="model-picker-title">Switch Model</span>
         <span className="model-picker-current">
-          Current: {activeRow?.displayName
-            ?? (autoRow && !liveModel
+          Current: {activeRow
+            ? catalogRowLabel(activeRow)
+            : (autoRow && !liveModel
               ? (autoRow.resolvedLabel ? `Auto (${autoRow.resolvedLabel})` : 'Auto')
               : shortModelLabel(liveModel))}
         </span>
@@ -480,7 +534,7 @@ export function ModelPicker({
               </span>
               {(modelMismatch || effortMismatch) && (
                 <span className="model-picker-live-mismatch" title="The CLI is using different settings than requested (env override or unsupported value silently downgraded/ignored).">
-                  {' '}⚠ requested{modelMismatch ? ` ${requestedRow?.displayName ?? shortModelLabel(liveSettings?.requested?.model ?? currentModel)}` : ''}{effortMismatch ? ` · effort ${requestedEffort}` : ''} not applied
+                  {' '}⚠ requested{modelMismatch ? ` ${requestedRow ? catalogRowLabel(requestedRow) : shortModelLabel(liveSettings?.requested?.model ?? currentModel)}` : ''}{effortMismatch ? ` · effort ${requestedEffort}` : ''} not applied
                 </span>
               )}
             </>
@@ -607,12 +661,12 @@ export function ModelPicker({
                   ? 'Restricted by your organization\'s settings'
                   : isRequestedNotApplied
                   ? 'You requested this model but the CLI is not using it'
-                  : m.description ?? m.displayName}
+                  : m.description ?? catalogRowLabel(m)}
                 onClick={() => { if (!isActive && !m.disabled) onSwitch(m.value); }}
               >
                 <span className="model-picker-row-check" aria-hidden>{isActive ? '✓' : ''}</span>
                 <span className="model-picker-row-name">
-                  {m.displayName}
+                  {catalogRowLabel(m)}
                   {isRequestedNotApplied && <span className="model-picker-option-requested"> ⚠</span>}
                 </span>
               </button>
@@ -629,7 +683,7 @@ export function ModelPicker({
               const active = effortSupported && e.id === activeEffort;
               const requestedNotApplied = effortMismatch && e.id === requestedEffort;
               const title = !effortSupported
-                ? `Not supported by ${activeRow?.displayName ?? shortModelLabel(liveModel)}`
+                ? `Not supported by ${activeRow ? catalogRowLabel(activeRow) : shortModelLabel(liveModel)}`
                 : e.id === 'xhigh' && !xhighSupported
                 ? 'X-High needs Fable 5 / Opus 4.7+ / Sonnet 5'
                 : e.id === 'max' && !maxSupported
@@ -684,4 +738,8 @@ export function ModelPicker({
       </div>{/* .model-picker-pane */}
     </div>
   );
+
+  // Anchored callers get a portal (clipping-proof); legacy callers keep the
+  // in-place absolute panel.
+  return popped ? createPortal(panel, document.body) : panel;
 }

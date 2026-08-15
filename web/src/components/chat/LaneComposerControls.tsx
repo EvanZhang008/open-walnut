@@ -14,7 +14,7 @@
  * setSessionEffort with get_settings read-back).
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { SessionRecord } from '@/types/session';
 import type { SessionEffort } from '@open-walnut/core';
 import { modelSupportsEffort, SESSION_EFFORTS, SESSION_MODE_LABELS } from '@open-walnut/core';
@@ -36,6 +36,8 @@ interface LaneComposerControlsProps {
 export function LaneComposerControls({ sessionId, engine = 'claude', onProviderSwitch }: LaneComposerControlsProps) {
   const [session, setSession] = useState<SessionRecord | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // The clicked pill — anchor for the popout picker (portalled, clip-proof).
+  const pillRef = useRef<HTMLElement | null>(null);
   const enabledModes = useEnabledModes();
   const liveUsage = useSessionUsage(sessionId);
 
@@ -134,7 +136,7 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
         type="button"
         className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill"
         title={`${(isCodex ? session?.acpModel : rawModel) || 'Model not reported yet (Auto)'} — click to switch model / effort${onProviderSwitch ? ' / provider' : ''}`}
-        onClick={() => setPickerOpen((v) => !v)}
+        onClick={(e) => { pillRef.current = e.currentTarget; setPickerOpen((v) => !v); }}
       >
         {displayModel || 'Auto'}
         {!isCodex && contextPercent != null && (
@@ -173,6 +175,7 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
           onProviderSwitch={onProviderSwitch
             ? (p) => { setPickerOpen(false); onProviderSwitch(p); }
             : undefined}
+          anchorRef={pillRef}
         />
       )}
     </div>

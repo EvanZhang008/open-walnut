@@ -13,6 +13,7 @@ import { DatePicker } from '@/components/common/DatePicker';
 import { PinTierPicker } from '@/components/common/PinTierPicker';
 import { useHostModelCatalog } from '@/hooks/useModelCatalog';
 import { formatModelName } from '@/hooks/useSessionUsage';
+import { catalogRowLabel } from '../ModelPicker';
 
 interface Props {
   meta: QuickStartTaskMeta;
@@ -44,7 +45,9 @@ export function useModelOptions(host?: string | null): {
     return {
       options: catalog.models
         .filter((m) => m.value !== 'default' && !m.disabled)
-        .map((m) => ({ value: m.value, label: m.displayName })),
+        // Versioned label ("Opus 5 1M", not "Opus") — same rule as the
+        // picker's catalogRowLabel: the user must see WHICH version launches.
+        .map((m) => ({ value: m.value, label: catalogRowLabel(m) })),
       autoResolved: formatModelName(catalog.models.find((m) => m.value === 'default')?.resolvedModel),
     };
   }

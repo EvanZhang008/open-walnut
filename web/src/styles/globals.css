@@ -16442,6 +16442,18 @@ a.task-kebab-info:hover {
   padding: 12px;
 }
 
+/* Popout variant: portalled to <body>, placed by useMenuPlacement (fixed
+   top/right/maxHeight arrive via inline style). Width is its own — no longer
+   inherits the composer column's width, so a narrow session panel can't
+   squeeze or clip it. */
+.model-picker-popout {
+  position: fixed;
+  bottom: auto;
+  left: auto;
+  width: min(440px, calc(100vw - 24px));
+  overflow-y: auto;
+}
+
 /* ── Provider rail (left pane): one icon per engine. The active one carries an
    accent edge; on a live session the other is greyed + locked (engine is a
    spawn-time fact), on a draft both are clickable. */
