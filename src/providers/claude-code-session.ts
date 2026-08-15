@@ -2444,11 +2444,36 @@ export class ClaudeCodeSession {
         }
         if (attachResult?.pendingCtrl && session._pendingPermissionRequests.size === 0) {
           const pc = attachResult.pendingCtrl
+          const pcReq = pc.request as { subtype?: string; tool_name?: string; input?: Record<string, unknown>; decision_reason?: string }
           session._pendingPermissionRequests.set(pc.reqId, {
             request_id: pc.reqId,
-            request: pc.request as { subtype: string; tool_name?: string; input?: Record<string, unknown>; decision_reason?: string },
+            request: pcReq as { subtype: string; tool_name?: string; input?: Record<string, unknown>; decision_reason?: string },
           })
-          session._startPermissionReEmitTimer(pc.reqId, pc.request as { subtype: string; tool_name?: string; input?: Record<string, unknown> })
+          session._startPermissionReEmitTimer(pc.reqId, pcReq as { subtype: string; tool_name?: string; input?: Record<string, unknown> })
+          // Persist to the record too (incident fd089463, 2026-08-15): the
+          // arrival-time persist lives in the control_request stream handler,
+          // which never ran if the request landed while walnut was down or
+          // restarting (deploy window). In-memory-only recovery left
+          // record.pendingPermission empty → canonicalStatusProjection had no
+          // pendingPermissionTool → no red Waiting badge on any list surface,
+          // and the doctor's category-B exemption missed the session. The
+          // daemon vouches for this request, so the record copy is authoritative.
+          if (record.pendingPermission?.requestId !== pc.reqId) {
+            import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+              updateSessionRecord(record.claudeSessionId, {
+                pendingPermission: {
+                  requestId: pc.reqId,
+                  toolName: pc.toolName ?? pcReq.tool_name,
+                  input: pcReq.input,
+                  reason: pcReq.decision_reason,
+                  subtype: pcReq.subtype ?? 'can_use_tool',
+                  receivedAt: Number.isFinite(pc.receivedAt)
+                    ? new Date(pc.receivedAt).toISOString()
+                    : new Date().toISOString(),
+                },
+              }),
+            ).catch(() => {})
+          }
           log.session.info('recovered pendingCtrl from daemon attach response', {
             sessionId: record.claudeSessionId,
             requestId: pc.reqId,
@@ -3119,18 +3144,37 @@ export class ClaudeCodeSession {
     this._activity = undefined
     this.pid = null
 
-    // Persist error state to session record
+    // Persist error state to session record. "No conversation found" in stderr
+    // means a cold `--resume` of an id the CLI never persisted (e.g. the
+    // original spawn died before its first turn) — that session can NEVER
+    // revive, so archive it like the other two conversation-lost paths do.
+    // Without this a lane-bound record wedges its conversation forever:
+    // getSessionByLane keeps returning the corpse and every send replays the
+    // same doomed resume (observed 2026-08-15, mentor lane).
+    //
+    // The archive rides its OWN patch, deliberately separate from the status
+    // write below: that one carries the ('system','daemon_reported_exit')
+    // category-① pair, which the C2 snapshot gate drops WHOLESALE in enforce
+    // mode — an archive folded into it silently never lands.
+    const conversationLost = cleanStderr.includes('No conversation found')
     if (this.claudeSessionId) {
       const sid = this.claudeSessionId
-      import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
-        updateSessionRecord(sid, {
+      import('../core/session-tracker.js').then(async ({ updateSessionRecord }) => {
+        if (conversationLost) {
+          await updateSessionRecord(sid, {
+            archived: true,
+            archive_reason: 'remote_conversation_lost',
+            errorMessage: errMsg,
+          } as Record<string, unknown>)
+        }
+        await updateSessionRecord(sid, {
           process_status: 'error',
           errorMessage: errMsg,
           status_reason: 'daemon_reported_exit',
           status_changed_by: 'system',
           pid: undefined,
-        } as Record<string, unknown>),
-      ).catch((err) => {
+        } as Record<string, unknown>)
+      }).catch((err) => {
         log.session.warn('failed to persist remote exit error', { sessionId: sid, error: String(err) })
       })
     }
