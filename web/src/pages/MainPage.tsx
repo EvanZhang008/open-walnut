@@ -6,7 +6,8 @@ import { getHostCatalog } from '@/hooks/useModelCatalog';
 import { useChat, mergeAdjacentErrors, type TaskContext, type ImageAttachment } from '@/hooks/useChat';
 import { useAgentConsole } from '@/hooks/useAgentConsole';
 import { useConversations, ACTIVE_CONV_KEY } from '@/hooks/useConversations';
-import { createConversation } from '@/api/conversations';
+import { createConversation, forkConversation } from '@/api/conversations';
+import { FileViewer } from '@/components/common/FileViewer';
 import { useWebSocket, useEvent } from '@/hooks/useWebSocket';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useNotifications } from '@/contexts/notifications';
@@ -88,13 +89,19 @@ const AGENT_BUILDER_PREFILL = `Create an interactive agent that shows up in my c
 Purpose:
 Name (optional): `;
 
-function ChatHeaderRow({ title, connectionState, inspectorOpen, onToggleInspector, hasMessages, onClear, agentSwitcher }: {
+function ChatHeaderRow({ title, connectionState, inspectorOpen, onToggleInspector, hasMessages, onClear, onOpenFiles, onFork, onCloseChat, agentSwitcher }: {
   title: string;
   connectionState: string;
   inspectorOpen: boolean;
   onToggleInspector: () => void;
   hasMessages: boolean;
   onClear: () => void;
+  /** Lane engine only: browse the main AI's working directory (Files split). */
+  onOpenFiles?: () => void;
+  /** Lane engine only: fork this conversation (history rides --fork-session). */
+  onFork?: () => void;
+  /** Collapse the chat column — same affordance a session panel's × has. */
+  onCloseChat?: () => void;
   agentSwitcher?: React.ReactNode;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -128,6 +135,16 @@ function ChatHeaderRow({ title, connectionState, inspectorOpen, onToggleInspecto
         </button>
         {menuOpen && (
           <div className="chat-header-dropdown">
+            {onOpenFiles && (
+              <button className="chat-header-dropdown-item" onClick={() => { onOpenFiles(); setMenuOpen(false); }}>
+                Files
+              </button>
+            )}
+            {onFork && (
+              <button className="chat-header-dropdown-item" onClick={() => { onFork(); setMenuOpen(false); }}>
+                Fork conversation
+              </button>
+            )}
             <button className="chat-header-dropdown-item" onClick={() => { onToggleInspector(); setMenuOpen(false); }}>
               {inspectorOpen ? 'Hide context' : 'Show context'}
             </button>
@@ -139,6 +156,16 @@ function ChatHeaderRow({ title, connectionState, inspectorOpen, onToggleInspecto
           </div>
         )}
       </div>
+      {onCloseChat && (
+        <button
+          className="chat-header-menu-btn"
+          onClick={onCloseChat}
+          title="Hide chat"
+          aria-label="Hide chat"
+        >
+          &#x2715;
+        </button>
+      )}
     </div>
   );
 }
@@ -2248,6 +2275,35 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (laneActive) setLaneResetNonce((n) => n + 1);
   }, [chat, laneActive]);
 
+  // Lane file viewing — a clicked file path in the timeline, or the ⋯ menu's
+  // "Files" (browse the main AI's working directory). One overlay serves both:
+  // the chat column has no split-view chrome, so the full-screen FileViewer
+  // (explorer + preview) is the right surface here.
+  const [laneFileView, setLaneFileView] = useState<{ path: string; line?: number } | null>(null);
+  const handleLaneFileOpen = useCallback((path: string, line?: number) => {
+    setLaneFileView({ path, line });
+  }, []);
+  const handleLaneOpenFiles = useCallback(() => {
+    // Root at the lane's cwd (~/.open-walnut — memory, notes, config all live there).
+    if (lane.cwd) setLaneFileView({ path: lane.cwd });
+  }, [lane.cwd]);
+
+  // Lane fork: server creates the conversation + forked session (history rides
+  // --fork-session) and sets the new conversation active; refresh + switch to it.
+  const handleLaneFork = useCallback(() => {
+    const cid = conversations.activeConversationId;
+    if (!cid) return;
+    forkConversation(agentConsole.activeAgentId, cid)
+      .then((r) => { conversations.switchTo(r.conversation.id); conversations.refresh(); })
+      .catch((err) => {
+        notify({
+          kind: 'operation-error', severity: 'error', title: 'Fork failed',
+          body: String(err instanceof Error ? err.message : err), persistent: true,
+          dedupKey: `lane-fork:${cid}`,
+        });
+      });
+  }, [agentConsole.activeAgentId, conversations, notify]);
+
   // Lane send: through the ordinary session queue (session:send), exactly like
   // any session composer. ensure() covers the send-before-resolve window (the
   // eager resolve usually wins). No task-context / plan-mode prefixes here —
@@ -2491,6 +2547,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             onToggleInspector={inspector.toggle}
             hasMessages={laneActive ? !!lane.sessionId : chat.messages.length > 0}
             onClear={handleClearChat}
+            onOpenFiles={laneActive && lane.cwd ? handleLaneOpenFiles : undefined}
+            onFork={laneActive && lane.sessionId ? handleLaneFork : undefined}
+            onCloseChat={() => setChatVisible(false)}
             agentSwitcher={(
               <AgentTabBar
                 agents={agentConsole.agents}
@@ -2554,7 +2613,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 onStreamingChange={setLaneStreaming}
                 onTaskClick={handleFocusTaskById}
                 onSessionClick={handleSessionClick}
+                onFileOpen={handleLaneFileOpen}
               />
+              {laneFileView && (
+                <FileViewer
+                  path={laneFileView.path}
+                  line={laneFileView.line}
+                  onClose={() => setLaneFileView(null)}
+                />
+              )}
             </div>
           ) : laneActive ? (
             <div className="chat-panel chat-lane-history">

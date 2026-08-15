@@ -134,6 +134,38 @@ export function createConversationsRouter(): Router {
     }
   })
 
+  // POST /api/agents/:agentId/conversations/:cid/fork
+  // Fork the conversation: new conversation + a forked lane session that carries
+  // the full history via the CLI's native --resume --fork-session. No task is
+  // created (lane sessions are taskless). 409 when the engine flag is off or the
+  // conversation has no session yet.
+  router.post('/:agentId/conversations/:cid/fork', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const agentId = validateAgentId(req.params.agentId as string)
+      const cid = validateConversationId(req.params.cid as string)
+      const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
+      if (resolveAgentEngineProvider(await getConfig()) !== 'claude-code') {
+        res.status(409).json({ error: 'Lane engine is not active' })
+        return
+      }
+      const { forkLaneConversation } = await import('../../core/sessions/lane-fork.js')
+      const { SessionControlError } = await import('../../core/sessions/session-controls.js')
+      try {
+        const result = await forkLaneConversation(agentId, cid)
+        broadcastEvent(EventNames.CONVERSATION_CREATED, { agentId, conversation: result.conversation })
+        res.json({ conversation: result.conversation, sessionId: result.sessionId })
+      } catch (err) {
+        if (err instanceof SessionControlError) {
+          res.status(err.statusCode).json({ error: err.message })
+          return
+        }
+        throw err
+      }
+    } catch (err) {
+      next(err)
+    }
+  })
+
   // DELETE /api/agents/:agentId/conversations/:cid
   // (The pre-delete distill step was removed with the unified memory redesign —
   //  durable knowledge is saved in-conversation via skill_manage.)

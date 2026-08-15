@@ -79,3 +79,15 @@ export async function deleteConversation(
 ): Promise<void> {
   await apiDelete(`/api/agents/${agentId}/conversations/${conversationId}`);
 }
+
+/** Fork a conversation: new conversation + a forked lane session carrying the
+ *  full history (CLI --resume --fork-session). Lane engine only (409 otherwise). */
+export async function forkConversation(
+  agentId: string,
+  conversationId: string,
+): Promise<{ conversation: ConversationMeta; sessionId: string }> {
+  return apiPost<{ conversation: ConversationMeta; sessionId: string }>(
+    `/api/agents/${agentId}/conversations/${conversationId}/fork`,
+    {},
+  );
+}
