@@ -5,6 +5,7 @@ import { CONFIG_FILE } from '../constants.js';
 import {
   VALID_PRIORITIES,
   DEFAULT_AGENT_ENGINE_PROVIDER,
+  FALLBACK_AGENT_ENGINE_PROVIDER,
   VALID_AGENT_ENGINE_PROVIDERS,
   type AgentEngineProvider,
   type Config,
@@ -41,9 +42,13 @@ const DEFAULT_CONFIG: Config = {
  */
 export function resolveAgentEngineProvider(config: Config): AgentEngineProvider {
   const raw = config.agent?.provider;
-  return typeof raw === 'string' && VALID_AGENT_ENGINE_PROVIDERS.has(raw)
-    ? (raw as AgentEngineProvider)
-    : DEFAULT_AGENT_ENGINE_PROVIDER;
+  if (typeof raw === 'string' && VALID_AGENT_ENGINE_PROVIDERS.has(raw)) {
+    return raw as AgentEngineProvider;
+  }
+  // Unset → the default engine. An unrecognized STRING → the fallback engine
+  // (the frozen in-process loop) — two separate constants on purpose, so
+  // flipping the default can never route a corrupt config onto the new engine.
+  return raw === undefined ? DEFAULT_AGENT_ENGINE_PROVIDER : FALLBACK_AGENT_ENGINE_PROVIDER;
 }
 
 // ── One-time config migration: category removal (project-only model) ────────

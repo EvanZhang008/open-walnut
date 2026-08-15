@@ -786,8 +786,16 @@ export const VALID_AGENT_ENGINE_PROVIDERS: ReadonlySet<string> = new Set<AgentEn
   'claude-code',
 ]);
 
-/** The default engine — today's behavior (in-process agent loop). */
+/** The default engine when `agent.provider` is unset. */
 export const DEFAULT_AGENT_ENGINE_PROVIDER: AgentEngineProvider = 'walnut-agent';
+
+/**
+ * Where an UNRECOGNIZED `agent.provider` value degrades. Deliberately a separate
+ * constant from the default: when the default flips to 'claude-code', a
+ * hand-edited/corrupt config must still land on the frozen in-process loop —
+ * never silently on the new engine, and never on "no engine".
+ */
+export const FALLBACK_AGENT_ENGINE_PROVIDER: AgentEngineProvider = 'walnut-agent';
 
 export interface AgentConfig {
   model?: string;

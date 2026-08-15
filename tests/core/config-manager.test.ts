@@ -10,8 +10,14 @@ import {
   getConfig,
   saveConfig,
   updateConfig,
+  resolveAgentEngineProvider,
   _resetWriteLockForTest,
 } from '../../src/core/config-manager.js';
+import {
+  DEFAULT_AGENT_ENGINE_PROVIDER,
+  FALLBACK_AGENT_ENGINE_PROVIDER,
+  type Config,
+} from '../../src/core/types.js';
 
 beforeEach(async () => {
   _resetWriteLockForTest();
@@ -208,5 +214,38 @@ describe('config loss recovery via sidecar backup', () => {
     const config = await getConfig();
     expect(config.version).toBe(1);
     expect(config.stt).toBeUndefined();
+  });
+});
+
+describe('resolveAgentEngineProvider: default vs fallback are SEPARATE roles', () => {
+  // The default (unset key) and the degrade target (unrecognized string) are two
+  // different constants so that flipping the default engine to 'claude-code' can
+  // never route a corrupt/hand-edited config onto the new engine. These tests pin
+  // the ROLE split, not the current values.
+  const cfg = (agent?: Record<string, unknown>): Config =>
+    ({ version: 1, user: {}, defaults: { priority: 'none' }, agent } as unknown as Config);
+
+  it('unset agent section → the DEFAULT engine', () => {
+    expect(resolveAgentEngineProvider(cfg(undefined))).toBe(DEFAULT_AGENT_ENGINE_PROVIDER);
+    expect(resolveAgentEngineProvider(cfg({}))).toBe(DEFAULT_AGENT_ENGINE_PROVIDER);
+  });
+
+  it('a valid explicit value is honored verbatim', () => {
+    expect(resolveAgentEngineProvider(cfg({ provider: 'claude-code' }))).toBe('claude-code');
+    expect(resolveAgentEngineProvider(cfg({ provider: 'walnut-agent' }))).toBe('walnut-agent');
+  });
+
+  it('an unrecognized string → the FALLBACK engine (frozen in-process loop), regardless of the default', () => {
+    expect(resolveAgentEngineProvider(cfg({ provider: 'wat' }))).toBe(FALLBACK_AGENT_ENGINE_PROVIDER);
+    expect(resolveAgentEngineProvider(cfg({ provider: '' }))).toBe(FALLBACK_AGENT_ENGINE_PROVIDER);
+    // Non-string garbage degrades the same way.
+    expect(resolveAgentEngineProvider(cfg({ provider: 42 }))).toBe(FALLBACK_AGENT_ENGINE_PROVIDER);
+    expect(resolveAgentEngineProvider(cfg({ provider: null }))).toBe(FALLBACK_AGENT_ENGINE_PROVIDER);
+  });
+
+  it('the fallback must stay the frozen loop even if the default flips', () => {
+    // This is the safety property task P4 depends on: a hand-edited config must
+    // degrade to walnut-agent forever, independent of the default's value.
+    expect(FALLBACK_AGENT_ENGINE_PROVIDER).toBe('walnut-agent');
   });
 });
