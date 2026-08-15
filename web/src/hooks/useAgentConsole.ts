@@ -41,7 +41,10 @@ export function useAgentConsole(): AgentConsoleState {
       const { fetchAgents } = await import('@/api/agents');
       const all = await fetchAgents();
       if (signal?.cancelled) return;
-      const consoleAgents = all.filter((a: AgentDefinition) => a.console);
+      // 'general' is the default console agent — its definition predates the
+      // console flag (console=null), so an exact `a.console` filter drops it
+      // and the switcher shows no row for the ACTIVE agent.
+      const consoleAgents = all.filter((a: AgentDefinition) => a.console || a.id === 'general');
       setAgents(consoleAgents);
     } catch (err) {
       console.warn('useAgentConsole: failed to load agents', err);

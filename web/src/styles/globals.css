@@ -4534,9 +4534,10 @@ select {
   flex: 1;
 }
 
-.agent-tab-walnut-wrap {
+.agent-tab-combo-wrap {
   position: relative;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
 }
 
 .agent-tab {
@@ -4560,42 +4561,53 @@ select {
   color: var(--fg);
 }
 
-/* Walnut tab — agent switcher, always emphasized */
-.agent-tab-walnut {
+/* Combined trigger — agent chip + conversation title in ONE button */
+.agent-tab-combo {
+  height: 28px;
+  max-width: 340px;
+  padding: 0 10px 0 4px;
+  gap: 7px;
+  border-radius: 999px;
   font-weight: 600;
   color: var(--fg);
 }
 
-.agent-tab-walnut.open {
+.agent-tab-combo.open {
   border-color: var(--accent);
 }
 
+/* Small tinted agent chip inside the combined trigger */
+.agent-combo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.agent-combo-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 90px;
+}
+
 .agent-tab-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--accent);
   flex-shrink: 0;
 }
 
-.agent-tab-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 140px;
-}
-
 .agent-tab-caret {
   font-size: 9px;
   opacity: 0.6;
-}
-
-.agent-tab-divider {
-  width: 1px;
-  height: 18px;
-  background: var(--border);
-  flex-shrink: 0;
-  margin: 0 2px;
 }
 
 /* Conversation tabs — scroll horizontally when they overflow.
@@ -4699,22 +4711,6 @@ select {
   background: var(--bg-tertiary);
 }
 
-/* Conversation dropdown trigger — the ONE switcher (no tab strip) */
-.agent-tab-history-wrap {
-  position: relative;
-  flex-shrink: 1;
-  min-width: 0;
-}
-
-.agent-tab-conv-trigger {
-  max-width: 260px;
-  font-weight: 600;
-  color: var(--fg);
-}
-
-.agent-tab-conv-trigger.open {
-  border-color: var(--accent);
-}
 
 /* History dropdown row actions (📌 / ×) — revealed on row hover */
 .agent-dd-row .agent-dd-hover-btn {

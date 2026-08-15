@@ -1,19 +1,18 @@
 /**
- * AgentTabBar — ONE simple conversation dropdown, no horizontal tab strip.
+ * AgentTabBar — ONE combined button + ONE "+" button (user-picked design #3).
  *
- * Layout:  [● Walnut ▾] | [current conversation ▾] [+]
+ * Layout:  [ (● agent-chip)  Conversation Title ▾ ]  [+]
  *
- *   - The "Walnut" tab shows the active agent; clicking it opens a small dropdown
- *     to switch agents / create a new one. Each agent row carries a ＋ that opens
- *     a NEW conversation directly under that agent.
- *   - The conversation trigger shows the ACTIVE conversation's title; clicking it
- *     opens the single dropdown: search, Main pinned at the top (undeletable),
- *     then 📌 Pinned, then Today / This week / Older. Rows switch on click and
- *     reveal pin/delete on hover. Double-click the trigger to rename (not Main).
- *   - Trailing "+" starts a new conversation.
- *
- * The dropdowns reuse the inline-style popover from the former AgentDropdown;
- * the trigger chrome is CSS-classed (see globals.css ".agent-tab-*").
+ *   - The single trigger shows BOTH the active agent (as a small tinted chip)
+ *     and the active conversation title. Double-click renames (not Main).
+ *   - Clicking it opens a two-pane dropdown: LEFT lists agents (click = switch
+ *     agent; hover reveals ＋ new-chat and 👁 visibility), RIGHT lists the
+ *     active agent's conversations — search, Main (bold, undeletable), Pinned,
+ *     then Today / This week / Older with hover pin/delete, and a
+ *     "+ New conversation" row at the bottom.
+ *   - "+ New agent…" lives at the bottom of the left pane; its form renders in
+ *     the right pane (wider), alongside the "create by chat" alternative.
+ *   - Trailing "+" starts a new conversation under the active agent.
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -28,18 +27,18 @@ interface AgentTabBarProps {
   activeConversationId: string | null;
   onSwitchConversation: (conversationId: string) => void;
   onNewConversation: () => void;
-  /** New conversation under a SPECIFIC agent (agent dropdown's per-row ＋). */
+  /** New conversation under a SPECIFIC agent (left pane's per-row ＋). */
   onNewConversationForAgent?: (agentId: string) => void;
   onDeleteConversation: (conversationId: string) => void;
   onRenameConversation: (conversationId: string, title: string) => void;
-  /** Pin/unpin — pinned conversations stay visible as tabs. */
+  /** Pin/unpin — pinned conversations get their own dropdown section. */
   onTogglePin?: (conversationId: string) => void;
   onCreateAgent: (name: string, description: string, systemPrompt?: string) => void;
   onCreateAgentByChat: () => void;
   onToggleAgentVisibility: (agentId: string, visible: boolean) => void;
 }
 
-/** Time bucket for the History dropdown (by lastMessageAt). */
+/** Time bucket for the conversation dropdown (by lastMessageAt). */
 function historyGroup(iso: string): 'Today' | 'This week' | 'Older' {
   const t = new Date(iso).getTime();
   if (Number.isNaN(t)) return 'Older';
@@ -69,17 +68,15 @@ export function AgentTabBar(props: AgentTabBarProps) {
     onCreateAgent, onCreateAgentByChat, onToggleAgentVisibility,
   } = props;
 
-  const [agentMenuOpen, setAgentMenuOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [historyQuery, setHistoryQuery] = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [query, setQuery] = useState('');
   const [showNewAgent, setShowNewAgent] = useState(false);
   const [newAgentName, setNewAgentName] = useState('');
   const [newAgentDesc, setNewAgentDesc] = useState('');
   const [newAgentPrompt, setNewAgentPrompt] = useState('');
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
-  const agentWrapRef = useRef<HTMLDivElement>(null);
-  const historyWrapRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
 
   const activeAgent = agents.find((a) => a.id === activeAgentId);
   const activeAgentName = activeAgent?.name ?? activeAgentId;
@@ -87,10 +84,10 @@ export function AgentTabBar(props: AgentTabBarProps) {
   const activeConv = conversations.find((c) => c.id === activeConversationId);
   const activeConvLabel = activeConv?.isMain ? 'Main' : (activeConv?.title ?? 'Main');
 
-  // Dropdown sections: Main pinned at the top, then 📌 Pinned, then the rest
+  // Right pane sections: Main pinned at the top, then 📌 Pinned, then the rest
   // time-grouped (Today / This week / Older). Search filters all of it.
   const menuSections = useMemo(() => {
-    const q = historyQuery.trim().toLowerCase();
+    const q = query.trim().toLowerCase();
     const match = (c: ConversationMeta) =>
       !q || (c.isMain ? 'main' : c.title.toLowerCase()).includes(q);
     const main = conversations.filter((c) => c.isMain && match(c));
@@ -108,41 +105,26 @@ export function AgentTabBar(props: AgentTabBarProps) {
       if (groups[g]?.length) sections.push({ label: g, items: groups[g] });
     }
     return sections;
-  }, [conversations, historyQuery]);
+  }, [conversations, query]);
 
-  // Close agent dropdown on outside click.
+  // Close the dropdown on outside click; reset search + new-agent form on close.
   useEffect(() => {
-    if (!agentMenuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (agentWrapRef.current && !agentWrapRef.current.contains(e.target as Node)) {
-        setAgentMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [agentMenuOpen]);
-
-  // Close History dropdown on outside click; reset its search when it closes.
-  useEffect(() => {
-    if (!historyOpen) { setHistoryQuery(''); return; }
-    const handler = (e: MouseEvent) => {
-      if (historyWrapRef.current && !historyWrapRef.current.contains(e.target as Node)) {
-        setHistoryOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [historyOpen]);
-
-  // Reset the new-agent sub-form whenever the dropdown closes.
-  useEffect(() => {
-    if (!agentMenuOpen) {
+    if (!menuOpen) {
+      setQuery('');
       setShowNewAgent(false);
       setNewAgentName('');
       setNewAgentDesc('');
       setNewAgentPrompt('');
+      return;
     }
-  }, [agentMenuOpen]);
+    const handler = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [menuOpen]);
 
   const submitNewAgent = useCallback(() => {
     const name = newAgentName.trim();
@@ -152,7 +134,7 @@ export function AgentTabBar(props: AgentTabBarProps) {
     setNewAgentName('');
     setNewAgentDesc('');
     setNewAgentPrompt('');
-    setAgentMenuOpen(false);
+    setMenuOpen(false);
   }, [newAgentName, newAgentDesc, newAgentPrompt, onCreateAgent]);
 
   const commitRename = useCallback((cid: string) => {
@@ -164,114 +146,8 @@ export function AgentTabBar(props: AgentTabBarProps) {
 
   return (
     <div className="agent-tab-bar">
-      {/* ── Walnut tab — agent switcher ── */}
-      <div className="agent-tab-walnut-wrap" ref={agentWrapRef}>
-        <button
-          className={`agent-tab agent-tab-walnut${agentMenuOpen ? ' open' : ''}`}
-          onClick={() => setAgentMenuOpen((v) => !v)}
-          title="Switch agent"
-        >
-          <span className="agent-tab-dot" />
-          <span className="agent-tab-label">{activeAgentName}</span>
-          <span className="agent-tab-caret">▾</span>
-        </button>
-
-        {agentMenuOpen && (
-          <div style={popoverStyle}>
-            <div style={sectionLabelStyle}>Agents</div>
-            {agents.map((agent) => {
-              const isActive = agent.id === activeAgentId;
-              const visible = agent.console !== false;
-              const isGeneral = agent.id === 'general';
-              return (
-                <div key={agent.id} style={rowStyle(isActive)} className="agent-dd-row">
-                  <button
-                    onClick={() => { onSwitchAgent(agent.id); setAgentMenuOpen(false); }}
-                    style={rowMainBtnStyle(isActive)}
-                    title={agent.description}
-                  >
-                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: isActive ? 'var(--accent)' : 'var(--fg-muted)', display: 'inline-block', flexShrink: 0 }} />
-                    <span style={ellipsisStyle}>{agent.name}</span>
-                  </button>
-                  {/* Per-agent ＋ — jump to this agent AND open a fresh conversation. */}
-                  {onNewConversationForAgent && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onNewConversationForAgent(agent.id); setAgentMenuOpen(false); }}
-                      style={iconBtnStyle}
-                      title={`New chat with ${agent.name}`}
-                      aria-label={`New chat with ${agent.name}`}
-                    >
-                      +
-                    </button>
-                  )}
-                  {/* Eye toggle — can't hide 'general' */}
-                  {!isGeneral && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onToggleAgentVisibility(agent.id, !visible); }}
-                      style={iconBtnStyle}
-                      title={visible ? 'Hide from console' : 'Show in console'}
-                      aria-label={visible ? 'Hide agent' : 'Show agent'}
-                    >
-                      {visible ? '\u{1F441}' : '\u{1F441}‍\u{1F5E8}'}{/* 👁 / 👁‍🗨 (struck) */}
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-
-            {showNewAgent ? (
-              <div style={{ padding: '6px 10px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <input
-                  autoFocus
-                  value={newAgentName}
-                  onChange={(e) => setNewAgentName(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') submitNewAgent(); if (e.key === 'Escape') setShowNewAgent(false); }}
-                  placeholder="Agent name"
-                  style={inputStyle}
-                />
-                <input
-                  value={newAgentDesc}
-                  onChange={(e) => setNewAgentDesc(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') submitNewAgent(); if (e.key === 'Escape') setShowNewAgent(false); }}
-                  placeholder="Description (optional)"
-                  style={inputStyle}
-                />
-                {/* System prompt — Enter inserts a newline (multi-line field); submit via the button. */}
-                <textarea
-                  value={newAgentPrompt}
-                  onChange={(e) => setNewAgentPrompt(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Escape') setShowNewAgent(false); }}
-                  placeholder="System prompt (optional — blank = auto-generate)"
-                  rows={3}
-                  style={textareaStyle}
-                />
-                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                  <button onClick={() => setShowNewAgent(false)} style={ghostBtnStyle}>Cancel</button>
-                  <button onClick={submitNewAgent} style={primaryBtnStyle} disabled={!newAgentName.trim()}>Create</button>
-                </div>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', alignItems: 'center' }}>
-                <button onClick={() => setShowNewAgent(true)} style={{ ...addRowStyle, width: 'auto', flex: 1 }}>
-                  + New Agent…
-                </button>
-                <button
-                  onClick={() => { onCreateAgentByChat(); setAgentMenuOpen(false); }}
-                  style={{ ...addRowStyle, width: 'auto', flexShrink: 0, paddingLeft: 8 }}
-                  title="Design & create an agent by chatting with Walnut"
-                >
-                  Create by chat
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      <span className="agent-tab-divider" />
-
-      {/* ── ONE conversation dropdown — trigger shows the active conversation ── */}
-      <div className="agent-tab-history-wrap" ref={historyWrapRef}>
+      {/* ── The ONE trigger: agent chip + conversation title ── */}
+      <div className="agent-tab-combo-wrap" ref={wrapRef}>
         {renamingId && activeConv && renamingId === activeConv.id ? (
           <input
             autoFocus
@@ -286,83 +162,187 @@ export function AgentTabBar(props: AgentTabBarProps) {
           />
         ) : (
           <button
-            className={`agent-tab agent-tab-conv-trigger${historyOpen ? ' open' : ''}`}
-            onClick={() => setHistoryOpen((v) => !v)}
+            className={`agent-tab agent-tab-combo${menuOpen ? ' open' : ''}`}
+            onClick={() => setMenuOpen((v) => !v)}
             // Main is the agent's fixed thread — never renameable.
             onDoubleClick={activeConv && !activeConv.isMain
-              ? () => { setHistoryOpen(false); setRenamingId(activeConv.id); setRenameValue(activeConv.title); }
+              ? () => { setMenuOpen(false); setRenamingId(activeConv.id); setRenameValue(activeConv.title); }
               : undefined}
             title={activeConv?.isMain
-              ? 'Main — receives notifications & cron. Click to switch conversation.'
-              : `${activeConvLabel} — click to switch, double-click to rename`}
+              ? `${activeAgentName} / Main — receives notifications & cron. Click to switch.`
+              : `${activeAgentName} / ${activeConvLabel} — click to switch, double-click to rename`}
           >
+            <span className="agent-combo-chip">
+              <span className="agent-tab-dot" />
+              <span className="agent-combo-chip-name">{activeAgentName}</span>
+            </span>
             <span className="agent-tab-conv-title">{activeConvLabel}</span>
             <span className="agent-tab-caret">▾</span>
           </button>
         )}
 
-        {historyOpen && (
-          <div style={historyPopoverStyle}>
-            <div style={{ padding: '4px 8px 6px' }}>
-              <input
-                autoFocus
-                value={historyQuery}
-                onChange={(e) => setHistoryQuery(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Escape') setHistoryOpen(false); }}
-                placeholder="Search conversations…"
-                style={inputStyle}
-              />
-            </div>
-            {menuSections.length === 0 && (
-              <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--fg-muted)' }}>
-                No matches
-              </div>
-            )}
-            {menuSections.map((group, gi) => (
-              <div key={group.label ?? `main-${gi}`}>
-                {group.label && <div style={sectionLabelStyle}>{group.label}</div>}
-                {group.items.map((conv) => {
-                  const isActive = conv.id === activeConversationId;
-                  return (
-                    <div key={conv.id} style={rowStyle(isActive)} className="agent-dd-row">
+        {menuOpen && (
+          <div style={comboPopoverStyle}>
+            {/* ── LEFT pane: agents ── */}
+            <div style={leftPaneStyle}>
+              {agents.map((agent) => {
+                const isActive = agent.id === activeAgentId;
+                const visible = agent.console !== false;
+                const isGeneral = agent.id === 'general';
+                return (
+                  <div key={agent.id} style={agentRowStyle(isActive)} className="agent-dd-row">
+                    <button
+                      onClick={() => { if (!isActive) onSwitchAgent(agent.id); setShowNewAgent(false); }}
+                      style={rowMainBtnStyle(isActive)}
+                      title={agent.description}
+                    >
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: isActive ? 'var(--accent)' : 'var(--fg-muted)', display: 'inline-block', flexShrink: 0 }} />
+                      <span style={ellipsisStyle}>{agent.name}</span>
+                    </button>
+                    {/* Per-agent ＋ — jump to this agent AND open a fresh conversation. */}
+                    {onNewConversationForAgent && (
                       <button
-                        onClick={() => { onSwitchConversation(conv.id); setHistoryOpen(false); }}
-                        style={rowMainBtnStyle(isActive)}
-                        title={conv.isMain ? 'Main — receives notifications & cron. Can\'t be renamed or deleted.' : conv.title}
+                        onClick={(e) => { e.stopPropagation(); onNewConversationForAgent(agent.id); setMenuOpen(false); }}
+                        style={iconBtnStyle}
+                        className="agent-dd-hover-btn"
+                        title={`New chat with ${agent.name}`}
+                        aria-label={`New chat with ${agent.name}`}
                       >
-                        {conv.pinned && !conv.isMain && <span style={{ fontSize: 10, flexShrink: 0 }}>{'\u{1F4CC}'}</span>}
-                        <span style={{ ...ellipsisStyle, fontWeight: conv.isMain ? 600 : undefined }}>
-                          {conv.isMain ? 'Main' : conv.title}
-                        </span>
+                        +
                       </button>
-                      {!conv.isMain && onTogglePin && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); onTogglePin(conv.id); }}
-                          style={iconBtnStyle}
-                          className="agent-dd-hover-btn"
-                          title={conv.pinned ? 'Unpin' : 'Pin'}
-                          aria-label={conv.pinned ? 'Unpin conversation' : 'Pin conversation'}
-                        >
-                          {'\u{1F4CC}'}{/* 📌 */}
-                        </button>
-                      )}
-                      {/* Main conversation can't be deleted (it owns notifications & cron). */}
-                      {!conv.isMain && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); onDeleteConversation(conv.id); }}
-                          style={iconBtnStyle}
-                          className="agent-dd-hover-btn"
-                          title="Delete conversation"
-                          aria-label="Delete conversation"
-                        >
-                          {'×'}
-                        </button>
-                      )}
+                    )}
+                    {/* Eye toggle — can't hide 'general' */}
+                    {!isGeneral && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onToggleAgentVisibility(agent.id, !visible); }}
+                        style={iconBtnStyle}
+                        className="agent-dd-hover-btn"
+                        title={visible ? 'Hide from console' : 'Show in console'}
+                        aria-label={visible ? 'Hide agent' : 'Show agent'}
+                      >
+                        {visible ? '\u{1F441}' : '\u{1F441}‍\u{1F5E8}'}{/* 👁 / 👁‍🗨 (struck) */}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+              <button onClick={() => setShowNewAgent(true)} style={addRowStyle}>
+                + New agent…
+              </button>
+            </div>
+
+            {/* ── RIGHT pane: the active agent's conversations (or new-agent form) ── */}
+            <div style={rightPaneStyle}>
+              {showNewAgent ? (
+                <div style={{ padding: '6px 4px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={sectionLabelStyle}>New agent</div>
+                  <input
+                    autoFocus
+                    value={newAgentName}
+                    onChange={(e) => setNewAgentName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') submitNewAgent(); if (e.key === 'Escape') setShowNewAgent(false); }}
+                    placeholder="Agent name"
+                    style={inputStyle}
+                  />
+                  <input
+                    value={newAgentDesc}
+                    onChange={(e) => setNewAgentDesc(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') submitNewAgent(); if (e.key === 'Escape') setShowNewAgent(false); }}
+                    placeholder="Description (optional)"
+                    style={inputStyle}
+                  />
+                  {/* System prompt — Enter inserts a newline (multi-line field); submit via the button. */}
+                  <textarea
+                    value={newAgentPrompt}
+                    onChange={(e) => setNewAgentPrompt(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Escape') setShowNewAgent(false); }}
+                    placeholder="System prompt (optional — blank = auto-generate)"
+                    rows={3}
+                    style={textareaStyle}
+                  />
+                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                    <button
+                      onClick={() => { onCreateAgentByChat(); setMenuOpen(false); }}
+                      style={{ ...ghostBtnStyle, marginRight: 'auto', border: 'none', color: 'var(--accent)' }}
+                      title="Design & create an agent by chatting with Walnut"
+                    >
+                      Create by chat
+                    </button>
+                    <button onClick={() => setShowNewAgent(false)} style={ghostBtnStyle}>Cancel</button>
+                    <button onClick={submitNewAgent} style={primaryBtnStyle} disabled={!newAgentName.trim()}>Create</button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div style={{ padding: '4px 4px 6px' }}>
+                    <input
+                      autoFocus
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Escape') setMenuOpen(false); }}
+                      placeholder="Search conversations…"
+                      style={inputStyle}
+                    />
+                  </div>
+                  {menuSections.length === 0 && (
+                    <div style={{ padding: '10px 12px', fontSize: 12, color: 'var(--fg-muted)' }}>
+                      No matches
                     </div>
-                  );
-                })}
-              </div>
-            ))}
+                  )}
+                  {menuSections.map((group, gi) => (
+                    <div key={group.label ?? `main-${gi}`}>
+                      {group.label && <div style={sectionLabelStyle}>{group.label}</div>}
+                      {group.items.map((conv) => {
+                        const isActive = conv.id === activeConversationId;
+                        return (
+                          <div key={conv.id} style={convRowStyle(isActive)} className="agent-dd-row">
+                            <button
+                              onClick={() => { onSwitchConversation(conv.id); setMenuOpen(false); }}
+                              style={rowMainBtnStyle(isActive)}
+                              title={conv.isMain ? 'Main — receives notifications & cron. Can\'t be renamed or deleted.' : conv.title}
+                            >
+                              {conv.pinned && !conv.isMain && <span style={{ fontSize: 10, flexShrink: 0 }}>{'\u{1F4CC}'}</span>}
+                              <span style={{ ...ellipsisStyle, fontWeight: conv.isMain ? 600 : undefined }}>
+                                {conv.isMain ? 'Main' : conv.title}
+                              </span>
+                            </button>
+                            {!conv.isMain && onTogglePin && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); onTogglePin(conv.id); }}
+                                style={iconBtnStyle}
+                                className="agent-dd-hover-btn"
+                                title={conv.pinned ? 'Unpin' : 'Pin'}
+                                aria-label={conv.pinned ? 'Unpin conversation' : 'Pin conversation'}
+                              >
+                                {'\u{1F4CC}'}{/* 📌 */}
+                              </button>
+                            )}
+                            {/* Main conversation can't be deleted (it owns notifications & cron). */}
+                            {!conv.isMain && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); onDeleteConversation(conv.id); }}
+                                style={iconBtnStyle}
+                                className="agent-dd-hover-btn"
+                                title="Delete conversation"
+                                aria-label="Delete conversation"
+                              >
+                                {'×'}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                  <button
+                    onClick={() => { onNewConversation(); setMenuOpen(false); }}
+                    style={addRowStyle}
+                  >
+                    + New conversation
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -379,40 +359,38 @@ export function AgentTabBar(props: AgentTabBarProps) {
   );
 }
 
-// ── Inline styles for the agent dropdown popover (CSS vars, mirroring the former AgentDropdown) ──
+// ── Inline styles for the two-pane popover (CSS vars, matching the app chrome) ──
 
-const popoverStyle: React.CSSProperties = {
+const comboPopoverStyle: React.CSSProperties = {
   position: 'absolute',
   top: 'calc(100% + 4px)',
   left: 0,
-  minWidth: 240,
-  maxWidth: 320,
+  display: 'flex',
+  width: 430,
+  maxWidth: 'min(430px, calc(100vw - 32px))',
   maxHeight: 420,
-  overflowY: 'auto',
   background: 'var(--bg-elevated, var(--bg))',
   border: '1px solid var(--border)',
-  borderRadius: 8,
+  borderRadius: 10,
   boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
   zIndex: 1000,
-  padding: '6px 0',
+  overflow: 'hidden',
 };
 
-// Conversation dropdown — anchored to the trigger's left edge (the trigger sits
-// right after the agent tab, well clear of the viewport's right edge).
-const historyPopoverStyle: React.CSSProperties = {
-  position: 'absolute',
-  top: 'calc(100% + 4px)',
-  left: 0,
-  minWidth: 260,
-  maxWidth: 340,
-  maxHeight: 420,
+const leftPaneStyle: React.CSSProperties = {
+  width: 132,
+  flexShrink: 0,
   overflowY: 'auto',
-  background: 'var(--bg-elevated, var(--bg))',
-  border: '1px solid var(--border)',
-  borderRadius: 8,
-  boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
-  zIndex: 1000,
-  padding: '6px 0',
+  background: 'var(--bg-secondary)',
+  borderRight: '1px solid var(--border)',
+  padding: '6px 4px',
+};
+
+const rightPaneStyle: React.CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  overflowY: 'auto',
+  padding: '6px 4px',
 };
 
 const sectionLabelStyle: React.CSSProperties = {
@@ -424,12 +402,25 @@ const sectionLabelStyle: React.CSSProperties = {
   color: 'var(--fg-muted)',
 };
 
-function rowStyle(isActive: boolean): React.CSSProperties {
+function agentRowStyle(isActive: boolean): React.CSSProperties {
   return {
     display: 'flex',
     alignItems: 'center',
     gap: 2,
-    padding: '0 6px 0 12px',
+    padding: '0 2px 0 8px',
+    borderRadius: 7,
+    background: isActive ? 'var(--bg-elevated, var(--bg))' : 'transparent',
+    boxShadow: isActive ? '0 1px 3px rgba(0,0,0,0.08)' : undefined,
+  };
+}
+
+function convRowStyle(isActive: boolean): React.CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 2,
+    padding: '0 6px 0 8px',
+    borderRadius: 7,
     background: isActive ? 'var(--accent-subtle)' : 'transparent',
   };
 }
@@ -446,6 +437,7 @@ function rowMainBtnStyle(isActive: boolean): React.CSSProperties {
     background: 'transparent',
     color: isActive ? 'var(--fg)' : 'var(--fg-secondary)',
     fontSize: 13,
+    fontWeight: isActive ? 600 : undefined,
     cursor: 'pointer',
     textAlign: 'left',
   };
