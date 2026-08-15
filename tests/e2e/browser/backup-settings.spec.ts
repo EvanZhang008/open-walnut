@@ -54,9 +54,11 @@ test.describe('S3 Backup settings', () => {
     // Status line: no backup yet.
     await expect(section).toContainText('No backup has run yet')
 
-    // Restore hint names the CLI and the agent skill.
+    // Restore hint names the CLI and links the agent skill.
     await expect(section).toContainText('open-walnut backup restore')
-    await expect(section).toContainText('restore-backup')
+    await expect(
+      section.locator('a[href*="skills/restore-backup"]', { hasText: 'restore-backup skill' }),
+    ).toBeVisible()
 
     // Test Connection against a nonexistent bucket must fail loudly, not hang:
     // STS/HeadBucket errors land in the red "Connection failed" line.

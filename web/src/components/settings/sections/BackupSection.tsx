@@ -301,8 +301,15 @@ export function BackupSection({ config, onSave }: Props) {
       </div>
       <p className="text-sm text-muted" style={{ marginTop: 6 }}>
         Restore from a terminal: <code>open-walnut backup restore</code> (downloads into a fresh folder, never
-        overwrites live data). Or let an agent do it: the <code>restore-backup</code> skill in the repo&apos;s{' '}
-        <code>skills/</code> folder walks a Claude Code session through find → restore → verify → adopt.
+        overwrites live data). Or let an agent do it: paste the{' '}
+        <a
+          href="https://github.com/EvanZhang008/open-walnut/blob/main/skills/restore-backup/SKILL.md"
+          target="_blank"
+          rel="noreferrer"
+        >
+          restore-backup skill
+        </a>{' '}
+        into a Claude Code session and it walks through find → restore → verify → adopt.
       </p>
     </SectionCard>
   );
