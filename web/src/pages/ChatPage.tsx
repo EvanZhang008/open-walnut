@@ -1,7 +1,6 @@
 import { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useChat, mergeAdjacentErrors } from '@/hooks/useChat';
-import { usePlanMode } from '@/hooks/usePlanMode';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { ChatPanel } from '@/components/chat/ChatPanel';
 import { ChatMessage } from '@/components/chat/ChatMessage';
@@ -14,7 +13,6 @@ import { shouldHideUiOnlyMessage, useUiOnlySettings } from '@/hooks/useDeveloper
 export function ChatPage() {
   const navigate = useNavigate();
   const { messages, isStreaming, toolActivity, isLoading, queueCount, hasMore, isLoadingOlder, prependedRef, sendMessage, clearMessages, addLocalMessage, stopGeneration, cancelQueuedMessage, clearQueue, loadOlderMessages } = useChat();
-  const { mode: chatMode, toggleMode, getPlanPayload } = usePlanMode();
   const { connectionState } = useWebSocket();
   // Force re-render when UI Only settings change
   useUiOnlySettings();
@@ -22,9 +20,8 @@ export function ChatPage() {
   const chatComposerRef = useOverlayHeightVar('--chat-composer-h', '.chat-panel');
 
   const handleSend = useCallback((text: string, images?: Parameters<typeof sendMessage>[2]) => {
-    const plan = getPlanPayload();
-    sendMessage(text, undefined, images, undefined, plan.mode, plan.planModeFirst, plan.planModeOff);
-  }, [sendMessage, getPlanPayload]);
+    sendMessage(text, undefined, images);
+  }, [sendMessage]);
 
   const handleCommand = useCallback((cmd: SlashCommand, args?: string) => {
     const ctx: CommandContext = {
@@ -101,7 +98,7 @@ export function ChatPage() {
       {/* G4 glass composer overlay — pills + input on one glass surface;
           .chat-panel pads by the tracked --chat-composer-h. */}
       <div className="chat-composer-overlay" ref={chatComposerRef}>
-        <QuickAccessBar onSessionClick={() => {}} mode={chatMode} onModeToggle={toggleMode} />
+        <QuickAccessBar onSessionClick={() => {}} />
 
         <ChatInput
           onSend={handleSend}
@@ -112,7 +109,6 @@ export function ChatPage() {
           isStreaming={isStreaming}
           queueCount={queueCount}
           draftKey="draft:chat-page"
-          onToggleMode={toggleMode}
         />
       </div>
     </div>

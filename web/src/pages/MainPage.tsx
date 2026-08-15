@@ -7,7 +7,6 @@ import { useChat, mergeAdjacentErrors, type TaskContext, type ImageAttachment } 
 import { useAgentConsole } from '@/hooks/useAgentConsole';
 import { useConversations, ACTIVE_CONV_KEY } from '@/hooks/useConversations';
 import { createConversation } from '@/api/conversations';
-import { usePlanMode } from '@/hooks/usePlanMode';
 import { useWebSocket, useEvent } from '@/hooks/useWebSocket';
 import { useTasksContext } from '@/contexts/TasksContext';
 import { useNotifications } from '@/contexts/notifications';
@@ -271,14 +270,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // stays byte-identical for the in-process engine and non-general agents.
   const chatEngine = useChatEngine();
   const [laneResetNonce, setLaneResetNonce] = useState(0);
-  const laneActive = chatEngine === 'claude-code' && agentConsole.activeAgentId === 'general';
+  // Every console agent runs on the lane engine — same session timeline, same
+  // composer, per-agent persona (consoleAgentProfile server-side).
+  const laneActive = chatEngine === 'claude-code';
   const lane = useLaneSession(
     laneActive, agentConsole.activeAgentId, conversations.activeConversationId, laneResetNonce,
   );
   const laneSend = useSessionSend(laneActive ? lane.sessionId : null);
   const [laneStreaming, setLaneStreaming] = useState(false);
   const { health, loading: healthLoading } = useSystemHealth();
-  const { mode: chatMode, toggleMode, getPlanPayload } = usePlanMode();
   const { connectionState } = useWebSocket();
   const { notify } = useNotifications();
   const { tasks, loading, refreshing: tasksRefreshing, error: tasksError, toggleComplete, setPhase, star, create, update, reorder, moveTask, reparentTask, deleteTask, batchSetPhase, batchDelete, bakeOrder, showOperationError, taskGroups, hiddenGroups, groupTasks, addToGroup, ungroupTasks, renameGroup, setGroupHidden } = useTasksContext();
@@ -2347,15 +2347,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             done: child.status === 'done' || child.phase === 'COMPLETE',
           })),
       };
-      const plan = getPlanPayload();
-      chat.sendMessage(text, taskContext, images, undefined, plan.mode, plan.planModeFirst, plan.planModeOff);
+      chat.sendMessage(text, taskContext, images);
       // Clear task quote after sending — quote is bound to the message, not persistent
       setFocusedTask(null);
     } else {
-      const plan = getPlanPayload();
-      chat.sendMessage(text, undefined, images, undefined, plan.mode, plan.planModeFirst, plan.planModeOff);
+      chat.sendMessage(text, undefined, images);
     }
-  }, [chat, focusedTask, getPlanPayload, launchQuickStart, tasks, laneActive, handleLaneSend]);
+  }, [chat, focusedTask, launchQuickStart, tasks, laneActive, handleLaneSend]);
 
   const handleCommand = useCallback((cmd: SlashCommand, args?: string) => {
     const ctx: CommandContext = {
@@ -2716,8 +2714,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 setQuickTaskOpen(false);
               }}
               onFixWalnutClick={walnutInstallDir ? handleFixWalnut : undefined}
-              mode={chatMode}
-              onModeToggle={toggleMode}
               stats={chat.stats}
             />
 
@@ -2738,7 +2734,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               draftKey="draft:main-chat"
               prefillText={AGENT_BUILDER_PREFILL}
               prefillNonce={agentBuilderPrefillNonce}
-              onToggleMode={toggleMode}
               sessionCommands={quickStartPath ? quickStartCommands : undefined}
               searchSessionCommands={quickStartPath ? searchQuickStartCommands : undefined}
               // Quick-start: "@" roots at the chosen cwd + host (like a session).

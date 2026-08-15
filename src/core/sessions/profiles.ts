@@ -86,6 +86,32 @@ export function butlerProfile(name: string, skillsIndex?: string, memoryContext?
 }
 
 /**
+ * Lane profile for a NON-general console agent (mentor, note-agent, custom
+ * ones): the agent's OWN persona replaces the butler role section, and the
+ * same session addendum re-points it at the Walnut MCP/HTTP surface. This is
+ * what lets every console agent run on the session engine with one consistent
+ * feel — same timeline, same tools, same ref pills — while keeping its
+ * identity. `contextBlock` carries whatever the agent's context sources
+ * resolve to (its own memory etc.); the caller does the I/O.
+ */
+export function consoleAgentProfile(
+  agentDef: { id: string; name: string; system_prompt?: string },
+  skillsIndex?: string,
+  contextBlock?: string,
+): SessionProfile {
+  const persona = agentDef.system_prompt?.trim() || `You are ${agentDef.name}.`
+  const skillsSection = skillsIndex?.trim() ? `\n\n${skillsIndex}` : ''
+  const contextSection = contextBlock?.trim() ? `\n\n${contextBlock}` : ''
+  return mergeProfiles(
+    {
+      systemPrompt: `${persona}\n\n${BUTLER_SESSION_ADDENDUM}${contextSection}${skillsSection}`,
+      systemPromptMode: 'replace',
+    },
+    walnutMcpProfile(),
+  )!
+}
+
+/**
  * Merge two profiles, `overlay` winning per field. MCP servers merge per key so
  * a config-driven pre-mount (walnutMcpProfile) composes with a caller's own
  * mounts instead of replacing them; allowedTools union, deduped.

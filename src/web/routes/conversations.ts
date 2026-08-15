@@ -119,8 +119,10 @@ export function createConversationsRouter(): Router {
       const agentId = validateAgentId(req.params.agentId as string)
       const cid = validateConversationId(req.params.cid as string)
       const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
-      if (agentId !== 'general' || resolveAgentEngineProvider(await getConfig()) !== 'claude-code') {
-        res.status(409).json({ error: 'Lane engine is not active for this agent' })
+      // Every console agent runs on the lane engine (per-agent persona via
+      // consoleAgentProfile) — the only gate left is the engine flag itself.
+      if (resolveAgentEngineProvider(await getConfig()) !== 'claude-code') {
+        res.status(409).json({ error: 'Lane engine is not active' })
         return
       }
       const { getOrCreateLaneSession } = await import('../../core/sessions/butler-lane.js')

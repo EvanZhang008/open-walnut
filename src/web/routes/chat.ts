@@ -784,14 +784,11 @@ export function registerChatRpc(): void {
     // ── Engine selection (config.agent.provider) ──
     // 'claude-code' delivers the turn into the conversation's lane session instead
     // of running the in-process loop. Resolved BEFORE the queue so the branch is a
-    // single decision per turn, and scoped to the butler ('general'): a custom
-    // console agent carries its OWN system prompt + tool filter, which the butler
-    // profile does not model — routing it through a butler lane would silently
-    // replace its persona. Those stay on the in-process loop until a per-agent
-    // profile exists.
+    // single decision per turn. EVERY console agent rides the lane engine: the
+    // butler gets butlerProfile, any other agent gets consoleAgentProfile (its
+    // own persona + the same session addendum) — see butler-lane.resolveLane.
     const { getConfig: getEngineConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
-    const useLaneEngine = agentId === 'general'
-      && resolveAgentEngineProvider(await getEngineConfig()) === 'claude-code'
+    const useLaneEngine = resolveAgentEngineProvider(await getEngineConfig()) === 'claude-code'
     /** Set by the lane branch so the client can subscribe to the session stream. */
     let laneSessionId: string | undefined
 

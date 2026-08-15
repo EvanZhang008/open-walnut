@@ -27,7 +27,7 @@ import { WALNUT_HOME } from '../../constants.js';
 import { bus, EventNames } from '../event-bus.js';
 import { getConfig } from '../config-manager.js';
 import { getSessionByLane, createSessionRecord } from '../session-tracker.js';
-import { butlerProfile } from './profiles.js';
+import { butlerProfile, consoleAgentProfile } from './profiles.js';
 import { buildSessionSkillsPrompt } from '../skill-loader.js';
 import { log } from '../../logging/index.js';
 
@@ -293,7 +293,20 @@ async function resolveLane(
   // Standing memory — Walnut-owned injection, engine-neutral (see
   // buildLaneMemoryContext). Rides the SAME profile as the persona.
   const memoryContext = await buildLaneMemoryContext().catch(() => '');
-  const profile = butlerProfile(config.user?.name ?? 'the user', skillsIndex, memoryContext);
+  // general = the butler persona; any other console agent gets ITS persona
+  // wrapped in the same session addendum (consoleAgentProfile) — one engine,
+  // one consistent chat feel, per-agent identity.
+  let profile;
+  if (agentId === 'general') {
+    profile = butlerProfile(config.user?.name ?? 'the user', skillsIndex, memoryContext);
+  } else {
+    const { getConsoleAgent } = await import('../agent-registry.js');
+    const agentDef = await getConsoleAgent(agentId);
+    if (!agentDef) throw new Error(`Console agent '${agentId}' not found`);
+    const { loadContextSources } = await import('../../agent/context-sources.js');
+    const contextBlock = await loadContextSources(agentDef, {}).catch(() => '');
+    profile = consoleAgentProfile(agentDef, skillsIndex, contextBlock);
+  }
   // Chat latency matters more than reasoning depth here. Without an explicit
   // effort the CLI inherits the user's global settings.json effortLevel (often
   // xhigh, tuned for coding sessions) — measured 100s+ for "what tasks do I have

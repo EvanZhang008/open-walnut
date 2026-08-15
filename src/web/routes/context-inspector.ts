@@ -48,22 +48,41 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
     // ── Lane engine (claude-code): show the SESSION's real context, not the
     // in-process assembly (which is not what the model sees on this engine). ──
     const engine = resolveAgentEngineProvider(config)
-    if (engine === 'claude-code' && (!agentId || agentId === 'general')) {
+    if (engine === 'claude-code') {
       const { butlerLaneKey, buildLaneMemoryContext, LANE_MEMORY_HEADER } = await import('../../core/sessions/butler-lane.js')
       const { getSessionByLane } = await import('../../core/session-tracker.js')
-      const { butlerProfile } = await import('../../core/sessions/profiles.js')
+      const { butlerProfile, consoleAgentProfile } = await import('../../core/sessions/profiles.js')
       const { buildSessionSkillsPrompt } = await import('../../core/skill-loader.js')
       const { getLastTurnTokens } = await import('../../core/token-truth.js')
 
-      const lane = butlerLaneKey(agentId ?? 'general', conversationId)
+      const effectiveAgentId = agentId ?? 'general'
+      const lane = butlerLaneKey(effectiveAgentId, conversationId)
       const record = await getSessionByLane(lane)
       // No lane yet (first message not sent) → show what the NEXT spawn will feed.
-      const profile = record?.profile
-        ?? butlerProfile(
-          config.user.name ?? 'the user',
-          await buildSessionSkillsPrompt().catch(() => ''),
-          await buildLaneMemoryContext().catch(() => ''),
-        )
+      // general = butler persona; other console agents = their own persona in the
+      // same session wrapper (mirrors butler-lane.resolveLane).
+      let fallbackProfile
+      if (!record?.profile) {
+        const skillsIdx = await buildSessionSkillsPrompt().catch(() => '')
+        if (effectiveAgentId === 'general') {
+          fallbackProfile = butlerProfile(
+            config.user.name ?? 'the user',
+            skillsIdx,
+            await buildLaneMemoryContext().catch(() => ''),
+          )
+        } else {
+          const { getConsoleAgent } = await import('../../core/agent-registry.js')
+          const agentDef = await getConsoleAgent(effectiveAgentId)
+          if (!agentDef) {
+            res.status(404).json({ error: `Console agent '${effectiveAgentId}' not found` })
+            return
+          }
+          const { loadContextSources } = await import('../../agent/context-sources.js')
+          const contextBlock = await loadContextSources(agentDef, {}).catch(() => '')
+          fallbackProfile = consoleAgentProfile(agentDef, skillsIdx, contextBlock)
+        }
+      }
+      const profile = record?.profile ?? fallbackProfile!
       const systemPrompt = profile.systemPrompt ?? ''
       const mcpServers = profile.mcpServers ?? {}
       const lastTurnTokens = getLastTurnTokens(conversationId) ?? 0

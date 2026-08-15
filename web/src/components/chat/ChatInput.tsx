@@ -82,7 +82,7 @@ interface ChatInputProps {
   onControlCommand?: (command: string) => void;
   /** localStorage key for persisting draft text. When set, input value is saved on change (debounced) and restored on mount. */
   draftKey?: string;
-  /** Toggle Execution / Plan mode (triggered by Shift+Tab) */
+  /** Shift+Tab handler — sessions use it to cycle the permission mode. */
   onToggleMode?: () => void;
   /** Root dir for "@" file mentions. When set, typing "@" opens a file picker. */
   mentionCwd?: string;
@@ -575,7 +575,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   }, [value, saveDraft]);
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    // Shift+Tab: toggle Execution / Plan mode
+    // Shift+Tab: caller-defined mode cycle (sessions: permission mode)
     if (e.key === 'Tab' && e.shiftKey) {
       e.preventDefault();
       onToggleMode?.();
