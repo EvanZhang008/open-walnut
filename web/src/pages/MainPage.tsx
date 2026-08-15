@@ -46,6 +46,7 @@ import { ContextInspectorPanel } from '@/components/context/ContextInspectorPane
 import { QuickAccessBar } from '@/components/chat/QuickAccessBar';
 import { AgentTabBar, slugifyAgentId } from '@/components/chat/AgentTabBar';
 import { useChatEngine } from '@/components/chat/EngineBadge';
+import { LaneComposerControls } from '@/components/chat/LaneComposerControls';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { useLaneSession } from '@/hooks/useLaneSession';
@@ -2736,6 +2737,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               prefillNonce={agentBuilderPrefillNonce}
               sessionCommands={quickStartPath ? quickStartCommands : undefined}
               searchSessionCommands={quickStartPath ? searchQuickStartCommands : undefined}
+              // Lane engine: same controls row a session composer has — mode
+              // pill + model pill (NO btw / notes, deliberately minimal).
+              controlsSlot={laneActive && lane.sessionId
+                ? <LaneComposerControls sessionId={lane.sessionId} />
+                : undefined}
               // Quick-start: "@" roots at the chosen cwd + host (like a session).
               // Plain main chat has no cwd, so "@" roots at "~" — backend expands it.
               // (?? undefined: QuickStartPath.host is string|null; coerce null→undefined.)
