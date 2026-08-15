@@ -118,10 +118,10 @@ test.describe('ModelPicker fallback registry', () => {
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
-    const options = picker.locator('.model-picker-option')
+    const options = picker.locator('.model-picker-col-models .model-picker-row')
     await expect(options).toHaveCount(7)
 
-    const names = picker.locator('.model-picker-option-name')
+    const names = picker.locator('.model-picker-col-models .model-picker-row-name')
     await expect(names.nth(0)).toHaveText('Opus')
     await expect(names.nth(1)).toHaveText('Opus 1M')
     await expect(names.nth(2)).toHaveText('Sonnet')
@@ -139,8 +139,7 @@ test.describe('ModelPicker fallback registry', () => {
 
     const [req] = await Promise.all([
       page.waitForRequest((r) => r.url().includes(`/api/sessions/${SESSION_ID}/model`) && r.method() === 'POST'),
-      picker.locator('.model-picker-option').filter({ hasText: 'Fastest' })
-        .locator('.model-picker-btn').click(),
+      picker.locator('.model-picker-col-models .model-picker-row', { hasText: 'Haiku' }).click(),
     ])
     expect(req.postDataJSON()).toEqual({ model: 'haiku' })
 
@@ -168,26 +167,25 @@ test.describe('ModelPicker CLI catalog', () => {
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
-    const options = picker.locator('.model-picker-option')
+    const options = picker.locator('.model-picker-col-models .model-picker-row')
     await expect(options).toHaveCount(3)
 
-    const names = picker.locator('.model-picker-option-name')
+    const names = picker.locator('.model-picker-col-models .model-picker-row-name')
     await expect(names.nth(0)).toHaveText('Default')
     await expect(names.nth(1)).toHaveText('Fable')
     await expect(names.nth(2)).toHaveText('Opus (1M context)')
 
-    // Active row = Fable (resolvedModel match on the non-default row).
-    const active = picker.locator('.model-picker-option-active')
+    // Active row = Fable (resolvedModel match on the non-default row), ✓-marked.
+    const active = picker.locator('.model-picker-row-active')
     await expect(active).toHaveCount(1)
-    await expect(active.locator('.model-picker-option-name')).toHaveText('Fable')
-    await expect(active.locator('.model-picker-option-badge')).toHaveText('Active')
+    await expect(active.locator('.model-picker-row-name')).toHaveText('Fable')
+    await expect(active.locator('.model-picker-row-check')).toHaveText('✓')
 
-    // Disabled row: greyed, badge "Restricted", no Switch button.
-    const disabled = picker.locator('.model-picker-option-disabled')
+    // Disabled row: greyed and not clickable.
+    const disabled = picker.locator('.model-picker-row-disabled')
     await expect(disabled).toHaveCount(1)
-    await expect(disabled.locator('.model-picker-option-name')).toHaveText('Opus (1M context)')
-    await expect(disabled.locator('.model-picker-btn')).toHaveCount(0)
-    await expect(disabled.locator('.model-picker-option-badge-disabled')).toHaveText('Restricted')
+    await expect(disabled.locator('.model-picker-row-name')).toHaveText('Opus (1M context)')
+    await expect(disabled).toBeDisabled()
 
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-cli-catalog.png') })
   })
@@ -200,10 +198,10 @@ test.describe('ModelPicker CLI catalog', () => {
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
-    const fableRow = picker.locator('.model-picker-option').filter({ hasText: 'Fast & capable' })
+    const fableRow = picker.locator('.model-picker-col-models .model-picker-row', { hasText: 'Fable' })
     const [req] = await Promise.all([
       page.waitForRequest((r) => r.url().includes(`/api/sessions/${SESSION_ID}/model`) && r.method() === 'POST'),
-      fableRow.locator('.model-picker-btn').click(),
+      fableRow.click(),
     ])
     // THE load-bearing assertion: the body carries the value, never an alias.
     expect(req.postDataJSON()).toEqual({ model: 'global.anthropic.claude-fable-5' })
@@ -220,12 +218,10 @@ test.describe('ModelPicker CLI catalog', () => {
 
     const synthetic = picker.locator('[data-testid="picker-out-of-catalog"]')
     await expect(synthetic).toBeVisible()
-    await expect(synthetic.locator('.model-picker-option-desc'))
-      .toContainText('not in this session\'s selectable catalog')
-    await expect(synthetic.locator('.model-picker-btn')).toHaveCount(0)
+    await expect(synthetic).toHaveAttribute('title', /not in this session's selectable catalog/)
 
     // No CATALOG row is active — the synthetic row is the only active-styled one.
-    const actives = picker.locator('.model-picker-option-active')
+    const actives = picker.locator('.model-picker-row-active')
     await expect(actives).toHaveCount(1)
 
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-out-of-catalog.png') })
@@ -245,7 +241,7 @@ test.describe('ModelPicker CLI catalog', () => {
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
-    const segs = picker.locator('.model-picker-effort-seg')
+    const segs = picker.locator('.model-picker-col-effort .model-picker-row')
     await expect(segs).toHaveCount(5)
     await expect(segs.nth(0)).toBeEnabled()   // low
     await expect(segs.nth(1)).toBeEnabled()   // medium
@@ -276,10 +272,10 @@ test.describe('ModelPicker CLI catalog', () => {
 
     await expect(picker.locator('.model-picker-current')).toContainText('Current: GPT-5.6 Sol')
     await expect(picker.locator('[data-testid="picker-live-strip"]')).toContainText('effort default (xhigh)')
-    const segs = picker.locator('.model-picker-effort-seg')
+    const segs = picker.locator('.model-picker-col-effort .model-picker-row')
     await expect(segs).toHaveCount(5)
     for (const seg of await segs.all()) await expect(seg).toBeEnabled()
-    await expect(segs.nth(3)).toHaveClass(/model-picker-effort-seg-active/)
+    await expect(segs.nth(3)).toHaveClass(/model-picker-row-active/)
 
     await page.screenshot({ path: '/tmp/walnut-effort/gpt-live-xhigh.png', fullPage: true })
 

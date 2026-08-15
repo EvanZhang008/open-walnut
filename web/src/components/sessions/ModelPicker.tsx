@@ -238,7 +238,6 @@ export function ModelPicker({
     return () => { cancelled = true; };
   }, [sessionId, hostCatalog, isCodexPane]);
   const models: SessionModelCatalogEntry[] = hostCatalog?.models ?? fetched?.models ?? sessionModelsAsCatalog();
-  const catalogIsLive = !!hostCatalog || fetched?.source === 'cli';
   // NOTE on switch failure: the panel closes the picker on Switch, so staleness
   // recovery lives SERVER-side — the /model route invalidates the session's
   // catalog cache on a read-back mismatch, which refetches + pushes the
@@ -388,41 +387,39 @@ export function ModelPicker({
         </span>
         <button className="model-picker-close" onClick={onClose} type="button">&times;</button>
       </div>
-      <div className="model-picker-options">
-        {onCodexSwitch ? (
-          codexLoading ? (
-            <div className="model-picker-status">Loading Codex models…</div>
-          ) : !codexModels || codexModels.length === 0 ? (
-            <div className="model-picker-status">No Codex models reported by this session.</div>
+      <div className="model-picker-columns">
+        <div className="model-picker-col model-picker-col-models" role="listbox" aria-label="Model">
+          <div className="model-picker-col-title">Model</div>
+          {onCodexSwitch ? (
+            codexLoading ? (
+              <div className="model-picker-status">Loading Codex models…</div>
+            ) : !codexModels || codexModels.length === 0 ? (
+              <div className="model-picker-status">No Codex models reported by this session.</div>
+            ) : (
+              codexModels.map((m) => {
+                const isActive = m.modelId === codexCurrent;
+                return (
+                  <button
+                    key={m.modelId}
+                    type="button"
+                    className={`model-picker-row${isActive ? ' model-picker-row-active' : ''}`}
+                    role="option"
+                    aria-selected={isActive}
+                    title={m.description ?? m.name}
+                    onClick={() => { if (!isActive) onCodexSwitch(m.modelId); }}
+                  >
+                    <span className="model-picker-row-check" aria-hidden>{isActive ? '✓' : ''}</span>
+                    <span className="model-picker-row-name">{m.name}</span>
+                  </button>
+                );
+              })
+            )
           ) : (
-            codexModels.map((m) => {
-              const isActive = m.modelId === codexCurrent;
-              return (
-                <div key={m.modelId} className={`model-picker-option${isActive ? ' model-picker-option-active' : ''}`}>
-                  <div className="model-picker-option-name">{m.name}</div>
-                  <div className="model-picker-option-desc">{m.description ?? ''}</div>
-                  {isActive ? (
-                    <div className="model-picker-option-badge">Active</div>
-                  ) : (
-                    <div className="model-picker-option-actions">
-                      <button
-                        className="btn btn-sm model-picker-btn"
-                        type="button"
-                        onClick={() => onCodexSwitch(m.modelId)}
-                      >
-                        Switch
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })
-          )
-        ) : (
-          <div className="model-picker-status">
-            Codex models come from ACP discovery when the session starts — the launch uses the Codex default.
-          </div>
-        )}
+            <div className="model-picker-status">
+              Codex models come from ACP discovery when the session starts — the launch uses the Codex default.
+            </div>
+          )}
+        </div>
       </div>
     </>
   );
@@ -563,118 +560,101 @@ export function ModelPicker({
         </div>
       )}
 
-      {/* Reasoning effort — a session-wide setting, decoupled from which model is picked.
-          Applied live via apply_flag_settings; active chip reflects the CLI's true value.
-          Hidden when the caller has no effort channel (a draft: the CLI's own
+      {/* Two flat columns: Model | Effort. One row per choice, click the row
+          to switch, ✓ marks the active one — no descriptions, no per-row
+          Switch buttons (design pick, 2026-08-15). The effort column hides
+          when the caller has no effort channel (a draft: the CLI's own
           settings decide at spawn). */}
-      {onEffortSwitch && (
-      <div className="model-picker-effort">
-        <div className="model-picker-effort-label">
-          Reasoning effort
-          {!effortSupported && (
-            <span className="model-picker-effort-hint" title="This model does not support effort levels">
-              {' '}— not supported by {activeRow?.displayName ?? shortModelLabel(liveModel)}
-            </span>
+      <div className="model-picker-columns">
+        <div className="model-picker-col model-picker-col-models" role="listbox" aria-label="Model">
+          <div className="model-picker-col-title">Model</div>
+          {/* Out-of-catalog live model: the session runs something no catalog
+              row claims (allowlist tightened mid-session, refusal fallback).
+              Shown truthfully as the active row — switchable nowhere. */}
+          {liveModel && !activeRow && !autoRow && (
+            <div className="model-picker-row model-picker-row-active" data-testid="picker-out-of-catalog" role="option" aria-selected="true"
+              title="Current model — not in this session's selectable catalog">
+              <span className="model-picker-row-check" aria-hidden>✓</span>
+              <span className="model-picker-row-name">{shortModelLabel(liveModel)}</span>
+            </div>
           )}
-        </div>
-        <div className="model-picker-effort-segments" role="group" aria-label="Reasoning effort">
-          {EFFORTS.map((e) => {
-            const disabled = !effortSupported
-              || (e.id === 'xhigh' && !xhighSupported)
-              || (e.id === 'max' && !maxSupported);
-            const active = effortSupported && e.id === activeEffort;
-            const requestedNotApplied = effortMismatch && e.id === requestedEffort;
-            const title = e.id === 'xhigh' && !xhighSupported
-              ? 'X-High is only supported by select models (Fable 5, Opus 4.7/4.8, Sonnet 5) — others fall back to High'
-              : e.id === 'max' && !maxSupported
-              ? 'Max is only supported by select models (Fable 5, Opus 4.6+, Sonnet 4.6) — others fall back to High'
-              : requestedNotApplied
-              ? 'You requested this level but the CLI is not using it (env override or downgrade)'
-              : e.description;
+          {autoRow && (
+            <button
+              type="button"
+              className={`model-picker-row${autoRow.active ? ' model-picker-row-active' : ''}`}
+              data-testid="picker-auto-row"
+              role="option"
+              aria-selected={autoRow.active}
+              title="No --model flag — the CLI/config default decides"
+              onClick={() => { if (!autoRow.active) onSwitch(''); }}
+            >
+              <span className="model-picker-row-check" aria-hidden>{autoRow.active ? '✓' : ''}</span>
+              <span className="model-picker-row-name">{autoRow.resolvedLabel ? `Auto (${autoRow.resolvedLabel})` : 'Auto'}</span>
+            </button>
+          )}
+          {models.filter((m) => !(autoRow && m.value === 'default')).map((m) => {
+            const isActive = activeRow?.value === m.value;
+            const isRequestedNotApplied = modelMismatch && requestedRow?.value === m.value;
             return (
               <button
-                key={e.id}
+                key={m.value}
                 type="button"
-                className={`model-picker-effort-seg${active ? ' model-picker-effort-seg-active' : ''}${requestedNotApplied ? ' model-picker-effort-seg-requested' : ''}`}
-                disabled={disabled}
-                title={title}
-                onClick={() => { if (!disabled && e.id !== activeEffort) onEffortSwitch(e.id); }}
+                className={`model-picker-row${isActive ? ' model-picker-row-active' : ''}${m.disabled ? ' model-picker-row-disabled' : ''}`}
+                role="option"
+                aria-selected={isActive}
+                disabled={m.disabled}
+                title={m.disabled
+                  ? 'Restricted by your organization\'s settings'
+                  : isRequestedNotApplied
+                  ? 'You requested this model but the CLI is not using it'
+                  : m.description ?? m.displayName}
+                onClick={() => { if (!isActive && !m.disabled) onSwitch(m.value); }}
               >
-                {e.label}{requestedNotApplied ? ' ⚠' : ''}
+                <span className="model-picker-row-check" aria-hidden>{isActive ? '✓' : ''}</span>
+                <span className="model-picker-row-name">
+                  {m.displayName}
+                  {isRequestedNotApplied && <span className="model-picker-option-requested"> ⚠</span>}
+                </span>
               </button>
             );
           })}
         </div>
-      </div>
-      )}
-
-      <div className="model-picker-options">
-        {/* Out-of-catalog live model: the session runs something no catalog row
-            claims (allowlist tightened mid-session, refusal fallback, resumed
-            onto a now-restricted model). Show it truthfully — selected nowhere,
-            switchable nowhere — instead of pretending a row is active. */}
-        {liveModel && !activeRow && !autoRow && (
-          <div className="model-picker-option model-picker-option-active" data-testid="picker-out-of-catalog">
-            <div className="model-picker-option-name">{shortModelLabel(liveModel)}</div>
-            <div className="model-picker-option-desc">Current model — not in this session's selectable catalog</div>
-            <div className="model-picker-option-badge">Active</div>
-          </div>
-        )}
-        {autoRow && (
-          <div className={`model-picker-option${autoRow.active ? ' model-picker-option-active' : ''}`} data-testid="picker-auto-row">
-            <div className="model-picker-option-name">{autoRow.resolvedLabel ? `Auto (${autoRow.resolvedLabel})` : 'Auto'}</div>
-            <div className="model-picker-option-desc">No --model flag — the CLI/config default decides</div>
-            {autoRow.active ? (
-              <div className="model-picker-option-badge">Active</div>
-            ) : (
-              <div className="model-picker-option-actions">
-                <button className="btn btn-sm model-picker-btn" type="button" onClick={() => onSwitch('')}>
-                  Switch
+        {onEffortSwitch && (
+          <div className="model-picker-col model-picker-col-effort" role="listbox" aria-label="Reasoning effort">
+            <div className="model-picker-col-title">Effort</div>
+            {EFFORTS.map((e) => {
+              const disabled = !effortSupported
+                || (e.id === 'xhigh' && !xhighSupported)
+                || (e.id === 'max' && !maxSupported);
+              const active = effortSupported && e.id === activeEffort;
+              const requestedNotApplied = effortMismatch && e.id === requestedEffort;
+              const title = !effortSupported
+                ? `Not supported by ${activeRow?.displayName ?? shortModelLabel(liveModel)}`
+                : e.id === 'xhigh' && !xhighSupported
+                ? 'X-High needs Fable 5 / Opus 4.7+ / Sonnet 5'
+                : e.id === 'max' && !maxSupported
+                ? 'Max needs Fable 5 / Opus 4.6+ / Sonnet 4.6'
+                : requestedNotApplied
+                ? 'You requested this level but the CLI is not using it'
+                : e.description;
+              return (
+                <button
+                  key={e.id}
+                  type="button"
+                  className={`model-picker-row${active ? ' model-picker-row-active' : ''}${requestedNotApplied ? ' model-picker-row-requested' : ''}`}
+                  role="option"
+                  aria-selected={active}
+                  disabled={disabled}
+                  title={title}
+                  onClick={() => { if (!disabled && e.id !== activeEffort) onEffortSwitch(e.id); }}
+                >
+                  <span className="model-picker-row-check" aria-hidden>{active ? '✓' : ''}</span>
+                  <span className="model-picker-row-name">{e.label}{requestedNotApplied ? ' ⚠' : ''}</span>
                 </button>
-              </div>
-            )}
+              );
+            })}
           </div>
         )}
-        {models.filter((m) => !(autoRow && m.value === 'default')).map((m) => {
-          const isActive = activeRow?.value === m.value;
-          const isRequestedNotApplied = modelMismatch && requestedRow?.value === m.value;
-          return (
-            <div
-              key={m.value}
-              className={`model-picker-option${isActive ? ' model-picker-option-active' : ''}${m.disabled ? ' model-picker-option-disabled' : ''}`}
-            >
-              <div className="model-picker-option-name">
-                {m.displayName}
-                {isRequestedNotApplied && (
-                  <span className="model-picker-option-requested" title="You requested this model but the CLI is not using it"> ⚠ requested</span>
-                )}
-              </div>
-              <div className="model-picker-option-desc">{m.description ?? ''}</div>
-              {!isActive && !m.disabled && (
-                <div className="model-picker-option-actions">
-                  <button
-                    className="btn btn-sm model-picker-btn"
-                    onClick={() => onSwitch(m.value)}
-                    type="button"
-                    title={catalogIsLive
-                      ? 'Applied live — the next turn uses this model (no restart)'
-                      : 'Applied live via the legacy alias path — the next turn uses this model'}
-                  >
-                    Switch
-                  </button>
-                </div>
-              )}
-              {!isActive && m.disabled && (
-                <div className="model-picker-option-badge model-picker-option-badge-disabled" title="Restricted by your organization's settings — visible but not selectable">
-                  Restricted
-                </div>
-              )}
-              {isActive && (
-                <div className="model-picker-option-badge">Active</div>
-              )}
-            </div>
-          );
-        })}
       </div>
 
       {/* Custom model ID — same escape hatch as the terminal's `/model <id>`.

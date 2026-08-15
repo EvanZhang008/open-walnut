@@ -16617,68 +16617,16 @@ a.task-kebab-info:hover {
 }
 
 /* ── Reasoning-effort segmented control ── */
-.model-picker-effort {
-  margin-bottom: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.2));
-}
 
-.model-picker-effort-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--fg-muted);
-  margin-bottom: 6px;
-}
 
-.model-picker-effort-hint {
-  font-weight: 400;
-  font-style: italic;
-}
 
-.model-picker-effort-segments {
-  display: flex;
-  gap: 0;
-  border: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.3));
-  border-radius: 6px;
-  overflow: hidden;
-  width: fit-content;
-}
 
-.model-picker-effort-seg {
-  background: none;
-  border: none;
-  border-right: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.3));
-  color: var(--fg-primary);
-  font-size: 12px;
-  padding: 5px 14px;
-  cursor: pointer;
-  transition: background 0.12s ease;
-}
 
-.model-picker-effort-seg:last-child {
-  border-right: none;
-}
 
-.model-picker-effort-seg:hover:not(:disabled):not(.model-picker-effort-seg-active) {
-  background: var(--bg-hover, rgba(128, 128, 128, 0.12));
-}
 
-.model-picker-effort-seg-active {
-  background: var(--accent, #0a84ff);
-  color: #fff;
-  font-weight: 600;
-}
 
-.model-picker-effort-seg:disabled {
-  color: var(--fg-disabled, rgba(128, 128, 128, 0.45));
-  cursor: not-allowed;
-}
 
 /* Requested-but-not-applied effort (CLI override/downgrade) — amber outline */
-.model-picker-effort-seg-requested {
-  border: 1px solid var(--warning, #e6a700);
-  color: var(--warning, #e6a700);
-}
 
 /* Live-truth strip: CLI's actual runtime settings pulled via get_settings on open */
 .model-picker-live {
@@ -16779,10 +16727,80 @@ a.task-kebab-info:hover {
   font-weight: 600;
 }
 
-.model-picker-options {
+/* Two flat columns: Model | Effort (design pick 2026-08-15). Rows are plain
+   list entries — click to switch, check marks the active one. */
+.model-picker-columns {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  align-items: stretch;
+}
+
+.model-picker-col {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 0;
+}
+
+.model-picker-col-models {
+  flex: 1.5;
+}
+
+.model-picker-col-effort {
+  border-left: 1px solid var(--border);
+  margin-left: 10px;
+  padding-left: 10px;
+}
+
+.model-picker-col-title {
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 4px 8px 3px;
+}
+
+.model-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--fg-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-picker-row:hover:not(:disabled) {
+  background: var(--bg-hover, rgba(127, 127, 127, 0.12));
+}
+
+.model-picker-row-active {
+  font-weight: 600;
+}
+
+.model-picker-row:disabled,
+.model-picker-row-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.model-picker-row-check {
+  width: 14px;
+  flex: none;
+  color: var(--accent);
+  font-weight: 700;
+  text-align: center;
+}
+
+.model-picker-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Custom model ID row — terminal `/model <id>` parity */
@@ -16816,46 +16834,11 @@ a.task-kebab-info:hover {
   font-size: 11.5px;
 }
 
-.model-picker-option {
-  flex: 1 1 calc(33.3% - 6px);
-  min-width: 100px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 10px 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--card-bg);
-  transition: border-color 0.15s, background 0.15s;
-}
 
-.model-picker-option:hover {
-  border-color: var(--accent);
-  background: var(--bg-secondary);
-}
 
-.model-picker-option-active {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-}
 
-.model-picker-option-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--fg-primary);
-}
 
-.model-picker-option-desc {
-  font-size: 11px;
-  color: var(--fg-muted);
-}
 
-.model-picker-option-actions {
-  display: flex;
-  gap: 4px;
-  margin-top: 4px;
-}
 
 .model-picker .model-picker-btn {
   font-size: 11px;
@@ -16885,21 +16868,9 @@ a.task-kebab-info:hover {
   background: var(--bg-secondary);
 }
 
-.model-picker-option-badge {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--accent);
-  margin-top: 4px;
-}
 
 /* Catalog rows the CLI marks disabled (org-restricted): visible, greyed, no Switch. */
-.model-picker-option-disabled {
-  opacity: 0.45;
-}
 
-.model-picker-option-badge-disabled {
-  color: var(--fg-muted, var(--fg-secondary));
-}
 
 /* ===== Hooks Page ===== */
 

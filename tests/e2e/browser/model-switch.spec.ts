@@ -110,12 +110,13 @@ test.describe('Model Switch UI', () => {
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
-    // Fallback registry: 7 model options (incl. 1M + Fable variants)
-    const options = picker.locator('.model-picker-option')
+    // Fallback registry: 7 model rows (incl. 1M + Fable variants) in the
+    // flat two-column list (design pick 2026-08-15: no cards, no per-row
+    // Switch buttons — the row itself is the switch).
+    const options = picker.locator('.model-picker-col-models .model-picker-row')
     await expect(options).toHaveCount(7)
 
-    // Check option labels
-    const names = picker.locator('.model-picker-option-name')
+    const names = picker.locator('.model-picker-col-models .model-picker-row-name')
     await expect(names.nth(0)).toHaveText('Opus')
     await expect(names.nth(1)).toHaveText('Opus 1M')
     await expect(names.nth(2)).toHaveText('Sonnet')
@@ -124,27 +125,19 @@ test.describe('Model Switch UI', () => {
     await expect(names.nth(5)).toHaveText('Fable')
     await expect(names.nth(6)).toHaveText('Fable 1M')
 
-    // Check option descriptions
-    const descs = picker.locator('.model-picker-option-desc')
-    await expect(descs.nth(0)).toHaveText('Most capable')
-    await expect(descs.nth(1)).toHaveText('1M context window')
-    await expect(descs.nth(2)).toHaveText('Balanced')
-    await expect(descs.nth(4)).toHaveText('Fastest')
-
-    // Non-active options have a single "Switch" button (applied live, no
-    // Now/Next-turn split anymore).
-    const sonnetOption = picker.locator('.model-picker-option').filter({ hasText: 'Balanced' })
-    await expect(sonnetOption.locator('.model-picker-btn')).toBeVisible()
-    await expect(sonnetOption.locator('.model-picker-btn')).toHaveText('Switch')
+    // The description rides the row tooltip now, not a visible line.
+    await expect(names.nth(2)).toHaveText('Sonnet')
+    const sonnetRow = picker.locator('.model-picker-col-models .model-picker-row', { hasText: 'Sonnet' }).first()
+    await expect(sonnetRow).toHaveAttribute('title', /Balanced/)
   })
 
   test('selecting model closes picker', async ({ page }) => {
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
-    // Click "Switch" on the plain Sonnet option (filter by "Balanced" description)
-    const sonnetOption = picker.locator('.model-picker-option').filter({ hasText: 'Balanced' })
-    await sonnetOption.locator('.model-picker-btn').click()
+    // Click the plain Sonnet row (exact name — 'Sonnet 1M' is a separate row)
+    await picker.locator('.model-picker-col-models .model-picker-row')
+      .filter({ has: page.locator('.model-picker-row-name', { hasText: /^Sonnet$/ }) }).click()
 
     // ModelPicker should close
     await expect(picker).toBeHidden({ timeout: 3000 })

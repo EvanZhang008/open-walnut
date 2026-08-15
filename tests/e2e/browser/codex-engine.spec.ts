@@ -287,8 +287,7 @@ test('Codex model picker switches models on Homepage', async ({ page }) => {
   const homeSwitchResponse = page.waitForResponse((candidate) =>
     candidate.request().method() === 'POST'
       && new URL(candidate.url()).pathname === `/api/sessions/${sessionId}/model`)
-  await homeMenu.locator('.model-picker-option', { hasText: 'Mock GPT Fast' })
-    .locator('.model-picker-btn').click()
+  await homeMenu.locator('.model-picker-row', { hasText: 'Mock GPT Fast' }).click()
   expect((await homeSwitchResponse).status()).toBe(200)
   const switchedPill = panel.getByRole('button', { name: /GPT Fast/ })
   await expect(switchedPill).toBeVisible()
@@ -297,8 +296,8 @@ test('Codex model picker switches models on Homepage', async ({ page }) => {
   await switchedPill.click()
   const reopenedMenu = panel.locator('.model-picker')
   await expect(reopenedMenu).toBeVisible()
-  await expect(reopenedMenu.locator('.model-picker-option', { hasText: 'Mock GPT Fast' }))
-    .toHaveClass(/model-picker-option-active/)
+  await expect(reopenedMenu.locator('.model-picker-row', { hasText: 'Mock GPT Fast' }))
+    .toHaveClass(/model-picker-row-active/)
   await page.keyboard.press('Escape')
 
   await fs.mkdir(MODEL_PICKER_SCREENSHOT_DIR, { recursive: true })
