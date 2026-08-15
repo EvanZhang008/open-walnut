@@ -91,6 +91,11 @@ async function selectedName(explorer: Locator): Promise<string | null> {
 }
 
 test.beforeEach(async ({ page }) => {
+  // Pin the Files tree EXPANDED before first render (the collapse pref key
+  // syncs via ui-prefs on the shared fixture server; see tree-collapse spec).
+  await page.addInitScript(() => {
+    try { localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0') } catch { /* off */ }
+  })
   // These tests SHARE a browser profile, and the feature under test persists to
   // localStorage — so without this every test but the first would inherit the
   // previous one's stack ("nothing visited yet" would be false, and re-clicking a

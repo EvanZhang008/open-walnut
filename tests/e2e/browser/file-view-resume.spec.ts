@@ -58,6 +58,13 @@ function mdPreview(explorer: ReturnType<Page['locator']>) {
 }
 
 test.beforeEach(async ({ page }) => {
+  // Pin the Files tree EXPANDED before first render: the collapse pref key
+  // syncs to the SHARED fixture server (ui-prefs), so a parallel run of
+  // file-explorer-tree-collapse.spec.ts would otherwise boot this page with
+  // no tree at all. A locally-written value wins the boot merge.
+  await page.addInitScript(() => {
+    try { localStorage.setItem('open-walnut-file-explorer-tree-collapsed', '0') } catch { /* off */ }
+  })
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 })

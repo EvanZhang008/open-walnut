@@ -15,7 +15,7 @@ import { computeExpandGaps, oldSourceLineCount, UNFOLD_CHUNK } from '@/component
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { SelectionAskPill } from '@/components/common/SelectionAskPill';
-import { ICON_REFRESH, ICON_WARNING } from '@/components/common/Icons';
+import { ICON_REFRESH, ICON_WARNING, ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
 import { log } from '@/utils/log';
 
 export type DiffViewType = 'split' | 'unified';
@@ -1287,15 +1287,6 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   return (
     <div className="session-diff-view" ref={containerRef} onMouseUp={handleMouseUp}>
       <div className="session-diff-toolbar">
-        <button
-          className="sfe-btn sfe-tree-toggle"
-          onClick={() => setTreeCollapsed((c) => !c)}
-          title={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
-          aria-label={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
-          aria-expanded={!treeCollapsed}
-        >
-          {treeCollapsed ? '☰' : '⟨'}
-        </button>
         <span className="session-diff-toolbar-title">
           {empty ? 'No file changes' : `${data!.fileCount} file${data!.fileCount === 1 ? '' : 's'} changed`}
           {refreshingBg && <span className="session-diff-refreshing" title="List served from cache — re-scanning in the background">↻</span>}
@@ -1381,9 +1372,31 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         </div>
       ) : (
         <div className="session-diff-body">
+          {/* Collapsed: slim click-to-restore rail — same control as the Files
+              tree and the chat column (design pick 2026-08-13, option 9). */}
+          {treeCollapsed && (
+            <button
+              type="button"
+              className="pane-collapsed-rail pane-rail-left"
+              onClick={() => setTreeCollapsed(false)}
+              title="Show file tree"
+              aria-label="Show file tree"
+              aria-expanded={false}
+            >{ICON_CHEVRON_RIGHT}</button>
+          )}
           {!treeCollapsed && (
             <>
               <div className="session-diff-tree" ref={tree.panelRef} style={{ width: tree.width }}>
+                <div className="pane-collapse-anchor">
+                  <button
+                    type="button"
+                    className="pane-collapse-btn"
+                    onClick={() => setTreeCollapsed(true)}
+                    title="Hide file tree"
+                    aria-label="Hide file tree"
+                    aria-expanded
+                  >{ICON_CHEVRON_LEFT}</button>
+                </div>
                 {data!.anyPartial && (
                   <div className="session-diff-partial-note" title="Some files changed on disk after the session edited them — those diffs are reconstructed best-effort.">
                     {ICON_WARNING} some diffs reconstructed

@@ -18582,16 +18582,64 @@ td.usage-share-col {
 .sfe-btn:disabled:hover { background: var(--bg); }
 .sfe-btn:disabled:active { transform: none; }
 
-/* Hide/show the tree pane — a toolbar button (☰/⟨), shared by the Files tab
-   and the Changed tab so both trees collapse with the identical control. */
-.sfe-tree-toggle {
-  flex-shrink: 0;
-  padding: 1px 7px;
-  font-size: 13px;
-  line-height: 1.4;
-  color: var(--fg-muted);
+/* ── Pane collapse (shared): Files tree, Changed tree, split chat column ──
+   Design pick 2026-08-13 (option 9): slim + quiet.
+   Expanded  → an 18px translucent chevron pinned to the pane's inner corner.
+   Collapsed → a 16px bare rail; a chevron fades in on hover. */
+.pane-collapsed-rail {
+  flex: 0 0 16px;
+  border: none;
+  padding: 0;
+  background: var(--bg-secondary, var(--card-bg));
+  cursor: pointer;
+  color: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
 }
-.sfe-tree-toggle:hover { color: var(--fg); }
+.pane-rail-left { border-right: 1px solid var(--border); }
+.pane-rail-right { border-left: 1px solid var(--border); }
+.pane-collapsed-rail:hover {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary, var(--card-bg)));
+  color: var(--accent);
+}
+.pane-collapsed-rail svg { flex: none; }
+
+/* Zero-height sticky anchor: the tree pane is its own scroller, so the
+   chevron needs this to stay pinned while rows scroll under it. */
+.pane-collapse-anchor {
+  position: sticky;
+  top: 0;
+  height: 0;
+  z-index: 5;
+}
+.pane-collapse-btn {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: color-mix(in srgb, var(--fg-muted) 55%, transparent);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.pane-collapse-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--fg);
+}
+/* Right-side pane (chat column): chevron sits top-LEFT, pointing right. */
+.pane-collapse-btn-right {
+  right: auto;
+  left: 3px;
+}
 
 /* Back / Forward pair: one segmented control, like a browser's. */
 .sfe-nav-group {
@@ -24046,41 +24094,10 @@ a.file-link:hover {
 }
 .session-panel-chat-resize:hover::after { opacity: 0.6; }
 
-/* Collapse chat → a thin rail with a 💬 button to restore it. */
-.session-chat-collapsed-rail {
-  flex: 0 0 32px;
-  border: none;
-  border-left: 1px solid var(--border);
-  background: var(--card-bg);
-  cursor: pointer;
-  font-size: 16px;
-  color: var(--fg-muted);
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding-top: 10px;
-}
-.session-chat-collapsed-rail:hover { background: var(--bg-tertiary); color: var(--fg); }
-
-/* The "collapse chat" chevron, floating top-right of the chat column. */
-.session-chat-collapse-btn {
-  position: absolute;
-  top: 4px;
-  right: 6px;
-  z-index: 5;
-  border: 1px solid var(--border);
-  background: var(--card-bg);
-  color: var(--fg-muted);
-  border-radius: 5px;
-  width: 22px;
-  height: 22px;
-  font-size: 12px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.session-chat-collapse-btn:hover { color: var(--fg); background: var(--bg-tertiary); }
+/* Chat collapse rail + chevron: visuals come from the shared .pane-collapsed-rail
+   / .pane-collapse-btn classes (see "Pane collapse (shared)"). Only the chat
+   column's stacking context needs pinning here. */
+.session-chat-collapse-btn { z-index: 5; }
 /* When closed, the chat column is a transparent wrapper. */
 .session-panel-chat-col {
   display: contents;

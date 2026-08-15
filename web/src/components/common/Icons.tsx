@@ -33,6 +33,10 @@ export const ICON_EXPAND = <svg width="14" height="14" viewBox="0 0 16 16" fill=
 // rendered as a lightning-zigzag; this is the standard exit-fullscreen glyph.
 export const ICON_COLLAPSE = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="13 7 9 7 9 3"/><polyline points="3 9 7 9 7 13"/><line x1="9" y1="7" x2="14" y2="2"/><line x1="2" y1="14" x2="7" y2="9"/></svg>;
 export const ICON_REFRESH = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><path d="M1.5 8a6.5 6.5 0 0111.3-4.4"/><polyline points="13 1 13 4.5 9.5 4.5"/><path d="M14.5 8a6.5 6.5 0 01-11.3 4.4"/><polyline points="3 15 3 11.5 6.5 11.5"/></svg>;
+// Thin chevrons for the pane collapse rails (SVG, not a text glyph — ⟨ read as
+// a code angle-bracket and font fallback made it inconsistent).
+export const ICON_CHEVRON_LEFT = <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="10 3 5.5 8 10 13"/></svg>;
+export const ICON_CHEVRON_RIGHT = <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 3 10.5 8 6 13"/></svg>;
 export const ICON_SEARCH = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5"/></svg>;
 export const ICON_LOCATE = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="3.5"/><line x1="8" y1="1" x2="8" y2="3.5"/><line x1="8" y1="12.5" x2="8" y2="15"/><line x1="1" y1="8" x2="3.5" y2="8"/><line x1="12.5" y1="8" x2="15" y2="8"/></svg>;
 export const ICON_CHAT = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M2 2h12v9H5l-3 3V2z"/></svg>;

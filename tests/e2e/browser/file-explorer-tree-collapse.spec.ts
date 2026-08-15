@@ -83,12 +83,13 @@ test('tree toggle hides the tree, preview takes full width, toggle restores', as
   expect(wideAfter).toBeGreaterThan(wideBefore + 100)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/step1-collapsed.png` })
 
-  // Restore: the toggle flips its glyph/label and brings the tree back.
+  // Restore: the collapsed rail carries an SVG chevron (not a text glyph —
+  // ⟨ was misread as a code angle-bracket) and brings the tree back.
   const showBtn = explorer.getByRole('button', { name: 'Show file tree' })
-  await expect(showBtn).toHaveText('☰')
+  await expect(showBtn.locator('svg')).toHaveCount(1)
   await showBtn.click()
   await expect(tree).toBeVisible()
-  await expect(explorer.getByRole('button', { name: 'Hide file tree' })).toHaveText('⟨')
+  await expect(explorer.getByRole('button', { name: 'Hide file tree' }).locator('svg')).toHaveCount(1)
   await expect(explorer.locator('.sfe-name', { hasText: 'incident-report.md' })).toBeVisible()
   await page.screenshot({ path: `${SCREENSHOT_DIR}/step2-restored.png` })
 })

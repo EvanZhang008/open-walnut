@@ -9,7 +9,7 @@ import { SessionTerminal } from './SessionTerminal';
 import { SessionDiffView } from './SessionDiffView';
 import { buildSelectionPrefill, displayPathForPrefill } from './diffPrefill';
 import type { SessionSplitView } from './sessionSplitView';
-import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB } from '../common/Icons';
+import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from '../common/Icons';
 import { openPopout } from '@/popout/openPopout';
 import { UserMessagesSummary } from './UserMessagesSummary';
 // PlanPreviewSection replaced by inline plan popover in meta bar
@@ -1391,10 +1391,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
           {splitOpen && (
             chatCollapsed ? (
               <button
-                className="session-chat-collapsed-rail"
+                className="pane-collapsed-rail pane-rail-right session-chat-collapsed-rail"
                 onClick={() => setChatCollapsed(false)}
                 title="Show chat"
-              >💬</button>
+                aria-label="Show chat"
+                aria-expanded={false}
+              >{ICON_CHEVRON_LEFT}</button>
             ) : (
               <div className="session-panel-chat-resize" {...chatPanel.handleProps} title="Drag to resize chat" />
             )
@@ -1406,10 +1408,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
           >
             {splitOpen && !chatCollapsed && (
               <button
-                className="session-chat-collapse-btn"
+                className="pane-collapse-btn pane-collapse-btn-right session-chat-collapse-btn"
                 onClick={() => setChatCollapsed(true)}
                 title="Collapse chat"
-              >⟩</button>
+                aria-label="Collapse chat"
+                aria-expanded
+              >{ICON_CHEVRON_RIGHT}</button>
             )}
         <div className="session-panel-body" ref={bodyRef}>
           <SessionChatHistory
