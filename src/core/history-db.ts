@@ -1,5 +1,5 @@
 /**
- * Conversation history store — SQLite FTS5 over every butler conversation.
+ * Conversation history store — SQLite FTS5 over every Personal AI conversation.
  *
  * SCOPE: conversations ONLY (chat-history entries across all agents). Project
  * history / skill support files are md searched via QMD (memory-search.ts) —

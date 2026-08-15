@@ -195,7 +195,7 @@ async function loadJournalRecent(budget: number): Promise<string> {
 
 /**
  * Load current working memory (real-time scratchpad) for injection into a subagent.
- * A subagent sees the General agent's MAIN conversation scratchpad — the butler's
+ * A subagent sees the General agent's MAIN conversation scratchpad — the Personal AI's
  * current working state. Resolving main explicitly keeps this working after the
  * global single-file working memory is migrated to per-conversation files.
  */

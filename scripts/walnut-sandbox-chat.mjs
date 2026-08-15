@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Send ONE message to a sandbox Walnut butler over the WebSocket RPC and print its reply.
- * Proves a credential works end-to-end (butler actually answers), not just that auth resolves.
+ * Send ONE message to a sandbox Walnut Personal AI over the WebSocket RPC and print its reply.
+ * Proves a credential works end-to-end (Personal AI actually answers), not just that auth resolves.
  *
  * The WS broadcast envelope is { type:'event', name:'agent:...', data:{...}, seq } — we
  * accumulate `agent:text-delta` { delta } and resolve on `agent:response` { text }.

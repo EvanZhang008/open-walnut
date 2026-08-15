@@ -29,7 +29,7 @@ function baseOpts(command: string, over: Partial<AdapterCallOptions> = {}): Adap
     providerConfig: { api: 'claude-cli', claude_cli_command: command },
     model: 'default',
     maxTokens: 4096,
-    system: 'You are the butler.',
+    system: 'You are the Personal AI.',
     messages: [{ role: 'user', content: 'say hi' }],
     ...over,
   };
@@ -170,7 +170,7 @@ printf '%s\\t%s\\n' "$ARGS" "$IN" >> ${JSON.stringify(logFile)}
 echo '{"type":"result","subtype":"success","result":"{\\"reply\\": \\"ok\\"}"}'
 `);
     const adapter = new ClaudeCliAdapter();
-    const system = 'You are the butler.';
+    const system = 'You are the Personal AI.';
     const turn1: AdapterCallOptions['messages'] = [{ role: 'user', content: 'FIRST_MSG' }];
     await adapter.sendMessage(baseOpts(cmd, { system, messages: turn1, tools: TOOLS }));
 
@@ -229,7 +229,7 @@ case "$*" in
 esac
 `);
     const adapter = new ClaudeCliAdapter();
-    const system = 'butler';
+    const system = 'Personal AI';
     const t1: AdapterCallOptions['messages'] = [{ role: 'user', content: 'hello world' }];
     await adapter.sendMessage(baseOpts(cmd, { system, messages: t1, tools: TOOLS }));
     const t2: AdapterCallOptions['messages'] = [...t1, { role: 'assistant', content: 'hi' }, { role: 'user', content: 'again' }];

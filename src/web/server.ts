@@ -96,7 +96,7 @@ import { sessionLaunchV1Router } from './routes/session-launch-v1.js'
 import { sessionControlV1Router } from './routes/session-control-v1.js'
 import { sessionLifecycleV1Router } from './routes/session-lifecycle-v1.js'
 import { taskV1Router } from './routes/task-v1.js'
-import { butlerV1Router } from './routes/butler-v1.js'
+import { personalAiV1Router } from './routes/personal-ai-v1.js'
 import { searchMemoryV1Router } from './routes/search-memory-v1.js'
 import { eventsV1Router, startMobileEventsFeed, stopMobileEventsFeed } from './routes/events-v1.js'
 import { sttV1Router, sttPayloadTooLargeHandler } from './routes/stt-v1.js'
@@ -155,7 +155,7 @@ async function resolveTaskRef(taskId: string): Promise<string> {
  * failure (unreadable config, unknown provider string) degrades to `false` — the
  * in-process loop — so a broken config can never leave a producer with no engine.
  */
-async function useButlerLaneEngine(agentId: string): Promise<boolean> {
+async function usePersonalAiLaneEngine(agentId: string): Promise<boolean> {
   if (agentId !== 'general') return false
   try {
     const { getConfig, resolveAgentEngineProvider } = await import('../core/config-manager.js')
@@ -455,7 +455,7 @@ function checkClaudeCliAvailable(): boolean {
 /** Resolve provider readiness + where the Bedrock credential came from.
  *  Bedrock detection delegates to the unified credential resolver (config →
  *  ~/.claude/settings.json env → process.env → ~/.aws) so the Settings page,
- *  the butler, and onboarding all agree on one priority chain. Non-Bedrock
+ *  the Personal AI, and onboarding all agree on one priority chain. Non-Bedrock
  *  providers count as ready when they carry an explicit key. */
 async function resolveCredentialHealth(): Promise<{
   hasReadyProvider: boolean
@@ -789,8 +789,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // Hoisted above the engine branch so both engines send the byte-identical prompt.
         const cronPrompt = `[Scheduled Job "${jobName}"] ${prompt}`
         try {
-          // ── Engine branch: butler lane (config.agent.provider='claude-code') ──
-          if (await useButlerLaneEngine('general')) {
+          // ── Engine branch: Personal AI lane (config.agent.provider='claude-code') ──
+          if (await usePersonalAiLaneEngine('general')) {
             const laneTs = new Date().toISOString()
             // The in-process path persists the prompt as part of result.newMessages;
             // here the model context lives in the CLI's own transcript, so only the
@@ -1080,9 +1080,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Task + focus endpoints (additive, Wave 1): detail/delete/star/notes/
   // reorder/batch + pin/tier — A-class (local store; replica rides the outbox).
   app.use('/api/v1', taskV1Router)
-  // Butler conversation management (additive, Wave 1): rename/delete/stop/
-  // answer — A-class (the replica runs its own butler).
-  app.use('/api/v1', butlerV1Router)
+  // Personal AI conversation management (additive, Wave 1): rename/delete/stop/
+  // answer — A-class (the replica runs its own Personal AI).
+  app.use('/api/v1', personalAiV1Router)
   // Search/memory/notifications/favorites/notes utilities (additive, Wave 1).
   // Mixed classes: search 501 on replica, notifications B-relay, rest A.
   app.use('/api/v1', searchMemoryV1Router)
@@ -1735,7 +1735,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // that predates the action, additionally to the legacy git outbox file);
       // see core/task-queue.ts for the full ladder. This subscriber is the ONE
       // interception point for every task write — REST routes, batch phase
-      // endpoints and butler tools alike — so routes stay unaware.
+      // endpoints and Personal AI tools alike — so routes stay unaware.
       //
       // Reader half (projection import) is triggered by the Phase 3 bridge push
       // (events-v1) and by reconcileAfterPull() from the auto-commit loop below.
@@ -2060,7 +2060,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     }
   }, { global: true, interest: ['task:completed'] })
 
-  // -- Recent-task ledger (butler context) --
+  // -- Recent-task ledger (Personal AI context) --
   // Any task mutation invalidates the cached render; a fresh task gets its
   // one-liner generated in the background (cheap Haiku-tier call, fire-and-
   // forget — see task-ledger-desc.ts). Deliberately OUTSIDE the QMD block:
@@ -2364,7 +2364,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const { sessionId, inputTokens } = eventData<'session:usage-update'>(event)
       if (sessionId) {
         sendStreamEvent(sessionId, event.name, event.data)
-        // Token-truth feed for butler-lane turns. On the in-process path the
+        // Token-truth feed for personal-ai-lane turns. On the in-process path the
         // loop's onUsage callback records the turn's EXACT input tokens (the
         // ground-truth half of effectiveTotalTokens); a lane turn never enters
         // that loop, so without this the conversation's compaction gate and
@@ -2380,7 +2380,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             try {
               const { getSessionByClaudeId } = await import('../core/session-tracker.js')
               const rec = await getSessionByClaudeId(sessionId)
-              const { parseLaneKey } = await import('../core/sessions/butler-lane.js')
+              const { parseLaneKey } = await import('../core/sessions/personal-ai-lane.js')
               const laneIds = parseLaneKey(rec?.lane)
               if (laneIds) recordLastTurnTokens(laneIds.conversationId, inputTokens)
             } catch { /* token truth is an optimization; a miss falls back to the estimate */ }
@@ -2670,15 +2670,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // reintroduce the bug — a missed increment is far cheaper than a 13× overcount.
       if (costDelta != null && costDelta > 0) {
         try {
-          // Attribution fork (butler lane): a lane-bound session IS the butler's
+          // Attribution fork (Personal AI lane): a lane-bound session IS the Personal AI's
           // own turn, not an external coding session. Recording it as
-          // source:'session' parked the butler's whole spend in the dashboard's
+          // source:'session' parked the Personal AI's whole spend in the dashboard's
           // pass-through session_cost bucket and zeroed its per-agent row. The
           // event payload carries no lane, so read it off the record — one cheap
           // indexed sqlite read, and only on results that actually cost money.
           const { getSessionByClaudeId } = await import('../core/session-tracker.js')
           const laneRecord = sessionId ? await getSessionByClaudeId(sessionId) : null
-          const { parseLaneKey } = await import('../core/sessions/butler-lane.js')
+          const { parseLaneKey } = await import('../core/sessions/personal-ai-lane.js')
           const laneIds = parseLaneKey(laneRecord?.lane)
           usageTracker.record({
             ...(laneIds ? { source: 'chat' as const, agentId: laneIds.agentId } : { source: 'session' as const }),
@@ -2995,12 +2995,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
               // Built ABOVE the engine branch so both engines send the same prompt.
               const prompt = `[Triage Update] Task "${taskTitle}" ${taskRef}\n\n${cleanedResult}\n\n<task_note>\n${taskNote}\n</task_note>\n\nInform the user concisely (2-4 sentences) about this task's status.\nFocus on what the triage analysis says — that's the new information.\nThe task note provides full context if needed.\nDo not use tools.`
 
-              // ── Engine branch: butler lane (config.agent.provider='claude-code') ──
+              // ── Engine branch: Personal AI lane (config.agent.provider='claude-code') ──
               // Skips the whole in-process block below (bail pre-check, system-prompt
               // estimation, runAgentLoop): the CLI owns its own context, so estimating
               // OUR history against OUR model window would gate a turn that isn't
               // ours to gate.
-              if (await useButlerLaneEngine('general')) {
+              if (await usePersonalAiLaneEngine('general')) {
                 const { runLaneTurn } = await import('../core/sessions/lane-turn.js')
                 const { sessionId: laneSessionId, resultText } =
                   await runLaneTurn('general', conversationId, prompt, { source: 'triage' })
@@ -3512,7 +3512,7 @@ async function startHeartbeatIfConfigured(): Promise<void> {
           const conversationId = await getMainConversationId('general')
           // Engine for this turn — a lane turn never enters the in-process loop, so
           // it needs neither the API history nor the agent module.
-          const laneEngine = await useButlerLaneEngine('general')
+          const laneEngine = await usePersonalAiLaneEngine('general')
 
           // Load chat history (fresh state after any preceding turn)
           let history: Awaited<ReturnType<typeof chatHistory.getApiMessages>> = []
@@ -3555,7 +3555,7 @@ async function startHeartbeatIfConfigured(): Promise<void> {
             agentId: 'general', conversationId,
           })
 
-          // ── Engine branch: butler lane (config.agent.provider='claude-code') ──
+          // ── Engine branch: Personal AI lane (config.agent.provider='claude-code') ──
           // Everything above ran for both engines (trigger broadcast + persist).
           if (laneEngine) {
             const { runLaneTurn } = await import('../core/sessions/lane-turn.js')

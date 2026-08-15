@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Wave 1 endpoints (additive /api/v1, docs/reference/api-v1.md)
 //
-// Session lifecycle, butler conversation management, task detail + batch +
+// Session lifecycle, Personal AI conversation management, task detail + batch +
 // focus pins, and global search. All ride WalnutAPI's shared request/decode
 // funnel so auth, logging, and the frozen error envelope apply uniformly.
 
@@ -66,9 +66,9 @@ extension WalnutAPI {
         )
     }
 
-    // MARK: - Butler conversation management
+    // MARK: - Personal AI conversation management
 
-    /// Rename and/or pin a butler conversation.
+    /// Rename and/or pin a Personal AI conversation.
     func patchConversation(
         id: String, agentID: String = "general", title: String? = nil, pinned: Bool? = nil
     ) async throws -> ConversationPatched {
@@ -90,7 +90,7 @@ extension WalnutAPI {
         try await sendExpectingNoContent("DELETE", "/conversations/\(escape(id))?agentId=\(escape(agentID))")
     }
 
-    /// Stop the butler's active turn(s) + cancel any pending question.
+    /// Stop the Personal AI's active turn(s) + cancel any pending question.
     func stopConversation(id: String, agentID: String = "general") async throws -> ConversationStopped {
         struct Body: Encodable { let agentId: String }
         return try await send(

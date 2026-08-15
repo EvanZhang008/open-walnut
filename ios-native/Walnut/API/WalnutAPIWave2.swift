@@ -130,7 +130,7 @@ extension WalnutAPI {
         try await get("/config")
     }
 
-    /// Butler conversation size stats (no conversationId = the active one).
+    /// Personal AI conversation size stats (no conversationId = the active one).
     func chatStats(agentID: String = "general") async throws -> ChatStats {
         try await get("/chat/stats?agentId=\(escape(agentID))")
     }

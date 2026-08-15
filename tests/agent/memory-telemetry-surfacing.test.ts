@@ -40,7 +40,7 @@ describe('memory_manage records write-path telemetry', () => {
     const res = await exec({ action: 'add', content: '## Reply Concisely\n\nUser prefers short answers.' });
     expect(res.success).toBe(true);
     const rec = loadMemoryTelemetry()['memory:Reply Concisely'];
-    expect(rec.origin).toBe('butler-turn');
+    expect(rec.origin).toBe('personal-ai-turn');
     expect(rec.interactive_writes).toBe(1);
   });
 
@@ -94,7 +94,7 @@ describe('SURFACE 1: the over-budget consolidation error carries the evidence', 
     // The caveat must travel with the numbers so they are read as tie-breakers.
     expect(res.entryEvidence[0]).not.toContain('used 0 times');
     expect(res.entryEvidenceNote).toContain('injected every turn');
-    expect(res.entryEvidenceLegend).toContain('live=written in a live butler turn');
+    expect(res.entryEvidenceLegend).toContain('live=written in a live Personal AI turn');
     expect(res.entryEvidenceNote).toContain('NO per-entry');
     expect(res.entryEvidenceNote).toContain('tie-breakers, not verdicts');
     // The pre-existing skill-routing hint is untouched.

@@ -15,7 +15,7 @@
  *     block-scalar marker `>` comes back as a literal `&gt;`.
  *
  * For `MEMORY.md`/`USER.md` that is not cosmetic: they are BOUNDED stores whose
- * `## Title` sections are injected into the butler's system prompt every turn, so
+ * `## Title` sections are injected into the Personal AI's system prompt every turn, so
  * a collapsed frontmatter block becomes a FAKE entry — it charges its length
  * against the char budget and is a legal `replace`/`remove` target string.
  *
@@ -123,7 +123,7 @@ const TAG_RE = /<\/?([A-Za-z][A-Za-z0-9-]*)(?:\s[^<>]*?)?\/?>/g;
  *
  * Rationale, measured against the production parser: `<id>` in prose is parsed as
  * an unknown HTML element and vanishes entirely on save (silent data loss in a
- * rule the butler reads every turn). Feeding `&lt;id&gt;` instead survives the
+ * rule the Personal AI reads every turn). Feeding `&lt;id&gt;` instead survives the
  * round trip verbatim, and `decodeEditorEscapes` turns it back into `<id>`.
  *
  * Scoped narrowly on purpose:
@@ -151,7 +151,7 @@ export function escapeUnknownTags(md: string): string {
  * Undo the ONE escaping artifact `tiptap-markdown` adds to every text node:
  * `escapeHTML` turns `<`/`>` into `&lt;`/`&gt;` on serialize and nothing decodes
  * them on parse, so a `>` the user typed comes back as a literal `&gt;` in the
- * saved bytes — visible corruption in a rule the butler reads every turn.
+ * saved bytes — visible corruption in a rule the Personal AI reads every turn.
  *
  * Deliberately narrow: only the two entities that serializer produces. `&amp;`
  * is NOT decoded — the editor never emits it, so decoding it would be a transform

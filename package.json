@@ -1,7 +1,7 @@
 {
   "name": "open-walnut",
   "version": "0.3.2",
-  "description": "Personal AI butler powered by Claude — task management, Claude Code sessions, memory system, and web UI",
+  "description": "Personal AI powered by Claude — task management, Claude Code sessions, memory system, and web UI",
   "license": "MIT",
   "homepage": "https://github.com/EvanZhang008/open-walnut",
   "repository": {
@@ -22,7 +22,7 @@
     "knowledge-management",
     "typescript",
     "cli",
-    "ai-butler",
+    "personal-ai",
     "automation"
   ],
   "type": "module",

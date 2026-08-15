@@ -328,7 +328,7 @@ Live Conversation
     │   Injection: only during compaction/resume/subagent (not normally — avoids duplication with chat history)
     │
     ├─ Daily Log (agent explicitly calls files_write, append)
-    │   Content: butler journal style
+    │   Content: Personal AI journal style
     │   Injection: today's log goes directly into system prompt
     │
     └─ Compaction Trigger
@@ -443,7 +443,7 @@ Regression tests:
 **Reference implementation**: Claude Code `src/services/SessionMemory/sessionMemory.ts` + `prompts.ts`
   - Full prompt: `claude-code-system-prompts/agent-prompt-session-memory-update-instructions.md`
   - Template: `claude-code-system-prompts/data-session-memory-template.md`
-  - We use the same pattern, with minor section adjustments for Walnut's butler role
+  - We use the same pattern, with minor section adjustments for Walnut's Personal AI role
 
 **Tasks**:
 
@@ -456,7 +456,7 @@ Regression tests:
      - `getWorkingMemorySectionSizes()`: Return token count per section (for over-limit warnings)
      - `truncateWorkingMemoryForCompact(content)`: Truncate for compaction, same as Claude Code `truncateSessionMemoryForCompact()`
 
-   **Template** (adapted from Claude Code `data-session-memory-template.md` for Walnut butler):
+   **Template** (adapted from Claude Code `data-session-memory-template.md` for Walnut Personal AI):
    ```markdown
    # Active Focus
    _What is the user currently working on? Active tasks, their IDs, and status._
@@ -547,7 +547,7 @@ Integration tests:
 
 1. **Rewrite `MEMORY_FLUSH_MESSAGE`**
    - Modify `src/core/chat-history.ts:1056`
-   - Butler journal style prompt (see below)
+   - Personal AI journal style prompt (see below)
    - Max 800 chars per entry
 
 2. **That's the only change.**
@@ -555,7 +555,7 @@ Integration tests:
 ```typescript
 export const MEMORY_FLUSH_MESSAGE = `Pre-compaction memory flush.
 
-Persist knowledge using the \`memory\` tool. Write as a butler's journal —
+Persist knowledge using the \`memory\` tool. Write as a Personal AI's journal:
 record what matters for RECALL, not for git log.
 
 ## Daily log — what to write (append, max 800 chars)
@@ -873,7 +873,7 @@ CHAT_HISTORY_FILE = ~/.open-walnut/chat-history.json
 - `buildSystemPrompt()` — assembles everything, includes `getCompactionSummary()` as "Earlier conversation context" (MODIFY: use working-memory.md instead when available)
 
 ### Chat History + Compaction (`src/core/chat-history.ts`)
-- Line 1056: `MEMORY_FLUSH_MESSAGE` — flush prompt (MODIFY: butler journal style)
+- Line 1056: `MEMORY_FLUSH_MESSAGE`: flush prompt (MODIFY: Personal AI journal style)
 - Line 1071: `MEMORY_FLUSH_MIN_ENTRIES = 8`
 - Line 1151: `compact(summarizer, memoryFlusher)` — main compaction function (MODIFY: working memory replaces summarizer)
 - Line 1195: `shouldFlush` — checks min entries before memory flush

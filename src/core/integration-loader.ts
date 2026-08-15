@@ -749,7 +749,7 @@ export async function loadPlugins(registry: IntegrationRegistry): Promise<void> 
  * swept into plugins.* on the next boot — where its real reader
  * (`config.ui.session_panels`) no longer finds it, so the feature quietly
  * reverted to defaults with nothing in the logs. It bit twice: `providers` (left
- * the butler unable to authenticate) and `ui` (session_panels kept resetting).
+ * the Personal AI unable to authenticate) and `ui` (session_panels kept resetting).
  */
 const LEGACY_INTEGRATION_KEYS = new Set([
   'ms_todo',
@@ -814,7 +814,7 @@ export async function migrateConfigToPlugins(): Promise<boolean> {
   // plugins.* get moved back to the top level, dropping the `enabled` flag the
   // migration injected. Reversing the sweep is not optional — the readers look
   // at the top level only, so until the key moves back the feature stays
-  // silently broken (`providers` → butler could not authenticate; `ui` →
+  // silently broken (`providers` → Personal AI could not authenticate; `ui` →
   // session_panels reset to its default on every boot).
   //
   // Only reverses keys that no longer exist at the top level, so a real plugin

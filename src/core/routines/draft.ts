@@ -28,7 +28,7 @@ function buildSystemPrompt(context: { hosts: string[]; models: string[] }): stri
     .map((e) => `- "${e.type}" (${e.label}): ${e.description}`)
     .join('\n');
 
-  return `You turn a natural-language automation request into a routine definition for a personal AI butler. Reply with ONLY a JSON object, no markdown fences, no commentary.
+  return `You turn a natural-language automation request into a routine definition for a Personal AI. Reply with ONLY a JSON object, no markdown fences, no commentary.
 
 Schema:
 {

@@ -110,7 +110,7 @@ describe('runCredentialProcess — real command execution', () => {
 
   // The AWS-documented credential_process protocol is FLAT (Version + the fields
   // at the top level) — that's what SSO/ada-style helpers emit. Rejecting it made
-  // the butler fall through to expired ~/.aws creds and 403 for 18h (2026-07-26).
+  // the Personal AI fall through to expired ~/.aws creds and 403 for 18h (2026-07-26).
   it('parses the standard FLAT credential_process payload (Version at top level)', async () => {
     const json = JSON.stringify({
       Version: 1,

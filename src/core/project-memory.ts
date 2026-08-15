@@ -12,7 +12,7 @@
  * source for that content and are genuinely load-bearing:
  *
  *   - `getProjectSummary`   → categories route (project "Memory" block in the
- *                             UI) and the butler's task_query/task_get output.
+ *                             UI) and the Personal AI's task_query/task_get output.
  *   - `getProjectMemory`    → chat.ts enriched task context (fallback behind
  *                             the skill path) and stateful-agent memory
  *                             injection (subagent-runner + cron actions).

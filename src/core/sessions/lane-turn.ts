@@ -1,11 +1,11 @@
 /**
- * One background-producer turn, run on a butler lane.
+ * One background-producer turn, run on a Personal AI lane.
  *
  * The chat RPC can fire-and-forget a lane turn (its output streams on the
  * session's own channel and the browser is already subscribed there). The
  * BACKGROUND producers cannot: cron records job status from the turn's outcome,
  * the heartbeat runner needs the response string to decide "all clear", and
- * triage has to persist what the butler said. So this helper does the one thing
+ * triage has to persist what the Personal AI said. So this helper does the one thing
  * the chat path doesn't — it AWAITS the lane's turn-over event and hands the
  * producer the text.
  *
@@ -20,7 +20,7 @@ import crypto from 'node:crypto';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import { eventData } from '../event-types.js';
 import { log } from '../../logging/index.js';
-import { getOrCreateLaneSession } from './butler-lane.js';
+import { getOrCreateLaneSession } from './personal-ai-lane.js';
 
 /** Default ceiling for one background lane turn (10 minutes). */
 export const LANE_TURN_TIMEOUT_MS = 600_000;
@@ -151,7 +151,7 @@ export async function runLaneTurn(
     timer.unref?.();
 
     // `created` means the message was consumed as the spawn's FIRST turn —
-    // sending it again would deliver it twice (see butler-lane.ts).
+    // sending it again would deliver it twice (see personal-ai-lane.ts).
     if (!lane.created) {
       try {
         const { sendMessageToSession } = await import('../session-message-queue.js');

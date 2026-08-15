@@ -217,7 +217,7 @@ describe('migrateConfigToPlugins', () => {
     expect(changed).toBe(false);
   });
 
-  // Regression: `providers` is a first-class config key (the butler reads
+  // Regression: `providers` is a first-class config key (the Personal AI reads
   // config.providers). It must NOT be migrated into plugins.providers, which used
   // to silently break Bedrock auth for every onboarding path that writes a provider.
   it('does NOT migrate the first-class `providers` key into plugins', async () => {
@@ -237,7 +237,7 @@ describe('migrateConfigToPlugins', () => {
   });
 
   // Self-heal: a previous build mis-migrated providers into plugins.providers.
-  // The migration must move it back to the top level so the butler can authenticate.
+  // The migration must move it back to the top level so the Personal AI can authenticate.
   it('self-heals a mis-migrated plugins.providers back to top-level providers', async () => {
     const config = {
       version: 1,

@@ -758,7 +758,7 @@ export async function getSessionByClaudeId(claudeSessionId: string): Promise<Ses
  * `lane` has no dedicated column — it spills into `payload` (see session-db.ts
  * FIELD_TO_COLUMN) — so this queries with `json_extract`. `json_valid` guard is
  * load-bearing: SQLite RAISES on malformed JSON rather than returning NULL, so a
- * single corrupt payload row would make every lane lookup throw (i.e. the butler
+ * single corrupt payload row would make every lane lookup throw (i.e. the Personal AI
  * could never find its own lane). Rows with NULL/empty payload can't match a
  * lane, so skipping them is free.
  */

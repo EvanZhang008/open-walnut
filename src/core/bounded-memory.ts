@@ -410,7 +410,7 @@ export class BoundedMemoryStore {
 
   /**
    * Freeze the current on-disk render for `scope` and return any drift observed
-   * since this scope's previous pin. Called at main-butler turn boundaries — the
+   * since this scope's previous pin. Called at Personal AI turn boundaries — the
    * ONLY thing that refreshes a pin besides an explicit invalidate.
    */
   beginPromptTurn(scope: string): MemoryPromptDrift | null {
@@ -783,7 +783,7 @@ function globalStores(): BoundedMemoryStore[] {
 
 /**
  * Freeze both global stores' prompt renders for this conversation's scope. Call
- * ONCE at a main-butler turn boundary, before building the prompt. Returns any
+ * ONCE at a Personal AI turn boundary, before building the prompt. Returns any
  * drift observed since that scope's previous turn (see memory-prompt-snapshot.ts
  * for the refresh policy and the self-vs-external attribution rule).
  */
@@ -803,7 +803,7 @@ export function beginMemoryPromptTurn(
 /**
  * Drop both global stores' frozen renders for one scope, or for EVERY scope when
  * called with no arguments. For the human-facing memory editor, whose full-file
- * PUT is explicit intent to change what the butler believes RIGHT NOW rather
+ * PUT is explicit intent to change what the Personal AI believes RIGHT NOW rather
  * than at the next turn — and for tests.
  */
 export function invalidateMemoryPromptSnapshots(

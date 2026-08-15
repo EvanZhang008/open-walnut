@@ -11,7 +11,7 @@
  *   2. record round-trip — profile/lane persist and come back
  *   3. capacity — checkSessionLimit ignores lane records
  *   4. listing — projection + getRecentSessions exclude lane records
- *   5. presets — walnutMcpProfile / butlerProfile shape, mergeProfiles semantics
+ *   5. presets — walnutMcpProfile / personalAiProfile shape, mergeProfiles semantics
  *
  * ZERO real side effects: the CLI is a MockDaemon-spawned mock-claude.mjs (never
  * the real `claude`), all stores are redirected into a temp dir by
@@ -39,7 +39,7 @@ import { ClaudeCodeSession } from '../../src/providers/claude-code-session.js'
 import { bus } from '../../src/core/event-bus.js'
 import { WALNUT_HOME, SESSION_STREAMS_DIR } from '../../src/constants.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
-import { walnutMcpProfile, butlerProfile, mergeProfiles } from '../../src/core/sessions/profiles.js'
+import { walnutMcpProfile, personalAiProfile, mergeProfiles } from '../../src/core/sessions/profiles.js'
 import type { SessionProfile } from '../../src/core/types.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, 'mock-claude.mjs')
@@ -133,10 +133,10 @@ afterEach(async () => {
 describe('profile → CLI arg assembly', () => {
   it('replace mode emits --system-prompt and NO --append-system-prompt', async () => {
     const args = await argsForSend('t-replace', {
-      systemPrompt: 'You are the butler.',
+      systemPrompt: 'You are the Personal AI.',
       systemPromptMode: 'replace',
     })
-    expect(flagValue(args, '--system-prompt')).toBe('You are the butler.')
+    expect(flagValue(args, '--system-prompt')).toBe('You are the Personal AI.')
     expect(args).not.toContain('--append-system-prompt')
   })
 
@@ -196,9 +196,9 @@ describe('profile → CLI arg assembly', () => {
     expect(args).not.toContain('--allowedTools')
   })
 
-  it('a butler-like profile produces all three flags in one argv', async () => {
-    const args = await argsForSend('t-butler-like', {
-      systemPrompt: 'You are Walnut, a butler.',
+  it('a personal-ai-like profile produces all three flags in one argv', async () => {
+    const args = await argsForSend('t-personal-ai-like', {
+      systemPrompt: 'You are Walnut, a Personal AI.',
       systemPromptMode: 'replace',
       mcpServers: walnutMcpProfile().mcpServers,
       allowedTools: ['mcp__walnut', 'Read'],
@@ -225,10 +225,10 @@ describe('profile record round-trip', () => {
       mcpServers: { walnut: { command: 'open-walnut', args: ['mcp'] } },
       allowedTools: ['Read'],
     }
-    await createSessionRecord('sid-profile', 'task-1', 'proj', tmpBase, { pid: 1234, profile, lane: 'butler' })
+    await createSessionRecord('sid-profile', 'task-1', 'proj', tmpBase, { pid: 1234, profile, lane: 'Personal AI' })
     const record = await getSessionByClaudeId('sid-profile')
     expect(record?.profile).toEqual(profile)
-    expect(record?.lane).toBe('butler')
+    expect(record?.lane).toBe('Personal AI')
   })
 
   it('the persisted profile survives an unrelated record update (payload spill)', async () => {
@@ -254,7 +254,7 @@ describe('profile record round-trip', () => {
     session.send(
       'hello', tmpBase, undefined, 'bypass', undefined, undefined,
       undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
-      { profile, lane: 'butler' },
+      { profile, lane: 'Personal AI' },
     )
     await session.awaitSpawn().catch(() => {})
     const sid = session.sessionId!
@@ -268,7 +268,7 @@ describe('profile record round-trip', () => {
     }
     await session.gracefulStop(true).catch(() => {})
     expect(record?.profile).toEqual(profile)
-    expect(record?.lane).toBe('butler')
+    expect(record?.lane).toBe('Personal AI')
   })
 
   it('resolveResumeArgs returns the record profile + lane for the cold-resume spawn', async () => {
@@ -280,7 +280,7 @@ describe('profile record round-trip', () => {
       mcpServers: { walnut: { command: 'open-walnut', args: ['mcp'] } },
       allowedTools: ['Read', 'Grep'],
     }
-    await createSessionRecord('sid-resume', 'task-3', 'proj', tmpBase, { pid: 4321, profile, lane: 'butler' })
+    await createSessionRecord('sid-resume', 'task-3', 'proj', tmpBase, { pid: 4321, profile, lane: 'Personal AI' })
     // Private method — reached through the instance under test, deliberately:
     // the contract asserted here is "the resume path re-reads the profile", and
     // every cold-spawn caller funnels through this one resolver.
@@ -293,7 +293,7 @@ describe('profile record round-trip', () => {
       }>
     }).resolveResumeArgs('sid-resume')
     expect(resolved.profile).toEqual(profile)
-    expect(resolved.lane).toBe('butler')
+    expect(resolved.lane).toBe('Personal AI')
   })
 
   it('resolveResumeArgs leaves profile undefined for a plain session', async () => {
@@ -315,7 +315,7 @@ describe('profile record round-trip', () => {
 describe('checkSessionLimit ignores lane sessions', () => {
   it('a lane session does not count toward the host limit', async () => {
     const { createSessionRecord, checkSessionLimit } = await import('../../src/core/session-tracker.js')
-    await createSessionRecord('cap-lane', 't1', 'p', tmpBase, { pid: 1001, lane: 'butler' })
+    await createSessionRecord('cap-lane', 't1', 'p', tmpBase, { pid: 1001, lane: 'Personal AI' })
     await createSessionRecord('cap-normal', 't2', 'p', tmpBase, { pid: 1002 })
     const result = await checkSessionLimit(undefined, { local: 2 })
     expect(result.running).toBe(1)
@@ -324,7 +324,7 @@ describe('checkSessionLimit ignores lane sessions', () => {
 
   it('lane sessions cannot exhaust capacity even at the limit', async () => {
     const { createSessionRecord, checkSessionLimit } = await import('../../src/core/session-tracker.js')
-    await createSessionRecord('cap-lane-1', 't1', 'p', tmpBase, { pid: 1101, lane: 'butler' })
+    await createSessionRecord('cap-lane-1', 't1', 'p', tmpBase, { pid: 1101, lane: 'Personal AI' })
     await createSessionRecord('cap-lane-2', 't2', 'p', tmpBase, { pid: 1102, lane: 'other' })
     const result = await checkSessionLimit(undefined, { local: 1 })
     expect(result.running).toBe(0)
@@ -346,8 +346,8 @@ describe('lane sessions are hidden from the default listings', () => {
     }
     expect(isListableSession(base)).toBe(true)
     expect(isLaneSession(base)).toBe(false)
-    expect(isListableSession({ ...base, lane: 'butler' })).toBe(false)
-    expect(isLaneSession({ ...base, lane: 'butler' })).toBe(true)
+    expect(isListableSession({ ...base, lane: 'Personal AI' })).toBe(false)
+    expect(isLaneSession({ ...base, lane: 'Personal AI' })).toBe(true)
     // Empty string is not a lane (a blank field must not hide a real session).
     expect(isLaneSession({ ...base, lane: '' })).toBe(false)
   })
@@ -355,7 +355,7 @@ describe('lane sessions are hidden from the default listings', () => {
   it('getRecentSessions excludes lane records by default and includes them on request', async () => {
     const { createSessionRecord, getRecentSessions } = await import('../../src/core/session-tracker.js')
     await createSessionRecord('list-normal', 't1', 'p', tmpBase, { pid: 2001 })
-    await createSessionRecord('list-lane', 't2', 'p', tmpBase, { pid: 2002, lane: 'butler' })
+    await createSessionRecord('list-lane', 't2', 'p', tmpBase, { pid: 2002, lane: 'Personal AI' })
     const ids = (await getRecentSessions(10)).map((s) => s.claudeSessionId)
     expect(ids).toContain('list-normal')
     expect(ids).not.toContain('list-lane')
@@ -367,7 +367,7 @@ describe('lane sessions are hidden from the default listings', () => {
     const { createSessionRecord } = await import('../../src/core/session-tracker.js')
     const { buildSessionProjection } = await import('../../src/core/session-projection.js')
     await createSessionRecord('proj-normal', 't1', 'p', tmpBase, { pid: 3001 })
-    await createSessionRecord('proj-lane', 't2', 'p', tmpBase, { pid: 3002, lane: 'butler' })
+    await createSessionRecord('proj-lane', 't2', 'p', tmpBase, { pid: 3002, lane: 'Personal AI' })
     const projection = await buildSessionProjection()
     const ids = projection.sessions.map((s) => s.id)
     expect(ids).toContain('proj-normal')
@@ -386,11 +386,11 @@ describe('profile presets', () => {
     })
   })
 
-  it('butlerProfile is a full-replace persona + the walnut MCP mount', () => {
+  it('personalAiProfile is a full-replace persona + the walnut MCP mount', () => {
     // Was "is a P3 stub" (it threw). P3 implemented it; the persona/addendum
-    // contract lives in tests/core/butler-lane.test.ts — this only pins the shape
+    // contract lives in tests/core/personal-ai-lane.test.ts — this only pins the shape
     // the arg-assembly tests above depend on.
-    const profile = butlerProfile('Ada')
+    const profile = personalAiProfile('Ada')
     expect(profile.systemPromptMode).toBe('replace')
     expect(profile.systemPrompt).toContain('You are Walnut')
     expect(profile.mcpServers).toEqual(walnutMcpProfile().mcpServers)

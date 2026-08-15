@@ -1,5 +1,5 @@
 /**
- * Chat tab — drops straight into the most recent conversation (butler feel).
+ * Chat tab — drops straight into the most recent conversation (Personal AI feel).
  * History button (top-left) opens the conversation list sheet.
  */
 
@@ -115,7 +115,7 @@ export default function ChatScreen() {
         ) : messages.length === 0 ? (
           <EmptyState
             icon="chatbubble-ellipses-outline"
-            title="Your butler is listening"
+            title="Your Personal AI is listening"
             subtitle="Ask anything — tasks, notes, or what happened today."
           />
         ) : (

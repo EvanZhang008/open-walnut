@@ -53,11 +53,11 @@ vi.mock('../../../src/providers/claude-code-session.js', () => ({
 import express from 'express'
 import request from 'supertest'
 import { chatHistoryRouter } from '../../../src/web/routes/chat-history.js'
-import { butlerV1Router } from '../../../src/web/routes/butler-v1.js'
+import { personalAiV1Router } from '../../../src/web/routes/personal-ai-v1.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js'
-import { butlerLaneKey } from '../../../src/core/sessions/butler-lane.js'
+import { personalAiLaneKey } from '../../../src/core/sessions/personal-ai-lane.js'
 
 const LANE_SID = '11111111-2222-3333-4444-555555555555'
 
@@ -65,7 +65,7 @@ function createApp() {
   const app = express()
   app.use(express.json())
   app.use('/api/chat', chatHistoryRouter)
-  app.use('/api/v1', butlerV1Router)
+  app.use('/api/v1', personalAiV1Router)
   app.use(errorHandler)
   return app
 }
@@ -77,8 +77,8 @@ let interrupts: Array<{ sessionId?: string }> = []
 async function seedLane(conversationId: string, processStatus = 'running'): Promise<void> {
   const { createSessionRecord, updateSessionRecord } = await import('../../../src/core/session-tracker.js')
   await createSessionRecord(LANE_SID, '', '', WALNUT_HOME, {
-    title: 'Butler chat',
-    lane: butlerLaneKey('general', conversationId),
+    title: 'Personal AI chat',
+    lane: personalAiLaneKey('general', conversationId),
     initialProcessStatus: 'idle',
   })
   if (processStatus !== 'idle') {
@@ -88,7 +88,7 @@ async function seedLane(conversationId: string, processStatus = 'running'): Prom
 
 async function laneRecord(conversationId: string) {
   const { getSessionByLane } = await import('../../../src/core/session-tracker.js')
-  return await getSessionByLane(butlerLaneKey('general', conversationId))
+  return await getSessionByLane(personalAiLaneKey('general', conversationId))
 }
 
 beforeEach(async () => {

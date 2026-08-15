@@ -127,7 +127,7 @@ describe('chat → background self-review wiring', () => {
   it('fires a persistence-isolated review fork after a clean turn', async () => {
     const ws = await connectWs()
     try {
-      await sendRpc(ws, 'chat', { message: 'hello butler' })
+      await sendRpc(ws, 'chat', { message: 'hello Personal AI' })
       await waitFor(() => reviewCalls().length === 1)
 
       const review = reviewCalls()[0]
@@ -138,7 +138,7 @@ describe('chat → background self-review wiring', () => {
 
       // The fork sees the just-persisted turn (getHistory ran AFTER addAIMessages).
       const historyText = JSON.stringify(review.history)
-      expect(historyText).toContain('hello butler')
+      expect(historyText).toContain('hello Personal AI')
       expect(historyText).toContain('mock response')
 
       // Persistence isolation: conversation on disk has ONLY the real turn.

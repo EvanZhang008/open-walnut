@@ -28,20 +28,20 @@
  * "re-learns" it, and content shifts under it mid-conversation for no reason it
  * can observe.
  *
- * REFRESH POLICY — "freeze until the next main-butler turn boundary"
+ * REFRESH POLICY — "freeze until the next Personal AI turn boundary"
  * ------------------------------------------------------------------
  * A pin is created ONLY by an explicit `beginPromptTurn(scope)` at a turn
  * boundary, and is served to every render for that scope until the next
  * boundary. What invalidates a pin, and why:
  *
- * - NEXT MAIN-BUTLER TURN BOUNDARY (primary). `loop.ts` re-pins from the SAME
+ * - NEXT PERSONAL AI TURN BOUNDARY (primary). `loop.ts` re-pins from the SAME
  *   gate that already resets the consolidation breaker — deliberately reusing
  *   that one definition of "a real turn started" instead of inventing a second,
  *   divergent one. That gate excludes subagents (`options.system` set) and the
  *   `background-review` fork.
  * - EXPLICIT `invalidate(scope?)`. Used by the human-facing memory editor
  *   (`PUT /api/memory/global|user` is a full-file replacement — the user's
- *   explicit intent to change what the butler believes, so it must not wait for
+ *   explicit intent to change what the Personal AI believes, so it must not wait for
  *   a turn) and by tests.
  * - NOTHING ELSE. A write through the store does NOT invalidate: that is the
  *   Hermes rationale, and it is what stops the same-turn re-learn loop.
@@ -77,7 +77,7 @@
  *   memory path, the git-sync data plane, the web editor, or another process.
  *   Logged at WARN with both hashes and recorded on the store, because these
  *   paths bypass every write-time check (budget, entry shape, safety screen) and
- *   a silent mutation of the butler's standing rules is exactly the thing an
+ *   a silent mutation of the Personal AI's standing rules is exactly the thing an
  *   operator needs to be able to see after the fact.
  *
  * Attribution is best-effort by construction: if a self write AND an external

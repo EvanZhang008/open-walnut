@@ -772,7 +772,7 @@ export interface AgentRun {
 }
 
 /**
- * Engine that answers a butler chat turn (`config.agent.provider`). NOT the model
+ * Engine that answers a Personal AI chat turn (`config.agent.provider`). NOT the model
  * provider (`config.provider.type`) — that one picks credentials/API, this one
  * picks who runs the loop.
  */
@@ -803,12 +803,12 @@ export interface AgentConfig {
   subagent?: SubagentGlobalConfig;
   agents?: Omit<AgentDefinition, 'source'>[];
   /**
-   * Which ENGINE answers a butler chat turn. Unrelated to `config.provider.type`
+   * Which ENGINE answers a Personal AI chat turn. Unrelated to `config.provider.type`
    * (the model/credential provider).
    *
    *   - 'walnut-agent' (default): the in-process agent loop (`runAgentLoop`).
    *   - 'claude-code': the turn is delivered to a daemon-managed `claude` CLI
-   *     session bound to the conversation's lane (see core/sessions/butler-lane.ts).
+   *     session bound to the conversation's lane (see core/sessions/personal-ai-lane.ts).
    *
    * Default keeps today's behavior exactly; flipping it is opt-in.
    */
@@ -845,9 +845,9 @@ export interface AgentConfig {
   /** Default provider name for the main agent. Maps to config.providers[name]. */
   main_provider?: string;
   /**
-   * Background self-review: every N clean main-butler turns, fork the conversation
-   * (same cache prefix) and let the butler review the window for skill/memory updates.
-   * The counter resets when the butler used skill_manage itself during the window.
+   * Background self-review: every N clean Personal AI turns, fork the conversation
+   * (same cache prefix) and let the Personal AI review the window for skill/memory updates.
+   * The counter resets when the Personal AI used skill_manage itself during the window.
    */
   background_review?: {
     enabled?: boolean;   // default: true

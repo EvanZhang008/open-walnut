@@ -10,7 +10,7 @@ function opts(over: Partial<AdapterCallOptions> = {}): AdapterCallOptions {
     providerConfig: { api: 'claude-cli' },
     model: 'default',
     maxTokens: 4096,
-    system: 'You are the butler.',
+    system: 'You are the Personal AI.',
     messages: [{ role: 'user', content: 'hello' }],
     ...over,
   };
@@ -47,7 +47,7 @@ describe('buildArgs — text-only, subscription-forced argv', () => {
     expect(args).toContain('--verbose');
   });
 
-  it('passes the butler persona via --system-prompt (replace)', () => {
+  it('passes the Personal AI persona via --system-prompt (replace)', () => {
     const args = buildArgs(opts({ system: 'You are Walnut.' }));
     const i = args.indexOf('--system-prompt');
     expect(i).toBeGreaterThanOrEqual(0);

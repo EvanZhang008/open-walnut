@@ -8,7 +8,7 @@ Repository profiles are stored as YAML files in `~/.open-walnut/repositories/{sl
 # ── Required fields ──
 name: Project Name                    # Human-readable name
 description: >-                       # 1-3 sentences — what it does, why it matters
-  Personal AI butler that manages tasks, knowledge, and AI sessions.
+  Personal AI that manages tasks, knowledge, and AI sessions.
   TypeScript/React frontend with Node.js backend. Orchestrates Claude
   Code sessions for coding work while the main agent handles planning.
 hosts:                                # At least one host required
@@ -23,7 +23,7 @@ hosts:                                # At least one host required
 
 overview: |                           # What / Why / How — injected into sessions
   ## What
-  Walnut is a personal AI butler that manages tasks, knowledge, and
+  Walnut is a Personal AI that manages tasks, knowledge, and
   Claude Code sessions. It provides a React web UI for task management
   and a main agent that orchestrates work across multiple AI sessions.
 

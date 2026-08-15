@@ -110,7 +110,7 @@ export function shouldHideUiOnlyMessage(source?: string, notification?: boolean,
   if (!category) return false;
   const isKnown = UI_ONLY_CATEGORIES.some(c => c.key === category);
   if (!isKnown) return false;
-  // Butler LANE notices are visible by default. On the lane engine the turn runs
+  // Personal AI LANE notices are visible by default. On the lane engine the turn runs
   // in a `claude` session, so this session-ref breadcrumb is the ONLY thing the
   // chat timeline ever gets for that turn — hidden by the `session` category's
   // defaultOn:false, the user saw literally nothing after sending a message. A

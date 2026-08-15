@@ -161,7 +161,7 @@ The note is ${existing.length} chars — OVER the ${NOTE_REORG_CAP}-char budget.
 
   return `You just finished a turn. Update this task's NOTE — the single living document that lets a human (or a fresh AI with zero context) pick the task up. You have the full context — be the authoritative source. ${noteBlock}
 
-Section contract (plain text under each label, English, self-contained — never "this bug"/"the feature"). Style rules for ALL sections: any name a zero-context reader wouldn't know (project codenames, internal tools, niche libraries, team jargon) gets a FEW-WORDS parenthetical on first use — "walnut (a personal task butler)" — not a sentence of background; well-known public things (React, S3, GitHub) need none. Reference code by file path only, NEVER line numbers (they drift). Terse beats thorough-sounding.
+Section contract (plain text under each label, English, self-contained — never "this bug"/"the feature"). Style rules for ALL sections: any name a zero-context reader wouldn't know (project codenames, internal tools, niche libraries, team jargon) gets a FEW-WORDS parenthetical on first use — "walnut (a personal task manager)" — not a sentence of background; well-known public things (React, S3, GitHub) need none. Reference code by file path only, NEVER line numbers (they drift). Terse beats thorough-sounding.
 EXEC_SUMMARY: For the HUMAN scanning: 2-3 plain sentences — what this task is + where it stands. No jargon.
 USER_REQUEST: A concise, accurate restatement of what the user asked for — capture the intent faithfully but do NOT quote the user verbatim (raw messages carry typos and thinking-out-loud; distill them). Include the acceptance criteria, detailed enough to be the search entry point. If the user changed direction, rewrite and keep a "(pivoted from: <old> — <why>)" trace inline.
 CONTEXT: Background a newcomer needs: where the problem came from, why it matters, constraints, systems involved. Write once, keep frozen; only add when genuinely new background surfaced.
@@ -1039,7 +1039,7 @@ async function askAndApplyTitle(
       return false;
     }
 
-    // Re-read before writing — the user (or the butler) may have renamed the
+    // Re-read before writing — the user (or the Personal AI) may have renamed the
     // task while the model was thinking; the placeholder check must hold at
     // write time, not just at dispatch time. (Also refreshes `source` for the
     // validation below.)

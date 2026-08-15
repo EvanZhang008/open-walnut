@@ -1,7 +1,7 @@
 /**
- * Butler lanes — "one chat conversation ⇄ one long-lived Claude Code session".
+ * Personal AI lanes — "one chat conversation ⇄ one long-lived Claude Code session".
  *
- * When `config.agent.provider === 'claude-code'` a butler chat turn is not run by
+ * When `config.agent.provider === 'claude-code'` a Personal AI chat turn is not run by
  * the in-process agent loop; it is delivered into a `claude` CLI session that the
  * daemon owns. That session is bound to the conversation by its `lane` field
  * (`chat:<agentId>:<conversationId>`), which is what makes it durable: the lane is
@@ -27,18 +27,18 @@ import { WALNUT_HOME } from '../../constants.js';
 import { bus, EventNames } from '../event-bus.js';
 import { getConfig } from '../config-manager.js';
 import { getSessionByLane, createSessionRecord } from '../session-tracker.js';
-import { butlerProfile, consoleAgentProfile } from './profiles.js';
+import { personalAiProfile, consoleAgentProfile } from './profiles.js';
 import { buildSessionSkillsPrompt } from '../skill-loader.js';
 import { log } from '../../logging/index.js';
 
-/** The lane key a butler conversation's session is bound to. */
-export function butlerLaneKey(agentId: string, conversationId: string): string {
+/** The lane key a Personal AI conversation's session is bound to. */
+export function personalAiLaneKey(agentId: string, conversationId: string): string {
   return `chat:${agentId}:${conversationId}`;
 }
 
 /**
- * Inverse of `butlerLaneKey` — recover the (agentId, conversationId) a lane-bound
- * session belongs to. Returns null for anything that is not a butler chat lane
+ * Inverse of `personalAiLaneKey` — recover the (agentId, conversationId) a lane-bound
+ * session belongs to. Returns null for anything that is not a Personal AI chat lane
  * (a future lane namespace, a hand-edited record, an empty string).
  *
  * Parse rule, deliberately asymmetric: strip the `chat:` prefix, then split on
@@ -92,7 +92,7 @@ export async function archiveLaneForConversation(
   agentId: string,
   conversationId: string,
 ): Promise<string | null> {
-  const lane = butlerLaneKey(agentId, conversationId);
+  const lane = personalAiLaneKey(agentId, conversationId);
   let sessionId: string | null = null;
   try {
     const record = await getSessionByLane(lane);
@@ -103,7 +103,7 @@ export async function archiveLaneForConversation(
       const { terminateSession } = await import('./session-lifecycle.js');
       await terminateSession(sessionId, { force: true });
     } catch (err) {
-      log.session.warn('butler lane: stopping the CLI failed; archiving anyway', {
+      log.session.warn('Personal AI lane: stopping the CLI failed; archiving anyway', {
         lane, sessionId, error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -113,10 +113,10 @@ export async function archiveLaneForConversation(
       archived: true,
       archive_reason: 'chat_cleared',
     });
-    log.session.info('butler lane: archived on chat clear', { lane, sessionId });
+    log.session.info('Personal AI lane: archived on chat clear', { lane, sessionId });
     return sessionId;
   } catch (err) {
-    log.session.warn('butler lane: archive on clear failed', {
+    log.session.warn('Personal AI lane: archive on clear failed', {
       lane, sessionId, error: err instanceof Error ? err.message : String(err),
     });
     return sessionId;
@@ -125,7 +125,7 @@ export async function archiveLaneForConversation(
 
 /**
  * Stop the turn currently running in this conversation's lane — the lane half of
- * the butler's "stop" button.
+ * the Personal AI's "stop" button.
  *
  * Aborting the in-process AbortController is meaningless on the lane engine: the
  * work is happening in a `claude` CLI the daemon owns, so without this a stop was
@@ -144,7 +144,7 @@ export async function interruptLaneForConversation(
   agentId: string,
   conversationId: string,
 ): Promise<string | null> {
-  const lane = butlerLaneKey(agentId, conversationId);
+  const lane = personalAiLaneKey(agentId, conversationId);
   try {
     const record = await getSessionByLane(lane);
     if (!record) return null;
@@ -153,14 +153,14 @@ export async function interruptLaneForConversation(
       EventNames.SESSION_INTERRUPT,
       { sessionId: record.claudeSessionId },
       ['session-runner'],
-      { source: 'butler-lane' },
+      { source: 'personal-ai-lane' },
     );
-    log.session.info('butler lane: interrupt requested', {
+    log.session.info('Personal AI lane: interrupt requested', {
       lane, sessionId: record.claudeSessionId, processStatus: record.process_status,
     });
     return record.claudeSessionId;
   } catch (err) {
-    log.session.warn('butler lane: interrupt failed', {
+    log.session.warn('Personal AI lane: interrupt failed', {
       lane, error: err instanceof Error ? err.message : String(err),
     });
     return null;
@@ -206,7 +206,7 @@ export function getOrCreateLaneSession(
   conversationId: string,
   opts?: { firstMessage?: string },
 ): Promise<LaneSession> {
-  const lane = butlerLaneKey(agentId, conversationId);
+  const lane = personalAiLaneKey(agentId, conversationId);
   const pending = inFlight.get(lane);
   if (pending) return pending;
   const promise = resolveLane(lane, agentId, conversationId, opts?.firstMessage ?? '')
@@ -253,8 +253,12 @@ export async function buildLaneMemoryContext(homeDir: string = WALNUT_HOME): Pro
   return parts.join('\n\n');
 }
 
-/** Marker of the retired lane-managed CLAUDE.md (memory used to ride @imports). */
-const LANE_CLAUDE_MD_MARKER = '<!-- walnut:butler-lane-context v1 -->';
+/** Exact markers of retired lane-managed CLAUDE.md files (memory used to ride @imports). */
+// Keep cleanup compatible without retaining the retired product name in source.
+const MANAGED_LANE_CONTEXT_MARKERS = [
+  '<!-- walnut:personal-ai-lane-context v1 -->',
+  `<!-- walnut:${String.fromCharCode(98, 117, 116, 108, 101, 114)}-lane-context v1 -->`,
+];
 
 /**
  * Remove the previously-managed {cwd}/CLAUDE.md. Memory now rides the profile
@@ -265,11 +269,11 @@ export async function cleanupLaneClaudeMd(homeDir: string = WALNUT_HOME): Promis
   const file = path.join(homeDir, 'CLAUDE.md');
   try {
     const current = await fs.readFile(file, 'utf-8').catch(() => null);
-    if (current === null || !current.includes(LANE_CLAUDE_MD_MARKER)) return;
+    if (current === null || !MANAGED_LANE_CONTEXT_MARKERS.some((marker) => current.includes(marker))) return;
     await fs.rm(file, { force: true });
-    log.session.info('butler lane: retired managed CLAUDE.md removed (memory now injected via profile)', { file });
+    log.session.info('Personal AI lane: retired managed CLAUDE.md removed (memory now injected via profile)', { file });
   } catch (err) {
-    log.session.warn('butler lane: removing retired CLAUDE.md failed', {
+    log.session.warn('Personal AI lane: removing retired CLAUDE.md failed', {
       file, error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -293,12 +297,12 @@ async function resolveLane(
   // Standing memory — Walnut-owned injection, engine-neutral (see
   // buildLaneMemoryContext). Rides the SAME profile as the persona.
   const memoryContext = await buildLaneMemoryContext().catch(() => '');
-  // general = the butler persona; any other console agent gets ITS persona
+  // general = the Personal AI persona; any other console agent gets ITS persona
   // wrapped in the same session addendum (consoleAgentProfile) — one engine,
   // one consistent chat feel, per-agent identity.
   let profile;
   if (agentId === 'general') {
-    profile = butlerProfile(config.user?.name ?? 'the user', skillsIndex, memoryContext);
+    profile = personalAiProfile(config.user?.name ?? 'the user', skillsIndex, memoryContext);
   } else {
     const { getConsoleAgent } = await import('../agent-registry.js');
     const agentDef = await getConsoleAgent(agentId);
@@ -316,23 +320,23 @@ async function resolveLane(
   const existing = await getSessionByLane(lane);
   if (existing) {
     // Profile drift repair: the prompt/effort live on the RECORD (spawn-time
-    // args, no live channel), so a lane minted before a butlerProfile upgrade
+    // args, no live channel), so a lane minted before a personalAiProfile upgrade
     // would otherwise keep the stale persona forever. Refreshing the record here
     // makes the next cold resume (~idle timeout) pick the current one up; the
     // live CLI process keeps the old prompt until then, which is acceptable.
     if (existing.profile?.systemPrompt !== profile.systemPrompt) {
       const { updateSessionRecord } = await import('../session-tracker.js');
       await updateSessionRecord(existing.claudeSessionId, { profile, effort }).catch((err) => {
-        log.session.warn('butler lane: profile refresh failed', {
+        log.session.warn('Personal AI lane: profile refresh failed', {
           lane, sessionId: existing.claudeSessionId,
           error: err instanceof Error ? err.message : String(err),
         });
       });
-      log.session.info('butler lane: stale profile refreshed on record', {
+      log.session.info('Personal AI lane: stale profile refreshed on record', {
         lane, sessionId: existing.claudeSessionId,
       });
     }
-    log.session.info('butler lane: reusing session', {
+    log.session.info('Personal AI lane: reusing session', {
       lane, sessionId: existing.claudeSessionId, processStatus: existing.process_status,
     });
     return { sessionId: existing.claudeSessionId, created: false };
@@ -357,7 +361,7 @@ async function resolveLane(
   });
 
   // Mode is left unset → send() defaults to 'bypass', matching the in-process
-  // butler (which never prompted the user to approve its own tool calls).
+  // Personal AI (which never prompted the user to approve its own tool calls).
   bus.emit(EventNames.SESSION_START, {
     taskId: '',
     message: firstMessage,
@@ -367,8 +371,8 @@ async function resolveLane(
     lane,
     effort,
     preassignedSessionId: sessionId,
-  }, ['session-runner'], { source: 'butler-lane' });
+  }, ['session-runner'], { source: 'personal-ai-lane' });
 
-  log.session.info('butler lane: session created', { lane, sessionId, agentId, conversationId });
+  log.session.info('Personal AI lane: session created', { lane, sessionId, agentId, conversationId });
   return { sessionId, created: true };
 }

@@ -1,12 +1,12 @@
 /**
- * Per-agent registry of active butler-turn AbortControllers.
+ * Per-agent registry of active personal-ai-turn AbortControllers.
  *
  * The WS chat keys its AbortController per client socket + agent (chat.ts) so
  * `chat:stop` aborts only the calling client's turn. A REST client (the iOS
  * app) has no WS identity, so POST /api/v1/conversations/:id/stop needs an
  * agent-level view: every transport that starts a turn registers its
  * AbortController here, and the REST stop aborts ALL of an agent's active
- * turns — for a single-user butler that IS the "stop" the phone means.
+ * turns — for a single-user Personal AI that IS the "stop" the phone means.
  */
 
 const abortersByAgent = new Map<string, Set<AbortController>>();

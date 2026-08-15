@@ -313,7 +313,7 @@ function isBookkeepingPath(filePath: string): boolean {
   return /(^|\/)\.claude\/(plans|projects)\//.test(filePath);
 }
 
-/** Agent MEMORY STORE entries (butler/subagent persistent memory, not code). */
+/** Agent MEMORY STORE entries (Personal AI/subagent persistent memory, not code). */
 function isAgentMemoryPath(filePath: string): boolean {
   return (
     /(^|\/)memory\/(projects|agents|repos|daily|topics|compaction|sessions|vault|knowledge)\//.test(filePath)

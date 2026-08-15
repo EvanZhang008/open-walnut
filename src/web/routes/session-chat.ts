@@ -197,7 +197,7 @@ export function registerSessionChatRpc(): void {
     if (record?.lane) {
       void (async () => {
         try {
-          const { parseLaneKey } = await import('../../core/sessions/butler-lane.js')
+          const { parseLaneKey } = await import('../../core/sessions/personal-ai-lane.js')
           const ids = parseLaneKey(record.lane)
           if (!ids) return
           const { touchLaneConversation, listConversations } = await import('../../core/conversations.js')

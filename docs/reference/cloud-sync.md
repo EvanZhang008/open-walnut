@@ -35,7 +35,7 @@ resumable job behind both (`/api/cloud-setup`, driven by
 `src/core/cloud-setup/job.ts`):
 
 - **Settings → Cloud Companion** — the wizard.
-- **Ask your butler** — "set up my cloud companion" routes to the shipped
+- **Ask your Personal AI**: "set up my cloud companion" routes to the shipped
   `setup-cloud-companion` skill.
 
 The claim step is what mints the device token: the box boots holding a one-shot

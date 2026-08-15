@@ -105,7 +105,7 @@ Replica note: all task writes ride the existing task outbox → git-sync → pri
 
 Replica note: all Wave-1/2 B rows reuse the `session.control` relay pattern (narrow allowlisted daemon command, primary runs the same core, verbatim error passthrough). `restart`/`terminate`/`retry`/`permission` need one new allowlisted relay command family, not per-endpoint plumbing.
 
-### api-v1.ts + conversations.ts + chat-history.ts — butler chat
+### api-v1.ts + conversations.ts + chat-history.ts: Personal AI chat
 
 | Method+Path | Web UI use | R/W | v1? | Class | Wave |
 |---|---|---|---|---|---|
@@ -323,7 +323,7 @@ Decision (Wave 3, 2026-08): the phone already holds its own system calendar perm
 `chat`, `chat:stop`, `chat:answer-question`, `session:start/send/get-queue/edit-queued/delete-queued`, `session:stream-subscribe`, `session:team-*` (4), `auth`, `set-interest`, `browser:logs`.
 
 - Covered by v1 already: `chat` (POST messages), `session:start` (POST /sessions), `session:send` (POST /sessions/:id/messages), streaming (SSE).
-- Wave 1: `chat:stop`, `chat:answer-question` (butler form answers — mobile currently cannot answer agent questions at all).
+- Wave 1: `chat:stop`, `chat:answer-question` (Personal AI form answers; mobile currently cannot answer agent questions at all).
 - Wave 2: queue management (`session:get-queue`/`edit-queued`/`delete-queued`) as `GET/PATCH/DELETE /v1/sessions/:id/queue*` — the web's queued-message editing.
 - Wave 3: team-agent subscriptions (fold into the session SSE stream as additive events).
 
@@ -339,7 +339,7 @@ Theme: everything a user does daily on the console that the phone cannot do toda
 2. **Focus/pin (6)**: pin/unpin/reorder/tier-move + tier list read. Class A.
 3. **Session control (7)**: `PATCH /v1/sessions/:id` (title/archive/mode/human_note), `POST terminate|restart|retry|permission|execute-continue` (5), `GET /v1/sessions/:id/changes`. Class B — one new `session.control` relay command family. `permission` and `restart` are the two single highest-value mobile actions (approve a tool prompt / wake a dead session from the phone — the latter removes a documented v1 gap).
 4. **Rich history (1)**: `GET /v1/sessions/:id/history` (paged rich blocks; supersedes transcript's 100-row tail for full parity chat rendering). Class B.
-5. **Butler chat manage (4)**: PATCH/DELETE conversation, `POST /v1/conversations/:id/stop`, `POST /v1/conversations/:id/answer`. Class A.
+5. **Personal AI chat manage (4)**: PATCH/DELETE conversation, `POST /v1/conversations/:id/stop`, `POST /v1/conversations/:id/answer`. Class A.
 6. **Search (2)**: `GET /v1/search` (tasks/memory/sessions), `GET /v1/notes/search`. Class C-then-A on replica.
 7. **Memory (5)**: browse/list + global/user read/write. Class A.
 8. **Notifications (3)**: feed + mark-read + dismiss. Class B relay (store on primary) or projection export — decide at design time; recommend relay for freshness.
@@ -372,7 +372,7 @@ Dev/admin maintenance (`working-dirs/recompile`, notes index ops, qmd download/r
 |---|---|---|
 | Internal console surface (baseline) | 267 | 46 route files, enumerated in the gap matrix |
 | Already v1 before the plan | 29 | chat, task R/W, session talk/launch/control, notes CRUD, events |
-| Wave 1 shipped | ~40 | task edits/batch, focus, session control + rich history, butler manage, search, memory, notifications, iOS leak formalization |
+| Wave 1 shipped | ~40 | task edits/batch, focus, session control + rich history, Personal AI manage, search, memory, notifications, iOS leak formalization |
 | Wave 2 shipped | ~52 | routines, config read, usage overview, projects + ordering + favorites, focus tiers, groups, files, slash-commands, skills read, session controls/side-questions/queue, notes extras, conversations active + chat stats/clear |
 | Wave 3 shipped | 59 | this wave — see above |
 | **Total v1 surface** | **~180 endpoints** | ~67% of the internal surface, 100% of the phone-meaningful surface |

@@ -15,10 +15,10 @@
  *
  * Flags:
  *   --url <url>        Walnut base URL (the container's mapped port). Required.
- *   --expect-ready     Assert the butler IS configured (path-2 happy path: creds were injected).
+ *   --expect-ready     Assert the Personal AI IS configured (path-2 happy path: creds were injected).
  *                      Default asserts the onboarding banner IS shown (path 1/3: no creds).
  *   --record <file>    Record an MP4 of the onboarding walkthrough via CDP screencast.
- *   --chat "msg"       After setup, type a message to the butler and assert a reply
+ *   --chat "msg"       After setup, type a message to the Personal AI and assert a reply
  *                      (only meaningful with --expect-ready; needs a real credential).
  */
 import { chromium } from 'playwright';
@@ -105,10 +105,10 @@ async function main() {
     }
 
     if (CHAT && CHAT !== true) {
-      log(`typing to butler: "${CHAT}"`);
+      log(`typing to Personal AI: "${CHAT}"`);
       const replied = await sendChatAndWaitForReply(page, CHAT);
-      if (replied) log('✓ butler replied — credential works end-to-end');
-      else fail('butler did not reply within timeout');
+      if (replied) log('✓ Personal AI replied — credential works end-to-end');
+      else fail('Personal AI did not reply within timeout');
     }
   } else {
     // Clean room: onboarding banner + the hero paste block must be visible.

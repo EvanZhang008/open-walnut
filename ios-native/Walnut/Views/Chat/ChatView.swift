@@ -143,7 +143,7 @@ struct ChatView: View {
     }
 }
 
-/// Butler chat message list on the UIKit timeline engine (Timeline/):
+/// Personal AI chat message list on the UIKit timeline engine (Timeline/):
 /// parsing/measurement on a background actor, O(visible) main-thread attach.
 /// Replaced the ScrollView+LazyVStack body — same structural fix as
 /// SessionConversationView (0x8BADF00D full-tree-diff class). The

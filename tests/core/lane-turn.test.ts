@@ -21,7 +21,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 const getOrCreateLaneSession = vi.hoisted(() => vi.fn())
 const sendMessageToSession = vi.hoisted(() => vi.fn(async () => ({ id: 'qm-test' })))
 
-vi.mock('../../src/core/sessions/butler-lane.js', () => ({ getOrCreateLaneSession }))
+vi.mock('../../src/core/sessions/personal-ai-lane.js', () => ({ getOrCreateLaneSession }))
 vi.mock('../../src/core/session-message-queue.js', () => ({ sendMessageToSession }))
 
 import { bus, EventNames } from '../../src/core/event-bus.js'

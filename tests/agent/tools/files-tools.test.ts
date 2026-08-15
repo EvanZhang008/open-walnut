@@ -301,7 +301,7 @@ describe('file_list', () => {
     await fs.mkdir(projDir, { recursive: true });
     await fs.writeFile(
       path.join(projDir, 'MEMORY.md'),
-      '---\nname: Walnut\ndescription: Personal butler\n---\n',
+      '---\nname: Walnut\ndescription: Personal Personal AI\n---\n',
       'utf-8',
     );
 

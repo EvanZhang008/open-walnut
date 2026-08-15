@@ -176,12 +176,12 @@ describe('getAllRepoMemorySummaries', () => {
   it('reads custom YAML frontmatter', () => {
     ensureRepoMemoryDir('walnut');
     const memFile = path.join(REPOS_MEMORY_DIR, 'walnut', 'SKILL.md');
-    fs.writeFileSync(memFile, `---\nname: Open Walnut\ndescription: Personal butler codebase\n---\n`, 'utf-8');
+    fs.writeFileSync(memFile, `---\nname: Open Walnut\ndescription: Personal Personal AI codebase\n---\n`, 'utf-8');
 
     const summaries = getAllRepoMemorySummaries();
     const walnut = summaries.find((s) => s.slug === 'walnut')!;
     expect(walnut.name).toBe('Open Walnut');
-    expect(walnut.description).toBe('Personal butler codebase');
+    expect(walnut.description).toBe('Personal Personal AI codebase');
   });
 });
 

@@ -1,29 +1,29 @@
 ---
 name: setup-walnut
-description: Hands-on setup agent for Open Walnut. Paste into your OWN Claude Code session — it makes Walnut's butler able to talk on first launch. It mirrors however THIS Claude Code is already authenticated (SSO profile, bearer token, or access keys) into Walnut, installs, starts the server, and proves it works with a real model call — fixing auth errors itself and asking you only when it truly can't proceed. Use when a user wants to install or set up Open Walnut.
+description: Hands-on setup agent for Open Walnut. Paste into your OWN Claude Code session. It makes Walnut's Personal AI able to talk on first launch. It mirrors however THIS Claude Code is already authenticated (SSO profile, bearer token, or access keys) into Walnut, installs, starts the server, and proves it works with a real model call. It fixes auth errors itself and asks you only when it truly can't proceed. Use when a user wants to install or set up Open Walnut.
 ---
 
 # Set up Open Walnut — we do it for you
 
-**Goal:** make Open Walnut's main agent (the "butler") able to talk on first launch.
+**Goal:** make Open Walnut's main agent (the "Personal AI") able to talk on first launch.
 You are doing the setup *for* the user. Be **proactive**: do everything you can yourself,
 write the config yourself, verify with a real model call yourself, and fix errors yourself.
 Ask the user a question **only** when you genuinely cannot proceed without an answer they alone have.
 
 ## Two truths that shape this skill
 
-1. **The butler needs a real model credential.** Walnut's main agent calls the model API
+1. **The Personal AI needs a real model credential.** Walnut's main agent calls the model API
    **directly via the SDK** (Bedrock / Anthropic / OpenAI / Google / Ollama). It does **not**
-   go through the `claude` CLI and has no OAuth path. So the butler (home-page chat, triage,
+   go through the `claude` CLI and has no OAuth path. So the Personal AI (home-page chat, triage,
    memory, cron) only works once one real credential is resolvable.
 
 2. **Coding sessions already work with zero config.** The `/sessions` Claude Code sessions
    spawn the user's **own logged-in `claude` binary** and use its login — they need *nothing*
-   from Walnut's config. So even before the butler has a credential, the user can clone, start,
+   from Walnut's config. So even before the Personal AI has a credential, the user can clone, start,
    and open coding sessions. Tell them this so they're never blocked: *"You can start using
-   coding sessions right now; let's also wire up the butler so home-page chat works."*
+   coding sessions right now; let's also wire up the Personal AI so home-page chat works."*
 
-Walnut resolves the butler's Bedrock credential with this priority:
+Walnut resolves the Personal AI's Bedrock credential with this priority:
 `~/.open-walnut/config.yaml` → `~/.claude/settings.json` env block → process env → `~/.aws`.
 Writing `config.yaml` is the most explicit and portable, so that's what this skill writes.
 
@@ -108,7 +108,7 @@ figure out what the user *can* use and guide the smallest path. Ask one short qu
   - Only if the user explicitly asks you to create a long-term key *and* has the rights, you may
     run the AWS CLI to do it — but **stop immediately on `AccessDenied`** and fall back to the
     console-self-serve path above. (Long-term keys are "exploration only" per AWS; a personal
-    local butler is an acceptable use, and it can be rotated/revoked later.)
+    local Personal AI is an acceptable use, and it can be rotated/revoked later.)
 
 - **Model access is a common real blocker.** Bedrock requires the account to have **model
   access** enabled for Claude models before any call succeeds. If Step 5's test returns
@@ -121,7 +121,7 @@ Have them grab a key from the Anthropic console and either export `ANTHROPIC_API
 write the Anthropic variant in Step 3.
 
 > Meanwhile, remind them coding sessions already work with their logged-in `claude` — they're
-> not blocked while sorting out the butler credential.
+> not blocked while sorting out the Personal AI credential.
 
 ---
 
@@ -207,7 +207,7 @@ curl -s http://localhost:3456/api/system/health | python3 -m json.tool
 # expect "hasReadyProvider": true and "credentialSource": "config"
 ```
 
-Final confirmation — actually talk to the butler in the UI: open http://localhost:3456 and
+Final confirmation: actually talk to the Personal AI in the UI: open http://localhost:3456 and
 type "hello". A real reply is the ground truth that onboarding succeeded.
 
 ---

@@ -1,5 +1,5 @@
 /**
- * WS `chat:stop` reaches the butler's lane session.
+ * WS `chat:stop` reaches the Personal AI's lane session.
  *
  * The handler used to abort ONLY the per-socket AbortController. On the lane
  * engine the turn is running inside a `claude` CLI the daemon owns, so that abort
@@ -38,7 +38,7 @@ vi.mock('../../../src/web/ws/handler.js', () => ({ registerMethod, broadcastEven
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { bus, EventNames, type BusEvent } from '../../../src/core/event-bus.js'
 import { registerChatRpc } from '../../../src/web/routes/chat.js'
-import { butlerLaneKey } from '../../../src/core/sessions/butler-lane.js'
+import { personalAiLaneKey } from '../../../src/core/sessions/personal-ai-lane.js'
 
 const LANE_SID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
 
@@ -57,8 +57,8 @@ async function callStop(payload: Record<string, unknown>): Promise<void> {
 async function seedLane(conversationId: string, processStatus = 'running'): Promise<void> {
   const { createSessionRecord, updateSessionRecord } = await import('../../../src/core/session-tracker.js')
   await createSessionRecord(LANE_SID, '', '', WALNUT_HOME, {
-    title: 'Butler chat',
-    lane: butlerLaneKey('general', conversationId),
+    title: 'Personal AI chat',
+    lane: personalAiLaneKey('general', conversationId),
     initialProcessStatus: 'idle',
   })
   if (processStatus !== 'idle') {

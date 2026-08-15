@@ -170,7 +170,7 @@ diff review, and zero-config onboarding.
 
 ## [0.1.0] — 2026-03-08
 
-First public release — a personal AI butler powered by Claude.
+First public release: a Personal AI powered by Claude.
 
 - Claude Code Web UI: spawn, monitor, and chat with sessions from a real-time dashboard.
 - 4-layer task hierarchy (Category → Project → Task → Subtask) with a 7-phase lifecycle.

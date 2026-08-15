@@ -145,7 +145,7 @@ export default function SettingsScreen() {
 
       <Text style={[styles.about, { color: c.tertiaryLabel }]}>
         Walnut{status ? ` · server v${status.version}` : ''}
-        {'\n'}Your personal AI butler
+        {'\n'}Your Personal AI
       </Text>
     </ScrollView>
   )

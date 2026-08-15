@@ -166,7 +166,7 @@ export async function runAgentLoop(
 
   // Turn boundary: the memory consolidation breaker (memory_manage writes) counts consecutive
   // failures WITHIN a turn (Hermes #42405); a new user turn resets it.
-  // Main-butler turns only: subagent/cron/dream loops (options.system set) run
+  // Personal AI turns only: subagent/cron/dream loops (options.system set) run
   // interleaved with a live main turn — resetting from them would clear the
   // breaker mid-consolidation and re-open the infinite retry loop. The global
   // memory actions always operate on the general store, so reset that one.
@@ -178,7 +178,7 @@ export async function runAgentLoop(
 
     // Same gate, same reason: RE-PIN the frozen memory prompt snapshot for this
     // conversation (Hermes frozen-snapshot pattern — see memory-prompt-snapshot.ts).
-    // A real main-butler turn is the ONLY thing that refreshes the pin, so a write
+    // A real Personal AI turn is the ONLY thing that refreshes the pin, so a write
     // mid-turn (including one from the background-review fork, which is excluded
     // here) reaches disk immediately but only enters the prompt on the NEXT turn.
     // Reusing this gate is deliberate: one definition of "a real turn started",

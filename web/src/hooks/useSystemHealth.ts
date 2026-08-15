@@ -27,7 +27,7 @@ export interface SystemHealth {
   daemons?: DaemonHealth[];
   /** True when the Claude Code CLI is available to the server (coding sessions work). */
   claudeCliAvailable?: boolean;
-  /** True when at least one AI provider has a usable credential (the butler can talk). */
+  /** True when at least one AI provider has a usable credential (the Personal AI can talk). */
   hasReadyProvider?: boolean;
   /** Where the active Bedrock credential came from (for the onboarding "auto-detected" note). */
   credentialSource?: CredentialSource;
@@ -89,7 +89,7 @@ export function useSystemHealth() {
   const gitSyncFailing = !gitSync.protected || gitSync.consecutiveFailures >= 3;
   const hasIssues = gitSyncFailing;
 
-  // Setup is "complete" once the butler has a provider AND the CLI is present.
+  // Setup is "complete" once the Personal AI has a provider AND the CLI is present.
   // Fields are optional on the wire; treat undefined as "not yet known" → not complete,
   // so the banner can appear on first load rather than flashing complete-then-incomplete.
   const setupComplete = health.claudeCliAvailable === true && health.hasReadyProvider === true;

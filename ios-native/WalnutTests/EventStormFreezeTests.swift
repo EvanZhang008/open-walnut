@@ -183,7 +183,7 @@ final class EventStormFreezeTests: XCTestCase {
         XCTAssertEqual(fired, 0, "same-value status events must not invalidate the nav subtitle")
     }
 
-    /// ChatStore mirror (the butler chat page has the same two flags and the
+    /// ChatStore mirror (the Personal AI chat page has the same two flags and the
     /// same full-page `streaming` read in ChatView's body). Drives the REAL
     /// handler via the handleForTesting seam — the old version of this test
     /// re-implemented the equality gate inside the test body, so it passed

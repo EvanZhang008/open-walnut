@@ -12,7 +12,7 @@
 # Production on :3456 and the real ~/.open-walnut / ~/.claude are never touched.
 #
 #   scripts/onboarding-cleanroom.sh clean            # path 1/3: no creds → onboarding shows
-#   scripts/onboarding-cleanroom.sh happy            # path 2: inject host cred → butler ready
+#   scripts/onboarding-cleanroom.sh happy            # path 2: inject host cred → Personal AI ready
 #   scripts/onboarding-cleanroom.sh record out.mp4   # record the clean-room onboarding
 #   scripts/onboarding-cleanroom.sh stop
 set -uo pipefail

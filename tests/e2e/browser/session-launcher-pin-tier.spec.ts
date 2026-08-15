@@ -154,7 +154,7 @@ test('the launcher sends the picked tier in the quick-start payload', async ({ p
   await expect(selector).toBeHidden()
 
   // The DRAFT column's composer, not the main chat's — the latter would message
-  // the butler and this spec would wait 20s for a quick-start that never fires.
+  // the Personal AI and this spec would wait 20s for a quick-start that never fires.
   const chatInput = panel.locator('.chat-input-textarea')
   await expect(chatInput).toBeVisible({ timeout: 10_000 })
   await chatInput.click()

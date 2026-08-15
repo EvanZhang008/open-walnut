@@ -98,9 +98,9 @@ function escAttr(s: string): string {
 }
 
 /**
- * Permission-mode enum + description for the butler's session tool schemas,
+ * Permission-mode enum + description for the Personal AI's session tool schemas,
  * derived from the SESSION_MODES registry (src/core/types.ts) so a new mode
- * reaches the butler automatically. These schemas used to hardcode subsets
+ * reaches the Personal AI automatically. These schemas used to hardcode subsets
  * (['plan','bypass'] and ['bypass','accept','plan']), which made modes the UI
  * offered un-requestable by the agent.
  */
@@ -2494,7 +2494,7 @@ defaults (same resolution chain as session_start).`,
 
   {
     name: 'cron_manage',
-    description: 'Manage routines (scheduled jobs). Actions: add, update, remove, toggle (enable/disable), run (manual trigger), status (scheduler info). A routine = schedule + executor. Executor types: "main-agent" (inject instructions into the main butler conversation), "walnut-agent" (isolated in-process agent run), "claude-code" (start a real Claude Code session — config needs cwd, optional host alias for remote / omit for local, optional model).',
+    description: 'Manage routines (scheduled jobs). Actions: add, update, remove, toggle (enable/disable), run (manual trigger), status (scheduler info). A routine = schedule + executor. Executor types: "main-agent" (inject instructions into the Personal AI conversation), "walnut-agent" (isolated in-process agent run), "claude-code" (start a real Claude Code session — config needs cwd, optional host alias for remote / omit for local, optional model).',
     input_schema: {
       type: 'object',
       properties: {

@@ -25,7 +25,7 @@
  *   DB, search index, timeline captures (gitignored dir) and heartbeat runner
  *   all live on the primary → 501 not_supported_cloud.
  * - config/providers: local read describing the ANSWERING box's provider
- *   credentials (the replica's butler uses its own) — served on both boxes,
+ *   credentials (the replica's Personal AI uses its own) — served on both boxes,
  *   with `key_hint` (last-4 of a key) STRIPPED: any paired device can call
  *   v1, and even a key fragment doesn't belong on that trust level.
  * - integrations / heartbeat checklist: A — registry runs on both boxes

@@ -61,7 +61,7 @@ function trackCompactionUsage(usage: { model?: string; input_tokens?: number; ou
 
 /**
  * The forked turn that rewrites working memory. Module-level because BOTH engines
- * trigger it — the in-process loop off its token breakdown, the butler lane off
+ * trigger it — the in-process loop off its token breakdown, the Personal AI lane off
  * the lane turn — and they must fork identically (same tool filter, same system,
  * same source tag, so usage attribution and the tool allowlist can't drift).
  */
@@ -689,7 +689,7 @@ export function registerChatRpc(): void {
       const conversationId = stopConvId
         ? validateConversationId(stopConvId)
         : await getActiveConversationId(effectiveAgentId)
-      const { interruptLaneForConversation } = await import('../../core/sessions/butler-lane.js')
+      const { interruptLaneForConversation } = await import('../../core/sessions/personal-ai-lane.js')
       await interruptLaneForConversation(effectiveAgentId, conversationId)
     } catch (err) {
       // A failed lane stop must never surface as an RPC error — the in-process
@@ -782,8 +782,8 @@ export function registerChatRpc(): void {
     // 'claude-code' delivers the turn into the conversation's lane session instead
     // of running the in-process loop. Resolved BEFORE the queue so the branch is a
     // single decision per turn. EVERY console agent rides the lane engine: the
-    // butler gets butlerProfile, any other agent gets consoleAgentProfile (its
-    // own persona + the same session addendum) — see butler-lane.resolveLane.
+    // Personal AI gets personalAiProfile, any other agent gets consoleAgentProfile (its
+    // own persona + the same session addendum) — see personal-ai-lane.resolveLane.
     const { getConfig: getEngineConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
     const useLaneEngine = resolveAgentEngineProvider(await getEngineConfig()) === 'claude-code'
     /** Set by the lane branch so the client can subscribe to the session stream. */
@@ -904,7 +904,7 @@ export function registerChatRpc(): void {
         unregisterAbort()
         try {
           // ── Turn-boundary memory bookkeeping (mirrors agent/loop.ts) ──
-          // The in-process loop opens every main-butler turn by resetting the
+          // The in-process loop opens every Personal AI turn by resetting the
           // memory-consolidation breaker and re-pinning the frozen memory-prompt
           // snapshot for this conversation. A lane turn never enters that loop, so
           // without this the breaker's consecutive-failure count never clears
@@ -1062,7 +1062,7 @@ export function registerChatRpc(): void {
           }
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err)
-          log.web.error('butler lane turn failed', { agentId, conversationId, error: errMsg })
+          log.web.error('Personal AI lane turn failed', { agentId, conversationId, error: errMsg })
           await chatHistory.addAIMessages(
             [{ role: 'assistant', content: [{ type: 'text', text: `[Error: ${errMsg}]` }] }] as MessageParam[],
             { source: 'agent-error', agentId, conversationId },
@@ -1255,7 +1255,7 @@ export function registerChatRpc(): void {
           }
         }
 
-        // Background self-review: count this clean main-butler turn; every N turns
+        // Background self-review: count this clean Personal AI turn; every N turns
         // fork the conversation (same cache prefix) for a skill/memory review pass.
         // Fire-and-forget — persistence-isolated, never touches this conversation.
         if (agentId === 'general') {

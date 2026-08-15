@@ -60,9 +60,6 @@ export function personalAiProfile(name: string, skillsIndex?: string, memoryCont
   )!
 }
 
-// Compatibility while callers migrate to the product name.
-export const butlerProfile = personalAiProfile
-
 /**
  * Lane profile for a NON-general console agent (mentor, note-agent, custom
  * ones): the agent's OWN persona replaces the Personal AI identity, then gets

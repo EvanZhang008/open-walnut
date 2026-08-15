@@ -78,7 +78,7 @@ struct SettingsView: View {
     }
 
     /// Server info block from GET /v1/config — provider/model/hosts, plus the
-    /// butler conversation size from GET /v1/chat/stats. Hidden entirely when
+    /// Personal AI conversation size from GET /v1/chat/stats. Hidden entirely when
     /// the endpoint isn't there yet (older server).
     @ViewBuilder
     private var serverInfoSection: some View {
@@ -101,7 +101,7 @@ struct SettingsView: View {
                     LabeledContent("Uptime", value: Self.uptimeText(uptime))
                 }
                 if let stats = chatStats, let count = stats.apiMessageCount {
-                    LabeledContent("Butler chat") {
+                    LabeledContent("Personal AI chat") {
                         Text(chatStatsLine(stats, count: count))
                             .foregroundStyle(.secondary)
                     }
@@ -201,7 +201,7 @@ struct SettingsView: View {
         } footer: {
             VStack(spacing: 4) {
                 Text("Walnut \(Self.appVersion)")
-                Text("Your personal AI butler")
+                Text("Your Personal AI")
             }
             .frame(maxWidth: .infinity)
             .padding(.top, 12)

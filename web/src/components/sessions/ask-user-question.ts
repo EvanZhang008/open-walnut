@@ -11,7 +11,7 @@
  * This module owns parsing the tool input and turning per-question UI selections
  * into the `answers` map the server injects. Rendering lives in
  * SessionChatHistory's PermissionRequestCard; the option pill styling reuses the
- * `qp-*` classes from the butler-side QuestionPopover.
+ * `qp-*` classes from the Personal AI's QuestionPopover.
  */
 
 export interface AskQuestionOption {

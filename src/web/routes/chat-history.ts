@@ -175,7 +175,7 @@ chatHistoryRouter.post('/clear', async (req: Request, res: Response, next: NextF
   try {
     const { agentId, conversationId } = await resolveChatRef(req)
     await chatHistory.clear(agentId, conversationId)
-    const { archiveLaneForConversation } = await import('../../core/sessions/butler-lane.js')
+    const { archiveLaneForConversation } = await import('../../core/sessions/personal-ai-lane.js')
     const retired = await archiveLaneForConversation(agentId ?? 'general', conversationId)
     log.web.info('chat conversation cleared', { agentId, conversationId, retiredLaneSessionId: retired ?? undefined })
     res.json({ ok: true })

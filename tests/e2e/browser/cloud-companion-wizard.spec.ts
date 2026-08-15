@@ -53,11 +53,11 @@ test.describe('Settings → Cloud Companion', () => {
     const section = await openCloudSection(page)
 
     // Nothing configured in the fixture, so the entry point is the hero — including
-    // the hint that the butler can do this too (the plan's discoverability promise).
+    // the hint that the Personal AI can do this too (the plan's discoverability promise).
     // Generous timeout: the mount probe (GET /job + GET /api/devices) must finish
     // first, and under heavy machine load that easily outlives the default 5s.
     await expect(section.getByRole('heading', { name: /Set up your own cloud companion/i })).toBeVisible({ timeout: 60_000 })
-    await expect(section).toContainText(/ask your butler/i)
+    await expect(section).toContainText(/ask your Personal AI/i)
 
     await section.getByRole('button', { name: /Get started/i }).click()
 

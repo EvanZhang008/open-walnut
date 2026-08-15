@@ -946,7 +946,7 @@ export function ProvidersSection({ config, onSave }: Props) {
   };
 
   // The engine flag (config.agent.provider) is a separate axis from these
-  // credentials: 'claude-code' routes butler turns into a `claude` CLI session,
+  // credentials: 'claude-code' routes Personal AI turns into a `claude` CLI session,
   // which brings its own auth — so this whole section stops being what answers
   // chat. Users read "Bedrock selected" as "Bedrock is answering"; say otherwise.
   const laneEngineActive = config.agent?.provider === 'claude-code';

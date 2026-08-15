@@ -127,7 +127,7 @@ export function CloudSection() {
   }, [refreshJob]);
 
   // Live progress. Attaching unconditionally (not only while a job runs) means a
-  // job started from another surface — the butler skill, a second tab — lights
+  // job started from another surface — the Personal AI skill, a second tab — lights
   // this panel up without a reload.
   useEffect(() => {
     const close = streamJob({
@@ -314,7 +314,7 @@ export function CloudSection() {
               Get started
             </button>
             <p className="cloud-hint">
-              You can also ask your butler: &ldquo;set up my cloud companion&rdquo;.
+              You can also ask your Personal AI: &ldquo;set up my cloud companion&rdquo;.
             </p>
           </div>
         )}

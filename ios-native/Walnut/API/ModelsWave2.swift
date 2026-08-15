@@ -58,7 +58,7 @@ struct RoutineJob: Codable, Identifiable, Equatable {
 
         var label: String {
             switch type {
-            case "main-agent": return "Butler"
+            case "main-agent": return "Personal AI"
             case "walnut-agent": return "Isolated agent"
             case "claude-code": return "Claude Code"
             default: return type
@@ -295,7 +295,7 @@ struct ServerConfigInfo: Codable {
     }
 }
 
-/// GET /v1/chat/stats → butler conversation size (cached between turns).
+/// GET /v1/chat/stats → Personal AI conversation size (cached between turns).
 struct ChatStats: Codable {
     let apiMessageCount: Int?
     let estimatedTotalTokens: Int?

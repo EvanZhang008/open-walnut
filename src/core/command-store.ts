@@ -5,7 +5,7 @@
  *   1. Built-in commands — dist/data/slash-commands/*.md (read-only). EMPTY since
  *      2026-07: every built-in descriptive command was migrated to a skill
  *      (src/data/skills/<name>/SKILL.md) — skills are the one mental model for
- *      "instructions the butler follows", surfaced in the / palette by
+ *      "instructions the Personal AI follows", surfaced in the / palette by
  *      skill-bridge. The layer is kept for back-compat with user-created files.
  *   2. User commands    — stored in ~/.open-walnut/commands/*.md (read-write)
  *

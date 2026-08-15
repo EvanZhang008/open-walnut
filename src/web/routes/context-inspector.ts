@@ -5,7 +5,7 @@
  * ENGINE-AWARE: the sections depend on which engine answers the turn.
  *   - walnut-agent (in-process loop): the full prompt assembly this file has
  *     always shown (role, skills index, memory, 52 tool schemas, apiMessages).
- *   - claude-code (butler lane): the turn runs in a `claude` CLI session, so
+ *   - claude-code (Personal AI lane): the turn runs in a `claude` CLI session, so
  *     none of that assembly is fed to the model. The honest view is the lane's
  *     LAUNCH CONFIG — the exact `--system-prompt`, model/effort/cwd, MCP
  *     mounts — plus the last turn's exact input-token count. Tools, skills
@@ -49,23 +49,23 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
     // in-process assembly (which is not what the model sees on this engine). ──
     const engine = resolveAgentEngineProvider(config)
     if (engine === 'claude-code') {
-      const { butlerLaneKey, buildLaneMemoryContext, LANE_MEMORY_HEADER } = await import('../../core/sessions/butler-lane.js')
+      const { personalAiLaneKey, buildLaneMemoryContext, LANE_MEMORY_HEADER } = await import('../../core/sessions/personal-ai-lane.js')
       const { getSessionByLane } = await import('../../core/session-tracker.js')
-      const { butlerProfile, consoleAgentProfile } = await import('../../core/sessions/profiles.js')
+      const { personalAiProfile, consoleAgentProfile } = await import('../../core/sessions/profiles.js')
       const { buildSessionSkillsPrompt } = await import('../../core/skill-loader.js')
       const { getLastTurnTokens } = await import('../../core/token-truth.js')
 
       const effectiveAgentId = agentId ?? 'general'
-      const lane = butlerLaneKey(effectiveAgentId, conversationId)
+      const lane = personalAiLaneKey(effectiveAgentId, conversationId)
       const record = await getSessionByLane(lane)
       // No lane yet (first message not sent) → show what the NEXT spawn will feed.
-      // general = butler persona; other console agents = their own persona in the
-      // same session wrapper (mirrors butler-lane.resolveLane).
+      // general = Personal AI persona; other console agents = their own persona in the
+      // same session wrapper (mirrors personal-ai-lane.resolveLane).
       let fallbackProfile
       if (!record?.profile) {
         const skillsIdx = await buildSessionSkillsPrompt().catch(() => '')
         if (effectiveAgentId === 'general') {
-          fallbackProfile = butlerProfile(
+          fallbackProfile = personalAiProfile(
             config.user.name ?? 'the user',
             skillsIdx,
             await buildLaneMemoryContext().catch(() => ''),

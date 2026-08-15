@@ -154,7 +154,7 @@ spike in §17.
 
 Personas: **Riya** (Obsidian power-user, ~2k-note vault, keyboard-first, portability non-negotiable);
 **Marco** (Notion power-user, blocks/slash/drag/databases-lite, "it just works" polish bar); **Sam** (newcomer
-/ butler-only, wants 2-second capture + "search just finds it", never a wall of options).
+/ chat-only, wants 2-second capture + "search just finds it", never a wall of options).
 
 ### Friction points and how they were addressed
 
@@ -186,14 +186,14 @@ Personas: **Riya** (Obsidian power-user, ~2k-note vault, keyboard-first, portabi
 - **Engineering honesty** — re-reading the shipped table serializer, the QMD hot-path trap, the
   absolute-vs-relative path bug; owning a custom serializer with a byte-level + node-level round-trip corpus.
 - **"One user action = one `Cmd+Z`"** — explicitly folding the multi-dispatch Tab into a single transaction.
-- **External/AI-write "defer-while-dirty + position-mapping"** — the butler can edit a note you have open
+- **External/AI-write "defer-while-dirty + position-mapping"**: the Personal AI can edit a note you have open
   without stealing your caret; a genuinely novel capability handled with care.
 
 ### Persona verdicts (verbatim gist)
 
 - **Riya (Obsidian):** *"Not yet a replacement at v1, but on a credible path."* Blockers were the link
   portability collision (now resolved) and the missing quick-switcher (now P1 + a P0 "New note" floor).
-- **Marco (Notion):** *"Would replace Notion for notes that live inside my butler; better on semantic search
+- **Marco (Notion):** *"Would replace Notion for notes that live inside my Personal AI; better on semantic search
   + portable Markdown."* Gated by no databases-lite (out of scope), Cmd+K demotion (resolved to P1 + floor),
   and the popup drag grip.
 - **Sam (newcomer):** *"Not yet my daily quick-jot tool, but close — the search is the reason I'd switch."*

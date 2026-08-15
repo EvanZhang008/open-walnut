@@ -43,7 +43,7 @@ describe('GET /api/agents', () => {
     const general = res.body.agents.find((a: { id: string }) => a.id === 'general');
     expect(general).toBeDefined();
     expect(general.source).toBe('builtin');
-    // BUILTIN_GENERAL.name — product-facing butler name, matched by api-v1.test.ts too.
+    // BUILTIN_GENERAL.name — product-facing Personal AI name, matched by api-v1.test.ts too.
     expect(general.name).toBe('Walnut');
   });
 });

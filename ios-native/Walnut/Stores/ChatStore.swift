@@ -42,7 +42,7 @@ final class ChatStore {
         agents.first(where: { $0.id == activeAgentID })
     }
 
-    /// Nav-bar title: the agent's name ("Walnut" for the main butler).
+    /// Nav-bar title: the agent's name ("Walnut" for the Personal AI).
     var activeAgentName: String {
         activeAgent?.name ?? (activeAgentID == "general" ? "Walnut" : activeAgentID)
     }
@@ -571,7 +571,7 @@ final class ChatStore {
 
     /// Equality-gated writes for the per-SSE-event flags — same fix as
     /// SessionConversationStore.setStreaming/setActivity (build-36 field
-    /// freeze): @Observable has no same-value suppression, and the butler
+    /// freeze): @Observable has no same-value suppression, and the Personal AI
     /// stream repeats `thinking` at whatever rate the agent emits, so an
     /// unconditional `activity = "Thinking"` invalidates every body that
     /// reads it (ChatView reads `streaming` in its ScrollView body) at

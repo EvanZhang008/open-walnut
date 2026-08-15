@@ -26,7 +26,7 @@ initLogging();
 program
   .name('open-walnut')
   .version(packageVersion)
-  .description('Open Walnut — Personal AI butler & task manager')
+  .description('Open Walnut — Personal AI & task manager')
   .option('--json', 'Output as JSON', false);
 
 registerCommands(program);

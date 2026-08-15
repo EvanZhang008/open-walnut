@@ -57,7 +57,7 @@ struct SetupView: View {
                 }
             Text("Walnut")
                 .font(.largeTitle.bold())
-            Text("Your personal AI butler — tasks, notes, and conversations, everywhere.")
+            Text("Your Personal AI — tasks, notes, and conversations, everywhere.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

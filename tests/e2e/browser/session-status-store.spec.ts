@@ -196,7 +196,7 @@ test('rejects delayed REST N after WS N+1 across every desktop status surface', 
     response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/api/sessions/quick-start')
   // The DRAFT's own composer is the launcher now — the main chat textarea would
-  // just message the butler, so the scope here is load-bearing.
+  // just message the Personal AI, so the scope here is load-bearing.
   const quickInput = draft.locator('.chat-input-textarea')
   await quickInput.fill(BASE_PROMPT)
   await quickInput.press('Enter')

@@ -28,7 +28,7 @@
 #   scripts/walnut-sandbox.sh export ["CMD"] [REGION] # use an awsCredentialExport command (temp creds)
 #   scripts/walnut-sandbox.sh subscription [MODEL]   # text-only Claude Code subscription (claude -p)
 #   scripts/walnut-sandbox.sh test                   # POST /api/config/test-connection (real round-trip)
-#   scripts/walnut-sandbox.sh chat ["message"]       # send one message to the butler, print its reply
+#   scripts/walnut-sandbox.sh chat ["message"]       # send one message to the Personal AI, print its reply
 #   scripts/walnut-sandbox.sh record <out.mp4>       # record the onboarding chain (needs a token; see below)
 #   scripts/walnut-sandbox.sh status                 # health of the sandbox
 #   scripts/walnut-sandbox.sh stop                   # stop + wipe the sandbox

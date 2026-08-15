@@ -78,7 +78,7 @@ The bar: a Notion user feels at home; an Obsidian user keeps their portable Mark
    cursor/scroll preserved across external/AI writes (defer-while-dirty + position-mapping), smooth typing on
    large notes, one `Cmd+Z` per user action. — tech §6
 9. **Minimal capture front door (newcomer on-ramp)** — a P0 "New note" affordance + `/notes` empty state so a
-   butler user not on `/notes` can capture in seconds (the headline newcomer metric) without the full Cmd+K
+   Personal AI user not on `/notes` can capture in seconds (the headline newcomer metric) without the full Cmd+K
    surface. — tech §3.6½
 
 **P1 (lands right after the editor feels right — root-cause durability backbone):** stable note identity +
@@ -179,7 +179,7 @@ default the docs already build against (full detail in tech §19).
    non-rendering id carrier — never the `|` slot.*
 3. **Conflict policy on a true write-write conflict.** The shipped optimistic-lock policy is
    **agent-writes-win**, losing ≤ one debounce window of un-flushed typing (now surfaced, not silent). The
-   design keeps it because it may be load-bearing for butler correctness. *Recommended: confirm
+   design keeps it because it may be load-bearing for Personal AI correctness. *Recommended: confirm
    agent-wins-on-true-conflict (non-conflicting writes already never lose input); flipping to
    user-wins-while-dirty would reverse a long-standing policy.*
 
@@ -192,5 +192,5 @@ keeps Markdown the portable source of truth, fixes three O(n) scans + the rename
 identity-keyed index, and treats round-trip fidelity + the editor's hard-won invariants as P0 gates. Two
 adversarial review rounds and three customer personas hardened it; their findings are resolved or escalated.
 What it is **not** at v1: a Notion-with-databases replacement, or a full Obsidian-parity PKM. What it **is**:
-a delightful block editor with magic (semantic + exact) search built into your AI butler — and the design is
+a delightful block editor with magic (semantic + exact) search built into your Personal AI, and the design is
 clear about exactly that line.

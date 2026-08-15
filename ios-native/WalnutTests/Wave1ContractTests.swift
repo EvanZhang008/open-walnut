@@ -3,7 +3,7 @@ import XCTest
 
 /// Wave-1 decode contracts + reducer logic: session lifecycle payloads
 /// (pendingPermissions, restart/terminate/retry), task detail readback,
-/// batch results, focus tiers, butler management, global search, and the
+/// batch results, focus tiers, Personal AI management, global search, and the
 /// user_ask pending-question state machine on ChatStore.
 final class Wave1ContractTests: XCTestCase {
 
@@ -144,7 +144,7 @@ final class Wave1ContractTests: XCTestCase {
         XCTAssertEqual(pins.pinnedTasks, ["x"])
     }
 
-    // MARK: - Butler management
+    // MARK: - Personal AI management
 
     func testConversationManagementPayloadsDecode() throws {
         let patched = try decode(ConversationPatched.self,

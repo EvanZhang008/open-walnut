@@ -1,6 +1,6 @@
 ---
 name: walnut-agent-loop
-description: Implementation details for src/agent/ — runAgentLoop internals (providers, auth, retry, streaming, abort, continuation), prompt caching, tool return types, tool module file map. Use when modifying the butler agent loop, providers, or agent tools.
+description: Implementation details for src/agent/: runAgentLoop internals (providers, auth, retry, streaming, abort, continuation), prompt caching, tool return types, tool module file map. Use when modifying the Personal AI agent loop, providers, or agent tools.
 ---
 
 # Agent System — Implementation Details

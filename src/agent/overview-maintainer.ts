@@ -105,7 +105,7 @@ export function buildMaintainerTools(location: ProjectSkillLocation): ToolDefini
 
       if (action === 'patch' || action === 'edit') {
         if (params.name !== skillKey) {
-          return `Error: the maintainer may only ${action} the '${skillKey}' skill. For other learnings, use create (rare) or leave them to the butler.`;
+          return `Error: the maintainer may only ${action} the '${skillKey}' skill. For other learnings, use create (rare) or leave them to the Personal AI.`;
         }
         return skillManageTool.execute(params, meta);
       }

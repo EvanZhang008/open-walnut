@@ -242,7 +242,7 @@ export const PROTOCOL_RETRY_PROMPT =
 // ── Conversation identity (for --resume chaining) ────────────────────────────
 
 /**
- * Fingerprint a conversation so consecutive adapter calls of the SAME butler
+ * Fingerprint a conversation so consecutive adapter calls of the SAME Personal AI
  * conversation resume one CLI session. The system prompt + the first user
  * message are stable for a conversation's lifetime; the message COUNT grows.
  * Collisions (two conversations with identical system + first message) are

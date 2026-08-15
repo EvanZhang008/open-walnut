@@ -42,7 +42,7 @@ export async function recordBoundedStoreEdit(target: MemoryTarget, before: strin
   // Thaw every frozen prompt snapshot. The agent's OWN writes deliberately do
   // not do this (see memory-prompt-snapshot.ts: freezing is what stops the
   // same-turn re-learn loop), but a human editing their memory in the UI is
-  // explicit intent to change what the butler believes RIGHT NOW — making them
+  // explicit intent to change what the Personal AI believes RIGHT NOW — making them
   // wait for the next turn boundary would read as the edit not having landed.
   try {
     invalidateMemoryPromptSnapshots()

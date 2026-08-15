@@ -4433,7 +4433,7 @@ select {
   text-overflow: ellipsis;
 }
 
-/* Engine badge — which engine answers butler turns (see EngineBadge.tsx). */
+/* Engine badge — which engine answers Personal AI turns (see EngineBadge.tsx). */
 .chat-engine-badge {
   display: inline-flex;
   align-items: center;

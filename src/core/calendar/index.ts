@@ -1,7 +1,7 @@
 /**
  * CalendarService — the single owner of external calendar data.
  *
- * All consumers (REST routes, butler calendar_* tools) go through this
+ * All consumers (REST routes, Personal AI calendar_* tools) go through this
  * service: a month-window TTL cache over the EventKit source, a periodic
  * refresh, and write-through edits that refresh the touched window and emit
  * `calendar:updated` so the web UI reflects agent/API edits live.

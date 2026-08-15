@@ -140,7 +140,7 @@ const result = await recordSegment(browser, {
       const roles = Array.from(document.querySelectorAll('.chat-message-role'));
       return roles.some((r) => /walnut/i.test(r.textContent || ''));
     }, { timeout: 60_000 }).then(() => true).catch(() => false);
-    log(replied ? '✓ Walnut assistant bubble appeared' : '• butler bubble not detected');
+    log(replied ? '✓ Walnut assistant bubble appeared' : '• Personal AI bubble not detected');
     // Let the turn fully complete (Stop button gone + text settled) so the reply is on screen.
     await waitForQuiet(page, { maxMs: 60_000, quietMs: 3000 });
     await beat(3500); // dwell on the finished reply for the viewer

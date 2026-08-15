@@ -92,14 +92,14 @@ describe('Memory Context', () => {
     seedGlobalMemory(WALNUT_HOME, 'Global preference: dark mode, concise responses.');
     seedDailyLog(WALNUT_HOME, daysAgoStr(0), 'Today I worked on memory v2 context injection tests.');
     // Legacy memory/projects/ files must NOT be injected (migrated to skills 2026-07)
-    seedProjectMemory(WALNUT_HOME, 'walnut', 'Walnut is a personal AI butler project.');
+    seedProjectMemory(WALNUT_HOME, 'walnut', 'Walnut is a Personal AI project.');
 
     const context = await buildMemoryContext(8000);
 
     expect(context).toContain('## Your long-term memory');
     expect(context).toContain('dark mode, concise responses');
     expect(context).not.toContain('## Your projects');
-    expect(context).not.toContain('personal AI butler project');
+    expect(context).not.toContain('Personal AI project');
     expect(context).toContain('## Recent activity');
     expect(context).toContain('memory v2 context injection tests');
 

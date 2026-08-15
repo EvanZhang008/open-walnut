@@ -45,7 +45,7 @@ describe('findRepoByPath', () => {
   it('matches CWD that is exactly the host path', async () => {
     await writeRepo('walnut', [
       'name: Open Walnut',
-      'description: Personal AI butler',
+      'description: Personal AI',
       'hosts:',
       '  local:',
       '    path: /tmp/test-walnut-exact',
@@ -58,7 +58,7 @@ describe('findRepoByPath', () => {
     expect(result).toBeDefined();
     expect(result!.name).toBe('Open Walnut');
     expect(result!.slug).toBe('walnut');
-    expect(result!.description).toBe('Personal AI butler');
+    expect(result!.description).toBe('Personal AI');
   });
 
   it('matches CWD that is a subdirectory of host path', async () => {

@@ -1,7 +1,7 @@
 ---
 name: walnut
 description: >-
-  Use the user's Walnut butler from inside a coding session — create, list,
+  Use the user's Walnut Personal AI from inside a coding session: create, list,
   update, and complete tasks, search their memory/tasks/sessions, and emit
   clickable task refs. Use when the user says "add a task", "put that on my
   list", "mark it done", "what's on my plate", "did I write anything about X",

@@ -4820,7 +4820,7 @@ export async function addTaskFull(taskData: Omit<Task, 'id'>): Promise<Task> {
   };
 
   // Register a project a pull just introduced, so its claim is recorded and the
-  // UI/butler see it as a real project rather than an implicit one.
+  // UI/Personal AI see it as a real project rather than an implicit one.
   let createdProject: { name: string; source: TaskSource } | undefined;
   if (incomingProject) {
     const projects = store.projects ?? {};

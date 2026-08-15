@@ -183,7 +183,7 @@ describe('serializeToolResults / isToolResultTurn', () => {
 
 describe('conversationKey', () => {
   it('is stable for the same conversation as it grows', () => {
-    const sys = 'You are the butler.';
+    const sys = 'You are the Personal AI.';
     const k1 = conversationKey(sys, [{ role: 'user', content: 'first message' }]);
     const k2 = conversationKey(sys, [
       { role: 'user', content: 'first message' },
@@ -194,7 +194,7 @@ describe('conversationKey', () => {
   });
 
   it('differs across conversations', () => {
-    const sys = 'You are the butler.';
+    const sys = 'You are the Personal AI.';
     const a = conversationKey(sys, [{ role: 'user', content: 'conversation A' }]);
     const b = conversationKey(sys, [{ role: 'user', content: 'conversation B!' }]);
     expect(a).not.toBe(b);
@@ -204,7 +204,7 @@ describe('conversationKey', () => {
     // Turn 1: cache.ts rewrites the last==first user message into a block array
     // with cache_control + an appended ephemeral context block. Turn 2: the
     // message is back to its original string form. Key must not change.
-    const sys = 'You are the butler.';
+    const sys = 'You are the Personal AI.';
     const kTurn1 = conversationKey(sys, [{
       role: 'user',
       content: [

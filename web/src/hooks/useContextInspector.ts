@@ -68,7 +68,7 @@ export function useContextInspector(agentId?: string, conversationId?: string): 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEvent('agent:response', (data) => {
-    // A butler-lane turn (source 'session') runs in a claude CLI session — its
+    // A personal-ai-lane turn (source 'session') runs in a claude CLI session — its
     // tokens never touch the in-process context stats, so refetching would just
     // repaint the same (now stale) numbers as if they were fresh.
     if ((data as { source?: string } | undefined)?.source === 'session') return;

@@ -103,7 +103,7 @@ mediaV1Router.get('/media', async (req: Request, res: Response, next: NextFuncti
     }
 
     // 1. Local file (primary's own disk, or the cloud box's own IMAGES_DIR for
-    //    images the phone itself attached to cloud-butler chats).
+    //    images the phone itself attached to cloud-personal-ai chats).
     let buffer: Buffer | null = null
     try {
       const st = await fsp.stat(filePath)
@@ -111,7 +111,7 @@ mediaV1Router.get('/media', async (req: Request, res: Response, next: NextFuncti
     } catch { /* not local — try the session's host below */ }
 
     // 2. The session's exec host (daemon channel on primary, bridge on cloud);
-    //    cloud also falls back to the primary box for butler-chat images.
+    //    cloud also falls back to the primary box for personal-ai-chat images.
     if (!buffer) {
       const hosts: string[] = []
       if (session) {

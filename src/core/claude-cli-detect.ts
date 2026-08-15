@@ -96,7 +96,7 @@ function fileCredentialExists(): boolean {
 }
 
 /**
- * Snapshot of what the local Claude Code install can offer the butler as a
+ * Snapshot of what the local Claude Code install can offer the Personal AI as a
  * zero-config provider. `subscriptionReady` gates the text-only `claude-cli`
  * provider (Phase 2).
  */

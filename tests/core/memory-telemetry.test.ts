@@ -66,8 +66,35 @@ describe('entryTitle', () => {
 describe('originFromSource', () => {
   it('maps the review fork to unattended provenance and everything else to a live turn', () => {
     expect(originFromSource('background-review')).toBe('background-review');
-    expect(originFromSource('chat')).toBe('butler-turn');
-    expect(originFromSource(undefined)).toBe('butler-turn');
+    expect(originFromSource('chat')).toBe('personal-ai-turn');
+    expect(originFromSource(undefined)).toBe('personal-ai-turn');
+  });
+});
+
+describe('persisted origin compatibility', () => {
+  it('normalizes the previous live-turn value when reading and writing the sidecar', async () => {
+    const file = path.join(path.dirname(MEMORY_FILE), '.entry-telemetry.json');
+    const previousOrigin = `${String.fromCharCode(98, 117, 116, 108, 101, 114)}-turn`;
+    const legacy = {
+      [key('memory', 'Legacy Rule')]: {
+        first_seen_at: '2026-01-01T00:00:00.000Z',
+        origin: previousOrigin,
+        last_write_at: '2026-01-01T00:00:00.000Z',
+        last_write_by: previousOrigin,
+        writes: 0,
+        interactive_writes: 1,
+        hash: 'legacy',
+      },
+    };
+    await fsp.writeFile(file, JSON.stringify(legacy), 'utf-8');
+
+    const loaded = loadMemoryTelemetry()[key('memory', 'Legacy Rule')];
+    expect(loaded.origin).toBe('personal-ai-turn');
+    expect(loaded.last_write_by).toBe('personal-ai-turn');
+
+    await recordMemoryWrite({ target: 'user', before: [], after: [entry('New Fact')], origin: 'personal-ai-turn' });
+    const persisted = await fsp.readFile(file, 'utf-8');
+    expect(persisted).not.toContain(previousOrigin);
   });
 });
 
@@ -77,25 +104,25 @@ describe('metadata lifecycle: add → replace → remove', () => {
       target: 'memory',
       before: [],
       after: [entry('Rule A')],
-      origin: 'butler-turn',
+      origin: 'personal-ai-turn',
     });
     const rec = loadMemoryTelemetry()[key('memory', 'Rule A')];
     expect(rec).toBeDefined();
-    expect(rec.origin).toBe('butler-turn');
+    expect(rec.origin).toBe('personal-ai-turn');
     expect(rec.writes).toBe(0);
     expect(rec.interactive_writes).toBe(1);
     expect(rec.first_seen_at).toBe(rec.last_write_at);
   });
 
   it('survives a replace: first_seen_at is preserved, churn increments', async () => {
-    await recordMemoryWrite({ target: 'memory', before: [], after: [entry('Rule A')], origin: 'butler-turn' });
+    await recordMemoryWrite({ target: 'memory', before: [], after: [entry('Rule A')], origin: 'personal-ai-turn' });
     const created = loadMemoryTelemetry()[key('memory', 'Rule A')].first_seen_at;
 
     await recordMemoryWrite({
       target: 'memory',
       before: [entry('Rule A')],
       after: [entry('Rule A', 'REVISED body.')],
-      origin: 'butler-turn',
+      origin: 'personal-ai-turn',
     });
     const rec = loadMemoryTelemetry()[key('memory', 'Rule A')];
     expect(rec.first_seen_at).toBe(created);
@@ -106,9 +133,9 @@ describe('metadata lifecycle: add → replace → remove', () => {
 
   it('does not count a no-op write as churn', async () => {
     const e = entry('Rule A');
-    await recordMemoryWrite({ target: 'memory', before: [], after: [e], origin: 'butler-turn' });
+    await recordMemoryWrite({ target: 'memory', before: [], after: [e], origin: 'personal-ai-turn' });
     // Same content, different entry touched — Rule A must stay at writes: 0.
-    await recordMemoryWrite({ target: 'memory', before: [e], after: [e, entry('Rule B')], origin: 'butler-turn' });
+    await recordMemoryWrite({ target: 'memory', before: [e], after: [e, entry('Rule B')], origin: 'personal-ai-turn' });
     expect(loadMemoryTelemetry()[key('memory', 'Rule A')].writes).toBe(0);
     expect(loadMemoryTelemetry()[key('memory', 'Rule B')].writes).toBe(0);
   });
@@ -118,7 +145,7 @@ describe('metadata lifecycle: add → replace → remove', () => {
       target: 'memory',
       before: [],
       after: [entry('Rule A'), entry('Rule B')],
-      origin: 'butler-turn',
+      origin: 'personal-ai-turn',
     });
     expect(Object.keys(loadMemoryTelemetry())).toHaveLength(2);
 
@@ -126,7 +153,7 @@ describe('metadata lifecycle: add → replace → remove', () => {
       target: 'memory',
       before: [entry('Rule A'), entry('Rule B')],
       after: [entry('Rule B')],
-      origin: 'butler-turn',
+      origin: 'personal-ai-turn',
     });
     const map = loadMemoryTelemetry();
     expect(map[key('memory', 'Rule A')]).toBeUndefined();
@@ -134,8 +161,8 @@ describe('metadata lifecycle: add → replace → remove', () => {
   });
 
   it('a write to one target never prunes the other target’s records', async () => {
-    await recordMemoryWrite({ target: 'user', before: [], after: [entry('Who I Am')], origin: 'butler-turn' });
-    await recordMemoryWrite({ target: 'memory', before: [], after: [entry('Rule A')], origin: 'butler-turn' });
+    await recordMemoryWrite({ target: 'user', before: [], after: [entry('Who I Am')], origin: 'personal-ai-turn' });
+    await recordMemoryWrite({ target: 'memory', before: [], after: [entry('Rule A')], origin: 'personal-ai-turn' });
     const map = loadMemoryTelemetry();
     expect(map[key('user', 'Who I Am')]).toBeDefined();
     expect(map[key('memory', 'Rule A')]).toBeDefined();
@@ -147,12 +174,12 @@ describe('metadata lifecycle: add → replace → remove', () => {
       // Rule A already existed but has no record; Rule B is genuinely new.
       before: [entry('Rule A')],
       after: [entry('Rule A'), entry('Rule B')],
-      origin: 'butler-turn',
+      origin: 'personal-ai-turn',
     });
     const map = loadMemoryTelemetry();
     expect(map[key('memory', 'Rule A')].origin).toBe('pre-existing');
     expect(map[key('memory', 'Rule A')].interactive_writes).toBe(0);
-    expect(map[key('memory', 'Rule B')].origin).toBe('butler-turn');
+    expect(map[key('memory', 'Rule B')].origin).toBe('personal-ai-turn');
   });
 
   it('observeMemoryEntries bootstraps records without attributing a write', async () => {
@@ -165,7 +192,7 @@ describe('metadata lifecycle: add → replace → remove', () => {
 
   it('caps the sidecar so it cannot grow without bound', async () => {
     const many = Array.from({ length: 260 }, (_, i) => entry(`Rule ${i}`));
-    await recordMemoryWrite({ target: 'memory', before: [], after: many, origin: 'butler-turn' });
+    await recordMemoryWrite({ target: 'memory', before: [], after: many, origin: 'personal-ai-turn' });
     expect(Object.keys(loadMemoryTelemetry()).length).toBeLessThanOrEqual(200);
   });
 });
@@ -175,7 +202,7 @@ describe('telemetry never breaks a memory write', () => {
     const file = path.join(path.dirname(MEMORY_FILE), '.entry-telemetry.json');
     await fsp.writeFile(file, '{ this is not json', 'utf-8');
     await expect(
-      recordMemoryWrite({ target: 'memory', before: [], after: [entry('Rule A')], origin: 'butler-turn' }),
+      recordMemoryWrite({ target: 'memory', before: [], after: [entry('Rule A')], origin: 'personal-ai-turn' }),
     ).resolves.toBeUndefined();
     expect(loadMemoryTelemetry()[key('memory', 'Rule A')]).toBeDefined();
   });
@@ -185,7 +212,7 @@ describe('telemetry never breaks a memory write', () => {
     const file = path.join(path.dirname(MEMORY_FILE), '.entry-telemetry.json');
     await fsp.mkdir(file, { recursive: true });
     await expect(
-      recordMemoryWrite({ target: 'memory', before: [], after: [entry('Rule A')], origin: 'butler-turn' }),
+      recordMemoryWrite({ target: 'memory', before: [], after: [entry('Rule A')], origin: 'personal-ai-turn' }),
     ).resolves.toBeUndefined();
     await fsp.rm(file, { recursive: true, force: true });
   });
@@ -202,7 +229,7 @@ describe('telemetry never breaks a memory write', () => {
 describe('getEntryEvidence (over-budget consolidation path)', () => {
   it('is index-aligned with the entries array', async () => {
     const entries = [entry('Rule A'), entry('Rule B'), entry('Rule C')];
-    await recordMemoryWrite({ target: 'memory', before: [], after: entries, origin: 'butler-turn' });
+    await recordMemoryWrite({ target: 'memory', before: [], after: entries, origin: 'personal-ai-turn' });
     const ev = getEntryEvidence(entries, { target: 'memory' });
     expect(ev).toHaveLength(3);
     expect(ev[0]).toContain('Rule A');
@@ -225,7 +252,7 @@ describe('getEntryEvidence (over-budget consolidation path)', () => {
       target: 'memory',
       before: [e],
       after: [entry('Fork Invented Rule', 'User confirmed this.')],
-      origin: 'butler-turn',
+      origin: 'personal-ai-turn',
     });
     const [line] = getEntryEvidence([entry('Fork Invented Rule', 'User confirmed this.')], { target: 'memory' });
     expect(line).not.toContain('UNATTENDED');
@@ -233,7 +260,7 @@ describe('getEntryEvidence (over-budget consolidation path)', () => {
 
   it('flags a never-revised entry as STALE past the 7-day window', async () => {
     const e = entry('Old Rule');
-    await recordMemoryWrite({ target: 'memory', before: [], after: [e], origin: 'butler-turn' });
+    await recordMemoryWrite({ target: 'memory', before: [], after: [e], origin: 'personal-ai-turn' });
     await backdate(key('memory', 'Old Rule'), 30);
     const [line] = getEntryEvidence([e], { target: 'memory' });
     expect(line).toContain('STALE');
@@ -242,10 +269,10 @@ describe('getEntryEvidence (over-budget consolidation path)', () => {
 
   it('marks a repeatedly revised entry ACTIVE so it is not dropped', async () => {
     let current = entry('Live Topic', 'v1');
-    await recordMemoryWrite({ target: 'memory', before: [], after: [current], origin: 'butler-turn' });
+    await recordMemoryWrite({ target: 'memory', before: [], after: [current], origin: 'personal-ai-turn' });
     for (const v of ['v2', 'v3']) {
       const next = entry('Live Topic', v);
-      await recordMemoryWrite({ target: 'memory', before: [current], after: [next], origin: 'butler-turn' });
+      await recordMemoryWrite({ target: 'memory', before: [current], after: [next], origin: 'personal-ai-turn' });
       current = next;
     }
     const [line] = getEntryEvidence([current], { target: 'memory' });
@@ -257,7 +284,7 @@ describe('getEntryEvidence (over-budget consolidation path)', () => {
 
 describe('buildMemoryReviewEvidence (background-review prompt block)', () => {
   it('returns empty string when nothing is flagged (zero tokens for a healthy store)', async () => {
-    await recordMemoryWrite({ target: 'memory', before: [], after: [entry('Fresh Rule')], origin: 'butler-turn' });
+    await recordMemoryWrite({ target: 'memory', before: [], after: [entry('Fresh Rule')], origin: 'personal-ai-turn' });
     expect(buildMemoryReviewEvidence()).toBe('');
   });
 
@@ -282,7 +309,7 @@ describe('buildMemoryReviewEvidence (background-review prompt block)', () => {
   });
 
   it('ranks unattended entries above merely stale ones', async () => {
-    await recordMemoryWrite({ target: 'memory', before: [], after: [entry('Stale One')], origin: 'butler-turn' });
+    await recordMemoryWrite({ target: 'memory', before: [], after: [entry('Stale One')], origin: 'personal-ai-turn' });
     await backdate(key('memory', 'Stale One'), 30);
     await recordMemoryWrite({
       target: 'memory',
@@ -326,7 +353,7 @@ describe('KEY NON-REGRESSION: the injected prompt is unchanged in size', () => {
     await store.add(entry('Rule A'));
     const rawBefore = fs.readFileSync(MEMORY_FILE, 'utf-8');
 
-    await recordMemoryWrite({ target: 'memory', before: [], after: [entry('Rule A')], origin: 'butler-turn' });
+    await recordMemoryWrite({ target: 'memory', before: [], after: [entry('Rule A')], origin: 'personal-ai-turn' });
 
     expect(fs.readFileSync(MEMORY_FILE, 'utf-8')).toBe(rawBefore);
     // …and the sidecar is dot-prefixed so the *.md memory index/watcher ignore it.

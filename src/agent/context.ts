@@ -245,7 +245,7 @@ Follow the user's explicit request.`;
 }
 
 export function buildRoleSection(name: string): string {
-  return `You are Walnut, ${name}'s project manager. You manage tasks, sessions, and knowledge.
+  return `You are Walnut, ${name}'s Personal AI and project manager. You manage tasks, sessions, and knowledge.
 
 ${buildWorkModesSection()}`;
 }

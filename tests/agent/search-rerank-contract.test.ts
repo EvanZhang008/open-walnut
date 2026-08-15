@@ -11,7 +11,7 @@
  *   - QMD's reranker is a native llama.cpp cross-encoder, so it BLOCKS the Node
  *     event loop while scoring — the same failure class as any sync native call.
  *   - Measured on a real vault: `memory_notes_search` 28.7s with a 2949ms
- *     event-loop stall; `task_search` 14.7s with a 609ms stall. Every butler
+ *     event-loop stall; `task_search` 14.7s with a 609ms stall. Every Personal AI
  *     tool call therefore froze every route for every surface (web, iOS, cloud).
  *   - Quality delta was negligible where it counts: across 8 A/B probe queries
  *     the #1 result was IDENTICAL every time; only mid/tail order shifted.

@@ -292,9 +292,9 @@ fuzzy ones. The semantic side reuses the engine that already indexes the notes v
 
 ---
 
-## 6. How notes relate to Walnut tasks & memory (the butler advantage)
+## 6. How notes relate to Walnut tasks & memory (the Personal AI advantage)
 
-Walnut is not just a notes app — it's a butler with **tasks** (the atom) and **memory**. The IA-first move is to
+Walnut is not just a notes app. It is a Personal AI with **tasks** (the atom) and **memory**. The IA-first move is to
 make notes a **first-class citizen of that graph**, surfaced *in the editor's context dock* so relations are visible
 while you write — without cluttering the page.
 
@@ -315,13 +315,13 @@ while you write — without cluttering the page.
 - **Notes ↔ tasks (bidirectional).** A note can `[[link]]` or `/tasks/`-reference a task (the editor already SPA-
   routes `/tasks/` links via `TaskAwareLink`). The dock lists those tasks with **live status** from the event bus —
   so a meeting note shows whether its action items are done, *in the note*. Conversely, a task can show "mentioned
-  in notes." This is the butler differentiator: notes and tasks are one fabric, not two apps.
+  in notes." This is the Personal AI differentiator: notes and tasks are one fabric, not two apps.
 - **Notes ↔ memory (semantic bridge).** Both the notes vault and the memory store are indexed in the **same**
   embedding engine. "Mentions in memory" surfaces semantically-near memory entries beside the note — and notes
   appear in memory recall too. The writer's long-term knowledge and their working notes cross-pollinate
   automatically (no manual linking).
-- **The butler can land in the right place.** Because capture (Cmd+K `+`) and the default-folder convention are
-  explicit IA, the AI butler writing a note directly drops it into the same structure the human browses — one
+- **The Personal AI can land in the right place.** Because capture (Cmd+K `+`) and the default-folder convention are
+  explicit IA, the Personal AI writing a note directly drops it into the same structure the human browses: one
   vault, one set of indexes, no special-case "agent notes" silo. The watcher re-indexes it; it's instantly findable.
 
 ---

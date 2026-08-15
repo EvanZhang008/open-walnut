@@ -1,6 +1,6 @@
 /**
  * Agent tool: skill_manage
- * Create/patch/edit/delete skills — the butler's write path into the unified
+ * Create/patch/edit/delete skills — the Personal AI's write path into the unified
  * skill system (type: action = procedures, knowledge = curated domain facts).
  *
  * The schema embeds the update triggers so condensation happens IN conversation
@@ -36,7 +36,7 @@ function refreshSkillIndex(): void {
 
 /**
  * Injection screen for a skill write (see memory-safety.ts). The writer is a
- * model that may itself be under an attacker's influence — the butler distils
+ * model that may itself be under an attacker's influence — the Personal AI distils
  * skills from conversation content, and the unattended background-review fork
  * does the same with nobody watching — so the cheapest place to stop a payload
  * is before it reaches disk. Only the text the model SUPPLIES is screened, never
@@ -173,13 +173,13 @@ Each category MAY have an \`overview\` skill (skills/<category>/overview/SKILL.m
         // Optional name targets a specific skill's history (skills/<cat>/<name>/history/);
         // default is the category's overview log.
         const targetName = (params.name as string | undefined)?.trim() || 'overview';
-        // History logs are read back by the butler and feed the overview skills,
+        // History logs are read back by the Personal AI and feed the overview skills,
         // so they get the same screen as a skill body.
         const logErr = screenWrite('log_append', `${category}/${targetName}`, content);
         if (logErr) return logErr;
         const result = targetName === 'overview'
-          ? appendOverviewLog(category, content, 'butler')
-          : appendSkillHistoryLog(category, targetName, content, 'butler');
+          ? appendOverviewLog(category, content, 'Personal AI')
+          : appendSkillHistoryLog(category, targetName, content, 'Personal AI');
         refreshSkillIndex();
         log.agent.info('skill_manage: history log appended', {
           category, name: targetName, rotated: result.rotated, archivedVolume: result.archivedVolume,

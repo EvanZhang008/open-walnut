@@ -151,7 +151,7 @@ The search uses keyword matching (BM25, AND logic) + vector similarity (semantic
     // one call, stalling the event loop 2949ms. This tool searches ALL sources, so
     // it feeds the reranker the most candidates of any caller. And because the
     // agent loop runs inside the web server process, that stall is app-wide: the
-    // butler answering a question froze every route for every surface (web, iOS,
+    // Personal AI answering a question froze every route for every surface (web, iOS,
     // cloud). Quality delta was negligible (top-1 identical across 4 probes),
     // which is the whole reason the reranker loses this trade.
     //

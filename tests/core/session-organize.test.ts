@@ -1,11 +1,11 @@
 /**
  * session-organize — fast-model PROJECT placement for quick-start sessions
- * (replaces the old per-launch butler wake-up). Contract pinned:
+ * (replaces the old per-launch Personal AI wake-up). Contract pinned:
  *   - model suggestion matching a known project → task moved out of Inbox
  *   - hallucinated names → dropped by canonicalMatch, task stays in Inbox
  *   - this pass may never CREATE a project (only quick-add's human-confirmed
  *     path can) — an unknown name is a no-op
- *   - task already filed (by user/butler) during the model call → no clobber
+ *   - task already filed (by user/Personal AI) during the model call → no clobber
  *   - model error / non-JSON → never throws, task stays in Inbox
  *
  * Real: organize code, task-manager (SQLite temp store). Fake: sendMessage,
@@ -41,7 +41,7 @@ function textResult(text: string) {
 const DIGEST = {
   digest: [
     '- walnut (3 open tasks): "Add STT route"; "Fix pipeline"',
-    '  about: The Walnut butler repo.',
+    '  about: The Walnut Personal AI repo.',
     '- Errands (1 open tasks): "Buy milk"',
   ].join('\n'),
   projects: ['walnut', 'Errands'],

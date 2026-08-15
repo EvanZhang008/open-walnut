@@ -37,7 +37,7 @@ async function startFailingQuickSession(page: Page): Promise<void> {
     response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/api/sessions/quick-start')
   // Send from the DRAFT column's composer (the main chat's textarea would go to
-  // the butler instead of launching a session).
+  // the Personal AI instead of launching a session).
   const chatInput = draftComposer(page)
   await chatInput.fill('error')
   await chatInput.press('Enter')

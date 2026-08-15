@@ -4,7 +4,7 @@
 #
 #   scripts/onboarding-demo.sh build                 # build the image
 #   scripts/onboarding-demo.sh clean                 # path 1/3: no creds → onboarding shows
-#   scripts/onboarding-demo.sh happy                 # path 2: inject a real key → butler ready
+#   scripts/onboarding-demo.sh happy                 # path 2: inject a real key → Personal AI ready
 #   scripts/onboarding-demo.sh record out.mp4        # record the clean-room onboarding walkthrough
 #
 # For `happy`, provide a credential via the host env (NEVER committed, NEVER baked in):
@@ -60,7 +60,7 @@ case "$cmd" in
       exit 2
     fi
     run_container "${CREDS[@]}"
-    echo "==> verifying happy path (expect provider ready + butler reply) …"
+    echo "==> verifying happy path (expect provider ready + Personal AI reply) …"
     node "$HERE/scripts/onboarding-demo.mjs" --url "$URL" --expect-ready --chat "hello, are you there?"
     rc=$?
     stop_run
@@ -83,7 +83,7 @@ case "$cmd" in
   *)
     echo "usage: scripts/onboarding-demo.sh {build|clean|happy|record <file>|stop}" >&2
     echo "  clean  — path 1/3: no creds, assert onboarding banner shows" >&2
-    echo "  happy  — path 2: inject host cred, assert butler ready + replies" >&2
+    echo "  happy  — path 2: inject host cred, assert Personal AI ready + replies" >&2
     echo "  record — record the clean-room onboarding walkthrough to <file>" >&2
     exit 1
     ;;

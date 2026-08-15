@@ -1,7 +1,7 @@
 /**
  * Quick-start session auto-organize — cheap-model project placement.
  *
- * Historically the web client woke the MAIN butler agent after every quick
+ * Historically the web client woke the Personal AI after every quick
  * start ("[Quick Start] Session created… move the task to the correct
  * category") — a full agent turn (main model + whole context) to make a
  * one-field decision. This module replaces that with the same fast-model
@@ -107,7 +107,7 @@ export async function suggestSessionPlacement(
 
 /**
  * Fire-and-forget placement for a quick-start task. Re-reads the task before
- * writing so a user/butler move that happened while the model was thinking
+ * writing so a user/Personal AI move that happened while the model was thinking
  * always wins (same guard shape as session-auto-title).
  */
 export async function organizeQuickStartTask(
@@ -120,7 +120,7 @@ export async function organizeQuickStartTask(
   const current = await getTask(taskId);
   if (!current) return;
   // Only move while the task is still unfiled — anything else means a human or
-  // the butler already placed it.
+  // the Personal AI already placed it.
   if ((current.project ?? '') !== '') return;
 
   await updateTask(taskId, {

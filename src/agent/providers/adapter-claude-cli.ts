@@ -82,7 +82,7 @@ interface CliSession {
 
 /** Sessions idle longer than this are dropped (CLI-side cache is long gone). */
 const SESSION_REUSE_TTL_MS = 30 * 60 * 1000;
-/** Bound the map — butler conversations are few; this is a leak guard. */
+/** Bound the map — Personal AI conversations are few; this is a leak guard. */
 const MAX_TRACKED_SESSIONS = 50;
 
 export class ClaudeCliAdapter implements ProtocolAdapter {
@@ -410,8 +410,8 @@ export function buildArgs(opts: AdapterCallOptions): string[] {
     '--tools', '',                      // disable ALL built-in tools (deny-all)
     '--settings', FORCE_SUBSCRIPTION_SETTINGS,
   ];
-  // The butler persona replaces the CLI's default coding-agent system prompt so
-  // it answers as the butler, not as a code assistant. --system-prompt (replace)
+  // The Personal AI persona replaces the CLI's default coding-agent system prompt so
+  // it answers as the Personal AI, not as a code assistant. --system-prompt (replace)
   // is verified to exist in the fork.
   let systemText = systemToText(opts.system).trim();
   // Pseudo-tool protocol: the CLI's own tools stay OFF (--tools "" above), but
@@ -465,7 +465,7 @@ export function buildSpawnEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Pro
 }
 
 /**
- * Serialize the butler's message history into a single plain text prompt written
+ * Serialize the Personal AI's message history into a single plain text prompt written
  * to stdin (default text input mode). The system/persona is passed separately via
  * --system-prompt. Prior turns are flattened as `User:` / `Assistant:` lines for
  * continuity; the final user turn ends the prompt so the CLI answers it.

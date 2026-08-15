@@ -3,7 +3,7 @@
  *
  * ## The bug (2026-08-09, user-visible as "WebSocket disconnected")
  *
- * Both send paths (`chat` for the butler, `session:send` for CLI sessions) used to
+ * Both send paths (`chat` for the Personal AI, `session:send` for CLI sessions) used to
  * put raw base64 image bytes inside the RPC payload. The WS server caps a single
  * frame at 4MB (`attachWss`, a memory-exhaustion guard), and the `ws` library
  * enforces that cap by CLOSING the connection with code 1009 — the frame never

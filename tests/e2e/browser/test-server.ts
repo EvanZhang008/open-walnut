@@ -1138,7 +1138,7 @@ await fs.writeFile(
 // YAML block scalar behind a closing `---` fence. markdown-it reads that closing
 // fence as a setext-H2 underline, so handing these bytes straight to the WYSIWYG
 // editor collapses the whole block into one `## name: … description: &gt; …`
-// heading — a FAKE entry in a store injected into the butler's prompt every turn.
+// heading — a FAKE entry in a store injected into the Personal AI's prompt every turn.
 // The body also carries the two prose shapes the serializer used to mangle: a
 // tag-shaped `<id>` placeholder (deleted outright) and a bare `>` (→ `&gt;`).
 const BOUNDED_STORE_BODY = [
@@ -1201,7 +1201,7 @@ await fs.writeFile(
 // Project memory
 await fs.writeFile(
   path.join(projectsDir, 'MEMORY.md'),
-  '# Walnut Project\n\nPersonal AI butler with task management and knowledge base.\nUses React frontend with Node.js backend.\n',
+  '# Walnut Project\n\nPersonal AI with task management and knowledge base.\nUses React frontend with Node.js backend.\n',
 )
 
 // Knowledge file

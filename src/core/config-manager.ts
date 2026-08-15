@@ -24,7 +24,7 @@ const DEFAULT_CONFIG: Config = {
   // so this never re-routes an established setup.
   defaults: { priority: 'none', platform: 'local' },
   provider: { type: 'claude-code' },
-  // Which ENGINE answers a butler chat turn. 'walnut-agent' = today's in-process
+  // Which ENGINE answers a Personal AI chat turn. 'walnut-agent' = today's in-process
   // agent loop; 'claude-code' routes the turn into a lane-bound `claude` session.
   // NOTE: getConfig() spreads the parsed file OVER these defaults at the TOP
   // level, so a config.yaml with any `agent:` section replaces this whole object
@@ -33,7 +33,7 @@ const DEFAULT_CONFIG: Config = {
 };
 
 /**
- * The engine that answers a butler chat turn, defaulted + validated.
+ * The engine that answers a Personal AI chat turn, defaulted + validated.
  *
  * Read through this rather than `config.agent?.provider` directly: getConfig()
  * merges the parsed YAML over DEFAULT_CONFIG at the top level only, so any user

@@ -1,5 +1,5 @@
 /**
- * main-agent executor — injects the routine's instructions into the butler's
+ * main-agent executor — injects the routine's instructions into the Personal AI's
  * main conversation (the chat the user sees on the homepage).
  *
  * NOTE: jobs with this executor type are dispatched through the cron engine's

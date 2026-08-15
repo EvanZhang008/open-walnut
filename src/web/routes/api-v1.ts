@@ -622,7 +622,7 @@ async function persistAndEmitTurnError(
 }
 
 /**
- * Run one REST turn on the conversation's butler lane
+ * Run one REST turn on the conversation's Personal AI lane
  * (`config.agent.provider === 'claude-code'`) and keep the frozen SSE contract.
  *
  * Why this exists at all, when chat.ts's lane branch is fire-and-forget: the web
@@ -731,7 +731,7 @@ async function runApiV1Turn(
     // ── Engine selection (config.agent.provider) ──
     // 'claude-code' delivers the turn into the conversation's lane session instead
     // of running the in-process loop. EVERY console agent rides the lane engine
-    // (per-agent persona via consoleAgentProfile — see butler-lane.resolveLane),
+    // (per-agent persona via consoleAgentProfile — see personal-ai-lane.resolveLane),
     // mirroring chat.ts. A failure to read config degrades to the in-process
     // loop — never "no engine".
     let useLaneEngine = false
@@ -804,7 +804,7 @@ async function runApiV1Turn(
 
     emitSse(conversationId, 'message-start', { turnId })
 
-    // ── Engine branch: butler lane (config.agent.provider='claude-code') ──
+    // ── Engine branch: Personal AI lane (config.agent.provider='claude-code') ──
     // Everything above ran for BOTH engines (engine resolution, history load, image
     // save, eager user-message persist, message-start) — only the engine differs.
     // The POST handler's `activeTurns` entry is released in its `.finally()`, i.e.

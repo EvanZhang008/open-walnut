@@ -18,7 +18,7 @@ this stack, wait for first boot, claim the box, and wire data sync for you:
 - **Settings → Cloud Companion** — a wizard that picks a provider, takes a domain
   (or a free auto-address), and shows live progress. It survives a tab reload and
   a server restart.
-- **Ask your butler** — "set up my cloud companion". The shipped
+- **Ask your Personal AI**: "set up my cloud companion". The shipped
   `setup-cloud-companion` skill drives the same resumable job over
   `/api/cloud-setup`, so both surfaces do exactly the same thing.
 

@@ -22,7 +22,7 @@
  * projection import overwrites them. That silent-revert is worse than an
  * honest error → groups + tier CRUD answer 501 not_supported_cloud on a
  * REPLICA. Tags read and quick-parse work on both boxes (quick-parse is
- * stateless; the replica has its own model credentials for the butler).
+ * stateless; the replica has its own model credentials for the Personal AI).
  *
  * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
  */

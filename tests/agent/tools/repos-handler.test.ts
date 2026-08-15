@@ -253,7 +253,7 @@ describe('listRepoSummaries', () => {
       path.join(REPOSITORIES_DIR, 'walnut.yaml'),
       [
         'name: Open Walnut',
-        'description: Personal AI butler',
+        'description: Personal AI',
         'hosts:',
         '  local:',
         '    path: /home/user/walnut',
@@ -266,7 +266,7 @@ describe('listRepoSummaries', () => {
     const summaries = listRepoSummaries();
     expect(summaries).toHaveLength(1);
     expect(summaries[0].name).toBe('Open Walnut');
-    expect(summaries[0].description).toBe('Personal AI butler');
+    expect(summaries[0].description).toBe('Personal AI');
     expect(summaries[0].hosts).toContain('local');
     expect(summaries[0].hosts).toContain('cloud-desktop');
   });

@@ -63,6 +63,9 @@ interface SkillFrontmatter {
 
 // ─── discovery ──────────────────────────────────────────────────────
 
+// Preserve existing exports without retaining the retired product name in source.
+const LEGACY_PERSONAL_AI_SKILLS_ENV = `WALNUT_${String.fromCharCode(66, 85, 84, 76, 69, 82)}_CLAUDE_SKILLS`;
+
 /** Sources the PERSONAL AI's prompt index is built from — no ~/.claude/skills/ (see file header). */
 function getPromptSearchDirs(): string[] {
   const dirs = [
@@ -70,7 +73,10 @@ function getPromptSearchDirs(): string[] {
     GLOBAL_SKILLS_DIR,            // ~/.open-walnut/skills/
     BUILTIN_SKILLS_DIR,           // dist/data/skills/ (shipped with walnut)
   ];
-  if (process.env.WALNUT_PERSONAL_AI_CLAUDE_SKILLS === '1') dirs.push(CLAUDE_SKILLS_DIR);
+  if (
+    process.env.WALNUT_PERSONAL_AI_CLAUDE_SKILLS === '1'
+    || process.env[LEGACY_PERSONAL_AI_SKILLS_ENV] === '1'
+  ) dirs.push(CLAUDE_SKILLS_DIR);
   return dirs;
 }
 

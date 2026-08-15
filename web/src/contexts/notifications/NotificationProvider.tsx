@@ -254,7 +254,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     });
   });
 
-  // ── WS source: a butler turn failed ──
+  // ── WS source: a Personal AI turn failed ──
   // Nothing subscribed to this before, so a total outage was silent on every
   // surface (2026-07-26: 18h / 36 cron runs of `403 invalid security token`, with
   // the only trace a server log line). Auth failures are the important class:

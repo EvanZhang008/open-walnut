@@ -47,7 +47,7 @@ They reconcile from the **same** watcher events but write **different** SQLite f
                           ~/.open-walnut/notes/**/*.md
                                      │
               ┌──────────────────────┼───────────────────────┐
-        write │ (PUT /content)       │ fs.watch(recursive)    │ external edit / git pull / AI butler
+        write │ (PUT /content)       │ fs.watch(recursive)    │ external edit / git pull / Personal AI
               ▼                      ▼                        ▼
    ┌─────────────────────┐   ┌──────────────────────────────────────────┐
    │  notes-v2 routes     │   │   NotesIndexer (new) — debounced reconcile │
@@ -193,7 +193,7 @@ Reuse the **exact** pattern from `qmd-watcher.ts` (debounce) and `qmd-task-sync.
 ### 4.1 Triggers (two paths, same handler)
 
 1. **In-process (fast path):** `PUT /content`, `DELETE /content`, `POST /move`, `POST /folder` already emit/should emit `NOTES_UPDATED`. The indexer subscribes to `NOTES_UPDATED` (via `bus`, using the **`interest`** set so it only wakes for note events — same mechanism that fixed event-loop starvation, see `event-bus.ts:161`) and reconciles **just the changed path** synchronously-ish (debounced ~300 ms to coalesce rapid autosaves).
-2. **Filesystem (catch-all):** extend the existing `fs.watch(NOTES_DIR, {recursive})` block in `qmd-watcher.ts` to ALSO call `scheduleNotesIndexUpdate.call(filename)`. This catches external edits, git pulls, and the AI butler writing files directly — the cases the in-process path misses. Debounce 1 s (faster than QMD's 5 s embed because structural parsing is cheap; no model involved).
+2. **Filesystem (catch-all):** extend the existing `fs.watch(NOTES_DIR, {recursive})` block in `qmd-watcher.ts` to ALSO call `scheduleNotesIndexUpdate.call(filename)`. This catches external edits, git pulls, and the Personal AI writing files directly. These are the cases the in-process path misses. Debounce 1 s (faster than QMD's 5 s embed because structural parsing is cheap; no model involved).
 
 > One watcher, two consumers. We do **not** add a second `fs.watch` — we add a second debounced callback inside the existing one, keeping a single inotify registration.
 
@@ -241,7 +241,7 @@ When a note lacks `id`, the indexer must persist a new one **into the file's fro
 - Write, then emit `NOTES_UPDATED` with the new `contentHash` so optimistic-lock clients refresh their hash (avoids a spurious 409 on the user's next save).
 - **Editing-quality guard:** never back-write while the note is being actively edited in a focused client. The route layer knows the last-served `contentHash`; if the file's current hash ≠ what we read, skip the back-write this cycle and retry on the next reconcile. This guarantees the indexer can never clobber an in-flight edit (P0 "zero data loss").
 
-> Alternative considered & rejected: assign id at **save time** in `PUT /content` instead of in the indexer. Rejected because files arriving via git pull / AI-butler writes bypass the route, so the indexer must own id-assignment anyway. Doing it in one place (the reconciler) is the root-cause-correct location. The route MAY *also* stamp an id on create as an optimization, but the reconciler remains the authority.
+> Alternative considered & rejected: assign id at **save time** in `PUT /content` instead of in the indexer. Rejected because files arriving via git pull / Personal AI writes bypass the route, so the indexer must own id-assignment anyway. Doing it in one place (the reconciler) is the root-cause-correct location. The route MAY *also* stamp an id on create as an optimization, but the reconciler remains the authority.
 
 ---
 
@@ -401,7 +401,7 @@ Tag rename is **targeted**: `SELECT note_id FROM tags WHERE tag=?` yields the ex
 | Optimistic-lock 409 after id back-write | Back-write emits `NOTES_UPDATED` with new `contentHash`; client refreshes its expected hash before next PUT. |
 | QMD store down / model mismatch | `Promise.allSettled` → string leg still returns; `degraded:'semantic-unavailable'`. Mirrors `core/search.ts`. |
 | Malformed frontmatter | `parseFrontmatter` never throws; note indexed as body-only; debug log. One bad note can't break the vault index. |
-| External edit / git pull / AI-butler write | Caught by `fs.watch` catch-all leg (§4.1) → reconcile. Both sidecars converge. |
+| External edit / git pull / Personal AI write | Caught by `fs.watch` catch-all leg (§4.1) → reconcile. Both sidecars converge. |
 | Index drift (sidecar ≠ files) | Sidecars are rebuildable; `POST /index/rebuild` + startup schema check; correctness tests assert `index == vault`. |
 | Ephemeral server isolation | Ephemeral uses its own `OPEN_WALNUT_HOME` temp dir → its own `notes-index.sqlite`; it must NOT touch production's sidecar. Follows the existing ephemeral-isolation gating discipline. |
 | FTS query injection / special chars | `escapeFts(q)` sanitizes FTS5 operators; `LIKE` leg uses parameter binding. (Same care as `memory-search.ts` `sanitizeForVec`.) |

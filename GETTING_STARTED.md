@@ -1,6 +1,6 @@
 # Getting Started with Open Walnut
 
-Open Walnut is a personal AI butler that manages tasks, accumulates knowledge, and orchestrates Claude Code sessions — all from a beautiful web UI. This guide walks you through installation, configuration, and your first productive session.
+Open Walnut is a Personal AI that manages tasks, accumulates knowledge, and orchestrates Claude Code sessions. It includes a web UI. This guide walks you through installation, configuration, and your first productive session.
 
 > **Time estimate**: 5 minutes for the fast track (plus a one-time ~1.16 GB model download on first start), 10 minutes for the full walkthrough.
 

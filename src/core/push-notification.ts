@@ -112,10 +112,10 @@ async function maybePush(title: string, body: string, data?: Record<string, unkn
 }
 
 /**
- * (agentId, conversationId) when this session is a butler chat lane, else null.
+ * (agentId, conversationId) when this session is a Personal AI chat lane, else null.
  *
- * A lane-bound session answers a butler CHAT turn, so its result/error must read
- * as the butler talking — not as "some session finished". The event payload
+ * A lane-bound session answers a Personal AI CHAT turn, so its result/error must read
+ * as the Personal AI talking — not as "some session finished". The event payload
  * carries no lane, so it's read off the record (one cheap indexed sqlite read).
  * Failure-safe by design: a record-read throw resolves null, which falls the
  * caller back to the generic session copy rather than dropping the push.
@@ -126,7 +126,7 @@ async function laneIdsFor(
   if (!sessionId) return null
   try {
     const { getSessionByClaudeId } = await import('./session-tracker.js')
-    const { parseLaneKey } = await import('./sessions/butler-lane.js')
+    const { parseLaneKey } = await import('./sessions/personal-ai-lane.js')
     const record = await getSessionByClaudeId(sessionId)
     return parseLaneKey(record?.lane)
   } catch (err) {
@@ -160,7 +160,7 @@ export function initPushNotifications(): void {
           const sessionId = data.sessionId
           const lane = await laneIdsFor(sessionId)
           if (lane) {
-            // A lane-bound session IS the butler answering a chat turn, not an
+            // A lane-bound session IS the Personal AI answering a chat turn, not an
             // external coding session — "Session 3f2a1b0c finished" would be
             // meaningless to the user. Push the reply itself, from Walnut.
             await maybePush(

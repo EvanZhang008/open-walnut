@@ -9,7 +9,7 @@
  * reads the CLOSING `---` as a setext-H2 underline, so the whole YAML block comes
  * back as ONE `## name: … description: &gt; …` heading line. For MEMORY.md /
  * USER.md — bounded stores whose `## Title` sections are injected into the
- * butler's prompt every turn — that heading then reads as a real ENTRY.
+ * Personal AI's prompt every turn — that heading then reads as a real ENTRY.
  *
  * The fix (mirrors what hooks/useNoteContent.ts does for vault notes): the editor
  * edits the BODY only; the frontmatter block is preserved verbatim and re-attached
@@ -283,7 +283,7 @@ describe('memory file: angle-bracket / entity fidelity', () => {
     const raw = `---
 name: Global Memory
 description: >
-  Rules the butler reads every turn.
+  Rules the Personal AI reads every turn.
 ---
 
 # MEMORY.md — Global

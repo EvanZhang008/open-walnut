@@ -95,9 +95,9 @@ describe('session mode registry', () => {
     expect(VALID_SESSION_MODE_IDS.has('bypassPermissions')).toBe(false) // CLI value, not an id
   })
 
-  it('exposes every mode to the butler session tools (no hardcoded subset)', () => {
+  it('exposes every mode to the Personal AI session tools (no hardcoded subset)', () => {
     // task_session_create and session_resume each hardcoded their own subset
-    // (['plan','bypass'] and ['bypass','accept','plan']), so the butler could
+    // (['plan','bypass'] and ['bypass','accept','plan']), so the Personal AI could
     // not request modes the UI offered. Both now derive from the registry.
     const src = read('src/agent/tools.ts')
     expect(src).toContain('enum: SESSION_MODE_ENUM')

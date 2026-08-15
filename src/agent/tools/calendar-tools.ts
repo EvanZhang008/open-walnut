@@ -1,5 +1,5 @@
 /**
- * Butler calendar tools — query and edit the user's external calendars
+ * Personal AI calendar tools — query and edit the user's external calendars
  * (EventKit: every macOS system-account calendar, incl. Google/iCloud).
  * Backed by the same CalendarService the web UI uses; every write emits
  * calendar:updated so the calendar view reflects agent edits live.

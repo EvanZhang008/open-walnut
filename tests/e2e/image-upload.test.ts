@@ -312,7 +312,7 @@ describe('<attached-images> annotation in chat.ts', () => {
 describe('Agent system prompt image instruction', () => {
   it('tells the agent to pass image file paths into session prompts', async () => {
     // The CONTRACT: a session can only read an image if its path is in the prompt,
-    // so the butler's prompt must say so. Asserting the old exact headings
+    // so the Personal AI's prompt must say so. Asserting the old exact headings
     // ('### Image attachments', '<attached-images>') made this fail when the same
     // instruction was reworded into a numbered list (commit ae0cd90) — a false
     // alarm on unchanged behaviour. Assert the substance instead of the wording.

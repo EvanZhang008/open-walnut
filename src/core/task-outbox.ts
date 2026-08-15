@@ -1,7 +1,7 @@
 /**
  * Task op apply core + the LEGACY git outbox lane.
  *
- * Problem: on the cloud box the butler's task tools write to the LOCAL
+ * Problem: on the cloud box the Personal AI's task tools write to the LOCAL
  * tasks.sqlite, which is gitignored — tasks created from the phone were
  * stranded on EC2 forever (and invisible to the iOS list, which reads the
  * Mac-exported tasks/projection.json).
@@ -27,7 +27,7 @@
  *                            for the transition + tests; production dispatch
  *                            goes through task-queue.ts.
  *   importProjectionOnCloud() — upserts the Mac-exported projection into the
- *                            cloud sqlite so the butler sees Mac-side tasks.
+ *                            cloud sqlite so the Personal AI sees Mac-side tasks.
  *                            Upsert-only — it never deletes local rows. Since
  *                            Phase 3 the projection arrives as a bridge push
  *                            into the projection cache (events-v1 invokes the
@@ -324,7 +324,7 @@ export async function applyOutboxOnPrimary(): Promise<number> {
 
 /**
  * CLOUD box: upsert the Mac-exported tasks/projection.json into the local
- * sqlite so the butler's task_query/task_search see Mac-side tasks.
+ * sqlite so the Personal AI's task_query/task_search see Mac-side tasks.
  *
  * Upsert-only, and rows with a PENDING outbox op are skipped (the local write
  * is newer than the projection by construction — it hasn't round-tripped yet).

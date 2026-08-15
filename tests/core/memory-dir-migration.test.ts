@@ -53,7 +53,7 @@ describe('migrateProjectMemoryDirs', () => {
   });
 
   it('flattens two-level dirs and carries sibling subdirs with them', async () => {
-    await writeMemory('passion/walnut', memoryDoc('Walnut', 'the butler'));
+    await writeMemory('passion/walnut', memoryDoc('Walnut', 'the Personal AI'));
     await writeMemory('passion/walnut/triage', memoryDoc('Walnut triage', 'triage state'));
     await writeMemory('life/tax', memoryDoc('Tax', 'filings'));
 

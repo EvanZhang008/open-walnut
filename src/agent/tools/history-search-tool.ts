@@ -42,7 +42,7 @@ Machine chatter (subagent/triage) is hidden unless include_hidden. Cron messages
       },
       agent_id: {
         type: 'string',
-        description: 'Limit to one agent (e.g. "general" for the butler). Required for scroll (comes with the hit); optional filter for discovery/browse.',
+        description: 'Limit to one agent (e.g. "general" for the Personal AI). Required for scroll (comes with the hit); optional filter for discovery/browse.',
       },
       after: { type: 'string', description: 'Only messages at/after this ISO date, e.g. "2026-06-01".' },
       before: { type: 'string', description: 'Only messages at/before this ISO date.' },

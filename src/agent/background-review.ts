@@ -1,8 +1,8 @@
 /**
- * Background self-review — the butler's every-N-turn learning loop.
+ * Background self-review — the Personal AI's every-N-turn learning loop.
  *
- * Every `interval` clean main-butler turns (default 10), fork the conversation
- * and let the butler review the window for skill/memory updates. Ported from
+ * Every `interval` clean Personal AI turns (default 10), fork the conversation
+ * and let the Personal AI review the window for skill/memory updates. Ported from
  * Hermes background_review with its three cache tricks:
  *
  * 1. TRUE FORK, SAME CACHE PREFIX. The review call goes through the SAME
@@ -20,9 +20,9 @@
  *    prompt as a standing instruction (Hermes curator-takeover bug).
  *
  * Trigger discipline:
- * - MAIN butler only (agentId 'general', default system prompt). Subagents,
+ * - Personal AI only (agentId 'general', default system prompt). Subagents,
  *   cron, triage, and the review fork itself never trigger or count.
- * - Counter resets to 0 when the butler used skill_manage ITSELF during the
+ * - Counter resets to 0 when the Personal AI used skill_manage ITSELF during the
  *   window — it already did its learning; a review pass would be redundant.
  * - Only clean (non-aborted, non-error) turns count.
  * - One review at a time per conversation; a fire while one is running is
@@ -165,7 +165,7 @@ async function defaultRunner(
 export interface TurnCompleteInfo {
   agentId: string;
   conversationId: string;
-  /** Tool names the butler called during the completed turn. */
+  /** Tool names the Personal AI called during the completed turn. */
   toolsUsed: ReadonlySet<string> | string[];
   /** Loads the conversation history snapshot to fork (called only when firing). */
   getHistory: () => Promise<MessageParam[]>;
@@ -174,7 +174,7 @@ export interface TurnCompleteInfo {
 }
 
 /**
- * Count a completed clean main-butler turn; fire the review fork at the
+ * Count a completed clean Personal AI turn; fire the review fork at the
  * interval boundary. Fire-and-forget — callers should not await the review.
  * Returns whether a review was spawned (for tests).
  */
@@ -189,7 +189,7 @@ export async function noteTurnCompleteAndMaybeReview(info: TurnCompleteInfo): Pr
   const k = key(info.agentId, info.conversationId);
   const toolsUsed = info.toolsUsed instanceof Set ? info.toolsUsed : new Set(info.toolsUsed);
 
-  // The butler already did its learning this turn — restart the window.
+  // The Personal AI already did its learning this turn — restart the window.
   if (toolsUsed.has('skill_manage')) {
     turnCounters.set(k, 0);
     log.agent.debug('background-review: counter reset (skill_manage used this turn)', {

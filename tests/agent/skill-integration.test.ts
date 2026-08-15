@@ -110,7 +110,7 @@ Use curl to check weather via wttr.in`,
   });
 
   it('system prompt contains walnut skills but NOT claude-store skills', async () => {
-    // Global skill — belongs to the butler
+    // Global skill — belongs to the Personal AI
     const globalDir = path.join(GLOBAL_SKILLS_DIR, 'deploy');
     await fsp.mkdir(globalDir, { recursive: true });
     await fsp.writeFile(
@@ -124,7 +124,7 @@ description: Deploy services to production
 
     // Claude skill — belongs to the Claude Code CLI (the executor), which
     // discovers it natively. Injecting it into the coordinator's prompt is
-    // pure token waste, so the butler index must skip it.
+    // pure token waste, so the Personal AI index must skip it.
     const claudeDir = path.join(CLAUDE_SKILLS_DIR, 'github');
     await fsp.mkdir(claudeDir, { recursive: true });
     await fsp.writeFile(

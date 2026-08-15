@@ -474,7 +474,7 @@ describe('computeSessionChanges — agent memory-store filtering', () => {
   it('excludes the agent memory store (memory/{MEMORY.md,index,projects,agents,…}) but keeps real code', async () => {
     const repo = path.join(workRoot, 'repo');
     await gitInit(repo);
-    // The butler's memory store lives under a `memory/` dir (here nested in the
+    // The Personal AI's memory store lives under a `memory/` dir (here nested in the
     // repo so git-sync would track it). Every shape the store uses must be hidden.
     const memRoot = path.join(repo, 'memory', 'MEMORY.md');
     const memIndex = path.join(repo, 'memory', 'index.md');

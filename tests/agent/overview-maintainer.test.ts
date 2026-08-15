@@ -68,7 +68,7 @@ async function seedProjectSkill(name = PROJECT, skillCategory = SKILL_CAT): Prom
   await fsp.mkdir(dir, { recursive: true });
   await fsp.writeFile(
     path.join(dir, 'SKILL.md'),
-    `---\nname: ${name}\ndescription: '${name} project skill'\ntype: knowledge\n---\n\n# ${name}\n\nCurrent direction: build the butler.\n`,
+    `---\nname: ${name}\ndescription: '${name} project skill'\ntype: knowledge\n---\n\n# ${name}\n\nCurrent direction: build the Personal AI.\n`,
   );
 }
 
@@ -242,12 +242,12 @@ describe('maintainer tool set', () => {
     const allowed = await skillManage.execute({
       action: 'patch',
       name: SKILL_KEY,
-      old_string: 'Current direction: build the butler.',
-      new_string: 'Current direction: butler + learning loops.',
+      old_string: 'Current direction: build the Personal AI.',
+      new_string: 'Current direction: Personal AI + learning loops.',
     });
     expect(String(allowed)).toContain('patched');
     const raw = fs.readFileSync(path.join(GLOBAL_SKILLS_DIR, SKILL_CAT, PROJECT, 'SKILL.md'), 'utf-8');
-    expect(raw).toContain('butler + learning loops');
+    expect(raw).toContain('Personal AI + learning loops');
   });
 
   it('delete and memory actions are refused', async () => {
@@ -301,7 +301,7 @@ describe('maintainer prompt', () => {
     expect(prompt).toContain('[Task completed]');
     expect(prompt).toContain('Ship the history.db index');
     expect(prompt).toContain(`- Project: ${PROJECT}`);
-    expect(prompt).toContain('Current direction: build the butler.');
+    expect(prompt).toContain('Current direction: build the Personal AI.');
     expect(prompt).toContain('Earlier progress entry.');
     expect(prompt).toContain(`action=log_append, category="${SKILL_CAT}"`);
     expect(prompt).toContain(`name="${SKILL_KEY}"`);

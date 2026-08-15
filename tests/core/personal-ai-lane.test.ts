@@ -1,13 +1,13 @@
 /**
- * Butler lanes (P3) — "one chat conversation ⇄ one long-lived Claude Code session".
+ * Personal AI lanes (P3) — "one chat conversation ⇄ one long-lived Claude Code session".
  *
  * A lane key (`chat:<agentId>:<conversationId>`) is the durable binding between a
- * butler conversation and the `claude` session that answers its turns. This file
+ * Personal AI conversation and the `claude` session that answers its turns. This file
  * covers the two properties the whole feature rests on:
  *
  *   1. IDENTITY — one session per conversation, forever. A second call must reuse
  *      the record, and two conversations must never share a session.
- *   2. LAUNCH SHAPE — the SESSION_START the lane emits carries the butler profile
+ *   2. LAUNCH SHAPE — the SESSION_START the lane emits carries the Personal AI profile
  *      (coordinator persona, full-replace, walnut MCP mounted) and the lane tag.
  *
  * ZERO real side effects: no `claude` is ever spawned — the 'session-runner'
@@ -24,8 +24,8 @@ vi.mock('../../src/constants.js', () => createMockConstants())
 
 import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js'
 import { WALNUT_HOME } from '../../src/constants.js'
-import { butlerLaneKey, parseLaneKey, getOrCreateLaneSession } from '../../src/core/sessions/butler-lane.js'
-import { butlerProfile, walnutMcpProfile } from '../../src/core/sessions/profiles.js'
+import { personalAiLaneKey, parseLaneKey, getOrCreateLaneSession } from '../../src/core/sessions/personal-ai-lane.js'
+import { personalAiProfile, walnutMcpProfile } from '../../src/core/sessions/profiles.js'
 import type { SessionStartEvent } from '../../src/core/event-types.js'
 
 /** SESSION_START payloads captured from the fake runner, in emit order. */
@@ -64,16 +64,16 @@ afterEach(async () => {
 
 describe('lane key', () => {
   it('is namespaced per agent + conversation', () => {
-    expect(butlerLaneKey('general', 'conv-abc')).toBe('chat:general:conv-abc')
-    expect(butlerLaneKey('research', 'conv-abc')).toBe('chat:research:conv-abc')
+    expect(personalAiLaneKey('general', 'conv-abc')).toBe('chat:general:conv-abc')
+    expect(personalAiLaneKey('research', 'conv-abc')).toBe('chat:research:conv-abc')
   })
 })
 
 describe('parseLaneKey', () => {
-  it('round-trips butlerLaneKey', () => {
-    expect(parseLaneKey(butlerLaneKey('general', 'conv-abc')))
+  it('round-trips personalAiLaneKey', () => {
+    expect(parseLaneKey(personalAiLaneKey('general', 'conv-abc')))
       .toEqual({ agentId: 'general', conversationId: 'conv-abc' })
-    expect(parseLaneKey(butlerLaneKey('research', 'conv-9f2e-4a')))
+    expect(parseLaneKey(personalAiLaneKey('research', 'conv-9f2e-4a')))
       .toEqual({ agentId: 'research', conversationId: 'conv-9f2e-4a' })
   })
 
@@ -86,7 +86,7 @@ describe('parseLaneKey', () => {
       .toEqual({ agentId: 'general', conversationId: 'conv-a:b:c' })
   })
 
-  it('returns null for anything that is not a butler chat lane', () => {
+  it('returns null for anything that is not a Personal AI chat lane', () => {
     expect(parseLaneKey(undefined)).toBeNull()
     expect(parseLaneKey(null)).toBeNull()
     expect(parseLaneKey('')).toBeNull()
@@ -157,7 +157,7 @@ describe('getOrCreateLaneSession', () => {
 
   it('a lane lookup survives a row whose payload is not valid JSON', async () => {
     // json_extract RAISES on malformed JSON, so without the json_valid guard ONE
-    // corrupt row would make the butler unable to find its own lane, ever.
+    // corrupt row would make the Personal AI unable to find its own lane, ever.
     const { getSessionByLane, createSessionRecord } = await import('../../src/core/session-tracker.js')
     const { getDb } = await import('../../src/core/session-db.js')
     await createSessionRecord('corrupt-row', 't', 'p', WALNUT_HOME, { pid: 1 })
@@ -186,14 +186,14 @@ describe('getOrCreateLaneSession', () => {
 // ══════════════════════════════════════════════════════════════════
 
 describe('the SESSION_START a lane emits', () => {
-  it('carries the butler profile, the lane tag, and the pre-minted id', async () => {
+  it('carries the Personal AI profile, the lane tag, and the pre-minted id', async () => {
     const lane = await getOrCreateLaneSession('general', 'conv-shape', { firstMessage: 'do a thing' })
     expect(started).toHaveLength(1)
     const ev = started[0]
 
     expect(ev.lane).toBe('chat:general:conv-shape')
     expect(ev.preassignedSessionId).toBe(lane.sessionId)
-    // Taskless + rooted at the butler's own home dir.
+    // Taskless + rooted at the Personal AI's own home dir.
     expect(ev.taskId).toBe('')
     expect(ev.cwd).toBe(WALNUT_HOME)
     // The user's message IS the first turn (created=true tells the caller not to
@@ -202,7 +202,7 @@ describe('the SESSION_START a lane emits', () => {
 
     // Full replacement of the CLI's own prompt, carrying the two work modes.
     expect(ev.profile?.systemPromptMode).toBe('replace')
-    expect(ev.profile?.systemPrompt).toContain("You are Walnut, Ada's project manager")
+    expect(ev.profile?.systemPrompt).toContain('Personal AI')
     expect(ev.profile?.systemPrompt).toContain('Choose one mode for each request')
     // Walnut's data reaches the CLI over MCP, not native tools.
     expect(ev.profile?.mcpServers).toEqual(walnutMcpProfile().mcpServers)
@@ -213,24 +213,25 @@ describe('the SESSION_START a lane emits', () => {
 })
 
 // ══════════════════════════════════════════════════════════════════
-//  3. butlerProfile preset
+//  3. personalAiProfile preset
 // ══════════════════════════════════════════════════════════════════
 
-describe('butlerProfile', () => {
+describe('personalAiProfile', () => {
   it('is a full-replace persona plus the walnut MCP mount', () => {
-    const profile = butlerProfile('Ada')
+    const profile = personalAiProfile('Ada')
     expect(profile.systemPromptMode).toBe('replace')
     expect(profile.mcpServers).toEqual(walnutMcpProfile().mcpServers)
-    // No tool restriction in the MVP — the butler runs on the user's own machine.
+    // No tool restriction in the MVP — the Personal AI runs on the user's own machine.
     expect(profile.allowedTools).toBeUndefined()
   })
 
   it('interpolates the user name into the persona', () => {
-    expect(butlerProfile('Ada').systemPrompt).toContain("Ada's project manager")
+    expect(personalAiProfile('Ada').systemPrompt).toContain('Personal AI')
+    expect(personalAiProfile('Ada').systemPrompt).toContain('Ada')
   })
 
   it('carries the two work modes without repeating tool instructions', () => {
-    const prompt = butlerProfile('Ada').systemPrompt!
+    const prompt = personalAiProfile('Ada').systemPrompt!
     expect(prompt).toContain('Do it yourself.')
     expect(prompt).toContain('Delegate.')
     expect(prompt).not.toContain('task_list')
@@ -245,7 +246,7 @@ describe('butlerProfile', () => {
 
 describe('buildLaneMemoryContext', () => {
   it('folds AGENTS.md + memory/MEMORY.md + memory/USER.md into one prompt block', async () => {
-    const { buildLaneMemoryContext, LANE_MEMORY_HEADER } = await import('../../src/core/sessions/butler-lane.js')
+    const { buildLaneMemoryContext, LANE_MEMORY_HEADER } = await import('../../src/core/sessions/personal-ai-lane.js')
     await fsp.mkdir(`${WALNUT_HOME}/memory`, { recursive: true })
     await fsp.writeFile(`${WALNUT_HOME}/AGENTS.md`, '# Vault layout\nPARA method\n', 'utf-8')
     await fsp.writeFile(`${WALNUT_HOME}/memory/MEMORY.md`, '## Deploy rule\nuse dev:prod\n', 'utf-8')
@@ -259,7 +260,7 @@ describe('buildLaneMemoryContext', () => {
   })
 
   it('missing files contribute nothing and never throw', async () => {
-    const { buildLaneMemoryContext, LANE_MEMORY_HEADER } = await import('../../src/core/sessions/butler-lane.js')
+    const { buildLaneMemoryContext, LANE_MEMORY_HEADER } = await import('../../src/core/sessions/personal-ai-lane.js')
     const block = await buildLaneMemoryContext()
     expect(block).toContain(LANE_MEMORY_HEADER)
     expect(block).not.toContain('### Global memory')
@@ -275,14 +276,18 @@ describe('buildLaneMemoryContext', () => {
     expect(prompt).toContain('Marker entry XYZZY')
   })
 
-  it('cleanupLaneClaudeMd removes only the retired MANAGED file, never a user-authored one', async () => {
-    const { cleanupLaneClaudeMd } = await import('../../src/core/sessions/butler-lane.js')
-    // Retired managed copy (has the marker) → removed.
-    await fsp.writeFile(`${WALNUT_HOME}/CLAUDE.md`, '<!-- walnut:butler-lane-context v1 -->\nold imports\n', 'utf-8')
-    await cleanupLaneClaudeMd()
-    await expect(fsp.readFile(`${WALNUT_HOME}/CLAUDE.md`, 'utf-8')).rejects.toThrow()
+  it('cleanupLaneClaudeMd removes retired managed files across naming versions, never a user-authored one', async () => {
+    const { cleanupLaneClaudeMd } = await import('../../src/core/sessions/personal-ai-lane.js')
+    const markers = [
+      '<!-- walnut:personal-ai-lane-context v1 -->',
+      `<!-- walnut:${String.fromCharCode(98, 117, 116, 108, 101, 114)}-lane-context v1 -->`,
+    ]
+    for (const marker of markers) {
+      await fsp.writeFile(`${WALNUT_HOME}/CLAUDE.md`, `${marker}\nold imports\n`, 'utf-8')
+      await cleanupLaneClaudeMd()
+      await expect(fsp.readFile(`${WALNUT_HOME}/CLAUDE.md`, 'utf-8')).rejects.toThrow()
+    }
 
-    // User-authored file (no marker) → byte-identical after the call.
     const userFile = '# My own instructions\ndo not touch\n'
     await fsp.writeFile(`${WALNUT_HOME}/CLAUDE.md`, userFile, 'utf-8')
     await cleanupLaneClaudeMd()

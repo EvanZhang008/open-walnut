@@ -1,5 +1,5 @@
 /**
- * /api/v1 butler conversation management (additive) — rename/pin, delete,
+ * /api/v1 Personal AI conversation management (additive) — rename/pin, delete,
  * stop, and structured-question answers. Mirrors the web console's
  * conversations REST routes + the WS `chat:stop` / `chat:answer-question`
  * RPCs with equivalent semantics (no new behavior).
@@ -16,14 +16,14 @@
  * The active pointer matters server-side (not just client UI state): cron
  * results and background notifications route into the ACTIVE conversation.
  *
- * Cloud companion (REPLICA): Class A — the replica runs its OWN butler agent
+ * Cloud companion (REPLICA): Class A — the replica runs its OWN Personal AI agent
  * (the v1 chat endpoints already work there), so these operate on the local
  * conversation store / turn queue directly. No bridge.
  *
  * Stop semantics: the WS chat keys AbortControllers per client socket; a REST
  * client has no socket identity, so stop aborts ALL of the agent's active
  * turns via core/agent-abort-registry.ts (both WS- and REST-initiated turns
- * register there). For a single-user butler that IS the "stop" the phone means.
+ * register there). For a single-user Personal AI that IS the "stop" the phone means.
  *
  * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
  */
@@ -34,7 +34,7 @@ import { broadcastEvent } from '../ws/handler.js'
 import { EventNames } from '../../core/event-bus.js'
 import { listConversations } from '../../core/conversations.js'
 
-export const butlerV1Router = Router()
+export const personalAiV1Router = Router()
 
 const DEFAULT_AGENT_ID = 'general'
 
@@ -83,7 +83,7 @@ async function resolveConversation(req: Request, res: Response): Promise<{ agent
 // results + background notifications route into the active conversation.
 // Registered before the :id routes (different method, but keep the shape
 // obvious): 'active' is never treated as a conversation id.
-butlerV1Router.put('/conversations/active', async (req: Request, res: Response, next: NextFunction) => {
+personalAiV1Router.put('/conversations/active', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const agentId = requestAgentId(req)
     if (!agentId || !(await consoleAgentExists(agentId))) {
@@ -128,7 +128,7 @@ async function resolveChatTarget(req: Request, res: Response): Promise<{ agentId
 
 // GET /api/v1/chat/stats?agentId&conversationId — real conversation size
 // (API message count + token estimate incl. system/tools), cached between turns.
-butlerV1Router.get('/chat/stats', async (req: Request, res: Response, next: NextFunction) => {
+personalAiV1Router.get('/chat/stats', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const ids = await resolveChatTarget(req, res)
     if (!ids) return
@@ -143,15 +143,15 @@ butlerV1Router.get('/chat/stats', async (req: Request, res: Response, next: Next
 // Retires the lane session too (same reason as the web route): the CLI holds its
 // own copy of the transcript, so leaving it alive means "clear" cleared nothing
 // from the model's point of view.
-butlerV1Router.post('/chat/clear', async (req: Request, res: Response, next: NextFunction) => {
+personalAiV1Router.post('/chat/clear', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const ids = await resolveChatTarget(req, res)
     if (!ids) return
     const chatHistory = await import('../../core/chat-history.js')
     await chatHistory.clear(ids.agentId, ids.conversationId)
-    const { archiveLaneForConversation } = await import('../../core/sessions/butler-lane.js')
+    const { archiveLaneForConversation } = await import('../../core/sessions/personal-ai-lane.js')
     const retired = await archiveLaneForConversation(ids.agentId, ids.conversationId)
-    log.web.info('butler conversation cleared via api-v1', { ...ids, retiredLaneSessionId: retired ?? undefined })
+    log.web.info('Personal AI conversation cleared via api-v1', { ...ids, retiredLaneSessionId: retired ?? undefined })
     res.json({ ok: true })
   } catch (err) {
     next(err)
@@ -162,8 +162,8 @@ butlerV1Router.post('/chat/clear', async (req: Request, res: Response, next: Nex
 // background compaction (the same trigger the web console uses). Answers
 // immediately: { ok, async: true }, or { ok, alreadyRunning: true } when a
 // compaction is already in flight. Class A (the replica compacts its own
-// butler's conversation with its own model credentials).
-butlerV1Router.post('/chat/compact', async (req: Request, res: Response, next: NextFunction) => {
+// Personal AI's conversation with its own model credentials).
+personalAiV1Router.post('/chat/compact', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const ids = await resolveChatTarget(req, res)
     if (!ids) return
@@ -180,7 +180,7 @@ butlerV1Router.post('/chat/compact', async (req: Request, res: Response, next: N
 })
 
 // PATCH /api/v1/conversations/:id { title? | pinned? } → { conversation }
-butlerV1Router.patch('/conversations/:id', async (req: Request, res: Response, next: NextFunction) => {
+personalAiV1Router.patch('/conversations/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const ids = await resolveConversation(req, res)
     if (!ids) return
@@ -216,7 +216,7 @@ butlerV1Router.patch('/conversations/:id', async (req: Request, res: Response, n
 
 // DELETE /api/v1/conversations/:id → 204. The MAIN conversation is never
 // deletable (it receives background notifications + cron) → 409 conflict.
-butlerV1Router.delete('/conversations/:id', async (req: Request, res: Response, next: NextFunction) => {
+personalAiV1Router.delete('/conversations/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const ids = await resolveConversation(req, res)
     if (!ids) return
@@ -244,7 +244,7 @@ butlerV1Router.delete('/conversations/:id', async (req: Request, res: Response, 
 // Aborts ALL of the agent's active turns (see the header comment for why
 // agent-level, not per-socket) and cancels any pending user_ask question —
 // the same pair of effects as the WS `chat:stop`.
-butlerV1Router.post('/conversations/:id/stop', async (req: Request, res: Response, next: NextFunction) => {
+personalAiV1Router.post('/conversations/:id/stop', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const ids = await resolveConversation(req, res)
     if (!ids) return
@@ -259,7 +259,7 @@ butlerV1Router.post('/conversations/:id/stop', async (req: Request, res: Respons
     // Unconditional: resolves null when this conversation has no lane record.
     let laneInterrupted: string | null = null
     try {
-      const { interruptLaneForConversation } = await import('../../core/sessions/butler-lane.js')
+      const { interruptLaneForConversation } = await import('../../core/sessions/personal-ai-lane.js')
       laneInterrupted = await interruptLaneForConversation(agentId, conversationId)
     } catch (err) {
       // Never fail the client's stop over the lane half.
@@ -267,7 +267,7 @@ butlerV1Router.post('/conversations/:id/stop', async (req: Request, res: Respons
         agentId, conversationId, error: err instanceof Error ? err.message : String(err),
       })
     }
-    log.web.info('butler turn stopped via api-v1', {
+    log.web.info('Personal AI turn stopped via api-v1', {
       agentId, conversationId, stopped, questionCancelled,
       laneSessionId: laneInterrupted ?? undefined,
     })
@@ -283,7 +283,7 @@ butlerV1Router.post('/conversations/:id/stop', async (req: Request, res: Respons
 // Answer a pending structured question (user_ask tool) — mirrors the WS
 // `chat:answer-question`: persists the answers as a UI entry, broadcasts the
 // history update, and unblocks the agent loop. 409 when nothing is pending.
-butlerV1Router.post('/conversations/:id/answer', async (req: Request, res: Response, next: NextFunction) => {
+personalAiV1Router.post('/conversations/:id/answer', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const ids = await resolveConversation(req, res)
     if (!ids) return
@@ -313,7 +313,7 @@ butlerV1Router.post('/conversations/:id/answer', async (req: Request, res: Respo
       conversationId,
     })
     submitAnswers(answers as Record<string, string>, agentId)
-    log.web.info('butler question answered via api-v1', { agentId, conversationId, answerCount: Object.keys(answers).length })
+    log.web.info('Personal AI question answered via api-v1', { agentId, conversationId, answerCount: Object.keys(answers).length })
     res.json({ ok: true })
   } catch (err) {
     next(err)
@@ -321,8 +321,8 @@ butlerV1Router.post('/conversations/:id/answer', async (req: Request, res: Respo
 })
 
 // Router-level error funnel — keeps unexpected failures in the frozen shape.
-butlerV1Router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-  log.web.error('api-v1 butler route error', {
+personalAiV1Router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  log.web.error('api-v1 Personal AI route error', {
     error: err instanceof Error ? err.message : String(err),
   })
   if (res.headersSent) {

@@ -2,7 +2,7 @@ import SwiftUI
 
 /// ChatStore → TimelineHost binding: the replacement for ChatView's
 /// MessageListView scroll body. Same shape as SessionTimelineBody; the
-/// butler chat adds the load-earlier affordance and the redacted
+/// Personal AI chat adds the load-earlier affordance and the redacted
 /// placeholder while the first canonical load is in flight.
 struct ChatTimelineBody: View {
     let chat: ChatStore
@@ -41,7 +41,7 @@ struct ChatTimelineBody: View {
                     case .loadEarlier:
                         Task { await chat.loadOlder() }
                     case .previewFile(let path):
-                        // Butler chat always runs on the primary box.
+                        // Personal AI chat always runs on the primary box.
                         previewTarget = FilePreviewTarget(path: path, host: nil)
                     default:
                         break
@@ -63,7 +63,7 @@ struct ChatTimelineEmptyState: View {
             Image(systemName: "bubble.left.and.text.bubble.right")
                 .font(.system(size: 40))
                 .foregroundStyle(.tertiary)
-            Text("Your butler is listening")
+            Text("Your Personal AI is listening")
                 .font(.headline)
             Text("Ask anything — tasks, notes, or what happened today.")
                 .font(.subheadline)

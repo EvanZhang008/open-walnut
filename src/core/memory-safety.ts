@@ -10,9 +10,9 @@
  *
  * WHY THIS EXISTS
  * ---------------
- * MEMORY.md and USER.md are injected into the butler's system prompt on EVERY
+ * MEMORY.md and USER.md are injected into the Personal AI's system prompt on EVERY
  * turn and are framed as authoritative behavior rules. They are written
- * automatically by (a) the butler's own `memory_manage` calls and (b) the
+ * automatically by (a) the Personal AI's own `memory_manage` calls and (b) the
  * unattended `background-review` fork, which distils *recent conversation
  * content* into rules. If a conversation ever touched untrusted text (a fetched
  * web page, someone else's issue tracker, a pasted log), a crafted instruction
@@ -253,7 +253,7 @@ export function screenEntriesForPrompt(entries: string[], label = 'memory'): str
 //  - SKILL BODY is loaded on demand by skill_view. Screened at LOAD time, at
 //    paragraph granularity: a skill body is a long document, so withholding all
 //    of it over one bad paragraph would break legitimate use. The rest stays
-//    readable, which is also what lets the butler go fix the flagged part.
+//    readable, which is also what lets the Personal AI go fix the flagged part.
 //  - DAILY LOG is injected under "## Recent activity". Screened at INJECTION
 //    time ONLY, never at write time: the two automatic writers (the on-stop and
 //    on-compact hooks) are fire-and-forget with nobody to receive a rejection,

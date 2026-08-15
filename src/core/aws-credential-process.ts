@@ -10,7 +10,7 @@
  *   nested { "Credentials": { "AccessKeyId", … } }
  *          — the `sts assume-role` / `claude default-credential-export` shape.
  * Accepting only the nested one silently broke every standards-compliant helper
- * (2026-07-26: the butler ran 18h on expired ~/.aws creds because its configured
+ * (2026-07-26: the Personal AI ran 18h on expired ~/.aws creds because its configured
  * credential_process was rejected as "not a valid Credentials object").
  *
  * Design mirrors the Claude Code fork's `refreshAndGetAwsCredentials`

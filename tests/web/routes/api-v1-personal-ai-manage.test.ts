@@ -1,5 +1,5 @@
 /**
- * /api/v1 butler conversation management (Wave 1) — butler-v1.ts. Bare
+ * /api/v1 Personal AI conversation management (Wave 1) — personal-ai-v1.ts. Bare
  * express + supertest against the real conversations store on an isolated
  * temp home. Verifies rename/pin PATCH, the main-conversation delete guard,
  * stop (agent-abort-registry + pending-question cancel), answer semantics
@@ -11,10 +11,10 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/constants.js')>()
-  return { ...actual, ...createMockConstants('walnut-apiv1-butler') }
+  return { ...actual, ...createMockConstants('walnut-apiv1-personal-ai') }
 })
 
-// WS broadcast seam — butler-v1 broadcasts CONVERSATION_*/CHAT_HISTORY_UPDATED.
+// WS broadcast seam — personal-ai-v1 broadcasts CONVERSATION_*/CHAT_HISTORY_UPDATED.
 const { broadcastMock } = vi.hoisted(() => ({ broadcastMock: vi.fn() }))
 vi.mock('../../../src/web/ws/handler.js', () => ({
   broadcastEvent: broadcastMock,
@@ -22,7 +22,7 @@ vi.mock('../../../src/web/ws/handler.js', () => ({
 
 import express from 'express'
 import request from 'supertest'
-import { butlerV1Router } from '../../../src/web/routes/butler-v1.js'
+import { personalAiV1Router } from '../../../src/web/routes/personal-ai-v1.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { createConversation, getMainConversationId, listConversations } from '../../../src/core/conversations.js'
@@ -32,7 +32,7 @@ import { waitForAnswers, hasPendingQuestion, cancelQuestion } from '../../../src
 function createApp() {
   const app = express()
   app.use(express.json())
-  app.use('/api/v1', butlerV1Router)
+  app.use('/api/v1', personalAiV1Router)
   app.use(errorHandler)
   return app
 }

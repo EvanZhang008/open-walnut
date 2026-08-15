@@ -125,7 +125,7 @@ export function createConversationsRouter(): Router {
         res.status(409).json({ error: 'Lane engine is not active' })
         return
       }
-      const { getOrCreateLaneSession } = await import('../../core/sessions/butler-lane.js')
+      const { getOrCreateLaneSession } = await import('../../core/sessions/personal-ai-lane.js')
       const lane = await getOrCreateLaneSession(agentId, cid)
       const { WALNUT_HOME } = await import('../../constants.js')
       res.json({ sessionId: lane.sessionId, cwd: WALNUT_HOME, created: lane.created })

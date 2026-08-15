@@ -10,7 +10,7 @@
  *   append-only, written via THIS module only.
  *
  * MECHANICS ARE CODE, CONTENT IS AI: callers (task hooks, background review,
- * the butler, session on-stop summaries) provide entry text; this module owns
+ * the Personal AI, session on-stop summaries) provide entry text; this module owns
  * file targeting, size-based rotation, and naming. AI never picks filenames
  * and never edits archives.
  *

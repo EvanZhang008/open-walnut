@@ -1,6 +1,6 @@
 /**
  * EngineBadge — small pill in the chat header showing WHICH engine answers the
- * butler's turns: the in-process loop ('walnut-agent') or a lane-bound Claude
+ * Personal AI's turns: the in-process loop ('walnut-agent') or a lane-bound Claude
  * Code session ('claude-code', via config.agent.provider).
  *
  * Exists because the two engines are otherwise invisible from the outside — the

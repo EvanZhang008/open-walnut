@@ -1,6 +1,6 @@
 /**
  * Recent-task ledger — an always-injected, recency-sorted digest of recent
- * tasks so the butler answers "which task did X?" by scanning THIS list
+ * tasks so the Personal AI answers "which task did X?" by scanning THIS list
  * instead of gambling on semantic search (where pure-title junk tasks used to
  * outrank real work — see task-junk.ts).
  *

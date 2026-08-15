@@ -98,7 +98,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | POST | `/api/v1/sessions/:id/execute-continue` | Execute a completed plan with bypass (cloud relays) |
 | GET | `/api/v1/sessions/:id/changes` | Changed-files data for the session (cloud relays) |
 | GET | `/api/v1/sessions/:id/history` | Full rich-block history, tail-windowed (cloud relays) |
-| PATCH | `/api/v1/conversations/:id` | Rename/pin a butler conversation |
+| PATCH | `/api/v1/conversations/:id` | Rename/pin a Personal AI conversation |
 | DELETE | `/api/v1/conversations/:id` | Delete a conversation (main is protected) |
 | POST | `/api/v1/conversations/:id/stop` | Stop the agent's active turn(s) |
 | POST | `/api/v1/conversations/:id/answer` | Answer a pending structured question |
@@ -174,9 +174,9 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | GET | `/api/v1/notes/tags/:tag/notes` | Notes carrying a tag |
 | DELETE | `/api/v1/notes/attachment/*path` | Delete a binary attachment |
 | DELETE | `/api/v1/notes/folder/*path` | Recursive folder delete (client must confirm) |
-| PUT | `/api/v1/conversations/active` | Switch the butler's active conversation pointer |
+| PUT | `/api/v1/conversations/active` | Switch the Personal AI's active conversation pointer |
 | GET | `/api/v1/chat/stats` | Conversation size stats (messages + token estimate) |
-| POST | `/api/v1/chat/clear` | Clear a butler conversation |
+| POST | `/api/v1/chat/clear` | Clear a Personal AI conversation |
 | POST | `/api/v1/chat/compact` | Fire-and-forget background compaction |
 | GET | `/api/v1/agents/meta/tools\|skills\|models` | Agent-editor dropdown catalogs |
 | GET | `/api/v1/agents/:id` | One agent definition (full editor payload) |
@@ -254,7 +254,7 @@ Console agents the client can chat with (additive):
 ]
 ```
 
-`isMain: true` marks the primary butler (receives notifications & cron). All
+`isMain: true` marks the primary Personal AI (receives notifications & cron). All
 conversation endpoints accept an optional `agentId` (query param on GETs, body
 field on POSTs); **absent → `general`**, so pre-agent clients keep working
 unchanged. Unknown/non-console agent ids → `404 not_found`.
@@ -816,9 +816,9 @@ an id outside `[A-Za-z0-9_-]`.
   the JSONL/journal is unreachable, `200` with `messages: []` +
   `historyUnavailable` (a human-readable reason) rather than an error.
 
-### Butler conversation management (additive, Wave 1 2026-08)
+### Personal AI conversation management (additive, Wave 1 2026-08)
 
-Class A everywhere (the REPLICA runs its own butler). `agentId` is accepted
+Class A everywhere (the REPLICA runs its own Personal AI). `agentId` is accepted
 like the other conversation endpoints (absent → `general`).
 
 - `PATCH /api/v1/conversations/:id` body `{ "title"? | "pinned"? }` →
@@ -828,7 +828,7 @@ like the other conversation endpoints (absent → `general`).
 - `POST /api/v1/conversations/:id/stop` → `200 { "stopped": N,
   "questionCancelled": boolean }` — aborts ALL of the agent's active turns
   (WS- and REST-initiated; REST clients have no per-socket identity, and for
-  a single-user butler that is what "stop" means) and cancels any pending
+  a single-user Personal AI that is what "stop" means) and cancels any pending
   structured question. Harmless no-op (`stopped: 0`) when nothing is running.
 - `POST /api/v1/conversations/:id/answer` body `{ "answers": { "<header>":
   "<value>", … } }` → `200 { "ok": true }` — answers a pending structured
@@ -1127,9 +1127,9 @@ on each box) — identical behavior on a REPLICA.
   confirm (the web console uses a typed-confirm dialog). The vault root and
   traversal paths refuse with `400`.
 
-### Butler additions (additive, Wave 2 2026-08) — active pointer + chat stats/clear
+### Personal AI additions (additive, Wave 2 2026-08): active pointer + chat stats/clear
 
-Class A (the REPLICA runs its own butler). `agentId` as usual (absent →
+Class A (the REPLICA runs its own Personal AI). `agentId` as usual (absent →
 `general`).
 
 - `PUT /api/v1/conversations/active` body `{ "conversationId", "agentId"? }`
@@ -1253,7 +1253,7 @@ Class A (the REPLICA runs its own butler). `agentId` as usual (absent →
   inline). Class A.
 - `POST /api/v1/chat/compact?agentId=&conversationId=` → `{ "ok",
   "async": true }` or `{ "ok", "alreadyRunning": true }` — fire-and-forget
-  background compaction. Class A (the replica compacts its own butler).
+  background compaction. Class A (the replica compacts its own Personal AI).
 - `GET /api/v1/memory/telemetry` → `{ "stores", "note" }` — write-path
   evidence per memory entry (age, revision churn, provenance).
   `POST /api/v1/memory/daily-log/compact` body `{ "date"?, "threshold"?,

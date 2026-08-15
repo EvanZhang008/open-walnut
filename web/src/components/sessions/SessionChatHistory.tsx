@@ -204,7 +204,7 @@ function StreamingTextBlock({ content, sessionCwd, sessionHost, onTaskClick, onS
  * walnut in EVERY mode (including bypass). Allowing it without `answers` makes the
  * CLI tell the model "user answered your questions" with nothing in it, so this card
  * renders the real options and submits the chosen labels as `answers`
- * (question text → label / free text). Option pills reuse the butler-side
+ * (question text → label / free text). Option pills reuse the Personal AI's
  * QuestionPopover `qp-*` styles; the frame keeps the permission-card classes. */
 function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, answered }: {
   questions: AskQuestion[];

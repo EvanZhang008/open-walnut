@@ -51,7 +51,7 @@
   and every one saves to clean, portable, git-friendly Markdown that reopens **byte-identical**, with a
   single `Cmd+Z` reversing each user action. Three weeks later you find that note by a vague
   half-remembered phrase **and** by an exact substring, in one labeled list where exact hits are never
-  buried. Rename a note and every `[[link]]` still resolves; backlinks render instantly. The AI butler can
+  buried. Rename a note and every `[[link]]` still resolves; backlinks render instantly. The Personal AI can
   edit a note you have open without stealing your caret: a non-conflicting write defers while you type and
   never loses a character; a true write-write conflict is surfaced (never silently dropped) with an honest,
   bounded loss of at most one debounce window (§6.2). Delete any sidecar and it rebuilds from the files.
@@ -165,7 +165,7 @@ basename rename will not scale and break links.
                                              │
         ┌──────────────────┬─────────────────┴───────────┬────────────────────────────────┐
   write │ (PUT /content)   │  fs.watch(recursive) — ONE   │  external edit / git pull / AI │
-        ▼ NOTES_UPDATED     │  registration, TWO consumers │  butler write                  ▼
+        ▼ NOTES_UPDATED     │  registration, TWO consumers │  Personal AI write                  ▼
  ┌──────────────────┐       ▼                              ▼                    (caught by watcher)
  │ notes-v2 routes  │  ┌─────────────────────────┐   ┌─────────────────────────────┐
  │ CRUD/move/folder │  │ NotesIndexer (NEW)       │   │ QMD widen+embed (EXISTING)  │
@@ -477,7 +477,7 @@ from anything baked into the link text.
 **The gap (all three customer personas + PRD persona Sam).** The PRD's headline newcomer metric is
 **"time-to-first-note ≤ 1.5 s, 0 required decisions"** (`01-product-design.md`), and the obvious vehicle —
 Cmd+K Quick-capture — is reconciled to **P1** (§9.3). With Cmd+K gone from the P0 wave, **no always-available
-capture/recall surface is specified for a butler user who is not already on `/notes`**, and no `/notes`
+capture/recall surface is specified for a Personal AI user who is not already on `/notes`**, and no `/notes`
 empty-state / "new note" affordance is specified anywhere. The newcomer's single most important journey
 (make a note fast, from wherever I am) would be undesigned in v1 — a friction at the very first step, before
 the editor or search can win them.
@@ -770,7 +770,7 @@ a non-portable, non-greppable HTML island, and a literal `|` in a cell breaks re
 > callout) re-homed onto `prosemirror-markdown` directly — no rewrite. State this so the team isn't
 > surprised later.
 
-### 6.2 External / AI-butler writes mid-edit — merge & cursor-mapping (BLOCKING fix)
+### 6.2 External / Personal AI writes mid-edit: merge & cursor-mapping (BLOCKING fix)
 
 **The problem (re-verified Round 2 in the REAL state owner `web/src/hooks/useNoteContent.ts`, not just
 `NotesEditor.tsx:494-532`).** Two distinct paths apply external content, and they behave **inconsistently**
@@ -810,7 +810,7 @@ on a true write-write conflict, with an honest bound"):**
 3. **Conflict honesty — the HONEST bound (replaces "zero lost characters").** On a **true write-write
    conflict** (both on-disk and local-dirty diverged → the optimistic-lock 409), the shipped policy is
    **agent-writes-win** and the user may lose **at most one debounce window (~500 ms) of un-flushed typing**.
-   We **keep that policy** (it is load-bearing for butler correctness — the agent's write reflects an
+   We **keep that policy** (it is load-bearing for Personal AI correctness because the agent's write reflects an
    action it just took) but we make the bound **explicit and surfaced**, not silent: on 409, before
    discarding, show the user the conflict (offer "your unsaved change vs. the version on disk") rather than a
    bare silent reload. **Non-conflicting external writes never lose input** (they defer, per part 1). The
@@ -819,7 +819,7 @@ on a true write-write conflict, with an honest bound"):**
    surfaced, never silently dropped."*
 
 > **Why not user-wins-on-conflict too?** Making the user always win would silently reverse the long-standing
-> "agent writes take priority" decision, which may be load-bearing (the butler's note edit often *is* the
+> "agent writes take priority" decision, which may be load-bearing (the Personal AI's note edit often *is* the
 > source of truth for an action it performed). Flipping it is a product call, not a tech-design default —
 > logged as an unresolved decision (§19) for the human owner. Until then we keep agent-wins-on-true-conflict
 > with the honest, surfaced bound above.
@@ -910,13 +910,13 @@ filtering. **No new concurrency primitive is invented.**
 2. **Filesystem (catch-all):** add a **second debounced callback inside the existing**
    `fs.watch(NOTES_DIR,{recursive})` block in `qmd-watcher.ts` → `scheduleNotesIndexUpdate(filename)`,
    debounced ~1 s (faster than QMD's ~5 s embed — structural parsing is cheap, no model). Catches external
-   edits, git pulls, and AI-butler writes.
+   edits, git pulls, and Personal AI writes.
 
 > **One inotify registration, two consumers (structural + semantic).** We do **not** add a second
 > `fs.watch`.
 
 **Per-path coalescing — NOT a single global timer (addresses Round 1).** The existing `debounce()` in
-`qmd-watcher.ts` is a **single global timer with no per-path keying** — under a burst (git pull / AI-butler
+`qmd-watcher.ts` is a **single global timer with no per-path keying**. Under a burst (git pull / Personal AI
 batch writing many files) that would collapse to "reconcile the last file only" or re-fire repeatedly. The
 notes reconciler instead uses a **coalescing queue**: a `Set<relPath>` of dirty paths plus one debounce; on
 fire it **drains the set and reconciles all queued paths inside a single `better-sqlite3` transaction**
@@ -999,7 +999,7 @@ When a note lacks `id`, the indexer persists one into frontmatter (the only case
   in-flight edit.
 
 > **Where, not whether.** id assignment lives in the **reconciler**, not `PUT /content`, because files
-> arriving via git pull / AI-butler bypass the route. The route stamps an id on create (see below — this is
+> arriving via git pull / Personal AI bypass the route. The route stamps an id on create (see below; this is
 > promoted from "optional optimization" to the **primary** path so a note is almost never pushed id-less),
 > but the reconciler remains the authority for files that bypass the route.
 
@@ -1242,7 +1242,7 @@ feature is not blocked on the index.
 | Optimistic-lock 409 after id back-write | Back-write emits `NOTES_UPDATED` with new `contentHash`; client refreshes expected hash before next PUT |
 | QMD down / model mismatch | `Promise.allSettled` → string still returns; `degraded:'semantic-unavailable'` |
 | Malformed frontmatter | `parseFrontmatter` never throws; indexed body-only; debug log — one bad note can't break the vault index |
-| External edit / git pull / AI-butler write | Caught by the `fs.watch` catch-all leg (§8.1) → reconcile; both sidecars converge |
+| External edit / git pull / Personal AI write | Caught by the `fs.watch` catch-all leg (§8.1) → reconcile; both sidecars converge |
 | Index drift (sidecar ≠ files) | Sidecars rebuildable; `POST /index/rebuild` + startup schema check; tests assert `index == vault` |
 | Ephemeral server isolation | Ephemeral uses its own `OPEN_WALNUT_HOME` temp dir → its own `notes-index.sqlite`; must **not** touch production's sidecar (existing ephemeral-isolation discipline) |
 | Event-loop starvation from reconcile storms | Per-path coalescing queue + single transaction (§8.1); reconcile is per-changed-path; `interest`-filtered bus subscription avoids waking on unrelated events; semantic store driven per-file, never `store.update()` on save (§5.1) |
@@ -1453,7 +1453,7 @@ All three docs now state this split identically.
   chrome** until hover or `/` (grip/inserter/bubble are progressive-disclosure only); (b) `/` opens with a
   **small grouped default set**, not all ~12 block types dumped flat (the fuzzy filter + groups carry
   discovery); (c) the **search trust legend is explained in plain language** — the `●◐○` glyphs always carry
-  a **word badge** ("exact match" / "related"), not training-wheels-only, since a low-frequency butler user
+  a **word badge** ("exact match" / "related"), not training-wheels-only, since a low-frequency Personal AI user
   may go weeks between searches and re-encounter them cold; (d) the **`/notes` empty state** surfaces the
   "New note" capture CTA (§3.6½).
 - **First-run "still indexing" honesty (customer Sam high-severity):** during the **one-time background
@@ -1537,7 +1537,7 @@ silently makes. Each has a recommended default the doc already builds against, b
    never the `|` slot.
 3. **Conflict policy on a true write-write conflict (§6.2 part 3).** The shipped optimistic-lock policy is
    **agent-writes-win**, losing at most one debounce window of un-flushed typing. This doc **keeps** that
-   (with the loss now surfaced, not silent) because it may be load-bearing for butler correctness.
+   (with the loss now surfaced, not silent) because it may be load-bearing for Personal AI correctness.
    **Decision needed:** confirm agent-wins-on-true-conflict (recommended; non-conflicting writes already never
    lose input), or flip to user-wins-while-dirty (which reverses the long-standing policy — call out why).
 
@@ -1594,7 +1594,7 @@ Notion power-user, newcomer "Sam") surfaced. Each item below is a **material** c
     open menu, refilter on first post-`compositionend` update (a blanket top-of-`update` return froze the
     filter / swallowed the first committed keystroke).
 11. **Newcomer on-ramp added (§3.6½) + calm-default acceptance + "still indexing" honesty (§16).** The Sam
-    walkthrough found no P0 capture front door for a butler user not on `/notes` (Cmd+K is P1). Added a
+    walkthrough found no P0 capture front door for a Personal AI user not on `/notes` (Cmd+K is P1). Added a
     minimal P0 **"New note"** affordance + empty-state, the calm-default acceptance check, and a first-run
     "semantic results may be incomplete" state.
 12. **"frontmatter properties" leak removed from build step B3** (→ frontmatter PARSE only; properties-editing

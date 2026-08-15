@@ -2,7 +2,7 @@
 /**
  * End-to-end verification of ALL onboarding cases against pristine clean-room servers.
  * Drives the real UI, asserts health + DOM, and (when a real credential is provided)
- * proves the butler ACTUALLY REPLIES. Captures screenshots into demo/onboarding-shots/.
+ * proves the Personal AI ACTUALLY REPLIES. Captures screenshots into demo/onboarding-shots/.
  *
  * Each case runs its own isolated server on :3458 with a fresh HOME + OPEN_WALNUT_HOME,
  * so ~/.claude and ~/.aws are empty. Production :3456 is never touched.
@@ -123,10 +123,10 @@ async function shoot(name) {
  * marker token in the prompt and wait for the page to render it back from the
  * assistant turn (a "WALNUT" message containing the marker), which is robust
  * regardless of reply length. The marker is NOT the same string the user typed
- * verbatim once — we ask the butler to echo it, then require it to appear at least
+ * verbatim once — we ask the Personal AI to echo it, then require it to appear at least
  * TWICE (the user echo + the assistant reply).
  */
-async function butlerReplies(marker, shotName) {
+async function personalAiReplies(marker, shotName) {
   const { browser, page } = await newPage();
   let replied = false, text = '';
   const prompt = `Reply with exactly this token and nothing else: ${marker}`;
@@ -195,7 +195,7 @@ async function main() {
     await browser.close();
   }
   if (TOKEN) {
-    const r = await butlerReplies('ONBOARDINGOK', 'case2-live-reply');
+    const r = await personalAiReplies('ONBOARDINGOK', 'case2-live-reply');
     record('C2 LIVE reply', r.replied, r.replied ? `replied: …${r.text.slice(-90)}` : r.text);
   } else record('C2 LIVE reply', false, 'SKIPPED — no WALNUT_TEST_TOKEN');
   await stop(srv); await killPort();
@@ -220,7 +220,7 @@ async function main() {
   h = await waitHealth();
   record('C4 config', h.hasReadyProvider === true && h.credentialSource === 'config', `source=${h.credentialSource}`);
   if (TOKEN) {
-    const r = await butlerReplies('HEROOK', 'case4-live-reply');
+    const r = await personalAiReplies('HEROOK', 'case4-live-reply');
     record('C4 LIVE reply', r.replied, r.replied ? `replied: …${r.text.slice(-90)}` : r.text);
   } else record('C4 LIVE reply', false, 'SKIPPED — no WALNUT_TEST_TOKEN');
   await stop(srv); await killPort();
@@ -238,7 +238,7 @@ async function main() {
     let h1; for (let i = 0; i < 12; i++) { await sleep(600); h1 = await (await fetch(`${BASE}/api/system/health`)).json(); if (h1.hasReadyProvider) break; }
     record('C5 after-save', h1.hasReadyProvider === true && h1.credentialSource === 'config', `source=${h1.credentialSource}`);
     await shoot('case5-after-save');
-    const r = await butlerReplies('MANUALOK', 'case5-live-reply');
+    const r = await personalAiReplies('MANUALOK', 'case5-live-reply');
     record('C5 LIVE reply', r.replied, r.replied ? `replied: …${r.text.slice(-90)}` : r.text);
   } else record('C5 after-save', false, 'SKIPPED — no WALNUT_TEST_TOKEN');
   await stop(srv); await killPort();

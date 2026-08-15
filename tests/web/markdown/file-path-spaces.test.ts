@@ -52,7 +52,7 @@ describe('file paths with spaces (plain text pass — filePathsToHtml)', () => {
   });
 
   it('linkifies sentence-style note titles: dash separators, lowercase connectors, (draft) tags', () => {
-    // Real butler-written note shape that broke 2026-08-08: en-dash chunk,
+    // Real personal-ai-written note shape that broke 2026-08-08: en-dash chunk,
     // lowercase "to" connector, parenthesized "(draft)" tag.
     const p = '/Users/me/.open-walnut/notes/Projects/Marina Renewal/2026-08-08 – Status Ping to Acme (draft).md';
     const out = filePathsToHtml(`草稿已存: ${p}`);

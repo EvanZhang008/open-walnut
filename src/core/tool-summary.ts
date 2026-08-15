@@ -36,7 +36,7 @@ const TOOL_DETAIL_KEYS: Record<string, string[]> = {
 }
 
 // Generic fallback keys when the tool isn't in the map above — covers both
-// CLI tools and the butler's walnut-native tools (task_* / session_*).
+// CLI tools and the Personal AI's walnut-native tools (task_* / session_*).
 const GENERIC_DETAIL_KEYS = [
   'description', 'command', 'file_path', 'path', 'url', 'query', 'queries',
   'pattern', 'prompt', 'text', 'title', 'message', 'question', 'id',

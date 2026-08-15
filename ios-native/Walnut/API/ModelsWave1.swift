@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Wave 1 models (additive /api/v1 endpoints, docs/reference/api-v1.md)
 //
 // Session lifecycle (detail/patch/terminate/restart/retry/permission), task
-// detail + batch + focus pins, butler conversation management, and global
+// detail + batch + focus pins, Personal AI conversation management, and global
 // search. All decode leniently: absent fields are optional so a newer server
 // never breaks an older app.
 
@@ -241,7 +241,7 @@ struct FocusPinResult: Codable {
     }
 }
 
-// MARK: - Butler conversation management
+// MARK: - Personal AI conversation management
 
 /// PATCH /v1/conversations/:id → { conversation } (lenient subset).
 struct ConversationPatched: Codable {

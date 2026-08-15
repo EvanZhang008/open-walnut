@@ -48,7 +48,7 @@ function formatTime(iso: string): string {
  * setext-H2 underline, collapsing the whole block into one
  * `## name: … description: &gt; …` heading. For MEMORY.md / USER.md that heading
  * then reads as a real `## Title` ENTRY of a bounded store injected into the
- * butler's prompt every turn — it eats the char budget and is a legal
+ * Personal AI's prompt every turn — it eats the char budget and is a legal
  * replace/remove target. See components/memory/memory-file-io.ts.
  */
 export function MemoryContentPanel({ content, path, updatedAt, onSaved }: MemoryContentPanelProps) {

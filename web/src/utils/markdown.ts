@@ -600,7 +600,7 @@ const CODE_EXTENSIONS = new Set([
 //    tag like "(draft)", or a lowercase TITLE CONNECTOR from a closed word list
 //    ("to", "with", "of", …) that must be followed by another chunk, so a
 //    connector can never end the filename. A closed list — not "any short
-//    lowercase word" — keeps prose after a path from being swallowed. Butler
+//    lowercase word" — keeps prose after a path from being swallowed. Personal AI
 //    notes use sentence-style titles like "2026-08-08 – Status Ping to Acme
 //    (draft).md" and "Reply to X with Resume (draft).md" — all shapes occur.
 //  - the chunk quantifier is LAZY: the shortest match that still reaches `.ext`

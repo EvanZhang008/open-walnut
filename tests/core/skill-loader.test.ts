@@ -242,18 +242,18 @@ Do the thing.`,
     expect(result).toContain('## Skills (mandatory)');
   });
 
-  it('EXCLUDES ~/.claude/skills from the butler prompt (CLI-executor store)', async () => {
+  it('EXCLUDES ~/.claude/skills from the Personal AI prompt (CLI-executor store)', async () => {
     clearSkillsCache();
     // A walnut skill so the prompt is non-empty (empty skill set → empty prompt).
-    const walnutDir = path.join(GLOBAL_SKILLS_DIR, 'butler-skill');
+    const walnutDir = path.join(GLOBAL_SKILLS_DIR, 'personal-ai-skill');
     await fsp.mkdir(walnutDir, { recursive: true });
     await fsp.writeFile(
       path.join(walnutDir, 'SKILL.md'),
       `---
-name: butler-skill
+name: personal-ai-skill
 description: A walnut skill
 ---
-# Butler Skill`,
+# Personal AI Skill`,
     );
 
     const skillDir = path.join(CLAUDE_SKILLS_DIR, 'claude-skill');
@@ -268,7 +268,7 @@ description: A claude skill
     );
 
     const result = await buildSkillsPrompt();
-    expect(result).toContain('<name>butler-skill</name>');
+    expect(result).toContain('<name>personal-ai-skill</name>');
     expect(result).not.toContain('<name>claude-skill</name>');
 
     // ...but it stays discoverable for the management UI / skill_view.
@@ -276,7 +276,7 @@ description: A claude skill
     expect(all.map((s) => s.dirName)).toContain('claude-skill');
   });
 
-  it('WALNUT_BUTLER_CLAUDE_SKILLS=1 opts claude skills back into the prompt', async () => {
+  it('WALNUT_PERSONAL_AI_CLAUDE_SKILLS=1 opts claude skills back into the prompt', async () => {
     clearSkillsCache();
     const skillDir = path.join(CLAUDE_SKILLS_DIR, 'opt-in-skill');
     await fsp.mkdir(skillDir, { recursive: true });
@@ -289,14 +289,40 @@ description: An opted-in claude skill
 # Opt In`,
     );
 
-    const prev = process.env.WALNUT_BUTLER_CLAUDE_SKILLS;
-    process.env.WALNUT_BUTLER_CLAUDE_SKILLS = '1';
+    const prev = process.env.WALNUT_PERSONAL_AI_CLAUDE_SKILLS;
+    process.env.WALNUT_PERSONAL_AI_CLAUDE_SKILLS = '1';
     try {
       const result = await buildSkillsPrompt();
       expect(result).toContain('<name>opt-in-skill</name>');
     } finally {
-      if (prev === undefined) delete process.env.WALNUT_BUTLER_CLAUDE_SKILLS;
-      else process.env.WALNUT_BUTLER_CLAUDE_SKILLS = prev;
+      if (prev === undefined) delete process.env.WALNUT_PERSONAL_AI_CLAUDE_SKILLS;
+      else process.env.WALNUT_PERSONAL_AI_CLAUDE_SKILLS = prev;
+      clearSkillsCache();
+    }
+  });
+
+  it('keeps the previous opt-in environment setting working after the rename', async () => {
+    clearSkillsCache();
+    const skillDir = path.join(CLAUDE_SKILLS_DIR, 'legacy-opt-in-skill');
+    await fsp.mkdir(skillDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(skillDir, 'SKILL.md'),
+      `---
+name: legacy-opt-in-skill
+description: A legacy opted-in claude skill
+---
+# Legacy Opt In`,
+    );
+
+    const legacyEnv = `WALNUT_${String.fromCharCode(66, 85, 84, 76, 69, 82)}_CLAUDE_SKILLS`;
+    const prev = process.env[legacyEnv];
+    process.env[legacyEnv] = '1';
+    try {
+      const result = await buildSkillsPrompt();
+      expect(result).toContain('<name>legacy-opt-in-skill</name>');
+    } finally {
+      if (prev === undefined) delete process.env[legacyEnv];
+      else process.env[legacyEnv] = prev;
       clearSkillsCache();
     }
   });

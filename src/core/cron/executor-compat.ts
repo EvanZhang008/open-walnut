@@ -6,7 +6,7 @@
  *   - old stores migrate losslessly (legacy → executor),
  *   - executor-shaped input still produces valid legacy fields (old binaries,
  *     assertSupportedJobSpec, and the announce path keep working),
- *   - legacy-shaped input (butler tools, old REST clients) gains an executor.
+ *   - legacy-shaped input (Personal AI tools, old REST clients) gains an executor.
  *
  * Lives in the cron layer (not ../routines/) so store/jobs/normalize can use it
  * without a circular import. Executor types are plain strings here by design.

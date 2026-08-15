@@ -5,7 +5,7 @@ import { renderMarkdownWithRefs, renderNoteMarkdown, markdownToRichHtml, renderT
  * Contract: a bare URL autolinked inside CJK prose ends at the first CJK
  * punctuation mark — the prose after it is NOT part of the link.
  *
- * The recurring bug (reported 2026-08-12, screenshot: butler chat): marked's
+ * The recurring bug (reported 2026-08-12, screenshot: Personal AI chat): marked's
  * GFM `url` rule stops only at whitespace, but Chinese puts no space around
  * punctuation, so "打开 https://…/machine-learning-specialization,个人账户,enroll"
  * rendered with `,个人账户,enroll` INSIDE the anchor — a broken href and half

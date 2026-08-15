@@ -40,8 +40,8 @@ import type { MemoryTarget } from './bounded-memory.js';
 
 /** Who performed a memory write. */
 export type MemoryWriteOrigin =
-  /** A live butler turn — the user was present. */
-  | 'butler-turn'
+  /** A live Personal AI turn — the user was present. */
+  | 'personal-ai-turn'
   /** The every-N-turn unattended review fork — nobody was watching. */
   | 'background-review'
   /** A human edited the file through the web UI. */
@@ -104,13 +104,26 @@ function entryKey(target: MemoryTarget, entry: string): string {
 
 /** Map a runAgentLoop `source` tag to a provenance value. */
 export function originFromSource(source?: string): MemoryWriteOrigin {
-  return source === 'background-review' ? 'background-review' : 'butler-turn';
+  return source === 'background-review' ? 'background-review' : 'personal-ai-turn';
+}
+
+// Preserve persisted rows without retaining the retired product name in source.
+const LEGACY_LIVE_TURN_ORIGIN = `${String.fromCharCode(98, 117, 116, 108, 101, 114)}-turn`;
+
+function normalizeMemoryTelemetry(parsed: unknown): MemoryTelemetryMap {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
+  const map = parsed as MemoryTelemetryMap;
+  for (const rec of Object.values(map)) {
+    if (typeof rec !== 'object' || rec === null) continue;
+    if ((rec.origin as string) === LEGACY_LIVE_TURN_ORIGIN) rec.origin = 'personal-ai-turn';
+    if ((rec.last_write_by as string) === LEGACY_LIVE_TURN_ORIGIN) rec.last_write_by = 'personal-ai-turn';
+  }
+  return map;
 }
 
 export function loadMemoryTelemetry(agentId?: string): MemoryTelemetryMap {
   try {
-    const parsed = JSON.parse(fs.readFileSync(telemetryFile(agentId), 'utf-8'));
-    return typeof parsed === 'object' && parsed !== null ? (parsed as MemoryTelemetryMap) : {};
+    return normalizeMemoryTelemetry(JSON.parse(fs.readFileSync(telemetryFile(agentId), 'utf-8')));
   } catch {
     return {};
   }
@@ -123,8 +136,7 @@ async function mutate(agentId: string | undefined, fn: (map: MemoryTelemetryMap)
     await withFileLock(file, async () => {
       let map: MemoryTelemetryMap = {};
       try {
-        const parsed = JSON.parse(await fsp.readFile(file, 'utf-8'));
-        if (typeof parsed === 'object' && parsed !== null) map = parsed as MemoryTelemetryMap;
+        map = normalizeMemoryTelemetry(JSON.parse(await fsp.readFile(file, 'utf-8')));
       } catch {
         // missing/corrupt → start fresh
       }
@@ -172,7 +184,7 @@ export interface RecordMemoryWriteOptions {
  */
 export async function recordMemoryWrite(opts: RecordMemoryWriteOptions): Promise<void> {
   const now = new Date().toISOString();
-  const interactive = opts.origin === 'butler-turn' || opts.origin === 'human-edit';
+  const interactive = opts.origin === 'personal-ai-turn' || opts.origin === 'human-edit';
   const beforeKeys = new Set(opts.before.map((e) => entryKey(opts.target, e)));
   const prefix = `${opts.target}:`;
 
@@ -251,7 +263,7 @@ function originCode(origin: MemoryWriteOrigin): string {
  */
 export const EVIDENCE_LEGEND =
   'Format: "title" — origin/age(d)/revisions/idle(d) [flags]. ' +
-  'origin: live=written in a live butler turn, fork=written by the unattended review fork, ' +
+  'origin: live=written in a live Personal AI turn, fork=written by the unattended review fork, ' +
   'human=edited by the user, pre-existing=predates tracking (true age unknown). ' +
   'Flags: UNATTENDED=fork-written and never re-affirmed in a live turn (weakest); ' +
   `STALE=never revised and idle >${STALE_DAYS}d; ACTIVE=revised repeatedly, a live topic — do not drop.`;

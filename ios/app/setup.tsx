@@ -87,7 +87,7 @@ export default function SetupScreen() {
           </View>
           <Text style={[styles.title, { color: c.label }]}>Walnut</Text>
           <Text style={[styles.tagline, { color: c.secondaryLabel }]}>
-            Your personal AI butler — tasks, notes, and conversations, everywhere.
+            Your Personal AI — tasks, notes, and conversations, everywhere.
           </Text>
         </View>
 

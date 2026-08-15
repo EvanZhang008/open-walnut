@@ -2034,7 +2034,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // Fired here, well before any draft opens, so the open path stays
         // network-free; failure just leaves the chips hidden.
         void fetchWorkingDirs().catch(() => { /* chips stay hidden until the next launch */ });
-        // No butler notification here anymore. Title AND project are both
+        // No Personal AI notification here anymore. Title AND project are both
         // server-side now: the session-auto-title hook titles from the
         // user's first message (CLI generate_session_title), and quick-start
         // fires a fast-model organizer (session-organize.ts) for placement.
@@ -2336,7 +2336,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       setQuickStartModel(undefined);   // clear the collapsed-bar model mirror
       // Local echo as a collapsible bubble — auto-collapses to "⚡ Quick Start on <cwd>"
       // with a chevron the user can click to see the full pasted prompt. This echo
-      // is the single visual confirmation (no butler message is sent anymore —
+      // is the single visual confirmation (no Personal AI message is sent anymore —
       // titling and project placement both happen server-side).
       chat.addLocalMessage(
         `${qsp.intent === 'fix-walnut' ? 'Fix Walnut' : 'Quick Start'} on \`${qsp.cwd}\`${qsp.host ? ` (${qsp.hostLabel ?? qsp.host})` : ''}:\n> ${text}`,

@@ -9,13 +9,13 @@ export type UsageSource =
   | 'compaction'   // chat compaction summarizer
   | 'image-tool'   // direct sendMessage for image analysis
   | 'session'      // Claude Code CLI session (external process)
-  | 'chat'         // butler turn answered by a lane-bound CLI session (agent.provider='claude-code')
+  | 'chat'         // Personal AI turn answered by a lane-bound CLI session (agent.provider='claude-code')
   | 'perplexity'   // web search via Perplexity
   | 'glm'          // Zhipu GLM-4 API calls
   | 'heartbeat'    // periodic health checks
   | 'cron'         // cron-triggered agent turns
   | 'triage'       // session/subagent triage
-  | 'background-review' // every-N-turn butler self-review fork
+  | 'background-review' // every-N-turn Personal AI self-review fork
   | 'task-hook';   // task lifecycle → overview maintainer agent
 
 export interface UsageRecord {

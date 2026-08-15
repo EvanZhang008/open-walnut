@@ -128,7 +128,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         title.textColor = NSColor(red: 0.45, green: 0.33, blue: 0.15, alpha: 1)
         stack.addArrangedSubview(title)
 
-        let subtitle = NSTextField(labelWithString: "Personal AI Butler")
+        let subtitle = NSTextField(labelWithString: "Personal AI")
         subtitle.font = NSFont.systemFont(ofSize: 14)
         subtitle.textColor = NSColor(white: 0.4, alpha: 1)
         stack.addArrangedSubview(subtitle)

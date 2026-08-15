@@ -1,13 +1,13 @@
 /**
- * Push notifications know about butler lanes.
+ * Push notifications know about Personal AI lanes.
  *
- * On the lane engine a butler chat turn is answered by a `claude` session, so the
- * SESSION_RESULT / SESSION_ERROR that ends it IS the butler talking. Pushed with
+ * On the lane engine a Personal AI chat turn is answered by a `claude` session, so the
+ * SESSION_RESULT / SESSION_ERROR that ends it IS the Personal AI talking. Pushed with
  * the generic session copy the user's phone would say "Session 3f2a1b0c finished"
  * for their own chat message — a session id they never saw and cannot act on.
  * This file pins the fork:
  *
- *   - lane record   → title 'Walnut', body = the reply / the butler's error
+ *   - lane record   → title 'Walnut', body = the reply / the Personal AI's error
  *   - no lane       → the existing generic session copy, byte-identical
  *   - record read throws → generic copy (the push must not be lost over a
  *     bookkeeping failure)
@@ -36,7 +36,7 @@ import { initPushNotifications } from '../../src/core/push-notification.js'
 // Statically imported ONLY to warm the module cache: the handler reaches it via a
 // dynamic import, and a cold resolve inside the first push added ~700ms of
 // latency that made a time-bounded assertion flaky.
-import '../../src/core/sessions/butler-lane.js'
+import '../../src/core/sessions/personal-ai-lane.js'
 
 interface SentPush { title: string; body: string; data?: Record<string, unknown> }
 
@@ -119,7 +119,7 @@ afterEach(async () => {
 })
 
 describe('SESSION_RESULT', () => {
-  it('a LANE session pushes as the butler, carrying the reply text', async () => {
+  it('a LANE session pushes as the Personal AI, carrying the reply text', async () => {
     records.set('lane-sid', { claudeSessionId: 'lane-sid', lane: 'chat:general:conv-abc' })
     await emitAndSettle(EventNames.SESSION_RESULT, {
       sessionId: 'lane-sid',
@@ -163,9 +163,9 @@ describe('SESSION_RESULT', () => {
     expect(sent[0].data).not.toHaveProperty('agentId')
   })
 
-  it('a lane in a FOREIGN namespace is not treated as a butler chat', async () => {
+  it('a lane in a FOREIGN namespace is not treated as a Personal AI chat', async () => {
     // parseLaneKey only claims 'chat:' — a future lane kind must fall through to
-    // the generic path rather than impersonate the butler.
+    // the generic path rather than impersonate the Personal AI.
     records.set('other-sid', { claudeSessionId: 'other-sid', lane: 'notes:general:conv-abc' })
     await emitAndSettle(EventNames.SESSION_RESULT, { sessionId: 'other-sid', result: 'x' })
     expect(sent[0].title).toBe('Session Complete')
@@ -209,7 +209,7 @@ describe('SESSION_ERROR', () => {
 
   it('still drops delivery_failed for a lane (the SSH-outage spam guard)', async () => {
     // The lane fork sits AFTER the errorKind guard — an SSH outage must not
-    // become one push per retry just because the session is the butler's.
+    // become one push per retry just because the session is the Personal AI's.
     records.set('lane-sid', { claudeSessionId: 'lane-sid', lane: 'chat:general:conv-abc' })
     await emitAndSettle(EventNames.SESSION_ERROR, {
       sessionId: 'lane-sid', error: 'ssh down', errorKind: 'delivery_failed',

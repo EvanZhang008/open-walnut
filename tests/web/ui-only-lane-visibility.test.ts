@@ -1,8 +1,8 @@
 /**
- * `shouldHideUiOnlyMessage` — butler LANE notices are visible by default.
+ * `shouldHideUiOnlyMessage` — Personal AI LANE notices are visible by default.
  *
  * The `session` UI-only category ships defaultOn:false (an external coding
- * session's "Session Result" dump is noise in the butler timeline). On the lane
+ * session's "Session Result" dump is noise in the Personal AI timeline). On the lane
  * engine that default became a blackout: the ONLY thing a lane turn puts in the
  * chat timeline is a `<session-ref>` breadcrumb — also source:'session',
  * notification:true — so a user who sent a message saw absolutely nothing come
@@ -28,7 +28,7 @@ class FakeStorage {
 let storage: FakeStorage;
 
 /** The breadcrumb the lane branch of chat.ts persists, verbatim in shape. */
-const LANE_NOTICE = 'Butler ran on session <session-ref id="abc-123" label="Butler chat"/>';
+const LANE_NOTICE = 'Personal AI ran on session <session-ref id="abc-123" label="Personal AI chat"/>';
 /** A normal session summary — the thing the category was created to hide. */
 const SESSION_RESULT = '**Session Result** (task-1):\n\nfinished the refactor';
 
@@ -116,7 +116,7 @@ describe('unchanged behavior', () => {
 
   it('degrades sanely (no throw) when localStorage is denied', async () => {
     // Private browsing: no toggle can be read, so there IS no explicit opt-out —
-    // the lane notice stays visible (the user still sees the butler answer) while
+    // the lane notice stays visible (the user still sees the Personal AI answer) while
     // an ordinary session summary stays hidden by its default. The filter runs on
     // every render, so the one unacceptable outcome is a throw.
     vi.stubGlobal('localStorage', {

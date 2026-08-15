@@ -1,7 +1,7 @@
 /**
  * Background PRODUCERS × engine selection (`config.agent.provider`).
  *
- * Chat is not the only thing that writes into the butler's MAIN conversation —
+ * Chat is not the only thing that writes into the Personal AI's MAIN conversation —
  * cron, the heartbeat, and triage all run main-agent turns. C5 routes those three
  * through the conversation's lane session when the flag is on. Each producer is a
  * FORK, so the two things worth asserting per producer are the same two:
@@ -214,7 +214,7 @@ describe('cron runMainAgentWithPrompt', () => {
 
   it('flag on: a failed lane turn fails the job (cron records the error)', async () => {
     // resultText === null must NOT be silently swallowed — the cron system's
-    // "last run failed" signal is the only place a stuck butler shows up.
+    // "last run failed" signal is the only place a stuck Personal AI shows up.
     // (The real timeout is 10 min, so the failure is driven through
     // session:error, which resolves null through the same branch.)
     laneReply = null

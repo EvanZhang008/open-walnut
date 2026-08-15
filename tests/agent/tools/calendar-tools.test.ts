@@ -1,5 +1,5 @@
 /**
- * Butler calendar_* tool tests — mock CalendarSource behind a real
+ * Personal AI calendar_* tool tests — mock CalendarSource behind a real
  * CalendarService (cache + write-through logic exercised for real).
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
@@ -74,7 +74,7 @@ describe('calendar_query', () => {
   it('surfaces permission-denied with actionable guidance', async () => {
     state.failWith = new CalendarHelperError('Calendar access denied.', 'permission-denied');
     const out = await run('calendar_query', { from: '2026-08-03', to: '2026-08-09' });
-    // Unlike the REST read (which degrades to []), the tool tells the butler
+    // Unlike the REST read (which degrades to []), the tool tells the Personal AI
     // what's wrong so it can relay the fix to the user.
     expect(out).toContain('System Settings');
     expect(out).toMatch(/^Error:/);

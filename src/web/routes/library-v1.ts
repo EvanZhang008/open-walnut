@@ -36,7 +36,7 @@
  * Cloud companion (REPLICA):
  * - Agents are stored in config.yaml, which is MACHINE-LOCAL (never
  *   git-synced) — reads answer with the replica's own agents (the replica
- *   runs its own butler), but writes answer 501 not_supported_cloud: a
+ *   runs its own Personal AI), but writes answer 501 not_supported_cloud: a
  *   replica-local agent would silently diverge from the primary console.
  * - Commands, skills, and repositories live in git-synced dirs — Class A,
  *   full read/write on both boxes.

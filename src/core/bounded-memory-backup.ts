@@ -3,7 +3,7 @@
  * global and per-agent). Ported from hermes-agent's memory tool, which writes a
  * `.bak` next to a memory file before it lets a mutation land.
  *
- * WHY: these files are written AUTOMATICALLY — by the butler mid-turn and by the
+ * WHY: these files are written AUTOMATICALLY — by the Personal AI mid-turn and by the
  * forked background-review pass, which runs unattended. A single bad `replace`
  * or `batch` can swallow an entire section, and until now there was no rollback
  * path at all. This repo has already lost local data exactly this way once (a
@@ -40,13 +40,13 @@
  * an automatic restore is itself a destructive write — picking the wrong
  * generation would undo good entries. `listMemoryBackups()` makes the snapshots
  * discoverable (for a triage tool or the Memory UI); putting content back is a
- * human copy, or a `file_read` + `memory_manage` round-trip the butler can do
+ * human copy, or a `file_read` + `memory_manage` round-trip the Personal AI can do
  * when asked.
  *
  * The `.bak.<n>` suffix order matters and is not cosmetic: the snapshots must
  * NOT end in `.md`, or every markdown walker over the memory tree (the search
  * index collections, memory-index's `*.md` walk, the daily-log listing) would
- * pick them up and the butler would start reading its own history back as if it
+ * pick them up and the Personal AI would start reading its own history back as if it
  * were live memory.
  */
 import fs from 'node:fs';

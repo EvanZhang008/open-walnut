@@ -15,7 +15,7 @@ const ENTITY_REF_RE = /<(task|session)-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?
 const LEGACY_REF_RE = /\[([a-z0-9]{7,10}-[a-f0-9]{4})\|([^\]]+)\]/g
 
 /**
- * Build a `<task-ref/>` tag. Shared so every emitter (the butler's tools, the
+ * Build a `<task-ref/>` tag. Shared so every emitter (the Personal AI's tools, the
  * CLI's task-mutating commands) produces byte-identical markup for the UI's
  * pill renderer + the ENTITY_REF_RE above.
  */

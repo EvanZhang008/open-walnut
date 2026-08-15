@@ -1167,7 +1167,7 @@ async function computeSessionChangesInner(
   }
 
   // 5. Filtering: drop bookkeeping (plans / Claude per-project memory) AND agent
-  //    memory-store entries (the butler's or a subagent's MEMORY.md / notes) —
+  //    memory-store entries (the Personal AI's or a subagent's MEMORY.md / notes) —
   //    they're agent scratch, not reviewable code. A whole group made only of
   //    these is dropped in step 6. Other .claude files (settings/skills/...) stay.
   for (const group of groupsByRoot.values()) {

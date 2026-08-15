@@ -137,7 +137,7 @@ rename breakage blocks power-users in testing).
 | **Cmd+K global front door** (Jump + Capture; Search + `>` Actions + `#` Tag modes layer in) | B | Same overlay component as search, opened from any page; first-character mode routing | **P1** (early-pull candidate; tech §9.3) |
 | Stable note identity + incremental link/backlink + tag + FTS sidecar | B backbone | One SQLite sidecar (id↔path, forward links, tags, FTS); files stay master, index rebuildable | P1 |
 | Tag browse/rename/merge view; backlinks-from-index; move-by-identity | B | Index ops, not vault scans | P1 |
-| Context dock: backlinks + linked Walnut tasks (live status via event bus) + memory neighbors | B (butler advantage) | Dock beside the editor, collapsible; relations as navigable jumps | **Deferred / post-v1 (P1+)** — out of this effort's v1 (tech §18) |
+| Context dock: backlinks + linked Walnut tasks (live status via event bus) + memory neighbors | B (Personal AI advantage) | Dock beside the editor, collapsible; relations as navigable jumps | **Deferred / post-v1 (P1+)**, outside this effort's v1 (tech §18) |
 
 **Rejected for v1 (kept as hard non-goals / deferred):** community block-suite mega-packages, columns/
 multi-column, frontmatter/properties node, canvas/whiteboard, graph view, real-time multiplayer,
@@ -302,7 +302,7 @@ proprietary storage — see §7.
     (search, backlinks, move) and the basename-collision bug class — P1, pulled to P0 if rename
     breakage blocks power-users.
 12. **Discard-guard on Cmd+K close mid-capture** — never silently drop a note.
-13. **Butler advantage: a relations dock** surfacing backlinks + linked Walnut tasks (live status via
+13. **Personal AI advantage: a relations dock** surfacing backlinks + linked Walnut tasks (live status via
     the event bus) + semantic memory neighbors beside the note — notes become first-class in the
     task/memory graph. **Deferred / post-v1 (P1+) — out of this effort's v1 (tech §18).** It is a
     roadmap item, not a permanent non-goal, but it does not ship in v1.

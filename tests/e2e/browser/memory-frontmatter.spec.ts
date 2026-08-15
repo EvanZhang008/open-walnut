@@ -10,7 +10,7 @@
  * `escapeHTML` left the `>` as a literal `&gt;`.
  *
  * That is not cosmetic for MEMORY.md / USER.md: they are BOUNDED stores whose
- * `## Title` sections are injected into the butler's system prompt every turn, so
+ * `## Title` sections are injected into the Personal AI's system prompt every turn, so
  * the collapsed block became a FAKE entry — charged against the char budget and a
  * legal replace/remove target.
  *

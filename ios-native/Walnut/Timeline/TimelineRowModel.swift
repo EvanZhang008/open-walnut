@@ -55,7 +55,7 @@ enum TimelineRowContent {
     case truncationChip
     /// Shimmering activity row while the agent thinks / runs tools.
     case activity(String?)
-    /// "Load earlier messages" button (butler chat only).
+    /// "Load earlier messages" button (Personal AI chat only).
     case loadEarlier
 }
 
