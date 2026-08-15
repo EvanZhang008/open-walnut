@@ -7926,6 +7926,7 @@ export class SessionRunner {
     mode?: string
     project?: string
     title?: string
+    lane?: string
     forkedFromSessionId?: string
   }): Promise<{ claudeSessionId: string; title: string }> {
     if (data.forkedFromSessionId) {
@@ -7940,6 +7941,7 @@ export class SessionRunner {
       project: data.project ?? '',
       cwd,
       mode: (data.mode as SessionMode | undefined) ?? 'default',
+      ...(data.lane ? { lane: data.lane } : {}),
       directWsUrl: this._testDaemonUrl,
       artifacts: this._testAcpArtifacts,
       onWorkerDead: (s) => this.scheduleAcpDrainAfterDeath(s),

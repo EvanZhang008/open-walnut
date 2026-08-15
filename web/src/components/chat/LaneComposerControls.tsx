@@ -18,12 +18,22 @@ import { useState, useEffect, useCallback } from 'react';
 import type { SessionRecord } from '@/types/session';
 import type { SessionEffort } from '@open-walnut/core';
 import { modelSupportsEffort, SESSION_EFFORTS, SESSION_MODE_LABELS } from '@open-walnut/core';
-import { fetchSession, updateSession, setSessionModel, setSessionEffort } from '@/api/sessions';
+import { fetchSession, updateSession, setSessionModel, setSessionEffort, setCodexSessionModel } from '@/api/sessions';
 import { useSessionUsage, formatModelName, getContextWindowSize } from '@/hooks/useSessionUsage';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
-import { ModelPicker } from '@/components/sessions/ModelPicker';
+import { ModelPicker, type ProviderId } from '@/components/sessions/ModelPicker';
 
-export function LaneComposerControls({ sessionId }: { sessionId: string | null }) {
+interface LaneComposerControlsProps {
+  sessionId: string | null;
+  /** Engine backing the lane (from useLaneSession). Default 'claude'. */
+  engine?: 'claude' | 'codex';
+  /** Provided ONLY while the conversation is empty: picking the other provider
+   *  re-mints the lane session on that engine (useLaneSession.swapEngine).
+   *  Absent → the other provider renders greyed + locked, like a live session. */
+  onProviderSwitch?: (provider: ProviderId) => void;
+}
+
+export function LaneComposerControls({ sessionId, engine = 'claude', onProviderSwitch }: LaneComposerControlsProps) {
   const [session, setSession] = useState<SessionRecord | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const enabledModes = useEnabledModes();
@@ -76,10 +86,24 @@ export function LaneComposerControls({ sessionId }: { sessionId: string | null }
     });
   }, [sessionId, session?.effort, session?.effectiveEffort]);
 
+  const handleCodexModelSwitch = useCallback((modelId: string) => {
+    setPickerOpen(false);
+    if (!sessionId) return;
+    const prev = session?.acpModel;
+    if (modelId === prev) return;
+    setSession((s) => s ? { ...s, acpModel: modelId } : s);
+    setCodexSessionModel(sessionId, modelId).catch(() => {
+      setSession((s) => s ? { ...s, acpModel: prev } : s);
+    });
+  }, [sessionId, session?.acpModel]);
+
   if (!sessionId) return null;
 
+  const isCodex = engine === 'codex';
   const rawModel = liveUsage.model || session?.model;
-  const displayModel = formatModelName(rawModel);
+  const displayModel = isCodex
+    ? (session?.acpModel || 'Codex')
+    : formatModelName(rawModel);
   let contextPercent = liveUsage.contextPercent;
   if (contextPercent == null && liveUsage.inputTokens) {
     const ctxSize = getContextWindowSize(rawModel, liveUsage.inputTokens);
@@ -94,22 +118,26 @@ export function LaneComposerControls({ sessionId }: { sessionId: string | null }
 
   return (
     <div className="session-mode-bar">
-      <button
-        className="mode-toggle-pill"
-        onClick={cycleMode}
-        title={`Mode: ${currentMode}. Click or Shift+Tab to cycle`}
-      >
-        <span className="mode-toggle-pill-label">{modeLabel}</span>
-        <span className="mode-toggle-pill-shortcut">{'⇧'}Tab</span>
-      </button>
+      {/* Permission-mode cycling is a claude-CLI channel (updateSession mode);
+          codex modes ride ACP session controls — hidden here for now. */}
+      {!isCodex && (
+        <button
+          className="mode-toggle-pill"
+          onClick={cycleMode}
+          title={`Mode: ${currentMode}. Click or Shift+Tab to cycle`}
+        >
+          <span className="mode-toggle-pill-label">{modeLabel}</span>
+          <span className="mode-toggle-pill-shortcut">{'⇧'}Tab</span>
+        </button>
+      )}
       <button
         type="button"
         className="session-detail-model-pill session-detail-model-pill-clickable composer-model-pill"
-        title={`${rawModel || 'Model not reported yet (Auto)'} — click to switch model / effort`}
+        title={`${(isCodex ? session?.acpModel : rawModel) || 'Model not reported yet (Auto)'} — click to switch model / effort${onProviderSwitch ? ' / provider' : ''}`}
         onClick={() => setPickerOpen((v) => !v)}
       >
         {displayModel || 'Auto'}
-        {contextPercent != null && (
+        {!isCodex && contextPercent != null && (
           <span
             className="session-detail-context-pct"
             style={{
@@ -122,7 +150,7 @@ export function LaneComposerControls({ sessionId }: { sessionId: string | null }
             {' '}{contextPercent}%
           </span>
         )}
-        {modelSupportsEffort(rawModel) && effortLabel && (
+        {!isCodex && modelSupportsEffort(rawModel) && effortLabel && (
           <span className="session-detail-effort-badge" title={`Reasoning effort: ${shownEffort}`}>
             {' · '}{effortLabel}
           </span>
@@ -137,6 +165,14 @@ export function LaneComposerControls({ sessionId }: { sessionId: string | null }
           onSwitch={handleModelSwitch}
           onEffortSwitch={handleEffortSwitch}
           onClose={() => setPickerOpen(false)}
+          engine={isCodex ? 'codex' : 'claude'}
+          codexCurrentModelId={session?.acpModel}
+          onCodexSwitch={isCodex ? handleCodexModelSwitch : undefined}
+          // Empty conversation: the provider rail is LIVE — picking the other
+          // engine re-mints the lane session on it. Locked once messages exist.
+          onProviderSwitch={onProviderSwitch
+            ? (p) => { setPickerOpen(false); onProviderSwitch(p); }
+            : undefined}
         />
       )}
     </div>

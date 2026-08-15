@@ -91,6 +91,7 @@ export function parseLaneKey(lane: string | undefined | null): { agentId: string
 export async function archiveLaneForConversation(
   agentId: string,
   conversationId: string,
+  reason: string = 'chat_cleared',
 ): Promise<string | null> {
   const lane = personalAiLaneKey(agentId, conversationId);
   let sessionId: string | null = null;
@@ -111,13 +112,13 @@ export async function archiveLaneForConversation(
     const { updateSessionRecord } = await import('../session-tracker.js');
     await updateSessionRecord(sessionId, {
       archived: true,
-      archive_reason: 'chat_cleared',
+      archive_reason: reason,
     });
-    log.session.info('Personal AI lane: archived on chat clear', { lane, sessionId });
+    log.session.info('Personal AI lane: archived', { lane, sessionId, reason });
     return sessionId;
   } catch (err) {
-    log.session.warn('Personal AI lane: archive on clear failed', {
-      lane, sessionId, error: err instanceof Error ? err.message : String(err),
+    log.session.warn('Personal AI lane: archive failed', {
+      lane, sessionId, reason, error: err instanceof Error ? err.message : String(err),
     });
     return sessionId;
   }
@@ -183,6 +184,8 @@ export interface LaneSession {
    * removes the window entirely.
    */
   created: boolean;
+  /** Coding-agent engine backing this lane ('claude' default). */
+  engine: 'claude' | 'codex';
 }
 
 /**
@@ -204,15 +207,71 @@ const inFlight = new Map<string, Promise<LaneSession>>();
 export function getOrCreateLaneSession(
   agentId: string,
   conversationId: string,
-  opts?: { firstMessage?: string },
+  opts?: { firstMessage?: string; engine?: 'claude' | 'codex' },
 ): Promise<LaneSession> {
   const lane = personalAiLaneKey(agentId, conversationId);
   const pending = inFlight.get(lane);
   if (pending) return pending;
-  const promise = resolveLane(lane, agentId, conversationId, opts?.firstMessage ?? '')
+  const promise = resolveLane(lane, agentId, conversationId, opts?.firstMessage ?? '', opts?.engine)
     .finally(() => { inFlight.delete(lane); });
   inFlight.set(lane, promise);
   return promise;
+}
+
+/**
+ * Switch the ENGINE backing a conversation's lane (claude ⇄ codex).
+ *
+ * An engine is a spawn-time fact, so this is a REPLACE, not a live switch:
+ * archive the current lane session, mint a fresh one on the requested engine.
+ * That discard is only safe while the conversation is EMPTY — the eager
+ * resolve creates the session before the user says anything, and THAT is the
+ * window where "switch provider" must work (user call, 2026-08-15). Once a
+ * message exists the transcript lives in the old engine's session and a swap
+ * would silently drop it → 409, start a new conversation instead.
+ *
+ * Guards (both map to 409 in the route):
+ *   - conversation has messages (`ConversationMeta.messageCount` — bumped by
+ *     touchLaneConversation on every lane send; the SESSION record's count
+ *     can't be used, createSessionRecord defaults it to 1);
+ *   - the lane was forked (`forkedFromSessionId`) — it inherits the parent
+ *     transcript even with zero sends, and Codex can't fork anyway.
+ */
+export async function swapLaneEngine(
+  agentId: string,
+  conversationId: string,
+  engine: 'claude' | 'codex',
+): Promise<LaneSession> {
+  const lane = personalAiLaneKey(agentId, conversationId);
+  // A resolve may be mid-flight (the eager mount fires one on every switch) —
+  // let it settle so we archive the record it created, not race it.
+  const pending = inFlight.get(lane);
+  if (pending) await pending.catch(() => {});
+
+  const existing = await getSessionByLane(lane);
+  const currentEngine: 'claude' | 'codex' = existing?.engine === 'codex' ? 'codex' : 'claude';
+  if (existing && currentEngine === engine) {
+    return { sessionId: existing.claudeSessionId, created: false, engine };
+  }
+
+  if (existing) {
+    const { SessionControlError } = await import('./session-controls.js');
+    if (existing.forkedFromSessionId) {
+      throw new SessionControlError(
+        'This conversation was forked — its history lives in the current session, so the provider can no longer be changed', 409);
+    }
+    const { listConversations } = await import('../conversations.js');
+    const meta = (await listConversations(agentId)).find((c) => c.id === conversationId);
+    if ((meta?.messageCount ?? 0) > 0) {
+      throw new SessionControlError(
+        'This conversation already has messages — start a new conversation to use a different provider', 409);
+    }
+    await archiveLaneForConversation(agentId, conversationId, 'engine_switched');
+  }
+
+  log.session.info('Personal AI lane: engine swap', {
+    lane, from: existing ? currentEngine : null, to: engine,
+  });
+  return getOrCreateLaneSession(agentId, conversationId, { engine });
 }
 
 /**
@@ -279,16 +338,11 @@ export async function cleanupLaneClaudeMd(homeDir: string = WALNUT_HOME): Promis
   }
 }
 
-async function resolveLane(
-  lane: string,
+/** The persona/skills/memory bundle + effort a claude-engine lane spawns with. */
+async function buildLaneProfile(
+  config: Awaited<ReturnType<typeof getConfig>>,
   agentId: string,
-  conversationId: string,
-  firstMessage: string,
-): Promise<LaneSession> {
-  const config = await getConfig();
-  // One-time cleanup of the retired CLAUDE.md delivery path (see
-  // cleanupLaneClaudeMd) — memory now rides the profile injection below.
-  await cleanupLaneClaudeMd();
+): Promise<{ profile: import('../types.js').SessionProfile; effort: import('../types.js').SessionEffort }> {
   // Walnut's own skills (workspace / ~/.open-walnut/skills / shipped) — no CLI
   // engine ever discovers these, so the lane prompt carries the index itself.
   // ~/.claude/skills is excluded (Claude Code loads it natively). Failure is
@@ -298,8 +352,8 @@ async function resolveLane(
   // buildLaneMemoryContext). Rides the SAME profile as the persona.
   const memoryContext = await buildLaneMemoryContext().catch(() => '');
   // general = the Personal AI persona; any other console agent gets ITS persona
-  // wrapped in the same session addendum (consoleAgentProfile) — one engine,
-  // one consistent chat feel, per-agent identity.
+  // plus the same two work modes — one engine, one consistent chat feel,
+  // per-agent identity.
   let profile;
   if (agentId === 'general') {
     profile = personalAiProfile(config.user?.name ?? 'the user', skillsIndex, memoryContext);
@@ -316,34 +370,92 @@ async function resolveLane(
   // xhigh, tuned for coding sessions) — measured 100s+ for "what tasks do I have
   // today". Config `agent.session_effort` still wins when the user set one.
   const effort = config.agent?.session_effort ?? 'medium';
+  return { profile, effort };
+}
+
+/**
+ * Wait for the record an ACP (codex) spawn creates for this lane. ACP mints its
+ * own session id at provider `session/new` — there is no preassigned id to seed
+ * a record with, so the lane binding rides the SESSION_START event and the
+ * record appears when the worker establishes (see AcpSession.adoptSessionResponse).
+ */
+async function waitForLaneRecord(lane: string, timeoutMs: number): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const record = await getSessionByLane(lane);
+    if (record) return record.claudeSessionId;
+    if (Date.now() >= deadline) {
+      throw new Error('Codex session did not start in time — check that the Codex CLI is installed and try again');
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+}
+
+async function resolveLane(
+  lane: string,
+  agentId: string,
+  conversationId: string,
+  firstMessage: string,
+  engine?: 'claude' | 'codex',
+): Promise<LaneSession> {
+  const config = await getConfig();
+  // One-time cleanup of the retired CLAUDE.md delivery path (see
+  // cleanupLaneClaudeMd) — memory now rides the profile injection below.
+  await cleanupLaneClaudeMd();
 
   const existing = await getSessionByLane(lane);
   if (existing) {
+    const existingEngine: 'claude' | 'codex' = existing.engine === 'codex' ? 'codex' : 'claude';
     // Profile drift repair: the prompt/effort live on the RECORD (spawn-time
     // args, no live channel), so a lane minted before a personalAiProfile upgrade
     // would otherwise keep the stale persona forever. Refreshing the record here
     // makes the next cold resume (~idle timeout) pick the current one up; the
     // live CLI process keeps the old prompt until then, which is acceptable.
-    if (existing.profile?.systemPrompt !== profile.systemPrompt) {
-      const { updateSessionRecord } = await import('../session-tracker.js');
-      await updateSessionRecord(existing.claudeSessionId, { profile, effort }).catch((err) => {
-        log.session.warn('Personal AI lane: profile refresh failed', {
-          lane, sessionId: existing.claudeSessionId,
-          error: err instanceof Error ? err.message : String(err),
+    // claude engine only — ACP has no profile channel (no system-prompt param).
+    if (existingEngine === 'claude') {
+      const { profile, effort } = await buildLaneProfile(config, agentId);
+      if (existing.profile?.systemPrompt !== profile.systemPrompt) {
+        const { updateSessionRecord } = await import('../session-tracker.js');
+        await updateSessionRecord(existing.claudeSessionId, { profile, effort }).catch((err) => {
+          log.session.warn('Personal AI lane: profile refresh failed', {
+            lane, sessionId: existing.claudeSessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
         });
-      });
-      log.session.info('Personal AI lane: stale profile refreshed on record', {
-        lane, sessionId: existing.claudeSessionId,
-      });
+        log.session.info('Personal AI lane: stale profile refreshed on record', {
+          lane, sessionId: existing.claudeSessionId,
+        });
+      }
     }
     log.session.info('Personal AI lane: reusing session', {
       lane, sessionId: existing.claudeSessionId, processStatus: existing.process_status,
     });
-    return { sessionId: existing.claudeSessionId, created: false };
+    return { sessionId: existing.claudeSessionId, created: false, engine: existingEngine };
   }
 
-  const sessionId = crypto.randomUUID();
   const title = agentId === 'general' ? 'Main AI chat' : `Main AI chat (${agentId})`;
+
+  if (engine === 'codex') {
+    // Codex lane: the ACP worker mints the session id itself, so there is no
+    // record to seed up front — emit the start (the runner routes engine:'codex'
+    // to handleAcpStart, which creates the lane-bound record on establish) and
+    // wait for that record. Known limitation: no persona/profile — ACP has no
+    // system-prompt channel, so a codex lane is a bare Codex chat.
+    bus.emit(EventNames.SESSION_START, {
+      taskId: '',
+      message: firstMessage,
+      cwd: WALNUT_HOME,
+      title,
+      lane,
+      engine: 'codex',
+    }, ['session-runner'], { source: 'personal-ai-lane' });
+    const sessionId = await waitForLaneRecord(lane, 90_000);
+    log.session.info('Personal AI lane: codex session created', { lane, sessionId, agentId, conversationId });
+    return { sessionId, created: true, engine: 'codex' };
+  }
+
+  const { profile, effort } = await buildLaneProfile(config, agentId);
+  const sessionId = crypto.randomUUID();
 
   // Seed the record BEFORE the spawn — same reason quick-start does (the id is
   // ours, so the row can exist before the CLI). Here it additionally CLOSES the
@@ -374,5 +486,5 @@ async function resolveLane(
   }, ['session-runner'], { source: 'personal-ai-lane' });
 
   log.session.info('Personal AI lane: session created', { lane, sessionId, agentId, conversationId });
-  return { sessionId, created: true };
+  return { sessionId, created: true, engine: 'claude' };
 }

@@ -2304,6 +2304,23 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       });
   }, [agentConsole.activeAgentId, conversations, notify]);
 
+  // Provider switch (claude ⇄ codex) — legal only while the conversation is
+  // EMPTY (no messages yet): the server archives the just-minted lane session
+  // and re-mints one on the requested engine. The pill's picker only offers
+  // this while `laneConversationEmpty` below, so the 409 path is a race guard.
+  const laneConversationEmpty = (conversations.conversations.find(
+    (c) => c.id === conversations.activeConversationId,
+  )?.messageCount ?? 0) === 0;
+  const handleLaneProviderSwitch = useCallback((provider: 'claude' | 'codex') => {
+    lane.swapEngine(provider).catch((err) => {
+      notify({
+        kind: 'operation-error', severity: 'error', title: 'Provider switch failed',
+        body: String(err instanceof Error ? err.message : err), persistent: true,
+        dedupKey: `lane-engine:${conversations.activeConversationId ?? 'unknown'}`,
+      });
+    });
+  }, [lane, notify, conversations.activeConversationId]);
+
   // Lane send: through the ordinary session queue (session:send), exactly like
   // any session composer. ensure() covers the send-before-resolve window (the
   // eager resolve usually wins). No task-context / plan-mode prefixes here —
@@ -2801,8 +2818,13 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               searchSessionCommands={quickStartPath ? searchQuickStartCommands : undefined}
               // Lane engine: same controls row a session composer has — mode
               // pill + model pill (NO btw / notes, deliberately minimal).
+              // Provider switching unlocks ONLY while the conversation is empty.
               controlsSlot={laneActive && lane.sessionId
-                ? <LaneComposerControls sessionId={lane.sessionId} />
+                ? <LaneComposerControls
+                    sessionId={lane.sessionId}
+                    engine={lane.engine}
+                    onProviderSwitch={laneConversationEmpty ? handleLaneProviderSwitch : undefined}
+                  />
                 : undefined}
               // Quick-start: "@" roots at the chosen cwd + host (like a session).
               // Plain main chat has no cwd, so "@" roots at "~" — backend expands it.

@@ -128,7 +128,44 @@ export function createConversationsRouter(): Router {
       const { getOrCreateLaneSession } = await import('../../core/sessions/personal-ai-lane.js')
       const lane = await getOrCreateLaneSession(agentId, cid)
       const { WALNUT_HOME } = await import('../../constants.js')
-      res.json({ sessionId: lane.sessionId, cwd: WALNUT_HOME, created: lane.created })
+      res.json({ sessionId: lane.sessionId, cwd: WALNUT_HOME, created: lane.created, engine: lane.engine })
+    } catch (err) {
+      next(err)
+    }
+  })
+
+  // POST /api/agents/:agentId/conversations/:cid/lane-engine  {engine}
+  // Switch the provider backing this conversation's lane (claude ⇄ codex).
+  // Only legal while the conversation is EMPTY — the lane session is archived
+  // and re-minted on the requested engine (an engine is a spawn-time fact).
+  // 409 once messages exist / for forked lanes (swapLaneEngine guards).
+  router.post('/:agentId/conversations/:cid/lane-engine', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const agentId = validateAgentId(req.params.agentId as string)
+      const cid = validateConversationId(req.params.cid as string)
+      const engine = (req.body as { engine?: string } | undefined)?.engine
+      if (engine !== 'claude' && engine !== 'codex') {
+        res.status(400).json({ error: "engine must be 'claude' or 'codex'" })
+        return
+      }
+      const { getConfig, resolveAgentEngineProvider } = await import('../../core/config-manager.js')
+      if (resolveAgentEngineProvider(await getConfig()) !== 'claude-code') {
+        res.status(409).json({ error: 'Lane engine is not active' })
+        return
+      }
+      const { swapLaneEngine } = await import('../../core/sessions/personal-ai-lane.js')
+      const { SessionControlError } = await import('../../core/sessions/session-controls.js')
+      try {
+        const lane = await swapLaneEngine(agentId, cid, engine)
+        const { WALNUT_HOME } = await import('../../constants.js')
+        res.json({ sessionId: lane.sessionId, cwd: WALNUT_HOME, created: lane.created, engine: lane.engine })
+      } catch (err) {
+        if (err instanceof SessionControlError) {
+          res.status(err.statusCode).json({ error: err.message })
+          return
+        }
+        throw err
+      }
     } catch (err) {
       next(err)
     }

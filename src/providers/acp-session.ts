@@ -283,6 +283,10 @@ export interface AcpSessionConfig {
   project: string
   cwd: string
   mode: SessionMode
+  /** Lane binding (Personal AI chat conversation) — persisted on the record at
+   * establish so getSessionByLane finds the codex session (capacity/list
+   * exemptions ride the same field). */
+  lane?: string
   /** Existing provider session to resume (lazy resume path). */
   providerSessionId?: string
   /** Existing runtimeId (resume) — fresh one generated when absent. */
@@ -799,6 +803,7 @@ export class AcpSession {
           initialProcessStatus: 'idle',
           messageCount: 0,
           engine: 'codex',
+          ...(this.cfg.lane ? { lane: this.cfg.lane } : {}),
           acpRuntimeId: this.runtimeId,
           acpJournalPath: this._journalPath,
           acpCapabilities: this._capabilities,

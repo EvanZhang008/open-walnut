@@ -21,6 +21,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import yaml from 'js-yaml'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
@@ -110,6 +111,20 @@ function installFakeRunner(): void {
       const d = event.data as SessionStartEvent
       started.push(d)
       sid = d.preassignedSessionId
+      if (!sid && d.engine === 'codex') {
+        // ACP mints its own session id at provider session/new — mimic
+        // adoptSessionResponse: create the lane-bound codex record the lane
+        // resolver is polling for (waitForLaneRecord).
+        const acpSid = randomUUID()
+        sid = acpSid
+        void import('../../../src/core/session-tracker.js').then(({ createSessionRecord }) =>
+          createSessionRecord(acpSid, '', '', d.cwd, {
+            engine: 'codex',
+            ...(d.lane ? { lane: d.lane } : {}),
+            initialProcessStatus: 'idle',
+            messageCount: 0,
+          }))
+      }
     } else if (event.name === EventNames.SESSION_SEND) {
       sent.push(event.data as SessionSendEvent)
       sid = (event.data as SessionSendEvent).sessionId
@@ -423,5 +438,70 @@ describe("agent.provider = 'claude-code' → lane session", () => {
     const res = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-session`, { method: 'POST' })
     expect(res.status).toBe(409)
     expect(started).toHaveLength(0)
+  })
+
+  it('lane-engine swap: EMPTY conversation re-mints the lane on codex, then back on claude', async () => {
+    await boot({ provider: 'claude-code' })
+    const { getActiveConversationId } = await import('../../../src/core/conversations.js')
+    const conv = await getActiveConversationId('general')
+
+    // Mint the default (claude) lane — the eager mount the UI performs.
+    const res1 = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-session`, { method: 'POST' })
+    const body1 = await res1.json() as { sessionId: string; engine: string }
+    expect(body1.engine).toBe('claude')
+    drainQueue(body1.sessionId)
+
+    // Swap to codex while empty → NEW session id, engine codex, old lane archived.
+    const swap = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-engine`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ engine: 'codex' }),
+    })
+    expect(swap.status).toBe(200)
+    const swapBody = await swap.json() as { sessionId: string; engine: string }
+    expect(swapBody.engine).toBe('codex')
+    expect(swapBody.sessionId).not.toBe(body1.sessionId)
+    const { getSessionByClaudeId } = await import('../../../src/core/session-tracker.js')
+    const oldRecord = await getSessionByClaudeId(body1.sessionId)
+    expect(oldRecord?.archived).toBe(true)
+    expect(oldRecord?.archive_reason).toBe('engine_switched')
+    // The codex spawn rode SESSION_START with engine + lane (no preassigned id).
+    const codexStart = started.find((s) => s.engine === 'codex')
+    expect(codexStart?.lane).toBe(`chat:general:${conv}`)
+
+    // Idempotent: swapping to the CURRENT engine returns the same session.
+    const again = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-engine`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ engine: 'codex' }),
+    })
+    expect(((await again.json()) as { sessionId: string }).sessionId).toBe(swapBody.sessionId)
+
+    // And back to claude — still empty, still legal.
+    const back = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-engine`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ engine: 'claude' }),
+    })
+    expect(back.status).toBe(200)
+    const backBody = await back.json() as { sessionId: string; engine: string }
+    expect(backBody.engine).toBe('claude')
+    expect(backBody.sessionId).not.toBe(swapBody.sessionId)
+    drainQueue(backBody.sessionId)
+  })
+
+  it('lane-engine swap: a conversation WITH messages answers 409 and keeps its session', async () => {
+    await boot({ provider: 'claude-code' })
+    const { getActiveConversationId, touchLaneConversation } = await import('../../../src/core/conversations.js')
+    const conv = await getActiveConversationId('general')
+
+    const res1 = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-session`, { method: 'POST' })
+    const body1 = await res1.json() as { sessionId: string }
+    drainQueue(body1.sessionId)
+    // A lane send bumps ConversationMeta.messageCount — the swap guard's signal.
+    await touchLaneConversation('general', conv, 'hello there')
+
+    const swap = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-engine`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ engine: 'codex' }),
+    })
+    expect(swap.status).toBe(409)
+    // The lane is untouched: same session, not archived.
+    const res2 = await fetch(`http://localhost:${port}/api/agents/general/conversations/${conv}/lane-session`, { method: 'POST' })
+    const body2 = await res2.json() as { sessionId: string }
+    expect(body2.sessionId).toBe(body1.sessionId)
   })
 })
