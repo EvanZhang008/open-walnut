@@ -22,6 +22,11 @@ test.describe('S3 Backup settings', () => {
     const section = page.locator('#backup')
     await expect(section).toBeVisible({ timeout: 5000 })
 
+    // The what-gets-backed-up explanation renders (users must know scope + that
+    // credentials ride along before pointing this at a bucket).
+    await expect(section).toContainText('What gets backed up')
+    await expect(section).toContainText('auth.json')
+
     // Form fields present with defaults.
     await expect(section.locator('#backup-bucket')).toBeVisible()
     await expect(section.locator('#backup-region')).toHaveValue('us-west-2')
@@ -49,8 +54,9 @@ test.describe('S3 Backup settings', () => {
     // Status line: no backup yet.
     await expect(section).toContainText('No backup has run yet')
 
-    // Restore hint names the CLI.
+    // Restore hint names the CLI and the agent skill.
     await expect(section).toContainText('open-walnut backup restore')
+    await expect(section).toContainText('restore-backup')
 
     // Test Connection against a nonexistent bucket must fail loudly, not hang:
     // STS/HeadBucket errors land in the red "Connection failed" line.

@@ -169,6 +169,15 @@ export function BackupSection({ config, onSave }: Props) {
         <ToggleSwitch id="backup-enabled" checked={enabled} onChange={setEnabled} label="Enable scheduled backups" />
       </div>
 
+      <p className="text-sm text-muted" style={{ marginTop: 0 }}>
+        <strong>What gets backed up:</strong> everything in your data folder — tasks, notes and
+        attachments, chat and session history, memory, config, and credentials (auth.json), so use
+        a bucket only you can access. Databases are snapshotted safely while in use.
+        <br />
+        <strong>Skipped:</strong> caches, temp files, and search indexes — Walnut rebuilds those
+        automatically. Only changed files upload after the first run.
+      </p>
+
       <div className="form-row">
         <div className="form-group">
           <label htmlFor="backup-bucket">Bucket</label>
@@ -291,7 +300,9 @@ export function BackupSection({ config, onSave }: Props) {
         )}
       </div>
       <p className="text-sm text-muted" style={{ marginTop: 6 }}>
-        Restore from a terminal: <code>open-walnut backup restore</code> (downloads into a fresh folder, never overwrites live data).
+        Restore from a terminal: <code>open-walnut backup restore</code> (downloads into a fresh folder, never
+        overwrites live data). Or let an agent do it: the <code>restore-backup</code> skill in the repo&apos;s{' '}
+        <code>skills/</code> folder walks a Claude Code session through find → restore → verify → adopt.
       </p>
     </SectionCard>
   );
