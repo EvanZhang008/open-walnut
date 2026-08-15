@@ -18569,82 +18569,18 @@ td.usage-share-col {
 .sfe-btn:disabled:hover { background: var(--bg); }
 .sfe-btn:disabled:active { transform: none; }
 
-/* ── Pane collapse (shared): Files tree, Changed tree, split chat column ──
-   Design pick 2026-08-13 (option 9), tuned 2026-08-15: slim but SELF-LABELED.
-   A bare hover-only rail was unidentifiable ("就一个杠, 人怎么知道它是这个"),
-   so the collapsed rail always shows its chevron + a vertical text label. */
-.pane-collapsed-rail {
-  flex: 0 0 20px;
-  border: none;
-  padding: 8px 0 0;
-  background: var(--bg-secondary, var(--card-bg));
-  cursor: pointer;
+/* Tree show/hide — a VS Code-style layout toggle in the toolbar (window
+   glyph, side compartment filled while the pane is visible). Final design
+   after chevrons, rails, and labels all failed discoverability: users know
+   this icon from editors, and a toolbar button has a fixed, findable home.
+   Shared by the Files tab and the Changed tab. */
+.sfe-tree-toggle {
+  flex-shrink: 0;
+  padding: 3px 6px;
   color: var(--fg-muted);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  transition: background 0.15s, color 0.15s;
 }
-.pane-rail-left { border-right: 1px solid var(--border); }
-.pane-rail-right { border-left: 1px solid var(--border); }
-.pane-collapsed-rail:hover {
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg-secondary, var(--card-bg)));
-  color: var(--accent);
-}
-.pane-collapsed-rail svg { flex: none; }
-/* What this rail restores, spelled out — readable without hovering. */
-.pane-rail-label {
-  writing-mode: vertical-rl;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: inherit;
-  user-select: none;
-}
-
-/* Sticky anchor: the tree pane is its own scroller, so the chevron needs
-   this to stay pinned while rows scroll. Real height (not 0) so the strip is
-   RESERVED — at height:0 the always-visible button sat on top of the first
-   row's "N changed" badge. */
-.pane-collapse-anchor {
-  position: sticky;
-  top: 0;
-  height: 26px;
-  flex: none;
-  z-index: 5;
-  background: inherit;
-}
-/* Visible at rest (border + card background) — the near-transparent version
-   was invisible until hovered, so nobody could find how to collapse. */
-.pane-collapse-btn {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 20px;
-  height: 20px;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  background: var(--card-bg);
-  color: var(--fg-muted);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  transition: background 0.15s, color 0.15s;
-}
-.pane-collapse-btn:hover {
-  background: var(--bg-tertiary);
-  color: var(--fg);
-}
-/* Right-side pane (chat column): chevron sits top-LEFT, pointing right. */
-.pane-collapse-btn-right {
-  right: auto;
-  left: 3px;
-}
+.sfe-tree-toggle:hover { color: var(--fg); }
+.sfe-tree-toggle svg { display: block; }
 
 /* Back / Forward pair: one segmented control, like a browser's. */
 .sfe-nav-group {
@@ -24099,10 +24035,9 @@ a.file-link:hover {
 }
 .session-panel-chat-resize:hover::after { opacity: 0.6; }
 
-/* Chat collapse rail + chevron: visuals come from the shared .pane-collapsed-rail
-   / .pane-collapse-btn classes (see "Pane collapse (shared)"). Only the chat
-   column's stacking context needs pinning here. */
-.session-chat-collapse-btn { z-index: 5; }
+/* Chat show/hide is the VS Code-style layout toggle in the header's
+   window-controls row (.session-chat-collapse-btn, a plain .task-action-btn) —
+   no collapsed rail, no floating chevron. */
 /* When closed, the chat column is a transparent wrapper. */
 .session-panel-chat-col {
   display: contents;

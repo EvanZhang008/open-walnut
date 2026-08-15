@@ -37,6 +37,13 @@ export const ICON_REFRESH = <svg width="14" height="14" viewBox="0 0 16 16" fill
 // a code angle-bracket and font fallback made it inconsistent).
 export const ICON_CHEVRON_LEFT = <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="10 3 5.5 8 10 13"/></svg>;
 export const ICON_CHEVRON_RIGHT = <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 3 10.5 8 6 13"/></svg>;
+// VS Code-style layout toggles: a window outline whose side compartment is
+// FILLED while that panel is visible, hollow when hidden. Instantly readable —
+// the chevron/label rails were not.
+export const ICON_PANEL_LEFT = <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.8"/><line x1="6.2" y1="2.5" x2="6.2" y2="13.5"/></svg>;
+export const ICON_PANEL_LEFT_FILLED = <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.8"/><path d="M1.5 4.3A1.8 1.8 0 013.3 2.5h2.9v11H3.3a1.8 1.8 0 01-1.8-1.8z" fill="currentColor" stroke="none"/></svg>;
+export const ICON_PANEL_RIGHT = <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.8"/><line x1="9.8" y1="2.5" x2="9.8" y2="13.5"/></svg>;
+export const ICON_PANEL_RIGHT_FILLED = <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.8"/><path d="M9.8 2.5h2.9a1.8 1.8 0 011.8 1.8v7.4a1.8 1.8 0 01-1.8 1.8H9.8z" fill="currentColor" stroke="none"/></svg>;
 export const ICON_SEARCH = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="7" cy="7" r="5"/><path d="M11 11l3.5 3.5"/></svg>;
 export const ICON_LOCATE = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><circle cx="8" cy="8" r="3.5"/><line x1="8" y1="1" x2="8" y2="3.5"/><line x1="8" y1="12.5" x2="8" y2="15"/><line x1="1" y1="8" x2="3.5" y2="8"/><line x1="12.5" y1="8" x2="15" y2="8"/></svg>;
 export const ICON_CHAT = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M2 2h12v9H5l-3 3V2z"/></svg>;

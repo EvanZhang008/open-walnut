@@ -9,7 +9,7 @@ import { SessionTerminal } from './SessionTerminal';
 import { SessionDiffView } from './SessionDiffView';
 import { buildSelectionPrefill, displayPathForPrefill } from './diffPrefill';
 import type { SessionSplitView } from './sessionSplitView';
-import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from '../common/Icons';
+import { ICON_ROBOT, ICON_EXPAND, ICON_COLLAPSE, ICON_CLOSE, ICON_LOCK, ICON_UNLOCK, ICON_LOCATE, ICON_NEW_TAB, ICON_PANEL_RIGHT, ICON_PANEL_RIGHT_FILLED } from '../common/Icons';
 import { openPopout } from '@/popout/openPopout';
 import { UserMessagesSummary } from './UserMessagesSummary';
 // PlanPreviewSection replaced by inline plan popover in meta bar
@@ -1150,6 +1150,19 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             {session?.lastActiveAt && <span className="session-panel-time">{timeAgo(session.lastActiveAt)}</span>}
             </div>{/* .session-meta-row-2-chips */}
             <div className="session-panel-window-controls">
+              {/* VS Code-style layout toggle: right compartment filled while the
+                  chat column shows. Only meaningful in split view. */}
+              {splitOpen && (
+                <button
+                  className="task-action-btn session-chat-collapse-btn"
+                  onClick={() => setChatCollapsed(!chatCollapsed)}
+                  title={chatCollapsed ? 'Show chat' : 'Hide chat'}
+                  aria-label={chatCollapsed ? 'Show chat' : 'Hide chat'}
+                  aria-expanded={!chatCollapsed}
+                >
+                  {chatCollapsed ? ICON_PANEL_RIGHT : ICON_PANEL_RIGHT_FILLED}
+                </button>
+              )}
               {!loading && session?.taskId && (
                 <button
                   className="task-action-btn session-panel-locate"
@@ -1388,33 +1401,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
               )}
             </div>
           )}
-          {splitOpen && (
-            chatCollapsed ? (
-              <button
-                className="pane-collapsed-rail pane-rail-right session-chat-collapsed-rail"
-                onClick={() => setChatCollapsed(false)}
-                title="Show chat"
-                aria-label="Show chat"
-                aria-expanded={false}
-              >{ICON_CHEVRON_LEFT}<span className="pane-rail-label">Chat</span></button>
-            ) : (
-              <div className="session-panel-chat-resize" {...chatPanel.handleProps} title="Drag to resize chat" />
-            )
+          {splitOpen && !chatCollapsed && (
+            <div className="session-panel-chat-resize" {...chatPanel.handleProps} title="Drag to resize chat" />
           )}
           <div
             className="session-panel-chat-col"
             ref={splitOpen ? chatPanel.panelRef : undefined}
             style={splitOpen && !chatCollapsed ? { width: chatPanel.width, flex: `0 0 ${chatPanel.width}` } : undefined}
           >
-            {splitOpen && !chatCollapsed && (
-              <button
-                className="pane-collapse-btn pane-collapse-btn-right session-chat-collapse-btn"
-                onClick={() => setChatCollapsed(true)}
-                title="Collapse chat"
-                aria-label="Collapse chat"
-                aria-expanded
-              >{ICON_CHEVRON_RIGHT}</button>
-            )}
         <div className="session-panel-body" ref={bodyRef}>
           <SessionChatHistory
             key={sessionId}

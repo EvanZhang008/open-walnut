@@ -83,8 +83,8 @@ test('tree toggle hides the tree, preview takes full width, toggle restores', as
   expect(wideAfter).toBeGreaterThan(wideBefore + 100)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/step1-collapsed.png` })
 
-  // Restore: the collapsed rail carries an SVG chevron (not a text glyph —
-  // ⟨ was misread as a code angle-bracket) and brings the tree back.
+  // Restore: the SAME toolbar toggle (VS Code-style layout icon — an SVG,
+  // never a text glyph: ⟨ was misread as a code angle-bracket) flips back.
   const showBtn = explorer.getByRole('button', { name: 'Show file tree' })
   await expect(showBtn.locator('svg')).toHaveCount(1)
   await showBtn.click()

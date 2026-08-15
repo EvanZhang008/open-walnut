@@ -20,7 +20,7 @@ import { fetchSessionChangedPaths } from '@/api/session-changes';
 import { FileContentView } from '@/components/common/FileContentView';
 import { FileTreeContextMenu, type FileTreeContextTarget } from './FileTreeContextMenu';
 import { parentPath, revealAncestors } from './reveal-ancestors';
-import { ICON_REFRESH, ICON_CHEVRON_LEFT, ICON_CHEVRON_RIGHT } from '@/components/common/Icons';
+import { ICON_REFRESH, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED } from '@/components/common/Icons';
 import { formatSize } from '@/utils/format';
 import { getRecentFolders, fuzzyMatchRecents, type RecentFolder } from '@/utils/recentFolders';
 import {
@@ -629,6 +629,19 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
   return (
     <div className="session-file-explorer" ref={explorerRef}>
       <div className="session-file-explorer-toolbar">
+        {/* VS Code-style layout toggle: window glyph, left compartment filled
+            while the tree shows. Lives HERE (toolbar, fixed spot) — the
+            floating chevron + collapsed rail were unfindable/unreadable. */}
+        <button
+          type="button"
+          className="sfe-btn sfe-tree-toggle"
+          onClick={toggleTreeCollapsed}
+          title={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
+          aria-label={treeCollapsed ? 'Show file tree' : 'Hide file tree'}
+          aria-expanded={!treeCollapsed}
+        >
+          {treeCollapsed ? ICON_PANEL_LEFT : ICON_PANEL_LEFT_FILLED}
+        </button>
         <div className="sfe-nav-group">
           <button
             type="button"
@@ -720,33 +733,8 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
       </div>
 
       <div className="session-file-explorer-body">
-        {/* Collapsed: a slim click-to-restore rail (design pick 2026-08-13,
-            option 9 — same affordance as the chat column's rail). The vertical
-            label keeps it identifiable — a bare rail read as decoration. */}
-        {treeCollapsed && (
-          <button
-            type="button"
-            className="pane-collapsed-rail pane-rail-left"
-            onClick={toggleTreeCollapsed}
-            title="Show file tree"
-            aria-label="Show file tree"
-            aria-expanded={false}
-          >{ICON_CHEVRON_RIGHT}<span className="pane-rail-label">Files</span></button>
-        )}
         {!treeCollapsed && (
         <div className="session-file-explorer-tree" style={{ width: `${treeWidth}px` }}>
-          {/* Slim floating collapse chevron pinned top-right of the tree (the
-              tree is its own scroller — zero-height sticky anchor keeps it put). */}
-          <div className="pane-collapse-anchor">
-            <button
-              type="button"
-              className="pane-collapse-btn"
-              onClick={toggleTreeCollapsed}
-              title="Hide file tree"
-              aria-label="Hide file tree"
-              aria-expanded
-            >{ICON_CHEVRON_LEFT}</button>
-          </div>
           {rootError && <div className="sfe-error">{rootError}</div>}
           {rootSections.map((section) => {
             const isOpen = openRoots.has(section.path);
