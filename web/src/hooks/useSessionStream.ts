@@ -77,7 +77,6 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
   const sessionStatus = useSessionStatus(sessionId);
   const streamBuffer = useRef('');
   const activeSessionId = useRef<string | null>(null);
-  const seenPermissionIds = useRef(new Set<string>());
   const resubscribePending = useRef(false);
   const safetyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Turn boundary: blocks[0..completedLen) belong to turns that already emitted
@@ -192,10 +191,6 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
           streamBuffer.current = lastText ? lastText.content : '';
           // Seed global cache with server snapshot for correction
           initStreamState(sessionId, snapshot.blocks, snapshot.isStreaming, snapshot.completedLen);
-          // Seed seenPermissionIds from snapshot (prevent duplicate blocks on re-emit)
-          for (const b of snapshot.blocks) {
-            if (b.type === 'permission') seenPermissionIds.current.add(b.requestId);
-          }
         }
       })
       .catch(() => {
@@ -238,7 +233,6 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
             .filter(p => !existingIds.has(p.requestId))
             .map(p => ({ type: 'permission' as const, requestId: p.requestId, toolName: p.toolName ?? 'unknown', input: p.input, reason: p.reason, acpOptions: p.acpOptions }));
           if (newBlocks.length === 0) return hasZombie ? next : prev;
-          for (const b of newBlocks) seenPermissionIds.current.add(b.requestId);
           return [...next, ...newBlocks];
         });
       })
@@ -560,12 +554,24 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
     };
     if (!sessionId || sid !== sessionId) return;
-    if (seenPermissionIds.current.has(requestId)) return; // dedup
-    seenPermissionIds.current.add(requestId);
 
+    // Dedup against what is actually RENDERED, not the grow-only
+    // seenPermissionIds set. That set outlives the blocks it guards: a server
+    // restart wipes the stream buffer, the reconnect snapshot (no permission
+    // block) evicts the card, and every 60s re-emit then bounced off the stale
+    // id — the card never came back and the session sat on "working…" until a
+    // new message auto-denied it (reported 2026-08-16, 2145s stuck).
+    // Presence-in-blocks makes the periodic re-emit the self-heal path.
+    // flushPendingTextRaf nests its own setBlocks, so flush OUTSIDE the updater;
+    // the extra flush on a duplicate re-emit is harmless (it's a no-op between
+    // text deltas of a blocked turn).
     flushPendingTextRaf();
-    streamBuffer.current = '';
-    setBlocks(prev => [...prev, { type: 'permission', requestId, toolName, input, reason, acpOptions }]);
+    setBlocks(prev => {
+      const already = prev.some(b => b.type === 'permission' && b.requestId === requestId);
+      if (already) return prev;
+      streamBuffer.current = '';
+      return [...prev, { type: 'permission', requestId, toolName, input, reason, acpOptions }];
+    });
   });
 
   // Handle permission resolved events (update block status from pending → allowed/denied)
@@ -648,9 +654,6 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     completedLen.current = 0;
     streamBuffer.current = '';
     currentTextMsgId.current = undefined;
-    // Permission dedup only matters within a turn; a re-emitted request next
-    // turn must not be swallowed.
-    seenPermissionIds.current.clear();
     if (activeSessionId.current) clearStreamState(activeSessionId.current);
     return true;
   }, []);
