@@ -31,7 +31,7 @@ import { test, expect } from '@playwright/test'
 import {
   basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftMetaAiSlot, draftPanel,
   draftProjectPill, draftTierBtn, loadHome, openDraft, openDraftOnCwd, presetStickyTier,
-  tasksTitled, watchForbiddenRequests,
+  seedColumns, tasksTitled, watchForbiddenRequests,
 } from './draft-helpers'
 import { presetPanelView } from './todo-panel-helpers'
 
@@ -364,7 +364,64 @@ test('AI-suggested dates land in the More menu (✦) and ride BOTH exits onto th
   await page.screenshot({ path: `${SCREENSHOT_DIR}/03e-ai-dates-both-exits.png`, fullPage: false })
 })
 
-// ── 4. "/" opens the slash-command palette, like a real session composer ─────
+// ── 4. Session "Fork" → a pre-bound fork DRAFT column (R10) ─────────────────
+
+test('Fork opens a pre-bound draft: pinned folder/project, no chips/meta/task-exit, and Fork ↵ calls the fork API', async ({ page }) => {
+  // The Fork button no longer opens its own popover form — it opens the SAME
+  // draft column every "+" opens, pre-bound to the source session. What must
+  // hold, per the fork contract (a fork resumes the source conversation in
+  // place): folder + project arrive preselected and IMMUTABLE, the quick chips
+  // and the tier/priority meta row are gone (the fork API takes only
+  // message+model), "Create task for later" is gone (the fork route creates
+  // the sibling task itself), and Start is relabelled Fork ↵ and calls
+  // POST /api/sessions/<src>/fork — not quick-start.
+  await page.setViewportSize({ width: 2400, height: 1000 })
+  await seedColumns(page, ['pw-model-switch-session'])
+  await loadHome(page)
+
+  const sessionPanel = page.locator('.main-page-session-column .session-panel').first()
+  await expect(sessionPanel).toBeVisible({ timeout: 20_000 })
+  await sessionPanel.getByRole('button', { name: 'Fork session into a child task' }).click()
+
+  const panel = draftPanel(page)
+  await expect(panel).toBeVisible({ timeout: 10_000 })
+  await expect(panel.locator('.session-panel-title')).toHaveText('Fork Session')
+  await expect(panel.locator('.draft-bound-task')).toContainText('fork of:')
+
+  // The immutable seed: both pills render the SOURCE's facts, disabled.
+  await expect(draftCwdPill(panel)).toBeDisabled()
+  await expect(draftProjectPill(panel)).toBeDisabled()
+  await expect(draftProjectPill(panel)).toHaveText('Walnut')
+  // No folder chips, no tier/priority row, no task exit — only message + model.
+  await expect(panel.locator('.draft-quick-chips')).toHaveCount(0)
+  await expect(panel.locator('.draft-meta-row')).toHaveCount(0)
+  await expect(panel.locator('.draft-later-btn')).toHaveCount(0)
+  await expect(panel.locator('.draft-model-select')).toBeVisible()
+  await expect(panel.locator('.draft-start-btn')).toHaveText('Fork ↵')
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/05a-fork-draft.png`, fullPage: false })
+
+  // Fork ↵ → POST /api/sessions/<source>/fork with the composed message.
+  // Stubbed: the mock-CLI fixture can't execute a real --fork-session resume,
+  // and the server-side fork contract has its own suite (session-controls).
+  let forkBody: Record<string, unknown> | null = null
+  await page.route('**/api/sessions/pw-model-switch-session/fork', (route) => {
+    forkBody = route.request().postDataJSON() as Record<string, unknown>
+    return route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ status: 'ok', sourceSessionId: 'pw-model-switch-session', sessionId: 'pw-forked-1', taskId: 'pw-task-fork-1' }),
+    })
+  })
+  await draftComposer(page).type('take the other approach from here')
+  await panel.locator('.draft-start-btn').click()
+  await expect.poll(() => forkBody !== null, { timeout: 10_000, message: 'the fork API was never called' }).toBe(true)
+  expect(forkBody!.message, 'the composed text rides as the fork message').toBe('take the other approach from here')
+  expect(forkBody!.create_child_task, 'fork always creates the sibling task').toBe(true)
+  expect(forkBody!.model, 'an untouched model select must NOT override the source').toBeUndefined()
+  // The draft column is consumed by the morph (draft: → pending: → promoted).
+  await expect(panel).toHaveCount(0, { timeout: 10_000 })
+})
+
+// ── 5. "/" opens the slash-command palette, like a real session composer ─────
 
 test('"/" in the draft composer opens the command palette — mid-text too, and after a folder pick', async ({ page }) => {
   // The draft composer is a session composer that hasn't launched yet, so "/"

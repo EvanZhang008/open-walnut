@@ -59,7 +59,7 @@ async function clearLaunchMemory(page: Page): Promise<void> {
 async function openPickerInDraft(page: Page): Promise<Locator> {
   const panel = await openDraft(page)
   await panel.locator('.draft-composer-bar .session-action-chip').first().click()
-  await expect(panel.locator('.session-path-selector')).toBeVisible({ timeout: 10_000 })
+  await expect(page.locator('.session-path-selector')).toBeVisible({ timeout: 10_000 })
   return panel
 }
 

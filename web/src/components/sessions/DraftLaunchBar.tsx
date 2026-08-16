@@ -19,8 +19,10 @@
  *   3. path + project — the cwd/host pill and the project pill, LEFT-ALIGNED.
  *      FIXED as the last row: "where does this run" is the statement the composer
  *      answers, so it stays glued to it and never moves.
- * Plus:  the folder-picker popover, anchored here and opening UPWARD
- *        (globals.css `.draft-launch-bar .session-path-selector`).
+ * Plus:  the folder picker — POPPED OUT of the column: portalled to <body>
+ *        (a ~300px column can't contain a browsing surface, and any in-column
+ *        placement gets painted over by sibling panels) but ANCHORED to the
+ *        cwd pill via useMenuPlacement, so it opens from where you clicked.
  *
  * The pills keep their original class names AND the `.draft-composer-bar`
  * container marker: that pair is the documented DOM hook the browser specs use to
@@ -79,6 +81,10 @@ export function DraftLaunchBar({
   onPathChange, onProjectChange, onMetaChange, projectForDir, onAfterQuickPick,
 }: Props) {
   const projectBtnRef = useRef<HTMLButtonElement>(null);
+  // Anchor for the folder picker's POPOUT: the panel portals to <body> (so the
+  // column can't clip it and siblings can't paint over it) but opens FROM this
+  // pill — "pops from where you clicked", not a centered modal.
+  const cwdPillRef = useRef<HTMLButtonElement>(null);
   const [projectOpen, setProjectOpen] = useState(false);
 
   // The project flyout is portalled to <body> and owns no closer (its usual host
@@ -119,7 +125,10 @@ export function DraftLaunchBar({
     onAfterQuickPick?.();
   }, [draft.id, draft.meta, draft.metaTouched, draft.project, onPathChange, onProjectChange, projectForDir, onAfterQuickPick]);
 
-  const chips = quickDirsFor();
+  const isFork = !!draft.forkOf;
+  // No quick chips on a fork draft: the folder is immutable, so a row of other
+  // folders would be five inert buttons (or worse, five ways to break the fork).
+  const chips = isFork ? [] : quickDirsFor();
   const currentKey = chipKey({ cwd: draft.cwd, host: draft.host ?? null });
   const isAi = (field: DraftAiField) => !!draft.aiFields?.has(field);
   // The meta row carries ONE badge for its AI-fillable fields (tier / priority /
@@ -160,8 +169,11 @@ export function DraftLaunchBar({
 
       {/* ROW 2 — HIDDEN while the picker is open: the picker carries its own copy
           of this footer, and two identical control rows ~40px apart is both
-          confusing and a duplicated control on the page. */}
-      {!pickerOpen && (
+          confusing and a duplicated control on the page. Hidden on a FORK draft
+          too: the fork API takes only message+model (no tier/priority/
+          engine — the sibling task inherits from the source), so every control
+          in this row would be a lie. The model select lives in the composer. */}
+      {!pickerOpen && !isFork && (
         <div className="draft-meta-row">
           {/* ONE badge for the whole row rather than three inside MetaFooter: the
               tier/priority controls are SHARED with the picker's footer, and
@@ -189,16 +201,22 @@ export function DraftLaunchBar({
         </div>
       )}
 
-      {/* ROW 3 — FIXED last: directly above the composer, always. */}
+      {/* ROW 3 — FIXED last: directly above the composer, always.
+          A FORK draft resumes the source conversation in place, so its folder
+          and project are facts, not choices — both pills render read-only. */}
       <div className="draft-launch-pills draft-composer-bar">
         {/* OPEN-only, never a toggle (matches the chat launcher pill): the
             picker's own document-level mousedown closer has already fired by the
             time this click runs, so a toggle would read the freshly-closed state
             and re-open. Close via Esc / outside click / picking a path. */}
         <button
+          ref={cwdPillRef}
           className={`session-action-chip${pickerOpen ? ' session-action-chip-active' : ''}${isAi('cwd') ? ' session-action-chip-ai' : ''}`}
-          onClick={onOpenPicker}
-          title={draft.cwd ? `Working folder: ${draft.cwd}` : 'Pick the folder this session runs in'}
+          onClick={isFork ? undefined : onOpenPicker}
+          disabled={isFork}
+          title={isFork
+            ? `A fork continues the source session, so it runs in its folder: ${draft.cwd}`
+            : draft.cwd ? `Working folder: ${draft.cwd}` : 'Pick the folder this session runs in'}
         >
           {pathLabel(draft)}
           <AiBadge on={isAi('cwd')} />
@@ -206,8 +224,11 @@ export function DraftLaunchBar({
         <button
           ref={projectBtnRef}
           className={`session-action-chip${projectOpen ? ' session-action-chip-active' : ''}${isAi('project') ? ' session-action-chip-ai' : ''}`}
-          onClick={() => setProjectOpen(o => !o)}
-          title="Project the new task files under"
+          onClick={isFork ? undefined : () => setProjectOpen(o => !o)}
+          disabled={isFork}
+          title={isFork
+            ? 'The forked task files as a sibling of the source task, in its project'
+            : 'Project the new task files under'}
         >
           {draft.project || 'Inbox'}
           <AiBadge on={isAi('project')} />
@@ -219,6 +240,9 @@ export function DraftLaunchBar({
             current={draft.project ?? ''}
             onPick={(project) => onProjectChange(draft.id, project)}
             onClose={() => setProjectOpen(false)}
+            // UPWARD like the folder picker beside it: both pills live at the
+            // column's bottom, and one row opening two directions reads broken.
+            preferSide="up"
           />
         )}
       </div>
@@ -227,6 +251,11 @@ export function DraftLaunchBar({
         open={pickerOpen}
         onClose={onClosePicker}
         onSelect={(path, meta) => { onPathChange(draft.id, path, meta); onClosePicker(); }}
+        // POP OUT of the column (user: the panel "没有必要只放在这一个 component
+        // 里面…它应该直接跳出来" + "你点哪里它就从哪里 pop 出来,不应该全屏"):
+        // portalled to <body> (siblings can't paint over it) but anchored to the
+        // cwd pill, so it opens from the click point instead of centering.
+        popoutAnchor={cwdPillRef}
         initialPath={draft.cwd ? { cwd: draft.cwd, host: draft.host } : undefined}
         // ONLY once the user has edited the launch meta. The picker reads a
         // non-undefined initialMeta as "the user already chose — don't touch

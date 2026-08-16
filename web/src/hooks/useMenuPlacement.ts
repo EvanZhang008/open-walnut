@@ -80,8 +80,20 @@ export interface MenuPlacementOptions {
    * edge at the anchor — matches kebab buttons at a row's right edge). 'left'
    * opens rightward from the anchor: used by the calendar's quick-create
    * popover, where opening leftward covered the very slot/day just clicked.
+   * 'center' centers the menu on the anchor's midpoint (spreads evenly both
+   * ways) and clamps at the viewport edges: used by the draft column's folder
+   * picker, which opens from a pill and should grow symmetrically around it.
    */
-  align?: 'right' | 'left';
+  align?: 'right' | 'left' | 'center';
+  /**
+   * Which side to PREFER when both fit. Default 'down' (the classic dropdown
+   * expectation). 'up' inverts it — open upward unless it doesn't fit above
+   * AND below has more room. Used by the draft launch bar, whose triggers sit
+   * at the column's bottom: its folder picker opens upward, so its project
+   * flyout opening downward read as two different behaviors for two pills in
+   * the same row. The flip/clamp/maxHeight rules are unchanged either way.
+   */
+  preferSide?: 'up' | 'down';
 }
 
 /** Which side the menu opens toward. `null` = decide from the geometry. */
@@ -89,13 +101,12 @@ export type OpenSide = 'up' | 'down' | null;
 
 export interface PlacementInput {
   /**
-   * Anchor box in viewport coords. Only `right` is used horizontally: the menu's
-   * RIGHT edge aligns to it, so a cursor-anchored menu opens leftward from the
-   * click (deliberate — a task row's kebab lives at the row's right edge, and
-   * matching that keeps right-click and button paths visually identical).
-   * A cursor anchor is zero-height: `top === bottom === cursor y`.
+   * Anchor box in viewport coords. Horizontally, `right` drives the default and
+   * 'left' alignments; 'center' additionally reads `left` (when present) to
+   * find the anchor's midpoint. A cursor anchor is zero-height:
+   * `top === bottom === cursor y`.
    */
-  anchor: { top: number; bottom: number; right: number };
+  anchor: { top: number; bottom: number; right: number; left?: number };
   /** The menu's natural, uncapped height (0 before it has mounted). */
   naturalHeight: number;
   /** The menu's rendered width (0 before it has mounted). */
@@ -115,7 +126,9 @@ export interface PlacementInput {
    */
   forceSide?: OpenSide;
   /** See MenuPlacementOptions.align. */
-  align?: 'right' | 'left';
+  align?: 'right' | 'left' | 'center';
+  /** See MenuPlacementOptions.preferSide. */
+  preferSide?: 'up' | 'down';
 }
 
 /**
@@ -129,11 +142,14 @@ export function computePlacement(input: PlacementInput): MenuPlacement & { side:
   const spaceBelow = viewportHeight - anchor.bottom - gap - margin;
   const spaceAbove = anchor.top - gap - margin;
 
-  // Open downward unless it doesn't fit AND there is more room above. A caller
-  // that already opened (forceSide) keeps its side — see PlacementInput.forceSide.
+  // Open toward the preferred side (default: down) unless it doesn't fit AND
+  // the other side has more room. A caller that already opened (forceSide)
+  // keeps its side — see PlacementInput.forceSide.
   const openUp = forceSide
     ? forceSide === 'up'
-    : naturalHeight > spaceBelow && spaceAbove > spaceBelow;
+    : input.preferSide === 'up'
+      ? !(naturalHeight > spaceAbove && spaceBelow > spaceAbove)
+      : naturalHeight > spaceBelow && spaceAbove > spaceBelow;
   const available = Math.max(openUp ? spaceAbove : spaceBelow, 0);
 
   // Cap to the space available, but never below minHeight and never above the
@@ -159,15 +175,19 @@ export function computePlacement(input: PlacementInput): MenuPlacement & { side:
   top = Math.min(top, viewportHeight - height - margin);
   top = Math.max(top, margin);
 
-  // Horizontal: right edge at the anchor (default), or left edge for
-  // align:'left' (menu opens rightward, keeping the anchor visible). When the
-  // rightward open doesn't fit (clicks in the last columns), flip leftward
-  // instead of letting the viewport clamp slide the menu back OVER the anchor
-  // — that fully covered the very day column being clicked.
+  // Horizontal: right edge at the anchor (default), left edge for align:'left'
+  // (menu opens rightward, keeping the anchor visible — flips back leftward
+  // when the last columns leave no room, else the viewport clamp slides the
+  // menu OVER the very day column being clicked), or align:'center' (menu's
+  // midpoint at the anchor's midpoint — spreads evenly both ways; the shared
+  // clamps below keep it on screen near the edges).
+  const anchorMid = ((anchor.left ?? anchor.right) + anchor.right) / 2;
   let right =
-    input.align === 'left' && menuWidth > 0
-      ? viewportWidth - anchor.right - menuWidth
-      : viewportWidth - anchor.right;
+    input.align === 'center' && menuWidth > 0
+      ? viewportWidth - anchorMid - menuWidth / 2
+      : input.align === 'left' && menuWidth > 0
+        ? viewportWidth - anchor.right - menuWidth
+        : viewportWidth - anchor.right;
   if (input.align === 'left' && menuWidth > 0 && right < margin) {
     right = viewportWidth - anchor.right;
   }
@@ -191,7 +211,7 @@ export function useMenuPlacement(
   menuRef: RefObject<HTMLElement | null>,
   options: MenuPlacementOptions = {},
 ): MenuPlacement | null {
-  const { gap = 2, margin = 8, minHeight = 180, anchorPoint = null, align = 'right', onAnchorLost } = options;
+  const { gap = 2, margin = 8, minHeight = 180, anchorPoint = null, align = 'right', preferSide = 'down', onAnchorLost } = options;
   const [placement, setPlacement] = useState<MenuPlacement | null>(null);
   // The side is decided ONCE per open and then latched — see PlacementInput.forceSide.
   const sideRef = useRef<OpenSide>(null);
@@ -256,12 +276,12 @@ export function useMenuPlacement(
         : 0;
 
       const next = computePlacement({
-        anchor: { top: r.top, bottom: r.bottom, right: r.right },
+        anchor: { top: r.top, bottom: r.bottom, right: r.right, ...('left' in r ? { left: r.left } : {}) },
         naturalHeight: menu ? menu.scrollHeight + borderY : 0,
         menuWidth: menu ? menu.offsetWidth : 0,
         viewportWidth: window.innerWidth,
         viewportHeight: window.innerHeight,
-        gap, margin, minHeight, align,
+        gap, margin, minHeight, align, preferSide,
         forceSide: sideRef.current,
       });
       // Latch on the first pass only — but not before the menu has been measured,
@@ -343,7 +363,7 @@ export function useMenuPlacement(
       window.removeEventListener('scroll', onScrollOrResize, true);
       window.removeEventListener('resize', onScrollOrResize);
     };
-  }, [open, triggerRef, menuRef, gap, margin, minHeight, anchorPoint, align]);
+  }, [open, triggerRef, menuRef, gap, margin, minHeight, anchorPoint, align, preferSide]);
 
   return placement;
 }

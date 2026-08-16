@@ -20581,6 +20581,15 @@ td.usage-share-col {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+/* While the POPOUT picker is up, the bar must outrank every piece of page
+   chrome: the picker is position:fixed but still this bar's DOM child, so its
+   own z-index resolves INSIDE this stacking context — at the resting 20, the
+   chat composer overlay (z 40) painted its pills over the popout and
+   intercepted its footer clicks (caught by the pin-tier spec). 200 clears the
+   header/composer band (≤60) while staying under toasts/modals (1000+). */
+.draft-launch-bar.picker-open {
+  z-index: 200;
   padding: 0 2px 6px;
 }
 .draft-launch-pills {
@@ -20625,21 +20634,9 @@ td.usage-share-col {
   padding: 0;
 }
 
-/* The picker opens UPWARD from the stack, which is what the shared rule
-   (`bottom: 100%`) already does — it was born above a composer, and that is
-   exactly where this stack sits. Only the margin is restated so the popover
-   clears the pills.
-   The FIXED height stays (see .session-path-selector: browse and edit mode must
-   render the same box, else the path input and footer move under the cursor
-   between interactions). At min(44vh, 460px) opening upward from the composer it
-   fits inside the column at every viewport height this app supports, and
-   .session-panel's `overflow: hidden` bounds it regardless, so it can never spill
-   past the viewport. */
-.draft-launch-bar .session-path-selector {
-  bottom: 100%;
-  top: auto;
-  margin-bottom: 6px;
-}
+/* The draft's picker no longer anchors inside the column — it POPS OUT
+   (`.sps-popout` below): position/top/right/maxHeight arrive inline from
+   useMenuPlacement, so no anchored-geometry override is needed here. */
 /* The MetaFooter's own "More" popover opens upward too — which is its default.
    Re-anchoring is the point of dropping `position` on .sps-meta-more: the popover
    then measures against .sps-meta-footer (the next positioned ancestor, exactly
@@ -20663,6 +20660,32 @@ td.usage-share-col {
   right: 0;
   min-width: 0;
 }
+
+/* ── Popout mode (draft column) ──
+   The picker POPS OUT of its host instead of boxing itself into it: a draft
+   column is ~300px wide and a browsing surface squeezed into that was unusable
+   (user: "它应该直接跳出来…不用管它自己占多少"). Portalled to <body> — an
+   in-tree fixed panel stayed z-capped inside its column's stacking context and
+   sibling panels painted over it — but ANCHORED to the cwd pill ("你点哪里它就
+   从哪里 pop 出来", explicitly NOT a centered/fullscreen modal). position/top/
+   right/maxHeight arrive INLINE from useMenuPlacement (measure → flip →
+   viewport clamp), so this rule only supplies the free panel's own size and
+   neutralizes the anchored-popover geometry it inherits from the base rule
+   (bottom:100% / left:0 / right:0 — both must go auto or the over-constrained
+   layout pins the panel to the wrong edge).
+   height (not max-height) keeps the browse↔edit box stable (see the base
+   rule); the inline maxHeight from the hook still wins on short viewports. */
+.session-path-selector.sps-popout {
+  bottom: auto;
+  left: auto;
+  right: auto;
+  margin-bottom: 0;
+  width: min(560px, calc(100vw - 24px));
+  height: min(60vh, 600px);
+}
+/* The picker's footer is a real popover footer at 560px — the draft bar's
+   row-level MetaFooter strips (borderless, static More, row-width popover)
+   don't apply, because the popout renders OUTSIDE .draft-launch-bar. */
 
 /* ── Empty body = ONE muted line ──
    "What happens next", centered, nothing else: every control lives in the bottom

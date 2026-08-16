@@ -42,10 +42,14 @@ async function fulfillWorkingDirs(route: Route): Promise<void> {
 }
 
 /** The picker's outside-click listener attaches on a 100ms timer after open —
- *  elastic under parallel test load. Poll-click outside until it takes effect. */
+ *  elastic under parallel test load. Poll-click outside until it takes effect.
+ *  Raw mouse click, not an element click: the popout panel floats over the
+ *  page, so an element at (10,10) may be covered and fail Playwright's
+ *  interception check — the raw click doesn't care, and any point outside the
+ *  panel is exactly what the document-mousedown closer listens for. */
 async function clickOutsideUntilClosed(page: Page): Promise<void> {
   await expect(async () => {
-    await page.locator('.main-page').click({ position: { x: 10, y: 10 } })
+    await page.mouse.click(10, 10)
     await expect(page.locator('.session-path-selector')).toHaveCount(0, { timeout: 500 })
   }).toPass({ timeout: 10_000 })
 }
@@ -82,7 +86,7 @@ async function openPicker(page: Page): Promise<Locator> {
   // after it) opens the picker.
   const panel = await openDraft(page)
   await panel.locator('.draft-composer-bar .session-action-chip').first().click()
-  await expect(panel.locator('.session-path-selector')).toBeVisible({ timeout: 10_000 })
+  await expect(page.locator('.session-path-selector')).toBeVisible({ timeout: 10_000 })
   await expect(page.locator('.sps-path-item')).toHaveCount(2, { timeout: 20_000 })
   return panel
 }
@@ -118,7 +122,7 @@ async function expectPickedCwd(panel: Locator, cwd: string): Promise<void> {
  */
 async function expectDraftModel(page: Page, panel: Locator, value: string, label: RegExp): Promise<void> {
   await cwdPill(panel).click()
-  const picker = panel.locator('.session-path-selector')
+  const picker = page.locator('.session-path-selector')
   await expect(picker).toBeVisible({ timeout: 10_000 })
   const select = picker.getByRole('combobox', { name: 'Session model' })
   await expect(select).toHaveValue(value)
@@ -131,7 +135,9 @@ async function expectDraftModel(page: Page, panel: Locator, value: string, label
 test('highlighted dir previews its remembered model; plain dir shows Auto', async ({ page }) => {
   await openPicker(page)
 
-  const modelSelect = page.getByRole('combobox', { name: 'Session model' })
+  // Scoped to the picker: the draft composer's own model select shares the
+  // accessible name, so a page-level read is ambiguous (strict-mode violation).
+  const modelSelect = page.locator('.session-path-selector').getByRole('combobox', { name: 'Session model' })
   const rows = page.locator('.sps-path-item')
   // Keys go to the picker's own input rather than page.keyboard: the draft column
   // focuses its composer on mount, so "whatever has focus" is no longer
@@ -161,7 +167,7 @@ test('CLICKING the remembered dir (drill into edit mode) keeps the model preview
   // reads as "my model wasn't remembered".
   await openPicker(page)
 
-  const modelSelect = page.getByRole('combobox', { name: 'Session model' })
+  const modelSelect = page.locator('.session-path-selector').getByRole('combobox', { name: 'Session model' })
   await expect(modelSelect).toHaveValue(rememberedModel)
 
   await page.locator('.sps-path-item', {
@@ -188,7 +194,7 @@ test('confirming the remembered dir sends its model on quick-start', async ({ pa
 
   // Shift+Enter on the highlighted remembered row = select directly
   await page.locator('.sps-search-input').press('Shift+Enter')
-  await expect(panel.locator('.session-path-selector')).toBeHidden()
+  await expect(page.locator('.session-path-selector')).toBeHidden()
   // The pick landed on THIS draft, carrying the remembered model (Sonnet 1M, not
   // Auto) — the draft's stored meta is what the launch below reads from.
   await expectPickedCwd(panel, rememberedCwd)
@@ -239,13 +245,16 @@ test('panel height is fixed — drilling into a dir with few children must not s
   }).first().click()
   await page.waitForTimeout(500)
   const editBox = await popover.boundingBox()
-  expect(editBox!.height).toBe(browseBox!.height)
+  // Sub-pixel tolerance: the popout placement path re-rasterizes the fixed
+  // element, moving the height by ~2e-5 px. The claim is "no mode-change
+  // shrink" (whole rows = ~28px), not bit-identical floats.
+  expect(Math.abs(editBox!.height - browseBox!.height)).toBeLessThan(1)
 })
 
 test('explicit user pick beats the remembered model', async ({ page }) => {
   const panel = await openPicker(page)
 
-  const modelSelect = page.getByRole('combobox', { name: 'Session model' })
+  const modelSelect = page.locator('.session-path-selector').getByRole('combobox', { name: 'Session model' })
   await expect(modelSelect).toHaveValue(rememberedModel)
 
   // User explicitly resets to Auto — memory must NOT re-apply on highlight moves.
@@ -269,7 +278,7 @@ test('explicit user pick beats the remembered model', async ({ page }) => {
   })
 
   await search.press('Shift+Enter')
-  await expect(panel.locator('.session-path-selector')).toBeHidden()
+  await expect(page.locator('.session-path-selector')).toBeHidden()
   await expectPickedCwd(panel, rememberedCwd)
   // The explicit Auto survived onto the draft: re-opening its picker shows Auto,
   // not the directory's remembered Sonnet 1M.

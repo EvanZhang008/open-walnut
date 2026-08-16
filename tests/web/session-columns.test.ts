@@ -86,42 +86,54 @@ describe('sessionColumns: trimUnlockedToMax', () => {
     expect(trimUnlockedToMax(cols, 2)).toBe(cols);
   });
 
-  // ── Placeholder columns (draft:/pending:) are trim-exempt like locked ones. ──
-  // The column IS the state: a draft holds unsent text, a pending column holds an
-  // in-flight launch whose only handle is that id. Evicting either loses data
-  // (the pre-existing "pending column evicted mid-HTTP" bug).
+  // ── Placeholder columns (draft:/pending:) are EXTRA — outside the budget. ──
+  // They neither count toward `max` nor get evicted, and the real columns behave
+  // exactly as if the placeholder weren't there. When they consumed budget,
+  // opening a session while a draft was up evicted one more live panel than the
+  // same click without it (shipped bug: max=3 + draft → open session → TWO real
+  // panels vanished). The column IS their state (unsent text / in-flight
+  // launch), which is why they can't be evicted either.
 
-  it('evicts a plain column rather than the rightmost pending: one', () => {
-    // Rightmost slot is the placeholder, so the trim reaches PAST it and takes
-    // the plain column instead — the in-flight launch keeps its column.
+  it('a placeholder is never evicted and never costs a real column its slot', () => {
+    // [a, pending] max=1: the pending column is free, `a` is within budget —
+    // nothing to trim. (The old budget-consuming semantics evicted `a` here.)
     const cols = [slot('a'), slot('pending:temp-1')];
-    expect(trimUnlockedToMax(cols, 1).map(s => s.id)).toEqual(['pending:temp-1']);
+    expect(trimUnlockedToMax(cols, 1)).toBe(cols);
   });
 
-  it('keeps placeholders even when they alone force overflow', () => {
-    // Two in-flight launches with max=1: nothing is evictable, so the strip
-    // overflows exactly as it does for two locked columns.
+  it('placeholders alone never trigger a trim', () => {
     const cols = [slot('pending:temp-1'), slot('draft:1-1')];
     expect(trimUnlockedToMax(cols, 1)).toBe(cols);
   });
 
-  it('keeps a draft next to a locked column with max=1 (both exempt)', () => {
+  it('keeps a draft next to a locked column with max=1 (draft free, lock within budget)', () => {
     const cols = [slot('draft:1-1'), slot('L', true)];
-    expect(trimUnlockedToMax(cols, 1).map(s => s.id)).toEqual(['draft:1-1', 'L']);
+    expect(trimUnlockedToMax(cols, 1)).toBe(cols);
   });
 
-  it('keeps every placeholder and sheds only the plain columns', () => {
+  it('real columns trim among themselves; interleaved placeholders ride along', () => {
+    // Two real columns over a max of 1: the rightmost real one goes, both
+    // placeholders stay, order preserved.
     const cols = [slot('draft:1-1'), slot('a'), slot('pending:temp-1'), slot('b')];
-    expect(trimUnlockedToMax(cols, 2).map(s => s.id)).toEqual(['draft:1-1', 'pending:temp-1']);
+    expect(trimUnlockedToMax(cols, 1).map(s => s.id)).toEqual(['draft:1-1', 'a', 'pending:temp-1']);
   });
 
-  it('a draft does NOT shield unlocked neighbours from eviction', () => {
-    // [A, draft, B] max=2 → the draft is exempt but grants NO amnesty to its
-    // neighbours: the rightmost evictable slot (B) still goes, leaving 2 columns.
-    // Getting this wrong (e.g. "any placeholder ⇒ skip the trim") would let the
-    // strip grow without bound every time the user opened a draft.
+  it('a draft does NOT shield real neighbours once REAL columns exceed max', () => {
+    // [A, draft, B] max=1 → one real column too many; the draft grants no
+    // amnesty: the rightmost evictable real slot (B) goes. Getting this wrong
+    // ("any placeholder ⇒ skip the trim") would let the strip grow without
+    // bound every time the user opened a draft.
     const cols = [slot('A'), slot('draft:1-1'), slot('B')];
-    expect(trimUnlockedToMax(cols, 2).map(s => s.id)).toEqual(['A', 'draft:1-1']);
+    expect(trimUnlockedToMax(cols, 1).map(s => s.id)).toEqual(['A', 'draft:1-1']);
+  });
+
+  it('opening a session beside a draft evicts exactly ONE real panel — the draft costs nothing', () => {
+    // THE reported bug, as a regression pin: max=3, three real panels + a
+    // draft. A new session arrives (inserted right of the draft prefix) → only
+    // C (rightmost real) may go. The old semantics evicted B AND C ("第三个
+    // window 被 draft 直接给覆盖了,然后我新点的也没出来").
+    const cols = [slot('draft:1-1'), slot('new'), slot('A'), slot('B'), slot('C')];
+    expect(trimUnlockedToMax(cols, 3).map(s => s.id)).toEqual(['draft:1-1', 'new', 'A', 'B']);
   });
 
   it('the overflow license expires when the placeholder becomes real', () => {
@@ -199,6 +211,22 @@ describe('sessionColumns: forceAddSessionColumn', () => {
     cols = forceAddSessionColumn(cols, 'draft:1-1');
     expect(cols.map(s => s.id)).toEqual(['draft:1-1', 'a']);
   });
+
+  // ── Drafts are pinned FAR LEFT — a real insert lands BESIDE them, never
+  // in front ("draft 的 location 应该一直是在最左边,不和其他发生反应"). ──
+
+  it('a real (pending:) insert lands to the RIGHT of an open draft', () => {
+    // Quick-start's fallback insert path: the draft must not be displaced.
+    const cols = [slot('draft:1-1'), slot('a')];
+    const next = forceAddSessionColumn(cols, 'pending:temp-1');
+    expect(next.map(s => s.id)).toEqual(['draft:1-1', 'pending:temp-1', 'a']);
+  });
+
+  it('a second draft still opens at the absolute leftmost', () => {
+    const cols = [slot('draft:1-1'), slot('a')];
+    const next = forceAddSessionColumn(cols, 'draft:2-2');
+    expect(next.map(s => s.id)).toEqual(['draft:2-2', 'draft:1-1', 'a']);
+  });
 });
 
 describe('sessionColumns: addSessionColumn', () => {
@@ -255,6 +283,32 @@ describe('sessionColumns: addSessionColumn', () => {
       { id: 'L2', locked: true },
       { id: 'L1', locked: true },
     ]);
+  });
+
+  // ── Draft pinned far left: session opens slide in beside it. ──
+
+  it('a new session opens to the RIGHT of the draft, which keeps its corner', () => {
+    // The user's rule: the draft "一直是在最左边,不和其他发生反应". Before this,
+    // every open pushed the draft to position 2 — visually the composer the user
+    // was typing into jumped sideways.
+    const cols = [slot('draft:1-1'), slot('existing')];
+    const next = addSessionColumn(cols, 'new', false, 3);
+    expect(next.map(s => s.id)).toEqual(['draft:1-1', 'new', 'existing']);
+  });
+
+  it('moving an existing session to front also stops at the draft boundary', () => {
+    // Clicking an open session's pill re-fronts it — within the REAL region only.
+    const cols = [slot('draft:1-1'), slot('a'), slot('b')];
+    const next = addSessionColumn(cols, 'b', false, 3);
+    expect(next.map(s => s.id)).toEqual(['draft:1-1', 'b', 'a']);
+  });
+
+  it('eviction beside a draft keeps the draft leftmost and drops the rightmost real', () => {
+    // max=2 real, strip full: the insert lands right of the draft, the trim
+    // takes the rightmost real column, the draft never moves.
+    const cols = [slot('draft:1-1'), slot('a'), slot('b')];
+    const next = addSessionColumn(cols, 'new', false, 2);
+    expect(next.map(s => s.id)).toEqual(['draft:1-1', 'new', 'a']);
   });
 
   it('honors triage-open reducing max by 1', () => {

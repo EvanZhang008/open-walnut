@@ -43,8 +43,8 @@ test('Homepage renders the persisted Codex session and blocks unsupported forks'
   // Seeded as stopped; opening the panel may attach the mock ACP runtime and
   // reconcile the badge to Idle — both are valid settled states for the fixture.
   await expect(homePanel.getByText(/^(Stopped|Idle)$/).first()).toBeVisible()
-  // The ACP journal holds 2 parity + 2 mobile messages → history recount = 4.
-  await expect(homePanel.getByText('4 turns', { exact: true })).toHaveCount(1)
+  // (The header's "N turns" badge was removed in 732b9196 — the transcript
+  // check below is what proves the 2 parity + 2 mobile messages loaded.)
   // Pill shows the engine name ("Codex") for a cold record, or the resolved
   // model label ("GPT Best") once the mock ACP runtime attaches on open.
   await expect(homePanel.locator('.session-detail-model-pill', { hasText: /Codex|GPT Best/ })).toBeVisible()

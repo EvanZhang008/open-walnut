@@ -1,4 +1,5 @@
 import { test, expect, type Page, type Route } from '@playwright/test'
+import { openDraft } from './draft-helpers'
 const fixtureRoot = '/Users/playwright/quick-nav-fixture'
 const now = new Date().toISOString()
 const parents = [
@@ -32,9 +33,10 @@ async function openPicker(page: Page): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 640 })
   await page.route('**/api/sessions/working-dirs', fulfillWorkingDirs)
   await page.goto('/')
-  const pill = page.getByRole('button', { name: /Quick session|\+ Session/i })
-  await expect(pill).toBeVisible({ timeout: 15_000 })
-  await pill.click()
+  // "+ Session" grows a DRAFT column now; the picker opens from its cwd pill
+  // and pops out centered over a scrim (same `.sps-*` markup inside).
+  const panel = await openDraft(page)
+  await panel.locator('.draft-composer-bar .session-action-chip').first().click()
   await expect(page.locator('.sps-path-list')).toBeVisible({ timeout: 10_000 })
   await expect(page.locator('.sps-path-item')).toHaveCount(fixtureDirs.length, { timeout: 20_000 })
 }

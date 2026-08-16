@@ -11,8 +11,10 @@
  * deletes the last path segment, "create & start" for nonexistent leaf dirs,
  * hidden dirs shown only when the typed segment starts with '.'.
  */
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, type RefObject } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
+import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { fetchWorkingDirs, prewarmWorkingDirs, type WorkingDirEntry, type ConfiguredHost } from '@/api/sessions';
 import type { TaskPriority } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
@@ -72,10 +74,19 @@ interface Props {
    *  bar). Pass false when onSelect has an irreversible effect (todo launcher:
    *  select immediately creates a task + spawns a CLI) so dismiss = cancel. */
   confirmOnDismiss?: boolean;
+  /** Pop the panel OUT of its host instead of rendering as an in-flow anchored
+   *  popover: portalled to <body> (escapes the host column's stacking context —
+   *  anchor-placed-but-in-tree it stayed z-capped and sibling panels painted
+   *  over it) and placed AT the trigger by useMenuPlacement (measure → flip
+   *  up/down → clamp to the viewport). NOT centered/modal: the user asked for
+   *  "it pops from where you clicked", so the panel opens from this anchor and
+   *  simply escapes the ~300px column that can't contain it. Must be
+   *  referentially stable. Omit → the classic `bottom: 100%` popover. */
+  popoutAnchor?: RefObject<HTMLElement | null>;
 }
 
 
-export function SessionPathSelector({ open, onClose, onSelect, initialMeta, initialPath, confirmOnDismiss = true }: Props) {
+export function SessionPathSelector({ open, onClose, onSelect, initialMeta, initialPath, confirmOnDismiss = true, popoutAnchor }: Props) {
   const navigate = useNavigate();
   const [dirs, setDirs] = useState<WorkingDirEntry[]>([]);
   // All hosts from config.hosts — a freshly added remote host must show as a tab
@@ -119,6 +130,20 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
+  // Popout placement — engaged only when an anchor was passed (open stays false
+  // otherwise, so the classic in-flow popover pays nothing). The shared hook is
+  // the overlay hard-rules implementation: measure the real panel → flip
+  // up/down from the anchor → clamp into the viewport → maxHeight cap.
+  // onAnchorLost closes (trigger unmounted/hidden while open).
+  const popoutPlacement = useMenuPlacement(open && !!popoutAnchor, popoutAnchor ?? popoverRef, popoverRef, {
+    gap: 6,
+    margin: 12,
+    minHeight: 320,
+    // Spread evenly around the pill ("以这个东西为中心向左右铺开") — the panel's
+    // midpoint sits on the pill's midpoint, clamped at the viewport edges.
+    align: 'center',
+    onAnchorLost: onClose,
+  });
   const statusBtnRef = useRef<HTMLButtonElement>(null);
   const [statusBtnWidth, setStatusBtnWidth] = useState(0);
 
@@ -670,8 +695,14 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
       ? 'No session history yet — type a path (e.g. ~/projects) to browse.'
       : 'No paths match your search.';
 
-  return (
-    <div className="session-path-selector" ref={popoverRef}>
+  const panel = (
+    <div
+      className={`session-path-selector${popoutAnchor ? ' sps-popout' : ''}`}
+      ref={popoverRef}
+      // Popout: fixed position from useMenuPlacement (top/right/maxHeight),
+      // portalled below. Classic mode keeps the stylesheet's anchored geometry.
+      style={popoutAnchor ? menuPlacementStyle(popoutPlacement) : undefined}
+    >
       {/* One-line concept explainer — new users repeatedly ask "task vs session?".
           A session is the live Claude Code run; the task is the tracking record
           Walnut auto-creates for it. Say it at the exact moment both get created. */}
@@ -793,4 +824,13 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
       <MetaFooter meta={meta} onChange={handleMetaChange} compact={editMode} host={currentHost} />
     </div>
   );
+
+  // Popout: portal to <body> so no ancestor stacking context can paint over
+  // the panel (kept in-tree it stayed z-capped inside its column and sibling
+  // panels covered it), but PLACED at the trigger — it pops from where the
+  // user clicked, not into a centered modal. No scrim: outside interactions
+  // stay live, and the existing document-mousedown closer (contains() on the
+  // panel itself) works unchanged through the portal.
+  if (popoutAnchor) return createPortal(panel, document.body);
+  return panel;
 }

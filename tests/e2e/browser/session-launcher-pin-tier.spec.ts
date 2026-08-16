@@ -56,7 +56,7 @@ async function seedPinTierPref(page: Page, value: 'focus' | 'satellite' | 'backl
 async function openLauncher(page: Page): Promise<{ panel: Locator; selector: Locator }> {
   const panel = await openDraft(page)
   await panel.locator('.draft-composer-bar .session-action-chip').first().click()
-  const selector = panel.locator('.session-path-selector')
+  const selector = page.locator('.session-path-selector')
   await expect(selector).toBeVisible({ timeout: 10_000 })
   return { panel, selector }
 }
@@ -72,9 +72,18 @@ async function openLauncher(page: Page): Promise<{ panel: Locator; selector: Loc
  * has for "never mind", so this stays a real-UI step.
  */
 async function closeLauncher(page: Page) {
+  // Dismiss the popout picker FIRST — anchored to the pill it can float over
+  // the draft's ✕ (Playwright then reports the panel intercepting the click).
+  // A raw click outside the panel is the dismiss gesture; the outside-click
+  // listener attaches on a 100ms timer, so poll until it lands.
+  await expect(async () => {
+    if (await page.locator('.session-path-selector').count() > 0) {
+      await page.mouse.click(10, 10)
+    }
+    await expect(page.locator('.session-path-selector')).toHaveCount(0, { timeout: 500 })
+  }).toPass({ timeout: 10_000 })
   await draftPanel(page).locator('.session-panel-close').click()
   await expect(page.locator('.draft-session-panel')).toHaveCount(0)
-  await expect(page.locator('.session-path-selector')).toHaveCount(0)
 }
 
 test('launcher defaults to Satellite and remembers the tier the user picks', async ({ page }) => {

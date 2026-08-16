@@ -322,8 +322,19 @@ export async function openDraftOnCwd(
   // and take the FIRST chip (the project pill sits right after it).
   await draftCwdPill(panel).click()
 
-  const picker = panel.locator('.session-path-selector')
+  // PAGE-scoped: the picker pops out (portalled to <body>, anchored to the
+  // pill) — it is no longer a DOM descendant of the draft panel. Only one
+  // picker can be open at a time, so the page-level locator is unambiguous.
+  const picker = page.locator('.session-path-selector')
   await expect(picker).toBeVisible({ timeout: 10_000 })
+
+  // Wait for the history fetch to land FIRST: the host tabs render in the same
+  // commit as the path list, so gating on a row makes the tab check below
+  // deterministic. A bare isVisible() raced the fetch under load — the Local
+  // pin was silently skipped, the All tab stayed active, and typing then fanned
+  // the live listing out to the dead fixture SSH host (400 → console.error →
+  // the codex audit fails the test).
+  await expect(picker.locator('.sps-path-item').first()).toBeVisible({ timeout: 20_000 })
 
   // Multi-host fixtures render host tabs; pin to Local so a slow/dead SSH host
   // can't leave path validity 'unknown'. Single-host mode renders no tabs.
@@ -435,7 +446,10 @@ export async function tasksTitled(
   page: Page,
   needle: string,
 ): Promise<Array<{ id: string; title: string; project?: string }>> {
-  const res = await page.request.get('/api/tasks?limit=500')
+  // No ?limit: the route now VALIDATES limit (1-200 → 400 above that), and this
+  // probe must see every row regardless of fixture size — unbounded is the
+  // pre-validation behavior.
+  const res = await page.request.get('/api/tasks')
   const body = (await res.json()) as { tasks?: Array<{ id: string; title: string; project?: string }> }
   return (body.tasks ?? []).filter((t) => t.title.includes(needle))
 }

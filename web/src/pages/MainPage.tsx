@@ -39,7 +39,7 @@ import { SessionSearchPanel } from '@/components/sessions/SessionSearchPanel';
 import { freshLauncherMeta, readLastLaunchPath, rememberLaunchPath } from '@/components/sessions/task-meta-constants';
 import { QuestionPopover, parseAskQuestionInput } from '@/components/chat/QuestionPopover';
 import { TriagePanel } from '@/components/triage/TriagePanel';
-import { fetchSession, fetchSessionsForTask, fetchWorkingDirs, quickStartSession } from '@/api/sessions';
+import { fetchSession, fetchSessionsForTask, fetchWorkingDirs, forkSessionInWalnut, quickStartSession } from '@/api/sessions';
 import { fetchProjectDetail } from '@/api/projects';
 import { deleteTask as deleteTaskApi, fetchTask, type QuickTaskParse } from '@/api/tasks';
 import { fetchConfig, fetchInstallDir } from '@/api/config';
@@ -249,6 +249,13 @@ interface DraftSeed {
    *  Start reuses that task instead of minting a new one. */
   taskId?: string;
   boundTaskTitle?: string;
+  /** Fork draft (session Fork button): Start calls the fork API on this session
+   *  instead of quick-start. Seeded WITH the source's cwd/host/project, all
+   *  pinned/final — a fork resumes the source conversation in place. */
+  forkOf?: { sessionId: string; title?: string };
+  /** Preselect this model (fork: the source session's). Applied like pinTier —
+   *  WITHOUT metaTouched, so it reads as a default, not a user edit. */
+  model?: string;
 }
 
 /** The one Quick Start failure notification shape — used by both the retry
@@ -456,6 +463,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const [chatVisible, setChatVisible] = useState<boolean>(
     () => sessionStorage.getItem(SS_CHAT_VISIBLE_KEY) !== 'false'
   );
+  // Ref mirror for the []-dep handlers (openDraftColumn, the dock toggle).
+  const chatVisibleRef = useRef(chatVisible);
+  chatVisibleRef.current = chatVisible;
+  // The draft column that BORROWED the main chat's spot: a "+" while the chat is
+  // open hides the chat for the draft's lifetime (the draft takes its place)
+  // instead of stacking a column beside it. Whoever borrowed gives it back —
+  // every draft exit funnels through forgetDraft, which restores the chat iff
+  // this ref names that draft. EXPLICITLY re-opening the chat (sidebar/dock
+  // toggle) while borrowed CANCELS the borrow: the user clearly wants both, so
+  // the draft demotes to a plain extra column and closing it later must not
+  // touch the chat again.
+  const chatBorrowedByDraftRef = useRef<string | null>(null);
 
   // Todo panel visibility — toggle via Sidebar toggle button
   const [todoVisible, setTodoVisible] = useState<boolean>(
@@ -578,20 +597,20 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // (sessionStorage/deep link) before the user's real '3' arrives — eviction is
   // one-way, so the column never comes back.
   //
-  // OVERFLOW LICENSE: "+" inserts unconditionally (forceAddSessionColumn) and
-  // trimUnlockedToMax exempts placeholders, so the strip legitimately sits above
-  // max while a draft/pending column is open. `placeholderCount` in the deps is
-  // what makes that license SELF-EXPIRING: draft→pending keeps the count (still
-  // one placeholder → still licensed), while pending→real or a draft close DROPS
-  // it, re-running this trim so the strip shrinks back to the user's panel
-  // setting. Count, not the array: a mere reorder/lock toggle must not re-fire an
+  // OVERFLOW LICENSE: "+" inserts unconditionally (forceAddSessionColumn), and
+  // placeholders are EXTRA in trimUnlockedToMax — they neither count toward max
+  // nor get evicted, so the strip legitimately sits above max while a
+  // draft/pending column is open and the REAL columns behave exactly as if it
+  // weren't there ("draft 是单独额外的,不去争抢现有的"). `placeholderCount` in
+  // the deps is what makes the license SELF-EXPIRING: draft→pending keeps the
+  // count (still free), while pending→real converts the free column into a
+  // budget-counting one — this re-run is the trim that resolves the overflow.
+  // Count, not the array: a mere reorder/lock toggle must not re-fire an
   // eviction.
   //
-  // The RISING edge is deliberately skipped. trimUnlockedToMax exempts the
-  // placeholder itself but grants no amnesty to its neighbours, so trimming on
-  // the "+" commit would close a live session panel the instant the user asked
-  // for a new column — the license would be void on arrival. Overflow while
-  // drafting is the accepted cost; the strip trims back when the draft resolves.
+  // The RISING edge is still skipped: with placeholders outside the budget the
+  // trim would be a no-op there anyway, but skipping keeps a simultaneous
+  // real-overflow race from evicting on the exact commit the user pressed "+".
   const trimGuardRef = useRef({ placeholders: placeholderCount, max: effectiveMaxPanels });
   useEffect(() => {
     const prev = trimGuardRef.current;
@@ -892,7 +911,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
 
   // Persist chatVisible + broadcast to FocusDock / Sidebar
   useEffect(() => {
-    sessionStorage.setItem(SS_CHAT_VISIBLE_KEY, String(chatVisible));
+    // Persist the user's PREFERENCE, not the borrow: a draft hiding the chat is
+    // transient (drafts don't survive a reload), so a reload must bring the chat
+    // back rather than leave it hidden with no draft to give it back. The
+    // broadcast stays the ACTUAL state so the sidebar/dock toggles read true.
+    sessionStorage.setItem(SS_CHAT_VISIBLE_KEY, String(chatBorrowedByDraftRef.current ? true : chatVisible));
     window.dispatchEvent(new CustomEvent('main:chat-visible', { detail: { visible: chatVisible } }));
   }, [chatVisible]);
 
@@ -924,7 +947,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       if (sessionId) openSessionOrToast(sessionId);
     };
     const handleDockChat = () => {
-      // Toggle main chat panel visibility
+      // Toggle main chat panel visibility. Turning it ON while a draft has
+      // borrowed its spot is an EXPLICIT ask for both — cancel the borrow, so
+      // closing that draft later leaves the chat where the user put it.
+      if (!chatVisibleRef.current) chatBorrowedByDraftRef.current = null;
       setChatVisible(prev => !prev);
     };
     // `/session` (src/commands/session.ts) — one verb "New": grow a draft column
@@ -1022,22 +1048,35 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    */
   const openDraftColumn = useCallback((seed?: DraftSeed): string => {
     // Anti-spam valve: repeated "+" on an untouched empty draft just refocuses it
-    // instead of stacking another. Only the LEFTMOST column counts — that's where
-    // "+" just put one, so a stale empty draft further right (user moved on) is
-    // left alone.
+    // instead of stacking another. Only the LEFTMOST column counts — drafts are
+    // PINNED to the far left (sessionColumns.ts insertLeftmost: real inserts land
+    // beside a draft, never in front), so an open draft is reliably at index 0.
     const leftmost = sessionColumnsRef.current[0];
-    if (leftmost && isDraftColumnId(leftmost.id) && draftColumnsRef.current.some(d => d.id === leftmost.id)) {
+    const leftmostDraft = leftmost && isDraftColumnId(leftmost.id)
+      ? draftColumnsRef.current.find(d => d.id === leftmost.id)
+      : undefined;
+    // A SEEDED open (task ▶ Start, fork, project "+") rewrites the reused
+    // draft's folder/project/binding. The rule (user-stated): a draft the user
+    // has EDITED BY HAND — folder pick, project pick, any meta edit, or typed
+    // text (checked below) — must never be overridden; the seed opens its own
+    // fresh column instead. A draft only SEEDS have written (e.g. bound by a
+    // previous task ▶) is fair game: picking a new task rebinds it rather than
+    // leaving the stale binding there forever. `userTouched` (not `cwdPinned`/
+    // `taskId`, which seeds also set) is exactly that by-hand distinction. An
+    // UNSEEDED "+" overrides nothing, so it may still refocus a touched-but-
+    // empty draft.
+    if (leftmostDraft && !(seed && leftmostDraft.userTouched)) {
       // "Untouched" is read off the LIVE textarea first, with the persisted draft
       // as the fallback. localStorage alone would lie for 300ms after a keystroke
       // (ChatInput's save is debounced), and inside that window a "+" would refuse
       // to open a second column and instead bounce the caret back into text the
       // user had already started.
       const textarea = document.querySelector<HTMLTextAreaElement>(
-        `[data-draft-id="${CSS.escape(leftmost.id)}"] .chat-input-textarea`,
+        `[data-draft-id="${CSS.escape(leftmostDraft.id)}"] .chat-input-textarea`,
       );
       let composed = textarea?.value ?? '';
       if (!composed && !textarea) {
-        try { composed = localStorage.getItem(draftComposerKey(leftmost.id)) ?? ''; } catch { /* storage off → treat as empty */ }
+        try { composed = localStorage.getItem(draftComposerKey(leftmostDraft.id)) ?? ''; } catch { /* storage off → treat as empty */ }
       }
       if (!composed.trim()) {
         // Refocus IMPERATIVELY, not via focusDraftId: the panel's focus effect is
@@ -1047,7 +1086,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // several drafts open.
         requestAnimationFrame(() => {
           document.querySelector<HTMLTextAreaElement>(
-            `[data-draft-id="${CSS.escape(leftmost.id)}"] .chat-input-textarea`,
+            `[data-draft-id="${CSS.escape(leftmostDraft.id)}"] .chat-input-textarea`,
           )?.focus();
         });
         // Seeds still apply — "+ Add session" on a project must land its project
@@ -1055,9 +1094,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // seed (task ▶ Start) additionally rebinds the reused column, cwd
         // included: a task carrying its own folder outranks the memory the draft
         // opened on, and dropping the binding here would launch a second task.
+        // A seed only reaches this block on a PRISTINE draft (leftmostTouched
+        // gated above) — the per-field guards below are belt-and-braces.
         if (seed) {
           setDraftColumns(prev => prev.map(d => {
-            if (d.id !== leftmost.id) return d;
+            if (d.id !== leftmostDraft.id) return d;
             const next = { ...d };
             if (seed.project !== undefined) {
               next.project = seed.project;
@@ -1066,19 +1107,25 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               // they chose by hand.
               if (d.projectSource !== 'user') next.projectSource = 'seed';
             }
-            // Tier seed (pin-tier header "+"), again without metaTouched — see
-            // DraftSeed.pinTier. Skipped once the user has edited the meta.
+            // Tier/model seed (pin-tier header "+", fork), again without
+            // metaTouched — see DraftSeed.pinTier. Skipped once the user edited.
             if (seed.pinTier && !d.metaTouched) next.meta = { ...next.meta, pinTier: seed.pinTier };
-            if (seed.taskId) {
-              next.taskId = seed.taskId;
-              next.boundTaskTitle = seed.boundTaskTitle;
+            if (seed.model && !d.metaTouched) next.meta = { ...next.meta, model: seed.model };
+            if (seed.taskId || seed.forkOf) {
+              if (seed.taskId) {
+                next.taskId = seed.taskId;
+                next.boundTaskTitle = seed.boundTaskTitle;
+              }
+              // Rebinding as a fork drops any previous task binding (and vice
+              // versa via the assignments above) — the two are exclusive exits.
+              if (seed.forkOf) { next.forkOf = seed.forkOf; delete next.taskId; delete next.boundTaskTitle; }
               if (seed.cwd) {
                 next.cwd = seed.cwd;
                 next.host = seed.host ?? null;
                 next.hostLabel = seed.hostLabel;
-                // Only a TASK's own folder is a pin. A ▶ that fell back to the
-                // launch memory hands the folder over as a starting point, so a
-                // project default may still refine it.
+                // Only a TASK's/fork-source's own folder is a pin. A ▶ that fell
+                // back to the launch memory hands the folder over as a mere
+                // starting point, so a project default may still refine it.
                 next.cwdPinned = seed.cwdPinned === true;
                 if (!next.metaTouched) next.meta = withDirLaunchMemory(next.meta, next.cwd, next.host);
               }
@@ -1086,7 +1133,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             return next;
           }));
         }
-        return leftmost.id;
+        return leftmostDraft.id;
       }
     }
 
@@ -1107,21 +1154,35 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         // the distinction exists so a future rule can tell them apart.
         ...(seed?.project ? { project: seed.project, projectSource: 'seed' as const } : {}),
         ...(seed?.taskId ? { taskId: seed.taskId, boundTaskTitle: seed.boundTaskTitle } : {}),
+        ...(seed?.forkOf ? { forkOf: seed.forkOf } : {}),
         ...(pinnedSeed ? { cwdPinned: true } : {}),
         // Per-directory launch memory, applied at OPEN time: the bar shows the
         // model/engine this folder actually launches with, instead of "Auto" that
         // silently becomes something else at Start. metaTouched is false here by
         // construction, so there is no user pick to overwrite. Synchronous (module
-        // cache only) — a cold cache just leaves the launcher defaults. A tier seed
-        // rides on top WITHOUT metaTouched (see DraftSeed.pinTier).
+        // cache only) — a cold cache just leaves the launcher defaults. A tier/model
+        // seed rides on top WITHOUT metaTouched (see DraftSeed.pinTier/model).
         meta: {
           ...withDirLaunchMemory(freshLauncherMeta(), cwd, host),
           ...(seed?.pinTier ? { pinTier: seed.pinTier } : {}),
+          ...(seed?.model ? { model: seed.model } : {}),
         },
       },
     ]);
     setSessionColumns(prev => forceAddSessionColumn(prev, id));
     setFocusDraftId(id);
+    // BORROW the main chat's spot when it is open: the user is composing NEW
+    // work, so the draft takes the chat's place instead of stacking a column
+    // beside it ("如果 main chat 开着,优先 override 它"). The chat comes back
+    // when this draft leaves (forgetDraft) — or immediately if the user re-opens
+    // it by hand, which cancels the borrow (see chatBorrowedByDraftRef). Chat
+    // already hidden → nothing to borrow; the draft is a plain extra column.
+    // Only a NEW draft borrows: the refocus valve above never touches the chat,
+    // so a cancelled borrow stays cancelled across repeated "+".
+    if (chatVisibleRef.current) {
+      chatBorrowedByDraftRef.current = id;
+      setChatVisible(false);
+    }
     return id;
     // Stable identity (refs only, no state deps) — TodoPanel is React.memo'd and
     // takes this as a prop; a new arrow per render would re-render the task list
@@ -1137,6 +1198,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     setDraftColumns(prev => prev.filter(d => d.id !== draftId));
     setFocusDraftId(prev => (prev === draftId ? null : prev));
     try { localStorage.removeItem(draftComposerKey(draftId)); } catch { /* storage disabled */ }
+    // Give the main chat its spot back if THIS draft borrowed it. Both exits
+    // funnel here (✕ close and Start), so the borrow can never outlive the
+    // draft; a borrow the user already cancelled (ref cleared on explicit
+    // re-open) is left alone.
+    if (chatBorrowedByDraftRef.current === draftId) {
+      chatBorrowedByDraftRef.current = null;
+      setChatVisible(true);
+    }
   }, []);
 
   /** Discard a draft: column + row + persisted composer text. Close = no trace. */
@@ -1170,6 +1239,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           // put on it is no longer true — drop the badge with the same write.
           ...clearAiFields(d, ['cwd']),
           cwd: path.cwd, host: path.host, hostLabel: path.hostLabel, meta, cwdPinned: true,
+          userTouched: true,
           createCwd: path.createCwd === true,
           metaTouched: d.metaTouched || launchDivergesFromDirMemory(meta, path.cwd, path.host),
         }
@@ -1181,7 +1251,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
    *  never write over it again, however the sentence changes. */
   const handleDraftProjectChange = useCallback((draftId: string, project: string) => {
     setDraftColumns(prev => prev.map(d => (d.id === draftId
-      ? { ...clearAiFields(d, ['project']), project, projectSource: 'user' as const }
+      ? { ...clearAiFields(d, ['project']), project, projectSource: 'user' as const, userTouched: true }
       : d)));
   }, []);
 
@@ -1226,7 +1296,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       // badges keeps the display honest about who chose what.
       ? {
           ...clearAiFields(d, ['pinTier', 'priority', 'dueDate', 'startDate', 'endDate']),
-          meta: updater(d.meta), metaTouched: true,
+          meta: updater(d.meta), metaTouched: true, userTouched: true,
         }
       : d)));
   }, []);
@@ -1658,10 +1728,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   }, [sessionColumns]);
 
   // ── Fork pending handlers ──
-  const handleForkPending = useCallback((cwd: string, host?: string) => {
+  const handleForkPending = useCallback((cwd: string, host?: string, opts?: { columnId?: string }) => {
     const pendingColId = `pending:fork-${Date.now()}`;
     pendingForkMetaRef.current = { id: pendingColId, cwd, host };
-    setSessionColumns(prev => addSessionColumn(prev, pendingColId, triageOpenRef.current, maxPanelsRef.current));
+    // From a fork DRAFT the column morphs in place (same one-commit swap Start
+    // does for quick-start drafts); the button path inserts a new column.
+    setSessionColumns(prev => (opts?.columnId
+      ? replaceSessionColumn(prev, opts.columnId, pendingColId)
+      : addSessionColumn(prev, pendingColId, triageOpenRef.current, maxPanelsRef.current)));
   }, []);
 
   const handleForkResolved = useCallback((taskId: string, sessionId?: string) => {
@@ -1679,6 +1753,17 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       pendingForkMetaRef.current = { ...pendingForkMetaRef.current, realTaskId: taskId };
     }
   }, [promoteToRealSession]);
+
+  /** Session panel "Fork" → a pre-bound fork DRAFT column (the shared "+"
+   *  surface). Folder/host/project ride in pinned; the model is a changeable
+   *  preselect. The composer, slash palette and AI backfill all come free. */
+  const handleOpenForkDraft = useCallback((seed: {
+    forkOf: { sessionId: string; title?: string };
+    cwd: string; host: string | null; hostLabel?: string;
+    project?: string; model?: string; cwdPinned: true;
+  }) => {
+    openDraftColumn(seed);
+  }, [openDraftColumn]);
 
   const handleForkFailed = useCallback((errorMessage?: string) => {
     if (pendingForkMetaRef.current) {
@@ -2084,6 +2169,26 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       setDraftColumns(prev => prev.map(d => (d.id === draftId ? { ...d, openPickerNonce: (d.openPickerNonce ?? 0) + 1 } : d)));
       return false;
     }
+    // FORK draft: Start continues the source conversation via the fork API
+    // instead of quick-start. Same one-commit morph (draft: → pending:fork-…)
+    // and the same pending/promote machinery the Fork button already uses.
+    if (draft.forkOf) {
+      const src = draft.forkOf.sessionId;
+      forgetDraft(draftId);
+      handleForkPending(draft.cwd, draft.host ?? undefined, { columnId: draftId });
+      forkSessionInWalnut(src, {
+        ...(text.trim() ? { message: text.trim() } : {}),
+        ...(images?.length ? { images } : {}),
+        // Only pass a model the user actually chose over the seeded default —
+        // the fork inherits the source session's model server-side otherwise.
+        ...(draft.metaTouched && draft.meta.model ? { model: draft.meta.model } : {}),
+      }).then((result) => {
+        handleForkResolved(result.taskId, result.sessionId);
+      }).catch((err) => {
+        handleForkFailed(err instanceof Error ? err.message : 'Fork failed');
+      });
+      return true;
+    }
     // A BOUND draft (task ▶ Start on a title-only task) with an empty composer
     // still has something to say: the task's own title. Without this the CLI
     // would spawn and idle on a task the user explicitly asked to work on.
@@ -2112,7 +2217,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       { columnId: draftId, ...(draft.taskId ? { taskId: draft.taskId } : {}) },
     );
     return true;
-  }, [forgetDraft, launchQuickStart]);
+  }, [forgetDraft, launchQuickStart, handleForkPending, handleForkResolved, handleForkFailed]);
 
   /** "◌ Create task for later": the composed text becomes a task, no session. First
    *  line = title, the rest = description. Images are dropped (text-only by design). */
@@ -2940,9 +3045,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   onOpenTaskDetail={handleOpenTaskDetailById}
                   onSessionClick={handleSessionClick}
                   onSessionReplaced={handleSessionReplaced}
-                  onForkPending={handleForkPending}
-                  onForkResolved={handleForkResolved}
-                  onForkFailed={handleForkFailed}
+                  onOpenForkDraft={handleOpenForkDraft}
                 />
               )}
             </div>

@@ -13,7 +13,8 @@
  *   body               nothing but one centered muted line of "what happens next"
  *   DraftLaunchBar     quick-access folder chips → provider/task row (engine ·
  *                      pin tier · ⋯ More) → cwd pill · project pill (fixed last),
- *                      with the folder picker opening UPWARD from it
+ *                      with the folder picker POPPING OUT over the page (fixed,
+ *                      anchored to the cwd pill — a ~300px column can't contain it)
  *   composer           shared ChatInput; its controls row holds the model select
  *                      and the two verbs
  *
@@ -48,6 +49,8 @@ import type { QuickStartPath, QuickStartTaskMeta } from './SessionPathSelector';
 const PLACEHOLDER = 'What should this session do?';
 const HINT = 'Nothing runs yet — send to start, or keep it as a task for later.';
 const BOUND_HINT = 'Start a session on this task — type the first instruction, or press Start to send its title.';
+const FORK_HINT = 'Forks the source conversation into a sibling session — type where it should go next (or Start to just branch).';
+const FORK_PLACEHOLDER = 'Message for the forked session (optional)';
 
 /** Trailing debounce after the user pauses. Shorter than QuickTaskComposer's
  *  500ms because the draft also parses DURING typing (see PARSE_THROTTLE_MS) —
@@ -177,6 +180,10 @@ export function DraftSessionPanel({
   // A bound draft already IS a task, so "create task for later" has nothing to
   // create; Start attaches to the existing task instead.
   const isBound = !!draft.taskId;
+  // A fork draft continues an existing session: no "task for later" either
+  // (the fork route creates the sibling task itself), and no AI backfill —
+  // project/folder are immutable facts, so there is nothing for it to fill.
+  const isFork = !!draft.forkOf;
 
   const focusComposer = useCallback(() => {
     rootRef.current?.querySelector<HTMLTextAreaElement>('.chat-input-textarea')?.focus();
@@ -222,7 +229,7 @@ export function DraftSessionPanel({
   // When the last EAGER (mid-typing) parse fired, for the throttle window.
   const lastEagerParseRef = useRef(0);
   useEffect(() => {
-    if (!onAiParseRef.current) return;
+    if (!onAiParseRef.current || isFork) return;
     const requested = text.trim();
     // Empty composer → invalidate everything in flight and stop.
     if (!requested) { parseAppliedSeqRef.current = ++parseSeqRef.current; return; }
@@ -258,7 +265,7 @@ export function DraftSessionPanel({
     // the eager path skipped).
     const timer = setTimeout(() => fire(false), PARSE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [draft.id, text]);
+  }, [draft.id, text, isFork]);
 
   // `async` on purpose: every exit path resolves a Promise<boolean>, so the
   // no-cwd case (open the picker, keep the text) can never degrade into the
@@ -288,11 +295,16 @@ export function DraftSessionPanel({
       <div className="session-panel-header">
         <div className="session-panel-header-top">
           <div className="session-panel-title-area">
-            <span className="session-panel-title">New Session</span>
+            <span className="session-panel-title">{isFork ? 'Fork Session' : 'New Session'}</span>
             <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Draft</span>
             {isBound && (
               <span className="draft-bound-task" title={`This session will attach to the existing task "${draft.boundTaskTitle}" — no second task is created`}>
                 for: {draft.boundTaskTitle}
+              </span>
+            )}
+            {isFork && draft.forkOf?.title && (
+              <span className="draft-bound-task" title="The conversation this fork continues — its history rides along">
+                fork of: {draft.forkOf.title}
               </span>
             )}
           </div>
@@ -310,7 +322,7 @@ export function DraftSessionPanel({
       {/* Empty body = ONE muted line of "what happens next". Everything
           actionable lives in the bottom stack, within reach of the composer. */}
       <div className="draft-session-body">
-        <div className="draft-quick-hint">{isBound ? BOUND_HINT : HINT}</div>
+        <div className="draft-quick-hint">{isFork ? FORK_HINT : isBound ? BOUND_HINT : HINT}</div>
       </div>
 
       <div className="session-panel-input">
@@ -329,7 +341,7 @@ export function DraftSessionPanel({
           onSend={(body, images) => startWith(body, images)}
           onValueChange={setText}
           draftKey={draftComposerKey(draft.id)}
-          placeholder={PLACEHOLDER}
+          placeholder={isFork ? FORK_PLACEHOLDER : PLACEHOLDER}
           showCommands={false}
           sessionCommands={slashCommands}
           searchSessionCommands={searchSlashCommands}
@@ -347,9 +359,10 @@ export function DraftSessionPanel({
                 onMetaChange={(updater) => onMetaChange(draft.id, updater)}
                 host={draft.host}
               />
-              {/* A bound draft is already a task — offering to create one would
+              {/* A bound draft is already a task, and a fork's sibling task is
+                  the fork route's job — offering "create task" on either would
                   make a duplicate. */}
-              {!isBound && (
+              {!isBound && !isFork && (
                 <button
                   className="draft-later-btn"
                   disabled={!text.trim()}
@@ -364,11 +377,13 @@ export function DraftSessionPanel({
               <button
                 className="draft-start-btn"
                 onClick={handleStartClick}
-                title={isBound
-                  ? 'Start the session on this task (an empty message sends the task title)'
-                  : 'Start the session (an empty message is fine — the agent spawns and waits)'}
+                title={isFork
+                  ? 'Fork the source session (an empty message just branches the conversation)'
+                  : isBound
+                    ? 'Start the session on this task (an empty message sends the task title)'
+                    : 'Start the session (an empty message is fine — the agent spawns and waits)'}
               >
-                Start ↵
+                {isFork ? 'Fork ↵' : 'Start ↵'}
               </button>
             </div>
           )}

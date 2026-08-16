@@ -70,6 +70,25 @@ function isExpectedNavigationAbort(message: string): boolean {
     .test(message)
 }
 
+/**
+ * The ps-fixture config declares a remote host (`fixture-remote`) whose
+ * hostname never resolves, and the fixture server runs EPHEMERAL (attach-only:
+ * it refuses to deploy/start remote daemons). Opening the folder picker fires
+ * the background SSH pre-warm (`prewarmWorkingDirs`), whose remote-host
+ * list-dirs therefore answers 400. That is by-design fixture noise — the
+ * pre-warm is fire-and-forget, the UI renders the host as "not responding" —
+ * not a product bug, so both the api-client console line and Chromium's
+ * generic "Failed to load resource" (matched via its resource URL) are
+ * excluded from the audit. Local list-dirs failures still fail the audit:
+ * the allowance requires a `host=` param on the URL.
+ */
+function isFixtureRemoteListDirs400(text: string, resourceUrl: string): boolean {
+  const remoteListDirs = (u: string) => u.includes('/api/sessions/list-dirs') && u.includes('host=')
+  if (/^\[api\] GET \/api\/sessions\/list-dirs\?\S*host=\S* → 400 /.test(text)) return true
+  return /^Failed to load resource: the server responded with a status of 400/.test(text)
+    && remoteListDirs(resourceUrl)
+}
+
 export async function discoverBrowserFixture(testPort: number): Promise<BrowserFixturePaths> {
   const response = await fetch(`http://localhost:${testPort}/api/sessions/working-dirs`)
   expect(response.status).toBe(200)
@@ -92,7 +111,11 @@ export async function installBrowserAudit(page: Page, walnutHome: string): Promi
   const httpErrors: Array<{ status: number; method: string; url: string }> = []
 
   page.on('console', (message) => {
-    if (message.type() === 'error') consoleErrors.push(message.text())
+    if (message.type() !== 'error') return
+    // location().url identifies the RESOURCE for Chromium's generic network
+    // console errors — needed to attribute "Failed to load resource" lines.
+    if (isFixtureRemoteListDirs400(message.text(), message.location().url ?? '')) return
+    consoleErrors.push(message.text())
   })
   page.on('pageerror', (error) => pageErrors.push(error.message))
   page.on('requestfailed', (request) => {
@@ -103,13 +126,17 @@ export async function installBrowserAudit(page: Page, walnutHome: string): Promi
     })
   })
   page.on('response', (response) => {
-    if (response.status() >= 400) {
-      httpErrors.push({
-        status: response.status(),
-        method: response.request().method(),
-        url: response.url(),
-      })
-    }
+    if (response.status() < 400) return
+    // Same fixture allowance as the console filter: the dead remote host's
+    // list-dirs pre-warm answers 400 on the attach-only ephemeral server.
+    if (response.status() === 400
+      && response.url().includes('/api/sessions/list-dirs')
+      && response.url().includes('host=')) return
+    httpErrors.push({
+      status: response.status(),
+      method: response.request().method(),
+      url: response.url(),
+    })
   })
 
   return {
@@ -140,7 +167,12 @@ export async function installBrowserAudit(page: Page, walnutHome: string): Promi
       expect(
         (await persistedBrowserErrors(walnutHome, baseline))
           .filter((message) =>
-            !isExpectedNavigationAbort(message) && !allowances.consoleError?.(message)),
+            !isExpectedNavigationAbort(message)
+            // The api-client's list-dirs 400 console.error is forwarded to the
+            // server log too — same fixture allowance (no resource URL here;
+            // the `[api]`-line regex carries the host= discriminator itself).
+            && !isFixtureRemoteListDirs400(message, '')
+            && !allowances.consoleError?.(message)),
         'persisted browser error logs',
       ).toEqual([])
     },

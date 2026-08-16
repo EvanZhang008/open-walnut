@@ -2,16 +2,20 @@
 // Extracted from MainPage.tsx so they can be unit-tested without React.
 //
 // Layout invariant:
-//   [ unlocked ... ][ newly-locked ... first-locked ]
-//    ↑ left                              ↑ rightmost = pin anchor
+//   [ drafts ... ][ unlocked ... ][ newly-locked ... first-locked ]
+//    ↑ far left                                ↑ rightmost = pin anchor
 //
-// Unlocked slots occupy the left; locked slots occupy the right. Within the
-// locked region, the FIRST slot the user locked sits rightmost (acts as a
-// visual anchor), and subsequently-locked slots slide in from the left edge of
-// the locked region. Unlock symmetrically drops the slot at the right edge of
-// the unlocked region, next to the boundary the user just crossed.
+// DRAFT columns are pinned to the FAR LEFT and stay there: a draft is "extra"
+// by design (outside the panel budget, see trimUnlockedToMax) and must not
+// interact with the real strip at all — so a real session opening must slide
+// in BESIDE it, never push it out of its corner. Then unlocked real slots;
+// locked slots occupy the right. Within the locked region, the FIRST slot the
+// user locked sits rightmost (acts as a visual anchor), and subsequently-locked
+// slots slide in from the left edge of the locked region. Unlock symmetrically
+// drops the slot at the right edge of the unlocked region, next to the boundary
+// the user just crossed.
 
-import { isPlaceholderColumnId } from '@/utils/column-ids';
+import { isDraftColumnId, isPlaceholderColumnId } from '@/utils/column-ids';
 
 export interface SessionSlot {
   id: string;
@@ -31,19 +35,46 @@ export function splitByLock(cols: SessionSlot[]): { unlocked: SessionSlot[]; loc
   return { unlocked, locked };
 }
 
+/** Partition the unlocked region into the draft prefix (pinned far left) and
+ *  the rest (real + pending slots). Drafts are never locked (a draft panel has
+ *  no lock control), so partitioning only the unlocked half is complete. */
+function splitDrafts(unlocked: SessionSlot[]): { drafts: SessionSlot[]; rest: SessionSlot[] } {
+  const drafts: SessionSlot[] = [];
+  const rest: SessionSlot[] = [];
+  for (const c of unlocked) (isDraftColumnId(c.id) ? drafts : rest).push(c);
+  return { drafts, rest };
+}
+
+/** Where a slot lands on insert/move: a draft goes to the FAR LEFT (before
+ *  other drafts — it's the one just asked for); anything else goes leftmost
+ *  of the REAL region, i.e. right after the draft prefix, so opening a session
+ *  never bumps a draft out of its corner. */
+function insertLeftmost(id: string, unlocked: SessionSlot[], locked: SessionSlot[]): SessionSlot[] {
+  const slot = { id, locked: false };
+  if (isDraftColumnId(id)) return [slot, ...unlocked, ...locked];
+  const { drafts, rest } = splitDrafts(unlocked);
+  return [...drafts, slot, ...rest, ...locked];
+}
+
 /**
- * Shrink to `max` total columns by dropping evictable slots from the RIGHT, and
+ * Shrink the REAL columns to `max` by dropping evictable slots from the RIGHT,
  * leaving every surviving slot exactly where it was.
  *
- * Two kinds of slot are exempt and can push the total past `max`:
- *   - LOCKED — visible overflow is preferred over evicting a user's pin.
- *   - PLACEHOLDER (`draft:`/`pending:`) — the column IS the state. A draft holds
- *     the user's unsent text; a pending column holds an in-flight launch whose
- *     only handle is that id. Trimming either destroys data the user cannot get
- *     back (this also fixes the pre-existing "pending column evicted mid-HTTP"
- *     bug: the launch completed into a column that no longer existed).
- * The overflow license is self-expiring — a placeholder becomes a real id (or is
- * closed), which makes it evictable again and the next trim resolves the strip.
+ * PLACEHOLDERS (`draft:`/`pending:`) ARE EXTRA — outside the budget entirely:
+ * they neither count toward `max` nor get evicted, and their presence must not
+ * change what happens to the real columns by one pixel. The column IS their
+ * state (a draft holds unsent text, a pending column an in-flight launch), so
+ * they can't be evicted; and if they CONSUMED budget, opening a session while a
+ * draft was up would evict one more real panel than the same click without it
+ * (shipped bug: max=3 + draft, open a session → TWO live panels vanished).
+ * "现有的就是现有的逻辑…draft 是单独额外的,不去争抢" — the real strip behaves
+ * exactly as if the placeholder weren't there. The extra column self-expires:
+ * pending→real makes it count (and be evictable), and the next trim resolves
+ * the strip; a closed draft just leaves.
+ *
+ * Among the real columns, LOCKED slots are still exempt — visible overflow is
+ * preferred over evicting a user's pin — so when locked alone exceed `max` this
+ * drops every evictable slot and still overflows.
  *
  * IT MUST PRESERVE THE INCOMING ORDER. This used to return
  * `[...unlocked.slice(0, keep), ...locked]`, i.e. it rebuilt the strip from the
@@ -60,10 +91,10 @@ export function splitByLock(cols: SessionSlot[]): { unlocked: SessionSlot[]; loc
  * of the row untouched.
  */
 export function trimUnlockedToMax(cols: SessionSlot[], max: number): SessionSlot[] {
-  if (cols.length <= max) return cols;
-  // How many slots must go. Exempt ones are never candidates, so when they alone
-  // exceed `max` this drops every evictable slot and still overflows.
-  let toDrop = cols.length - Math.max(max, cols.filter(trimExempt).length);
+  // The budget applies to REAL columns only — placeholders ride for free.
+  const real = cols.filter(c => !isPlaceholderColumnId(c.id));
+  if (real.length <= max) return cols;
+  let toDrop = real.length - Math.max(max, real.filter(c => c.locked).length);
   if (toDrop <= 0) return cols;
   const doomed = new Set<SessionSlot>();
   for (let i = cols.length - 1; i >= 0 && toDrop > 0; i--) {
@@ -88,14 +119,15 @@ export function addSessionColumn(cols: SessionSlot[], id: string, triageOpen: bo
     // Locked branch re-uses the existing object reference on purpose — preserves
     // React key+memo identity so the locked panel's subtree doesn't remount
     // when the user clicks its pill. Unlocked branch constructs fresh because
-    // the slot is moving to leftmost; no stability benefit worth the branch cost.
+    // the slot is moving to leftmost (of the real region — drafts stay put);
+    // no stability benefit worth the branch cost.
     return existing.locked
-      ? [...unlocked, existing, ...locked]              // locked: left edge of locked region
-      : [{ id, locked: false }, ...unlocked, ...locked]; // unlocked: leftmost
+      ? [...unlocked, existing, ...locked]     // locked: left edge of locked region
+      : insertLeftmost(id, unlocked, locked);  // unlocked: leftmost of its region
   }
   const { unlocked, locked } = splitByLock(cols);
   if (locked.length >= max) return cols; // fully locked — caller shows toast
-  return trimUnlockedToMax([{ id, locked: false }, ...unlocked, ...locked], max);
+  return trimUnlockedToMax(insertLeftmost(id, unlocked, locked), max);
 }
 
 /**
@@ -120,13 +152,13 @@ export function forceAddSessionColumn(cols: SessionSlot[], id: string): SessionS
     const filtered = cols.filter(c => c.id !== id);
     const { unlocked, locked } = splitByLock(filtered);
     // Locked branch re-uses the existing object reference (React key+memo
-    // identity — see addSessionColumn); unlocked moves to leftmost.
+    // identity — see addSessionColumn); unlocked moves to its region's leftmost.
     return existing.locked
       ? [...unlocked, existing, ...locked]
-      : [{ id, locked: false }, ...unlocked, ...locked];
+      : insertLeftmost(id, unlocked, locked);
   }
   const { unlocked, locked } = splitByLock(cols);
-  return [{ id, locked: false }, ...unlocked, ...locked];
+  return insertLeftmost(id, unlocked, locked);
 }
 
 export function removeSessionColumn(cols: SessionSlot[], id: string): SessionSlot[] {

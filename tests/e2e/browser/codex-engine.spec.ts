@@ -72,7 +72,7 @@ async function openPicker(page: Page): Promise<{ panel: Locator; picker: Locator
   await expect(page.locator('.main-page')).toBeVisible()
   const panel = await openDraft(page)
   await panel.locator('.draft-composer-bar .session-action-chip').first().click()
-  const picker = panel.locator('.session-path-selector')
+  const picker = page.locator('.session-path-selector')
   await expect(picker).toBeVisible()
   return { panel, picker }
 }
@@ -128,7 +128,7 @@ test('quick-start with Codex engine sends engine:codex and shows the Codex chip'
   // draft holds the launch meta itself, so re-open its picker and read the
   // toggle back (same fact: the confirm did not reset the engine to Claude).
   await panel.locator('.draft-composer-bar .session-action-chip').first().click()
-  const reopened = panel.locator('.session-path-selector')
+  const reopened = page.locator('.session-path-selector')
   await expect(reopened).toBeVisible()
   await expect(reopened.locator('.sps-engine-btn', { hasText: 'Codex' })).toHaveClass(/active/)
   // Esc twice = edit mode → browse → closed. Deliberately NOT an outside click:
@@ -214,15 +214,18 @@ test('Codex session controls cycle on Homepage', async ({ page }) => {
 
   const panel = page.locator(REAL_PANEL)
   await expect(panel).toBeVisible({ timeout: 15_000 })
+  // ONE pill since the SessionControlPills rework (7fda772b): the mode pill
+  // opens a menu holding the approval options AND the plan-mode toggle. The
+  // old standalone "Default" collaboration pill no longer exists; plan mode
+  // surfaces as its own amber pill only while ON.
   const modePill = panel.locator('.mode-toggle-pill').filter({ hasText: 'Agent' })
-  const collaborationPill = panel.locator('.mode-toggle-pill').filter({ hasText: 'Default' })
   await expect(modePill).toBeVisible({ timeout: 15_000 })
-  await expect(collaborationPill).toBeVisible()
 
   const clickModeResponse = page.waitForResponse((candidate) =>
     candidate.request().method() === 'POST'
       && new URL(candidate.url()).pathname === `/api/sessions/${sessionId}/controls`)
   await modePill.click()
+  await panel.locator('.session-control-option', { hasText: 'Agent full access' }).click()
   expect((await clickModeResponse).status()).toBe(200)
   await expect(panel.locator('.mode-toggle-pill').filter({ hasText: 'Agent full access' })).toBeVisible()
 
@@ -236,9 +239,10 @@ test('Codex session controls cycle on Homepage', async ({ page }) => {
   const collaborationResponse = page.waitForResponse((candidate) =>
     candidate.request().method() === 'POST'
       && new URL(candidate.url()).pathname === `/api/sessions/${sessionId}/controls`)
-  await collaborationPill.click()
+  await panel.locator('.mode-toggle-pill').first().click()
+  await panel.locator('.session-control-option', { hasText: 'Plan mode' }).click()
   expect((await collaborationResponse).status()).toBe(200)
-  await expect(panel.locator('.mode-toggle-pill').filter({ hasText: 'Plan' })).toBeVisible()
+  await expect(panel.locator('.mode-toggle-pill.plan-active')).toBeVisible()
 
   await fs.mkdir(SESSION_CONTROLS_SCREENSHOT_DIR, { recursive: true })
   await page.screenshot({

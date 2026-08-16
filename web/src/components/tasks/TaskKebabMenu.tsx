@@ -257,7 +257,7 @@ export function TaskActionMenuItems({
  * scroll closers must exempt `.task-kebab-project-flyout` — it is intentionally
  * outside their menu ref.
  */
-export function ProjectPickerFlyout({ open, anchorRef, current, onPick, onClose }: {
+export function ProjectPickerFlyout({ open, anchorRef, current, onPick, onClose, preferSide }: {
   open: boolean;
   /** The trigger the flyout is placed against. */
   anchorRef: RefObject<HTMLElement | null>;
@@ -268,12 +268,16 @@ export function ProjectPickerFlyout({ open, anchorRef, current, onPick, onClose 
    *  mounted — e.g. a composer pill — doesn't have to close itself) and when the
    *  anchor is lost (trigger unmounted / hidden while the flyout was open). */
   onClose: () => void;
+  /** Side to prefer when both fit (default 'down'). The draft launch bar passes
+   *  'up' so this flyout matches its folder picker — one row, one direction. */
+  preferSide?: 'up' | 'down';
 }) {
   const { projectNames } = useProjectRegistry();
   const [filter, setFilter] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
   const placement = useMenuPlacement(open, anchorRef, listRef, {
     minHeight: 160,
+    preferSide,
     onAnchorLost: onClose,
   });
   if (!open) return null;

@@ -93,16 +93,26 @@ test('the chip row is top-2-by-use then 2-most-recent — a different answer fro
   // Reload so the module cache is refilled from a FRESH response that includes the
   // launch (the cache is invalidated + re-warmed in-page too, but a reload makes the
   // captured payload unambiguous).
-  // `.json()` is chained IMMEDIATELY on resolution, not after the todo-panel
-  // wait: Chromium keeps response bodies only briefly, and reading seconds later
-  // failed with "No resource with given identifier found" under machine load.
-  const warm = page.waitForResponse(
-    (res) => res.url().includes('/api/sessions/working-dirs') && res.ok(),
-    { timeout: 30_000 },
-  ).then((res) => res.json() as Promise<{ dirs: WorkingDir[] }>)
+  // Captured via a ROUTE INTERCEPT, not waitForResponse().json(): the waiter could
+  // match the PRE-reload document's re-warm request, whose body the reload's
+  // navigation frees before .json() reaches it ("No resource with given identifier
+  // found" — even with the read chained immediately). route.fetch() reads the body
+  // on the Playwright side and hands the page the same bytes, so the test owns the
+  // payload and no navigation can drop it.
+  let warmDirs: { dirs: WorkingDir[] } | null = null
+  await page.route('**/api/sessions/working-dirs*', async (route) => {
+    const response = await route.fetch()
+    const json = (await response.json()) as { dirs: WorkingDir[] }
+    warmDirs = json   // the post-reload warm — the payload the module cache keeps
+    await route.fulfill({ response, json })
+  })
   await page.reload()
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
-  const dirs = (await warm).dirs
+  await expect.poll(() => warmDirs !== null, { timeout: 30_000, message: 'the working-dirs warm never fired' }).toBe(true)
+  await page.unroute('**/api/sessions/working-dirs*')
+  // `?? []` only for TS (its flow analysis can't see the closure assignment);
+  // the poll above guarantees the capture happened.
+  const dirs = (warmDirs ?? { dirs: [] as WorkingDir[] }).dirs
 
   const panel = await openDraft(page)
   const paths = await draftChipPaths(panel)
@@ -229,7 +239,7 @@ test('a quick-access chip is a bare basename and sets cwd AND project in one off
   await expect(dirChip).toHaveClass(/draft-quick-chip-active/)
   expect(await draftChipPaths(panel), 'a pick must not reorder the chip row').toEqual(paths)
   // The picker never opened, either: a chip is a shortcut PAST it.
-  await expect(panel.locator('.session-path-selector')).toHaveCount(0)
+  await expect(page.locator('.session-path-selector')).toHaveCount(0)
   // The whole interaction ran off the synchronous caches (working-dirs module
   // cache + the already-loaded registry) — a draft path is contractually
   // network-free, and "resolve the project for this folder" must not become a fetch.

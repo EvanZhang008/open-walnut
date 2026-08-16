@@ -19,7 +19,7 @@ test('Quick Start footer keeps primary controls visible and opens task settings 
   const panel = await openDraft(page)
   await panel.locator('.draft-composer-bar .session-action-chip').first().click()
 
-  const selector = panel.locator('.session-path-selector')
+  const selector = page.locator('.session-path-selector')
   await expect(selector).toBeVisible({ timeout: 10_000 })
 
   const footer = selector.locator('.sps-meta-footer')

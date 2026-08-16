@@ -68,6 +68,12 @@ export interface DraftColumn {
    *  memory off after the FIRST pick and made every later folder change silently
    *  launch with the previous folder's model. */
   metaTouched?: boolean;
+  /** True once the user edited ANY launch pill by hand (folder pick, project
+   *  pick, meta edit). Distinct from `cwdPinned`/`taskId`, which SEEDS also set:
+   *  this is the "don't override at all" latch — a seeded open (task ▶, fork,
+   *  project "+") may rebind an un-touched draft in place, but one the user has
+   *  configured keeps everything and the seed opens a fresh column instead. */
+  userTouched?: boolean;
   /** The user confirmed a MISSING folder through the picker's "Create folder &
    *  start session in it" row, so the launch must mkdir it first. Carried on the
    *  row (not just inside the picker) because Start reads the draft, not the
@@ -91,6 +97,12 @@ export interface DraftColumn {
    *  A nonce rather than a boolean so a second attempt after the user dismissed
    *  the picker re-opens it. */
   openPickerNonce?: number;
+  /** This draft FORKS an existing session: Start calls the fork API (continuing
+   *  that conversation in a new sibling session) instead of quick-start. Folder,
+   *  host and project are the SOURCE session's and can't be changed — a fork
+   *  resumes in place; only the message and the model are the user's to pick.
+   *  Mutually exclusive with `taskId` (a bound draft) by construction. */
+  forkOf?: { sessionId: string; title?: string };
 }
 
 /** Merge a directory's remembered launch config into `meta`.
