@@ -74,6 +74,23 @@ describe('GET /api/search', () => {
     expect(res.body.results.every((r: { type: string }) => r.type === 'task')).toBe(true);
   });
 
+  it('accepts type (singular) as an alias of types', async () => {
+    await addTask({ title: 'Searchable task' });
+
+    const app = createApp();
+    const res = await request(app).get('/api/search?q=searchable&type=task');
+
+    expect(res.status).toBe(200);
+    expect(res.body.results.length).toBeGreaterThanOrEqual(1);
+    expect(res.body.results.every((r: { type: string }) => r.type === 'task')).toBe(true);
+  });
+
+  it('rejects invalid type values through the alias too', async () => {
+    const app = createApp();
+    const res = await request(app).get('/api/search?q=x&type=bogus');
+    expect(res.status).toBe(400);
+  });
+
   it('respects limit parameter', async () => {
     await addTask({ title: 'Match one' });
     await addTask({ title: 'Match two' });
@@ -84,5 +101,63 @@ describe('GET /api/search', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.results.length).toBeLessThanOrEqual(2);
+  });
+});
+
+describe('GET /api/search?slim=1', () => {
+  it('task rows carry type/id/title/summary/phase/project/ref and nothing bulky', async () => {
+    const { task } = await addTask({
+      title: 'Fix authentication bug',
+      project: 'walnut',
+      description: 'A very long description that should be compacted. '.repeat(20),
+    });
+
+    const app = createApp();
+    const res = await request(app).get('/api/search?q=authentication&slim=1');
+
+    expect(res.status).toBe(200);
+    const row = res.body.results.find((r: { id: string }) => r.id === task.id);
+    expect(row).toBeDefined();
+    expect(row.type).toBe('task');
+    expect(row.title).toBe('Fix authentication bug');
+    expect(row.phase).toBe(task.phase);
+    expect(row.project).toBe('walnut');
+    expect(row.ref).toBe(`<task-ref id="${task.id}" label="Fix authentication bug"/>`);
+    // one-line summary, hard-bounded
+    expect(typeof row.summary).toBe('string');
+    expect(row.summary.length).toBeLessThanOrEqual(121); // 120 + ellipsis
+    expect(row.summary).not.toContain('\n');
+    // bulky/internal fields must not leak into slim rows
+    expect(row.snippet).toBeUndefined();
+    expect(row.score).toBeUndefined();
+    expect(row.matchField).toBeUndefined();
+  });
+
+  it('slim=1 output is small enough to never need truncation', async () => {
+    for (let i = 0; i < 10; i++) {
+      await addTask({
+        title: `Bulk match ${i}`,
+        description: 'Long body content for search snippets. '.repeat(100),
+      });
+    }
+
+    const app = createApp();
+    const res = await request(app).get('/api/search?q=bulk&slim=1');
+
+    expect(res.status).toBe(200);
+    expect(res.body.results.length).toBeGreaterThanOrEqual(1);
+    // Whole payload stays compact (the verbose default was 3KB+ per row)
+    expect(JSON.stringify(res.body).length).toBeLessThan(400 * res.body.results.length + 100);
+  });
+
+  it('default (no slim) keeps the verbose shape', async () => {
+    await addTask({ title: 'Verbose row' });
+
+    const app = createApp();
+    const res = await request(app).get('/api/search?q=verbose');
+
+    expect(res.status).toBe(200);
+    expect(res.body.results[0].snippet).toBeDefined();
+    expect(res.body.results[0].score).toBeDefined();
   });
 });

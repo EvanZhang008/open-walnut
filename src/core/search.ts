@@ -1,5 +1,7 @@
 import { log } from '../logging/index.js';
+import { timed } from './observability/metrics.js';
 import { CLOUD_MODE } from '../constants.js';
+import { CJK_CHAR_RE, splitQueryTerms } from './cjk.js';
 import { listTasks } from './task-manager.js';
 import { listSessions } from './session-tracker.js';
 import type { SessionRecord, Task } from './types.js';
@@ -421,6 +423,15 @@ export function searchTaskAndSessionReferences(
 
 // ── Main search function ──
 
+export async function search(
+  query: string,
+  options: SearchOptions = {},
+): Promise<SearchResult[]> {
+  // Metric per lane combo (bounded: a handful of type sets exist in the UI).
+  const laneLabel = (options.types ?? DEFAULT_SEARCH_TYPES).slice().sort().join(',');
+  return timed('search.global', () => searchInner(query, options), { types: laneLabel });
+}
+
 /**
  * Default search lanes when the caller doesn't pick.
  *
@@ -434,7 +445,7 @@ export function searchTaskAndSessionReferences(
  */
 export const DEFAULT_SEARCH_TYPES: ReadonlyArray<'task' | 'memory' | 'session'> = ['task', 'memory', 'session'];
 
-export async function search(
+async function searchInner(
   query: string,
   options: SearchOptions = {},
 ): Promise<SearchResult[]> {
@@ -631,8 +642,38 @@ export async function search(
     || result.matchField === 'session_id'
     || result.matchField === 'commit_sha'
     || result.matchField === 'external_url';
+
+  // CJK multi-term queries: rank by term coverage before per-store score.
+  // Each store ranks independently and no-rerank scores are 1/rank × source
+  // weight (SOURCE_WEIGHTS in memory-search.ts), so cross-store scores are
+  // NOT comparable — a memory doc matching only "timeout" at store-rank #1
+  // (1.0 × 1.1) would outrank the task matching EVERY term at store-rank #2
+  // (0.5). Docs covering more of the query are what a human means by a
+  // multi-term query, so coverage wins the merge.
+  //
+  // Graded (hits/terms), not all-or-nothing: the haystack is title + QMD's
+  // bestChunk — a single chunk, not the whole doc — so on long queries even
+  // the best doc usually misses a term or two in its selected chunk, and a
+  // binary rule would silently never fire. Buckets (×4, rounded) absorb
+  // one-term noise so near-ties fall through to the score comparator.
+  // Latin-only queries skip this (coverage stays 0 for all — no-op tiebreak):
+  // their FTS lane already ANDs correctly, so per-store score order is
+  // meaningful and coverage would only add chunk-selection noise.
+  const coverage = new Map<SearchResult, number>();
+  if (CJK_CHAR_RE.test(normalizedQuery)) {
+    const terms = splitQueryTerms(normalizedQuery);
+    if (terms.length > 1) {
+      for (const result of results) {
+        const haystack = `${result.title}\n${result.snippet}`.toLowerCase();
+        const hits = terms.filter((t) => haystack.includes(t)).length;
+        coverage.set(result, Math.round((hits / terms.length) * 4));
+      }
+    }
+  }
+
   results.sort((a, b) =>
     Number(isReference(b)) - Number(isReference(a))
+    || (coverage.get(b) ?? 0) - (coverage.get(a) ?? 0)
     || b.score - a.score);
   const sliced = results.slice(0, limit);
 

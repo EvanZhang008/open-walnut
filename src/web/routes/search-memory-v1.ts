@@ -62,10 +62,21 @@ searchMemoryV1Router.get('/search', async (req: Request, res: Response, next: Ne
       sendError(res, 400, 'bad_request', 'q (non-empty string) is required')
       return
     }
-    const typesParam = typeof req.query.types === 'string' ? req.query.types : undefined
-    const types = typesParam
-      ? (typesParam.split(',') as Array<'task' | 'memory' | 'session'>)
-      : undefined
+    // `type` accepted as an alias of `types` — same rationale as /api/search:
+    // a guessed singular param must not silently fall back to default lanes.
+    const rawTypes = req.query.types ?? req.query.type
+    const typesParam = typeof rawTypes === 'string' ? rawTypes : undefined
+    const VALID_TYPES = ['task', 'memory', 'session'] as const
+    let types: Array<(typeof VALID_TYPES)[number]> | undefined
+    if (typesParam) {
+      const requested = typesParam.split(',')
+      const invalid = requested.filter((t) => !(VALID_TYPES as readonly string[]).includes(t))
+      if (invalid.length > 0) {
+        sendError(res, 400, 'bad_request', `invalid types: ${invalid.join(', ')} (valid: ${VALID_TYPES.join(', ')})`)
+        return
+      }
+      types = [...new Set(requested)] as Array<(typeof VALID_TYPES)[number]>
+    }
     const limit = req.query.limit ? Math.max(1, Math.min(100, Number(req.query.limit) || 20)) : undefined
     const { search } = await import('../../core/search.js')
     res.json({ results: await search(q, { types, limit }) })

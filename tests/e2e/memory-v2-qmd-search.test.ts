@@ -106,7 +106,7 @@ beforeAll(async () => {
   seedTopicFile(
     WALNUT_HOME,
     'project-goals',
-    '## 项目目标\n\nWalnut 的目标是成为个人 AI，管理任务、知识和会话。\n\n## Project Goals\n\nWalnut aims to be a Personal AI managing tasks, knowledge, and sessions.',
+    '## 项目目标\n\nWalnut的目标是成为个人AI，管理任务、知识和会话。\n\n## Project Goals\n\nWalnut aims to be a Personal AI managing tasks, knowledge, and sessions.',
   );
 
   server = await startServer({ port: 0, dev: true });
@@ -277,7 +277,7 @@ describe('Category 1: QMD Search E2E', () => {
 
   it('1.7: bilingual search finds content in both languages', async () => {
     // Chinese query
-    const chineseResults = await memoryNotesSearch('个人 AI', ['memory_topic']);
+    const chineseResults = await memoryNotesSearch('个人AI', ['memory_topic']);
     // English query
     const englishResults = await memoryNotesSearch('Personal AI', ['memory_topic']);
 

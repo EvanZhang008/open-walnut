@@ -8,8 +8,10 @@
  * dramatically improving recall for keyword-miss cases (e.g. doc says "travel" but
  * query says "trip"). The caller (Claude) generates focused 2-4 word queries.
  */
+import { CJK_RUN_RE, MIN_TERM_CHARS } from './cjk.js';
 import { getMemoryStore, getNotesStore, getTaskStore, getSessionStore } from './qmd-store.js';
 import { runQmdReadWork } from './qmd-work-queue.js';
+import { timed } from './observability/metrics.js';
 import { temporalDecay } from './temporal-decay.js';
 import { log } from '../logging/index.js';
 import type { HybridQueryResult } from '@tobilu/qmd';
@@ -84,6 +86,86 @@ export interface MemorySearchOptions {
 }
 
 /**
+ * Cap on lex queries emitted per input query. Each list is one SYNCHRONOUS
+ * better-sqlite3 FTS query PER COLLECTION (the memory store has ~9), on the
+ * web server's event loop — so the real multiplier is cap × collections.
+ * Measured ~3ms per FTS query on an 8k-doc index; 4 lists keeps the worst
+ * case well under the event-loop budget while covering original + residue +
+ * the two longest CJK runs.
+ */
+const MAX_LEX_QUERIES = 4;
+
+/**
+ * Split a query containing CJK into multiple lex queries so FTS5 keyword
+ * search survives AND-annihilation.
+ *
+ * Why: the FTS index keeps a whole contiguous CJK run as ONE token (see
+ * cjk.ts — e.g. doc text "能否自动重试" indexes as the single token
+ * `能否自动重试`). QMD joins query terms with AND and matches each as a token
+ * PREFIX — so query `timeout 自动重试` compiles to
+ * `"timeout"* AND "自动重试"*`, the CJK term fails to prefix-match mid-run
+ * tokens, and the AND annihilates the whole keyword lane (0 rows). Ranking
+ * then falls back to vector-only, which is how unrelated docs reached #1.
+ * The same annihilation hits pure-CJK multi-word queries (`超时 重试`), so the
+ * split applies whenever a CJK query has 2+ terms, not only mixed-script.
+ *
+ * What actually carries the fix: the RESIDUE list (non-CJK words). A per-run
+ * lex query like `"自动重试"*` still only matches when the run PREFIXES the
+ * indexed token (`能否自动重试` → 0 rows), so the per-run lists help only on
+ * prefix-aligned docs. Do NOT "simplify" this by dropping the residue list —
+ * that reverts the bug. Each emitted list enters QMD's RRF fusion as an
+ * independent ranked list (OR-ish semantics); QMD gives its 2x weight to the
+ * first NON-EMPTY list, so when the original AND query returns 0 rows the
+ * boost transfers to the residue list, which is the desired outcome.
+ *
+ * The vec lane deliberately stays ONE whole-sentence query — splitting it
+ * would multiply embedBatch work and dilute the semantic signal.
+ */
+export function buildLexQueries(query: string): string[] {
+  const q = query.trim();
+  if (!q) return [];
+  // Quoted phrases / negation are precise lex operator syntax — don't rewrite.
+  // Note this also bails on CLI-flag-looking queries (`--verbose 重试`), which
+  // degrade to the old single-list behavior rather than anything worse.
+  if (q.includes('"') || /(^|\s)-\S/.test(q)) return [q];
+  const allRuns = q.match(CJK_RUN_RE) ?? [];
+  if (allRuns.length === 0) return [q];
+
+  // Residue = non-CJK words. Keep only real alphanumeric tokens: CJK
+  // punctuation (。，、) is Script=Common so "自动重试。" would otherwise emit
+  // "。" as a lex list, and a bare digit residue ("重试3次" → "3") compiles to
+  // `"3"*` which matches half the corpus — a junk RRF list that pushes noise up.
+  const residueTokens = q
+    .replace(CJK_RUN_RE, ' ')
+    .split(/\s+/)
+    .map((t) => t.replace(/[^\p{L}\p{N}'_-]/gu, ''))
+    .filter((t) => t.length >= MIN_TERM_CHARS);
+  const residue = residueTokens.join(' ');
+
+  // No residue and at most one CJK run: single-term queries never
+  // AND-annihilate, nothing to split.
+  if (!residue && allRuns.length < 2) return [q];
+
+  const out = [q];
+  if (residue) out.push(residue);
+  // Per-run lists. When the cap forces a choice, keep the LONGEST runs (most
+  // selective — the ones worth the FTS cost), but emit survivors in original
+  // query order so the list order mirrors what the user typed. Single-char
+  // runs are noise prefixes and are skipped. splitQueryTerms keeps all 2+ char
+  // runs for coverage ranking, so capped-out runs still count toward coverage;
+  // they are just not lex-searched.
+  const eligible = allRuns.filter((r) => r.length >= MIN_TERM_CHARS);
+  const budget = Math.max(0, MAX_LEX_QUERIES - out.length);
+  const kept = new Set(
+    [...eligible].sort((a, b) => b.length - a.length).slice(0, budget),
+  );
+  for (const run of eligible) {
+    if (kept.has(run)) out.push(run);
+  }
+  return out;
+}
+
+/**
  * Search memory and/or notes using multiple focused queries.
  *
  * Each query string becomes both a lex (BM25) and vec (vector) search in QMD's
@@ -154,7 +236,7 @@ async function memoryNotesSearchUnlocked(
      .trim();
 
   const expandedQueries = queryList.flatMap(q => [
-    { type: 'lex' as const, query: q },
+    ...buildLexQueries(q).map(lex => ({ type: 'lex' as const, query: lex })),
     { type: 'vec' as const, query: sanitizeForVec(q) },
   ]);
 
@@ -331,6 +413,10 @@ export function memoryNotesSearch(
   pathPrefix?: string,
   options: MemorySearchOptions = {},
 ): Promise<MemorySearchResult[]> {
-  return runQmdReadWork(() =>
-    memoryNotesSearchUnlocked(queries, sources, limit, pathPrefix, options));
+  // Metric wraps queue wait + search — end-to-end is what callers feel. A rerank
+  // regression (the 5-28s freeze family) shows up here as a p90 cliff long
+  // before a user files "search is slow".
+  return timed('search.memory_notes', () => runQmdReadWork(() =>
+    memoryNotesSearchUnlocked(queries, sources, limit, pathPrefix, options)),
+  { rerank: String(options.rerank ?? false) });
 }

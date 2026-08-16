@@ -24,6 +24,12 @@ export function taskRefTag(id: string, label: string): string {
   return `<task-ref id="${esc(id)}" label="${esc(label)}"/>`
 }
 
+/** Build a `<session-ref/>` tag — same contract as taskRefTag. */
+export function sessionRefTag(id: string, label: string): string {
+  const esc = (s: string): string => s.replace(/"/g, '&quot;')
+  return `<session-ref id="${esc(id)}" label="${esc(label)}"/>`
+}
+
 /** Undo taskRefTag's attribute escaping when a label leaves attribute context. */
 function decodeAttr(s: string): string {
   return s.replace(/&quot;/g, '"')

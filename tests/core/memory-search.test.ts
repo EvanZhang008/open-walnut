@@ -51,7 +51,7 @@ vi.mock('../../src/core/qmd-store.js', () => {
   };
 });
 
-import { memoryNotesSearch } from '../../src/core/memory-search.js';
+import { memoryNotesSearch, buildLexQueries } from '../../src/core/memory-search.js';
 import { reserveQmdIndexWork } from '../../src/core/qmd-work-queue.js';
 
 const qmdStore = await import('../../src/core/qmd-store.js') as unknown as {
@@ -323,6 +323,122 @@ describe('memoryNotesSearch', () => {
     } finally {
       reservation.release();
     }
+  });
+});
+
+describe('buildLexQueries — mixed CJK/Latin lex splitting', () => {
+  it('pure English query is unchanged', () => {
+    expect(buildLexQueries('hook api error timeout')).toEqual(['hook api error timeout']);
+  });
+
+  it('pure CJK query is unchanged', () => {
+    expect(buildLexQueries('自动重试')).toEqual(['自动重试']);
+  });
+
+  it('mixed query splits into original + latin residue + CJK runs', () => {
+    expect(buildLexQueries('timeout 自动重试')).toEqual([
+      'timeout 自动重试',
+      'timeout',
+      '自动重试',
+    ]);
+  });
+
+  it('multiple CJK runs each become their own query', () => {
+    expect(buildLexQueries('daemon 崩溃 重启失败')).toEqual([
+      'daemon 崩溃 重启失败',
+      'daemon',
+      '崩溃',
+      '重启失败',
+    ]);
+  });
+
+  it('CJK embedded without spaces still splits', () => {
+    expect(buildLexQueries('修复timeout问题')).toEqual([
+      '修复timeout问题',
+      'timeout',
+      '修复',
+      '问题',
+    ]);
+  });
+
+  it('single-char CJK runs are not emitted as standalone queries', () => {
+    expect(buildLexQueries('timeout 查 bedrock')).toEqual([
+      'timeout 查 bedrock',
+      'timeout bedrock',
+    ]);
+  });
+
+  it('preserves operator queries verbatim (quotes / negation)', () => {
+    expect(buildLexQueries('"exact 短语" timeout')).toEqual(['"exact 短语" timeout']);
+    expect(buildLexQueries('timeout -自动')).toEqual(['timeout -自动']);
+  });
+
+  it('empty and blank queries return []', () => {
+    expect(buildLexQueries('')).toEqual([]);
+    expect(buildLexQueries('   ')).toEqual([]);
+  });
+
+  it('caps the number of emitted lex queries', () => {
+    const q = 'x 一二 三四 五六 七八 九十 十一 十二';
+    expect(buildLexQueries(q).length).toBeLessThanOrEqual(6);
+  });
+
+  it('sends split lex queries to the QMD store for mixed input', async () => {
+    qmdStore.__setMockMemoryResults([
+      { file: 'qmd://global/a.md', title: 'A', bestChunk: 'x', score: 0.9 },
+    ]);
+    await memoryNotesSearch('timeout 自动重试', ['memory_global']);
+    const store = qmdStore.__getMockStore();
+    const lastCall = store.search.mock.calls.at(-1)![0];
+    const lexQueries = lastCall.queries.filter((q: { type: string }) => q.type === 'lex').map((q: { query: string }) => q.query);
+    const vecQueries = lastCall.queries.filter((q: { type: string }) => q.type === 'vec').map((q: { query: string }) => q.query);
+    expect(lexQueries).toEqual(['timeout 自动重试', 'timeout', '自动重试']);
+    // vec stays a single whole-sentence query — splitting only fixes the FTS lane
+    expect(vecQueries).toEqual(['timeout 自动重试']);
+  });
+});
+
+describe('cjk helpers', () => {
+  it('splitQueryTerms: latin words + CJK runs, single-char fragments dropped', async () => {
+    const { splitQueryTerms } = await import('../../src/core/cjk.js');
+    expect(splitQueryTerms('timeout 自动重试')).toEqual(['timeout', '自动重试']);
+    expect(splitQueryTerms('修复timeout问题')).toEqual(['timeout', '修复', '问题']);
+    expect(splitQueryTerms('timeout 查')).toEqual(['timeout']);
+    expect(splitQueryTerms('hook api')).toEqual(['hook', 'api']);
+    expect(splitQueryTerms('')).toEqual([]);
+  });
+
+  it('isMixedScriptQuery: true only when CJK and non-CJK coexist', async () => {
+    const { isMixedScriptQuery } = await import('../../src/core/cjk.js');
+    expect(isMixedScriptQuery('timeout 自动重试')).toBe(true);
+    expect(isMixedScriptQuery('自动重试')).toBe(false);
+    expect(isMixedScriptQuery('timeout retry')).toBe(false);
+  });
+});
+
+describe('FTS5 unicode61 tokenizer contract (root cause of mixed-query rank collapse)', () => {
+  // QMD indexes with tokenize='porter unicode61' and compiles each query term
+  // to `"term"* AND …`. unicode61 keeps a contiguous CJK run as ONE token, so
+  // a CJK query term only matches when it PREFIXES the whole indexed run.
+  // These tests pin that engine behavior; if a QMD upgrade changes tokenization
+  // (e.g. adds a CJK segmenter), they fail and buildLexQueries can be retired.
+  it('mixed AND query misses docs whose CJK run has a leading char, split queries hit', async () => {
+    const { default: Database } = await import('better-sqlite3');
+    const db = new Database(':memory:');
+    db.exec("CREATE VIRTUAL TABLE t USING fts5(body, tokenize='porter unicode61')");
+    db.prepare('INSERT INTO t VALUES (?)').run(
+      '请求 timeout 频发 — 查 Claude Code 能否自动重试;是否 bedrock proxy 引起',
+    );
+    const count = (m: string): number =>
+      (db.prepare('SELECT count(*) c FROM t WHERE t MATCH ?').get(m) as { c: number }).c;
+
+    // The doc's CJK run indexes as one token '能否自动重试'
+    expect(count('"能否自动重试"*')).toBe(1);
+    // …so the un-split mixed query annihilates via AND (this is the bug)
+    expect(count('"timeout"* AND "自动重试"*')).toBe(0);
+    // …while the split queries keep the keyword lane alive
+    expect(count('"timeout"*')).toBe(1);
+    db.close();
   });
 });
 

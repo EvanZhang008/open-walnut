@@ -314,6 +314,76 @@ describe('QMD memory search integration', () => {
     await expect(search('TypeScript', { types: ['memory'] }))
       .rejects.toThrow('Database not available');
   });
+
+  it('mixed CJK/Latin query: full-term-coverage hit outranks a higher-scored partial hit', async () => {
+    // Task and memory stores rank independently; no-rerank scores are 1/rank,
+    // so a memory doc matching ONLY "timeout" at its store's #1 (score 1.0 ×
+    // weight 1.1) used to beat the task matching BOTH terms at its store's #2
+    // (0.5). Coverage must win the cross-store merge for mixed queries.
+    vi.doMock('../../src/core/task-manager.js', () => ({
+      listTasks: vi.fn().mockResolvedValue([]),
+    }));
+    vi.doMock('../../src/core/session-tracker.js', () => ({
+      listSessions: vi.fn().mockResolvedValue([]),
+    }));
+    vi.doMock('../../src/core/memory-search.js', () => ({
+      memoryNotesSearch: vi.fn(async (_q: string, sources?: string[]) => {
+        if (sources?.includes('task')) {
+          return [{
+            title: '请求 timeout 频发 — 查能否自动重试',
+            snippet: '让 daemon 自动重试 timeout 的请求',
+            filepath: 'qmd://task/task-t1',
+            taskId: 't1',
+            finalScore: 0.5,
+            source: 'task',
+          }];
+        }
+        return [{
+          title: 'triage memory',
+          snippet: 'unrelated doc that only mentions timeout once',
+          filepath: 'memory/triage.md',
+          finalScore: 1.1,
+          source: 'memory_project',
+        }];
+      }),
+    }));
+
+    const { search } = await import('../../src/core/search.js');
+    const results = await search('timeout 自动重试', { types: ['task', 'memory'] });
+
+    expect(results[0].taskId).toBe('t1');
+    expect(results[1].title).toBe('triage memory');
+  });
+
+  it('single-script query keeps pure score order (coverage tiebreak is a no-op)', async () => {
+    vi.doMock('../../src/core/task-manager.js', () => ({
+      listTasks: vi.fn().mockResolvedValue([]),
+    }));
+    vi.doMock('../../src/core/session-tracker.js', () => ({
+      listSessions: vi.fn().mockResolvedValue([]),
+    }));
+    vi.doMock('../../src/core/memory-search.js', () => ({
+      memoryNotesSearch: vi.fn(async (_q: string, sources?: string[]) => {
+        if (sources?.includes('task')) {
+          return [{
+            title: 'timeout retry task', snippet: 'covers timeout and retry',
+            filepath: 'qmd://task/task-t1', taskId: 't1', finalScore: 0.5, source: 'task',
+          }];
+        }
+        return [{
+          title: 'timeout-only doc', snippet: 'only timeout here',
+          filepath: 'memory/m.md', finalScore: 1.1, source: 'memory_project',
+        }];
+      }),
+    }));
+
+    const { search } = await import('../../src/core/search.js');
+    const results = await search('timeout retry', { types: ['task', 'memory'] });
+
+    // Not a mixed-script query — higher raw score stays first even though
+    // the task covers more terms.
+    expect(results[0].title).toBe('timeout-only doc');
+  });
 });
 
 describe('default search lanes (2026-08-15 star incident)', () => {
