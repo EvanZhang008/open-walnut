@@ -416,11 +416,13 @@ export async function maybeRefreshForkTitle(taskId: string, summary: string): Pr
   try {
     if (!summary.trim()) return;
     const { getTask, updateTask } = await import('../task-manager.js');
-    const { prependTopicToTitle, summarizeForkPrompt } = await import('../fork-title.js');
+    const { prependTopicToTitle, summarizeDriftTopic } = await import('../fork-title.js');
     const task = await getTask(taskId);
     if (!task.title?.trim()) return;
 
-    const label = await summarizeForkPrompt(summary);
+    // 1-2 word label (prefer one) — it lands IN FRONT of an existing title, so
+    // brevity beats descriptiveness here (user: "能一个词就不要两个词").
+    const label = await summarizeDriftTopic(summary);
     if (!label) return;
     const refined = prependTopicToTitle(task.title, label);
     if (!refined) return; // topic already covered by the title

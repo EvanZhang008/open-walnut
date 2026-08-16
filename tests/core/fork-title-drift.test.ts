@@ -4,26 +4,31 @@
  * src/core/fork-title.ts).
  *
  * A title is written once but sessions pivot; a stale title breaks title
- * search (2026-08-15 star incident). The refresh is ADDITIVE: the drifted
- * topic is PREPENDED (`New Topic · original title`), the original tail is
- * never modified or dropped, so it is safe on every task — human-named or
- * auto-named — and only the auto-added prefixes rotate.
+ * search (2026-08-15 star incident). The refresh is ADDITIVE and MINIMAL:
+ * the drifted topic (1-2 words, summarizeDriftTopic) is PREPENDED
+ * (`New Topic · original title`), the original tail is never modified or
+ * dropped, and at most ONE auto-prefix exists — a later drift REPLACES it
+ * instead of stacking ("千层饼" titles, user feedback 2026-08-15). The
+ * default posture is "don't touch": covered topics change nothing.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const getTaskMock = vi.fn();
-const updateTaskMock = vi.fn();
+// vi.hoisted: the fork-title mock factory runs during the STATIC import below
+// (before top-level consts initialize), so the mocks must be hoisted with it.
+const { getTaskMock, updateTaskMock, summarizeDriftTopicMock } = vi.hoisted(() => ({
+  getTaskMock: vi.fn(),
+  updateTaskMock: vi.fn(),
+  summarizeDriftTopicMock: vi.fn(),
+}));
 vi.mock('../../src/core/task-manager.js', () => ({
   getTask: getTaskMock,
   updateTask: updateTaskMock,
 }));
-
-const summarizeForkPromptMock = vi.fn();
 vi.mock('../../src/core/fork-title.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../src/core/fork-title.js')>();
   return {
     ...real,
-    summarizeForkPrompt: summarizeForkPromptMock,
+    summarizeDriftTopic: summarizeDriftTopicMock,
   };
 });
 
@@ -37,8 +42,8 @@ beforeEach(() => {
 
 describe('prependTopicToTitle', () => {
   it('prepends a drifted topic, keeping the original title intact', () => {
-    expect(prependTopicToTitle('Fork of UI cleanup', 'Remove Star System'))
-      .toBe('Remove Star System · Fork of UI cleanup');
+    expect(prependTopicToTitle('Fork of UI cleanup', 'Load Test'))
+      .toBe('Load Test · Fork of UI cleanup');
   });
 
   it('returns null when the title already covers the topic (paraphrase damping)', () => {
@@ -46,45 +51,55 @@ describe('prependTopicToTitle', () => {
     expect(prependTopicToTitle('anything', '')).toBeNull();
   });
 
-  it('rotates auto-prefixes past the cap but NEVER drops the original tail', () => {
-    const t1 = prependTopicToTitle('My precious title', 'Topic One')!;
-    const t2 = prependTopicToTitle(t1, 'Topic Two')!;
-    const t3 = prependTopicToTitle(t2, 'Topic Three')!;
-    expect(t3).toBe('Topic Three · Topic Two · My precious title');
+  it('REPLACES the previous auto-prefix instead of stacking — only one layer ever', () => {
+    const t1 = prependTopicToTitle('My precious title', 'Productize')!;
+    expect(t1).toBe('Productize · My precious title');
+    const t2 = prependTopicToTitle(t1, 'Load Test')!;
+    expect(t2).toBe('Load Test · My precious title');
+    const t3 = prependTopicToTitle(t2, 'Onboarding')!;
+    expect(t3).toBe('Onboarding · My precious title');
     expect(t3.endsWith('My precious title')).toBe(true);
+    // Never the mille-feuille shape: exactly one separator.
+    expect(t3.split(' · ')).toHaveLength(2);
+  });
+
+  it('a label sharing words with the current prefix counts as covered (no churn)', () => {
+    // "Topic Two" shares 'Topic' with the existing prefix — half its words hit,
+    // so the title is left alone. Don't-touch is the default posture.
+    expect(prependTopicToTitle('Topic One · My precious title', 'Topic Two')).toBeNull();
   });
 });
 
 describe('maybeRefreshForkTitle (title drift refresh, all tasks)', () => {
   it('prepends the drifted topic to an auto-fork title', async () => {
     getTaskMock.mockResolvedValue({ id: 't1', title: 'Star Rating Polish - fork of UI cleanup' });
-    summarizeForkPromptMock.mockResolvedValue('Context Inspector Panel');
+    summarizeDriftTopicMock.mockResolvedValue('Inspector');
 
     await maybeRefreshForkTitle('t1', 'Built the new context inspector panel; deployed.');
 
     expect(updateTaskMock).toHaveBeenCalledWith(
       't1',
-      { title: 'Context Inspector Panel · Star Rating Polish - fork of UI cleanup' },
+      { title: 'Inspector · Star Rating Polish - fork of UI cleanup' },
       { source: 'title-drift' },
     );
   });
 
   it('prepends on a HUMAN-named title too (additive = safe), original kept verbatim', async () => {
     getTaskMock.mockResolvedValue({ id: 't1', title: 'Retire the star system' });
-    summarizeForkPromptMock.mockResolvedValue('Context Inspector Panel');
+    summarizeDriftTopicMock.mockResolvedValue('Inspector');
 
     await maybeRefreshForkTitle('t1', 'pivoted to building the context inspector');
 
     expect(updateTaskMock).toHaveBeenCalledWith(
       't1',
-      { title: 'Context Inspector Panel · Retire the star system' },
+      { title: 'Inspector · Retire the star system' },
       { source: 'title-drift' },
     );
   });
 
   it('skips when the title already covers the topic', async () => {
     getTaskMock.mockResolvedValue({ id: 't1', title: 'Star Rating Polish - fork of UI cleanup' });
-    summarizeForkPromptMock.mockResolvedValue('Polish Star Rating');
+    summarizeDriftTopicMock.mockResolvedValue('Star Rating');
 
     await maybeRefreshForkTitle('t1', 'still polishing the star rating UI');
 
@@ -95,7 +110,7 @@ describe('maybeRefreshForkTitle (title drift refresh, all tasks)', () => {
     getTaskMock
       .mockResolvedValueOnce({ id: 't1', title: 'Old title' })
       .mockResolvedValueOnce({ id: 't1', title: 'Human renamed it meanwhile' });
-    summarizeForkPromptMock.mockResolvedValue('Context Inspector Panel');
+    summarizeDriftTopicMock.mockResolvedValue('Inspector Panel');
 
     await maybeRefreshForkTitle('t1', 'new topic summary');
 
