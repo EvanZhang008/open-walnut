@@ -21,7 +21,7 @@ import { modelSupportsEffort, SESSION_EFFORTS, SESSION_MODE_LABELS } from '@open
 import { fetchSession, updateSession, setSessionModel, setSessionEffort, setCodexSessionModel } from '@/api/sessions';
 import { useSessionUsage, formatModelName, getContextWindowSize } from '@/hooks/useSessionUsage';
 import { useEnabledModes } from '@/hooks/useEnabledModes';
-import { ModelPicker, type ProviderId } from '@/components/sessions/ModelPicker';
+import { ModelPicker, shortCodexModelName, type ProviderId } from '@/components/sessions/ModelPicker';
 
 interface LaneComposerControlsProps {
   sessionId: string | null;
@@ -104,7 +104,7 @@ export function LaneComposerControls({ sessionId, engine = 'claude', onProviderS
   const isCodex = engine === 'codex';
   const rawModel = liveUsage.model || session?.model;
   const displayModel = isCodex
-    ? (session?.acpModel || 'Codex')
+    ? (session?.acpModel ? shortCodexModelName(session.acpModel) : 'Codex')
     : formatModelName(rawModel);
   let contextPercent = liveUsage.contextPercent;
   if (contextPercent == null && liveUsage.inputTokens) {

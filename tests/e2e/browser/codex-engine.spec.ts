@@ -284,7 +284,8 @@ test('Codex model picker switches models on Homepage', async ({ page }) => {
   await homePill.click()
   // The shared two-pane picker: provider rail (Claude greyed+locked — a live
   // codex session can't switch engines in place) | the ACP model rows.
-  const homeMenu = panel.locator('.model-picker')
+  // page-scoped: the picker PORTALS to <body> when anchored (popout, 020a265b).
+  const homeMenu = page.locator('.model-picker')
   await expect(homeMenu).toBeVisible()
   await expect(homeMenu.locator('.provider-rail-item[data-provider="codex"]')).toHaveClass(/provider-rail-item-active/)
   await expect(homeMenu.locator('.provider-rail-item[data-provider="claude"]')).toHaveClass(/provider-rail-item-locked/)
@@ -298,7 +299,7 @@ test('Codex model picker switches models on Homepage', async ({ page }) => {
 
   // Re-open the picker and confirm the switched model is marked active.
   await switchedPill.click()
-  const reopenedMenu = panel.locator('.model-picker')
+  const reopenedMenu = page.locator('.model-picker')
   await expect(reopenedMenu).toBeVisible()
   await expect(reopenedMenu.locator('.model-picker-row', { hasText: 'Mock GPT Fast' }))
     .toHaveClass(/model-picker-row-active/)

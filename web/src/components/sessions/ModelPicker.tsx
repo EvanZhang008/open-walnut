@@ -132,10 +132,20 @@ function fmtTokens(n?: number | null): string {
   return String(n);
 }
 
-/** "gpt-best" → "GPT Best" — display form of a Codex/ACP model id (moved here
- *  from the retired CodexModelPicker; the pill label in SessionPanel uses it). */
-export function shortCodexModelName(modelId: string): string {
-  return modelId
+/**
+ * ACP encodes reasoning effort INTO the model id — "openai.gpt-5.6-sol[xhigh]"
+ * — so a raw catalog renders as a wall of family×effort rows. Split the two
+ * axes back apart: familyId is the id without the [effort] suffix, effort is
+ * the suffix (null when the id carries none, e.g. mock/test models).
+ */
+export function parseCodexModelId(modelId: string): { familyId: string; effort: string | null } {
+  const m = /^(.*)\[([a-z]+)\]$/.exec(modelId);
+  return m ? { familyId: m[1], effort: m[2] } : { familyId: modelId, effort: null };
+}
+
+/** "openai.gpt-5.6-sol" → "GPT 5.6 Sol" — family half of a Codex model id. */
+function codexFamilyName(familyId: string): string {
+  return familyId
     .replace(/^(?:openai|codex|mock)[.:/_\s-]+/i, '')
     .split(/[-_\s]+/)
     .filter(Boolean)
@@ -145,6 +155,17 @@ export function shortCodexModelName(modelId: string): string {
         ? 'Codex'
         : part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
+}
+
+/** Display form of a full Codex/ACP model id — "GPT 5.6 Sol · X-High".
+ *  (Pill labels in SessionPanel + the lane composer use it.) */
+export function shortCodexModelName(modelId: string): string {
+  const { familyId, effort } = parseCodexModelId(modelId);
+  const family = codexFamilyName(familyId);
+  if (!effort) return family;
+  const label = SESSION_EFFORTS.find((e) => e.id === effort)?.label
+    ?? effort.charAt(0).toUpperCase() + effort.slice(1);
+  return `${family} · ${label}`;
 }
 
 interface ModelPickerProps {
@@ -429,6 +450,47 @@ export function ModelPicker({
   }, [popped, onClose, anchorRef]);
 
   // ── Codex pane rows (live: ACP catalog; draft: explanatory placeholder).
+  // ACP encodes effort into the model id (…-sol[xhigh]), which as raw rows is a
+  // 25-entry wall. Regroup to the SAME two flat columns the claude pane has:
+  // Model = one row per family, Effort = the shared ladder (rows the active
+  // family doesn't offer render disabled). A family/effort click composes the
+  // full id back (family switch keeps the current effort when offered).
+  const codexFamilies = React.useMemo(() => {
+    const fams = new Map<string, { familyId: string; label: string; byEffort: Map<string | null, CodexModelInfo> }>();
+    for (const m of codexModels ?? []) {
+      const { familyId, effort } = parseCodexModelId(m.modelId);
+      let fam = fams.get(familyId);
+      if (!fam) {
+        // Prefer the server's own name minus its "(effort)" tail — it keeps
+        // punctuation the id lost (e.g. "GPT-5.6 Sol", mock model names).
+        const label = m.name.replace(/\s*\((?:low|medium|high|xhigh|max)\)\s*$/i, '').trim()
+          || codexFamilyName(familyId);
+        fam = { familyId, label, byEffort: new Map() };
+        fams.set(familyId, fam);
+      }
+      fam.byEffort.set(effort, m);
+    }
+    return [...fams.values()];
+  }, [codexModels]);
+  const codexActive = codexCurrent ? parseCodexModelId(codexCurrent) : null;
+  const codexActiveFamily = codexActive
+    ? codexFamilies.find((f) => f.familyId === codexActive.familyId)
+    : undefined;
+  // Hide the effort column entirely when NO family has effort variants (mock
+  // catalogs) — mirrors the claude pane hiding effort for draft callers.
+  const codexHasEfforts = codexFamilies.some((f) => [...f.byEffort.keys()].some((e) => e !== null));
+
+  const switchCodexFamily = (fam: { familyId: string; byEffort: Map<string | null, CodexModelInfo> }) => {
+    if (!onCodexSwitch) return;
+    // Keep the current effort when the target family offers it; else fall to
+    // medium, a suffix-less id, or the family's first variant.
+    const target = (codexActive?.effort ? fam.byEffort.get(codexActive.effort) : undefined)
+      ?? fam.byEffort.get('medium')
+      ?? fam.byEffort.get(null)
+      ?? [...fam.byEffort.values()][0];
+    if (target && target.modelId !== codexCurrent) onCodexSwitch(target.modelId);
+  };
+
   const codexPane = (
     <>
       <div className="model-picker-header">
@@ -444,23 +506,24 @@ export function ModelPicker({
           {onCodexSwitch ? (
             codexLoading ? (
               <div className="model-picker-status">Loading Codex models…</div>
-            ) : !codexModels || codexModels.length === 0 ? (
+            ) : codexFamilies.length === 0 ? (
               <div className="model-picker-status">No Codex models reported by this session.</div>
             ) : (
-              codexModels.map((m) => {
-                const isActive = m.modelId === codexCurrent;
+              codexFamilies.map((fam) => {
+                const isActive = fam.familyId === codexActive?.familyId;
+                const sample = [...fam.byEffort.values()][0];
                 return (
                   <button
-                    key={m.modelId}
+                    key={fam.familyId}
                     type="button"
                     className={`model-picker-row${isActive ? ' model-picker-row-active' : ''}`}
                     role="option"
                     aria-selected={isActive}
-                    title={m.description ?? m.name}
-                    onClick={() => { if (!isActive) onCodexSwitch(m.modelId); }}
+                    title={sample?.description?.split('.')[0] ?? fam.label}
+                    onClick={() => { if (!isActive) switchCodexFamily(fam); }}
                   >
                     <span className="model-picker-row-check" aria-hidden>{isActive ? '✓' : ''}</span>
-                    <span className="model-picker-row-name">{m.name}</span>
+                    <span className="model-picker-row-name">{fam.label}</span>
                   </button>
                 );
               })
@@ -471,6 +534,35 @@ export function ModelPicker({
             </div>
           )}
         </div>
+        {onCodexSwitch && codexHasEfforts && (
+          <div className="model-picker-col model-picker-col-effort" role="listbox" aria-label="Reasoning effort">
+            <div className="model-picker-col-title">Effort</div>
+            {EFFORTS.map((e) => {
+              const variant = codexActiveFamily?.byEffort.get(e.id);
+              const disabled = !variant;
+              const active = codexActive?.effort === e.id;
+              return (
+                <button
+                  key={e.id}
+                  type="button"
+                  className={`model-picker-row${active ? ' model-picker-row-active' : ''}`}
+                  role="option"
+                  aria-selected={active}
+                  disabled={disabled}
+                  title={disabled
+                    ? `Not offered by ${codexActiveFamily?.label ?? 'this model'}`
+                    : e.description}
+                  onClick={() => {
+                    if (!active && variant && variant.modelId !== codexCurrent) onCodexSwitch(variant.modelId);
+                  }}
+                >
+                  <span className="model-picker-row-check" aria-hidden>{active ? '✓' : ''}</span>
+                  <span className="model-picker-row-name">{e.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </>
   );
