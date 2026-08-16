@@ -314,26 +314,29 @@ export function ModelPicker({
     return () => clearTimeout(t);
   }, [refreshState]);
 
-  // ── Live details: collapsed by default; expanding lazily pulls the heavier
-  // reads (get_context_usage tokenizes the CLI's whole tool surface — too heavy
-  // to fire on every picker open). Result is kept until the picker closes.
+  // ── Live details: collapsed by default, but PREFETCHED in the background
+  // the moment the picker opens — the pull is slow (get_context_usage
+  // tokenizes the CLI's whole tool surface, ~15s), and making the user click
+  // "details" and THEN wait it out reads as broken (user report 2026-08-16).
+  // Opening the section mid-flight just shows the loading line briefly.
   const [detailsOpen, setDetailsOpen] = React.useState(false);
   const [details, setDetails] = React.useState<SessionLiveSettings['details'] | null>(null);
   const [detailsPulling, setDetailsPulling] = React.useState(false);
-  const toggleDetails = () => {
-    const next = !detailsOpen;
-    setDetailsOpen(next);
-    if (next && !details && !detailsPulling && sessionId) {
-      setDetailsPulling(true);
-      fetchSessionLiveSettings(sessionId, { details: true })
-        .then((s) => {
-          setDetails(s.details ?? { contextUsage: null, usage: null, binaryVersion: null });
-          setLiveSettings(s); // refresh the strip from the same round-trip
-        })
-        .catch(() => setDetails({ contextUsage: null, usage: null, binaryVersion: null }))
-        .finally(() => setDetailsPulling(false));
-    }
-  };
+  React.useEffect(() => {
+    if (!sessionId || isCodexPane) return;
+    let cancelled = false;
+    setDetailsPulling(true);
+    fetchSessionLiveSettings(sessionId, { details: true })
+      .then((s) => {
+        if (cancelled) return;
+        setDetails(s.details ?? { contextUsage: null, usage: null, binaryVersion: null });
+        setLiveSettings(s); // refresh the strip from the same round-trip
+      })
+      .catch(() => { if (!cancelled) setDetails({ contextUsage: null, usage: null, binaryVersion: null }); })
+      .finally(() => { if (!cancelled) setDetailsPulling(false); });
+    return () => { cancelled = true; };
+  }, [sessionId, isCodexPane]);
+  const toggleDetails = () => setDetailsOpen((v) => !v);
 
   const applied = liveSettings?.live ? liveSettings.applied : null;
   // Active row = catalog row matching the LIVE model (applied wins over record).
