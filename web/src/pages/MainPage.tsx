@@ -2794,7 +2794,11 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 setQuickTaskOpen(false);
               }}
               onFixWalnutClick={walnutInstallDir ? handleFixWalnut : undefined}
-              stats={chat.stats}
+              // Lane engine: chat.stats reads the OLD chat-history store, which
+              // lane turns never touch — its % is a frozen lie (reported: stuck
+              // 3% next to the model pill's real 18%). The composer's model pill
+              // shows the session's true context %; hide this one.
+              stats={laneActive ? null : chat.stats}
             />
 
             <ChatInput
