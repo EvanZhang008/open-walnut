@@ -230,6 +230,11 @@ export function bm25ScoreSessions(
       title: session.title || session.claudeSessionId,
       snippet: extractSnippet(snippetSource, query),
       sessionId: session.claudeSessionId,
+      // A session hit must carry its owning task: "which TASK did X?" is the
+      // question users actually ask, and a hit that names only the session
+      // leaves the answer one un-navigable hop away (2026-08-16 eval: the
+      // agent found the session, then could not name the task).
+      ...(session.taskId ? { taskId: session.taskId } : {}),
       score: bestScore,
       matchField,
     });
@@ -316,6 +321,7 @@ export function searchSessionReferences(
           title: session.title || session.claudeSessionId,
           snippet: session.claudeSessionId,
           sessionId: session.claudeSessionId,
+          ...(session.taskId ? { taskId: session.taskId } : {}),
           score: idScore,
           matchField: 'session_id',
         };
@@ -335,6 +341,7 @@ export function searchSessionReferences(
             title: session.title || session.claudeSessionId,
             snippet: `commit ${sha}`,
             sessionId: session.claudeSessionId,
+            ...(session.taskId ? { taskId: session.taskId } : {}),
             score,
             matchField: 'commit_sha',
           };
@@ -570,13 +577,21 @@ async function searchInner(
         undefined,
         { rerank: false, overfetchMultiplier: 1 },
       );
+      // QMD returns only the session id; join the owning task from the record
+      // so every session hit answers "which task?" too (see the taskId note in
+      // bm25ScoreSessions). One already-cached listSessions() read, no per-hit I/O.
+      const taskBySession = new Map(
+        (await getSessions()).map((s) => [s.claudeSessionId, s.taskId]),
+      );
       for (const r of qmdResults) {
         if (referenceResults.some((result) => result.sessionId === r.sessionId)) continue;
+        const ownerTaskId = r.sessionId ? taskBySession.get(r.sessionId) : undefined;
         results.push({
           type: 'session',
           title: r.title,
           snippet: r.snippet,
           sessionId: r.sessionId,
+          ...(ownerTaskId ? { taskId: ownerTaskId } : {}),
           score: r.finalScore,
           matchField: r.source,
         });

@@ -176,6 +176,20 @@ describe('searchSessionReferences', () => {
     expect(searchSessionReferences([session], '1234')).toEqual([]);
   });
 
+  it('session hits carry the owning taskId ("which TASK did X?" is one hop)', () => {
+    // 2026-08-16 eval: an agent searching types=session found the right session
+    // but could not name the task, because the hit omitted taskId even though
+    // SessionRecord.taskId was right there.
+    const owned = {
+      claudeSessionId: sessionId,
+      title: 'Owned session',
+      taskId: 'task-owner-1',
+      commitShas: ['a00ee84c'],
+    } as SessionRecord;
+    expect(searchSessionReferences([owned], sessionId)[0]?.taskId).toBe('task-owner-1');
+    expect(searchSessionReferences([owned], 'a00ee84c')[0]?.taskId).toBe('task-owner-1');
+  });
+
   it('resolves a commit SHA to its producing session (commit_sha lane)', () => {
     const committer = {
       claudeSessionId: sessionId,

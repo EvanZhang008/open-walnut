@@ -31,6 +31,29 @@ program
 
 registerCommands(program);
 
+// Unknown-command guidance. Commander's default for a stray argument is
+// "error: too many arguments" — which tells an agent (or a human) nothing about
+// where the capability actually lives. Measured cost of that silence
+// (2026-08-16 agent eval): an agent asked "which task made commit X" guessed
+// `walnut task-for-commit`, got "too many arguments", and burned FIVE turns on
+// --help spelunking before finding `walnut tools call`. Point at the catalog.
+program.showSuggestionAfterError(true);
+program.exitOverride((err) => {
+  const stray = process.argv.slice(2).find((a) => !a.startsWith('-'));
+  if (err.code === 'commander.excessArguments' && stray) {
+    console.error(`Unknown command: ${stray}`);
+    console.error('');
+    console.error('Every Walnut capability is available as an operation:');
+    console.error('  walnut tools list              # the full catalog');
+    console.error('  walnut tools help <op>         # one op\'s parameters');
+    console.error("  walnut tools call <op> '{...}' # run it");
+    console.error('');
+    console.error('Run `walnut --help` for the human subcommands.');
+    process.exit(1);
+  }
+  process.exit(err.exitCode);
+});
+
 // Default action: show dashboard or start web server
 program.action(async () => {
   const globals = program.opts<GlobalOptions>();

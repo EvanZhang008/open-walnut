@@ -21,8 +21,8 @@ export { resolveApiBase }
  * Read/write tool name sets — derived from the registry now, kept as exports
  * because tests and callers pin the surface through them.
  */
-export const READ_TOOL_NAMES: readonly string[] = opNames({ readonly: true })
-export const WRITE_TOOL_NAMES: readonly string[] = opNames({ readonly: false })
+export const READ_TOOL_NAMES: readonly string[] = opNames({ readonly: true, humanOnly: false })
+export const WRITE_TOOL_NAMES: readonly string[] = opNames({ readonly: false, humanOnly: false })
 
 /** JSON text content — the one result shape every tool returns on success. */
 function ok(payload: unknown): CallToolResult {
@@ -46,6 +46,7 @@ export function registerWalnutTools(
   const base = resolveApiBase(options.apiBase)
 
   for (const op of listOps()) {
+    if (op.tags.humanOnly) continue
     if (options.readonly && !op.tags.readonly) continue
     server.registerTool(op.name, {
       title: op.title,
@@ -55,8 +56,18 @@ export function registerWalnutTools(
         ...(op.tags.readonly ? { readOnlyHint: true } : {}),
         ...(op.tags.destructive !== undefined ? { destructiveHint: op.tags.destructive } : {}),
       },
+      // Claude Code defers ALL MCP tools behind ToolSearch by default
+      // (ENABLE_TOOL_SEARCH unset → 'tst' mode): they never appear in the
+      // initial prompt, so the Personal AI never used them — it fell back to
+      // the Bash/curl paths its skill teaches (observed live 2026-08-16:
+      // init carried 0 mcp__ tools, debug showed "0/17 deferred included").
+      // 'anthropic/alwaysLoad' is the per-tool opt-out the CLI honors; these
+      // ops ARE the session's primary interface to Walnut, so they must be
+      // visible from turn 1. ~17 small schemas ≈ a modest one-time prompt
+      // cost, far cheaper than every op-call spawning a CLI via Bash.
+      _meta: { 'anthropic/alwaysLoad': true },
     }, async (args: Record<string, unknown>) => {
-      const r = await executeOp(op.name, args ?? {}, { apiBase: base })
+      const r = await executeOp(op.name, args ?? {}, { apiBase: base, caller: 'agent' })
       return r.ok ? ok(r.result) : fail(r.message)
     })
   }
