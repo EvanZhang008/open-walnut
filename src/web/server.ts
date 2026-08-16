@@ -1457,6 +1457,27 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     qmdWatcherHandle = startQmdWatcher()
     log.memory.info('QMD watcher started')
 
+    // Warm the query path: the FIRST search after a restart used to pay the
+    // whole embedding-model load (measured 10s+, tripping client timeouts and
+    // reading as "search is broken"). One throwaway query right after boot
+    // moves that cost off the user's first keystroke. Fire-and-forget with a
+    // small delay so it never competes with the listen/startup critical path.
+    if (!options.dev) {
+      setTimeout(() => {
+        void (async () => {
+          const t0 = Date.now()
+          try {
+            const { memoryNotesSearch } = await import('../core/memory-search.js')
+            await memoryNotesSearch('warmup', undefined, 1, undefined, { rerank: false, overfetchMultiplier: 1 })
+            log.memory.info('QMD query path warmed', { ms: Date.now() - t0 })
+          } catch (err) {
+            log.memory.debug('QMD query warmup failed (first real search pays the load)', {
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        })()
+      }, 3_000)
+
     const qmdBackfillDelayMs = options.dev ? 0 : 60_000
     let qmdBackfillTimer: ReturnType<typeof setTimeout>
 

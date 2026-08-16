@@ -67,6 +67,12 @@ export interface WalnutOp {
   ) => Promise<unknown>
   /** Reshape a successful bound result (e.g. attach the task-ref citation). */
   mapResult?: (ctx: OpResultContext) => unknown
+  /**
+   * Per-op HTTP timeout override (ms). Search ops need more than the 10s
+   * default: a cold embedding model + semantic legs measured 10s+, and a
+   * timeout there reads as "search is broken" when the answer was coming.
+   */
+  timeoutMs?: number
   tags: {
     /** Read-only ops are advertised in --readonly mode and never prompt. */
     readonly: boolean

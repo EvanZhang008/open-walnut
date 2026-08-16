@@ -30,6 +30,13 @@ export interface IndexedSessionContent {
   rawBytes: number;
   /** True if oldest turns were dropped to honor maxBytes. */
   truncated: boolean;
+  /**
+   * Git commit SHAs this session produced (from `git commit` Bash results),
+   * extracted from the FULL history — never lost to the body's tail-keep cap.
+   * The one durable commit→session→task link ("which task made commit X?"
+   * was un-answerable through every search path, 2026-08-15).
+   */
+  commitShas: string[];
 }
 
 export interface IndexOptions {
@@ -89,10 +96,66 @@ function truncateTurn(text: string, maxChars: number): string {
 }
 
 /**
+ * Commit SHAs from git Bash tool results. Three shapes cover the real
+ * transcripts (each verified against actual session JSONLs):
+ *  1. porcelain "[branch abc1234] subject" from `git commit` itself;
+ *  2. `git log --oneline -1` — the standard "confirm the commit landed" probe
+ *     (needed when the commit's own output was redirected to a file, which is
+ *     exactly how the a00ee84c star-removal commit escaped shape 1);
+ *  3. `git rev-parse [--short] HEAD` — a bare hex line.
+ * Only 7-40 hex, word-bounded; `git log` without an explicit `-1` is history
+ * BROWSING, not confirmation — extracting it would falsely link other
+ * sessions' commits, so it is deliberately skipped.
+ */
+const COMMIT_RESULT_RE = /\[[^\[\]\n]+ ([0-9a-f]{7,40})\]/g;
+const ONELINE_HEAD_RE = /^([0-9a-f]{7,40})(?:\s|$)/;
+const GIT_LOG_SEGMENT_RE = /git\s+log\b([^|;&]*)/g;
+const GIT_REV_PARSE_RE = /git\s+rev-parse\s+(?:--short(?:=\d+)?\s+)?HEAD\b/;
+
+/** True when the command contains a `git log --oneline` limited to ONE entry
+ *  (flag order agnostic). Multi-entry `git log` is history browsing — its SHAs
+ *  are other commits, not this session's. */
+function isSingleCommitLogProbe(command: string): boolean {
+  for (const m of command.matchAll(GIT_LOG_SEGMENT_RE)) {
+    const args = m[1];
+    if (/--oneline\b/.test(args) && /(?:^|\s)-(?:1|n\s*1)(?:\s|$)/.test(args)) return true;
+  }
+  return false;
+}
+
+/** Extract commit SHAs a session created, from its tool calls. */
+export function extractCommitShas(messages: SessionHistoryMessage[]): string[] {
+  const shas: string[] = [];
+  const seen = new Set<string>();
+  const add = (sha: string) => { if (!seen.has(sha)) { seen.add(sha); shas.push(sha); } };
+  for (const msg of messages) {
+    for (const tool of msg.tools ?? []) {
+      if (tool.name !== 'Bash' || tool.isError) continue;
+      const input = typeof tool.input?.command === 'string' ? tool.input.command : '';
+      const result = tool.result ?? '';
+      if (/git\s+commit/.test(input)) {
+        for (const m of result.matchAll(COMMIT_RESULT_RE)) add(m[1]);
+      }
+      if (isSingleCommitLogProbe(input) || GIT_REV_PARSE_RE.test(input)) {
+        for (const line of result.split('\n')) {
+          const m = ONELINE_HEAD_RE.exec(line.trim());
+          if (m) add(m[1]);
+        }
+      }
+    }
+  }
+  return shas;
+}
+
+/**
  * Build the filtered conversation body from parsed session history.
  * Drops thinking, tool inputs, and tool results (kept only as a tool-name
  * footer). Collapses big code blocks, strips blobs, and caps total size by
  * dropping the OLDEST turns (recent conversation is most relevant).
+ *
+ * Commit SHAs are extracted from the FULL history BEFORE the size cap, so a
+ * commit made early in a long session survives even when its turn is dropped
+ * from the body.
  */
 export function buildIndexedContent(
   messages: SessionHistoryMessage[],
@@ -101,6 +164,8 @@ export function buildIndexedContent(
   const maxBytes = options?.maxBytes ?? DEFAULTS.maxBytes;
   const maxCharsPerTurn = options?.maxCharsPerTurn ?? DEFAULTS.maxCharsPerTurn;
   const codeBlockLineThreshold = options?.codeBlockLineThreshold ?? DEFAULTS.codeBlockLineThreshold;
+
+  const commitShas = extractCommitShas(messages);
 
   const blocks: string[] = [];
   let turnIndex = 0;
@@ -135,5 +200,5 @@ export function buildIndexedContent(
     truncated = true;
   }
 
-  return { body, turnCount: turnIndex, rawBytes, truncated };
+  return { body, turnCount: turnIndex, rawBytes, truncated, commitShas };
 }

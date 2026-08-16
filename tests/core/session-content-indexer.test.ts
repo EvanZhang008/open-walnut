@@ -4,7 +4,7 @@
  * size cap (tail-keep), turn headings, and empty input.
  */
 import { describe, it, expect } from 'vitest';
-import { buildIndexedContent } from '../../src/core/session-content-indexer.js';
+import { buildIndexedContent, extractCommitShas } from '../../src/core/session-content-indexer.js';
 import type { SessionHistoryMessage } from '../../src/core/session-history.js';
 
 function msg(partial: Partial<SessionHistoryMessage> & { role: 'user' | 'assistant' }): SessionHistoryMessage {
@@ -116,5 +116,129 @@ describe('buildIndexedContent', () => {
     const out = buildIndexedContent([msg({ role: 'user', text: 'short' })], { maxBytes: 50_000 });
     expect(out.truncated).toBe(false);
     expect(out.body).not.toContain('earlier turns omitted');
+  });
+});
+
+describe('extractCommitShas', () => {
+  const gitCommit = (result: string, over?: Partial<import('../../src/core/session-history.js').SessionHistoryTool>) => msg({
+    role: 'assistant' as const,
+    text: 'committing',
+    tools: [{ name: 'Bash', input: { command: 'git commit -m "fix: something"' }, result, ...over }],
+  });
+
+  it('extracts the SHA from porcelain commit output', () => {
+    const out = extractCommitShas([gitCommit('[main a00ee84] fix: retire the star system\n 3 files changed')]);
+    expect(out).toEqual(['a00ee84']);
+  });
+
+  it('extracts full 40-char SHAs and preserves order across turns', () => {
+    const out = extractCommitShas([
+      gitCommit('[main 1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa] first'),
+      gitCommit('[feature-x 2222222] second'),
+    ]);
+    expect(out).toEqual(['1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '2222222']);
+  });
+
+  it('dedupes a SHA reported twice', () => {
+    const out = extractCommitShas([
+      gitCommit('[main abc1234] msg'),
+      gitCommit('[main abc1234] msg (re-run echoed same output)'),
+    ]);
+    expect(out).toEqual(['abc1234']);
+  });
+
+  it('ignores failed git commit tool calls', () => {
+    const out = extractCommitShas([gitCommit('[main abc1234] msg', { isError: true })]);
+    expect(out).toEqual([]);
+  });
+
+  it('ignores Bash calls that are not git commit', () => {
+    const out = extractCommitShas([msg({
+      role: 'assistant',
+      text: '',
+      tools: [{ name: 'Bash', input: { command: 'git log --oneline' }, result: '[main abc1234] old commit' }],
+    })]);
+    expect(out).toEqual([]);
+  });
+
+  it('ignores non-Bash tools and prose that merely looks bracketed', () => {
+    const out = extractCommitShas([
+      msg({ role: 'assistant', text: 'see [branch deadbeef] in the docs' }),
+      msg({ role: 'assistant', text: '', tools: [{ name: 'Read', input: { command: 'git commit' }, result: '[main abc1234] x' }] }),
+    ]);
+    expect(out).toEqual([]);
+  });
+
+  it('does not match non-hex or too-short bracket contents', () => {
+    const out = extractCommitShas([
+      gitCommit('[main HEAD] weird'),
+      gitCommit('[main abc12] too short'),
+    ]);
+    expect(out).toEqual([]);
+  });
+
+  it('extracts from a git log --oneline -1 confirmation probe (redirected-commit case)', () => {
+    // The real a00ee84c escape: commit output was `> /tmp/x.txt`-redirected, so
+    // the SHA only ever appeared in the follow-up confirmation command.
+    const out = extractCommitShas([msg({
+      role: 'assistant',
+      text: '',
+      tools: [{
+        name: 'Bash',
+        input: { command: 'rm -rf /tmp/scratch 2>/dev/null; git log --oneline -1; git status --short | grep -c "^ M"' },
+        result: 'a00ee84c feat(tasks): retire the star system — pin + focus tiers are the working set\n99',
+      }],
+    })]);
+    expect(out).toEqual(['a00ee84c']);
+  });
+
+  it('extracts regardless of git log flag order (-1 --oneline)', () => {
+    const out = extractCommitShas([msg({
+      role: 'assistant',
+      text: '',
+      tools: [{
+        name: 'Bash',
+        input: { command: 'git log -1 --oneline' },
+        result: 'cafe123 fix: something',
+      }],
+    })]);
+    expect(out).toEqual(['cafe123']);
+  });
+
+  it('extracts from git rev-parse HEAD output', () => {
+    const out = extractCommitShas([msg({
+      role: 'assistant',
+      text: '',
+      tools: [{
+        name: 'Bash',
+        input: { command: 'git rev-parse --short HEAD' },
+        result: 'deadbee12\n',
+      }],
+    })]);
+    expect(out).toEqual(['deadbee12']);
+  });
+
+  it('does NOT extract from multi-commit history browsing (git log without -1)', () => {
+    const out = extractCommitShas([msg({
+      role: 'assistant',
+      text: '',
+      tools: [{
+        name: 'Bash',
+        input: { command: 'git log --oneline -5' },
+        result: 'abc1234 someone elses commit\ndef5678 another one',
+      }],
+    })]);
+    expect(out).toEqual([]);
+  });
+
+  it('survives the tail-keep cap: SHA from a dropped early turn still returned', () => {
+    const turns: SessionHistoryMessage[] = [gitCommit('[main abc1234] early commit')];
+    for (let i = 0; i < 50; i++) {
+      turns.push(msg({ role: 'user', text: `turn ${i} ` + 'word '.repeat(200) }));
+    }
+    const out = buildIndexedContent(turns, { maxBytes: 5_000 });
+    expect(out.truncated).toBe(true);
+    expect(out.body).not.toContain('early commit');
+    expect(out.commitShas).toEqual(['abc1234']);
   });
 });

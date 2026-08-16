@@ -307,16 +307,38 @@ export function searchSessionReferences(
 
   return sessions
     .map((session): SearchResult | null => {
-      const score = referenceMatchScore(session.claudeSessionId, query);
-      if (score === 0) return null;
-      return {
-        type: 'session',
-        title: session.title || session.claudeSessionId,
-        snippet: session.claudeSessionId,
-        sessionId: session.claudeSessionId,
-        score,
-        matchField: 'session_id',
-      };
+      const idScore = referenceMatchScore(session.claudeSessionId, query);
+      if (idScore > 0) {
+        return {
+          type: 'session',
+          title: session.title || session.claudeSessionId,
+          snippet: session.claudeSessionId,
+          sessionId: session.claudeSessionId,
+          score: idScore,
+          matchField: 'session_id',
+        };
+      }
+      // Commit SHA lane (2026-08-15 star incident): commitShas is the
+      // structured commit→session→task link the indexer backfills. A pasted
+      // SHA must resolve deterministically — as an embedding input it is
+      // noise, and BM25 ranked the right session #7. Prefix match both ways
+      // (7-char short SHA query vs 40-char stored, and vice versa).
+      for (const sha of session.commitShas ?? []) {
+        const score = referenceMatchScore(sha, query)
+          || (query.length >= MIN_PARTIAL_REFERENCE_LENGTH && sha.startsWith(query) ? 0.99 : 0)
+          || (sha.length >= 7 && query.startsWith(sha) && /^[0-9a-f]+$/.test(query) ? 0.99 : 0);
+        if (score > 0) {
+          return {
+            type: 'session',
+            title: session.title || session.claudeSessionId,
+            snippet: `commit ${sha}`,
+            sessionId: session.claudeSessionId,
+            score,
+            matchField: 'commit_sha',
+          };
+        }
+      }
+      return null;
     })
     .filter((result): result is SearchResult => result !== null)
     .sort((a, b) => b.score - a.score);
@@ -337,23 +359,25 @@ export function searchSessionTaskReferences(
 
   const tasksById = new Map(tasks.map((task) => [task.id, task]));
   const bestByTask = new Map<string, SearchResult>();
-  for (const session of sessions) {
-    const score = referenceMatchScore(session.claudeSessionId, query);
-    if (score === 0 || !session.taskId) continue;
+  // Reuse the id + commit-SHA reference lanes: a hit on EITHER resolves to the
+  // owning task, so "which task made commit X?" is a one-hop lookup.
+  for (const hit of searchSessionReferences(sessions, rawQuery)) {
+    const session = sessions.find((s) => s.claudeSessionId === hit.sessionId);
+    if (!session?.taskId) continue;
     const task = tasksById.get(session.taskId);
     if (!task) continue;
 
     const existing = bestByTask.get(task.id);
-    if (existing && existing.score >= score) continue;
+    if (existing && existing.score >= hit.score) continue;
     bestByTask.set(task.id, {
       type: 'task',
       title: task.title,
-      snippet: session.claudeSessionId,
+      snippet: hit.snippet,
       taskId: task.id,
       sessionId: session.claudeSessionId,
       parentTaskId: task.parent_task_id,
-      score,
-      matchField: 'session_id',
+      score: hit.score,
+      matchField: hit.matchField,
     });
   }
 
@@ -397,12 +421,25 @@ export function searchTaskAndSessionReferences(
 
 // ── Main search function ──
 
+/**
+ * Default search lanes when the caller doesn't pick.
+ *
+ * Sessions are IN by default (2026-08-15): "which task retired the star
+ * system?" was unanswerable through every search front door because the
+ * transcript content — the only place the answer lived — sat in a session
+ * index no default query ever consulted. Task titles/summaries routinely
+ * under-describe what actually happened (fork-inherited titles, one summary
+ * field overwritten by later topics); the transcript is the ground truth, so
+ * the default must include it.
+ */
+export const DEFAULT_SEARCH_TYPES: ReadonlyArray<'task' | 'memory' | 'session'> = ['task', 'memory', 'session'];
+
 export async function search(
   query: string,
   options: SearchOptions = {},
 ): Promise<SearchResult[]> {
   const limit = options.limit ?? 20;
-  const types = options.types ?? ['task', 'memory'];
+  const types = options.types ?? DEFAULT_SEARCH_TYPES;
 
   const normalizedQuery = query.trim();
   if (normalizedQuery.length === 0) return [];
@@ -592,6 +629,7 @@ export async function search(
   const isReference = (result: SearchResult): boolean =>
     result.matchField === 'id'
     || result.matchField === 'session_id'
+    || result.matchField === 'commit_sha'
     || result.matchField === 'external_url';
   results.sort((a, b) =>
     Number(isReference(b)) - Number(isReference(a))

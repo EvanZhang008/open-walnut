@@ -52,6 +52,7 @@ async function rawRequest(
   method: string,
   path: string,
   body?: unknown,
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
 ): Promise<OpOutcome> {
   const serverRoot = base.replace(/\/api\/v1$/, '')
   const url = path.startsWith('/api/') ? `${serverRoot}${path}` : `${base}${path}`
@@ -61,7 +62,7 @@ async function rawRequest(
       method,
       headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     })
   } catch (err) {
     const code = causeCode(err)
@@ -69,7 +70,7 @@ async function rawRequest(
       return { ok: false, message: `Walnut server not running at ${base} — start with \`open-walnut web\`` }
     }
     if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-      return { ok: false, message: `Walnut request timed out after ${REQUEST_TIMEOUT_MS}ms: ${method} ${path}` }
+      return { ok: false, message: `Walnut request timed out after ${timeoutMs}ms: ${method} ${path}` }
     }
     return { ok: false, message: `Walnut request failed: ${err instanceof Error ? err.message : String(err)}` }
   }
@@ -166,10 +167,11 @@ export async function executeOp(
 }
 
 async function runOp(op: WalnutOp, args: Record<string, unknown>, base: string): Promise<OpOutcome> {
+  const timeoutMs = op.timeoutMs ?? REQUEST_TIMEOUT_MS
   if (op.handler) {
     try {
       const call = async (method: HttpBinding['method'], path: string, body?: unknown): Promise<unknown> => {
-        const r = await rawRequest(base, method, path, body)
+        const r = await rawRequest(base, method, path, body, timeoutMs)
         if (!r.ok) throw new Error(r.message)
         return r.result
       }
@@ -185,7 +187,7 @@ async function runOp(op: WalnutOp, args: Record<string, unknown>, base: string):
   } catch (err) {
     return { ok: false, message: `Invalid arguments for ${op.name}: ${err instanceof Error ? err.message : String(err)}` }
   }
-  const r = await rawRequest(base, op.bind!.method, materialized.path, materialized.body)
+  const r = await rawRequest(base, op.bind!.method, materialized.path, materialized.body, timeoutMs)
   if (!r.ok) return r
   const result = op.mapResult ? op.mapResult({ body: r.result, args }) : r.result
   return { ok: true, result }

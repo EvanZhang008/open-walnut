@@ -21,14 +21,19 @@ defineOp({
   name: 'search',
   title: 'Search Walnut',
   description:
-    'Global search across the user\'s tasks, memory, and sessions (string + semantic legs). ' +
-    'Use this to check whether something already exists before creating a task.',
+    'Global search across the user\'s tasks, memory, AND session transcripts (string + semantic ' +
+    'legs; sessions are searched by default). Session transcripts are the ground truth for "who ' +
+    'did X / which task changed Y" questions — task titles and summaries routinely under-describe ' +
+    'the actual work. Also use this to check whether something already exists before creating a task.',
   input: {
     q: z.string().min(1).describe('Search query'),
-    types: z.string().optional().describe('Comma-separated subset of: task,memory,session'),
+    types: z.string().optional().describe('Comma-separated subset of: task,memory,session (default: all three)'),
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default 20)'),
   },
   bind: { method: 'GET', path: '/search' },
+  // Cold embedding model + three semantic legs measured >10s; the default
+  // 10s timeout made "search is broken" out of "search is warming up".
+  timeoutMs: 30_000,
   tags: { readonly: true, remote: 'allow' },
 })
 
@@ -169,6 +174,7 @@ defineOp({
     limit: z.number().int().min(1).max(100).optional().describe('Max results (default 30)'),
   },
   bind: { method: 'GET', path: '/notes/search' },
+  timeoutMs: 30_000,
   tags: { readonly: true, remote: 'allow' },
 })
 

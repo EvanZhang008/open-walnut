@@ -7,7 +7,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { bus } from '../event-bus.js';
+import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
 import type {
   SessionHookDefinition,
@@ -162,7 +162,7 @@ The note is ${existing.length} chars — OVER the ${NOTE_REORG_CAP}-char budget.
   return `You just finished a turn. Update this task's NOTE — the single living document that lets a human (or a fresh AI with zero context) pick the task up. You have the full context — be the authoritative source. ${noteBlock}
 
 Section contract (plain text under each label, English, self-contained — never "this bug"/"the feature"). Style rules for ALL sections: any name a zero-context reader wouldn't know (project codenames, internal tools, niche libraries, team jargon) gets a FEW-WORDS parenthetical on first use — "walnut (a personal task manager)" — not a sentence of background; well-known public things (React, S3, GitHub) need none. Reference code by file path only, NEVER line numbers (they drift). Terse beats thorough-sounding.
-EXEC_SUMMARY: For the HUMAN scanning: 2-3 plain sentences — what this task is + where it stands. No jargon.
+EXEC_SUMMARY: For the HUMAN scanning: 2-4 plain sentences — what this task is + where it stands. No jargon. A task that grew to cover SEVERAL distinct workstreams (long sessions and forks often pivot) must mention EVERY workstream in one short clause each — never only the latest one. This summary is a primary search surface: dropping an earlier workstream makes that work unfindable ("which task removed X?" fails). If an earlier summary listed a workstream, keep it (compressed is fine, deleted is not).
 USER_REQUEST: A concise, accurate restatement of what the user asked for — capture the intent faithfully but do NOT quote the user verbatim (raw messages carry typos and thinking-out-loud; distill them). Include the acceptance criteria, detailed enough to be the search entry point. If the user changed direction, rewrite and keep a "(pivoted from: <old> — <why>)" trace inline.
 CONTEXT: Background a newcomer needs: where the problem came from, why it matters, constraints, systems involved. Write once, keep frozen; only add when genuinely new background surfaced.
 PROGRESS: HIGH-LEVEL status board, one BULLET per workitem/component: "- [STATUS] <workitem> — <detail>". STATUS is one of the plain-text labels wrapped in square brackets — [DONE] (finished), [WIP] (in progress), [TODO] (not started yet), [BLOCKED]/[WAIT] (blocked, or waiting on a human / review / deployment). Use the bracketed label text, NOT emoji. Simple and concise — details belong in WORK_LOG, not here.
@@ -402,6 +402,50 @@ export function decideNotify(report: string, dedupKey: string): string | null {
 }
 
 /**
+ * Fork-title drift refresh (triage-time). A fork's title is refined ONCE at
+ * creation from its FIRST prompt — sessions that pivot keep a title describing
+ * the original topic forever, which breaks title-based search ("which task
+ * removed X?" finds nothing because the fork is still named after topic #1,
+ * 2026-08-15 star incident). After each summary derivation, re-label the fork
+ * from its CURRENT summary and rename when the topic genuinely drifted.
+ *
+ * Guardrails: only titles still in the auto-fork shape (`… fork of <source>`)
+ * are touched — a human rename never is; titleCoversLabel damps paraphrase
+ * flip-flops; the write re-checks the title didn't change during the LLM call.
+ * Best-effort and fire-and-forget: failures keep the current title. Exported
+ * for unit tests.
+ */
+export async function maybeRefreshForkTitle(taskId: string, summary: string): Promise<void> {
+  try {
+    if (!summary.trim()) return;
+    const { getTask, updateTask } = await import('../task-manager.js');
+    const { parseForkTitle, titleCoversLabel, summarizeForkPrompt } = await import('../fork-title.js');
+    const task = await getTask(taskId);
+    const parsed = parseForkTitle(task.title ?? '');
+    if (!parsed) return; // human-named (or not a fork) — never rewrite
+
+    const label = await summarizeForkPrompt(summary);
+    if (!label) return;
+    if (titleCoversLabel(task.title, label)) return; // same topic, differently worded
+
+    // CAS-ish: skip if someone (human or another fire) renamed it meanwhile.
+    const fresh = await getTask(taskId);
+    if (fresh.title !== task.title) return;
+
+    const refined = `${label} - fork of ${parsed.sourceTitle}`;
+    const { task: updated } = await updateTask(taskId, { title: refined }, { source: 'fork-title' });
+    bus.emit(EventNames.TASK_UPDATED, { task: updated }, ['web-ui', 'main-agent'], { source: 'fork-title' });
+    log.session.info('fork title refreshed after topic drift', {
+      taskId, from: task.title, to: refined,
+    });
+  } catch (err) {
+    log.session.debug('fork title drift refresh skipped', {
+      taskId, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
  * runTriage: the turn-complete summary work. Invoked from the trailing-debounce
  * timer below, NOT directly on turn completion, so a burst of interactive turns
  * collapses into one run.
@@ -632,6 +676,8 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
             sessionId: p.sessionId, error: err instanceof Error ? err.message : String(err),
           });
         }
+        // Fork-title drift refresh: fire-and-forget, auto-fork titles only.
+        void maybeRefreshForkTitle(taskId, shortSummary);
       }
     }
 

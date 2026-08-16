@@ -175,6 +175,23 @@ describe('searchSessionReferences', () => {
     expect(searchSessionReferences([session], '12345678')[0]?.sessionId).toBe(sessionId);
     expect(searchSessionReferences([session], '1234')).toEqual([]);
   });
+
+  it('resolves a commit SHA to its producing session (commit_sha lane)', () => {
+    const committer = {
+      claudeSessionId: sessionId,
+      title: 'Star removal session',
+      commitShas: ['68e23b9e', 'a00ee84c'],
+    } as SessionRecord;
+    // Short SHA exact hit
+    expect(searchSessionReferences([committer], 'a00ee84c')[0]).toEqual(
+      expect.objectContaining({ sessionId, matchField: 'commit_sha', score: 1 }),
+    );
+    // Full-SHA query vs short stored SHA (prefix, hex-only)
+    expect(searchSessionReferences([committer], 'a00ee84c1234567890abcdef1234567890abcdef')[0]?.matchField)
+      .toBe('commit_sha');
+    // Non-hex lookalike must not match
+    expect(searchSessionReferences([committer], 'a00ee84cz')).toEqual([]);
+  });
 });
 
 describe('searchSessionTaskReferences', () => {
@@ -213,6 +230,25 @@ describe('searchSessionTaskReferences', () => {
       claudeSessionId: sessionId,
       taskId: 'deleted-task',
     } as SessionRecord], sessionId)).toEqual([]);
+  });
+
+  it('resolves a commit SHA to the owning TASK ("which task made commit X?")', () => {
+    const results = searchSessionTaskReferences([task], [{
+      claudeSessionId: sessionId,
+      taskId: task.id,
+      title: 'Star removal session',
+      commitShas: ['a00ee84c'],
+    } as SessionRecord], 'a00ee84c');
+
+    expect(results).toEqual([
+      expect.objectContaining({
+        type: 'task',
+        taskId: task.id,
+        sessionId,
+        matchField: 'commit_sha',
+        score: 1,
+      }),
+    ]);
   });
 });
 
@@ -277,5 +313,57 @@ describe('QMD memory search integration', () => {
     const { search } = await import('../../src/core/search.js');
     await expect(search('TypeScript', { types: ['memory'] }))
       .rejects.toThrow('Database not available');
+  });
+});
+
+describe('default search lanes (2026-08-15 star incident)', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.doUnmock('../../src/core/memory-search.js');
+    vi.doUnmock('../../src/core/task-manager.js');
+    vi.doUnmock('../../src/core/session-tracker.js');
+  });
+
+  it('DEFAULT_SEARCH_TYPES includes sessions', async () => {
+    const { DEFAULT_SEARCH_TYPES } = await import('../../src/core/search.js');
+    // Transcripts are the ground truth for "which task changed X" — a default
+    // that skips the session index made real work unfindable. Regression guard.
+    expect([...DEFAULT_SEARCH_TYPES].sort()).toEqual(['memory', 'session', 'task']);
+  });
+
+  it('search() with NO types option consults the session lane and returns its hits', async () => {
+    vi.doMock('../../src/core/task-manager.js', () => ({
+      listTasks: vi.fn().mockResolvedValue([]),
+    }));
+    vi.doMock('../../src/core/session-tracker.js', () => ({
+      listSessions: vi.fn().mockResolvedValue([]),
+    }));
+    const memoryNotesSearch = vi.fn(async (_q: string, sources?: string[]) => {
+      if (sources?.includes('session')) {
+        return [{
+          title: 'star removal session',
+          snippet: 'retire the star system — StarButton deleted',
+          filepath: 'qmd://session/sess-8df36131',
+          sessionId: '8df36131',
+          finalScore: 0.9,
+          source: 'session',
+        }];
+      }
+      return [];
+    });
+    vi.doMock('../../src/core/memory-search.js', () => ({ memoryNotesSearch }));
+
+    const { search } = await import('../../src/core/search.js');
+    const results = await search('StarButton'); // deliberately NO types option
+
+    const sessionLaneQueried = memoryNotesSearch.mock.calls.some(
+      (c) => Array.isArray(c[1]) && c[1].includes('session'),
+    );
+    expect(sessionLaneQueried).toBe(true);
+    expect(results.some((r) => r.type === 'session' && r.sessionId === '8df36131')).toBe(true);
   });
 });

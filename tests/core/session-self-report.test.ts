@@ -316,3 +316,21 @@ describe('buildSelfReportPrompt', () => {
     expect(p).toContain('NEVER include commit hashes');
   });
 });
+
+describe('EXEC_SUMMARY multi-workstream contract (2026-08-15 star incident)', () => {
+  // task.summary is derived from EXEC_SUMMARY and is a primary search surface.
+  // A fork session that pivoted topics used to end with a summary describing
+  // ONLY the latest topic — the earlier work (the actual answer to "which task
+  // removed X?") vanished from search. The prompt must demand every workstream
+  // stays represented.
+  it('instructs the session to keep EVERY workstream in the summary', () => {
+    const p = buildSelfReportPrompt('');
+    expect(p).toContain('EVERY workstream');
+    expect(p).toMatch(/never only the latest/i);
+  });
+
+  it('explains the why: the summary is a search surface', () => {
+    const p = buildSelfReportPrompt('');
+    expect(p).toMatch(/search surface/i);
+  });
+});

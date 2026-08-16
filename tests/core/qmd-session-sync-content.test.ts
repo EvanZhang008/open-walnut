@@ -47,8 +47,10 @@ vi.mock('../../src/core/task-manager.js', () => ({
   listTasks: vi.fn(async () => []),
 }));
 
+const updateSessionRecordMock = vi.hoisted(() => vi.fn(async () => ({})));
 vi.mock('../../src/core/session-tracker.js', () => ({
   listSessions: vi.fn(async () => []),
+  updateSessionRecord: updateSessionRecordMock,
 }));
 
 // Mock session-history: return canned messages for a known local sid, throw for "boom".
@@ -57,10 +59,20 @@ const localMessages: SessionHistoryMessage[] = [
   { role: 'assistant', text: 'use buildIndexedContent then embed', timestamp: '2026-05-05T10:01:00.000Z',
     tools: [{ name: 'Read', input: { file_path: '/x' }, result: 'SECRET_TOOL_RESULT' }] },
 ];
+// A session whose transcript contains a real `git commit` porcelain result —
+// exercises the # Commits section + record backfill.
+const committerMessages: SessionHistoryMessage[] = [
+  ...localMessages,
+  { role: 'assistant', text: 'committed the star removal', timestamp: '2026-05-05T10:05:00.000Z',
+    tools: [{ name: 'Bash', input: { command: 'git commit -m "feat: retire the star system"' },
+      result: '[main a00ee84] feat: retire the star system\n 12 files changed' }] },
+];
+
 vi.mock('../../src/core/session-history.js', () => {
   const read = vi.fn(async (sid: string) => {
     if (sid === 'boom') throw new Error('jsonl read failed');
     if (sid === 'empty') return [];
+    if (sid === 'committer') return committerMessages;
     return localMessages;
   });
   // syncSession reads via the tail-bounded variant (whale-safe); same contract
@@ -153,6 +165,27 @@ describe('qmd-session-sync v2 content indexing', () => {
     expect(docContent('sess-boom')).toBe(original);
     expect(docContent('sess-boom'))
       .not.toContain('Must not replace the rich document');
+  });
+
+  it('emits a # Commits section and backfills commitShas onto the session record', async () => {
+    await syncSession(sess({ claudeSessionId: 'committer' }));
+    const content = docContent('sess-committer');
+    // Own heading → own QMD chunk, so a SHA query lands on this session.
+    expect(content).toContain('# Commits\na00ee84');
+    // Wait a tick: the backfill is fire-and-forget (void promise).
+    await new Promise((r) => setTimeout(r, 0));
+    expect(updateSessionRecordMock).toHaveBeenCalledWith('committer', { commitShas: ['a00ee84'] });
+  });
+
+  it('skips the backfill write when the record already has the same SHAs', async () => {
+    await syncSession(sess({ claudeSessionId: 'committer', commitShas: ['a00ee84'] }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(updateSessionRecordMock).not.toHaveBeenCalled();
+  });
+
+  it('sessions without commits get no # Commits section', async () => {
+    await syncSession(sess({ claudeSessionId: 'sid-1' }));
+    expect(docContent('sess-sid-1')).not.toContain('# Commits');
   });
 
   it('indexes Codex conversation content from the ACP journal', async () => {

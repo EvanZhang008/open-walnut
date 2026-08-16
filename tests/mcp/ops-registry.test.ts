@@ -40,6 +40,22 @@ describe('ops registry — shape contract', () => {
     }
   })
 
+  it('search ops carry a 30s timeout (embedding cold-start exceeds the 10s default)', () => {
+    // Cold semantic search loads the embedding model (measured >10s); the 10s
+    // default made "search is warming up" read as "search is broken". Regression
+    // guard for the 2026-08-15 star-incident fix.
+    for (const name of ['search', 'note_search']) {
+      const op = listOps().find((o) => o.name === name)
+      expect(op?.timeoutMs, `${name} timeoutMs`).toBe(30_000)
+    }
+  })
+
+  it('the search op description says sessions are searched by default', () => {
+    const op = listOps().find((o) => o.name === 'search')
+    expect(op?.description).toMatch(/session transcripts/i)
+    expect(op?.description).toMatch(/searched by default/i)
+  })
+
   it('the original 10 MCP tool names survive the registry port (public contract)', () => {
     const names = listOps().map((o) => o.name)
     for (const n of [

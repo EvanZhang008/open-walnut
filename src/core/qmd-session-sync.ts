@@ -41,6 +41,8 @@ export interface SerializeOptions {
 interface ConversationBodyRead {
   body: string | null;
   failed: boolean;
+  /** Commit SHAs extracted from the full history (see extractCommitShas). */
+  commitShas?: string[];
 }
 
 interface SerializedSession {
@@ -87,8 +89,8 @@ async function readConversationBody(
       const state = await readAcpSessionHistoryState(session);
       if (!state.journalExists) return { body: null, failed: true };
       if (state.messages.length === 0) return { body: null, failed: false };
-      const { body } = buildIndexedContent(state.messages);
-      return { body: body || null, failed: false };
+      const { body, commitShas } = buildIndexedContent(state.messages);
+      return { body: body || null, failed: false, commitShas };
     } catch (err) {
       log.agent.debug('ACP session content read failed during indexing', {
         sessionId: session.claudeSessionId,
@@ -120,8 +122,8 @@ async function readConversationBody(
     if (messages.length === 0) {
       return { body: null, failed: false };
     }
-    const { body } = buildIndexedContent(messages);
-    return { body: body || null, failed: false };
+    const { body, commitShas } = buildIndexedContent(messages);
+    return { body: body || null, failed: false, commitShas };
   } catch (err) {
     log.agent.debug('session content read failed during indexing', {
       sessionId: session.claudeSessionId,
@@ -162,6 +164,14 @@ async function serializeSession(
     const content = await readConversationBody(session);
     contentReadFailed = content.failed;
     const body = content.body;
+    // Commits FIRST (their own heading → own QMD chunk): extracted from the
+    // full history, so a SHA search finds this session even when the commit's
+    // turn fell out of the tail-capped body. Also backfilled onto the session
+    // record (structured field) — best-effort, index write must not depend on it.
+    if (content.commitShas?.length) {
+      sections.push(`# Commits\n${content.commitShas.join('\n')}`);
+      void backfillCommitShas(session, content.commitShas);
+    }
     if (body) sections.push(body);
   }
 
@@ -169,6 +179,25 @@ async function serializeSession(
     text: sections.length ? sections.join('\n\n') : null,
     contentReadFailed,
   };
+}
+
+/**
+ * Persist extracted commit SHAs onto the SessionRecord (payload field), making
+ * commit→session→task a structured one-hop lookup instead of a transcript
+ * archaeology exercise. Skips the write when nothing changed.
+ */
+async function backfillCommitShas(session: SessionRecord, shas: string[]): Promise<void> {
+  try {
+    const existing = session.commitShas ?? [];
+    if (existing.length === shas.length && existing.every((s, i) => s === shas[i])) return;
+    const { updateSessionRecord } = await import('./session-tracker.js');
+    await updateSessionRecord(session.claudeSessionId, { commitShas: shas });
+  } catch (err) {
+    log.agent.debug('commit sha backfill skipped', {
+      sessionId: session.claudeSessionId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /** SHA256 hash of serialized content. */

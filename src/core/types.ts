@@ -1488,6 +1488,13 @@ export interface SessionRecord {
   fromPlanSessionId?: string;
   /** Source session ID when this session was forked from another session. */
   forkedFromSessionId?: string;
+  /**
+   * Git commit SHAs this session produced (extracted from `git commit` tool
+   * results by the session indexer, in commit order). The structured half of
+   * the commit→session→task chain — searchable and API-visible, so "which
+   * task made commit X?" is a lookup, not transcript archaeology.
+   */
+  commitShas?: string[];
   human_note?: string;
   /** Claude model used by this session (e.g. "claude-opus-4-6"). Display only. */
   model?: string;

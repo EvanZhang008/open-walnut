@@ -19,6 +19,13 @@ const DEFAULT_BASE_URL = 'http://127.0.0.1:3456';
 /** A CLI command must never hang on a wedged server — fail fast and say why. */
 const REQUEST_TIMEOUT_MS = 10_000;
 
+/** Per-request override for known-slow endpoints (semantic search cold-starts
+ *  the embedding model — measured >10s on first query, 2-4s warm). 10s default
+ *  turned "search is warming up" into "search is broken". */
+export interface ApiRequestOptions {
+  timeoutMs?: number;
+}
+
 export function apiBaseUrl(): string {
   const raw = process.env.OPEN_WALNUT_API_URL?.trim();
   return (raw || DEFAULT_BASE_URL).replace(/\/+$/, '');
@@ -47,14 +54,15 @@ export class ApiUnreachableError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, opts?: ApiRequestOptions): Promise<T> {
   const base = apiBaseUrl();
+  const timeoutMs = opts?.timeoutMs ?? REQUEST_TIMEOUT_MS;
   let res: Response;
   try {
     res = await fetch(base + path, {
       method,
       ...(body !== undefined ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
     // fetch only rejects for transport-level failures (refused/DNS/abort) —
@@ -62,7 +70,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     // "there is no server answering here".
     const name = (err as { name?: string } | undefined)?.name;
     const reason = name === 'TimeoutError' || name === 'AbortError'
-      ? `no response within ${REQUEST_TIMEOUT_MS / 1000}s`
+      ? `no response within ${timeoutMs / 1000}s`
       : 'connection refused';
     throw new ApiUnreachableError(base, reason);
   }
@@ -92,8 +100,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return parsed as T;
 }
 
-export function apiGet<T>(path: string): Promise<T> {
-  return request<T>('GET', path);
+export function apiGet<T>(path: string, opts?: ApiRequestOptions): Promise<T> {
+  return request<T>('GET', path, undefined, opts);
 }
 
 export function apiPost<T>(path: string, body?: unknown): Promise<T> {

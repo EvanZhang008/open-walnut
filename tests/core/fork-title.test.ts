@@ -17,7 +17,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
   getConfig: async () => ({ agent: { main_provider: 'bedrock' } }),
 }));
 
-import { normalizeLabel, summarizeForkPrompt } from '../../src/core/fork-title.js';
+import { normalizeLabel, summarizeForkPrompt, parseForkTitle, titleCoversLabel } from '../../src/core/fork-title.js';
 
 function textResult(text: string) {
   return { content: [{ type: 'text', text }], stopReason: 'end_turn' };
@@ -102,5 +102,36 @@ describe('summarizeForkPrompt', () => {
     // A prompt with only stopwords → heuristic yields '' (caller keeps placeholder).
     const label = await summarizeForkPrompt('please can you');
     expect(typeof label).toBe('string');
+  });
+});
+
+describe('parseForkTitle', () => {
+  it('parses the bare placeholder shape', () => {
+    expect(parseForkTitle('Fork of Notes redesign')).toEqual({ label: null, sourceTitle: 'Notes redesign' });
+  });
+
+  it('parses the refined shape', () => {
+    expect(parseForkTitle('Fix Login Redirect - fork of Notes redesign'))
+      .toEqual({ label: 'Fix Login Redirect', sourceTitle: 'Notes redesign' });
+  });
+
+  it('returns null for a human-authored title (never rewrite those)', () => {
+    expect(parseForkTitle('Retire the star system')).toBeNull();
+    expect(parseForkTitle('')).toBeNull();
+    expect(parseForkTitle('forklift of doom')).toBeNull();
+  });
+});
+
+describe('titleCoversLabel', () => {
+  it('true when the title already mentions the topic (paraphrase damping)', () => {
+    expect(titleCoversLabel('Star System Removal - fork of UI polish', 'Remove Star System')).toBe(true);
+  });
+
+  it('false when the label is a genuinely new topic', () => {
+    expect(titleCoversLabel('Context Inspector - fork of UI polish', 'Remove Star System')).toBe(false);
+  });
+
+  it('true for an empty label (nothing to cover)', () => {
+    expect(titleCoversLabel('anything', '')).toBe(true);
   });
 });

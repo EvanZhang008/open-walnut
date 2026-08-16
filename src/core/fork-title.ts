@@ -170,3 +170,28 @@ export async function summarizeGroupLabel(titles: string[], timeoutMs = 15_000):
     return heuristicLabel(cleaned.join(' '));
   }
 }
+
+/**
+ * Split an auto-generated fork title into its parts, or null when the title is
+ * NOT the auto-fork shape (`Fork of <source>` / `<label> - fork of <source>`).
+ * Null means a human named it — callers must never rewrite such a title.
+ */
+export function parseForkTitle(title: string): { label: string | null; sourceTitle: string } | null {
+  const m = /^(?:(.+?) - )?[Ff]ork of (.+)$/.exec((title ?? '').trim());
+  if (!m) return null;
+  return { label: m[1]?.trim() || null, sourceTitle: m[2].trim() };
+}
+
+/**
+ * Does `title` already cover `label`'s topic? True when at least half the
+ * label's words appear in the title. Damps paraphrase flip-flops ("Star System
+ * Removal" vs "Remove Star System") so a drift refresh only fires on a REAL
+ * topic change, not on the model re-wording the same one.
+ */
+export function titleCoversLabel(title: string, label: string): boolean {
+  const titleWords = new Set(title.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
+  const labelWords = label.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  if (labelWords.length === 0) return true;
+  const hits = labelWords.filter((w) => titleWords.has(w)).length;
+  return hits >= Math.ceil(labelWords.length / 2);
+}

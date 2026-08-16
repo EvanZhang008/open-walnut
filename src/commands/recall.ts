@@ -18,8 +18,11 @@ export async function runRecall(
   }
 
   try {
+    // 30s: semantic search cold-starts the embedding model (>10s first query);
+    // the default 10s made a warming-up search look permanently broken.
     const { results } = await apiGet<{ results: SearchResult[] }>(
       `/api/v1/search?q=${encodeURIComponent(query)}`,
+      { timeoutMs: 30_000 },
     );
 
     if (globals.json) {
@@ -53,6 +56,9 @@ function printResults(results: SearchResult[], facts: Map<string, TaskFacts>): v
       if (task) {
         console.log(`     ${statusSymbol(task.status)} ${task.status}  ${prioritySymbol(task.priority)}`);
       }
+    } else if (result.type === 'session') {
+      console.log(`  ${chalk.magenta('[session]')} ${chalk.bold(result.title)}`);
+      if (result.sessionId) console.log(`     ${chalk.dim(result.sessionId)}`);
     } else {
       console.log(`  ${chalk.blue('[memo]')} ${chalk.dim(result.path)}`);
       console.log(`     ${chalk.bold(result.title)}`);
