@@ -195,3 +195,27 @@ export function titleCoversLabel(title: string, label: string): boolean {
   const hits = labelWords.filter((w) => titleWords.has(w)).length;
   return hits >= Math.ceil(labelWords.length / 2);
 }
+
+/** Separator between drift-prepended topic labels and the original title. */
+const TOPIC_SEP = ' · ';
+/** Keep at most this many auto-prepended topics; oldest drops first. */
+const MAX_TOPIC_PREFIXES = 2;
+
+/**
+ * Prepend a drifted topic to a title WITHOUT losing anything the human (or the
+ * original auto-namer) wrote: `New Topic · Old Topic · original title`. This is
+ * the additive alternative to rewriting — safe on EVERY title, not just
+ * auto-fork ones, because the original tail is never modified or dropped.
+ * Only the auto-prepended `·`-prefixes rotate (oldest out past the cap).
+ * Returns null when the topic is already covered (no change needed).
+ */
+export function prependTopicToTitle(title: string, label: string): string | null {
+  const trimmed = (title ?? '').trim();
+  if (!label || titleCoversLabel(trimmed, label)) return null;
+  const parts = trimmed.split(TOPIC_SEP);
+  // parts = [prefix1, prefix2, ..., originalTail] — the tail is untouchable.
+  const tail = parts[parts.length - 1];
+  const prefixes = parts.slice(0, -1);
+  const nextPrefixes = [label, ...prefixes].slice(0, MAX_TOPIC_PREFIXES);
+  return [...nextPrefixes, tail].join(TOPIC_SEP);
+}

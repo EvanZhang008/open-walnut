@@ -402,44 +402,40 @@ export function decideNotify(report: string, dedupKey: string): string | null {
 }
 
 /**
- * Fork-title drift refresh (triage-time). A fork's title is refined ONCE at
- * creation from its FIRST prompt — sessions that pivot keep a title describing
- * the original topic forever, which breaks title-based search ("which task
- * removed X?" finds nothing because the fork is still named after topic #1,
- * 2026-08-15 star incident). After each summary derivation, re-label the fork
- * from its CURRENT summary and rename when the topic genuinely drifted.
- *
- * Guardrails: only titles still in the auto-fork shape (`… fork of <source>`)
- * are touched — a human rename never is; titleCoversLabel damps paraphrase
- * flip-flops; the write re-checks the title didn't change during the LLM call.
- * Best-effort and fire-and-forget: failures keep the current title. Exported
- * for unit tests.
+ * Title drift refresh (triage-time), for EVERY task — not just forks. A title
+ * is written once (creation / fork refine) but sessions pivot; a stale title
+ * breaks title-based search ("which task removed X?" — 2026-08-15 star
+ * incident). After each summary derivation, label the CURRENT topic and, when
+ * the title doesn't cover it, PREPEND it: `New Topic · original title`.
+ * Additive by design: the original title (human or auto) is never modified or
+ * dropped — only the auto-added `·`-prefixes rotate. titleCoversLabel damps
+ * paraphrase flip-flops; a concurrent rename during the LLM call wins.
+ * Best-effort and fire-and-forget. Exported for unit tests.
  */
 export async function maybeRefreshForkTitle(taskId: string, summary: string): Promise<void> {
   try {
     if (!summary.trim()) return;
     const { getTask, updateTask } = await import('../task-manager.js');
-    const { parseForkTitle, titleCoversLabel, summarizeForkPrompt } = await import('../fork-title.js');
+    const { prependTopicToTitle, summarizeForkPrompt } = await import('../fork-title.js');
     const task = await getTask(taskId);
-    const parsed = parseForkTitle(task.title ?? '');
-    if (!parsed) return; // human-named (or not a fork) — never rewrite
+    if (!task.title?.trim()) return;
 
     const label = await summarizeForkPrompt(summary);
     if (!label) return;
-    if (titleCoversLabel(task.title, label)) return; // same topic, differently worded
+    const refined = prependTopicToTitle(task.title, label);
+    if (!refined) return; // topic already covered by the title
 
     // CAS-ish: skip if someone (human or another fire) renamed it meanwhile.
     const fresh = await getTask(taskId);
     if (fresh.title !== task.title) return;
 
-    const refined = `${label} - fork of ${parsed.sourceTitle}`;
-    const { task: updated } = await updateTask(taskId, { title: refined }, { source: 'fork-title' });
-    bus.emit(EventNames.TASK_UPDATED, { task: updated }, ['web-ui', 'main-agent'], { source: 'fork-title' });
-    log.session.info('fork title refreshed after topic drift', {
+    const { task: updated } = await updateTask(taskId, { title: refined }, { source: 'title-drift' });
+    bus.emit(EventNames.TASK_UPDATED, { task: updated }, ['web-ui', 'main-agent'], { source: 'title-drift' });
+    log.session.info('task title topic-prefixed after drift', {
       taskId, from: task.title, to: refined,
     });
   } catch (err) {
-    log.session.debug('fork title drift refresh skipped', {
+    log.session.debug('title drift refresh skipped', {
       taskId, error: err instanceof Error ? err.message : String(err),
     });
   }
