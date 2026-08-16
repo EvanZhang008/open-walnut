@@ -6,6 +6,7 @@
  * attention, priority) lives in an upward-opening More menu.
  */
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { SESSION_MODELS } from '@open-walnut/core';
 import { PRIORITY_OPTIONS, DEFAULT_META, rememberPinTier } from '../task-meta-constants';
 import type { QuickStartTaskMeta } from '../SessionPathSelector';
@@ -13,6 +14,7 @@ import { DatePicker } from '@/components/common/DatePicker';
 import { PinTierPicker } from '@/components/common/PinTierPicker';
 import { useHostModelCatalog } from '@/hooks/useModelCatalog';
 import { formatModelName } from '@/hooks/useSessionUsage';
+import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { catalogRowLabel } from '../ModelPicker';
 
 interface Props {
@@ -150,6 +152,19 @@ export function MetaFooter({ meta, onChange, compact, host, hideModel = false }:
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
   const moreBtnRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  // POPPED OUT of the host, like every draft-column overlay (user: overlays
+  // "没有必要完全占满,大小不应该跟着 session 列走"): portalled to <body> at its
+  // own fixed width and PLACED at the More button by useMenuPlacement (measure →
+  // open upward → viewport clamp), instead of an absolutely-positioned child
+  // whose width the host column dictated (full row width in a draft, and inside
+  // a session panel its stacking context let siblings paint over it).
+  const morePlacement = useMenuPlacement(moreOpen, moreBtnRef, popoverRef, {
+    gap: 4,
+    margin: 12,
+    preferSide: 'up',
+    onAnchorLost: () => setMoreOpen(false),
+  });
   // Count fields the user actually CHANGED from the quick-start defaults, so a
   // fresh open shows an inactive badge, not "More · 1". Only counts controls that
   // LIVE in the menu: the pin tier moved to the primary row, where its own active
@@ -167,6 +182,9 @@ export function MetaFooter({ meta, onChange, compact, host, hideModel = false }:
       // clipping ancestors), so a click inside one is outside moreRef — without
       // this exemption picking a date would slam the whole More menu shut.
       if (t.closest?.('.dp-popover')) return;
+      // The popover itself is a <body> portal too now, so DOM containment must
+      // be tested against BOTH the in-row trigger and the portalled panel.
+      if (popoverRef.current?.contains(t)) return;
       if (!moreRef.current?.contains(t)) setMoreOpen(false);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -180,11 +198,11 @@ export function MetaFooter({ meta, onChange, compact, host, hideModel = false }:
     // Capture prevents the Escape from reaching the focused path input first.
     document.addEventListener('keydown', handleKeyDown, true);
 
-    // a11y: the popover renders BEFORE its trigger in the DOM, so keyboard users
-    // tabbing from the trigger would skip it entirely. Move focus in on open and
-    // hand it back to the trigger on close — but only if focus is still inside
-    // the popover (don't steal it from wherever the user clicked).
-    const popover = moreRef.current?.querySelector<HTMLElement>('.sps-meta-more-popover');
+    // a11y: the popover is a <body> portal, unreachable by tabbing from the
+    // trigger. Move focus in on open and hand it back to the trigger on close —
+    // but only if focus is still inside the popover (don't steal it from
+    // wherever the user clicked).
+    const popover = popoverRef.current;
     popover?.querySelector<HTMLElement>('button, select, input')?.focus();
     return () => {
       document.removeEventListener('mousedown', handleMouseDown);
@@ -200,8 +218,16 @@ export function MetaFooter({ meta, onChange, compact, host, hideModel = false }:
         <EngineToggle meta={meta} onChange={onChange} host={host} />
         <TierPicker meta={meta} onChange={onChange} />
         <div className="sps-meta-more" ref={moreRef}>
-          {moreOpen && (
-            <div className="sps-meta-more-popover" role="dialog" aria-label="More task settings">
+          {moreOpen && createPortal(
+            <div
+              ref={popoverRef}
+              className="sps-meta-more-popover"
+              role="dialog"
+              aria-label="More task settings"
+              // Fixed position at the More button (opens upward), viewport-
+              // clamped — never sized by the host column, never off-screen.
+              style={menuPlacementStyle(morePlacement)}
+            >
               {/* Task dates — the same Start / End / Due trio as the Quick Task
                   form (a launch IS a task create). Same calendar semantics too:
                   Start leads, End/Due are usually empty so they ghost. Popover
@@ -256,7 +282,8 @@ export function MetaFooter({ meta, onChange, compact, host, hideModel = false }:
                   ))}
                 </div>
               </div>
-            </div>
+            </div>,
+            document.body,
           )}
           <button
             type="button"

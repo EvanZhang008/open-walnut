@@ -16271,12 +16271,15 @@ a.task-kebab-info:hover {
 .sps-meta-more-badge {
   font-weight: 600;
 }
+/* POPPED OUT (portalled to <body>): position/top/right/maxHeight/z-index all
+   arrive INLINE from useMenuPlacement, so this rule supplies only the free
+   panel's own size — a fixed width regardless of which column hosts the More
+   button (it used to stretch to the host row: full column width in a draft).
+   NO bottom/right offsets here: any stylesheet offset would over-constrain the
+   inline fixed placement (top + bottom with auto height = 0-height panel). */
 .sps-meta-more-popover {
-  position: absolute;
-  bottom: calc(100% + 4px);
-  right: 0;
-  z-index: 20;
-  min-width: 260px;
+  width: min(320px, calc(100vw - 24px));
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -20637,28 +20640,15 @@ td.usage-share-col {
 /* The draft's picker no longer anchors inside the column — it POPS OUT
    (`.sps-popout` below): position/top/right/maxHeight arrive inline from
    useMenuPlacement, so no anchored-geometry override is needed here. */
-/* The MetaFooter's own "More" popover opens upward too — which is its default.
-   Re-anchoring is the point of dropping `position` on .sps-meta-more: the popover
-   then measures against .sps-meta-footer (the next positioned ancestor, exactly
-   row-width) instead of the ~70px More button, so `left/right: 0` gives it the
-   column's full width and its 260px min-width can't overhang either edge of a
-   ~270px column. Its outside-click closer tests DOM containment, not position, so
-   it is unaffected. */
+/* The MetaFooter's "More" popover is a <body> portal placed by useMenuPlacement
+   (see .sps-meta-more-popover) — no per-host geometry override needed here. */
 .draft-launch-bar .sps-meta-more {
-  position: static;
   /* No `margin-left: auto` here (the shared rule's): in the picker's footer the
      model select anchors the left and pushing More to the far right balances the
      row, but this row starts at the engine toggle and the model select is gone —
      an auto margin stranded "⋯ More" against the panel edge, a whole column away
      from the controls it belongs to. Hugging the tier group is the approved shape. */
   margin-left: 0;
-}
-.draft-launch-bar .sps-meta-more-popover {
-  bottom: calc(100% + 4px);
-  top: auto;
-  left: 0;
-  right: 0;
-  min-width: 0;
 }
 
 /* ── Popout mode (draft column) ──

@@ -676,7 +676,12 @@ export function SessionPathSelector({ open, onClose, onSelect, initialMeta, init
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+      const t = e.target as HTMLElement;
+      // The footer's More menu and its date calendars are <body> portals —
+      // NOT descendants of popoverRef. Without these exemptions a click inside
+      // either (picking a priority, choosing a date) dismissed the whole picker.
+      if (t.closest?.('.sps-meta-more-popover') || t.closest?.('.dp-popover')) return;
+      if (popoverRef.current && !popoverRef.current.contains(t)) {
         handleDismiss();
       }
     };

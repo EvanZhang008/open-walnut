@@ -37,7 +37,10 @@ test('Quick Start footer keeps primary controls visible and opens task settings 
   const more = footer.getByRole('button', { name: /More/ })
   await more.click()
 
-  const popover = footer.getByRole('dialog', { name: 'More task settings' })
+  // PAGE-scoped: the More popover pops out of its host (portalled to <body>,
+  // fixed own width, placed at the button by useMenuPlacement) — it is no
+  // longer a footer descendant.
+  const popover = page.getByRole('dialog', { name: 'More task settings' })
   await expect(popover).toBeVisible()
   // The retired star toggle is gone from the menu entirely (pin + focus tier is
   // the working set now).

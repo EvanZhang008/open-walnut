@@ -327,7 +327,9 @@ test('AI-suggested dates land in the More menu (✦) and ride BOTH exits onto th
   await expect(draftMetaAiSlot(panel)).toHaveText('✦', { timeout: 10_000 })
   // …and the More menu is where they are VISIBLE + editable (badge count too).
   await panel.locator('.sps-meta-more-btn').click()
-  const popover = panel.locator('.sps-meta-more-popover')
+  // PAGE-scoped: the More popover portals to <body> (popped out of the column,
+  // fixed size + viewport clamp), so it is no longer a panel descendant.
+  const popover = page.locator('.sps-meta-more-popover')
   await expect(popover.locator('.sps-meta-dates .dp-trigger', { hasText: /^Start / })).toBeVisible()
   await expect(popover.locator('.sps-meta-dates .dp-trigger', { hasText: /^Due / })).toBeVisible()
   await page.screenshot({ path: `${SCREENSHOT_DIR}/03d-ai-dates-more-menu.png`, fullPage: false })
