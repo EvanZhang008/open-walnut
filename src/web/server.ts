@@ -1477,6 +1477,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           }
         })()
       }, 3_000)
+    }
 
     const qmdBackfillDelayMs = options.dev ? 0 : 60_000
     let qmdBackfillTimer: ReturnType<typeof setTimeout>
