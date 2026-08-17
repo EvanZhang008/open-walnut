@@ -46,7 +46,10 @@ describe('buildIndexedContent', () => {
     expect(out.body).not.toContain('lines omitted>');
   });
 
-  it('drops tool inputs/results but keeps a deduped tool-name footer', () => {
+  it('drops tool RESULTS but keeps names, file paths, and command heads', () => {
+    // CONTRACT CHANGE (2026-08-16): tool results stay excluded (secrets/bulk),
+    // but file paths and Bash command first-lines are now indexed — they are
+    // what makes "which session edited X" answerable.
     const out = buildIndexedContent([
       msg({
         role: 'assistant',
@@ -59,9 +62,38 @@ describe('buildIndexedContent', () => {
       }),
     ]);
     expect(out.body).toContain('Tools: Bash, Read');
-    expect(out.body).not.toContain('/etc/passwd');
+    expect(out.body).toContain('Files: /foo');
+    expect(out.body).toContain('Commands: cat /etc/passwd | ls');
+    // Results must never leak.
     expect(out.body).not.toContain('root:x:0:0');
     expect(out.body).not.toContain('file contents here');
+  });
+
+  it('caps footer paths at 10 and command heads at 3, deduped', () => {
+    const tools = [
+      ...Array.from({ length: 14 }, (_, i) => ({ name: 'Edit', input: { file_path: `/f${i}.ts` } })),
+      { name: 'Bash', input: { command: 'npm test' } },
+      { name: 'Bash', input: { command: 'npm test' } },
+      { name: 'Bash', input: { command: 'git status' } },
+      { name: 'Bash', input: { command: 'git diff' } },
+      { name: 'Bash', input: { command: 'git log' } },
+    ];
+    const out = buildIndexedContent([msg({ role: 'assistant', text: 'work', tools })]);
+    expect(out.body).toContain('/f9.ts');
+    expect(out.body).not.toContain('/f10.ts');
+    expect(out.body).toContain('npm test | git status | git diff');
+    expect(out.body).not.toContain('git log');
+  });
+
+  it('multi-line Bash commands contribute only their first line', () => {
+    const out = buildIndexedContent([
+      msg({
+        role: 'assistant', text: 'commit',
+        tools: [{ name: 'Bash', input: { command: 'git commit -m "feat: retire stars"\nSECRET_HEREDOC_BODY' } }],
+      }),
+    ]);
+    expect(out.body).toContain('git commit -m "feat: retire stars"');
+    expect(out.body).not.toContain('SECRET_HEREDOC_BODY');
   });
 
   it('does not index thinking content', () => {

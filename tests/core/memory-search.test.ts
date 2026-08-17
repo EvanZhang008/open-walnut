@@ -327,8 +327,18 @@ describe('memoryNotesSearch', () => {
 });
 
 describe('buildLexQueries — mixed CJK/Latin lex splitting', () => {
-  it('pure English query is unchanged', () => {
-    expect(buildLexQueries('hook api error timeout')).toEqual(['hook api error timeout']);
+  it('pure English query at the relax threshold gains a relaxed list', () => {
+    // CONTRACT CHANGE (follow-up to the 2026-08-15 star hunt): 4+ content
+    // words used to pass through verbatim and AND-annihilate; now the
+    // original list is joined by one relaxed most-selective-words list.
+    expect(buildLexQueries('hook api error timeout')).toEqual([
+      'hook api error timeout',
+      'hook error timeout',
+    ]);
+  });
+
+  it('short pure-English query is unchanged', () => {
+    expect(buildLexQueries('hook timeout')).toEqual(['hook timeout']);
   });
 
   it('pure CJK query is unchanged', () => {
@@ -371,6 +381,23 @@ describe('buildLexQueries — mixed CJK/Latin lex splitting', () => {
   it('preserves operator queries verbatim (quotes / negation)', () => {
     expect(buildLexQueries('"exact 短语" timeout')).toEqual(['"exact 短语" timeout']);
     expect(buildLexQueries('timeout -自动')).toEqual(['timeout -自动']);
+  });
+
+  it('long pure-Latin queries get one relaxed list of the most selective words', () => {
+    const out = buildLexQueries('deprecate star system use pin focus instead');
+    expect(out[0]).toBe('deprecate star system use pin focus instead');
+    expect(out).toHaveLength(2);
+    // stopwords (use, instead) dropped; 3 longest content words, query order
+    expect(out[1]).toBe('deprecate system focus');
+  });
+
+  it('short pure-Latin queries stay single-list', () => {
+    expect(buildLexQueries('star system')).toEqual(['star system']);
+    expect(buildLexQueries('retire star system')).toEqual(['retire star system']);
+  });
+
+  it('all-stopword Latin queries stay single-list', () => {
+    expect(buildLexQueries('how to do this and that')).toEqual(['how to do this and that']);
   });
 
   it('empty and blank queries return []', () => {

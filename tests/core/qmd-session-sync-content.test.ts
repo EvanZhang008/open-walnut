@@ -126,14 +126,29 @@ describe('qmd-session-sync v2 content indexing', () => {
     expect(content).not.toContain('SECRET_TOOL_RESULT');
   });
 
-  it('keeps remote sessions metadata-only (no JSONL pull)', async () => {
+  it('indexes remote session bodies through the tail-bounded read (1 MB window)', async () => {
+    // CONTRACT CHANGE (2026-08-16): remote sessions used to be metadata-only,
+    // which made every clouddev session unsearchable. The ranged-read path
+    // makes a bounded remote read safe, so the body is indexed like local.
     await syncSession(sess({ claudeSessionId: 'sid-remote', host: 'clouddev' }));
     const content = docContent('sess-sid-remote');
     expect(content).toContain('# Session Metadata');
     expect(content).toContain('Host: clouddev');
-    // No conversation turns — body skipped for remote
+    expect(content).toContain('## Turn 1');
+    expect(content).toContain('use buildIndexedContent');
+    // The read must have been called with the REMOTE window, not the 4 MB default.
+    const { readSessionHistoryTail } = await import('../../src/core/session-history.js');
+    const call = vi.mocked(readSessionHistoryTail).mock.calls.at(-1)!;
+    expect(call[2]).toBe('clouddev');
+    expect(call[4]).toBe(1024 * 1024);
+  });
+
+  it('a failed remote read stays metadata-only instead of erroring', async () => {
+    await syncSession(sess({ claudeSessionId: 'boom', host: 'clouddev' }));
+    const content = docContent('sess-boom');
+    // Read threw → failed:true → metadata-only doc is still written on first sync.
+    expect(content).toContain('# Session Metadata');
     expect(content).not.toContain('## Turn 1');
-    expect(content).not.toContain('use buildIndexedContent');
   });
 
   it('prepends the summary as a # Session Gist heading', async () => {

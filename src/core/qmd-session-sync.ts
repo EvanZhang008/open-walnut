@@ -73,12 +73,17 @@ function serializeMetadata(session: SessionRecord, task?: Task): string {
  * explicit so an existing content-rich document is never replaced by a
  * metadata-only transient read.
  *
- * LOCAL SESSIONS ONLY: remote sessions are skipped here because reading their
- * JSONL means pulling the full (up to ~14MB) file over the SSH tunnel, which
- * some corporate proxies kill past ~5MB. Indexing remote conversation content requires
- * a daemon-side filter RPC (filter on the remote host, ship back ~50KB) — that
- * is a separate, larger change. Until then remote sessions stay metadata-only.
+ * Remote sessions are read through the SAME tail-bounded path as local ones —
+ * readSessionHistoryTail's window path stats first and pulls a bounded RANGE
+ * via DaemonFileReader.readFileRange, so a whale JSONL never crosses the
+ * tunnel whole (the old blanket skip predated ranged reads and left every
+ * clouddev session unsearchable — half the user's work). Remote uses a
+ * smaller window than local: 1 MB is still 20× the 50 KB index budget, and
+ * keeps the per-session transfer well under proxy kill thresholds. A dead
+ * daemon/tunnel surfaces as a null read → failed:true → the existing doc
+ * (or metadata-only) stays, same as a local read error.
  */
+const REMOTE_TAIL_BYTES = 1 * 1024 * 1024;
 async function readConversationBody(
   session: SessionRecord,
 ): Promise<ConversationBodyRead> {
@@ -100,15 +105,20 @@ async function readConversationBody(
     }
   }
 
-  if (session.host) return { body: null, failed: false }; // remote Claude session
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     // Tail-bounded read: indexing keeps ≤50 KB of cleaned text, so pulling a
     // whole whale JSONL to index its tail was pure waste (167 GB/day of full
-    // re-reads pre-fix). The tail window (4 MB) exceeds the index budget by
-    // orders of magnitude even after cleaning.
+    // re-reads pre-fix). The tail window (4 MB local / 1 MB remote) exceeds
+    // the index budget by orders of magnitude even after cleaning.
     const messages = await Promise.race([
-      readSessionHistoryTail(session.claudeSessionId, session.cwd, session.host, session.outputFile),
+      readSessionHistoryTail(
+        session.claudeSessionId,
+        session.cwd,
+        session.host,
+        session.outputFile,
+        session.host ? REMOTE_TAIL_BYTES : undefined,
+      ),
       new Promise<never>((_, reject) => {
         timeout = setTimeout(
           () => reject(new Error('content read timeout')),

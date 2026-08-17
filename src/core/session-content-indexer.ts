@@ -71,15 +71,47 @@ function cleanText(text: string, codeBlockLineThreshold: number): string {
   return out.trim();
 }
 
-/** Compact, de-duplicated, capped tool-name footer for a turn. */
+/** Tool-input keys that carry a file path across the built-in tool set
+ *  (Read/Edit/Write/NotebookEdit use file_path; Glob/Grep use path). */
+const PATH_INPUT_KEYS = ['file_path', 'path', 'notebook_path'] as const;
+
+/**
+ * Compact, de-duplicated, capped tool-name footer for a turn — now WITH the
+ * file paths the tools touched. Tool inputs/results stay excluded from the
+ * index (secrets, sheer bulk), but paths are the one input that makes a
+ * session findable: "which session edited src/core/search.ts" was
+ * unanswerable when only tool NAMES survived (2026-08-15 star hunt — the
+ * session was only findable because prose happened to mention the file).
+ * Bash contributes its command's first line, which usually embeds the paths
+ * and is also how `git commit` messages become searchable text.
+ */
 function toolFooter(tools: SessionHistoryMessage['tools']): string {
   if (!tools || tools.length === 0) return '';
   const names: string[] = [];
+  const paths: string[] = [];
+  const bashHeads: string[] = [];
   for (const t of tools) {
     if (t.name && !names.includes(t.name)) names.push(t.name);
-    if (names.length >= 10) break;
+    if (paths.length < 10) {
+      for (const key of PATH_INPUT_KEYS) {
+        const v = t.input?.[key];
+        if (typeof v === 'string' && v && !paths.includes(v)) { paths.push(v); break; }
+      }
+    }
+    if (t.name === 'Bash' && bashHeads.length < 3) {
+      const cmd = t.input?.command;
+      if (typeof cmd === 'string' && cmd.trim()) {
+        const head = cmd.trim().split('\n')[0].slice(0, 200);
+        if (!bashHeads.includes(head)) bashHeads.push(head);
+      }
+    }
+    if (names.length >= 10 && paths.length >= 10 && bashHeads.length >= 3) break;
   }
-  return names.length ? `Tools: ${names.join(', ')}` : '';
+  const lines: string[] = [];
+  if (names.length) lines.push(`Tools: ${names.join(', ')}`);
+  if (paths.length) lines.push(`Files: ${paths.join(', ')}`);
+  if (bashHeads.length) lines.push(`Commands: ${bashHeads.join(' | ')}`);
+  return lines.join('\n');
 }
 
 /** Year-month-day hour:minute from an ISO timestamp; empty string if unparseable. */

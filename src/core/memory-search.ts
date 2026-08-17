@@ -129,7 +129,7 @@ export function buildLexQueries(query: string): string[] {
   // degrade to the old single-list behavior rather than anything worse.
   if (q.includes('"') || /(^|\s)-\S/.test(q)) return [q];
   const allRuns = q.match(CJK_RUN_RE) ?? [];
-  if (allRuns.length === 0) return [q];
+  if (allRuns.length === 0) return buildLatinLexQueries(q);
 
   // Residue = non-CJK words. Keep only real alphanumeric tokens: CJK
   // punctuation (。，、) is Script=Common so "自动重试。" would otherwise emit
@@ -163,6 +163,46 @@ export function buildLexQueries(query: string): string[] {
     if (kept.has(run)) out.push(run);
   }
   return out;
+}
+
+/**
+ * Long pure-Latin queries AND-annihilate too — the same failure as CJK, just
+ * via word count instead of tokenization: QMD compiles `deprecate star system
+ * use pin focus instead` to 7 AND-joined prefix terms, and one missing word
+ * zeroes the keyword lane, handing ranking to vector-only (which gets the
+ * first-list 2x RRF weight). Observed 2026-08-15: the star-system task was
+ * unfindable by every natural-language paraphrase while `StarButton` (one
+ * term) hit rank 0.
+ *
+ * Fix mirrors the CJK residue idea: keep the original AND list (precise when
+ * it does hit), plus ONE relaxed list of the most selective words — longest
+ * words, stopwords dropped — capped at 3 terms so the relaxed AND stays
+ * likely to match. Short queries (≤3 content words) don't annihilate at
+ * meaningful rates and stay single-list; adding lists there only costs FTS
+ * time and dilutes RRF.
+ */
+const LATIN_RELAX_MIN_WORDS = 4;
+const LATIN_RELAX_KEEP = 3;
+const LATIN_STOPWORDS = new Set([
+  'the', 'a', 'an', 'of', 'to', 'in', 'on', 'for', 'and', 'or', 'is', 'are',
+  'was', 'were', 'be', 'it', 'this', 'that', 'with', 'as', 'at', 'by', 'from',
+  'use', 'using', 'used', 'how', 'what', 'which', 'why', 'when', 'do', 'does',
+  'did', 'not', 'no', 'we', 'i', 'you', 'they', 'instead', 'via', 'into',
+]);
+
+function buildLatinLexQueries(q: string): string[] {
+  const words = q.split(/\s+/).filter((w) => w.length >= MIN_TERM_CHARS);
+  if (words.length < LATIN_RELAX_MIN_WORDS) return [q];
+  const content = words.filter((w) => !LATIN_STOPWORDS.has(w.toLowerCase()));
+  // Selectivity proxy: length. Keep original order among the survivors so the
+  // relaxed list reads like the query, not like an anagram.
+  const kept = new Set(
+    [...content].sort((a, b) => b.length - a.length).slice(0, LATIN_RELAX_KEEP),
+  );
+  const relaxed = content.filter((w) => kept.has(w)).join(' ');
+  // Degenerate cases (all stopwords, or relaxed == original) stay single-list.
+  if (!relaxed || relaxed === q) return [q];
+  return [q, relaxed];
 }
 
 /**

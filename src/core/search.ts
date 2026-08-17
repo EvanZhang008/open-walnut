@@ -690,7 +690,41 @@ async function searchInner(
     Number(isReference(b)) - Number(isReference(a))
     || (coverage.get(b) ?? 0) - (coverage.get(a) ?? 0)
     || b.score - a.score);
+
+  // Per-type floor on the merged page. Cross-store scores are 1/rank × source
+  // weight — NOT comparable (memory_topic's 1.3 beats task's 1.0 at every
+  // rank) — so one prolific store can legally fill the whole page and blank
+  // out a lane the caller explicitly asked for. Guarantee each requested type
+  // that HAS results at least a few visible rows; the remainder stays
+  // score-ordered. floor = limit/(3×types), i.e. 2 rows/type at the default
+  // limit 20 with 3 lanes — enough to surface the lane without distorting the
+  // overall order. References are exempt (they outrank everything by design).
+  const perTypeFloor = Math.max(1, Math.floor(limit / (3 * types.length)));
   const sliced = results.slice(0, limit);
+  if (types.length > 1) {
+    for (const type of types) {
+      const have = sliced.filter((r) => r.type === type).length;
+      if (have >= perTypeFloor) continue;
+      const candidates = results
+        .slice(limit)
+        .filter((r) => r.type === type)
+        .slice(0, perTypeFloor - have);
+      if (candidates.length === 0) continue;
+      // Evict the lowest-scored rows of over-represented types (never a
+      // reference row, never a row of a still-under-floor type).
+      for (const candidate of candidates) {
+        for (let i = sliced.length - 1; i >= 0; i--) {
+          const row = sliced[i];
+          if (isReference(row) || row.type === type) continue;
+          const rowTypeCount = sliced.filter((r) => r.type === row.type).length;
+          if (rowTypeCount <= perTypeFloor) continue;
+          sliced.splice(i, 1);
+          sliced.push(candidate);
+          break;
+        }
+      }
+    }
+  }
 
   // Keep child task expansion for task results (lazy-loads tasks only if needed)
   if (types.includes('task')) {
