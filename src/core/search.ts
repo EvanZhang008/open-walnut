@@ -24,6 +24,26 @@ export interface SearchOptions {
   types?: ('task' | 'memory' | 'session')[];
 }
 
+/**
+ * Cap on a QMD snippet handed back to a caller.
+ *
+ * QMD returns a whole matched chunk, and a session chunk is a transcript slice:
+ * measured 2026-08-16, THREE session hits carried 9,831 chars (~2.5K tokens) of
+ * raw turn-by-turn log. Every consumer pays that — an agent burns its context on
+ * it, and the search UI renders a wall of text — for a relevance preview nobody
+ * reads past the first line. The keyword lanes have always trimmed (extractSnippet);
+ * the QMD lanes passed the chunk through untouched.
+ */
+const MAX_SNIPPET_CHARS = 400;
+
+/** Trim a QMD chunk to a preview, preferring a cut at a line break. */
+function capSnippet(snippet: string | undefined): string {
+  if (!snippet) return '';
+  const flat = snippet.replace(/\s+/g, ' ').trim();
+  if (flat.length <= MAX_SNIPPET_CHARS) return flat;
+  return flat.slice(0, MAX_SNIPPET_CHARS).trimEnd() + '…';
+}
+
 export function extractSnippet(
   content: string,
   query: string,
@@ -542,7 +562,7 @@ async function searchInner(
         appendTaskResult({
           type: 'task',
           title: r.title,
-          snippet: r.snippet,
+          snippet: capSnippet(r.snippet),
           taskId: r.taskId,
           score: r.finalScore,
           matchField: 'task',
@@ -589,7 +609,7 @@ async function searchInner(
         results.push({
           type: 'session',
           title: r.title,
-          snippet: r.snippet,
+          snippet: capSnippet(r.snippet),
           sessionId: r.sessionId,
           ...(ownerTaskId ? { taskId: ownerTaskId } : {}),
           score: r.finalScore,
@@ -635,7 +655,7 @@ async function searchInner(
         results.push({
           type: 'memory',
           title: r.title,
-          snippet: r.snippet,
+          snippet: capSnippet(r.snippet),
           path: r.filepath,
           score: r.finalScore,
           matchField: r.source,

@@ -319,6 +319,46 @@ describe('QMD memory search integration', () => {
     );
   });
 
+  it('caps QMD snippets so one search cannot flood a caller with transcript', async () => {
+    // Measured 2026-08-16 during the real MCP-vs-CLI A/B: THREE session hits
+    // carried 9,831 chars (~2.5K tokens) of raw turn-by-turn transcript, because
+    // the QMD lanes passed the whole matched chunk through. An agent spent its
+    // context on it; the hardest eval task was dominated by that payload.
+    const hugeChunk = 'Turn 41 ran a command\n'.repeat(400); // ~8.8K chars
+    vi.doMock('../../src/core/task-manager.js', () => ({
+      listTasks: vi.fn().mockResolvedValue([]),
+    }));
+    vi.doMock('../../src/core/session-tracker.js', () => ({
+      listSessions: vi.fn().mockResolvedValue([]),
+    }));
+    vi.doMock('../../src/core/memory-search.js', () => ({
+      memoryNotesSearch: vi.fn(async (_q: string, sources?: string[]) => {
+        if (sources?.includes('session')) {
+          return [{
+            title: 'huge session', snippet: hugeChunk,
+            filepath: 'qmd://session/sess-abc', sessionId: 'abc',
+            finalScore: 0.9, source: 'session',
+          }];
+        }
+        return [{
+          title: 'huge memory', snippet: hugeChunk,
+          filepath: 'memory/m.md', finalScore: 0.8, source: 'memory_project',
+        }];
+      }),
+    }));
+
+    const { search } = await import('../../src/core/search.js');
+    const results = await search('command', { types: ['memory', 'session'] });
+
+    expect(results.length).toBeGreaterThan(0);
+    for (const r of results) {
+      expect(r.snippet.length).toBeLessThanOrEqual(401); // 400 + the ellipsis
+    }
+    // Still a usable preview, and collapsed to one line (no raw newlines).
+    expect(results[0].snippet).toContain('Turn 41');
+    expect(results[0].snippet).not.toContain('\n');
+  });
+
   it('surfaces a total QMD failure instead of returning an authoritative empty set', async () => {
     vi.doMock('../../src/core/memory-search.js', () => ({
       memoryNotesSearch: vi.fn().mockRejectedValue(new Error('Database not available')),
