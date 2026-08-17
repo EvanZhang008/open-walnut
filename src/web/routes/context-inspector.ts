@@ -17,7 +17,7 @@ import { validateAgentId, validateConversationId, WALNUT_HOME } from '../../cons
 import { getConfig, resolveAgentEngineProvider } from '../../core/config-manager.js'
 import { DEFAULT_MODEL } from '../../agent/model.js'
 import { DEFAULT_MAX_TOKENS } from '../../agent/providers/defaults.js'
-import { buildRoleSection, buildSystemPrompt, buildTaskProjectsSection, getNotesContext } from '../../agent/context.js'
+import { buildRoleSection, buildSystemPrompt, buildTaskProjectsSection } from '../../agent/context.js'
 import { buildSkillsPrompt } from '../../core/skill-loader.js'
 import { getCompactionSummary, getModelContext } from '../../core/chat-history.js'
 import { getMemoryFile } from '../../core/memory-file.js'
@@ -144,7 +144,7 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
           taskProjects: { content: '(Not injected — the session reads tasks live via MCP/HTTP when asked.)', tokens: 0 },
           userProfile: { content: '(Injected inside Global Memory below — see the standing-memory block.)', tokens: 0 },
           globalMemory: { content: memoryContent, tokens: estimateTokens(memoryContent) },
-          notesContext: { content: '(Injected inside Global Memory above — home directory guide section.)', tokens: 0 },
+          notesContext: { content: '', tokens: 0 },
           dailyLogs: { content: '(On demand — memory/daily/<date>.md files the session Reads when asked, not injected per turn.)', tokens: 0 },
           tools: { content: [], tokens: 0, count: 0 },
           apiMessages: { content: [], tokens: 0, count: 0 },
@@ -309,8 +309,8 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
           tokens: globalMemoryTokens,
         },
         notesContext: {
-          content: getNotesContext(),
-          tokens: estimateTokens(getNotesContext()),
+          content: '',
+          tokens: 0,
         },
         dailyLogs: {
           content: dailyLogs,
