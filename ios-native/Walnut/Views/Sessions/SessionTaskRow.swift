@@ -82,7 +82,16 @@ struct SessionTaskRow: View {
 
     // MARK: - Quick controls
 
-    /// One-tap todo↔done — the same optimistic PATCH path the task list uses.
+    /// True when the row lives in the list store (optimistic writes land
+    /// instantly there); false = fetched-fallback copy (needs the await).
+    private var isLiveRow: Bool {
+        store?.tasks.contains(where: { $0.id == taskId }) == true
+    }
+
+    /// One-tap todo↔done — optimistic through the store: for in-list rows the
+    /// circle flips the moment it's tapped (no disabled window); only the
+    /// fetched-fallback copy still gates on `saving` (it needs the PATCH
+    /// response to update its snapshot).
     private var statusToggle: some View {
         Button {
             toggleDone()
@@ -91,7 +100,7 @@ struct SessionTaskRow: View {
                 .font(.title3)
         }
         .buttonStyle(.plain)
-        .disabled(saving || task == nil || store == nil)
+        .disabled((saving && !isLiveRow) || task == nil || store == nil)
         .accessibilityIdentifier("session.task.statusToggle")
     }
 
@@ -99,18 +108,27 @@ struct SessionTaskRow: View {
         Button {
             togglePin()
         } label: {
-            Image(systemName: task?.pinned == true ? "pin.fill" : "pin")
-                .foregroundStyle(task?.pinned == true ? Theme.tint : Color.secondary)
+            HStack(spacing: 3) {
+                Image(systemName: task?.pinned == true ? "pin.fill" : "pin")
+                // WHERE it's pinned, not just that it is (focus tier label).
+                if task?.pinned == true,
+                   let store, let badge = task.flatMap({ store.tierBadge(for: $0) }) {
+                    Text(badge).font(.caption2.weight(.semibold))
+                }
+            }
+            .foregroundStyle(task?.pinned == true ? Theme.tint : Color.secondary)
         }
         .buttonStyle(.plain)
-        .disabled(saving || task == nil || store == nil)
+        .disabled((saving && !isLiveRow) || task == nil || store == nil)
         .accessibilityIdentifier("session.task.pinToggle")
     }
 
     private func toggleDone() {
-        guard let store, let task, !saving else { return }
+        guard let store, let task else { return }
+        guard isLiveRow || !saving else { return }
         saving = true
         errorText = nil
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         Task {
             defer { saving = false }
             do {
@@ -119,7 +137,6 @@ struct SessionTaskRow: View {
                 let next = task.statusKind == .done ? "todo" : "done"
                 let updated = try await store.updateTask(id: task.id, edit: .init(status: next))
                 if store.tasks.first(where: { $0.id == task.id }) == nil { fetched = updated }
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
             } catch {
                 errorText = TaskDetailSheet.friendlyEditError(error)
             }
@@ -127,18 +144,19 @@ struct SessionTaskRow: View {
     }
 
     private func togglePin() {
-        guard let store, let task, !saving else { return }
+        guard let store, let task else { return }
+        guard isLiveRow || !saving else { return }
         saving = true
         errorText = nil
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         Task {
             defer { saving = false }
             let next = !(task.pinned == true)
             if let message = await store.setPinned(task, pinned: next) {
                 errorText = message
-            } else {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            } else if store.tasks.first(where: { $0.id == task.id }) == nil {
                 // Fallback rows aren't in the list — refetch the truth.
-                if store.tasks.first(where: { $0.id == task.id }) == nil { await resolve(force: true) }
+                await resolve(force: true)
             }
         }
     }

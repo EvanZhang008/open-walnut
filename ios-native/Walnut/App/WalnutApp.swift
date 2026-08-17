@@ -85,6 +85,11 @@ struct RootView: View {
             // Maestro's launchArguments encode flags as "-timeline-harness".
             if ProcessInfo.processInfo.arguments.contains(where: { $0.contains("timeline-harness") }) {
                 NavigationStack { TimelineHarnessView() }
+            } else if ProcessInfo.processInfo.arguments.contains(where: { $0.contains("calendar-harness") }) {
+                // Calendar E2E harness (Maestro): boots straight into the
+                // Tasks-tab calendar against the configured server — lets the
+                // calendar be driven end-to-end before its tab wiring lands.
+                NavigationStack { CalendarHarnessView() }
             } else if connection.isConfigured {
                 MainTabView()
             } else {

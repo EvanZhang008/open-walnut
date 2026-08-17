@@ -7,23 +7,30 @@ import Observation
 /// ladder), and description/note editing. Kept out of TasksStore on purpose:
 /// the list store stays a thin projection cache; this controller is scoped to
 /// one open detail sheet.
+///
+/// Instant-first (2026-08): star and description/note writes apply to the
+/// local `detail` snapshot synchronously, call the API behind, and revert
+/// with an error line on failure — no spinner windows. `acting` still gates
+/// only the destructive delete ladder.
 @Observable
 @MainActor
 final class TaskDetailController {
-    private let api = WalnutAPI()
+    /// Injectable transport (WalnutTests) — production uses the live client.
+    private let api: WalnutTaskTransport
     let taskId: String
 
     /// Full server row (nil until the first fetch lands).
     private(set) var detail: TaskDetail?
     private(set) var loading = false
-    /// True while any mutation runs (buttons disable).
+    /// True while a destructive action (delete) runs — buttons disable.
     private(set) var acting = false
     var errorMessage: String?
     /// Delete hit 409 with active sessions — confirm, then force.
     var deleteNeedsForce: [String]?
 
-    init(taskId: String) {
+    init(taskId: String, transport: WalnutTaskTransport? = nil) {
         self.taskId = taskId
+        self.api = transport ?? WalnutAPI()
     }
 
     func load() async {
@@ -40,45 +47,92 @@ final class TaskDetailController {
         }
     }
 
-    /// Toggle star; returns the new state (nil on failure).
-    func toggleStar() async -> Bool? {
-        await runAction {
-            let starred = try await self.api.toggleTaskStar(id: self.taskId)
-            await self.load()
-            return starred
+    /// Rebuild the immutable TaskDetail with one changed field. Static + pure
+    /// so WalnutTests can gate the optimistic projection directly.
+    static func withField(
+        _ d: TaskDetail, starred: Bool? = nil, description: String? = nil, note: String? = nil
+    ) -> TaskDetail {
+        TaskDetail(
+            id: d.id, title: d.title, status: d.status, phase: d.phase,
+            priority: d.priority, project: d.project,
+            description: description ?? d.description,
+            summary: d.summary, note: note ?? d.note, tags: d.tags,
+            starred: starred ?? d.starred, pinned: d.pinned,
+            dependsOn: d.dependsOn, isBlocked: d.isBlocked,
+            resolvedDependencies: d.resolvedDependencies,
+            dependents: d.dependents, children: d.children, parent: d.parent,
+            sessionIds: d.sessionIds
+        )
+    }
+
+    /// Toggle star — optimistic: the chip flips instantly; revert on failure.
+    func toggleStar() async {
+        let original = detail
+        let next = !(detail?.starred == true)
+        if let d = detail { detail = Self.withField(d, starred: next) }
+        errorMessage = nil
+        do {
+            let confirmed = try await api.toggleTaskStar(id: taskId)
+            // Adopt the server's answer if it disagrees (idempotency races).
+            if let d = detail, d.starred != confirmed {
+                detail = Self.withField(d, starred: confirmed)
+            }
+        } catch {
+            detail = original
+            errorMessage = Self.friendlyError(error)
         }
     }
 
-    /// Pin/unpin via the focus endpoints. Pinning a completed task → 409.
+    /// Pin/unpin via the focus endpoints — FALLBACK path for rows outside the
+    /// list projection (TaskDetailExtras prefers TasksStore.setPinned, which
+    /// is optimistic against the live row). Returns the new state, nil on
+    /// failure.
     func setPinned(_ pinned: Bool) async -> Bool? {
-        await runAction {
+        errorMessage = nil
+        do {
             _ = pinned
-                ? try await self.api.pinTask(id: self.taskId)
-                : try await self.api.unpinTask(id: self.taskId)
+                ? try await api.pinTask(id: taskId)
+                : try await api.unpinTask(id: taskId)
             return pinned
+        } catch {
+            errorMessage = Self.friendlyError(error)
+            return nil
         }
     }
 
-    /// Replace the description (PUT /tasks/:id/description).
-    func saveDescription(_ content: String) async -> Bool {
-        await runAction {
-            try await self.api.setTaskField(id: self.taskId, field: "description", content: content)
-            await self.load()
-            return true
-        } ?? false
+    /// Replace the description — optimistic (readback text swaps instantly,
+    /// editor closes immediately; failure reverts + error line).
+    func saveDescription(_ content: String) {
+        saveFieldInstant(field: "description", content: content)
     }
 
-    /// Replace the whole note (PUT /tasks/:id/note).
-    func saveNote(_ content: String) async -> Bool {
-        await runAction {
-            try await self.api.setTaskField(id: self.taskId, field: "note", content: content)
-            await self.load()
-            return true
-        } ?? false
+    /// Replace the whole note — same optimistic contract.
+    func saveNote(_ content: String) {
+        saveFieldInstant(field: "note", content: content)
+    }
+
+    private func saveFieldInstant(field: String, content: String) {
+        let original = detail
+        if let d = detail {
+            detail = field == "description"
+                ? Self.withField(d, description: content)
+                : Self.withField(d, note: content)
+        }
+        errorMessage = nil
+        Task {
+            do {
+                try await api.setTaskField(id: taskId, field: field, content: content)
+            } catch {
+                detail = original
+                errorMessage = Self.friendlyError(error)
+            }
+        }
     }
 
     /// Delete. Returns true when the task is gone (caller dismisses). A 409
     /// with active sessions sets `deleteNeedsForce` for the confirm dialog.
+    /// (TaskDetailExtras prefers TasksStore.deleteTask — optimistic against
+    /// the live list; this stays as the out-of-projection fallback.)
     func delete(force: Bool = false) async -> Bool {
         guard !acting else { return false }
         acting = true
@@ -95,19 +149,6 @@ final class TaskDetailController {
         } catch {
             errorMessage = Self.friendlyError(error)
             return false
-        }
-    }
-
-    private func runAction<T>(_ operation: @MainActor () async throws -> T) async -> T? {
-        guard !acting else { return nil }
-        acting = true
-        errorMessage = nil
-        defer { acting = false }
-        do {
-            return try await operation()
-        } catch {
-            errorMessage = Self.friendlyError(error)
-            return nil
         }
     }
 

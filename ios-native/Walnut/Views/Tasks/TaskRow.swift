@@ -5,6 +5,11 @@ import SwiftUI
 /// through and dim. The circle is NOT a toggle in v1.
 struct TaskRow: View {
     let task: WalnutTask
+    /// Focus tier label for pinned tasks ("Focus"/"Satellite"/…) — shown as a
+    /// small badge next to the pin so the phone says WHERE it's pinned, not
+    /// just that it is. nil = no badge (unpinned rows, callers without the
+    /// tier map).
+    var tierBadge: String? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -17,6 +22,15 @@ struct TaskRow: View {
                         Image(systemName: "pin.fill")
                             .font(.caption2)
                             .foregroundStyle(Theme.tint)
+                        if let tierBadge {
+                            Text(tierBadge)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(Theme.tint)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Theme.tint.opacity(0.12), in: Capsule())
+                                .accessibilityIdentifier("task.tierBadge")
+                        }
                     }
                     Text(task.title)
                         .foregroundStyle(task.isDone ? .secondary : .primary)

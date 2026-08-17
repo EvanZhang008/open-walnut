@@ -12,6 +12,10 @@ final class TasksStore {
     /// Internal (not private) so same-module extensions in other files can
     /// ride the same client (TasksStoreQuickAdd's backfill PATCH).
     let api = WalnutAPI()
+    /// Mutation seam: production uses the same WalnutAPI instance; WalnutTests
+    /// pass a scripted mock so the REAL optimistic apply/rollback state
+    /// machines run without a network.
+    @ObservationIgnored let transport: WalnutTaskTransport
     weak var connection: ConnectionStore?
 
     /// False while backgrounded — every completion re-checks it before touching
@@ -110,6 +114,28 @@ final class TasksStore {
     var sessionsSyncedAt: Date?
     var sessionsNotSyncedYet = false
 
+    // MARK: - Focus tier state (GET /focus/tasks + /focus/tiers)
+    //
+    // The slim task projection carries `pinned` but NOT `focus_tier`, so the
+    // phone joins the tier split endpoint by task id. Satellite entries are
+    // explicit in the map so every pinned row resolves a label.
+
+    /// taskId → tier id ("focus" | "satellite" | "backlog" | "wait" | "ct_*")
+    /// for every currently pinned task.
+    var taskTiers: [String: String] = [:]
+    /// Custom tier registry (ct_* id → label), refreshed with the split.
+    var customTiers: [FocusTierInfo] = []
+    /// Debounce handle for scheduleTierRefresh (extension file).
+    @ObservationIgnored var tierRefreshTask: Task<Void, Never>?
+    /// Transient failure line for fire-and-forget mutations — TasksView shows
+    /// it as a small auto-dismissing toast (never a modal).
+    var transientError: String?
+    /// Transient info line ("Pinned · Satellite") — same toast surface.
+    var transientNotice: String?
+    /// Task ids whose delete came back 409 (active sessions) — the next
+    /// delete confirm for these offers "Stop Sessions & Delete".
+    var deleteNeedsForceIds: Set<String> = []
+
     // MARK: - Live events feed (GET /api/v1/events)
     //
     // One SSE stream keeps both lists current: snapshot on (re)connect = full
@@ -121,13 +147,31 @@ final class TasksStore {
     @ObservationIgnored private var feed: EventsFeedClient?
     /// Latest feed transport state (MainActor-confined).
     @ObservationIgnored private(set) var feedState: EventsFeedClient.FeedState = .down
-    /// 404 from the feed = server predates it; never retry this app session.
+    /// 404/401/403 from the feed = don't reconnect-loop. NOT permanent: each
+    /// foreground reset retries ONCE — a transient 401 (cloud box mid-restart,
+    /// proxy hiccup) used to freeze the app on 30s polling for its whole
+    /// lifetime, the top phone-side "status is stale" mechanism.
     @ObservationIgnored private var feedUnsupported = false
     @ObservationIgnored private var fallbackPollTask: Task<Void, Never>?
+    /// Feed down → real fallback cadence.
     private static let fallbackPollSeconds: Double = 30
+    /// Feed LIVE → slow trust-but-verify cadence. The cloud relay lane is
+    /// fire-and-forget (a dropped bridge frame is healed only by the next
+    /// snapshot, i.e. the next reconnect), so a healthy-looking feed can
+    /// silently miss rows; a slow REST reconcile bounds that staleness.
+    private static let verifyPollSeconds: Double = 120
 
-    init() {
+    /// Weak app-wide reference so session-page control objects created by
+    /// views can apply optimistic list updates. The app's single store
+    /// instance owns its own lifetime; tests overwrite it harmlessly.
+    static weak var shared: TasksStore?
+
+    /// `transport` nil (production) = the store's own WalnutAPI instance.
+    /// WalnutTests pass a scripted mock to drive the real mutation paths.
+    init(transport: WalnutTaskTransport? = nil) {
+        self.transport = transport ?? api
         LifecycleHub.shared.register(self)
+        Self.shared = self
     }
 
     private func connectFeed() {
@@ -161,22 +205,34 @@ final class TasksStore {
         feedState = state
         switch state {
         case .live:
-            stopFallbackPolling()
+            // Feed authoritative — drop to the slow verify cadence (the
+            // bridge relay lane can drop frames silently; see the constant).
+            restartPolling(every: Self.verifyPollSeconds)
         case .unsupported:
             feedUnsupported = true
             feed = nil // client already stopped itself
-            startFallbackPolling()
+            restartPolling(every: Self.fallbackPollSeconds)
         case .down:
-            startFallbackPolling()
+            restartPolling(every: Self.fallbackPollSeconds)
         }
     }
 
-    /// 30s REST refresh while the live feed can't deliver. Idempotent.
-    private func startFallbackPolling() {
-        guard isActive, fallbackPollTask == nil else { return }
+    /// Cadence of the currently running poll task (0 = none). Guards against
+    /// timer resets: the feed emits `.down` on EVERY failed reconnect attempt,
+    /// and blindly restarting the poll each time would keep pushing the next
+    /// refresh out — potentially forever under a steady 30s backoff loop.
+    @ObservationIgnored private var pollCadence: Double = 0
+
+    /// (Re)start the background REST refresh at the given cadence. No-op when
+    /// a poll at the same cadence is already running.
+    private func restartPolling(every seconds: Double) {
+        guard isActive else { return }
+        if pollCadence == seconds, fallbackPollTask != nil { return }
+        stopFallbackPolling()
+        pollCadence = seconds
         fallbackPollTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(Self.fallbackPollSeconds))
+                try? await Task.sleep(for: .seconds(seconds))
                 guard let self, self.isActive, !Task.isCancelled else { return }
                 async let t: Void = self.loadTasks()
                 async let s: Void = self.loadSessions()
@@ -188,6 +244,7 @@ final class TasksStore {
     private func stopFallbackPolling() {
         fallbackPollTask?.cancel()
         fallbackPollTask = nil
+        pollCadence = 0
     }
 
     /// Apply one coalesced batch from the feed. Same-value writes are skipped
@@ -308,7 +365,8 @@ final class TasksStore {
         connectFeed()
         async let t: Void = loadTasks()
         async let s: Void = loadSessions()
-        _ = await (t, s)
+        async let f: Void = loadFocusTiers()
+        _ = await (t, s, f)
     }
 
     func loadTasks() async {
@@ -322,8 +380,17 @@ final class TasksStore {
             guard isActive, !Task.isCancelled, seq == taskLoadSeq else { return }
             // Overlay pending creates: on a REPLICA the projection lags the
             // create, so a raw adoption here would delete the optimistic row.
+            // Replay in-flight optimistic edits on top (same rule as the feed
+            // upsert path): the fetched projection can predate a PATCH that is
+            // still running, and adopting it verbatim flashes the old value.
             MainWork.track("tasks.load", count: response.tasks.count) {
-                tasks = mergePending(into: response.tasks)
+                var merged = mergePending(into: response.tasks)
+                if !inFlightEdits.isEmpty {
+                    merged = merged.map { row in
+                        inFlightEdits[row.id].map { Self.applyEdit($0, to: row) } ?? row
+                    }
+                }
+                tasks = merged
             }
             syncedAt = WalnutTask.parseISO(response.syncedAt)
             notSyncedYet = false
@@ -495,7 +562,9 @@ final class TasksStore {
             starred: task.starred,
             pinned: task.pinned,
             tags: task.tags,
-            summary: task.summary
+            summary: task.summary,
+            startDate: task.startDate,
+            endDate: task.endDate
         )
     }
 
@@ -547,41 +616,54 @@ final class TasksStore {
     }
 
     private func patchTask(id: String, edit: TaskEdit) async throws -> WalnutTask {
-        try await api.updateTask(
+        try await transport.updateTask(
             id: id, status: edit.status, priority: edit.priority,
-            dueDate: edit.dueDate, project: edit.project, title: edit.title
+            dueDate: edit.dueDate, project: edit.project, title: edit.title,
+            description: nil
         )
     }
 
     // MARK: - Pin toggle (Wave 1 — POST/DELETE /focus/tasks/:id)
 
+    /// Same row with a different pinned flag (WalnutTask is immutable).
+    static func withPinned(_ t: WalnutTask, _ value: Bool?) -> WalnutTask {
+        WalnutTask(
+            id: t.id, title: t.title, status: t.status, phase: t.phase,
+            priority: t.priority, project: t.project, dueDate: t.dueDate,
+            createdAt: t.createdAt, updatedAt: t.updatedAt,
+            completedAt: t.completedAt, starred: t.starred,
+            pinned: value, tags: t.tags, summary: t.summary,
+            startDate: t.startDate, endDate: t.endDate
+        )
+    }
+
     /// Pin/unpin with optimistic row update + rollback. Returns an error
     /// message on failure (409 = pinning a completed task), nil on success.
+    /// No blocking list refetch on success: the row is already right, the
+    /// events feed (or the verify poll) confirms it; only the tier map is
+    /// refreshed so the badge appears/disappears.
     func setPinned(_ task: WalnutTask, pinned: Bool) async -> String? {
         noteUserTouched(task.id)
-        // Optimistic: flip the row's pinned flag in place.
+        // Optimistic: flip the row's pinned flag + tier map in place.
         let apply = { (value: Bool?) in
             if let idx = self.tasks.firstIndex(where: { $0.id == task.id }) {
-                let t = self.tasks[idx]
-                self.tasks[idx] = WalnutTask(
-                    id: t.id, title: t.title, status: t.status, phase: t.phase,
-                    priority: t.priority, project: t.project, dueDate: t.dueDate,
-                    createdAt: t.createdAt, updatedAt: t.updatedAt,
-                    completedAt: t.completedAt, starred: t.starred,
-                    pinned: value, tags: t.tags, summary: t.summary
-                )
+                self.tasks[idx] = Self.withPinned(self.tasks[idx], value)
             }
         }
+        let originalTier = taskTiers[task.id]
         apply(pinned)
+        // New pins land in satellite (the server default tier).
+        taskTiers[task.id] = pinned ? "satellite" : nil
         do {
             _ = pinned
-                ? try await api.pinTask(id: task.id)
-                : try await api.unpinTask(id: task.id)
-            // Authoritative refresh (pin state is exported on the projection).
-            await loadTasks()
+                ? try await transport.pinTask(id: task.id)
+                : try await transport.unpinTask(id: task.id)
+            // Reconcile the tier map in the background (never blocks the UI).
+            scheduleTierRefresh()
             return nil
         } catch {
             apply(task.pinned) // rollback
+            taskTiers[task.id] = originalTier
             if let apiError = error as? APIError, apiError.isConflict {
                 return "Completed tasks can't be pinned."
             }
@@ -593,38 +675,74 @@ final class TasksStore {
 
     /// Batch-complete (or reopen). PARTIAL SUCCESS by contract: returns a
     /// human summary line on any failure, nil when everything succeeded.
-    /// The server emits per-task events, so the list converges via the feed;
-    /// a REST refresh covers the no-feed fallback.
+    /// Optimistic: every selected row flips locally BEFORE the POST; failed
+    /// ids (partial failure or thrown error) roll back to their originals.
     func batchSetDone(_ taskIds: [String], done: Bool) async -> String? {
         guard !taskIds.isEmpty else { return nil }
         for id in taskIds { noteUserTouched(id) }
+        // Optimistic apply, remembering originals for rollback.
+        var originals: [String: WalnutTask] = [:]
+        let edit = TaskEdit(status: done ? "done" : "todo")
+        for id in taskIds {
+            if let idx = tasks.firstIndex(where: { $0.id == id }) {
+                originals[id] = tasks[idx]
+                let optimistic = Self.applyEdit(edit, to: tasks[idx])
+                tasks[idx] = optimistic
+                inFlightEdits[id] = edit
+            }
+        }
+        defer { for id in taskIds { inFlightEdits[id] = nil } }
+        let rollback = { (ids: any Sequence<String>) in
+            for id in ids {
+                if let original = originals[id],
+                   let idx = self.tasks.firstIndex(where: { $0.id == id }) {
+                    self.tasks[idx] = original
+                }
+            }
+        }
         do {
-            let result = try await api.batchSetPhase(taskIds: taskIds, phase: done ? "COMPLETE" : "TODO")
-            await loadTasks()
+            let result = try await transport.batchSetPhase(taskIds: taskIds, phase: done ? "COMPLETE" : "TODO")
+            if isActive { DiskCache.save(tasks, key: "tasks-list") }
             if result.failed.isEmpty { return nil }
+            rollback(result.failed.compactMap(\.id))
             let reason = result.failed.first?.error ?? "unknown error"
             return "\(result.changed.count) updated, \(result.failed.count) failed — \(reason)"
         } catch {
+            rollback(taskIds)
             return error.localizedDescription
         }
     }
 
     /// Batch-delete. Same partial-success contract as batchSetDone.
+    /// Optimistic: selected rows vanish immediately; failures reappear.
     func batchDelete(_ taskIds: [String], force: Bool = false) async -> String? {
         guard !taskIds.isEmpty else { return nil }
         for id in taskIds { noteUserTouched(id) }
-        do {
-            let result = try await api.batchDeleteTasks(taskIds: taskIds, force: force)
-            let deletedIds = Set(result.deleted.map(\.id))
-            if !deletedIds.isEmpty {
-                tasks.removeAll { deletedIds.contains($0.id) }
-                DiskCache.save(tasks, key: "tasks-list")
+        // Remember (row, index) so a rollback can reinsert near its old spot.
+        var removed: [(task: WalnutTask, index: Int)] = []
+        for id in taskIds {
+            if let idx = tasks.firstIndex(where: { $0.id == id }) {
+                removed.append((tasks[idx], idx))
+                tasks.remove(at: idx)
             }
-            await loadTasks()
+        }
+        let restore = { (ids: Set<String>) in
+            for entry in removed where ids.contains(entry.task.id) {
+                let at = min(entry.index, self.tasks.count)
+                self.tasks.insert(entry.task, at: at)
+            }
+        }
+        do {
+            let result = try await transport.batchDeleteTasks(taskIds: taskIds, force: force)
+            let deletedIds = Set(result.deleted.map(\.id))
+            // Rows the server did NOT delete come back.
+            restore(Set(taskIds).subtracting(deletedIds))
+            if isActive { DiskCache.save(tasks, key: "tasks-list") }
             if result.failed.isEmpty { return nil }
             let reason = result.failed.first?.error ?? "unknown error"
             return "\(result.deleted.count) deleted, \(result.failed.count) failed — \(reason)"
         } catch {
+            restore(Set(taskIds))
             return error.localizedDescription
         }
     }
@@ -729,7 +847,9 @@ final class TasksStore {
         switch filter {
         case .today: rows = WalnutTask.openSorted(todayTasks)
         case .inProgress: rows = WalnutTask.openSorted(inProgressTasks)
-        case .sessions: rows = []
+        // Calendar renders its own month grid straight from the store; the
+        // flat-list slice is unused (mirrors .sessions).
+        case .sessions, .calendar: rows = []
         case .allOpen: rows = WalnutTask.openSorted(openTasks)
         case .done: rows = WalnutTask.doneSorted(doneTasks)
         }
@@ -764,6 +884,12 @@ extension TasksStore: LifecycleSuspendable {
 
     func resumeForForeground() {
         isActive = true
+        // Give a previously "unsupported" feed one fresh chance per
+        // foreground: 401/403 can be transient (cloud box mid-restart, proxy
+        // hiccup), and latching it for the app's lifetime silently downgraded
+        // live status to 30s polling forever — a top staleness mechanism.
+        // A genuinely old server (404) just re-latches after one request.
+        feedUnsupported = false
         connectFeed()
         // The feed snapshot covers tasks+sessions, but reconnect can lag —
         // fire one REST refresh so the lists are fresh immediately.
@@ -771,7 +897,8 @@ extension TasksStore: LifecycleSuspendable {
             guard let self else { return }
             async let t: Void = self.loadTasks()
             async let s: Void = self.loadSessions()
-            _ = await (t, s)
+            async let f: Void = self.loadFocusTiers()
+            _ = await (t, s, f)
         }
     }
 }
@@ -780,12 +907,13 @@ extension TasksStore: LifecycleSuspendable {
 enum TaskFilter: String, CaseIterable, Identifiable {
     // Declaration order IS the card order: Sessions leads — live agent work
     // is the primary daily surface, task lists follow.
-    case sessions, today, inProgress, allOpen, done
+    case sessions, today, calendar, inProgress, allOpen, done
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .today: return "Today"
+        case .calendar: return "Calendar"
         case .inProgress: return "In Progress"
         case .sessions: return "Sessions"
         case .allOpen: return "All Open"
@@ -796,6 +924,7 @@ enum TaskFilter: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .today: return "calendar"
+        case .calendar: return "calendar.badge.clock"
         case .inProgress: return "arrow.triangle.2.circlepath"
         case .sessions: return "terminal"
         case .allOpen: return "tray.full"
@@ -807,6 +936,7 @@ enum TaskFilter: String, CaseIterable, Identifiable {
     var identifierKey: String {
         switch self {
         case .today: return "today"
+        case .calendar: return "calendarview"
         case .inProgress: return "inprogress"
         case .sessions: return "sessions"
         case .allOpen: return "all"

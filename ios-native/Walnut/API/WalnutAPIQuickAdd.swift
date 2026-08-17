@@ -37,9 +37,11 @@ extension WalnutAPI {
 
     /// PUT /api/v1/focus/tasks/:id/tier — move a PINNED task between tiers
     /// (`focus|satellite|backlog|wait` or a registered `ct_*` id). The task
-    /// must already be pinned (pin first via `pinTask`).
-    func setTaskFocusTier(id: String, tier: String) async throws {
-        let _: FocusTierResult = try await send(
+    /// must already be pinned (pin first via `pinTask`). Answers the full
+    /// tier split so callers can adopt the authoritative buckets.
+    @discardableResult
+    func setTaskFocusTier(id: String, tier: String) async throws -> FocusTierResult {
+        try await send(
             "PUT", "/focus/tasks/\(escape(id))/tier", body: ["tier": tier]
         )
     }

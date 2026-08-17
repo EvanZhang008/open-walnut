@@ -176,6 +176,12 @@ struct WalnutTask: Codable, Identifiable, Equatable {
     let pinned: Bool?
     let tags: [String]?
     let summary: String?
+    /// Additive (projection ships them since Wave 1): "when to begin" /
+    /// "when it ends" — the Calendar view places tasks by these + due_date.
+    /// `var … = nil` keeps the synthesized memberwise init source-compatible
+    /// with pre-existing call sites (they simply leave the dates nil).
+    var startDate: String? = nil
+    var endDate: String? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, title, status, phase, priority, project
@@ -184,6 +190,8 @@ struct WalnutTask: Codable, Identifiable, Equatable {
         case updatedAt = "updated_at"
         case completedAt = "completed_at"
         case starred, pinned, tags, summary
+        case startDate = "start_date"
+        case endDate = "end_date"
     }
 }
 

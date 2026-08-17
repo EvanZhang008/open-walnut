@@ -38,9 +38,20 @@ struct TaskDetailExtras: View {
             }
         }
         // Delete ladder: plain confirm first; 409 active-sessions → force.
+        // Optimistic: the row vanishes + the sheet closes the moment the user
+        // confirms; a failure reverts the row and surfaces on the list's
+        // toast (a modal after dismissal would be homeless). A 409 marks the
+        // id in deleteNeedsForceIds, so the NEXT delete confirm on this task
+        // offers Stop Sessions & Delete directly.
         .confirmationDialog("Delete this task?", isPresented: $confirmDelete, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) {
-                Task { if await controller.delete() { onDeleted() } }
+            if tasks.deleteNeedsForceIds.contains(controller.taskId) {
+                Button("Stop Sessions & Delete", role: .destructive) {
+                    deleteOptimistically(force: true)
+                }
+            } else {
+                Button("Delete", role: .destructive) {
+                    deleteOptimistically(force: false)
+                }
             }
         }
         .alert("Task has active sessions", isPresented: Binding(
@@ -50,7 +61,7 @@ struct TaskDetailExtras: View {
             Button("Cancel", role: .cancel) { controller.deleteNeedsForce = nil }
             Button("Stop Sessions & Delete", role: .destructive) {
                 controller.deleteNeedsForce = nil
-                Task { if await controller.delete(force: true) { onDeleted() } }
+                deleteOptimistically(force: true)
             }
         } message: {
             Text(controller.deleteNeedsForce?.first ?? "")
@@ -60,12 +71,12 @@ struct TaskDetailExtras: View {
                 title: "Description", text: $descriptionDraft,
                 identifier: "task.descriptionEditor"
             ) { content in
-                await controller.saveDescription(content)
+                controller.saveDescription(content)
             }
         }
         .sheet(isPresented: $editingNote) {
             fieldEditor(title: "Note", text: $noteDraft, identifier: "task.noteEditor") { content in
-                await controller.saveNote(content)
+                controller.saveNote(content)
             }
         }
     }
@@ -76,7 +87,7 @@ struct TaskDetailExtras: View {
         HStack(spacing: 10) {
             let starred = controller.detail?.starred == true
             Button {
-                Task { _ = await controller.toggleStar() }
+                Task { await controller.toggleStar() }
             } label: {
                 actionChip(
                     starred ? "Starred" : "Star",
@@ -90,16 +101,24 @@ struct TaskDetailExtras: View {
             let pinned = isPinned
             Button {
                 Task {
-                    if await controller.setPinned(!pinned) != nil {
-                        // Pin state lives on the task row — refresh the list
-                        // projection so the pin chip and Pinned scope update.
+                    // Optimistic store path: the row + tier map flip NOW; a
+                    // failure reverts and surfaces below. The detail record
+                    // refresh rides behind (no spinner gate).
+                    if let taskRow {
+                        if let failure = await tasks.setPinned(taskRow, pinned: !pinned) {
+                            controller.errorMessage = failure
+                        } else {
+                            await controller.load()
+                        }
+                    } else if await controller.setPinned(!pinned) != nil {
+                        // Fallback for rows outside the list projection.
                         await tasks.loadTasks()
                         await controller.load()
                     }
                 }
             } label: {
                 actionChip(
-                    pinned ? "Pinned" : "Pin",
+                    pinned ? "Pinned · \(tierLabel)" : "Pin",
                     icon: pinned ? "pin.fill" : "pin",
                     color: pinned ? Theme.tint : .secondary
                 )
@@ -120,9 +139,38 @@ struct TaskDetailExtras: View {
         .disabled(controller.acting)
     }
 
+    /// Live list row (the optimistic writes land here first).
+    private var taskRow: WalnutTask? {
+        tasks.tasks.first(where: { $0.id == controller.taskId })
+    }
+
     private var isPinned: Bool {
-        controller.detail?.pinned == true
-            || tasks.tasks.first(where: { $0.id == controller.taskId })?.pinned == true
+        // List row first — it carries the optimistic flip; the detail record
+        // is a slower snapshot and would show the stale value mid-flight.
+        taskRow?.pinned ?? (controller.detail?.pinned == true)
+    }
+
+    /// Where the pin lives (focus tier label) — "Satellite" until mapped.
+    private var tierLabel: String {
+        tasks.tierLabel(for: tasks.tierId(for: controller.taskId) ?? "satellite")
+    }
+
+    /// Optimistic delete: dismiss + remove NOW; revert + toast on failure.
+    /// Rows outside the list projection fall back to the awaited controller
+    /// path (there is no local row to remove optimistically).
+    private func deleteOptimistically(force: Bool) {
+        guard taskRow != nil else {
+            Task { if await controller.delete(force: force) { onDeleted() } }
+            return
+        }
+        let taskId = controller.taskId
+        onDeleted() // close the sheet immediately — the row is already gone
+        Task {
+            if let failure = await tasks.deleteTask(id: taskId, force: force) {
+                // Row restored by the store; explain on the toast surface.
+                tasks.transientError = failure
+            }
+        }
     }
 
     private func actionChip(_ text: String, icon: String, color: Color) -> some View {
@@ -247,10 +295,13 @@ struct TaskDetailExtras: View {
             .foregroundStyle(.secondary)
     }
 
-    /// Shared plain-text editor sheet for description/note.
+    /// Shared plain-text editor sheet for description/note. Save is
+    /// optimistic: the editor closes immediately, the readback text already
+    /// shows the new content, and a failure reverts it + shows the error line
+    /// (never a blocked Save button).
     private func fieldEditor(
         title: String, text: Binding<String>, identifier: String,
-        onSave: @escaping (String) async -> Bool
+        onSave: @escaping (String) -> Void
     ) -> some View {
         NavigationStack {
             TextEditor(text: text)
@@ -268,13 +319,9 @@ struct TaskDetailExtras: View {
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Save") {
-                            let content = text.wrappedValue
-                            Task {
-                                if await onSave(content) {
-                                    editingDescription = false
-                                    editingNote = false
-                                }
-                            }
+                            onSave(text.wrappedValue)
+                            editingDescription = false
+                            editingNote = false
                         }
                         .fontWeight(.semibold)
                         .accessibilityIdentifier("\(identifier).save")

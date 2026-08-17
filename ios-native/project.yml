@@ -44,6 +44,11 @@ targets:
         # Voice input: the composer mic button records speech and transcribes
         # it to text on your Walnut server.
         NSMicrophoneUsageDescription: Walnut uses the microphone for voice input — speech is transcribed to text by your own Walnut server.
+        # Tasks-tab calendar view: device calendar events render read-only in
+        # the day agenda next to your Walnut tasks. Read access only; nothing
+        # is written to your calendars. (Deployment target is iOS 18, so only
+        # the iOS 17+ full-access key is needed — no legacy NSCalendarsUsageDescription.)
+        NSCalendarsFullAccessUsageDescription: Walnut shows your calendar events alongside tasks in the calendar view. Events are read-only and never leave your device.
         # Keep a live voice recording running across screen lock / app
         # background. Without this the audio session dies the moment the
         # phone auto-locks mid-dictation (field data-loss incident 2026-08-09).

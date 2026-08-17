@@ -149,20 +149,33 @@ extension TasksStore {
             priority: t.priority, project: t.project, dueDate: t.dueDate,
             createdAt: t.createdAt, updatedAt: t.updatedAt,
             completedAt: t.completedAt, starred: t.starred,
-            pinned: true, tags: t.tags, summary: t.summary
+            pinned: true, tags: t.tags, summary: t.summary,
+            startDate: t.startDate, endDate: t.endDate
         )
     }
 
-    /// Pin (idempotent) + optional tier move, then refresh so the projection's
-    /// authoritative pin state lands. Best-effort: failures only log.
-    private func applyPin(taskId: String, tier: String?) async {
+    /// Pin (idempotent) + optional tier move. Optimistic: the tier map is
+    /// written immediately (badge shows the moment the row is pinned) and the
+    /// debounced refresh reconciles with the server split. Announces WHERE
+    /// the pin landed ("Pinned · Focus") via the toast surface. Best-effort:
+    /// failures only log — quick-add's task itself already exists.
+    func applyPin(taskId: String, tier: String?) async {
+        let landed = tier ?? "satellite"
+        taskTiers[taskId] = landed
+        // Flip the row's pinned flag too (the parse-tier path arrives with an
+        // unpinned local row; the badge needs pinned==true to render).
+        if let idx = tasks.firstIndex(where: { $0.id == taskId }), tasks[idx].pinned != true {
+            tasks[idx] = Self.withPinned(tasks[idx])
+        }
         do {
-            _ = try await api.pinTask(id: taskId)
+            _ = try await transport.pinTask(id: taskId)
             if let tier, tier != "satellite" {
-                try await api.setTaskFocusTier(id: taskId, tier: tier)
+                _ = try await transport.setTaskFocusTier(id: taskId, tier: tier)
             }
-            await loadTasks()
+            if isActive { transientNotice = "Pinned · \(tierLabel(for: landed))" }
+            scheduleTierRefresh()
         } catch {
+            taskTiers[taskId] = nil
             AppLog.warn("tasks", "quick-add pin failed", ["taskId": taskId, "error": error.localizedDescription])
         }
     }

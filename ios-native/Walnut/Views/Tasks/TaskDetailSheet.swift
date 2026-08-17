@@ -67,8 +67,9 @@ struct TaskDetailSheet: View {
                     // Wave-1 detail plane: star/pin/delete + description/note
                     // readback with editing + blocked/children/parent relations.
                     TaskDetailExtras(controller: detailController) {
-                        // Deleted server-side — reflect locally and close.
-                        Task { await tasks.loadTasks() }
+                        // Row already removed optimistically by the store —
+                        // just close. (A refetch here could race the DELETE
+                        // and resurrect the row from a stale projection.)
                         dismiss()
                     }
                 }
@@ -99,15 +100,18 @@ struct TaskDetailSheet: View {
 
     // MARK: - Edits
 
+    /// Fire-and-forget: the store applies the edit to the row SYNCHRONOUSLY
+    /// (optimistic) and rolls back on failure — so there is no spinner and no
+    /// disabled window. `saving` is kept only as a tiny progress hint in the
+    /// header; it never gates the controls (instant-first rule, 2026-08).
     private func apply(_ edit: TasksStore.TaskEdit) {
-        guard !saving else { return }
-        saving = true
         editError = nil
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        saving = true
         Task {
             defer { saving = false }
             do {
                 _ = try await tasks.updateTask(id: task.id, edit: edit)
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
             } catch {
                 editError = Self.friendlyEditError(error)
             }
@@ -178,7 +182,6 @@ struct TaskDetailSheet: View {
                 apply(.init(status: current.statusKind == .done ? "todo" : "done"))
             }
             .accessibilityIdentifier("task.statusToggle")
-            .disabled(saving)
             Text(current.title)
                 .font(.title2.weight(.semibold))
                 .strikethrough(current.isDone, color: .secondary)
@@ -207,12 +210,42 @@ struct TaskDetailSheet: View {
             Chip(text: phaseLabel, color: .secondary)
             priorityMenu
             if current.pinned == true {
-                Chip(text: "Pinned", color: Theme.tint, systemImage: "pin.fill")
+                tierMenu
             }
             if current.starred == true {
                 Chip(text: "Starred", color: Theme.warning, systemImage: "star.fill")
             }
         }
+    }
+
+    /// Pinned chip WITH the focus tier ("Pinned · Focus") — tap → tier picker
+    /// (built-ins + custom tiers, mirroring the desktop focus bar). Moves are
+    /// optimistic (map write now, PUT behind, revert + banner on failure).
+    private var tierMenu: some View {
+        Menu {
+            let currentTier = tasks.tierId(for: task.id) ?? "satellite"
+            ForEach(tasks.allTierChoices, id: \.id) { choice in
+                Button {
+                    Task {
+                        if let failure = await tasks.setTier(taskId: task.id, tier: choice.id) {
+                            editError = failure
+                        }
+                    }
+                } label: {
+                    if choice.id == currentTier {
+                        Label(choice.label, systemImage: "checkmark")
+                    } else {
+                        Text(choice.label)
+                    }
+                }
+            }
+        } label: {
+            Chip(
+                text: "Pinned · \(tasks.tierBadge(for: current) ?? "Satellite")",
+                color: Theme.tint, systemImage: "pin.fill"
+            )
+        }
+        .accessibilityIdentifier("task.tier")
     }
 
     /// Priority is a tappable chip → menu of the four levels.
@@ -238,7 +271,6 @@ struct TaskDetailSheet: View {
             )
         }
         .accessibilityIdentifier("task.priority")
-        .disabled(saving)
     }
 
     static let priorities: [(value: String, label: String)] = [
@@ -302,7 +334,6 @@ struct TaskDetailSheet: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("task.project")
-            .disabled(saving)
         }
     }
 
@@ -321,7 +352,6 @@ struct TaskDetailSheet: View {
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("task.due")
-            .disabled(saving)
             if current.dueDate != nil {
                 Button {
                     apply(.init(dueDate: "")) // "" = explicit clear
@@ -330,7 +360,6 @@ struct TaskDetailSheet: View {
                         .foregroundStyle(.tertiary)
                 }
                 .accessibilityIdentifier("task.dueClear")
-                .disabled(saving)
             }
         }
     }
@@ -384,7 +413,7 @@ struct TaskDetailSheet: View {
         }
     }
 
-    /// Phase enum → readable Title Case (e.g. AWAIT_HUMAN_ACTION → Await Human Action).
+    /// Phase enum → readable Title Case (e.g. AGENT_COMPLETE → Agent Complete).
     private var phaseLabel: String {
         current.phase
             .split(separator: "_")

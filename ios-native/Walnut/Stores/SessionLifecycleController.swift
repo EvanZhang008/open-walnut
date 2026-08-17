@@ -153,20 +153,46 @@ final class SessionLifecycleController {
         }
     }
 
-    /// Rename the session (PATCH title).
+    /// Rename the session — optimistic-first: the list row (TasksStore) flips
+    /// instantly and reverts on failure; no `acting` spinner window for a
+    /// simple field write. Falls back to a plain awaited PATCH when no list
+    /// store exists (unit tests, detached pages).
     @discardableResult
     func rename(_ title: String) async -> Bool {
-        await run {
+        errorMessage = nil
+        confirmation = nil
+        if let store = TasksStore.shared,
+           store.sessions.contains(where: { $0.id == sessionId }) {
+            if let failure = await store.renameSession(id: sessionId, title: title) {
+                errorMessage = failure
+                return false
+            }
+            confirmation = "Session renamed."
+            return true
+        }
+        return await run {
             _ = try await self.api.patchSession(id: self.sessionId, title: title)
             self.confirmation = "Session renamed."
             return true
         }
     }
 
-    /// Archive/unarchive the session.
+    /// Archive/unarchive the session — optimistic through the list store
+    /// (archive removes the row immediately; failure restores it).
     @discardableResult
     func setArchived(_ archived: Bool) async -> Bool {
-        await run {
+        errorMessage = nil
+        confirmation = nil
+        if let store = TasksStore.shared,
+           archived, store.sessions.contains(where: { $0.id == sessionId }) {
+            if let failure = await store.setSessionArchived(id: sessionId, archived: archived) {
+                errorMessage = failure
+                return false
+            }
+            confirmation = "Session archived."
+            return true
+        }
+        return await run {
             _ = try await self.api.patchSession(id: self.sessionId, archived: archived)
             self.confirmation = archived ? "Session archived." : "Session unarchived."
             return true

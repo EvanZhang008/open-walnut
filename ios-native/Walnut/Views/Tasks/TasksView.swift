@@ -216,8 +216,9 @@ struct TasksView: View {
                 }
 
                 // Live sessions ride the top of every task filter (except the
-                // Sessions filter, which shows the full Pinned/Active/Recent list).
-                if activeFilter != .sessions {
+                // Sessions filter, which shows the full Pinned/Active/Recent
+                // list, and Calendar, which is a full-bleed month grid).
+                if activeFilter != .sessions && activeFilter != .calendar {
                     activeSessionsSection
                     // Pinned tasks float above the project sections (mirrors
                     // the desktop focus bar). Rows keep full swipe/menu/detail
@@ -229,6 +230,15 @@ struct TasksView: View {
 
                 if activeFilter == .sessions {
                     sessionSections
+                } else if activeFilter == .calendar {
+                    // Month grid + day agenda (self-contained; reads TasksStore
+                    // from the environment, device events via EventKit).
+                    Section {
+                        CalendarTabView()
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
+                            .listRowBackground(Color.clear)
+                    }
                 } else if sections.isEmpty {
                     Section {
                         Text(emptyText)
@@ -317,7 +327,8 @@ struct TasksView: View {
             .refreshable {
                 async let t: Void = tasks.loadTasks()
                 async let se: Void = tasks.loadSessions()
-                _ = await (t, se)
+                async let f: Void = tasks.loadFocusTiers()
+                _ = await (t, se, f)
             }
             // Gated: on a background/prewarm launch the tab's `.task` would fire
             // network fetches before the app is ever in front of the user (P0-2).
@@ -325,7 +336,22 @@ struct TasksView: View {
                 LaunchGate.shared.whenActive {
                     async let t: Void = tasks.loadTasks()
                     async let se: Void = tasks.loadSessions()
-                    _ = await (t, se)
+                    async let f: Void = tasks.loadFocusTiers()
+                    _ = await (t, se, f)
+                }
+            }
+            // Store-level toast surface (fire-and-forget mutations): a small
+            // auto-dismissing line at the bottom — never a modal.
+            .overlay(alignment: .bottom) {
+                if let notice = tasks.transientNotice ?? tasks.transientError {
+                    TransientToast(
+                        text: notice,
+                        isError: tasks.transientError != nil
+                    ) {
+                        tasks.transientNotice = nil
+                        tasks.transientError = nil
+                    }
+                    .padding(.bottom, 12)
                 }
             }
             .animation(.snappy(duration: 0.25), value: activeFilter)
@@ -373,7 +399,7 @@ struct TasksView: View {
                         .font(.title3)
                         .foregroundStyle(selectedIds.contains(task.id) ? Theme.tint : Color(.systemGray3))
                 }
-                TaskRow(task: task)
+                TaskRow(task: task, tierBadge: tasks.tierBadge(for: task))
             }
         }
         .buttonStyle(.plain)
@@ -428,11 +454,41 @@ struct TasksView: View {
                     Label(task.pinned == true ? "Unpin" : "Pin",
                           systemImage: task.pinned == true ? "pin.slash" : "pin")
                 }
+                // Tier mover (pinned rows only): mirrors the desktop focus
+                // bar's tier set — built-ins + custom tiers, optimistic.
+                if task.pinned == true {
+                    Menu {
+                        let currentTier = tasks.tierId(for: task.id) ?? "satellite"
+                        ForEach(tasks.allTierChoices, id: \.id) { choice in
+                            Button {
+                                moveTier(task, tier: choice.id)
+                            } label: {
+                                if choice.id == currentTier {
+                                    Label(choice.label, systemImage: "checkmark")
+                                } else {
+                                    Text(choice.label)
+                                }
+                            }
+                        }
+                    } label: {
+                        Label("Move to Tier", systemImage: "square.stack.3d.up")
+                    }
+                }
                 Button {
                     selected = task
                 } label: {
                     Label("Details", systemImage: "info.circle")
                 }
+            }
+        }
+    }
+
+    /// Tier move from a row's context menu. Optimistic via the store.
+    private func moveTier(_ task: WalnutTask, tier: String) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Task {
+            if let error = await tasks.setTier(taskId: task.id, tier: tier) {
+                toggleError = error
             }
         }
     }
@@ -523,6 +579,7 @@ struct TasksView: View {
         case .today: return "Nothing due today."
         case .inProgress: return "No tasks in progress."
         case .sessions: return "No agent sessions."
+        case .calendar: return "" // calendar renders its own grid, never this
         case .allOpen: return "No open tasks."
         case .done: return "No recent completions."
         }
@@ -901,6 +958,7 @@ struct SmartListCard: View {
     private var accent: Color {
         switch filter {
         case .today: return Theme.tint
+        case .calendar: return .teal
         case .inProgress: return Theme.warning
         case .sessions: return .indigo
         case .allOpen: return .secondary
@@ -933,5 +991,37 @@ struct SmartListCard: View {
             RoundedRectangle(cornerRadius: 14)
                 .strokeBorder(selected ? accent : Color.clear, lineWidth: 2)
         }
+    }
+}
+
+// MARK: - Transient toast (fire-and-forget mutation feedback)
+
+/// Small bottom toast for optimistic mutations: info ("Pinned · Focus") or a
+/// subtle failure line after a revert. Auto-dismisses; tap to dismiss early.
+/// Deliberately NOT a modal/alert — instant-first mutations never block.
+struct TransientToast: View {
+    let text: String
+    let isError: Bool
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: isError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                .font(.caption)
+            Text(text)
+                .font(.caption.weight(.medium))
+                .lineLimit(2)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(.regularMaterial, in: Capsule())
+        .foregroundStyle(isError ? Theme.danger : Theme.tint)
+        .onTapGesture(perform: dismiss)
+        .task {
+            try? await Task.sleep(for: .seconds(isError ? 5 : 2.5))
+            dismiss()
+        }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .accessibilityIdentifier("tasks.toast")
     }
 }
