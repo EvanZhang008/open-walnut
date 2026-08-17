@@ -211,7 +211,8 @@ private struct HTMLPreviewWebView: UIViewRepresentable {
                 switch http.statusCode {
                 case 404: message = "File not found."
                 case 403, 501: message = "File previews aren't available through the cloud companion — open this on your Mac."
-                case 502: message = "Can't reach the file's host right now — try again when it reconnects."
+                case 413: message = "This file is too large to preview on the phone — open it on your Mac."
+                case 502, 503: message = "Can't reach the file's host right now — try again when it reconnects."
                 default: message = "The server couldn't serve this file (HTTP \(http.statusCode))."
                 }
                 Task { @MainActor in parent.phase = .failed(message) }

@@ -494,6 +494,64 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     expect(templateSrc).toMatch(/changes\.file: core sidecar not available/)
   })
 
+  // Bridge bounded file read (cloud replica phone file previews): the ONLY
+  // generic-content read a bridge socket may invoke. Lock the containment
+  // shape on BOTH twins: allowlist membership, dispatch case, 2MB cap,
+  // realpath-then-denylist ordering, secret-path denylist, regular-files-only
+  // stat gate, and that unbounded fs.read stays OFF the bridge.
+  it('both twins allowlist fs.readBounded on the bridge and dispatch it', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      const allowStart = src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set([')
+      expect(allowStart).toBeGreaterThan(-1)
+      const allowBody = src.slice(allowStart, src.indexOf('])', allowStart))
+      expect(allowBody).toContain("'fs.readBounded'")
+      // Containment intact: the unbounded read stays off the bridge.
+      expect(allowBody).not.toContain("'fs.read'")
+      expect(allowBody).not.toContain("'fs.readRange'")
+      expect(src).toMatch(/case 'fs\.readBounded': return cmdFsReadBounded/)
+      expect(src).toMatch(/function cmdFsReadBounded/)
+    }
+  })
+  it('both twins enforce the same fs.readBounded cap, sandbox ordering, and denylist', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/FS_READ_BOUNDED_MAX_BYTES = 2 \* 1024 \* 1024/)
+      // Denylist covers the key-material dirs and file classes.
+      expect(src).toMatch(/FS_READ_BOUNDED_DENIED_DIRS = \['\.ssh', '\.aws', '\.gnupg'/)
+      for (const lit of ["'.netrc'", "'auth.json'", "'bridge-tokens.json'", "'pem'", "'ppk'"]) {
+        expect(src).toContain(lit)
+      }
+      expect(src).toMatch(/\^id_\(rsa\|dsa\|ecdsa\|ed25519\)/)
+      expect(src).toMatch(/\^config\\\.ya\?ml\$/)
+      const body = src.slice(src.search(/function cmdFsReadBounded/), src.indexOf('\n}', src.search(/function cmdFsReadBounded/)))
+      // realpath BEFORE the denylist (symlink laundering) …
+      const realpathIdx = body.indexOf('realpath(filePath)')
+      const denyIdx = body.indexOf('fsReadBoundedDenied(resolved)')
+      expect(realpathIdx).toBeGreaterThan(-1)
+      expect(denyIdx).toBeGreaterThan(realpathIdx)
+      // …then stat-before-open (FIFO guard) and the size cap before the read.
+      const statIdx = body.indexOf('stat(resolved)')
+      const readIdx = body.indexOf('readFile(resolved)')
+      expect(statIdx).toBeGreaterThan(denyIdx)
+      expect(body.indexOf('FS_READ_BOUNDED_MAX_BYTES')).toBeGreaterThan(statIdx)
+      expect(readIdx).toBeGreaterThan(statIdx)
+      // Traversal + absolute checks are present.
+      expect(body).toContain("includes('..')")
+      expect(body).toContain('isAbsolute(filePath)')
+    }
+  })
+  it("'fs.readBounded' is advertised but NOT required (old daemons must stay usable)", () => {
+    const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
+    const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES = [')
+    const reqEnd = capsSrc.indexOf('] as const', reqStart)
+    expect(reqStart).toBeGreaterThan(-1)
+    expect(capsSrc.slice(reqStart, reqEnd)).not.toMatch(/'fs\.readBounded'/)
+    const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES = [')
+    const advEnd = capsSrc.indexOf('] as const', advStart)
+    expect(capsSrc.slice(advStart, advEnd)).toMatch(/'fs\.readBounded'/)
+  })
+
   it('both twins scrub WALNUT_DAEMON_PARENT_PID from the CLI spawn env', () => {
     // Env-carrier chain: isolated daemon → CLI → `npm run dev:prod` → PROD daemon
     // inherits a dead parent pid, watchdog trips, prod sessions die.
@@ -1822,6 +1880,28 @@ describe('session.message relay daemon-standalone vs daemon-source parity', () =
       // The daemon must NOT deliver anything itself from this command.
       expect(body).not.toMatch(/writeFifo|appendFileSync|cmdSend\(|cmdStart\(/)
       expect(src).toMatch(/MESSAGE_RELAY_TIMEOUT_MS = 45[_]?000/)
+    }
+  })
+
+  // FIFO wedge guard (2026-08-15): fs.read/fs.readRange on a writer-less FIFO
+  // blocked a fs-pool thread FOREVER inside open(); 14 wedged threads killed
+  // every local fs RPC for hours. Both twins must stat-before-open and refuse
+  // non-regular files with ENOTFILE (which DaemonFileReader maps to null).
+  it('both fs.read and fs.readRange stat-before-open and refuse non-regular files (ENOTFILE)', () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const [src, label] of [[standaloneSrc, 'standalone'], [templateSrc, 'source template']] as const) {
+      for (const fn of ['cmdFsRead', 'cmdFsReadRange']) {
+        const start = src.search(new RegExp(`async function ${fn}\\b`))
+        expect(start, `${label}: ${fn} missing`).toBeGreaterThan(-1)
+        const body = src.slice(start, src.indexOf('\n}', start))
+        expect(body, `${label}: ${fn} lost the ENOTFILE guard`).toContain('ENOTFILE')
+        expect(body, `${label}: ${fn} must reject via isFile()`).toMatch(/\.isFile\(\)/)
+        // The guard must run BEFORE any open()/readFile() — stat first.
+        const statIdx = body.search(/fs\.promises\.stat\(/)
+        const openIdx = body.search(/fs\.promises\.(open|readFile)\(/)
+        expect(statIdx, `${label}: ${fn} has no pre-open stat`).toBeGreaterThan(-1)
+        expect(statIdx, `${label}: ${fn} stats AFTER opening — the wedge is back`).toBeLessThan(openIdx)
+      }
     }
   })
 

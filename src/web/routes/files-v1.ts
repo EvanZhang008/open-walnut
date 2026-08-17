@@ -20,12 +20,12 @@
  *   metadata; no threat-model expansion beyond the existing session.launch
  *   relay). The primary serves them exactly like a local request — including
  *   `host=` targets over its SSH daemon channel.
- * - file-content does NOT relay: the daemon bridge deliberately never grants
- *   arbitrary file READS on exec hosts (only the narrow fs.readImage — see
- *   BRIDGE_ALLOWED_COMMANDS), and a server-side relay would hand a
- *   compromised cloud box every file on the primary. On a REPLICA, local
- *   reads stay confined to the /tmp/open-walnut roots (same as the internal
- *   route) and `host=` reads answer 501 not_supported_cloud.
+ * - file-content READS relay via the narrow `fs.readBounded` bridge command
+ *   (2MB cap + path sandbox, both enforced HOST-SIDE by the target daemon —
+ *   see file-content-bridge.ts). NOT fs.read: the bridge still never grants
+ *   arbitrary/unbounded reads on exec hosts. Replica-local safe-root reads
+ *   (stream mirrors) stay local; oversize → 413, bridge down → 503, an old
+ *   daemon → 501 (self-heals on auto-deploy). WRITES still do not relay.
  *
  * Frozen-contract note: everything here is additive (docs/reference/api-v1.md).
  */
@@ -104,11 +104,16 @@ filesV1Router.get('/files/resolve-path', async (req: Request, res: Response, nex
 filesV1Router.get('/file-content', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const host = typeof req.query.host === 'string' && req.query.host ? req.query.host : undefined
-    // REPLICA: remote-host content reads would need an arbitrary-read channel
-    // the bridge deliberately does not have. Local reads fall through to the
-    // shared core, whose CLOUD_MODE guard confines them to the safe roots.
-    if (CLOUD_MODE && host) {
-      sendError(res, 501, 'not_supported_cloud', 'Remote file content is not readable through the cloud companion (the bridge has no arbitrary-read channel)')
+    // REPLICA: relay the read to the target host's daemon over the bridge via
+    // the narrow fs.readBounded command (2MB cap + path sandbox, both
+    // enforced HOST-SIDE — see file-content-bridge.ts). host='' / absent
+    // targets the PRIMARY's daemon: the replica's own disk only holds stream
+    // mirrors, and phones mean "the Mac" when they say no host. Old daemons
+    // (no fs.readBounded) still answer 501 not_supported_cloud and self-heal
+    // on the next auto-deploy.
+    if (CLOUD_MODE) {
+      const { serveCloudFileContent } = await import('./file-content-bridge.js')
+      await serveCloudFileContent(req, res)
       return
     }
     const { readFileContentPayload, serveRawFileContent, FileContentError } = await import('./file-content.js')

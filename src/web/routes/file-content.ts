@@ -39,7 +39,7 @@ import { log } from '../../logging/index.js'
  * (trusted LAN, owner's own machine) the FileViewer needs the whole FS, so this
  * confinement is cloud-only.
  */
-function cloudLocalReadAllowed(absPath: string): boolean {
+export function cloudLocalReadAllowed(absPath: string): boolean {
   const resolved = path.resolve(absPath)
   const roots = [
     path.join(os.tmpdir(), 'open-walnut'),
@@ -52,7 +52,7 @@ function cloudLocalReadAllowed(absPath: string): boolean {
 }
 
 /** Absolute paths / dirs whose contents are secrets — never served locally. */
-function isSecretPath(absPath: string): boolean {
+export function isSecretPath(absPath: string): boolean {
   const resolved = path.resolve(absPath)
   const home = os.homedir()
   const denied = [

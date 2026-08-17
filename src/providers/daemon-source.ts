@@ -1641,6 +1641,12 @@ var BRIDGE_ALLOWED_COMMANDS = new Set([
   // attach pictures to a session over the cloud box. NOT fs.write: a
   // compromised cloud box must never get arbitrary file writes on exec hosts.
   'image.save',
+  // Narrow bounded file read (2MB cap + host-side path sandbox: traversal
+  // rejection, realpath resolution, secret-path denylist) — lets the cloud
+  // box serve phone file previews (HTML/text) for files on this host. NOT
+  // fs.read: a compromised cloud box must never get unbounded arbitrary
+  // reads (keys, configs) off exec hosts.
+  'fs.readBounded',
   // Narrow launch relay: forwarded UP to the connected walnut server (same
   // relay shape as stt), which runs its full quick-start validation chain —
   // the daemon spawns NOTHING from this command. NOT the raw spawn command:
@@ -1727,6 +1733,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'write-inbox': return cmdWriteInbox(ws, id, cmd);
     case 'fs.read': return cmdFsRead(ws, id, cmd);
     case 'fs.readImage': return cmdFsReadImage(ws, id, cmd);
+    case 'fs.readBounded': return cmdFsReadBounded(ws, id, cmd);
     case 'image.save': return cmdImageSave(ws, id, cmd);
     case 'fs.write': return cmdFsWrite(ws, id, cmd);
     case 'fs.mkdir': return cmdFsMkdir(ws, id, cmd);
@@ -4275,6 +4282,12 @@ async function cmdFsRead(ws, id, cmd) {
   }
 
   try {
+    // Regular files ONLY, checked BEFORE open: open() on a FIFO with no writer
+    // blocks forever (2026-08-15: wedged every local fs RPC for hours).
+    const st = await fs.promises.stat(filePath);
+    if (!st.isFile()) {
+      return sendError(ws, id, 'fs.read failed: not a regular file (ENOTFILE)');
+    }
     const enc = encoding || 'base64';
     const data = await fs.promises.readFile(filePath);
     if (enc === 'base64') {
@@ -4330,6 +4343,68 @@ async function cmdFsReadImage(ws, id, cmd) {
   } catch (err) {
     const code = err.code || '';
     sendError(ws, id, 'fs.readImage failed: ' + err.message + (code ? ' (' + code + ')' : ''));
+  }
+}
+
+// Bridge-safe bounded file read: size cap + HOST-SIDE path sandbox. Serves
+// the cloud replica's phone file previews (HTML/text file-content relay).
+// Unlike fs.read (trusted SSH channel only), this is reachable from the
+// public cloud bridge, so THIS handler is the security authority — the
+// replica's own checks are a convenience, not the guarantee. Keep in sync
+// with daemon-standalone.ts cmdFsReadBounded.
+var FS_READ_BOUNDED_MAX_BYTES = 2 * 1024 * 1024; // 2MB — bridge frames stay small
+// Secret files/dirs never served over the bridge. Checked against the
+// REALPATH-resolved target so a symlink can't launder a denied path.
+var FS_READ_BOUNDED_DENIED_DIRS = ['.ssh', '.aws', '.gnupg', path.join('.config', 'walnut-secrets')];
+var FS_READ_BOUNDED_DENIED_BASENAMES = new Set([
+  '.netrc', '.npmrc', '.git-credentials', 'credentials', 'auth.json', 'bridge-tokens.json',
+]);
+var FS_READ_BOUNDED_DENIED_EXTENSIONS = new Set(['pem', 'key', 'p12', 'pfx', 'ppk', 'jks', 'keystore']);
+
+function fsReadBoundedDenied(resolved) {
+  for (const dir of FS_READ_BOUNDED_DENIED_DIRS) {
+    const abs = path.join(HOME_DIR, dir);
+    if (resolved === abs || resolved.startsWith(abs + path.sep)) return true;
+    // Any path SEGMENT named .ssh/.aws/… — covers non-HOME checkouts of keys.
+    if (resolved.split(path.sep).includes(dir)) return true;
+  }
+  const base = path.basename(resolved);
+  if (FS_READ_BOUNDED_DENIED_BASENAMES.has(base)) return true;
+  if (base === '.env' || base.startsWith('.env.')) return true;
+  if (/^id_(rsa|dsa|ecdsa|ed25519)/.test(base)) return true;
+  const ext = base.slice(base.lastIndexOf('.') + 1).toLowerCase();
+  if (FS_READ_BOUNDED_DENIED_EXTENSIONS.has(ext)) return true;
+  if (/^config\.ya?ml$/.test(base)) return true;
+  return false;
+}
+
+async function cmdFsReadBounded(ws, id, cmd) {
+  let filePath = cmd.path;
+  if (!filePath || typeof filePath !== 'string') return sendError(ws, id, 'fs.readBounded: missing path');
+  if (filePath === '~' || filePath.startsWith('~/')) {
+    filePath = HOME_DIR + filePath.slice(1);
+  }
+  if (filePath.includes('..')) return sendError(ws, id, 'fs.readBounded: invalid path (EDENIED)');
+  if (!path.isAbsolute(filePath)) return sendError(ws, id, 'fs.readBounded: path must be absolute (EDENIED)');
+  try {
+    // realpath BEFORE the denylist: a symlink at an innocent path must not
+    // serve ~/.ssh bytes. ENOENT here doubles as the not-found check.
+    const resolved = await fs.promises.realpath(filePath);
+    if (fsReadBoundedDenied(resolved)) {
+      return sendError(ws, id, 'fs.readBounded: path not permitted (EDENIED)');
+    }
+    // Regular files ONLY, stat BEFORE open: open() on a FIFO with no writer
+    // wedges an fs-pool thread forever (same guard as fs.read).
+    const st = await fs.promises.stat(resolved);
+    if (!st.isFile()) return sendError(ws, id, 'fs.readBounded: not a regular file (ENOTFILE)');
+    if (st.size > FS_READ_BOUNDED_MAX_BYTES) {
+      return sendError(ws, id, 'fs.readBounded: too large (EFBIG)');
+    }
+    const data = await fs.promises.readFile(resolved);
+    sendOk(ws, id, { data: data.toString('base64'), encoding: 'base64', size: data.length });
+  } catch (err) {
+    const code = err.code || '';
+    sendError(ws, id, 'fs.readBounded failed: ' + err.message + (code ? ' (' + code + ')' : ''));
   }
 }
 
@@ -4536,6 +4611,11 @@ async function cmdFsReadRange(ws, id, cmd) {
 
   let fh = null;
   try {
+    // Same FIFO guard as fs.read: stat BEFORE open (see cmdFsRead).
+    const pre = await fs.promises.stat(filePath);
+    if (!pre.isFile()) {
+      return sendError(ws, id, 'fs.readRange failed: not a regular file (ENOTFILE)');
+    }
     fh = await fs.promises.open(filePath, 'r');
     const st = await fh.stat();
     if (start >= st.size) {

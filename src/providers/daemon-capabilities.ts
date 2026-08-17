@@ -108,6 +108,17 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * death between steps lost the message. Optional: on an old daemon the cloud
  * route falls back to the direct sequence (now marker-after-delivery).
  *
+ * 'fs.readBounded' — narrow bridge-safe file read (path sandbox + 2MB cap,
+ * both enforced HOST-SIDE by the daemon: traversal/absolute checks, realpath
+ * secret-path denylist (~/.ssh, ~/.aws, key files, config.yaml, …), regular
+ * files only). Lets the cloud replica serve GET /api/v1/file-content (JSON +
+ * raw preview) for files on any bridged exec host — the phone HTML/text
+ * preview path. NOT fs.read: a compromised cloud box must never get
+ * arbitrary/unbounded reads on exec hosts. Optional: a pre-fs.readBounded
+ * daemon answers with an unknown-command error, which the cloud route maps to
+ * 501 not_supported_cloud (self-heals on the next primary reconnect via the
+ * normal auto-deploy).
+ *
  * 'changes-v1' — host-local session-changes compute (changes.compute /
  * changes.file). The daemon parses the session's JSONLs + reads file contents
  * ON ITS OWN HOST and returns a light list / one file's diff — the design-
@@ -127,6 +138,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'agent-gateway',
   'session.message',
   'changes-v1',
+  'fs.readBounded',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]
