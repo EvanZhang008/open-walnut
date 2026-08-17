@@ -68,6 +68,17 @@ describe('terminal phase guard — updateTask', () => {
     expect(after.status).toBe('in_progress');
   });
 
+  it('rejects human-owned phases from agent sources', async () => {
+    const { task } = await addTask({ title: 'Guard human phases' });
+
+    for (const phase of ['HUMAN_VERIFIED', 'POST_WORK_COMPLETED', 'COMPLETE'] as const) {
+      await expect(updateTask(task.id, { phase }, { source: 'agent' }))
+        .rejects.toThrow(/Agents may set/);
+    }
+    await expect(updateTask(task.id, { status: 'done' }, { source: 'agent' }))
+      .rejects.toThrow(/Agents cannot set status=done/);
+  });
+
   it('allows agent to overwrite non-terminal phase AGENT_COMPLETE → AWAIT_HUMAN_ACTION', async () => {
     const { task } = await addTask({ title: 'Guard test 5' });
 

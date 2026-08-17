@@ -9,7 +9,7 @@
  * What this pins down:
  *   - task_create really writes (verified by an independent HTTP GET), and its
  *     result carries the `<task-ref .../>` citation string
- *   - task_complete flips status and also carries the ref
+ *   - agent task_update can hand work back without claiming human completion
  *   - task_list honors the status filter
  *   - --readonly advertises ZERO write tools
  *   - a dead server produces the friendly "not running" tool error
@@ -180,7 +180,7 @@ describe('walnut mcp — task write path', () => {
     }
   })
 
-  it('task_complete marks the task done and also returns a <task-ref/>', async () => {
+  it('task_update hands work back with AGENT_COMPLETE without claiming human completion', async () => {
     const { client, close } = await connect()
     try {
       const created = jsonOf(await client.callTool({
@@ -189,41 +189,32 @@ describe('walnut mcp — task write path', () => {
       }))
       const id = (created.task as { id: string }).id
 
-      const done = await client.callTool({ name: 'task_complete', arguments: { id } })
-      expect(done.isError).toBeFalsy()
-      const payload = jsonOf(done)
-      expect(payload.completed).toBe(true)
-      expect((payload.task as { status: string }).status).toBe('done')
-      expect(payload.ref).toBe(`<task-ref id="${id}" label="Finish the migration"/>`)
-      expect(String(payload.instruction)).toMatch(/verbatim/i)
+      const handedBack = await client.callTool({
+        name: 'task_update',
+        arguments: { id, phase: 'AGENT_COMPLETE' },
+      })
+      expect(handedBack.isError).toBeFalsy()
+      const payload = jsonOf(handedBack)
+      expect((payload.task as { phase: string; status: string }).phase).toBe('AGENT_COMPLETE')
+      expect((payload.task as { phase: string; status: string }).status).toBe('in_progress')
 
       const res = await fetch(`http://127.0.0.1:${port}/api/v1/tasks/${id}`)
-      const detail = await res.json() as { task: { status: string } }
-      expect(detail.task.status).toBe('done')
+      const detail = await res.json() as { task: { phase: string; status: string } }
+      expect(detail.task.phase).toBe('AGENT_COMPLETE')
+      expect(detail.task.status).toBe('in_progress')
     } finally {
       await close()
     }
   })
 
-  it('task_complete auto-unpins (completeTask semantics, not bare PATCH)', async () => {
+  it('does not advertise or execute human-only task completion', async () => {
     const { client, close } = await connect()
     try {
-      const created = jsonOf(await client.callTool({
-        name: 'task_create',
-        arguments: { title: 'Pinned via MCP then completed' },
-      }))
-      const id = (created.task as { id: string }).id
-
-      const pinRes = await fetch(`http://127.0.0.1:${port}/api/v1/focus/tasks/${id}`, { method: 'POST' })
-      expect(pinRes.status).toBe(200)
-      const before = await fetch(`http://127.0.0.1:${port}/api/v1/tasks/${id}`)
-      expect(((await before.json()) as { task: { pinned?: boolean } }).task.pinned).toBe(true)
-
-      const done = await client.callTool({ name: 'task_complete', arguments: { id } })
-      expect(done.isError).toBeFalsy()
-
-      const after = await fetch(`http://127.0.0.1:${port}/api/v1/tasks/${id}`)
-      expect(((await after.json()) as { task: { pinned?: boolean } }).task.pinned).toBeFalsy()
+      const names = (await client.listTools()).tools.map((tool) => tool.name)
+      expect(names).not.toContain('task_complete')
+      const refused = await client.callTool({ name: 'task_complete', arguments: { id: 'x' } })
+      expect(refused.isError).toBe(true)
+      expect(textOf(refused)).toMatch(/task_complete not found/)
     } finally {
       await close()
     }
@@ -302,7 +293,8 @@ describe('walnut mcp — reads', () => {
         name: 'task_create',
         arguments: { title: 'Already closed work' },
       })).task as { id: string }
-      await client.callTool({ name: 'task_complete', arguments: { id: closedTask.id } })
+      const completed = await fetch(`http://127.0.0.1:${port}/api/v1/tasks/${closedTask.id}/complete`, { method: 'POST' })
+      expect(completed.status).toBe(200)
 
       const todo = jsonOf(await client.callTool({ name: 'task_list', arguments: { status: 'todo' } }))
       const todoTasks = todo.tasks as Array<{ id: string; status: string }>

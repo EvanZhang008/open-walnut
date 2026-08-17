@@ -296,8 +296,7 @@ export async function buildLaneMemoryContext(homeDir: string = WALNUT_HOME): Pro
   const readOr = async (rel: string): Promise<string> => {
     try { return (await fs.readFile(path.join(homeDir, rel), 'utf-8')).trim(); } catch { return ''; }
   };
-  const [agentsMd, memoryMd, userMd] = await Promise.all([
-    readOr('AGENTS.md'),
+  const [memoryMd, userMd] = await Promise.all([
     readOr('memory/MEMORY.md'),
     readOr('memory/USER.md'),
   ]);
@@ -305,7 +304,6 @@ export async function buildLaneMemoryContext(homeDir: string = WALNUT_HOME): Pro
     LANE_MEMORY_HEADER,
     'Walnut injects this at session start — standing context, the same role the old per-turn memory sections played. The live files under your working directory are the source of truth; your edits to them are picked up on the next session start.',
   ];
-  if (agentsMd) parts.push(`### Home directory guide (AGENTS.md)\n\n${agentsMd}`);
   if (memoryMd) parts.push(`### Global memory (memory/MEMORY.md)\n\n${memoryMd}`);
   if (userMd) parts.push(`### User profile (memory/USER.md)\n\n${userMd}`);
   parts.push('Daily activity logs live in memory/daily/<date>.md — Read recent ones on demand when the user asks "what happened / what did I do".');

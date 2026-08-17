@@ -12,6 +12,7 @@
  */
 
 import { z } from 'zod'
+import { isAgentWritablePhase } from '../core/phase.js'
 import { getOp, type HttpBinding, type WalnutOp } from './registry.js'
 
 const DEFAULT_API_ROOT = 'http://127.0.0.1:3456'
@@ -30,6 +31,12 @@ export function resolveApiBase(override?: string): string {
 export type OpOutcome =
   | { ok: true; result: unknown }
   | { ok: false; message: string }
+
+export type OpCaller = 'human' | 'agent' | 'gateway'
+
+export function opCallerFromEnv(env: NodeJS.ProcessEnv = process.env): OpCaller {
+  return env.WALNUT_SESSION_ID ? 'agent' : 'human'
+}
 
 /** Pull the deepest cause code out of a fetch failure (Node wraps in TypeError). */
 function causeCode(err: unknown): string | undefined {
@@ -51,8 +58,9 @@ async function rawRequest(
   base: string,
   method: string,
   path: string,
-  body?: unknown,
-  timeoutMs: number = REQUEST_TIMEOUT_MS,
+  body: unknown,
+  timeoutMs: number,
+  caller: OpCaller,
 ): Promise<OpOutcome> {
   const serverRoot = base.replace(/\/api\/v1$/, '')
   const url = path.startsWith('/api/') ? `${serverRoot}${path}` : `${base}${path}`
@@ -60,7 +68,10 @@ async function rawRequest(
   try {
     res = await fetch(url, {
       method,
-      headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+      headers: {
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        'X-Walnut-Op-Caller': caller,
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
     })
@@ -150,10 +161,25 @@ export function materializeBinding(
 export async function executeOp(
   name: string,
   rawArgs: Record<string, unknown>,
-  options: { apiBase?: string } = {},
+  options: { apiBase?: string; caller: OpCaller },
 ): Promise<OpOutcome> {
   const op = getOp(name)
   if (!op) return { ok: false, message: `Unknown op: ${name}. Run \`walnut tools list\` for the catalog.` }
+  const caller = options.caller
+  if (op.tags.humanOnly && caller !== 'human') {
+    return { ok: false, message: `${name} is human-only. Agents must hand work back with AGENT_COMPLETE or AWAIT_HUMAN_ACTION.` }
+  }
+  if (name === 'api' && caller !== 'human' && rawArgs.method !== 'GET') {
+    return { ok: false, message: 'The generic api operation is read-only for agents. Use a named operation for writes.' }
+  }
+  if (name === 'task_update' && caller !== 'human') {
+    if (rawArgs.status === 'done') {
+      return { ok: false, message: 'Agents cannot set status=done. Use phase=AGENT_COMPLETE or AWAIT_HUMAN_ACTION.' }
+    }
+    if (rawArgs.phase !== undefined && !isAgentWritablePhase(rawArgs.phase)) {
+      return { ok: false, message: 'Agents may set TODO, IN_PROGRESS, AGENT_COMPLETE, or AWAIT_HUMAN_ACTION only.' }
+    }
+  }
 
   const parsed = z.object(op.input).strict().safeParse(rawArgs ?? {})
   if (!parsed.success) {
@@ -163,15 +189,20 @@ export async function executeOp(
   const args = parsed.data as Record<string, unknown>
 
   const base = resolveApiBase(options.apiBase)
-  return runOp(op, args, base)
+  return runOp(op, args, base, caller)
 }
 
-async function runOp(op: WalnutOp, args: Record<string, unknown>, base: string): Promise<OpOutcome> {
+async function runOp(
+  op: WalnutOp,
+  args: Record<string, unknown>,
+  base: string,
+  caller: OpCaller,
+): Promise<OpOutcome> {
   const timeoutMs = op.timeoutMs ?? REQUEST_TIMEOUT_MS
   if (op.handler) {
     try {
       const call = async (method: HttpBinding['method'], path: string, body?: unknown): Promise<unknown> => {
-        const r = await rawRequest(base, method, path, body, timeoutMs)
+        const r = await rawRequest(base, method, path, body, timeoutMs, caller)
         if (!r.ok) throw new Error(r.message)
         return r.result
       }
@@ -187,7 +218,7 @@ async function runOp(op: WalnutOp, args: Record<string, unknown>, base: string):
   } catch (err) {
     return { ok: false, message: `Invalid arguments for ${op.name}: ${err instanceof Error ? err.message : String(err)}` }
   }
-  const r = await rawRequest(base, op.bind!.method, materialized.path, materialized.body, timeoutMs)
+  const r = await rawRequest(base, op.bind!.method, materialized.path, materialized.body, timeoutMs, caller)
   if (!r.ok) return r
   const result = op.mapResult ? op.mapResult({ body: r.result, args }) : r.result
   return { ok: true, result }

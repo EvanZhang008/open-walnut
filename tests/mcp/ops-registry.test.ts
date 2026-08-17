@@ -9,12 +9,13 @@
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import type { Server as HttpServer } from 'node:http'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-ops-registry'))
 
-import { WALNUT_HOME } from '../../src/constants.js'
+import { BUILTIN_SKILLS_DIR, WALNUT_HOME } from '../../src/constants.js'
 import { listOps, materializeBinding, executeOp } from '../../src/ops/index.js'
 
 describe('ops registry — shape contract', () => {
@@ -92,22 +93,53 @@ describe('ops registry — binding materialization', () => {
 
 describe('ops registry — arg validation (executor front door)', () => {
   it('rejects unknown args and type mismatches identically for every surface', async () => {
-    const bad = await executeOp('task_get', { id: 'x', nope: 1 })
+    const bad = await executeOp('task_get', { id: 'x', nope: 1 }, { caller: 'human' })
     expect(bad.ok).toBe(false)
     if (!bad.ok) expect(bad.message).toContain('Invalid arguments')
 
-    const missing = await executeOp('task_get', {})
+    const missing = await executeOp('task_get', {}, { caller: 'human' })
     expect(missing.ok).toBe(false)
   })
 
   it('the api passthrough refuses non-/api/ paths', async () => {
-    const r = await executeOp('api', { method: 'GET', path: '/etc/passwd' })
+    const r = await executeOp('api', { method: 'GET', path: '/etc/passwd' }, { caller: 'human' })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.message).toContain('/api/')
   })
 
+  it('enforces human completion and agent API boundaries before transport', async () => {
+    const human = await executeOp('task_complete', {}, { caller: 'human' })
+    expect(human.ok).toBe(false)
+    if (!human.ok) {
+      expect(human.message).toContain('Invalid arguments')
+      expect(human.message).not.toContain('human-only')
+    }
+
+    for (const caller of ['agent', 'gateway'] as const) {
+      const complete = await executeOp('task_complete', { id: 'x' }, { caller })
+      expect(complete.ok).toBe(false)
+      if (!complete.ok) expect(complete.message).toContain('human-only')
+
+      const done = await executeOp('task_update', { id: 'x', status: 'done' }, { caller })
+      expect(done.ok).toBe(false)
+      if (!done.ok) expect(done.message).toContain('phase=AGENT_COMPLETE')
+
+      for (const phase of ['HUMAN_VERIFIED', 'POST_WORK_COMPLETED', 'COMPLETE']) {
+        const phaseWrite = await executeOp('task_update', { id: 'x', phase }, { caller })
+        expect(phaseWrite.ok).toBe(false)
+        if (!phaseWrite.ok) expect(phaseWrite.message).toContain('Agents may set')
+      }
+
+      const apiWrite = await executeOp('api', {
+        method: 'DELETE', path: '/api/v1/tasks/x',
+      }, { caller })
+      expect(apiWrite.ok).toBe(false)
+      if (!apiWrite.ok) expect(apiWrite.message).toContain('read-only for agents')
+    }
+  })
+
   it('unknown op name yields a friendly catalog pointer, not a throw', async () => {
-    const r = await executeOp('definitely_not_an_op', {})
+    const r = await executeOp('definitely_not_an_op', {}, { caller: 'human' })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.message).toContain('walnut tools list')
   })
@@ -168,7 +200,11 @@ describe('ops registry — parity with the live server (P4)', () => {
 
   beforeAll(async () => {
     await fs.rm(WALNUT_HOME, { recursive: true, force: true })
-    await fs.mkdir(WALNUT_HOME, { recursive: true })
+    await fs.mkdir(path.join(BUILTIN_SKILLS_DIR, 'walnut-self-knowledge'), { recursive: true })
+    await fs.copyFile(
+      path.resolve('src/data/skills/walnut-self-knowledge/SKILL.md'),
+      path.join(BUILTIN_SKILLS_DIR, 'walnut-self-knowledge', 'SKILL.md'),
+    )
     const { startServer, stopServer } = await import('../../src/web/server.js')
     server = await startServer({ port: 0, dev: true })
     stop = stopServer
@@ -198,22 +234,70 @@ describe('ops registry — parity with the live server (P4)', () => {
   it('spot-check: a live call through the executor round-trips', async () => {
     const addr = server.address()
     if (!addr || typeof addr === 'string') throw new Error('no port')
-    const r = await executeOp('walnut_status', {}, { apiBase: `http://127.0.0.1:${addr.port}` })
+    const r = await executeOp('walnut_status', {}, { apiBase: `http://127.0.0.1:${addr.port}`, caller: 'human' })
     expect(r.ok).toBe(true)
     if (r.ok) expect((r.result as { mode?: unknown }).mode).toBeDefined()
+  })
+
+  it('propagates the caller so agents cannot reopen a human-completed task', async () => {
+    const addr = server.address()
+    if (!addr || typeof addr === 'string') throw new Error('no port')
+    const base = `http://127.0.0.1:${addr.port}`
+    const created = await executeOp('task_create', { title: 'caller policy probe' }, { apiBase: base, caller: 'human' })
+    expect(created.ok).toBe(true)
+    const id = ((created as { result?: { task?: { id?: string } } }).result?.task?.id) ?? ''
+    expect(id).toBeTruthy()
+    expect((await executeOp('task_complete', { id }, { apiBase: base, caller: 'human' })).ok).toBe(true)
+
+    const reopened = await executeOp('task_update', { id, phase: 'IN_PROGRESS' }, { apiBase: base, caller: 'agent' })
+    expect(reopened.ok).toBe(true)
+    const detail = await executeOp('task_get', { id }, { apiBase: base, caller: 'human' })
+    expect(detail.ok).toBe(true)
+    if (detail.ok) expect((detail.result as { task?: { phase?: string } }).task?.phase).toBe('COMPLETE')
+  })
+
+  it('reads a shipped skill by directory name', async () => {
+    const addr = server.address()
+    if (!addr || typeof addr === 'string') throw new Error('no port')
+    const result = await executeOp(
+      'skill_read',
+      { dirName: 'walnut-self-knowledge' },
+      { apiBase: `http://127.0.0.1:${addr.port}`, caller: 'agent' },
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect((result.result as { skill?: { content?: string } }).skill?.content)
+        .toContain('# Walnut self-knowledge')
+    }
+  })
+
+  it('resolves task prefixes inside pin and tier routes without a detail round-trip', async () => {
+    const addr = server.address()
+    if (!addr || typeof addr === 'string') throw new Error('no port')
+    const base = `http://127.0.0.1:${addr.port}`
+    const created = await executeOp('task_create', { title: 'focus op probe' }, { apiBase: base, caller: 'human' })
+    expect(created.ok).toBe(true)
+    const id = ((created as { result?: { task?: { id?: string } } }).result?.task?.id) ?? ''
+    const prefix = id.slice(0, -1)
+
+    expect((await executeOp('task_pin_set', { id: prefix, pinned: true }, { apiBase: base, caller: 'agent' })).ok).toBe(true)
+    const tier = await executeOp('task_focus_tier_set', { id: prefix, tier: 'focus' }, { apiBase: base, caller: 'agent' })
+    expect(tier.ok).toBe(true)
+    if (tier.ok) expect((tier.result as { focus_tasks?: string[] }).focus_tasks).toContain(id)
+    expect((await executeOp('task_pin_set', { id: prefix, pinned: false }, { apiBase: base, caller: 'agent' })).ok).toBe(true)
   })
 
   it('handler-based ops still hit real endpoints (task_update round-trip)', async () => {
     const addr = server.address()
     if (!addr || typeof addr === 'string') throw new Error('no port')
     const base = `http://127.0.0.1:${addr.port}`
-    const created = await executeOp('task_create', { title: 'parity probe' }, { apiBase: base })
+    const created = await executeOp('task_create', { title: 'parity probe' }, { apiBase: base, caller: 'human' })
     expect(created.ok).toBe(true)
     const id = ((created as { result?: { task?: { id?: string } } }).result?.task?.id) ?? ''
     expect(id).toBeTruthy()
-    const updated = await executeOp('task_update', { id, priority: 'backlog' }, { apiBase: base })
+    const updated = await executeOp('task_update', { id, priority: 'backlog' }, { apiBase: base, caller: 'human' })
     expect(updated.ok).toBe(true)
-    const deleted = await executeOp('task_delete', { id }, { apiBase: base })
+    const deleted = await executeOp('task_delete', { id }, { apiBase: base, caller: 'human' })
     expect(deleted.ok).toBe(true)
   })
 })

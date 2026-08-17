@@ -9,7 +9,7 @@ let tmpDir: string;
 // Mock constants module to redirect file paths to temp directory
 vi.mock('../../src/constants.js', () => createMockConstants());
 
-import { WALNUT_HOME, DAILY_DIR, MEMORY_FILE } from '../../src/constants.js';
+import { WALNUT_HOME, DAILY_DIR, MEMORY_FILE, NOTES_DIR } from '../../src/constants.js';
 import { buildMemoryContext } from '../../src/agent/context.js';
 import { formatDateKey, estimateTokens } from '../../src/core/daily-log.js';
 import {
@@ -67,6 +67,15 @@ describe('buildMemoryContext', () => {
     const result = await buildMemoryContext();
     expect(result).toContain('Worked on API endpoints.');
     expect(result).not.toContain('(No recent activity.)');
+  });
+
+  it('does not inject the notes vault guide into every prompt', async () => {
+    fs.mkdirSync(NOTES_DIR, { recursive: true });
+    fs.writeFileSync(path.join(NOTES_DIR, 'AGENTS.md'), '# Vault guide\nSTALE-PARA-MARKER', 'utf-8');
+
+    const result = await buildMemoryContext();
+    expect(result).not.toContain('## Notes vault guide');
+    expect(result).not.toContain('STALE-PARA-MARKER');
   });
 
   it('respects token budget - large daily logs get truncated', async () => {

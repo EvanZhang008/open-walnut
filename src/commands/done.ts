@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import { outputJson } from '../utils/json-output.js';
 import { apiPost, reportApiError } from '../utils/api-client.js';
 import { taskRefTag } from '../utils/entity-refs.js';
+import { opCallerFromEnv } from '../ops/executor.js';
 import type { GlobalOptions } from '../core/types.js';
 
 interface CompletedTask {
@@ -22,6 +23,17 @@ export async function runDone(
   id: string,
   globals: GlobalOptions,
 ): Promise<void> {
+  if (opCallerFromEnv() === 'agent') {
+    const message = 'Only a human can complete a task. Hand work back with task_update phase=AGENT_COMPLETE or AWAIT_HUMAN_ACTION.';
+    if (globals.json) {
+      outputJson({ error: message });
+    } else {
+      console.error(chalk.red(message));
+    }
+    process.exitCode = 1;
+    return;
+  }
+
   if (process.env.WALNUT_CLI_DIRECT === '1') {
     await runDoneDirect(id, globals);
     return;

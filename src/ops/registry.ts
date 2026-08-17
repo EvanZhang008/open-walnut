@@ -17,7 +17,7 @@
  * executor.ts against a transport (HTTP today, gateway relay in P2).
  */
 
-import type { z } from 'zod'
+import { z } from 'zod'
 
 /** How an op reaches the server when it has no custom handler. */
 export interface HttpBinding {
@@ -84,6 +84,10 @@ export interface WalnutOp {
     remote: 'allow' | 'deny'
     /** MCP destructiveHint (irreversible data loss). */
     destructive?: boolean
+    /** Only a direct human caller may invoke this operation. */
+    humanOnly?: boolean
+    /** Its server route rejects replicas; exposed for discovery and generated docs. */
+    primaryOnly?: boolean
   }
 }
 
@@ -107,8 +111,15 @@ export function getOp(name: string): WalnutOp | undefined {
 }
 
 /** Names only — convenience for allowlists and tests. */
-export function opNames(filter?: { readonly?: boolean }): string[] {
+export function opNames(filter?: { readonly?: boolean; humanOnly?: boolean }): string[] {
   return listOps()
     .filter((o) => filter?.readonly === undefined || o.tags.readonly === filter.readonly)
+    .filter((o) => filter?.humanOnly === undefined || !!o.tags.humanOnly === filter.humanOnly)
     .map((o) => o.name)
+}
+
+export function opInputJsonSchema(op: WalnutOp): Record<string, unknown> {
+  const schema = z.toJSONSchema(z.object(op.input), { target: 'draft-7', io: 'input' }) as Record<string, unknown>
+  delete schema.$schema
+  return schema
 }

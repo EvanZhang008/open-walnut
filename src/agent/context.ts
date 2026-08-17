@@ -1,8 +1,6 @@
 /**
  * System prompt builder for the agent.
  */
-import fs from 'node:fs';
-import path from 'node:path';
 import { getConfig } from '../core/config-manager.js';
 import { buildSkillsPrompt } from '../core/skill-loader.js';
 import { getDailyLogsWithinBudget, estimateTokens } from '../core/daily-log.js';
@@ -13,7 +11,7 @@ import { listRepoSummaries } from './tools/files/repos-handler.js';
 import { getAllRepoMemorySummaries } from '../core/repo-memory.js';
 import { listTasks, getStoreProjects } from '../core/task-manager.js';
 import { buildTaskLedger } from '../core/task-ledger.js';
-import { NOTES_DIR } from '../constants.js';
+import { renderSelfKnowledgeContract } from '../core/self-knowledge-contract.js';
 
 /**
  * Framing prepended to the injected compaction summary / working memory.
@@ -71,19 +69,6 @@ export async function buildTaskProjectsSection(): Promise<string> {
 }
 
 /**
- * Read the Obsidian vault guide (notes/AGENTS.md) for context injection.
- */
-export function getNotesContext(): string {
-  try {
-    const agentsFile = path.join(NOTES_DIR, 'AGENTS.md');
-    if (fs.existsSync(agentsFile)) {
-      return fs.readFileSync(agentsFile, 'utf-8').trim();
-    }
-  } catch { /* non-critical */ }
-  return '';
-}
-
-/**
  * Build the memory context section from daily logs, global memory, and project summaries.
  *
  * `scope` (from beginMemoryPromptTurn) selects the FROZEN memory render pinned at
@@ -123,12 +108,6 @@ export async function buildMemoryContext(budget: number = 8000, scope?: string):
     ? `\n\n## Your repositories\n${repoLines}\nUse \`file_read source='repos/{name}'\` for full details, \`file_list prefix='repos'\` to list all.${repoMemLine}`
     : '';
 
-  // Notes vault guide
-  const notesContext = getNotesContext();
-  const notesSection = notesContext
-    ? `\n\n## Notes vault guide\n${notesContext}`
-    : '';
-
   // memory/index.md retired (2026-07 unification): directory awareness now
   // comes from the skills index (buildSkillsPrompt) — no separate wiki index.
 
@@ -145,7 +124,7 @@ ${taskProjects}${ledgerSection}
 ${userProfileBlock ?? '(No user profile yet. Save who the user is — identity, work, durable preferences — with memory_manage target:user.)'}
 
 ## Your long-term memory (behavior rules — bounded, update via memory_manage target:memory)
-${globalMemoryBlock ?? '(No global memory yet. Save behavior rules with memory_manage.)'}${repoSection}${notesSection}
+${globalMemoryBlock ?? '(No global memory yet. Save behavior rules with memory_manage.)'}${repoSection}
 
 ## Recent activity
 ${dailyLogs || '(No recent activity.)'}
@@ -192,7 +171,6 @@ function enforceContextBudget(text: string, budget: number): string {
   // how the agent behaves, not just what it knows.
   const DROP_ORDER = [
     '## Recent activity',
-    '## Notes vault guide',
     '## Your repositories',
     '## Recent tasks',
   ];
@@ -214,7 +192,6 @@ function enforceContextBudget(text: string, budget: number): string {
       '\n## User profile',
       '\n## Your long-term memory',
       '\n## Your repositories',
-      '\n## Notes vault guide',
       '\n## Recent activity',
     ];
     let end = out.length;
@@ -234,14 +211,9 @@ function enforceContextBudget(text: string, budget: number): string {
   return out;
 }
 
-/** Shared work-routing rule for the Main Agent and custom console agents. */
+/** Stable product contract shared by every Main Agent provider. */
 export function buildWorkModesSection(): string {
-  return `Choose one mode for each request:
-
-1. **Do it yourself.** Use this for quick, simple work the user did not ask to track in Walnut, such as answering a question, making an HTML explainer, doing quick research, or making a quick change.
-2. **Delegate.** Use this for complex or long-running work or tests, and work already tracked in Walnut. Create or reuse a Walnut task and session so the work is stored, indexed, searchable, and resumable.
-
-Follow the user's explicit request.`;
+  return renderSelfKnowledgeContract();
 }
 
 export function buildRoleSection(name: string): string {

@@ -16,6 +16,7 @@ import {
 } from '../../src/core/task-manager.js';
 import { closeDb as closeTaskDb } from '../../src/core/task-db.js';
 import { closeDb as closeSessionDb } from '../../src/core/session-db.js';
+import { getOp, opInputJsonSchema } from '../../src/ops/index.js';
 
 /** Pre-create a project via the agent tool (task_create also auto-creates by name). */
 async function ensureProject(name: string, source = 'local') {
@@ -41,6 +42,7 @@ afterEach(async () => {
 describe('tool definitions', () => {
   it('has all expected tools', () => {
     const names = tools.map((t) => t.name);
+    expect(names).toContain('delegate');
     expect(names).toContain('task_query');
     expect(names).toContain('task_get');
     expect(names).toContain('task_create');
@@ -59,6 +61,15 @@ describe('tool definitions', () => {
     expect(names).toContain('session_start');
     expect(names).toContain('config_get');
     expect(names).toContain('config_update');
+  });
+
+  it('derives delegate name, description, and schema from the shared op registry', () => {
+    const agentTool = tools.find((tool) => tool.name === 'delegate');
+    const op = getOp('delegate');
+    expect(agentTool).toBeDefined();
+    expect(op).toBeDefined();
+    expect(agentTool?.description).toBe(op?.description);
+    expect(agentTool?.input_schema).toEqual(opInputJsonSchema(op!));
   });
 
   it('session_start has working_directory, task_id, runner, and agent_id in input_schema', () => {
@@ -478,6 +489,16 @@ describe('task tools', () => {
     const task = JSON.parse(taskResult);
     expect(task.phase).toBe('AGENT_COMPLETE');
     expect(task.status).toBe('in_progress');
+  });
+
+  it('update_task rejects human-owned lifecycle phases', async () => {
+    const addResult = await executeTool('task_create', { title: 'Human phase guard' });
+    const idMatch = addResult.match(/id="([^"]+)"/);
+
+    for (const phase of ['HUMAN_VERIFIED', 'POST_WORK_COMPLETED', 'COMPLETE']) {
+      const result = await executeTool('task_update', { id: idMatch![1], phase });
+      expect(result).toContain('Agents may set TODO, IN_PROGRESS, AGENT_COMPLETE, or AWAIT_HUMAN_ACTION only');
+    }
   });
 
   it('update_task modifies task fields', async () => {

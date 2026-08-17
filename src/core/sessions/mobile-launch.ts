@@ -41,8 +41,11 @@ export interface MobileLaunchInput {
   host?: string;
   message: string;
   taskId?: string;
+  taskTitle?: string;
+  project?: string;
   model?: string;
   mode?: string;
+  engine?: 'claude' | 'codex';
 }
 
 /** HTTP status → frozen v1 error code (also the relay errorKind vocabulary). */
@@ -59,9 +62,19 @@ export function launchErrorCode(status: number): string {
  * Throws QuickStartError(message, 400) with the exact messages the frozen
  * /api/v1 contract already ships.
  */
-export function validateMobileLaunchBody(body: unknown): MobileLaunchInput {
-  const { cwd, host: rawHost, message, taskId, model: rawModel, mode } = (body ?? {}) as {
-    cwd?: unknown; host?: unknown; message?: unknown; taskId?: unknown; model?: unknown; mode?: unknown;
+function validateLaunchBody(body: unknown, allowEngine: boolean): MobileLaunchInput {
+  const {
+    cwd, host: rawHost, message, taskId, taskTitle, project, model: rawModel, mode, engine,
+  } = (body ?? {}) as {
+    cwd?: unknown;
+    host?: unknown;
+    message?: unknown;
+    taskId?: unknown;
+    taskTitle?: unknown;
+    project?: unknown;
+    model?: unknown;
+    mode?: unknown;
+    engine?: unknown;
   };
 
   if (typeof cwd !== 'string' || !cwd.trim()) {
@@ -87,6 +100,15 @@ export function validateMobileLaunchBody(body: unknown): MobileLaunchInput {
   }
   if (taskId !== undefined && (typeof taskId !== 'string' || !taskId)) {
     throw new QuickStartError('taskId must be a non-empty string', 400);
+  }
+  if (taskTitle !== undefined && (typeof taskTitle !== 'string' || !taskTitle.trim() || taskTitle.length > 500)) {
+    throw new QuickStartError('taskTitle must be a non-empty string up to 500 characters', 400);
+  }
+  if (project !== undefined && (typeof project !== 'string' || project.length > 256)) {
+    throw new QuickStartError('project must be a string up to 256 characters', 400);
+  }
+  if (allowEngine && engine !== undefined && engine !== 'claude' && engine !== 'codex') {
+    throw new QuickStartError('engine must be claude or codex', 400);
   }
 
   // Host: '' / absent = the primary box. Non-string is a shape error here;
@@ -116,9 +138,20 @@ export function validateMobileLaunchBody(body: unknown): MobileLaunchInput {
   return {
     cwd, host, message: msg,
     taskId: typeof taskId === 'string' ? taskId : undefined,
+    taskTitle: typeof taskTitle === 'string' ? taskTitle.trim() : undefined,
+    project: typeof project === 'string' ? project.trim() : undefined,
     model,
     mode: typeof mode === 'string' ? mode : undefined,
+    engine: allowEngine ? engine as MobileLaunchInput['engine'] : undefined,
   };
+}
+
+export function validateMobileLaunchBody(body: unknown): MobileLaunchInput {
+  return validateLaunchBody(body, false);
+}
+
+export function validateDelegateLaunchBody(body: unknown): MobileLaunchInput {
+  return validateLaunchBody(body, true);
 }
 
 /**
@@ -172,7 +205,7 @@ export async function computeLaunchOptions(): Promise<LaunchOptionsResult> {
   return { hosts, dirs };
 }
 
-export interface MobileLaunchResult { sessionId: string; taskId: string; title: string }
+export interface MobileLaunchResult { sessionId?: string; taskId: string; title: string }
 
 /**
  * Config host check + the shared quickStartSession core. Throws
@@ -194,7 +227,7 @@ export async function performMobileLaunch(
     }
   }
 
-  const preassignedSessionId = randomUUID();
+  const preassignedSessionId = input.engine === 'codex' ? undefined : randomUUID();
   const task = await quickStartSession({
     message: input.message,
     cwd: input.cwd,
@@ -202,14 +235,21 @@ export async function performMobileLaunch(
     model: input.model,
     mode: input.mode,
     existingTaskId: input.taskId,
+    taskTitle: input.taskTitle,
+    project: input.project,
     source,
     requestTs: Date.now(),
+    engine: input.engine === 'codex' ? 'codex' : undefined,
     preassignedSessionId,
   });
   log.web.info(`${source}: session created`, {
     sessionId: preassignedSessionId, taskId: task.id, cwd: input.cwd, host: input.host ?? '',
   });
-  return { sessionId: preassignedSessionId, taskId: task.id, title: task.title };
+  return {
+    ...(preassignedSessionId ? { sessionId: preassignedSessionId } : {}),
+    taskId: task.id,
+    title: task.title,
+  };
 }
 
 /**

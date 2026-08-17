@@ -82,6 +82,26 @@ export const PHASE_ORDER: TaskPhase[] = [
 
 export const VALID_PHASES = new Set<string>(PHASE_ORDER);
 
+export const AGENT_HANDOFF_PHASES = {
+  readyForReview: 'AGENT_COMPLETE',
+  needsHuman: 'AWAIT_HUMAN_ACTION',
+} as const satisfies Record<string, TaskPhase>;
+
+export const AGENT_WRITABLE_PHASES = [
+  'TODO',
+  'IN_PROGRESS',
+  AGENT_HANDOFF_PHASES.readyForReview,
+  AGENT_HANDOFF_PHASES.needsHuman,
+] as const satisfies readonly TaskPhase[];
+
+const AGENT_WRITABLE_PHASE_SET = new Set<TaskPhase>(AGENT_WRITABLE_PHASES);
+
+export function isAgentWritablePhase(phase: unknown): phase is (typeof AGENT_WRITABLE_PHASES)[number] {
+  return typeof phase === 'string' && AGENT_WRITABLE_PHASE_SET.has(phase as TaskPhase);
+}
+
+export const HUMAN_COMPLETE_PHASE = 'COMPLETE' satisfies TaskPhase;
+
 /** Phases that only humans can set — system never overwrites.
  *  HUMAN_VERIFIED is terminal because it represents explicit human approval.
  *  If the system could overwrite it (e.g. session:input → IN_PROGRESS),

@@ -9,6 +9,7 @@
 
 import './tasks.js'
 import './core.js'
+import './work.js'
 
-export { defineOp, listOps, getOp, opNames, type WalnutOp, type HttpBinding } from './registry.js'
-export { executeOp, resolveApiBase, materializeBinding, type OpOutcome } from './executor.js'
+export { defineOp, listOps, getOp, opNames, opInputJsonSchema, type WalnutOp, type HttpBinding } from './registry.js'
+export { executeOp, resolveApiBase, materializeBinding, opCallerFromEnv, type OpCaller, type OpOutcome } from './executor.js'

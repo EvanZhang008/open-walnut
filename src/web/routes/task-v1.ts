@@ -72,6 +72,16 @@ function sendTaskManagerError(res: Response, err: unknown): boolean {
   return false
 }
 
+async function resolveTaskIdPrefix(res: Response, id: string): Promise<string | null> {
+  const { getTask } = await import('../../core/task-manager.js')
+  try {
+    return (await getTask(id)).id
+  } catch (err) {
+    if (sendTaskManagerError(res, err)) return null
+    throw err
+  }
+}
+
 // ─── Task detail / delete / field setters ───────────────────────────────────
 
 /**
@@ -476,7 +486,8 @@ taskV1Router.get('/focus/tasks', async (_req: Request, res: Response, next: Next
 // POST /api/v1/focus/tasks/:id — pin (idempotent). → { pinned_tasks }
 taskV1Router.post('/focus/tasks/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const taskId = paramStr(req.params.id)
+    const taskId = await resolveTaskIdPrefix(res, paramStr(req.params.id))
+    if (!taskId) return
     const { getPinnedTasks, togglePin } = await import('../../core/task-manager.js')
     const current = await getPinnedTasks()
     if (current.some((t) => t.id === taskId)) {
@@ -503,7 +514,8 @@ taskV1Router.post('/focus/tasks/:id', async (req: Request, res: Response, next: 
 // DELETE /api/v1/focus/tasks/:id — unpin (idempotent). → { pinned_tasks }
 taskV1Router.delete('/focus/tasks/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const taskId = paramStr(req.params.id)
+    const taskId = await resolveTaskIdPrefix(res, paramStr(req.params.id))
+    if (!taskId) return
     const { getPinnedTasks, togglePin } = await import('../../core/task-manager.js')
     const current = await getPinnedTasks()
     if (!current.some((t) => t.id === taskId)) {
@@ -541,7 +553,8 @@ const BUILTIN_TIERS = ['focus', 'satellite', 'backlog', 'wait']
 // PUT /api/v1/focus/tasks/:id/tier { tier } — move a pinned task between tiers.
 taskV1Router.put('/focus/tasks/:id/tier', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const taskId = paramStr(req.params.id)
+    const taskId = await resolveTaskIdPrefix(res, paramStr(req.params.id))
+    if (!taskId) return
     const tier = (req.body ?? {}).tier
     const { getCustomTiers, setFocusTier } = await import('../../core/task-manager.js')
     const customIds = (await getCustomTiers()).map((t) => t.id)

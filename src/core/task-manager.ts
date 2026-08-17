@@ -7,7 +7,7 @@ import { initDirectories } from './init.js';
 import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
 import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
-import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES } from './phase.js';
+import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES, isAgentWritablePhase } from './phase.js';
 import {
   COMPLETION_TO_PHASES,
   compareTasksForQuery,
@@ -2880,6 +2880,10 @@ export async function updateTask(
     if (!assigned) task.project = newProject;
   }
   if (updates.phase !== undefined && VALID_PHASES.has(updates.phase)) {
+    const source = eventOptions?.source ?? 'internal';
+    if (source === 'agent' && !isAgentWritablePhase(updates.phase)) {
+      throw new Error('Agents may set TODO, IN_PROGRESS, AGENT_COMPLETE, or AWAIT_HUMAN_ACTION only.');
+    }
     // CAS guard: if caller specified ifPhase, only apply phase change if current phase matches
     if (eventOptions?.ifPhase && task.phase !== eventOptions.ifPhase) {
       log.task.warn('ifPhase CAS guard: skipping phase change — task phase has moved on', {
@@ -2889,7 +2893,6 @@ export async function updateTask(
       // Skip phase change but allow other fields to update
     } else {
     // Terminal phase guard: only human-initiated sources can overwrite COMPLETE/HUMAN_VERIFIED
-    const source = eventOptions?.source ?? 'internal';
     const isHumanSource = source === 'api' || source === 'user';
     if (TERMINAL_PHASES.has(task.phase) && !TERMINAL_PHASES.has(updates.phase) && !isHumanSource) {
       log.task.warn('terminal phase guard: blocked non-human phase change', {
@@ -2904,6 +2907,9 @@ export async function updateTask(
     // Legacy: status without phase → derive phase from status
     const derivedPhase = phaseFromStatus(updates.status);
     const source = eventOptions?.source ?? 'internal';
+    if (source === 'agent' && !isAgentWritablePhase(derivedPhase)) {
+      throw new Error('Agents cannot set status=done. Use phase=AGENT_COMPLETE or AWAIT_HUMAN_ACTION.');
+    }
     const isHumanSource = source === 'api' || source === 'user';
     if (TERMINAL_PHASES.has(task.phase) && !TERMINAL_PHASES.has(derivedPhase) && !isHumanSource) {
       log.task.warn('terminal phase guard: blocked non-human status change', {

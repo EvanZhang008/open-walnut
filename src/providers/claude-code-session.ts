@@ -53,7 +53,7 @@ import { createSessionManager, registerSessionManager, unregisterSessionManager 
 import type { SessionManager } from './session-manager.js'
 import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists } from './cwd-check.js'
-import { AcpSession, emitAcpIdentityBoundary } from './acp-session.js'
+import { AcpSession, emitAcpIdentityBoundary, sessionMcpServerToAcp } from './acp-session.js'
 import { extractImageFilePathFromInput } from '../core/session-history.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort } from '../core/types.js'
 import {
@@ -73,6 +73,21 @@ import {
   abortAllTurns,
   getOpenTurnPromise,
 } from './turn-ledger.js'
+
+export async function buildAcpLaneConfig(lane: string): Promise<{
+  lane: string
+  disableProjectInstructions: true
+  walnutMcpServer: import('./acp-worker/protocol.js').AcpMcpServer
+}> {
+  const { walnutMcpProfile } = await import('../core/sessions/profiles.js')
+  const server = walnutMcpProfile().mcpServers?.walnut
+  if (!server) throw new Error('Walnut MCP profile is unavailable for the Main Agent lane')
+  return {
+    lane,
+    disableProjectInstructions: true,
+    walnutMcpServer: sessionMcpServerToAcp('walnut', server),
+  }
+}
 
 // ── JSONL types from `claude -p --output-format stream-json --verbose` ──
 
@@ -7660,6 +7675,7 @@ export class SessionRunner {
         providerSessionId: record.claudeSessionId,
         runtimeId: record.acpRuntimeId,
         acpConfig: record.acpConfig,
+        ...(record.lane ? await buildAcpLaneConfig(record.lane) : {}),
         directWsUrl: this._testDaemonUrl,
         artifacts: this._testAcpArtifacts,
         onWorkerDead: (s) => this.scheduleAcpDrainAfterDeath(s),
@@ -7947,7 +7963,7 @@ export class SessionRunner {
       project: data.project ?? '',
       cwd,
       mode: (data.mode as SessionMode | undefined) ?? 'default',
-      ...(data.lane ? { lane: data.lane } : {}),
+      ...(data.lane ? await buildAcpLaneConfig(data.lane) : {}),
       directWsUrl: this._testDaemonUrl,
       artifacts: this._testAcpArtifacts,
       onWorkerDead: (s) => this.scheduleAcpDrainAfterDeath(s),

@@ -78,6 +78,7 @@ beforeEach(() => {
   errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
   process.exitCode = undefined;
   delete process.env.WALNUT_CLI_DIRECT;
+  delete process.env.WALNUT_SESSION_ID;
 });
 
 afterEach(() => {
@@ -85,6 +86,7 @@ afterEach(() => {
   errSpy.mockRestore();
   process.exitCode = undefined;
   delete process.env.WALNUT_CLI_DIRECT;
+  delete process.env.WALNUT_SESSION_ID;
 });
 
 describe('open-walnut add → POST /api/v1/tasks', () => {
@@ -205,6 +207,27 @@ describe('open-walnut done → POST /api/v1/tasks/:id/complete', () => {
     await runDone(id, { json: true });
     const after = await api<{ task: { pinned?: boolean } }>(`/api/v1/tasks/${id}`);
     expect(after.task.pinned).toBeFalsy();
+  });
+
+  it.each([
+    ['HTTP', false],
+    ['legacy direct', true],
+  ])('rejects managed agents before the %s completion path', async (_path, direct) => {
+    const { runAdd } = await import('../../src/commands/add.js');
+    const { runDone } = await import('../../src/commands/done.js');
+    await runAdd(`Agent completion guard ${_path}`, {}, { json: true });
+    const { id } = jsonOut<{ id: string }>();
+    logSpy.mockClear();
+
+    process.env.WALNUT_SESSION_ID = 'managed-session';
+    if (direct) process.env.WALNUT_CLI_DIRECT = '1';
+    await runDone(id, { json: true });
+
+    expect(process.exitCode).toBe(1);
+    expect(jsonOut<{ error: string }>().error).toContain('Only a human can complete a task');
+    const { task } = await api<{ task: { status: string; phase: string } }>(`/api/v1/tasks/${id}`);
+    expect(task.status).toBe('todo');
+    expect(task.phase).toBe('TODO');
   });
 
   it('unknown id → server 404 message on stderr, exit 1', async () => {

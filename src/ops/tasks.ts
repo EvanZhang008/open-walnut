@@ -7,9 +7,11 @@
 import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { taskRefTag } from '../utils/entity-refs.js'
+import { AGENT_WRITABLE_PHASES } from '../core/phase.js'
 
 const PRIORITY = z.enum(['immediate', 'important', 'backlog', 'none'])
 const STATUS = z.enum(['todo', 'in_progress', 'done'])
+const AGENT_PHASE = z.enum(AGENT_WRITABLE_PHASES)
 
 const REF_INSTRUCTION =
   'Include the `ref` string verbatim in your reply to the user so Walnut renders a clickable task pill.'
@@ -56,10 +58,9 @@ defineOp({
   name: 'task_create',
   title: 'Create a Walnut task',
   description:
-    'Create a task. An omitted/empty project means the Inbox; an unknown project name ' +
-    'auto-creates its registry row. `description` is write-only (stored, but not echoed in the ' +
-    'slim response). The result carries a `ref` tag — paste it verbatim in your reply so the ' +
-    'user gets a clickable task pill.',
+    'Record a task without starting any work or session. Use this only when the user wants tracking ' +
+    'without execution; use `delegate` when work should start now. An omitted/empty project means ' +
+    'Inbox, and an unknown project name auto-creates its registry row. The result carries a `ref` tag.',
   input: {
     title: z.string().min(1).describe('Task title (required)'),
     project: z.string().optional().describe('Project name; omit or "" for the Inbox'),
@@ -76,12 +77,13 @@ defineOp({
   name: 'task_update',
   title: 'Update a Walnut task',
   description:
-    'Patch any subset of a task\'s fields. At least one field is required. `tags` is a FULL ' +
-    'replace ([] clears). Pass "" to clear due_date/start_date. The id accepts a unique prefix. ' +
-    'Prefer task_complete for the common "mark it done" case.',
+    'Patch any supported task fields. Agents hand work back with phase=AGENT_COMPLETE, or ' +
+    'phase=AWAIT_HUMAN_ACTION when a person must act. status=done and task_complete are human-only. ' +
+    '`tags` is a full replacement ([] clears). Pass "" to clear due_date/start_date.',
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
-    status: STATUS.optional().describe('todo | in_progress | done (the server derives phase)'),
+    status: STATUS.optional().describe('Legacy status. Agents may use todo or in_progress; done is human-only'),
+    phase: AGENT_PHASE.optional().describe('Agent lifecycle phase; use AGENT_COMPLETE or AWAIT_HUMAN_ACTION to hand work back'),
     priority: PRIORITY.optional(),
     due_date: z.string().optional().describe('ISO-8601 date/datetime, or "" to clear'),
     start_date: z.string().optional().describe('ISO-8601 date/datetime, or "" to clear'),
@@ -118,7 +120,7 @@ defineOp({
   // PATCH swallows it via asyncPush). Same reasoning as the CLI's `done`.
   bind: { method: 'POST', path: '/tasks/:id/complete' },
   mapResult: ({ body }) => withRef((body as { task?: unknown } | undefined)?.task, { completed: true }),
-  tags: { readonly: false, remote: 'allow', destructive: false },
+  tags: { readonly: false, remote: 'deny', destructive: false, humanOnly: true },
 })
 
 defineOp({

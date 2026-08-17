@@ -34,7 +34,7 @@ import {
   renameGroup,
   listGroups,
 } from '../core/task-manager.js';
-import { VALID_PHASES } from '../core/phase.js';
+import { AGENT_WRITABLE_PHASES, isAgentWritablePhase } from '../core/phase.js';
 import {
   LEGACY_STATUS_TO_COMPLETION,
   MAX_QUERY_LIMIT,
@@ -66,6 +66,7 @@ import { bus, EventNames } from '../core/event-bus.js';
 import { getConfig, updateConfig } from '../core/config-manager.js';
 import { SESSION_MODES, SESSION_MODE_IDS } from '../core/types.js';
 import type { Config, SessionRecord, Task, TaskPhase, TaskPriority, TaskSource } from '../core/types.js';
+import { getOp, opInputJsonSchema } from '../ops/index.js';
 import path from 'node:path';
 import { log } from '../logging/index.js';
 import { CLAUDE_HOME } from '../constants.js';
@@ -169,6 +170,24 @@ export interface ToolDefinition {
 
 function json(data: unknown): string {
   return JSON.stringify(data, null, 2);
+}
+
+function delegateAgentTool(): ToolDefinition {
+  const op = getOp('delegate');
+  if (!op) throw new Error('Missing registry op: delegate');
+  return {
+    name: op.name,
+    description: op.description,
+    input_schema: opInputJsonSchema(op),
+    async execute(params, meta) {
+      try {
+        const { delegateWork } = await import('../core/delegate-work.js');
+        return json(await delegateWork(params as never, meta?.source ?? 'agent'));
+      } catch (err) {
+        return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    },
+  };
 }
 
 /** Where a resolved host/cwd value came from — used to arbitrate conflicts (more specific wins). */
@@ -470,6 +489,8 @@ async function runTaskQueryTool(
 }
 
 export const tools: ToolDefinition[] = [
+  delegateAgentTool(),
+
   // ── Task Tools ──
   {
     name: 'task_query',
@@ -687,10 +708,10 @@ export const tools: ToolDefinition[] = [
 
   {
     name: 'task_create',
-    description: `Create a task, or an empty project.
+    description: `Record a task or empty project without starting any work or session.
 
-- type=task (default): Create a task. Tasks optionally belong to a **project**; no project = **Inbox**. Prefer an existing project (matched case-insensitively). A project name that doesn't exist yet is created automatically — do that only when the task clearly starts a new ongoing stream of work. One-off items → leave project empty. Use parent_task_id for child tasks (inherits project and source from parent).
-- type=project: Create an empty project up front (rarely needed — task_create type=task auto-creates a project by name).`,
+- type=task (default): Use only when the user wants tracking without execution. If work should start now, use delegate instead. Tasks optionally belong to a **project**; no project = **Inbox**. Prefer an existing project (matched case-insensitively). A project name that doesn't exist yet is created automatically. Use parent_task_id for child tasks (inherits project and source from parent).
+- type=project: Create an empty project up front (rarely needed; task creation auto-creates a project by name).`,
     input_schema: {
       type: 'object',
       properties: {
@@ -829,7 +850,7 @@ For projects (type='project'): set default_host and default_cwd for session defa
         id: { type: 'string', description: 'Task ID or prefix. Required for type=task.' },
         title: { type: 'string', description: 'New title. Format: "<≤3-word prefix> — <short description>". Prefix MUST be the most unique identifier of the task (max 3 words) — the thing that instantly tells you WHICH task this is. Use em-dash (—). Good: "Sprint选择器 — 查询/选择当前sprint", "Task不跳转 — 点击task不定位到列表位置". Bad: generic prefixes like "Sprint功能增强", "Bug:", "Tool Description".' },
         priority: { type: 'string', enum: ['immediate', 'important', 'backlog', 'none'], description: 'New priority: immediate (urgent), important (can wait), backlog (future), none.' },
-        phase: { type: 'string', enum: [...VALID_PHASES].filter(p => p !== 'COMPLETE'), description: 'Task lifecycle phase. Status is auto-derived. Only humans can set COMPLETE.' },
+        phase: { type: 'string', enum: [...AGENT_WRITABLE_PHASES], description: 'Agent-writable task phase. Use AGENT_COMPLETE or AWAIT_HUMAN_ACTION to hand work back.' },
         project: { type: 'string', description: 'New project for the task (empty string moves it to Inbox). For type=project: the project to update settings on.' },
         due_date: { type: 'string', description: 'New due date — the deadline (YYYY-MM-DD, or ISO datetime). Empty string clears.' },
         start_date: { type: 'string', description: 'New start date — when to begin working (YYYY-MM-DD, or ISO datetime). Tasks with a future start_date are hidden from the "Now" view until then. Empty string clears.' },
@@ -902,9 +923,8 @@ For projects (type='project'): set default_host and default_cwd for session defa
       const id = params.id as string;
       if (!id) return 'Error: id is required for type=task.';
 
-      // Validate: AI cannot set COMPLETE phase
-      if (params.phase === 'COMPLETE') {
-        return 'Error: AI cannot set phase to COMPLETE. Use AGENT_COMPLETE instead. Only humans can mark tasks as COMPLETE.';
+      if (params.phase !== undefined && !isAgentWritablePhase(params.phase)) {
+        return 'Error: Agents may set TODO, IN_PROGRESS, AGENT_COMPLETE, or AWAIT_HUMAN_ACTION only.';
       }
 
       try {

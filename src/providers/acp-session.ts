@@ -22,6 +22,7 @@ import fsModule from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { log } from '../logging/index.js'
 import { bus, EventNames } from '../core/event-bus.js'
+import { renderSelfKnowledgeContract } from '../core/self-knowledge-contract.js'
 import type { SessionMode } from '../core/types.js'
 import { localDaemon } from './local-daemon.js'
 import { getDirectDaemonConnection, DaemonConnection, type DaemonEvent } from './daemon-connection.js'
@@ -278,6 +279,73 @@ export function emitAcpIdentityBoundary(
   } as never, ['main-ai'])
 }
 
+export function sessionMcpServerToAcp(
+  name: string,
+  server: { command: string; args?: string[]; env?: Record<string, string> },
+): AcpMcpServer {
+  return {
+    name,
+    command: server.command,
+    args: [...(server.args ?? [])],
+    env: Object.entries(server.env ?? {}).map(([envName, value]) => ({ name: envName, value })),
+  }
+}
+
+export function parseCodexBaseConfig(raw: string | undefined): Record<string, unknown> | undefined {
+  if (!raw) return undefined
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch (error) {
+    throw new Error(`CODEX_CONFIG must be valid JSON: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('CODEX_CONFIG must be a JSON object')
+  }
+  return parsed as Record<string, unknown>
+}
+
+/**
+ * Environment for the ACP worker + adapter (and therefore for every shell the
+ * provider spawns inside the session).
+ *
+ * `WALNUT_SESSION_ID` is the managed-session identity the `walnut` CLI reads to
+ * classify itself as an agent rather than a human (ops/executor.ts
+ * `opCallerFromEnv`). The native `claude` spawn sets it in daemon-standalone.ts
+ * / daemon-source.ts; without it here, `walnut done <id>` inside a Codex
+ * session looked like a human at a terminal and bypassed every human-only
+ * completion guard. We deliberately do NOT set `WALNUT_AGENT_SOCKET`: the
+ * daemon's gateway resolves caller sids against its native-CLI session map,
+ * which does not track ACP runtime ids, so advertising the socket would only
+ * turn "not a managed session" into a confusing `unknown_caller`.
+ */
+export function buildAcpAdapterEnv(
+  systemCodex: string | undefined,
+  options: {
+    disableProjectInstructions?: boolean
+    developerInstructions?: string
+    baseConfig?: Record<string, unknown>
+    sessionId?: string
+  } = {},
+): Record<string, string> | undefined {
+  const existingInstructions = typeof options.baseConfig?.developer_instructions === 'string'
+    ? options.baseConfig.developer_instructions.trim()
+    : ''
+  const walnutInstructions = options.developerInstructions?.trim() ?? ''
+  const developerInstructions = [existingInstructions, walnutInstructions].filter(Boolean).join('\n\n')
+  const config = {
+    ...(options.baseConfig ?? {}),
+    ...(options.disableProjectInstructions ? { project_doc_max_bytes: 0 } : {}),
+    ...(developerInstructions ? { developer_instructions: developerInstructions } : {}),
+  }
+  const env = {
+    ...(systemCodex ? { CODEX_PATH: systemCodex } : {}),
+    ...(Object.keys(config).length > 0 ? { CODEX_CONFIG: JSON.stringify(config) } : {}),
+    ...(options.sessionId ? { WALNUT_SESSION_ID: options.sessionId } : {}),
+  }
+  return Object.keys(env).length > 0 ? env : undefined
+}
+
 export interface AcpSessionConfig {
   taskId: string
   project: string
@@ -295,6 +363,12 @@ export interface AcpSessionConfig {
   consumedOffset?: number
   acpJournalPath?: string
   acpConfig?: Record<string, string>
+  /** Disable cwd AGENTS.md discovery for chat lanes rooted in Walnut's data directory. */
+  disableProjectInstructions?: boolean
+  /** Walnut-owned developer instructions for a Main Agent lane. */
+  developerInstructions?: string
+  /** Walnut MCP command for a Main Agent lane, independent of the global ACP opt-in. */
+  walnutMcpServer?: AcpMcpServer
   /** Test override: direct daemon ws URL (MockDaemon / ephemeral daemon). */
   directWsUrl?: string
   /** Test override: worker/adapter command vectors. */
@@ -603,6 +677,13 @@ export class AcpSession {
    * set per-session would need record-level persistence like SessionProfile.
    */
   private async resolveMcpServers(): Promise<AcpMcpServer[]> {
+    if (this.cfg.walnutMcpServer) {
+      return [{
+        ...this.cfg.walnutMcpServer,
+        args: [...this.cfg.walnutMcpServer.args],
+        env: this.cfg.walnutMcpServer.env.map((entry) => ({ ...entry })),
+      }]
+    }
     try {
       const { getConfig } = await import('../core/config-manager.js')
       const config = await getConfig()
@@ -634,12 +715,20 @@ export class AcpSession {
       this.resolveMcpServers(),
       this.ensureConn(),
     ])
+    const parsedBaseConfig = parseCodexBaseConfig(process.env.CODEX_CONFIG)
+    const adapterEnv = buildAcpAdapterEnv(systemCodex, {
+      disableProjectInstructions: this.cfg.disableProjectInstructions,
+      developerInstructions: this.cfg.developerInstructions
+        ?? (this.cfg.lane ? renderSelfKnowledgeContract() : undefined),
+      baseConfig: parsedBaseConfig,
+      sessionId: this.runtimeId,
+    })
     const startResp = await conn.send('acpStart', {
       sid: this.runtimeId,
       cwd: this.cfg.cwd,
       workerCmd,
       adapterCmd,
-      env: systemCodex ? { CODEX_PATH: systemCodex } : undefined,
+      env: adapterEnv,
       providerSessionId: this._providerSessionId ?? undefined,
       fromOffset: this._seenV,
       mcpServers,

@@ -23,7 +23,8 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import type { MessageParam } from '../../agent/model.js'
-import { VALID_PRIORITIES, type ChatEntry, type TaskPriority } from '../../core/types.js'
+import { VALID_PRIORITIES, type ChatEntry, type TaskPhase, type TaskPriority } from '../../core/types.js'
+import { VALID_PHASES } from '../../core/phase.js'
 import { CLOUD_MODE, NOTES_DIR } from '../../constants.js'
 import * as chatHistory from '../../core/chat-history.js'
 import { listConversations, createConversation } from '../../core/conversations.js'
@@ -1057,9 +1058,10 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     // without this forward the :id param would swallow it as a task id. Task
     // ids are hex-ish and can never be the literal word "reorder".
     if (id === 'reorder') { next(); return }
-    const { status, priority, due_date: dueDate, start_date: startDate, project, title, description, tags,
+    const { status, phase, priority, due_date: dueDate, start_date: startDate, project, title, description, tags,
       unread } = (req.body ?? {}) as {
       status?: unknown
+      phase?: unknown
       priority?: unknown
       due_date?: unknown
       start_date?: unknown
@@ -1072,6 +1074,14 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
 
     if (status !== undefined && !(typeof status === 'string' && V1_TASK_STATUSES.has(status))) {
       sendError(res, 400, 'bad_request', 'status must be one of: todo, in_progress, done')
+      return
+    }
+    if (phase !== undefined && !(typeof phase === 'string' && VALID_PHASES.has(phase) && phase !== 'COMPLETE')) {
+      sendError(res, 400, 'bad_request', 'phase must be a non-COMPLETE task phase')
+      return
+    }
+    if (status !== undefined && phase !== undefined) {
+      sendError(res, 400, 'bad_request', 'provide status or phase, not both')
       return
     }
     if (priority !== undefined
@@ -1115,19 +1125,22 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       sendError(res, 400, 'bad_request', 'unread must be a boolean')
       return
     }
-    if (status === undefined && priority === undefined && dueDate === undefined
+    if (status === undefined && phase === undefined && priority === undefined && dueDate === undefined
         && startDate === undefined && project === undefined && title === undefined
         && description === undefined && tags === undefined && unread === undefined) {
-      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/priority/due_date/start_date/project/title/description/tags/unread)')
+      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/phase/priority/due_date/start_date/project/title/description/tags/unread)')
       return
     }
 
     const tm = await import('../../core/task-manager.js')
     const { projectTask } = await import('../../core/task-projection.js')
+    const opCaller = req.get('X-Walnut-Op-Caller')
+    const updateSource = opCaller === 'agent' || opCaller === 'gateway' ? 'agent' : 'api'
     try {
       let updated
       const patch = {
         ...(status !== undefined ? { status: status as import('../../core/types.js').TaskStatus } : {}),
+        ...(phase !== undefined ? { phase: phase as TaskPhase } : {}),
         ...(priority !== undefined ? { priority: priority as TaskPriority } : {}),
         ...(dueDate !== undefined ? { due_date: dueDate as string } : {}),
         ...(startDate !== undefined ? { start_date: startDate as string } : {}),
@@ -1149,10 +1162,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         updated = result.task
       }
       if (Object.keys(patch).length > 0) {
-        // Same options as the web PATCH: source 'api' (human-initiated — the
-        // terminal phase guard applies its human policy), asyncPush so the
-        // response never waits out an external sync round trip.
-        const result = await tm.updateTask(id, patch, { source: 'api', extraTargets: ['main-agent'], asyncPush: true })
+        const result = await tm.updateTask(id, patch, { source: updateSource, extraTargets: ['main-agent'], asyncPush: true })
         updated = result.task
       }
       if (!updated) {

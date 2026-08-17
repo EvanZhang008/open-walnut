@@ -3,9 +3,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  buildAcpAdapterEnv,
+  parseCodexBaseConfig,
   resolveSystemCodexPath,
   SystemCodexPathError,
 } from '../../src/providers/acp-session.js'
+import { buildAcpLaneConfig } from '../../src/providers/claude-code-session.js'
+import { opCallerFromEnv } from '../../src/ops/executor.js'
 
 let tmpDir: string
 
@@ -37,6 +41,55 @@ function resolutionError(run: () => unknown): SystemCodexPathError {
   }
   throw new Error('expected SystemCodexPathError')
 }
+
+describe('parseCodexBaseConfig', () => {
+  it('accepts objects and rejects malformed or non-object JSON clearly', () => {
+    expect(parseCodexBaseConfig('{"model_verbosity":"low"}')).toEqual({ model_verbosity: 'low' })
+    expect(() => parseCodexBaseConfig('{bad json')).toThrow(/CODEX_CONFIG must be valid JSON/)
+    expect(() => parseCodexBaseConfig('[]')).toThrow(/CODEX_CONFIG must be a JSON object/)
+  })
+})
+
+describe('buildAcpAdapterEnv', () => {
+  it('merges lane instructions without losing the user Codex config', () => {
+    expect(buildAcpAdapterEnv('/usr/local/bin/codex', {
+      disableProjectInstructions: true,
+      developerInstructions: 'Walnut contract',
+      baseConfig: { model_verbosity: 'low', developer_instructions: 'User Codex rule' },
+    })).toEqual({
+      CODEX_PATH: '/usr/local/bin/codex',
+      CODEX_CONFIG: JSON.stringify({
+        model_verbosity: 'low',
+        developer_instructions: 'User Codex rule\n\nWalnut contract',
+        project_doc_max_bytes: 0,
+      }),
+    })
+    expect(buildAcpAdapterEnv('/usr/local/bin/codex')).toEqual({
+      CODEX_PATH: '/usr/local/bin/codex',
+    })
+    expect(buildAcpAdapterEnv(undefined)).toBeUndefined()
+  })
+
+  it('marks the session as Walnut-managed so the CLI classifies itself as an agent', () => {
+    // Without this, `walnut done <id>` inside a Codex session read as a human
+    // and bypassed the human-only completion guard (native claude was blocked).
+    const env = buildAcpAdapterEnv('/usr/local/bin/codex', { sessionId: 'acp-deadbeef' })
+    expect(env).toEqual({ CODEX_PATH: '/usr/local/bin/codex', WALNUT_SESSION_ID: 'acp-deadbeef' })
+    expect(opCallerFromEnv(env as NodeJS.ProcessEnv)).toBe('agent')
+    expect(opCallerFromEnv({ CODEX_PATH: '/usr/local/bin/codex' } as NodeJS.ProcessEnv)).toBe('human')
+  })
+})
+
+describe('buildAcpLaneConfig', () => {
+  it('keeps project docs off and mounts this Walnut install for Main Agent lanes', async () => {
+    const config = await buildAcpLaneConfig('chat:general:conv-codex')
+    expect(config.lane).toBe('chat:general:conv-codex')
+    expect(config.disableProjectInstructions).toBe(true)
+    expect(config.walnutMcpServer.name).toBe('walnut')
+    expect(config.walnutMcpServer.args.at(-1)).toBe('mcp')
+    expect(config.walnutMcpServer.env).toEqual([])
+  })
+})
 
 describe('resolveSystemCodexPath', () => {
   it('uses a valid explicit override before every discovered candidate', () => {
