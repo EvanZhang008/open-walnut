@@ -1399,6 +1399,11 @@ export class ClaudeCodeSession {
     return this.pid
   }
 
+  /** MCP servers this session asked the CLI to mount (see the init mount-health check). */
+  get requestedMcpServers(): readonly string[] {
+    return this._requestedMcpServers
+  }
+
   get processStatus(): ProcessStatus {
     return this._processStatus
   }
@@ -2047,6 +2052,11 @@ export class ClaudeCodeSession {
     session._outputFile = record.outputFile ?? null
     session._cwd = record.cwd ?? null
     session._active = true
+    // The persisted profile is what this CLI was actually launched with, so an
+    // attached session must inherit the requested mount list — otherwise every
+    // init seen after an attach (server restart, reconnect, cold resume) skips
+    // the mount-health check and the verdict is never recorded.
+    session._requestedMcpServers = Object.keys(record.profile?.mcpServers ?? {})
     session._processStatus = record.process_status ?? 'running'
     session._mode = record.mode ?? 'default'
     session._activity = record.activity

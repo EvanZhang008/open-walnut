@@ -1428,6 +1428,48 @@ describe('ClaudeCodeSession.attachToExisting', () => {
     session.detach();
   });
 
+  it('inherits the requested MCP mounts from the record (attach must not blind the mount check)', async () => {
+    // An attach builds a FRESH session object, so without this the requested-mount
+    // list is empty and every init seen after an attach (server restart, reconnect,
+    // cold resume) skips the mount-health check entirely — observed live 2026-08-16:
+    // a lane spawned at 17:30 was attached to at 17:42, and its record carried no
+    // mcpMountStatus even though the CLI had refused the mount.
+    const session = await ClaudeCodeSession.attachToExisting({
+      claudeSessionId: 'attach-mcp-session',
+      taskId: 'task-attach-mcp',
+      project: 'proj',
+      process_status: 'running',
+      mode: 'default',
+      startedAt: new Date().toISOString(),
+      lastActiveAt: new Date().toISOString(),
+      messageCount: 1,
+      pid: 99999,
+      outputFile: '/tmp/nonexistent.jsonl',
+      profile: { mcpServers: { walnut: { command: 'node', args: ['cli.js', 'mcp'] } } },
+    }, MOCK_CLI, daemonUrl());
+
+    expect([...session.requestedMcpServers]).toEqual(['walnut']);
+    session.detach();
+  });
+
+  it('attaching without a profile requests no mounts (no false blocked verdicts)', async () => {
+    const session = await ClaudeCodeSession.attachToExisting({
+      claudeSessionId: 'attach-no-mcp',
+      taskId: 'task-attach-no-mcp',
+      project: 'proj',
+      process_status: 'running',
+      mode: 'default',
+      startedAt: new Date().toISOString(),
+      lastActiveAt: new Date().toISOString(),
+      messageCount: 1,
+      pid: 99999,
+      outputFile: '/tmp/nonexistent.jsonl',
+    }, MOCK_CLI, daemonUrl());
+
+    expect([...session.requestedMcpServers]).toEqual([]);
+    session.detach();
+  });
+
   it('restores host field from SessionRecord', async () => {
     const session = await ClaudeCodeSession.attachToExisting({
       claudeSessionId: 'ssh-session-id',
