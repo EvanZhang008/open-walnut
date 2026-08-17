@@ -107,13 +107,6 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * the old direct marker+send/bridgeResume sequence had no queue, so a daemon
  * death between steps lost the message. Optional: on an old daemon the cloud
  * route falls back to the direct sequence (now marker-after-delivery).
- */
-export const ADVERTISED_DAEMON_CAPABILITIES = [
-  ...REQUIRED_DAEMON_CAPABILITIES,
-  'snapshot-v1',
-  'image.save',
-  'session.launch',
-  'session.control',
  *
  * 'changes-v1' — host-local session-changes compute (changes.compute /
  * changes.file). The daemon parses the session's JSONLs + reads file contents
@@ -123,10 +116,17 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
  * daemons require() a sidecar (changes-core.cjs, shipped by deploySource) and
  * advertise this capability only when that load succeeds — otherwise the
  * server uses its reader-based fallback compute (old daemons likewise).
+ */
+export const ADVERTISED_DAEMON_CAPABILITIES = [
+  ...REQUIRED_DAEMON_CAPABILITIES,
+  'snapshot-v1',
+  'image.save',
+  'session.launch',
+  'session.control',
   'mobile-event',
   'agent-gateway',
   'session.message',
+  'changes-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]
-  'changes-v1',
