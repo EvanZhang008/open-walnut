@@ -268,11 +268,23 @@ final class SessionConversationStore {
             reconcile(next)
             transcriptMissing = false
             loadedOnce = true
+            // Failure-fallback polling (below) has done its job once a load
+            // lands and the normal delivery paths are healthy again. Keep
+            // polling while offline (it IS the data path then) or when SSE was
+            // abandoned (404 fallback, sse == nil) — those own their lifecycle.
+            if !offline && sse != nil { stopPolling() }
         } catch let error as APIError where error.isCancelled {
             return
         } catch {
             guard isActive, !Task.isCancelled else { return }
             if !loadedOnce { transcriptMissing = true }
+            // Self-heal: nothing retried a failed transcript load unless the
+            // page happened to be in a polling fallback already — a transient
+            // network error on open()/resume() left "No transcript yet" on
+            // screen FOREVER while the server had the data (2026-08-16 field
+            // report: healthy transcript on both boxes, phone stuck empty).
+            // Poll until a load succeeds; the success path above stops it.
+            startPolling(keepStream: true)
         }
     }
 
@@ -715,6 +727,14 @@ final class SessionConversationStore {
     }
 
     private func applySeedTracked(_ seed: SnapshotSeed) {
+        // A snapshot only rides the PRIMARY box's stream attach (the cloud
+        // path emits bridge-online/offline instead) — receiving one is proof
+        // this store talks to the session's host right now. A sticky offline
+        // flag from an earlier bridge-offline must not survive it: nothing on
+        // the primary stream ever cleared the flag, so the page stayed
+        // "unreachable — read-only" on a healthy session (2026-08-16 field
+        // report, plain claude session).
+        if offline { offline = false }
         // Snapshot content is PROOF a turn ran — retire the pre-spawn wait
         // BEFORE applyStatus so a terminal status in the same snapshot (app
         // backgrounded through the whole spawn→run→idle-reap arc) doesn't

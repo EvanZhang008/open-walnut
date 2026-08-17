@@ -146,6 +146,24 @@ function forwardJsonlLine(sessionId: string, line: string): void {
     emitSse(key, 'turn-end', {})
     return
   }
+
+  if (type === 'system' && parsed.subtype === 'session_state_changed') {
+    // The CLI's authoritative turn state (every daemon spawn sets
+    // CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1). Without this mapping the
+    // phone conversation header froze on whatever status the page attached
+    // with — "Idle" through an entire visible turn (2026-08-16): this lane
+    // forwarded deltas/tools/results but never a status frame, and the
+    // daemon's own `session_state` broadcasts only cover spawn/adopt/death.
+    // requires_action = paused mid-turn on a permission prompt — still a
+    // live turn (same projection as session-snapshot-apply's waiting→running).
+    const state = parsed.state as string | undefined
+    if (state === 'running' || state === 'requires_action') {
+      emitSse(key, 'status', { processStatus: 'running' })
+    } else if (state === 'idle') {
+      emitSse(key, 'status', { processStatus: 'idle' })
+    }
+    return
+  }
 }
 
 function handleFrame(conn: BridgeConn, raw: string): void {
@@ -365,6 +383,13 @@ async function reattachInterestedSessions(conn: BridgeConn): Promise<void> {
       await bridgeAttachSession(conn.hostAlias, sid)
       emitSse(channelKey(sid), 'bridge-online', {})
     } catch (err) {
+      // Attach failed but the socket is still up (per-session refusal — ACP
+      // journal / dead CLI — or a transient RPC timeout): the BRIDGE is back
+      // regardless, and sends/polling work — tell the phone. Only a socket
+      // that died again leaves the page offline (the next redial retries).
+      if (bridges.get(conn.hostAlias) === conn) {
+        emitSse(channelKey(sid), 'bridge-online', {})
+      }
       log.ws.warn('bridge: re-attach after redial failed', {
         hostAlias: conn.hostAlias, sessionId: sid,
         error: err instanceof Error ? err.message : String(err),
@@ -405,6 +430,21 @@ export function bridgeHosts(): Array<{ hostAlias: string; since: number; version
 
 export class BridgeOfflineError extends Error {
   constructor(hostAlias: string) { super(`No live bridge for host: ${hostAlias}`) }
+}
+
+/**
+ * The daemon ANSWERED an attach RPC with an error — the bridge transport is
+ * healthy; only THIS session has no tailable stream on that host (dead CLI,
+ * or an ACP/codex session whose journal is keyed by its runtimeId rather than
+ * the walnut sid). Callers must not classify this as host-unreachable: doing
+ * so painted "Mac unreachable — read-only" on one session while its neighbors
+ * streamed fine over the same bridge (2026-08-16), and read-only wrongly
+ * bricked the composer even though the durable send relay works.
+ */
+export class BridgeAttachRefusedError extends Error {
+  constructor(hostAlias: string, sessionId: string, reason: string) {
+    super(`attach refused by ${hostAlias} for ${sessionId}: ${reason}`)
+  }
 }
 
 /** Send one RPC to a host's daemon and await its `{id, ...}` response. */
@@ -449,7 +489,13 @@ export async function bridgeAttachSession(hostAlias: string, sessionId: string):
   const res = await bridgeRequest(hostAlias, 'attach', {
     sid: sessionId, fromOffset: Number.MAX_SAFE_INTEGER,
   })
-  if (res.ok !== true) throw new Error(`attach failed: ${String(res.error ?? 'unknown')}`)
+  // A settled { ok: false } reply is a per-SESSION refusal (e.g. "session not
+  // found" for an ACP/codex sid whose journal lives under its runtimeId) — the
+  // transport round-tripped fine. Distinguish it from BridgeOfflineError /
+  // request-timeout so callers don't report a healthy host as unreachable.
+  if (res.ok !== true) {
+    throw new BridgeAttachRefusedError(hostAlias, sessionId, String(res.error ?? 'unknown'))
+  }
   conn.attachSent.add(sessionId)
 }
 

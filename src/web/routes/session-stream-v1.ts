@@ -633,7 +633,28 @@ sessionStreamV1Router.get('/sessions/:id/stream', async (req: Request, res: Resp
       const { bridgeAttachSession, bridgeDetachSession, bridgeForHost } = await import('../ws/bridge-registry.js')
       let online = bridgeForHost(host).connected
       if (online) {
-        try { await bridgeAttachSession(host, sessionId) } catch { online = false }
+        try {
+          await bridgeAttachSession(host, sessionId)
+        } catch (err) {
+          // An attach failure is NOT proof the host is down — only the bridge
+          // socket's absence is. Two failure shapes land here with a healthy
+          // socket: (a) per-session refusal — an ACP/codex session's journal is
+          // keyed by its runtimeId, so the daemon tailer finds no <sid>.jsonl
+          // and answers ok:false; (b) a transient attach RPC timeout on a busy
+          // daemon. Both used to flip this page to bridge-offline, painting
+          // "Mac unreachable — read-only" on ONE healthy session while its
+          // neighbors streamed over the same bridge (2026-08-16, twice: a
+          // codex session and a plain claude session). Sends still work via
+          // the durable relay and transcripts via the poll, so stay ONLINE
+          // whenever the socket survives; only a genuinely absent bridge
+          // reports offline. Cost of the tradeoff: a live tail may be missing
+          // (no status/delta frames) — the phone's polling covers that.
+          online = bridgeForHost(host).connected
+          log.web.info('session stream: bridge attach failed', {
+            sessionId, host, stillOnline: online,
+            reason: err instanceof Error ? err.message : String(err),
+          })
+        }
       }
       const isOnline = online
       attachSse(channelKey(sessionId), req, res, {

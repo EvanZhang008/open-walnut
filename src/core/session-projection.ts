@@ -239,10 +239,22 @@ export async function buildSessionTranscript(sessionId: string): Promise<Session
   const { getSessionByClaudeId } = await import('./session-tracker.js')
   const { toolDetail, toolResultPreview } = await import('./tool-summary.js')
   const record = await getSessionByClaudeId(sessionId)
-  // Tail-bounded: this export keeps only the last TRANSCRIPT_TAIL messages, so
-  // whales must not be fully transferred per sweep (pre-fix: the 60s sweep
-  // full-read every alive session — dominant share of 167 GB/day of reads).
-  const history = await readSessionHistoryTail(sessionId, record?.cwd, record?.host, record?.outputFile) ?? []
+  // ACP/codex sessions have no claude JSONL — their history lives in the ACP
+  // journal (acpJournalPath / <runtimeId>.acp.jsonl). The claude-only read
+  // below silently returned [] for them, so every export/fresh=1/cloud tail
+  // was an empty transcript on a session with a full visible conversation
+  // (2026-08-16: cache/transcripts/<sid>.json stuck at messages:[] while the
+  // web console showed the whole thread). Same branch the /history route takes.
+  let history: import('./session-history.js').SessionHistoryMessage[]
+  if (record?.engine === 'codex') {
+    const { readAcpSessionHistory } = await import('../providers/acp-session-history.js')
+    history = await readAcpSessionHistory(record)
+  } else {
+    // Tail-bounded: this export keeps only the last TRANSCRIPT_TAIL messages, so
+    // whales must not be fully transferred per sweep (pre-fix: the 60s sweep
+    // full-read every alive session — dominant share of 167 GB/day of reads).
+    history = await readSessionHistoryTail(sessionId, record?.cwd, record?.host, record?.outputFile) ?? []
+  }
   const tail = history.slice(-TRANSCRIPT_TAIL)
   const messages: ProjectedTranscriptMessage[] = []
   for (const m of tail) {

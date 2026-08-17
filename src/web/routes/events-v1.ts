@@ -225,6 +225,23 @@ export function handleBridgeMobileEvent(kind: unknown, data: unknown): void {
   // inject arbitrary SSE event names into phones.
   if (kind !== 'session-upsert' && kind !== 'task-upsert' && kind !== 'task-delete') return
   fanOut(kind, data)
+  // Echo the authoritative status onto the session's OWN conversation channel
+  // (same `status` frame the primary's stream route emits). This is the only
+  // status lane that covers EVERY engine on the cloud box: the jsonl tail
+  // carries session_state_changed for claude CLIs, but an ACP/codex session
+  // has no tailable <sid>.jsonl, so without this echo its conversation header
+  // froze on whatever it attached with ("Idle" through a visible turn,
+  // 2026-08-16). Guarded by live-subscriber count so idle sessions don't
+  // allocate ring-buffer channels on every upsert.
+  if (kind === 'session-upsert') {
+    const row = data as { id?: unknown; process_status?: unknown } | null
+    if (row && typeof row.id === 'string' && typeof row.process_status === 'string' && row.process_status) {
+      const channel = `session:${row.id}`
+      if (sseConnCount(channel) > 0) {
+        emitSse(channel, 'status', { processStatus: row.process_status })
+      }
+    }
+  }
 }
 
 // ── Lifecycle (wired from server.ts) ────────────────────────────────────────
