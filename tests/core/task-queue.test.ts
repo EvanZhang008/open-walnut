@@ -451,3 +451,354 @@ describe('startTaskQueueFlush drain triggers', () => {
     expect(await queue.queuedTaskOpCount()).toBe(0);
   });
 });
+
+// ── Scoped update ops (touched / append / order) — write-parity 2026-08 ─────
+
+describe('applyTaskOp: scoped updates (touched)', () => {
+  it('a touched-scoped op applies ONLY the named fields — untouched blobs survive', async () => {
+    current = await load(false);
+    const { outbox, tm } = current;
+
+    const { task } = await tm.addTask({ title: 'primary truth', source: 'local' });
+    await tm.updateDescription(task.id, 'primary description');
+    await tm.updateNote(task.id, 'primary note');
+    const row = await tm.getTask(task.id);
+
+    // A replica title edit: the replica row is projection-blind (description/
+    // note are ''), and its snapshot says so — but touched scopes the patch.
+    const freshAt = new Date(Date.parse(row.updated_at) + 60_000).toISOString();
+    expect(await outbox.applyTaskOp({
+      opId: 'sc-1', type: 'update', at: freshAt, touched: ['title'],
+      task: { ...row, title: 'phone title', description: '', note: '', summary: '', updated_at: freshAt } as never,
+    })).toEqual({ applied: true, reason: 'updated' });
+    const after = await tm.getTask(task.id);
+    expect(after.title).toBe('phone title');
+    expect(after.description).toBe('primary description');
+    expect(after.note).toBe('primary note');
+  });
+
+  it('a touched field ABSENT from the snapshot is an explicit clear (unpin case)', async () => {
+    current = await load(false);
+    const { outbox, tm } = current;
+
+    const { task } = await tm.addTask({ title: 'pinned one', source: 'local' });
+    await tm.togglePin(task.id);
+    const row = await tm.getTask(task.id);
+    expect(row.pinned).toBe(true);
+
+    const freshAt = new Date(Date.parse(row.updated_at) + 60_000).toISOString();
+    const { pinned: _p, pin_order: _o, focus_tier: _f, ...unpinned } = row as Record<string, unknown>;
+    expect(await outbox.applyTaskOp({
+      opId: 'sc-2', type: 'update', at: freshAt,
+      touched: ['pinned', 'pin_order', 'focus_tier'],
+      task: { ...unpinned, pinned: false, updated_at: freshAt } as never,
+    })).toEqual({ applied: true, reason: 'updated' });
+    const after = await tm.getTask(task.id);
+    expect(after.pinned).toBe(false);
+    expect(after.pin_order).toBeUndefined();
+    expect(after.focus_tier).toBeUndefined();
+  });
+
+  it('LEGACY op (no touched): empty note/description are skipped, summary never applies', async () => {
+    current = await load(false);
+    const { outbox, tm } = current;
+
+    const { task } = await tm.addTask({ title: 'legacy target', source: 'local' });
+    await tm.updateDescription(task.id, 'real description');
+    await tm.updateNote(task.id, 'real note');
+    await tm.updateSummary(task.id, 'full summary the projection would truncate');
+    const row = await tm.getTask(task.id);
+
+    const freshAt = new Date(Date.parse(row.updated_at) + 60_000).toISOString();
+    expect(await outbox.applyTaskOp({
+      opId: 'lg-1', type: 'update', at: freshAt,
+      task: {
+        ...row, title: 'legacy rename', updated_at: freshAt,
+        description: '', note: '', summary: 'truncated…',
+      } as never,
+    })).toEqual({ applied: true, reason: 'updated' });
+    const after = await tm.getTask(task.id);
+    expect(after.title).toBe('legacy rename');
+    expect(after.description).toBe('real description');   // '' skipped
+    expect(after.note).toBe('real note');                  // '' skipped
+    expect(after.summary).toBe('full summary the projection would truncate'); // never applied
+  });
+
+  it('append.note concatenates onto the PRIMARY note instead of replacing it', async () => {
+    current = await load(false);
+    const { outbox, tm } = current;
+
+    const { task } = await tm.addTask({ title: 'note target', source: 'local' });
+    await tm.updateNote(task.id, 'existing primary note');
+    const row = await tm.getTask(task.id);
+
+    const freshAt = new Date(Date.parse(row.updated_at) + 60_000).toISOString();
+    expect(await outbox.applyTaskOp({
+      opId: 'ap-1', type: 'update', at: freshAt, touched: ['note'],
+      append: { note: 'appended from the phone' },
+      task: { ...row, note: 'appended from the phone', updated_at: freshAt } as never,
+    })).toEqual({ applied: true, reason: 'updated' });
+    expect((await tm.getTask(task.id)).note).toBe('existing primary note\n\nappended from the phone');
+  });
+
+  it('a touched human reopen un-completes a terminal primary row', async () => {
+    current = await load(false);
+    const { outbox, tm } = current;
+
+    const { task } = await tm.addTask({ title: 'done one', source: 'local' });
+    await tm.completeTask(task.id);
+    const row = await tm.getTask(task.id);
+    expect(row.phase).toBe('COMPLETE');
+
+    const freshAt = new Date(Date.parse(row.updated_at) + 60_000).toISOString();
+    expect(await outbox.applyTaskOp({
+      opId: 'ro-1', type: 'update', at: freshAt, touched: ['status', 'phase'],
+      task: { ...row, status: 'todo', phase: 'TODO', completed_at: undefined, updated_at: freshAt } as never,
+    })).toEqual({ applied: true, reason: 'updated' });
+    const after = await tm.getTask(task.id);
+    expect(after.phase).toBe('TODO');
+    expect(after.status).toBe('todo');
+  });
+
+  it('a project move mints the registry row (same as create)', async () => {
+    current = await load(false);
+    const { outbox, tm } = current;
+
+    const { task } = await tm.addTask({ title: 'mover', source: 'local' });
+    const row = await tm.getTask(task.id);
+    const freshAt = new Date(Date.parse(row.updated_at) + 60_000).toISOString();
+    expect(await outbox.applyTaskOp({
+      opId: 'pm-1', type: 'update', at: freshAt, touched: ['project'],
+      task: { ...row, project: 'BrandNewProject', updated_at: freshAt } as never,
+    })).toEqual({ applied: true, reason: 'updated' });
+    expect((await tm.getTask(task.id)).project).toBe('BrandNewProject');
+    expect(await tm.getProjectRecord('brandnewproject')).toMatchObject({ name: 'BrandNewProject' });
+  });
+
+  it('depends_on rides a touched op through cycle validation', async () => {
+    current = await load(false);
+    const { outbox, tm } = current;
+
+    const { task: a } = await tm.addTask({ title: 'dep A', source: 'local' });
+    const { task: b } = await tm.addTask({ title: 'dep B', source: 'local' });
+    const rowA = await tm.getTask(a.id);
+    const freshAt = new Date(Date.parse(rowA.updated_at) + 60_000).toISOString();
+    expect(await outbox.applyTaskOp({
+      opId: 'dp-1', type: 'update', at: freshAt, touched: ['depends_on'],
+      task: { ...rowA, depends_on: [b.id], updated_at: freshAt } as never,
+    })).toEqual({ applied: true, reason: 'updated' });
+    expect((await tm.getTask(a.id)).depends_on).toEqual([b.id]);
+
+    // A self-cycle is refused by validation but still CONSUMES the op.
+    const rowB = await tm.getTask(b.id);
+    const at2 = new Date(Date.parse(rowB.updated_at) + 60_000).toISOString();
+    await outbox.applyTaskOp({
+      opId: 'dp-2', type: 'update', at: at2, touched: ['depends_on'],
+      task: { ...rowB, depends_on: [a.id], updated_at: at2 } as never, // b→a while a→b = cycle
+    });
+    expect((await tm.getTask(b.id)).depends_on).toBeUndefined();
+  });
+});
+
+describe('applyTaskOp: order ops', () => {
+  it('reorder permutes a project group; reorder-pins rewrites pin_order', async () => {
+    current = await load(false);
+    const { outbox, tm } = current;
+
+    const t1 = (await tm.addTask({ title: 'r1', source: 'local' })).task;
+    const t2 = (await tm.addTask({ title: 'r2', source: 'local' })).task;
+    const t3 = (await tm.addTask({ title: 'r3', source: 'local' })).task;
+
+    expect(await outbox.applyTaskOp({
+      opId: 'or-1', type: 'reorder', at: new Date().toISOString(),
+      project: '', taskIds: [t3.id, t1.id, t2.id],
+    })).toEqual({ applied: true, reason: 'reordered' });
+    const inbox = (await tm.listTasks()).filter((t) => !t.project).map((t) => t.id);
+    expect(inbox).toEqual([t3.id, t1.id, t2.id]);
+
+    await tm.togglePin(t1.id);
+    await tm.togglePin(t2.id);
+    expect(await outbox.applyTaskOp({
+      opId: 'or-2', type: 'reorder-pins', at: new Date().toISOString(),
+      taskIds: [t2.id, t1.id],
+    })).toEqual({ applied: true, reason: 'reordered' });
+    const pinned = await tm.getPinnedTasks();
+    expect(pinned.map((t) => t.id)).toEqual([t2.id, t1.id]);
+  });
+
+  it('relay handler validates order ops (shape + project required for reorder)', async () => {
+    current = await load(false);
+    const { handleSessionControlRelay } = await import('../../src/core/sessions/session-controls.js');
+    const relay = async (op: unknown) =>
+      await handleSessionControlRelay('server.tasks.apply', '__server__', { op }) as Record<string, unknown>;
+
+    expect(await relay({ opId: 'x', type: 'reorder', taskIds: [] }))
+      .toMatchObject({ ok: false, errorKind: 'bad_request' });
+    expect(await relay({ opId: 'x', type: 'reorder', taskIds: ['a'] })) // no project
+      .toMatchObject({ ok: false, errorKind: 'bad_request' });
+    expect(await relay({ opId: 'x', type: 'reorder-pins', taskIds: [42] }))
+      .toMatchObject({ ok: false, errorKind: 'bad_request' });
+    const ok = await relay({ opId: 'ok-1', type: 'reorder', project: '', taskIds: ['nope'] });
+    expect(ok.ok).toBe(true); // unknown ids self-heal to a no-op, still consumed
+  });
+});
+
+describe('dispatchTaskOp: order ops and the legacy lane', () => {
+  it('order ops queue on bridge_offline but NEVER write the legacy git outbox on needs_upgrade', async () => {
+    current = await load(true);
+    const { queue } = current;
+
+    relayReply = { ok: false, failure: { kind: 'needs_upgrade', message: 'Unknown control action' } };
+    await queue.dispatchTaskOp({ type: 'reorder', project: '', taskIds: ['a', 'b'] });
+    expect(await queue.queuedTaskOpCount()).toBe(1);
+    expect(await listJson(OUTBOX_DIR)).toEqual([]); // an old primary can't parse it
+
+    relayReply = { ok: false, failure: { kind: 'bridge_offline', message: 'down' } };
+    await queue.dispatchTaskOp({ type: 'reorder-pins', taskIds: ['a'] });
+    expect(await queue.queuedTaskOpCount()).toBe(2);
+  });
+
+  it('update dispatch carries touched + append through to the relay payload', async () => {
+    current = await load(true);
+    const { queue } = current;
+
+    await queue.dispatchTaskOp({
+      type: 'update', task: snapshot() as never,
+      touched: ['note'], append: { note: 'appended entry' },
+    });
+    const sent = (relayCalls[0].params as { op: Record<string, unknown> }).op;
+    expect(sent.touched).toEqual(['note']);
+    expect(sent.append).toEqual({ note: 'appended entry' });
+  });
+});
+
+describe('delete tombstones + projection-import guards', () => {
+  it('a dispatched delete leaves a tombstone that blocks the projection echo', async () => {
+    current = await load(true);
+    const { queue } = current;
+
+    relayReply = { ok: true, result: { applied: true, reason: 'deleted' } };
+    await queue.dispatchTaskOp({ type: 'delete', id: 'tomb-1' });
+    expect(queue.hasDeleteTombstone('tomb-1')).toBe(true);
+    expect(queue.hasDeleteTombstone('someone-else')).toBe(false);
+  });
+
+  it('importProjectionOnCloud skips rows with a QUEUED op and tombstoned deletes', async () => {
+    current = await load(true);
+    const { queue, outbox, tm, taskDb } = current;
+
+    // Local replica edit banked while offline (queued op) + a local delete.
+    relayReply = { ok: false, failure: { kind: 'bridge_offline', message: 'down' } };
+    const { task: edited } = await tm.addTask({ title: 'replica edit', source: 'local' });
+    await tm.updateTask(edited.id, { title: 'replica newer title' });
+    await queue.dispatchTaskOp({ type: 'update', task: await tm.getTask(edited.id) });
+    await queue.dispatchTaskOp({ type: 'delete', id: 'deleted-on-replica' });
+
+    // A projection frame built BEFORE those local writes arrives late.
+    const staleAt = new Date(Date.now() + 60_000).toISOString(); // newer clock — would win LWW without the guard
+    const projection = {
+      version: 2, exportedAt: new Date().toISOString(),
+      tasks: [
+        { id: edited.id, title: 'stale echo title', status: 'todo', phase: 'TODO', priority: 'none', project: '', created_at: staleAt, updated_at: staleAt },
+        { id: 'deleted-on-replica', title: 'zombie', status: 'todo', phase: 'TODO', priority: 'none', project: '', created_at: staleAt, updated_at: staleAt },
+      ],
+    };
+    const { writeProjectionCache } = await import('../../src/core/projection-cache.js');
+    await writeProjectionCache('tasks', projection);
+    await outbox.importProjectionOnCloud();
+
+    expect((await tm.getTask(edited.id)).title).toBe('replica newer title'); // queued-op guard
+    await expect(tm.getTask('deleted-on-replica')).rejects.toThrow(/No task found/); // tombstone
+    void taskDb;
+  });
+
+  it('the projection import adopts the custom-tier registry', async () => {
+    current = await load(true);
+    const { outbox, tm } = current;
+
+    const projection = {
+      version: 2, exportedAt: new Date().toISOString(), tasks: [],
+      custom_tiers: [{ id: 'ct_abc12345', label: 'Deep Work' }],
+    };
+    const { writeProjectionCache } = await import('../../src/core/projection-cache.js');
+    await writeProjectionCache('tasks', projection);
+    await outbox.importProjectionOnCloud();
+    expect(await tm.getCustomTiers()).toEqual([{ id: 'ct_abc12345', label: 'Deep Work' }]);
+  });
+
+  it('the projection import removes a primary-deleted row (guarded: never a fresh or pending one)', async () => {
+    current = await load(true);
+    const { queue, outbox, tm } = current;
+
+    // Three replica rows: one stale (primary deleted it), one with a queued op,
+    // one fresh. Backdate the stale + queued rows so only the guards differ.
+    const old = new Date(Date.now() - 60 * 60_000).toISOString();
+    await tm.addTasksBulk([
+      { id: 'gone-on-mac', title: 'deleted on the Mac', status: 'todo', phase: 'TODO', priority: 'none', project: '', source: 'local', session_ids: [], description: '', summary: '', note: '', created_at: old, updated_at: old } as never,
+      { id: 'queued-edit', title: 'has a banked op', status: 'todo', phase: 'TODO', priority: 'none', project: '', source: 'local', session_ids: [], description: '', summary: '', note: '', created_at: old, updated_at: old } as never,
+    ]);
+    const { task: fresh } = await tm.addTask({ title: 'fresh replica create', source: 'local' });
+    relayReply = { ok: false, failure: { kind: 'bridge_offline', message: 'down' } };
+    await queue.dispatchTaskOp({ type: 'update', task: await tm.getTask('queued-edit') });
+
+    // Projection built now, WITHOUT any of the three rows.
+    const { writeProjectionCache } = await import('../../src/core/projection-cache.js');
+    await writeProjectionCache('tasks', { version: 2, exportedAt: new Date().toISOString(), tasks: [] });
+    await outbox.importProjectionOnCloud();
+
+    await expect(tm.getTask('gone-on-mac')).rejects.toThrow(/No task found/); // reconciled away
+    expect((await tm.getTask('queued-edit')).title).toBe('has a banked op');  // pending-op guard
+    expect((await tm.getTask(fresh.id)).title).toBe('fresh replica create');  // safety window
+  });
+
+  it('the projection import adopts the primary row ORDER (skipped after a local reorder)', async () => {
+    current = await load(true);
+    const { queue, outbox, tm } = current;
+
+    const t1 = (await tm.addTask({ title: 'o1', source: 'local' })).task;
+    const t2 = (await tm.addTask({ title: 'o2', source: 'local' })).task;
+    const now = new Date(Date.now() - 60_000).toISOString(); // older than local rows → upserts skip
+    const mkRow = (id: string, title: string) => ({
+      id, title, status: 'todo', phase: 'TODO', priority: 'none', project: '',
+      created_at: now, updated_at: now,
+    });
+    const { writeProjectionCache } = await import('../../src/core/projection-cache.js');
+
+    // Primary says t2 before t1 → replica store aligns.
+    await writeProjectionCache('tasks', {
+      version: 2, exportedAt: new Date().toISOString(), tasks: [mkRow(t2.id, 'o2'), mkRow(t1.id, 'o1')],
+    });
+    await outbox.importProjectionOnCloud();
+    expect((await tm.listTasks()).map((t) => t.id)).toEqual([t2.id, t1.id]);
+
+    // Replica-side reorder → a late stale projection must NOT re-impose its order.
+    relayReply = { ok: false, failure: { kind: 'bridge_offline', message: 'down' } };
+    await queue.dispatchTaskOp({ type: 'reorder', project: '', taskIds: [t1.id, t2.id] });
+    await tm.reorderTasks('', [t1.id, t2.id]);
+    await writeProjectionCache('tasks', {
+      version: 2, exportedAt: new Date().toISOString(), tasks: [mkRow(t2.id, 'o2'), mkRow(t1.id, 'o1')],
+    });
+    await outbox.importProjectionOnCloud();
+    expect((await tm.listTasks()).map((t) => t.id)).toEqual([t1.id, t2.id]); // local order kept
+  });
+});
+
+describe('server.tasks.get (full-row readback relay, primary side)', () => {
+  it('answers the full task row; 404s an unknown id', async () => {
+    current = await load(false);
+    const { tm } = current;
+    const { handleSessionControlRelay } = await import('../../src/core/sessions/session-controls.js');
+
+    const { task } = await tm.addTask({ title: 'readback target', source: 'local' });
+    await tm.updateDescription(task.id, 'full primary description');
+
+    const ok = await handleSessionControlRelay('server.tasks.get', '__server__', { id: task.id });
+    expect(ok.ok).toBe(true);
+    const row = (ok as { result: { task: Record<string, unknown> } }).result.task;
+    expect(row.id).toBe(task.id);
+    expect(row.description).toBe('full primary description');
+
+    const missing = await handleSessionControlRelay('server.tasks.get', '__server__', { id: 'nope-1234' });
+    expect(missing).toMatchObject({ ok: false, errorKind: 'not_found' });
+  });
+});

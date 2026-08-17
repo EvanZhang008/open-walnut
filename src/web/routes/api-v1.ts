@@ -918,17 +918,56 @@ function isValidIsoDate(s: string): boolean {
 }
 
 // GET /api/v1/tasks — slim task list for mobile.
-// Cloud box: serves the git-synced tasks/projection.json (the replica).
-// Primary box: exports a fresh projection from SQLite and serves that, so
-// both modes return the identical shape (+ syncedAt provenance).
+// Primary box: exports a fresh projection from SQLite and serves that.
+// Cloud box: builds the same shape from the replica's OWN task store (which
+// the projection import seeds and every replica-local write updates), so a
+// phone edit is visible on the very next list fetch — serving only the pushed
+// projection file made every write appear to REVERT until the outbox→primary→
+// projection round trip landed (minutes; unbounded with the Mac asleep). The
+// pushed projection still rides along as a bootstrap/coverage overlay: rows
+// the local store doesn't know yet (first 5s after boot, import races) are
+// appended, minus anything with a queued local delete.
 apiV1Router.get('/tasks', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { readTaskProjection, exportTaskProjection } = await import('../../core/task-projection.js')
+    const { readTaskProjection, exportTaskProjection, buildTaskProjection } = await import('../../core/task-projection.js')
+    let projection = null
     if (!CLOUD_MODE) {
       // Live box — refresh the projection inline (cheap: one SELECT + write).
       await exportTaskProjection().catch(() => { /* serve last good file below */ })
+      projection = await readTaskProjection()
+    } else {
+      const [local, synced] = await Promise.all([
+        buildTaskProjection().catch(() => null),
+        readTaskProjection(),
+      ])
+      if (local && local.tasks.length > 0) {
+        const seen = new Set(local.tasks.map((t) => t.id))
+        let extras = (synced?.tasks ?? []).filter((t) => !seen.has(t.id))
+        if (extras.length > 0) {
+          // Rows only the synced projection has: keep them UNLESS this replica
+          // deleted them (tombstone, or a still-queued delete op after a
+          // restart wiped the in-memory tombstones) — the projection-lag echo
+          // must never resurrect a phone-side delete in the response.
+          const tq = await import('../../core/task-queue.js')
+          const queuedDeletes = new Set(
+            (await tq.listQueuedOps()).filter((o) => o.type === 'delete').map((o) => (o as { id: string }).id),
+          )
+          extras = extras.filter((t) => !tq.hasDeleteTombstone(t.id) && !queuedDeletes.has(t.id))
+        }
+        // syncedAt keeps its provenance meaning (when the MAC's data last
+        // arrived) — the locally-built envelope's exportedAt is "now" and
+        // would hide real staleness while the Mac is asleep.
+        projection = {
+          ...local,
+          ...(synced?.exportedAt ? { exportedAt: synced.exportedAt } : {}),
+          tasks: [...local.tasks, ...extras],
+        }
+      } else {
+        // Empty/unavailable local store (fresh boot, pre-seed) — the pushed
+        // projection is the only truth we have.
+        projection = synced ?? local
+      }
     }
-    const projection = await readTaskProjection()
     if (!projection) {
       sendError(res, 503, 'unavailable', 'Task projection not synced yet')
       return
@@ -968,11 +1007,10 @@ apiV1Router.get('/tasks', async (req: Request, res: Response, next: NextFunction
 // Works on BOTH boxes. A REPLICA has a real local task store (the projection
 // import seeds it — task-outbox.ts importProjectionOnCloud), and the
 // TASK_CREATED emit below is what the cloud outbox subscriber (server.ts)
-// listens for to drop an op file that rides git-sync back to the primary —
-// the exact path the web UI's task creation already uses on cloud. The one
-// cloud caveat: GET /api/v1/tasks serves the git-synced projection, so the
-// new task appears there only after the outbox→primary→projection round trip
-// (the app renders its own 201 response optimistically in the meantime).
+// listens for to dispatch the op to the primary (bridge RPC, offline queue
+// fallback — core/task-queue.ts). GET /api/v1/tasks on a replica serves the
+// LOCAL store (projection as overlay), so the new task is visible on the
+// very next list read — no round-trip wait.
 apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { title, project, priority, due_date: dueDate, description } = (req.body ?? {}) as {

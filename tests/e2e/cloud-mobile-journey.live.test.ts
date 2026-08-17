@@ -173,4 +173,39 @@ suite('LIVE: phone journey through the real cloud companion', () => {
     })
     expect(res.status).toBe(404)
   })
+
+  it('task write parity: create → PATCH title visible IMMEDIATELY → delete never resurrects', async () => {
+    if (!online) return
+    const title = `LIVE-PARITY-${Date.now().toString(36).toUpperCase()}-DELETEME`
+
+    // 1. Create on the replica.
+    const create = await api('/api/v1/tasks', {
+      method: 'POST', body: JSON.stringify({ title }),
+    })
+    expect(create.status).toBe(201)
+    const { task } = await create.json() as { task: { id: string } }
+
+    // 2. Title PATCH answers fast and the LIST reflects it on the very next
+    //    read (no outbox round-trip wait — the projection-lag bug class).
+    const t0 = Date.now()
+    const patch = await api(`/api/v1/tasks/${task.id}`, {
+      method: 'PATCH', body: JSON.stringify({ title: `${title}-renamed` }),
+    })
+    const patchMs = Date.now() - t0
+    expect(patch.status).toBe(200)
+    expect(patchMs).toBeLessThan(3_000)
+    const list = await api(`/api/v1/tasks?q=${encodeURIComponent(title)}`)
+    const body = await list.json() as { tasks: Array<{ id: string; title: string }> }
+    expect(body.tasks.find((t) => t.id === task.id)?.title).toBe(`${title}-renamed`)
+
+    // 3. Delete → gone immediately, AND still gone after the primary's
+    //    projection echo window (tombstone holds the line).
+    const del = await api(`/api/v1/tasks/${task.id}`, { method: 'DELETE' })
+    expect(del.status).toBe(204)
+    const after = await api(`/api/v1/tasks?q=${encodeURIComponent(title)}`)
+    expect(((await after.json()) as { tasks: unknown[] }).tasks).toEqual([])
+    await new Promise((r) => setTimeout(r, 45_000)) // outbox apply + projection push round trip
+    const echoed = await api(`/api/v1/tasks?q=${encodeURIComponent(title)}`)
+    expect(((await echoed.json()) as { tasks: unknown[] }).tasks).toEqual([])
+  }, 120_000)
 })

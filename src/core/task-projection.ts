@@ -58,6 +58,11 @@ export interface ProjectedTask {
   updated_at: string
   completed_at?: string
   pinned?: boolean
+  /** Focus-bar order/tier (additive, pinned rows only) — lets the REPLICA's
+   *  focus endpoints mirror the primary's tier split instead of dumping every
+   *  pin into satellite in arbitrary order. */
+  pin_order?: number
+  focus_tier?: string
   /** Read/unread marker — true = agent output the human hasn't opened. Additive
    *  (omitted when false), so an older iOS build that doesn't decode it is fine. */
   unread?: boolean
@@ -77,6 +82,10 @@ export interface TaskProjection {
   version: typeof PROJECTION_VERSION
   exportedAt: string
   tasks: ProjectedTask[]
+  /** Custom focus-tier registry (additive) — lets the REPLICA validate tier
+   *  values and bucket its tier split like the primary. Absent on projections
+   *  from an older primary. */
+  custom_tiers?: Array<{ id: string; label: string }>
 }
 
 const SUMMARY_MAX = 500
@@ -98,6 +107,10 @@ export function projectTask(t: Task): ProjectedTask {
     updated_at: t.updated_at,
     ...(t.completed_at ? { completed_at: t.completed_at } : {}),
     ...(t.pinned ? { pinned: true } : {}),
+    // typeof check (not just != null): a null-clear can survive in the payload
+    // blob; only a real number is an order.
+    ...(t.pinned && typeof t.pin_order === 'number' ? { pin_order: t.pin_order } : {}),
+    ...(t.pinned && t.focus_tier ? { focus_tier: t.focus_tier } : {}),
     ...(t.unread ? { unread: true } : {}),
     ...(t.tags && t.tags.length > 0 ? { tags: t.tags } : {}),
     ...(summary ? { summary: summary.length > SUMMARY_MAX ? summary.slice(0, SUMMARY_MAX) + '…' : summary } : {}),
@@ -112,8 +125,9 @@ export function projectTask(t: Task): ProjectedTask {
  */
 export async function buildTaskProjection(): Promise<TaskProjection> {
   // Lazy import breaks the task-manager ↔ projection cycle risk.
-  const { listTasks } = await import('./task-manager.js')
+  const { listTasks, getCustomTiers } = await import('./task-manager.js')
   const all = await listTasks()
+  const customTiers = await getCustomTiers().catch(() => [])
   const cutoff = Date.now() - DONE_RETENTION_DAYS * 24 * 60 * 60 * 1000
   const tasks = all
     .filter((t) => {
@@ -126,6 +140,7 @@ export async function buildTaskProjection(): Promise<TaskProjection> {
     version: PROJECTION_VERSION,
     exportedAt: new Date().toISOString(),
     tasks,
+    ...(customTiers.length > 0 ? { custom_tiers: customTiers.map((t) => ({ id: t.id, label: t.label })) } : {}),
   }
 }
 

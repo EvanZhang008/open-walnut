@@ -229,4 +229,21 @@ describe('GET /api/v1/events on a REPLICA', () => {
       remote.close()
     }
   })
+
+  it('a REPLICA-LOCAL task write emits task-upsert immediately (no git-sync echo wait)', async () => {
+    const sse = await connectSse(apiUrl('/api/v1/events'))
+    try {
+      await sse.waitFor((e) => e.event === 'snapshot')
+      // Write through the REST route like the phone would — the replica's own
+      // bus feeds the feed directly (startMobileEventsFeed's cloud branch).
+      const { addTask } = await import('../../../src/core/task-manager.js')
+      const { bus, EventNames } = await import('../../../src/core/event-bus.js')
+      const { task } = await addTask({ title: 'replica-local feed check' })
+      bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui'], { source: 'api-v1' })
+      const upsert = await sse.waitFor((e) => e.event === 'task-upsert' && e.data.id === task.id)
+      expect(upsert.data.title).toBe('replica-local feed check')
+    } finally {
+      sse.close()
+    }
+  })
 })

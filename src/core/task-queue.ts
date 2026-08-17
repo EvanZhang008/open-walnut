@@ -73,14 +73,35 @@ function mintOpId(): string {
   return `${Date.now().toString().padStart(15, '0')}-${(opSeq++).toString().padStart(4, '0')}`;
 }
 
-export function buildTaskOp(
-  op: { type: 'create' | 'update'; task: Task } | { type: 'delete'; id: string },
-): TaskOp {
+/** What a replica-side mutation hands to dispatchTaskOp. `touched`/`append`
+ *  scope an update (see TaskOp in task-outbox.ts); the two reorder kinds carry
+ *  whole-list ordering (no per-row LWW clock). */
+export type TaskOpInput =
+  | { type: 'create'; task: Task }
+  | { type: 'update'; task: Task; touched?: string[]; append?: { note?: string } }
+  | { type: 'delete'; id: string }
+  | { type: 'reorder'; project: string; taskIds: string[] }
+  | { type: 'reorder-pins'; taskIds: string[] };
+
+export function buildTaskOp(op: TaskOpInput): TaskOp {
   const opId = mintOpId();
   const at = new Date().toISOString();
-  return op.type === 'delete'
-    ? { opId, type: 'delete', at, id: op.id }
-    : { opId, type: op.type, at, task: op.task };
+  switch (op.type) {
+    case 'delete':
+      return { opId, type: 'delete', at, id: op.id };
+    case 'reorder':
+      return { opId, type: 'reorder', at, project: op.project, taskIds: op.taskIds };
+    case 'reorder-pins':
+      return { opId, type: 'reorder-pins', at, taskIds: op.taskIds };
+    case 'create':
+      return { opId, type: 'create', at, task: op.task };
+    case 'update':
+      return {
+        opId, type: 'update', at, task: op.task,
+        ...(op.touched?.length ? { touched: op.touched } : {}),
+        ...(op.append?.note ? { append: { note: op.append.note } } : {}),
+      };
+  }
 }
 
 function queueFile(opId: string): string {
@@ -115,6 +136,10 @@ async function enqueue(op: TaskOp): Promise<void> {
  * and deleted it, the queued copy's RPC is what delivers next.
  */
 async function writeLegacyOutboxFallback(op: TaskOp): Promise<void> {
+  // An old primary's consumption loop predates the order ops — a legacy file
+  // it can't parse would be retried on every git pull forever. Ordering is
+  // cosmetic; the queued copy converges the moment the primary upgrades.
+  if (op.type === 'reorder' || op.type === 'reorder-pins') return;
   try {
     const { OUTBOX_DIR } = await import('./task-outbox.js');
     const file = path.join(OUTBOX_DIR, `${op.opId}.json`);
@@ -163,10 +188,13 @@ async function sendOp(op: TaskOp): Promise<SendOutcome> {
  * sqlite write already succeeded and the phone already has its 200; a failure
  * here degrades to the offline queue.
  */
-export async function dispatchTaskOp(
-  input: { type: 'create' | 'update'; task: Task } | { type: 'delete'; id: string },
-): Promise<void> {
+export async function dispatchTaskOp(input: TaskOpInput): Promise<void> {
   if (!CLOUD_MODE) return;
+  // Tombstone BEFORE the RPC: the projection import must never resurrect a
+  // locally-deleted row, and the race window opens the moment the local
+  // delete committed (the caller emits the bus event after its own write).
+  if (input.type === 'delete') recordDeleteTombstone(input.id);
+  if (input.type === 'reorder' || input.type === 'reorder-pins') noteLocalOrderOp();
   const op = buildTaskOp(input);
   try {
     const outcome = await sendOp(op);
@@ -244,6 +272,75 @@ export async function queuedTaskOpCount(): Promise<number> {
   } catch {
     return 0;
   }
+}
+
+/** Read the queued ops (oldest-first). Used by the projection import to skip
+ *  rows with an undelivered local write — same role listPendingOps plays for
+ *  the legacy git outbox. Unreadable files are left alone here (the flush
+ *  sweep owns removal). */
+export async function listQueuedOps(): Promise<TaskOp[]> {
+  let names: string[];
+  try {
+    names = (await fsp.readdir(TASK_QUEUE_DIR)).filter((n) => n.endsWith('.json')).sort();
+  } catch {
+    return [];
+  }
+  const out: TaskOp[] = [];
+  for (const name of names) {
+    try {
+      const op = JSON.parse(await fsp.readFile(path.join(TASK_QUEUE_DIR, name), 'utf-8')) as TaskOp;
+      if (op && op.opId && op.type) out.push(op);
+    } catch { /* flush sweep drops it */ }
+  }
+  return out;
+}
+
+// ── Delete tombstones ────────────────────────────────────────────────────────
+// The projection import is upsert-only, so a projection frame BUILT before the
+// primary applied a replica-side delete but ARRIVING after the queue drained
+// would resurrect the deleted row (the pending-op guard no longer covers it).
+// A short-lived tombstone bridges that window; the next projection the primary
+// exports post-delete no longer contains the row, so a TTL is enough.
+
+const TOMBSTONE_TTL_MS = 15 * 60_000;
+const deleteTombstones = new Map<string, number>();
+
+/** When the replica last dispatched an order op ('reorder'/'reorder-pins').
+ *  The projection import's order-alignment must stand down for a while after
+ *  one: a projection frame built BEFORE the primary applied the reorder would
+ *  otherwise re-impose the old order (the projection-lag echo family). */
+let lastOrderOpAt = 0;
+
+export function noteLocalOrderOp(): void {
+  lastOrderOpAt = Date.now();
+}
+
+export function hasRecentOrderOp(ttlMs = TOMBSTONE_TTL_MS): boolean {
+  return Date.now() - lastOrderOpAt < ttlMs;
+}
+
+export function recordDeleteTombstone(id: string): void {
+  const now = Date.now();
+  deleteTombstones.set(id, now);
+  // Opportunistic sweep — the map only grows while deletes happen.
+  for (const [k, at] of deleteTombstones) {
+    if (now - at > TOMBSTONE_TTL_MS) deleteTombstones.delete(k);
+  }
+}
+
+export function hasDeleteTombstone(id: string): boolean {
+  const at = deleteTombstones.get(id);
+  if (at === undefined) return false;
+  if (Date.now() - at > TOMBSTONE_TTL_MS) {
+    deleteTombstones.delete(id);
+    return false;
+  }
+  return true;
+}
+
+/** Tests only. */
+export function _resetDeleteTombstonesForTesting(): void {
+  deleteTombstones.clear();
 }
 
 /**

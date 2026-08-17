@@ -301,8 +301,13 @@ export async function patchSession(sessionId: string, input: SessionPatchInput):
   }
   log.session.info('session patched via lifecycle core', { sessionId, fields: Object.keys(updates) });
 
-  // Emit status change so frontends update in real time.
-  if (archived !== undefined && mode === undefined) {
+  // Emit status change so frontends update in real time — for EVERY metadata
+  // patch, not just archive flips. A title/human_note-only patch used to emit
+  // nothing, so the session projection (interest: session:status-changed) and
+  // the mobile events feed never re-exported, and a phone-side rename looked
+  // reverted until some unrelated status change (the projection-lag family).
+  // The mode branch already emits inside persistSessionModeChange.
+  if (mode === undefined && Object.keys(updates).length > 0) {
     emitSessionStatusChanged(updated, {}, ['*']);
   }
 

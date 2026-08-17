@@ -1327,6 +1327,53 @@ Body: `{ "device": "Evan's iPhone", "appVersion": "1.0.0", "os": "iOS 26",
   quota (20 MB) exhausted.
 - Max 5000 lines per call; each line is stamped with `device`/`appVersion`/`os`.
 
+## Offline write matrix (REPLICA behavior contract, 2026-08)
+
+This section is the contract the iOS optimistic-mutation layer relies on. It answers, per mutation family: what happens on the cloud REPLICA, what happens while the Mac (primary) is unreachable, and how the two stores converge afterward. General model:
+
+- **Class A (local-store + outbox)**: the replica has a real local task store (seeded by the pushed projection). The mutation applies to that store, the route answers from it immediately, and a background op rides the `server.tasks.apply` bridge RPC to the primary; when the bridge is down the op banks in a durable disk queue (`cache/task-queue/`) and drains on reconnect, on the next successful RPC, and on a 60s sweep. Mac asleep or offline never blocks or fails the write.
+- **Class B (synchronous relay)**: the mutation acts on state only the primary owns (a live CLI process, the cron engine, a registry with no write-back lane). The route relays over the bridge and waits; bridge down is an honest `503 bridge_offline`.
+- **Class B+ (fast-accept relay)**: like B, but the payload is pure metadata the primary applies unconditionally, so when the bridge is down the intent is persisted in a durable queue (`cache/control-queue/`) and the route answers `200` with the optimistic row plus an additive `queued: true` marker.
+- **Class C (refused on replica)**: `501 not_supported_cloud`.
+
+Convergence rules (Class A):
+
+- **Per-row LWW**: every op carries the row's `updated_at`; the primary skips an op older than its own row (a stale phone snapshot can never clobber a newer Mac edit). The projection import applies the same rule in the other direction. Later timestamp wins, both ways.
+- **Field scoping (`touched`)**: an op names the fields the originating mutation actually set; the primary patches only those. Content the projection never ships to the replica (`description`, `note`, the full `summary`) can therefore never be blanked by an unrelated phone edit. A touched field absent from the snapshot is an explicit clear (e.g. unpin clears `pin_order`/`focus_tier`).
+- **Note appends**: `POST /tasks/:id/notes` ships the appended entry (`append.note`); the primary concatenates onto its own note, so phone and Mac appends interleave without loss instead of last-writer-wins on the whole blob.
+- **Order ops**: reorder (project rows) and pins-reorder carry the whole ordered id list with no per-row clock; latest arrival wins. After a replica-side reorder the projection import suppresses order-alignment for 15 minutes so a projection frame built before the primary applied it cannot re-impose the old order.
+- **Deletes**: a replica delete leaves a 15-minute tombstone; the upsert-only projection import and the GET /tasks overlay both honor it, so a projection frame built pre-delete cannot resurrect the row. A delete the primary refuses (task has live sessions) is consumed, and the next projection push restores the row on the replica: the honest outcome.
+- **Echo protection**: rows with a pending (queued, undelivered) op are skipped by the projection import, because the local write is newer than any projection by construction.
+- **Duplicates/replays are safe**: ops are idempotent absolute snapshots with a replay-guard on `opId`; double delivery (RPC + queue flush) converges to the same state.
+
+Per-family matrix:
+
+| Mutation family | Replica behavior | Mac offline | Convergence |
+|---|---|---|---|
+| Task create (`POST /tasks`) | Class A: 201 with the created row from the local store | accepted; op queued | insert-by-same-id on the primary; project registry row auto-minted; primary recomputes `source` |
+| Task PATCH (title/description/status/phase/priority/due_date/start_date/project/tags/unread) | Class A: 200 with the updated row | accepted; op queued | LWW + `touched` scoping; project move mints the registry row; status→phase derivation runs on the primary too |
+| Quick-parse (`POST /tasks/quick-parse`) | stateless LLM call on the replica's own credentials | works (no primary involved) | n/a |
+| Task delete (single + batch) | Class A: 204 / per-task result | accepted; op queued | tombstone prevents projection resurrection; delete blocked by a live session is consumed (row comes back via projection) |
+| Batch phase (`POST /tasks/batch/phase`) | Class A: 200 partial-success shape | accepted; one op per changed task | same as PATCH; COMPLETE additionally clears the pin fields |
+| Complete (`POST /tasks/:id/complete`) | Class A: 200 | accepted; op queued | phase + auto-unpin travel as one scoped op; a later phone reopen (touched, human-vetted) un-completes the primary row |
+| Notes append / note replace / description / summary (`/tasks/:id/notes`, `note`, `description`, `summary`) | Class A: 200 | accepted; op queued | append concatenates on the primary; replace/description/summary are `touched`-scoped LWW |
+| Depends-on (`PUT /tasks/:id/depends-on`) | Class A: 200 (cycle-validated locally first) | accepted; op queued | re-validated on the primary (existence + cycles); a primary-side validation failure drops only that field |
+| Tasks reorder (`PATCH /tasks/reorder`) | Class A: 200; local order updated | accepted; order op queued | whole-list, latest-arrival-wins; projection order alignment pauses 15 min after a local reorder |
+| Focus pin / unpin (`POST`/`DELETE /focus/tasks/:id`) | Class A: 200 with `pinned_tasks` | accepted; op queued | pin fields travel as explicit sets/clears (`touched`) |
+| Focus pins reorder (`PUT /focus/reorder`) | Class A: 200 full tier split | accepted; order op queued | `reorder-pins` op, latest-arrival-wins |
+| Focus tier move (`PUT /focus/tasks/:id/tier`) | Class A: 200 | accepted; op queued | `focus_tier` scoped LWW; the custom-tier registry syncs replica-ward via the projection (`custom_tiers`), so replica-side validation matches the primary |
+| Custom tier CRUD, task groups, project rename/delete | Class C: `501 not_supported_cloud` | n/a | registries are primary-owned with no write-back lane |
+| Task detail readback (`GET /tasks/:id`) | local row; with a live bridge the primary's full row is fetched (5s budget) and served when not older than the local row | local row (description/note may be blank until the bridge returns) | read-only |
+| Session PATCH (title / archived / human_note) | Class B+ fast-accept: synchronous relay first; bridge down → durable `cache/control-queue/` + `200 { session, queued: true }` | accepted and queued | drains on reconnect/60s sweep; primary validates at apply time (e.g. archive requires a stopped session); a rejection is dropped and the next projection push shows the truth |
+| Session PATCH (`mode`) | Class B synchronous only | `503 bridge_offline` | mode reconfigures the live CLI (permission mode swap); only the primary can truthfully accept it |
+| Session lifecycle: terminate / restart / retry / permission / execute-continue, model / effort / fork, session launch, messages into a session | Class B relays (messages ride their own durable `session.message` relay; see Session talk) | honest `503 bridge_offline` (messages: still accepted durably by the daemon lane when the daemon is reachable) | these act on a live process; fabricating acceptance would lie about the session's real state |
+| Notes vault writes (create/update/delete, global notes, tag rename, folder/attachment deletes) | Class A-like: the vault is git-synced data; writes land locally | accepted | git-sync merge on reconnect; optimistic-lock hashes (`expectedHash`) protect against cross-box conflicts |
+
+Freshness signals a client can rely on:
+
+- `GET /api/v1/tasks` on a replica always reflects replica-local writes immediately (the response is built from the local store; the pushed projection only overlays rows the local store does not know). `syncedAt` still reports when the Mac's data last arrived: a stale `syncedAt` with fresh local writes means the Mac is asleep, not that the write was lost.
+- The `GET /api/v1/events` feed emits `task-upsert` / `task-delete` for replica-local writes at write time (no round trip), and relays the primary's events when the bridge is up.
+
 ## curl examples
 
 ```bash

@@ -109,6 +109,22 @@ taskV1Router.get('/tasks/:id', async (req: Request, res: Response, next: NextFun
       if (sendTaskManagerError(res, err)) return
       throw err
     }
+    // REPLICA readback upgrade: the replica row's description/note are
+    // projection-blind (often ''), so with a live bridge fetch the primary's
+    // authoritative row. Best-effort with a short budget — bridge down or an
+    // old primary just serves the local row (fast, mildly degraded), never an
+    // error. LWW guard: never let a STALE primary row (op still queued /
+    // in-flight) shadow a newer local edit.
+    if (CLOUD_MODE) {
+      try {
+        const { callPrimaryControl } = await import('./v1-control-relay.js')
+        const reply = await callPrimaryControl('server.tasks.get', '__server__', { id: task.id }, 5_000)
+        if (reply.ok && reply.result.task && typeof reply.result.task === 'object') {
+          const primaryRow = reply.result.task as Task
+          if (Date.parse(primaryRow.updated_at) >= Date.parse(task.updated_at)) task = primaryRow
+        }
+      } catch { /* serve the local row */ }
+    }
     const allTasks = await tm.listTasks({})
     const detail: Record<string, unknown> = { ...task }
     if (task.depends_on?.length) {
@@ -194,7 +210,12 @@ taskV1Router.post('/tasks/:id/complete', async (req: Request, res: Response, nex
     try {
       const result = await tm.completeTask(id)
       log.web.info('task completed via api-v1', { taskId: result.task.id })
-      bus.emit(EventNames.TASK_COMPLETED, { task: result.task }, ['web-ui', 'main-agent'], { source: 'api-v1' })
+      // fields (additive): on a REPLICA this scopes the outbox op so the
+      // auto-unpin's DELETED pin_order/focus_tier land as explicit clears.
+      bus.emit(EventNames.TASK_COMPLETED, {
+        task: result.task,
+        fields: ['status', 'phase', 'completed_at', 'pinned', 'pin_order', 'focus_tier'],
+      }, ['web-ui', 'main-agent'], { source: 'api-v1' })
       res.json(result)
     } catch (err) {
       if (err instanceof tm.ActiveChildrenError) {
@@ -442,8 +463,11 @@ taskV1Router.post('/tasks/batch/phase', async (req: Request, res: Response, next
     // Per-task events so every surface (and the cloud outbox) reconciles the
     // same way it does for a single-task change.
     const eventName = phase === 'COMPLETE' ? EventNames.TASK_COMPLETED : EventNames.TASK_UPDATED
+    const fields = phase === 'COMPLETE'
+      ? ['status', 'phase', 'completed_at', 'pinned', 'pin_order', 'focus_tier'] // COMPLETE auto-unpins
+      : ['status', 'phase']
     for (const task of changed) {
-      bus.emit(eventName, { task }, ['web-ui', 'main-agent'], { source: 'api-v1' })
+      bus.emit(eventName, { task, fields }, ['web-ui', 'main-agent'], { source: 'api-v1' })
     }
     res.json({ changed, failed, syncFailed })
   } catch (err) {
@@ -542,6 +566,9 @@ taskV1Router.put('/focus/reorder', async (req: Request, res: Response, next: Nex
     const { reorderPins } = await import('../../core/task-manager.js')
     const result = await reorderPins(taskIds as string[])
     bus.emit(EventNames.CONFIG_CHANGED, { key: 'focus_bar' }, ['web-ui'])
+    // pins:true → the REPLICA outbox subscriber relays this as a
+    // 'reorder-pins' op (reorderPins itself is emit-silent).
+    bus.emit(EventNames.TASK_REORDERED, { pins: true, taskIds: taskIds as string[] }, ['web-ui'], { source: 'api-v1' })
     res.json(result)
   } catch (err) {
     next(err)

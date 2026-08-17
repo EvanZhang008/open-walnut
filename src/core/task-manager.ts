@@ -3145,8 +3145,17 @@ export async function updateTask(
   // Centralized event emission — every updateTask() call notifies the UI.
   // All other task-mutating functions (addNote, updateDescription, toggleComplete,
   // etc.) also auto-emit internally. Only updateTaskRaw() is silent (by design).
+  // `fields` (additive) names the UpdateTaskInput keys this call actually set —
+  // on a REPLICA the outbox subscriber uses it to scope the op it sends to the
+  // primary (an untouched description/note in the replica row is projection
+  // blindness, not an edit). Input aliases map to their Task field.
+  const touchedFields = Object.keys(updates)
+    .filter((k) => (updates as Record<string, unknown>)[k] !== undefined)
+    .map((k) => (k === 'set_tags' || k === 'add_tags' || k === 'remove_tags') ? 'tags'
+      : (k === 'set_depends_on' || k === 'add_depends_on' || k === 'remove_depends_on') ? 'depends_on'
+      : k);
   const targets = ['web-ui', ...(eventOptions?.extraTargets ?? [])];
-  bus.emit(EventNames.TASK_UPDATED, { task }, targets, { source: eventOptions?.source ?? 'internal' });
+  bus.emit(EventNames.TASK_UPDATED, { task, fields: [...new Set(touchedFields)] }, targets, { source: eventOptions?.source ?? 'internal' });
   emitPhaseChanged(task, oldPhase, eventOptions?.source ?? 'internal');
 
   // When a task's cwd changes, migrate JSONL history for each linked session so
@@ -3230,7 +3239,10 @@ export async function addNote(idPrefix: string, content: string): Promise<{ task
     throw new Error(`Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}`);
   }
 
-  bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'internal' });
+  // fields/appendNote (additive): on a REPLICA the outbox subscriber scopes the
+  // op to the note and ships the appended ENTRY, so the primary concatenates
+  // onto its own note (the replica's note copy is projection-blind).
+  bus.emit(EventNames.TASK_UPDATED, { task, fields: ['note'], appendNote: content }, ['web-ui'], { source: 'internal' });
   return { task };
 }
 
@@ -3326,7 +3338,7 @@ export async function updateNote(idPrefix: string, content: string): Promise<{ t
   if (!syncResult.success) {
     throw new Error(`Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}`);
   }
-  bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'internal' });
+  bus.emit(EventNames.TASK_UPDATED, { task, fields: ['note'] }, ['web-ui'], { source: 'internal' });
   return { task };
 }
 
@@ -3373,7 +3385,7 @@ export async function compareAndSetNote(
   if (!syncResult.success) {
     throw new Error(`Sync to ${result.task.source} failed: ${syncResult.error ?? 'unknown error'}`);
   }
-  bus.emit(EventNames.TASK_UPDATED, { task: result.task }, ['web-ui'], { source: 'internal' });
+  bus.emit(EventNames.TASK_UPDATED, { task: result.task, fields: ['note'] }, ['web-ui'], { source: 'internal' });
   return result;
 }
 
@@ -3408,7 +3420,7 @@ export async function updateDescription(idPrefix: string, content: string): Prom
   if (!syncResult.success) {
     throw new Error(`Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}`);
   }
-  bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'internal' });
+  bus.emit(EventNames.TASK_UPDATED, { task, fields: ['description'] }, ['web-ui'], { source: 'internal' });
   return { task };
 }
 
@@ -3443,7 +3455,7 @@ export async function updateSummary(idPrefix: string, content: string): Promise<
   if (!syncResult.success) {
     throw new Error(`Sync to ${task.source} failed: ${syncResult.error ?? 'unknown error'}`);
   }
-  bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'internal' });
+  bus.emit(EventNames.TASK_UPDATED, { task, fields: ['summary'] }, ['web-ui'], { source: 'internal' });
   return { task };
 }
 
@@ -4307,7 +4319,9 @@ export async function togglePin(taskId: string): Promise<{ pinned: boolean; pinn
     }
 
     await writeStore(store);
-    bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'internal' });
+    // fields (additive): scopes the replica→primary op to the pin state so an
+    // unpin's DELETED pin_order/focus_tier travel as explicit clears.
+    bus.emit(EventNames.TASK_UPDATED, { task, fields: ['pinned', 'pin_order', 'focus_tier'] }, ['web-ui'], { source: 'internal' });
     const ordered = store.tasks.filter((t) => t.pinned).sort((a, b) => (a.pin_order ?? 0) - (b.pin_order ?? 0));
     return { pinned: !!task.pinned, pinned_tasks: ordered.map((t) => t.id) };
   });
@@ -4486,6 +4500,55 @@ export async function createCustomTier(label: string): Promise<{ tier: CustomTie
   });
 }
 
+/**
+ * REPLICA-only order sync: permute the store so rows appear in `orderedIds`
+ * order (the primary's projection order). Local-only rows (pending creates)
+ * keep their current relative order, appended after the aligned block. No-op
+ * when the order already matches — the import calls this on every projection
+ * push, and a full-store rewrite (writeStore) is only worth it for a real
+ * change. Never called on the primary.
+ */
+export async function alignTaskOrderFromSync(orderedIds: string[]): Promise<boolean> {
+  if (orderedIds.length === 0) return false;
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const byId = new Map(store.tasks.map((t) => [t.id, t]));
+    const aligned: Task[] = [];
+    for (const id of orderedIds) {
+      const t = byId.get(id);
+      if (t) { aligned.push(t); byId.delete(id); }
+    }
+    for (const t of store.tasks) {
+      if (byId.has(t.id)) aligned.push(t); // local-only rows keep relative order
+    }
+    const changed = aligned.some((t, i) => store.tasks[i]?.id !== t.id);
+    if (!changed) return false;
+    store.tasks = aligned;
+    await writeStore(store);
+    return true;
+  });
+}
+
+/**
+ * REPLICA-only registry sync: adopt the primary's custom-tier registry from
+ * the pushed task projection. Whole-list replace, no label validation (the
+ * primary already validated) and no CONFIG_CHANGED storm unless it changed.
+ * Never called on the primary — its registry is user-owned.
+ */
+export async function replaceCustomTiersFromSync(tiers: CustomTierRecord[]): Promise<boolean> {
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const current = store.custom_tiers ?? [];
+    const same = current.length === tiers.length
+      && current.every((t, i) => t.id === tiers[i]?.id && t.label === tiers[i]?.label);
+    if (same) return false;
+    store.custom_tiers = tiers.map((t) => ({ id: t.id, label: t.label }));
+    await writeStore(store);
+    bus.emit(EventNames.CONFIG_CHANGED, { key: 'focus_tiers' }, ['web-ui']);
+    return true;
+  });
+}
+
 /** Rename a custom tier. Same label validation as create (excluding self). */
 export async function renameCustomTier(id: string, label: string): Promise<{ tier: CustomTierRecord; tiers: CustomTierRecord[] }> {
   return withWriteLock(async () => {
@@ -4567,7 +4630,7 @@ export async function setFocusTier(taskId: string, tier: string): Promise<TierRe
     task.updated_at = new Date().toISOString();
 
     await writeStore(store);
-    bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'internal' });
+    bus.emit(EventNames.TASK_UPDATED, { task, fields: ['focus_tier'] }, ['web-ui'], { source: 'internal' });
     bus.emit(EventNames.CONFIG_CHANGED, { key: 'focus_bar' }, ['web-ui']);
 
     return splitTiers(store);

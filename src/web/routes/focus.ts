@@ -77,6 +77,10 @@ focusRouter.put('/reorder', async (req: Request, res: Response, next: NextFuncti
     // every task's tier to satellite — Focus tasks vanished until refetch.
     const result = await reorderPins(task_ids)
     bus.emit(EventNames.CONFIG_CHANGED, { key: 'focus_bar' }, ['web-ui'])
+    // pins:true marks a focus-bar order op — on a REPLICA the outbox subscriber
+    // relays it to the primary as a 'reorder-pins' op (reorderPins itself is
+    // emit-silent, so this is the one interception point).
+    bus.emit(EventNames.TASK_REORDERED, { pins: true, taskIds: task_ids }, ['web-ui'], { source: 'api' })
     res.json(result)
   } catch (err) {
     next(err)

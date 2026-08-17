@@ -67,8 +67,29 @@ export const OUTBOX_DIR = path.join(TASKS_DIR, 'outbox');
 
 export type TaskOp =
   | { opId: string; type: 'create'; at: string; task: Task }
-  | { opId: string; type: 'update'; at: string; task: Task }
-  | { opId: string; type: 'delete'; at: string; id: string };
+  | {
+      opId: string; type: 'update'; at: string; task: Task;
+      /** Fields the ORIGINATING mutation actually set (additive; new senders
+       *  only). Scopes the patch: an untouched description/note/summary in the
+       *  snapshot is replica IGNORANCE (those blobs don't ride the projection,
+       *  so the replica row holds ''), not a user edit — blindly applying the
+       *  full snapshot wiped primary content. A touched field that is ABSENT
+       *  from the snapshot is an explicit clear (the sender set it and the
+       *  post-write row no longer has it). Legacy ops (no touched) keep the
+       *  full-snapshot behavior, minus empty text blobs (see applyTaskOp). */
+      touched?: string[];
+      /** Append-style note op (additive): the primary CONCATENATES this entry
+       *  onto its own note instead of taking the snapshot's note, because the
+       *  replica's prior note copy is blind (note isn't in the projection). */
+      append?: { note?: string };
+    }
+  | { opId: string; type: 'delete'; at: string; id: string }
+  /** Whole-project row reorder (additive). No per-row LWW clock — arrival
+   *  order wins; flushTaskQueue's oldest-first sweep keeps it chronological. */
+  | { opId: string; type: 'reorder'; at: string; project: string; taskIds: string[] }
+  /** Focus-bar pin order (additive): pin_order = index for each pinned id.
+   *  Same arrival-order semantics as 'reorder'. */
+  | { opId: string; type: 'reorder-pins'; at: string; taskIds: string[] };
 
 /**
  * Fields an 'update' op may write onto an existing primary row.
@@ -83,7 +104,25 @@ const UPDATE_WHITELIST: (keyof Task)[] = [
   'title', 'status', 'phase', 'priority', 'project',
   'due_date', 'start_date', 'end_date', 'completed_at', 'pinned', 'tags', 'summary',
   'description', 'note', 'sprint', 'unread', 'updated_at',
+  // Focus-bar + dependency parity (2026-08): these ride ONLY on ops that name
+  // them in `touched` — a legacy full snapshot never carries them (the replica
+  // row lacks them unless the phone set them), so old senders can't clobber.
+  'focus_tier', 'pin_order', 'depends_on',
 ];
+
+/**
+ * Text blobs the projection does NOT ship (in full) to the replica, applied
+ * only on a LEGACY full-snapshot op (no `touched` list):
+ *   - description/note: an EMPTY value means the replica never KNEW the
+ *     content (those blobs aren't in the projection) — not a user clear — so
+ *     it must never blank the primary's copy.
+ *   - summary: NEVER authoritative — the projection ships a 500-char
+ *     TRUNCATED preview, so echoing it back would truncate the primary's
+ *     full summary on every unrelated edit.
+ * New senders scope every write via `touched`, which bypasses this guard.
+ */
+const LEGACY_SKIP_WHEN_EMPTY: (keyof Task)[] = ['description', 'note'];
+const LEGACY_NEVER_APPLY: (keyof Task)[] = ['summary'];
 
 let opSeq = 0;
 
@@ -172,7 +211,7 @@ export function _resetAppliedOpIdsForTesting(): void {
 export interface ApplyTaskOpResult {
   applied: boolean;
   /** Why an op did NOT change the store (or how it was consumed). */
-  reason?: 'replay' | 'stale' | 'missing' | 'blocked' | 'unchanged' | 'created' | 'updated' | 'deleted';
+  reason?: 'replay' | 'stale' | 'missing' | 'blocked' | 'unchanged' | 'created' | 'updated' | 'deleted' | 'reordered';
 }
 
 /**
@@ -191,6 +230,21 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
   if (recentOpIds.has(op.opId)) return { applied: false, reason: 'replay' };
 
   const tm = await import('./task-manager.js');
+
+  if (op.type === 'reorder' || op.type === 'reorder-pins') {
+    // Order ops carry no per-row LWW clock: last-arrival wins, which is what a
+    // human dragging rows expects. Both core functions are self-healing
+    // (unknown/stale ids are dropped, missing ids appended), so a list that
+    // drifted while the op was queued still applies cleanly.
+    if (op.type === 'reorder') await tm.reorderTasks(op.project, op.taskIds);
+    else await tm.reorderPins(op.taskIds);
+    rememberOpId(op.opId);
+    const { bus, EventNames } = await import('./event-bus.js');
+    // Bulk signal (task: null is the established "refetch the list" marker) so
+    // the web UI and the projection exporter pick up the new order.
+    bus.emit(EventNames.TASK_UPDATED, { task: null }, ['web-ui'], { source: 'cloud-outbox' });
+    return { applied: true, reason: 'reordered' };
+  }
 
   if (op.type === 'delete') {
     try {
@@ -270,21 +324,106 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
     return { applied: false, reason: 'stale' };
   }
 
+  const touched = op.type === 'update' && Array.isArray(op.touched) && op.touched.length > 0
+    ? new Set(op.touched)
+    : null;
   const patch: Partial<Task> = {};
-  for (const key of UPDATE_WHITELIST) {
-    if (snapshot[key] !== undefined) (patch as Record<string, unknown>)[key] = snapshot[key];
+  if (touched) {
+    // A status/phase transition manages completed_at as a side effect
+    // (applyPhase on the sender), so it is implicitly touched — without this a
+    // scoped complete-op would land without its completion timestamp.
+    if (touched.has('status') || touched.has('phase')) touched.add('completed_at');
+    // NEW sender: the op names exactly what the originating mutation set.
+    // A touched field ABSENT from the snapshot is an explicit clear (unpin
+    // deletes pin_order/focus_tier, '' clears a date) — null is the marker
+    // taskToRow writes through as SQL NULL.
+    for (const key of UPDATE_WHITELIST) {
+      if (key === 'updated_at' || !touched.has(key)) continue;
+      const val = snapshot[key];
+      (patch as Record<string, unknown>)[key] = val === undefined ? null : val;
+    }
+  } else {
+    // LEGACY full snapshot (old cloud box): apply present whitelisted fields…
+    for (const key of UPDATE_WHITELIST) {
+      if (snapshot[key] === undefined) continue;
+      // …minus the projection-blind text blobs (see the constants above):
+      // an empty description/note is replica ignorance, and the snapshot's
+      // summary is a truncated preview, never the real document.
+      if ((LEGACY_NEVER_APPLY as string[]).includes(key)) continue;
+      if ((LEGACY_SKIP_WHEN_EMPTY as string[]).includes(key) && snapshot[key] === '') continue;
+      (patch as Record<string, unknown>)[key] = snapshot[key];
+    }
+    // The snapshot is the FULL task, so an absent date means "cleared on
+    // the phone/cloud" — write it through as the explicit-clear marker,
+    // otherwise a cleared date silently survives on the primary.
+    if (snapshot.due_date === undefined) (patch as Record<string, unknown>).due_date = null;
+    if (snapshot.start_date === undefined) (patch as Record<string, unknown>).start_date = null;
+    if (snapshot.end_date === undefined) (patch as Record<string, unknown>).end_date = null;
   }
-  // The snapshot is the FULL task, so an absent date means "cleared on
-  // the phone/cloud" — write it through as the explicit-clear marker,
-  // otherwise a cleared date silently survives on the primary.
-  if (snapshot.due_date === undefined) (patch as Record<string, unknown>).due_date = null;
-  if (snapshot.start_date === undefined) (patch as Record<string, unknown>).start_date = null;
-  if (snapshot.end_date === undefined) (patch as Record<string, unknown>).end_date = null;
+  // LWW clock always rides along so the primary row's updated_at reflects the edit.
+  (patch as Record<string, unknown>).updated_at = snapshot.updated_at;
+
+  // Project move: mint the registry row exactly like the create branch does —
+  // the raw update below writes the column only, and a phone-side move to a
+  // brand-new project name must not leave a rowless project on the primary.
+  if (typeof patch.project === 'string' && patch.project.trim()
+      && patch.project.trim().toLowerCase() !== (existing.project || '').trim().toLowerCase()) {
+    try {
+      const ensured = await tm.ensureProject(patch.project.trim(), 'local');
+      patch.project = ensured.name; // canonical spelling wins
+    } catch (err) {
+      if (!(err instanceof tm.InvalidProjectNameError)) throw err;
+      log.task.warn('task-op: invalid project name on update — keeping current project', {
+        opId: op.opId, project: patch.project, err: String(err),
+      });
+      delete patch.project;
+    }
+  }
+
+  // depends_on: never write the raw column — route through updateTask's
+  // set_depends_on so existence + cycle validation run. A validation failure
+  // consumes the op (retry would refuse identically), other fields still apply.
+  if (patch.depends_on !== undefined) {
+    const deps = Array.isArray(patch.depends_on) ? patch.depends_on : [];
+    delete patch.depends_on;
+    try {
+      await tm.updateTask(existing.id, { set_depends_on: deps }, { source: 'api', asyncPush: true });
+    } catch (err) {
+      log.task.warn('task-op: depends_on rejected (validation) — dropping that field', {
+        opId: op.opId, id: existing.id, err: String(err),
+      });
+    }
+  }
+
+  // Append-style note (POST /tasks/:id/notes): concatenate onto the PRIMARY's
+  // note — the replica's own note copy is blind, so its snapshot value is just
+  // the appended entry, not the merged document.
+  if (op.type === 'update' && typeof op.append?.note === 'string' && op.append.note) {
+    (patch as Record<string, unknown>).note = existing.note
+      ? existing.note + '\n\n' + op.append.note
+      : op.append.note;
+  }
+
+  // Human reopen: a deliberate (touched) non-terminal phase over a terminal
+  // primary row is a person un-completing the task from the phone — the
+  // replica's own human-source gate already vetted it (an agent's attempt is
+  // skipped there, so its snapshot still carries the terminal phase). Route it
+  // through updateTask's human path; the raw path below would block it as if
+  // it were a sync echo.
+  const { phaseFromStatus, TERMINAL_PHASES } = await import('./phase.js');
+  const phasePatch = (patch.phase ?? (patch.status ? phaseFromStatus(patch.status) : undefined));
+  if (touched && phasePatch && !TERMINAL_PHASES.has(phasePatch) && TERMINAL_PHASES.has(existing.phase)) {
+    await tm.updateTask(existing.id, { phase: phasePatch }, { source: 'api', asyncPush: true });
+    delete patch.phase;
+    delete patch.status;
+    delete (patch as Record<string, unknown>).completed_at;
+  }
+
   const { changed } = await tm.updateTaskRaw(existing.id, patch, {
     emitEvent: true, push: true, source: 'cloud-outbox',
   });
   rememberOpId(op.opId);
-  if (changed) log.task.info('task-op: update applied', { id: existing.id, opId: op.opId });
+  if (changed) log.task.info('task-op: update applied', { id: existing.id, opId: op.opId, scoped: !!touched });
   return changed ? { applied: true, reason: 'updated' } : { applied: false, reason: 'unchanged' };
 }
 
@@ -326,12 +465,24 @@ export async function applyOutboxOnPrimary(): Promise<number> {
  * CLOUD box: upsert the Mac-exported tasks/projection.json into the local
  * sqlite so the Personal AI's task_query/task_search see Mac-side tasks.
  *
- * Upsert-only, and rows with a PENDING outbox op are skipped (the local write
- * is newer than the projection by construction — it hasn't round-tripped yet).
- * Never deletes local rows: the projection excludes done-tasks older than its
- * retention window, so absence there does not mean deleted.
+ * Upserts skip rows with a PENDING outbox/queue op (the local write is newer
+ * than the projection by construction — it hasn't round-tripped yet).
+ *
+ * DELETION reconcile (2026-08, guarded): the projection carries EVERY
+ * non-done primary task, so a non-done local row absent from it means the
+ * primary deleted it — and since GET /v1/tasks now serves the replica's own
+ * store, a never-deleted zombie would haunt the phone list forever. Guards
+ * (each one keeps a legitimate local-only row alive): pending-op rows,
+ * tombstoned ids, done rows (projection retention legitimately omits old
+ * ones), and rows updated within a safety window of the projection's build
+ * time (a fresh replica create whose round trip hasn't reached a projection
+ * yet).
  */
 let lastProjectionMtimeMs = 0;
+
+/** A local row absent from the projection is deleted only when the projection
+ *  was built comfortably after the row's last write. */
+const IMPORT_DELETE_SAFETY_MS = 10 * 60_000;
 
 export async function importProjectionOnCloud(): Promise<number> {
   if (!CLOUD_MODE) return 0;
@@ -353,10 +504,23 @@ export async function importProjectionOnCloud(): Promise<number> {
   const projection = await readTaskProjection();
   if (!projection) return 0;
 
+  // Rows with an UNDELIVERED local write are skipped — the local row is newer
+  // than the projection by construction. Two pending sources: the legacy git
+  // outbox (transition) and the Phase-4 offline queue (cache/task-queue/) —
+  // missing the latter let a stale projection echo clobber a queued edit and,
+  // worse, RESURRECT a locally-deleted task (import is upsert-only, so the
+  // zombie then never left). Tombstones extend the delete guard past the
+  // queue drain: a projection built before the primary applied the delete can
+  // still arrive after the op was consumed.
   const pendingIds = new Set<string>();
   for (const { op } of await listPendingOps()) {
-    if (op.type !== 'delete') pendingIds.add(op.task.id);
-    else pendingIds.add(op.id);
+    if (op.type === 'delete') pendingIds.add(op.id);
+    else if (op.type === 'create' || op.type === 'update') pendingIds.add(op.task.id);
+  }
+  const tq = await import('./task-queue.js');
+  for (const op of await tq.listQueuedOps()) {
+    if (op.type === 'delete') pendingIds.add(op.id);
+    else if (op.type === 'create' || op.type === 'update') pendingIds.add(op.task.id);
   }
 
   const tm = await import('./task-manager.js');
@@ -365,8 +529,32 @@ export async function importProjectionOnCloud(): Promise<number> {
   const toInsert: Array<Omit<Task, 'id'> & { id: string }> = [];
   const toUpdate: Array<{ id: string; patch: Partial<Task> }> = [];
 
+  // Mac-side deletes (see the header comment for the guard rationale).
+  const projectionIds = new Set(projection.tasks.map((t) => t.id));
+  const projectionAt = Date.parse(projection.exportedAt);
+  if (Number.isFinite(projectionAt)) {
+    for (const row of local.values()) {
+      if (projectionIds.has(row.id)) continue;
+      if (row.status === 'done') continue; // retention window omits old done rows
+      if (pendingIds.has(row.id) || tq.hasDeleteTombstone(row.id)) continue;
+      const rowAt = Date.parse(row.updated_at);
+      if (!Number.isFinite(rowAt) || projectionAt - rowAt < IMPORT_DELETE_SAFETY_MS) continue;
+      try {
+        const { task } = await tm.deleteTask(row.id);
+        const { bus, EventNames } = await import('./event-bus.js');
+        bus.emit(EventNames.TASK_DELETED, { id: task.id, task }, ['web-ui'], { source: 'cloud-outbox' });
+        log.task.info('task-outbox: projection reconcile removed a primary-deleted row', { id: row.id });
+      } catch (err) {
+        log.task.warn('task-outbox: projection reconcile delete failed', { id: row.id, err: String(err) });
+      }
+    }
+  }
+
   for (const p of projection.tasks) {
     if (pendingIds.has(p.id)) continue;
+    // Deleted here, projection built before the primary caught up — skip
+    // (upsert-only import would otherwise resurrect the row forever).
+    if (tq.hasDeleteTombstone(p.id)) continue;
     const row = local.get(p.id);
     if (!row) {
       toInsert.push({
@@ -388,6 +576,9 @@ export async function importProjectionOnCloud(): Promise<number> {
         ...(p.end_date ? { end_date: p.end_date } : {}),
         ...(p.completed_at ? { completed_at: p.completed_at } : {}),
         ...(p.pinned ? { pinned: true } : {}),
+        ...(p.pin_order !== undefined ? { pin_order: p.pin_order } : {}),
+        ...(p.focus_tier ? { focus_tier: p.focus_tier } : {}),
+        ...(p.unread ? { unread: true } : {}),
         ...(p.tags?.length ? { tags: p.tags } : {}),
       } as Task);
     } else if (Date.parse(p.updated_at) > Date.parse(row.updated_at)) {
@@ -407,7 +598,14 @@ export async function importProjectionOnCloud(): Promise<number> {
           start_date: (p.start_date ?? null) as Task['start_date'],
           end_date: (p.end_date ?? null) as Task['end_date'],
           completed_at: p.completed_at,
-          pinned: p.pinned,
+          // Booleans are written EXPLICITLY (never undefined): the projection
+          // omits them when false, and an undefined patch value means "don't
+          // touch" — which left a Mac-side unpin/read invisible on the replica
+          // forever. Same explicit-clear rule as the dates for the pin fields.
+          pinned: !!p.pinned,
+          pin_order: (p.pin_order ?? null) as Task['pin_order'],
+          focus_tier: (p.focus_tier ?? null) as Task['focus_tier'],
+          unread: !!p.unread,
           tags: p.tags,
           summary: p.summary,
           updated_at: p.updated_at,
@@ -418,6 +616,37 @@ export async function importProjectionOnCloud(): Promise<number> {
 
   if (toInsert.length) await tm.addTasksBulk(toInsert);
   if (toUpdate.length) await tm.updateTasksBulk(toUpdate);
+  // Reopen pass: updateTasksBulk rides the raw path, whose terminal-phase
+  // guard silently drops a COMPLETE→non-terminal transition (built to stop
+  // sync-plugin echoes reopening tasks). On the REPLICA the projection is the
+  // PRIMARY's authoritative state — a human reopened the task on the Mac — so
+  // route just the phase through the human-source path. Everything else in
+  // the patch already landed above.
+  for (const { id, patch } of toUpdate) {
+    const phase = patch.phase as Task['phase'] | undefined;
+    if (!phase || phase === 'COMPLETE' || phase === 'HUMAN_VERIFIED') continue;
+    const row = local.get(id);
+    if (!row || !(row.phase === 'COMPLETE' || row.phase === 'HUMAN_VERIFIED')) continue;
+    await tm.updateTask(id, { phase }, { source: 'api' }).catch((err) => {
+      log.task.warn('task-outbox: projection reopen failed', { id, err: String(err) });
+    });
+  }
+  // Adopt the primary's custom-tier registry (additive envelope field) so the
+  // replica's tier endpoints validate/bucket exactly like the primary.
+  if (Array.isArray(projection.custom_tiers)) {
+    await tm.replaceCustomTiersFromSync(projection.custom_tiers).catch((err) => {
+      log.task.warn('task-outbox: custom-tier registry sync failed', { err: String(err) });
+    });
+  }
+  // Adopt the primary's row ORDER (the projection array is store order) so a
+  // Mac-side drag shows up on the phone. Stands down after a replica-side
+  // reorder: a projection built before the primary applied it would re-impose
+  // the old order (the projection-lag echo family).
+  if (!tq.hasRecentOrderOp()) {
+    await tm.alignTaskOrderFromSync(projection.tasks.map((t) => t.id)).catch((err) => {
+      log.task.warn('task-outbox: order alignment failed', { err: String(err) });
+    });
+  }
   lastProjectionMtimeMs = mtimeMs;
   const changed = toInsert.length + toUpdate.length;
   if (changed > 0) {

@@ -227,6 +227,17 @@ export function setPrimaryBridgeConnectedHandler(handler: (() => void) | null): 
   primaryBridgeConnectedHandler = handler
 }
 
+/** Additive multi-handler variant of the hook above — the single-slot setter
+ *  is kept for its existing consumer (task-queue) and tests; new drain hooks
+ *  (control-queue) register here so they don't clobber each other. Returns an
+ *  unhook function. */
+const primaryBridgeConnectedHandlers = new Set<() => void>()
+
+export function addPrimaryBridgeConnectedHandler(handler: () => void): () => void {
+  primaryBridgeConnectedHandlers.add(handler)
+  return () => primaryBridgeConnectedHandlers.delete(handler)
+}
+
 /**
  * Wire an authenticated /bridge socket. Registration completes when the
  * daemon's hello arrives (carries the hostAlias).
@@ -331,13 +342,16 @@ function registerBridge(ws: WebSocket, deviceName: string, hello: Record<string,
   // Anything that banked work during the outage gets a chance to drain now
   // (Phase 4's task-op queue). Guarded: a throwing handler must not abort the
   // registration that just succeeded.
-  if (hostAlias === PRIMARY_ALIAS && primaryBridgeConnectedHandler) {
-    try {
-      primaryBridgeConnectedHandler()
-    } catch (err) {
-      log.ws.warn('bridge: primary-connected handler threw', {
-        error: err instanceof Error ? err.message : String(err),
-      })
+  if (hostAlias === PRIMARY_ALIAS) {
+    for (const handler of [primaryBridgeConnectedHandler, ...primaryBridgeConnectedHandlers]) {
+      if (!handler) continue
+      try {
+        handler()
+      } catch (err) {
+        log.ws.warn('bridge: primary-connected handler threw', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
     }
   }
 }

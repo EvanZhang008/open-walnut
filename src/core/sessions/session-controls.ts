@@ -666,11 +666,15 @@ export type SessionControlAction =
   // Wave 2 box-level family: file-explorer metadata (names/types only — file
   // CONTENT never rides the bridge; see files-v1.ts for the threat model).
   | 'server.files.list' | 'server.files.resolve'
-  // Phase 4 box-level family: apply ONE cloud task op (create/update/delete
-  // absolute snapshot) on the primary's task store — the synchronous
+  // Phase 4 box-level family: apply ONE cloud task op (create/update/delete/
+  // reorder snapshot) on the primary's task store — the synchronous
   // replacement for the git outbox round trip. See core/task-outbox.ts
   // (applyTaskOp) + core/task-queue.ts (the cloud's dispatch + fallback).
-  | 'server.tasks.apply';
+  | 'server.tasks.apply'
+  // Full-row task readback (additive 2026-08): the slim projection omits
+  // description/note, so a REPLICA's GET /v1/tasks/:id relays here for the
+  // primary's authoritative row when the bridge is up (local row = fallback).
+  | 'server.tasks.get';
 
 // ── Task op relay payload validation (server.tasks.apply) ───────────────────
 
@@ -706,8 +710,22 @@ function parseTaskOpParams(p: Record<string, unknown>): import('../task-outbox.j
     if (!id) throw new SessionControlError('delete op requires op.id', 400);
     return { opId, type: 'delete', at, id };
   }
+  // Order ops (additive 2026-08): a whole-list ordering, no per-row LWW clock.
+  if (raw.type === 'reorder' || raw.type === 'reorder-pins') {
+    const taskIds = raw.taskIds;
+    if (!Array.isArray(taskIds) || taskIds.length === 0 || !taskIds.every((v) => typeof v === 'string')) {
+      throw new SessionControlError(`${raw.type} op requires op.taskIds (non-empty string array)`, 400);
+    }
+    if (taskIds.length > 2000) {
+      throw new SessionControlError('reorder op too large (max 2000 ids)', 400);
+    }
+    if (raw.type === 'reorder-pins') return { opId, type: 'reorder-pins', at, taskIds: taskIds as string[] };
+    const project = typeof raw.project === 'string' ? raw.project : null;
+    if (project === null) throw new SessionControlError('reorder op requires op.project (string; "" = Inbox)', 400);
+    return { opId, type: 'reorder', at, project, taskIds: taskIds as string[] };
+  }
   if (raw.type !== 'create' && raw.type !== 'update') {
-    throw new SessionControlError('op.type must be one of: create, update, delete', 400);
+    throw new SessionControlError('op.type must be one of: create, update, delete, reorder, reorder-pins', 400);
   }
   const task = raw.task as Partial<Task> | undefined;
   if (!task || typeof task !== 'object' || Array.isArray(task)) {
@@ -721,7 +739,19 @@ function parseTaskOpParams(p: Record<string, unknown>): import('../task-outbox.j
   if (typeof task.updated_at !== 'string' || Number.isNaN(Date.parse(task.updated_at))) {
     throw new SessionControlError('op.task.updated_at must be an ISO-8601 timestamp', 400);
   }
-  return { opId, type: raw.type, at, task: task as Task };
+  if (raw.type === 'create') return { opId, type: 'create', at, task: task as Task };
+  // Update extras (additive): `touched` scopes the patch to fields the sender
+  // actually set; `append.note` concatenates instead of replacing. Malformed
+  // shapes degrade to the legacy full-snapshot semantics rather than erroring.
+  const touched = Array.isArray(raw.touched) && raw.touched.every((v) => typeof v === 'string')
+    ? (raw.touched as string[])
+    : undefined;
+  const appendNote = (raw.append as Record<string, unknown> | undefined)?.note;
+  return {
+    opId, type: 'update', at, task: task as Task,
+    ...(touched?.length ? { touched } : {}),
+    ...(typeof appendNote === 'string' && appendNote ? { append: { note: appendNote } } : {}),
+  };
 }
 
 /**
@@ -986,6 +1016,20 @@ export async function handleSessionControlRelay(
         const { applyTaskOp } = await import('../task-outbox.js');
         const outcome = await applyTaskOp(op);
         result = { ...outcome, opId: op.opId };
+        break;
+      }
+      case 'server.tasks.get': {
+        const id = typeof p.id === 'string' ? p.id.trim() : '';
+        if (!id) throw new SessionControlError('id is required', 400);
+        const tm = await import('../task-manager.js');
+        try {
+          result = { task: await tm.getTask(id) as unknown as Record<string, unknown> };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/No task found/i.test(msg)) throw new SessionControlError(msg, 404);
+          if (/Ambiguous ID prefix/i.test(msg)) throw new SessionControlError(msg, 400);
+          throw err;
+        }
         break;
       }
       default:

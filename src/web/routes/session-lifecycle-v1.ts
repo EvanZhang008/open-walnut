@@ -115,7 +115,50 @@ sessionLifecycleV1Router.patch('/sessions/:id', async (req: Request, res: Respon
       return
     }
     if (CLOUD_MODE) {
-      await relayControlAction(res, 'patch', sessionId, patch, 200)
+      // Metadata-only patches (title/archived/human_note) FAST-ACCEPT when the
+      // bridge is down: persist the intent in the durable control queue and
+      // answer 200 with the optimistic row — mirroring the durable
+      // session.message relay. `mode` is EXCLUDED: it reconfigures the live
+      // CLI (changeSessionMode), so only the primary can truthfully accept it.
+      const metadataOnly = body.mode === undefined
+      if (!metadataOnly) {
+        await relayControlAction(res, 'patch', sessionId, patch, 200)
+        return
+      }
+      const { callPrimaryControl } = await import('./v1-control-relay.js')
+      const reply = await callPrimaryControl('patch', sessionId, patch, 20_000)
+      if (reply.ok) {
+        res.status(200).json(reply.result)
+        return
+      }
+      if (reply.failure.kind === 'bridge_offline' || reply.failure.kind === 'needs_upgrade') {
+        const { enqueueSessionPatch } = await import('../../core/control-queue.js')
+        const opId = await enqueueSessionPatch(sessionId, patch)
+        if (opId) {
+          // Optimistic response in the frozen { session } shape, built from the
+          // synced projection row when available (additive `queued` marker).
+          let record: Record<string, unknown> = { claudeSessionId: sessionId }
+          try {
+            const { readSessionProjection } = await import('../../core/session-projection.js')
+            const row = (await readSessionProjection())?.sessions.find((s) => s.id === sessionId)
+            if (row) {
+              record = {
+                claudeSessionId: sessionId,
+                process_status: row.process_status,
+                ...(row.title !== undefined ? { title: row.title } : {}),
+                ...(row.mode !== undefined ? { mode: row.mode } : {}),
+              }
+            }
+          } catch { /* minimal record */ }
+          res.status(200).json({ session: { ...record, ...patch }, queued: true })
+          return
+        }
+        // Queue write failed — the honest transport error is all that's left.
+        sendError(res, 503, 'bridge_offline', reply.failure.message)
+        return
+      }
+      // Domain error: the primary RAN the patch and refused — verbatim passthrough.
+      sendError(res, reply.failure.status, reply.failure.code, reply.failure.message)
       return
     }
     const { patchSession } = await import('../../core/sessions/session-lifecycle.js')

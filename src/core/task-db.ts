@@ -313,6 +313,13 @@ export function taskToRow(task: Partial<Task>): Record<string, any> {
     if (RETIRED_TASK_KEYS.has(key)) continue;
     const val = (task as Record<string, any>)[key];
     if (val === undefined) continue;
+    // null is the explicit-clear marker (same as the column path, where it
+    // writes SQL NULL). For a payload field "cleared" = key ABSENT from the
+    // blob — storing a literal null would leak back out of rowToTask as a
+    // null field value, which the in-memory Task contract never carries. The
+    // key still counts as payload-touching (hasPayload) so a patch that ONLY
+    // clears a payload field still rewrites the payload column.
+    if (val === null) { hasPayload = true; continue; }
     payload[key] = val;
     hasPayload = true;
   }

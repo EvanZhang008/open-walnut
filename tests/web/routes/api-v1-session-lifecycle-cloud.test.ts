@@ -78,9 +78,24 @@ describe('lifecycle relay payloads on a REPLICA', () => {
       .patch(`/api/v1/sessions/${SID}`)
       .send({ title: 'Renamed', archived: false })
     expect(res.status).toBe(200)
+    // Metadata-only patches ride the fast-accept path (20s budget — no runner
+    // work behind them); mode patches keep the 30s synchronous relay below.
     expect(bridgeRequestMock).toHaveBeenCalledWith(
       '__local__', 'session.control',
       { action: 'patch', sessionId: SID, params: { title: 'Renamed', archived: false } },
+      20_000,
+    )
+  })
+
+  it('PATCH with mode stays a SYNCHRONOUS relay (runner-touching — no fast-accept)', async () => {
+    bridgeRequestMock.mockResolvedValue({ ok: true, result: { session: { mode: 'plan' } } })
+    const res = await request(createApp())
+      .patch(`/api/v1/sessions/${SID}`)
+      .send({ mode: 'plan' })
+    expect(res.status).toBe(200)
+    expect(bridgeRequestMock).toHaveBeenCalledWith(
+      '__local__', 'session.control',
+      { action: 'patch', sessionId: SID, params: { mode: 'plan' } },
       30_000,
     )
   })
@@ -203,5 +218,67 @@ describe('failure ladder', () => {
     const res = await request(createApp()).post(`/api/v1/sessions/${SID}/terminate`).send({})
     expect(res.status).toBe(409)
     expect(res.body.error.code).toBe('cron_owner')
+  })
+})
+
+describe('PATCH fast-accept (metadata patches survive a dead bridge)', () => {
+  it('bridge offline → 200 { session, queued:true } and the patch lands in the control queue', async () => {
+    bridgeRequestMock.mockRejectedValue(new BridgeOfflineError('__local__'))
+    const res = await request(createApp())
+      .patch(`/api/v1/sessions/${SID}`)
+      .send({ title: 'Renamed offline' })
+    expect(res.status).toBe(200)
+    expect(res.body.queued).toBe(true)
+    expect(res.body.session.title).toBe('Renamed offline')
+    const { queuedSessionPatchCount, flushControlQueue } = await import('../../../src/core/control-queue.js')
+    expect(await queuedSessionPatchCount()).toBe(1)
+
+    // Bridge back → the queued patch drains as a normal 'patch' relay.
+    bridgeRequestMock.mockReset()
+    bridgeRequestMock.mockResolvedValue({ ok: true, result: { session: { title: 'Renamed offline' } } })
+    expect(await flushControlQueue()).toBe(1)
+    expect(await queuedSessionPatchCount()).toBe(0)
+    expect(bridgeRequestMock).toHaveBeenCalledWith(
+      '__local__', 'session.control',
+      { action: 'patch', sessionId: SID, params: { title: 'Renamed offline' } },
+      20_000,
+    )
+  })
+
+  it('mode patch does NOT fast-accept: bridge offline stays an honest 503', async () => {
+    bridgeRequestMock.mockRejectedValue(new BridgeOfflineError('__local__'))
+    const res = await request(createApp())
+      .patch(`/api/v1/sessions/${SID}`)
+      .send({ mode: 'plan' })
+    expect(res.status).toBe(503)
+    expect(res.body.error.code).toBe('bridge_offline')
+  })
+
+  it('a domain rejection is NOT queued — verbatim error passthrough', async () => {
+    bridgeRequestMock.mockResolvedValue({ ok: false, error: 'Stop session before archiving', errorKind: 'bad_request' })
+    const res = await request(createApp())
+      .patch(`/api/v1/sessions/${SID}`)
+      .send({ archived: true })
+    expect(res.status).toBe(400)
+    const { queuedSessionPatchCount } = await import('../../../src/core/control-queue.js')
+    expect(await queuedSessionPatchCount()).toBe(0)
+  })
+
+  it('flush keeps the patch on transport failure and drops it on domain rejection', async () => {
+    // Queue one patch via the route.
+    bridgeRequestMock.mockRejectedValue(new BridgeOfflineError('__local__'))
+    await request(createApp()).patch(`/api/v1/sessions/${SID}`).send({ human_note: 'queued note' })
+    const { queuedSessionPatchCount, flushControlQueue } = await import('../../../src/core/control-queue.js')
+    expect(await queuedSessionPatchCount()).toBe(1)
+
+    // Still offline → kept.
+    expect(await flushControlQueue()).toBe(0)
+    expect(await queuedSessionPatchCount()).toBe(1)
+
+    // Primary refuses at apply time → dropped (retry would refuse identically).
+    bridgeRequestMock.mockReset()
+    bridgeRequestMock.mockResolvedValue({ ok: false, error: 'session not found', errorKind: 'not_found' })
+    expect(await flushControlQueue()).toBe(1)
+    expect(await queuedSessionPatchCount()).toBe(0)
   })
 })

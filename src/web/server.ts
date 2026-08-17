@@ -275,6 +275,8 @@ let sessionProjectionHandle: { stop: () => void } | null = null
 let projectionSelfHealHandle: { stop: () => void } | null = null
 /** Cloud box only: 60s drain of cache/task-queue/ (see core/task-queue.ts). */
 let taskQueueFlushHandle: { stop: () => void } | null = null
+/** Cloud box only: 60s drain of cache/control-queue/ (see core/control-queue.ts). */
+let controlQueueFlushHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
 let claudeSettingsWatcherStop: (() => void) | null = null
 // Pending deferred-markDone timers from the session:status-changed handler.
@@ -1768,18 +1770,47 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // guard on source anyway in case that ever changes — echoing an applied
         // op back to the primary would be an infinite round trip.
         if (event.source === 'cloud-outbox') return
-        const data = event.data as { task?: import('../core/types.js').Task; id?: string }
+        const data = event.data as {
+          task?: import('../core/types.js').Task; id?: string
+          // Additive op-scoping extras some emitters attach (see task-queue.ts):
+          // fields = Task keys the mutation actually set (scopes the primary-side
+          // patch so replica-blind blobs are never wiped); appendNote = an
+          // append-style note entry the primary must CONCATENATE, not replace.
+          fields?: string[]; appendNote?: string
+          // task:reordered payload (whole-list order, no per-row snapshot).
+          project?: string; taskIds?: string[]; pins?: boolean
+        }
         if (event.name === EventNames.TASK_DELETED) {
           if (data.id) void dispatchTaskOp({ type: 'delete', id: data.id })
         } else if (event.name === EventNames.TASK_CREATED) {
           if (data.task) void dispatchTaskOp({ type: 'create', task: data.task })
+        } else if (event.name === EventNames.TASK_REORDERED) {
+          if (!Array.isArray(data.taskIds) || data.taskIds.length === 0) return
+          if (data.pins) void dispatchTaskOp({ type: 'reorder-pins', taskIds: data.taskIds })
+          else if (typeof data.project === 'string') {
+            void dispatchTaskOp({ type: 'reorder', project: data.project, taskIds: data.taskIds })
+          }
         } else if (data.task) {
-          void dispatchTaskOp({ type: 'update', task: data.task })
+          void dispatchTaskOp({
+            type: 'update', task: data.task,
+            ...(Array.isArray(data.fields) && data.fields.length > 0 ? { touched: data.fields } : {}),
+            ...(typeof data.appendNote === 'string' && data.appendNote ? { append: { note: data.appendNote } } : {}),
+          })
         }
-      }, { global: true, interest: ['task:'] })
+        // Interest is the EXACT primary-write event set — derived events
+        // (task:phase-changed rides beside every completed/updated emit) would
+        // dispatch the same change twice.
+      }, {
+        global: true,
+        interest: ['task:created', 'task:updated', 'task:completed', 'task:deleted', 'task:reordered'],
+      })
       // Drain ops banked during a bridge outage: every 60s (the floor for a
       // quiet box) plus opportunistically after any successful RPC.
       taskQueueFlushHandle = startTaskQueueFlush()
+      // Session-metadata patches accepted while the bridge was down ride their
+      // own durable queue (core/control-queue.ts) — same drain triggers.
+      const { startControlQueueFlush } = await import('../core/control-queue.js')
+      controlQueueFlushHandle = startControlQueueFlush()
       // Seed the local replica from the synced projection shortly after boot.
       setTimeout(() => { void importProjectionOnCloud() }, 5_000)
     }
@@ -4106,6 +4137,10 @@ export async function stopServer(): Promise<void> {
   if (taskQueueFlushHandle) {
     taskQueueFlushHandle.stop()
     taskQueueFlushHandle = null
+  }
+  if (controlQueueFlushHandle) {
+    controlQueueFlushHandle.stop()
+    controlQueueFlushHandle = null
   }
   stopMobileEventsFeed()
   if (autoContinueHandle) {
