@@ -22,6 +22,17 @@ declare module '@tiptap/core' {
       getMarkdown(): string;
       options: Record<string, unknown>;
     };
+    /**
+     * WikiEmbedNode's own storage (wiki-embed-node.ts). `notePath` is the vault
+     * path of the note being edited — the NodeView sends it as `?note=` so the
+     * server can break duplicate-attachment-filename ties by proximity. It is
+     * document state, deliberately NOT a node attribute (it must never reach the
+     * serialized markdown). Optional: the node is only registered when wiki
+     * links are enabled.
+     */
+    wikiEmbed?: {
+      notePath: string;
+    };
   }
 
   interface Commands<ReturnType> {

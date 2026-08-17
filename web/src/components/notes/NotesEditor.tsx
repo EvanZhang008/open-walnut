@@ -627,6 +627,15 @@ export function NotesEditor({ content, onDirty, placeholder, className, autoFocu
     editorRef.current = editor;
   }, [editor]);
 
+  // Tell the ![[embed]] NodeView which note it is rendering inside, so it can
+  // send `?note=` and let the server break duplicate-filename ties by proximity
+  // (the same image name lives in many `_attachment/` folders in a real vault).
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    const storage = editor.storage.wikiEmbed;
+    if (storage) storage.notePath = attachmentNotePath || '';
+  }, [editor, attachmentNotePath]);
+
   // Sync external content changes (e.g. initial load, popup↔inline sync).
   // Uses isSourceRef to break the save-sync loop: when THIS editor was the
   // source of the save, skip setContent() — the editor already has correct content.

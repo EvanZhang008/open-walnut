@@ -364,12 +364,14 @@ searchMemoryV1Router.delete('/favorites/notes', async (req: Request, res: Respon
 // these formalize the internal /api/notes-v2 paths iOS already calls, reusing
 // the extracted notes-v2 operation functions (NotesOpError → frozen shape).
 
-// GET /api/v1/notes/attachment?path= — attachment bytes (image/PDF/Office).
+// GET /api/v1/notes/attachment?path=[&note=] — attachment bytes (image/PDF/Office).
+// `note` is the vault path of the embedding note; it only breaks duplicate-name
+// ties (a real vault has the same image filename in many `_attachment/` dirs).
 searchMemoryV1Router.get('/notes/attachment', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { readNoteAttachment, NotesOpError } = await import('./notes-v2.js')
     try {
-      const { buffer, mime, contentDisposition } = await readNoteAttachment(req.query.path)
+      const { buffer, mime, contentDisposition } = await readNoteAttachment(req.query.path, req.query.note)
       res.setHeader('Content-Type', mime)
       res.setHeader('Content-Length', buffer.length)
       res.setHeader('Cache-Control', 'public, max-age=3600')

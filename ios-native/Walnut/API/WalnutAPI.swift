@@ -363,11 +363,20 @@ struct WalnutAPI {
     /// Authenticated URL for a note attachment. `raw` is the inner text of an
     /// Obsidian `![[...]]` embed or a relative markdown image path — the server
     /// resolves either. Callers must attach the Bearer header themselves.
-    static func attachmentURL(rawPath: String) -> URL? {
+    ///
+    /// `notePath` (the note doing the embedding) is sent so the server can break
+    /// duplicate-filename ties by proximity: a real vault has the same image
+    /// name (`Untitled 5.png`, `image.jpg`) in many `_attachment/` folders, and
+    /// without this the embed can resolve to a picture from an unrelated note.
+    static func attachmentURL(rawPath: String, notePath: String? = nil) -> URL? {
         guard let base = AppConfig.serverURL else { return nil }
         var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
         components?.path = "/api/v1/notes/attachment"
-        components?.queryItems = [URLQueryItem(name: "path", value: rawPath)]
+        var items = [URLQueryItem(name: "path", value: rawPath)]
+        if let notePath, !notePath.isEmpty {
+            items.append(URLQueryItem(name: "note", value: notePath))
+        }
+        components?.queryItems = items
         return components?.url
     }
 

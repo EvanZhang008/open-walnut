@@ -241,6 +241,56 @@ describe('GET /api/notes-v2/attachment', () => {
       .query({ path: '_attachment/nope.png' });
     expect(res.status).toBe(404);
   });
+
+  it('serves a heic photo (what an iPhone camera writes)', async () => {
+    await fs.mkdir(path.join(NOTES_DIR, '_attachment'), { recursive: true });
+    await fs.writeFile(path.join(NOTES_DIR, '_attachment', 'IMG_1.heic'), 'HEICBYTES');
+
+    const app = createApp();
+    const res = await request(app)
+      .get('/api/notes-v2/attachment')
+      .query({ path: '_attachment/IMG_1.heic' });
+
+    // Previously 400 "File type not allowed" — every phone photo in the vault
+    // rendered as a broken embed.
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('image/heic');
+    expect(res.headers['content-disposition']).toBe('inline');
+  });
+
+  it('accepts an Obsidian display-size suffix on the target', async () => {
+    await fs.mkdir(path.join(NOTES_DIR, '_attachment'), { recursive: true });
+    await fs.writeFile(path.join(NOTES_DIR, '_attachment', 'sized.png'), 'PNGBYTES');
+
+    const app = createApp();
+    const res = await request(app)
+      .get('/api/notes-v2/attachment')
+      // `![[sized.png|300]]` — the size is presentation, not part of the name.
+      .query({ path: '_attachment/sized.png|300' });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('image/png');
+  });
+
+  it('uses ?note= to pick the copy nearest the embedding note', async () => {
+    for (const folder of ['finance', 'health']) {
+      await fs.mkdir(path.join(NOTES_DIR, folder, '_attachment'), { recursive: true });
+      await fs.writeFile(
+        path.join(NOTES_DIR, folder, '_attachment', 'image.jpg'), folder.toUpperCase(),
+      );
+    }
+
+    const app = createApp();
+    const health = await request(app)
+      .get('/api/notes-v2/attachment')
+      .query({ path: 'image.jpg', note: 'health/Checkup.md' });
+    const finance = await request(app)
+      .get('/api/notes-v2/attachment')
+      .query({ path: 'image.jpg', note: 'finance/Taxes.md' });
+
+    expect(health.body.toString()).toBe('HEALTH');
+    expect(finance.body.toString()).toBe('FINANCE');
+  });
 });
 
 // ─── POST /attachment — Pasted-image upload into the vault ───────────

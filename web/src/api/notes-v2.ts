@@ -17,9 +17,16 @@ export interface NoteTreeNode {
  * URL for a vault attachment (image/pdf) — the single notes-owned endpoint that
  * streams the file with the right content-type (incl. pdf). Used by the tree
  * preview and ![[embed]] rendering. `path` is vault-relative.
+ *
+ * `notePath` (the note doing the embedding) is sent when known so the server can
+ * break duplicate-filename ties by proximity: a real vault has the same image
+ * name (`Untitled 5.png`, `image.jpg`) in many `_attachment/` folders, and
+ * without it the embed can render a picture belonging to an unrelated note.
  */
-export function attachmentUrl(path: string): string {
-  return `/api/notes-v2/attachment?${new URLSearchParams({ path })}`;
+export function attachmentUrl(path: string, notePath?: string): string {
+  const params = new URLSearchParams({ path });
+  if (notePath) params.set('note', notePath);
+  return `/api/notes-v2/attachment?${params}`;
 }
 
 /**

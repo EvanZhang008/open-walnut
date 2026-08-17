@@ -168,6 +168,11 @@ private final class CappedDownloadDelegate: NSObject, URLSessionDataDelegate, @u
 @MainActor
 enum MediaContext {
     static var currentSessionID: String?
+    /// Vault path of the note currently on screen. Sent alongside a vault
+    /// attachment request so the server can break duplicate-filename ties by
+    /// proximity — the same read-at-request-time rule as `currentSessionID`.
+    /// Set by NoteDetailView on appear, cleared on disappear.
+    static var currentNotePath: String?
 }
 
 /// Fetches vault attachments with the Bearer header (AsyncImage can't send
@@ -197,11 +202,22 @@ final class AttachmentLoader {
     /// showing up inside an unrelated session, and vice versa. Scope is the
     /// session id captured when the load was requested ("chat" for the chat tab
     /// and for vault attachments, which are host-independent).
-    private static func scope(for raw: String, sessionID: String?) -> String {
-        // Absolute paths are the host-dependent ones; http(s) URLs and
-        // vault-relative names resolve identically everywhere.
-        guard raw.hasPrefix("/") else { return "chat" }
-        return sessionID?.isEmpty == false ? sessionID! : "chat"
+    private static func scope(for raw: String, sessionID: String?, notePath: String?) -> String {
+        if raw.hasPrefix("http://") || raw.hasPrefix("https://") { return "chat" }
+        if raw.hasPrefix("/") {
+            // Absolute paths are the host-dependent ones — scope by session.
+            return sessionID?.isEmpty == false ? sessionID! : "chat"
+        }
+        // A vault-relative name is NOT host-dependent, but it IS note-dependent:
+        // `Untitled 5.png` exists in seven different `_attachment/` folders here,
+        // and the server now picks the copy nearest the embedding note. Caching
+        // one name globally would hand note B whichever picture note A resolved
+        // first — the same cross-contamination the session scope fixed for
+        // absolute paths. Scope by the note's own DIRECTORY (not the note file),
+        // since proximity resolution can only differ between directories.
+        guard let notePath, !notePath.isEmpty else { return "chat" }
+        let directory = (notePath as NSString).deletingLastPathComponent
+        return directory.isEmpty ? "chat" : "note:\(directory)"
     }
 
     private static func cacheKey(_ raw: String, scope: String) -> String {
@@ -224,7 +240,9 @@ final class AttachmentLoader {
     /// rendered — every path was tried against the notes vault and 404ed.
     /// `sessionID` is captured by the CALLER at request time — never read from
     /// MediaContext in here, see that type's comment.
-    private static func resolvedURL(for raw: String, sessionID: String?) -> (url: URL, needsAuth: Bool)? {
+    private static func resolvedURL(
+        for raw: String, sessionID: String?, notePath: String?
+    ) -> (url: URL, needsAuth: Bool)? {
         if raw.hasPrefix("http://") || raw.hasPrefix("https://") {
             guard let url = URL(string: raw) else { return nil }
             return (url, false)
@@ -233,14 +251,15 @@ final class AttachmentLoader {
             guard let url = WalnutAPI.mediaURL(absolutePath: raw, sessionID: sessionID) else { return nil }
             return (url, true)
         }
-        guard let url = WalnutAPI.attachmentURL(rawPath: raw) else { return nil }
+        guard let url = WalnutAPI.attachmentURL(rawPath: raw, notePath: notePath) else { return nil }
         return (url, true)
     }
 
     func image(for raw: String) async -> UIImage? {
         // Snapshot the routing context HERE, on the MainActor, at request time.
         let sessionID = MediaContext.currentSessionID
-        let scope = Self.scope(for: raw, sessionID: sessionID)
+        let notePath = MediaContext.currentNotePath
+        let scope = Self.scope(for: raw, sessionID: sessionID, notePath: notePath)
         let key = Self.cacheKey(raw, scope: scope)
 
         if let cached = memory.object(forKey: key as NSString) { return cached }
@@ -249,7 +268,7 @@ final class AttachmentLoader {
         // the second session the first one's bytes.
         if let running = inflight[key] { return await running.value }
 
-        let resolved = Self.resolvedURL(for: raw, sessionID: sessionID)
+        let resolved = Self.resolvedURL(for: raw, sessionID: sessionID, notePath: notePath)
         let token = resolved?.needsAuth == true ? AppConfig.token : nil
         let task = Task.detached(priority: .userInitiated) { [diskURL = diskURL(for: key), diskDirectory] in
             await Self.loadImage(resolved: resolved, token: token, diskURL: diskURL, diskDirectory: diskDirectory)
@@ -266,7 +285,9 @@ final class AttachmentLoader {
     /// Seed the cache with an image the caller just uploaded, so the editor's
     /// placeholder resolves instantly instead of round-tripping the fetch.
     func seed(_ image: UIImage, for raw: String) {
-        let scope = Self.scope(for: raw, sessionID: MediaContext.currentSessionID)
+        let scope = Self.scope(
+            for: raw, sessionID: MediaContext.currentSessionID, notePath: MediaContext.currentNotePath
+        )
         let key = Self.cacheKey(raw, scope: scope)
         memory.setObject(image, forKey: key as NSString, cost: Self.decodedCost(image))
         guard let data = image.jpegData(compressionQuality: 0.9) else { return }

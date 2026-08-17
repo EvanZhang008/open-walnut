@@ -71,6 +71,14 @@ export const WikiEmbedNode = Node.create({
 
   addStorage() {
     return {
+      /**
+       * Vault path of the note being edited. The NodeView reads it to send
+       * `?note=` alongside the attachment request so the server can break
+       * duplicate-filename ties by proximity. Lives in storage (not a node
+       * attribute) because it belongs to the DOCUMENT, not to each embed — it
+       * must never reach the serialized markdown. NotesEditor keeps it current.
+       */
+      notePath: '' as string,
       markdown: {
         // Byte-clean: literal write, NO escaping (see file header).
         serialize(state: MarkdownSerializerState, node: { attrs: { target: string } }) {

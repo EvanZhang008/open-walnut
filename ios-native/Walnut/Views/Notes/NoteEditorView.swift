@@ -81,7 +81,14 @@ struct NoteDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarContent }
         .task { await load() }
+        .onAppear {
+            // Attachment resolution needs to know WHICH note is asking: the same
+            // image filename lives in many `_attachment/` folders, and the server
+            // breaks the tie by proximity to this note.
+            MediaContext.currentNotePath = path
+        }
         .onDisappear {
+            if MediaContext.currentNotePath == path { MediaContext.currentNotePath = nil }
             saveTask?.cancel()
             if dirty {
                 // Persist a local draft FIRST: the fire-and-forget final save

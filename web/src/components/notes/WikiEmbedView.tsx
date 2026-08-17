@@ -20,22 +20,38 @@ import { attachmentUrl } from '@/api/notes-v2';
 import { browserCanInlinePdf } from '@/utils/pdf-support';
 import './wiki-embed.css';
 
-const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
+// heic/heif are what an iPhone camera writes. Safari renders them inline; other
+// browsers fail the <img> load and fall through to the click-to-open card, which
+// is the correct degrade (previously they never even tried).
+const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif']);
+
+/**
+ * The embed target may carry an Obsidian display size (`![[x.png|300]]`). That
+ * suffix is presentation, not part of the filename — extension sniffing and the
+ * fetch path both have to see through it.
+ */
+function pathOf(target: string): string {
+  return target.split('|')[0].trim();
+}
 
 function extOf(target: string): string {
-  const base = target.split('/').pop() || target;
+  const base = pathOf(target).split('/').pop() || target;
   const dot = base.lastIndexOf('.');
   return dot >= 0 ? base.slice(dot + 1).toLowerCase() : '';
 }
 
 function fileNameOf(target: string): string {
-  return target.split('/').pop() || target;
+  const p = pathOf(target);
+  return p.split('/').pop() || p;
 }
 
-export function WikiEmbedView({ node }: ReactNodeViewProps) {
+export function WikiEmbedView({ node, editor }: ReactNodeViewProps) {
   const target = String(node.attrs.target || '');
   const ext = extOf(target);
-  const url = attachmentUrl(target);
+  // `notePath` lets the server break duplicate-filename ties by proximity to
+  // this note (see attachmentUrl); absent it falls back to the old behavior.
+  const notePath = (editor?.storage?.wikiEmbed?.notePath as string | undefined) || undefined;
+  const url = attachmentUrl(pathOf(target), notePath);
   const [imgFailed, setImgFailed] = useState(false);
 
   // NodeViewWrapper is inline to match the inline atom node (block elements

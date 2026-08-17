@@ -27,7 +27,7 @@ import {
   generateNoteId,
   stampId,
 } from '../../core/parse-frontmatter.js'
-import { resolveAttachmentPath } from './notes-attachment.js'
+import { resolveAttachmentPath, invalidateAttachmentIndex } from './notes-attachment.js'
 import {
   scheduleNotesIndexUpdate,
   reconcileNoteNow,
@@ -162,7 +162,10 @@ export function getWildcardPath(req: Request): string | null {
 // Office docs are listed (not rendered): clicking opens them in the local app
 // (Word/Excel) via /reveal, or downloads through /attachment as a fallback.
 const ATTACHMENT_EXTS = new Set([
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf',
+  // heic/heif: what an iPhone camera actually writes. Excluding them meant
+  // every photo imported straight off a phone answered 400 "File type not
+  // allowed" and rendered as a broken embed.
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'pdf',
   'docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt',
 ])
 
@@ -241,6 +244,10 @@ const ATTACHMENT_MIME: Record<string, string> = {
   jpeg: 'image/jpeg',
   gif: 'image/gif',
   webp: 'image/webp',
+  // iPhone camera format. Safari/iOS decode it natively; other browsers
+  // download it. Either way it must not 400 — these are ordinary user photos.
+  heic: 'image/heic',
+  heif: 'image/heif',
   pdf: 'application/pdf',
   // Office formats: served as downloads (Content-Disposition below switches to
   // `attachment` for these) — the browser can't render them inline.
@@ -253,7 +260,9 @@ const ATTACHMENT_MIME: Record<string, string> = {
 }
 
 // Extensions the browser can render inline; everything else downloads.
-const INLINE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'pdf'])
+// heic/heif are inline for iOS (native decode) and for the iOS app, which hands
+// the bytes to ImageIO — it decodes heic fine.
+const INLINE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'pdf'])
 
 // RFC 5987 ext-value: encodeURIComponent leaves ' * ( ) unescaped, but a bare
 // ' collides with the UTF-8'' delimiter and breaks download filenames.
@@ -268,13 +277,16 @@ const MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024 // 50 MB (mirror local-image)
  * GET /attachment and GET /api/v1/notes/attachment. Throws NotesOpError for
  * every failure; the caller writes the headers/body.
  *
- * Resolution handles the three Obsidian `![[...]]` embed forms (see
- * resolveAttachmentPath): a vault-relative path, a legacy `Notion/`-rooted
- * path, or a bare shortest-unique attachment name searched across the vault.
+ * Resolution (see resolveAttachmentPath) tries the exact vault-relative path,
+ * then the same with a legacy `Notion/` root stripped, then the longest matching
+ * PATH SUFFIX — so an embed that names its folder gets the copy in that folder
+ * even when the same filename exists elsewhere in the vault. `notePath` (the
+ * embedding note) only breaks remaining ties by proximity.
+ *
  * resolveAttachmentPath enforces the same traversal/escape guard + NOTES_DIR
  * containment as resolveSafePath, and only returns an existing regular file.
  */
-export async function readNoteAttachment(raw: unknown): Promise<{
+export async function readNoteAttachment(raw: unknown, notePath?: unknown): Promise<{
   buffer: Buffer
   mime: string
   /** Browser-renderable → serve inline; Office docs → download. */
@@ -283,10 +295,15 @@ export async function readNoteAttachment(raw: unknown): Promise<{
   if (!raw || typeof raw !== 'string') throw new NotesOpError('path required', 400)
 
   // Reject a disallowed extension up-front (before any fs touch). No SVG.
-  const reqExt = path.extname(raw).slice(1).toLowerCase()
+  // An Obsidian size suffix (`![[x.png|300]]`) is part of the embed, not the
+  // filename — strip it before reading the extension or every sized embed 400s.
+  const reqExt = path.extname(raw.split('|')[0]).slice(1).toLowerCase()
   if (!ATTACHMENT_MIME[reqExt]) throw new NotesOpError('File type not allowed', 400)
 
-  const fullPath = await resolveAttachmentPath(raw)
+  const fullPath = await resolveAttachmentPath(
+    raw,
+    typeof notePath === 'string' ? notePath : undefined,
+  )
   if (!fullPath) throw new NotesOpError('Attachment not found', 404)
 
   const ext = path.extname(fullPath).slice(1).toLowerCase()
@@ -311,9 +328,10 @@ export async function readNoteAttachment(raw: unknown): Promise<{
 }
 
 // GET /api/notes-v2/attachment?path=<vault-relative path under NOTES_DIR>
+//   &note=<vault path of the embedding note>  (optional; breaks duplicate-name ties)
 notesV2Router.get('/attachment', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { buffer, mime, contentDisposition } = await readNoteAttachment(req.query.path)
+    const { buffer, mime, contentDisposition } = await readNoteAttachment(req.query.path, req.query.note)
     res.setHeader('Content-Type', mime)
     res.setHeader('Content-Length', buffer.length)
     res.setHeader('Cache-Control', 'public, max-age=3600')
@@ -448,6 +466,9 @@ export async function saveNoteAttachment(
   await fsp.writeFile(filePath, buffer)
 
   const relPath = toRelPath(filePath)
+  // The resolver's vault index must see the new file immediately: the editor
+  // inserts the embed and fetches it in the same breath.
+  invalidateAttachmentIndex()
   log.memory.info('Note attachment saved', { notePath, path: relPath, bytes: buffer.length })
   // The tree only refetches on explicit create/delete/move or this event —
   // a new _attachment/ folder + file appeared outside that path, so without
@@ -643,6 +664,9 @@ export async function deleteNoteAttachment(relPath: unknown): Promise<{ ok: true
     const { deleteAttachmentText } = await import('../../core/notes-index.js')
     deleteAttachmentText(toRelPath(fullPath))
   } catch { /* best-effort */ }
+  // Drop the resolver's index so a deleted file can't keep answering requests
+  // (it would then 404 at the stat, but only after picking it over a live copy).
+  invalidateAttachmentIndex()
   log.memory.info('Attachment deleted', { path: relPath })
   return { ok: true }
 }

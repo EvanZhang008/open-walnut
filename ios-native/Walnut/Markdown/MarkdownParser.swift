@@ -476,7 +476,10 @@ enum MarkdownParser {
         case embed(name: String)
     }
 
-    private static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp"]
+    /// heic/heif included: what an iPhone camera writes. Without them a photo
+    /// imported straight off a phone rendered as literal `![[IMG.heic]]` text
+    /// instead of an image.
+    private static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif"]
 
     static func isImagePath(_ raw: String) -> Bool {
         imageExtensions.contains((raw as NSString).pathExtension.lowercased())

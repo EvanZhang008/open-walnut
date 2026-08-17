@@ -598,70 +598,156 @@ struct WysiwygEditor: UIViewRepresentable {
             parent.onChange()
         }
 
-        /// Increase/decrease the leading indent (±2 spaces) of the current
-        /// bullet / numbered / task line; no-op on any other paragraph kind.
-        /// The indent lives in each marker's exact source (so it round-trips)
-        /// and in the paragraph style's headIndent (so it renders).
+        /// Deepest indent level a list row may reach. Apple Notes bounds this
+        /// too; without a cap a held swipe walks the marker off the screen.
+        static let maxIndentLevel = 8
+
+        /// Whether indent/outdent can do anything right now — the swipe
+        /// gesture's eligibility test and (in principle) the drawer arrows'.
+        /// True when ANY line the selection touches is a bullet/numbered/task.
+        func canAdjustIndent(in textView: UITextView) -> Bool {
+            !listLineStarts(in: textView).isEmpty
+        }
+
+        /// Line starts (ascending) of every bullet/numbered/task row the current
+        /// selection touches. A collapsed caret yields at most one.
+        private func listLineStarts(in textView: UITextView) -> [Int] {
+            let storage = textView.textStorage
+            guard storage.length > 0 else { return [] }
+            let ns = storage.string as NSString
+            let selection = textView.selectedRange
+            let from = min(selection.location, ns.length)
+            let to = min(selection.location + selection.length, ns.length)
+
+            var starts: [Int] = []
+            var cursor = from
+            while true {
+                let line = ns.lineRange(for: NSRange(location: min(cursor, ns.length), length: 0))
+                if line.location < storage.length {
+                    let attrs = storage.attributes(at: line.location, effectiveRange: nil)
+                    switch (attrs[.walnutBlock] as? WalnutBlockKind) ?? .body {
+                    case .bullet, .numbered, .task: starts.append(line.location)
+                    default: break
+                    }
+                }
+                let next = line.location + max(line.length, 1)
+                // Stop once past the selection; a zero-length selection stops
+                // after its own line.
+                if next > to || next >= ns.length { break }
+                cursor = next
+            }
+            return starts
+        }
+
+        /// Increase/decrease the indent of every bullet / numbered / task line
+        /// the selection touches (one level = two leading spaces); non-list
+        /// lines in the selection are left alone.
+        ///
+        /// The indent has to land in THREE places or it looks like a no-op:
+        /// the marker's exact source (so `MarkdownSerializer` re-emits it and
+        /// the note round-trips), the paragraph style's head indents (so the
+        /// row visibly moves), and — for numbered/quote-style literal prefixes —
+        /// real space characters in the storage.
         func adjustIndent(_ delta: Int, in textView: UITextView) {
             let storage = textView.textStorage
-            let caret = textView.selectedRange.location
-            let lineRange = (storage.string as NSString).lineRange(for: NSRange(location: min(caret, storage.length), length: 0))
-            guard lineRange.length > 0, lineRange.location < storage.length else { return }
-            let attrs = storage.attributes(at: lineRange.location, effectiveRange: nil)
-            let kind = (attrs[.walnutBlock] as? WalnutBlockKind) ?? .body
+            let starts = listLineStarts(in: textView)
+            guard !starts.isEmpty, delta != 0 else { return }
+            let selection = textView.selectedRange
 
-            var lengthDelta = 0
+            // Edit bottom-up: an earlier line's insertion would shift every
+            // later line's range, so process descending and the ranges we
+            // already computed stay valid.
+            var shiftBeforeSelection = 0
+            var shiftInsideSelection = 0
             isInternalUpdate = true
-            switch kind {
-            case .bullet:
-                guard let dot = attrs[.attachment] as? BulletAttachment else { isInternalUpdate = false; return }
-                let newSource = reindentedSource(dot.source, delta: delta)
-                let lineAttrs = MarkdownAttributed.typingAttributes(for: .bullet(prefix: newSource))
-                let piece = NSMutableAttributedString(attachment: BulletAttachment(source: newSource))
-                piece.addAttributes(lineAttrs, range: NSRange(location: 0, length: 1))
-                storage.replaceCharacters(in: NSRange(location: lineRange.location, length: 1), with: piece)
-                applyLineAttributes(storage, lineStart: lineRange.location, attrs: lineAttrs)
-            case .task:
-                guard let box = attrs[.attachment] as? CheckboxAttachment else { isInternalUpdate = false; return }
-                let newSource = reindentedSource(box.source, delta: delta)
-                let lineAttrs = MarkdownAttributed.taskAttributes(
-                    leadingSpaces: newSource.prefix(while: { $0 == " " }).count
-                )
-                let piece = NSMutableAttributedString(attachment: CheckboxAttachment(source: newSource, checked: box.checked))
-                piece.addAttributes(lineAttrs, range: NSRange(location: 0, length: 1))
-                storage.replaceCharacters(in: NSRange(location: lineRange.location, length: 1), with: piece)
-                applyLineAttributes(storage, lineStart: lineRange.location, attrs: lineAttrs)
-            case .numbered(let prefix):
-                let newPrefix = reindentedSource(prefix, delta: delta)
-                guard newPrefix != prefix else { isInternalUpdate = false; return }
-                let lineAttrs = MarkdownAttributed.typingAttributes(for: .numbered(prefix: newPrefix))
-                let oldSpaces = prefix.prefix(while: { $0 == " " }).count
-                let newSpaces = newPrefix.prefix(while: { $0 == " " }).count
-                if newSpaces > oldSpaces {
-                    let pad = String(repeating: " ", count: newSpaces - oldSpaces)
-                    storage.insert(NSAttributedString(string: pad, attributes: lineAttrs), at: lineRange.location)
-                    lengthDelta = newSpaces - oldSpaces
+            for lineStart in starts.reversed() {
+                let lineDelta = reindentLine(storage, lineStart: lineStart, delta: delta)
+                guard lineDelta != 0 else { continue }
+                // Characters inserted AT a line start land before the caret only
+                // when the caret is strictly past that start.
+                if lineStart < selection.location {
+                    shiftBeforeSelection += lineDelta
                 } else {
-                    storage.deleteCharacters(in: NSRange(location: lineRange.location, length: oldSpaces - newSpaces))
-                    lengthDelta = -(oldSpaces - newSpaces)
+                    shiftInsideSelection += lineDelta
                 }
-                applyLineAttributes(storage, lineStart: lineRange.location, attrs: lineAttrs)
-            default:
-                isInternalUpdate = false
-                return // no-op for non-list lines
             }
-            let newCaret = max(lineRange.location, min(caret + lengthDelta, storage.length))
-            textView.selectedRange = NSRange(location: newCaret, length: 0)
+            let newLocation = max(0, min(selection.location + shiftBeforeSelection, storage.length))
+            let newLength = max(0, min(selection.length + shiftInsideSelection, storage.length - newLocation))
+            textView.selectedRange = NSRange(location: newLocation, length: newLength)
             isInternalUpdate = false
             pushBinding(from: textView)
             parent.onChange()
         }
 
+        /// Re-indent ONE list line in place. Returns how many characters the
+        /// storage grew (negative = shrank) at `lineStart`.
+        private func reindentLine(_ storage: NSTextStorage, lineStart: Int, delta: Int) -> Int {
+            guard lineStart < storage.length else { return 0 }
+            let attrs = storage.attributes(at: lineStart, effectiveRange: nil)
+            switch (attrs[.walnutBlock] as? WalnutBlockKind) ?? .body {
+            case .bullet:
+                // The dot is an attachment: its `source` IS the markdown marker,
+                // so re-indenting means swapping in a new attachment. One
+                // character replaces one character — no length change.
+                guard let dot = attrs[.attachment] as? BulletAttachment else { return 0 }
+                let newSource = reindentedSource(dot.source, delta: delta)
+                guard newSource != dot.source else { return 0 }
+                let lineAttrs = MarkdownAttributed.typingAttributes(for: .bullet(prefix: newSource))
+                let piece = NSMutableAttributedString(attachment: BulletAttachment(source: newSource))
+                piece.addAttributes(lineAttrs, range: NSRange(location: 0, length: 1))
+                storage.replaceCharacters(in: NSRange(location: lineStart, length: 1), with: piece)
+                applyLineAttributes(storage, lineStart: lineStart, attrs: lineAttrs)
+                return 0
+            case .task:
+                guard let box = attrs[.attachment] as? CheckboxAttachment else { return 0 }
+                let newSource = reindentedSource(box.source, delta: delta)
+                guard newSource != box.source else { return 0 }
+                let lineAttrs = MarkdownAttributed.taskAttributes(
+                    leadingSpaces: newSource.prefix(while: { $0 == " " }).count
+                )
+                let piece = NSMutableAttributedString(
+                    attachment: CheckboxAttachment(source: newSource, checked: box.checked)
+                )
+                piece.addAttributes(lineAttrs, range: NSRange(location: 0, length: 1))
+                storage.replaceCharacters(in: NSRange(location: lineStart, length: 1), with: piece)
+                applyLineAttributes(storage, lineStart: lineStart, attrs: lineAttrs)
+                return 0
+            case .numbered(let prefix):
+                // A numbered marker is literal TEXT in the line, so the leading
+                // spaces are real characters that must be inserted/removed.
+                let newPrefix = reindentedSource(prefix, delta: delta)
+                guard newPrefix != prefix else { return 0 }
+                let lineAttrs = MarkdownAttributed.typingAttributes(for: .numbered(prefix: newPrefix))
+                let oldWhitespace = prefix.prefix(while: { $0 == " " || $0 == "\t" }).count
+                let newSpaces = newPrefix.prefix(while: { $0 == " " }).count
+                // Replace the whole leading run in one edit: the old run may
+                // contain tabs, which reindentedSource normalizes to spaces.
+                let replacement = NSAttributedString(
+                    string: String(repeating: " ", count: newSpaces), attributes: lineAttrs
+                )
+                storage.replaceCharacters(
+                    in: NSRange(location: lineStart, length: oldWhitespace), with: replacement
+                )
+                applyLineAttributes(storage, lineStart: lineStart, attrs: lineAttrs)
+                return newSpaces - oldWhitespace
+            default:
+                return 0
+            }
+        }
+
+        /// Shift a marker's source by `delta` indent levels. Two spaces = one
+        /// level; a tab counts as one level (Obsidian/Apple Notes both write
+        /// tabs sometimes) and is normalized to spaces on the way out, and an
+        /// odd space count snaps down to a whole level so the row can never sit
+        /// half-way between two indents.
         private func reindentedSource(_ source: String, delta: Int) -> String {
-            let leading = source.prefix(while: { $0 == " " }).count
-            let rest = String(source.dropFirst(leading))
-            let newLeading = max(0, leading + delta * 2)
-            return String(repeating: " ", count: newLeading) + rest
+            let leadingRun = source.prefix(while: { $0 == " " || $0 == "\t" })
+            let spaces = leadingRun.filter { $0 == " " }.count
+            let tabs = leadingRun.filter { $0 == "\t" }.count
+            let level = spaces / 2 + tabs
+            let newLevel = min(max(0, level + delta), Self.maxIndentLevel)
+            let rest = String(source.dropFirst(leadingRun.count))
+            return String(repeating: " ", count: newLevel * 2) + rest
         }
 
         /// Re-apply block attributes across a whole line, excluding its trailing
@@ -851,12 +937,85 @@ final class WalnutTextView: UITextView, UIGestureRecognizerDelegate {
         tap.cancelsTouchesInView = false
         tap.delegate = self
         addGestureRecognizer(tap)
+        setUpIndentSwipe()
         // Attachment glyphs are baked bitmaps; re-bake them when light/dark
         // changes so bullets/tables stay visible (dynamic colors don't
         // re-resolve inside already-rendered images).
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: WalnutTextView, _) in
             view.refreshAttachmentAppearance()
         }
+    }
+
+    // MARK: - Apple Notes-style indent swipe
+
+    /// Horizontal travel that commits the swipe. Roughly a thumb-flick; below
+    /// this, ordinary scroll jitter and selection drags would re-indent rows by
+    /// accident.
+    private static let indentSwipeThreshold: CGFloat = 44
+    /// How much more horizontal than vertical the accumulated travel must be for
+    /// the gesture to count as an indent rather than a scroll.
+    private static let indentSwipeHorizontalRatio: CGFloat = 1.6
+
+    private weak var indentPan: UIPanGestureRecognizer?
+    /// Whether this gesture has already committed its one level.
+    ///
+    /// ONE swipe = ONE level, deliberately. A distance-proportional version
+    /// (level per N points of travel) measured 3 levels from a single ordinary
+    /// flick in the simulator — the row shot out to a depth the user never asked
+    /// for, and the only way back was three counter-swipes. Apple Notes behaves
+    /// the same way: the gesture is a discrete "nudge one step", repeated.
+    private var indentSwipeCommitted = false
+
+    private func setUpIndentSwipe() {
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(onIndentPan(_:)))
+        // Observe only: the text view's own recognizers still own scrolling and
+        // selection. Direction/eligibility gating happens in the delegate.
+        pan.cancelsTouchesInView = false
+        pan.delaysTouchesBegan = false
+        pan.delegate = self
+        addGestureRecognizer(pan)
+        indentPan = pan
+    }
+
+    @objc private func onIndentPan(_ gesture: UIPanGestureRecognizer) {
+        guard let coordinator else { return }
+        switch gesture.state {
+        case .began:
+            indentSwipeCommitted = false
+        case .changed:
+            guard !indentSwipeCommitted else { return }
+            let translation = gesture.translation(in: self)
+            // Direction is judged on ACCUMULATED travel (see
+            // gestureRecognizerShouldBegin for why not on initial velocity): the
+            // drag must be both long enough and clearly more horizontal than
+            // vertical, so a scroll that wanders sideways never indents.
+            guard abs(translation.x) >= Self.indentSwipeThreshold,
+                  abs(translation.x) > abs(translation.y) * Self.indentSwipeHorizontalRatio
+            else { return }
+            indentSwipeCommitted = true
+            coordinator.adjustIndent(translation.x > 0 ? 1 : -1, in: self)
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        case .ended, .cancelled, .failed:
+            indentSwipeCommitted = false
+        default:
+            break
+        }
+    }
+
+    /// Gate the indent pan: only while EDITING, and only when the caret/selection
+    /// is on a list row. Read mode and non-list lines never even start tracking.
+    ///
+    /// Direction is deliberately NOT decided here. A velocity check at
+    /// `.began` rejected slow-starting drags: a leftward swipe verifiably did
+    /// nothing in the simulator while the identical rightward one worked, because
+    /// velocity that early is small and noisy. The `.changed` handler judges
+    /// direction on ACCUMULATED translation instead, which is stable — and since
+    /// this recognizer neither swallows touches (`cancelsTouchesInView = false`)
+    /// nor blocks the text view's own recognizers (shouldRecognizeSimultaneously
+    /// returns true), merely tracking a vertical scroll costs nothing.
+    override func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+        guard gesture === indentPan else { return super.gestureRecognizerShouldBegin(gesture) }
+        return isEditable && coordinator?.canAdjustIndent(in: self) == true
     }
 
     func refreshAttachmentAppearance() {
