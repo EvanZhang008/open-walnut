@@ -11,3 +11,10 @@
 if [ -x scripts/local/scan-sensitive-staged.sh ]; then
   scripts/local/scan-sensitive-staged.sh || exit 1
 fi
+
+# Parse-check staged .ts/.tsx blobs (committed, runs for everyone; <1s).
+# Guards against the mangled-hunk class where the committed content is
+# syntactically broken while the worktree compiles — see the script header.
+if [ -x scripts/check-staged-parse.sh ]; then
+  scripts/check-staged-parse.sh || exit 1
+fi
