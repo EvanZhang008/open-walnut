@@ -1637,6 +1637,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (!el) return;
     el.scrollTop = el.scrollHeight;
     isAtBottom.current = true;
+    setShowScrollArrow(false);
+  }, []);
 
   // Parent-requested jump to the bottom (a quote-to-ask prefill). Deliberately
   // NOT gated on isAtBottom or the selection guard: those protect the AUTOMATIC
@@ -1659,8 +1661,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     };
     raf = requestAnimationFrame(chase);
     return () => cancelAnimationFrame(raf);
-    setShowScrollArrow(false);
-  }, []);
+  }, [scrollToBottomNonce]);
 
   // ── Deduplicate optimistic messages against persisted history ──
   //
