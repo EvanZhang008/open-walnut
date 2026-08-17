@@ -29,7 +29,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 // ── Mock constants (isolate file I/O to temp dir) ──
 vi.mock('../../src/constants.js', () => createMockConstants());
 
-import { ClaudeCodeSession, SessionRunner, shellQuote, outputFileCheckResult, stripCliStartupNoise, isBenignSshStderr } from '../../src/providers/claude-code-session.js';
+import { ClaudeCodeSession, SessionRunner, shellQuote, outputFileCheckResult, stripCliStartupNoise, isBenignSshStderr, reconcileMcpMountStatus } from '../../src/providers/claude-code-session.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 import { log } from '../../src/logging/index.js';
 import type { BusEvent } from '../../src/core/event-bus.js';
@@ -158,6 +158,50 @@ afterEach(async () => {
   // handles a writer still holding a file. Measured 88.9s -> 63.7s, 133/133 both.
   await new Promise((r) => setImmediate(r));
   await fsp.rm(tmpBase, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {});
+});
+
+// ── MCP mount health ──
+
+describe('reconcileMcpMountStatus', () => {
+  // Shapes below are VERBATIM from CLI 2.1.220, probed 2026-08-16. The whole
+  // point of this helper is that a policy-refused mount is INVISIBLE except as
+  // an absence: the CLI omits the server from init and only warns on stderr,
+  // which the session classifies as startup noise. Walnut used to have no idea
+  // whether its own mount came up, and the context inspector hardcoded a guess
+  // ("blocked by machine policy on some hosts").
+
+  it('marks a server the init event never mentions as blocked', () => {
+    // Real observation: `--mcp-config` with the walnut server on a machine whose
+    // managed settings block it → init carried `mcp_servers: []`, stderr said
+    // "Warning: MCP server blocked by enterprise policy: walnut".
+    expect(reconcileMcpMountStatus(['walnut'], [])).toEqual({ walnut: 'blocked' });
+    // Field missing entirely (older CLI / other engine) must behave the same.
+    expect(reconcileMcpMountStatus(['walnut'], undefined)).toEqual({ walnut: 'blocked' });
+  });
+
+  it("keeps the CLI's own status when the server IS reported", () => {
+    // Real observation from the same probe with an sdk-type mount.
+    expect(reconcileMcpMountStatus(['walnut'], [{ name: 'walnut', status: 'failed' }]))
+      .toEqual({ walnut: 'failed' });
+    expect(reconcileMcpMountStatus(['walnut'], [{ name: 'walnut', status: 'connected' }]))
+      .toEqual({ walnut: 'connected' });
+  });
+
+  it('reports per-server verdicts and ignores servers we never requested', () => {
+    expect(reconcileMcpMountStatus(['walnut', 'other'], [
+      { name: 'other', status: 'connected' },
+      { name: 'unrequested', status: 'connected' },
+    ])).toEqual({ walnut: 'blocked', other: 'connected' });
+  });
+
+  it('falls back to unknown for a reported server with no status field', () => {
+    expect(reconcileMcpMountStatus(['walnut'], [{ name: 'walnut' }]))
+      .toEqual({ walnut: 'unknown' });
+  });
+
+  it('returns an empty map when nothing was mounted (no false alarms)', () => {
+    expect(reconcileMcpMountStatus([], [])).toEqual({});
+  });
 });
 
 // ── outputFileCheckResult tests ──

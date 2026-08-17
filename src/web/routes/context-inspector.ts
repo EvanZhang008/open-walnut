@@ -102,7 +102,19 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
           : '- Session: not started yet — this is what the first message will launch.',
         `- Last turn exact input tokens: ${lastTurnTokens > 0 ? `~${lastTurnTokens.toLocaleString()}` : 'unknown (no turn yet)'}`,
         Object.keys(mcpServers).length > 0
-          ? `- MCP mounts: ${Object.entries(mcpServers).map(([k, v]) => `\`${k}\` (${(v as { command?: string }).command ?? '?'})`).join(', ')} — blocked by machine policy on some hosts; the persona falls back to the HTTP API.`
+          ? `- MCP mounts: ${Object.entries(mcpServers).map(([k, v]) => {
+              // Real per-server verdict from the CLI's init event when we have it
+              // (recorded by the session runner), instead of the old blanket
+              // "blocked on some hosts" guess. 'blocked' = refused by machine policy.
+              const st = record?.mcpMountStatus?.[k]
+              return `\`${k}\` (${(v as { command?: string }).command ?? '?'})${st ? ` — ${st}` : ''}`
+            }).join(', ')}${
+              record?.mcpMountStatus
+                ? Object.values(record.mcpMountStatus).every((s) => s === 'connected')
+                  ? ''
+                  : ' · a non-connected mount means its tools are NOT available this session; use the `walnut` CLI over Bash instead (see the walnut skill).'
+                : ' · mount health unknown until the session starts.'
+            }`
           : '- MCP mounts: none',
         '- Compaction: the CLI auto-compacts its own transcript near the context limit (no Walnut-side compaction on this engine).',
         `- Tools: the CLI's native tool set (Bash, Read, Edit, …)${Object.keys(mcpServers).length > 0 ? ' + MCP tools when the mount is allowed' : ''} — the in-process tool schemas are NOT sent.`,

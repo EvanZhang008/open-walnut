@@ -107,6 +107,14 @@ interface StreamInitEvent {
   model?: string
   tools?: string[]
   permissionMode?: string
+  /**
+   * Per-server mount health, one entry per server the CLI accepted from
+   * `--mcp-config`. A server refused by machine policy is ABSENT from this list
+   * entirely (the CLI only warns on stderr), so "we mounted N, init reports
+   * fewer" is the one reliable signal that a mount was rejected.
+   * Verified against CLI 2.1.220: `[{"name":"walnut","status":"failed"}]`.
+   */
+  mcp_servers?: { name: string; status?: string }[]
 }
 
 /**
@@ -364,6 +372,29 @@ const CLI_STARTUP_NOISE: RegExp[] = [
   /Invalid entry was ignored: failed validation$/i,
 ]
 
+/**
+ * Reconcile the MCP servers we requested via `--mcp-config` against the ones the
+ * CLI reported in its `init` event.
+ *
+ * The CLI lists ONLY servers it accepted; one refused by machine policy is absent
+ * from the list and the refusal goes to stderr, which we classify as startup
+ * noise. So absence is the single reliable signal of a rejected mount, and
+ * `'blocked'` is our verdict for it. Present servers keep the CLI's own status
+ * (connected | failed | needs-auth | pending | disabled).
+ */
+export function reconcileMcpMountStatus(
+  requested: string[],
+  reported: { name?: string; status?: string }[] | undefined,
+): Record<string, string> {
+  const list = Array.isArray(reported) ? reported : []
+  const status: Record<string, string> = {}
+  for (const name of requested) {
+    const hit = list.find((s) => s?.name === name)
+    status[name] = hit ? (hit.status ?? 'unknown') : 'blocked'
+  }
+  return status
+}
+
 /** Drop CLI startup advisories from stderr, so only real diagnostics get quoted. */
 function stripCliStartupNoise(stderr: string): string {
   return stderr
@@ -464,6 +495,8 @@ export class ClaudeCodeSession {
   private _exitCode: number | null = null
   /** Stderr from the remote daemon (populated on exit for remote sessions) */
   private _exitStderr: string | undefined
+  /** MCP server names passed via `--mcp-config` at the last spawn (see init handler). */
+  private _requestedMcpServers: string[] = []
   /** Session-lifetime flag: survives across turns, checked by handleProcessDeath and
    *  server-restart recovery to suppress spurious events from dead/old processes.
    *  Set true on kill/interrupt/respawn; set false when a new turn begins. */
@@ -1677,6 +1710,9 @@ export class ClaudeCodeSession {
     // and the JS daemon spawns without a shell (no re-parsing either way).
     if (profile?.mcpServers && Object.keys(profile.mcpServers).length > 0) {
       args.push('--mcp-config', JSON.stringify({ mcpServers: profile.mcpServers }))
+      // Remember what we ASKED for: the init event reports only the servers the
+      // CLI accepted, so the requested set is what makes a silent refusal visible.
+      this._requestedMcpServers = Object.keys(profile.mcpServers)
     }
     if (profile?.allowedTools && profile.allowedTools.length > 0) {
       args.push('--allowedTools', profile.allowedTools.join(','))
@@ -3599,6 +3635,35 @@ export class ClaudeCodeSession {
               this._resolveSessionReady(newId)
             }
           })()
+        }
+
+        // ── MCP mount health (init only) ──
+        // The CLI lists ONLY the servers it accepted. A server refused by machine
+        // policy is absent entirely and the refusal goes to stderr, which we
+        // deliberately treat as startup noise — so the mount used to die in
+        // silence and the UI hardcoded a guess. Record the real per-server
+        // verdict instead, marking anything we requested but init omitted as
+        // 'blocked'. Read-only bookkeeping: nothing here changes session state.
+        if (sys.subtype === 'init' && this._requestedMcpServers.length > 0) {
+          const status = reconcileMcpMountStatus(
+            this._requestedMcpServers,
+            sys.mcp_servers as { name?: string; status?: string }[] | undefined,
+          )
+          const degraded = Object.entries(status).filter(([, v]) => v !== 'connected')
+          if (degraded.length > 0) {
+            log.session.warn('MCP mount did not come up', {
+              sessionId: this.claudeSessionId, taskId: this.taskId,
+              mcpMountStatus: status,
+              hint: degraded.some(([, v]) => v === 'blocked')
+                ? 'server absent from init — refused before startup (machine policy blocks it); the session falls back to the walnut CLI'
+                : undefined,
+            })
+          }
+          if (this.claudeSessionId) {
+            import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+              updateSessionRecord(this.claudeSessionId!, { mcpMountStatus: status }).catch(() => {}),
+            ).catch(() => {})
+          }
         }
 
         // Parse permissionMode from system events.

@@ -1495,6 +1495,15 @@ export interface SessionRecord {
    * task made commit X?" is a lookup, not transcript archaeology.
    */
   commitShas?: string[];
+  /**
+   * MCP mount health as the CLI itself reported it in the `init` event, keyed by
+   * server name. `'blocked'` is Walnut's own verdict for a server we passed in
+   * `--mcp-config` that init never mentioned — the CLI only warns on stderr, so
+   * without this the mount fails silently and the UI has to guess (it used to
+   * hardcode "blocked on some hosts"). Other values are the CLI's own status
+   * strings: connected | failed | needs-auth | pending | disabled.
+   */
+  mcpMountStatus?: Record<string, string>;
   human_note?: string;
   /** Claude model used by this session (e.g. "claude-opus-4-6"). Display only. */
   model?: string;
