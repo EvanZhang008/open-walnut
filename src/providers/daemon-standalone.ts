@@ -65,14 +65,14 @@ import {
 import { createAcpDaemon, type AcpStartParams } from './acp-daemon.js'
 import { computeGitDiff, GitDiffError, type GitDiffBase } from './git-diff-core.js'
 import {
-  GATEWAY_SOCKET_FILENAME,
-  GATEWAY_MAX_LINE_BYTES,
-import {
   computeHostLocalChanges,
   toLightChangesResult,
   type HostLocalComputeOutput,
   type FileAccum as ChangesFileAccum,
 } from './session-changes-core.js'
+import {
+  GATEWAY_SOCKET_FILENAME,
+  GATEWAY_MAX_LINE_BYTES,
   gatewayHubTimeoutMs,
   parseGatewayLine,
   resolveCallerSid,
