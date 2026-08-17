@@ -110,7 +110,9 @@ contextInspectorRouter.get('/', async (req: Request, res: Response, next: NextFu
               return `\`${k}\` (${(v as { command?: string }).command ?? '?'})${st ? ` — ${st}` : ''}`
             }).join(', ')}${
               record?.mcpMountStatus
-                ? Object.values(record.mcpMountStatus).every((s) => s === 'connected')
+                // 'pending' = handshake still finishing; the tools do arrive, so it
+                // is not a degraded mount (see the init handler's note).
+                ? Object.values(record.mcpMountStatus).every((s) => s === 'connected' || s === 'pending')
                   ? ''
                   : ' · a non-connected mount means its tools are NOT available this session; use the `walnut` CLI over Bash instead (see the walnut skill).'
                 : ' · mount health unknown until the session starts.'

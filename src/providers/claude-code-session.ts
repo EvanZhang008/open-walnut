@@ -3659,7 +3659,14 @@ export class ClaudeCodeSession {
             this._requestedMcpServers,
             sys.mcp_servers as { name?: string; status?: string }[] | undefined,
           )
-          const degraded = Object.entries(status).filter(([, v]) => v !== 'connected')
+          // 'pending' is the CLI still finishing its MCP handshake, NOT a failure:
+          // init fires before the server answers, and the tools work moments later
+          // (verified 2026-08-16 — a lane reporting 'pending' successfully called
+          // mcp__walnut__walnut_status in the same turn). Warning on it produced a
+          // false alarm on every healthy mount, so only genuinely bad states warn.
+          const degraded = Object.entries(status).filter(
+            ([, v]) => v !== 'connected' && v !== 'pending',
+          )
           if (degraded.length > 0) {
             log.session.warn('MCP mount did not come up', {
               sessionId: this.claudeSessionId, taskId: this.taskId,

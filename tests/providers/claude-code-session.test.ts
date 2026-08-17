@@ -194,6 +194,15 @@ describe('reconcileMcpMountStatus', () => {
     ])).toEqual({ walnut: 'blocked', other: 'connected' });
   });
 
+  it("keeps 'pending' verbatim — it is a healthy handshake, not a failure", () => {
+    // Observed live 2026-08-16 the moment the policy allowed the mount: init said
+    // {"name":"walnut","status":"pending"} and the very same turn successfully
+    // called mcp__walnut__walnut_status. Treating pending as degraded warned on
+    // every healthy mount, so the caller must be able to tell it apart.
+    expect(reconcileMcpMountStatus(['walnut'], [{ name: 'walnut', status: 'pending' }]))
+      .toEqual({ walnut: 'pending' });
+  });
+
   it('falls back to unknown for a reported server with no status field', () => {
     expect(reconcileMcpMountStatus(['walnut'], [{ name: 'walnut' }]))
       .toEqual({ walnut: 'unknown' });
