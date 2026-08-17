@@ -145,9 +145,10 @@ const LEGACY_NOTE_LABELS: Partial<Record<NoteSection, string>> = {
  *  never needs to remember the task's beginning. Cheap-by-default protocol: most
  *  sections answer `unchanged`; Work Log appends one entry; Progress is rewritten
  *  only when a workitem's status actually moved. */
-export function buildSelfReportPrompt(existingNote?: string): string {
+export function buildSelfReportPrompt(existingNote?: string, currentTitle?: string): string {
   const existing = existingNote?.trim() ?? '';
   const reorg = existing.length > NOTE_REORG_CAP;
+  const title = currentTitle?.trim() ?? '';
 
   let noteBlock: string;
   if (!existing) {
@@ -170,7 +171,8 @@ WORK_LOG: \`append: <one entry>\` — what you DID, what you FOUND (conclusions,
 NEVER delete facts: when something is superseded, update it in place and keep an "(was: …)" trace.
 
 Then these status fields (same plain-label format):
-RECAP: ONE line, as simple as possible — what just happened in your latest turn(s), for a user re-opening this session ("Fixed the timeout bug, tests green, awaiting commit approval"). Always answer this; never "unchanged".
+${title ? `TITLE: The task's current title is: "${title}". Default answer: \`unchanged\` — a title should almost never change. Only two exceptions: (a) the work CHANGED DIRECTION and the title no longer covers what's happening → answer \`prefix: <1-3 words>\` (English Title Case, one word if it's enough — it lands in FRONT of the title, replacing any previous "Topic · " prefix, so brevity is everything); (b) the title has grown long/stale/confusing as a whole → answer \`rewrite: <new title>\` (short, plain, still findable by someone searching for the ORIGINAL work). Never rewrite a title the human just set; when in doubt, \`unchanged\`.
+` : ''}RECAP: ONE line, as simple as possible — what just happened in your latest turn(s), for a user re-opening this session ("Fixed the timeout bug, tests green, awaiting commit approval"). Always answer this; never "unchanged".
 PHASE_SIGNAL: one of — plan-written | implement-done | reconfirmed | verify-pass | verify-fail | review-done | committed(<hash>) | conversational(user-asked-question).
 STATUS: <succeeded|failed|blocked|waiting> — one sentence on what works / what doesn't.
 WHAT_I_DID: 1-2 sentences, this turn's concrete change (used verbatim in notifications).
@@ -190,7 +192,7 @@ VERIFIED: <ran-and-saw-pass | assumed | not-applicable>.`;
  *  text — missing the regex silently dumps the new section into `preamble`;
  *  missing this list makes the new label bleed into the previous field. */
 const SELF_REPORT_LABELS = [
-  'EXEC_SUMMARY', 'USER_REQUEST', 'GOAL', 'CONTEXT', 'PROGRESS', 'WORK_LOG', 'RECAP',
+  'EXEC_SUMMARY', 'USER_REQUEST', 'GOAL', 'CONTEXT', 'PROGRESS', 'WORK_LOG', 'TITLE', 'RECAP',
   'TASK_SUMMARY', 'WHAT_I_DID', 'STATUS', 'CHANGES_TRIED', 'PHASE_SIGNAL', 'NEXT_STEPS',
   'BLOCKERS', 'USER_INTENT', 'VERIFIED', 'ARTIFACTS',
 ] as const;
@@ -401,43 +403,55 @@ export function decideNotify(report: string, dedupKey: string): string | null {
   return msg;
 }
 
+/** Hard cap for a `rewrite:` title — same MAX_TITLE_LEN family as elsewhere. */
+const TITLE_REWRITE_MAX_LEN = 80;
+
 /**
- * Title drift refresh (triage-time), for EVERY task — not just forks. A title
- * is written once (creation / fork refine) but sessions pivot; a stale title
- * breaks title-based search ("which task removed X?" — 2026-08-15 star
- * incident). After each summary derivation, label the CURRENT topic and, when
- * the title doesn't cover it, PREPEND it: `New Topic · original title`.
- * Additive by design: the original title (human or auto) is never modified or
- * dropped — only the auto-added `·`-prefixes rotate. titleCoversLabel damps
- * paraphrase flip-flops; a concurrent rename during the LLM call wins.
- * Best-effort and fire-and-forget. Exported for unit tests.
+ * Title drift, driven by the self-report's TITLE field — the SESSION judges its
+ * own title as part of the one batched report (no separate cheap-model call;
+ * user direction 2026-08-16). Directives:
+ *   `unchanged`            → nothing (the default, by far the common case)
+ *   `prefix: <1-3 words>`  → prepend in front, REPLACING any previous auto-prefix
+ *                            (prependTopicToTitle — never stacks, tail untouchable)
+ *   `rewrite: <new title>` → full replacement, for a title that got long/stale
+ * `expectedTitle` is the title the prompt showed the session; if the task was
+ * renamed while the report was in flight (human wins), the directive is stale
+ * and dropped. Best-effort, never throws. Exported for unit tests.
  */
-export async function maybeRefreshForkTitle(taskId: string, summary: string): Promise<void> {
+export async function applyTitleDirective(taskId: string, directive: string, expectedTitle: string): Promise<void> {
   try {
-    if (!summary.trim()) return;
+    const d = directive.trim();
+    if (!d || /^unchanged\b/i.test(d)) return;
+    const m = /^(prefix|rewrite)\s*:\s*(.+)$/is.exec(d);
+    if (!m) return; // malformed → treat as unchanged (never guess)
+    const kind = m[1].toLowerCase();
+    const value = m[2].replace(/\s+/g, ' ').trim();
+    if (!value) return;
+
     const { getTask, updateTask } = await import('../task-manager.js');
-    const { prependTopicToTitle, summarizeDriftTopic } = await import('../fork-title.js');
-    const task = await getTask(taskId);
-    if (!task.title?.trim()) return;
-
-    // 1-2 word label (prefer one) — it lands IN FRONT of an existing title, so
-    // brevity beats descriptiveness here (user: "能一个词就不要两个词").
-    const label = await summarizeDriftTopic(summary);
-    if (!label) return;
-    const refined = prependTopicToTitle(task.title, label);
-    if (!refined) return; // topic already covered by the title
-
-    // CAS-ish: skip if someone (human or another fire) renamed it meanwhile.
     const fresh = await getTask(taskId);
-    if (fresh.title !== task.title) return;
+    // Concurrent rename (human or another fire) wins over an in-flight report.
+    if (fresh.title !== expectedTitle) return;
 
-    const { task: updated } = await updateTask(taskId, { title: refined }, { source: 'title-drift' });
+    let next: string | null = null;
+    if (kind === 'prefix') {
+      const { prependTopicToTitle } = await import('../fork-title.js');
+      // Belt-and-braces word cap: the prompt says 1-3 words, enforce it here too.
+      const label = value.split(' ').slice(0, 3).join(' ');
+      next = prependTopicToTitle(fresh.title, label); // null when already covered
+    } else {
+      const rewritten = value.slice(0, TITLE_REWRITE_MAX_LEN).trim();
+      if (rewritten && rewritten !== fresh.title) next = rewritten;
+    }
+    if (!next) return;
+
+    const { task: updated } = await updateTask(taskId, { title: next }, { source: 'title-drift' });
     bus.emit(EventNames.TASK_UPDATED, { task: updated }, ['web-ui', 'main-agent'], { source: 'title-drift' });
-    log.session.info('task title topic-prefixed after drift', {
-      taskId, from: task.title, to: refined,
+    log.session.info('task title updated from self-report TITLE directive', {
+      taskId, kind, from: fresh.title, to: next,
     });
   } catch (err) {
-    log.session.debug('title drift refresh skipped', {
+    log.session.debug('title directive skipped', {
       taskId, error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -516,6 +530,7 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
     selfReportInFlight.add(p.sessionId);
 
     let existingNote = '';
+    let promptedTitle = '';
     let selfReport = '';
     const askedAt = Date.now();
     try {
@@ -524,7 +539,9 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
         // Trimmed at the source: the prompt (NOTE BUDGET + reorg gate) trims
         // internally, so the accountability/shrink checks below must measure the
         // SAME string or a 6006-raw/5992-trimmed note logs spurious reorg warns.
-        existingNote = ((await getTask(taskId)).note ?? '').trim();
+        const taskRow = await getTask(taskId);
+        existingNote = (taskRow.note ?? '').trim();
+        promptedTitle = (taskRow.title ?? '').trim();
       } catch (err) {
         // Do NOT degrade to an empty note: the prompt would say "NOTE is EMPTY,
         // write ALL five sections", the model rewrites from scratch, the shrink
@@ -539,7 +556,7 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
 
       selfReport = (await sessionRunner.requestTurnCompleteSelfReport(
         p.sessionId,
-        buildSelfReportPrompt(existingNote), SELF_REPORT_TIMEOUT_MS,
+        buildSelfReportPrompt(existingNote, promptedTitle), SELF_REPORT_TIMEOUT_MS,
       )).trim();
     } catch (err) {
       log.session.warn('turn-complete-summary: provider self-report failed — skipped (next turn will merge)', {
@@ -674,9 +691,15 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
             sessionId: p.sessionId, error: err instanceof Error ? err.message : String(err),
           });
         }
-        // Fork-title drift refresh: fire-and-forget, auto-fork titles only.
-        void maybeRefreshForkTitle(taskId, shortSummary);
       }
+    }
+
+    // Title directive — the session's own judgment, batched in the same report
+    // (no separate model call). `unchanged` (the default) is a no-op; a rename
+    // that landed while the report was in flight makes the directive stale.
+    const titleDirective = extractField(selfReport, 'TITLE');
+    if (titleDirective && promptedTitle) {
+      void applyTitleDirective(taskId, titleDirective, promptedTitle);
     }
 
     // (a2) Session recap — one line, "what just happened here", shown as a tip

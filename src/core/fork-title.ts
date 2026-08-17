@@ -203,54 +203,6 @@ const TOPIC_SEP = ' · ';
  *  Productize Local Test Setup · GC Load test" — user: too confusing.) */
 const MAX_TOPIC_PREFIXES = 1;
 
-const DRIFT_TOPIC_SYSTEM =
-  'You label the current topic of a coding task. Given a work summary, reply ' +
-  'with a 1-2 word English label in Title Case — ONE word whenever it is ' +
-  'enough; never more than two. No quotes, no punctuation, English only. ' +
-  'Examples: "Productize", "Load Test", "Onboarding".';
-
-/**
- * Label the CURRENT topic of a summary in 1-2 words (prefer one). This is the
- * drift-refresh flavor of summarizeForkPrompt: same cheap call, but a much
- * shorter label — it is prepended onto an existing title, so every extra word
- * compounds ("能一个词就不要两个词"). Best-effort; '' on failure.
- */
-export async function summarizeDriftTopic(summary: string, timeoutMs = 15_000): Promise<string> {
-  const trimmed = (summary ?? '').trim();
-  if (!trimmed) return '';
-  const cap = (s: string): string => s.split(' ').filter(Boolean).slice(0, 2).join(' ');
-  try {
-    const { getConfig } = await import('./config-manager.js');
-    const config = await getConfig();
-    const model = fastModelFor(config);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    let result;
-    try {
-      result = await sendMessage({
-        system: DRIFT_TOPIC_SYSTEM,
-        messages: [{ role: 'user', content: `Summary:\n${trimmed.slice(0, 2000)}\n\nLabel:` }],
-        config: { maxTokens: 64, ...(model ? { model } : {}) },
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timer);
-    }
-    const text = (result.content ?? [])
-      .map((b) => (b.type === 'text' && 'text' in b ? (b as { text: string }).text : ''))
-      .join('')
-      .trim();
-    const label = cap(normalizeLabel(text));
-    if (label) return label;
-    return cap(heuristicLabel(trimmed));
-  } catch (err) {
-    log.web.warn('summarizeDriftTopic failed, using heuristic', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return cap(heuristicLabel(trimmed));
-  }
-}
-
 /**
  * Prepend a drifted topic to a title WITHOUT losing anything the human (or the
  * original auto-namer) wrote: `New Topic · original title`. This is the
