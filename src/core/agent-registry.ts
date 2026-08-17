@@ -122,7 +122,10 @@ export const DEFAULT_TRIAGE_AGENT_ID = 'turn-complete-triage';
  */
 export async function getConsoleAgents(): Promise<AgentDefinition[]> {
   const all = await getAllAgents();
-  return all.filter((a) => a.console);
+  // General is always a console agent even if a config override drops the flag
+  // (same compat rule as getConsoleAgent) — a stray `agents: [{id: general}]`
+  // entry must never make the main agent vanish from the chat pickers.
+  return all.filter((a) => a.console || a.id === 'general');
 }
 
 /**

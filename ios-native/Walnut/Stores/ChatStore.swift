@@ -109,16 +109,19 @@ final class ChatStore {
         LifecycleHub.shared.register(self)
     }
 
-    /// Load cache, pick the most recent conversation, refresh from network.
+    /// Cold launch lands on the MAIN agent with a fresh chat (user call,
+    /// 2026-08-16): restoring the saved agent used to strand the app on a
+    /// subagent (Mentor) whenever the main agent was unavailable, and opening
+    /// into an old thread buried the composer under history. History stays one
+    /// tap away (clock button); the conversation is created lazily on first
+    /// send, so an untouched new chat never litters the server.
     func initialize() async {
         // Reactivate explicitly: Settings disconnect calls closeStream()
         // (isActive=false) and re-pairing runs initialize() in the SAME
         // foreground session — without this the chat tab is dead until the
         // next background/foreground cycle.
         isActive = true
-        if let savedAgent = UserDefaults.standard.string(forKey: "walnut.activeAgent") {
-            activeAgentID = savedAgent
-        }
+        activeAgentID = Self.mainAgentID
         // Cache hydration is ASYNC (P0-1): decoding these on the MainActor was
         // part of the cold-start work that got a background/prewarm launch
         // killed for blowing the scene-update allowance.
@@ -131,15 +134,16 @@ final class ChatStore {
             conversations = cachedList
         }
         guard isActive else { return }
-        if let saved = UserDefaults.standard.string(forKey: activeConversationKey) {
-            select(saved)
-        }
+        // New chat is the resting state — no saved-conversation restore, no
+        // fall-through to the most recent thread.
+        select(nil)
         await refreshAgents()
         await refreshConversations()
-        if activeID == nil || !conversations.contains(where: { $0.id == activeID }) {
-            select(conversations.first?.id)
-        }
     }
+
+    /// The server marks the main agent with `isMain` (id "general"); this is
+    /// the same fallback id the API defaults to when none is sent.
+    static let mainAgentID = "general"
 
     /// Per-agent persistence keys — each agent remembers its own thread.
     private var activeConversationKey: String { "walnut.activeConversation.\(activeAgentID)" }
