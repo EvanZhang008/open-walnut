@@ -50,7 +50,7 @@ export function CalendarSection() {
     // optimistic
     setCalendars((prev) => prev.map((c) => (c.id === id ? { ...c, hidden } : c)));
     try {
-      await updateCalendarSource({ hidden_calendar_ids: nextHidden });
+      await updateCalendarSource({ hidden_calendar_ids: nextHidden, visible_calendar_ids: null });
     } catch {
       load();
     }

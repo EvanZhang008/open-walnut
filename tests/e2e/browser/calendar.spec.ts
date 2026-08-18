@@ -32,6 +32,33 @@ async function getTaskViaApi(id: string): Promise<{ start_date?: string; due_dat
   return body.task
 }
 
+async function deleteTaskViaApi(id: string): Promise<void> {
+  const res = await fetch(`${API}/api/tasks/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`DELETE task failed: ${res.status}`)
+}
+
+async function setCalendarHiddenViaApi(id: string, hidden: boolean): Promise<void> {
+  const sourcesRes = await fetch(`${API}/api/calendar/sources`)
+  if (!sourcesRes.ok) throw new Error(`GET calendars failed: ${sourcesRes.status}`)
+  const body = (await sourcesRes.json()) as {
+    calendars: Array<{ id: string; hidden: boolean }>
+  }
+  const hiddenIds = new Set(
+    body.calendars.filter((calendar) => calendar.hidden).map((calendar) => calendar.id),
+  )
+  if (hidden) hiddenIds.add(id)
+  else hiddenIds.delete(id)
+  const updateRes = await fetch(`${API}/api/calendar/sources/eventkit`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      hidden_calendar_ids: [...hiddenIds],
+      visible_calendar_ids: null,
+    }),
+  })
+  if (!updateRes.ok) throw new Error(`PUT calendar visibility failed: ${updateRes.status}`)
+}
+
 /** Local YYYY-MM-DD for today / +offset days. */
 function localDay(offset = 0): string {
   const d = new Date()
@@ -327,26 +354,67 @@ test.describe('Calendar view', () => {
     await expect(page.locator(`.cal-chip:has-text("${title}")`).first()).toBeVisible()
   })
 
-  test('toolbar Calendars popover toggles per-calendar visibility live', async ({ page }) => {
-    await openCalendar(page)
-    // ev-e2e-errand rides the dedicated "Personal" calendar so this toggle
-    // can't break parallel specs asserting on cal-work chips.
-    const chip = page.locator('.cal-day-col .cal-chip[data-item-id="event:ev-e2e-errand"]')
-    await chip.scrollIntoViewIfNeeded()
-    await expect(chip).toBeVisible()
+  test('calendar menus toggle visibility and homepage context menu restores a hidden source', async ({ page }) => {
+    await setCalendarHiddenViaApi('cal-personal', false)
+    try {
+      await openCalendar(page)
+      // ev-e2e-errand rides the dedicated "Personal" calendar so this toggle
+      // can't break parallel specs asserting on cal-work chips.
+      const chip = page.locator('.cal-day-col .cal-chip[data-item-id="event:ev-e2e-errand"]')
+      await chip.scrollIntoViewIfNeeded()
+      await expect(chip).toBeVisible()
 
-    await page.click('[data-testid="cal-cals-btn"]')
-    const popover = page.locator('[data-testid="cal-cals-popover"]')
-    await expect(popover).toBeVisible()
+      await page.click('[data-testid="cal-cals-btn"]')
+      const popover = page.locator('[data-testid="cal-cals-popover"]')
+      await expect(popover).toBeVisible()
 
-    const row = popover.locator('.cal-cals-row', { hasText: 'Personal' })
-    await row.locator('input[type="checkbox"]').uncheck()
-    await expect(chip).toHaveCount(0, { timeout: 5000 })
+      const row = popover.locator('.cal-cals-row', { hasText: 'Personal' })
+      await expect(row).toHaveAttribute('aria-checked', 'true')
+      await row.click()
+      await expect(chip).toHaveCount(0, { timeout: 5000 })
 
-    // Re-check → chips come back (no reload, cache kept the events)
-    await row.locator('input[type="checkbox"]').check()
-    await expect(page.locator('.cal-day-col .cal-chip[data-item-id="event:ev-e2e-errand"]')).toBeVisible({ timeout: 5000 })
-    await page.locator('.cal-popover-backdrop').click()
+      // Re-check → chips come back (no reload, cache kept the events)
+      await expect(row).toHaveAttribute('aria-checked', 'false')
+      await row.click()
+      await expect(page.locator('.cal-day-col .cal-chip[data-item-id="event:ev-e2e-errand"]')).toBeVisible({ timeout: 5000 })
+      await page.locator('.cal-popover-backdrop').click()
+
+      // The homepage uses the same persisted visibility state. Right-clicking an
+      // event hides its entire calendar, then the compact header menu restores it.
+      await page.click('a[href="/"]')
+      await page.click('[data-testid="sidebar-toggle-calendar"]')
+      const panel = page.locator('[data-testid="cal-side-panel"]')
+      const sideChip = panel.locator('.cal-chip[data-item-id="event:ev-e2e-errand"]')
+      await sideChip.scrollIntoViewIfNeeded()
+      await sideChip.click({ button: 'right' })
+      const contextMenu = page.locator('[data-testid="cal-ctx-menu"]')
+      await contextMenu.locator('button:has-text("Hide calendar")').click()
+      await expect(sideChip).toHaveCount(0)
+      await expect
+        .poll(async () => {
+          const res = await fetch(`${API}/api/calendar/sources`)
+          const body = (await res.json()) as { calendars: Array<{ id: string; hidden: boolean }> }
+          return body.calendars.find((calendar) => calendar.id === 'cal-personal')?.hidden
+        })
+        .toBe(true)
+
+      await panel.locator('[data-testid="cal-side-cals-btn"]').click()
+      const sidePopover = page.locator('[data-testid="cal-cals-popover"]')
+      const sideRow = sidePopover.locator('.cal-cals-row', { hasText: 'Personal' })
+      await expect(sideRow).toHaveAttribute('aria-checked', 'false')
+      await sideRow.click()
+      await expect(sideRow).toHaveAttribute('aria-checked', 'true')
+      await expect(sideChip).toBeVisible({ timeout: 5000 })
+      await expect
+        .poll(async () => {
+          const res = await fetch(`${API}/api/calendar/sources`)
+          const body = (await res.json()) as { calendars: Array<{ id: string; hidden: boolean }> }
+          return body.calendars.find((calendar) => calendar.id === 'cal-personal')?.hidden
+        })
+        .toBe(false)
+    } finally {
+      await setCalendarHiddenViaApi('cal-personal', false)
+    }
   })
 
   test('right-click on a task chip offers Unschedule (clears start_date)', async ({ page }) => {
@@ -871,6 +939,111 @@ test.describe('Calendar view', () => {
     // Toggle closes
     await panel.locator('button[title="Close calendar panel"]').click()
     await expect(panel).toHaveCount(0)
+  })
+
+  test('homepage all-day area grows to ten rows, scrolls, resizes, and persists', async ({ page }) => {
+    const dayOffset = 10
+    const targetDay = localDay(dayOffset)
+    const heightKey = 'open-walnut-home-calendar-all-day-height'
+    const tasks: Array<{ id: string; title: string }> = []
+
+    try {
+      const results = await Promise.allSettled(
+        Array.from({ length: 12 }, (_, i) =>
+          createTaskViaApi(`CalAllDayResize${String(i + 1).padStart(2, '0')}`, { start_date: targetDay }),
+        ),
+      )
+      for (const result of results) {
+        if (result.status === 'fulfilled') tasks.push(result.value)
+      }
+      const failed = results.find((result) => result.status === 'rejected')
+      if (failed?.status === 'rejected') throw failed.reason
+
+      await page.goto('/')
+      await expect(page.locator('[data-testid="sidebar-toggle-calendar"]')).toBeVisible()
+      await page.evaluate((key) => localStorage.removeItem(key), heightKey)
+      await page.reload()
+      await expect(page.locator('[data-testid="sidebar-toggle-calendar"]')).toBeVisible()
+      await page.click('[data-testid="sidebar-toggle-calendar"]')
+
+      const panel = page.locator('[data-testid="cal-side-panel"]')
+      const allDay = panel.locator('.cal-grid-allday')
+      const handle = panel.locator('[data-testid="cal-allday-resize-handle"]')
+      await expect(panel).toBeVisible()
+      for (let i = 0; i < dayOffset; i += 1) {
+        await panel.getByRole('button', { name: 'Next day' }).click()
+      }
+      await expect(allDay.locator('.cal-chip').filter({ hasText: 'CalAllDayResize' })).toHaveCount(12)
+
+      const natural = await allDay.evaluate((el) => ({
+        clientHeight: el.clientHeight,
+        scrollHeight: el.scrollHeight,
+      }))
+      expect(natural.clientHeight).toBeGreaterThan(180)
+      expect(natural.clientHeight).toBeLessThanOrEqual(214)
+      expect(natural.scrollHeight).toBeGreaterThan(natural.clientHeight)
+      const initialRows = await allDay.evaluate((el) => {
+        const viewport = el.getBoundingClientRect()
+        const chips = Array.from(el.querySelectorAll<HTMLElement>('.cal-chip'))
+        return {
+          total: chips.length,
+          fullyVisible: chips.filter((chip) => {
+            const rect = chip.getBoundingClientRect()
+            return rect.top >= viewport.top - 0.5 && rect.bottom <= viewport.bottom + 0.5
+          }).length,
+        }
+      })
+      expect(initialRows.total).toBeGreaterThan(10)
+      expect(initialRows.fullyVisible).toBe(10)
+
+      await allDay.hover()
+      await page.mouse.wheel(0, 500)
+      await expect.poll(() => allDay.evaluate((el) => el.scrollTop)).toBeGreaterThan(0)
+      await expect(allDay.locator('.cal-chip').filter({ hasText: 'CalAllDayResize12' })).toBeVisible()
+
+      const handleBox = await handle.boundingBox()
+      if (!handleBox) throw new Error('all-day resize handle not visible')
+      await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2)
+      await page.mouse.down()
+      await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y - 80, { steps: 8 })
+      await page.mouse.up()
+
+      const shrunkenHeight = await allDay.evaluate((el) => el.clientHeight)
+      expect(shrunkenHeight).toBeLessThan(natural.clientHeight - 50)
+
+      const shrunkenHandleBox = await handle.boundingBox()
+      if (!shrunkenHandleBox) throw new Error('all-day resize handle missing after shrink')
+      await page.mouse.move(
+        shrunkenHandleBox.x + shrunkenHandleBox.width / 2,
+        shrunkenHandleBox.y + shrunkenHandleBox.height / 2,
+      )
+      await page.mouse.down()
+      await page.mouse.move(
+        shrunkenHandleBox.x + shrunkenHandleBox.width / 2,
+        shrunkenHandleBox.y + shrunkenHandleBox.height / 2 + 45,
+        { steps: 6 },
+      )
+      await page.mouse.up()
+
+      const expandedHeight = await allDay.evaluate((el) => el.clientHeight)
+      expect(expandedHeight).toBeGreaterThan(shrunkenHeight + 25)
+      expect(expandedHeight).toBeLessThanOrEqual(natural.clientHeight)
+      const storedHeight = await page.evaluate((key) => Number(localStorage.getItem(key)), heightKey)
+      expect(Math.abs(storedHeight - expandedHeight)).toBeLessThanOrEqual(1)
+
+      await page.reload()
+      await expect(panel).toBeVisible()
+      const restoredMaxHeight = await allDay.evaluate((el) => Number.parseFloat(el.style.maxHeight))
+      expect(Math.abs(restoredMaxHeight - expandedHeight)).toBeLessThanOrEqual(1)
+
+      await panel.locator('.cal-side-expand').click()
+      await expect(page).toHaveURL(/\/calendar\?view=day/)
+      const calendarPage = page.locator('.cal-page')
+      await expect(calendarPage).toBeVisible()
+      await expect(calendarPage.locator('[data-testid="cal-allday-resize-handle"]')).toHaveCount(0)
+    } finally {
+      await Promise.all(tasks.map((task) => deleteTaskViaApi(task.id)))
+    }
   })
 
   test('rail groups pinned tasks under their tier before the project groups', async ({ page, request }) => {

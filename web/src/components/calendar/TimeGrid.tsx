@@ -22,6 +22,7 @@ import {
 } from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import { useDragGesture } from '@/hooks/useDragGesture';
+import { useResizableHeight } from '@/hooks/useResizableHeight';
 import {
   SLOT_MINUTES,
   SNAP_MINUTES,
@@ -41,6 +42,9 @@ const CLICK_TOLERANCE_PX = 4;
 const MIN_EVENT_PX = 20;
 /** Resize can't shrink an event below this. */
 const SNAP_MINUTES_MIN = 15;
+const ALL_DAY_HEIGHT_STORAGE_KEY = 'open-walnut-home-calendar-all-day-height';
+const ALL_DAY_MIN_HEIGHT = 26;
+const ALL_DAY_MAX_HEIGHT = 212; // Ten 19px rows, nine 2px gaps, and 4px cell padding.
 
 export interface DropPreview {
   day: string;
@@ -74,6 +78,8 @@ interface Props {
   onContextMenu?: (point: { x: number; y: number }, target: { item?: CalendarItem; seed?: CreateSeed }) => void;
   /** Click on any chip → the item edit popover (macOS-Calendar-style). */
   onItemClick?: (item: CalendarItem, el: HTMLElement) => void;
+  /** Homepage agenda only: let the all-day area grow to ten rows and resize. */
+  resizableAllDay?: boolean;
 }
 
 interface ChipDrag {
@@ -243,6 +249,7 @@ export const TimeGrid = memo(function TimeGrid({
   onCreate,
   onContextMenu,
   onItemClick,
+  resizableAllDay = false,
 }: Props) {
   const dayList = useMemo(() => {
     const base = days === 7 ? weekRange(anchor) : [anchor];
@@ -253,6 +260,11 @@ export const TimeGrid = memo(function TimeGrid({
   const todayStr = formatDateOnly(today);
   const scrollRef = useRef<HTMLDivElement>(null);
   const colsRef = useRef<HTMLDivElement>(null);
+  const allDayRef = useRef<HTMLDivElement>(null);
+  const allDayResize = useResizableHeight(ALL_DAY_HEIGHT_STORAGE_KEY, {
+    min: ALL_DAY_MIN_HEIGHT,
+    max: ALL_DAY_MAX_HEIGHT,
+  });
 
   // Publish column rects for the page's dnd-kit slot math; refresh on layout.
   const publishMetrics = useCallback(() => {
@@ -272,9 +284,15 @@ export const TimeGrid = memo(function TimeGrid({
     const scroller = scrollRef.current;
     scroller?.addEventListener('scroll', publishMetrics, { passive: true });
     window.addEventListener('resize', publishMetrics);
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined' && scroller
+        ? new ResizeObserver(publishMetrics)
+        : null;
+    if (scroller) resizeObserver?.observe(scroller);
     return () => {
       scroller?.removeEventListener('scroll', publishMetrics);
       window.removeEventListener('resize', publishMetrics);
+      resizeObserver?.disconnect();
     };
   }, [publishMetrics, dayList]);
 
@@ -550,7 +568,11 @@ export const TimeGrid = memo(function TimeGrid({
         <div className="cal-grid-gutter" />
         <div className="cal-grid-dayheads">{dayList.map(dayHeader)}</div>
       </div>
-      <div className="cal-grid-allday">
+      <div
+        ref={allDayRef}
+        className={`cal-grid-allday${resizableAllDay ? ' cal-grid-allday-resizable' : ''}`}
+        style={resizableAllDay ? { maxHeight: allDayResize.height ?? ALL_DAY_MAX_HEIGHT } : undefined}
+      >
         <div className="cal-grid-gutter cal-allday-label">all-day</div>
         <div className="cal-allday-cells">
           {dayList.map((d) => (
@@ -571,6 +593,17 @@ export const TimeGrid = memo(function TimeGrid({
           ))}
         </div>
       </div>
+      {resizableAllDay && (
+        <div
+          className={`cal-allday-resize-handle${allDayResize.isDragging ? ' dragging' : ''}`}
+          data-testid="cal-allday-resize-handle"
+          role="separator"
+          aria-label="Resize all-day events"
+          aria-orientation="horizontal"
+          title="Drag to resize all-day events"
+          onPointerDown={(e) => allDayResize.handlePointerDown(e, allDayRef.current)}
+        />
+      )}
       <div className="cal-grid-scroll" ref={scrollRef}>
         <div className="cal-grid-ruler">
           {HOURS.map((h) => (

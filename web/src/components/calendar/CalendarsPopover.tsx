@@ -50,7 +50,10 @@ export function CalendarsPopover({ anchorEl, onClose }: Props) {
     if (!calendars) return;
     const next = calendars.map((c) => (c.id === id ? { ...c, hidden } : c));
     setCalendars(next); // optimistic — server push refreshes the grid
-    updateCalendarSource({ hidden_calendar_ids: next.filter((c) => c.hidden).map((c) => c.id) }).catch(() => {
+    updateCalendarSource({
+      hidden_calendar_ids: next.filter((c) => c.hidden).map((c) => c.id),
+      visible_calendar_ids: null,
+    }).catch(() => {
       setCalendars(calendars);
     });
   };
@@ -65,7 +68,15 @@ export function CalendarsPopover({ anchorEl, onClose }: Props) {
   return createPortal(
     <>
       <div className="cal-popover-backdrop" onClick={onClose} />
-      <div className="cal-cals-popover" ref={menuRef} style={menuPlacementStyle(placement)} data-testid="cal-cals-popover">
+      <div
+        className="cal-cals-popover"
+        ref={menuRef}
+        style={menuPlacementStyle(placement)}
+        data-testid="cal-cals-popover"
+        role="menu"
+        aria-label="Visible calendars"
+        onPointerDown={(event) => event.stopPropagation()}
+      >
         {calendars === null && !unavailable && <div className="cal-cals-empty">Loading…</div>}
         {unavailable && (
           <div className="cal-cals-empty">
@@ -80,11 +91,19 @@ export function CalendarsPopover({ anchorEl, onClose }: Props) {
           <div key={account} className="cal-cals-group">
             <div className="cal-cals-account">{account}</div>
             {list.map((c) => (
-              <label key={c.id} className="cal-cals-row" title={c.readonly ? `${c.title} (read-only)` : c.title}>
-                <input type="checkbox" checked={!c.hidden} onChange={(e) => toggle(c.id, !e.target.checked)} />
+              <button
+                key={c.id}
+                type="button"
+                className="cal-cals-row"
+                title={c.readonly ? `${c.title} (read-only)` : c.title}
+                role="menuitemcheckbox"
+                aria-checked={!c.hidden}
+                onClick={() => toggle(c.id, !c.hidden)}
+              >
+                <span className="cal-cals-check" aria-hidden="true" />
                 <span className="cal-settings-dot" style={{ background: c.color }} />
                 <span className="cal-cals-name">{c.title}</span>
-              </label>
+              </button>
             ))}
           </div>
         ))}

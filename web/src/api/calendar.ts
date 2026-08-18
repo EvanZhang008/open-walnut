@@ -52,7 +52,11 @@ export function listCalendarSources() {
   return apiGet<{ sources: CalendarSourceStatus[]; calendars: CalendarInfo[] }>('/api/calendar/sources');
 }
 
-export function updateCalendarSource(patch: { enabled?: boolean; hidden_calendar_ids?: string[] }) {
+export function updateCalendarSource(patch: {
+  enabled?: boolean;
+  hidden_calendar_ids?: string[];
+  visible_calendar_ids?: string[] | null;
+}) {
   return apiPut<{ sources: CalendarSourceStatus[] }>('/api/calendar/sources/eventkit', patch);
 }
 

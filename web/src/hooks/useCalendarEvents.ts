@@ -8,7 +8,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   listCalendarEvents,
+  listCalendarSources,
   updateCalendarEvent,
+  updateCalendarSource,
   createCalendarEvent,
   deleteCalendarEvent,
   type CalendarEvent,
@@ -25,6 +27,8 @@ export interface UseCalendarEvents {
   moveEvent: (id: string, patch: { start: string; end: string; title?: string }) => void;
   createEvent: (input: { calendarId: string; title: string; start: string; end: string; allDay?: boolean }) => Promise<CalendarEvent>;
   removeEvent: (id: string) => void;
+  /** Hide one external calendar and persist it in the shared visibility config. */
+  hideCalendar: (calendarId: string) => void;
   refetch: () => void;
 }
 
@@ -126,5 +130,42 @@ export function useCalendarEvents(from: string, to: string): UseCalendarEvents {
     [events, settleWrite]
   );
 
-  return { events, sources, loading, moveEvent, createEvent, removeEvent, refetch: fetchNow };
+  const hideCalendar = useCallback(
+    (calendarId: string) => {
+      // The context-menu action should feel immediate. The canonical refetch
+      // below restores the events if either visibility request fails.
+      setEvents((current) => current.filter((event) => event.calendarId !== calendarId));
+      void listCalendarSources()
+        .then((res) => {
+          const hiddenIds = new Set(
+            res.calendars.filter((calendar) => calendar.hidden).map((calendar) => calendar.id)
+          );
+          hiddenIds.add(calendarId);
+          return updateCalendarSource({
+            hidden_calendar_ids: [...hiddenIds],
+            visible_calendar_ids: null,
+          });
+        })
+        .then(fetchNow)
+        .catch((err) => {
+          log.warn('calendar', 'calendar hide failed, refetching', {
+            calendarId,
+            error: String(err).slice(0, 200),
+          });
+          fetchNow();
+        });
+    },
+    [fetchNow]
+  );
+
+  return {
+    events,
+    sources,
+    loading,
+    moveEvent,
+    createEvent,
+    removeEvent,
+    hideCalendar,
+    refetch: fetchNow,
+  };
 }

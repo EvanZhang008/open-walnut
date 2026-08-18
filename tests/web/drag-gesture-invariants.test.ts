@@ -192,7 +192,7 @@ describe('CSS supports the pointer-based drag model', () => {
       'notes-resize-handle', 'session-col-resize-handle', 'session-panel-chat-resize',
       'session-diff-tree-resize', 'sfe-divider', 'notes-chat-divider',
       'dock-resize-handle', 'global-notes-resize-handle', 'todo-tier-resize-handle',
-      'todo-detail-splitter', 'todo-pinned-splitter',
+      'todo-detail-splitter', 'todo-pinned-splitter', 'cal-allday-resize-handle',
     ];
     // Find the rule block that declares touch-action:none for the handle list.
     const blocks = CSS.match(/[^{}]+\{[^}]*touch-action:\s*none[^}]*\}/g) ?? [];

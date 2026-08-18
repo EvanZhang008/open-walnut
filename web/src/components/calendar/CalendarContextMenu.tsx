@@ -2,7 +2,7 @@
  * CalendarContextMenu — right-click menu for the calendar surfaces, replacing
  * the browser menu with regular calendar actions:
  *   task chip   → Open task · Complete · Unschedule (clear that date) · Delete
- *   event chip  → Delete event (writable calendars only)
+ *   event chip  → Hide its calendar · Delete event (writable calendars only)
  *   empty slot  → New task… · New event… (seeds the quick-create popover)
  * Anchored at the pointer via useMenuPlacement's anchorPoint mode.
  */
@@ -30,6 +30,8 @@ interface Props {
   /** Delete the task entirely (two-step confirm, same as event delete). */
   onDeleteTask?: (item: CalendarItem) => void;
   onDeleteEvent?: (item: CalendarItem) => void;
+  /** Hide the external calendar that owns the selected event. */
+  onHideCalendar?: (calendarId: string) => void;
   /** Open the quick-create popover on the given tab. */
   onCreate?: (seed: CreateSeed, tab: 'task' | 'event') => void;
   /** Event creation is possible (writable source connected). */
@@ -43,6 +45,7 @@ export function CalendarContextMenu({
   onCompleteTask,
   onDeleteTask,
   onDeleteEvent,
+  onHideCalendar,
   onCreate,
   canCreateEvent,
 }: Props) {
@@ -74,7 +77,14 @@ export function CalendarContextMenu({
   return createPortal(
     <>
       <div className="cal-popover-backdrop" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
-      <div className="cal-ctx-menu" ref={menuRef} style={menuPlacementStyle(placement)} role="menu" data-testid="cal-ctx-menu">
+      <div
+        className="cal-ctx-menu"
+        ref={menuRef}
+        style={menuPlacementStyle(placement)}
+        role="menu"
+        data-testid="cal-ctx-menu"
+        onPointerDown={(event) => event.stopPropagation()}
+      >
         {isTask && (
           <>
             <button role="menuitem" onClick={run(() => window.open(`/tasks/${item.task.id}`, '_self'))}>
@@ -107,6 +117,11 @@ export function CalendarContextMenu({
               {item.event.calendarName} · {item.event.accountName}
               {item.event.readonly ? ' (read-only)' : ''}
             </div>
+            {onHideCalendar && (
+              <button role="menuitem" onClick={run(() => onHideCalendar(item.event.calendarId))}>
+                Hide calendar
+              </button>
+            )}
             {eventWritable && onDeleteEvent && (
               <button
                 role="menuitem"

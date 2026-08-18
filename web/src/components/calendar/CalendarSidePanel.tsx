@@ -19,6 +19,7 @@ import { TimeGrid, type DropPreview, type GridMetrics } from './TimeGrid';
 import { QuickCreatePopover, type CreateSeed } from './QuickCreatePopover';
 import { CalendarContextMenu, type CalendarContextTarget } from './CalendarContextMenu';
 import { CalendarItemPopover } from './CalendarItemPopover';
+import { CalendarsPopover } from './CalendarsPopover';
 
 interface Props {
   onClose: () => void;
@@ -36,6 +37,7 @@ export function CalendarSidePanel({ onClose, width, panelRef: externalPanelRef }
   const [createSeed, setCreateSeed] = useState<CreateSeed | null>(null);
   const [ctxTarget, setCtxTarget] = useState<CalendarContextTarget | null>(null);
   const [openItem, setOpenItem] = useState<{ item: CalendarItem; anchorEl: HTMLElement } | null>(null);
+  const [calsAnchor, setCalsAnchor] = useState<HTMLElement | null>(null);
   const metricsRef = useRef<GridMetrics | null>(null);
   const internalPanelRef = useRef<HTMLDivElement | null>(null);
   // One element, two consumers: the drag-bus hit-test reads it, and MainPage's
@@ -174,6 +176,23 @@ export function CalendarSidePanel({ onClose, width, panelRef: externalPanelRef }
           )}
           <button onClick={() => step(1)} aria-label="Next day">›</button>
         </div>
+        <button
+          className="cal-side-calendars"
+          onClick={(event) => setCalsAnchor(event.currentTarget)}
+          aria-label="Choose calendars"
+          title="Choose which calendars to show"
+          data-testid="cal-side-cals-btn"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="17" rx="2" />
+            <line x1="3" y1="9" x2="21" y2="9" />
+            <line x1="8" y1="2" x2="8" y2="6" />
+            <line x1="16" y1="2" x2="16" y2="6" />
+            <circle cx="8.5" cy="14" r="1.4" />
+            <circle cx="12" cy="14" r="1.4" />
+            <circle cx="15.5" cy="14" r="1.4" />
+          </svg>
+        </button>
         <Link to={`/calendar?view=day&d=${day}`} className="cal-side-expand" title="Open calendar">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M15 3h6v6" /><path d="M10 14L21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
@@ -205,6 +224,7 @@ export function CalendarSidePanel({ onClose, width, panelRef: externalPanelRef }
             onCreate={setCreateSeed}
             onContextMenu={(point, target) => setCtxTarget({ point, ...target })}
             onItemClick={(item, anchorEl) => setOpenItem({ item, anchorEl })}
+            resizableAllDay
           />
         </DndContext>
       </div>
@@ -228,9 +248,13 @@ export function CalendarSidePanel({ onClose, width, panelRef: externalPanelRef }
           onDeleteEvent={(item) => {
             if (item.kind === 'event') calendar.removeEvent(item.event.id);
           }}
+          onHideCalendar={calendar.hideCalendar}
           onCreate={(seed, tab) => setCreateSeed({ ...seed, tab })}
           canCreateEvent={canCreateEvent}
         />
+      )}
+      {calsAnchor && (
+        <CalendarsPopover anchorEl={calsAnchor} onClose={() => setCalsAnchor(null)} />
       )}
       {openItem && (
         <CalendarItemPopover

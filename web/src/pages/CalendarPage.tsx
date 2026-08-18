@@ -411,6 +411,7 @@ export function CalendarPage() {
           onCompleteTask={completeTaskItem}
           onDeleteTask={deleteTaskItem}
           onDeleteEvent={deleteEventItem}
+          onHideCalendar={calendar.hideCalendar}
           onCreate={(seed, tab) => setCreateSeed({ ...seed, tab })}
           canCreateEvent={canCreateEvent}
         />
