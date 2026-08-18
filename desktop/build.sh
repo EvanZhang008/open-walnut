@@ -20,7 +20,8 @@ rm -rf "$APP_BUNDLE"
 mkdir -p "$MACOS" "$RESOURCES"
 
 # Compile the Swift source
-swiftc -O -o "$MACOS/$APP_NAME" "$SCRIPT_DIR/main.swift" \
+swiftc -O -o "$MACOS/$APP_NAME" \
+    "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" \
     -framework Cocoa -framework WebKit
 
 # Create Info.plist

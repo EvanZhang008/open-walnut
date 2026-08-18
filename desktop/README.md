@@ -97,6 +97,10 @@ Config (chosen home + source dir) is stored at
 `~/Library/Application Support/Walnut/config.json`. Use **Reset Setup…** from the
 app menu to start over.
 
+Desktop lifecycle events are written as JSON lines to
+`~/Library/Application Support/Walnut/desktop.log`. The log rotates at 1 MB
+and keeps one previous copy.
+
 ## Notes
 
 - Bundle identifier: `com.local.walnut-desktop`.

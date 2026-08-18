@@ -70,8 +70,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var statusLabel: NSTextField?
     var retryTimer: Timer?
     var bootstrapProcess: Process?
+    var serverOutputReader: ProcessOutputReader?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        DesktopLogger.shared.log("app_launched", fields: [
+            "pid": String(ProcessInfo.processInfo.processIdentifier)
+        ])
         NSApp.setActivationPolicy(.regular)
 
         setupMainMenu()
@@ -105,8 +109,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        DesktopLogger.shared.log("app_terminating")
         bootstrapProcess?.terminate()
         stopServer()
+        DesktopLogger.shared.flush()
     }
 
     // MARK: - Setup Screen
@@ -750,10 +756,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // exceeds 15s, and killing it mid-compile corrupts the module).
         var rebuildingNativeModule = false
 
-        handle.readabilityHandler = { [weak self] fileHandle in
-            let data = fileHandle.availableData
-            guard !data.isEmpty, let str = String(data: data, encoding: .utf8) else { return }
-            outputBuffer += str
+        let outputReader = ProcessOutputReader(
+            handle: handle,
+            logger: { event, fields in
+                var details = fields
+                details["port"] = String(port)
+                DesktopLogger.shared.log(event, fields: details)
+            }
+        )
+        serverOutputReader = outputReader
+        outputReader.start(onText: { [weak self] snapshot in
+            outputBuffer = snapshot
 
             // The server may recompile a native addon whose ABI doesn't match this
             // Node (see src/core/native-abi-preflight.ts). That takes far longer
@@ -774,7 +787,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self?.pollForServer()
                 }
             }
-        }
+        }, onEOF: {
+            DesktopLogger.shared.log("server_output_eof", fields: ["port": String(port)])
+        })
 
         do {
             try process.run()
@@ -782,6 +797,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // can recognize this exact process as OUR orphan and reclaim it.
             recordSpawnedServerPid(process.processIdentifier)
         } catch {
+            outputReader.stop(reason: "spawn_failed")
+            serverOutputReader = nil
             DispatchQueue.main.async { [weak self] in
                 self?.showError("Failed to start server: \(error.localizedDescription)")
             }
@@ -789,9 +806,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         process.terminationHandler = { [weak self] proc in
+            outputReader.stop(reason: "process_exited")
+            DesktopLogger.shared.log("server_process_exited", fields: [
+                "port": String(port),
+                "status": String(proc.terminationStatus)
+            ])
             DispatchQueue.main.async {
                 clearSpawnedServerPid() // it died on its own — nothing to reclaim
-                guard let self = self, !portConfirmed, !settled else { return }
+                guard let self = self else { return }
+                if self.serverOutputReader === outputReader {
+                    self.serverOutputReader = nil
+                }
+                guard !portConfirmed, !settled else { return }
                 settled = true
                 self.serverProcess = nil
 
@@ -830,6 +856,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
                 settled = true
+                outputReader.stop(reason: "startup_timeout")
                 // A hang (never printed "listening"), not a crash — terminate and try
                 // the next port. terminationHandler fires but bails on `settled`.
                 if process.isRunning {
@@ -919,6 +946,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func stopServer() {
         retryTimer?.invalidate()
         retryTimer = nil
+        serverOutputReader?.stop(reason: "app_stop")
+        serverOutputReader = nil
 
         if ownsServer, let proc = serverProcess, proc.isRunning {
             proc.terminate()
