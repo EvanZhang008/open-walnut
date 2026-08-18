@@ -46,7 +46,11 @@ vi.mock('../../src/core/config-manager.js', async (importOriginal) => {
   return { ...actual, getConfig: async () => ({ hosts: configHosts, defaults: {} }) };
 });
 
-import { importExternalSessions, externalHolderTaskTitle } from '../../src/core/sessions/external-session-import.js';
+import {
+  importExternalSessions,
+  externalHolderTaskTitle,
+  EXTERNAL_SESSIONS_PROJECT,
+} from '../../src/core/sessions/external-session-import.js';
 import { getSessionByClaudeId, getSessionsForTask, _resetSessionTrackerForTesting } from '../../src/core/session-tracker.js';
 import { getTask, queryTasks, _resetForTesting as _resetTaskManager } from '../../src/core/task-manager.js';
 import { closeDb as closeSessionDb } from '../../src/core/session-db.js';
@@ -120,7 +124,9 @@ describe('importExternalSessions', () => {
     const taskId = result.taskIdByHost['__local__'];
     const task = await getTask(taskId);
     expect(task.title).toBe(externalHolderTaskTitle('__local__'));
-    expect(task.project).toBe('');
+    // A real project, NOT the Inbox — in the Inbox these buckets sit unlabeled
+    // among loose tasks and are effectively invisible.
+    expect(task.project).toBe(EXTERNAL_SESSIONS_PROJECT);
     expect(task.session_ids).toContain('ext-1');
     // A bucket has no single live session — the slot must stay empty.
     expect(task.session_id).toBeFalsy();
@@ -135,6 +141,8 @@ describe('importExternalSessions', () => {
       messageCount: 12,
       startedAt: '2026-08-10T10:00:00.000Z',
       lastActiveAt: '2026-08-10T12:00:00.000Z',
+      // Session rows carry their own project copy (search + filters read it).
+      project: EXTERNAL_SESSIONS_PROJECT,
     });
     // Local sessions store no host sentinel.
     expect(record?.host).toBeUndefined();
@@ -201,6 +209,79 @@ describe('importExternalSessions', () => {
     expect(holders).toHaveLength(1);
     expect((await getSessionsForTask(holders[0].id)).map((s) => s.claudeSessionId).sort())
       .toEqual(['a', 'b']);
+  });
+
+  it('creates the project registry row so the group is real, not a bare label', async () => {
+    setHost('__local__', { candidates: [candidate()] });
+    await importExternalSessions();
+    const { getStoreProjects } = await import('../../src/core/task-manager.js');
+    const projects = await getStoreProjects();
+    const key = Object.keys(projects).find((k) => k.toLowerCase() === EXTERNAL_SESSIONS_PROJECT.toLowerCase());
+    expect(key).toBeTruthy();
+    // source 'local' — a sync provider must never be able to claim this project.
+    expect(projects[key!].source).toBe('local');
+  });
+
+  it('moves a pre-project bucket out of the Inbox and drags its sessions along', async () => {
+    // Buckets created before the project existed landed in the Inbox with
+    // project='' on both the task AND every imported session row.
+    const host = setHost('__local__', { candidates: [candidate({ sessionId: 'legacy-1' })] });
+    const first = await importExternalSessions();
+    const taskId = first.taskIdByHost['__local__'];
+    const { updateTask } = await import('../../src/core/task-manager.js');
+    const { updateSessionRecord } = await import('../../src/core/session-tracker.js');
+    await updateTask(taskId, { project: '' });
+    await updateSessionRecord('legacy-1', { project: '' });
+    expect((await getTask(taskId)).project).toBe('');
+
+    host.candidates = [candidate({ sessionId: 'legacy-2' })];
+    const second = await importExternalSessions();
+    expect(second.taskIdByHost['__local__']).toBe(taskId);
+    expect((await getTask(taskId)).project).toBe(EXTERNAL_SESSIONS_PROJECT);
+    // Both the backfilled OLD session and the NEW one carry the project.
+    for (const sid of ['legacy-1', 'legacy-2']) {
+      expect((await getSessionByClaudeId(sid))?.project).toBe(EXTERNAL_SESSIONS_PROJECT);
+    }
+  });
+
+  it('heals a stranded bucket even when the tick has nothing new to import (regression)', async () => {
+    // The heal used to hang off the import path, so once every session was
+    // already tracked the scan returned 0 candidates, the holder task was never
+    // touched, and a bucket stranded in the Inbox stayed there forever.
+    const host = setHost('__local__', { candidates: [candidate({ sessionId: 'only-1' })] });
+    const first = await importExternalSessions();
+    const taskId = first.taskIdByHost['__local__'];
+    const { updateTask } = await import('../../src/core/task-manager.js');
+    const { updateSessionRecord } = await import('../../src/core/session-tracker.js');
+    await updateTask(taskId, { project: '' });
+    await updateSessionRecord('only-1', { project: '' });
+
+    host.candidates = []; // steady state: nothing new
+    const second = await importExternalSessions();
+    expect(second.imported).toBe(0);
+    expect(second.taskIdByHost['__local__']).toBe(taskId);
+    expect((await getTask(taskId)).project).toBe(EXTERNAL_SESSIONS_PROJECT);
+    expect((await getSessionByClaudeId('only-1'))?.project).toBe(EXTERNAL_SESSIONS_PROJECT);
+  });
+
+  it('still never mints an empty bucket on a host with no external sessions', async () => {
+    setHost('__local__', { candidates: [] });
+    const result = await importExternalSessions();
+    expect(result.taskIdByHost).toEqual({});
+    expect(await queryTasks({ tagsAll: ['walnut:external-sessions'] })).toHaveLength(0);
+  });
+
+  it('respects a deliberate move to a different project', async () => {
+    const host = setHost('__local__', { candidates: [candidate({ sessionId: 'moved-1' })] });
+    const first = await importExternalSessions();
+    const taskId = first.taskIdByHost['__local__'];
+    const { updateTask } = await import('../../src/core/task-manager.js');
+    await updateTask(taskId, { project: 'Walnut' });
+
+    host.candidates = [candidate({ sessionId: 'moved-2' })];
+    await importExternalSessions();
+    // Only the empty/Inbox case self-heals — the user's own filing stands.
+    expect((await getTask(taskId)).project).toBe('Walnut');
   });
 
   it('finds the holder task again after the user renames it', async () => {

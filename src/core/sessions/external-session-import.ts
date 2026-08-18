@@ -43,6 +43,15 @@ const PER_RUN_IMPORT_LIMIT = 100;
 /** Marker persisted on the holder task so we re-find it instead of duplicating. */
 const HOLDER_TAG = 'walnut:external-sessions';
 
+/**
+ * Project the holder tasks live in. Deliberately a real project, NOT the Inbox:
+ * one bucket task per host is exactly the "grouping layer" a project is for, and
+ * in the Inbox they sit unlabeled among loose tasks where they're invisible.
+ * Auto-created on first import (an unknown name mints a `source:'local'`
+ * registry row), so a sync provider can never claim it.
+ */
+export const EXTERNAL_SESSIONS_PROJECT = 'Imported Sessions';
+
 export interface ExternalImportResult {
   /** Sessions newly imported into Walnut. */
   imported: number;
@@ -126,23 +135,93 @@ async function scanHost(
 }
 
 /**
- * Find (or create) the holder task for a host. Matched by tag + title so a
- * user-renamed task is still recognized and we never mint a second bucket.
+ * Point every session already linked to a holder task at the task's project.
+ * Best-effort: a failed row is logged and skipped, never fails the import.
+ *
+ * NOTE this is the one place the importer writes an EXISTING session record.
+ * It only touches `project`, and only when it actually differs, so the
+ * lastActiveAt bump inside updateSessionRecord can't rewrite a transcript's
+ * real timestamps on a no-op tick.
+ */
+async function backfillSessionProject(task: Task): Promise<number> {
+  const { getSessionsForTask, updateSessionRecord } = await import('../session-tracker.js');
+  const project = task.project || '';
+  let moved = 0;
+  for (const session of await getSessionsForTask(task.id)) {
+    if ((session.project || '') === project) continue;
+    try {
+      await updateSessionRecord(session.claudeSessionId, { project });
+      moved++;
+    } catch (err) {
+      log.session.warn('external session project backfill failed', {
+        sessionId: session.claudeSessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  if (moved > 0) {
+    log.session.info('backfilled project on imported sessions', { taskId: task.id, project, moved });
+  }
+  return moved;
+}
+
+/**
+ * The host's existing holder task, or null. Matched by tag first, then by title,
+ * so a user-renamed bucket is still recognized and we never mint a second one.
+ * Includes COMPLETE tasks: a user who ticked the bucket off must not cause a
+ * duplicate on the next tick.
+ */
+async function findHolderTask(host: string): Promise<Task | null> {
+  const { queryTasks } = await import('../task-manager.js');
+  const title = externalHolderTaskTitle(host);
+  return (await queryTasks({ tagsAll: [HOLDER_TAG, hostTag(host)] }))[0]
+    ?? (await queryTasks({ tagsAll: [HOLDER_TAG] })).find((t) => t.title === title)
+    ?? null;
+}
+
+/**
+ * Move a bucket that predates EXTERNAL_SESSIONS_PROJECT out of the Inbox, and
+ * drag its already-imported session rows with it. A deliberate user move to some
+ * OTHER project is respected — only the empty/Inbox case is corrected.
+ */
+async function healHolderProject(host: string, existing: Task): Promise<Task> {
+  if (existing.project || '') return existing;
+  const { updateTask } = await import('../task-manager.js');
+  const { task } = await updateTask(existing.id, { project: EXTERNAL_SESSIONS_PROJECT });
+  // Session rows carry their own `project` copy (search + filters read it), so
+  // already-imported records must follow the task or the two disagree.
+  await backfillSessionProject(task);
+  log.session.info('moved external-session holder task out of the Inbox', {
+    host, taskId: task.id, project: task.project,
+  });
+  return task;
+}
+
+/**
+ * Heal an EXISTING bucket on a host that produced no new candidates this tick.
+ * Returns null when the host has no bucket — a machine with no external sessions
+ * must never grow an empty one.
+ */
+async function healExistingHolderTask(host: string): Promise<Task | null> {
+  const existing = await findHolderTask(host);
+  if (!existing) return null;
+  return healHolderProject(host, existing);
+}
+
+/**
+ * Find (or create) the holder task for a host.
  */
 async function ensureHolderTask(host: string): Promise<Task> {
-  const { queryTasks, addTask } = await import('../task-manager.js');
+  const { addTask } = await import('../task-manager.js');
   const title = externalHolderTaskTitle(host);
-  // Tag-indexed lookup, and include COMPLETE: a user who marked the bucket done
-  // must not cause a second one to be minted on the next tick.
-  const existing = (await queryTasks({ tagsAll: [HOLDER_TAG, hostTag(host)] }))[0]
-    ?? (await queryTasks({ tagsAll: [HOLDER_TAG] })).find((t) => t.title === title);
-  if (existing) return existing;
+  const existing = await findHolderTask(host);
+  if (existing) return healHolderProject(host, existing);
 
   const { task } = await addTask({
     title,
-    // Inbox on purpose: the holder is machine bookkeeping and must not be
-    // filed under (or auto-create) a project.
-    project: '',
+    // A real project, not the Inbox: one bucket per host IS a grouping, and in
+    // the Inbox these sit unlabeled among loose tasks where nobody finds them.
+    project: EXTERNAL_SESSIONS_PROJECT,
     source: 'local',
     priority: 'none',
     tags: [HOLDER_TAG, hostTag(host)],
@@ -153,7 +232,9 @@ async function ensureHolderTask(host: string): Promise<Task> {
       'want the imports to start a fresh bucket.',
     _skipPluginOps: true,
   });
-  log.session.info('created external-session holder task', { host, taskId: task.id });
+  log.session.info('created external-session holder task', {
+    host, taskId: task.id, project: task.project,
+  });
   return task;
 }
 
@@ -235,7 +316,15 @@ export async function importExternalSessions(options: {
         host, limit: PER_HOST_CANDIDATE_LIMIT,
       });
     }
-    if (candidates.length === 0) continue;
+    if (candidates.length === 0) {
+      // Nothing new to import, but an EXISTING bucket may still need healing
+      // (e.g. it predates the project and is stranded in the Inbox). Steady
+      // state is the common case — a host with no external sessions at all must
+      // NOT grow an empty bucket, so this only touches a bucket that exists.
+      const healed = await healExistingHolderTask(host);
+      if (healed) result.taskIdByHost[host] = healed.id;
+      continue;
+    }
 
     // Only create the holder task once there is something to put in it — a
     // machine with no external sessions should not grow an empty bucket task.
