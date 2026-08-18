@@ -143,6 +143,45 @@ vi.mock('../../src/constants.js', () => createMockConstants());
 
 This generates all constants pointing to a unique tmpdir. Prefer this over inline mock boilerplate.
 
+## Stubbing a singleton: spy on it, don't `vi.mock` its module
+
+**If the code under test reaches a singleton through `await import(...)`, a
+`vi.mock` module factory may not reach it — and the miss is SILENT.** Patch the
+real object instead:
+
+```typescript
+// ✅ immune to which module instance the consumer resolves
+import { sessionRunner } from '../../src/providers/claude-code-session.js'
+beforeEach(() => { vi.spyOn(sessionRunner, 'findSessionByClaudeId').mockImplementation(...) })
+afterEach(() => { vi.restoreAllMocks() })
+```
+
+Measured on `tests/providers/session-init-after-result-turn-start.test.ts`
+(2026-08-18): with a `vi.mock('claude-code-session.js')` factory, the TEST file's
+import saw the mock while `core/phase.ts`'s stale-result gate — one dynamic
+`import()` away — got the REAL module in the same run. Proved by tagging the
+factory's object with `__isMock` and printing it from both sides: test `true`,
+gate `false`.
+
+- **The trigger is an unrelated static edge.** The gate only diverges once the
+  real module is already in the graph. `b7e23c32` created that edge
+  (`claude-code-session → acp-session → self-knowledge-contract → phase`).
+  Cutting just that one import flipped the gate to `isMock=true` and the three
+  failing assertions went green — so a test can rot from an import added in a
+  file it never mentions.
+- **Why it's dangerous:** the gate is written to fail OPEN (no live session →
+  proceed), which is correct for production. Combined with a stub that never
+  applies, the test asserts a guard that silently is not running. No error, no
+  mock warning, just three assertions failing for an invented reason. Any guard
+  that degrades gracefully hides this the same way.
+- **Second, independent hazard:** `{ ...actual.someSingleton }` on a CLASS
+  instance drops every prototype method (verified in a scratch repro: spreading
+  an instance leaves `find` `undefined`), so the "preserve the rest" idiom
+  quietly yields a near-empty object. Another reason to spy rather than rebuild.
+
+Module factories are still right for pure-data or leaf modules (`constants.js`
+above). Reserve them for cases with no live object to patch.
+
 ## Live Test Pattern
 
 Live tests hit real external APIs (Bedrock, MS To-Do). They are expensive and opt-in only.
