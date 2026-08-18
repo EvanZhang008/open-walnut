@@ -30,6 +30,42 @@ describe('QMD incremental retry queue', () => {
     }
   });
 
+  it('honors a worker retry floor and new events cannot accelerate it', async () => {
+    vi.useFakeTimers();
+    try {
+      const deferred = Object.assign(new Error('embedding failed'), {
+        retryAfterMs: 6 * 60 * 60_000,
+      });
+      const dispatch = vi.fn()
+        .mockRejectedValueOnce(deferred)
+        .mockResolvedValueOnce(undefined);
+      const queue = createQmdIncrementalQueue({
+        debounceMs: 10,
+        retryBaseMs: 20,
+        retryMaxMs: 20,
+        dispatch,
+      });
+
+      queue.enqueue('session-a', 'sync');
+      await vi.advanceTimersByTimeAsync(10);
+      expect(dispatch).toHaveBeenCalledTimes(1);
+
+      queue.enqueue('session-b', 'sync');
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(dispatch).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(6 * 60 * 60_000 - 60_000);
+      expect(dispatch).toHaveBeenCalledTimes(2);
+      expect(new Set(dispatch.mock.calls[1]?.[0])).toEqual(
+        new Set(['session-a', 'session-b']),
+      );
+
+      await queue.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('preserves a newer event that arrives while an older batch is in flight', async () => {
     let releaseFirst!: () => void;
     const first = new Promise<void>((resolve) => { releaseFirst = resolve; });

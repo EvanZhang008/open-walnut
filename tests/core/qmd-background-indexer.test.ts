@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 interface FakeReservation {
@@ -9,6 +10,7 @@ interface FakeReservation {
 interface FakeChild extends EventEmitter {
   exitCode: number | null;
   signalCode: string | null;
+  stderr: PassThrough;
   kill: ReturnType<typeof vi.fn>;
 }
 
@@ -29,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   existsSync: vi.fn(() => true),
   fork: vi.fn(),
   getRuntimeModel: vi.fn(async () => 'hf:test/runtime-model.gguf'),
+  assertPowerAvailable: vi.fn(async () => undefined),
   reservations: [] as FakeReservation[],
   reserve: vi.fn(),
   setRuntimeModel: vi.fn(),
@@ -68,6 +71,10 @@ vi.mock('../../src/core/qmd-model.js', () => ({
   setQmdRuntimeModel: mocks.setRuntimeModel,
 }));
 
+vi.mock('../../src/core/qmd-power.js', () => ({
+  assertQmdBackgroundIndexPowerAvailable: mocks.assertPowerAvailable,
+}));
+
 vi.mock('../../src/core/qmd-store.js', () => ({
   closeQmdStores: mocks.closeStores,
 }));
@@ -78,6 +85,7 @@ function makeChild(): FakeChild {
   const child = new EventEmitter() as FakeChild;
   child.exitCode = null;
   child.signalCode = null;
+  child.stderr = new PassThrough();
   child.kill = vi.fn((signal = 'SIGTERM') => {
     child.signalCode = signal;
     queueMicrotask(() => child.emit('exit', null, signal));
@@ -148,6 +156,7 @@ beforeEach(() => {
   mocks.closeStores.mockClear();
   mocks.existsSync.mockReset().mockReturnValue(true);
   mocks.getRuntimeModel.mockReset().mockResolvedValue('hf:test/runtime-model.gguf');
+  mocks.assertPowerAvailable.mockReset().mockResolvedValue(undefined);
   mocks.setRuntimeModel.mockClear();
   mocks.reserve.mockReset().mockImplementation(() => {
     const reservation: FakeReservation = {
@@ -197,7 +206,7 @@ describe('QMD background worker scheduler', () => {
       WALNUT_QMD_WORKER: '1',
       QMD_EMBED_MODEL: 'hf:test/runtime-model.gguf',
     });
-    expect(options.stdio).toEqual(['ignore', 'ignore', 'ignore', 'ipc']);
+    expect(options.stdio).toEqual(['ignore', 'ignore', 'pipe', 'ipc']);
     expect(mocks.reserve).toHaveBeenCalledWith({ blockReads: false });
 
     emitExit(mocks.children[0], 0);
@@ -313,6 +322,55 @@ describe('QMD background worker scheduler', () => {
     mocks.children[0].emit('error', new Error('worker launch failed'));
 
     await rejection;
+    expect(mocks.reservations[0].release).toHaveBeenCalledOnce();
+  });
+
+  it('defers the worker on battery power and releases its reservation', async () => {
+    const deferred = Object.assign(new Error('deferred on battery'), {
+      retryAfterMs: 300_000,
+    });
+    mocks.assertPowerAvailable.mockRejectedValueOnce(deferred);
+
+    const run = backgroundIndexer.runQmdBackgroundIndex();
+    await expect(run).rejects.toBe(deferred);
+
+    expect(mocks.fork).not.toHaveBeenCalled();
+    expect(mocks.reservations[0].release).toHaveBeenCalledOnce();
+  });
+
+  it('does not fork when shutdown begins during the power check', async () => {
+    let releasePowerCheck!: () => void;
+    mocks.assertPowerAvailable.mockImplementationOnce(() =>
+      new Promise<void>((resolve) => { releasePowerCheck = resolve; }));
+
+    const run = backgroundIndexer.runQmdBackgroundIndex();
+    const settled = run.catch(() => undefined);
+    await vi.waitFor(() => expect(mocks.assertPowerAvailable).toHaveBeenCalledOnce());
+
+    await backgroundIndexer.stopQmdBackgroundIndex();
+    releasePowerCheck();
+    await settled;
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(mocks.fork).not.toHaveBeenCalled();
+    expect(mocks.reservations[0].release).toHaveBeenCalledOnce();
+  });
+
+  it('includes worker stderr and delays deterministic embedding retries', async () => {
+    const run = backgroundIndexer.runQmdBackgroundIndex();
+    const rejection = run.catch((error: unknown) => error);
+    await waitForForkCount(1);
+
+    mocks.children[0].stderr.write('Metal backend unavailable\n');
+    mocks.children[0].emit('message', {
+      type: 'error',
+      error: 'QMD session: embedding failed for 20 chunk(s); partial vectors cleared for retry',
+    });
+    emitExit(mocks.children[0], 1);
+
+    const error = await rejection as Error & { retryAfterMs?: number };
+    expect(error.message).toContain('Metal backend unavailable');
+    expect(error.retryAfterMs).toBe(6 * 60 * 60_000);
     expect(mocks.reservations[0].release).toHaveBeenCalledOnce();
   });
 

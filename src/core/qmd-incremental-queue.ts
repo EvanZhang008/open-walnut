@@ -30,6 +30,14 @@ export interface QmdIncrementalQueue {
   stop: () => Promise<void>;
 }
 
+function retryAfterHint(error: unknown): number {
+  if (!error || typeof error !== 'object' || !('retryAfterMs' in error)) return 0;
+  const value = (error as { retryAfterMs?: unknown }).retryAfterMs;
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, value)
+    : 0;
+}
+
 /**
  * Debounce QMD entity changes and retain them until a worker acknowledges the
  * batch. Per-ID generations prevent an older successful batch from deleting a
@@ -48,14 +56,16 @@ export function createQmdIncrementalQueue(
   let timer: ReturnType<typeof setTimeout> | null = null;
   let inFlight: Promise<void> | null = null;
   let retryAttempt = 0;
+  let retryNotBefore = 0;
   let stopped = false;
 
   function schedule(delayMs: number): void {
     if (stopped || timer || inFlight || pending.size === 0) return;
+    const effectiveDelay = Math.max(delayMs, retryNotBefore - Date.now());
     timer = setTimeout(() => {
       timer = null;
       void flush();
-    }, delayMs);
+    }, effectiveDelay);
   }
 
   /** Cooldown remaining for an ID; 0 = dispatchable now. Deletes always pass —
@@ -104,6 +114,7 @@ export function createQmdIncrementalQueue(
           }
         }
         retryAttempt = 0;
+        retryNotBefore = 0;
         try {
           options.onSuccess?.({
             synced: [...snapshot.values()]
@@ -120,6 +131,8 @@ export function createQmdIncrementalQueue(
           retryMaxMs,
           retryBaseMs * (2 ** Math.max(0, retryAttempt - 1)),
         );
+        retryDelay = Math.max(retryDelay, retryAfterHint(error));
+        retryNotBefore = Date.now() + retryDelay;
         try {
           options.onError?.(error, retryDelay);
         } catch {
@@ -142,6 +155,7 @@ export function createQmdIncrementalQueue(
         generation: ++generation,
         operation,
       });
+      if (timer && retryNotBefore > Date.now()) return;
       if (timer) clearTimeout(timer);
       timer = null;
       schedule(debounceMs);
@@ -149,6 +163,7 @@ export function createQmdIncrementalQueue(
     async flushNow() {
       if (timer) clearTimeout(timer);
       timer = null;
+      retryNotBefore = 0;
       await flush();
     },
     async stop() {

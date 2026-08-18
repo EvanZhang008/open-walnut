@@ -18,6 +18,7 @@ import {
   initializeQmdRuntimeModel,
   setQmdRuntimeModel,
 } from './qmd-model.js';
+import { assertQmdBackgroundIndexPowerAvailable } from './qmd-power.js';
 
 export interface QmdBackgroundIndexOptions {
   initialize?: boolean;
@@ -60,6 +61,18 @@ interface ActiveWorker {
 let activeWorker: ActiveWorker | null = null;
 const queue: QueueEntry[] = [];
 let stopping = false;
+const STDERR_TAIL_MAX_CHARS = 8_192;
+const EMBEDDING_FAILURE_RETRY_AFTER_MS = 6 * 60 * 60_000;
+
+function workerExitError(message: string, stderrTail: string): Error {
+  const stderr = stderrTail.trim();
+  const error = new Error(stderr ? `${message}; worker stderr: ${stderr}` : message);
+  if (/embedding failed for \d+ chunk\(s\)/i.test(message)) {
+    (error as Error & { retryAfterMs: number }).retryAfterMs =
+      EMBEDDING_FAILURE_RETRY_AFTER_MS;
+  }
+  return error;
+}
 
 function resolveWorkerPath(): string {
   const baseDir = path.dirname(fileURLToPath(import.meta.url));
@@ -182,6 +195,7 @@ async function drainQueue(): Promise<void> {
   let settled = false;
   let workerError: string | null = null;
   let workerStats: QmdCorpusStats | null = null;
+  let workerStderrTail = '';
 
   const record: ActiveWorker = {
     child: null,
@@ -220,6 +234,11 @@ async function drainQueue(): Promise<void> {
       settle(new Error('QMD background index stopped'));
       return;
     }
+    await assertQmdBackgroundIndexPowerAvailable();
+    if (record.stopRequested || stopping || activeWorker !== record) {
+      settle(new Error('QMD background index stopped'));
+      return;
+    }
 
     const workerModel = entry.model ?? await initializeQmdRuntimeModel();
     if (entry.resetStores) {
@@ -239,9 +258,13 @@ async function drainQueue(): Promise<void> {
         WALNUT_QMD_WORKER: '1',
         QMD_EMBED_MODEL: workerModel,
       },
-      stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+      stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
     });
     record.child = child;
+    child.stderr?.setEncoding('utf8');
+    child.stderr?.on('data', (chunk: string) => {
+      workerStderrTail = `${workerStderrTail}${chunk}`.slice(-STDERR_TAIL_MAX_CHARS);
+    });
 
     child.on('message', (raw: QmdWorkerMessage) => {
       if (!raw || typeof raw !== 'object') return;
@@ -262,9 +285,10 @@ async function drainQueue(): Promise<void> {
       } else if (code === 0) {
         settle();
       } else {
-        settle(new Error(
+        settle(workerExitError(
           workerError
           ?? `QMD worker exited with code ${code ?? 'null'} (${signal ?? 'no signal'})`,
+          workerStderrTail,
         ));
       }
     });
