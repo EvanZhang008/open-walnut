@@ -24,6 +24,7 @@ targets:
     scheme:
       testTargets:
         - WalnutTests
+        - WalnutUITests
     info:
       path: Walnut/Support/Info.plist
       properties:
@@ -84,4 +85,21 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.openwalnut.ios.tests
+        GENERATE_INFOPLIST_FILE: "YES"
+  # UI tests (XCUITest) — the layer that drives REAL taps. Exists because the
+  # calendar's interaction contract (the view-switch menu, month day → Day view
+  # drill-in, the Today button) can only be proven by tapping, and driving the
+  # macOS Simulator window from outside the sandbox is unsafe on a shared
+  # desktop: a blind coordinate click can land in another app's window.
+  # XCUITest taps are scoped to the app under test and are deterministic.
+  WalnutUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - WalnutUITests
+    dependencies:
+      - target: Walnut
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.openwalnut.ios.uitests
         GENERATE_INFOPLIST_FILE: "YES"

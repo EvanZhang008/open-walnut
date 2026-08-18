@@ -41,6 +41,11 @@ struct TasksView: View {
             Group {
                 if tasks.notSyncedYet && tasks.tasks.isEmpty {
                     notSyncedState
+                } else if activeFilter == .calendar {
+                    // Full-bleed: the calendar's own views scroll and page
+                    // (hour timelines, day list), which a List row can't host —
+                    // a pager inside a List row has no intrinsic height.
+                    calendarSurface
                 } else {
                     list
                 }
@@ -49,9 +54,10 @@ struct TasksView: View {
             .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search tasks & sessions")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { StatusBadge() }
-                // Multi-select entry — task filters only (sessions aren't
-                // batch-actionable). "Select" → edit mode with a bottom bar.
-                if activeFilter != .sessions {
+                // Multi-select entry — task LIST filters only (sessions aren't
+                // batch-actionable, and the calendar has no rows to select).
+                // "Select" → edit mode with a bottom bar.
+                if activeFilter != .sessions && activeFilter != .calendar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button(isEditing ? "Done" : "Select") {
                             let entering = !isEditing
@@ -181,6 +187,27 @@ struct TasksView: View {
         Self.sections(from: tasks.tasks(for: activeFilter), query: trimmedQuery)
     }
 
+    // MARK: - Calendar surface
+
+    /// The Calendar filter renders FULL-BLEED, not as a List row: its four views
+    /// (hour timelines, day list, month grid) own their own scrolling and
+    /// horizontal paging, and a pager nested in a List row has no intrinsic
+    /// height. The smart-list cards stay on top so switching back out is one tap.
+    private var calendarSurface: some View {
+        VStack(spacing: 0) {
+            if !connection.online {
+                OfflineBanner(text: "Offline — tasks are read-only from cache")
+                    .padding(.horizontal, 12)
+                    .padding(.top, 4)
+            }
+            SmartListCards(activeFilter: $activeFilter)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+            Divider()
+            CalendarTabView()
+        }
+    }
+
     private var list: some View {
         ScrollViewReader { proxy in
             // Bind the derived sections ONCE per body pass — the old computed-
@@ -230,15 +257,6 @@ struct TasksView: View {
 
                 if activeFilter == .sessions {
                     sessionSections
-                } else if activeFilter == .calendar {
-                    // Month grid + day agenda (self-contained; reads TasksStore
-                    // from the environment, device events via EventKit).
-                    Section {
-                        CalendarTabView()
-                            .listRowInsets(EdgeInsets())
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-                    }
                 } else if sections.isEmpty {
                     Section {
                         Text(emptyText)
