@@ -6,7 +6,11 @@
 #    CI. This makes a local push fail for the same reason CI would, before the
 #    error reaches the remote.
 #
-# 2. An OPTIONAL local-only scanner (scripts/local/scan-sensitive.sh, gitignored)
+# 2. Committed-tree bundle check — the worktree tsc above can PASS while HEAD
+#    is broken (the fix for a cross-file dangling import sits uncommitted in
+#    the worktree). Bundling HEAD's import graph catches that in <1s.
+#
+# 3. An OPTIONAL local-only scanner (scripts/local/scan-sensitive.sh, gitignored)
 #    runs afterwards if present — used by this repo's maintainer to scan for
 #    private content before pushing to the public mirror. Absent for everyone
 #    else, so this hook degrades to just the type-check.
@@ -21,6 +25,8 @@ if ! npm run --silent lint; then
   exit 1
 fi
 echo "✓ Type-check passed."
+
+bash scripts/check-committed-bundle.sh || exit 1
 
 # Optional local sensitive-content scanner — forward stdin (the pre-push refs).
 if [ -x scripts/local/scan-sensitive.sh ]; then
