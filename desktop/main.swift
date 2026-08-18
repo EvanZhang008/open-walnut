@@ -634,6 +634,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var ownsServer = false
 
     func startServer() {
+        DesktopLogger.shared.log("server_discovery_started")
         checkExistingServer(index: 0)
     }
 
@@ -660,6 +661,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     // server. Otherwise (a legitimate owner: another app instance or a
                     // shell-launched dev server, ppid != 1) attach without killing it.
                     if let orphanPid = self.orphanedWalnutServerPid(onPort: port) {
+                        DesktopLogger.shared.log("orphaned_server_reclaimed", fields: [
+                            "pid": String(orphanPid),
+                            "port": String(port)
+                        ])
                         self.statusLabel?.stringValue = "Reclaiming orphaned server on port \(port)..."
                         kill(orphanPid, SIGTERM)
                         // Give it a moment to release the port, then start our own.
@@ -667,6 +672,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                             self.tryStartServerOnPort(index: index)
                         }
                     } else {
+                        DesktopLogger.shared.log("existing_server_attached", fields: [
+                            "port": String(port)
+                        ])
                         self.ownsServer = false
                         self.serverPort = port
                         self.loadWebUI()
@@ -717,6 +725,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let process = Process()
         let nodePath = findNode()
+        DesktopLogger.shared.log("server_spawn_attempted", fields: [
+            "port": String(port),
+            "runtime": nodePath
+        ])
         let nodeDir = (nodePath as NSString).deletingLastPathComponent
         process.executableURL = URL(fileURLWithPath: nodePath)
         process.arguments = [source + "/dist/cli.js", "web", "--port", String(port)]
@@ -782,6 +794,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if outputBuffer.contains("listening on http://localhost:\(port)") && !portConfirmed {
                 portConfirmed = true
                 DispatchQueue.main.async {
+                    DesktopLogger.shared.log("server_port_confirmed", fields: [
+                        "port": String(port)
+                    ])
                     self?.ownsServer = true
                     self?.serverPort = port
                     self?.pollForServer()
@@ -796,9 +811,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Persist the child's PID so a future launch (after an app crash)
             // can recognize this exact process as OUR orphan and reclaim it.
             recordSpawnedServerPid(process.processIdentifier)
+            DesktopLogger.shared.log("server_process_started", fields: [
+                "pid": String(process.processIdentifier),
+                "port": String(port)
+            ])
         } catch {
             outputReader.stop(reason: "spawn_failed")
             serverOutputReader = nil
+            DesktopLogger.shared.log("server_spawn_failed", fields: [
+                "error": error.localizedDescription,
+                "port": String(port)
+            ])
             DispatchQueue.main.async { [weak self] in
                 self?.showError("Failed to start server: \(error.localizedDescription)")
             }
@@ -857,6 +880,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 settled = true
                 outputReader.stop(reason: "startup_timeout")
+                DesktopLogger.shared.log("server_startup_timed_out", fields: [
+                    "port": String(port)
+                ])
                 // A hang (never printed "listening"), not a crash — terminate and try
                 // the next port. terminationHandler fires but bails on `settled`.
                 if process.isRunning {
@@ -944,6 +970,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func stopServer() {
+        DesktopLogger.shared.log("server_stop_requested", fields: [
+            "owned": String(ownsServer),
+            "port": serverPort.map(String.init) ?? "none"
+        ])
         retryTimer?.invalidate()
         retryTimer = nil
         serverOutputReader?.stop(reason: "app_stop")
