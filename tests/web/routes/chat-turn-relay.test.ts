@@ -18,9 +18,10 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-chat-rela
 
 // vi.mock factories are hoisted above the module scope, so the spies they close
 // over have to be created in a hoisted block too.
-const { callPrimaryControlMock, emitSseMock } = vi.hoisted(() => ({
+const { callPrimaryControlMock, emitSseMock, bridgeRequestMock } = vi.hoisted(() => ({
   callPrimaryControlMock: vi.fn(),
   emitSseMock: vi.fn(),
+  bridgeRequestMock: vi.fn(),
 }))
 
 vi.mock('../../../src/web/routes/v1-control-relay.js', () => ({
@@ -34,6 +35,14 @@ vi.mock('../../../src/web/sse-channels.js', () => ({
   closeAllSseChannels: () => {},
 }))
 
+// The image staging lane's only seam. `image.save` itself is a daemon command
+// covered against the REAL daemon in tests/e2e/daemon-bridge-image-save-e2e.ts;
+// here we drive the replica's decision table around it.
+vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
+  bridgeRequest: bridgeRequestMock,
+  BridgeOfflineError: class extends Error {},
+}))
+
 import {
   relayChatTurnToPrimary,
   handleBridgeChatTurnFrame,
@@ -45,9 +54,18 @@ import {
 const CONV = 'conv-relay-unit-1'
 const TURN = 'turn-unit-1'
 
+/** 1×1 PNG — small enough that compressForApi early-exits, so no sharp work. */
+const TINY_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
+function pngPayload() {
+  return { data: TINY_PNG_BASE64, mediaType: 'image/png' }
+}
+
 beforeEach(() => {
   callPrimaryControlMock.mockReset()
   emitSseMock.mockReset()
+  bridgeRequestMock.mockReset()
   resetChatTurnRelayState()
 })
 
@@ -103,6 +121,121 @@ describe('engine selection: a healthy primary owns the turn', () => {
     expect(second.kind).toBe('turn_active')
     // No second RPC — the guard is local.
     expect(callPrimaryControlMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('image turns: bytes take the image lane, the RPC carries paths', () => {
+  it('stages each image on the primary and relays only the returned paths', async () => {
+    callPrimaryControlMock.mockResolvedValue(acceptedByClaudeCode())
+    let n = 0
+    bridgeRequestMock.mockImplementation(async () => ({
+      ok: true, path: `/tmp/open-walnut/images/mobile/1700000000-abcd000${n++}.png`, size: 68,
+    }))
+
+    const outcome = await relayChatTurnToPrimary('general', CONV, 'what is this?', TURN, [pngPayload(), pngPayload()])
+    expect(outcome.kind).toBe('accepted')
+
+    // One image.save per picture, on the PRIMARY's daemon, with no path param
+    // (the daemon generates the filename — no caller path crosses the bridge).
+    const saves = bridgeRequestMock.mock.calls.filter((c) => c[1] === 'image.save')
+    expect(saves).toHaveLength(2)
+    expect(saves[0][0]).toBe('__local__')
+    expect(Object.keys(saves[0][2] as object).sort()).toEqual(['data', 'mediaType'])
+
+    // THE core assertion: the control RPC carries PATHS, never base64. Base64 in
+    // a control frame is the 1009 oversized-frame kill that takes every
+    // in-flight RPC on the shared bridge socket with it.
+    const params = callPrimaryControlMock.mock.calls[0][2] as Record<string, unknown>
+    expect(params.imagePaths).toEqual([
+      '/tmp/open-walnut/images/mobile/1700000000-abcd0000.png',
+      '/tmp/open-walnut/images/mobile/1700000000-abcd0001.png',
+    ])
+    expect(JSON.stringify(params)).not.toContain(TINY_PNG_BASE64.slice(0, 40))
+  })
+
+  it('a text-only turn sends no imagePaths key at all (old primaries see the old payload)', async () => {
+    callPrimaryControlMock.mockResolvedValue(acceptedByClaudeCode())
+    await relayChatTurnToPrimary('general', CONV, 'hello', TURN)
+
+    expect(bridgeRequestMock).not.toHaveBeenCalled()
+    expect(callPrimaryControlMock.mock.calls[0][2]).toEqual({
+      agentId: 'general', conversationId: CONV, text: 'hello', turnId: TURN,
+    })
+  })
+
+  it.each([
+    ['the daemon predates image.save', { ok: false, error: 'unknown command: image.save' }],
+    ['the daemon refuses the bytes', { ok: false, error: 'image.save: too large (EFBIG)' }],
+    ['the reply carries no path', { ok: true, size: 12 }],
+  ])('falls back when %s — and never relays a text-only version of the turn', async (_label, reply) => {
+    callPrimaryControlMock.mockResolvedValue(acceptedByClaudeCode())
+    bridgeRequestMock.mockResolvedValue(reply)
+
+    const outcome = await relayChatTurnToPrimary('general', CONV, 'what is this?', TURN, [pngPayload()])
+    expect(outcome.kind).toBe('unavailable')
+    // The turn must NOT have been relayed without its picture: answering a
+    // "what is this?" with no image would be confidently wrong.
+    expect(callPrimaryControlMock).not.toHaveBeenCalled()
+  })
+
+  it('a staging failure on image 2 of 3 aborts the whole turn, never a partial set', async () => {
+    callPrimaryControlMock.mockResolvedValue(acceptedByClaudeCode())
+    let call = 0
+    bridgeRequestMock.mockImplementation(async () => {
+      call += 1
+      if (call === 2) return { ok: false, error: 'image.save failed: ENOSPC' }
+      return { ok: true, path: `/tmp/open-walnut/images/mobile/1700000000-cafe000${call}.png`, size: 68 }
+    })
+
+    const outcome = await relayChatTurnToPrimary('general', CONV, 'compare these', TURN,
+      [pngPayload(), pngPayload(), pngPayload()])
+    expect(outcome.kind).toBe('unavailable')
+    // Stops at the failure instead of pushing the third picture over the wire.
+    expect(bridgeRequestMock).toHaveBeenCalledTimes(2)
+    expect(callPrimaryControlMock).not.toHaveBeenCalled()
+  })
+
+  it('a bridge that throws mid-staging degrades instead of rejecting', async () => {
+    callPrimaryControlMock.mockResolvedValue(acceptedByClaudeCode())
+    bridgeRequestMock.mockRejectedValue(new Error('No live bridge for host: __local__'))
+
+    const outcome = await relayChatTurnToPrimary('general', CONV, 'look', TURN, [pngPayload()])
+    expect(outcome.kind).toBe('unavailable')
+    if (outcome.kind !== 'unavailable') throw new Error('unreachable')
+    expect(outcome.reason).toContain('image staging')
+  })
+
+  it('refuses more images than one message may carry, without touching the bridge', async () => {
+    callPrimaryControlMock.mockResolvedValue(acceptedByClaudeCode())
+    const outcome = await relayChatTurnToPrimary('general', CONV, 'many', TURN,
+      [pngPayload(), pngPayload(), pngPayload(), pngPayload(), pngPayload(), pngPayload()])
+    expect(outcome.kind).toBe('unavailable')
+    expect(bridgeRequestMock).not.toHaveBeenCalled()
+  })
+
+  it('an image compression cannot rescue is refused locally, not on the wire', async () => {
+    callPrimaryControlMock.mockResolvedValue(acceptedByClaudeCode())
+    // sharp cannot read this, so compressForApi returns it unchanged (it degrades
+    // rather than throwing) — and the post-compression cap is what stops it. That
+    // ordering matters: a pre-compression-only check would reject compressible
+    // photos, a post-only check would let this one onto the shared socket.
+    const outcome = await relayChatTurnToPrimary('general', CONV, 'huge', TURN,
+      [{ data: 'A'.repeat(14_000_004), mediaType: 'image/png' }])
+    expect(outcome.kind).toBe('unavailable')
+    expect(bridgeRequestMock).not.toHaveBeenCalled()
+  })
+
+  it('a failed image turn leaves no in-flight slot behind (the local loop reruns it)', async () => {
+    callPrimaryControlMock.mockResolvedValue(acceptedByClaudeCode())
+    bridgeRequestMock.mockResolvedValue({ ok: false, error: 'image.save: too large (EFBIG)' })
+    expect((await relayChatTurnToPrimary('general', CONV, 'pic', TURN, [pngPayload()])).kind)
+      .toBe('unavailable')
+
+    // Same conversation must still be relayable — a leaked slot would report
+    // turn_active and surface as a phantom 409 on the phone's NEXT message.
+    bridgeRequestMock.mockResolvedValue({ ok: true, path: '/tmp/open-walnut/images/mobile/1700000000-beef0001.png' })
+    const retry = await relayChatTurnToPrimary('general', CONV, 'pic again', 'turn-unit-img-2', [pngPayload()])
+    expect(retry.kind).toBe('accepted')
   })
 })
 

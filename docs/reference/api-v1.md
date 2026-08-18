@@ -341,11 +341,18 @@ forwards the primary's stream back onto this conversation's SSE channel, because
 the replica has no session runner and could otherwise only answer with its own
 in-process fallback loop. Clients need no change for this.
 
+Image turns relay too. The bytes travel on the image lane (the same narrow
+host-side save a session attachment uses), and only the resulting host paths ride
+the relay call, so the picture reaches the primary's model without a multi-MB
+control frame. Nothing about the request shape changes for the client.
+
 Degraded case: when the relay is unusable (bridge down, primary's server down, a
-primary that predates the relay) or the turn carries images, the replica answers
-from its own loop instead of failing, and stamps the additive `engine` field on
-the terminal frame (`"walnut-agent-fallback"`). `engine` is informational only —
-ignore it unless you want to show the degradation.
+primary that predates the relay) or an attachment cannot be handed over (too
+large, or the primary's host refuses it), the replica answers the WHOLE turn from
+its own loop instead of failing, and stamps the additive `engine` field on the
+terminal frame (`"walnut-agent-fallback"`). A turn is never relayed with only
+some of its pictures. `engine` is informational only — ignore it unless you want
+to show the degradation.
 
 ### GET /api/v1/conversations/:id/stream (SSE)
 

@@ -283,6 +283,17 @@ export const DTACH_SOCKET_DIR = path.join(LOG_DIR, 'term');
 export const SESSION_QUEUE_FILE = path.join(WALNUT_HOME, 'session-message-queue.json');
 export const IMAGES_DIR = path.join(LOG_DIR, 'images');
 export const REMOTE_IMAGES_DIR = path.join(IMAGES_DIR, 'remote');
+/**
+ * Where the DAEMON's `image.save` command lands a phone's attachment relayed
+ * from the cloud companion. Written by the daemon twins, read by this server —
+ * so the expression must stay identical on both sides (they compute
+ * `path.join(DAEMON_DIR, 'images', 'mobile')` from the same WALNUT_DAEMON_DIR,
+ * which is what keeps an isolated instance isolated). Kept here rather than
+ * inline so the two consumers (session image serving, chat-turn relay adoption)
+ * can never drift apart. See IMAGE_SAVE_DIR in providers/daemon-standalone.ts
+ * and providers/daemon-source.ts.
+ */
+export const MOBILE_STAGED_IMAGES_DIR = path.join(IMAGES_DIR, 'mobile');
 // Oversized chat-input pastes spilled to disk (POST /api/pastes); the message
 // then carries the file path instead of megabytes of text. /tmp like
 // IMAGES_DIR: same lifecycle, same remote-transfer treatment.

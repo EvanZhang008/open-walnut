@@ -54,17 +54,34 @@
  * store) and `touchConversation` no-ops on the missing index row; the row
  * itself arrives from the replica by git-sync (last-writer-wins on _index.json).
  *
+ * ── Image attachments: bytes take the image lane, the RPC carries paths ──────
+ *
+ * An image turn relays too, but its bytes NEVER enter the control RPC: base64 in
+ * a 45s RPC is exactly the oversized-frame failure mode that closes the shared
+ * bridge socket (1009) and kills every in-flight request with it. Instead the
+ * replica stages each picture on the primary through the narrow, already-
+ * allowlisted `image.save` daemon command — the same lane a phone's SESSION
+ * attachment uses — and puts only the returned host PATHS in the RPC payload
+ * (~60 bytes each). The primary adopts those staged files into its own image
+ * store and runs its ordinary image orchestration from there.
+ *
  * ── Degradation: never "no engine" ───────────────────────────────────────────
  *
- * Bridge down, primary's server down, old primary, relay error, or a turn with
- * image attachments (base64 does not belong in a 45s control RPC) all fall back
- * to the replica's in-process loop — today's behavior — and mark the terminal
- * frame `engine: 'walnut-agent-fallback'`. That field is additive; a client that
- * ignores it behaves exactly as before.
+ * Bridge down, primary's server down, old primary, relay error, or ANY image
+ * that could not be staged (too large for `image.save`, a daemon predating it,
+ * a save error) all fall back to the replica's in-process loop and mark the
+ * terminal frame `engine: 'walnut-agent-fallback'`. That field is additive; a
+ * client that ignores it behaves exactly as before.
+ *
+ * Image failures are all-or-nothing on purpose: a turn that answered a picture
+ * question from a partially-staged attachment set would be confidently wrong,
+ * which is worse than the honest degraded answer the local loop gives (it still
+ * has every image, on its own disk).
  */
 
 import { CLOUD_MODE } from '../../constants.js'
 import { emitSse as emitChannelSse } from '../sse-channels.js'
+import { fitsImageSaveLimits, maxImagesPerMessage, type ImagePayload } from './images.js'
 import { log } from '../../logging/index.js'
 
 /** Box-level relay actions carry no real session id (same as routines/files). */
@@ -115,6 +132,14 @@ const RELAY_FRAME_SILENCE_MS = 300_000
 /** Accept-only uplink budget: the primary answers in milliseconds. */
 const RELAY_ACCEPT_TIMEOUT_MS = 30_000
 
+/** The primary's daemon, which owns the image staging lane. Same alias the
+ *  control relay targets — the primary's server is the box running the turn. */
+const PRIMARY_BRIDGE_ALIAS = '__local__'
+
+/** One `image.save` round trip: up to ~14MB of base64 over the bridge WS. Same
+ *  budget the session-send image lane uses (session-stream-v1.ts). */
+const IMAGE_STAGE_TIMEOUT_MS = 30_000
+
 // ─── Replica side: uplink + in-flight bookkeeping ───────────────────────────
 
 interface InFlightRelay {
@@ -138,22 +163,124 @@ export type RelayStartOutcome =
   | { kind: 'unavailable'; reason: string }
 
 /**
+ * Stage one turn's images on the PRIMARY through the daemon's narrow
+ * `image.save` command, returning the host paths to put in the RPC payload.
+ *
+ * All-or-nothing: any refusal (oversized, unsupported mediaType, a daemon
+ * predating `image.save`, a host write error, bridge down) returns null and the
+ * caller degrades the WHOLE turn to the local loop. Partial staging is never
+ * reported as success — see the header note on why a half-attached picture set
+ * is worse than an honest fallback.
+ */
+async function stageImagesOnPrimary(
+  rawImages: ImagePayload[],
+  conversationId: string,
+  turnId: string,
+): Promise<string[] | null> {
+  // Count cap first — cheap, and the REST route already clamps to the same
+  // number, so a longer list means a caller that bypassed it.
+  if (rawImages.length > maxImagesPerMessage()) {
+    log.web.info('chat-turn relay: too many images to stage — falling back', {
+      conversationId, turnId, count: rawImages.length,
+    })
+    return null
+  }
+
+  // Compress BEFORE measuring and before the wire: a raw phone screenshot is
+  // several MB of base64 on the socket every other RPC shares, and the daemon
+  // would refuse anything over its cap outright. Same clamp the primary applies
+  // to a locally-attached image, just done here so the bytes that travel are the
+  // bytes that get stored.
+  let images: ImagePayload[]
+  try {
+    const { compressImagesInMemory } = await import('./images.js')
+    images = await compressImagesInMemory(rawImages)
+  } catch (err) {
+    log.web.info('chat-turn relay: image compression failed — falling back', {
+      conversationId, turnId, error: err instanceof Error ? err.message : String(err),
+    })
+    return null
+  }
+
+  const oversized = images.find((img) => !fitsImageSaveLimits(img.data))
+  if (oversized) {
+    // compressForApi gives up rather than throwing on formats sharp can't read
+    // (or a GIF that stays huge), so a post-compression check is still needed.
+    log.web.info('chat-turn relay: an image exceeds the image.save limits — falling back', {
+      conversationId, turnId, base64Length: oversized.data.length,
+    })
+    return null
+  }
+
+  const { bridgeRequest } = await import('../ws/bridge-registry.js')
+  const paths: string[] = []
+  for (const img of images) {
+    let saved: Record<string, unknown>
+    try {
+      saved = await bridgeRequest(
+        PRIMARY_BRIDGE_ALIAS,
+        'image.save',
+        { data: img.data, mediaType: img.mediaType },
+        IMAGE_STAGE_TIMEOUT_MS,
+      )
+    } catch (err) {
+      // Bridge offline / request timeout. Nothing to clean up: the daemon stages
+      // into its own /tmp dir, and an orphaned staged file is only a few
+      // kilobytes on a path that gets reaped with the rest of the daemon tree.
+      log.web.info('chat-turn relay: image staging transport failed — falling back', {
+        conversationId, turnId, error: err instanceof Error ? err.message : String(err),
+      })
+      return null
+    }
+    if (saved.ok === true && typeof saved.path === 'string') {
+      paths.push(saved.path)
+      continue
+    }
+    log.web.info('chat-turn relay: the primary refused an image — falling back', {
+      conversationId, turnId, reason: String(saved.error ?? 'unknown'),
+    })
+    return null
+  }
+  log.web.info('chat-turn relay: images staged on the primary', {
+    conversationId, turnId, count: paths.length,
+  })
+  return paths
+}
+
+/**
  * Ask the primary to run one chat turn. Never throws: every failure comes back
  * as `unavailable` so the caller can fall back to the in-process loop.
  *
  * Resolves as soon as the primary ACCEPTS. `settled` resolves later, when the
  * turn's terminal frame arrives (or the watchdog fires) — await it to hold a
  * per-conversation turn guard for the turn's real duration.
+ *
+ * `images` (optional) are staged on the primary FIRST and travel as host paths;
+ * their bytes never enter the control RPC. A staging failure degrades the whole
+ * turn (`unavailable`) rather than relaying a text-only version of it.
  */
 export async function relayChatTurnToPrimary(
   agentId: string,
   conversationId: string,
   text: string,
   turnId: string,
+  images: ImagePayload[] = [],
 ): Promise<RelayStartOutcome> {
   if (!CLOUD_MODE) return { kind: 'unavailable', reason: 'not a cloud replica' }
   if (inFlight.has(conversationId)) {
     return { kind: 'turn_active', message: 'A relayed turn is already active on this conversation' }
+  }
+
+  // Staging runs BEFORE the in-flight registration: it is plain I/O with no
+  // downlink frames to lose, and a fallback here must leave no bookkeeping
+  // behind (the local loop will run this same turnId).
+  let imagePaths: string[] = []
+  if (images.length > 0) {
+    const staged = await stageImagesOnPrimary(images, conversationId, turnId)
+    if (staged === null) {
+      return { kind: 'unavailable', reason: 'image staging on the primary failed' }
+    }
+    imagePaths = staged
   }
 
   // Register BEFORE the RPC, not after the accept. The primary arms its frame
@@ -176,7 +303,12 @@ export async function relayChatTurnToPrimary(
     outcome = await callPrimaryControl(
       'server.chat.turn' as never,
       SERVER_RELAY_SID,
-      { agentId, conversationId, text, turnId },
+      {
+        agentId, conversationId, text, turnId,
+        // Omitted entirely for a text turn, so the payload an OLD primary sees
+        // is byte-identical to the pre-image one.
+        ...(imagePaths.length > 0 ? { imagePaths } : {}),
+      },
       RELAY_ACCEPT_TIMEOUT_MS,
     )
   } catch (err) {
@@ -345,6 +477,16 @@ export function mirrorRelayedChatFrame(conversationId: string, event: string, da
   })()
 }
 
+/**
+ * What the ordinary turn path needs to run an image turn — the exact shape
+ * `processAndSaveImages` returns, so a relayed turn is indistinguishable from a
+ * locally-attached one downstream.
+ */
+type RelayedImageData = {
+  savedImages: Array<{ filePath: string; filename: string; mediaType: string }>
+  imageContentBlocks: unknown[] | null
+}
+
 export interface PrimaryChatTurnOutcome {
   accepted: boolean
   turnId: string
@@ -365,6 +507,12 @@ export interface PrimaryChatTurnOutcome {
  * `agent.provider` (so a claude-code Mac answers on the lane engine, which is
  * the entire point), owns persistence, and owns the SSE contract. There is no
  * second turn implementation to keep in sync.
+ *
+ * `imagePaths` (optional) name files the replica staged on THIS box through the
+ * daemon's `image.save`. They are adopted (validated → re-compressed → saved
+ * into this box's own image store) BEFORE the accept, so a bad or vanished
+ * attachment is a REFUSAL the replica can still fall back from, never a turn
+ * that silently answers a picture question without the picture.
  */
 export async function handlePrimaryChatTurnRelay(
   params: Record<string, unknown>,
@@ -373,11 +521,14 @@ export async function handlePrimaryChatTurnRelay(
   const conversationId = typeof params.conversationId === 'string' ? params.conversationId : ''
   const text = typeof params.text === 'string' ? params.text : ''
   const turnId = typeof params.turnId === 'string' ? params.turnId : ''
+  const imagePaths = Array.isArray(params.imagePaths) ? params.imagePaths : []
 
   if (!conversationId || !turnId) {
     return { accepted: false, turnId, reason: 'bad_request', message: 'conversationId and turnId are required' }
   }
-  if (text.trim().length === 0) {
+  // Same rule as the REST route: an image-bearing turn may carry empty text
+  // ("what is this?" is the picture itself). Text-only still requires text.
+  if (text.trim().length === 0 && imagePaths.length === 0) {
     return { accepted: false, turnId, reason: 'bad_request', message: 'text (non-empty string) is required' }
   }
   if (recentTurnIds.has(turnId)) {
@@ -393,6 +544,26 @@ export async function handlePrimaryChatTurnRelay(
     }
   }
 
+  // Adopt the staged pictures before committing to the turn. Deliberately ahead
+  // of rememberTurnId: a refusal must leave this box exactly as it was, so the
+  // replica's local-loop fallback runs the same turnId without tripping the
+  // duplicate guard on a later retry.
+  let imageData: RelayedImageData | undefined
+  if (imagePaths.length > 0) {
+    const { adoptRelayedImagePaths } = await import('./images.js')
+    const adopted = await adoptRelayedImagePaths(imagePaths)
+    if (!adopted) {
+      log.web.warn('chat-turn relay refused — staged images unusable', {
+        conversationId, turnId, agentId, count: imagePaths.length,
+      })
+      return {
+        accepted: false, turnId, reason: 'images_unavailable',
+        message: 'The relayed image attachments could not be read on this box',
+      }
+    }
+    imageData = adopted
+  }
+
   const engine = await resolvePrimaryEngineLabel()
   rememberTurnId(turnId)
   primaryTurns.set(conversationId, turnId)
@@ -402,6 +573,7 @@ export async function handlePrimaryChatTurnRelay(
 
   log.web.info('chat-turn relay accepted from the cloud replica', {
     conversationId, turnId, agentId, engine, messageLength: text.length,
+    imageCount: imageData?.savedImages.length ?? 0,
   })
 
   // Proof-of-life while the turn produces no frames of its own: it can sit in
@@ -415,7 +587,7 @@ export async function handlePrimaryChatTurnRelay(
   void (async () => {
     try {
       const { runRelayedApiV1Turn } = await import('./api-v1.js')
-      await runRelayedApiV1Turn(agentId, conversationId, text, turnId)
+      await runRelayedApiV1Turn(agentId, conversationId, text, turnId, imageData)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       log.web.error('relayed chat turn failed on the primary', { conversationId, turnId, agentId, error: message })

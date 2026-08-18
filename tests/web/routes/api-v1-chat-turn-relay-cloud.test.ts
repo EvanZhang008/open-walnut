@@ -16,7 +16,11 @@
  *    the answering engine stamped on the terminal frame;
  *  - the replica writes NO chat history for a relayed turn (the primary is the
  *    single writer — two writers would double every message under git-sync);
- *  - bridge down degrades to the local loop and marks the terminal frame.
+ *  - bridge down degrades to the local loop and marks the terminal frame;
+ *  - an IMAGE turn relays too: the bytes ride the `image.save` daemon lane and
+ *    the control RPC carries only host PATHS (base64 in a control frame is the
+ *    1009 oversized-frame kill), the replica stages nothing on its own disk, and
+ *    a staging refusal degrades the whole turn to the marked local loop.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -49,7 +53,7 @@ vi.mock('../../../src/agent/loop.js', () => ({
   }),
 }))
 
-import { WALNUT_HOME } from '../../../src/constants.js'
+import { WALNUT_HOME, IMAGES_DIR, MOBILE_STAGED_IMAGES_DIR } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { attachBridge, closeAllBridges } from '../../../src/web/ws/bridge-registry.js'
 import { createDevice, _resetDeviceAuthForTesting } from '../../../src/core/device-auth.js'
@@ -66,13 +70,41 @@ function apiUrl(p: string): string {
 
 // ── Fake bridge socket standing in for the PRIMARY's daemon ──
 
-interface UplinkFrame { id: number; cmd: string; action?: string; params?: Record<string, unknown> }
+interface UplinkFrame {
+  id: number
+  cmd: string
+  action?: string
+  params?: Record<string, unknown>
+  /** `image.save` puts its args at the frame's top level, not under `params`. */
+  data?: string
+  mediaType?: string
+}
+
+/** Stand in for the daemon's `image.save`: generated filename, fixed staging
+ *  dir, no caller path component — the same contract the real command holds. */
+let stagedCounter = 0
+async function stageImageLikeDaemon(frame: UplinkFrame): Promise<Record<string, unknown>> {
+  const ext = frame.mediaType === 'image/jpeg' ? 'jpg' : 'png'
+  const buf = Buffer.from(String(frame.data ?? ''), 'base64')
+  await fs.mkdir(MOBILE_STAGED_IMAGES_DIR, { recursive: true })
+  const filePath = path.join(MOBILE_STAGED_IMAGES_DIR, `170000000${stagedCounter++}-abcd1234.${ext}`)
+  await fs.writeFile(filePath, buf)
+  return { ok: true, path: filePath, size: buf.length }
+}
 
 class FakePrimaryDaemon extends EventEmitter {
   /** Uplink RPCs the cloud sent us. */
   received: UplinkFrame[] = []
   /** Reply factory for `session.control` — set per test. */
   onControl: ((frame: UplinkFrame) => Record<string, unknown>) | null = null
+  /**
+   * Reply factory for `image.save`. Default: behave like a real daemon —
+   * validate nothing here (the real one is covered against the actual binary in
+   * tests/e2e/daemon-bridge-image-save-e2e.test.ts) and write the bytes into
+   * THIS process's staging dir, which is what makes the primary-side adoption in
+   * the same process a genuine end-to-end read rather than a stub.
+   */
+  onImageSave: ((frame: UplinkFrame) => Promise<Record<string, unknown>>) | null = null
 
   send(payload: string): void {
     const frame = JSON.parse(payload) as UplinkFrame
@@ -81,6 +113,11 @@ class FakePrimaryDaemon extends EventEmitter {
       const reply = this.onControl(frame)
       // Answer on the next tick, like a real round trip.
       setTimeout(() => this.inbound({ id: frame.id, ...reply }), 0)
+      return
+    }
+    if (frame.cmd === 'image.save') {
+      const handler = this.onImageSave ?? stageImageLikeDaemon
+      void handler(frame).then((reply) => this.inbound({ id: frame.id, ...reply }))
     }
   }
 
@@ -185,14 +222,35 @@ async function connectSse(url: string): Promise<{
   }
 }
 
-async function postMessage(conversationId: string, text: string): Promise<{ status: number; turnId: string }> {
+/** 1×1 PNG — real image bytes, small enough that compression early-exits. */
+const TINY_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
+async function postMessage(
+  conversationId: string,
+  text: string,
+  images?: Array<{ data: string; mediaType: string }>,
+): Promise<{ status: number; turnId: string }> {
   const res = await fetch(apiUrl(`/api/v1/conversations/${conversationId}/messages`), {
     method: 'POST',
     headers: { Authorization: `Bearer ${deviceToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, ...(images ? { images } : {}) }),
   })
   const body = await res.json().catch(() => ({}))
   return { status: res.status, turnId: (body as { turnId?: string }).turnId ?? '' }
+}
+
+/** Files the REPLICA saved into its own chat image store. Must stay empty for a
+ *  relayed turn: the primary owns the bytes exactly as it owns the history. */
+async function listReplicaImageStore(): Promise<string[]> {
+  try {
+    const names = await fs.readdir(IMAGES_DIR)
+    // The staging dir is written by our FAKE DAEMON (playing the primary's host,
+    // same process), so it is not a replica-side write.
+    return names.filter((n) => n !== 'mobile' && n !== 'remote')
+  } catch {
+    return []
+  }
 }
 
 /** The replica's own copy of a conversation's chat history (must stay empty
@@ -209,6 +267,7 @@ async function readReplicaHistory(conversationId: string): Promise<unknown[]> {
 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
+  await fs.rm(IMAGES_DIR, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
   _resetDeviceAuthForTesting()
   server = await startServer({ port: 0, dev: true })
@@ -223,11 +282,13 @@ afterAll(async () => {
   closeAllBridges()
   await stopServer()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
+  await fs.rm(IMAGES_DIR, { recursive: true, force: true }).catch(() => {})
 })
 
-beforeEach(() => {
+beforeEach(async () => {
   closeAllBridges()
   resetChatTurnRelayState()
+  await fs.rm(IMAGES_DIR, { recursive: true, force: true }).catch(() => {})
 })
 
 describe('a relayed chat turn runs on the primary\'s engine', () => {
@@ -324,6 +385,126 @@ describe('a relayed chat turn runs on the primary\'s engine', () => {
       primary.close()
     }
   }, 40_000)
+})
+
+describe('an image turn also runs on the primary\'s engine', () => {
+  it('stages the bytes on the primary and puts only PATHS in the control RPC', async () => {
+    const primary = connectFakePrimary()
+    primary.onControl = () => ({ ok: true, result: { accepted: true, engine: 'claude-code' } })
+
+    const conv = await createConversation('general')
+    const sse = await connectSse(apiUrl(`/api/v1/conversations/${conv.id}/stream`))
+    try {
+      const posted = await postMessage(conv.id, 'what is in this picture?', [
+        { data: TINY_PNG_BASE64, mediaType: 'image/png' },
+        { data: TINY_PNG_BASE64, mediaType: 'image/png' },
+      ])
+      expect(posted.status).toBe(202)
+
+      const uplink = await primary.waitForControl('server.chat.turn')
+
+      // ── The rule this whole change exists to hold ──
+      // Bytes went over the dedicated image lane, one RPC per picture; the
+      // control frame carries ~60-byte paths. Base64 in a control frame is the
+      // oversized-frame (1009) close that kills every in-flight RPC on the
+      // shared bridge socket, so this assertion is the feature's safety net.
+      const saves = primary.received.filter((f) => f.cmd === 'image.save')
+      expect(saves).toHaveLength(2)
+      expect(saves[0].data).toBe(TINY_PNG_BASE64)
+
+      const paths = uplink.params?.imagePaths as string[]
+      expect(paths).toHaveLength(2)
+      for (const p of paths) expect(path.dirname(p)).toBe(MOBILE_STAGED_IMAGES_DIR)
+      expect(JSON.stringify(uplink.params)).not.toContain(TINY_PNG_BASE64.slice(0, 40))
+
+      // ── Single owner: the replica staged NOTHING in its own image store ──
+      // (the fake daemon writes the staging dir on the primary's behalf; the
+      // replica's own chat-image dir must be untouched, exactly like history)
+      expect(await listReplicaImageStore()).toEqual([])
+
+      // The turn then behaves like any relayed turn: primary's frames, primary's
+      // engine on the terminal frame, and zero history written here.
+      primary.pushChatFrame(conv.id, posted.turnId, 'message-end', {
+        turnId: posted.turnId, fullText: 'A 1×1 pixel.',
+      })
+      const end = await sse.waitFor((e) => e.event === 'message-end')
+      expect(end.data.engine).toBe('claude-code')
+      expect(await readReplicaHistory(conv.id)).toEqual([])
+    } finally {
+      sse.close()
+      primary.close()
+    }
+  }, 40_000)
+
+  it('the primary can actually read back what the replica staged, and refuses anything else', async () => {
+    // Closes the loop the pure-unit test cannot: the paths here were produced by
+    // the daemon stand-in from bytes that really crossed the relay, and they are
+    // fed to the REAL primary-side code rather than hand-written fixtures.
+    const primary = connectFakePrimary()
+    let relayedParams: Record<string, unknown> | undefined
+    primary.onControl = (frame) => {
+      relayedParams = frame.params
+      return { ok: true, result: { accepted: true, engine: 'claude-code' } }
+    }
+
+    const conv = await createConversation('general')
+    try {
+      await postMessage(conv.id, 'describe it', [{ data: TINY_PNG_BASE64, mediaType: 'image/png' }])
+      await primary.waitForControl('server.chat.turn')
+
+      const { adoptRelayedImagePaths } = await import('../../../src/web/routes/images.js')
+      const adopted = await adoptRelayedImagePaths(relayedParams!.imagePaths as unknown[])
+      expect(adopted).not.toBeNull()
+      expect(adopted!.savedImages).toHaveLength(1)
+      // Adopted into the answering box's OWN store (IMAGES_DIR root), which is
+      // what makes GET /api/images/:filename and history hydration work.
+      expect(path.dirname(adopted!.savedImages[0].filePath)).toBe(IMAGES_DIR)
+      await expect(fs.access(adopted!.savedImages[0].filePath)).resolves.toBeUndefined()
+
+      // The primary's own ACCEPT handler refuses a path outside the staging dir,
+      // and refuses it BEFORE starting a turn — the gate is not caller-trusted,
+      // because these paths arrive from another box over the network.
+      const { handlePrimaryChatTurnRelay } = await import('../../../src/web/routes/chat-turn-relay.js')
+      const refused = await handlePrimaryChatTurnRelay({
+        agentId: 'general', conversationId: conv.id, text: 'read this',
+        turnId: 'turn-evil-path', imagePaths: [path.join(WALNUT_HOME, 'config.yaml')],
+      })
+      expect(refused.accepted).toBe(false)
+      expect(refused.reason).toBe('images_unavailable')
+    } finally {
+      primary.close()
+    }
+  }, 40_000)
+
+  it('a staging refusal degrades the WHOLE turn to the local loop, marked as a fallback', async () => {
+    const primary = connectFakePrimary()
+    primary.onControl = () => ({ ok: true, result: { accepted: true, engine: 'claude-code' } })
+    // An old daemon that predates image.save. The turn must not be relayed
+    // text-only — a "what is this?" without the picture is a wrong answer.
+    primary.onImageSave = async () => ({ ok: false, error: 'unknown command: image.save' })
+
+    const conv = await createConversation('general')
+    const sse = await connectSse(apiUrl(`/api/v1/conversations/${conv.id}/stream`))
+    try {
+      expect((await postMessage(conv.id, 'what is this?', [
+        { data: TINY_PNG_BASE64, mediaType: 'image/png' },
+      ])).status).toBe(202)
+
+      const end = await sse.waitFor((e) => e.event === 'message-end', 30_000)
+      expect(end.data.fullText).toBe('local fallback answer')
+      expect(end.data.engine).toBe('walnut-agent-fallback')
+
+      // No relay attempt at all, and the picture IS on this box now — the local
+      // loop is the writer on the fallback path, images included.
+      expect(primary.received.some((f) => f.action === 'server.chat.turn')).toBe(false)
+      expect((await listReplicaImageStore()).length).toBe(1)
+      const entries = await readReplicaHistory(conv.id) as Array<{ role?: string }>
+      expect(entries.filter((e) => e.role === 'user')).toHaveLength(1)
+    } finally {
+      sse.close()
+      primary.close()
+    }
+  }, 60_000)
 })
 
 describe('degradation: no bridge → the replica answers locally, and says so', () => {

@@ -11,7 +11,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import fsp from 'node:fs/promises'
-import { IMAGES_DIR } from '../../constants.js'
+import { IMAGES_DIR, MOBILE_STAGED_IMAGES_DIR } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { compressForApi } from '../../utils/image-compress.js'
 
@@ -43,6 +43,15 @@ export interface ProcessedImages {
 
 const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 const MAX_IMAGES_PER_MESSAGE = 5
+
+/**
+ * `image.save` caps, mirrored from the daemon twins so an oversized attachment
+ * is refused HERE (and the caller can degrade) instead of after a full bridge
+ * round trip. Decoded bytes and base64 length are both checked, exactly as the
+ * daemon checks them.
+ */
+const IMAGE_SAVE_MAX_BASE64_LENGTH = 14_000_000
+const IMAGE_SAVE_MAX_BYTES = 10 * 1024 * 1024
 
 export const imagesRouter = Router()
 
@@ -125,6 +134,137 @@ export async function processAndSaveImages(images: ImagePayload[]): Promise<Proc
       source: { type: 'base64' as const, media_type: s.mediaType, data: s.data },
     })),
   }
+}
+
+/**
+ * True when one base64 attachment fits the `image.save` limits the daemon (and
+ * therefore the chat-turn relay) enforces. Checked replica-side so an oversized
+ * picture degrades to the local loop rather than burning a bridge round trip and
+ * a WS frame on a save the daemon will refuse anyway.
+ */
+export function fitsImageSaveLimits(base64: string): boolean {
+  if (base64.length === 0 || base64.length > IMAGE_SAVE_MAX_BASE64_LENGTH) return false
+  // Decoded size without materializing the buffer: 4 base64 chars = 3 bytes,
+  // minus padding. A 10MB cap on a 14MB base64 ceiling makes this the binding
+  // check for most real photos, so it must not itself allocate 10MB per call.
+  const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0
+  const decodedBytes = Math.floor(base64.length / 4) * 3 - padding
+  return decodedBytes > 0 && decodedBytes <= IMAGE_SAVE_MAX_BYTES
+}
+
+/** How many images one message may carry — shared with the relay's payload cap. */
+export function maxImagesPerMessage(): number {
+  return MAX_IMAGES_PER_MESSAGE
+}
+
+/**
+ * Compress/clamp image payloads IN MEMORY, without touching disk — for the
+ * cloud chat-turn relay, which must ship the bytes to another box rather than
+ * store them here.
+ *
+ * Two reasons this runs before staging rather than only on the receiving side:
+ * an unclamped phone screenshot is several MB of base64 on a WS socket every
+ * other RPC shares, and `image.save` refuses anything over its cap, so
+ * compressing first is the difference between a relayed turn and a fallback.
+ * The receiving box re-runs the same compression (it must, for locally-attached
+ * images too) and early-exits on an already-small buffer.
+ */
+export async function compressImagesInMemory(images: ImagePayload[]): Promise<ImagePayload[]> {
+  return Promise.all(images.map(async (img) => {
+    const { buffer, mimeType } = await compressForApi(Buffer.from(img.data, 'base64'), img.mediaType)
+    return { data: buffer.toString('base64'), mediaType: mimeType }
+  }))
+}
+
+/**
+ * True for a path the local daemon's `image.save` could have produced: inside
+ * the fixed mobile staging directory, one flat filename, image extension.
+ *
+ * This is the trust boundary for a RELAYED chat turn. The path arrives from the
+ * cloud replica, so it must never be able to name an arbitrary file: without
+ * this gate a compromised replica could ask the primary to read any file it
+ * likes and have the bytes echoed into chat history (and served back over
+ * `GET /api/images/:filename`). No traversal, no symlink escape (the caller
+ * realpaths), no non-image extension.
+ */
+export function isRelayedImageStagingPath(p: unknown): p is string {
+  if (typeof p !== 'string' || p.length === 0) return false
+  if (path.dirname(p) !== MOBILE_STAGED_IMAGES_DIR) return false
+  const name = path.basename(p)
+  return isSafeImageFilename(name)
+}
+
+/**
+ * Adopt images a cloud replica staged on THIS box (via the daemon's
+ * `image.save`) into the primary's own image store, returning the exact shape
+ * `processAndSaveImages` produces — so a relayed turn feeds the ordinary turn
+ * path with no image-specific branch downstream.
+ *
+ * Why re-save instead of referencing the staged file directly:
+ *
+ *  - `image.save` deliberately does NOT compress or clamp (it is a narrow,
+ *    dependency-free daemon primitive). An unclamped 4000px image poisons EVERY
+ *    later turn of the conversation, because a stored image replays with each
+ *    one — so the same `compressForApi` the local REST path runs must run here.
+ *  - The staged file lives in the daemon's `images/mobile/` subdir, while the
+ *    web console resolves a persisted image by BASENAME under `/api/images/`.
+ *    Landing it in IMAGES_DIR like every other chat image keeps history,
+ *    hydration and serving identical to a locally-attached image.
+ *
+ * ALL-OR-NOTHING, and that is the whole contract: null means "this turn cannot
+ * run here", which the relay answers with a refusal so the replica falls back to
+ * a loop that still holds every image. Dropping one bad path and answering with
+ * the rest would produce a confident answer about a picture the model never saw,
+ * which is strictly worse than an honestly degraded one.
+ */
+export async function adoptRelayedImagePaths(paths: unknown[]): Promise<ProcessedImages | null> {
+  if (paths.length === 0 || paths.length > MAX_IMAGES_PER_MESSAGE) return null
+  // Every path must clear the staging gate — a single reject fails the turn
+  // rather than shortening the attachment set behind the user's back.
+  if (!paths.every(isRelayedImageStagingPath)) {
+    log.web.warn('relayed chat images rejected — a path is not a staged mobile image', {
+      count: paths.length,
+    })
+    return null
+  }
+
+  // Resolve the staging dir ITSELF before comparing resolved file paths. On
+  // macOS the production dir is under /tmp, which is a symlink to /private/tmp,
+  // so realpath('/tmp/…/mobile/x.png') has dirname '/private/tmp/…/mobile' —
+  // comparing that to the unresolved constant refuses EVERY legitimate image and
+  // silently degrades every phone image turn to the fallback loop.
+  let stagingRoot: string
+  try {
+    stagingRoot = await fsp.realpath(MOBILE_STAGED_IMAGES_DIR)
+  } catch {
+    // Nothing was ever staged here — no image can be adopted.
+    return null
+  }
+
+  const staged = await Promise.all(paths.map(async (stagedPath) => {
+    try {
+      // realpath AFTER the dirname check: a symlink planted in the staging dir
+      // must not turn into a read of /etc/… . Resolve, then re-assert containment
+      // against the resolved root, which is the check that actually holds.
+      const real = await fsp.realpath(stagedPath)
+      if (path.dirname(real) !== stagingRoot) return null
+      const image = await readImageAsBase64(real)
+      if (!image) return null
+      return { data: image.data, mediaType: image.mediaType }
+    } catch {
+      // Staged file already reaped, unreadable, or a symlink pointing out.
+      return null
+    }
+  }))
+
+  const usable = staged.filter((s): s is ImagePayload => s !== null)
+  if (usable.length !== paths.length) {
+    log.web.warn('relayed chat images incomplete — refusing to answer a partial attachment set', {
+      requested: paths.length, usable: usable.length,
+    })
+    return null
+  }
+  return processAndSaveImages(usable)
 }
 
 /** True for a filename the upload endpoint could have produced (no path traversal). */

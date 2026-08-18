@@ -85,6 +85,7 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
     SESSION_QUEUE_FILE: path.join(tmpBase, 'session-message-queue.json'),
     IMAGES_DIR: path.join(tmpBase, 'images'),
     REMOTE_IMAGES_DIR: path.join(tmpBase, 'images', 'remote'),
+    MOBILE_STAGED_IMAGES_DIR: path.join(tmpBase, 'images', 'mobile'),
     PASTES_DIR: path.join(tmpBase, 'pastes'),
     HEARTBEAT_FILE: path.join(tmpBase, 'HEARTBEAT.md'),
     LOG_DIR: path.join(tmpBase, 'logs'),

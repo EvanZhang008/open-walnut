@@ -487,6 +487,21 @@ const activeTurns = new Map<string, string>()
 const ALLOWED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 const MAX_IMAGES_PER_MESSAGE = 5
 
+/**
+ * One turn's image attachments as they travel through the engine router.
+ *
+ * `savedImages`/`imageContentBlocks` are the on-disk + model-facing forms the
+ * turn path consumes. `images` keeps the ORIGINAL request payloads, which only
+ * the cloud relay needs: the primary has to receive bytes to stage, and a
+ * replica-local file path is meaningless there. On a replica the two saved
+ * fields start EMPTY and are filled in only if the turn falls back locally.
+ */
+interface TurnImageData {
+  savedImages: Array<{ filePath: string; filename: string; mediaType: string }>
+  imageContentBlocks: unknown[] | null
+  images?: ImagePayload[]
+}
+
 /** Extract the valid image payloads from a request body (silently drops junk). */
 function extractValidImages(raw: unknown): ImagePayload[] {
   if (!Array.isArray(raw)) return []
@@ -555,19 +570,23 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
 
     // Save + compress images OUTSIDE the queue (disk I/O) — same as chat.ts, so
     // the per-agent queue isn't held during uploads.
-    let savedImages: Array<{ filePath: string; filename: string; mediaType: string }> = []
-    let imageContentBlocks: unknown[] | null = null
+    //
+    // A CLOUD REPLICA saves NOTHING here: the turn is about to be relayed, and
+    // the primary is the single owner of both the bytes and the history for a
+    // relayed turn (a file on this box also means nothing over there). The
+    // fallback branch in runApiV1TurnRouted saves them if the relay fails.
+    let imageData: TurnImageData | undefined
     if (images.length > 0) {
-      const processed = await processAndSaveImages(images)
-      if (processed) {
-        savedImages = processed.savedImages
-        imageContentBlocks = processed.imageContentBlocks
+      imageData = { savedImages: [], imageContentBlocks: null, images }
+      if (!CLOUD_MODE) {
+        const processed = await processAndSaveImages(images)
+        if (processed) imageData = { ...processed, images }
       }
     }
 
     const turnId = crypto.randomUUID()
     activeTurns.set(conversationId, turnId)
-    log.web.info('api-v1 message accepted', { conversationId, turnId, agentId, messageLength: text.length, imageCount: savedImages.length })
+    log.web.info('api-v1 message accepted', { conversationId, turnId, agentId, messageLength: text.length, imageCount: images.length })
 
     // Additive SSE event: if another turn currently holds the agent queue
     // (possibly a long one on a DIFFERENT conversation), this turn will wait.
@@ -583,7 +602,7 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
     // On a CLOUD REPLICA the turn is relayed to the primary first, so the
     // phone gets the Mac's configured engine (claude-code) rather than this
     // box's in-process fallback loop — see routes/chat-turn-relay.ts.
-    void runApiV1TurnRouted(agentId, conversationId, text, turnId, { savedImages, imageContentBlocks })
+    void runApiV1TurnRouted(agentId, conversationId, text, turnId, imageData)
       .catch((err) => {
         log.web.error('api-v1 turn failed', {
           conversationId, turnId,
@@ -609,18 +628,19 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
  * different engine than the same question gets when the phone talks to the Mac
  * directly.
  *
- * Two deliberate exclusions from the relay, both falling back to the local loop:
+ * IMAGE turns relay too, but their bytes take a different lane: the ORIGINAL
+ * base64 payloads (not this box's saved paths, which mean nothing over there)
+ * are staged on the primary via the daemon's narrow `image.save`, and only the
+ * returned host paths ride the control RPC — base64 in a 45s RPC is the
+ * oversized-frame failure mode that closes the shared bridge socket. If any
+ * image fails to stage, the WHOLE turn falls back here, where the locally-saved
+ * copies are already on disk.
  *
- *  - IMAGE turns. The saved files live on THIS box's disk, so their paths mean
- *    nothing on the primary, and shipping base64 through a 45s control RPC is
- *    exactly the oversized-frame failure mode that kills every in-flight request
- *    on the shared bridge socket. Cloud image attachments already have their own
- *    host-side lane for SESSION sends (`image.save`); wiring that into chat is a
- *    separate change.
- *  - Anything the relay reports `unavailable` for (bridge down, primary's server
- *    down, old primary, relay error). The user gets a real answer from the local
- *    loop instead of an error, with the terminal frame marked
- *    `engine:'walnut-agent-fallback'` so the degradation is observable.
+ * The one remaining fallback class: anything the relay reports `unavailable`
+ * for (bridge down, primary's server down, old primary, relay error, image
+ * staging refused). The user gets a real answer from the local loop instead of
+ * an error, with the terminal frame marked `engine:'walnut-agent-fallback'` so
+ * the degradation is observable.
  *
  * `turn_active` is NOT a fallback case: the primary already has a turn on this
  * conversation, and running a second one here would produce two answers and two
@@ -631,18 +651,16 @@ async function runApiV1TurnRouted(
   conversationId: string,
   text: string,
   turnId: string,
-  imageData?: {
-    savedImages: Array<{ filePath: string; filename: string; mediaType: string }>
-    imageContentBlocks: unknown[] | null
-  },
+  imageData?: TurnImageData,
 ): Promise<void> {
-  const hasImages = (imageData?.savedImages.length ?? 0) > 0
-  if (!CLOUD_MODE || hasImages) {
+  if (!CLOUD_MODE) {
     await runApiV1Turn(agentId, conversationId, text, turnId, imageData)
     return
   }
 
-  const outcome = await relayChatTurnToPrimary(agentId, conversationId, text, turnId)
+  const outcome = await relayChatTurnToPrimary(
+    agentId, conversationId, text, turnId, imageData?.images ?? [],
+  )
 
   if (outcome.kind === 'accepted') {
     // The primary owns this turn end to end: it runs the engine, persists the
@@ -666,7 +684,15 @@ async function runApiV1TurnRouted(
   log.web.warn('api-v1 turn falling back to this replica\'s in-process loop', {
     conversationId, turnId, agentId, reason: outcome.reason,
   })
-  await runApiV1Turn(agentId, conversationId, text, turnId, imageData, { engine: FALLBACK_ENGINE_LABEL })
+  // The local loop needs the images ON THIS BOX, and a replica deliberately
+  // skipped that save while the relay was still a possibility. Do it now: this
+  // is the one branch where the replica is the writer.
+  let localImageData = imageData
+  if (imageData?.images?.length) {
+    const processed = await processAndSaveImages(imageData.images)
+    if (processed) localImageData = { ...processed, images: imageData.images }
+  }
+  await runApiV1Turn(agentId, conversationId, text, turnId, localImageData, { engine: FALLBACK_ENGINE_LABEL })
 }
 
 /**
@@ -680,8 +706,15 @@ export async function runRelayedApiV1Turn(
   conversationId: string,
   text: string,
   turnId: string,
+  /** Images the replica staged on this box, already adopted into THIS box's
+   *  image store by the relay (adoptRelayedImagePaths). Same shape a local
+   *  attachment produces, so the turn path needs no relay-specific branch. */
+  imageData?: {
+    savedImages: Array<{ filePath: string; filename: string; mediaType: string }>
+    imageContentBlocks: unknown[] | null
+  },
 ): Promise<void> {
-  await runApiV1Turn(agentId, conversationId, text, turnId)
+  await runApiV1Turn(agentId, conversationId, text, turnId, imageData)
 }
 
 /**
