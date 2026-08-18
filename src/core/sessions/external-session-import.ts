@@ -13,15 +13,18 @@
  *      the tunnel (see external-session-scan-core.ts).
  *   2. Drop anything Walnut already tracks (ids are sent to the daemon so it
  *      never even parses those files).
- *   3. Per host, ensure ONE holder task: "Sessions opened outside Walnut
- *      (<host>)". Every imported session for that host attaches to it.
+ *   3. Per host, ONE PROJECT ("Imported from <host>"), and inside it ONE TASK
+ *      PER SESSION, titled with the session's own auto-generated name. This is
+ *      the normal task↔session shape (1 session per task, session in the slot),
+ *      so imported sessions behave exactly like native ones — status circle,
+ *      click-through, resume.
  *   4. Import each candidate as a `stopped` session record with its real title.
  *
- * Deliberately NOT using linkSession(): that sets the task's single session slot
- * (1-session-per-task model). The holder task is a bucket for many sessions, so
- * imports go into `session_ids` history via addSessionToHistory() and leave the
- * slot empty — the slot is what "this task's live session" means, and a bucket
- * has no single live session.
+ * v1 grouped everything under one bucket task per host; that fought the 1-slot
+ * model (sessions had to hide in session_ids history) and read as one opaque
+ * row. cleanupLegacyBuckets() below removes those v1 buckets and lets the
+ * normal scan re-import their sessions in this shape — one code path, no
+ * bespoke migration of titles/timestamps.
  */
 
 import { log } from '../../logging/index.js';
@@ -40,20 +43,26 @@ const PER_HOST_CANDIDATE_LIMIT = 200;
 /** Per-run cap on actual imports, so one huge backlog can't hog a tick. */
 const PER_RUN_IMPORT_LIMIT = 100;
 
-/** Marker persisted on the holder task so we re-find it instead of duplicating. */
+/** Marker tag on every imported task, so imports are identifiable and the v1
+ *  bucket cleanup can find its targets. */
 const HOLDER_TAG = 'walnut:external-sessions';
+/** v1-only per-host tag — its presence is what identifies a legacy bucket. */
+const LEGACY_HOST_TAG_PREFIX = 'walnut:host:';
+/** v1 project the buckets were filed under; removed once its buckets are gone. */
+const LEGACY_PROJECT = 'Imported Sessions';
 
 /**
- * Project the holder tasks live in. Deliberately a real project, NOT the Inbox:
- * one bucket task per host is exactly the "grouping layer" a project is for, and
- * in the Inbox they sit unlabeled among loose tasks where they're invisible.
- * Auto-created on first import (an unknown name mints a `source:'local'`
- * registry row), so a sync provider can never claim it.
+ * Per-host project the imported tasks live in — the host IS the grouping
+ * ("where did these come from"), so it's the project name. Auto-created on
+ * first import (an unknown name mints a `source:'local'` registry row), so a
+ * sync provider can never claim it.
  */
-export const EXTERNAL_SESSIONS_PROJECT = 'Imported Sessions';
+export function externalImportProject(host: string): string {
+  return host === '__local__' ? 'Imported from this Mac' : `Imported from ${host}`;
+}
 
 export interface ExternalImportResult {
-  /** Sessions newly imported into Walnut. */
+  /** Sessions newly imported into Walnut (each as its own task). */
   imported: number;
   /** Candidates found but skipped (already tracked, or bad data). */
   skipped: number;
@@ -63,20 +72,10 @@ export interface ExternalImportResult {
   hostsSkipped: string[];
   /** True when a per-host or per-run cap clipped the work — logged, never silent. */
   truncated: boolean;
-  /** Holder task id per host. */
-  taskIdByHost: Record<string, string>;
-}
-
-/** Per-host marker tag, so the bucket survives a user rename of the title. */
-function hostTag(host: string): string {
-  return `walnut:host:${host}`;
-}
-
-/** Human-facing title of a host's holder task. */
-export function externalHolderTaskTitle(host: string): string {
-  return host === '__local__'
-    ? 'Sessions opened outside Walnut (this Mac)'
-    : `Sessions opened outside Walnut (${host})`;
+  /** Project name per host that received imports this run. */
+  projectByHost: Record<string, string>;
+  /** v1 bucket tasks removed this run (their sessions re-import per-task). */
+  cleanedLegacyBuckets: number;
 }
 
 /**
@@ -135,133 +134,93 @@ async function scanHost(
 }
 
 /**
- * Point every session already linked to a holder task at the task's project.
- * Best-effort: a failed row is logged and skipped, never fails the import.
+ * Remove v1 holder-bucket tasks ("Sessions opened outside Walnut (<host>)") and
+ * their session records, so the normal scan re-imports every one of those
+ * sessions in the current one-task-per-session shape. Reuses the import path
+ * instead of migrating in place — one code path, and titles/timestamps come
+ * back from the transcripts (source of truth), not from the v1 rows.
  *
- * NOTE this is the one place the importer writes an EXISTING session record.
- * It only touches `project`, and only when it actually differs, so the
- * lastActiveAt bump inside updateSessionRecord can't rewrite a transcript's
- * real timestamps on a no-op tick.
+ * Identified by the v1-only per-host tag, NOT by title, so a task a user
+ * created themselves can never be swept up. Runs on every tick; no-op once the
+ * buckets are gone.
  */
-async function backfillSessionProject(task: Task): Promise<number> {
-  const { getSessionsForTask, updateSessionRecord } = await import('../session-tracker.js');
-  const project = task.project || '';
-  let moved = 0;
-  for (const session of await getSessionsForTask(task.id)) {
-    if ((session.project || '') === project) continue;
+async function cleanupLegacyBuckets(): Promise<number> {
+  const { queryTasks, deleteTask, deleteProject } = await import('../task-manager.js');
+  const { getSessionsForTask, deleteSessionRecords } = await import('../session-tracker.js');
+  const buckets = (await queryTasks({ tagsAll: [HOLDER_TAG] }))
+    .filter((t) => (t.tags ?? []).some((tag) => tag.startsWith(LEGACY_HOST_TAG_PREFIX)));
+  if (buckets.length === 0) return 0;
+
+  let cleaned = 0;
+  for (const bucket of buckets) {
     try {
-      await updateSessionRecord(session.claudeSessionId, { project });
-      moved++;
+      // Drop the session rows FIRST: their ids must vanish from the tracker so
+      // the next scan's knownSessionIds doesn't hide them from re-import.
+      const sessions = await getSessionsForTask(bucket.id);
+      await deleteSessionRecords(
+        new Set(sessions.map((s) => s.claudeSessionId)),
+        'external-import v1 bucket migration (re-imported as one task per session)',
+      );
+      await deleteTask(bucket.id);
+      cleaned++;
+      log.session.info('removed v1 external-session bucket (sessions re-import per-task)', {
+        taskId: bucket.id, title: bucket.title, sessions: sessions.length,
+      });
     } catch (err) {
-      log.session.warn('external session project backfill failed', {
-        sessionId: session.claudeSessionId,
-        error: err instanceof Error ? err.message : String(err),
+      log.session.warn('v1 bucket cleanup failed; will retry next tick', {
+        taskId: bucket.id, error: err instanceof Error ? err.message : String(err),
       });
     }
   }
-  if (moved > 0) {
-    log.session.info('backfilled project on imported sessions', { taskId: task.id, project, moved });
-  }
-  return moved;
+  // Retire the v1 project once it's empty. Non-empty means the user filed their
+  // own tasks there — leave it alone.
+  try {
+    const remaining = await queryTasks({ projects: [LEGACY_PROJECT] });
+    if (remaining.length === 0) await deleteProject(LEGACY_PROJECT);
+  } catch { /* project may not exist (fresh install) — fine */ }
+  return cleaned;
 }
 
-/**
- * The host's existing holder task, or null. Matched by tag first, then by title,
- * so a user-renamed bucket is still recognized and we never mint a second one.
- * Includes COMPLETE tasks: a user who ticked the bucket off must not cause a
- * duplicate on the next tick.
- */
-async function findHolderTask(host: string): Promise<Task | null> {
-  const { queryTasks } = await import('../task-manager.js');
-  const title = externalHolderTaskTitle(host);
-  return (await queryTasks({ tagsAll: [HOLDER_TAG, hostTag(host)] }))[0]
-    ?? (await queryTasks({ tagsAll: [HOLDER_TAG] })).find((t) => t.title === title)
-    ?? null;
-}
-
-/**
- * Move a bucket that predates EXTERNAL_SESSIONS_PROJECT out of the Inbox, and
- * drag its already-imported session rows with it. A deliberate user move to some
- * OTHER project is respected — only the empty/Inbox case is corrected.
- */
-async function healHolderProject(host: string, existing: Task): Promise<Task> {
-  if (existing.project || '') return existing;
-  const { updateTask } = await import('../task-manager.js');
-  const { task } = await updateTask(existing.id, { project: EXTERNAL_SESSIONS_PROJECT });
-  // Session rows carry their own `project` copy (search + filters read it), so
-  // already-imported records must follow the task or the two disagree.
-  await backfillSessionProject(task);
-  log.session.info('moved external-session holder task out of the Inbox', {
-    host, taskId: task.id, project: task.project,
-  });
-  return task;
-}
-
-/**
- * Heal an EXISTING bucket on a host that produced no new candidates this tick.
- * Returns null when the host has no bucket — a machine with no external sessions
- * must never grow an empty one.
- */
-async function healExistingHolderTask(host: string): Promise<Task | null> {
-  const existing = await findHolderTask(host);
-  if (!existing) return null;
-  return healHolderProject(host, existing);
-}
-
-/**
- * Find (or create) the holder task for a host.
- */
-async function ensureHolderTask(host: string): Promise<Task> {
-  const { addTask } = await import('../task-manager.js');
-  const title = externalHolderTaskTitle(host);
-  const existing = await findHolderTask(host);
-  if (existing) return healHolderProject(host, existing);
-
-  const { task } = await addTask({
-    title,
-    // A real project, not the Inbox: one bucket per host IS a grouping, and in
-    // the Inbox these sit unlabeled among loose tasks where nobody finds them.
-    project: EXTERNAL_SESSIONS_PROJECT,
-    source: 'local',
-    priority: 'none',
-    tags: [HOLDER_TAG, hostTag(host)],
-    description:
-      'Auto-maintained by Walnut. Coding-agent sessions started outside Walnut on this ' +
-      'machine (terminal `claude`, Claude Desktop, codex TUI) are imported here so they ' +
-      'show up in the UI with their history. Safe to rename; do not delete unless you ' +
-      'want the imports to start a fresh bucket.',
-    _skipPluginOps: true,
-  });
-  log.session.info('created external-session holder task', {
-    host, taskId: task.id, project: task.project,
-  });
-  return task;
-}
-
-/** Import one candidate. Returns true when a new record was written. */
+/** Import one candidate as ITS OWN task. Returns true when created. */
 async function importCandidate(
   candidate: ExternalSessionCandidate,
   host: string,
-  task: Task,
 ): Promise<boolean> {
   const { getSessionByClaudeId, importSessionRecord } = await import('../session-tracker.js');
-  const { addSessionToHistory } = await import('../task-manager.js');
+  const { addTask, linkSession } = await import('../task-manager.js');
 
   // Re-check under no lock: the scan list was built before any of this ran, and
   // a normal Walnut launch may have claimed the id in between.
   if (await getSessionByClaudeId(candidate.sessionId)) return false;
 
-  const fallbackTitle = `${candidate.engine === 'codex' ? 'Codex' : 'Claude'} session ${candidate.sessionId.slice(0, 8)}`;
+  const title = candidate.title
+    || `${candidate.engine === 'codex' ? 'Codex' : 'Claude'} session ${candidate.sessionId.slice(0, 8)}`;
+  const project = externalImportProject(host);
+
+  // Task title = the session's own auto-generated name. Normal 1-session-per-
+  // task shape, so the session goes in the task's SLOT (linkSession), exactly
+  // like a session Walnut started itself.
+  const { task } = await addTask({
+    title,
+    project,
+    source: 'local',
+    priority: 'none',
+    tags: [HOLDER_TAG],
+    ...(candidate.cwd ? { cwd: candidate.cwd } : {}),
+    description: `Imported automatically — session started outside Walnut (${candidate.origin}).`,
+    _skipPluginOps: true,
+  });
+
   try {
     await importSessionRecord({
       claudeSessionId: candidate.sessionId,
       taskId: task.id,
-      project: task.project || '',
+      project,
       ...(candidate.cwd ? { cwd: candidate.cwd } : {}),
       // '__local__' is the in-memory key for "this machine"; session records
       // store local as absent host, so don't persist the sentinel.
       ...(host === '__local__' ? {} : { host }),
-      title: candidate.title || fallbackTitle,
+      title,
       ...(candidate.startedAt ? { startedAt: candidate.startedAt } : {}),
       lastActiveAt: candidate.lastActiveAt,
       messageCount: candidate.messageCount,
@@ -276,14 +235,17 @@ async function importCandidate(
       human_note: `Imported automatically — started outside Walnut (${candidate.origin}).`,
     });
   } catch (err) {
-    // importSessionRecord throws on an id that raced in — treat as skipped.
+    // importSessionRecord throws on an id that raced in — remove the task we
+    // just minted for it so a lost race can't leave an empty orphan behind.
+    const { deleteTask } = await import('../task-manager.js');
+    try { await deleteTask(task.id); } catch { /* best-effort */ }
     log.session.debug('external session import skipped', {
       sessionId: candidate.sessionId, error: err instanceof Error ? err.message : String(err),
     });
     return false;
   }
 
-  await addSessionToHistory(task.id, candidate.sessionId);
+  await linkSession(task.id, candidate.sessionId);
   return true;
 }
 
@@ -297,12 +259,16 @@ export async function importExternalSessions(options: {
   const windowMs = options.windowMs ?? DEFAULT_EXTERNAL_SCAN_WINDOW_MS;
   const result: ExternalImportResult = {
     imported: 0, skipped: 0, hostsScanned: [], hostsSkipped: [],
-    truncated: false, taskIdByHost: {},
+    truncated: false, projectByHost: {}, cleanedLegacyBuckets: 0,
   };
 
   const { scannable, skipped } = await scanTargets();
   result.hostsSkipped = skipped;
   if (scannable.length === 0) return result;
+
+  // v1 buckets go first: dropping their session rows makes those ids unknown
+  // again, so the scans below re-import them in the one-task-per-session shape.
+  result.cleanedLegacyBuckets = await cleanupLegacyBuckets();
 
   const { listAllSessionIds } = await import('../session-tracker.js');
   const knownSessionIds = [...await listAllSessionIds()];
@@ -316,20 +282,7 @@ export async function importExternalSessions(options: {
         host, limit: PER_HOST_CANDIDATE_LIMIT,
       });
     }
-    if (candidates.length === 0) {
-      // Nothing new to import, but an EXISTING bucket may still need healing
-      // (e.g. it predates the project and is stranded in the Inbox). Steady
-      // state is the common case — a host with no external sessions at all must
-      // NOT grow an empty bucket, so this only touches a bucket that exists.
-      const healed = await healExistingHolderTask(host);
-      if (healed) result.taskIdByHost[host] = healed.id;
-      continue;
-    }
-
-    // Only create the holder task once there is something to put in it — a
-    // machine with no external sessions should not grow an empty bucket task.
-    const task = await ensureHolderTask(host);
-    result.taskIdByHost[host] = task.id;
+    if (candidates.length === 0) continue;
 
     for (const candidate of candidates) {
       if (result.imported >= PER_RUN_IMPORT_LIMIT) {
@@ -340,8 +293,12 @@ export async function importExternalSessions(options: {
         break;
       }
       try {
-        if (await importCandidate(candidate, host, task)) result.imported++;
-        else result.skipped++;
+        if (await importCandidate(candidate, host)) {
+          result.imported++;
+          result.projectByHost[host] = externalImportProject(host);
+        } else {
+          result.skipped++;
+        }
       } catch (err) {
         result.skipped++;
         log.session.warn('external session import failed', {
@@ -353,12 +310,13 @@ export async function importExternalSessions(options: {
   }
 
   if (result.imported > 0) {
-    for (const taskId of Object.values(result.taskIdByHost)) {
-      bus.emit(EventNames.TASK_UPDATED, { taskId }, [], { source: 'external-session-import' });
-    }
+    // One coarse refresh — addTask already emitted per-task events; this nudges
+    // list surfaces that coalesce on task:updated.
+    bus.emit(EventNames.TASK_UPDATED, {}, [], { source: 'external-session-import' });
     log.session.info('imported external sessions', {
       imported: result.imported, skipped: result.skipped,
       hosts: result.hostsScanned.join(','),
+      projects: Object.values(result.projectByHost).join(','),
     });
   }
   return result;

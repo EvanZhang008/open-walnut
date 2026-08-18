@@ -136,6 +136,24 @@ final class DeviceCalendarStore {
         AppLog.info("calendar", "month events loaded", ["month": key, "events": String(events.count)])
     }
 
+    /// Fetch every month touched by `from...to` (the list view's scroll window
+    /// and the multi-day pager both span month boundaries). Rides the same
+    /// per-month cache, so re-entering a covered range is free.
+    func loadRange(from: Date, to: Date) async {
+        guard access == .granted else { return }
+        guard var cursor = CalendarLogic.startOfMonth(min(from, to), calendar: calendar),
+              let last = CalendarLogic.startOfMonth(max(from, to), calendar: calendar)
+        else { return }
+        // Cap the walk so a corrupt range can't fan out unbounded.
+        var hops = 0
+        while cursor <= last, hops <= 36 {
+            await loadMonth(containing: cursor)
+            guard let next = calendar.date(byAdding: .month, value: 1, to: cursor) else { break }
+            cursor = next
+            hops += 1
+        }
+    }
+
     func events(on dayKey: String) -> [DeviceCalendarEvent] {
         eventsByDay[dayKey] ?? []
     }
