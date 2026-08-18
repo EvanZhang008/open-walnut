@@ -334,6 +334,19 @@ Turns share the exact same per-agent serialization queue as the web UI's
 WebSocket chat — a REST turn and a WS turn can never interleave on one
 conversation, and turns fired from mobile also stream into the web UI.
 
+**Which engine answers (cloud companion).** A chat turn always runs on the
+engine the PRIMARY box is configured for (`agent.provider`), even when the phone
+is talking to the cloud replica: the replica relays the turn to the primary and
+forwards the primary's stream back onto this conversation's SSE channel, because
+the replica has no session runner and could otherwise only answer with its own
+in-process fallback loop. Clients need no change for this.
+
+Degraded case: when the relay is unusable (bridge down, primary's server down, a
+primary that predates the relay) or the turn carries images, the replica answers
+from its own loop instead of failing, and stamps the additive `engine` field on
+the terminal frame (`"walnut-agent-fallback"`). `engine` is informational only —
+ignore it unless you want to show the degradation.
+
 ### GET /api/v1/conversations/:id/stream (SSE)
 
 `Content-Type: text/event-stream`. Events (each has a monotonic numeric `id:`):
@@ -345,8 +358,8 @@ conversation, and turns fired from mobile also stream into the web UI.
 | `text-delta` | `{ "delta" }` | Streaming assistant text chunk |
 | `tool` | `{ "name" }` | The agent invoked a tool |
 | `thinking` | `{}` | The agent is reasoning (render a spinner) |
-| `message-end` | `{ "turnId", "fullText" }` | Turn finished; `fullText` = complete reply |
-| `error` | `{ "message" }` | Turn failed |
+| `message-end` | `{ "turnId", "fullText", "engine"? }` | Turn finished; `fullText` = complete reply |
+| `error` | `{ "message", "engine"? }` | Turn failed |
 
 - A `: ping` comment is sent every 25 s — treat it as keep-alive noise.
 - **Replay**: the server keeps a ring buffer of the current turn's events.

@@ -49,6 +49,7 @@ import {
   MAX_NOTE_SIZE,
 } from './notes-v2.js'
 import { emitSse as emitChannelSse, attachSse, closeAllSseChannels } from '../sse-channels.js'
+import { mirrorRelayedChatFrame, relayChatTurnToPrimary, FALLBACK_ENGINE_LABEL } from './chat-turn-relay.js'
 import { processAndSaveImages, buildImageAnnotation, buildSessionImageContext, type ImagePayload } from './images.js'
 import { stripEntityRefs } from '../../utils/entity-refs.js'
 import { log } from '../../logging/index.js'
@@ -439,6 +440,11 @@ apiV1Router.get('/conversations/:id/messages', async (req: Request, res: Respons
 
 function emitSse(conversationId: string, event: string, data: unknown): void {
   emitChannelSse(conversationId, event, data, { reset: event === 'message-start' })
+  // Primary box only, and only while a CLOUD-RELAYED turn is armed on this
+  // conversation (one Map lookup otherwise): mirror the frame down the bridge
+  // so the phone attached to the replica sees the same live stream a phone
+  // attached here does. See routes/chat-turn-relay.ts.
+  mirrorRelayedChatFrame(conversationId, event, data)
 }
 
 /** Close all live SSE connections (server shutdown / tests). */
@@ -574,7 +580,10 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
 
     // Fire the turn through the SAME per-agent queue the WS chat uses — one
     // serialization path. The 202 returns immediately; progress streams on SSE.
-    void runApiV1Turn(agentId, conversationId, text, turnId, { savedImages, imageContentBlocks })
+    // On a CLOUD REPLICA the turn is relayed to the primary first, so the
+    // phone gets the Mac's configured engine (claude-code) rather than this
+    // box's in-process fallback loop — see routes/chat-turn-relay.ts.
+    void runApiV1TurnRouted(agentId, conversationId, text, turnId, { savedImages, imageContentBlocks })
       .catch((err) => {
         log.web.error('api-v1 turn failed', {
           conversationId, turnId,
@@ -592,6 +601,90 @@ apiV1Router.post('/conversations/:id/messages', async (req: Request, res: Respon
 })
 
 /**
+ * Engine router for one accepted REST turn.
+ *
+ * On the PRIMARY this is just runApiV1Turn. On a CLOUD REPLICA it first tries to
+ * hand the turn to the primary, because the replica cannot run the lane engine
+ * at all (no session runner, no `claude` CLI) and would otherwise answer with a
+ * different engine than the same question gets when the phone talks to the Mac
+ * directly.
+ *
+ * Two deliberate exclusions from the relay, both falling back to the local loop:
+ *
+ *  - IMAGE turns. The saved files live on THIS box's disk, so their paths mean
+ *    nothing on the primary, and shipping base64 through a 45s control RPC is
+ *    exactly the oversized-frame failure mode that kills every in-flight request
+ *    on the shared bridge socket. Cloud image attachments already have their own
+ *    host-side lane for SESSION sends (`image.save`); wiring that into chat is a
+ *    separate change.
+ *  - Anything the relay reports `unavailable` for (bridge down, primary's server
+ *    down, old primary, relay error). The user gets a real answer from the local
+ *    loop instead of an error, with the terminal frame marked
+ *    `engine:'walnut-agent-fallback'` so the degradation is observable.
+ *
+ * `turn_active` is NOT a fallback case: the primary already has a turn on this
+ * conversation, and running a second one here would produce two answers and two
+ * history writers. It is reported to the client as an SSE error.
+ */
+async function runApiV1TurnRouted(
+  agentId: string,
+  conversationId: string,
+  text: string,
+  turnId: string,
+  imageData?: {
+    savedImages: Array<{ filePath: string; filename: string; mediaType: string }>
+    imageContentBlocks: unknown[] | null
+  },
+): Promise<void> {
+  const hasImages = (imageData?.savedImages.length ?? 0) > 0
+  if (!CLOUD_MODE || hasImages) {
+    await runApiV1Turn(agentId, conversationId, text, turnId, imageData)
+    return
+  }
+
+  const outcome = await relayChatTurnToPrimary(agentId, conversationId, text, turnId)
+
+  if (outcome.kind === 'accepted') {
+    // The primary owns this turn end to end: it runs the engine, persists the
+    // user message AND the answer, and streams every frame back down the bridge
+    // (handleBridgeChatTurnFrame fans them out on this conversation's channel).
+    // This box persists NOTHING — two writers would double every message once
+    // git-sync converged. Awaiting `settled` keeps the POST handler's 409 guard
+    // held for the turn's real duration, exactly as the local path does.
+    await outcome.settled
+    return
+  }
+
+  if (outcome.kind === 'turn_active') {
+    log.web.warn('api-v1 turn rejected — the primary already has a turn on this conversation', {
+      conversationId, turnId, agentId,
+    })
+    emitSse(conversationId, 'error', { message: outcome.message })
+    return
+  }
+
+  log.web.warn('api-v1 turn falling back to this replica\'s in-process loop', {
+    conversationId, turnId, agentId, reason: outcome.reason,
+  })
+  await runApiV1Turn(agentId, conversationId, text, turnId, imageData, { engine: FALLBACK_ENGINE_LABEL })
+}
+
+/**
+ * Entry point for a chat turn RELAYED here from a cloud replica (the primary
+ * side of routes/chat-turn-relay.ts). Deliberately the ordinary turn path: this
+ * box resolves its own `agent.provider`, owns persistence, and owns the SSE
+ * contract, so there is no second turn implementation to keep in sync.
+ */
+export async function runRelayedApiV1Turn(
+  agentId: string,
+  conversationId: string,
+  text: string,
+  turnId: string,
+): Promise<void> {
+  await runApiV1Turn(agentId, conversationId, text, turnId)
+}
+
+/**
  * Persist + publish a failed turn: the disk entry, the SSE `error` the mobile
  * client unlocks its composer on, and the two WS broadcasts the web console
  * needs (live error card + agent:error). One helper so the in-process catch and
@@ -601,12 +694,14 @@ async function persistAndEmitTurnError(
   agentId: string,
   conversationId: string,
   errMsg: string,
+  /** Additive engine marker for the terminal frame (see runApiV1Turn). */
+  engineMark: Record<string, string> = {},
 ): Promise<void> {
   await chatHistory.addAIMessages(
     [{ role: 'assistant', content: [{ type: 'text', text: `[Error: ${errMsg}]` }] }] as MessageParam[],
     { source: 'agent-error', agentId, conversationId },
   ).catch(() => { /* best-effort */ })
-  emitSse(conversationId, 'error', { message: errMsg })
+  emitSse(conversationId, 'error', { message: errMsg, ...engineMark })
   // Mirror the WS path: push the error entry live, not disk-only (see chat.ts).
   broadcastEvent(EventNames.CHAT_HISTORY_UPDATED, {
     entry: {
@@ -727,7 +822,12 @@ async function runApiV1Turn(
     savedImages: Array<{ filePath: string; filename: string; mediaType: string }>
     imageContentBlocks: unknown[] | null
   },
+  /** Additive marker stamped on the terminal SSE frame. Set only on a cloud
+   *  replica's fallback turn, so a degraded answer is observable without any
+   *  client change (unknown fields are ignored by the frozen v1 contract). */
+  opts?: { engine?: string },
 ): Promise<void> {
+  const engineMark: Record<string, string> = opts?.engine ? { engine: opts.engine } : {}
   await enqueueAgentTurn(agentId, 'api-v1', async () => {
     // ── Engine selection (config.agent.provider) ──
     // 'claude-code' delivers the turn into the conversation's lane session instead
@@ -883,7 +983,7 @@ async function runApiV1Turn(
         await chatHistory.addAIMessages(afterUser, { agentId, conversationId })
       }
 
-      emitSse(conversationId, 'message-end', { turnId, fullText: result.response })
+      emitSse(conversationId, 'message-end', { turnId, fullText: result.response, ...engineMark })
       broadcastEvent(EventNames.AGENT_RESPONSE, { text: result.response, agentId, conversationId })
       log.web.info('api-v1 turn completed', { conversationId, turnId, agentId })
 
@@ -892,7 +992,7 @@ async function runApiV1Turn(
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
       log.web.error('api-v1 turn error', { conversationId, turnId, agentId, error: errMsg })
-      await persistAndEmitTurnError(agentId, conversationId, errMsg)
+      await persistAndEmitTurnError(agentId, conversationId, errMsg, engineMark)
     } finally {
       unregisterAbort()
     }

@@ -674,7 +674,12 @@ export type SessionControlAction =
   // Full-row task readback (additive 2026-08): the slim projection omits
   // description/note, so a REPLICA's GET /v1/tasks/:id relays here for the
   // primary's authoritative row when the bridge is up (local row = fallback).
-  | 'server.tasks.get';
+  | 'server.tasks.get'
+  // Run ONE Personal AI chat turn on the answering box's OWN engine, so a
+  // phone talking to a cloud replica gets the Mac's configured engine
+  // (claude-code) instead of the replica's in-process fallback loop.
+  // Accept-only + reverse-lane streaming: routes/chat-turn-relay.ts.
+  | 'server.chat.turn';
 
 // ── Task op relay payload validation (server.tasks.apply) ───────────────────
 
@@ -1016,6 +1021,18 @@ export async function handleSessionControlRelay(
         const { applyTaskOp } = await import('../task-outbox.js');
         const outcome = await applyTaskOp(op);
         result = { ...outcome, opId: op.opId };
+        break;
+      }
+      // ── Chat-turn relay: run the phone's chat turn on THIS box's engine ──
+      // A cloud replica has no session runner and no `claude` CLI, so a chat
+      // turn sent to it silently ran its in-process walnut-agent loop instead
+      // of the Mac's configured claude-code engine. This action moves the turn
+      // to the box that owns the lane. Accept-only: the daemon's 45s relay
+      // budget cannot cover a minutes-long turn, so the answer and its deltas
+      // ride the reverse `mobile-event` lane (see routes/chat-turn-relay.ts).
+      case 'server.chat.turn': {
+        const { handlePrimaryChatTurnRelay } = await import('../../web/routes/chat-turn-relay.js');
+        result = await handlePrimaryChatTurnRelay(p) as unknown as Record<string, unknown>;
         break;
       }
       case 'server.tasks.get': {

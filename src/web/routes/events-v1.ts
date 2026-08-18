@@ -24,7 +24,9 @@
  * bridge-registry hands it to this module → same SSE fan-out. The same lane
  * additionally carries CACHE frames ('projection-upsert'/'transcript-upsert',
  * pushed by core/projection-cache.ts) that are persisted to WALNUT_HOME/cache/
- * and never fanned out. The snapshot frame on cloud comes from the pushed
+ * and never fanned out, plus CHAT-TURN frames (routes/chat-turn-relay.ts) that
+ * are routed to ONE conversation's own SSE channel rather than this feed. The
+ * kind allowlist below is the injection gate for all of them. The snapshot frame on cloud comes from the pushed
  * session projection cache (legacy git-synced file as transition fallback) +
  * the local task store. Bridge down / old daemon → the stream degrades to
  * snapshot + heartbeats (no error; the phone's pull paths still work).
@@ -36,6 +38,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { attachSse, emitSse, sseConnCount } from '../sse-channels.js'
+import { CHAT_TURN_FRAME_KIND, handleBridgeChatTurnFrame } from './chat-turn-relay.js'
 import { log } from '../../logging/index.js'
 import type { Task } from '../../core/types.js'
 
@@ -86,19 +89,29 @@ function fanOut(event: string, data: unknown): void {
  * `mobile-event` command (the cloud feed just degrades to snapshot+poll).
  */
 function forwardToBridge(event: string, data: unknown): void {
-  void (async () => {
-    try {
-      const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js')
-      const conn = getConnectedDaemonConnection('__local__')
-      if (!conn || !conn.hasCapability('mobile-event')) return
-      await conn.send('mobile-event', { kind: event, data })
-    } catch (err) {
-      // Non-fatal by design — the snapshot frame heals any gap.
-      log.web.debug('mobile-events: bridge forward failed', {
-        event, error: err instanceof Error ? err.message : String(err),
-      })
-    }
-  })()
+  void forwardMobileEventToBridge(event, data).catch((err) => {
+    // Non-fatal by design — the snapshot frame heals any gap.
+    log.web.debug('mobile-events: bridge forward failed', {
+      event, error: err instanceof Error ? err.message : String(err),
+    })
+  })
+}
+
+/**
+ * Awaitable single-frame push down the SAME `mobile-event` lane (primary only).
+ * Split out of forwardToBridge so other producers on this box can push their own
+ * frame kinds through the one transport that already exists (chat-turn-relay's
+ * downlink) and see whether it landed. Resolves false when there is no lane
+ * (no daemon, or one predating `mobile-event`) rather than throwing — an absent
+ * downlink is a normal, degradable state, not an error.
+ */
+export async function forwardMobileEventToBridge(kind: string, data: unknown): Promise<boolean> {
+  if (CLOUD_MODE) return false
+  const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js')
+  const conn = getConnectedDaemonConnection('__local__')
+  if (!conn || !conn.hasCapability('mobile-event')) return false
+  await conn.send('mobile-event', { kind, data })
+  return true
 }
 
 function emitFeedEvent(event: string, data: unknown): void {
@@ -219,6 +232,12 @@ export function handleBridgeMobileEvent(kind: unknown, data: unknown): void {
   // Projection/transcript pushes → local cache, never the SSE feed.
   if (kind === 'projection-upsert' || kind === 'transcript-upsert') {
     handleBridgeCacheFrame(kind, data)
+    return
+  }
+  // Chat-turn frames belong to ONE conversation's own SSE channel, not this
+  // feed — the relay module owns their validation, watchdog and fan-out.
+  if (kind === CHAT_TURN_FRAME_KIND) {
+    handleBridgeChatTurnFrame(data)
     return
   }
   // Only the three known event kinds — a compromised/buggy sender must not

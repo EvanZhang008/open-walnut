@@ -174,6 +174,90 @@ suite('LIVE: phone journey through the real cloud companion', () => {
     expect(res.status).toBe(404)
   })
 
+  /**
+   * The phone's CHAT (not a session) must answer on the PRIMARY's engine.
+   *
+   * Pre-fix, this turn ran the replica's in-process walnut-agent loop, because
+   * the replica's config carries no `agent.provider` and the default is
+   * 'walnut-agent' — so the same question got a different engine depending on
+   * whether the phone reached the Mac or the cloud. The relay moves the turn to
+   * the box that owns the lane session.
+   *
+   * The assertion is deliberately on the SSE terminal frame's `engine`, not on
+   * the answer text: only the answering box knows which engine ran, and a text
+   * assertion would just be testing the model's willingness to introspect.
+   *
+   * NOTE: green only AFTER both boxes are deployed with this change. Against an
+   * older primary the relay classifies 'Unknown control action' as needs_upgrade
+   * and correctly degrades to the local loop, which reports
+   * engine:'walnut-agent-fallback' — so a pre-deploy run fails HERE, which is
+   * the intended signal.
+   */
+  it('chat turn runs on the PRIMARY\'s engine (claude-code), not the replica\'s loop', async () => {
+    if (!online) return
+    const marker = `LIVE-CHAT-ENGINE-${Date.now().toString(36).toUpperCase()}`
+
+    // 1. A fresh conversation, so no other turn can be active on it.
+    const created = await api('/api/v1/conversations', {
+      method: 'POST', body: JSON.stringify({ title: marker }),
+    })
+    expect(created.status).toBe(201)
+    const { id: conversationId } = await created.json() as { id: string }
+
+    // 2. Attach the SSE stream BEFORE sending — the terminal frame is the only
+    //    place the answering engine is reported.
+    const controller = new AbortController()
+    const streamRes = await fetch(`${target!.base}/api/v1/conversations/${conversationId}/stream`, {
+      headers: hdrs(), signal: controller.signal,
+    })
+    expect(streamRes.status).toBe(200)
+
+    const terminal = (async () => {
+      const reader = streamRes.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) return null
+        buffer += decoder.decode(value, { stream: true })
+        let sep: number
+        while ((sep = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, sep)
+          buffer = buffer.slice(sep + 2)
+          let event = ''
+          let data = ''
+          for (const line of frame.split('\n')) {
+            if (line.startsWith('event: ')) event = line.slice(7)
+            else if (line.startsWith('data: ')) data = line.slice(6)
+          }
+          if (event === 'message-end' || event === 'error') {
+            return { event, data: data ? JSON.parse(data) as Record<string, unknown> : {} }
+          }
+        }
+      }
+    })()
+
+    try {
+      // 3. Send the turn (exactly what the phone's composer does).
+      const posted = await api(`/api/v1/conversations/${conversationId}/messages`, {
+        method: 'POST', body: JSON.stringify({ text: `Reply with exactly: ${marker}` }),
+      })
+      expect(posted.status).toBe(202)
+
+      const frame = await Promise.race([
+        terminal,
+        new Promise<null>((r) => setTimeout(() => r(null), 240_000)),
+      ])
+      if (!frame) throw new Error('no terminal SSE frame within 240s')
+
+      // The whole point of the feature.
+      expect(frame.event).toBe('message-end')
+      expect(frame.data.engine).toBe('claude-code')
+    } finally {
+      controller.abort()
+    }
+  }, 300_000)
+
   it('task write parity: create → PATCH title visible IMMEDIATELY → delete never resurrects', async () => {
     if (!online) return
     const title = `LIVE-PARITY-${Date.now().toString(36).toUpperCase()}-DELETEME`
