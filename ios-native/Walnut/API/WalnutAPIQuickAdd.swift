@@ -14,14 +14,20 @@ extension WalnutAPI {
     /// fields ride the wire (synthesized Encodable omits nils); callers must
     /// pass at least one — the server 400s an empty patch.
     /// Answers the updated task in the same slim ProjectedTask shape.
+    ///
+    /// `endDate` (additive, 2026-08) carries the parse's time RANGE ("3-5pm"),
+    /// which only exists alongside a `startDate` — pass them together or not at
+    /// all, since the server refuses an end with no start.
     func backfillTask(
         id: String, title: String? = nil, dueDate: String? = nil,
-        startDate: String? = nil, priority: String? = nil, project: String? = nil
+        startDate: String? = nil, endDate: String? = nil,
+        priority: String? = nil, project: String? = nil
     ) async throws -> WalnutTask {
         struct Body: Encodable {
             let title: String?
             let due_date: String?
             let start_date: String?
+            let end_date: String?
             let priority: String?
             let project: String?
         }
@@ -29,7 +35,7 @@ extension WalnutAPI {
             "PATCH", "/tasks/\(escape(id))",
             body: Body(
                 title: title, due_date: dueDate, start_date: startDate,
-                priority: priority, project: project
+                end_date: endDate, priority: priority, project: project
             )
         )
         return updated.task

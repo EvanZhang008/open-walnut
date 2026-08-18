@@ -106,15 +106,24 @@ struct WalnutAPI {
     /// nil/empty project = the server default (Inbox); a new project name is
     /// auto-created. Throws APIError.server code "not_supported_cloud" (503)
     /// on a REPLICA — task writes run on the primary box only.
+    ///
+    /// `startDate`/`endDate` (additive, 2026-08) create the task already placed
+    /// on the calendar — this is what a "create on this day / in this time
+    /// range" gesture sends. Both are ISO-8601 (`YYYY-MM-DD` or a full
+    /// datetime); an `endDate` needs a `startDate` (the server 400s an orphan
+    /// end, and an end earlier than its start).
     func createTask(
         title: String, project: String? = nil, priority: String? = nil,
-        dueDate: String? = nil, description: String? = nil
+        dueDate: String? = nil, startDate: String? = nil, endDate: String? = nil,
+        description: String? = nil
     ) async throws -> WalnutTask {
         struct Body: Encodable {
             let title: String
             let project: String?
             let priority: String?
             let due_date: String?
+            let start_date: String?
+            let end_date: String?
             let description: String?
         }
         let created: TaskCreated = try await send(
@@ -124,6 +133,8 @@ struct WalnutAPI {
                 project: (project?.isEmpty ?? true) ? nil : project,
                 priority: priority,
                 due_date: dueDate,
+                start_date: startDate,
+                end_date: endDate,
                 description: (description?.isEmpty ?? true) ? nil : description
             )
         )
@@ -134,15 +145,24 @@ struct WalnutAPI {
     /// on BOTH server modes: a REPLICA applies locally and outbox-syncs back).
     /// Only non-nil fields ride the wire; `dueDate` "" = explicit clear.
     /// Answers the updated task in the same slim shape GET /tasks serves.
+    ///
+    /// `startDate`/`endDate` (additive, 2026-08) move or resize the task's
+    /// calendar block. "" clears either one; clearing `startDate` also clears
+    /// the end server-side (an end with no start is not a state the model
+    /// keeps). The pair is validated against the STORED row, so sending just
+    /// one half is fine, but an end before the task's start is a 400.
     func updateTask(
         id: String, status: String? = nil, priority: String? = nil,
-        dueDate: String? = nil, project: String? = nil, title: String? = nil,
+        dueDate: String? = nil, startDate: String? = nil, endDate: String? = nil,
+        project: String? = nil, title: String? = nil,
         description: String? = nil
     ) async throws -> WalnutTask {
         struct Body: Encodable {
             let status: String?
             let priority: String?
             let due_date: String?
+            let start_date: String?
+            let end_date: String?
             let project: String?
             let title: String?
             let description: String?
@@ -151,6 +171,7 @@ struct WalnutAPI {
             "PATCH", "/tasks/\(escape(id))",
             body: Body(
                 status: status, priority: priority, due_date: dueDate,
+                start_date: startDate, end_date: endDate,
                 project: project, title: title, description: description
             )
         )

@@ -86,12 +86,16 @@ extension TasksStore {
         let priority = ["immediate", "important", "backlog"].contains(parse.priority ?? "") ? parse.priority : nil
         let project = parse.project?.trimmingCharacters(in: .whitespaces)
 
+        // end_date is the end of parse.startDate's block, so it only rides when
+        // the start does — the server refuses an end with no start.
+        let endDate = parse.startDate != nil ? parse.endDate : nil
+
         if title != nil || parse.dueDate != nil || parse.startDate != nil
             || priority != nil || (project?.isEmpty == false) {
             do {
                 let updated = try await patchBackfill(
                     id: created.id, title: title, dueDate: parse.dueDate,
-                    startDate: parse.startDate, priority: priority,
+                    startDate: parse.startDate, endDate: endDate, priority: priority,
                     project: (project?.isEmpty == false) ? project : nil
                 )
                 // Re-check: the user may have edited DURING the PATCH.
@@ -126,17 +130,17 @@ extension TasksStore {
     /// WITHOUT the project so the date/title upgrade still lands.
     private func patchBackfill(
         id: String, title: String?, dueDate: String?, startDate: String?,
-        priority: String?, project: String?
+        endDate: String?, priority: String?, project: String?
     ) async throws -> WalnutTask {
         do {
             return try await api.backfillTask(
                 id: id, title: title, dueDate: dueDate,
-                startDate: startDate, priority: priority, project: project
+                startDate: startDate, endDate: endDate, priority: priority, project: project
             )
         } catch let error as APIError where error.isConflict && project != nil {
             return try await api.backfillTask(
                 id: id, title: title, dueDate: dueDate,
-                startDate: startDate, priority: priority, project: nil
+                startDate: startDate, endDate: endDate, priority: priority, project: nil
             )
         }
     }

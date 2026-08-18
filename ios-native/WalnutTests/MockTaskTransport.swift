@@ -61,16 +61,24 @@ final class MockTaskTransport: WalnutTaskTransport, @unchecked Sendable {
 
     func updateTask(
         id: String, status: String?, priority: String?, dueDate: String?,
+        startDate: String?, endDate: String?,
         project: String?, title: String?, description: String?
     ) async throws -> WalnutTask {
-        try await checkpoint("updateTask", [id, status ?? "-", priority ?? "-", title ?? "-"])
+        // The calendar dates join the recorded args so a test can assert WHAT a
+        // reschedule sent, not just that a PATCH happened.
+        try await checkpoint("updateTask", [
+            id, status ?? "-", priority ?? "-", title ?? "-",
+            startDate ?? "-", endDate ?? "-",
+        ])
         if let updateTaskResult { return updateTaskResult(id) }
         return WalnutTask(
             id: id, title: title ?? "t", status: status ?? "todo", phase: "TODO",
             priority: priority ?? "none", project: project ?? "", dueDate: dueDate,
             createdAt: "2026-08-16T00:00:00Z", updatedAt: "2026-08-16T00:00:01Z",
             completedAt: status == "done" ? "2026-08-16T00:00:01Z" : nil,
-            starred: nil, pinned: nil, tags: nil, summary: nil
+            starred: nil, pinned: nil, tags: nil, summary: nil,
+            startDate: (startDate?.isEmpty ?? true) ? nil : startDate,
+            endDate: (endDate?.isEmpty ?? true) ? nil : endDate
         )
     }
 

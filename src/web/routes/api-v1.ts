@@ -1017,6 +1017,38 @@ function isValidIsoDate(s: string): boolean {
   return new Date(`${datePart}T00:00:00Z`).toISOString().slice(0, 10) === datePart
 }
 
+// The calendar date pair (start_date/end_date) shares ONE gate across POST and
+// PATCH: an ISO-8601 value passes isValidIsoDate, and '' or null is the explicit
+// "no value" marker. '' mirrors due_date's established clear input; null is
+// accepted too because a calendar client that models "no date" as null would
+// otherwise get a 400 it can't act on. due_date's own gate is deliberately
+// untouched (frozen contract) — it keeps rejecting null.
+function isClearMarker(v: unknown): boolean {
+  return v === '' || v === null
+}
+/** Exported for the validation-matrix unit test (tests/web/routes/api-v1-task-dates.test.ts). */
+export function isDateFieldValid(v: unknown): boolean {
+  return isClearMarker(v) || (typeof v === 'string' && isValidIsoDate(v))
+}
+/** Clear markers normalize to '', the clear input updateTask/addTask understand. */
+function normalizeDateField(v: unknown): string {
+  return isClearMarker(v) ? '' : (v as string)
+}
+
+/**
+ * Coherence of the working block, checked against the EFFECTIVE final state
+ * (request values overlaid on the stored row) rather than the request alone.
+ * end_date is the END of a start_date block, so two shapes are junk and get a
+ * 400: an end with no start (PATCH end_date onto a task with no start_date),
+ * and an end that precedes its start. Returns the error message or null.
+ */
+export function validateDateWindow(start: string | undefined, end: string | undefined): string | null {
+  if (!end) return null
+  if (!start) return 'end_date requires a start_date (it is the end of a start_date working block)'
+  if (Date.parse(end) < Date.parse(start)) return 'end_date must be greater than or equal to start_date'
+  return null
+}
+
 // GET /api/v1/tasks — slim task list for mobile.
 // Primary box: exports a fresh projection from SQLite and serves that.
 // Cloud box: builds the same shape from the replica's OWN task store (which
@@ -1113,11 +1145,14 @@ apiV1Router.get('/tasks', async (req: Request, res: Response, next: NextFunction
 // very next list read — no round-trip wait.
 apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { title, project, priority, due_date: dueDate, description } = (req.body ?? {}) as {
+    const { title, project, priority, due_date: dueDate, start_date: startDate,
+      end_date: endDate, description } = (req.body ?? {}) as {
       title?: unknown
       project?: unknown
       priority?: unknown
       due_date?: unknown
+      start_date?: unknown
+      end_date?: unknown
       description?: unknown
     }
     if (typeof title !== 'string' || !title.trim()) {
@@ -1141,6 +1176,25 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
       sendError(res, 400, 'bad_request', 'due_date must be an ISO-8601 date string (YYYY-MM-DD or full datetime)')
       return
     }
+    // Calendar dates (additive, 2026-08): the pair that gives a task a block on
+    // the calendar surfaces. '' / null are accepted as "not set" so a client can
+    // send the whole shape unconditionally.
+    if (startDate !== undefined && !isDateFieldValid(startDate)) {
+      sendError(res, 400, 'bad_request', 'start_date must be an ISO-8601 date string (YYYY-MM-DD or full datetime), or "" / null for none')
+      return
+    }
+    if (endDate !== undefined && !isDateFieldValid(endDate)) {
+      sendError(res, 400, 'bad_request', 'end_date must be an ISO-8601 date string (YYYY-MM-DD or full datetime), or "" / null for none')
+      return
+    }
+    const windowError = validateDateWindow(
+      startDate === undefined ? undefined : normalizeDateField(startDate) || undefined,
+      endDate === undefined ? undefined : normalizeDateField(endDate) || undefined,
+    )
+    if (windowError) {
+      sendError(res, 400, 'bad_request', windowError)
+      return
+    }
     if (description !== undefined && typeof description !== 'string') {
       sendError(res, 400, 'bad_request', 'description must be a string')
       return
@@ -1156,6 +1210,10 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         ...(project !== undefined ? { project } : {}),
         ...(priority !== undefined ? { priority: priority as TaskPriority } : {}),
         ...(dueDate !== undefined ? { due_date: dueDate } : {}),
+        // addTask drops falsy dates, so a clear marker on CREATE is simply "no
+        // date" — no need for a separate branch.
+        ...(startDate !== undefined ? { start_date: normalizeDateField(startDate) } : {}),
+        ...(endDate !== undefined ? { end_date: normalizeDateField(endDate) } : {}),
         ...(description !== undefined ? { description } : {}),
         asyncPush: true,
       })
@@ -1176,8 +1234,8 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
 })
 
 // PATCH /api/v1/tasks/:id — update task fields from mobile (additive).
-// Allowed fields: { status?, priority?, due_date?, start_date?, project?, title?,
-// description?, tags?, unread? }.
+// Allowed fields: { status?, priority?, due_date?, start_date?, end_date?,
+// project?, title?, description?, tags?, unread? }.
 // Same core path as the web PATCH (updateTask with source 'api' + asyncPush) so
 // hooks/emits/terminal-phase-guard semantics are identical — updateTask emits
 // TASK_UPDATED internally, which on a REPLICA also feeds the task outbox (the
@@ -1196,19 +1254,23 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     // without this forward the :id param would swallow it as a task id. Task
     // ids are hex-ish and can never be the literal word "reorder".
     if (id === 'reorder') { next(); return }
-    const { status, phase, priority, due_date: dueDate, start_date: startDate, project, title, description, tags,
+    const { status, phase, priority, due_date: dueDate, start_date: startDate, end_date: endDateRaw,
+      project, title, description, tags,
       unread } = (req.body ?? {}) as {
       status?: unknown
       phase?: unknown
       priority?: unknown
       due_date?: unknown
       start_date?: unknown
+      end_date?: unknown
       project?: unknown
       title?: unknown
       description?: unknown
       tags?: unknown
       unread?: unknown
     }
+    // Reassignable: clearing start_date cascades an end_date clear (below).
+    let endDate = endDateRaw
 
     if (status !== undefined && !(typeof status === 'string' && V1_TASK_STATUSES.has(status))) {
       sendError(res, 400, 'bad_request', 'status must be one of: todo, in_progress, done')
@@ -1249,9 +1311,17 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       return
     }
     // Additive (Wave 1): start_date (same clear-with-'' semantics as due_date)
-    // and tags (full replace — mirrors updateTask's set_tags).
-    if (startDate !== undefined && !(typeof startDate === 'string' && (startDate === '' || isValidIsoDate(startDate)))) {
-      sendError(res, 400, 'bad_request', 'start_date must be an ISO-8601 date string (YYYY-MM-DD or full datetime) or "" to clear')
+    // and tags (full replace — mirrors updateTask's set_tags). end_date joined
+    // in 2026-08 for the calendar surfaces; both accept null as a clear marker
+    // alongside '' (see isClearMarker). Cross-field coherence (end needs a
+    // start, end >= start) is checked below against the EFFECTIVE row, since a
+    // PATCH may set only one half of the pair.
+    if (startDate !== undefined && !isDateFieldValid(startDate)) {
+      sendError(res, 400, 'bad_request', 'start_date must be an ISO-8601 date string (YYYY-MM-DD or full datetime), or "" / null to clear')
+      return
+    }
+    if (endDate !== undefined && !isDateFieldValid(endDate)) {
+      sendError(res, 400, 'bad_request', 'end_date must be an ISO-8601 date string (YYYY-MM-DD or full datetime), or "" / null to clear')
       return
     }
     if (tags !== undefined && !(Array.isArray(tags) && tags.every((t) => typeof t === 'string'))) {
@@ -1264,9 +1334,9 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       return
     }
     if (status === undefined && phase === undefined && priority === undefined && dueDate === undefined
-        && startDate === undefined && project === undefined && title === undefined
+        && startDate === undefined && endDate === undefined && project === undefined && title === undefined
         && description === undefined && tags === undefined && unread === undefined) {
-      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/phase/priority/due_date/start_date/project/title/description/tags/unread)')
+      sendError(res, 400, 'bad_request', 'at least one updatable field is required (status/phase/priority/due_date/start_date/end_date/project/title/description/tags/unread)')
       return
     }
 
@@ -1274,6 +1344,32 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     const { projectTask } = await import('../../core/task-projection.js')
     const opCaller = req.get('X-Walnut-Op-Caller')
     const updateSource = opCaller === 'agent' || opCaller === 'gateway' ? 'agent' : 'api'
+    // Window coherence on the EFFECTIVE row: a PATCH touching one half of the
+    // pair must be judged against the stored other half, otherwise
+    // `{ end_date: <before the stored start> }` would sail through. Only read
+    // the row when a date field is actually in play (one extra read on a
+    // date PATCH, none on any other). A resolution failure here is left to the
+    // mutation below, which owns the 404/400-ambiguous mapping.
+    if (startDate !== undefined || endDate !== undefined) {
+      const current = await tm.getTask(id).catch(() => undefined)
+      if (current) {
+        const effectiveStart = startDate !== undefined
+          ? (normalizeDateField(startDate) || undefined) : current.start_date
+        const effectiveEnd = endDate !== undefined
+          ? (normalizeDateField(endDate) || undefined) : current.end_date
+        // Clearing the start also clears a now-orphaned end (rather than 400ing
+        // a legitimate "remove this task from the calendar" intent).
+        if (startDate !== undefined && !effectiveStart && effectiveEnd && endDate === undefined) {
+          endDate = ''
+        } else {
+          const windowError = validateDateWindow(effectiveStart, effectiveEnd)
+          if (windowError) {
+            sendError(res, 400, 'bad_request', windowError)
+            return
+          }
+        }
+      }
+    }
     try {
       let updated
       const patch = {
@@ -1281,7 +1377,9 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         ...(phase !== undefined ? { phase: phase as TaskPhase } : {}),
         ...(priority !== undefined ? { priority: priority as TaskPriority } : {}),
         ...(dueDate !== undefined ? { due_date: dueDate as string } : {}),
-        ...(startDate !== undefined ? { start_date: startDate as string } : {}),
+        // updateTask treats '' as the clear, so a null marker rides as ''.
+        ...(startDate !== undefined ? { start_date: normalizeDateField(startDate) } : {}),
+        ...(endDate !== undefined ? { end_date: normalizeDateField(endDate) } : {}),
         ...(project !== undefined ? { project: project as string } : {}),
         ...(title !== undefined ? { title: (title as string).trim() } : {}),
         ...(tags !== undefined ? { set_tags: tags as string[] } : {}),

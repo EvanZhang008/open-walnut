@@ -204,6 +204,9 @@ struct QuickParsedTask: Codable, Equatable {
     let title: String
     let dueDate: String?
     let startDate: String?
+    /// End of the working block ("3-5pm" → start + end). Only ever present
+    /// alongside `startDate`; the server never emits one without the other.
+    let endDate: String?
     let priority: String?  // "immediate" | "important" | "backlog"
     let project: String?
     let projectIsNew: Bool?
@@ -214,6 +217,7 @@ struct QuickParsedTask: Codable, Equatable {
         case title, priority, project, pinTier, starred
         case dueDate = "due_date"
         case startDate = "start_date"
+        case endDate = "end_date"
         case projectIsNew = "project_is_new"
     }
 

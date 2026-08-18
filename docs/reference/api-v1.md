@@ -59,7 +59,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | GET | `/api/v1/conversations/:id/stream?agentId=` | SSE stream of the current turn |
 | GET | `/api/v1/sessions/launch-options` | Hosts + frequent dirs for creating a session (cloud relays to the primary) |
 | POST | `/api/v1/sessions` | Create a Claude Code session on a chosen host/path (cloud relays to the primary) |
-| PATCH | `/api/v1/tasks/:id` | Update task fields (status/priority/due_date/project/title/description) |
+| PATCH | `/api/v1/tasks/:id` | Update task fields (status/priority/due_date/start_date/end_date/project/title/description) |
 | GET | `/api/v1/sessions/:id/model-options` | Selectable models + current model/effort for the picker (cloud relays to the primary) |
 | POST | `/api/v1/sessions/:id/model` | Switch the session's model (cloud relays to the primary) |
 | POST | `/api/v1/sessions/:id/effort` | Switch the session's reasoning effort (cloud relays to the primary) |
@@ -403,6 +403,10 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   optional field, so a client that still decodes it just never sees it.
   `start_date` (added 2026-07) is the "when to begin" time that defers a task
   out of the web Now view; additive and optional, so older clients ignore it.
+  `end_date` (added 2026-08) is where that working block ENDS: paired with
+  `start_date` it gives the task a duration on the calendar surfaces, and it is
+  independent of `due_date` (the deadline). Meaningless on its own, so the write
+  endpoints refuse an `end_date` with no `start_date`.
   `unread` (added 2026-08-09) is the read/unread marker — present and `true` only
   when the agent produced output the human hasn't opened; omitted otherwise.
   Additive and optional. `PATCH /api/v1/tasks/:id` accepts `unread` to mark a
@@ -415,22 +419,29 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
 - `503 { "error": { "code": "unavailable" } }` — projection not synced yet
   (fresh companion before its first git pull).
 - `POST /api/v1/tasks` (additive, 2026-08) body `{ "title", "project"?,
-  "priority"?, "due_date"?, "description"? }` → `201 { "task": ProjectedTask }`.
+  "priority"?, "due_date"?, "start_date"?, "end_date"?, "description"? }` →
+  `201 { "task": ProjectedTask }`.
   Same creation semantics as the web quick-add: omitted/empty `project` =
   config default → Inbox; a new project name auto-creates its registry row;
   `priority` one of `immediate|important|backlog|none` (default from config).
+  `start_date` / `end_date` (additive, 2026-08) let a client create a task
+  already scheduled on the calendar (tapping a day, dragging a time range);
+  both are ISO-8601 (`YYYY-MM-DD` or full datetime), and `""` or `null` means
+  "no date" so a client can send the shape unconditionally.
   `description` is write-only: it is stored on the task but NOT returned in the
   slim ProjectedTask shape (which carries `summary`, a different field) — don't
   expect to read it back from `POST`'s response or `GET /tasks`.
-  Errors: `400 bad_request` (missing title / bad priority / bad due_date),
-  `409 conflict` (project source conflict).
+  Errors: `400 bad_request` (missing title / bad priority / bad due_date /
+  bad `start_date`/`end_date` / `end_date` before `start_date` / `end_date`
+  with no `start_date`), `409 conflict` (project source conflict).
   Works on BOTH boxes (2026-08: the REPLICA's former `503 not_supported_cloud`
   gate was removed — the cloud companion writes to its local store and the
   task outbox syncs it back to the primary). On a REPLICA the new task shows
   up in `GET /tasks` only after the outbox→primary→projection round trip
   (up to a couple of git-sync cycles); render the `201` response optimistically.
 - `PATCH /api/v1/tasks/:id` (additive, 2026-08) body — any subset of
-  `{ "status"?, "priority"?, "due_date"?, "project"?, "title"?, "description"? }`
+  `{ "status"?, "priority"?, "due_date"?, "start_date"?, "end_date"?,
+  "project"?, "title"?, "description"? }`
   → `200 { "task": ProjectedTask }` (the updated task in the same slim shape).
   - `status`: `todo` | `in_progress` | `done` (the server derives `phase` from
     it — a human-initiated `PATCH` may reopen a terminal task, same policy as
@@ -451,6 +462,17 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   - Additive fields (Wave 1, 2026-08): `start_date` (ISO date/datetime or `""`
     to clear — same gate as `due_date`) and `tags` (array of strings — a FULL
     replace of the task's tags; `[]` clears them).
+  - Calendar window (additive, 2026-08): `end_date` joins `start_date` as the
+    end of the task's working block, so a client can move or resize a task on a
+    calendar with one PATCH. Both accept an ISO-8601 value, and `""` **or**
+    `null` to clear (`due_date`'s frozen gate still takes only `""`). Rules,
+    checked against the task's EFFECTIVE state (request values overlaid on the
+    stored row, so a PATCH may send just one half): an `end_date` with no
+    `start_date` is `400 bad_request`, and an `end_date` earlier than the
+    `start_date` is `400 bad_request` (equal is fine). Clearing `start_date`
+    cascades an `end_date` clear rather than 400ing, since removing a task from
+    the calendar is a legitimate intent and an end with no start is not a state
+    worth keeping.
 - `GET /api/v1/tasks` additive filters (Wave 1, 2026-08): `project=` (exact,
   case-insensitive; `""` = Inbox), `tag=` (exact member match), `q=`
   (case-insensitive substring on the title). Combinable with `status=`.
@@ -1364,7 +1386,7 @@ Per-family matrix:
 | Mutation family | Replica behavior | Mac offline | Convergence |
 |---|---|---|---|
 | Task create (`POST /tasks`) | Class A: 201 with the created row from the local store | accepted; op queued | insert-by-same-id on the primary; project registry row auto-minted; primary recomputes `source` |
-| Task PATCH (title/description/status/phase/priority/due_date/start_date/project/tags/unread) | Class A: 200 with the updated row | accepted; op queued | LWW + `touched` scoping; project move mints the registry row; status→phase derivation runs on the primary too |
+| Task PATCH (title/description/status/phase/priority/due_date/start_date/end_date/project/tags/unread) | Class A: 200 with the updated row | accepted; op queued | LWW + `touched` scoping; project move mints the registry row; status→phase derivation runs on the primary too. Both calendar dates are in the op update whitelist, and a `touched` date absent from the snapshot is the explicit clear, so a phone-side reschedule or "off the calendar" reaches the primary intact |
 | Quick-parse (`POST /tasks/quick-parse`) | stateless LLM call on the replica's own credentials | works (no primary involved) | n/a |
 | Task delete (single + batch) | Class A: 204 / per-task result | accepted; op queued | tombstone prevents projection resurrection; delete blocked by a live session is consumed (row comes back via projection) |
 | Batch phase (`POST /tasks/batch/phase`) | Class A: 200 partial-success shape | accepted; one op per changed task | same as PATCH; COMPLETE additionally clears the pin fields |

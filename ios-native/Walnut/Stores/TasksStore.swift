@@ -444,14 +444,18 @@ final class TasksStore {
     /// would silently delete the row ("created it but can't find it").
     /// The overlay survives refreshes (and restarts, via DiskCache) until the
     /// server list contains the id. Throws on failure — the sheet surfaces it.
+    /// `startDate`/`endDate` create the task already on the calendar (the
+    /// "tap a day / drag a range" gesture); an end needs a start.
     @discardableResult
     func createTask(
         title: String, project: String? = nil, priority: String? = nil,
-        dueDate: String? = nil, description: String? = nil
+        dueDate: String? = nil, startDate: String? = nil, endDate: String? = nil,
+        description: String? = nil
     ) async throws -> WalnutTask {
         let created = try await api.createTask(
             title: title, project: project, priority: priority,
-            dueDate: dueDate, description: description
+            dueDate: dueDate, startDate: startDate, endDate: endDate,
+            description: description
         )
         if isActive {
             pendingCreated.append(PendingCreated(task: created, createdAt: Date()))
@@ -531,11 +535,16 @@ final class TasksStore {
         var status: String? = nil
         var priority: String? = nil
         var dueDate: String? = nil
+        /// Calendar block (additive, 2026-08). "" clears either one; clearing
+        /// the start clears the end server-side too.
+        var startDate: String? = nil
+        var endDate: String? = nil
         var project: String? = nil
         var title: String? = nil
 
         var isEmpty: Bool {
-            status == nil && priority == nil && dueDate == nil && project == nil && title == nil
+            status == nil && priority == nil && dueDate == nil && startDate == nil
+                && endDate == nil && project == nil && title == nil
         }
     }
 
@@ -563,8 +572,13 @@ final class TasksStore {
             pinned: task.pinned,
             tags: task.tags,
             summary: task.summary,
-            startDate: task.startDate,
-            endDate: task.endDate
+            // Same "" = clear convention as dueDate above. Clearing the start
+            // drops the end too, mirroring the server's cascade — otherwise the
+            // optimistic row would show an end the server just removed.
+            startDate: edit.startDate.map { $0.isEmpty ? nil : $0 } ?? task.startDate,
+            endDate: (edit.startDate?.isEmpty == true)
+                ? nil
+                : (edit.endDate.map { $0.isEmpty ? nil : $0 } ?? task.endDate)
         )
     }
 
@@ -618,7 +632,8 @@ final class TasksStore {
     private func patchTask(id: String, edit: TaskEdit) async throws -> WalnutTask {
         try await transport.updateTask(
             id: id, status: edit.status, priority: edit.priority,
-            dueDate: edit.dueDate, project: edit.project, title: edit.title,
+            dueDate: edit.dueDate, startDate: edit.startDate, endDate: edit.endDate,
+            project: edit.project, title: edit.title,
             description: nil
         )
     }
