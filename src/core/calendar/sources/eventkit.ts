@@ -27,8 +27,32 @@ import type {
 } from '../types.js';
 
 const execFileAsync = promisify(execFile);
-const HELPER_VERSION = 'v1';
+// v2: helper re-execs with TCC responsibility disclaimed and carries its own
+// embedded Info.plist (__info_plist section), so the calendar grant belongs to
+// the helper binary itself — not to whatever launched Walnut (iTerm, app
+// bundle, launchd). Without this, changing the launcher silently revoked
+// calendar access (tccd refused: parent had no NSCalendarsUsageDescription).
+const HELPER_VERSION = 'v2';
 const HELPER_TIMEOUT_MS = 30_000;
+
+/** Embedded plist: tccd reads usage keys from here once the helper is its own
+ *  responsible process. Both keys required — macOS 14+ wants the FullAccess
+ *  variant but refuses outright if the legacy key is absent. */
+const HELPER_INFO_PLIST = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>dev.openwalnut.calendar-helper</string>
+    <key>CFBundleName</key>
+    <string>Walnut Calendar Helper</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>Walnut shows and edits your Mac calendar events alongside your tasks.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Walnut shows and edits your Mac calendar events alongside your tasks.</string>
+</dict>
+</plist>
+`;
 
 interface HelperError {
   error: string;
@@ -72,10 +96,18 @@ async function ensureHelper(): Promise<string | null> {
       return null;
     }
     await fsp.mkdir(path.dirname(bin), { recursive: true });
+    // Embed the Info.plist into the binary (__TEXT,__info_plist) so tccd can
+    // read the calendar usage keys when the helper disclaims responsibility.
+    const plistPath = path.join(WALNUT_HOME, 'cache', `walnut-calendar-${HELPER_VERSION}.plist`);
+    await fsp.writeFile(plistPath, HELPER_INFO_PLIST);
     const compiled = await new Promise<boolean>((resolve) => {
-      const child = spawn('nice', ['-n', '10', 'xcrun', 'swiftc', '-O', '-o', bin, src], {
-        stdio: ['ignore', 'ignore', 'pipe'],
-      });
+      const child = spawn(
+        'nice',
+        ['-n', '10', 'xcrun', 'swiftc', '-O', '-o', bin, src,
+         '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist',
+         '-Xlinker', plistPath],
+        { stdio: ['ignore', 'ignore', 'pipe'] }
+      );
       let stderr = '';
       child.stderr.on('data', (d) => {
         stderr += String(d);

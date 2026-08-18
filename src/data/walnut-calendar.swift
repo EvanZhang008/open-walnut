@@ -20,8 +20,47 @@
 // Compiled lazily by src/core/calendar/sources/eventkit.ts via
 // `xcrun swiftc -O` into WALNUT_HOME/cache (same pattern as walnut-extract).
 
+import Darwin
 import EventKit
 import Foundation
+
+// ── TCC self-responsibility ─────────────────────────────────────────────────
+// TCC attributes a calendar request to the RESPONSIBLE process — normally the
+// top of the parent chain (Walnut.app, iTerm, launchd job, …), whose Info.plist
+// must carry NSCalendarsUsageDescription or tccd refuses without even
+// prompting. That made calendar access break whenever the launcher changed.
+// Fix: re-exec ourselves with responsibility DISCLAIMED (the same private
+// posix_spawn attribute Chromium/OBS use), so this binary becomes its own
+// responsible process and tccd reads the usage keys from our embedded
+// __info_plist section (injected at compile time by eventkit.ts). The grant
+// then sticks to this binary, independent of who launched Walnut.
+func reexecDisclaimedIfNeeded() {
+    guard ProcessInfo.processInfo.environment["WALNUT_CAL_DISCLAIMED"] != "1" else { return }
+    typealias DisclaimFn = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>?, Int32) -> Int32
+    let RTLD_DEFAULT = UnsafeMutableRawPointer(bitPattern: -2)
+    guard let sym = dlsym(RTLD_DEFAULT, "responsibility_spawnattrs_setdisclaim") else { return }
+    let setDisclaim = unsafeBitCast(sym, to: DisclaimFn.self)
+
+    var attr: posix_spawnattr_t?
+    guard posix_spawnattr_init(&attr) == 0 else { return }
+    defer { posix_spawnattr_destroy(&attr) }
+    guard setDisclaim(&attr, 1) == 0 else { return }
+
+    let exePath = Bundle.main.executablePath ?? CommandLine.arguments[0]
+    var argv: [UnsafeMutablePointer<CChar>?] = CommandLine.arguments.map { strdup($0) }
+    argv.append(nil)
+    var env = ProcessInfo.processInfo.environment
+    env["WALNUT_CAL_DISCLAIMED"] = "1"
+    var envp: [UnsafeMutablePointer<CChar>?] = env.map { strdup("\($0.key)=\($0.value)") }
+    envp.append(nil)
+
+    var pid: pid_t = 0
+    guard posix_spawn(&pid, exePath, nil, &attr, argv, envp) == 0 else { return } // fall back inline
+    var status: Int32 = 0
+    while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
+    // WIFEXITED / WEXITSTATUS (Swift has no C macros)
+    exit((status & 0x7f) == 0 ? (status >> 8) & 0xff : 1)
+}
 
 let store = EKEventStore()
 
@@ -146,6 +185,7 @@ func output(_ obj: Any) {
 
 let args = CommandLine.arguments
 guard args.count >= 2 else { fail("usage: walnut-calendar <calendars|list|update|create|delete> …", code: "usage") }
+reexecDisclaimedIfNeeded()
 requestAccess()
 
 switch args[1] {

@@ -58,6 +58,18 @@ cat > "$CONTENTS/Info.plist" << 'EOF'
          which silently removes the web console's voice-input mic button. -->
     <key>NSMicrophoneUsageDescription</key>
     <string>Walnut uses the microphone for voice input (speech-to-text).</string>
+    <!-- The calendar view shells out to the walnut-calendar EventKit helper, but
+         TCC attributes that request to the RESPONSIBLE process — this app bundle
+         — not to the helper binary. Without these keys tccd refuses the request
+         outright ("Refusing authorization request ... without
+         NSCalendarsUsageDescription key"): no prompt appears, and a Full Access
+         toggle already granted to `node` is never consulted. macOS 14+ wants the
+         Full Access variant; the legacy key must ALSO be present or the request
+         is refused before the variant is read. -->
+    <key>NSCalendarsUsageDescription</key>
+    <string>Walnut shows and edits your Mac calendar events alongside your tasks.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Walnut shows and edits your Mac calendar events alongside your tasks.</string>
 </dict>
 </plist>
 EOF
