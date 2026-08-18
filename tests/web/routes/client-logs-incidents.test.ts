@@ -18,7 +18,8 @@ vi.mock('../../../src/constants.js', () => createMockConstants('walnut-client-in
 
 import express from 'express';
 import request from 'supertest';
-import { WALNUT_HOME } from '../../../src/constants.js';
+import { LOG_DIR, WALNUT_HOME } from '../../../src/constants.js';
+import path from 'node:path';
 import { apiV1Router } from '../../../src/web/routes/api-v1.js';
 import { listNotifications } from '../../../src/core/notifications/store.js';
 import {
@@ -93,7 +94,14 @@ describe('POST /api/v1/client-logs — full-dump transport', () => {
     expect(res.body).toMatchObject({ ok: true, received: 2 });
 
     const day = new Date().toISOString().slice(0, 10);
-    const content = await fs.readFile(`/tmp/open-walnut/ios-client/${device}-${day}.log`, 'utf-8');
+    // Derived from the MOCKED LOG_DIR, never the literal '/tmp/open-walnut'.
+    // The route used to hardcode that path, so this assertion read (and the
+    // route wrote) the real production forensics dir — every run of this file
+    // left `gz-<epoch>-<day>.log` debris among a real device's logs, which is
+    // what made a genuine upload indistinguishable from test noise.
+    const content = await fs.readFile(
+      path.join(LOG_DIR, 'ios-client', `${device}-${day}.log`), 'utf-8',
+    );
     const written = content.trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>);
     // debug-level lines must survive ingest — full-dump means full dump.
     expect(written.some((l) => l.level === 'debug' && l.subsystem === 'heartbeat')).toBe(true);

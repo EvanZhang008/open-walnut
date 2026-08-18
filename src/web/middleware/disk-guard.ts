@@ -16,6 +16,11 @@
  *
  * Carve-outs (allowed even while blocked):
  *  - /browser-logs      — crash forensics; tiny, and losing them blinds triage.
+ *  - /v1/client-logs    — the MOBILE half of the same forensics channel. Left out
+ *    originally, which inverted the intent above: a full disk silently 507'd every
+ *    flight-recorder upload, and the client only gives up compression on a 4xx, so
+ *    a 507 makes it retry the same batch forever while the phone's evidence of
+ *    whatever the full disk broke never lands.
  *  - /notifications/*   — mark-read/dismiss on the very alert this guard fires.
  *  - /system/*          — health/diagnostics; a stuck box must stay inspectable.
  *  - /config/test-connection — read-only probe despite being a POST.
@@ -27,7 +32,9 @@ import { isDiskWriteBlocked, getDiskWatermarkState } from '../../core/disk-water
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 /** Mount-relative path prefixes exempt from the block (see header). */
-const EXEMPT_PREFIXES = ['/browser-logs', '/notifications', '/system', '/config/test-connection'];
+const EXEMPT_PREFIXES = [
+  '/browser-logs', '/v1/client-logs', '/notifications', '/system', '/config/test-connection',
+];
 
 export function diskGuardMiddleware(req: Request, res: Response, next: NextFunction): void {
   if (!MUTATING_METHODS.has(req.method) || !isDiskWriteBlocked()) {

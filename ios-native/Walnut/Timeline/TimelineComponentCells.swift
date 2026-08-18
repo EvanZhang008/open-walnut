@@ -85,12 +85,32 @@ enum TimelineHostedCell {
         case .activity(let activity):
             ThinkingRow(activity: activity)
                 .frame(maxWidth: .infinity, alignment: .leading)
-        case .failedNotice:
+        case .failedNotice(let notice):
+            // Waiting (an automatic retry is pending) reads as amber + a
+            // progress spinner: the message is genuinely not delivered, but
+            // telling the user to act would be wrong — the app is on it.
+            // Terminal reads as the plain red "Not sent". Both are tappable.
             HStack {
                 Spacer()
-                Label("Not sent — tap to retry", systemImage: "exclamationmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(Theme.danger)
+                Button {
+                    delegate?.timelineCell(
+                        didRequest: .retry(messageID: TimelineRow.messageID(fromRowID: row.id))
+                    )
+                } label: {
+                    if let notice {
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.mini)
+                            Text(notice).font(.caption)
+                        }
+                        .foregroundStyle(Theme.warning)
+                    } else {
+                        Label("Not sent — tap to retry", systemImage: "exclamationmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(Theme.danger)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("chat.retryFailed")
             }
             .padding(.horizontal, TimelineMetrics.hMargin)
         case .loadEarlier:

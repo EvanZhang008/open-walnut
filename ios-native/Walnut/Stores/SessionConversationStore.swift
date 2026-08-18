@@ -53,7 +53,7 @@ enum SessionLaunchContext {
 @Observable
 @MainActor
 final class SessionConversationStore {
-    private let api = WalnutAPI()
+    private let api: SessionSendTransport
     private let sessionId: String
     /// Where this session's CLI runs — "Mac" or the remote host alias. The
     /// offline notices name THIS host: a clouddev session going read-only is
@@ -63,6 +63,10 @@ final class SessionConversationStore {
     private var sse: SSEClient?
     private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var trackedTasks: [UUID: Task<Void, Never>] = [:]
+    /// In-flight automatic send retries, keyed by optimistic bubble id (one per
+    /// bubble). Cancelled on suspend/close and re-armed on resume, which is how
+    /// "pause in the background, continue in the foreground" is implemented.
+    @ObservationIgnored private var retryTasks: [String: Task<Void, Never>] = [:]
     private var isActive = true
     /// Set by close() (view gone), cleared by open(). Blocks LifecycleHub
     /// resumeAll from reviving a store whose screen was dismissed.
@@ -142,7 +146,10 @@ final class SessionConversationStore {
     @ObservationIgnored private var awaitingFirstTurn = false
     private static let startingActivity = "Starting session"
 
-    init(session: WalnutSession) {
+    /// `transport` is the WalnutTests seam (nil = the real WalnutAPI) — same
+    /// injection pattern as TasksStore's WalnutTaskTransport.
+    init(session: WalnutSession, transport: SessionSendTransport? = nil) {
+        self.api = transport ?? WalnutAPI()
         self.sessionId = session.id
         self.hostLabel = session.isLocal ? "Mac" : session.host
         self.processStatus = session.processStatus
@@ -245,6 +252,11 @@ final class SessionConversationStore {
         snapshotDecodeGen += 1 // invalidate any in-flight decode completion
         queuedWhileDecoding = []
         cancelTrackedTasks()
+        // Pause (never abandon) automatic send retries: a backgrounded app gets
+        // no reliable network or execution time, so burning attempts there just
+        // spends the budget on nothing. The bubbles keep their waiting notice
+        // and resume() re-arms them.
+        cancelRetryTasks()
         streaming = false
         activity = nil
     }
@@ -255,6 +267,7 @@ final class SessionConversationStore {
         guard !isActive, !viewClosed else { return }
         isActive = true
         connectStream()
+        rearmPendingRetries()
         trackTask { [weak self] in await self?.loadTranscript(fresh: true) }
     }
 
@@ -440,6 +453,12 @@ final class SessionConversationStore {
     /// Optimistic user bubble → POST. Composer stays enabled (sessions accept
     /// mid-turn messages). On failure the bubble STAYS in the timeline marked
     /// failed (tap to retry / copy / delete) — the user's text never vanishes.
+    ///
+    /// Idempotency: the bubble carries a `qm-mobile-*` id minted ONCE here, and
+    /// every re-send of it (automatic backoff below, or a manual tap) POSTs the
+    /// SAME id. The server's durable queue dedupes on it, so a retry after a
+    /// lost ack collapses onto the original row instead of delivering the turn
+    /// twice. See SendRetryPolicy.
     @discardableResult
     func send(_ text: String, images: [SelectedImage] = []) async -> Bool {
         guard isActive, canSend else { return false }
@@ -451,6 +470,7 @@ final class SessionConversationStore {
             createdAt: ISO8601DateFormatter().string(from: .now), kind: nil
         )
         optimistic.pending = true
+        optimistic.clientMessageId = SendRetryPolicy.newMessageId()
         // Carry thumbnails so the bubble shows them at once and a failed send
         // retains them for retry (the user's attachments never vanish).
         if !jpegDatas.isEmpty { optimistic.localImages = jpegDatas }
@@ -459,23 +479,45 @@ final class SessionConversationStore {
         // message land even if they were reading history.
         bottomPinned = true
         if isActive { scrollToBottomSignal += 1 }
+        return await deliver(
+            bubbleID: optimistic.id, messageId: optimistic.clientMessageId,
+            text: text, jpegDatas: jpegDatas, attempt: 0, firstFailureAt: nil
+        )
+    }
+
+    /// One delivery attempt for an existing bubble. `attempt` counts AUTOMATIC
+    /// retries already made (0 = the user's original send); `firstFailureAt`
+    /// anchors the retry budget so the whole ladder is bounded in wall-clock
+    /// time, not just in attempts.
+    @discardableResult
+    private func deliver(
+        bubbleID: String, messageId: String?, text: String, jpegDatas: [Data],
+        attempt: Int, firstFailureAt: Date?
+    ) async -> Bool {
         let payloads = await Self.buildImagePayloads(jpegDatas)
         // Encoding is a real suspension point (5 large photos take a moment).
         // If the store went inactive meanwhile, do NOT fire the request: leave
         // the text as a retryable failed bubble instead of writing UI state
         // into a store whose screen is gone / whose process is suspended.
         guard isActive, !Task.isCancelled else {
-            if let idx = pendingUser.firstIndex(where: { $0.id == optimistic.id }) {
-                pendingUser[idx].pending = false
-                pendingUser[idx].failed = true
-            }
+            settleFailed(bubbleID)
             return false
         }
         do {
-            _ = try await api.sendSessionMessage(id: sessionId, text: text, images: payloads)
+            _ = try await api.sendSessionMessage(
+                id: sessionId, text: text, images: payloads, messageId: messageId
+            )
             guard isActive, !Task.isCancelled else { return true }
-            if let idx = pendingUser.firstIndex(where: { $0.id == optimistic.id }) {
+            if let idx = pendingUser.firstIndex(where: { $0.id == bubbleID }) {
                 pendingUser[idx].pending = false
+                pendingUser[idx].failed = false
+                pendingUser[idx].retryNotice = nil
+            }
+            // A 202 proves the bridge is up: clear a sticky offline banner a
+            // previous attempt raised, same reasoning as a delivered snapshot.
+            if offline {
+                offline = false
+                stopPolling()
             }
             return true
         } catch {
@@ -483,20 +525,33 @@ final class SessionConversationStore {
             // forever-pending bubble: the draft is already cleared, so the
             // failed bubble (tap to retry) is the only copy of the text.
             if !isActive || (error as? APIError)?.isCancelled == true {
-                if let idx = pendingUser.firstIndex(where: { $0.id == optimistic.id }) {
-                    pendingUser[idx].pending = false
-                    pendingUser[idx].failed = true
-                }
+                settleFailed(bubbleID)
                 return false
-            }
-            if let idx = pendingUser.firstIndex(where: { $0.id == optimistic.id }) {
-                pendingUser[idx].pending = false
-                pendingUser[idx].failed = true
             }
             if let apiError = error as? APIError, apiError.isBridgeOffline {
                 offline = true
                 startPolling()
-            } else if let apiError = error as? APIError, apiError.isSessionDead {
+                // Retryable: ride it out on the backoff ladder rather than
+                // making the user the retry loop. The bubble stays visible and
+                // manually retryable throughout (same id, so a manual tap
+                // racing the timer still can't double-deliver).
+                let failedAt = firstFailureAt ?? Date()
+                let next = attempt + 1
+                let elapsed = Date().timeIntervalSince(failedAt)
+                if SendRetryPolicy.shouldRetry(attempt: next, elapsed: elapsed) {
+                    markWaitingForRetry(bubbleID)
+                    scheduleRetry(
+                        bubbleID: bubbleID, messageId: messageId, text: text,
+                        jpegDatas: jpegDatas, attempt: next, firstFailureAt: failedAt
+                    )
+                    return false
+                }
+                // Budget spent — settle on the honest "Not sent" copy.
+                settleFailed(bubbleID)
+                return false
+            }
+            settleFailed(bubbleID)
+            if let apiError = error as? APIError, apiError.isSessionDead {
                 dead = true
             } else if let apiError = error as? APIError, apiError.code == "images_not_supported_cloud" {
                 errorMessage = "Images can only be sent to sessions while your Mac is online."
@@ -507,6 +562,77 @@ final class SessionConversationStore {
         }
     }
 
+    /// Terminal failed state: red bubble + "Not sent — tap to retry".
+    private func settleFailed(_ bubbleID: String) {
+        guard let idx = pendingUser.firstIndex(where: { $0.id == bubbleID }) else { return }
+        pendingUser[idx].pending = false
+        pendingUser[idx].failed = true
+        pendingUser[idx].retryNotice = nil
+    }
+
+    /// Non-terminal failed state: still red (the message is genuinely not
+    /// delivered, and pretending otherwise is the ghost-bubble bug) but the
+    /// notice says an automatic retry is coming, and tapping it retries NOW.
+    private func markWaitingForRetry(_ bubbleID: String) {
+        guard let idx = pendingUser.firstIndex(where: { $0.id == bubbleID }) else { return }
+        pendingUser[idx].pending = false
+        pendingUser[idx].failed = true
+        pendingUser[idx].retryNotice = SendRetryPolicy.waitingNotice(host: hostLabel)
+    }
+
+    /// Sleep, then re-attempt. Tracked so backgrounding/close cancels it —
+    /// which is exactly the "app goes to background → pause" requirement: the
+    /// bubble stays a visible failed one, and `resume()` re-arms the ladder for
+    /// any bubble still waiting (see rearmPendingRetries).
+    private func scheduleRetry(
+        bubbleID: String, messageId: String?, text: String, jpegDatas: [Data],
+        attempt: Int, firstFailureAt: Date
+    ) {
+        let delay = SendRetryPolicy.delay(forAttempt: attempt)
+        let id = UUID()
+        retryTasks[bubbleID]?.cancel()
+        let task = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            guard let self, self.isActive else { return }
+            // Bubble gone (user deleted it, or the transcript absorbed it):
+            // nothing left to deliver.
+            guard self.pendingUser.contains(where: { $0.id == bubbleID }) else {
+                self.retryTasks[bubbleID] = nil
+                return
+            }
+            self.retryTasks[bubbleID] = nil
+            await self.deliver(
+                bubbleID: bubbleID, messageId: messageId, text: text,
+                jpegDatas: jpegDatas, attempt: attempt, firstFailureAt: firstFailureAt
+            )
+        }
+        retryTasks[bubbleID] = task
+        _ = id
+    }
+
+    /// Cancel every pending automatic retry (suspend / close). Bubbles keep
+    /// their `retryNotice`, so a foregrounded app re-arms them.
+    private func cancelRetryTasks() {
+        for task in retryTasks.values { task.cancel() }
+        retryTasks.removeAll()
+    }
+
+    /// Foreground: resume the ladder for bubbles that were mid-backoff when the
+    /// app suspended. Attempt counting restarts (a background stretch is not
+    /// evidence about the bridge), which is the forgiving direction — the id is
+    /// stable, so extra attempts still can't double-deliver.
+    private func rearmPendingRetries() {
+        let waiting = pendingUser.filter { $0.retryNotice != nil && $0.failed == true }
+        for bubble in waiting {
+            guard retryTasks[bubble.id] == nil else { continue }
+            scheduleRetry(
+                bubbleID: bubble.id, messageId: bubble.clientMessageId, text: bubble.text,
+                jpegDatas: bubble.localImages ?? [], attempt: 1, firstFailureAt: Date()
+            )
+        }
+    }
+
     /// Sequential, budgeted, off-MainActor — see SelectedImage.buildPayloads.
     private nonisolated static func buildImagePayloads(_ datas: [Data]) async -> [ImagePayload] {
         await SelectedImage.buildPayloads(datas)
@@ -514,20 +640,47 @@ final class SessionConversationStore {
 
     // MARK: - Failed-bubble actions
 
-    /// Re-send a failed bubble with the same text. Precondition-guarded —
-    /// send()'s canSend guard returns without appending, so removing the
-    /// bubble first while offline/dead would LOSE the text.
+    /// Re-send a failed bubble. Reuses the bubble's ORIGINAL `qm-mobile-*` id:
+    /// the server's queue is idempotent by that id, so if the first attempt
+    /// actually landed and only its ack was lost, this retry collapses onto the
+    /// same queued row instead of delivering the message twice. Minting a fresh
+    /// id here would bypass the dedupe entirely.
+    ///
+    /// Deliberately NOT gated on `canSend`. `canSend` is false while `offline`,
+    /// and a bridge_offline is the single most likely reason a bubble is sitting
+    /// here failed — so gating on it made "tap to retry" a no-op in precisely
+    /// the case it exists for, leaving the bubble un-retryable until a
+    /// bridge-online frame happened to arrive. Attempting the POST is also how
+    /// we FIND OUT the bridge is back (a 202 clears `offline` in deliver()).
+    /// Only a session the server itself declared unresumable (409 → `dead`) is
+    /// hopeless enough to refuse.
     func retry(_ message: ChatMessage) async {
-        guard message.failed == true, canSend else { return }
-        // Rebuild attached images from the retained JPEG datas so retry
-        // re-sends them; drop any that no longer decode.
-        let images = (message.localImages ?? []).compactMap { SelectedImage(jpegData: $0) }
-        pendingUser.removeAll { $0.id == message.id }
+        guard message.failed == true, !dead else { return }
+        // A manual tap supersedes any scheduled automatic attempt for this
+        // bubble (and resets the budget: the user asked for it now).
+        retryTasks[message.id]?.cancel()
+        retryTasks[message.id] = nil
         errorMessage = nil
-        await send(message.text, images: images)
+        guard let idx = pendingUser.firstIndex(where: { $0.id == message.id }) else { return }
+        pendingUser[idx].pending = true
+        pendingUser[idx].failed = false
+        pendingUser[idx].retryNotice = nil
+        // Backfill an id for a bubble that predates this field (a failed send
+        // from an older build restored into this session) so the retry is still
+        // idempotent from here on.
+        let messageId = message.clientMessageId ?? SendRetryPolicy.newMessageId()
+        pendingUser[idx].clientMessageId = messageId
+        await deliver(
+            bubbleID: message.id, messageId: messageId, text: message.text,
+            jpegDatas: message.localImages ?? [], attempt: 0, firstFailureAt: nil
+        )
     }
 
     func discardFailed(_ message: ChatMessage) {
+        // Deleting the bubble must also kill its pending automatic retry, or a
+        // timer would re-deliver text the user just threw away.
+        retryTasks[message.id]?.cancel()
+        retryTasks[message.id] = nil
         pendingUser.removeAll { $0.id == message.id }
     }
 

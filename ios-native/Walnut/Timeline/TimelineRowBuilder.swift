@@ -109,8 +109,11 @@ final class TimelineRowBuilder {
             ))
         }
         if message.failed == true {
+            // Revision distinguishes the waiting copy from the terminal one so
+            // the cell reloads when the automatic ladder gives up.
             rows.append(TimelineRow(
-                id: nextID(), revision: 0, content: .failedNotice,
+                id: nextID(), revision: message.retryNotice == nil ? 0 : 1,
+                content: .failedNotice(notice: message.retryNotice),
                 height: TimelineMetrics.failedNoticeHeight
             ))
         }

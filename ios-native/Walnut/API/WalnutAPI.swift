@@ -244,12 +244,25 @@ struct WalnutAPI {
     /// 400 images_not_supported_cloud (attached images can't reach a CLI that
     /// runs on another machine — only the Mac-online path accepts them).
     /// `images` is additive (≤5 base64 JPEG/PNG), omitted when empty.
-    func sendSessionMessage(id: String, text: String, images: [ImagePayload] = []) async throws -> String {
-        struct Body: Encodable { let text: String; let images: [ImagePayload]? }
+    ///
+    /// `messageId` is the client-supplied idempotency key (additive, shape
+    /// `qm-…`). The server's durable queue dedupes on it, so a RETRY of the
+    /// same user message MUST pass the id its first attempt used — otherwise
+    /// the retry is a new message and a lost ack becomes a doubled turn. See
+    /// SendRetryPolicy. Omitted → the server mints one (fine for a first-and-
+    /// only attempt, useless for retries).
+    func sendSessionMessage(
+        id: String, text: String, images: [ImagePayload] = [], messageId: String? = nil
+    ) async throws -> String {
+        struct Body: Encodable { let text: String; let images: [ImagePayload]?; let messageId: String? }
         struct Accepted: Codable { let messageId: String }
         let accepted: Accepted = try await send(
             "POST", "/sessions/\(escape(id))/messages",
-            body: Body(text: text, images: images.isEmpty ? nil : images),
+            body: Body(
+                text: text,
+                images: images.isEmpty ? nil : images,
+                messageId: messageId.flatMap { SendRetryPolicy.isValidMessageId($0) ? $0 : nil }
+            ),
             timeout: images.isEmpty ? nil : 180
         )
         return accepted.messageId

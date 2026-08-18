@@ -38,6 +38,8 @@ const DELTA_BYTES = Number(process.env.DELTA_BYTES || 400)
 const DELTA_COUNT = Number(process.env.DELTA_COUNT || 200)
 const MSG_COUNT = Number(process.env.MSG_COUNT || 1000)
 const IDLE = process.env.IDLE === '1'
+/** Sends to refuse with 503 bridge_offline before accepting (retry-ladder lever). */
+let bridgeOfflineSendsLeft = Number(process.env.BRIDGE_OFFLINE_SENDS || 0)
 const THINKING_MS = Number(process.env.THINKING_MS || 0)
 const THINKING_COUNT = Number(process.env.THINKING_COUNT || 2000)
 
@@ -143,7 +145,30 @@ const server = http.createServer((req, res) => {
     // Field send path: 202 accepted (the real cloud replica queues the text).
     let body = ''
     req.on('data', (c) => { body += c })
-    req.on('end', () => { res.statusCode = 202; res.end(JSON.stringify({ messageId: 'qm-mock-' + Date.now() })) })
+    req.on('end', () => {
+      // BRIDGE_OFFLINE_SENDS=n → answer the first n sends with the real 503
+      // bridge_offline shape (the lid-closed / SSH-flap window), then start
+      // accepting. This is the manual-verification lever for the app's
+      // automatic send-retry ladder: the composer must NOT report "Not sent",
+      // it must ride the backoff out and land the message on its own.
+      // Every attempt's messageId is logged so a human can SEE that the retry
+      // reused the original id (the server-side dedupe depends on it).
+      let mid = null
+      try { mid = JSON.parse(body).messageId ?? null } catch { /* not JSON */ }
+      if (bridgeOfflineSendsLeft > 0) {
+        bridgeOfflineSendsLeft -= 1
+        console.log(`[send] 503 bridge_offline messageId=${mid} (${bridgeOfflineSendsLeft} more will fail)`)
+        res.statusCode = 503
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify({
+          error: { code: 'bridge_offline', message: 'No live bridge to this session\'s host' },
+        }))
+        return
+      }
+      console.log(`[send] 202 accepted messageId=${mid}`)
+      res.statusCode = 202
+      res.end(JSON.stringify({ messageId: mid ?? 'qm-mock-' + Date.now() }))
+    })
     return
   }
   if (p === '/api/v1/tasks') { res.end(JSON.stringify({ tasks: [], syncedAt: new Date().toISOString() })); return }

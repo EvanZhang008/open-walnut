@@ -178,6 +178,24 @@ final class AppLog: @unchecked Sendable {
         }
 
         startTimers()
+
+        #if DEBUG
+        // Self-arming diagnostics probe. Deliberately hooked HERE rather than in
+        // WalnutApp: AppLog.shared is already touched during app init, so this
+        // needs no scene/app-delegate wiring at all, and the probe stays inside
+        // the subsystem it proves. `-walnut.diagnosticsProbe <marker>` on the
+        // launch command line (NSArgumentDomain) turns it on; absent = no-op.
+        if let marker = UserDefaults.standard.string(forKey: "walnut.diagnosticsProbe"),
+           !marker.isEmpty {
+            Task.detached(priority: .utility) { [weak self] in
+                // Let the first frame settle so the app is a realistic subject
+                // (the launch/lifecycle lines are in the same batch).
+                try? await Task.sleep(for: .seconds(2))
+                let uploaded = await self?.runDiagnosticsProbe(marker: marker) ?? 0
+                AppLog.info("diagnostics-probe", "probe finished", ["uploaded": String(uploaded)])
+            }
+        }
+        #endif
     }
 
     private static func parseLevel(_ raw: String?) -> Level? {
@@ -531,6 +549,24 @@ final class AppLog: @unchecked Sendable {
         UserDefaults.standard.set(true, forKey: Self.compressionDisabledKey)
         AppLog.warn("applog", "server rejected a compressed body — sending identity from now on")
     }
+
+    #if DEBUG
+    /// Diagnostics-pipeline probe (DEBUG only): emit one `error` line and drain
+    /// the queue, reporting whether the server accepted it.
+    ///
+    /// Exists because the upload path had no end-to-end proof — everything up to
+    /// `uploadOneBatch` is unit-tested, but "an AppLog.error on a real device
+    /// becomes a line in the server's ios-client dir" was only ever verified by
+    /// hand, which is how a break in that path can sit unnoticed. Driven by
+    /// scripts/ios-client-log-e2e.sh via `-walnut.diagnosticsProbe 1`.
+    /// - Returns: lines uploaded (0 = the server never accepted the batch).
+    @discardableResult
+    func runDiagnosticsProbe(marker: String) async -> Int {
+        AppLog.error("diagnostics-probe", "flight recorder end-to-end probe", ["marker": marker])
+        let outcome = await sendDiagnosticsNow()
+        return outcome.uploaded
+    }
+    #endif
 
     // MARK: - Introspection (Settings)
 

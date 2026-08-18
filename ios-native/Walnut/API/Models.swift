@@ -70,6 +70,17 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// image references, so historical messages never show these. Excluded from
     /// Codable so it never rides the wire or the disk cache.
     var localImages: [Data]? = nil
+    /// Client-only: the `qm-mobile-*` id this bubble was POSTed under. EVERY
+    /// re-send of this bubble (auto-retry after a bridge_offline, or the user
+    /// tapping "retry") must reuse it — the server's durable message queue is
+    /// idempotent BY THIS ID, so a fresh id per attempt is what turns a lost
+    /// ack into a genuinely double-delivered turn (the "conversation repeats"
+    /// family). nil on canonical history rows, which are never re-sent.
+    var clientMessageId: String? = nil
+    /// Client-only: replaces the "Not sent — tap to retry" copy while an
+    /// automatic retry is still pending ("Waiting for Mac…"). nil = the plain
+    /// give-up copy.
+    var retryNotice: String? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, role, text, createdAt, kind, source, detail, resultPreview, agent

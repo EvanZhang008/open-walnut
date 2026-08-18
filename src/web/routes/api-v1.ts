@@ -25,7 +25,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import type { MessageParam } from '../../agent/model.js'
 import { VALID_PRIORITIES, type ChatEntry, type TaskPhase, type TaskPriority } from '../../core/types.js'
 import { VALID_PHASES } from '../../core/phase.js'
-import { CLOUD_MODE, NOTES_DIR } from '../../constants.js'
+import { CLOUD_MODE, LOG_DIR, NOTES_DIR } from '../../constants.js'
 import * as chatHistory from '../../core/chat-history.js'
 import { listConversations, createConversation } from '../../core/conversations.js'
 import { enqueueAgentTurn, recordLastTurnTokens, getQueueStatus } from '../agent-turn-queue.js'
@@ -1389,7 +1389,14 @@ apiV1Router.get('/sessions/:id/transcript', async (req: Request, res: Response, 
 //    core/notifications/client-incidents.ts). Ingest still succeeds if that
 //    fails — losing the client's log to a bell failure would be worse.
 
-const CLIENT_LOG_DIR = '/tmp/open-walnut/ios-client'
+// DERIVED FROM LOG_DIR, never hardcoded. A literal '/tmp/open-walnut/ios-client'
+// escaped the per-worker runtime-dir isolation (tests/setup/runtime-dir-isolation.ts
+// redirects WALNUT_DAEMON_DIR → LOG_DIR), so every ingest test appended its
+// fixtures to the PRODUCTION forensics dir — which is what made a real device's
+// logs impossible to tell apart from test debris. It also disagreed with the
+// READER (core/observability/bug-report.ts uses path.join(LOG_DIR,'ios-client')),
+// so under any override the bundler looked in a dir nothing wrote to.
+const CLIENT_LOG_DIR = path.join(LOG_DIR, 'ios-client')
 const CLIENT_LOG_MAX_LINES = 5000
 /** Per device+day rotate guard. Full-dump traffic is ~2-6 MB/day gzipped-on-wire
  *  but lands expanded on disk, so this holds several heavy days. */

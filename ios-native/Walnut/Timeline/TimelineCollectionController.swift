@@ -325,7 +325,7 @@ final class TimelineCollectionController: UIViewController {
 
     /// Row ids are "<messageID>#<block>"; actions need the message id.
     private func messageID(fromRowID id: String) -> String {
-        id.range(of: "#", options: .backwards).map { String(id[..<$0.lowerBound]) } ?? id
+        TimelineRow.messageID(fromRowID: id)
     }
 
     private func reuseID(for row: TimelineRow) -> String {

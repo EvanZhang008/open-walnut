@@ -209,9 +209,20 @@ struct MessageRow: View {
                 Button {
                     onRetry?()
                 } label: {
-                    Label("Not sent — tap to retry", systemImage: "exclamationmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(Theme.danger)
+                    // An automatic retry still pending reads as amber + spinner
+                    // ("Waiting for Mac… retrying"); only a spent retry budget
+                    // shows the terminal red "Not sent". Tappable either way.
+                    if let notice = message.retryNotice {
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.mini)
+                            Text(notice).font(.caption)
+                        }
+                        .foregroundStyle(Theme.warning)
+                    } else {
+                        Label("Not sent — tap to retry", systemImage: "exclamationmark.circle.fill")
+                            .font(.caption)
+                            .foregroundStyle(Theme.danger)
+                    }
                 }
                 .accessibilityIdentifier("chat.retryFailed")
             }

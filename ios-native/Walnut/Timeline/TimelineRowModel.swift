@@ -20,6 +20,14 @@ struct TimelineRow {
     /// Full cell height at the build width, including the row's own vertical
     /// padding. The layout NEVER self-sizes.
     let height: CGFloat
+
+    /// Row ids are "<messageID>#<block>"; actions carry the MESSAGE id. Shared
+    /// so every action site (bubble context menu, hosted failed-notice button)
+    /// strips the suffix the same way — a raw row id would never match a store
+    /// message and the retry would silently no-op.
+    static func messageID(fromRowID id: String) -> String {
+        id.range(of: "#", options: .backwards).map { String(id[..<$0.lowerBound]) } ?? id
+    }
 }
 
 enum TimelineRowContent {
@@ -29,8 +37,10 @@ enum TimelineRowContent {
     /// Right-aligned user bubble. `width` is the measured text width so the
     /// bubble hugs its content like the SwiftUI original.
     case userBubble(text: NSAttributedString, textSize: CGSize, failed: Bool, pending: Bool)
-    /// "Not sent — tap to retry" row under a failed bubble.
-    case failedNotice
+    /// Undelivered-send row under a failed bubble. `notice` non-nil = an
+    /// automatic retry is still pending ("Waiting for Mac… retrying"); nil =
+    /// the terminal "Not sent — tap to retry". Either way tapping retries now.
+    case failedNotice(notice: String?)
     /// Code fence: monospace, horizontal scroll, no wrapping.
     case code(text: String, contentSize: CGSize)
     /// Inline image (assistant output or historical user image send).

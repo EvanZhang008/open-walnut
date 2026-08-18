@@ -99,6 +99,22 @@ describe('disk watermark through a real server', () => {
     expect(r.status).not.toBe(507);
   });
 
+  it('the phone\'s flight recorder keeps ingesting while blocked', async () => {
+    stubUsedPct(92);
+    await pollDiskWatermarkOnce();
+    // /browser-logs was carved out but /v1/client-logs (its MOBILE twin) was
+    // not, so a full disk silently 507'd every diagnostic upload — and the
+    // client only abandons compression on a 4xx, so a 507 makes it retry the
+    // same batch forever. Losing the phone's evidence of whatever the full disk
+    // broke is exactly the outcome the carve-out list exists to prevent.
+    const r = await api('POST', '/api/v1/client-logs', {
+      device: 'disk-guard-probe', appVersion: '1.0.0', os: 'iOS 26',
+      lines: [{ ts: new Date().toISOString(), level: 'error', subsystem: 'sse', message: 'x' }],
+    });
+    expect(r.status).not.toBe(507);
+    expect(r.status).toBe(200);
+  });
+
   it('at 81%: writes flow + the warning notification lands in the real feed', async () => {
     // Reset so the ok→warn transition (the notifying edge) happens now.
     resetDiskWatermarkForTest();

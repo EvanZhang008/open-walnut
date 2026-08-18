@@ -27,6 +27,19 @@ struct AppConfig {
     }
 
     static var token: String? {
+        #if DEBUG
+        // Diagnostics harness (DEBUG only): `-walnut.deviceToken <tok>` on the
+        // launch command line pairs the app against a throwaway server with no
+        // UI driving and no Keychain write. The server URL needs no hook —
+        // UserDefaults already exposes launch args as NSArgumentDomain, so
+        // `-walnut.serverUrl <url>` is picked up by `serverURL` above for free;
+        // only the token lives outside UserDefaults. Used by
+        // scripts/ios-client-log-e2e.sh to prove the flight-recorder upload
+        // path end to end against an isolated server.
+        if let injected = UserDefaults.standard.string(forKey: tokenKey), !injected.isEmpty {
+            return injected
+        }
+        #endif
         if let cached = cachedToken.withLock({ $0 }) { return cached }
         // First read of the process — the one real securityd XPC. Timed into
         // LaunchTrace (audit TMR-2): it can run before the first frame (via
