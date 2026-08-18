@@ -53,7 +53,7 @@ describe('fetchTasks response validation', () => {
 
     let error: unknown;
     try {
-      await fetchTasks(undefined, { minimal: true });
+      await fetchTasks({ minimal: true });
     } catch (caught) {
       error = caught;
     }

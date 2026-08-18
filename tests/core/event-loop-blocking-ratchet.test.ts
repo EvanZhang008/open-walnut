@@ -49,7 +49,13 @@ const BASELINE: Record<string, number> = {
   'src/integrations/git-sync.ts': 3,
   'src/utils/process.ts': 1,
   'src/providers/daemon-core.ts': 1,
+  // Pre-listen startup guards. Both run ONCE in `walnut web` before the server
+  // binds a port, so there is no request path and no route to freeze, and both
+  // are advisory (they log and continue, never exit). Blocking is the point:
+  // native-abi-preflight must finish `npm rebuild better-sqlite3` before any
+  // code touches the task store, and nothing may be served on a broken addon.
   'src/providers/daemon-version-check.ts': 1,
+  'src/core/native-abi-preflight.ts': 1,
 };
 
 function countSyncCalls(): Map<string, number> {
