@@ -49,6 +49,15 @@ targets:
         # is written to your calendars. (Deployment target is iOS 18, so only
         # the iOS 17+ full-access key is needed — no legacy NSCalendarsUsageDescription.)
         NSCalendarsFullAccessUsageDescription: Walnut shows your calendar events alongside tasks in the calendar view. Events are read-only and never leave your device.
+        # Home-screen Quick Action (long-press the app icon): one tap opens the
+        # mic and the transcript goes straight to the main agent — the fastest
+        # path from pocket to Personal AI. `Type` must match
+        # VoiceQuickAction.shortcutType (a unit test pins the pair).
+        UIApplicationShortcutItems:
+          - UIApplicationShortcutItemType: dev.openwalnut.ios.voice
+            UIApplicationShortcutItemTitle: Voice to Walnut
+            UIApplicationShortcutItemSubtitle: Record and send to your AI
+            UIApplicationShortcutItemIconSymbolName: mic.fill
         # Keep a live voice recording running across screen lock / app
         # background. Without this the audio session dies the moment the
         # phone auto-locks mid-dictation (field data-loss incident 2026-08-09).

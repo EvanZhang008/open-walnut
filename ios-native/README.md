@@ -47,6 +47,46 @@ Walnut/
 - **Notes**: optimistic locking via `expectedHash`; on 409 the user picks
   overwrite (last-write-wins) or reload.
 
+## Voice Quick Action ("Voice to Walnut")
+
+The fastest path from pocket to Personal AI: long-press the app icon, pick
+**Voice to Walnut**, talk, stop. The transcript is sent to the main agent
+immediately, with no draft review and no intent picker: the agent reads the
+sentence and decides whether it's a search, a note, a task, or a chat.
+
+```
+long-press icon                       UIApplicationShortcutItems (Info.plist)
+  │
+  ▼
+QuickActionDelegate                   cold: didFinishLaunchingWithOptions
+  │  (UIKit; the only reason it exists)   warm: performActionFor
+  ▼
+VoiceQuickAction.shared               mailbox: pending request + autoSendArmed
+  │  (2-minute TTL, one-shot consume)
+  ├──▶ MainTabView                    brings the Chat tab forward
+  ▼
+ComposerBar (chat only)               switch to the main agent → voice.start()
+  │
+  ▼
+stop ─▶ VoiceRecorder.stopAndTranscribe ─▶ ChatStore.send (the ordinary path)
+```
+
+- The mic only opens on a composer the user can SEE (a retained off-screen tab
+  never records), and only while online: recording would work offline but the
+  SEND wouldn't, and the shortcut's entire promise is that it reaches the agent.
+- Auto-send is **one-shot**. Any interruption of the happy path (cancel, failed
+  transcription, navigating away, a mic that wouldn't open) disarms it, so the
+  preserved audio's later Retry lands in the draft for review instead of sending
+  text the user never saw. Audio itself is preserved exactly as always: the
+  no-loss contract in `VoiceRecorder` is untouched.
+- The recording row's caption states the consequence: "Recording — stop to send"
+  for a quick-action take, plain "Recording…" for an ordinary mic tap.
+
+Tests: `WalnutTests/VoiceQuickActionTests.swift` (routing, TTL, one-shot arming,
+Info.plist ↔ Swift constant pinning) and `tests/voice/voice-quickaction-e2e.sh`
+(real app + real mic + isolated server; asserts the transcript arrives as a user
+message on agent `general`).
+
 ## Flight recorder (field diagnostics)
 
 TestFlight builds can't be attached to with a debugger, so the app records what

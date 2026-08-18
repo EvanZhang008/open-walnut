@@ -3,6 +3,10 @@ import UIKit
 
 @main
 struct WalnutApp: App {
+    /// Home-screen Quick Action delivery ("Voice to Walnut"). SwiftUI has no
+    /// scene-phase hook for shortcut items, so a minimal UIKit delegate catches
+    /// them and hands them to `VoiceQuickAction.shared`. It does nothing else.
+    @UIApplicationDelegateAdaptor(QuickActionDelegate.self) private var quickActionDelegate
     @State private var connection: ConnectionStore
     @State private var chat: ChatStore
     @State private var notes: NotesStore
@@ -148,8 +152,17 @@ struct MainTabView: View {
     @Environment(NotesStore.self) private var notes
     @Environment(TasksStore.self) private var tasks
 
+    /// Tab identity, needed only so the voice Quick Action can bring Chat
+    /// forward. A warm launch from the Home screen can land on any tab, and the
+    /// chat composer (the only consumer of the shortcut) has to be ON SCREEN
+    /// before it may open the microphone.
+    enum Tab: Hashable { case chat, notes, tasks, settings }
+
+    @State private var selection: Tab = .chat
+    @State private var quickAction = VoiceQuickAction.shared
+
     var body: some View {
-        TabView {
+        TabView(selection: $selection) {
             // freezeScreen: names the visible surface for freeze reports, and
             // (via FreezeContext's crumb sink) puts the appear/leave pair on the
             // uploaded tape — so the full navigation trail survives in a field
@@ -160,15 +173,30 @@ struct MainTabView: View {
             ChatView()
                 .freezeScreen("chat")
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right.fill") }
+                .tag(Tab.chat)
             NotesView()
                 .freezeScreen("notes")
                 .tabItem { Label("Notes", systemImage: "doc.text") }
+                .tag(Tab.notes)
             TasksView()
                 .freezeScreen("tasks")
                 .tabItem { Label("Tasks", systemImage: "checklist") }
+                .tag(Tab.tasks)
             SettingsView()
                 .freezeScreen("settings")
                 .tabItem { Label("Settings", systemImage: "gearshape") }
+                .tag(Tab.settings)
+        }
+        // Voice Quick Action: switch to Chat so its composer is on screen and
+        // can pick the request up. Both edges are needed — a cold launch has the
+        // mailbox already armed before this view exists (`onAppear`), a warm one
+        // arms it while the app sits on another tab (`onChange`). The composer
+        // owns the mic; this only decides which tab is in front.
+        .onAppear {
+            if quickAction.pending != nil { selection = .chat }
+        }
+        .onChange(of: quickAction.pending) { _, request in
+            if request != nil { selection = .chat }
         }
         // Hydration is gated on first activation (P0-2). A background/prewarm
         // launch that ran this immediately did the whole cold-start path —

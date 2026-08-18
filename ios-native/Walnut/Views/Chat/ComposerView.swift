@@ -23,6 +23,12 @@ import PhotosUI
 /// the draft for review before sending. A live recording is view-scoped: it
 /// stops on disappear so navigating away can never leave an invisible mic open.
 ///
+/// Voice Quick Action: when `acceptsVoiceQuickAction` is set, this composer also
+/// serves the Home-screen "Voice to Walnut" shortcut — it opens the mic on
+/// arrival and, on stop, sends the transcript STRAIGHT through `onSend` instead
+/// of parking it in the draft. Only the chat composer opts in; a session
+/// composer must never swallow the shortcut.
+///
 /// Image input: photo button opens the native PhotosPicker (iOS 16+, sandboxed
 /// — no photo-library permission prompt). Picked images are downscaled + JPEG
 /// encoded on-device and shown as a removable thumbnail strip above the field.
@@ -34,11 +40,24 @@ struct ComposerBar: View {
     /// Identity of the thread this composer writes into ("chat:<conversation>",
     /// "session:<id>"). Scopes the durable draft.
     var draftKey: String = "chat"
+    /// Opt in to serving the Home-screen voice Quick Action (chat composer only).
+    var acceptsVoiceQuickAction: Bool = false
+    /// Run right before a quick-action take opens the mic — the chat composer
+    /// uses it to make sure the MAIN agent is selected, so the transcript can
+    /// never land on whichever subagent the user last browsed.
+    var prepareVoiceQuickAction: (() -> Void)? = nil
     let onSend: (String, [SelectedImage]) async -> Bool
 
     @State private var voice = VoiceRecorder()
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var imageNotice: String?
+    @State private var quickAction = VoiceQuickAction.shared
+    /// True between onAppear and onDisappear. A quick action may only open the
+    /// mic on a composer the user can actually SEE: a TabView retains the
+    /// non-selected tabs' views, so `onChange` alone would happily start an
+    /// invisible recording — the exact "hot mic with no way to stop it" failure
+    /// the onDisappear guard below exists to prevent.
+    @State private var onScreen = false
     @FocusState private var focused: Bool
     /// Focus for the long-draft editor. A `UIViewRepresentable` cannot ride
     /// `@FocusState` dependably, so its focus is a plain two-way `@State` the
@@ -100,12 +119,23 @@ struct ComposerBar: View {
         }
         .background(.bar)
         .onAppear {
-            voice.onAutoStopText = { text in appendToDraft(text) }
+            onScreen = true
+            // An interruption (call / Siri) auto-transcribes the partial take.
+            // For a quick-action take that text is still owed to the agent —
+            // route it the same way a normal stop would.
+            voice.onAutoStopText = { text in deliver(text) }
             // Crash/relaunch recovery: takes preserved by an earlier run (or
             // by another composer instance) surface here as the retry row.
             voice.refreshPending()
+            consumeVoiceQuickActionIfPending()
+        }
+        // Warm launch: the shortcut arrives while this view is already mounted,
+        // so onAppear never runs again — the mailbox change is the trigger.
+        .onChange(of: quickAction.pending) { _, request in
+            if request != nil { consumeVoiceQuickActionIfPending() }
         }
         .onDisappear {
+            onScreen = false
             // The recorder is registered app-wide with LifecycleHub but its UI
             // lives in THIS view. Navigating away mid-recording (tab switch,
             // pop, sheet dismiss) hid the recording row while the mic stayed
@@ -113,7 +143,13 @@ struct ComposerBar: View {
             // indicator with no way to stop it. View gone = mic off, but the
             // audio is PRESERVED (never silently deleted — the field incident)
             // and resurfaces as the retry row when the composer returns.
-            if voice.state == .recording { voice.preserveAndStop(reason: "view-dismissed") }
+            if voice.state == .recording {
+                voice.preserveAndStop(reason: "view-dismissed")
+                // The take was preserved, NOT transcribed — a later Retry must
+                // land in the draft for review, not auto-send text the user
+                // never saw. (The audio itself is untouched, as always.)
+                quickAction.clear(reason: "view-dismissed")
+            }
         }
         .onChange(of: pickerItems) { _, items in
             guard !items.isEmpty else { return }
@@ -274,10 +310,16 @@ struct ComposerBar: View {
     }
 
     /// Recording in progress: cancel × — pulsing dot + elapsed — stop ✓.
+    /// A quick-action take swaps the label copy ("Send to Walnut") so the user
+    /// knows stopping SENDS rather than dropping text into a field to review.
     private var recordingRow: some View {
         HStack(spacing: 12) {
             Button {
+                // Cancel is the user's explicit "never mind" — it deletes the
+                // audio (the one sanctioned deletion), so the quick action's
+                // auto-send arming dies with it.
                 voice.cancel()
+                quickAction.clear(reason: "cancelled")
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 15, weight: .semibold))
@@ -287,17 +329,28 @@ struct ComposerBar: View {
             }
             .accessibilityIdentifier("chat.voiceCancel")
 
-            RecordingIndicator(elapsed: voice.elapsed)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            RecordingIndicator(
+                elapsed: voice.elapsed,
+                caption: quickAction.autoSendArmed ? "Recording — stop to send" : "Recording…"
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             Button {
                 Task {
                     if let text = await voice.stopAndTranscribe() {
-                        appendToDraft(text)
+                        deliver(text)
+                    }
+                    // Transcription FAILED (or heard nothing): the audio is
+                    // preserved and the pending-retry row is now showing. Disarm
+                    // auto-send so a later manual Retry lands in the draft for
+                    // review — an unattended send of text the user never saw,
+                    // minutes after they spoke, is worse than a visible draft.
+                    else if quickAction.autoSendArmed {
+                        quickAction.clear(reason: "transcribe-failed")
                     }
                 }
             } label: {
-                Image(systemName: "checkmark")
+                Image(systemName: quickAction.autoSendArmed ? "arrow.up" : "checkmark")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Theme.onTint)
                     .frame(width: 32, height: 32)
@@ -423,6 +476,63 @@ struct ComposerBar: View {
         }
     }
 
+    // MARK: - Voice Quick Action
+
+    /// Where a finished transcription goes. Normal mic taps compose into the
+    /// draft (the user reviews and hits send); a quick-action take sends
+    /// straight through, because "one action, then talk" is the whole point.
+    ///
+    /// Auto-send arming is consumed here, once. Everything downstream is the
+    /// store's ordinary send path — including its no-loss guarantee: a failed
+    /// send stays in the timeline as a retryable failed bubble holding the full
+    /// transcript, so the words survive even when the network doesn't.
+    private func deliver(_ text: String) {
+        guard quickAction.takeAutoSend() else {
+            appendToDraft(text)
+            return
+        }
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Nothing to send: fall back to the draft so the user still sees
+        // whatever came back rather than losing it to a silent no-op.
+        guard !trimmedText.isEmpty else {
+            appendToDraft(text)
+            return
+        }
+        AppLog.info("voice", "quick action transcript auto-sent", ["chars": "\(trimmedText.count)"])
+        FreezeContext.shared.note("voice-quick-send", trimmedText.utf8.count)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Task { _ = await onSend(trimmedText, []) }
+    }
+
+    /// Open the mic for a pending Home-screen quick action.
+    ///
+    /// Every guard here is load-bearing:
+    ///  - `acceptsVoiceQuickAction`: session composers must not steal it.
+    ///  - `onScreen`: a retained off-screen tab must never open the mic.
+    ///  - `disabled` (offline): recording would be fine, but the SEND wouldn't,
+    ///    and a quick action whose entire promise is "it reaches the agent"
+    ///    should not silently become a draft. Leave the request for the next
+    ///    appear (inside its TTL) instead of burning it.
+    ///  - `voice.state == .idle`: a take is already running; do not restart it.
+    private func consumeVoiceQuickActionIfPending() {
+        guard acceptsVoiceQuickAction, onScreen, !disabled, voice.state == .idle else { return }
+        guard quickAction.consume() != nil else { return }
+        // Point the composer at the MAIN agent before the mic opens, so a user
+        // who last browsed a subagent still gets their sentence delivered to the
+        // Personal AI (the quick action's contract).
+        prepareVoiceQuickAction?()
+        quickAction.autoSendArmed = true
+        Task {
+            let started = await voice.start()
+            if !started {
+                // Permission denied / session failure — `voice.errorMessage` is
+                // already on screen. Disarm so a later manual take isn't
+                // unexpectedly auto-sent.
+                quickAction.clear(reason: "start-failed")
+            }
+        }
+    }
+
     private func appendToDraft(_ text: String) {
         let existing = draft.wrappedValue
         // Breadcrumb BEFORE the mutation: the append + focus pair is the
@@ -458,9 +568,11 @@ struct ComposerBar: View {
     }
 }
 
-/// Pulsing red dot + elapsed time while the mic is live.
+/// Pulsing red dot + elapsed time while the mic is live. `caption` states what
+/// stopping will DO — a quick-action take sends, a normal take fills the draft.
 private struct RecordingIndicator: View {
     let elapsed: TimeInterval
+    var caption: String = "Recording…"
     @Environment(\.scenePhase) private var scenePhase
     @State private var phase = false
 
@@ -476,9 +588,10 @@ private struct RecordingIndicator: View {
                 )
             Text(timeString)
                 .font(.callout.monospacedDigit().weight(.medium))
-            Text("Recording…")
+            Text(caption)
                 .font(.callout)
                 .foregroundStyle(.secondary)
+                .accessibilityIdentifier("chat.voiceRecordingCaption")
         }
         .onAppear { phase = scenePhase == .active }
         .onChange(of: scenePhase) { _, phaseState in
@@ -512,7 +625,16 @@ struct ComposerView: View {
             // Per-conversation draft. A brand-new (unsaved) conversation shares
             // the agent-scoped key so text typed before the server assigns an id
             // isn't orphaned when it does.
-            draftKey: "chat:\(chat.activeID ?? "new-\(chat.activeAgentID)")"
+            draftKey: "chat:\(chat.activeID ?? "new-\(chat.activeAgentID)")",
+            // The chat composer is the ONLY consumer of the Home-screen voice
+            // Quick Action — it is the surface that talks to the main agent.
+            acceptsVoiceQuickAction: true,
+            prepareVoiceQuickAction: {
+                // The shortcut promises the MAIN agent. If the user last left
+                // chat on a subagent, switch home before the mic opens (a no-op
+                // when already there).
+                chat.switchAgent(ChatStore.mainAgentID)
+            }
         ) { text, images in
             await chat.send(text, images: images)
         }
