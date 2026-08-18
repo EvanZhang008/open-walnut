@@ -16,7 +16,10 @@ final class MainThreadWatchdog: @unchecked Sendable {
     private let queue = DispatchQueue(label: "walnut.watchdog", qos: .utility)
     private var timer: DispatchSourceTimer?
     private let lock = NSLock()
-    private var lastPong = MainThreadWatchdog.uptimeNow()
+    /// When the CURRENTLY OUTSTANDING ping was dispatched to the main queue.
+    /// Only meaningful while `pingInFlight` — the stall is the age of an
+    /// UNANSWERED ping, never the age of the last answered one (see `tick()`).
+    private var pingSentAt = MainThreadWatchdog.uptimeNow()
     private var pingInFlight = false
     // Pessimistic default: don't count stall time until the app has
     // demonstrably become ACTIVE. iOS prewarms apps (process launched in the
@@ -79,33 +82,69 @@ final class MainThreadWatchdog: @unchecked Sendable {
     private func setBackgrounded(_ value: Bool) {
         lock.lock()
         backgrounded = value
-        lastPong = Self.uptimeNow() // reset the clock across suspend/resume boundaries
+        pingSentAt = Self.uptimeNow() // reset the clock across suspend/resume boundaries
+        // Clearing pingInFlight also drains the sample ring, indirectly: the
+        // next tick sees an "answered" ping and takes the recovery branch. Do
+        // NOT touch `stallSamples` here — it is owned by the watchdog queue and
+        // this runs on the notification's thread.
         pingInFlight = false
+        hangStart = nil
         lock.unlock()
     }
 
+    /// How long the main thread has been unresponsive, given the ping state.
+    ///
+    /// A ping still OUTSTANDING means the main thread has not run our block
+    /// since `sentAt`, so that age is the stall. A ping already ANSWERED means
+    /// the main thread is responsive as of now, so the stall is zero — NOT the
+    /// time elapsed since the answer.
+    ///
+    /// Extracted and `static` so the arithmetic is testable without a genuinely
+    /// frozen main thread (see `WatchdogStallAccountingTests`).
+    ///
+    /// ## The T41 bug this replaces
+    ///
+    /// The old code measured `now - lastPong`, where `lastPong` advanced only
+    /// when a pong actually ran, and it re-armed a NEW ping on the very tick
+    /// that read the clock. So an idle-but-perfectly-healthy app always
+    /// measured one full ping interval (~2s) of "stall": every 2s tick logged a
+    /// bogus `stall sample`, and the sample ring was drained only under
+    /// `stalled < pingInterval * 1.5` (3s), which the steady 2.0s reading never
+    /// satisfied — so the ring filled once and never drained again.
+    ///
+    /// Field proof (9,676 samples across builds 42/44/45): `stalledSeconds`
+    /// NEVER exceeded 2.1, `sampleIndex` was 1 in 100% of samples, and 47% of
+    /// the supposedly frozen stacks were parked in `__CFRunLoopServiceMachPort`
+    /// / `mach_msg` — an IDLE run loop waiting for events. Those reports were
+    /// the watchdog's own arithmetic, not a real freeze.
+    static func stallSeconds(now: TimeInterval, pingInFlight: Bool, pingSentAt: TimeInterval) -> TimeInterval {
+        pingInFlight ? max(0, now - pingSentAt) : 0
+    }
+
     private func tick() {
+        let now = Self.uptimeNow()
         lock.lock()
         let bg = backgrounded
         let inFlight = pingInFlight
-        let last = lastPong
+        let sentAt = pingSentAt
         let ongoingHang = hangStart
         lock.unlock()
 
         if bg { return }
 
+        let stalled = Self.stallSeconds(now: now, pingInFlight: inFlight, pingSentAt: sentAt)
+
+        // Re-arm only after the measurement above, and stamp the send time so
+        // the next tick ages THIS ping rather than the previous pong.
         if !inFlight {
-            lock.lock(); pingInFlight = true; lock.unlock()
+            lock.lock(); pingInFlight = true; pingSentAt = now; lock.unlock()
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.lock.lock()
-                self.lastPong = Self.uptimeNow()
                 self.pingInFlight = false
                 self.lock.unlock()
             }
         }
-
-        let stalled = Self.uptimeNow() - last
         // Stall-building sampler: once a stall crosses the sampling threshold
         // (well before the 5s report line), capture the frozen main thread's
         // stack on each 2s tick into a small ring. Two properties:
@@ -120,16 +159,22 @@ final class MainThreadWatchdog: @unchecked Sendable {
                 stallSamples.append(frames.joined(separator: " <- "))
                 // Persist each sample as its own line immediately — the report
                 // may never come (kill first), but the disk queue survives.
+                // `build` rides every freeze-subsystem line, not just the 5s
+                // report. Without it a stall sample was unattributable to a
+                // build: `m_build` came only from `Self.meta()`, so the T41
+                // triage of 9,676 samples had to infer the build from the
+                // batch's top-level `appVersion` instead of the line itself.
                 AppLog.error("freeze", "stall sample", [
                     "stalledSeconds": String(format: "%.1f", stalled),
                     "sampleIndex": String(stallSamples.count),
+                    "build": Self.buildNumber,
                     "mainStack": stallSamples.last ?? "-",
                 ])
                 AppLog.shared.persistNow()
             }
         }
         if stalled > Self.hangThreshold, ongoingHang == nil {
-            lock.lock(); hangStart = last; lock.unlock()
+            lock.lock(); hangStart = sentAt; lock.unlock()
             // The report carries every stack sampled while the stall built
             // (the 5-kill blind spot: OS kill stacks were 100% anonymous
             // SwiftUICore/AttributeGraph offsets with nothing attributable —
@@ -149,8 +194,11 @@ final class MainThreadWatchdog: @unchecked Sendable {
             // the report never left the device. uploadCritical bypasses the gate
             // once and holds a background task so the OS grants time to finish.
             AppLog.shared.uploadCritical()
-        } else if stalled < Self.pingInterval * 1.5 {
-            stallSamples = [] // main thread answered — the ring belonged to that stall
+        } else if !inFlight {
+            // The main thread ANSWERED (not "stalled less than 3s", which the
+            // old phantom 2.0s reading satisfied only by accident). This is the
+            // one true recovery signal, so it is what drains the sample ring.
+            stallSamples = []
             if let began = ongoingHang {
                 lock.lock(); hangStart = nil; lock.unlock()
                 // Recovered hangs get the SAME context: a sub-threshold stall is
@@ -168,9 +216,15 @@ final class MainThreadWatchdog: @unchecked Sendable {
     /// Build + the freeze-context snapshot, merged under the caller's own keys.
     /// String formatting lives here (report path, at most once per freeze) —
     /// never on the push paths that feed FreezeContext.
+    /// `CFBundleVersion`, cached: every freeze-subsystem line carries it, and a
+    /// stall sample can fire on every 2s tick, so this must not re-read the
+    /// Info dictionary per line.
+    static let buildNumber: String =
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+
     private static func meta(_ base: [String: String]) -> [String: String] {
         var meta = base
-        meta["build"] = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+        meta["build"] = Self.buildNumber
         for (key, value) in FreezeContext.shared.snapshotMeta() { meta[key] = value }
         return meta
     }
