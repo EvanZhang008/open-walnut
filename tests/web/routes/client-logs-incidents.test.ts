@@ -188,6 +188,37 @@ describe('flagClientIncidents', () => {
     expect(mine.find((n) => n.dedupKey.startsWith('ios-crash'))!.severity).toBe('error');
   });
 
+  it('classes a stall sample as evidence, not a verdict of "froze"', async () => {
+    // T41 regression. `stall sample` is a stack captured while a stall is still
+    // BUILDING (past the 1.5s sampling line, not yet the 5s report line) — it
+    // may never become a freeze. It was added after this classifier and fell
+    // through to the severe default, so every sample rang the bell as an ERROR
+    // titled "iOS app froze". Field result: 68 of 72 iOS notifications read
+    // "iOS app froze — stall sample" while the device had recorded ZERO
+    // `main thread unresponsive` lines, which is what kept T41 open for four
+    // rounds of investigating freezes that had not happened.
+    await flagClientIncidents('phone-stall', [
+      { subsystem: 'freeze', message: 'stall sample', level: 'error', m_stalledSeconds: '2.0', m_build: '45' },
+    ]);
+    const { feed } = await listNotifications();
+    const entry = feed.find((n) => n.dedupKey.includes('phone-stall'))!;
+    expect(entry.dedupKey.startsWith('ios-stall')).toBe(true);
+    expect(entry.severity).toBe('warning');
+    expect(entry.title).not.toContain('froze');
+  });
+
+  it('still fails loud on an UNKNOWN freeze message', async () => {
+    // The permissive default is deliberate: a freeze message this server has
+    // never seen must be treated as severe, not quietly downgraded.
+    await flagClientIncidents('phone-unknown', [
+      { subsystem: 'freeze', message: 'watchdog tripped some new way', level: 'error' },
+    ]);
+    const { feed } = await listNotifications();
+    const entry = feed.find((n) => n.dedupKey.includes('phone-unknown'))!;
+    expect(entry.dedupKey.startsWith('ios-freeze')).toBe(true);
+    expect(entry.severity).toBe('error');
+  });
+
   it('ignores ordinary telemetry', async () => {
     const created = await flagClientIncidents('phone-e', [
       { subsystem: 'heartbeat', message: 'state', level: 'debug' },

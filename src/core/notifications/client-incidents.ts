@@ -65,9 +65,23 @@ function pruneRecent(now: number): void {
 
 function classify(subsystem: string, message: string): IncidentClass {
   if (subsystem === 'crash') return 'crash';
-  // MainThreadWatchdog emits exactly two freeze messages; anything else from
-  // the freeze subsystem is treated as the severe case (fail loud, not quiet).
-  return /recovered/i.test(message) ? 'stall' : 'freeze';
+  // Only `main thread unresponsive` is a VERDICT of "froze". The other two
+  // freeze-subsystem messages are sub-threshold evidence:
+  //  - `main thread recovered` — a hang that ended,
+  //  - `stall sample` — a stack captured while a stall is still BUILDING (past
+  //    the 1.5s sampling line, not yet the 5s report line). It may never become
+  //    a freeze at all.
+  //
+  // `stall sample` was added later (build 37 forensics) and fell through to the
+  // severe default, so every sample rang the bell as an ERROR titled "iOS app
+  // froze". That is how T41 stayed "open" for four rounds: 68 of 72 iOS
+  // notifications were `iOS app froze — stall sample` while the device had
+  // recorded ZERO `main thread unresponsive` lines. The bell was reporting
+  // evidence as a verdict.
+  //
+  // The fail-loud default is kept for genuinely UNKNOWN freeze messages.
+  if (/recovered|stall sample/i.test(message)) return 'stall';
+  return 'freeze';
 }
 
 const TITLES: Record<IncidentClass, string> = {
