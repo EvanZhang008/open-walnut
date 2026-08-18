@@ -54,6 +54,11 @@ export const SLOW_TEST_FILES = [
 
   // ── Real git subprocesses (repo creation, history rewrite, packing) ─────────
   'tests/integrations/git-compaction.test.ts', // 67s
+  // 13-19s per test at idle load: 5 real repos + a bare hub, ~480 real commits,
+  // a force-with-lease push, and `git gc --prune=now`. It sat in the quick tier
+  // straddling that tier's 15s timeout, so which of its tests failed shifted run
+  // to run — a margin, not a logic bug. Measured, not guessed.
+  'tests/integrations/git-compaction-remote.test.ts', // 13-19s
   'tests/integrations/git-sync.test.ts', // 11s
   'tests/integrations/git-sync-mass-revert-guard.test.ts', // many real repos and commits
   'tests/core/git-versioning.test.ts', // 5s
