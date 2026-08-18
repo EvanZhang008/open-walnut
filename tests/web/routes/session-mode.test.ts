@@ -148,12 +148,23 @@ describe('PATCH session mode', () => {
     expect(res.status).toBe(404)
   })
 
-  it('rejects an unconfirmed live mode change and preserves the persisted mode', async () => {
+  // Persist-FIRST, notify-the-CLI-in-background (changeSessionMode, 2026-08-13).
+  // This used to answer 409 and keep the old mode, on the theory that showing an
+  // unconfirmed mode would make the UI lie. Awaiting the CLI instead held the
+  // user's click hostage to inference speed: the control queue only drains
+  // between streaming chunks, so a mid-turn round-trip measured 6-15s and could
+  // blow the client's whole 15s budget (the "mode pill takes 30s" report). The
+  // record is the durable source of truth (spawn args and the cold --resume
+  // fallback both read it), so a failed live apply just means the mode takes
+  // effect at the next turn boundary rather than mid-turn. The original
+  // divergence risk is handled at the provider instead — a missing bypass
+  // capability triggers a reinitialize so the CLI converges on the record.
+  it('persists a mode change the live CLI rejects, and still notifies the CLI', async () => {
     await seedSession('mode-live-rejected-001', 'mode-test-task-001', 'plan', {
       pid: 98765,
       initialProcessStatus: 'idle',
     })
-    vi.spyOn(sessionRunner, 'changePermissionMode').mockRejectedValue(
+    const apply = vi.spyOn(sessionRunner, 'changePermissionMode').mockRejectedValue(
       new Error('set_permission_mode rejected by CLI'),
     )
 
@@ -163,9 +174,15 @@ describe('PATCH session mode', () => {
       body: JSON.stringify({ mode: 'bypass' }),
     })
 
-    expect(res.status).toBe(409)
-    expect(await res.json()).toEqual({ error: 'set_permission_mode rejected by CLI' })
-    expect((await getSessionByClaudeId('mode-live-rejected-001'))?.mode).toBe('plan')
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { session: { mode: string } }).session.mode).toBe('bypass')
+    expect((await getSessionByClaudeId('mode-live-rejected-001'))?.mode).toBe('bypass')
+    // The live apply is fire-and-forget behind a dynamic import, so it can land
+    // after the response resolves — but it MUST still be attempted, or a session
+    // mid-turn would keep the old mode with nothing to correct it.
+    await vi.waitFor(() =>
+      expect(apply).toHaveBeenCalledWith('mode-live-rejected-001', 'bypass'),
+    )
   })
 
   it('mode toggle round-trip: bypass → plan → bypass', async () => {
