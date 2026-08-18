@@ -119,6 +119,14 @@ echo "$VERSION" > "$OUTDIR/acp-worker.js.version"
   --outfile "$OUTDIR/changes-core.cjs" \
   src/providers/session-changes-core.ts
 
+# External-session scan sidecar — same rationale as changes-core.cjs: the
+# source template can't import, so deploySource ships this next to daemon.cjs
+# and the template require()s it; 'external-scan-v1' is advertised only when
+# the sidecar loads.
+"$BUN" build --minify --target=node --format=cjs \
+  --outfile "$OUTDIR/external-scan-core.cjs" \
+  src/providers/external-session-scan-core.ts
+
 # Invalidate stale .gz caches — DaemonConnection.deployBinary reuses them
 # if present, which would ship an old binary under a new version label.
 rm -f "$OUTDIR"/daemon-linux-*.gz

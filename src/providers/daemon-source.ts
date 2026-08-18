@@ -91,13 +91,15 @@ export function getDaemonSource(): string {
   // adds a second placeholder copy and forgets it, (2) someone typos the
   // placeholder so no substitution happens and the daemon ships with a
   // literal `__DAEMON_CAPABILITIES__` that crashes at parse time.
-  // 'changes-v1' is sidecar-gated for source deploys: the host-local changes
-  // pipeline (session-changes-core.ts) can't be inlined into this string
-  // template, so deploySource ships it as a separate CJS bundle
-  // (changes-core.cjs) and the template advertises 'changes-v1' at runtime
-  // only when that sidecar loads. The STATIC list therefore excludes it —
-  // daemonCapabilities() in the template adds it back on successful load.
-  const capsLiteral = JSON.stringify([...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => c !== 'changes-v1'))
+  // Sidecar-gated capabilities are EXCLUDED from the static list: their host-
+  // local pipelines can't be inlined into this string template, so deploySource
+  // ships each as a separate CJS bundle (changes-core.cjs,
+  // external-scan-core.cjs) and daemonCapabilities() in the template adds the
+  // capability back at runtime only when that sidecar actually loads.
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1'])
+  const capsLiteral = JSON.stringify(
+    [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
+  )
   const placeholder = '__DAEMON_CAPABILITIES__'
   const matches = DAEMON_SOURCE.split(placeholder).length - 1
   if (matches !== 1) {
@@ -1743,6 +1745,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'fs.readRange': return cmdFsReadRange(ws, id, cmd);
     case 'git.diff': return cmdGitDiff(ws, id, cmd);
     case 'list': return cmdList(ws, id);
+    case 'sessions.discoverExternal': return cmdDiscoverExternalSessions(ws, id, cmd);
     case 'changes.compute': return cmdChangesCompute(ws, id, cmd);
     case 'changes.file': return cmdChangesFile(ws, id, cmd);
     case 'bridge.configure': return cmdBridgeConfigure(ws, id, cmd);
@@ -4850,10 +4853,57 @@ let bridgeGeneration = 0;
 let changesCore = null;
 try { changesCore = require(path.join(__dirname, 'changes-core.cjs')); } catch (err) { changesCore = null; }
 
+// External-session scan sidecar (external-scan-core.cjs) — same sidecar
+// rationale as changes-core above: the walk + transcript parse can't live in
+// this template, so it is require()d and 'external-scan-v1' is advertised only
+// when the load succeeds. An old/sidecar-less daemon simply never reports
+// external sessions for its host (the server skips it on capability).
+let externalScanCore = null;
+try { externalScanCore = require(path.join(__dirname, 'external-scan-core.cjs')); } catch (err) { externalScanCore = null; }
+
 function daemonCapabilities() {
   const caps = __DAEMON_CAPABILITIES__.slice();
   if (changesCore) caps.push('changes-v1');
+  if (externalScanCore) caps.push('external-scan-v1');
   return caps;
+}
+
+// ── Discover sessions started OUTSIDE Walnut ──
+// Serialized daemon-wide: a burst of server ticks must not stack concurrent
+// directory walks over thousands of transcript files.
+let externalScanInflight = Promise.resolve();
+
+async function cmdDiscoverExternalSessions(ws, id, cmd) {
+  if (!externalScanCore) {
+    sendError(ws, id, 'sessions.discoverExternal unsupported: external-scan-core sidecar not loaded');
+    return;
+  }
+  const prev = externalScanInflight;
+  let release;
+  externalScanInflight = new Promise((r) => { release = r; });
+  await prev.catch(() => {});
+  try {
+    const sinceMs = typeof cmd.sinceMs === 'number' && cmd.sinceMs > 0 ? cmd.sinceMs : 30 * 24 * 60 * 60 * 1000;
+    const knownSessionIds = Array.isArray(cmd.knownSessionIds)
+      ? cmd.knownSessionIds.filter(function (s) { return typeof s === 'string'; })
+      : [];
+    const limit = typeof cmd.limit === 'number' && cmd.limit > 0 ? cmd.limit : undefined;
+    const t0 = Date.now();
+    const result = externalScanCore.scanExternalSessions({
+      sinceMs: sinceMs, knownSessionIds: knownSessionIds, limit: limit, homeDir: HOME_DIR,
+    });
+    logMsg('info', 'external session scan', {
+      scanned: result.scanned, found: result.candidates.length,
+      truncated: result.truncated, ms: Date.now() - t0,
+    });
+    sendOk(ws, id, {
+      candidates: result.candidates, scanned: result.scanned, truncated: result.truncated,
+    });
+  } catch (err) {
+    sendError(ws, id, 'sessions.discoverExternal failed: ' + err.message);
+  } finally {
+    release();
+  }
 }
 
 const changesCache = new Map();

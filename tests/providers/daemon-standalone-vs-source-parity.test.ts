@@ -484,14 +484,54 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     expect(capsSrc.slice(advStart, advEnd)).toMatch(/'changes-v1'/)
   })
   it("source twin gates 'changes-v1' on the sidecar load (static caps exclude it)", () => {
-    // The static caps literal excludes the capability…
-    expect(templateSrc).toMatch(/filter\(\(c\) => c !== 'changes-v1'\)/)
+    // Every sidecar-gated capability must be excluded from the STATIC caps
+    // literal (a source deploy that advertised one before its sidecar loaded
+    // would make the server route work to a daemon that can't do it) …
+    const gatedStart = templateSrc.indexOf('SIDECAR_GATED_CAPABILITIES = new Set([')
+    expect(gatedStart).toBeGreaterThan(-1)
+    const gatedBody = templateSrc.slice(gatedStart, templateSrc.indexOf('])', gatedStart))
+    expect(gatedBody).toContain("'changes-v1'")
+    expect(templateSrc).toMatch(/filter\(\(c\) => !SIDECAR_GATED_CAPABILITIES\.has\(c\)\)/)
     // …hello answers with the runtime-gated list…
     expect(templateSrc).toMatch(/capabilities:\s*daemonCapabilities\(\)/)
     expect(templateSrc).toMatch(/if \(changesCore\) caps\.push\('changes-v1'\)/)
     // …and both handlers refuse cleanly when the sidecar is absent.
     expect(templateSrc).toMatch(/changes\.compute: core sidecar not available/)
     expect(templateSrc).toMatch(/changes\.file: core sidecar not available/)
+  })
+
+  // External-session scan (sessions.discoverExternal): same sidecar-gated
+  // shape as changes-v1. Locked on BOTH twins so the bun binary and the
+  // source-deployed template can't drift on a host-local capability.
+  it("both twins gate 'external-scan-v1' and dispatch sessions.discoverExternal", () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/case 'sessions\.discoverExternal': return cmdDiscoverExternalSessions/)
+      expect(src).toMatch(/function cmdDiscoverExternalSessions/)
+      // Serialized daemon-wide: concurrent walks over thousands of transcript
+      // files would be the same starvation shape changes-v1 guards against.
+      expect(src).toMatch(/externalScanInflight/)
+    }
+    // Static caps exclude it; the template adds it only when the sidecar loads.
+    const gatedStart = templateSrc.indexOf('SIDECAR_GATED_CAPABILITIES = new Set([')
+    expect(templateSrc.slice(gatedStart, templateSrc.indexOf('])', gatedStart)))
+      .toContain("'external-scan-v1'")
+    expect(templateSrc).toMatch(/if \(externalScanCore\) caps\.push\('external-scan-v1'\)/)
+    expect(templateSrc).toMatch(/external-scan-core\.cjs/)
+    // Optional, never required — an old daemon must stay usable.
+    const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
+    const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES = [')
+    expect(capsSrc.slice(reqStart, capsSrc.indexOf('] as const', reqStart)))
+      .not.toMatch(/'external-scan-v1'/)
+    const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES = [')
+    expect(capsSrc.slice(advStart, capsSrc.indexOf('] as const', advStart)))
+      .toMatch(/'external-scan-v1'/)
+    // The sidecar must actually be built and deployed, or the capability can
+    // never light up on a source-deployed host.
+    expect(readFile(path.join(ROOT, 'scripts/build-daemon.sh')))
+      .toMatch(/external-scan-core\.cjs/)
+    expect(readFile(path.join(ROOT, 'src/providers/daemon-connection.ts')))
+      .toMatch(/external-scan-core\.cjs/)
   })
 
   // Bridge bounded file read (cloud replica phone file previews): the ONLY
@@ -1183,9 +1223,10 @@ describe('C1 session-snapshot daemon-standalone vs daemon-source parity', () => 
     expect(standaloneSrc).toMatch(/capabilities:\s*ADVERTISED_DAEMON_CAPABILITIES/)
     expect(templateSrc).toMatch(/capabilities:\s*daemonCapabilities\(\)/)
     expect(templateSrc).toMatch(/__DAEMON_CAPABILITIES__\.slice\(\)/)
-    // getDaemonSource substitutes the ADVERTISED list into that placeholder
-    // (minus 'changes-v1', which the source twin can't implement).
-    expect(templateSrc).toMatch(/JSON\.stringify\(\[\.\.\.ADVERTISED_DAEMON_CAPABILITIES\]\.filter\(\(c\) => c !== 'changes-v1'\)\)/)
+    // getDaemonSource substitutes the ADVERTISED list into that placeholder,
+    // minus the sidecar-gated caps (which a source twin can only advertise once
+    // its sidecar has actually loaded — daemonCapabilities() re-adds them).
+    expect(templateSrc).toMatch(/JSON\.stringify\(\s*\n?\s*\[\.\.\.ADVERTISED_DAEMON_CAPABILITIES\]\.filter\(\(c\) => !SIDECAR_GATED_CAPABILITIES\.has\(c\)\),/)
   })
 
   it('getDaemonSource validates the fold injection and throws on corruption', () => {

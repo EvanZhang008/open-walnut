@@ -70,6 +70,7 @@ import {
   type HostLocalComputeOutput,
   type FileAccum as ChangesFileAccum,
 } from './session-changes-core.js'
+import { scanExternalSessions } from './external-session-scan-core.js'
 import {
   GATEWAY_SOCKET_FILENAME,
   GATEWAY_MAX_LINE_BYTES,
@@ -1429,6 +1430,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'fs.readRange': return cmdFsReadRange(ws, id as number, cmd)
     case 'git.diff': return cmdGitDiff(ws, id as number, cmd)
     case 'list': return cmdList(ws, id as number)
+    case 'sessions.discoverExternal': return cmdDiscoverExternalSessions(ws, id as number, cmd)
     case 'bridge.configure': return cmdBridgeConfigure(ws, id as number, cmd)
     case 'bridgeResume': return cmdBridgeResume(ws, id as number, cmd)
     case 'stt': return cmdSttRelay(ws, id as number, cmd)
@@ -4100,6 +4102,50 @@ async function cmdGitDiff(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
   } catch (err: unknown) {
     if (err instanceof GitDiffError) return sendError(ws, id, err.message)
     sendError(ws, id, 'git.diff failed: ' + (err as Error).message)
+  }
+}
+
+// ── Discover sessions started OUTSIDE Walnut (capability 'external-scan-v1') ──
+// Host-local by design: this host owns thousands of transcript files, so the
+// walk + head parse happen HERE and only the small descriptor list crosses the
+// tunnel. Serialized daemon-wide (one scan at a time) so a burst of server
+// ticks can't stack concurrent directory walks.
+let externalScanInflight: Promise<void> = Promise.resolve()
+
+async function cmdDiscoverExternalSessions(
+  ws: ServerWebSocket<WsData>,
+  id: number,
+  cmd: Record<string, unknown>,
+) {
+  const prev = externalScanInflight
+  let release!: () => void
+  externalScanInflight = new Promise<void>((r) => { release = r })
+  await prev.catch(() => {})
+  try {
+    const sinceMs = typeof cmd.sinceMs === 'number' && cmd.sinceMs > 0
+      ? cmd.sinceMs
+      : 30 * 24 * 60 * 60 * 1000
+    const knownSessionIds = Array.isArray(cmd.knownSessionIds)
+      ? (cmd.knownSessionIds as unknown[]).filter((s): s is string => typeof s === 'string')
+      : []
+    const limit = typeof cmd.limit === 'number' && cmd.limit > 0 ? cmd.limit : undefined
+    const t0 = Date.now()
+    const result = scanExternalSessions({ sinceMs, knownSessionIds, limit })
+    logMsg('info', 'external session scan', {
+      scanned: result.scanned,
+      found: result.candidates.length,
+      truncated: result.truncated,
+      ms: Date.now() - t0,
+    })
+    sendOk(ws, id, {
+      candidates: result.candidates,
+      scanned: result.scanned,
+      truncated: result.truncated,
+    })
+  } catch (err) {
+    sendError(ws, id, 'sessions.discoverExternal failed: ' + (err as Error).message)
+  } finally {
+    release()
   }
 }
 

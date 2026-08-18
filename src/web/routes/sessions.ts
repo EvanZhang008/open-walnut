@@ -190,6 +190,23 @@ sessionsRouter.post('/working-dirs/recompile', async (_req: Request, res: Respon
   }
 })
 
+// POST /api/sessions/import-external — run the external-session import NOW.
+// The importer already runs on a 10-minute tick; this is the "don't make me
+// wait" button (and what E2E drives). Coalesces with an in-flight tick.
+sessionsRouter.post('/import-external', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { importExternalSessions, DEFAULT_EXTERNAL_SCAN_WINDOW_MS } =
+      await import('../../core/sessions/external-session-import.js')
+    const days = Number(req.body?.days)
+    const windowMs = Number.isFinite(days) && days > 0
+      ? days * 24 * 60 * 60 * 1000
+      : DEFAULT_EXTERNAL_SCAN_WINDOW_MS
+    res.json(await importExternalSessions({ windowMs }))
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/sessions/list-dirs — list subdirectories on a host (local or daemon) for path auto-complete
 // Remote hosts use DaemonConnection for fast directory listing.
 sessionsRouter.get('/list-dirs', async (req: Request, res: Response) => {

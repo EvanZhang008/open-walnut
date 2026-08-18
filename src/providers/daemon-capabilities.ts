@@ -127,6 +127,17 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * daemons require() a sidecar (changes-core.cjs, shipped by deploySource) and
  * advertise this capability only when that load succeeds — otherwise the
  * server uses its reader-based fallback compute (old daemons likewise).
+ *
+ * 'external-scan-v1' — host-local discovery of sessions started OUTSIDE
+ * Walnut (sessions.discoverExternal). The daemon walks its own
+ * ~/.claude/projects + ~/.codex/sessions, classifies each transcript by its
+ * recorded entrypoint/originator, and returns a SMALL descriptor list — the
+ * host has thousands of transcript files, so neither the walk nor the parse
+ * may happen server-side. Binary daemons bundle the scanner; source-deployed
+ * daemons require() a sidecar (external-scan-core.cjs) and advertise this only
+ * when that load succeeds. Optional: a host without it simply contributes no
+ * external sessions (the importer skips it on capability) until the next
+ * auto-deploy.
  */
 export const ADVERTISED_DAEMON_CAPABILITIES = [
   ...REQUIRED_DAEMON_CAPABILITIES,
@@ -138,6 +149,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'agent-gateway',
   'session.message',
   'changes-v1',
+  'external-scan-v1',
   'fs.readBounded',
 ] as const
 

@@ -1928,28 +1928,31 @@ export class DaemonConnection {
       // look like success while the current spawn is already dead. Binary has
       // a `--status` subcommand; source daemon doesn't, so it uses `kill -0`
       // on the PID file. See daemon-source.ts — no --status handler.
-      // Session-changes sidecar (changes-core.cjs, ~13KB): the template can't
-      // inline the pipeline, so it require()s this file next to daemon.cjs and
-      // advertises 'changes-v1' only when the load succeeds. Best-effort: a
-      // missing sidecar (npm-package install without dist/daemon-binaries)
-      // just means the server keeps its reader-based fallback for this host.
-      try {
-        const sidecar = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, 'changes-core.cjs'), 'utf-8')
-        const scArgs = [...this.baseSshArgs, this.sshHostString, 'cat > /tmp/open-walnut/changes-core.cjs']
-        const scProc = spawn('ssh', scArgs, { stdio: ['pipe', 'pipe', 'pipe'] })
-        scProc.stdin!.on('error', () => {})
-        await new Promise<void>((resolve, reject) => {
-          scProc.on('close', (code) => {
-            if (code === 0) resolve()
-            else reject(new Error(`changes-core sidecar deploy failed with code ${code}`))
+      // Sidecar bundles: the source template can't import modules, so each of
+      // these is require()d next to daemon.cjs and gates its own capability.
+      // Best-effort per file — a missing sidecar (npm-package install without
+      // dist/daemon-binaries) just means that host keeps the server-side
+      // fallback (changes) or reports no external sessions (external-scan).
+      for (const sidecarFile of ['changes-core.cjs', 'external-scan-core.cjs']) {
+        try {
+          const sidecar = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, sidecarFile), 'utf-8')
+          const scArgs = [...this.baseSshArgs, this.sshHostString, `cat > /tmp/open-walnut/${sidecarFile}`]
+          const scProc = spawn('ssh', scArgs, { stdio: ['pipe', 'pipe', 'pipe'] })
+          scProc.stdin!.on('error', () => {})
+          await new Promise<void>((resolve, reject) => {
+            scProc.on('close', (code) => {
+              if (code === 0) resolve()
+              else reject(new Error(`${sidecarFile} sidecar deploy failed with code ${code}`))
+            })
+            scProc.on('error', reject)
+            scProc.stdin!.end(sidecar)
           })
-          scProc.on('error', reject)
-          scProc.stdin!.end(sidecar)
-        })
-      } catch (err) {
-        log.session.info('DaemonConnection: changes-core sidecar not deployed (reader fallback stays)', {
-          host: this.hostKey, error: err instanceof Error ? err.message : String(err),
-        })
+        } catch (err) {
+          log.session.info('DaemonConnection: sidecar not deployed (fallback stays)', {
+            host: this.hostKey, sidecar: sidecarFile,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
       }
 
 

@@ -751,6 +751,21 @@ export async function getSessionByClaudeId(claudeSessionId: string): Promise<Ses
 }
 
 /**
+ * Every tracked session id, as a Set. Deliberately id-ONLY (not rowToSession):
+ * the external-session importer needs "does Walnut already know this id?" for
+ * thousands of host transcripts, and the answer must not cost a whole-table
+ * materialization. One indexed column scan, no payload JSON.parse.
+ */
+export async function listAllSessionIds(): Promise<Set<string>> {
+  await ensureSessionInit();
+  const db = getDb();
+  if (!db) return new Set();
+  const rows = db.prepare('SELECT claude_session_id FROM sessions').all() as
+    Array<{ claude_session_id: string }>;
+  return new Set(rows.map((r) => r.claude_session_id));
+}
+
+/**
  * The session bound to `lane`, or null. Newest-first so a lane that somehow holds
  * two records (a crash between mint and spawn) resolves to the live one rather
  * than a stale corpse.
@@ -1213,6 +1228,14 @@ export async function importSessionRecord(opts: {
   startedAt?: string;
   lastActiveAt?: string;
   messageCount?: number;
+  /** Which coding-agent CLI produced the transcript. Undefined = 'claude'.
+   *  MUST be set at import time, not patched afterwards: updateSessionRecord
+   *  bumps lastActiveAt on every write (correct for a live session), which
+   *  would overwrite the imported history timestamp with "now" and make every
+   *  imported session sort as if it were just active. */
+  engine?: SessionRecord['engine'];
+  provider?: SessionRecord['provider'];
+  human_note?: string;
 }): Promise<SessionRecord> {
   await ensureSessionInit();
   return withWriteLock(async () => {
@@ -1236,6 +1259,9 @@ export async function importSessionRecord(opts: {
         ...(opts.cwd ? { cwd: opts.cwd } : {}),
         ...(opts.host ? { host: opts.host } : {}),
         ...(opts.title ? { title: opts.title } : {}),
+        ...(opts.engine ? { engine: opts.engine } : {}),
+        ...(opts.provider ? { provider: opts.provider } : {}),
+        ...(opts.human_note ? { human_note: opts.human_note } : {}),
         statusRevision: 1,
         statusUpdatedAt: now,
       };

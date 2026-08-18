@@ -261,6 +261,8 @@ let changesPrewarmer: import('../core/session-changes-prewarm.js').SessionChange
 let sessionReaper: SessionReaper | null = null
 let heartbeatHandle: HeartbeatRunnerHandle | null = null
 let recordingReaperHandle: { stop: () => void } | null = null
+let externalSessionImporter:
+  import('../core/sessions/external-session-import.js').ExternalSessionImporterHandle | null = null
 let terminalReaperHandle: { stop: () => void } | null = null
 let qmdWatcherHandle: { stop: () => void } | null = null
 let qmdSyncStop: (() => Promise<void>) | null = null
@@ -2033,6 +2035,17 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const { recordingReaper } = await import('../core/recording-reaper.js')
       recordingReaper.start()
       recordingReaperHandle = recordingReaper
+    }
+
+    // -- Start external-session importer --
+    // Sessions a human started OUTSIDE Walnut (terminal `claude`, Claude
+    // Desktop, codex TUI) are invisible to the UI. Each daemon scans its OWN
+    // transcript dirs and returns a small list; the server files them under a
+    // per-host holder task. Primary box only: the cloud replica has no exec
+    // host of its own and would double-import through the bridge.
+    {
+      const { startExternalSessionImporter } = await import('../core/sessions/external-session-import.js')
+      externalSessionImporter = startExternalSessionImporter()
     }
   }
 
@@ -4050,6 +4063,12 @@ export async function stopServer(): Promise<void> {
   if (recordingReaperHandle) {
     recordingReaperHandle.stop()
     recordingReaperHandle = null
+  }
+  // Awaited: an in-flight import writes task/session rows, so shutdown must not
+  // return while one is mid-write.
+  if (externalSessionImporter) {
+    try { await externalSessionImporter.stop() } catch { /* already logged */ }
+    externalSessionImporter = null
   }
   if (terminalReaperHandle) {
     terminalReaperHandle.stop()
