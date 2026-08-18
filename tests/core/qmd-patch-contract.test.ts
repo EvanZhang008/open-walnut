@@ -43,4 +43,35 @@ describe('QMD postinstall patch contract', () => {
       expect(qmdStoreSource).toContain(snippet);
     }
   });
+
+  it('writes seq=0 last and withholds it after another chunk fails', () => {
+    const requiredSnippets = [
+      'const failedHashes = new Set();',
+      'const chunkOrder = chunks.length > 0',
+      '[...chunks.keys()].slice(1).concat(0)',
+      'Keep the run incomplete even when expiry lands between batches.',
+      'chunk.seq !== 0 || !failedHashes.has(chunk.hash)',
+      'failedHashes.add(chunk.hash)',
+      'seq=0 is the document completion marker. Its vectors_vec row is inserted first,',
+      'Publish the completion row only after its searchable vector exists.',
+    ];
+
+    for (const snippet of requiredSnippets) {
+      expect(qmdStoreSource).toContain(snippet);
+    }
+
+    expect(
+      qmdStoreSource.match(
+        /chunk\.seq !== 0 \|\| !failedHashes\.has\(chunk\.hash\)/g,
+      ),
+    ).toHaveLength(2);
+
+    const completionBranch = qmdStoreSource.slice(
+      qmdStoreSource.indexOf('if (seq === 0) {'),
+      qmdStoreSource.indexOf('else {', qmdStoreSource.indexOf('if (seq === 0) {')),
+    );
+    expect(completionBranch.indexOf('insertVecStmt.run')).toBeLessThan(
+      completionBranch.indexOf('insertContentVectorStmt.run'),
+    );
+  });
 });

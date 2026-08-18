@@ -69,15 +69,23 @@ function makeStore(
     errors: number;
     durationMs: number;
   }>,
+  candidateHashes: string[] = ['touched'],
 ): QMDStore {
   return {
     internal: {
       db,
-      getHashesForEmbedding: () => [{
-        hash: 'touched',
-        body: 'body',
-        path: 'task-touched',
-      }],
+      getHashesForEmbedding: () => candidateHashes
+        .filter((hash) => {
+          const completed = db.prepare(
+            'SELECT 1 FROM content_vectors WHERE hash = ? AND seq = 0',
+          ).get(hash);
+          return !completed;
+        })
+        .map((hash) => ({
+          hash,
+          body: 'body',
+          path: `task-${hash}`,
+        })),
       clearAllEmbeddings: () => {
         db.exec('DELETE FROM content_vectors; DELETE FROM vectors_vec;');
       },
@@ -91,41 +99,64 @@ afterEach(() => {
 });
 
 describe('QMD embedding recovery marker', () => {
-  it('clears only hashes touched by an interrupted pass before retrying', async () => {
+  it('retains completed documents and retries only incomplete documents after interruption', async () => {
     const db = createDatabase();
     insertVector(db, 'stable', 0);
     let attempt = 0;
-    let rowsSeenByRetry: { touched: number; stable: number } | null = null;
+    let retryState: {
+      completed: number;
+      partial: number;
+      stable: number;
+      markerHashes: string[];
+      recoveryVersion: number;
+    } | null = null;
     const store = makeStore(db, vi.fn(async () => {
       attempt++;
       if (attempt === 1) {
-        insertVector(db, 'touched', 0);
-        insertVector(db, 'touched', 1);
+        insertVector(db, 'completed', 1);
+        insertVector(db, 'completed', 0);
+        insertVector(db, 'partial', 1);
         throw new Error('process interrupted');
       }
 
-      rowsSeenByRetry = {
-        touched: countRows(db, 'content_vectors', 'touched'),
+      const marker = db.prepare(`
+        SELECT hashes_json, recovery_version
+        FROM walnut_qmd_embed_runs
+        WHERE id = 1
+      `).get() as { hashes_json: string; recovery_version: number };
+      retryState = {
+        completed: countRows(db, 'content_vectors', 'completed'),
+        partial: countRows(db, 'content_vectors', 'partial'),
         stable: countRows(db, 'content_vectors', 'stable'),
+        markerHashes: JSON.parse(marker.hashes_json) as string[],
+        recoveryVersion: marker.recovery_version,
       };
-      insertVector(db, 'touched', 0);
-      insertVector(db, 'touched', 1);
+      insertVector(db, 'partial', 1);
+      insertVector(db, 'partial', 0);
       return {
         docsProcessed: 1,
         chunksEmbedded: 2,
         errors: 0,
         durationMs: 1,
       };
-    }));
+    }), ['completed', 'partial']);
 
     await expect(embedQmdStore(store, 'task', { model: 'test-model' }))
       .rejects.toThrow('process interrupted');
-    expect(countRows(db, 'content_vectors', 'touched')).toBe(2);
+    expect(countRows(db, 'content_vectors', 'completed')).toBe(2);
+    expect(countRows(db, 'content_vectors', 'partial')).toBe(1);
 
     await embedQmdStore(store, 'task', { model: 'test-model' });
 
-    expect(rowsSeenByRetry).toEqual({ touched: 0, stable: 1 });
-    expect(countRows(db, 'content_vectors', 'touched')).toBe(2);
+    expect(retryState).toEqual({
+      completed: 2,
+      partial: 0,
+      stable: 1,
+      markerHashes: ['partial'],
+      recoveryVersion: 2,
+    });
+    expect(countRows(db, 'content_vectors', 'completed')).toBe(2);
+    expect(countRows(db, 'content_vectors', 'partial')).toBe(2);
     expect(countRows(db, 'vectors_vec', 'stable')).toBe(1);
     const marker = db.prepare(
       'SELECT COUNT(*) AS count FROM walnut_qmd_embed_runs',
@@ -133,30 +164,91 @@ describe('QMD embedding recovery marker', () => {
     expect(marker.count).toBe(0);
   });
 
-  it('rejects reported chunk errors and clears their partial vectors', async () => {
+  it('preserves completed documents when reported chunk errors clear incomplete vectors', async () => {
     const db = createDatabase();
     insertVector(db, 'stable', 0);
     const store = makeStore(db, vi.fn(async () => {
-      insertVector(db, 'touched', 0);
+      insertVector(db, 'completed', 1);
+      insertVector(db, 'completed', 0);
+      insertVector(db, 'partial', 1);
       return {
         docsProcessed: 1,
-        chunksEmbedded: 1,
+        chunksEmbedded: 3,
         errors: 1,
         durationMs: 1,
       };
-    }));
+    }), ['completed', 'partial']);
 
     await expect(embedQmdStore(store, 'task', { model: 'test-model' }))
       .rejects.toThrow(
-        'QMD task: embedding failed for 1 chunk(s); partial vectors cleared for retry',
+        'QMD task: embedding failed for 1 chunk(s); incomplete vectors cleared for retry; 1 completed document(s) retained',
       );
 
-    expect(countRows(db, 'content_vectors', 'touched')).toBe(0);
-    expect(countRows(db, 'vectors_vec', 'touched')).toBe(0);
+    expect(countRows(db, 'content_vectors', 'completed')).toBe(2);
+    expect(countRows(db, 'vectors_vec', 'completed')).toBe(2);
+    expect(countRows(db, 'content_vectors', 'partial')).toBe(0);
+    expect(countRows(db, 'vectors_vec', 'partial')).toBe(0);
     expect(countRows(db, 'content_vectors', 'stable')).toBe(1);
     const marker = db.prepare(
       'SELECT COUNT(*) AS count FROM walnut_qmd_embed_runs',
     ).get() as { count: number };
     expect(marker.count).toBe(1);
+  });
+
+  it('clears every touched hash from a legacy marker before using version 2', async () => {
+    const db = createDatabase();
+    db.exec(`
+      CREATE TABLE walnut_qmd_embed_runs (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        model TEXT NOT NULL,
+        force INTEGER NOT NULL,
+        hashes_json TEXT NOT NULL,
+        started_at TEXT NOT NULL
+      );
+    `);
+    insertVector(db, 'legacy-partial', 0);
+    insertVector(db, 'legacy-partial', 1);
+    insertVector(db, 'stable', 0);
+    db.prepare(`
+      INSERT INTO walnut_qmd_embed_runs
+        (id, model, force, hashes_json, started_at)
+      VALUES (1, 'test-model', 0, ?, '2026-07-19T00:00:00.000Z')
+    `).run(JSON.stringify(['legacy-partial']));
+
+    let stateDuringRetry: {
+      legacyRows: number;
+      stableRows: number;
+      recoveryVersion: number;
+    } | null = null;
+    const store = makeStore(db, vi.fn(async () => {
+      const marker = db.prepare(`
+        SELECT recovery_version
+        FROM walnut_qmd_embed_runs
+        WHERE id = 1
+      `).get() as { recovery_version: number };
+      stateDuringRetry = {
+        legacyRows: countRows(db, 'content_vectors', 'legacy-partial'),
+        stableRows: countRows(db, 'content_vectors', 'stable'),
+        recoveryVersion: marker.recovery_version,
+      };
+      return {
+        docsProcessed: 1,
+        chunksEmbedded: 1,
+        errors: 0,
+        durationMs: 1,
+      };
+    }), ['legacy-partial']);
+
+    await embedQmdStore(store, 'task', { model: 'test-model' });
+
+    expect(stateDuringRetry).toEqual({
+      legacyRows: 0,
+      stableRows: 1,
+      recoveryVersion: 2,
+    });
+    const markerCount = db.prepare(
+      'SELECT COUNT(*) AS count FROM walnut_qmd_embed_runs',
+    ).get() as { count: number };
+    expect(markerCount.count).toBe(0);
   });
 });

@@ -34,6 +34,7 @@ const KNOWN_QMD_MODEL_DIMENSIONS: Readonly<Record<string, number>> = {
   [BGE_M3_EMBEDDING_MODEL]: 1024,
 };
 const EMBED_RUN_TABLE = 'walnut_qmd_embed_runs';
+const EMBED_RUN_RECOVERY_VERSION = 2;
 const QMD_DB_FILES = [
   'memory-search.sqlite',
   'notes-search.sqlite',
@@ -80,7 +81,14 @@ interface PersistedEmbedRun {
   force: number;
   hashes_json: string;
   model: string;
+  recovery_version: number;
   started_at: string;
+}
+
+interface EmbedRunRecovery {
+  clearedAll: boolean;
+  clearedHashes: number;
+  retainedHashes: number;
 }
 
 /**
@@ -157,14 +165,27 @@ function ensureEmbedRunTable(store: QMDStore): void {
       model TEXT NOT NULL,
       force INTEGER NOT NULL,
       hashes_json TEXT NOT NULL,
+      recovery_version INTEGER NOT NULL DEFAULT 1,
       started_at TEXT NOT NULL
     )
   `);
+
+  const columns = store.internal.db.prepare(
+    `PRAGMA table_info(${EMBED_RUN_TABLE})`,
+  ).all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === 'recovery_version')) {
+    // Rows created before completion-last ordering cannot prove that seq=0
+    // represents a fully embedded document.
+    store.internal.db.exec(`
+      ALTER TABLE ${EMBED_RUN_TABLE}
+      ADD COLUMN recovery_version INTEGER NOT NULL DEFAULT 1
+    `);
+  }
 }
 
 function readPersistedEmbedRun(store: QMDStore): PersistedEmbedRun | null {
   const row = store.internal.db.prepare(`
-    SELECT force, hashes_json, model, started_at
+    SELECT force, hashes_json, model, recovery_version, started_at
     FROM ${EMBED_RUN_TABLE}
     WHERE id = 1
   `).get() as PersistedEmbedRun | undefined;
@@ -206,13 +227,34 @@ function clearEmbeddingHashes(store: QMDStore, hashes: readonly string[]): void 
   }
 }
 
+function getIncompleteEmbeddingHashes(
+  store: QMDStore,
+  hashes: readonly string[],
+): string[] {
+  const uniqueHashes = [...new Set(hashes.filter(Boolean))];
+  const completedHashes = new Set<string>();
+
+  for (let offset = 0; offset < uniqueHashes.length; offset += 500) {
+    const batch = uniqueHashes.slice(offset, offset + 500);
+    const placeholders = batch.map(() => '?').join(', ');
+    const rows = store.internal.db.prepare(`
+      SELECT hash
+      FROM content_vectors
+      WHERE seq = 0 AND hash IN (${placeholders})
+    `).all(...batch) as Array<{ hash: string }>;
+    for (const row of rows) completedHashes.add(row.hash);
+  }
+
+  return uniqueHashes.filter((hash) => !completedHashes.has(hash));
+}
+
 function clearInterruptedEmbedRun(
   store: QMDStore,
   run: PersistedEmbedRun,
-): void {
+): EmbedRunRecovery {
   if (run.force === 1) {
     store.internal.clearAllEmbeddings();
-    return;
+    return { clearedAll: true, clearedHashes: 0, retainedHashes: 0 };
   }
 
   try {
@@ -220,20 +262,31 @@ function clearInterruptedEmbedRun(
     if (!Array.isArray(hashes) || !hashes.every((hash) => typeof hash === 'string')) {
       throw new Error('invalid hash list');
     }
-    clearEmbeddingHashes(store, hashes);
+
+    const uniqueHashes = [...new Set(hashes.filter(Boolean))];
+    const incompleteHashes = run.recovery_version === EMBED_RUN_RECOVERY_VERSION
+      ? getIncompleteEmbeddingHashes(store, uniqueHashes)
+      : uniqueHashes;
+    clearEmbeddingHashes(store, incompleteHashes);
+    return {
+      clearedAll: false,
+      clearedHashes: incompleteHashes.length,
+      retainedHashes: uniqueHashes.length - incompleteHashes.length,
+    };
   } catch {
     // A corrupt recovery marker cannot prove which vectors are complete.
     store.internal.clearAllEmbeddings();
+    return { clearedAll: true, clearedHashes: 0, retainedHashes: 0 };
   }
 }
 
 /**
  * Run QMD embedding with a durable recovery marker.
  *
- * QMD treats seq=0 as proof that an entire document is embedded. A process
- * exit after writing seq=0 can therefore strand missing later chunks forever.
- * The marker records every hash touched by a pass so the next pass removes
- * only those potentially partial vectors before retrying.
+ * Patched QMD writes seq=0 only after every other chunk for that document.
+ * Versioned markers let recovery retain those completed documents while
+ * removing incomplete hashes before retrying. Legacy markers clear every
+ * touched hash once because their seq=0 rows were written first.
  */
 export async function embedQmdStore(
   store: QMDStore,
@@ -244,12 +297,16 @@ export async function embedQmdStore(
 
   const interrupted = readPersistedEmbedRun(store);
   if (interrupted) {
-    log.agent.warn(`QMD ${label}: recovering interrupted embedding pass`, {
+    const recovery = clearInterruptedEmbedRun(store, interrupted);
+    log.agent.warn(`QMD ${label}: recovered interrupted embedding pass`, {
       model: interrupted.model,
       startedAt: interrupted.started_at,
       force: interrupted.force === 1,
+      recoveryVersion: interrupted.recovery_version,
+      clearedAll: recovery.clearedAll,
+      clearedHashes: recovery.clearedHashes,
+      retainedHashes: recovery.retainedHashes,
     });
-    clearInterruptedEmbedRun(store, interrupted);
     deletePersistedEmbedRun(store);
   }
 
@@ -258,21 +315,27 @@ export async function embedQmdStore(
     : store.internal.getHashesForEmbedding().map((row) => row.hash);
   store.internal.db.prepare(`
     INSERT OR REPLACE INTO ${EMBED_RUN_TABLE}
-      (id, model, force, hashes_json, started_at)
-    VALUES (1, ?, ?, ?, ?)
+      (id, model, force, hashes_json, recovery_version, started_at)
+    VALUES (1, ?, ?, ?, ?, ?)
   `).run(
     options.model ?? DEFAULT_QMD_MODEL,
     options.force ? 1 : 0,
     JSON.stringify(hashes),
+    EMBED_RUN_RECOVERY_VERSION,
     new Date().toISOString(),
   );
 
   const result = await store.embed(options);
   if (result.errors > 0) {
     const failedRun = readPersistedEmbedRun(store);
-    if (failedRun) clearInterruptedEmbedRun(store, failedRun);
+    const recovery = failedRun
+      ? clearInterruptedEmbedRun(store, failedRun)
+      : null;
+    const cleanup = recovery?.clearedAll || options.force
+      ? 'all vectors cleared for retry'
+      : `incomplete vectors cleared for retry; ${recovery?.retainedHashes ?? 0} completed document(s) retained`;
     throw new Error(
-      `QMD ${label}: embedding failed for ${result.errors} chunk(s); partial vectors cleared for retry`,
+      `QMD ${label}: embedding failed for ${result.errors} chunk(s); ${cleanup}`,
     );
   }
 

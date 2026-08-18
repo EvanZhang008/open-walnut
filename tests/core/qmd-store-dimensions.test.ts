@@ -45,6 +45,7 @@ function makeStore(model: string | null, dimensions: number): FakeStore {
     force: number;
     hashes_json: string;
     model: string;
+    recovery_version: number;
     started_at: string;
   } | null = null;
   const vectorDimensions: { value: number | null } = { value: dimensions };
@@ -73,6 +74,12 @@ function makeStore(model: string | null, dimensions: number): FakeStore {
       db: {
         exec: vi.fn(),
         prepare: vi.fn((sql: string) => ({
+          all: () => {
+            if (sql.includes('PRAGMA table_info(walnut_qmd_embed_runs)')) {
+              return [{ name: 'recovery_version' }];
+            }
+            throw new Error(`Unexpected SQL: ${sql}`);
+          },
           get: () => {
             if (sql.includes('FROM walnut_qmd_embed_runs')) {
               return embedRun ?? undefined;
@@ -94,7 +101,8 @@ function makeStore(model: string | null, dimensions: number): FakeStore {
                 model: String(args[0]),
                 force: Number(args[1]),
                 hashes_json: String(args[2]),
-                started_at: String(args[3]),
+                recovery_version: Number(args[3]),
+                started_at: String(args[4]),
               };
               return;
             }
@@ -203,7 +211,7 @@ describe('QMD vector schema compatibility', () => {
     const { initQmdStores } = await import('../../src/core/qmd-store.js');
 
     await expect(initQmdStores()).rejects.toThrow(
-      'QMD task: embedding failed for 1 chunk(s); partial vectors cleared for retry',
+      'QMD task: embedding failed for 1 chunk(s); all vectors cleared for retry',
     );
     expect(taskStore.internal.clearAllEmbeddings).toHaveBeenCalledOnce();
     expect(taskStore.vectorDimensions.value).toBeNull();

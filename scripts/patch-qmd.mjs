@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Post-install patch for @tobilu/qmd@2.1.0 — fixes two search-recall issues:
+ * Post-install patch for @tobilu/qmd@2.1.0.
  *
  * 1. Hardcoded per-sub-search limit of 20 in hybridQuery() and structuredSearch()
  *    prevents documents ranked 21-40 from entering the RRF fusion pool. Replaced
@@ -10,6 +10,11 @@
  *    is stripped by sanitizeFTS5Term, collapsing "4.7" into "47" which never
  *    matches the FTS5 tokens "4" and "7". Added a dotted-token handler that
  *    splits on dots and creates a phrase query, matching the hyphenated-token pattern.
+ *
+ * 3. generateEmbeddings() wrote seq=0 before the rest of a document, even
+ *    though pending-document checks treat seq=0 as the completion marker.
+ *    Write seq=0 last and suppress it whenever another chunk for that document
+ *    fails, so a timed-out run can safely retain completed documents.
  */
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
@@ -58,7 +63,7 @@ for (const qmdDir of locations) {
   const originalSrc = readFileSync(storeFile, 'utf8');
   let src = originalSrc;
   let applied = 0;
-  const expected = 6;
+  const expected = 15;
 
   // ── Fix 1: Replace hardcoded limit 20 with candidateLimit ──
 
@@ -136,6 +141,183 @@ ${dottedInsertion}
     applied++;
   }
 
+  // ── Fix 3: Make seq=0 a durable per-document completion marker ──
+
+  const chunkOrderOld = `                for (let seq = 0; seq < chunks.length; seq++) {
+                    batchChunks.push({
+                        hash: doc.hash,
+                        title,
+                        text: chunks[seq].text,
+                        seq,
+                        pos: chunks[seq].pos,
+                        tokens: chunks[seq].tokens,
+                        bytes: encoder.encode(chunks[seq].text).length,
+                    });
+                }`;
+  const chunkOrderNew = `                // seq=0 is the completion marker, so write it after every other chunk.
+                const chunkOrder = chunks.length > 0
+                    ? [...chunks.keys()].slice(1).concat(0)
+                    : [];
+                for (const seq of chunkOrder) {
+                    batchChunks.push({
+                        hash: doc.hash,
+                        title,
+                        text: chunks[seq].text,
+                        seq,
+                        pos: chunks[seq].pos,
+                        tokens: chunks[seq].tokens,
+                        bytes: encoder.encode(chunks[seq].text).length,
+                    });
+                }`;
+  if (src.includes(chunkOrderOld)) {
+    src = src.replace(chunkOrderOld, chunkOrderNew);
+    applied++;
+  }
+
+  const failedSetOld = `        let chunksEmbedded = 0;
+        let errors = 0;
+        let bytesProcessed = 0;`;
+  const failedSetNew = `        let chunksEmbedded = 0;
+        let errors = 0;
+        const failedHashes = new Set();
+        let bytesProcessed = 0;`;
+  if (src.includes(failedSetOld)) {
+    src = src.replace(failedSetOld, failedSetNew);
+    applied++;
+  }
+
+  const expiredBatchOld = `            if (!session.isValid) {
+                console.warn(\`⚠ Session expired — skipping remaining document batches\`);
+                break;
+            }`;
+  const expiredBatchNew = `            if (!session.isValid) {
+                // Keep the run incomplete even when expiry lands between batches.
+                errors += batchMeta.length;
+                console.warn(\`⚠ Session expired — skipping remaining document batches\`);
+                break;
+            }`;
+  if (src.includes(expiredBatchOld)) {
+    src = src.replace(expiredBatchOld, expiredBatchNew);
+    applied++;
+  }
+
+  const batchResultOld = `                        if (embedding) {
+                            insertEmbedding(db, chunk.hash, chunk.seq, chunk.pos, new Float32Array(embedding.embedding), model, now);
+                            chunksEmbedded++;
+                        }
+                        else {
+                            errors++;
+                        }`;
+  const batchResultNew = `                        if (embedding) {
+                            if (chunk.seq !== 0 || !failedHashes.has(chunk.hash)) {
+                                insertEmbedding(db, chunk.hash, chunk.seq, chunk.pos, new Float32Array(embedding.embedding), model, now);
+                                chunksEmbedded++;
+                            }
+                        }
+                        else {
+                            failedHashes.add(chunk.hash);
+                            errors++;
+                        }`;
+  if (src.includes(batchResultOld)) {
+    src = src.replace(batchResultOld, batchResultNew);
+    applied++;
+  }
+
+  const invalidBatchOld = `                    if (!session.isValid) {
+                        errors += chunkBatch.length;
+                        batchChunkBytesProcessed += chunkBatch.reduce((sum, c) => sum + c.bytes, 0);
+                    }`;
+  const invalidBatchNew = `                    if (!session.isValid) {
+                        for (const chunk of chunkBatch)
+                            failedHashes.add(chunk.hash);
+                        errors += chunkBatch.length;
+                        batchChunkBytesProcessed += chunkBatch.reduce((sum, c) => sum + c.bytes, 0);
+                    }`;
+  if (src.includes(invalidBatchOld)) {
+    src = src.replace(invalidBatchOld, invalidBatchNew);
+    applied++;
+  }
+
+  const individualResultOld = `                                if (result) {
+                                    insertEmbedding(db, chunk.hash, chunk.seq, chunk.pos, new Float32Array(result.embedding), model, now);
+                                    chunksEmbedded++;
+                                }
+                                else {
+                                    errors++;
+                                }`;
+  const individualResultNew = `                                if (result) {
+                                    if (chunk.seq !== 0 || !failedHashes.has(chunk.hash)) {
+                                        insertEmbedding(db, chunk.hash, chunk.seq, chunk.pos, new Float32Array(result.embedding), model, now);
+                                        chunksEmbedded++;
+                                    }
+                                }
+                                else {
+                                    failedHashes.add(chunk.hash);
+                                    errors++;
+                                }`;
+  if (src.includes(individualResultOld)) {
+    src = src.replace(individualResultOld, individualResultNew);
+    applied++;
+  }
+
+  const individualCatchOld = `                            catch {
+                                errors++;
+                            }
+                            batchChunkBytesProcessed += chunk.bytes;`;
+  const individualCatchNew = `                            catch {
+                                failedHashes.add(chunk.hash);
+                                errors++;
+                            }
+                            batchChunkBytesProcessed += chunk.bytes;`;
+  if (src.includes(individualCatchOld)) {
+    src = src.replace(individualCatchOld, individualCatchNew);
+    applied++;
+  }
+
+  const insertCommentOld = ` * content_vectors is inserted first so that getHashesForEmbedding (which checks
+ * only content_vectors) won't re-select the hash on a crash between the two inserts.
+ *
+ * vectors_vec uses DELETE + INSERT instead of INSERT OR REPLACE because sqlite-vec's
+ * vec0 virtual tables silently ignore the OR REPLACE conflict clause.`;
+  const insertCommentNew = ` * seq=0 is the document completion marker. Its vectors_vec row is inserted first,
+ * so a crash cannot publish completion without a searchable vector. Other chunks
+ * keep content_vectors-first ordering because they do not affect pending detection.
+ *
+ * vectors_vec uses DELETE + INSERT instead of INSERT OR REPLACE because sqlite-vec's
+ * vec0 virtual tables silently ignore the OR REPLACE conflict clause.`;
+  if (src.includes(insertCommentOld)) {
+    src = src.replace(insertCommentOld, insertCommentNew);
+    applied++;
+  }
+
+  const insertOrderOld = `    // Insert content_vectors first — crash-safe ordering (see getHashesForEmbedding)
+    const insertContentVectorStmt = db.prepare(\`INSERT OR REPLACE INTO content_vectors (hash, seq, pos, model, embedded_at) VALUES (?, ?, ?, ?, ?)\`);
+    insertContentVectorStmt.run(hash, seq, pos, model, embeddedAt);
+    // vec0 virtual tables don't support OR REPLACE — use DELETE + INSERT
+    const deleteVecStmt = db.prepare(\`DELETE FROM vectors_vec WHERE hash_seq = ?\`);
+    const insertVecStmt = db.prepare(\`INSERT INTO vectors_vec (hash_seq, embedding) VALUES (?, ?)\`);
+    deleteVecStmt.run(hashSeq);
+    insertVecStmt.run(hashSeq, embedding);`;
+  const insertOrderNew = `    const insertContentVectorStmt = db.prepare(\`INSERT OR REPLACE INTO content_vectors (hash, seq, pos, model, embedded_at) VALUES (?, ?, ?, ?, ?)\`);
+    // vec0 virtual tables don't support OR REPLACE, so use DELETE + INSERT.
+    const deleteVecStmt = db.prepare(\`DELETE FROM vectors_vec WHERE hash_seq = ?\`);
+    const insertVecStmt = db.prepare(\`INSERT INTO vectors_vec (hash_seq, embedding) VALUES (?, ?)\`);
+    if (seq === 0) {
+        // Publish the completion row only after its searchable vector exists.
+        deleteVecStmt.run(hashSeq);
+        insertVecStmt.run(hashSeq, embedding);
+        insertContentVectorStmt.run(hash, seq, pos, model, embeddedAt);
+    }
+    else {
+        insertContentVectorStmt.run(hash, seq, pos, model, embeddedAt);
+        deleteVecStmt.run(hashSeq);
+        insertVecStmt.run(hashSeq, embedding);
+    }`;
+  if (src.includes(insertOrderOld)) {
+    src = src.replace(insertOrderOld, insertOrderNew);
+    applied++;
+  }
+
   const requiredSnippets = [
     'store.searchFTS(query, candidateLimit, collection)',
     'store.searchFTS(q.query, candidateLimit, collection)',
@@ -144,6 +326,14 @@ ${dottedInsertion}
     'store.searchVec(vecSearches[i].query, DEFAULT_EMBED_MODEL, candidateLimit, coll',
     'Handle dotted version tokens:',
     "term.split('.').map",
+    'const failedHashes = new Set();',
+    'const chunkOrder = chunks.length > 0',
+    '[...chunks.keys()].slice(1).concat(0)',
+    'Keep the run incomplete even when expiry lands between batches.',
+    'chunk.seq !== 0 || !failedHashes.has(chunk.hash)',
+    'failedHashes.add(chunk.hash)',
+    'seq=0 is the document completion marker. Its vectors_vec row is inserted first,',
+    'Publish the completion row only after its searchable vector exists.',
   ];
   const missing = requiredSnippets.filter((snippet) => !src.includes(snippet));
   if (missing.length > 0) {
