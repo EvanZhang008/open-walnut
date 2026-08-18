@@ -124,6 +124,18 @@ final class VoiceRecorder: NSObject {
         }
         do {
             try await activateSession()
+        } catch let failure as VoiceSessionActivationFailure {
+            // Classified path (2026-08-18): the user gets a sentence they can
+            // act on, and the log names the branch so a field recurrence is
+            // greppable by `reason` instead of by raw OSStatus.
+            errorMessage = failure.diagnosis.message
+            var meta = Self.diagnosticMeta(failure.underlying, stage: "session-activate")
+            meta["reason"] = failure.diagnosis.reason
+            meta["attempts"] = String(failure.attempts)
+            meta["failedCall"] = failure.stage
+            meta["retryable"] = failure.diagnosis.retryable ? "true" : "false"
+            AppLog.error("voice", "record start failed", meta)
+            return false
         } catch {
             errorMessage = Self.diagnosticMessage(prefix: "Recording failed", error)
             AppLog.error("voice", "record start failed", Self.diagnosticMeta(error, stage: "session-activate"))
@@ -186,27 +198,53 @@ final class VoiceRecorder: NSObject {
     ///    passing it to `setActive(true)` is itself a -50.
     /// So: mode `.default`, and a bare `setActive(true)`.
     ///
-    /// Two safety nets: `.isBusy`/`.insufficientPriority` are transient
-    /// (another app briefly holding the session) and get one short retry;
-    /// any other error on the full-option config falls back once to the
-    /// barest legal combo (no options) so an exotic option rejection on
-    /// some device still ends in a working recording.
+    /// Retry shape, reworked after the 2026-08-18 field failure (build 45): two
+    /// mic presses a second apart both died on OSStatus 561017449 = `'!pri'`
+    /// `insufficientPriority`, i.e. another app (Phone/FaceTime/CarPlay) owned
+    /// the audio category. Two things were wrong.
+    ///
+    /// 1. The old cadence only slept after the FIRST failure, then fired the
+    ///    remaining attempts back to back — all three activations inside
+    ///    ~150ms, which is no retry at all against real audio arbitration.
+    ///    Now every failed attempt waits (`VoiceSessionDiagnosis.backoffMs`),
+    ///    and only for codes where waiting can actually help.
+    /// 2. Whatever the code, the user got the raw OSStatus. Now the classifier
+    ///    owns the sentence, so contention reads as "another app is using
+    ///    audio (a call?)" instead of "NSOSStatusErrorDomain 561017449".
+    ///
+    /// Deliberately NOT changed: the category stays `.record` + `.default` with
+    /// `.allowBluetoothHFP`. Reaching for `.duckOthers`/`.mixWithOthers` to
+    /// dodge the rejection is not an option — the SDK header
+    /// (AVAudioSessionTypes.h) states both are valid ONLY with
+    /// `.playAndRecord`, `.playback`, and `.multiRoute`, and that for other
+    /// categories they default off and "cannot be changed". Passing either
+    /// alongside `.record` would trade a truthful `'!pri'` for a `-50`
+    /// paramErr, i.e. break every recording to soften one failure mode. And
+    /// `'!pri'` is arbitration by a higher-priority app; mixability is not the
+    /// lever that wins it. See the -50 minefield note above.
     private func activateSession() async throws {
         let session = AVAudioSession.sharedInstance()
         try? session.setActive(false, options: .notifyOthersOnDeactivation)
         let wantBuiltIn = Self.micRoute == .builtInMic
-        var lastError: NSError?
-        for attempt in 0...2 {
+        var lastFailure: VoiceSessionActivationFailure?
+        // `bare` starts false and latches true when a diagnosis says our own
+        // option combo was rejected — the one case where repeating the same
+        // request is pointless but a simpler one may work.
+        var bare = wantBuiltIn
+        for attempt in 0..<VoiceSessionDiagnosis.maxAttempts {
+            var stage = "set-category"
             do {
-                if attempt < 2 && !wantBuiltIn {
-                    try session.setCategory(.record, mode: .default, options: .allowBluetoothHFP)
-                } else {
-                    // Built-in-mic route: omit .allowBluetoothHFP so AirPods /
-                    // BT headsets never become eligible inputs at all — the
-                    // category shape alone excludes them (wired headsets are
-                    // handled by setPreferredInput below).
+                if bare {
+                    // Built-in-mic route (or a rejected option combo): omit
+                    // .allowBluetoothHFP so AirPods / BT headsets never become
+                    // eligible inputs at all — the category shape alone
+                    // excludes them (wired headsets are handled by
+                    // setPreferredInput below).
                     try session.setCategory(.record, mode: .default)
+                } else {
+                    try session.setCategory(.record, mode: .default, options: .allowBluetoothHFP)
                 }
+                stage = "set-active"
                 try session.setActive(true)
                 if wantBuiltIn {
                     // Pin the built-in mic even when a wired headset is
@@ -219,21 +257,52 @@ final class VoiceRecorder: NSObject {
                         }
                     }
                 }
+                if attempt > 0 {
+                    // Prove the retry earned its keep — otherwise a recovered
+                    // activation is indistinguishable from a clean one.
+                    AppLog.info("voice", "session activated after retry", [
+                        "attempts": String(attempt + 1),
+                        "lastReason": lastFailure?.diagnosis.reason ?? "unknown",
+                    ])
+                }
                 return
             } catch let error as NSError {
-                lastError = error
-                let transient = error.domain == NSOSStatusErrorDomain
-                    && [AVAudioSession.ErrorCode.isBusy.rawValue,
-                        AVAudioSession.ErrorCode.insufficientPriority.rawValue].contains(error.code)
-                if attempt == 0 && transient {
-                    try? await Task.sleep(for: .milliseconds(150))
-                    continue
+                let diagnosis = VoiceSessionDiagnosis.classify(error)
+                lastFailure = VoiceSessionActivationFailure(
+                    underlying: error, diagnosis: diagnosis,
+                    attempts: attempt + 1, stage: stage
+                )
+                // A config rejection is worth one more attempt ONLY if it can
+                // actually change the request. Already bare and still rejected
+                // means there is nothing simpler left to try.
+                let canSimplify = diagnosis.tryBareConfig && !bare
+                if diagnosis.tryBareConfig { bare = true }
+                // Give up early when waiting provably cannot help (no mic
+                // hardware, our own illegal options): the user should get the
+                // real answer now, not after 800ms of theatre. `canSimplify`
+                // still buys one more immediate attempt with a simpler shape.
+                guard diagnosis.retryable || canSimplify else { break }
+                guard let waitMs = VoiceSessionDiagnosis.backoff(afterAttempt: attempt) else { break }
+                // A pure config rejection needs a different request, not time.
+                if diagnosis.retryable {
+                    AppLog.warn("voice", "session activate retrying", [
+                        "reason": diagnosis.reason,
+                        "attempt": String(attempt + 1),
+                        "waitMs": String(waitMs),
+                        "fourCC": VoiceSessionDiagnosis.fourCC(error.code) ?? "n/a",
+                    ])
+                    try? await Task.sleep(for: .milliseconds(waitMs))
                 }
-                // Non-transient: fall through once to the no-options combo.
-                if attempt < 2 { continue }
             }
         }
-        throw lastError ?? NSError(domain: NSOSStatusErrorDomain, code: 0)
+        if let lastFailure { throw lastFailure }
+        // Unreachable in practice (the loop always records a failure before
+        // exiting), but a silent success-shaped return would be worse.
+        let fallback = NSError(domain: NSOSStatusErrorDomain, code: 0)
+        throw VoiceSessionActivationFailure(
+            underlying: fallback, diagnosis: .classify(fallback),
+            attempts: VoiceSessionDiagnosis.maxAttempts, stage: "set-active"
+        )
     }
 
     /// Stop and upload for transcription. Returns the recognized text, or nil
@@ -524,6 +593,10 @@ final class VoiceRecorder: NSObject {
             "desc": nsError.localizedDescription,
             "underlying": underlying,
         ]
+        // The FourCC is the whole reason the 2026-08-18 log took a manual decode
+        // to read: `561017449` says nothing, `'!pri'` greps straight to the SDK
+        // enum. Emitted for every OSStatus, not just activation failures.
+        if let fourCC = VoiceSessionDiagnosis.fourCC(nsError.code) { meta["fourCC"] = fourCC }
         if !stage.isEmpty { meta["stage"] = stage }
         return meta
     }
