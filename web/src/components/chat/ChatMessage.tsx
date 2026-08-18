@@ -14,6 +14,7 @@ import { parseAskQuestionInput } from './QuestionPopover';
 import { SubagentBlock } from './SubagentBlock';
 import { getErrorSuggestion } from '@/utils/error-suggestions';
 import { ErrorSuggestionLink } from '@/components/common/ErrorSuggestionLink';
+import { PromoteToTaskMenu, type PromoteToTaskInput } from './PromoteToTaskMenu';
 export interface RouteInfo {
   direction: 'sent' | 'received';
   event: string;
@@ -40,6 +41,9 @@ interface ChatMessageProps {
   taskLookup?: Map<string, Task>;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
+  /** MAIN CHAT ONLY: enables the hover "Task" action ("Turn this into task").
+   *  The lane engine's twin of this lives on SessionMessage. */
+  onPromoteToTask?: (input: PromoteToTaskInput) => Promise<unknown>;
 }
 
 // NOTE: the global marked config (setOptions + taskLink/imagePath inline
@@ -834,7 +838,7 @@ function MemoizedTextBlock({ content, onClick }: { content: string; onClick: (e:
   );
 }
 
-function ChatMessageInner({ role, content, blocks, images, taskContext, routeInfo, timestamp, source, cronJobName, notification, errorCount, queued, onCancel, taskLookup, onTaskClick, onSessionClick }: ChatMessageProps) {
+function ChatMessageInner({ role, content, blocks, images, taskContext, routeInfo, timestamp, source, cronJobName, notification, errorCount, queued, onCancel, taskLookup, onTaskClick, onSessionClick, onPromoteToTask }: ChatMessageProps) {
   const { lightboxSrc, openLightbox, closeLightbox } = useLightbox();
 
   // File path click → open the shared FileViewer overlay. Self-contained so every
@@ -1083,6 +1087,15 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
     return firstLine.replace(/\*\*/g, '').slice(0, 120);
   }, [content, shouldAutoCollapse, isTriage, isQuickStartEcho]);
 
+  // Hover-only "Task" action (MAIN CHAT only — the host passes onPromoteToTask).
+  // Hidden while a row is collapsed: the trigger belongs next to the text it
+  // would capture, and a collapsed row shows a one-line summary instead.
+  const promoteActions = (onPromoteToTask && content.trim() && (!isCollapsed || !shouldAutoCollapse)) ? (
+    <div className="chat-message-actions">
+      <PromoteToTaskMenu text={content} onPromote={onPromoteToTask} />
+    </div>
+  ) : null;
+
   // Notification header with optional UI Only badge + collapse toggle + collapsed summary
   const notificationHeader = (isCron || isNotification || isTriage || isQuickStartEcho || isLongPlainUser) ? (
     <div className="chat-message-header chat-notification-header" onClick={shouldAutoCollapse ? () => setIsCollapsed(c => !c) : undefined} style={shouldAutoCollapse ? { cursor: 'pointer' } : undefined}>
@@ -1196,6 +1209,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
               )}
             </div>
           )}
+          {promoteActions}
         </div>
         {lightboxSrc && <Lightbox src={lightboxSrc} onClose={closeLightbox} />}
         {fileViewerState && (
@@ -1286,6 +1300,7 @@ function ChatMessageInner({ role, content, blocks, images, taskContext, routeInf
             </div>
           )
         )}
+        {promoteActions}
       </div>
       {lightboxSrc && <Lightbox src={lightboxSrc} onClose={closeLightbox} />}
       {fileViewerState && (
@@ -1317,7 +1332,8 @@ function arePropsEqual(prev: ChatMessageProps, next: ChatMessageProps): boolean 
     prev.onCancel === next.onCancel &&
     prev.taskLookup === next.taskLookup &&
     prev.onTaskClick === next.onTaskClick &&
-    prev.onSessionClick === next.onSessionClick
+    prev.onSessionClick === next.onSessionClick &&
+    prev.onPromoteToTask === next.onPromoteToTask
   );
 }
 

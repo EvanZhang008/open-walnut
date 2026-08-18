@@ -4066,6 +4066,60 @@ select {
 
 .msg-copy-label { white-space: nowrap; }
 
+/* "Turn this into task" — the trigger reuses .msg-copy-btn so the message
+   toolbar stays one visual language; the menu reuses .task-kebab-menu (placed
+   and capped by useMenuPlacement, like every other dropdown here). */
+.chat-message-actions {
+  display: flex;
+  align-items: center;
+  margin-top: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+/* Hover reveals it; keep it visible while its own menu is open (the pointer has
+   left the row for the portalled menu by then). */
+.chat-message:hover .chat-message-actions,
+.chat-message-actions:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Two classes deliberately: .task-kebab-menu (which supplies the frame, the
+   height cap and the internal scrolling) is defined LATER in this file, so a
+   single-class rule here would lose its 180px min-width to it. */
+.task-kebab-menu.promote-task-menu {
+  min-width: 300px;
+  padding: 8px 0 6px;
+}
+.promote-task-heading {
+  padding: 0 12px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.promote-task-title {
+  width: calc(100% - 24px);
+  margin: 0 12px 6px;
+  padding: 5px 8px;
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  outline: none;
+}
+.promote-task-title:focus { border-color: var(--accent); }
+.promote-task-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 8px 12px 2px;
+}
+
 /* On the blue user bubble, muted greys are invisible — use translucent white. */
 .session-msg-user .msg-copy-btn {
   color: rgba(255, 255, 255, 0.75);

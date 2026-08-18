@@ -38,6 +38,7 @@ import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } fro
 import { SessionSearchPanel } from '@/components/sessions/SessionSearchPanel';
 import { freshLauncherMeta, readLastLaunchPath, rememberLaunchPath } from '@/components/sessions/task-meta-constants';
 import { QuestionPopover, parseAskQuestionInput } from '@/components/chat/QuestionPopover';
+import type { PromoteToTaskInput } from '@/components/chat/PromoteToTaskMenu';
 import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchSession, fetchSessionsForTask, fetchWorkingDirs, forkSessionInWalnut, quickStartSession } from '@/api/sessions';
 import { fetchProjectDetail } from '@/api/projects';
@@ -2010,6 +2011,20 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     return created;
   }, [handleCreate, handleFocusTask, notify, tierLabel]);
 
+  // "Turn this into task" on a Main Chat message. Reuses the quick-task path
+  // verbatim, so the new task locates itself in the todo panel and gets the same
+  // toast + Undo as every other create. No path/folder is chosen: a task has no
+  // working directory of its own (a session picks one later) — Project is the
+  // only placement the menu offers.
+  const handlePromoteMessageToTask = useCallback(async (input: PromoteToTaskInput) => {
+    return handleQuickTaskCreate({
+      title: input.title,
+      priority: 'none',
+      ...(input.description ? { description: input.description } : {}),
+      ...(input.project ? { project: input.project } : {}),
+    });
+  }, [handleQuickTaskCreate]);
+
   // Core quick-start launcher — creates the pending session column and fires the
   // API call. Deliberately does NOT touch chat state/visibility: the todo-panel
   // "+" entry point starts sessions while the chat column stays hidden (the CLI
@@ -2736,6 +2751,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 onTaskClick={handleFocusTaskById}
                 onSessionClick={handleSessionClick}
                 onFileOpen={handleLaneFileOpen}
+                onPromoteToTask={handlePromoteMessageToTask}
               />
               {laneFileView && (
                 <FileViewer
@@ -2802,6 +2818,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 taskLookup={taskMap}
                 onTaskClick={handleFocusTaskById}
                 onSessionClick={handleSessionClick}
+                onPromoteToTask={handlePromoteMessageToTask}
               />
             ))}
             {chat.toolActivity && (
