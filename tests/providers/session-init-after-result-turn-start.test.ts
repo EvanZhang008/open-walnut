@@ -50,20 +50,22 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-init-turnsta
 // The stale-result gate resolves the LIVE session via the runner registry. Point it
 // at whichever ClaudeCodeSession the test registered, so the gate reads the real
 // (post-init) turnGen straight off the instance under test.
+//
+// The stub is a `vi.spyOn` on the REAL singleton, deliberately NOT a
+// `vi.mock('claude-code-session.js')` factory. A module factory only replaces the
+// binding for importers that resolve the mocked id — and `core/phase.ts` reaches
+// the runner through a *dynamic* `import('../providers/claude-code-session.js')`
+// that vitest resolves to the real module whenever the real module is already in
+// the graph. It IS in the graph here: claude-code-session → acp-session →
+// core/self-knowledge-contract → core/phase, an edge added 2026-08-16. So the
+// factory's `findSessionByClaudeId` was silently never consulted, the gate found
+// no live session, failed OPEN, and the "late flip is skipped" assertions broke
+// without any product regression. Patching the singleton's method is immune to
+// which module instance the gate resolves.
 let liveSession: { turnGen: number } | undefined
 let liveSid: string | null = null
-vi.mock('../../src/providers/claude-code-session.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/providers/claude-code-session.js')>()
-  return {
-    ...actual,
-    sessionRunner: {
-      ...actual.sessionRunner,
-      findSessionByClaudeId: (sid: string) => (sid === liveSid ? liveSession : undefined),
-    },
-  }
-})
 
-import { ClaudeCodeSession } from '../../src/providers/claude-code-session.js'
+import { ClaudeCodeSession, sessionRunner } from '../../src/providers/claude-code-session.js'
 import { applySessionPhase } from '../../src/core/phase.js'
 import { addTask, updateTaskRaw, getTask } from '../../src/core/task-manager.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
@@ -143,6 +145,9 @@ beforeEach(async () => {
   bus.clear()
   liveSession = undefined
   liveSid = null
+  vi.spyOn(sessionRunner, 'findSessionByClaudeId').mockImplementation(
+    (sid: string) => (sid === liveSid ? liveSession : undefined) as never,
+  )
   closeDb()
   _resetSessionTrackerForTesting()
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -152,6 +157,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   bus.clear()
   closeDb()
   _resetSessionTrackerForTesting()
