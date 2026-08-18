@@ -55,6 +55,11 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/acp-worker/protocol.ts',
   // Session-changes host-local compute (changes.compute / changes.file).
   'src/providers/session-changes-core.ts',
+  // External-session scan (sessions.discoverExternal) — bundled into the
+  // binary AND shipped as the external-scan-core.cjs sidecar. Missing from
+  // this list once: a classifier edit produced an identical version, no
+  // daemon self-upgraded, and the new scan rules silently never ran.
+  'src/providers/external-session-scan-core.ts',
   'src/core/bash-file-ops.ts',
 ] as const
 

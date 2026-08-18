@@ -50,6 +50,7 @@ SOURCES=(
   src/providers/acp-worker/journal.ts
   src/providers/acp-worker/protocol.ts
   src/providers/session-changes-core.ts
+  src/providers/external-session-scan-core.ts
   src/core/bash-file-ops.ts
 )
 

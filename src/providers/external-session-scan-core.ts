@@ -77,8 +77,28 @@ export interface ScanExternalSessionsResult {
 
 /** Claude entrypoints that mean "a human started this", not Walnut's SDK spawn. */
 const HUMAN_CLAUDE_ENTRYPOINTS = new Set(['cli', 'claude-desktop'])
+/**
+ * Programmatic entrypoints — OTHER SDK apps (e.g. an agent orchestrator running
+ * investigations through the Agent SDK) record the same 'sdk-cli' Walnut's own
+ * spawns do, so entrypoint alone cannot separate them. Walnut's own sessions
+ * are excluded by knownSessionIds (they are all tracked); what remains is other
+ * programs' sessions plus TEST DEBRIS from ephemeral/dev servers whose isolated
+ * DBs are gone. The debris lives under temp dirs, so programmatic sessions are
+ * accepted only with a real (non-temp) cwd — human sessions stay unconditional.
+ */
+const PROGRAMMATIC_CLAUDE_ENTRYPOINTS = new Set(['sdk-cli', 'sdk-ts'])
 /** Codex originators that mean "a human started this". */
 const HUMAN_CODEX_ORIGINATORS = new Set(['codex-tui', 'Codex Desktop', 'codex_desktop'])
+
+/** Temp/test locations whose programmatic sessions are throwaway debris. */
+function isTempCwd(cwd: string | undefined): boolean {
+  if (!cwd) return true // no cwd recorded → can't place it → not worth a task
+  if (cwd === '/tmp' || cwd === '/private/tmp') return true
+  if (cwd.startsWith('/tmp/') || cwd.startsWith('/private/tmp/')) return true
+  if (cwd.startsWith('/var/folders/') || cwd.startsWith('/private/var/folders/')) return true
+  if (cwd.includes('walnut-test-') || cwd.includes('open-walnut-test')) return true
+  return false
+}
 
 /** One read step when walking a transcript head. */
 const CHUNK_BYTES = 131072
@@ -290,10 +310,14 @@ function scanClaude(
       scanned++
 
       const head = parseClaudeHead(filePath, stat.size)
-      // Walnut's own spawns are 'sdk-cli'. A sidechain file is a subagent
-      // transcript, not a session a human opened.
-      if (!head.entrypoint || !HUMAN_CLAUDE_ENTRYPOINTS.has(head.entrypoint)) continue
+      if (!head.entrypoint) continue
+      // A sidechain file is a subagent transcript, not a session someone opened.
       if (head.isSidechain) continue
+      const isHuman = HUMAN_CLAUDE_ENTRYPOINTS.has(head.entrypoint)
+      // Programmatic (other SDK apps, e.g. an investigation orchestrator):
+      // only with a real working directory — temp-dir ones are test debris.
+      const isProgram = PROGRAMMATIC_CLAUDE_ENTRYPOINTS.has(head.entrypoint) && !isTempCwd(head.cwd)
+      if (!isHuman && !isProgram) continue
 
       const aiTitle = findAiTitle(readChunk(filePath, stat.size, TAIL_BYTES, true))
       out.push({
