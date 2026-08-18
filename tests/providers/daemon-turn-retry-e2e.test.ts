@@ -42,9 +42,25 @@ async function spawnDaemon(extraEnv: Record<string, string>): Promise<{
   const scriptPath = path.join(daemonDir, 'daemon.cjs')
   fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
 
+  // Scrub INHERITED retry vars before applying this test's own. The daemon reads
+  // the feature from its env at boot, and a developer whose config enables
+  // session.turn_retry runs their whole session under those vars (the local
+  // daemon exports them when it spawns the CLI, so every child inherits them) —
+  // which silently turns retries ON for the case that asserts a default install
+  // stays inert. src/providers/local-daemon.ts scrubs the same five vars for the
+  // same reason; a spawner's leftovers must never decide this behavior.
+  const env: Record<string, string | undefined> = { ...process.env }
+  for (const key of [
+    'WALNUT_TURN_RETRY',
+    'WALNUT_TURN_RETRY_BUDGET_MS',
+    'WALNUT_TURN_RETRY_MAX_ATTEMPTS',
+    'WALNUT_TURN_RETRY_BACKOFF_MS',
+    'WALNUT_TURN_RETRY_BACKOFF_MAX_MS',
+  ]) delete env[key]
+
   const proc = spawn('node', [scriptPath, '--start'], {
     env: {
-      ...process.env,
+      ...env,
       WALNUT_DAEMON_DIR: daemonDir,
       WALNUT_STREAMS_DIR: streamsDir,
       ...extraEnv,
