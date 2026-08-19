@@ -378,6 +378,26 @@ function persistTierViewModes(modes: Record<string, TierViewMode>) {
   try { localStorage.setItem(LS_TIER_VIEW_KEY, JSON.stringify(modes)); } catch { /* ignore */ }
 }
 
+/**
+ * Recent tab sort mode — 'updated' (activity feed: latest of update/session/
+ * completion, the historical behavior) or 'created' (pure creation time).
+ * Sorting only; nothing is rewritten. 'walnut-todo-' prefix rides ui-prefs-sync.
+ */
+type RecentSortMode = 'updated' | 'created';
+const LS_RECENT_SORT_KEY = 'walnut-todo-recent-sort';
+
+function readRecentSortMode(): RecentSortMode {
+  try {
+    const v = localStorage.getItem(LS_RECENT_SORT_KEY);
+    if (v === 'updated' || v === 'created') return v;
+  } catch { /* ignore */ }
+  return 'updated';
+}
+
+function persistRecentSortMode(mode: RecentSortMode) {
+  try { localStorage.setItem(LS_RECENT_SORT_KEY, mode); } catch { /* ignore */ }
+}
+
 // Disable layout animation for items that were just dragged to prevent
 // the "flash" where both old and new position are briefly visible.
 const noAnimateAfterDrag: AnimateLayoutChanges = (args) => {
@@ -2248,6 +2268,12 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       return next;
     });
   }, []);
+  // Recent tab sort mode (updated-activity vs creation time) — see RecentSortMode.
+  const [recentSortMode, setRecentSortMode] = useState<RecentSortMode>(readRecentSortMode);
+  const handleRecentSortChange = useCallback((mode: RecentSortMode) => {
+    setRecentSortMode(mode);
+    persistRecentSortMode(mode);
+  }, []);
   // Ephemeral view override while a search query is active. Search defaults to the
   // stacked All view (every region shows its matches at once); picking a tab during
   // a search narrows the view WITHOUT touching the persisted tab, so clearing the
@@ -2987,9 +3013,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // shares the pinned DndContext — a mid-drag re-sort moves/remounts cards and
   // feeds the useRect #185 loop. Converges to live order on drop.
   const recentTasksLive = useMemo(() => {
-    // Most recent of creation / any update / session activity / completion
+    // 'updated': most recent of creation / any update / session activity /
+    // completion (the activity feed). 'created': pure creation time.
     const recentTime = (t: Task) => {
       let m = t.created_at ?? '';
+      if (recentSortMode === 'created') return m;
       if (t.updated_at && t.updated_at > m) m = t.updated_at;
       if (t.last_session_update && t.last_session_update > m) m = t.last_session_update;
       if (t.completed_at && t.completed_at > m) m = t.completed_at;
@@ -3002,7 +3030,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       })
       .sort((a, b) => recentTime(b).localeCompare(recentTime(a)))
       .slice(0, 50);
-  }, [tasks, showCompleted, keepWhileCompleting, recentTick]);
+  }, [tasks, showCompleted, keepWhileCompleting, recentTick, recentSortMode]);
   const recentTasks = useFrozenWhile(recentTasksLive, isPinnedDragActive);
 
   // Stable sensor config — inline objects in useSensor destabilize dnd-kit's internal
@@ -5494,6 +5522,30 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
               onAddSession={onOpenLauncherForTier}
             />
           )}
+        </div>
+      )}
+
+      {/* Recent view-mode bar — the Recent tab's counterpart to the tier bar:
+          sort the activity feed by last update (default) or by creation time.
+          Pure sort toggle; the underlying feed isn't rewritten. */}
+      {!isSearchMode && effectiveSection === 'recent' && (
+        <div className="todo-minibar" data-testid="recent-sort-bar">
+          <button
+            type="button"
+            className={`todo-minibar-btn${recentSortMode === 'updated' ? ' on' : ''}`}
+            title="Sort by latest activity (updates, sessions, completion)"
+            onClick={() => handleRecentSortChange('updated')}
+          >
+            ↕ Sort by update
+          </button>
+          <button
+            type="button"
+            className={`todo-minibar-btn${recentSortMode === 'created' ? ' on' : ''}`}
+            title="Sort by creation time"
+            onClick={() => handleRecentSortChange('created')}
+          >
+            ↕ Sort by creation time
+          </button>
         </div>
       )}
 
