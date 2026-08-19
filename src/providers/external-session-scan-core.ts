@@ -247,9 +247,15 @@ function parseClaudeHead(filePath: string, size: number): ClaudeHead {
     if (type === 'user' && !out.entrypoint) {
       out.entrypoint = typeof entry.entrypoint === 'string' ? entry.entrypoint : 'unknown'
       if (entry.isSidechain === true) out.isSidechain = true
-      // A non-human entrypoint (Walnut's own sdk-cli) is rejected outright, so
-      // stop immediately — this is the 97%-of-files case.
-      if (!HUMAN_CLAUDE_ENTRYPOINTS.has(out.entrypoint)) return true
+      // Stop early only when the file can never be imported: an entrypoint in
+      // neither set, or a programmatic session in a temp dir (cwd rides this
+      // same line). Accepted programmatic sessions MUST keep walking — their
+      // title is the first user message further down, and exiting here is what
+      // once left every SDK import named "Claude session <id>".
+      const human = HUMAN_CLAUDE_ENTRYPOINTS.has(out.entrypoint)
+      const program = PROGRAMMATIC_CLAUDE_ENTRYPOINTS.has(out.entrypoint)
+      if (!human && !program) return true
+      if (program && !human && isTempCwd(out.cwd)) return true
     }
     if (type === 'user' && !out.firstUserText) {
       const text = messageText(entry.message)

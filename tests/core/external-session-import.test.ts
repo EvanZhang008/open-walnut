@@ -286,6 +286,49 @@ describe('importExternalSessions — one task per session', () => {
   });
 });
 
+describe('importExternalSessions — fallback-name re-title', () => {
+  it('re-imports a task stuck with the fallback name once the scan yields a title', async () => {
+    // Seed what the buggy scanner produced: fallback-named task, no title.
+    setHost('__local__', { candidates: [candidate({ sessionId: 'deadbeef-1111', title: undefined })] });
+    await importExternalSessions();
+    const before = await taskForSession('deadbeef-1111');
+    expect(before.title).toBe('Claude session deadbeef');
+
+    // Fixed scanner now returns the real title for the same session.
+    setHost('__local__', { candidates: [candidate({ sessionId: 'deadbeef-1111', title: 'Investigate ticket 12345' })] });
+    const result = await importExternalSessions();
+    expect(result.imported).toBe(1);
+    const after = await taskForSession('deadbeef-1111');
+    expect(after.title).toBe('Investigate ticket 12345');
+    expect(after.id).not.toBe(before.id);
+    // Exactly one task remains for the session.
+    expect(await queryTasks({ tagsAll: ['walnut:external-sessions'] })).toHaveLength(1);
+  });
+
+  it('does not loop on a transcript that truly has no title', async () => {
+    const host = setHost('__local__', { candidates: [candidate({ sessionId: 'cafebabe-2222', title: undefined })] });
+    await importExternalSessions();
+    const first = await taskForSession('cafebabe-2222');
+    expect(first.title).toBe('Claude session cafebabe');
+
+    // Next tick still yields no title: the task must survive untouched. The id
+    // is deliberately left OUT of knownSessionIds so the daemon keeps offering
+    // it — the upgrade happens the tick its transcript finally has a title.
+    const second = await importExternalSessions();
+    expect(second.imported).toBe(0);
+    expect((await taskForSession('cafebabe-2222')).id).toBe(first.id);
+    expect(host.calls[1].knownSessionIds).not.toContain('cafebabe-2222');
+  });
+
+  it('never touches a user-renamed task that merely looks fallback-ish', async () => {
+    // A task the user created themselves with a similar name but no import tag.
+    await addTask({ title: 'Claude session 12345678', project: '', source: 'local', _skipPluginOps: true });
+    setHost('__local__', { candidates: [] });
+    await importExternalSessions();
+    expect((await queryTasks({}))).toHaveLength(1);
+  });
+});
+
 describe('importExternalSessions — v1 bucket migration', () => {
   /** Seed a v1-shape bucket: one task holding N sessions in session_ids history. */
   async function seedLegacyBucket(host: string, sessionIds: string[]) {

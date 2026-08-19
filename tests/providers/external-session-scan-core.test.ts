@@ -124,7 +124,7 @@ describe('scanExternalSessions — claude classification', () => {
     // An SDK-based agent orchestrator records entrypoint 'sdk-cli' — same
     // as Walnut's own spawns. Walnut's own are excluded by knownSessionIds;
     // what separates the rest from ephemeral-server test debris is the cwd.
-    claudeSession({ sid: 'sdk-real', entrypoint: 'sdk-cli', cwd: '/Users/dev/agent-orchestrator' })
+    claudeSession({ sid: 'sdk-real', entrypoint: 'sdk-cli', cwd: '/Users/dev/agent-orchestrator', firstUserText: 'Investigate ticket 12345' })
     claudeSession({ sid: 'sdk-tmp1', entrypoint: 'sdk-cli', cwd: '/private/tmp' })
     claudeSession({ sid: 'sdk-tmp2', entrypoint: 'sdk-cli', cwd: '/tmp/modetest' })
     claudeSession({ sid: 'sdk-tmp3', entrypoint: 'sdk-cli', cwd: '/private/var/folders/ph/x/T/walnut-test-123/memory' })
@@ -132,6 +132,11 @@ describe('scanExternalSessions — claude classification', () => {
     const { candidates } = scan()
     expect(candidates.map((c) => c.sessionId)).toEqual(['sdk-real'])
     expect(candidates[0].origin).toBe('sdk-cli')
+    // Regression: the entrypoint check used to stop the walk on ANY non-human
+    // entrypoint — including accepted SDK apps — before the first user message
+    // was captured, so every SDK import fell back to "Claude session <id>".
+    expect(candidates[0].title).toBe('Investigate ticket 12345')
+    expect(candidates[0].messageCount).toBe(2)
   })
 
   it('still excludes tracked sdk sessions via knownSessionIds (Walnut\'s own)', () => {

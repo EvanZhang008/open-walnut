@@ -46,6 +46,12 @@ const PER_RUN_IMPORT_LIMIT = 100;
 /** Marker tag on every imported task, so imports are identifiable and the v1
  *  bucket cleanup can find its targets. */
 const HOLDER_TAG = 'walnut:external-sessions';
+/** The name minted when a transcript yields no title. A HOLDER_TAG task still
+ *  wearing it is re-title-eligible: its id is left out of knownSessionIds so
+ *  the daemon re-offers it, and it's re-imported the moment a scan finally
+ *  produces a real title (claude writes its ai-title AFTER the session starts,
+ *  so "untitled at first sight" often resolves a tick later). */
+const FALLBACK_TITLE_RE = /^(Claude|Codex) session [0-9a-f]{8}$/;
 /** v1-only per-host tag — its presence is what identifies a legacy bucket. */
 const LEGACY_HOST_TAG_PREFIX = 'walnut:host:';
 /** v1 project the buckets were filed under; removed once its buckets are gone. */
@@ -181,17 +187,55 @@ async function cleanupLegacyBuckets(): Promise<number> {
   return cleaned;
 }
 
+/**
+ * Session ids of imports stuck with the fallback name — the first scanner
+ * version stopped reading an accepted SDK transcript at its entrypoint line,
+ * before the first user message, so every SDK import was named
+ * "Claude session <id>". These ids are LEFT OUT of the knownSessionIds sent to
+ * the daemon, so it keeps re-offering them; importCandidate re-imports one the
+ * moment a scan finally carries a real title, and simply skips it while the
+ * transcript still yields none (no delete/re-import loop for truly untitled
+ * sessions — the task stays put).
+ */
+async function fallbackNamedSessionIds(): Promise<Set<string>> {
+  const { queryTasks } = await import('../task-manager.js');
+  const stuck = (await queryTasks({ tagsAll: [HOLDER_TAG] }))
+    .filter((t) => FALLBACK_TITLE_RE.test(t.title) && typeof t.session_id === 'string');
+  return new Set(stuck.map((t) => t.session_id as string));
+}
+
 /** Import one candidate as ITS OWN task. Returns true when created. */
 async function importCandidate(
   candidate: ExternalSessionCandidate,
   host: string,
 ): Promise<boolean> {
-  const { getSessionByClaudeId, importSessionRecord } = await import('../session-tracker.js');
-  const { addTask, linkSession } = await import('../task-manager.js');
+  const { getSessionByClaudeId, importSessionRecord, deleteSessionRecords } =
+    await import('../session-tracker.js');
+  const { addTask, linkSession, getTask, deleteTask, clearSessionSlot } =
+    await import('../task-manager.js');
 
   // Re-check under no lock: the scan list was built before any of this ran, and
   // a normal Walnut launch may have claimed the id in between.
-  if (await getSessionByClaudeId(candidate.sessionId)) return false;
+  const existing = await getSessionByClaudeId(candidate.sessionId);
+  if (existing) {
+    // Already imported under the fallback name and the transcript NOW yields a
+    // real title (claude writes ai-title after the session starts) → re-import
+    // through the normal path below so title/timestamps come from the
+    // transcript. Anything else that's already tracked is skipped.
+    if (!candidate.title || !existing.taskId) return false;
+    const owner = await getTask(existing.taskId).catch(() => null);
+    if (!owner || !(owner.tags ?? []).includes(HOLDER_TAG) || !FALLBACK_TITLE_RE.test(owner.title)) {
+      return false;
+    }
+    await deleteSessionRecords(
+      new Set([candidate.sessionId]),
+      'external-import re-title (transcript now has a real title)',
+    );
+    // deleteTask refuses while the slot is occupied — clear it first (the
+    // session record is already gone; the slot is the only remaining pointer).
+    await clearSessionSlot(owner.id, candidate.sessionId);
+    await deleteTask(owner.id);
+  }
 
   const title = candidate.title
     || `${candidate.engine === 'codex' ? 'Codex' : 'Claude'} session ${candidate.sessionId.slice(0, 8)}`;
@@ -271,7 +315,11 @@ export async function importExternalSessions(options: {
   result.cleanedLegacyBuckets = await cleanupLegacyBuckets();
 
   const { listAllSessionIds } = await import('../session-tracker.js');
-  const knownSessionIds = [...await listAllSessionIds()];
+  // Fallback-named imports stay OUT of knownSessionIds: the daemon re-offers
+  // them each tick, and importCandidate upgrades one in place as soon as its
+  // transcript yields a real title.
+  const retitleable = await fallbackNamedSessionIds();
+  const knownSessionIds = [...await listAllSessionIds()].filter((id) => !retitleable.has(id));
 
   for (const host of scannable) {
     const { candidates, truncated } = await scanHost(host, knownSessionIds, windowMs);
