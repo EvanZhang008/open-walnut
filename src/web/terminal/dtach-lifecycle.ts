@@ -14,7 +14,8 @@
 
 import { execFile } from 'node:child_process'
 import type { SessionRecord } from '../../core/types.js'
-import { resolveSshTarget, dtachSocketPath, DTACH_SOCKET_DIR, sshControlMasterArgs } from './spawn.js'
+import { resolveSshTarget, dtachSocketPath, dtachOwnerMarkerPath, DTACH_SOCKET_DIR, sshControlMasterArgs } from './spawn.js'
+import { WALNUT_HOME } from '../../constants.js'
 import { listSessions } from '../../core/session-tracker.js'
 import { getConfig } from '../../core/config-manager.js'
 import { shellQuote } from '../../providers/session-io.js'
@@ -137,10 +138,23 @@ export async function killDtachSession(record: Pick<SessionRecord, 'claudeSessio
 
 /**
  * Conditional reap on task completion / session stop. Keeps the dtach session
- * if a foreground process is still running; otherwise kills it.
- * Returns 'killed' | 'kept'.
+ * if a client is actively viewing it OR a foreground process is still running;
+ * otherwise kills it. Returns 'killed' | 'kept'.
+ *
+ * The viewing check exists because task completion is a data-model event that
+ * says nothing about the user's screen: marking a task done while its terminal
+ * tab is open used to vaporize the shell mid-look ("terminal randomly dies").
+ * An idle viewed terminal is later collected by the periodic reaper / orphan
+ * sweep once the session record itself is deleted.
  */
 export async function conditionalReap(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<'killed' | 'kept'> {
+  try {
+    const { terminalManager } = await import('./terminal-manager.js')
+    if (terminalManager.isViewing(record.claudeSessionId)) {
+      log.web.info('dtach kept (client attached)', { sessionId: record.claudeSessionId })
+      return 'kept'
+    }
+  } catch { /* terminal feature disabled → fall through to process check */ }
   if (await hasForegroundProcess(record)) {
     log.web.info('dtach kept (foreground process running)', { sessionId: record.claudeSessionId })
     return 'kept'
@@ -149,12 +163,20 @@ export async function conditionalReap(record: Pick<SessionRecord, 'claudeSession
   return 'killed'
 }
 
-/** List walnut dtach socket session-ids present on a host (local or remote). */
-async function listWalnutDtach(host: string | undefined): Promise<string[]> {
-  const script = `ls -1 ${shellQuote(DTACH_SOCKET_DIR)}/walnut-*.dsock 2>/dev/null || true`
+/**
+ * List walnut dtach socket session-ids present on a host (local or remote),
+ * plus the dir's ownership marker (see dtachOwnerMarkerPath in spawn.ts).
+ * One round-trip: `OWNER:<data-dir>` line first, then the socket paths.
+ */
+async function listWalnutDtach(host: string | undefined): Promise<{ owner: string | null; ids: string[] }> {
+  const script =
+    `echo "OWNER:$(cat ${shellQuote(dtachOwnerMarkerPath())} 2>/dev/null)"; ` +
+    `ls -1 ${shellQuote(DTACH_SOCKET_DIR)}/walnut-*.dsock 2>/dev/null || true`
   const res = await runShell(host, script)
-  return res.stdout
-    .split('\n')
+  const lines = res.stdout.split('\n')
+  const ownerLine = lines.find((l) => l.startsWith('OWNER:'))
+  const owner = ownerLine?.slice('OWNER:'.length).trim() || null
+  const ids = lines
     .map((l) => l.trim())
     .filter((l) => l.endsWith('.dsock'))
     .map((p) => {
@@ -162,6 +184,53 @@ async function listWalnutDtach(host: string | undefined): Promise<string[]> {
       return base.replace(/^walnut-/, '').replace(/\.dsock$/, '')
     })
     .filter(Boolean)
+  return { owner, ids }
+}
+
+/**
+ * May THIS instance sweep the socket dir it sees on `host`?
+ *
+ * The sweep's kill rule ("sid absent from MY registry → kill") is only sound
+ * when the sockets were created against MY registry. The `.owner` marker
+ * records which data dir (WALNUT_HOME) the sockets belong to; it is written
+ * exclusively by the SPAWN paths — a sweeper never claims, so a misconfigured
+ * instance (isolated registry, inherited production socket dir — the
+ * 2026-08-18 recurrence) sees a foreign marker and refuses.
+ *
+ *   marker == my WALNUT_HOME → sweep.
+ *   marker missing           → refuse (pre-upgrade sockets are unattributable;
+ *                              the true owner claims on its next spawn, which
+ *                              re-enables sweeping. An empty dir has nothing
+ *                              to reap anyway).
+ *   marker foreign           → refuse + loud log. LOCAL self-heal: if the
+ *                              foreign data dir no longer exists (a torn-down
+ *                              temp instance claimed first), drop the stale
+ *                              marker so the true owner's next spawn reclaims.
+ *                              (Remote markers hold LOCAL Mac paths, so an
+ *                              existence check on the remote host would be
+ *                              meaningless — remote foreign markers only log.)
+ */
+async function maySweepDtachDir(host: string | undefined, owner: string | null, socketCount: number): Promise<boolean> {
+  if (owner === WALNUT_HOME) return true
+  if (owner === null) {
+    if (socketCount > 0) {
+      log.web.info('reapOrphanDtach: socket dir unclaimed, skipping (owner claims on next spawn)', { host, socketCount })
+    }
+    return false
+  }
+  log.web.warn('reapOrphanDtach: socket dir owned by another instance, refusing to sweep', {
+    host, owner, myHome: WALNUT_HOME, socketCount,
+  })
+  if (!host) {
+    try {
+      const { existsSync, rmSync } = await import('node:fs')
+      if (!existsSync(owner)) {
+        rmSync(dtachOwnerMarkerPath(), { force: true })
+        log.web.warn('reapOrphanDtach: dropped stale owner marker (data dir gone)', { owner })
+      }
+    } catch { /* best-effort */ }
+  }
+  return false
 }
 
 /**
@@ -180,6 +249,14 @@ export async function reapOrphanDtach(): Promise<void> {
     return
   }
 
+  // Same guard as conditionalReap: never vaporize a terminal a client is
+  // looking at, even if its session record is already gone.
+  let isViewing: (sid: string) => boolean = () => false
+  try {
+    const { terminalManager } = await import('./terminal-manager.js')
+    isViewing = (sid) => terminalManager.isViewing(sid)
+  } catch { /* terminal feature disabled */ }
+
   // Determine hosts to sweep. Orphans are by definition on hosts that may no
   // longer have a live session (the last session was deleted), so sweeping only
   // live-session hosts would leak their sockets forever. Sweep local + EVERY
@@ -196,13 +273,18 @@ export async function reapOrphanDtach(): Promise<void> {
   for (const host of hosts) {
     let ids: string[]
     try {
-      ids = await listWalnutDtach(host)
+      const listed = await listWalnutDtach(host)
+      // Ownership gate: only the instance whose registry the sockets belong to
+      // may apply the "absent from my registry → kill" rule. See maySweepDtachDir.
+      if (!(await maySweepDtachDir(host, listed.owner, listed.ids.length))) continue
+      ids = listed.ids
     } catch (err) {
       log.web.warn('reapOrphanDtach: list failed', { host, error: String(err) })
       continue
     }
     for (const sid of ids) {
       if (liveIds.has(sid)) continue // session still tracked → keep
+      if (isViewing(sid)) continue   // client actively viewing → keep
       log.web.info('reaping orphan dtach session', { sid, host })
       try {
         await killDtachSession({ claudeSessionId: sid, host })

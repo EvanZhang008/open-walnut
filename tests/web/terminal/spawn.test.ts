@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   dtachSocketPath,
+  dtachOwnerMarkerPath,
+  dtachOwnerClaimScript,
   buildDtachArgs,
   buildRemoteDtachCommand,
   buildRemoteSshArgs,
   DTACH_SOCKET_DIR,
 } from '../../../src/web/terminal/spawn.js';
+import { WALNUT_HOME } from '../../../src/constants.js';
 import type { SshTarget } from '../../../src/providers/session-io.js';
 
 describe('dtachSocketPath', () => {
@@ -52,7 +55,7 @@ describe('buildRemoteDtachCommand', () => {
 
   it('defaults to the remote $SHELL as a LOGIN shell, cds to cwd', () => {
     expect(buildRemoteDtachCommand('/home/u/.local/bin/walnut-dtach', 'sid2', undefined, '/var/data')).toBe(
-      `mkdir -p '${DTACH_SOCKET_DIR}'; cd '/var/data' && exec '/home/u/.local/bin/walnut-dtach' -A '${DTACH_SOCKET_DIR}/walnut-sid2.dsock' -z -E -r winch ${DEFAULT_SHELL} -l`,
+      `${dtachOwnerClaimScript()}; cd '/var/data' && exec '/home/u/.local/bin/walnut-dtach' -A '${DTACH_SOCKET_DIR}/walnut-sid2.dsock' -z -E -r winch ${DEFAULT_SHELL} -l`,
     );
   });
 
@@ -71,8 +74,27 @@ describe('buildRemoteDtachCommand', () => {
 
   it('omits the cd prefix when no cwd (still makes the socket dir + execs login shell)', () => {
     expect(buildRemoteDtachCommand('dtach', 'sid2')).toBe(
-      `mkdir -p '${DTACH_SOCKET_DIR}'; exec 'dtach' -A '${DTACH_SOCKET_DIR}/walnut-sid2.dsock' -z -E -r winch ${DEFAULT_SHELL} -l`,
+      `${dtachOwnerClaimScript()}; exec 'dtach' -A '${DTACH_SOCKET_DIR}/walnut-sid2.dsock' -z -E -r winch ${DEFAULT_SHELL} -l`,
     );
+  });
+});
+
+describe('dtachOwnerClaimScript (socket-dir ownership marker)', () => {
+  it('mkdirs the socket dir and writes MY data dir into .owner', () => {
+    const script = dtachOwnerClaimScript();
+    expect(script).toContain(`mkdir -p '${DTACH_SOCKET_DIR}'`);
+    expect(script).toContain(`'${DTACH_SOCKET_DIR}/.owner'`);
+    expect(script).toContain(`'${WALNUT_HOME}'`);
+  });
+
+  it('never overwrites an existing claim (guarded by [ -e marker ])', () => {
+    // First-writer-wins: a misconfigured second instance spawning into someone
+    // else's socket dir must not steal ownership.
+    expect(dtachOwnerClaimScript()).toContain(`[ -e '${dtachOwnerMarkerPath()}' ] ||`);
+  });
+
+  it('marker path lives inside the socket dir', () => {
+    expect(dtachOwnerMarkerPath()).toBe(`${DTACH_SOCKET_DIR}/.owner`);
   });
 });
 

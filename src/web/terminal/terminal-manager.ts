@@ -135,6 +135,11 @@ class TerminalSession {
     return this.attached === ws
   }
 
+  /** Any client currently attached (actively viewing)? */
+  hasClient(): boolean {
+    return this.attached !== null
+  }
+
   write(data: string): void {
     if (this.exited) return
     this.pty.write(data)
@@ -307,6 +312,13 @@ class TerminalManager {
       out.push({ sessionId: t.sessionId, host: t.host })
     }
     return out
+  }
+
+  /** Is a client actively viewing this session's terminal right now? */
+  isViewing(sessionId: string): boolean {
+    const id = this.bySession.get(sessionId)
+    const t = id ? this.terminals.get(id) : undefined
+    return t ? t.hasClient() : false
   }
 
   /** Release all local ptys on server shutdown (dtach sessions survive). */

@@ -40,7 +40,7 @@ import type { SessionRecord } from '../../core/types.js'
 import type { SshTarget } from '../../providers/session-io.js'
 import { shellQuote } from '../../providers/session-io.js'
 import { getConfig } from '../../core/config-manager.js'
-import { DTACH_SOCKET_DIR } from '../../constants.js'
+import { DTACH_SOCKET_DIR, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { remoteDtachPath, localDtachPath } from './dtach-provision.js'
 
@@ -105,6 +105,42 @@ export function dtachSocketPath(sessionId: string): string {
     throw new Error(`Unsafe session id for dtach socket: ${JSON.stringify(sessionId)}`)
   }
   return `${DTACH_SOCKET_DIR}/walnut-${sessionId}.dsock`
+}
+
+/**
+ * Ownership marker for the dtach socket dir: `<dir>/.owner` holds the
+ * WALNUT_HOME (data-dir) path of the instance whose session registry the
+ * sockets belong to.
+ *
+ * WHY (incident 2026-08-18, recurrence of 2026-08-10): the orphan sweep's kill
+ * rule is "socket whose sessionId is absent from MY registry → kill". Deriving
+ * DTACH_SOCKET_DIR from LOG_DIR only isolates instances that override
+ * WALNUT_DAEMON_DIR. An instance that overrides ONLY the data dir (isolated,
+ * empty registry) but inherits the production LOG_DIR sees production's sockets
+ * with an empty registry and kills every live terminal — including over ssh on
+ * remote hosts. Registry identity is WALNUT_HOME, so the marker records exactly
+ * that: a sweeper whose WALNUT_HOME differs from the marker is looking at
+ * someone else's terminals and must not reap. Per-sid kills (End terminal, task
+ * completion) don't need the marker — session ids are UUIDs, so a sid-scoped
+ * kill can only ever hit that session's own terminal.
+ */
+export const DTACH_OWNER_MARKER = '.owner'
+
+export function dtachOwnerMarkerPath(): string {
+  return `${DTACH_SOCKET_DIR}/${DTACH_OWNER_MARKER}`
+}
+
+/**
+ * Shell snippet that creates the socket dir and claims it for this instance
+ * IF unclaimed (`[ -e marker ] || write`) — it never overwrites an existing
+ * marker, so a mismatched instance spawning into someone else's dir cannot
+ * steal ownership. Runs locally and verbatim inside the remote ssh command
+ * (the remote socket dir is chosen by the LOCAL env — see DTACH_SOCKET_DIR
+ * comment — so the remote dir's owner is this instance's WALNUT_HOME too).
+ */
+export function dtachOwnerClaimScript(): string {
+  const marker = dtachOwnerMarkerPath()
+  return `mkdir -p ${shellQuote(DTACH_SOCKET_DIR)}; [ -e ${shellQuote(marker)} ] || printf '%s\\n' ${shellQuote(WALNUT_HOME)} > ${shellQuote(marker)}`
 }
 
 /**
@@ -184,7 +220,9 @@ const REMOTE_DEFAULT_SHELL = '"${SHELL:-/bin/bash}"'
  */
 export function buildRemoteDtachCommand(dtachBin: string, sessionId: string, shell: string = REMOTE_DEFAULT_SHELL, cwd?: string): string {
   const sock = dtachSocketPath(sessionId)
-  const mkdir = `mkdir -p ${shellQuote(DTACH_SOCKET_DIR)}`
+  // mkdir + claim the socket dir for this instance's registry (never overwrites
+  // an existing claim) — the orphan sweep refuses to reap an unowned dir.
+  const mkdir = dtachOwnerClaimScript()
   // `-l` → login shell. `shell` is either our unquoted REMOTE_DEFAULT_SHELL
   // (must expand remotely) or an explicit safe token, so it is NOT re-quoted.
   const dtach = `exec ${shellQuote(dtachBin)} -A ${shellQuote(sock)} -z -E -r winch ${shell} -l`
@@ -275,8 +313,13 @@ export async function resolveSpawnForSession(
   const cwd = record.cwd ?? os.homedir()
   const dtachBin = await localDtachPath()
   // Ensure the dtach socket dir exists locally (the remote path mkdir -p's it in
-  // the ssh command; locally we create it here before spawning).
-  try { fs.mkdirSync(DTACH_SOCKET_DIR, { recursive: true }) } catch { /* best-effort */ }
+  // the ssh command; locally we create it here before spawning), and claim it
+  // for this instance's registry (never overwrites an existing claim) — the
+  // orphan sweep refuses to reap an unowned dir.
+  try {
+    fs.mkdirSync(DTACH_SOCKET_DIR, { recursive: true })
+    fs.writeFileSync(dtachOwnerMarkerPath(), `${WALNUT_HOME}\n`, { flag: 'wx' })
+  } catch { /* best-effort; EEXIST = already claimed */ }
   const args = buildDtachArgs(dtachBin, record.claudeSessionId, localShell())
   log.web.info('terminal spawn (local/dtach)', { sessionId: record.claudeSessionId, cwd })
   // Start dir comes from node-pty's cwd option (a new dtach session inherits
