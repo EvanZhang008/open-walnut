@@ -250,23 +250,49 @@ async function gitRoots(dir: string): Promise<string[]> {
   return found.reverse();
 }
 
+/** How many leading path segments `a` and `b` share. */
+function sharedPrefixSegments(a: string, b: string): number {
+  const as = a.split('/');
+  const bs = b.split('/');
+  let n = 0;
+  while (n < as.length && n < bs.length && as[n] === bs[n]) n++;
+  return n;
+}
+
 /**
- * Rank hits: shallowest path wins, then shortest string, then lexicographic.
+ * Rank hits so the one a person meant comes first.
  *
- * `exactTail` breaks the remaining ties in favour of a path whose ending matches
- * the reference CHARACTER FOR CHARACTER. On a case-sensitive filesystem a
- * directory can hold both `Thing.ts` and `thing.ts`; both are equally shallow and
- * equally long, so without this the winner came down to string order and a request
- * for one could return the other.
+ * The keys, in order, and why each is where it is:
+ *
+ *  1. EXACT TAIL — the path ends with the reference character for character. On a
+ *     case-sensitive filesystem one directory can hold both `Thing.ts` and
+ *     `thing.ts`; they are equally deep and equally long, so without this the
+ *     winner came down to string order and a request for one could return the other.
+ *
+ *  2. PROXIMITY TO CWD — how many leading segments the hit shares with the session's
+ *     working directory, most first. This is the key that makes the resolver
+ *     generic rather than tuned for one repo layout: any project that repeats a
+ *     filename across sibling units (two packages with `src/pages/home.tsx`, two
+ *     Rails apps with `models/user.rb`, two Go services with `handler.go`) produces
+ *     candidates identical in depth and in length, and the one inside the unit you
+ *     are working in is the one you meant. Ranking by depth alone picked
+ *     essentially at random — measured: cwd was the `web` package and the answer
+ *     came back from `api`.
+ *
+ *  3. SHALLOWEST, then SHORTEST, then lexicographic — stable tie-breakers for
+ *     candidates that are equally close, so the result never depends on the order
+ *     git or find happened to emit.
  */
-function rankHits(hits: string[], exactTail?: string): string[] {
+function rankHits(hits: string[], exactTail?: string, cwd?: string): string[] {
   const seen = new Set<string>();
   const unique = hits.filter((h) => h && !seen.has(h) && (seen.add(h), true));
   const isExact = (p: string) =>
     exactTail !== undefined && (p === exactTail || p.endsWith('/' + exactTail)) ? 0 : 1;
+  const near = (p: string) => (cwd ? -sharedPrefixSegments(p, cwd) : 0);
   return unique
     .sort((a, b) =>
       isExact(a) - isExact(b)
+      || near(a) - near(b)
       || a.split('/').length - b.split('/').length
       || a.length - b.length
       || (a < b ? -1 : a > b ? 1 : 0))
@@ -674,7 +700,7 @@ export async function resolvePathHostLocal(opts: ResolvePathOptions): Promise<Re
     if (outOfTime()) break;
     const byNeedle = await gitSearchScoped(root, needles, wantDir, cwd, outOfTime, fast);
     for (const needle of needles) {
-      const hits = rankHits(byNeedle.get(needle) ?? [], needle);
+      const hits = rankHits(byNeedle.get(needle) ?? [], needle, cwd);
       for (const hit of hits) {
         if (outOfTime()) break;
         if (await exists(hit)) return done(hit, 'git', hits);
@@ -691,10 +717,10 @@ export async function resolvePathHostLocal(opts: ResolvePathOptions): Promise<Re
       const raw = await findSearch(fsRoot, needle);
       // Exact-case suffix first: if both a correctly-cased and a differently-cased
       // file exist, the one the reference actually names must win.
-      for (const hit of rankHits(matchingSuffix(raw, needle), needle)) {
+      for (const hit of rankHits(matchingSuffix(raw, needle), needle, cwd)) {
         if (await exists(hit)) return done(hit, 'find', raw);
       }
-      for (const hit of rankHits(matchingSuffixCI(raw, needle), needle)) {
+      for (const hit of rankHits(matchingSuffixCI(raw, needle), needle, cwd)) {
         if (await exists(hit)) return done(hit, 'case-insensitive', raw);
       }
     }

@@ -241,3 +241,99 @@ describe('honesty — never a confident wrong answer', () => {
     expect(res.path).toBe(path.join(R, 'src/web'));
   });
 });
+
+describe('generic across project shapes, not tuned for one layout', () => {
+  /**
+   * The resolver must behave the same in a plain repo, a git-less folder, and a
+   * monorepo of plain directories. These build each shape from scratch rather than
+   * reusing the shared tree, because the shape itself is what is under test.
+   */
+  let box: string;
+
+  beforeAll(async () => {
+    box = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'walnut-shapes-')));
+  });
+  afterAll(async () => {
+    await fs.rm(box, { recursive: true, force: true });
+  });
+
+  const write = async (rel: string) => {
+    const abs = path.join(box, rel);
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.writeFile(abs, 'x\n');
+    return abs;
+  };
+  const initAt = (dir: string) => {
+    const env = {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@e',
+      GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@e',
+    };
+    execFileSync('git', ['init', '-q'], { cwd: dir, stdio: 'ignore', env });
+    execFileSync('git', ['add', '-A'], { cwd: dir, stdio: 'ignore', env });
+    execFileSync('git', ['commit', '-qm', 'i'], { cwd: dir, stdio: 'ignore', env });
+  };
+
+  it('resolves in a tree with NO git at all (find layer only)', async () => {
+    const target = await write('vault/projects/2026/notes/meeting.md');
+    const res = await resolvePathHostLocal({
+      ref: 'notes/meeting.md', cwd: path.join(box, 'vault'), budgetMs: 10_000,
+    });
+    expect(res).toMatchObject({ path: target, resolved: true, via: 'find' });
+  });
+
+  it('prefers the hit inside the package the session is working in', async () => {
+    // THE generic ranking bug: a monorepo of PLAIN DIRECTORIES (no submodules
+    // anywhere) repeats `src/pages/home.tsx` across packages. Both candidates are
+    // identical in depth and length, so ranking by depth alone returned whichever
+    // git listed first — measured: cwd was `web` and the answer came from `api`.
+    const wanted = await write('mono/packages/web/src/pages/home.tsx');
+    const decoy = await write('mono/packages/api/src/pages/home.tsx');
+    initAt(path.join(box, 'mono'));
+
+    const fromWeb = await resolvePathHostLocal({
+      ref: 'pages/home.tsx', cwd: path.join(box, 'mono/packages/web'), budgetMs: 10_000,
+    });
+    expect(fromWeb.path).toBe(wanted);
+
+    // Symmetry check: the same reference from the OTHER package must pick that one.
+    const fromApi = await resolvePathHostLocal({
+      ref: 'pages/home.tsx', cwd: path.join(box, 'mono/packages/api'), budgetMs: 10_000,
+    });
+    expect(fromApi.path).toBe(decoy);
+  });
+
+  it('skips dependency and build directories in any ecosystem', async () => {
+    const target = await write('node-proj/src/utils/format.ts');
+    await write('node-proj/node_modules/dep/src/utils/format.ts');
+    await write('node-proj/dist/src/utils/format.ts');
+    initAt(path.join(box, 'node-proj'));
+
+    const res = await resolvePathHostLocal({
+      ref: 'utils/format.ts', cwd: path.join(box, 'node-proj'), budgetMs: 10_000,
+    });
+    expect(res.path).toBe(target);
+  });
+
+  it('resolves a deeply conventional path (java/gradle nesting)', async () => {
+    const target = await write('java/app/src/main/java/com/acme/svc/Handler.java');
+    initAt(path.join(box, 'java'));
+
+    const res = await resolvePathHostLocal({
+      ref: 'acme/svc/Handler.java', cwd: path.join(box, 'java'), budgetMs: 10_000,
+    });
+    expect(res).toMatchObject({ path: target, resolved: true });
+  });
+
+  it('resolves from a cwd deep inside the repo, not just from its root', async () => {
+    const target = await write('deep/services/auth/internal/token/verify.go');
+    initAt(path.join(box, 'deep'));
+
+    const res = await resolvePathHostLocal({
+      ref: 'internal/token/verify.go',
+      cwd: path.join(box, 'deep/services/auth/internal/token'),
+      budgetMs: 10_000,
+    });
+    expect(res).toMatchObject({ path: target, resolved: true });
+  });
+});
