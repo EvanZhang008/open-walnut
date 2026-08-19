@@ -600,6 +600,127 @@ describe('applyTaskOp: scoped updates (touched)', () => {
   });
 });
 
+// ── depends_on: a validation refusal vs an INFRASTRUCTURE failure ───────────
+//
+// These two must not share a fate. The depends_on write is the one field
+// applyTaskOp routes back through updateTask (for existence + cycle checks), so
+// it is the one field whose failure can be misread. An unconditional catch there
+// relabelled a write-lock timeout / EIO as "validation rejected", dropped the
+// field, and then let the fall-through updateTaskRaw report `applied: true` —
+// which stood BOTH safety layers down at once:
+//
+//   1. PRIMARY: rememberOpId() ran, so a re-delivery of the same opId is
+//      refused as a replay for the whole 500-op window.
+//   2. REPLICA: task-queue's dispatch returns early WITHOUT enqueue() on a
+//      truthy outcome, so no copy was ever banked.
+//
+// Nobody held the user's dependency edit, and there was no error to act on. The
+// (a) test below pins the primary half (the op must NOT be consumed) and the
+// replica half (a primary 5xx must be queued, not dropped as a refusal); (b)
+// pins that a genuine validation refusal still consumes the op, because a retry
+// would be refused identically forever.
+describe('applyTaskOp: depends_on failure is classified, not swallowed', () => {
+  it('(a) an INFRA failure propagates — the op is NOT consumed and a retry lands the edge', async () => {
+    current = await load(false);
+    const { outbox, tm } = current;
+
+    const { task: a } = await tm.addTask({ title: 'infra A', source: 'local' });
+    const { task: b } = await tm.addTask({ title: 'infra B', source: 'local' });
+    const rowA = await tm.getTask(a.id);
+    const freshAt = new Date(Date.parse(rowA.updated_at) + 60_000).toISOString();
+    const op = {
+      opId: 'infra-1', type: 'update' as const, at: freshAt, touched: ['depends_on'],
+      task: { ...rowA, depends_on: [b.id], updated_at: freshAt } as never,
+    };
+
+    // Spy on the REAL task-manager singleton, never a vi.mock module factory:
+    // task-outbox reaches it through `await import('./task-manager.js')`, which
+    // a factory does not reliably rebind (see 751a8f3f — the miss is silent).
+    const spy = vi.spyOn(tm, 'updateTask').mockRejectedValueOnce(new Error('withWriteLock timeout'));
+    try {
+      await expect(outbox.applyTaskOp(op)).rejects.toThrow(/withWriteLock timeout/);
+    } finally {
+      spy.mockRestore();
+    }
+    // The edge did not land, and — the part that used to lose data — the op was
+    // never marked consumed, so the SAME op still applies on a retry.
+    expect((await tm.getTask(a.id)).depends_on).toBeUndefined();
+    expect(await outbox.applyTaskOp(op)).toEqual({ applied: true, reason: 'updated' });
+    expect((await tm.getTask(a.id)).depends_on).toEqual([b.id]);
+  });
+
+  it('(a2) REPLICA half: a primary 5xx is banked for retry, not dropped as a refusal', async () => {
+    current = await load(true);
+    const { queue } = current;
+
+    // What the relay actually reports when applyTaskOp throws: errorKind
+    // 'internal' → status 500. Classifying that as a domain refusal would drop
+    // the op and re-open the loss from the other end.
+    relayReply = {
+      ok: false,
+      failure: { kind: 'error', status: 500, code: 'internal', message: 'withWriteLock timeout' },
+    };
+    await queue.dispatchTaskOp({ type: 'update', task: snapshot({ id: 'infra-op-1' }) as never });
+    expect(await queue.queuedTaskOpCount()).toBe(1);
+
+    // …and it converges once the primary recovers.
+    relayReply = { ok: true, result: { applied: true, reason: 'updated' } };
+    expect(await queue.flushTaskQueue()).toBe(1);
+    expect(await queue.queuedTaskOpCount()).toBe(0);
+
+    // Contrast: a 4xx refusal is still dropped (a retry is refused identically).
+    relayReply = {
+      ok: false,
+      failure: { kind: 'error', status: 400, code: 'bad_request', message: 'op too large' },
+    };
+    await queue.dispatchTaskOp({ type: 'update', task: snapshot({ id: 'refused-1' }) as never });
+    expect(await queue.queuedTaskOpCount()).toBe(0);
+  });
+
+  it('(b) a VALIDATION refusal consumes the op — other fields apply, a replay is refused', async () => {
+    current = await load(false);
+    const { outbox, tm } = current;
+
+    // Real cycle: A depends on B, then the op asks for B → A.
+    const { task: a } = await tm.addTask({ title: 'cycle A', source: 'local' });
+    const { task: b } = await tm.addTask({ title: 'cycle B', source: 'local' });
+    await tm.updateTask(a.id, { set_depends_on: [b.id] });
+
+    const rowB = await tm.getTask(b.id);
+    const freshAt = new Date(Date.parse(rowB.updated_at) + 60_000).toISOString();
+    const op = {
+      opId: 'cyc-1', type: 'update' as const, at: freshAt, touched: ['depends_on', 'title'],
+      task: { ...rowB, title: 'renamed anyway', depends_on: [a.id], updated_at: freshAt } as never,
+    };
+
+    expect(await outbox.applyTaskOp(op)).toEqual({ applied: true, reason: 'updated' });
+    const after = await tm.getTask(b.id);
+    expect(after.depends_on).toBeUndefined();      // the cycle was refused
+    expect(after.title).toBe('renamed anyway');    // the rest of the op still landed
+    // Consumed: replaying it changes nothing (a retry would be refused too).
+    expect(await outbox.applyTaskOp(op)).toEqual({ applied: false, reason: 'replay' });
+    expect((await tm.getTask(b.id)).depends_on).toBeUndefined();
+  });
+
+  it('(b2) a non-existent dependency target is a validation refusal too, not an infra error', async () => {
+    current = await load(false);
+    const { outbox, tm } = current;
+
+    const { task } = await tm.addTask({ title: 'dangling dep', source: 'local' });
+    const row = await tm.getTask(task.id);
+    const freshAt = new Date(Date.parse(row.updated_at) + 60_000).toISOString();
+    // Must not throw: the target id will never exist, so retrying forever is
+    // pointless — consume the op and keep the rest of the edit.
+    expect(await outbox.applyTaskOp({
+      opId: 'dangle-1', type: 'update', at: freshAt, touched: ['depends_on', 'title'],
+      task: { ...row, title: 'renamed', depends_on: ['no-such-task-9999'], updated_at: freshAt } as never,
+    })).toEqual({ applied: true, reason: 'updated' });
+    const after = await tm.getTask(task.id);
+    expect(after.depends_on).toBeUndefined();
+    expect(after.title).toBe('renamed');
+  });
+});
+
 describe('applyTaskOp: order ops', () => {
   it('reorder permutes a project group; reorder-pins rewrites pin_order', async () => {
     current = await load(false);

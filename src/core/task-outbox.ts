@@ -381,14 +381,25 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
   }
 
   // depends_on: never write the raw column — route through updateTask's
-  // set_depends_on so existence + cycle validation run. A validation failure
-  // consumes the op (retry would refuse identically), other fields still apply.
+  // set_depends_on so existence + cycle validation run. Only a VALIDATION
+  // failure may be swallowed (a cycle or a target that doesn't exist would be
+  // refused identically on every retry, so consuming the op is the right call
+  // and the other fields still apply). Everything else — a 10s write-lock
+  // timeout, EIO, a plugin push blowing up — MUST propagate, exactly like the
+  // project branch above: applyTaskOp then never returns, so rememberOpId
+  // below doesn't run and the caller keeps its queue file for a retry. An
+  // unconditional catch here lost the edit twice over, because the fall-through
+  // updateTaskRaw still succeeded and reported `applied: true`: the primary
+  // burned the opId in its replay guard AND the replica skipped enqueue on the
+  // truthy result, so nobody held a copy of the user's dependency edit.
   if (patch.depends_on !== undefined) {
     const deps = Array.isArray(patch.depends_on) ? patch.depends_on : [];
     delete patch.depends_on;
     try {
       await tm.updateTask(existing.id, { set_depends_on: deps }, { source: 'api', asyncPush: true });
     } catch (err) {
+      if (!(err instanceof tm.CircularDependencyError)
+          && !(err instanceof tm.DependencyValidationError)) throw err;
       log.task.warn('task-op: depends_on rejected (validation) — dropping that field', {
         opId: op.opId, id: existing.id, err: String(err),
       });

@@ -155,7 +155,7 @@ async function writeLegacyOutboxFallback(op: TaskOp): Promise<void> {
   }
 }
 
-type SendOutcome = 'applied' | 'retry' | 'needs_upgrade' | 'rejected';
+type SendOutcome = 'applied' | 'retry' | 'needs_upgrade' | 'rejected' | 'primary_error';
 
 /** One `server.tasks.apply` RPC. Never throws. */
 async function sendOp(op: TaskOp): Promise<SendOutcome> {
@@ -174,6 +174,17 @@ async function sendOp(op: TaskOp): Promise<SendOutcome> {
       opId: op.opId, type: op.type, reason: reply.failure.message,
     });
     return 'retry';
+  }
+  // A 5xx is the primary FAILING, not refusing: applyTaskOp threw on a write
+  // lock timeout / EIO, and the relay reports that as errorKind 'internal'.
+  // Dropping it here would re-open the same silent loss the primary's own
+  // narrowed catch just closed — the whole point of letting it throw is that
+  // SOMEBODY still holds the op. Bank it and retry.
+  if (reply.failure.status >= 500) {
+    log.task.warn('task-queue: primary FAILED to apply op (not a refusal) — queueing for retry', {
+      opId: op.opId, type: op.type, status: reply.failure.status, err: reply.failure.message,
+    });
+    return 'primary_error';
   }
   // The primary RAN it and refused (bad shape, oversized, domain error). A
   // retry would produce the identical refusal forever — drop it loudly.
@@ -249,6 +260,10 @@ export async function flushTaskQueue(): Promise<number> {
       }
       const outcome = await sendOp(op);
       if (outcome === 'retry') break; // bridge down — the rest would fail too
+      // The primary's store is struggling (lock timeout / EIO). Keep the file
+      // and stop the sweep: the remaining ops would contend for the same lock
+      // and make it worse. The next sweep retries from here.
+      if (outcome === 'primary_error') break;
       if (outcome === 'needs_upgrade') {
         // Keep the queue copy for the post-upgrade convergence, but make sure
         // the legacy lane carries it now.

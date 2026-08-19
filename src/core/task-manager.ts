@@ -2358,16 +2358,21 @@ export async function queryTasksSlim(
 
 /**
  * Validate dependency IDs exist (full match, not prefix) and are not self-referencing.
- * Throws on validation failure.
+ * Throws DependencyValidationError on validation failure — the type matters:
+ * callers that consume an op on a REJECTED edit (the cloud outbox) must be able
+ * to tell "this edit can never be accepted" apart from a lock timeout or an I/O
+ * error, which they have to retry instead of eating.
  */
 function validateDependencyIds(store: TaskStore, taskId: string, depIds: string[]): void {
   const taskMap = new Map(store.tasks.map(t => [t.id, t]));
   for (const depId of depIds) {
     if (depId === taskId) {
-      throw new Error('A task cannot depend on itself.');
+      throw new DependencyValidationError('A task cannot depend on itself.', taskId, depId);
     }
     if (!taskMap.has(depId)) {
-      throw new Error(`Dependency target not found: "${depId}". Use full task IDs for depends_on.`);
+      throw new DependencyValidationError(
+        `Dependency target not found: "${depId}". Use full task IDs for depends_on.`, taskId, depId,
+      );
     }
   }
 }
@@ -3616,6 +3621,23 @@ export class ActiveChildrenError extends Error {
     this.name = 'ActiveChildrenError';
     this.childTitles = titles;
     this.activeCount = count;
+  }
+}
+
+/**
+ * Error thrown when a dependency mutation names an unusable target: the task
+ * itself, or an id no task carries. Distinct from a plain Error so a caller can
+ * treat it as "the edit is rejected, retrying changes nothing" without also
+ * swallowing lock timeouts and disk failures under the same catch.
+ */
+export class DependencyValidationError extends Error {
+  public readonly taskId: string;
+  public readonly depId: string;
+  constructor(message: string, taskId: string, depId: string) {
+    super(message);
+    this.name = 'DependencyValidationError';
+    this.taskId = taskId;
+    this.depId = depId;
   }
 }
 
