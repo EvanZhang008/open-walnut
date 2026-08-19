@@ -227,3 +227,115 @@ describe('GET /api/files/resolve-path', () => {
     expect(meta.status).toBe(400);
   });
 });
+
+describe('GET /api/files/resolve-path — decorated references', () => {
+  it('accepts a reference with a line number and reports it back', async () => {
+    const target = await writeFile('repo/src/web/routes/files.ts');
+    initRepo(path.join(tmp, 'repo'));
+
+    const res = await request(createApp()).get('/api/files/resolve-path').query({
+      rel: 'routes/files.ts:913', cwd: path.join(tmp, 'repo'),
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ path: target, resolved: true, line: 913 });
+  });
+
+  it('accepts a backticked reference', async () => {
+    const target = await writeFile('repo/src/a.ts');
+    initRepo(path.join(tmp, 'repo'));
+    const res = await request(createApp()).get('/api/files/resolve-path').query({
+      rel: '`src/a.ts`', cwd: path.join(tmp, 'repo'),
+    });
+    expect(res.body).toMatchObject({ path: target, resolved: true });
+  });
+
+  it('accepts a GitHub-style anchor and a range', async () => {
+    const target = await writeFile('repo/src/a.ts');
+    initRepo(path.join(tmp, 'repo'));
+    const app = createApp();
+
+    const anchor = await request(app).get('/api/files/resolve-path').query({
+      rel: 'src/a.ts#L42', cwd: path.join(tmp, 'repo'),
+    });
+    expect(anchor.body).toMatchObject({ path: target, resolved: true, line: 42 });
+
+    const range = await request(app).get('/api/files/resolve-path').query({
+      rel: 'src/a.ts:10-20', cwd: path.join(tmp, 'repo'),
+    });
+    expect(range.body).toMatchObject({ path: target, resolved: true, line: 10, endLine: 20 });
+  });
+
+  it('accepts a name containing dots that is not traversal', async () => {
+    const target = await writeFile('repo/pkg/mod..old/thing.ts');
+    initRepo(path.join(tmp, 'repo'));
+    const res = await request(createApp()).get('/api/files/resolve-path').query({
+      rel: 'mod..old/thing.ts', cwd: path.join(tmp, 'repo'),
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ path: target, resolved: true });
+  });
+
+  it('still rejects a real traversal SEGMENT', async () => {
+    for (const rel of ['../escape.ts', 'a/../../etc/passwd', 'a/b/..']) {
+      const res = await request(createApp()).get('/api/files/resolve-path').query({
+        rel, cwd: tmp,
+      });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it('does NOT resolve a path whose directory context is wrong', async () => {
+    // Honesty pin at the HTTP edge: matching a bare basename would open the wrong
+    // file while reporting success.
+    await writeFile('repo/other/lonely.ts');
+    initRepo(path.join(tmp, 'repo'));
+    const res = await request(createApp()).get('/api/files/resolve-path').query({
+      rel: 'no/such/lonely.ts', cwd: path.join(tmp, 'repo'),
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.resolved).toBe(false);
+    expect(res.body.path).not.toBe(path.join(tmp, 'repo/other/lonely.ts'));
+  });
+});
+
+describe('GET /api/files/list — decorated + awkward paths', () => {
+  it('heals a path that carried a line number', async () => {
+    await writeFile('repo/src/web/routes/files.ts');
+    initRepo(path.join(tmp, 'repo'));
+    const res = await request(createApp()).get('/api/files/list').query({
+      path: path.join(tmp, 'repo/routes/files.ts:913'),
+      cwd: path.join(tmp, 'repo'),
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.path).toBe(path.join(tmp, 'repo/src/web/routes'));
+    expect(res.body.selectedFile).toBe('files.ts');
+  });
+
+  it('heals a path with spaces in its segments', async () => {
+    await writeFile('repo/docs/My Notes/H1 2026 Overview.md');
+    initRepo(path.join(tmp, 'repo'));
+    // Two segments of context, so the honesty floor is satisfied and the spaced
+    // directory is still found.
+    const res = await request(createApp()).get('/api/files/list').query({
+      path: path.join(tmp, 'repo/My Notes/H1 2026 Overview.md'),
+      cwd: path.join(tmp, 'repo'),
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.path).toBe(path.join(tmp, 'repo/docs/My Notes'));
+    expect(res.body.selectedFile).toBe('H1 2026 Overview.md');
+  });
+
+  it('will NOT guess a single-segment directory name (honesty floor)', async () => {
+    // `My Notes` alone carries no context, and a directory reference with no
+    // parent could match anywhere — reporting a guess as found is the failure
+    // mode this floor exists to prevent.
+    await writeFile('repo/docs/My Notes/H1 2026 Overview.md');
+    initRepo(path.join(tmp, 'repo'));
+    const res = await request(createApp()).get('/api/files/list').query({
+      path: path.join(tmp, 'repo/My Notes'),
+      cwd: path.join(tmp, 'repo'),
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.requestedPath).toBe(path.join(tmp, 'repo/My Notes'));
+  });
+});

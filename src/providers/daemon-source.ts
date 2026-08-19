@@ -4895,6 +4895,8 @@ async function cmdFsResolvePath(ws, id, cmd) {
       claudeHome: path.join(HOME_DIR, '.claude'),
       homeDir: HOME_DIR,
       budgetMs: typeof cmd.budgetMs === 'number' ? cmd.budgetMs : undefined,
+      // Skip the exhaustive submodule scope when the caller has a user waiting.
+      fast: cmd.fast === true,
     });
     sendOk(ws, id, result);
   } catch (err) {

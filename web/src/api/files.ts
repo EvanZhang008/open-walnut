@@ -128,6 +128,9 @@ export interface DirListResponse {
   requestedPath?: string;
   /** Which resolver layer produced `path` ('transcript' | 'git' | 'find' | …). */
   resolvedVia?: string;
+  /** false when a fast search skipped its slowest scope, so `requestedPath` means
+   *  "not found in the likely places" rather than "definitely absent". */
+  exhaustive?: boolean;
 }
 
 export interface ResolvePathResponse {
@@ -139,6 +142,11 @@ export interface ResolvePathResponse {
   degraded?: boolean;
   /** Other plausible matches, shallowest first. */
   alternatives?: string[];
+  /** Position the reference itself carried (`a.ts:42`, `a.ts#L10-L20`). Present
+   *  even when the file wasn't found — the reference still asked for it. */
+  line?: number;
+  column?: number;
+  endLine?: number;
 }
 
 /**

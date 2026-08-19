@@ -76,7 +76,11 @@ export function useEntityClickHandler(
       const cwd = fileAnchor.dataset.cwd;
       if (rel && cwd) {
         resolvePath(rel, cwd, fileHost, fileSessionId)
-          .then((r) => onFileOpen(r.path, line))
+          // The anchor's own line wins when present (the markdown layer already
+          // parsed it); otherwise take whatever position the reference carried,
+          // which the resolver reports even for shapes markdown doesn't linkify
+          // (`#L42`, `(42,7)`, `, line 42`).
+          .then((r) => onFileOpen(r.path, line ?? r.line))
           .catch(() => onFileOpen(`${cwd.replace(/\/$/, '')}/${rel.replace(/^\.\//, '')}`, line));
       }
     }

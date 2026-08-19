@@ -34,7 +34,10 @@ let base = ''
 beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
-  base = await fs.mkdtemp(path.join(os.tmpdir(), 'walnut-files-v1-'))
+  // realpath: on macOS os.tmpdir() is a symlink (/var → /private/var), and the
+  // resolver deliberately returns REAL paths so one file can't end up with two
+  // different "absolute" paths depending on how the session was started.
+  base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'walnut-files-v1-')))
   await fs.mkdir(path.join(base, 'sub'))
   await fs.writeFile(path.join(base, 'readme.md'), '# hello from wave 2\n')
   await fs.writeFile(path.join(base, 'sub', 'nested.txt'), 'nested content\n')

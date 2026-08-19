@@ -15,15 +15,15 @@
  *                  rather than what it typed. Also the only layer that can fix a
  *                  WRONG absolute path (a stale/hallucinated prefix).
  *  L2 walk-up      cwd/rel, then each ancestor      (the old resolver's only trick)
- *  L3 git          git ls-files --recurse-submodules with a wildcard-prefixed
- *                  pathspec, run from the OUTERMOST ancestor repo. Any depth,
- *                  submodules included, .gitignore honored for free, and it is a
- *                  single index lookup (milliseconds) rather than a directory walk.
+ *  L3 git          the git index, searched CHEAPEST-SCOPE-FIRST (see gitSearch).
+ *                  Any depth, submodules included, .gitignore honored for free,
+ *                  and an index lookup rather than a directory walk.
  *  L4 find         pruned `find` for untracked files and non-git trees. Matches
- *                  DIRECTORIES too — extensionless refs are usually folders.
+ *                  DIRECTORIES too — extensionless refs are often folders.
  *  L5 suffix retry the reference has extra leading segments that don't exist here
  *                  (`repo/src/x.ts` quoted from a different root). Drop leading
- *                  segments one at a time and re-run L3/L4 on the tail.
+ *                  segments and re-run L3/L4 on the tail — but never so far that
+ *                  the needle stops being specific (see MIN_NEEDLE_SEGMENTS).
  *  L6 ancestor     nothing matched: hand back the deepest ancestor that DOES exist,
  *                  flagged `degraded`, so the caller can show a usable directory
  *                  plus "couldn't find X" instead of a raw errno.
@@ -32,8 +32,8 @@
  * the daemon for remote ones — per the repo's host-local design principle), so the
  * whole search is ONE round trip instead of ~2 RPCs per ancestor level.
  *
- * Self-contained on purpose (node builtins + session-changes-core's JSONL locator):
- * it is bundled as a sidecar (`path-resolve-core.cjs`) for source-deployed daemons.
+ * Self-contained on purpose (node builtins + two local modules): it is bundled as a
+ * sidecar (`path-resolve-core.cjs`) for source-deployed daemons.
  */
 
 import path from 'node:path';
@@ -41,6 +41,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { resolveJsonlPathHostLocal } from './session-changes-core.js';
+import { parsePathRef, isUnsafePathRef } from './path-ref-parse.js';
 
 /** How the answer was found. Reported so logs and the UI can explain themselves. */
 export type ResolveVia =
@@ -49,11 +50,13 @@ export type ResolveVia =
   | 'walk-up'
   | 'git'
   | 'find'
+  | 'case-insensitive'
   | 'ancestor'
   | 'none';
 
 export interface ResolvePathOptions {
-  /** What the model wrote. Absolute or relative, file or directory. */
+  /** What the model wrote. Absolute or relative, file or directory, and possibly
+   *  decorated (`\`src/a.ts:42\``) — decoration is parsed off, not searched for. */
   ref: string;
   /** Session cwd, when known — the anchor for every relative search. */
   cwd?: string;
@@ -65,6 +68,20 @@ export interface ResolvePathOptions {
   homeDir?: string;
   /** Total wall-clock budget for the whole search. */
   budgetMs?: number;
+  /**
+   * Skip the one scope whose cost scales with the repo's submodule count.
+   *
+   * Every layer except that scope answers in tens of milliseconds; the exhaustive
+   * submodule traversal is what makes a genuine MISS take ~1.2s on a large
+   * monorepo (measured: 2,606 submodules). A caller that is blocking a UI can set
+   * this to get the fast answer, then re-ask without it if the result came back
+   * `resolved: false` and it still cares.
+   *
+   * A `false` result from a fast pass therefore means "not found in the likely
+   * places", not "does not exist" — which is why `exhaustive: false` is reported
+   * back on the result, so a caller can tell the two apart.
+   */
+  fast?: boolean;
 }
 
 export interface ResolvePathResult {
@@ -80,6 +97,19 @@ export interface ResolvePathResult {
   ref?: string;
   /** Other plausible hits, shallowest first (excludes `path`). Capped. */
   alternatives?: string[];
+  /** Line the reference asked for (`file.ts:42`, `#L42`), when it carried one. */
+  line?: number;
+  /** Column, when the reference carried one (`file.ts:42:7`). */
+  column?: number;
+  /** End line for a range reference (`:10-20`). */
+  endLine?: number;
+  /**
+   * false when a `fast` pass skipped the exhaustive submodule scope. On a
+   * `resolved: false` result this is the difference between "not found in the
+   * likely places" and "definitely not here" — a caller showing a
+   * "couldn't find X" message should only claim the latter when this is true.
+   */
+  exhaustive?: boolean;
 }
 
 /** Directories never worth walking into during L4. */
@@ -91,33 +121,50 @@ const PRUNE_DIRS = [
 
 /** How many ancestors of cwd L2 tries, and how far up we look for a repo root. */
 const MAX_UPWARD_LEVELS = 8;
-/** `find` depth for L4. Deeper than the old 4 — monorepo paths are long. */
+/** `find` depth for L4. Deeper than a typical repo nests. */
 const FIND_MAX_DEPTH = 6;
 /** Cap on hits carried between layers so a bad needle can't blow up memory. */
 const MAX_CANDIDATES = 50;
-/** Longest tail of a reference we search for. See suffixNeedles: an unbounded
- *  suffix list burns the time budget on tails that cannot match. */
+/**
+ * Longest tail of a reference we search for. An absolute reference on a deep
+ * monorepo path has ~15 suffixes, each costing a search per scope, so an unbounded
+ * list spends the whole budget on long tails that cannot match and gives up before
+ * reaching the short ones that do.
+ */
 const MAX_NEEDLE_SEGMENTS = 5;
+/**
+ * Shortest tail we will accept as a MATCH — the guard against a confident wrong
+ * answer, and the most important constant in this file.
+ *
+ * Retrying with fewer leading segments is what lets `repo/src/x.ts` find
+ * `src/x.ts`. Taken to its limit it also lets `no/such/thing.ts` "find" an
+ * unrelated `other/thing.ts`, and report `resolved: true` — a lie that is worse
+ * than an error message, because the user opens the wrong file believing it is the
+ * right one. So a multi-segment reference must keep at least a directory of
+ * context. A reference that was ALWAYS just a bare filename (`Makefile`) is
+ * exempt: there is no context to preserve, and matching the basename is exactly
+ * what was asked for.
+ */
+const MIN_NEEDLE_SEGMENTS = 2;
 /** Bytes of transcript tail scanned by L1. Recent turns are the relevant ones. */
 const TRANSCRIPT_TAIL_BYTES = 8 * 1024 * 1024;
 /** Window the tail is read+scanned in. Bounded so neither the read nor the regex
  *  pass ever occupies the event loop for long (this resolver also runs INSIDE the
  *  walnut server for the local host, where one event loop serves every route). */
 const TRANSCRIPT_WINDOW_BYTES = 1024 * 1024;
-/** Cap on distinct absolute paths kept from the transcript. Well above the number
- *  of files any single conversation touches; stops a pathological log from growing
- *  the set without bound. */
+/** Cap on distinct absolute paths kept from the transcript. */
 const TRANSCRIPT_MAX_PATHS = 4000;
 /** Default total budget. Every layer re-checks it, so a slow host degrades. */
 const DEFAULT_BUDGET_MS = 6_000;
 /** Per-subprocess ceiling (git / find). Well under the total budget. */
 const SUBPROCESS_TIMEOUT_MS = 4_000;
-
-/** Reject input that could escape the sandbox or reach a shell. Mirrors the HTTP
- *  edges' guards, repeated here because the daemon accepts this over RPC too. */
-function isUnsafeRef(ref: string): boolean {
-  return ref.length === 0 || ref.length > 4096 || ref.includes('..') || /[;&|`$(){}!<>\n\r]/.test(ref);
-}
+/** Concurrent `git ls-files` processes when fanning out over submodules. */
+const SUBMODULE_FANOUT = 24;
+/**
+ * Submodules searched in the fan-out scopes. Above this the fan-out costs more
+ * than `--recurse-submodules` would, so the last-resort scope is used instead.
+ */
+const MAX_FANOUT_SUBMODULES = 400;
 
 /** Expand a leading `~` and strip trailing slashes. */
 function normalize(p: string, homeDir: string): string {
@@ -136,16 +183,49 @@ async function exists(p: string): Promise<boolean> {
   }
 }
 
+/**
+ * Resolve symlinks in a directory path, falling back to the input.
+ *
+ * Load-bearing for correctness, not tidiness: a session's cwd is often a symlink
+ * (`~/work` → `/Volumes/…`, or a checkout linked into place). Searching from the
+ * link and returning link-relative paths produced answers that were correct but
+ * unstable — the same file got two different "absolute" paths depending on how the
+ * session was started, which broke the Files panel's per-path memory. Resolve once
+ * here so every layer speaks about the same real path.
+ */
+async function realDir(p: string): Promise<string> {
+  try {
+    return await fsp.realpath(p);
+  } catch {
+    return p;
+  }
+}
+
 /** Run a subprocess, never throwing. Returns stdout ('' on any failure). */
 function run(cmd: string, args: string[], cwd?: string): Promise<string> {
   return new Promise((resolve) => {
     const child = execFile(
       cmd, args,
-      { cwd, timeout: SUBPROCESS_TIMEOUT_MS, maxBuffer: 4 << 20, encoding: 'utf-8' },
+      { cwd, timeout: SUBPROCESS_TIMEOUT_MS, maxBuffer: 8 << 20, encoding: 'utf-8' },
       (_err, stdout) => resolve(stdout || ''),
     );
     child.on('error', () => resolve(''));
   });
+}
+
+/** Map over `items` with at most `limit` in flight. Preserves input order. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i]!);
+    }
+  });
+  await Promise.all(workers);
+  return out;
 }
 
 /** Ordered bases to try: cwd, then each ancestor, stopping at the filesystem root. */
@@ -161,14 +241,7 @@ function ancestors(dir: string): string[] {
   return out;
 }
 
-/**
- * Every git repo root at or above `dir`, OUTERMOST first.
- *
- * Outermost-first matters: `git ls-files --recurse-submodules` searches DOWN into
- * submodules, so starting at the superproject covers the submodule too, while
- * starting inside the submodule can never see a sibling one. A monorepo of
- * submodules is exactly the case that used to fail.
- */
+/** Every git repo root at or above `dir`, OUTERMOST first. */
 async function gitRoots(dir: string): Promise<string[]> {
   const found: string[] = [];
   for (const base of ancestors(dir)) {
@@ -177,12 +250,26 @@ async function gitRoots(dir: string): Promise<string[]> {
   return found.reverse();
 }
 
-/** Rank hits: shallowest path wins, then shortest string. Deterministic. */
-function rankHits(hits: string[]): string[] {
+/**
+ * Rank hits: shallowest path wins, then shortest string, then lexicographic.
+ *
+ * `exactTail` breaks the remaining ties in favour of a path whose ending matches
+ * the reference CHARACTER FOR CHARACTER. On a case-sensitive filesystem a
+ * directory can hold both `Thing.ts` and `thing.ts`; both are equally shallow and
+ * equally long, so without this the winner came down to string order and a request
+ * for one could return the other.
+ */
+function rankHits(hits: string[], exactTail?: string): string[] {
   const seen = new Set<string>();
   const unique = hits.filter((h) => h && !seen.has(h) && (seen.add(h), true));
+  const isExact = (p: string) =>
+    exactTail !== undefined && (p === exactTail || p.endsWith('/' + exactTail)) ? 0 : 1;
   return unique
-    .sort((a, b) => a.split('/').length - b.split('/').length || a.length - b.length)
+    .sort((a, b) =>
+      isExact(a) - isExact(b)
+      || a.split('/').length - b.split('/').length
+      || a.length - b.length
+      || (a < b ? -1 : a > b ? 1 : 0))
     .slice(0, MAX_CANDIDATES);
 }
 
@@ -192,21 +279,32 @@ function matchingSuffix(paths: string[], needle: string): string[] {
   return paths.filter((p) => p === needle || p.endsWith(suffix));
 }
 
+/** Case-insensitive variant of the above, for the fallback pass. */
+function matchingSuffixCI(paths: string[], needle: string): string[] {
+  const lower = needle.toLowerCase();
+  const suffix = '/' + lower;
+  return paths.filter((p) => {
+    const pl = p.toLowerCase();
+    return pl === lower || pl.endsWith(suffix);
+  });
+}
+
 /**
- * Progressively shorter tails of a reference: `a/b/c` → [`a/b/c`, `b/c`, `c`].
+ * Progressively shorter tails of a reference: `a/b/c` → [`a/b/c`, `b/c`].
  *
- * Only the LAST `MAX_NEEDLE_SEGMENTS` segments are considered. That bound is
- * load-bearing, not a nicety: an absolute reference on a deep monorepo path has
- * ~15 suffixes, each costing a search per repo root, so an unbounded list spent
- * the entire time budget on long tails that can never match and gave up before
- * reaching the short ones that do. Four segments already identify a file far more
- * specifically than any real repo needs.
+ * Bounded at BOTH ends. The upper bound (MAX_NEEDLE_SEGMENTS) keeps a deep
+ * absolute path from spending the budget on tails that cannot match. The lower
+ * bound (MIN_NEEDLE_SEGMENTS) is what stops a confident wrong answer: without it,
+ * `no/such/thing.ts` degrades to the bare needle `thing.ts` and cheerfully returns
+ * an unrelated file. A reference that is a bare filename to begin with has no
+ * context to keep, so it is allowed as-is.
  */
 function suffixNeedles(rel: string): string[] {
   const all = rel.split('/').filter(Boolean);
   const segs = all.slice(-MAX_NEEDLE_SEGMENTS);
+  const floor = Math.min(MIN_NEEDLE_SEGMENTS, all.length);
   const out: string[] = [];
-  for (let i = 0; i < segs.length; i++) out.push(segs.slice(i).join('/'));
+  for (let i = 0; i <= segs.length - floor; i++) out.push(segs.slice(i).join('/'));
   return out;
 }
 
@@ -249,7 +347,6 @@ async function transcriptPaths(
     const seen = new Set<string>();
     const out: string[] = [];
     const buf = Buffer.alloc(TRANSCRIPT_WINDOW_BYTES);
-    // Walk windows from the END of the file backwards.
     let winEnd = st.size;
     while (winEnd > tailStart && out.length < TRANSCRIPT_MAX_PATHS) {
       if (Date.now() >= deadline) break;
@@ -281,53 +378,162 @@ async function transcriptPaths(
   }
 }
 
-// ── L3: the git index ──
+// ── L3: the git index, cheapest scope first ──
 
 /**
- * Search a repo's index (and its submodules') for every needle at once.
+ * Submodule paths declared in a repo's `.gitmodules`, repo-relative.
  *
- * ALL needles go into ONE `ls-files` call: git takes many pathspecs, and one
- * process handling six patterns costs the same as one handling one, while a call
- * per needle per repo root is what made this slow enough to hit the time budget
- * on a remote monorepo. Results are grouped BY NEEDLE so the caller can still
- * prefer the most specific match.
- *
- * Directory refs are matched by finding the FILES under them and cutting each hit
- * back to the directory: `ls-files` lists files only, but a directory containing
- * tracked files is exactly a directory that exists.
+ * Read as TEXT rather than via `git submodule status`: the file is a few hundred
+ * KB even for thousands of entries and parsing it costs ~2ms, while the git command
+ * stats every submodule and costs seconds at that scale.
  */
-async function gitSearch(
-  root: string,
-  needles: string[],
-  wantDir: boolean,
-): Promise<Map<string, string[]>> {
-  const pathspec: string[] = [];
-  for (const n of needles) {
-    if (wantDir) pathspec.push(`*/${n}/*`, `${n}/*`);
-    else pathspec.push(`*/${n}`, n);
+async function declaredSubmodules(root: string): Promise<string[]> {
+  let text: string;
+  try {
+    text = await fsp.readFile(path.join(root, '.gitmodules'), 'utf-8');
+  } catch {
+    return [];
   }
-  const out = await run('git', [
-    'ls-files', '--recurse-submodules', '-z', '--', ...pathspec,
-  ], root);
-  const rels = out.split('\0').filter(Boolean);
-  const byNeedle = new Map<string, string[]>();
-  if (rels.length === 0) return byNeedle;
+  const out: string[] = [];
+  for (const line of text.split('\n')) {
+    const m = line.match(/^\s*path\s*=\s*(.+?)\s*$/);
+    if (m?.[1]) out.push(m[1]);
+  }
+  return out;
+}
 
+/** Pathspecs that match `needle` as a file, or as a directory's contents. */
+function pathspecsFor(needles: string[], wantDir: boolean): string[] {
+  const out: string[] = [];
+  for (const n of needles) {
+    if (wantDir) out.push(`*/${n}/*`, `${n}/*`);
+    // A needle with no extension may still be a FILE (Makefile, LICENSE), so the
+    // file patterns are always included — an extra pathspec is free, a missed file
+    // is a bug.
+    out.push(`*/${n}`, n);
+  }
+  return out;
+}
+
+/** Group repo-relative hits by which needle they satisfy, as absolute paths. */
+function groupByNeedle(
+  rels: string[],
+  needles: string[],
+  base: string,
+  wantDir: boolean,
+): Map<string, string[]> {
+  const byNeedle = new Map<string, string[]>();
   for (const needle of needles) {
     const hits: string[] = [];
-    if (!wantDir) {
-      for (const r of matchingSuffix(rels, needle)) hits.push(path.join(root, r));
-    } else {
+    // Direct file matches always count, even for an extensionless needle.
+    for (const r of matchingSuffix(rels, needle)) hits.push(path.join(base, r));
+    if (wantDir) {
+      // Cut each file path back to the directory whose tail is the needle.
       const suffix = '/' + needle + '/';
       for (const rel of rels) {
         const at = ('/' + rel).indexOf(suffix);
         if (at === -1) continue;
-        hits.push(path.join(root, ('/' + rel).slice(1, at + suffix.length - 1)));
+        hits.push(path.join(base, ('/' + rel).slice(1, at + suffix.length - 1)));
       }
     }
     if (hits.length) byNeedle.set(needle, hits);
   }
   return byNeedle;
+}
+
+/**
+ * Search a repo's index for every needle, CHEAPEST SCOPE FIRST.
+ *
+ * `git ls-files --recurse-submodules` is the complete answer and the obvious one,
+ * but its cost is proportional to the submodule COUNT, not to how likely each one
+ * is to hold the file. Measured on a real monorepo of 27,827 tracked files and
+ * 2,606 initialized submodules: the recursive call takes **1.24s**, while the same
+ * pathspec against the superproject index alone takes **45ms** (27x), and a
+ * parallel fan-out over just the submodules under cwd takes **20ms** (60x).
+ *
+ * The ordering exploits the fact that a path the model mentioned is almost always
+ * in the subtree the session is working in:
+ *
+ *   scope 1  the superproject index         ~45ms   (no submodule traversal at all)
+ *   scope 2  submodules UNDER cwd           ~20ms   (parallel, no recursion each)
+ *   scope 3  submodules under cwd's parent  ~95ms   (the sibling-component case)
+ *   scope 4  --recurse-submodules          ~1240ms  (last resort, complete)
+ *
+ * Each scope returns as soon as it has a hit, so the common case pays 20-45ms and
+ * the complete-but-slow scope is reached only when the file genuinely lives
+ * somewhere unrelated to the session. A repo with no submodules has exactly one
+ * scope and is unaffected.
+ */
+async function gitSearchScoped(
+  root: string,
+  needles: string[],
+  wantDir: boolean,
+  cwd: string | undefined,
+  outOfTime: () => boolean,
+  fast: boolean,
+): Promise<Map<string, string[]>> {
+  const specs = pathspecsFor(needles, wantDir);
+  const empty = new Map<string, string[]>();
+
+  // ── scope 1: the superproject index, no submodule traversal ──
+  const own = await run('git', ['ls-files', '-z', '--', ...specs], root);
+  const ownRels = own.split('\0').filter(Boolean);
+  if (ownRels.length) {
+    const g = groupByNeedle(ownRels, needles, root, wantDir);
+    if (g.size) return g;
+  }
+  if (outOfTime()) return empty;
+
+  const subs = await declaredSubmodules(root);
+  if (subs.length === 0) return empty; // no submodules: scope 1 was complete
+
+  /** Fan out over a set of submodules, each a plain (non-recursive) ls-files. */
+  const fanOut = async (paths: string[]): Promise<Map<string, string[]>> => {
+    if (paths.length === 0 || paths.length > MAX_FANOUT_SUBMODULES) return empty;
+    const results = await mapLimit(paths, SUBMODULE_FANOUT, async (rel) => {
+      if (outOfTime()) return [] as string[];
+      const abs = path.join(root, rel);
+      const out = await run('git', ['ls-files', '-z', '--', ...specs], abs);
+      return out.split('\0').filter(Boolean).map((r) => path.join(rel, r));
+    });
+    const flat = results.flat();
+    return flat.length ? groupByNeedle(flat, needles, root, wantDir) : empty;
+  };
+
+  // ── scopes 2 and 3: submodules under cwd, then under cwd's parent ──
+  // Prefix-filtered against the DECLARED paths, which is pure string work.
+  if (cwd && cwd.startsWith(root)) {
+    const relCwd = cwd.slice(root.length).replace(/^\/+/, '');
+    const scopes = relCwd ? [relCwd, path.dirname(relCwd)] : [];
+    for (const scope of scopes) {
+      if (outOfTime()) return empty;
+      if (!scope || scope === '.') continue;
+      const inScope = subs.filter((s) => s === scope || s.startsWith(scope + '/'));
+      const g = await fanOut(inScope);
+      if (g.size) return g;
+    }
+  }
+  if (outOfTime()) return empty;
+
+  // ── scope 4: everything. Complete, and the only scope whose cost scales with
+  // the submodule count — which is why it is last.
+  //
+  // There is deliberately NO cheap pre-check here. The obvious one (ask the
+  // superproject index whether the basename exists anywhere, and skip this scope
+  // if not) was measured and does not work: a superproject index contains
+  // submodule GITLINKS, not submodule CONTENTS, so it answers "no" for every file
+  // that lives in a submodule — which is exactly the case this scope exists to
+  // catch. Measured on the same repo: 38ms for the superproject question, 1030ms
+  // for the real one, and the cheap answer was wrong.
+  //
+  // So confirming a reference is genuinely absent costs one full traversal. That
+  // is the honest price of a definite "no", and it is only paid on the miss path;
+  // every hit returns from an earlier scope in tens of milliseconds. A caller that
+  // is blocking a UI opts out with `fast` and re-asks later if it still cares.
+  if (fast) return empty;
+  const all = await run('git', ['ls-files', '--recurse-submodules', '-z', '--', ...specs], root);
+  const allRels = all.split('\0').filter(Boolean);
+  return allRels.length ? groupByNeedle(allRels, needles, root, wantDir) : empty;
 }
 
 // ── L4: a pruned filesystem walk ──
@@ -346,9 +552,9 @@ async function findSearch(root: string, needle: string): Promise<string[]> {
   const out = await run('find', [
     root, '-maxdepth', String(FIND_MAX_DEPTH),
     '(', ...pruneArgs.slice(0, -1), ')',
-    '-o', '-name', baseName, '-print',
+    '-o', '-iname', baseName, '-print',
   ]);
-  return matchingSuffix(out.split('\n').filter(Boolean), needle);
+  return out.split('\n').filter(Boolean);
 }
 
 // ── L6: give back something usable ──
@@ -372,24 +578,41 @@ async function nearestExistingAncestor(p: string): Promise<string | null> {
  * unresolvable path: it degrades to the nearest existing ancestor so a click
  * always lands somewhere, with `resolved:false` telling the caller to say so.
  *
- * Throws only on input that must not be searched at all (traversal / metachars).
+ * Throws only on input that must not be searched at all (a `..` segment, shell
+ * metacharacters, NUL, empty, or absurdly long).
  */
 export async function resolvePathHostLocal(opts: ResolvePathOptions): Promise<ResolvePathResult> {
   const homeDir = opts.homeDir ?? os.homedir();
   const claudeHome = opts.claudeHome ?? path.join(homeDir, '.claude');
   const deadline = Date.now() + (opts.budgetMs ?? DEFAULT_BUDGET_MS);
   const outOfTime = () => Date.now() >= deadline;
+  const fast = opts.fast === true;
+  // Stamped on every result: a `fast` pass never reaches the exhaustive scope, so
+  // its negatives are weaker than a full pass's.
+  const exh = fast ? { exhaustive: false } : { exhaustive: true };
 
   const rawRef = typeof opts.ref === 'string' ? opts.ref : '';
-  if (isUnsafeRef(rawRef)) throw new Error('Invalid path');
-  const ref = normalize(rawRef, homeDir);
-  const cwd = opts.cwd && !isUnsafeRef(opts.cwd) ? normalize(opts.cwd, homeDir) : undefined;
+  // Parse decoration off BEFORE the safety check: a reference wrapped in backticks
+  // or carrying `:42` is ordinary input, and rejecting it as unsafe (or searching
+  // for the decorated string) was a whole family of misses.
+  const parsed = parsePathRef(rawRef);
+  if (isUnsafePathRef(parsed.path)) throw new Error('Invalid path');
+  const pos = {
+    ...(parsed.line !== undefined ? { line: parsed.line } : {}),
+    ...(parsed.column !== undefined ? { column: parsed.column } : {}),
+    ...(parsed.endLine !== undefined ? { endLine: parsed.endLine } : {}),
+  };
+
+  const ref = normalize(parsed.path, homeDir);
+  const rawCwd = opts.cwd && !isUnsafePathRef(opts.cwd) ? normalize(opts.cwd, homeDir) : undefined;
+  // Resolve the cwd's symlinks ONCE: every layer then produces stable real paths.
+  const cwd = rawCwd ? await realDir(rawCwd) : undefined;
 
   // L0 — it exists exactly as written.
   const isAbs = ref.startsWith('/');
   const asWritten = isAbs ? ref : cwd ? path.join(cwd, ref.replace(/^\.\//, '')) : null;
   if (asWritten && await exists(asWritten)) {
-    return { path: asWritten, resolved: true, via: 'exact' };
+    return { path: await realDir(asWritten), resolved: true, via: 'exact', ...pos, ...exh };
   }
 
   // Needles to search for, longest (most specific) tail first. For an absolute
@@ -398,8 +621,8 @@ export async function resolvePathHostLocal(opts: ResolvePathOptions): Promise<Re
   const relRef = (isAbs ? ref.replace(/^\/+/, '') : ref.replace(/^\.\//, '')).replace(/\/+$/, '');
   const needles = suffixNeedles(relRef);
   const leaf = relRef.split('/').pop() ?? relRef;
-  // Extensionless leaf ⇒ almost certainly a directory. `find`/`ls-files` need to
-  // know which, and guessing wrong just costs one empty result set.
+  // An extensionless leaf is USUALLY a directory, so directory pathspecs are added
+  // — but file pathspecs are always included too (Makefile, LICENSE, Dockerfile).
   const wantDir = !leaf.includes('.');
 
   const alternatives: string[] = [];
@@ -412,20 +635,22 @@ export async function resolvePathHostLocal(opts: ResolvePathOptions): Promise<Re
   };
   const done = (p: string, via: ResolveVia, hits: string[] = []): ResolvePathResult => {
     remember(hits, p);
-    return { path: p, resolved: true, via, ...(alternatives.length ? { alternatives } : {}) };
+    return {
+      path: p, resolved: true, via, ...pos, ...exh,
+      ...(alternatives.length ? { alternatives } : {}),
+    };
   };
 
   // L1 — the transcript. Best signal available: the session already opened this
   // file, so its real absolute path is recorded. Free relative to a disk search.
+  let transcript: string[] = [];
   if (opts.sessionId && !outOfTime()) {
-    const seen = await transcriptPaths(opts.sessionId, cwd, claudeHome, deadline);
-    if (seen.length > 0) {
-      for (const needle of needles) {
-        const hits = matchingSuffix(seen, needle);
-        for (const hit of hits) {
-          if (outOfTime()) break;
-          if (await exists(hit)) return done(hit, 'transcript', hits);
-        }
+    transcript = await transcriptPaths(opts.sessionId, cwd, claudeHome, deadline);
+    for (const needle of needles) {
+      const hits = matchingSuffix(transcript, needle);
+      for (const hit of hits) {
+        if (outOfTime()) break;
+        if (await exists(hit)) return done(hit, 'transcript', hits);
       }
     }
   }
@@ -440,30 +665,49 @@ export async function resolvePathHostLocal(opts: ResolvePathOptions): Promise<Re
     }
   }
 
-  // L3 + L4 — search DOWN. One git call per repo root covers EVERY needle; the
-  // needle order then decides which hit wins, longest (most specific) first.
-  // Dropping leading segments (L5) is just the later entries of `needles`.
+  // L3 — the git index, cheapest scope first. One search per repo root covers
+  // EVERY needle; the needle order then decides which hit wins, most specific
+  // first. Dropping leading segments (L5) is just the later entries of `needles`.
   const searchRoots = cwd ? await gitRoots(cwd) : [];
   const fsRoot = searchRoots[searchRoots.length - 1] ?? cwd;
   for (const root of searchRoots) {
     if (outOfTime()) break;
-    const byNeedle = await gitSearch(root, needles, wantDir);
+    const byNeedle = await gitSearchScoped(root, needles, wantDir, cwd, outOfTime, fast);
     for (const needle of needles) {
-      const hits = rankHits(byNeedle.get(needle) ?? []);
+      const hits = rankHits(byNeedle.get(needle) ?? [], needle);
       for (const hit of hits) {
         if (outOfTime()) break;
         if (await exists(hit)) return done(hit, 'git', hits);
       }
     }
   }
-  // `find` only after every git attempt: it is the slower, less precise layer, and
-  // its job is the cases git cannot see (untracked files, non-git trees).
-  if (fsRoot) {
+
+  // L4 — `find`, for what git cannot see: untracked files and non-git trees.
+  // `-iname` makes this pass case-insensitive on the basename, so it doubles as
+  // the recovery path for a mis-cased leaf.
+  if (fsRoot && !outOfTime()) {
     for (const needle of needles) {
       if (outOfTime()) break;
-      const hits = rankHits(await findSearch(fsRoot, needle));
-      for (const hit of hits) {
-        if (await exists(hit)) return done(hit, 'find', hits);
+      const raw = await findSearch(fsRoot, needle);
+      // Exact-case suffix first: if both a correctly-cased and a differently-cased
+      // file exist, the one the reference actually names must win.
+      for (const hit of rankHits(matchingSuffix(raw, needle), needle)) {
+        if (await exists(hit)) return done(hit, 'find', raw);
+      }
+      for (const hit of rankHits(matchingSuffixCI(raw, needle), needle)) {
+        if (await exists(hit)) return done(hit, 'case-insensitive', raw);
+      }
+    }
+  }
+
+  // L4b — a mis-cased path the transcript knows about. Cheap (already in memory)
+  // and it covers the case-only mismatch on a DIRECTORY segment, which `-iname`
+  // (basename-only) cannot.
+  if (transcript.length && !outOfTime()) {
+    for (const needle of needles) {
+      for (const hit of matchingSuffixCI(transcript, needle)) {
+        if (outOfTime()) break;
+        if (await exists(hit)) return done(hit, 'case-insensitive', []);
       }
     }
   }
@@ -479,8 +723,10 @@ export async function resolvePathHostLocal(opts: ResolvePathOptions): Promise<Re
       via: 'ancestor',
       degraded: true,
       ref: rawRef,
+      ...pos,
+      ...exh,
       ...(alternatives.length ? { alternatives } : {}),
     };
   }
-  return { path: fallback, resolved: false, via: 'none', ref: rawRef };
+  return { path: fallback, resolved: false, via: 'none', ref: rawRef, ...pos, ...exh };
 }

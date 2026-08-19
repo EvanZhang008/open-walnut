@@ -160,6 +160,35 @@ the same logic moved next to the data: one RPC, and it can use signals the serve
 CANDIDATE SET, not just the clock (an unbounded suffix list burns the budget on tails that
 can't match), and batch — every needle rides ONE `ls-files` call per repo root.
 
+**Order search scopes by cost, not by completeness.** `git ls-files --recurse-submodules` is
+the complete answer, and on a monorepo of 2,606 initialized submodules it costs **1.24s
+regardless of outcome** — while the same pathspec against the superproject index alone costs
+**45ms**, and a parallel fan-out over just the submodules under cwd costs **20ms**. Since a
+path the model mentioned is almost always inside the subtree the session is working in, the
+resolver tries superproject → submodules-under-cwd → submodules-under-cwd's-parent →
+everything, returning at the first hit: 2.3s became **~85ms** on the real repo. Two things make
+this safe to generalize: read `.gitmodules` as TEXT (~2ms; `git submodule status` stats every
+submodule and takes seconds at that scale), and expose a `fast` flag that skips the exhaustive
+scope for callers with a user waiting, reporting `exhaustive: false` so a negative from a fast
+pass is never mistaken for "definitely absent".
+
+**A confident wrong answer is worse than an error.** Trimming leading segments is what lets
+`repo/src/x.ts` find `src/x.ts`; taken to its limit it also let `no/such/thing.ts` "find" an
+unrelated `other/thing.ts` and report `resolved: true`, so the user opened the wrong file
+believing it was right. `MIN_NEEDLE_SEGMENTS` keeps at least one directory of context for any
+multi-segment reference (a bare `Makefile` is exempt — there is no context to preserve).
+
+**Parse a path reference before guarding or searching it** (`src/providers/path-ref-parse.ts`,
+shared by the resolver and both HTTP edges). A path in prose arrives decorated: `` `a.ts` ``,
+`a.ts:42`, `a.ts#L10-L20`, `a.ts(42,7)`, a trailing sentence period, Windows separators. Each
+one used to become part of the name being searched for, so the file was missed; the position is
+now parsed out and returned (`line`/`column`/`endLine`) instead. Two traps this file encodes:
+check traversal SEGMENT-wise, not by substring (`mod..old/thing.ts` is an ordinary filename that
+a substring check rejects outright), and note that any rule which can DELETE a `..` must run
+after every rule that can CREATE one — trailing-noise trimming turned `a/b/..` into a clean-
+looking `a/b` and laundered an escape past the safety check. A generated matrix pins that
+invariant.
+
 **Never answer a path question with an errno.** `/api/files/list` accepts optional
 `cwd`/`sessionId` and, when the requested path can't be listed, resolves and retries, flagging
 a stand-in via `requestedPath`. A dead-end error message in a file tree is a bug, not a

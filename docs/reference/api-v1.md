@@ -1087,16 +1087,26 @@ rejected, 4096-char cap.
   the client can say "couldn't find X, showing Y". Omit both parameters for the
   pre-2026-08 behavior (a missing path is a `400`).
 - `GET /api/v1/files/resolve-path?rel=&cwd=&host=[&sessionId=]` →
-  `{ "path", "resolved", "via"?, "degraded"?, "alternatives"? }` — resolves a
-  transcript-mentioned path (relative, package-relative, or an absolute one with
-  a wrong prefix) against the session cwd. The target host runs a layered search:
-  paths the session already opened (its transcript), the ancestor walk, the git
-  index (`--recurse-submodules`, so any depth and any submodule), then a pruned
-  `find`. `via` reports which layer answered. Unresolvable → `resolved: false`
-  with the nearest existing directory (`degraded: true`) so a click always lands
-  somewhere. Passing `sessionId` enables the transcript layer, which is both the
-  cheapest and the most accurate — always send it when known.
-  REPLICA: relays as `server.files.resolve`.
+  `{ "path", "resolved", "via"?, "degraded"?, "alternatives"?, "line"?, "column"?,
+    "endLine"?, "exhaustive"? }` — resolves a transcript-mentioned path (relative,
+  package-relative, or an absolute one with a wrong prefix) against the session cwd.
+  The target host runs a layered search: paths the session already opened (its
+  transcript), the ancestor walk, the git index (submodules included, any depth),
+  then a pruned `find`, then a case-insensitive retry. `via` reports which layer
+  answered. Unresolvable → `resolved: false` with the nearest existing directory
+  (`degraded: true`) so a click always lands somewhere. Passing `sessionId` enables
+  the transcript layer, which is both the cheapest and the most accurate — always
+  send it when known. REPLICA: relays as `server.files.resolve`.
+  **`rel` may be DECORATED.** A path as written in prose is accepted as-is:
+  wrapped (`` `a.ts` ``, `"a.ts"`, `<a.ts>`), carrying a position (`a.ts:42`,
+  `a.ts:42:7`, `a.ts#L42`, `a.ts:10-20`, `a.ts(42,7)`, `a.ts, line 42`), trailing a
+  sentence period or comma, or spelled with Windows separators. The position comes
+  back as `line`/`column`/`endLine` — present even on a failed resolve, since the
+  reference asked for it either way.
+  **`exhaustive: false`** means a fast pass skipped the one search scope whose cost
+  scales with a repo's submodule count. On `resolved: false` that is the difference
+  between "not found in the likely places" and "definitely not here": only claim the
+  latter to a user when `exhaustive` is true.
 - `GET /api/v1/file-content?path=&host=` → `{ "content", "size",
   "truncated", "binary", "extension", "error"?, "contentHash"? }` — the
   FileViewer JSON payload (text, truncated at 512 KB, binary-detected). A

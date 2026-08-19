@@ -24,6 +24,7 @@ import { getFrequentDirs } from '../../core/frequent-dirs.js'
 import { recordMentionDir, getMentionDirs } from '../../core/mention-dirs.js'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
+import { parsePathRef, isUnsafePathRef } from '../../providers/path-ref-parse.js'
 
 export const filesRouter = Router()
 
@@ -90,12 +91,16 @@ async function resolveViaHost(
   cwd: string | undefined,
   host: string | undefined,
   sessionId: string | undefined,
+  /** Skip the exhaustive submodule scope. See ResolvePathOptions.fast: it is the
+   *  difference between ~85ms and ~1.2s on a large monorepo, and it only affects
+   *  how confidently a MISS can be reported. Set it whenever a user is waiting. */
+  fast = false,
 ): Promise<HostResolveResult | null> {
   // Local host: call the resolver in-process. It yields the event loop between
   // transcript windows and shells out for git/find, so it never blocks a route.
   if (!host) {
     const { resolvePathHostLocal } = await import('../../providers/path-resolve-core.js')
-    return await resolvePathHostLocal({ ref, cwd, sessionId })
+    return await resolvePathHostLocal({ ref, cwd, sessionId, ...(fast ? { fast: true } : {}) })
   }
 
   const config = await getConfig()
@@ -122,6 +127,7 @@ async function resolveViaHost(
   const res = await conn.send('fs.resolvePath', {
     ref, budgetMs: REMOTE_RESOLVE_BUDGET_MS,
     ...(cwd ? { cwd } : {}), ...(sessionId ? { sessionId } : {}),
+    ...(fast ? { fast: true } : {}),
   })
   if (!res.ok || typeof res.path !== 'string') return null
   return {
@@ -131,6 +137,10 @@ async function resolveViaHost(
     ...(res.degraded === true ? { degraded: true } : {}),
     ...(typeof res.ref === 'string' ? { ref: res.ref } : {}),
     ...(Array.isArray(res.alternatives) ? { alternatives: res.alternatives as string[] } : {}),
+    ...(typeof res.line === 'number' ? { line: res.line } : {}),
+    ...(typeof res.column === 'number' ? { column: res.column } : {}),
+    ...(typeof res.endLine === 'number' ? { endLine: res.endLine } : {}),
+    ...(res.exhaustive === false ? { exhaustive: false } : {}),
   }
 }
 
@@ -142,6 +152,14 @@ interface HostResolveResult {
   degraded?: boolean
   ref?: string
   alternatives?: string[]
+  /** Position the reference itself carried (`a.ts:42`, `#L10-L20`). Reported even
+   *  on a failed resolve: the reference asked for it, so the caller can still jump
+   *  there once the file is found some other way. */
+  line?: number
+  column?: number
+  endLine?: number
+  /** false when a fast pass skipped the exhaustive scope — a weaker "not found". */
+  exhaustive?: boolean
 }
 
 /**
@@ -214,15 +232,21 @@ export async function resolveSessionPath(
   cwd: unknown,
   host: string | undefined,
   sessionId?: string,
-): Promise<{ path: string; resolved: boolean; via?: string; degraded?: boolean; ref?: string; alternatives?: string[] }> {
+): Promise<{
+  path: string; resolved: boolean; via?: string; degraded?: boolean; ref?: string
+  alternatives?: string[]; line?: number; column?: number; endLine?: number
+}> {
   if (!rel || typeof rel !== 'string' || !cwd || typeof cwd !== 'string') {
     throw new FilesOpError('Missing rel or cwd parameter', 400)
   }
-  if (rel.includes('..') || cwd.includes('..')) {
+  // Guard the PARSED reference, not the raw string. A reference arrives decorated
+  // (`` `src/a.ts:42` ``) and a decoration character is not a threat; the old
+  // substring checks rejected both that and legitimate names containing `..`
+  // (`mod..old/thing.ts`), making those files unreachable. parsePathRef strips
+  // decoration and isUnsafePathRef rejects a real `..` SEGMENT.
+  const parsedRel = parsePathRef(rel)
+  if (isUnsafePathRef(parsedRel.path) || isUnsafePathRef(cwd)) {
     throw new FilesOpError('Invalid path', 400)
-  }
-  if (/[;&|`$(){}!<>]/.test(rel) || /[;&|`$(){}!<>]/.test(cwd)) {
-    throw new FilesOpError('invalid characters in path', 400)
   }
   // Preferred path. Absolute refs go through it too: an absolute path that does
   // NOT exist is a common failure (a stale checkout root, or a prefix the model
@@ -244,13 +268,21 @@ export async function resolveSessionPath(
   }
 
   // ── Legacy fallback (daemon without 'path-resolve-v1') ──
+  // Work from the PARSED reference so decoration doesn't leak into a stat path,
+  // and carry the position through — a legacy host still can't find the file any
+  // better, but the line the reference asked for is known either way.
+  const pos = {
+    ...(parsedRel.line !== undefined ? { line: parsedRel.line } : {}),
+    ...(parsedRel.column !== undefined ? { column: parsedRel.column } : {}),
+    ...(parsedRel.endLine !== undefined ? { endLine: parsedRel.endLine } : {}),
+  }
   // Absolute rel needs no resolution here — this path can only stat, and the
   // caller's listing surfaces a miss.
-  if (rel.startsWith('/')) {
-    return { path: rel, resolved: true }
+  if (parsedRel.path.startsWith('/')) {
+    return { path: parsedRel.path, resolved: true, ...pos }
   }
 
-  const cleanRel = rel.replace(/^\.\//, '').replace(/\/+$/, '')
+  const cleanRel = parsedRel.path.replace(/^\.\//, '').replace(/\/+$/, '')
   const bases = candidateBases(cwd)
   const fallback = path.posix.join(cwd.replace(/\/+$/, ''), cleanRel)
 
@@ -259,7 +291,7 @@ export async function resolveSessionPath(
     const config = await getConfig()
     const hostDef = config.hosts?.[host]
     if (!hostDef?.hostname) {
-      return { path: fallback, resolved: false }
+      return { path: fallback, resolved: false, ...pos }
     }
     const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
     const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }
@@ -272,7 +304,7 @@ export async function resolveSessionPath(
       conn = await Promise.race([getDaemonConnection(host, sshTarget), timeoutPromise])
         .finally(() => clearTimeout(timeoutId!))
     } catch {
-      return { path: fallback, resolved: false }
+      return { path: fallback, resolved: false, ...pos }
     }
     // Total time budget across the walk-up stats + the downward find: the
     // loop is up to 2 serial RPCs per ancestor level (~18 on a deep path),
@@ -282,19 +314,19 @@ export async function resolveSessionPath(
     let remoteRepoRoot: string | null = null
     for (const base of bases) {
       if (Date.now() >= resolveDeadline) {
-        return { path: fallback, resolved: false }
+        return { path: fallback, resolved: false, ...pos }
       }
       const candidate = path.posix.join(base, cleanRel)
       const st = await conn.send('fs.stat', { path: candidate })
       if (st.ok && st.exists) {
-        return { path: candidate, resolved: true }
+        return { path: candidate, resolved: true, ...pos }
       }
       // Stop at the repo root (one .git up), remember it for downward search.
       const git = await conn.send('fs.stat', { path: path.posix.join(base, '.git') })
       if (git.ok && git.exists) { remoteRepoRoot = base; break }
     }
     if (Date.now() >= resolveDeadline) {
-      return { path: fallback, resolved: false }
+      return { path: fallback, resolved: false, ...pos }
     }
     // Downward: one fs.find RPC by basename under the repo root, then keep the
     // first hit whose full path ends with the requested rel (server-side walk
@@ -308,10 +340,10 @@ export async function resolveSessionPath(
         .filter((f) => f === path.posix.join(downRoot, cleanRel) || f.endsWith(suffix))
         .sort((a, b) => a.split('/').length - b.split('/').length)[0]
       if (hit) {
-        return { path: hit, resolved: true }
+        return { path: hit, resolved: true, ...pos }
       }
     }
-    return { path: fallback, resolved: false }
+    return { path: fallback, resolved: false, ...pos }
   }
 
   // ── Local: walk up first, then search down from the repo root ──
@@ -320,7 +352,7 @@ export async function resolveSessionPath(
     const candidate = path.posix.join(base, cleanRel)
     try {
       await fsp.stat(candidate)
-      return { path: candidate, resolved: true }
+      return { path: candidate, resolved: true, ...pos }
     } catch { /* not here, keep walking up */ }
     try {
       await fsp.stat(path.join(base, '.git'))
@@ -335,9 +367,9 @@ export async function resolveSessionPath(
   const downRoot = repoRoot ?? cwd.replace(/\/+$/, '')
   const downHit = await findDownwardLocal(downRoot, cleanRel)
   if (downHit) {
-    return { path: downHit, resolved: true }
+    return { path: downHit, resolved: true, ...pos }
   }
-  return { path: fallback, resolved: false }
+  return { path: fallback, resolved: false, ...pos }
 }
 
 filesRouter.get('/resolve-path', async (req: Request, res: Response, next: NextFunction) => {
@@ -354,6 +386,95 @@ filesRouter.get('/resolve-path', async (req: Request, res: Response, next: NextF
   }
 })
 
+/**
+ * GET /api/files/references?path=<absFile>&symbol=<ident>&host=&maxMatches=
+ *
+ * "Find references" for the Files viewer. The search is HOST-LOCAL work (git
+ * grep next to the files), so the local host runs it in-process and a remote one
+ * runs it in its daemon — only the small match list crosses the tunnel.
+ */
+const REFERENCE_SEARCH_BUDGET_MS = 10_000
+const SYMBOL_RE = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/
+
+filesRouter.get('/references', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const reqPath = typeof req.query.path === 'string' ? req.query.path : ''
+    const symbol = typeof req.query.symbol === 'string' ? req.query.symbol : ''
+    const rawHost = typeof req.query.host === 'string' && req.query.host ? req.query.host : undefined
+    const host = rawHost === '__local__' || rawHost === 'local' ? undefined : rawHost
+    const maxMatches = typeof req.query.maxMatches === 'string' && req.query.maxMatches
+      ? Number(req.query.maxMatches)
+      : undefined
+
+    if (!SYMBOL_RE.test(symbol)) {
+      res.status(400).json({ error: 'invalid symbol' })
+      return
+    }
+    if (!reqPath || !path.isAbsolute(reqPath)) {
+      res.status(400).json({ error: 'path must be absolute' })
+      return
+    }
+
+    if (!host) {
+      const { grepReferencesHostLocal } = await import('../../providers/search-grep-core.js')
+      const result = await grepReferencesHostLocal({
+        file: reqPath, symbol,
+        ...(maxMatches !== undefined ? { maxMatches } : {}),
+        budgetMs: REFERENCE_SEARCH_BUDGET_MS,
+      })
+      res.json({ ...result, symbol })
+      return
+    }
+
+    // ── Remote host: same connection shape as resolveViaHost ──
+    const config = await getConfig()
+    const hostDef = config.hosts?.[host]
+    if (!hostDef?.hostname) {
+      res.status(404).json({ error: `Unknown host: ${host}` })
+      return
+    }
+    const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
+    const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }
+    let conn
+    try {
+      let timeoutId: ReturnType<typeof setTimeout>
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('timeout')), REMOTE_TIMEOUT_MS)
+      })
+      conn = await Promise.race([getDaemonConnection(host, sshTarget), timeoutPromise])
+        .finally(() => clearTimeout(timeoutId!))
+    } catch {
+      res.status(503).json({ error: 'host unreachable' })
+      return
+    }
+    if (!conn.hasCapability?.('grep-v1')) {
+      res.status(503).json({ error: 'daemon needs upgrade for reference search' })
+      return
+    }
+    const result = await conn.send('fs.grep', {
+      file: reqPath, symbol,
+      ...(maxMatches !== undefined ? { maxMatches } : {}),
+      budgetMs: REFERENCE_SEARCH_BUDGET_MS,
+    }, REMOTE_TIMEOUT_MS)
+    if (!result.ok) {
+      res.status(502).json({ error: String(result.error ?? 'reference search failed') })
+      return
+    }
+    // Pick the result's own fields: the RPC envelope also carries id/ok/traceId,
+    // which are transport details the client must never see.
+    res.json({
+      root: typeof result.root === 'string' ? result.root : '',
+      matches: Array.isArray(result.matches) ? result.matches : [],
+      truncated: result.truncated === true,
+      tool: typeof result.tool === 'string' ? result.tool : 'none',
+      ...(typeof result.error === 'string' ? { error: result.error } : {}),
+      symbol,
+    })
+  } catch (err) {
+    next(err)
+  }
+})
+
 export interface FileListResult {
   path: string
   selectedFile?: string
@@ -365,6 +486,10 @@ export interface FileListResult {
   requestedPath?: string
   /** How the shown path was arrived at, when resolution ran ('transcript', 'git', …). */
   resolvedVia?: string
+  /** false when the resolve was a FAST pass that skipped its slowest scope — the
+   *  accompanying `requestedPath` then means "not found in the likely places", not
+   *  "definitely absent", and the UI wording must not overclaim. */
+  exhaustive?: boolean
 }
 
 /** Optional context that lets a listing SELF-HEAL a path that doesn't exist. */
@@ -398,27 +523,33 @@ export async function listSessionFiles(
   if (rawPath.length > 4096) {
     throw new FilesOpError('path too long', 400)
   }
-  // No directory traversal
-  if (rawPath.includes('..')) {
+  // Guard the PARSED path: a reference reaches this route decorated too (a click
+  // on `src/a.ts:42` in the chat), and a legitimate name may contain `..` inside a
+  // segment. isUnsafePathRef rejects only a real `..` SEGMENT plus metacharacters.
+  const parsedPath = parsePathRef(rawPath)
+  if (isUnsafePathRef(parsedPath.path)) {
     throw new FilesOpError('Invalid path', 400)
   }
-  // No shell metacharacters (defense in depth — remote path is passed to daemon)
-  if (/[;&|`$(){}!<>]/.test(rawPath)) {
-    throw new FilesOpError('invalid characters in path', 400)
-  }
+  // Everything below works from the parsed path — decoration must never reach a
+  // readdir (it becomes part of the name and turns a real dir into an ENOENT).
+  const reqPath: string = parsedPath.path
 
   try {
-    return await listOneDir(rawPath, host, showHidden)
+    return await listOneDir(reqPath, host, showHidden)
   } catch (err) {
     // Only a listing failure is worth healing; a guard rejection above is final.
     if (!ctx || (!ctx.cwd && !ctx.sessionId)) throw err
     let healed: HostResolveResult | null = null
     try {
-      healed = await resolveViaHost(rawPath, ctx.cwd, host, ctx.sessionId)
+      // FAST resolve: a person is waiting on this listing. The exhaustive submodule
+      // scope only strengthens a negative, and a negative here means "show the
+      // nearest folder" either way — so paying ~1.2s for it would be a second of
+      // dead UI in exchange for nothing the user can see.
+      healed = await resolveViaHost(reqPath, ctx.cwd, host, ctx.sessionId, true)
     } catch { /* resolver refused the input — surface the original error */ }
-    if (!healed || healed.path === rawPath) throw err
+    if (!healed || healed.path === reqPath) throw err
     log.web.info('files/list: healed an unlistable path', {
-      host: host ?? 'local', requested: rawPath, healed: healed.path, via: healed.via,
+      host: host ?? 'local', requested: reqPath, healed: healed.path, via: healed.via,
     })
     try {
       const listing = await listOneDir(healed.path, host, showHidden)
@@ -426,7 +557,10 @@ export async function listSessionFiles(
       // needs no flag: the user asked for a path and got that path's contents.
       return healed.resolved
         ? { ...listing, resolvedVia: healed.via }
-        : { ...listing, requestedPath: rawPath, resolvedVia: healed.via }
+        : {
+          ...listing, requestedPath: reqPath, resolvedVia: healed.via,
+          ...(healed.exhaustive === false ? { exhaustive: false } : {}),
+        }
     } catch {
       throw err // healed path doesn't list either — the original error is truer
     }
