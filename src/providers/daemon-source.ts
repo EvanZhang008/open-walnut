@@ -97,7 +97,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'path-resolve-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'path-resolve-v1', 'vscode-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -1744,6 +1744,15 @@ function dispatchCommand(ws, id, cmd) {
     case 'fs.find': return cmdFsFind(ws, id, cmd);
     case 'fs.stat': return cmdFsStat(ws, id, cmd);
     case 'fs.resolvePath': return cmdFsResolvePath(ws, id, cmd);
+    // NOT in BRIDGE_ALLOWED_COMMANDS: starts a process — only the trusted
+    // SSH-tunneled walnut socket may ask, never the public cloud bridge.
+    case 'vscode.ensure': return cmdVscodeEnsure(ws, id, cmd);
+    case 'vscode.status':
+      if (!vscodeServerCore) return sendOk(ws, id, { running: false });
+      return vscodeServerCore.codeServerStatus().then(
+        function (s) { sendOk(ws, id, s); },
+        function (err) { sendError(ws, id, 'vscode.status failed: ' + err.message); },
+      );
     case 'fs.readRange': return cmdFsReadRange(ws, id, cmd);
     case 'git.diff': return cmdGitDiff(ws, id, cmd);
     case 'list': return cmdList(ws, id);
@@ -4870,11 +4879,19 @@ try { externalScanCore = require(path.join(__dirname, 'external-scan-core.cjs'))
 let pathResolveCore = null;
 try { pathResolveCore = require(path.join(__dirname, 'path-resolve-core.cjs')); } catch (err) { pathResolveCore = null; }
 
+// Embedded VS Code sidecar (vscode-server-core.cjs) — same sidecar rationale:
+// the install/spawn/health pipeline can't live in this template. 'vscode-v1'
+// is advertised only when the load succeeds; without it the web UI degrades
+// to the vscode:// deep-link button.
+let vscodeServerCore = null;
+try { vscodeServerCore = require(path.join(__dirname, 'vscode-server-core.cjs')); } catch (err) { vscodeServerCore = null; }
+
 function daemonCapabilities() {
   const caps = __DAEMON_CAPABILITIES__.slice();
   if (changesCore) caps.push('changes-v1');
   if (externalScanCore) caps.push('external-scan-v1');
   if (pathResolveCore) caps.push('path-resolve-v1');
+  if (vscodeServerCore) caps.push('vscode-v1');
   return caps;
 }
 
@@ -4899,6 +4916,26 @@ async function cmdFsResolvePath(ws, id, cmd) {
     sendOk(ws, id, result);
   } catch (err) {
     sendError(ws, id, 'fs.resolvePath failed: ' + err.message);
+  }
+}
+
+// Embedded VS Code — see cmdVscodeEnsure in daemon-standalone.ts for the
+// design rationale. NOT bridge-reachable (starts a process).
+async function cmdVscodeEnsure(ws, id, cmd) {
+  if (!vscodeServerCore) {
+    sendError(ws, id, 'vscode.ensure unsupported: vscode-server-core sidecar not loaded');
+    return;
+  }
+  try {
+    const result = await vscodeServerCore.ensureCodeServer({ noInstall: cmd.noInstall === true });
+    let open;
+    if (typeof cmd.cwd === 'string' && cmd.cwd) {
+      open = await vscodeServerCore.resolveOpenTarget(cmd.cwd);
+    }
+    if (!result.ok) logMsg('warn', 'vscode.ensure failed', { error: result.error, installed: result.installed });
+    sendOk(ws, id, Object.assign({}, result, { open: open }));
+  } catch (err) {
+    sendError(ws, id, 'vscode.ensure failed: ' + err.message);
   }
 }
 
@@ -5396,6 +5433,10 @@ function deriveSessionProtection(session, sid, now) {
 
 function scanIdleSessions() {
   const now = Date.now();
+  // Embedded code-server rides the same scan: 2h untouched → reap.
+  if (vscodeServerCore && vscodeServerCore.reapIdleCodeServer(now)) {
+    logMsg('info', 'idle scan: reaped idle code-server', {});
+  }
   for (const [sid, session] of sessions) {
     const pid = session.pid;
     if (!pid) continue;
@@ -5534,6 +5575,11 @@ function cleanup() {
   // Close the cloud bridge first — a half-dead daemon must not keep looking
   // reachable from the phone. bridge.json survives for the successor.
   try { stopBridge(); } catch {}
+
+  // Embedded code-server: leave it for successor adoption on production
+  // restarts; reap in isolated/test daemons (no successor). Keep in sync with
+  // daemon-standalone.ts cleanup().
+  if (vscodeServerCore && shouldReapOnExit()) { try { vscodeServerCore.stopCodeServer(); } catch {} }
 
   // Graceful shutdown: leave session processes running so the next daemon
   // can adopt them (via sessions.json + .pgid files). Only close watchers

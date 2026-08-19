@@ -954,6 +954,69 @@ export class DaemonConnection {
    * NEVER call on a shared pool connection from error-recovery paths — use
    * `this.conn = null` instead to drop the local reference safely.
    */
+  // ── Auxiliary port forwards (embedded VS Code etc.) ──
+  // Keyed by remote port. Separate from the daemon tunnel: these carry browser
+  // iframe traffic, live/die independently, and are re-dialed on demand by
+  // ensurePortForward rather than by the reconnect loop.
+  private portForwards = new Map<number, { localPort: number; proc: ChildProcess }>()
+
+  /**
+   * Ensure an SSH local forward 127.0.0.1:<local> → remote 127.0.0.1:<remotePort>
+   * exists, creating it if needed. Returns the local port. Reuses a live
+   * forward for the same remote port across calls (idempotent per remote port).
+   */
+  async ensurePortForward(remotePort: number): Promise<number> {
+    const existing = this.portForwards.get(remotePort)
+    if (existing && existing.proc.exitCode === null) {
+      // Verify it still accepts connections — an ssh that lost its transport
+      // can linger with exitCode null while the forward is dead.
+      if (await this.waitForTunnel(existing.localPort, 1_500)) return existing.localPort
+      try { existing.proc.kill('SIGTERM') } catch {}
+      this.portForwards.delete(remotePort)
+    }
+
+    const { createServer } = await import('node:net')
+    const localPort = await new Promise<number>((resolve, reject) => {
+      const srv = createServer()
+      srv.listen(0, '127.0.0.1', () => {
+        const addr = srv.address()
+        const port = typeof addr === 'object' && addr ? addr.port : 0
+        srv.close(() => resolve(port))
+      })
+      srv.on('error', reject)
+    })
+
+    const args = [
+      ...this.baseSshArgs,
+      '-L', `${localPort}:127.0.0.1:${remotePort}`,
+      '-N',
+      '-o', 'ExitOnForwardFailure=yes',
+      '-o', 'ServerAliveInterval=15',
+      '-o', 'ServerAliveCountMax=3',
+      this.sshHostString,
+    ]
+    const proc = spawn('ssh', args, { detached: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    proc.unref()
+    proc.on('exit', (code) => {
+      log.session.warn('DaemonConnection: port forward died', {
+        host: this.hostKey, code, localPort, remotePort,
+      })
+      const cur = this.portForwards.get(remotePort)
+      if (cur?.proc === proc) this.portForwards.delete(remotePort)
+    })
+
+    const ready = await this.waitForTunnel(localPort, 10_000)
+    if (!ready) {
+      try { proc.kill('SIGTERM') } catch {}
+      throw new Error(`port forward to ${this.hostKey}:${remotePort} not accepting connections after 10s`)
+    }
+    this.portForwards.set(remotePort, { localPort, proc })
+    log.session.info('DaemonConnection: port forward created', {
+      host: this.hostKey, localPort, remotePort,
+    })
+    return localPort
+  }
+
   disconnect(): void {
     this._destroyed = true
     this.setConnected(false)
@@ -994,6 +1057,12 @@ export class DaemonConnection {
       try { this.tunnel.kill('SIGTERM') } catch {}
       this.tunnel = null
     }
+
+    // Kill auxiliary port forwards (embedded VS Code iframes go stale with us)
+    for (const [, fwd] of this.portForwards) {
+      try { fwd.proc.kill('SIGTERM') } catch {}
+    }
+    this.portForwards.clear()
 
     // Stop SSH ControlMaster (fire-and-forget — cleanup only)
     this.stopControlMaster().catch(() => {})
@@ -1892,7 +1961,7 @@ export class DaemonConnection {
       // Best-effort per file — a missing sidecar (npm-package install without
       // dist/daemon-binaries) just means that host keeps the server-side
       // fallback (changes) or reports no external sessions (external-scan).
-      for (const sidecarFile of ['changes-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs']) {
+      for (const sidecarFile of ['changes-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'vscode-server-core.cjs']) {
         try {
           const sidecar = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, sidecarFile), 'utf-8')
           const scArgs = [...this.baseSshArgs, this.sshHostString, `cat > /tmp/open-walnut/${sidecarFile}`]

@@ -45,6 +45,7 @@ import type { ImagePayload } from './images.js'
 import { quickStartSession, QuickStartError } from '../../core/sessions/quick-start.js'
 import { ensureCwd } from '../../core/sessions/ensure-cwd.js'
 import { buildSessionVscodeUri, SessionVscodeUriError } from '../../core/session-vscode-uri.js'
+import { buildSessionVscodeEmbed, SessionVscodeEmbedError } from '../../core/session-vscode-embed.js'
 import {
   listSessionDirs, getSessionControls, applySessionControl, getSessionSettings,
   listSessionSideQuestions, askSessionSideQuestion, promoteSessionSideQuestion,
@@ -671,6 +672,26 @@ sessionsRouter.get('/:sessionId/vscode-uri', async (req: Request, res: Response,
   } catch (err) {
     if (err instanceof SessionVscodeUriError) {
       res.status(err.status).json({ error: err.message })
+      return
+    }
+    next(err)
+  }
+})
+
+// POST /api/sessions/:sessionId/vscode-embed — ensure a code-server for this
+// session's host (installing on first use unless ?install=false) and answer a
+// browser-loadable 127.0.0.1 URL (local instance or SSH-forwarded). POST, not
+// GET: it can start processes and download an installer.
+sessionsRouter.post('/:sessionId/vscode-embed', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const session = await getSessionByClaudeId(String(req.params.sessionId))
+    const result = await buildSessionVscodeEmbed(session, {
+      install: String(req.query.install ?? '') !== 'false',
+    })
+    res.json(result)
+  } catch (err) {
+    if (err instanceof SessionVscodeEmbedError) {
+      res.status(err.status).json({ error: err.message, hint: err.hint })
       return
     }
     next(err)

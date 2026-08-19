@@ -277,6 +277,26 @@ export async function fetchSessionVscodeUri(sessionId: string): Promise<string> 
   return res.uri;
 }
 
+export interface VscodeEmbedInfo {
+  /** Browser-loadable URL (127.0.0.1 — local code-server or the SSH tunnel end). */
+  url: string;
+  /** Instance identity — changes when code-server restarts (stale-iframe detection). */
+  token: string;
+  open: { kind: 'workspace' | 'folder'; path: string };
+  host: string;
+  codeServerVersion?: string;
+}
+
+/**
+ * Ensure a code-server exists for this session's host and return the iframe
+ * URL. First call on a host may download ~100MB (install), so the timeout is
+ * generous; pass install=false to probe without installing.
+ */
+export async function ensureSessionVscodeEmbed(sessionId: string, opts?: { install?: boolean }): Promise<VscodeEmbedInfo> {
+  const qs = opts?.install === false ? '?install=false' : '';
+  return apiPost<VscodeEmbedInfo>(`/api/sessions/${sessionId}/vscode-embed${qs}`, {}, { timeoutMs: 150_000 });
+}
+
 /**
  * Change a session's reasoning effort. Backend delivers it live via an
  * apply_flag_settings control_request (no respawn) when the CLI is running, then

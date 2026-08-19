@@ -170,6 +170,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'changes-v1',
   'external-scan-v1',
   'path-resolve-v1',
+  // 'vscode-v1' — host-local embedded VS Code (vscode.ensure / vscode.status):
+  // the daemon installs/starts code-server bound to 127.0.0.1 and returns
+  // {port, token}; the server tunnels the port and the web UI iframes it.
+  // Sidecar-gated in the source twin (vscode-server-core.cjs). Optional:
+  // without it the UI shows an upgrade hint and the vscode:// deep-link
+  // button still works.
+  'vscode-v1',
   'fs.readBounded',
   // 'acpSteer' — mid-turn message injection into a live ACP turn (worker
   // 'steer' op → adapter `_session/steering` → codex `turn/steer`). Optional:

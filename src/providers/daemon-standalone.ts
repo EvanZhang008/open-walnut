@@ -72,6 +72,7 @@ import {
 } from './session-changes-core.js'
 import { scanExternalSessions } from './external-session-scan-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
+import { ensureCodeServer, codeServerStatus, reapIdleCodeServer, stopCodeServer, resolveOpenTarget } from './vscode-server-core.js'
 import {
   GATEWAY_SOCKET_FILENAME,
   GATEWAY_MAX_LINE_BYTES,
@@ -1429,6 +1430,13 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'fs.find': return cmdFsFind(ws, id as number, cmd)
     case 'fs.stat': return cmdFsStat(ws, id as number, cmd)
     case 'fs.resolvePath': return cmdFsResolvePath(ws, id as number, cmd)
+    // NOT in BRIDGE_ALLOWED_COMMANDS: starts a process — only the trusted
+    // SSH-tunneled walnut socket may ask, never the public cloud bridge.
+    case 'vscode.ensure': return cmdVscodeEnsure(ws, id as number, cmd)
+    case 'vscode.status': return codeServerStatus().then(
+      (s) => sendOk(ws, id as number, s as unknown as Record<string, unknown>),
+      (err) => sendError(ws, id as number, 'vscode.status failed: ' + (err as Error).message),
+    )
     case 'fs.readRange': return cmdFsReadRange(ws, id as number, cmd)
     case 'git.diff': return cmdGitDiff(ws, id as number, cmd)
     case 'list': return cmdList(ws, id as number)
@@ -4047,6 +4055,27 @@ async function cmdFsResolvePath(ws: ServerWebSocket<WsData>, id: number, cmd: Re
   }
 }
 
+/**
+ * Embedded VS Code (capability 'vscode-v1'): ensure a host-local code-server
+ * is installed + running, and resolve what the caller should open for a cwd.
+ * The editor's traffic stays on this host; only {port, token, open} returns.
+ */
+async function cmdVscodeEnsure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  try {
+    const result = await ensureCodeServer({ noInstall: cmd.noInstall === true })
+    let open: { kind: string; path: string } | undefined
+    if (typeof cmd.cwd === 'string' && cmd.cwd) {
+      open = await resolveOpenTarget(cmd.cwd)
+    }
+    if (!result.ok) {
+      logMsg('warn', 'vscode.ensure failed', { error: result.error, installed: result.installed })
+    }
+    sendOk(ws, id, { ...result, open } as unknown as Record<string, unknown>)
+  } catch (err: unknown) {
+    sendError(ws, id, 'vscode.ensure failed: ' + (err as Error).message)
+  }
+}
+
 // Byte-range read for LARGE files. A whole-file fs.read of a multi-MB session
 // JSONL serializes into ONE giant WS frame; some corporate SSH proxies kill the
 // tunnel mid-frame, the client sees only a pong gap, and the read times out
@@ -4577,6 +4606,9 @@ function deriveSessionProtection(session: SessionData, sid: string, now: number)
 function scanIdleSessions() {
   const now = Date.now()
 
+  // Embedded code-server rides the same 60s scan: 2h untouched → reap.
+  if (reapIdleCodeServer(now)) logMsg('info', 'idle scan: reaped idle code-server', {})
+
   for (const [sid, session] of sessions) {
     const pid = session.pid
     if (!pid) continue
@@ -4762,6 +4794,12 @@ function cleanup() {
   // Close the cloud bridge first — a half-dead daemon must not keep looking
   // reachable from the phone. bridge.json survives for the successor.
   try { stopBridge() } catch {}
+
+  // Embedded code-server: leave it running on a graceful production restart —
+  // the successor adopts it via ~/.open-walnut/code-server/instance.json (same
+  // philosophy as CLI session adoption). Isolated/test daemons have no
+  // successor, so reap it like everything else (shouldReapOnExit below).
+  if (shouldReapOnExit()) { try { stopCodeServer() } catch {} }
 
   // Phase C change: preserve running sessions across a graceful daemon
   // restart. The next daemon's reconcileRegistry() will adopt them as

@@ -52,6 +52,7 @@ SOURCES=(
   src/providers/session-changes-core.ts
   src/providers/external-session-scan-core.ts
   src/providers/path-resolve-core.ts
+  src/providers/vscode-server-core.ts
   src/core/bash-file-ops.ts
 )
 
@@ -136,6 +137,13 @@ echo "$VERSION" > "$OUTDIR/acp-worker.js.version"
 "$BUN" build --minify --target=node --format=cjs \
   --outfile "$OUTDIR/path-resolve-core.cjs" \
   src/providers/path-resolve-core.ts
+
+# Embedded VS Code sidecar — same rationale: install/spawn/health pipeline
+# can't live in the source template; 'vscode-v1' is advertised only when the
+# sidecar loads.
+"$BUN" build --minify --target=node --format=cjs \
+  --outfile "$OUTDIR/vscode-server-core.cjs" \
+  src/providers/vscode-server-core.ts
 
 # Invalidate stale .gz caches — DaemonConnection.deployBinary reuses them
 # if present, which would ship an old binary under a new version label.

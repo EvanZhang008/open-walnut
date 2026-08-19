@@ -6,6 +6,7 @@ import { SessionNotesPill, SessionNotesBar, useSessionNote } from './SessionNote
 import { SessionFileExplorer } from './SessionFileExplorer';
 import { sessionScope } from '@/utils/file-view-state';
 import { SessionTerminal } from './SessionTerminal';
+import { SessionCodeView } from './SessionCodeView';
 import { SessionDiffView } from './SessionDiffView';
 import { buildSelectionPrefill, displayPathForPrefill } from './diffPrefill';
 import type { SessionSplitView } from './sessionSplitView';
@@ -1175,6 +1176,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             >
               Terminal
             </button>
+            <button
+              className={`session-action-chip${activeView === 'code' ? ' session-action-chip-active' : ''}`}
+              onClick={() => toggleView('code')}
+              title="Embedded VS Code in the session working directory — full-screen alongside the chat"
+            >
+              Code
+            </button>
             {/* Model pill + turn count moved out of the header (2026-07-25):
                 the pill now lives in the composer controls row (modelInfoPill,
                 rendered in both ChatInput controlsSlot mode bars); the turn
@@ -1434,6 +1442,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                         host={session?.host}
                         onClose={() => toggleView('terminal')}
                         embedded
+                        barRightSlot={chatBarSlot}
+                      />
+                    )}
+                    {activeView === 'code' && (
+                      <SessionCodeView
+                        sessionId={sessionId}
+                        host={session?.host}
                         barRightSlot={chatBarSlot}
                       />
                     )}

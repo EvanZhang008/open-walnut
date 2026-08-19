@@ -4,6 +4,8 @@ class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** Parsed error-response JSON, when the server sent one (e.g. { error, hint }). */
+    public body?: unknown,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -170,14 +172,16 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
   const elapsed = Math.round(performance.now() - t0);
   if (!res.ok) {
     let message = res.statusText;
+    let errBody: unknown;
     try {
       const data = await res.json();
+      errBody = data;
       if (data.error) message = data.error;
     } catch {
       // use statusText
     }
     console.error(`[api] ${method} ${path} → ${res.status} in ${elapsed}ms: ${message}`);
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, errBody);
   }
   if (res.status === 204) return undefined as T;
   const jsonT0 = performance.now();

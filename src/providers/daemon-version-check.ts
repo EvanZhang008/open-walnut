@@ -60,6 +60,14 @@ const DAEMON_SOURCE_FILES = [
   // this list once: a classifier edit produced an identical version, no
   // daemon self-upgraded, and the new scan rules silently never ran.
   'src/providers/external-session-scan-core.ts',
+  // Host-local path resolution (fs.resolvePath) — bundled into the binary AND
+  // shipped as the path-resolve-core.cjs sidecar. Was missing from this list
+  // (same failure mode as the scan-core note above); keep in lockstep with
+  // scripts/build-daemon.sh.
+  'src/providers/path-resolve-core.ts',
+  // Embedded VS Code (vscode.ensure) — bundled into the binary AND shipped
+  // as the vscode-server-core.cjs sidecar.
+  'src/providers/vscode-server-core.ts',
   'src/core/bash-file-ops.ts',
 ] as const
 
