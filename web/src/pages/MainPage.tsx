@@ -154,7 +154,7 @@ function ChatHeaderRow({ title, connectionState, inspectorOpen, onToggleInspecto
             )}
             {onPromoteToTask && hasMessages && (
               <button className="chat-header-dropdown-item" onClick={() => { setPromoteOpen(true); setMenuOpen(false); }}>
-                Turn this into task
+                Create task from chat
               </button>
             )}
             <button className="chat-header-dropdown-item" onClick={() => { onToggleInspector(); setMenuOpen(false); }}>
@@ -2031,7 +2031,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     return created;
   }, [handleCreate, handleFocusTask, notify, tierLabel]);
 
-  // "Turn this into task" — promotes the WHOLE active conversation. The server
+  // "Create task from chat" — promotes the WHOLE active conversation. The server
   // creates the task and links the conversation's lane session to it; the chat
   // stays right here in Main Chat, and the task's session circle routes back to
   // this same transcript (dual visibility, deliberately). Locate + toast + Undo
@@ -2594,7 +2594,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     ? `Chat — ${focusedTask.title}`
     : 'Chat';
 
-  // The active conversation's auto title — prefill for "Turn this into task".
+  // The active conversation's auto title — prefill for "Create task from chat".
   // 'New Conversation' is the placeholder before auto-titling; an empty prefill
   // reads better in the form than that.
   const activeConversationTitle = (() => {

@@ -4066,7 +4066,7 @@ select {
 
 .msg-copy-label { white-space: nowrap; }
 
-/* "Turn this into task" (chat header ⋯ menu) — the popover reuses
+/* "Create task from chat" (chat header ⋯ menu) — the popover reuses
    .task-kebab-menu, placed and capped by useMenuPlacement like every other
    dropdown here. Two classes deliberately: .task-kebab-menu (which supplies
    the frame, the height cap and the internal scrolling) is defined LATER in
@@ -4076,11 +4076,19 @@ select {
   padding: 8px 0 6px;
 }
 .promote-task-heading {
-  padding: 0 12px 6px;
+  padding: 0 12px 2px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
+  color: var(--fg-muted);
+}
+/* One plain sentence under the heading saying exactly what will happen —
+   the form's antidote to "is something else going on during the turning?" */
+.promote-task-hint {
+  padding: 0 12px 8px;
+  font-size: 11px;
+  line-height: 1.45;
   color: var(--fg-muted);
 }
 .promote-task-title {

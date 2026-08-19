@@ -1,6 +1,9 @@
 /**
- * PromoteTaskPopover — the "Turn this into task" form for a WHOLE Main Chat
- * conversation (opened from the chat header's ⋯ menu).
+ * PromoteTaskPopover — the "Create task from chat" form for a WHOLE Main Chat
+ * conversation (opened from the chat header's ⋯ menu). Named "create", not
+ * "turn into"/"move": create is the only thing that happens (a task is created
+ * and linked; the chat is neither converted nor moved), and the verb should
+ * not suggest otherwise (user feedback 2026-08-18).
  *
  * Why it exists: a conversation often becomes the work item ("ok let's actually
  * do this"), and the Main Chat lane IS a Claude Code session — so promoting is
@@ -123,7 +126,10 @@ export function PromoteTaskPopover({ open, anchorRef, defaultTitle, onClose, onS
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <div className="promote-task-heading">Turn this into task</div>
+      <div className="promote-task-heading">Create task from chat</div>
+      {/* Say exactly what happens — "turn into" read like a conversion with
+          unknown side effects (user feedback); this is just create + link. */}
+      <div className="promote-task-hint">Creates a task linked to this chat. The chat stays here.</div>
       <input
         ref={titleRef}
         className="promote-task-title"
