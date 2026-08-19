@@ -201,11 +201,12 @@ test('ACP worker death cold-resumes without replay and converges across a mid-st
       .filter((record) => record.event?.type === 'session-loaded').length,
   { timeout: 15_000 }).toBe(1)
 
+  // The resume targeted a NON-EMPTY journal, so the provider's replay burst is
+  // dropped instead of journaled (it would re-append the whole conversation on
+  // every resume — the 100MB-journal incident). Only a fresh journal records it.
   const recoveryJournal = await journalRecords(session.acpJournalPath)
-  expect(recoveryJournal.filter((record) =>
-    record.source === 'provider-replay'
-      && record.frame?.params?.update?.content?.text === 'replayed: earlier reply',
-  )).toHaveLength(1)
+  expect(recoveryJournal.filter((record) => record.source === 'provider-replay'))
+    .toHaveLength(0)
 
   await page.screenshot({
     path: `${SCREENSHOT_DIR}/recovery-mid-stream-before-reload.png`,

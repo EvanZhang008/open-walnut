@@ -75,6 +75,9 @@ export class AcpWorker {
   private turnCommandId: string | null = null
   private controlPrompt: { commandId: string; purpose: 'self-report' } | null = null
   private loadingSession = false
+  /** True while a resume's replay burst must be dropped instead of journaled
+   * (set in opLoadSession when the journal already holds the conversation). */
+  private skipReplayFrames = false
   /** providerRequestId → live JSON-RPC resolver. Dies with the process (by design). */
   private pendingPermissions = new Map<string, PendingPermission>()
   private permissionSeq = 0
@@ -247,6 +250,9 @@ export class AcpWorker {
   private async opLoadSession(params: LoadSessionParams): Promise<unknown> {
     const conn = this.requireConn()
     this.loadingSession = true
+    // A non-empty journal already holds this conversation, so the provider's
+    // replay burst is pure duplication (see the sessionUpdate handler).
+    this.skipReplayFrames = this.journal.offset > 0
     try {
       const resp = await conn.loadSession({
         sessionId: params.providerSessionId,
@@ -264,6 +270,7 @@ export class AcpWorker {
       throw <WorkerError>{ kind: 'load_failed', message: e instanceof Error ? e.message : String(e) }
     } finally {
       this.loadingSession = false
+      this.skipReplayFrames = false
     }
   }
 
@@ -557,6 +564,14 @@ export class AcpWorker {
   private buildClientHandler(): Client {
     return {
       sessionUpdate: (params: SessionNotification): void => {
+        // A resume replays the ENTIRE past conversation as provider-replay
+        // frames. When the journal already contains that conversation, writing
+        // the burst again on every resume makes an append-only file grow
+        // quadratically (a real journal was 100MB, 47MB of it re-replays), and
+        // the history projector ignores non-live frames anyway. A FRESH journal
+        // (offset 0, e.g. the file was lost) still records the replay so the
+        // conversation isn't unrecoverable.
+        if (this.loadingSession && this.skipReplayFrames) return
         // Raw to journal; zero interpretation here.
         this.journal.appendAcpFrame(
           { method: 'session/update', params },

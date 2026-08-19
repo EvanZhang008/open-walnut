@@ -19,6 +19,7 @@ import { bus, EventNames } from '../../src/core/event-bus.js'
 import {
   readAcpSessionHistory,
   readAcpSessionHistoryState,
+  _resetAcpHistoryCacheForTesting,
 } from '../../src/providers/acp-session-history.js'
 import { AcpSession } from '../../src/providers/acp-session.js'
 
@@ -31,6 +32,9 @@ beforeEach(() => {
     fs.rmSync(SESSION_DB_PATH + suffix, { force: true })
   }
   _resetSessionTrackerForTesting()
+  // The fold cache is process-global; without this, a second test reading the
+  // same runtimeId+path silently gets the first test's fold.
+  _resetAcpHistoryCacheForTesting()
 })
 
 afterEach(() => {
@@ -106,6 +110,275 @@ describe('ACP session history', () => {
 
     expect(empty).toEqual({ messages: [], journalExists: true })
     expect(missing).toEqual({ messages: [], journalExists: false })
+  })
+})
+
+describe('ACP streaming fold (range-reader path)', () => {
+  const chunkLine = (text: string, ts: number) => JSON.stringify({
+    kind: 'acp', ts, source: 'live',
+    frame: {
+      method: 'session/update',
+      params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } },
+    },
+  }) + '\n'
+  const promptLine = (n: number, text: string, ts: number) => JSON.stringify({
+    kind: 'meta', ts,
+    event: { type: 'prompt-accepted', commandId: `acp-prompt:qm-${n}`, walnutMessageId: `qm-${n}`, text },
+  }) + '\n'
+
+  /** Range-capable reader over an in-memory buffer, counting range calls. */
+  const rangeReader = (state: { data: Buffer; rangeCalls: number }) => ({
+    readFile: async () => { throw new Error('whole-file read must not be used on the streaming path') },
+    stat: async () => ({ mtimeMs: 1, size: state.data.length }),
+    readRangeBytes: async (_p: string, start: number, length: number) => {
+      state.rangeCalls++
+      const end = Math.min(start + length, state.data.length)
+      return {
+        buf: state.data.subarray(start, end),
+        fileSize: state.data.length,
+        eof: end >= state.data.length,
+      }
+    },
+  })
+  const journalRecord = (n: string) => ({
+    claudeSessionId: `provider-${n}`,
+    acpRuntimeId: `runtime-${n}`,
+    acpJournalPath: `/virtual/runtime-${n}.acp.jsonl`,
+  })
+
+  it('folds a journal via bounded range reads and serves later reads incrementally', async () => {
+    const state = { data: Buffer.from(promptLine(1, 'first question', 1) + chunkLine('first answer', 2)), rangeCalls: 0 }
+    const reader = rangeReader(state)
+    const record = journalRecord('stream')
+
+    const first = await readAcpSessionHistoryState(record, { reader })
+    expect(first.windowed).toBeUndefined()
+    expect(first.messages.map((m) => m.text)).toEqual(['first question', 'first answer'])
+    const callsAfterFirst = state.rangeCalls
+
+    // Append one turn; the next read must fold ONLY the appended bytes (one
+    // range call) and keep the earlier messages without re-reading them.
+    state.data = Buffer.concat([state.data, Buffer.from(promptLine(2, 'second question', 3) + chunkLine('second answer', 4))])
+    const second = await readAcpSessionHistoryState(record, { reader })
+    expect(second.messages.map((m) => m.text))
+      .toEqual(['first question', 'first answer', 'second question', 'second answer'])
+    expect(state.rangeCalls).toBe(callsAfterFirst + 1)
+
+    // Unchanged journal → zero additional range reads.
+    await readAcpSessionHistoryState(record, { reader })
+    expect(state.rangeCalls).toBe(callsAfterFirst + 1)
+  })
+
+  it('a chunk boundary can split a multi-byte char and a record without tearing either', async () => {
+    // 1MB chunks: build >1MB of records where the boundary lands mid-record,
+    // with CJK text so a boundary can also land mid-char.
+    const filler = '中文字符边界测试'.repeat(2000) // ~48KB of 3-byte chars per line
+    let content = promptLine(1, 'q', 1)
+    for (let i = 0; i < 30; i++) content += chunkLine(filler, 2 + i)
+    const state = { data: Buffer.from(content), rangeCalls: 0 }
+    expect(state.data.length).toBeGreaterThan(1024 * 1024)
+
+    const result = await readAcpSessionHistoryState(journalRecord('mbchar'), { reader: rangeReader(state) })
+    expect(state.rangeCalls).toBeGreaterThan(1)
+    // All chunks share one segment → one assistant message, byte-identical text.
+    expect(result.messages).toHaveLength(2)
+    expect(result.messages[1].text).toBe(filler.repeat(30))
+  })
+
+  it('a trailing partial line (mid-write) is not consumed and completes on the next read', async () => {
+    const full = chunkLine('complete answer', 2)
+    const state = {
+      data: Buffer.concat([Buffer.from(promptLine(1, 'q', 1)), Buffer.from(full.slice(0, 20))]),
+      rangeCalls: 0,
+    }
+    const reader = rangeReader(state)
+    const record = journalRecord('torn')
+
+    const first = await readAcpSessionHistoryState(record, { reader })
+    expect(first.messages.map((m) => m.text)).toEqual(['q'])
+
+    // Writer finishes the line.
+    state.data = Buffer.concat([state.data, Buffer.from(full.slice(20))])
+    const second = await readAcpSessionHistoryState(record, { reader })
+    expect(second.messages.map((m) => m.text)).toEqual(['q', 'complete answer'])
+  })
+
+  it('tail-bounded cold read folds a window (windowed:true); a full read replaces it and clears the flag', async () => {
+    let content = ''
+    for (let n = 1; n <= 40; n++) content += promptLine(n, `question ${n}`, n * 2 - 1) + chunkLine(`answer ${n}`, n * 2)
+    const state = { data: Buffer.from(content), rangeCalls: 0 }
+    const reader = rangeReader(state)
+    const record = journalRecord('window')
+    const windowBytes = Math.floor(state.data.length / 4)
+
+    const windowed = await readAcpSessionHistoryState(record, { reader, maxColdReadBytes: windowBytes })
+    expect(windowed.windowed).toBe(true)
+    expect(windowed.messages.length).toBeGreaterThan(0)
+    expect(windowed.messages.length).toBeLessThan(80)
+    expect(windowed.messages.at(-1)?.text).toBe('answer 40')
+
+    // Full caller (Load earlier messages sends no tail) gets the whole journal.
+    const full = await readAcpSessionHistoryState(record, { reader })
+    expect(full.windowed).toBeUndefined()
+    expect(full.messages).toHaveLength(80)
+    expect(full.messages[0].text).toBe('question 1')
+
+    // The full fold now serves windowed callers too — no re-window.
+    const callsAfterFull = state.rangeCalls
+    const again = await readAcpSessionHistoryState(record, { reader, maxColdReadBytes: windowBytes })
+    expect(again.windowed).toBeUndefined()
+    expect(again.messages).toHaveLength(80)
+    expect(state.rangeCalls).toBe(callsAfterFull)
+  })
+
+  it('truncates fat tool results to the DTO cap (native parity)', async () => {
+    const fat = 'x'.repeat(20000)
+    const content = promptLine(1, 'q', 1)
+      + JSON.stringify({
+        kind: 'acp', ts: 2, source: 'live',
+        frame: {
+          method: 'session/update',
+          params: { update: { sessionUpdate: 'tool_call', toolCallId: 'call_0', title: 'Bash', rawInput: { command: 'ls' } } },
+        },
+      }) + '\n'
+      + JSON.stringify({
+        kind: 'acp', ts: 3, source: 'live',
+        frame: {
+          method: 'session/update',
+          params: { update: { sessionUpdate: 'tool_call_update', toolCallId: 'call_0', status: 'completed', rawOutput: fat } },
+        },
+      }) + '\n'
+    const state = { data: Buffer.from(content), rangeCalls: 0 }
+
+    const result = await readAcpSessionHistoryState(journalRecord('fat'), { reader: rangeReader(state) })
+    const tool = result.messages.find((m) => m.tools)?.tools?.[0]
+    expect(tool?.result).toHaveLength(5000)
+  })
+
+  it('legacy journal (command-accepted era) still recovers user prompts on the streaming path', async () => {
+    const legacy = [
+      { kind: 'meta', ts: 1, event: { type: 'command-accepted', op: 'prompt', commandId: 'cmd-1' } },
+      {
+        kind: 'acp', ts: 2, source: 'provider-replay',
+        frame: {
+          method: 'session/update',
+          params: { update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'legacy question' } } },
+        },
+      },
+      {
+        kind: 'acp', ts: 3, source: 'live',
+        frame: {
+          method: 'session/update',
+          params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'legacy answer' } } },
+        },
+      },
+    ].map((r) => JSON.stringify(r)).join('\n') + '\n'
+    const state = { data: Buffer.from(legacy), rangeCalls: 0 }
+
+    const result = await readAcpSessionHistoryState(journalRecord('legacy'), { reader: rangeReader(state) })
+    expect(result.messages.map((m) => m.text)).toEqual(['legacy question', 'legacy answer'])
+  })
+
+  it('a shrunk/replaced journal invalidates the cached fold instead of serving stale messages', async () => {
+    const state = { data: Buffer.from(promptLine(1, 'old world', 1) + chunkLine('old answer', 2)), rangeCalls: 0 }
+    const reader = rangeReader(state)
+    const record = journalRecord('shrink')
+    await readAcpSessionHistoryState(record, { reader })
+
+    state.data = Buffer.from(promptLine(9, 'new world', 9))
+    const result = await readAcpSessionHistoryState(record, { reader })
+    expect(result.messages.map((m) => m.text)).toEqual(['new world'])
+  })
+
+  it('an epoch change invalidates the fold even when the replacement file is LONGER', async () => {
+    const state = {
+      data: Buffer.from(promptLine(1, 'incarnation one', 1) + chunkLine('answer one', 2)),
+      rangeCalls: 0,
+      epoch: 'dev:1:100',
+    }
+    const reader = {
+      ...rangeReader(state),
+      stat: async () => ({ mtimeMs: 1, size: state.data.length, epoch: state.epoch }),
+    }
+    const record = journalRecord('epoch')
+    await readAcpSessionHistoryState(record, { reader })
+
+    // Same path, new incarnation, REGROWN PAST the old offset — the size test
+    // alone cannot catch this; the epoch must.
+    let replacement = ''
+    for (let n = 1; n <= 6; n++) replacement += promptLine(n, `incarnation two q${n}`, n)
+    state.data = Buffer.from(replacement)
+    state.epoch = 'dev:2:200'
+    const result = await readAcpSessionHistoryState(record, { reader })
+    expect(result.messages).toHaveLength(6)
+    expect(result.messages[0].text).toBe('incarnation two q1')
+  })
+
+  it('a windowed cold read warms the full fold in the background — the next poll is complete', async () => {
+    let content = ''
+    for (let n = 1; n <= 40; n++) content += promptLine(n, `question ${n}`, n * 2 - 1) + chunkLine(`answer ${n}`, n * 2)
+    const state = { data: Buffer.from(content), rangeCalls: 0 }
+    const reader = rangeReader(state)
+    const record = journalRecord('warmup')
+    const windowBytes = Math.floor(state.data.length / 4)
+
+    const windowed = await readAcpSessionHistoryState(record, { reader, maxColdReadBytes: windowBytes })
+    expect(windowed.windowed).toBe(true)
+
+    // Let the fire-and-forget warm-up drain, then poll with the SAME tail
+    // bound: it must now serve the complete history with no windowed flag and
+    // without the user ever requesting a full read.
+    await vi.waitFor(async () => {
+      const next = await readAcpSessionHistoryState(record, { reader, maxColdReadBytes: windowBytes })
+      expect(next.windowed).toBeUndefined()
+      expect(next.messages).toHaveLength(80)
+    })
+  })
+
+  it('served payloads are isolated from the cache — caller mutation cannot poison later reads', async () => {
+    const state = { data: Buffer.from(promptLine(1, 'pristine question', 1) + chunkLine('pristine answer', 2)), rangeCalls: 0 }
+    const reader = rangeReader(state)
+    const record = journalRecord('mutate')
+
+    const first = await readAcpSessionHistoryState(record, { reader })
+    // Simulate rewriteHistoryRemoteImages: in-place mutation of served objects.
+    first.messages[1].text = '/local/mirror/path.png'
+
+    const second = await readAcpSessionHistoryState(record, { reader })
+    expect(second.messages[1].text).toBe('pristine answer')
+  })
+
+  it('legacy journal with a torn trailing line stays cached (no re-fold per poll)', async () => {
+    const legacyRecords = [
+      { kind: 'meta', ts: 1, event: { type: 'command-accepted', op: 'prompt', commandId: 'cmd-1' } },
+      {
+        kind: 'acp', ts: 2, source: 'provider-replay',
+        frame: {
+          method: 'session/update',
+          params: { update: { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'legacy question' } } },
+        },
+      },
+      {
+        kind: 'acp', ts: 3, source: 'live',
+        frame: {
+          method: 'session/update',
+          params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'legacy answer' } } },
+        },
+      },
+    ].map((r) => JSON.stringify(r)).join('\n') + '\n'
+    // Mid-write crash: the file ends in a PARTIAL line (no trailing newline).
+    const torn = legacyRecords + '{"kind":"acp","ts":4,"sour'
+    const state = { data: Buffer.from(torn), rangeCalls: 0 }
+    const reader = rangeReader(state)
+    const record = journalRecord('legacy-torn')
+
+    const first = await readAcpSessionHistoryState(record, { reader })
+    expect(first.messages.map((m) => m.text)).toEqual(['legacy question', 'legacy answer'])
+    const callsAfterFirst = state.rangeCalls
+
+    const second = await readAcpSessionHistoryState(record, { reader })
+    expect(second.messages.map((m) => m.text)).toEqual(['legacy question', 'legacy answer'])
+    expect(state.rangeCalls).toBe(callsAfterFirst)
   })
 })
 

@@ -614,6 +614,45 @@ describe('load / resume', () => {
     expect(live.every((r) => r.kind === 'acp' && r.source === 'live')).toBe(true)
   })
 
+  it('a resume onto a NON-EMPTY journal drops the provider replay burst', async () => {
+    worker = await initWorker()
+    const created = await op(worker, 'newSession', { cwd: tmpDir })
+    expect(created.ok).toBe(true)
+    const providerSessionId = (created.result as { sessionId: string }).sessionId
+    const first = await op(worker, 'prompt', {
+      commandId: 'acp-prompt:qm-replay-1',
+      walnutMessageId: 'qm-replay-1',
+      text: 'first turn',
+    })
+    expect(first.ok).toBe(true)
+    await waitForJournal(turnEnded)
+    await op(worker, 'shutdown')
+    worker = null
+
+    // The journal now holds the whole conversation; a resume replaying it again
+    // must not append anything (that re-append is the quadratic growth).
+    const before = readJournal(journalPath())
+    expect(before.nextOffset).toBeGreaterThan(0)
+    const sessionCreated = metas(before.records.map((r) => r.record))
+      .find((event) => event.type === 'session-created')
+    expect(sessionCreated && 'providerSessionId' in sessionCreated
+      && sessionCreated.providerSessionId).toBe(providerSessionId)
+
+    worker = await initWorker()
+    const loaded = await op(worker, 'loadSession', { providerSessionId, cwd: tmpDir })
+    expect(loaded.ok).toBe(true)
+    await waitForJournal((recs) => metas(recs).some((e) => e.type === 'session-loaded'))
+
+    const appended = readJournal(journalPath(), before.nextOffset).records
+      .map(({ record }) => record)
+    expect(appended.filter((record) =>
+      record.kind === 'acp' && record.source === 'provider-replay')).toHaveLength(0)
+    expect(appended.some((record) => JSON.stringify(record).includes('replayed: earlier reply')))
+      .toBe(false)
+    // The lifecycle fact is still recorded — only the duplicate frames are dropped.
+    expect(metas(appended).some((event) => event.type === 'session-loaded')).toBe(true)
+  })
+
   it('loadSession failure surfaces load_failed (fallback decision is the caller\'s)', async () => {
     worker = await initWorker({ MOCK_ACP_FAIL_LOAD: '1' })
     const resp = await op(worker, 'loadSession', { providerSessionId: 'mock-session-1', cwd: tmpDir })

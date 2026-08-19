@@ -360,18 +360,35 @@ export class AcpJournalProjector {
   }
 }
 
-/** Fold a complete journal into the existing session history DTO. */
-export function projectAcpJournalHistory(
-  runtimeId: string,
-  records: JournalRecord[],
-): SessionHistoryMessage[] {
-  const projector = new AcpJournalProjector(runtimeId)
-  const messages: SessionHistoryMessage[] = []
-  const byMessageId = new Map<string, SessionHistoryMessage>()
-  const tools = new Map<string, SessionHistoryTool>()
+/** Per-tool-result cap in the HISTORY DTO — parity with the native parser
+ *  (parseSessionMessages slices tool results to 5000 chars). ACP rawOutput had
+ *  no cap, so one turn of fat tool output could dominate a projected history
+ *  (measured: 100 MB journal → 14.5 MB projected without the cap, 3.9 MB with).
+ *  Live streaming (AcpStreamNormalizer) is NOT capped here — this applies only
+ *  where the fold materializes the history DTO. */
+const TOOL_RESULT_MAX_CHARS = 5000
 
-  for (const record of recoverLegacyUserPrompts(records)) {
-    for (const event of projector.project(record)) {
+/**
+ * Stateful, incremental fold from journal records to the history DTO. One
+ * instance can keep absorbing appended records across calls — the journal is
+ * append-only, so a cached fold continues exactly where it stopped (this is
+ * what makes whale journals cheap: only new bytes are ever re-projected).
+ * `projectAcpJournalHistory` remains the one-shot wrapper.
+ */
+export class AcpHistoryFold {
+  private readonly projector: AcpJournalProjector
+  private readonly byMessageId = new Map<string, SessionHistoryMessage>()
+  private readonly tools = new Map<string, SessionHistoryTool>()
+  /** Rough resident-size gauge for cache budgeting (chars pushed, not bytes). */
+  charCount = 0
+  readonly messages: SessionHistoryMessage[] = []
+
+  constructor(readonly runtimeId: string) {
+    this.projector = new AcpJournalProjector(runtimeId)
+  }
+
+  push(record: JournalRecord): void {
+    for (const event of this.projector.project(record)) {
       const timestamp = new Date(event.ts).toISOString()
       switch (event.type) {
         case 'user': {
@@ -382,20 +399,22 @@ export function projectAcpJournalHistory(
             msgId: event.msgId,
             walnutMessageId: event.walnutMessageId,
           }
-          messages.push(message)
-          byMessageId.set(event.msgId, message)
+          this.messages.push(message)
+          this.byMessageId.set(event.msgId, message)
+          this.charCount += event.text.length
           break
         }
         case 'text':
         case 'thinking': {
-          let message = byMessageId.get(event.msgId)
+          let message = this.byMessageId.get(event.msgId)
           if (!message) {
             message = { role: 'assistant', text: '', timestamp, msgId: event.msgId }
-            messages.push(message)
-            byMessageId.set(event.msgId, message)
+            this.messages.push(message)
+            this.byMessageId.set(event.msgId, message)
           }
           if (event.type === 'text') message.text += event.text
           else message.thinking = (message.thinking ?? '') + event.text
+          this.charCount += event.text.length
           break
         }
         case 'tool-use': {
@@ -411,56 +430,68 @@ export function projectAcpJournalHistory(
             msgId: event.msgId,
             tools: [tool],
           }
-          messages.push(message)
-          byMessageId.set(event.msgId, message)
-          tools.set(event.toolUseId, tool)
+          this.messages.push(message)
+          this.byMessageId.set(event.msgId, message)
+          this.tools.set(event.toolUseId, tool)
           break
         }
         case 'tool-result': {
-          let tool = tools.get(event.toolUseId)
+          let tool = this.tools.get(event.toolUseId)
           if (!tool) {
             tool = {
               name: 'tool',
               input: {},
               toolUseId: event.toolUseId,
             }
-            messages.push({
+            this.messages.push({
               role: 'assistant',
               text: '',
               timestamp,
               msgId: event.msgId,
               tools: [tool],
             })
-            tools.set(event.toolUseId, tool)
+            this.tools.set(event.toolUseId, tool)
           }
-          tool.result = event.result
+          tool.result = event.result.slice(0, TOOL_RESULT_MAX_CHARS)
           if (event.isError) tool.isError = true
+          this.charCount += tool.result.length
           break
         }
         case 'system':
-          messages.push({
+          this.messages.push({
             role: 'system',
             text: event.message,
             timestamp,
             msgId: event.msgId,
             systemVariant: event.variant,
           })
+          this.charCount += event.message.length
           break
         case 'error':
-          messages.push({
+          this.messages.push({
             role: 'system',
             text: event.error,
             timestamp,
             msgId: event.msgId,
             systemVariant: 'error',
           })
+          this.charCount += event.error.length
           break
         default:
           break
       }
     }
   }
-  return messages
+}
+
+/** Fold a complete journal into the existing session history DTO. */
+export function projectAcpJournalHistory(
+  runtimeId: string,
+  records: JournalRecord[],
+): SessionHistoryMessage[] {
+  const fold = new AcpHistoryFold(runtimeId)
+  for (const record of recoverLegacyUserPrompts(records)) fold.push(record)
+  return fold.messages
 }
 
 /**

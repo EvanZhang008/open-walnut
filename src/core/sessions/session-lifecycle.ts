@@ -39,9 +39,8 @@ export async function readProviderSessionHistory(
   skipSubagents = true,
   opts?: {
     /** Tail-bounded caller: bound a COLD full read to the last N bytes (marked
-     *  windowed) instead of transferring + parsing the whole JSONL. See
-     *  ReadHistoryOptions.maxColdReadBytes. Claude engine only (ACP journals
-     *  are projected, not byte-addressable). */
+     *  windowed) instead of transferring + parsing the whole JSONL. Both
+     *  engines; a warm ACP fold cache ignores it (incremental reads are cheap). */
     maxColdReadBytes?: number;
   },
 ): Promise<{
@@ -56,8 +55,9 @@ export async function readProviderSessionHistory(
 }> {
   if (record?.engine === 'codex') {
     const { readAcpSessionHistoryState } = await import('../../providers/acp-session-history.js');
-    const state = await readAcpSessionHistoryState(record);
-    return { messages: state.messages, sourceAvailable: state.journalExists, windowed: false };
+    const state = await readAcpSessionHistoryState(record,
+      opts?.maxColdReadBytes ? { maxColdReadBytes: opts.maxColdReadBytes } : {});
+    return { messages: state.messages, sourceAvailable: state.journalExists, windowed: state.windowed === true };
   }
   const { readSessionHistory, isWindowedHistory, isSourceFoundHistory, getOrphanFinishedAgentIds } = await import('../session-history.js');
   const messages = await readSessionHistory(

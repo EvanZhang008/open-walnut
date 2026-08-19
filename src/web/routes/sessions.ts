@@ -863,7 +863,10 @@ sessionsRouter.get('/:sessionId/history', async (req: Request, res: Response, ne
 
     if (source === 'streams') {
       if (record?.engine === 'codex') {
-        const { messages } = await readProviderSessionHistory(sessionId, record, record.host)
+        // Tail-bounded P1: bound a COLD fold to the journal's last few MB so a
+        // whale journal paints instantly; the fold cache serves the follow-ups.
+        const { messages } = await readProviderSessionHistory(sessionId, record, record.host, true,
+          tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined)
         logMessageOrdering('P1:streams', sessionId, messages, record.host)
         const sliced = tail && tail > 0 ? messages.slice(-tail) : messages
         res.json({ messages: sliced, total: messages.length })
