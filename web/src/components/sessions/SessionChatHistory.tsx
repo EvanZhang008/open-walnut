@@ -7,7 +7,6 @@ import { useEvent } from '@/hooks/useWebSocket';
 import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { SessionMessage, SessionThinking, PlanCard, CollapsedPlanWrite, GenericToolCall, TaskGroupPrompt, agentModelLabel, ToolRunShell, toolRunPhrase, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, MergedHistoryToolRun, SystemGroupRun, SystemLineCollapsible, systemGroupMemberFromHistory, type SystemGroupMember } from './SessionMessage';
-import type { PromoteToTaskInput } from '@/components/chat/PromoteToTaskMenu';
 import { dedupeOptimisticMessages } from './optimistic-dedup';
 import { parseHistoryUnavailable, visibleHistoryUnavailable } from './history-unavailable';
 import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence } from '@/stream/render-filter';
@@ -145,9 +144,6 @@ interface SessionChatHistoryProps {
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number) => void;
-  /** MAIN CHAT ONLY: enables the per-message "Turn this into task" action.
-   *  Unset in the session columns, whose bubbles keep just the copy actions. */
-  onPromoteToTask?: (input: PromoteToTaskInput) => Promise<unknown>;
   /** Bubbles the hook's isStreaming up so parents don't need to mount their
    *  own useSessionStream (which would double RPCs + defensive-clear paths). */
   onStreamingChange?: (isStreaming: boolean) => void;
@@ -817,7 +813,7 @@ const NEAR_BOTTOM_PX = 80;  // px from bottom to consider "at bottom"
 const TRIPWIRE_SETTLE_MS = (typeof window !== 'undefined'
   && (window as unknown as { __tripwireSettleMs?: number }).__tripwireSettleMs) || 8_000;
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onPromoteToTask, onStreamingChange, scrollToBottomNonce }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce }: SessionChatHistoryProps) {
   // Slow-commit detector: renderT0 is per-render-pass (closure), the layout
   // effect runs after THAT pass commits — the delta is the synchronous
   // render+commit cost of this whole conversation subtree. This is the
@@ -2161,7 +2157,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                   <span className="session-fork-divider-label">Forked session starts here</span>
                 </div>
               )}
-              <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} showCopyActions={globalIndex === lastAssistantTextIndex} onPromoteToTask={onPromoteToTask} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+              <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} showCopyActions={globalIndex === lastAssistantTextIndex} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
             </div>
           );
         })}

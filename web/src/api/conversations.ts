@@ -80,6 +80,20 @@ export async function deleteConversation(
   await apiDelete(`/api/agents/${agentId}/conversations/${conversationId}`);
 }
 
+/** Turn the WHOLE conversation into a task: creates the task and links the lane
+ *  session to it. The conversation stays in Main Chat; the task's session circle
+ *  routes back to the same transcript. 409 when the lane has no session yet. */
+export async function promoteConversationToTask(
+  agentId: string,
+  conversationId: string,
+  input: { title?: string; project?: string },
+): Promise<{ task: import('@open-walnut/core').Task; sessionId: string }> {
+  return apiPost<{ task: import('@open-walnut/core').Task; sessionId: string }>(
+    `/api/agents/${agentId}/conversations/${conversationId}/promote-task`,
+    input,
+  );
+}
+
 /** Fork a conversation: new conversation + a forked lane session carrying the
  *  full history (CLI --resume --fork-session). Lane engine only (409 otherwise). */
 export async function forkConversation(

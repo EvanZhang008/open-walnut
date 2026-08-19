@@ -6,7 +6,7 @@ import { getHostCatalog } from '@/hooks/useModelCatalog';
 import { useChat, mergeAdjacentErrors, type TaskContext, type ImageAttachment } from '@/hooks/useChat';
 import { useAgentConsole } from '@/hooks/useAgentConsole';
 import { useConversations, ACTIVE_CONV_KEY } from '@/hooks/useConversations';
-import { createConversation, forkConversation } from '@/api/conversations';
+import { createConversation, forkConversation, promoteConversationToTask } from '@/api/conversations';
 import { FileViewer } from '@/components/common/FileViewer';
 import { useWebSocket, useEvent } from '@/hooks/useWebSocket';
 import { useTasksContext } from '@/contexts/TasksContext';
@@ -38,7 +38,7 @@ import { SessionPathSelector, type QuickStartPath, type QuickStartTaskMeta } fro
 import { SessionSearchPanel } from '@/components/sessions/SessionSearchPanel';
 import { freshLauncherMeta, readLastLaunchPath, rememberLaunchPath } from '@/components/sessions/task-meta-constants';
 import { QuestionPopover, parseAskQuestionInput } from '@/components/chat/QuestionPopover';
-import type { PromoteToTaskInput } from '@/components/chat/PromoteToTaskMenu';
+import { PromoteTaskPopover, type PromoteToTaskInput } from '@/components/chat/PromoteToTaskMenu';
 import { TriagePanel } from '@/components/triage/TriagePanel';
 import { fetchSession, fetchSessionsForTask, fetchWorkingDirs, forkSessionInWalnut, quickStartSession } from '@/api/sessions';
 import { fetchProjectDetail } from '@/api/projects';
@@ -90,7 +90,7 @@ const AGENT_BUILDER_PREFILL = `Create an interactive agent that shows up in my c
 Purpose:
 Name (optional): `;
 
-function ChatHeaderRow({ title, connectionState, inspectorOpen, onToggleInspector, hasMessages, onClear, onOpenFiles, onFork, onCloseChat, agentSwitcher }: {
+function ChatHeaderRow({ title, connectionState, inspectorOpen, onToggleInspector, hasMessages, onClear, onOpenFiles, onFork, onPromoteToTask, promoteDefaultTitle, onCloseChat, agentSwitcher }: {
   title: string;
   connectionState: string;
   inspectorOpen: boolean;
@@ -101,11 +101,17 @@ function ChatHeaderRow({ title, connectionState, inspectorOpen, onToggleInspecto
   onOpenFiles?: () => void;
   /** Lane engine only: fork this conversation (history rides --fork-session). */
   onFork?: () => void;
+  /** Lane engine only: turn this WHOLE conversation into a task (creates the
+   *  task + links the lane session; the chat stays right here). */
+  onPromoteToTask?: (input: PromoteToTaskInput) => Promise<unknown>;
+  /** Prefill for the promote form — the conversation's auto title. */
+  promoteDefaultTitle?: string;
   /** Collapse the chat column — same affordance a session panel's × has. */
   onCloseChat?: () => void;
   agentSwitcher?: React.ReactNode;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [promoteOpen, setPromoteOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Close menu on outside click
@@ -146,6 +152,11 @@ function ChatHeaderRow({ title, connectionState, inspectorOpen, onToggleInspecto
                 Fork conversation
               </button>
             )}
+            {onPromoteToTask && hasMessages && (
+              <button className="chat-header-dropdown-item" onClick={() => { setPromoteOpen(true); setMenuOpen(false); }}>
+                Turn this into task
+              </button>
+            )}
             <button className="chat-header-dropdown-item" onClick={() => { onToggleInspector(); setMenuOpen(false); }}>
               {inspectorOpen ? 'Hide context' : 'Show context'}
             </button>
@@ -155,6 +166,15 @@ function ChatHeaderRow({ title, connectionState, inspectorOpen, onToggleInspecto
               </button>
             )}
           </div>
+        )}
+        {onPromoteToTask && (
+          <PromoteTaskPopover
+            open={promoteOpen}
+            anchorRef={menuRef}
+            defaultTitle={promoteDefaultTitle ?? ''}
+            onClose={() => setPromoteOpen(false)}
+            onSubmit={onPromoteToTask}
+          />
         )}
       </div>
       {onCloseChat && (
@@ -2011,19 +2031,31 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     return created;
   }, [handleCreate, handleFocusTask, notify, tierLabel]);
 
-  // "Turn this into task" on a Main Chat message. Reuses the quick-task path
-  // verbatim, so the new task locates itself in the todo panel and gets the same
-  // toast + Undo as every other create. No path/folder is chosen: a task has no
-  // working directory of its own (a session picks one later) — Project is the
-  // only placement the menu offers.
-  const handlePromoteMessageToTask = useCallback(async (input: PromoteToTaskInput) => {
-    return handleQuickTaskCreate({
-      title: input.title,
-      priority: 'none',
-      ...(input.description ? { description: input.description } : {}),
-      ...(input.project ? { project: input.project } : {}),
+  // "Turn this into task" — promotes the WHOLE active conversation. The server
+  // creates the task and links the conversation's lane session to it; the chat
+  // stays right here in Main Chat, and the task's session circle routes back to
+  // this same transcript (dual visibility, deliberately). Locate + toast + Undo
+  // mirror handleQuickTaskCreate; Undo deletes with force (the task holds a live
+  // session slot, which a plain delete correctly 409s on).
+  const handlePromoteChatToTask = useCallback(async (input: PromoteToTaskInput) => {
+    const cid = conversations.activeConversationId;
+    if (!cid) throw new Error('No active conversation');
+    const { task } = await promoteConversationToTask(agentConsole.activeAgentId, cid, input);
+    setTodoVisible(true);
+    const known = taskMapRef.current.get(task.id);
+    handleFocusTask(known ?? task, { openDetail: false });
+    notify({
+      kind: 'sort',
+      severity: 'success',
+      title: `Task created: ${task.title}`,
+      body: `${input.project?.trim() || 'Inbox'} · linked to this chat`,
+      dedupKey: task.id,
+      persistent: false,
+      action: { label: 'Undo', kind: 'callback' },
+      onAction: () => { deleteTaskApi(task.id, { force: true }).catch(() => {}); },
     });
-  }, [handleQuickTaskCreate]);
+    return task;
+  }, [agentConsole.activeAgentId, conversations.activeConversationId, handleFocusTask, notify]);
 
   // Core quick-start launcher — creates the pending session column and fires the
   // API call. Deliberately does NOT touch chat state/visibility: the todo-panel
@@ -2562,6 +2594,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     ? `Chat — ${focusedTask.title}`
     : 'Chat';
 
+  // The active conversation's auto title — prefill for "Turn this into task".
+  // 'New Conversation' is the placeholder before auto-titling; an empty prefill
+  // reads better in the form than that.
+  const activeConversationTitle = (() => {
+    const meta = conversations.conversations.find((c) => c.id === conversations.activeConversationId);
+    const t = meta?.title?.trim() ?? '';
+    return t === 'New Conversation' ? '' : t;
+  })();
+
   return (
     <div
       className={`main-page${sessionColumns.length > 0 ? ' has-mobile-session' : ''}`}
@@ -2686,6 +2727,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             onClear={handleClearChat}
             onOpenFiles={laneActive && lane.cwd ? handleLaneOpenFiles : undefined}
             onFork={laneActive && lane.sessionId ? handleLaneFork : undefined}
+            onPromoteToTask={laneActive && lane.sessionId ? handlePromoteChatToTask : undefined}
+            promoteDefaultTitle={activeConversationTitle}
             onCloseChat={() => setChatVisible(false)}
             agentSwitcher={(
               <AgentTabBar
@@ -2751,7 +2794,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 onTaskClick={handleFocusTaskById}
                 onSessionClick={handleSessionClick}
                 onFileOpen={handleLaneFileOpen}
-                onPromoteToTask={handlePromoteMessageToTask}
               />
               {laneFileView && (
                 <FileViewer
@@ -2818,7 +2860,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 taskLookup={taskMap}
                 onTaskClick={handleFocusTaskById}
                 onSessionClick={handleSessionClick}
-                onPromoteToTask={handlePromoteMessageToTask}
               />
             ))}
             {chat.toolActivity && (

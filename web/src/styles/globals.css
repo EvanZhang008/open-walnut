@@ -4066,29 +4066,11 @@ select {
 
 .msg-copy-label { white-space: nowrap; }
 
-/* "Turn this into task" — the trigger reuses .msg-copy-btn so the message
-   toolbar stays one visual language; the menu reuses .task-kebab-menu (placed
-   and capped by useMenuPlacement, like every other dropdown here). */
-.chat-message-actions {
-  display: flex;
-  align-items: center;
-  margin-top: 4px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.12s ease;
-}
-
-/* Hover reveals it; keep it visible while its own menu is open (the pointer has
-   left the row for the portalled menu by then). */
-.chat-message:hover .chat-message-actions,
-.chat-message-actions:focus-within {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-/* Two classes deliberately: .task-kebab-menu (which supplies the frame, the
-   height cap and the internal scrolling) is defined LATER in this file, so a
-   single-class rule here would lose its 180px min-width to it. */
+/* "Turn this into task" (chat header ⋯ menu) — the popover reuses
+   .task-kebab-menu, placed and capped by useMenuPlacement like every other
+   dropdown here. Two classes deliberately: .task-kebab-menu (which supplies
+   the frame, the height cap and the internal scrolling) is defined LATER in
+   this file, so a single-class rule here would lose its 180px min-width to it. */
 .task-kebab-menu.promote-task-menu {
   min-width: 300px;
   padding: 8px 0 6px;

@@ -275,6 +275,61 @@ export async function swapLaneEngine(
 }
 
 /**
+ * Turn a WHOLE conversation into a task: create the task and link the
+ * conversation's lane session to it (session_id slot + session_ids history +
+ * the record's taskId back-pointer).
+ *
+ * The conversation is NOT moved, archived, or re-homed — the lane session keeps
+ * its `lane` binding, so the chat surface stays exactly where it was and the
+ * task's session circle simply routes back to it. That dual identity is the
+ * point: one transcript, visible from both the Main Chat and the task.
+ *
+ * Uses linkSession (the primary `session_id` slot, same as quick-start), NOT
+ * addSessionToHistory: the lane IS this task's working session, not a
+ * spectator. Deleting the task later therefore requires stopping/clearing the
+ * slot (force delete) — same contract as every other session-holding task.
+ */
+export async function promoteLaneConversationToTask(
+  agentId: string,
+  conversationId: string,
+  input: { title?: string; project?: string },
+): Promise<{ task: import('../types.js').Task; sessionId: string }> {
+  const lane = personalAiLaneKey(agentId, conversationId);
+  // Let a mid-flight resolve settle so we link the record it created.
+  const pending = inFlight.get(lane);
+  if (pending) await pending.catch(() => {});
+  const record = await getSessionByLane(lane);
+  if (!record) {
+    const { SessionControlError } = await import('./session-controls.js');
+    throw new SessionControlError('This conversation has no session yet — send a message first', 409);
+  }
+
+  // Title: caller's choice → conversation auto-title → generic.
+  let title = input.title?.trim() ?? '';
+  if (!title) {
+    const { listConversations } = await import('../conversations.js');
+    const meta = (await listConversations(agentId)).find((c) => c.id === conversationId);
+    title = meta?.title?.trim() || 'Chat conversation';
+  }
+
+  const { addTask, linkSession } = await import('../task-manager.js');
+  const { task } = await addTask({
+    title,
+    ...(input.project !== undefined ? { project: input.project } : {}),
+  });
+  const { task: linked } = await linkSession(task.id, record.claudeSessionId);
+  // Back-pointer on the record: task surfaces resolve session→task through it
+  // (handleSessionClick, reconciler phase sync).
+  const { linkSessionToTask } = await import('../session-tracker.js');
+  await linkSessionToTask(record.claudeSessionId, task.id);
+
+  log.session.info('Personal AI lane: conversation promoted to task', {
+    lane, sessionId: record.claudeSessionId, taskId: task.id, project: linked.project || '',
+  });
+  return { task: linked, sessionId: record.claudeSessionId };
+}
+
+/**
  * Header marking the Walnut-injected standing-memory block inside the lane's
  * system prompt. The inspector splits on it for display.
  */

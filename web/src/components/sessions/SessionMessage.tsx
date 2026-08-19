@@ -9,7 +9,6 @@ import { useLivePlanContent } from '@/contexts/PlanContentContext';
 import { fetchSubagentHistory } from '@/api/sessions';
 import { getSubagentCache, setSubagentCache } from '@/cache/session-cache';
 import { CopyMessageButtons } from '@/components/common/CopyMessageButtons';
-import { PromoteToTaskMenu, type PromoteToTaskInput } from '@/components/chat/PromoteToTaskMenu';
 import { BashToolCall } from './BashToolCall';
 import { log } from '@/utils/log';
 
@@ -154,9 +153,6 @@ interface SessionMessageProps {
   suppressTools?: boolean;
   /** Only the last assistant output renders copy actions, keeping middle rows compact. */
   showCopyActions?: boolean;
-  /** MAIN CHAT ONLY: turns this message into a task ("Turn this into task").
-   *  Session columns leave it unset, so their bubbles keep just the copy actions. */
-  onPromoteToTask?: (input: PromoteToTaskInput) => Promise<unknown>;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number) => void;
@@ -975,7 +971,7 @@ function SessionToolCall({ tool, assistantLabel, sessionId, sessionCwd, sessionH
   return <GenericToolCall tool={tool} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen ? (p) => onFileOpen(p) : undefined} />;
 }
 
-export const SessionMessage = memo(function SessionMessage({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, showCopyActions = false, onPromoteToTask, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
+export const SessionMessage = memo(function SessionMessage({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, showCopyActions = false, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
   const { role, text, timestamp, tools: rawTools, thinking } = message;
   const tools = suppressTools ? undefined : rawTools;
   const time = formatTime(timestamp);
@@ -1076,13 +1072,9 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
             </div>
           );
         })()}
-        {(showCopyActions || onPromoteToTask) && text && text.trim() && (
+        {showCopyActions && text && text.trim() && (
           <div className="session-msg-actions">
-            {showCopyActions && <CopyMessageButtons markdown={text} />}
-            {/* Promote rides on EVERY message with text (not just the last
-                assistant one like copy does): the turn worth capturing is
-                usually mid-conversation, and the row is hover-only anyway. */}
-            {onPromoteToTask && <PromoteToTaskMenu text={text} onPromote={onPromoteToTask} />}
+            <CopyMessageButtons markdown={text} />
           </div>
         )}
       </div>

@@ -171,6 +171,46 @@ export function createConversationsRouter(): Router {
     }
   })
 
+  // POST /api/agents/:agentId/conversations/:cid/promote-task  {title?, project?}
+  // Turn the WHOLE conversation into a task: create the task and link the lane
+  // session to it. The conversation stays in Main Chat (lane binding untouched);
+  // the task's session circle routes back to this same transcript.
+  router.post('/:agentId/conversations/:cid/promote-task', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const agentId = validateAgentId(req.params.agentId as string)
+      const cid = validateConversationId(req.params.cid as string)
+      const body = (req.body ?? {}) as { title?: unknown; project?: unknown }
+      if (body.title !== undefined && typeof body.title !== 'string') {
+        res.status(400).json({ error: 'title must be a string' })
+        return
+      }
+      if (body.project !== undefined && typeof body.project !== 'string') {
+        res.status(400).json({ error: 'project must be a string ("" = Inbox)' })
+        return
+      }
+      const { promoteLaneConversationToTask } = await import('../../core/sessions/personal-ai-lane.js')
+      const { SessionControlError } = await import('../../core/sessions/session-controls.js')
+      try {
+        const { task, sessionId } = await promoteLaneConversationToTask(agentId, cid, {
+          title: body.title as string | undefined,
+          project: body.project as string | undefined,
+        })
+        log.web.info('conversation promoted to task', { agentId, conversationId: cid, taskId: task.id, sessionId })
+        const { bus } = await import('../../core/event-bus.js')
+        bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui', 'main-agent'], { source: 'api' })
+        res.status(201).json({ task, sessionId })
+      } catch (err) {
+        if (err instanceof SessionControlError) {
+          res.status(err.statusCode).json({ error: err.message })
+          return
+        }
+        throw err
+      }
+    } catch (err) {
+      next(err)
+    }
+  })
+
   // POST /api/agents/:agentId/conversations/:cid/fork
   // Fork the conversation: new conversation + a forked lane session that carries
   // the full history via the CLI's native --resume --fork-session. No task is
