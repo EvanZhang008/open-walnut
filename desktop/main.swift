@@ -1437,12 +1437,23 @@ extension AppDelegate: WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        if let url = navigationAction.request.url,
-           navigationAction.navigationType == .linkActivated,
-           url.host != "localhost" {
-            NSWorkspace.shared.open(url)
-            decisionHandler(.cancel)
-            return
+        if let url = navigationAction.request.url {
+            // App deep links (vscode:// etc.) set via JS `location.href` arrive as
+            // .other, not .linkActivated — WKWebView can't load them ("unsupported
+            // URL", silent no-op), so hand ANY non-web scheme to macOS regardless
+            // of navigation type. about/blob/data stay in-page.
+            let scheme = url.scheme?.lowercased() ?? ""
+            let inPageSchemes = ["http", "https", "about", "blob", "data", "javascript"]
+            if !inPageSchemes.contains(scheme) {
+                NSWorkspace.shared.open(url)
+                decisionHandler(.cancel)
+                return
+            }
+            if navigationAction.navigationType == .linkActivated, url.host != "localhost" {
+                NSWorkspace.shared.open(url)
+                decisionHandler(.cancel)
+                return
+            }
         }
         decisionHandler(.allow)
     }
