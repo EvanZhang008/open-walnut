@@ -63,6 +63,7 @@ test.describe('todo panel section tabs', () => {
     // The PROJECT chip is a separate axis from the section tabs; pick "All" so
     // no project scoping can filter the seed tasks out of the tiers.
     await page.getByRole('button', { name: 'View options' }).click()
+    await page.locator('.vd-rail-btn[data-rail-section="projects"]').click()
     await page.locator('.vd-cat').filter({
       has: page.locator('.vd-cat-name').filter({ hasText: /^All$/ }),
     }).click()
@@ -163,6 +164,7 @@ test.describe('todo panel section tabs', () => {
 
     // Project chip → All so the seed task is visible in the main list.
     await page.getByRole('button', { name: 'View options' }).click()
+    await page.locator('.vd-rail-btn[data-rail-section="projects"]').click()
     await page.locator('.vd-cat').filter({
       has: page.locator('.vd-cat-name').filter({ hasText: /^All$/ }),
     }).click()

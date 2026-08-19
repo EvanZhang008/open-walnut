@@ -64,7 +64,8 @@ async function expectTargetSelection(page: Page): Promise<void> {
   if (!await viewPanel.isVisible()) {
     await page.getByRole('button', { name: 'View options' }).click();
   }
-  await expect(page.locator('.vd-cat', { hasText: '\u2605' }).first()).toHaveClass(/\bvd-active\b/);
+  await page.locator('.vd-rail-btn[data-rail-section="projects"]').click();
+  await expect(page.locator('.vd-cat', { hasText: 'Inbox' }).first()).toHaveClass(/\bvd-active\b/);
   await page.keyboard.press('Escape');
 }
 
@@ -374,6 +375,7 @@ test('exact taskless deep link is restored by Back during a failed warm refresh'
   await page.locator('.session-panel-close').first().click();
   await expect(page.locator('.main-page-session-column .session-panel')).toHaveCount(0);
   await page.getByRole('button', { name: 'View options' }).click();
+  await page.locator('.vd-rail-btn[data-rail-section="projects"]').click();
   await page.locator('.vd-cat', { hasText: 'All' }).click();
   await page.keyboard.press('Escape');
   await expect.poll(() => {

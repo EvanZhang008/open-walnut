@@ -32,6 +32,8 @@ test('search finds a future-start task that the Now date filter hides', async ({
   await page.locator('.vd-trigger').click();
   const datePanel = page.locator('.vd-panel');
   await expect(datePanel).toBeVisible();
+  // Legacy selects render in the "Quick filters" rail section of the panel.
+  await datePanel.locator('.vd-rail-btn[data-rail-section="quick"]').click();
   await datePanel.locator('.vd-field', { hasText: 'Date' }).locator('select').selectOption('now');
   const showCompleted = datePanel.locator('.vd-check input[type="checkbox"]');
   if (await showCompleted.isChecked()) await showCompleted.uncheck();
@@ -74,6 +76,8 @@ test('search ignores the priority filter too', async ({ page }) => {
   await page.locator('.vd-trigger').click();
   const panel = page.locator('.vd-panel');
   await expect(panel).toBeVisible();
+  // Legacy selects render in the "Quick filters" rail section of the panel.
+  await panel.locator('.vd-rail-btn[data-rail-section="quick"]').click();
   await panel.locator('.vd-field', { hasText: 'Priority' }).locator('select').selectOption('immediate');
   await page.keyboard.press('Escape');
   await expect(panel).toBeHidden();

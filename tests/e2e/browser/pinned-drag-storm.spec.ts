@@ -14,7 +14,7 @@
  * task store, including cross-tier hovers.
  */
 import { test, expect, type Page } from '@playwright/test'
-import { showAllSections } from './todo-panel-helpers'
+import { selectProject, showAllSections } from './todo-panel-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
@@ -44,16 +44,8 @@ async function pinTaskViaApi(taskId: string, tier = 'focus'): Promise<void> {
   if (!tierRes.ok) throw new Error(`Tier failed: ${tierRes.status} ${await tierRes.text()}`)
 }
 
-async function selectProject(page: Page, project: string): Promise<void> {
-  if (!await page.locator('.vd-panel').isVisible()) {
-    await page.getByRole('button', { name: 'View options' }).click()
-  }
-  // :not([data-filter-value]) — the query filter panel duplicates .vd-cat markup.
-  await page.locator('.vd-cat:not([data-filter-value])').filter({
-    has: page.locator('.vd-cat-name').filter({ hasText: new RegExp(`^${project}$`) }),
-  }).click()
-  await page.keyboard.press('Escape')
-}
+// selectProject comes from todo-panel-helpers — this file used to carry its own
+// copy, which meant every panel-markup change had to be made twice.
 
 /** PATCH filler tasks in a loop — emulates the session-status / task:updated
  *  storm from the crash console ("transition accepted" x2352, bulk refetch). */

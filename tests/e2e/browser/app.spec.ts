@@ -89,9 +89,11 @@ test('todo panel shows seeded test task', async ({ page }) => {
 })
 
 test('Date=Now hides future tasks from the pinned area', async ({ page }) => {
+  // Now is START-date driven (2c4d557f): a future due date is a deadline and
+  // never hides a task; only a future start_date defers it out of Now.
   const futurePinned = await createTaskViaApi('Future pinned date filter', {
     project: 'Work',
-    due_date: new Date(Date.now() + 30 * 86_400_000).toISOString(),
+    start_date: new Date(Date.now() + 30 * 86_400_000).toISOString(),
   })
   const currentPinned = await createTaskViaApi('Current pinned date filter', {
     project: 'Work',
@@ -106,12 +108,16 @@ test('Date=Now hides future tasks from the pinned area', async ({ page }) => {
   const pinnedCard = (taskId: string) => page.locator(`.todo-focus-card[data-task-id="${taskId}"]`)
 
   await page.getByRole('button', { name: 'View options' }).click()
+  // Legacy selects render in the "Quick filters" rail section of the panel.
+  await page.locator('.vd-rail-btn[data-rail-section="quick"]').click()
   await page.locator('.vd-field').filter({ hasText: /^Date/ }).locator('select').selectOption('')
   await page.keyboard.press('Escape')
   await expect(pinnedCard(futurePinned.id)).toBeVisible({ timeout: 5000 })
   await expect(pinnedCard(currentPinned.id)).toBeVisible()
 
   await page.getByRole('button', { name: 'View options' }).click()
+  // Legacy selects render in the "Quick filters" rail section of the panel.
+  await page.locator('.vd-rail-btn[data-rail-section="quick"]').click()
   await page.locator('.vd-field').filter({ hasText: /^Date/ }).locator('select').selectOption('now')
   await page.keyboard.press('Escape')
   await expect(pinnedCard(futurePinned.id)).toBeHidden()
@@ -193,6 +199,8 @@ test('search and filters apply across pinned, recent, and task sections', async 
   await expect(recentCard(unpinnedMatch.id)).toBeVisible()
 
   await page.getByRole('button', { name: 'View options' }).click()
+  // Legacy selects render in the "Quick filters" rail section of the panel.
+  await page.locator('.vd-rail-btn[data-rail-section="quick"]').click()
   await page.locator('.vd-field').filter({ hasText: /^Priority/ }).locator('select').selectOption('immediate')
   await page.keyboard.press('Escape')
 
@@ -249,18 +257,18 @@ test('create task via quick-add form', async ({ page }) => {
   await page.waitForLoadState('networkidle')
   await showAllTasks(page)
 
-  // Type in the quick-add input
-  const input = page.locator('input[aria-label="New task title"]')
+  // The old always-visible quick-add input was retired; adding is now the
+  // InlineAdd row ("+ Add to Focus…" trigger → title input → Enter).
+  await page.locator('.focus-inline-add-trigger').first().click()
+  const input = page.locator('.focus-inline-add input')
   await input.fill(uniqueTitle)
+  await input.press('Enter')
 
-  // Click Add button
-  await page.getByRole('button', { name: 'Add', exact: true }).click()
+  // The new task lands in the Focus tier area.
+  const card = page.locator(`.todo-focus-card`, { hasText: uniqueTitle })
+  await expect(card).toBeVisible({ timeout: 5000 })
 
-  // Verify task appears in the todo list (match exact unique title)
-  const taskItem = page.locator('.todo-panel-item', { hasText: uniqueTitle })
-  await expect(taskItem).toBeVisible({ timeout: 5000 })
-
-  // Input should be cleared
+  // Input stays open for rapid multi-add, but clears after a successful create.
   await expect(input).toHaveValue('')
 })
 
@@ -278,9 +286,10 @@ test('complete task via phase picker', async ({ page }) => {
   const taskItem = page.locator('.todo-panel-item', { hasText: task.title })
   await expect(taskItem).toBeVisible({ timeout: 5000 })
 
-  // Complete the task through the current phase picker.
-  await taskItem.getByRole('button', { name: 'To Do', exact: true }).click()
-  await taskItem.getByRole('button', { name: 'Complete', exact: true }).click()
+  // Complete the task: the phase control is now a single circle button that
+  // toggles To Do ↔ Complete (the multi-option picker was retired with the
+  // two-state simplification).
+  await taskItem.getByRole('button', { name: 'Mark complete' }).click()
 
   // Wait for the task to get the done styling or disappear from active list
   // (completed tasks are hidden by default in the todo panel)

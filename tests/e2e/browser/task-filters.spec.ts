@@ -30,7 +30,7 @@ const PINNED_DONE_RECENT = 'pw-tq-pinned-done-recent'   // Lantern, COMPLETE, pi
 const OPEN_RECENT = 'pw-tq-open-recent'                 // Lantern, IN_PROGRESS, unpinned, updated 2h ago
 const DONE_STALE = 'pw-tq-done-stale'                   // Lantern, COMPLETE, unpinned, updated 3d ago
 const OTHER_RECENT = 'pw-tq-other-project-recent'       // Meadow, TODO, updated 2h ago
-const OTHER_STALE = 'pw-tq-other-project-stale'         // Meadow, AWAIT_HUMAN_ACTION, updated 8d ago
+const OTHER_STALE = 'pw-tq-other-project-stale'         // Meadow, TODO, backlog, updated 8d ago
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
@@ -97,14 +97,41 @@ async function closeViewPanel(page: Page): Promise<void> {
   }
 }
 
+/** Rail section id owning each query dimension in the rail+detail panel. */
+const RAIL_SECTION: Record<string, string> = {
+  Status: 'q-status',
+  Phase: 'q-phase',
+  Priority: 'q-priority',
+  Project: 'q-project',
+  Source: 'q-source',
+  Sprint: 'q-sprint',
+  Pinned: 'q-flags',
+  Blocked: 'q-flags',
+  Time: 'q-time',
+  'Order by': 'q-sort',
+}
+
+/** Focus a dimension's rail section so its options render in the detail pane.
+ *  RAIL_SECTION mirrors ViewDropdown's RailSection ids BY HAND — the guard
+ *  turns a drift into a named error instead of a silent
+ *  `[data-rail-section="undefined"]` 30s timeout. */
+async function openRailSection(panel: Locator, group: string): Promise<void> {
+  const id = RAIL_SECTION[group]
+  if (!id) throw new Error(`openRailSection: unknown rail group "${group}" — update RAIL_SECTION to match ViewDropdown's section ids`)
+  await panel.locator(`.vd-rail-btn[data-rail-section="${id}"]`).click()
+  await expect(panel.locator(`.vd-rail-btn.vd-active[data-rail-section="${id}"]`)).toBeVisible()
+}
+
 /** Toggle one value of an array dimension inside the query section. */
 async function toggleQueryChip(panel: Locator, group: string, value: string): Promise<void> {
+  await openRailSection(panel, group)
   await panel.locator('.vd-query .vd-field', { hasText: group })
     .locator(`.vd-cat[data-filter-value="${value}"]`).first().click()
 }
 
 /** Set a tri-state (Pinned / Blocked) to Any | Yes | No. */
 async function setTriState(panel: Locator, label: string, choice: 'any' | 'yes' | 'no'): Promise<void> {
+  await openRailSection(panel, label)
   await panel.locator('.vd-query .vd-field', { hasText: label })
     .locator(`.vd-seg-btn[data-tri-state="${choice}"]`).first().click()
 }
@@ -115,6 +142,9 @@ async function setTimeWindow(
   basis: 'created' | 'updated' | 'created_or_updated',
   preset: 'any' | '1h' | '6h' | '24h' | '7d' | '30d',
 ): Promise<void> {
+  await openRailSection(panel, 'Time')
+  // .vd-query scope: the panel renders .vd-seg-btn/.vd-cat in other sections
+  // too (Arrange, tri-states, custom unit) — keep the collision guard.
   await panel.locator(`.vd-query .vd-seg-btn[data-time-basis="${basis}"]`).click()
   await panel.locator(`.vd-query .vd-cat[data-time-preset="${preset}"]`).click()
 }
@@ -337,4 +367,64 @@ test('/tasks reached through the UI matches the homepage hit set', async ({ page
   await expect(chip(page, 'completion:complete', TASKS_PAGE)).toContainText('Done')
 
   await page.screenshot({ path: `${SHOTS}/04-tasks-page-parity.png`, fullPage: true })
+})
+
+test('filter sentence spells out the query and its chips remove one condition each', async ({ page }) => {
+  await openHomePanel(page)
+
+  const panel = await openViewPanel(page)
+  await toggleQueryChip(panel, 'Project', 'Meadow')
+  await setTimeWindow(panel, 'updated', '24h')
+
+  // The sentence writes the active query in plain words with one chip per value.
+  const sentence = panel.getByTestId('vd-sentence')
+  await expect(sentence).toContainText('Showing')
+  await expect(sentence.locator('[data-chip-dim="projects"][data-chip-value="Meadow"]')).toBeVisible()
+  await expect(sentence.locator('[data-chip-dim="time"]')).toContainText('24h')
+
+  // A chip's × removes exactly that one condition; the other survives.
+  await sentence.locator('[data-chip-dim="projects"][data-chip-value="Meadow"] .vd-sc-x').click()
+  await expect(sentence.locator('[data-chip-dim="projects"]')).toHaveCount(0)
+  await expect(sentence.locator('[data-chip-dim="time"]')).toBeVisible()
+
+  // Removing the last condition returns the neutral line.
+  await sentence.locator('[data-chip-dim="time"] .vd-sc-x').click()
+  await expect(sentence).toContainText('Showing every task.')
+
+  await page.screenshot({ path: `${SHOTS}/05-sentence-chips.png`, fullPage: true })
+  await closeViewPanel(page)
+})
+
+test('panel search finds options across dimensions and Enter toggles them', async ({ page }) => {
+  await openHomePanel(page)
+
+  const panel = await openViewPanel(page)
+  const search = panel.locator('.vd-search input')
+  await search.fill('meadow')
+
+  // The detail pane becomes a grouped cross-dimension result list.
+  const result = panel.locator('.vd-query .vd-cat[data-filter-value="Meadow"]')
+  await expect(result).toBeVisible()
+
+  // Enter toggles the cursor row (cursor starts at the first hit).
+  await search.press('Enter')
+  await expect(result).toHaveClass(/\bvd-active\b/)
+  await expect(panel.getByTestId('vd-sentence').locator('[data-chip-dim="projects"][data-chip-value="Meadow"]')).toBeVisible()
+
+  // First Escape clears the search (back to the section view), second closes.
+  await page.keyboard.press('Escape')
+  await expect(search).toHaveValue('')
+  await expect(panel.locator('.vd-rail')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(panel).toBeHidden()
+
+  // The filter applied: only the Meadow fixtures remain among pw-tq-* rows.
+  await expect(homeRow(page, OTHER_RECENT)).toBeVisible({ timeout: 10_000 })
+  await expect(homeRow(page, OPEN_RECENT)).toHaveCount(0)
+
+  // Clean up for the next spec: drop the condition through the chip strip.
+  await chip(page, 'project:Meadow').click()
+  await expect(chipStrip(page)).toHaveCount(0)
+
+  await page.screenshot({ path: `${SHOTS}/06-search-enter.png`, fullPage: true })
 })

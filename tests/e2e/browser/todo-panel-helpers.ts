@@ -54,6 +54,11 @@ export async function selectProject(page: Page, project: string): Promise<void> 
   if (!(await page.locator('.vd-panel').isVisible())) {
     await page.getByRole('button', { name: 'View options' }).click()
   }
+  // The panel is rail+detail now: the project chips render only while the
+  // "Projects" rail section is active, so select it first. Re-selecting the
+  // active section is a no-op state-wise, but it DOES clear any active search
+  // (the detail pane swaps back from results to the section).
+  await page.locator('.vd-rail-btn[data-rail-section="projects"]').click()
   // :not([data-filter-value]) — the query filter panel's project ChipGroup reuses
   // .vd-cat/.vd-cat-name markup; only the legacy nav grid chips lack data-filter-value.
   await page.locator('.vd-cat:not([data-filter-value])').filter({

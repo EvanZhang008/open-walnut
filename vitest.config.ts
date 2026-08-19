@@ -1,7 +1,19 @@
+import path from 'node:path';
 import { defineConfig } from 'vitest/config';
 import { maxWorkers, workerExecArgv } from './tests/setup/worker-budget';
 
 export default defineConfig({
+  // Same aliases as vitest.quick.config.ts: '@open-walnut/*' are alias-only
+  // (no real packages), so any tests/web/** file reaching web/src code dies at
+  // COLLECTION under a config without them — zero assertions, invisible to the
+  // baseline gate (this bit view-filter-model.test.ts and session-columns.test.ts).
+  resolve: {
+    alias: {
+      '@': path.resolve(import.meta.dirname, 'web/src'),
+      '@open-walnut/core': path.resolve(import.meta.dirname, 'src/core/types.ts'),
+      '@open-walnut/task-query': path.resolve(import.meta.dirname, 'src/core/task-query.ts'),
+    },
+  },
   test: {
     globals: true,
     environment: 'node',
