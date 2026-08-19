@@ -109,6 +109,43 @@ export async function revealLocalFile(
   return body.fullPath as string;
 }
 
+/** One match from the reference search (cmd+click on an identifier). */
+export interface ReferenceMatch {
+  file: string;
+  line: number;
+  text: string;
+  kind: 'def' | 'ref';
+}
+
+export interface ReferencesResponse {
+  symbol: string;
+  root: string;
+  matches: ReferenceMatch[];
+  truncated: boolean;
+  tool: 'git-grep' | 'grep' | 'none';
+  error?: string;
+}
+
+/**
+ * Repo-wide reference search for an identifier. One RPC: the host (daemon for
+ * remote sessions) runs a batched `git grep -w` from the file's repo root and
+ * returns classified matches — definitions sorted first.
+ */
+export async function fetchReferences(
+  filePath: string,
+  symbol: string,
+  host?: string,
+): Promise<ReferencesResponse> {
+  const params = new URLSearchParams({ path: filePath, symbol });
+  if (host) params.set('host', host);
+  const res = await fetch(`/api/files/references?${params}`);
+  const body = await res.json().catch(() => ({} as Record<string, unknown>));
+  if (!res.ok) {
+    throw new Error(typeof body?.error === 'string' ? body.error : `Reference search failed: ${res.status}`);
+  }
+  return body as ReferencesResponse;
+}
+
 /** A single directory entry for the file explorer tree. */
 export interface DirEntry {
   name: string;

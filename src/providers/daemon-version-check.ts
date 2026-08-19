@@ -65,6 +65,8 @@ const DAEMON_SOURCE_FILES = [
   // (same failure mode as the scan-core note above); keep in lockstep with
   // scripts/build-daemon.sh.
   'src/providers/path-resolve-core.ts',
+  // Host-local symbol search (fs.grep) — bundled into the binary twin.
+  'src/providers/search-grep-core.ts',
   // Embedded VS Code (vscode.ensure) — bundled into the binary AND shipped
   // as the vscode-server-core.cjs sidecar.
   'src/providers/vscode-server-core.ts',

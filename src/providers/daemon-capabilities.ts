@@ -156,6 +156,14 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * failure). Binary daemons bundle the resolver; source-deployed daemons require()
  * a sidecar (path-resolve-core.cjs) and advertise this only when that load
  * succeeds. Optional: without it the server uses its own RPC-based walk.
+ *
+ * 'grep-v1' — host-local symbol search (fs.grep), backing "find references" in
+ * the Files viewer. The daemon runs `git grep` (or a pruned `grep -r` outside a
+ * repo) next to the files and returns only the small match list, never the
+ * searched bytes. NOT sidecar-gated: both twins implement it inline over
+ * child_process, so a current daemon of either flavor can always answer.
+ * Optional: without it the route answers 503 "daemon needs upgrade for
+ * reference search" until the next auto-deploy.
  */
 export const ADVERTISED_DAEMON_CAPABILITIES = [
   ...REQUIRED_DAEMON_CAPABILITIES,
@@ -177,6 +185,7 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // without it the UI shows an upgrade hint and the vscode:// deep-link
   // button still works.
   'vscode-v1',
+  'grep-v1',
   'fs.readBounded',
   // 'acpSteer' — mid-turn message injection into a live ACP turn (worker
   // 'steer' op → adapter `_session/steering` → codex `turn/steer`). Optional:

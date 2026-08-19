@@ -24,6 +24,12 @@ import { EditorView, lineNumbers, highlightActiveLine, keymap, highlightSpecialC
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { syntaxHighlighting, defaultHighlightStyle, indentUnit, LanguageDescription } from '@codemirror/language';
 import { languages } from '@codemirror/language-data';
+import { highlightSelectionMatches } from '@codemirror/search';
+import {
+  cmSearchExtension, cmUpdateSearch, cmNavSearch, cmCloseSearch,
+  cmFlashExtension, cmFlashTerm, type CmSearchStatus,
+} from '@/utils/cm-search';
+import { SYMBOL_RE } from '@/utils/dom-text-search';
 
 export interface FileSourceEditorHandle {
   /** Current editor text — pulled by the parent at save time. */
@@ -36,6 +42,14 @@ export interface FileSourceEditorHandle {
    * (and its undo history) alive while making dirty-tracking correct again.
    */
   markClean: () => void;
+  /** Scroll a 1-based line into view (centered) — reference-jump target.
+   *  `term` flashes the landed-on keyword so the eye finds it instantly.
+   *  Optional: the WYSIWYG editor shares this handle type and has no lines. */
+  scrollToLine?: (line: number, term?: string) => void;
+  /** In-file search (the shared FileSearchBar drives these; CM surface only). */
+  searchUpdate?: (query: string, caseSensitive: boolean) => CmSearchStatus;
+  searchNav?: (dir: 1 | -1) => CmSearchStatus;
+  searchClose?: () => void;
 }
 
 /** A completed mouse selection inside the editor (for the quote-to-ask pill). */
@@ -59,6 +73,10 @@ interface FileSourceEditorProps {
   onSave: () => void;
   /** Scroll this 1-based line into view (centered) on mount — deep links. */
   initialLine?: number;
+  /** Flash this term on initialLine after mount (reference-jump landing).
+   *  Lives HERE, not only on the imperative handle: a cross-file jump mounts a
+   *  fresh editor, and a flash dispatched at any earlier instance dies with it. */
+  initialFlashTerm?: string;
   /**
    * Mouse selection reporting for the quote-to-ask pill. Called with the
    * selection on mouseup (line resolved from the CodeMirror doc, which the
@@ -66,6 +84,8 @@ interface FileSourceEditorProps {
    * selection collapses or the doc changes (typing replaces the selection).
    */
   onSelectText?: (sel: EditorSelection | null) => void;
+  /** Cmd/Ctrl+click on an identifier → reference lookup. 1-based line. */
+  onSymbolClick?: (symbol: string, line: number) => void;
 }
 
 /**
@@ -103,7 +123,7 @@ const editorTheme = EditorView.theme({
 });
 
 export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEditorProps>(
-  function FileSourceEditor({ initialValue, path, onDirtyChange, onSave, initialLine, onSelectText }, ref) {
+  function FileSourceEditor({ initialValue, path, onDirtyChange, onSave, initialLine, initialFlashTerm, onSelectText, onSymbolClick }, ref) {
     const hostRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     // Latest-callback refs: the listeners live inside a once-created view and must
@@ -114,6 +134,8 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
     onSaveRef.current = onSave;
     const onSelectTextRef = useRef(onSelectText);
     onSelectTextRef.current = onSelectText;
+    const onSymbolClickRef = useRef(onSymbolClick);
+    onSymbolClickRef.current = onSymbolClick;
     // Seed + last-reported dirtiness, both mount-scoped (the parent remounts to reseed).
     const seedRef = useRef(initialValue);
     const dirtyRef = useRef(false);
@@ -128,6 +150,19 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
           onDirtyChangeRef.current(false);
         }
       },
+      scrollToLine: (line: number, term?: string) => {
+        const view = viewRef.current;
+        if (!view || line < 1 || line > view.state.doc.lines) return;
+        view.dispatch({
+          effects: EditorView.scrollIntoView(view.state.doc.line(line).from, { y: 'center' }),
+        });
+        cmFlashTerm(view, line, term);
+      },
+      searchUpdate: (query, caseSensitive) =>
+        viewRef.current ? cmUpdateSearch(viewRef.current, query, caseSensitive) : { count: 0, index: 0 },
+      searchNav: (dir) =>
+        viewRef.current ? cmNavSearch(viewRef.current, dir) : { count: 0, index: 0 },
+      searchClose: () => { if (viewRef.current) cmCloseSearch(viewRef.current); },
     }), []);
 
     useEffect(() => {
@@ -154,6 +189,11 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
         ]),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         indentUnit.of('  '),
+        // Select a word → every exact match lights up (VS Code behavior).
+        // minSelectionLength keeps a 1-2 char selection from confetti-ing the file.
+        highlightSelectionMatches({ minSelectionLength: 3, maxMatches: 2000 }),
+        cmSearchExtension(),
+        cmFlashExtension(),
         editorTheme,
         EditorView.updateListener.of((u) => {
           // Any doc change or selection collapse retracts a reported selection —
@@ -188,6 +228,31 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
             cb({ text, line, x: e.clientX, y: e.clientY });
             return false;
           },
+          // Cmd/Ctrl+click on an identifier → reference lookup (VS Code jump).
+          // mousedown (not click): returning true here stops CM's own handling,
+          // so the caret doesn't move out from under the reader.
+          mousedown: (e, view) => {
+            const cb = onSymbolClickRef.current;
+            if (!cb || !(e.metaKey || e.ctrlKey) || e.button !== 0) return false;
+            const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+            if (pos == null) return false;
+            const lineObj = view.state.doc.lineAt(pos);
+            const text = lineObj.text;
+            const col = pos - lineObj.from;
+            const isWord = (ch: string) => /[A-Za-z0-9_$]/.test(ch);
+            let start = col;
+            let end = col;
+            // Caret may land just right of the glyph — step back onto the word.
+            if (!isWord(text[start] ?? '') && start > 0 && isWord(text[start - 1]!)) { start -= 1; end -= 1; }
+            if (!isWord(text[start] ?? '')) return false;
+            while (start > 0 && isWord(text[start - 1]!)) start -= 1;
+            while (end < text.length && isWord(text[end]!)) end += 1;
+            const word = text.slice(start, end);
+            if (!SYMBOL_RE.test(word)) return false;
+            e.preventDefault();
+            cb(word, lineObj.number);
+            return true;
+          },
         }),
       ];
 
@@ -207,6 +272,9 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
         lineRaf = requestAnimationFrame(() => {
           if (viewRef.current === view) {
             view.dispatch({ effects: EditorView.scrollIntoView(pos, { y: 'center' }) });
+            // Landing cue for reference jumps: flash the jumped-to term (or
+            // line). Runs on THIS instance, so a remount can't strand it.
+            cmFlashTerm(view, initialLine, initialFlashTerm);
           }
         });
       }

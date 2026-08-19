@@ -108,21 +108,43 @@ export function saveSelectedFile(host: string | undefined, scope: string, path: 
 // ── Back/forward history (per host + scope) ──
 
 /**
+ * One history stop. `line` is set when the visit was a POSITIONED navigation —
+ * a reference-panel jump, a go-to-definition, or the stamped "you were here"
+ * position recorded on the entry being jumped AWAY from — so Back/Forward
+ * return to the exact line, editor-style, not just the file.
+ */
+export interface FileHistoryEntry {
+  path: string;
+  line?: number;
+}
+
+/**
  * A browser-style history stack for the preview pane. `entries` is oldest-first,
  * `index` points at the currently-shown file. Back = index-1, Forward = index+1.
  */
 export interface FileHistory {
-  entries: string[];
+  entries: FileHistoryEntry[];
   index: number;
 }
 
 const EMPTY_HISTORY: FileHistory = { entries: [], index: -1 };
 
+function sanitizeEntry(raw: unknown): FileHistoryEntry | null {
+  // Legacy shape: a bare path string (pre-line-aware stacks persist in
+  // localStorage indefinitely — migrate on read, forever).
+  if (typeof raw === 'string') return raw.length > 0 ? { path: raw } : null;
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Partial<FileHistoryEntry>;
+  if (typeof obj.path !== 'string' || obj.path.length === 0) return null;
+  const line = typeof obj.line === 'number' && Number.isInteger(obj.line) && obj.line > 0 ? obj.line : undefined;
+  return line ? { path: obj.path, line } : { path: obj.path };
+}
+
 function sanitizeHistory(raw: unknown): FileHistory {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return EMPTY_HISTORY;
-  const obj = raw as Partial<FileHistory>;
+  const obj = raw as { entries?: unknown; index?: unknown };
   if (!Array.isArray(obj.entries)) return EMPTY_HISTORY;
-  const entries = obj.entries.filter((e): e is string => typeof e === 'string' && e.length > 0);
+  const entries = obj.entries.map(sanitizeEntry).filter((e): e is FileHistoryEntry => e !== null);
   if (entries.length === 0) return EMPTY_HISTORY;
   const idx = typeof obj.index === 'number' && Number.isInteger(obj.index) ? obj.index : entries.length - 1;
   // A stored index outside the surviving entries would strand Back/Forward on a
@@ -149,24 +171,42 @@ export function saveFileHistory(host: string | undefined, scope: string, history
 
 /**
  * Push a newly-opened file, exactly like a browser address-bar navigation:
- *  - re-opening the file already shown is a no-op (no duplicate stack entries);
+ *  - re-opening the file already shown is a no-op (no duplicate stack entries)
+ *    UNLESS it lands on a different line (a same-file reference jump IS a stop);
  *  - navigating after going Back TRUNCATES the forward tail (that future is gone);
  *  - the stack is capped, dropping oldest entries (index shifts with them).
  */
-export function pushFileHistory(history: FileHistory, path: string): FileHistory {
-  if (history.entries[history.index] === path) return history;
-  const entries = [...history.entries.slice(0, history.index + 1), path];
+export function pushFileHistory(history: FileHistory, path: string, line?: number): FileHistory {
+  const cur = history.entries[history.index];
+  if (cur?.path === path && (line === undefined || cur.line === line)) return history;
+  const entry: FileHistoryEntry = line ? { path, line } : { path };
+  const entries = [...history.entries.slice(0, history.index + 1), entry];
   const overflow = entries.length - HISTORY_MAX_ENTRIES;
   const trimmed = overflow > 0 ? entries.slice(overflow) : entries;
   return { entries: trimmed, index: trimmed.length - 1 };
 }
 
+/**
+ * Stamp the CURRENT entry with the position the reader is jumping AWAY from, so
+ * Back returns to that exact line (what every code editor does on
+ * go-to-definition). Plain scrolling deliberately doesn't stamp — only a
+ * positioned jump makes the departure point worth pinning; un-lined entries
+ * keep resuming via the per-file scroll memory.
+ */
+export function stampFileHistoryLine(history: FileHistory, path: string, line: number): FileHistory {
+  const cur = history.entries[history.index];
+  if (!cur || cur.path !== path || cur.line === line) return history;
+  const entries = [...history.entries];
+  entries[history.index] = { path, line };
+  return { entries, index: history.index };
+}
+
 /** Drop every occurrence of a path (file deleted since) and re-clamp the index. */
 export function removeFromFileHistory(history: FileHistory, path: string): FileHistory {
-  if (!history.entries.includes(path)) return history;
-  const removedBeforeIndex = history.entries.slice(0, history.index).filter((e) => e === path).length;
-  const wasCurrent = history.entries[history.index] === path;
-  const entries = history.entries.filter((e) => e !== path);
+  if (!history.entries.some((e) => e.path === path)) return history;
+  const removedBeforeIndex = history.entries.slice(0, history.index).filter((e) => e.path === path).length;
+  const wasCurrent = history.entries[history.index]?.path === path;
+  const entries = history.entries.filter((e) => e.path !== path);
   if (entries.length === 0) return EMPTY_HISTORY;
   // Removing the current entry lands on its predecessor (browser-like); removing
   // earlier entries just shifts the index left by however many vanished.

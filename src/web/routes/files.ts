@@ -402,15 +402,31 @@ filesRouter.get('/references', async (req: Request, res: Response, next: NextFun
       res.status(400).json({ error: 'invalid symbol' })
       return
     }
-    if (!reqPath || !path.isAbsolute(reqPath)) {
-      res.status(400).json({ error: 'path must be absolute' })
+    // A reference search RETURNS FILE CONTENT (up to 500 matched lines), so it
+    // must clear the same sandbox as the read path — never a weaker one. That
+    // gate owns `..` rejection, `~` expansion, the cloud-mode root confinement,
+    // and the secret denylist; skipping it made `~/.aws/credentials` greppable.
+    let filePath: string
+    try {
+      const { assertPathAllowed, isSecretPath } = await import('./file-content.js')
+      filePath = assertPathAllowed(reqPath, host, 'read').filePath
+      // The read path only checks secrets in cloud mode (a local console is the
+      // user's own machine), but grep walks a whole DIRECTORY from one file, so
+      // one innocent-looking path can rake in every sibling secret. Deny always.
+      if (!host && isSecretPath(filePath)) {
+        res.status(403).json({ error: 'Path not permitted' })
+        return
+      }
+    } catch (err) {
+      const status = (err as { statusCode?: number }).statusCode ?? 400
+      res.status(status).json({ error: (err as Error).message })
       return
     }
 
     if (!host) {
       const { grepReferencesHostLocal } = await import('../../providers/search-grep-core.js')
       const result = await grepReferencesHostLocal({
-        file: reqPath, symbol,
+        file: filePath, symbol,
         ...(maxMatches !== undefined ? { maxMatches } : {}),
         budgetMs: REFERENCE_SEARCH_BUDGET_MS,
       })
@@ -444,7 +460,7 @@ filesRouter.get('/references', async (req: Request, res: Response, next: NextFun
       return
     }
     const result = await conn.send('fs.grep', {
-      file: reqPath, symbol,
+      file: filePath, symbol,
       ...(maxMatches !== undefined ? { maxMatches } : {}),
       budgetMs: REFERENCE_SEARCH_BUDGET_MS,
     }, REMOTE_TIMEOUT_MS)

@@ -18922,6 +18922,18 @@ td.usage-share-col {
 }
 
 .session-pill-status-dot.dot-active {
+.sfe-notice-dismiss {
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  margin-left: 6px;
+}
+.sfe-notice-dismiss:hover { opacity: 1; }
+
   background: var(--success);
   animation: session-pulse 2s ease-in-out infinite;
 }
@@ -23344,7 +23356,8 @@ a.file-link:hover {
 .file-content-view:has(> .fv-wysiwyg-editor) > .fv-html-toolbar,
 .file-content-view:has(> .fv-wysiwyg-editor) > .fv-save-error,
 .file-content-view:has(> .fv-wysiwyg-editor) > .file-viewer-truncated,
-.file-content-view:has(> .fv-wysiwyg-editor) > .fv-reloading-badge {
+.file-content-view:has(> .fv-wysiwyg-editor) > .fv-reloading-badge,
+.file-content-view:has(> .fv-wysiwyg-editor) > .fv-search-bar {
   flex: 0 0 auto;
 }
 
@@ -23372,6 +23385,7 @@ a.file-link:hover {
      resolvable height (pop-out window, unusually short pane). */
   min-height: 240px;
   overflow: hidden;
+.file-content-view:has(> .fv-source-editor) > .fv-search-bar,
 }
 
 .fv-html-preview {
@@ -23379,6 +23393,208 @@ a.file-link:hover {
   width: 100%;
   height: 100%;
   min-height: 60vh;
+/* ── In-file search bar (⌘F) — a chrome row above the file body ─────────── */
+.fv-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary, var(--bg));
+}
+.fv-search-input {
+  flex: 0 1 260px;
+  min-width: 120px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+  outline: none;
+}
+.fv-search-input:focus { border-color: var(--accent); }
+.fv-search-case,
+.fv-search-nav,
+.fv-search-close {
+  padding: 2px 7px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.fv-search-case:hover, .fv-search-nav:hover:not(:disabled), .fv-search-close:hover {
+  background: var(--bg-hover, rgba(127, 127, 127, 0.1));
+  color: var(--fg);
+}
+.fv-search-case.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.fv-search-nav:disabled { opacity: 0.35; cursor: default; }
+.fv-search-count {
+  font-size: 11px;
+  color: var(--fg-muted);
+  min-width: 64px;
+  white-space: nowrap;
+}
+
+/* Search-match paint. CodeMirror surface = .cm-searchMatch marks (same class
+   names the stock @codemirror/search panel uses); every DOM surface (markdown
+   preview, WYSIWYG, read-only <pre>, HTML iframe) = the CSS Custom Highlight
+   API (::highlight), which paints WITHOUT touching the DOM. */
+.cm-searchMatch { background-color: rgba(255, 200, 0, 0.35); }
+.cm-searchMatch.cm-searchMatch-selected { background-color: rgba(255, 145, 0, 0.85); color: #1a1a1a; }
+::highlight(walnut-search) { background-color: rgba(255, 200, 0, 0.35); }
+::highlight(walnut-search-active) { background-color: rgba(255, 145, 0, 0.85); color: #1a1a1a; }
+/* Select text → every exact match tints (VS Code). CM twin: .cm-selectionMatch. */
+::highlight(walnut-selmatch) { background-color: rgba(80, 160, 255, 0.30); }
+.cm-selectionMatch { background-color: rgba(80, 160, 255, 0.30); }
+/* "You landed HERE" flash on the jumped-to keyword (reference jumps). */
+.cm-jump-flash {
+  background-color: rgba(255, 145, 0, 0.55);
+  border-radius: 2px;
+  animation: walnut-jump-flash-fade 2.4s ease-out forwards;
+}
+@keyframes walnut-jump-flash-fade {
+  0%, 55% { background-color: rgba(255, 145, 0, 0.55); }
+  100% { background-color: rgba(255, 145, 0, 0); }
+}
+
+/* ── Reference panel (cmd+click an identifier) — third explorer column ───── */
+.ref-panel {
+  flex: 0 0 300px;
+  min-width: 220px;
+  max-width: 40%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-secondary, var(--bg));
+}
+.ref-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.ref-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ref-panel-title code {
+  font-size: 11.5px;
+  background: var(--bg-hover, rgba(127, 127, 127, 0.1));
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.ref-panel-count {
+  margin-left: 8px;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.ref-panel-close {
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+.ref-panel-close:hover { background: var(--bg-hover, rgba(127, 127, 127, 0.1)); color: var(--fg); }
+.ref-panel-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0 24px;
+}
+.ref-panel-status {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.ref-panel-error { color: var(--danger, #ef4444); }
+.ref-panel-section {
+  padding: 8px 10px 3px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+.ref-panel-file {
+  padding: 5px 10px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;      /* ellipsize the LEFT side — the filename end matters */
+  text-align: left;
+}
+/* The file the lookup came FROM — colored so "where am I" reads instantly. */
+.ref-panel-file-current {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-radius: 4px;
+}
+.ref-panel-current-tag {
+  direction: ltr;
+  display: inline-block;
+  margin-right: 6px;   /* rtl container: margin-right renders to the tag's left */
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  background: var(--accent);
+  color: #fff;
+  vertical-align: 1px;
+}
+.ref-panel-row {
+  display: flex;
+  gap: 8px;
+  padding: 2px 10px 2px 16px;
+  font-size: 11.5px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  cursor: pointer;
+  align-items: baseline;
+}
+.ref-panel-row:hover { background: var(--bg-hover, rgba(127, 127, 127, 0.08)); }
+.ref-panel-def .ref-panel-text { font-weight: 600; }
+.ref-panel-line {
+  flex: 0 0 auto;
+  min-width: 34px;
+  text-align: right;
+  color: var(--fg-muted);
+  font-size: 10.5px;
+}
+.ref-panel-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+.ref-panel-text mark {
+  background: rgba(255, 200, 0, 0.35);
+  color: inherit;
+  border-radius: 2px;
+}
+
   border: none;
   background: #fff;
 }

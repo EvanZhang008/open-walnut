@@ -620,6 +620,40 @@ await fs.mkdir(vscodeFixtureRoot, { recursive: true })
 // content the spec rewrites on disk, plus a dir it creates a new file inside —
 // Refresh must surface both without a page reload.
 await fs.writeFile(path.join(vscodeFixtureRoot, 'refresh-target.txt'), 'ORIGINAL_CONTENT\n')
+// In-file search + reference-lookup fixtures (file-search-and-references.spec.ts):
+// a definition in one file, calls in another, so cmd+click has something to find.
+await fs.writeFile(
+  path.join(vscodeFixtureRoot, 'sync-controller.go'),
+  [
+    'package marina',
+    '',
+    '// registerResources wires the informers.',
+    'func (f *Factory) HasSyncedForItems(gate []string) bool {',
+    '\treturn f.done',
+    '}',
+    '',
+    'func run() {',
+    '\tsyncedFn = func() bool { return c.factory.HasSyncedForItems(gates) }',
+    '\tfor i := 0; i < 3; i++ {',
+    '\t\tprintln("SEARCH_MARKER row", i)',
+    '\t}',
+    '}',
+    '',
+  ].join('\n'),
+)
+await fs.writeFile(
+  path.join(vscodeFixtureRoot, 'sync-caller.go'),
+  [
+    'package marina',
+    '',
+    'func wait(c *Controller) {',
+    '\tif !c.factory.HasSyncedForItems(nil) {',
+    '\t\tprintln("timed out")',
+    '\t}',
+    '}',
+    '',
+  ].join('\n'),
+)
 // Markdown preview fixture (file-explorer-refresh.spec.ts): a FOUR-backtick
 // fence wrapping inner ``` fences — the shape that used to make path
 // linkification inject <a> inside a code region, which marked then escaped into

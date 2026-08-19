@@ -483,6 +483,40 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     const advEnd = capsSrc.indexOf('] as const', advStart)
     expect(capsSrc.slice(advStart, advEnd)).toMatch(/'changes-v1'/)
   })
+  // Host-local symbol search (fs.grep): the binary twin imports
+  // search-grep-core.ts, the source twin inlines an equivalent. NOT sidecar-
+  // gated — both need only child_process — so 'grep-v1' is unconditional on a
+  // current daemon, and still advertised-not-required so old ones stay usable.
+  it("both twins dispatch fs.grep; 'grep-v1' advertised but NOT required", () => {
+    const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
+    for (const src of [standaloneSrc, templateSrc]) {
+      expect(src).toMatch(/case 'fs\.grep': return cmdFsGrep/)
+      expect(src).toMatch(/function cmdFsGrep/)
+    }
+    // The binary twin uses the shared core; the template inlines the classifier.
+    expect(standaloneSrc).toMatch(/from '\.\/search-grep-core\.js'/)
+    expect(templateSrc).toMatch(/function grepClassifyDefinition/)
+    // Unconditional on the template (no sidecar to gate on).
+    expect(templateSrc).toMatch(/caps\.push\('grep-v1'\)/)
+    const gatedStart = templateSrc.indexOf('SIDECAR_GATED_CAPABILITIES = new Set([')
+    expect(templateSrc.slice(gatedStart, templateSrc.indexOf('])', gatedStart)))
+      .not.toContain("'grep-v1'")
+    // Advertised, never required — an old daemon must stay usable.
+    const capsSrc = readFile(path.join(ROOT, 'src/providers/daemon-capabilities.ts'))
+    const reqStart = capsSrc.indexOf('REQUIRED_DAEMON_CAPABILITIES = [')
+    expect(reqStart).toBeGreaterThan(-1)
+    expect(capsSrc.slice(reqStart, capsSrc.indexOf('] as const', reqStart)))
+      .not.toMatch(/'grep-v1'/)
+    const advStart = capsSrc.indexOf('ADVERTISED_DAEMON_CAPABILITIES = [')
+    expect(capsSrc.slice(advStart, capsSrc.indexOf('] as const', advStart)))
+      .toMatch(/'grep-v1'/)
+    // The core must be hashed into the daemon version, or a classifier edit
+    // ships without any daemon self-upgrading.
+    expect(readFile(path.join(ROOT, 'scripts/build-daemon.sh')))
+      .toMatch(/search-grep-core\.ts/)
+    expect(readFile(path.join(ROOT, 'src/providers/daemon-version-check.ts')))
+      .toMatch(/search-grep-core\.ts/)
+  })
   it("source twin gates 'changes-v1' on the sidecar load (static caps exclude it)", () => {
     // Every sidecar-gated capability must be excluded from the STATIC caps
     // literal (a source deploy that advertised one before its sidecar loaded

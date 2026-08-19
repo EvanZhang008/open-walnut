@@ -36,12 +36,20 @@ import { ICON_NEW_TAB } from '@/components/common/Icons';
 import { FileSourceEditor, type FileSourceEditorHandle } from '@/components/common/FileSourceEditor';
 import { FileMarkdownEditor } from '@/components/common/FileMarkdownEditor';
 import { SelectionAskPill, selectionClientRect } from '@/components/common/SelectionAskPill';
+import { FileSearchBar } from '@/components/common/FileSearchBar';
+import {
+  DomSearchController, applyHighlights, clearHighlights, collectTextMatches,
+  ensureHighlightStyles, wordAtPoint, claimSearchOwner, onSearchOwnerLost, HL_SELMATCH,
+} from '@/utils/dom-text-search';
 import { openPopout } from '@/popout/openPopout';
 import { log } from '@/utils/log';
 
 interface FileContentViewProps {
   path: string;
   line?: number;
+  /** The keyword the jump landed on (reference panel) — flashed at `line` so
+   *  the eye finds the term, not just the row. */
+  lineTerm?: string;
   host?: string;
   /** Hide the "pop out to window" button (e.g. when already rendered inside a pop-out). */
   hidePopout?: boolean;
@@ -62,6 +70,12 @@ interface FileContentViewProps {
   /** Fired after a successful save, so the container can refresh sibling views
    *  (the explorer re-lists, a Changed tab recomputes). */
   onSaved?: (filePath: string) => void;
+  /**
+   * Cmd/Ctrl+click on an identifier → reference search. When provided, the
+   * container (SessionFileExplorer) owns the side panel and the jump; this
+   * component only detects the gesture and reports the symbol.
+   */
+  onSymbolLookup?: (symbol: string, filePath: string, line?: number) => void;
 }
 
 /** Build line-numbered HTML from raw file content. Lines get Prism syntax
@@ -148,7 +162,7 @@ function findScroller(start: HTMLElement | null): HTMLElement | null {
 }
 
 export function FileContentView({
-  path: filePath, line, host, hidePopout, reloadToken = 0, onSelectCode, onSaved,
+  path: filePath, line, lineTerm, host, hidePopout, reloadToken = 0, onSelectCode, onSaved, onSymbolLookup,
 }: FileContentViewProps) {
   const [data, setData] = useState<FileContentResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -779,6 +793,187 @@ export function FileContentView({
   // Drop a stale pill when the file changes.
   useEffect(() => { setSelection(null); }, [filePath]);
 
+  // ── In-file search (⌘F) ────────────────────────────────────────────────────
+  // ONE search bar for every render mode. The CodeMirror surface searches via
+  // the editor handle (decorations); every DOM surface (markdown preview,
+  // WYSIWYG, read-only <pre>, HTML iframe) via DomSearchController, which
+  // paints with the CSS Custom Highlight API — no DOM mutation, so refractor
+  // spans and the live TipTap doc are never corrupted.
+  const [searchOpen, setSearchOpen] = useState(false);
+  // Identity for the single-owner arbitration of the global highlight registry.
+  const searchTokenRef = useRef(`fv-${Math.random().toString(36).slice(2)}`);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchCase, setSearchCase] = useState(false);
+  const [searchStatus, setSearchStatus] = useState({ count: 0, index: 0 });
+  const domSearchRef = useRef<{ root: HTMLElement; ctrl: DomSearchController } | null>(null);
+
+  /** The DOM body that hosts text in the CURRENT render mode (null for CM). */
+  const resolveDomSearchTarget = useCallback((): { root: HTMLElement; win: Window; scrollWindow: boolean } | null => {
+    const rootEl = contentRef.current;
+    if (!rootEl) return null;
+    if (!loading && !showSource && isHtml) {
+      const frame = htmlFrameRef.current;
+      let doc: Document | null = null;
+      try { doc = frame?.contentDocument ?? null; } catch { doc = null; }
+      const win = frame?.contentWindow;
+      if (doc?.body && win) {
+        ensureHighlightStyles(doc);
+        return { root: doc.body, win, scrollWindow: true };
+      }
+      return null;
+    }
+    const body = rootEl.querySelector<HTMLElement>('.fv-wysiwyg-editor, .fv-md-preview, .file-viewer-code');
+    return body ? { root: body, win: window, scrollWindow: false } : null;
+  }, [loading, showSource, isHtml]);
+
+  const domSearchCtrl = useCallback((): DomSearchController | null => {
+    const target = resolveDomSearchTarget();
+    if (!target) return null;
+    if (domSearchRef.current?.root !== target.root) {
+      domSearchRef.current?.ctrl.close();
+      domSearchRef.current = { root: target.root, ctrl: new DomSearchController(target.root, target.win, target.scrollWindow) };
+    }
+    return domSearchRef.current.ctrl;
+  }, [resolveDomSearchTarget]);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery('');
+    setSearchStatus({ count: 0, index: 0 });
+    editorRef.current?.searchClose?.();
+    domSearchRef.current?.ctrl.close();
+    domSearchRef.current = null;
+  }, []);
+
+  /** Open the bar and claim the highlight registry (closing any other one). */
+  const openSearch = useCallback(() => {
+    claimSearchOwner(searchTokenRef.current);
+    setSearchOpen(true);
+  }, []);
+
+  // Another viewer claimed the registry — close our bar rather than sit there
+  // showing a count for highlights that are no longer painted.
+  useEffect(() => {
+    if (!searchOpen) return;
+    return onSearchOwnerLost(searchTokenRef.current, closeSearch);
+  }, [searchOpen, closeSearch]);
+
+  // Re-run the search when the query/case/surface changes. Debounced: the DOM
+  // pass re-walks every text node, which a fast typist shouldn't pay per key.
+  useEffect(() => {
+    if (!searchOpen) return;
+    const timer = setTimeout(() => {
+      if (editingSource) {
+        setSearchStatus(editorRef.current?.searchUpdate?.(searchQuery, searchCase) ?? { count: 0, index: 0 });
+      } else {
+        const ctrl = domSearchCtrl();
+        setSearchStatus(ctrl ? ctrl.update(searchQuery, searchCase) : { count: 0, index: 0 });
+      }
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [searchOpen, searchQuery, searchCase, editingSource, domSearchCtrl, data]);
+
+  const handleSearchNav = useCallback((dir: 1 | -1) => {
+    if (editingSource) {
+      setSearchStatus(editorRef.current?.searchNav?.(dir) ?? { count: 0, index: 0 });
+    } else {
+      const ctrl = domSearchCtrl();
+      setSearchStatus(ctrl ? ctrl.nav(dir) : { count: 0, index: 0 });
+    }
+  }, [editingSource, domSearchCtrl]);
+
+  // Search state belongs to the FILE — switching files drops it.
+  useEffect(() => () => { closeSearch(); }, [filePath, closeSearch]);
+
+  // ⌘F opens the bar. Capture phase so it beats CodeMirror and the browser's
+  // native find. Guards: skip inputs outside this view; when several viewers
+  // are mounted (session panel + overlay), only the focused/overlay one reacts.
+  useEffect(() => {
+    if (raw || data?.binary) return;
+    const handler = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      if (e.key !== 'f' && e.key !== 'F') return;
+      const el = contentRef.current;
+      if (!el) return;
+      const t = e.target as HTMLElement | null;
+      const inside = t ? el.contains(t) : false;
+      if (!inside) {
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+        if (document.querySelectorAll('.file-content-view').length > 1
+          && !el.contains(document.activeElement)
+          && !el.closest('.file-viewer-overlay') && !fullscreen) return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      openSearch();
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [raw, data?.binary, fullscreen]);
+
+  // ── Select → highlight every exact match ───────────────────────────────────
+  // DOM surfaces only: CodeMirror already does this via highlightSelectionMatches.
+  // Painted with the Highlight API under the browser's own selection paint.
+  const refreshSelectionMatches = useCallback(() => {
+    const rootEl = contentRef.current;
+    if (!rootEl) return;
+    const body = rootEl.querySelector<HTMLElement>('.fv-wysiwyg-editor, .fv-md-preview, .file-viewer-code');
+    if (!body) return;
+    const sel = window.getSelection();
+    const text = sel && !sel.isCollapsed && sel.rangeCount ? sel.toString() : '';
+    const t = text.trim();
+    if (!t || t.length < 3 || t.length > 200 || t.includes('\n')
+      || !sel || !body.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+      clearHighlights(window, HL_SELMATCH);
+      return;
+    }
+    applyHighlights(window, HL_SELMATCH, collectTextMatches(body, t, true, 2000));
+  }, []);
+  useEffect(() => () => { clearHighlights(window, HL_SELMATCH); }, [filePath]);
+
+  // ── Cmd/Ctrl+click → reference lookup (DOM surfaces) ───────────────────────
+  // CodeMirror detects its own (virtualized DOM — see FileSourceEditor); this
+  // covers the read-only <pre>, markdown preview, and WYSIWYG surfaces.
+  const handleContainerMouseDown = useCallback((e: React.MouseEvent) => {
+    if (!onSymbolLookup || !(e.metaKey || e.ctrlKey) || e.button !== 0) return;
+    const t = e.target as HTMLElement;
+    if (t.closest('.fv-source-editor')) return; // CM owns its clicks
+    // Cheap containment check FIRST: caretPositionFromPoint hit-tests the whole
+    // document, so a portalled overlay over the click would otherwise resolve a
+    // word that isn't ours (and preventDefault would eat the user's real click).
+    if (!contentRef.current?.contains(t)) return;
+    const hit = wordAtPoint(document, e.clientX, e.clientY);
+    if (!hit || !contentRef.current?.contains(hit.node)) return;
+    // Resolve a line where per-line anchors exist (read-only source rows).
+    let lineNum: number | undefined;
+    let node: Node | null = hit.node;
+    while (node && node !== contentRef.current) {
+      if (node instanceof HTMLElement) {
+        const ln = node.getAttribute('data-line');
+        if (ln) { const n = Number(ln); if (!Number.isNaN(n)) { lineNum = n; break; } }
+      }
+      node = node.parentNode;
+    }
+    e.preventDefault();
+    onSymbolLookup(hit.word, filePath, lineNum);
+  }, [onSymbolLookup, filePath]);
+
+  const handleCmSymbolClick = useCallback((symbol: string, lineNum: number) => {
+    onSymbolLookup?.(symbol, filePath, lineNum);
+  }, [onSymbolLookup, filePath]);
+
+  // Reference-jump within the SAME open file: the editor doesn't remount when
+  // only `line` changes (key is path+hash), so scroll it imperatively — and
+  // flash the landed-on term so the eye finds the keyword, not just the row.
+  // baseHash is a dep on purpose: a cross-file jump mounts the editor once for
+  // the fetch, then REMOUNTS it when the read lands (the key includes the
+  // hash) — a flash applied to the first instance dies with it. Re-running
+  // after the final remount is what makes the landing flash actually visible.
+  useEffect(() => {
+    if (!line || !editingSource) return;
+    editorRef.current?.scrollToLine?.(line, lineTerm);
+  }, [line, lineTerm, editingSource, data, baseHash]);
+
   const [pathCopied, setPathCopied] = useState(false);
   const handleCopyPath = useCallback(() => {
     navigator.clipboard.writeText(filePath).then(() => {
@@ -891,9 +1086,22 @@ export function FileContentView({
     </>
   ) : null;
 
+  /** Find button — same affordance as ⌘F, for mouse-first users. */
+  const findBtn = !raw && !data?.binary && !data?.error ? (
+    <button
+      type="button"
+      className={`fv-html-tab fv-find-btn${searchOpen ? ' active' : ''}`}
+      onClick={() => (searchOpen ? closeSearch() : openSearch())}
+      title="Find in file (⌘F)"
+    >
+      Find
+    </button>
+  ) : null;
+
   /** Toolbar tail every render mode shares. */
   const commonBtns = (
     <>
+      {findBtn}
       {openInNotesBtn}
       {copyPathBtn}
       {downloadBtn}
@@ -923,8 +1131,14 @@ export function FileContentView({
       // Quote-to-ask for the READ-ONLY views (md preview of MDX, truncated
       // <pre>): DOM selection → pill. The editors report selections through
       // their own channels (CodeMirror onSelectText; WYSIWYG bubble-menu Ask),
-      // so this handler is off while an editor owns the body.
-      onMouseUp={onSelectCode && !editing ? handleMouseUp : undefined}
+      // so this handler is off while an editor owns the body. Selection-match
+      // highlighting listens on every DOM surface (CM paints its own).
+      onMouseUp={(e) => {
+        refreshSelectionMatches();
+        if (onSelectCode && !editing) handleMouseUp(e);
+      }}
+      // Cmd/Ctrl+click identifier → references (DOM surfaces; CM self-detects).
+      onMouseDown={onSymbolLookup ? handleContainerMouseDown : undefined}
     >
       {loading && <div className="file-viewer-loading">Loading file...</div>}
       {reloading && <div className="fv-reloading-badge">Reloading…</div>}
@@ -1087,6 +1301,18 @@ export function FileContentView({
           {saveError}
         </div>
       )}
+      {searchOpen && (
+        <FileSearchBar
+          query={searchQuery}
+          caseSensitive={searchCase}
+          count={searchStatus.count}
+          index={searchStatus.index}
+          onQueryChange={setSearchQuery}
+          onToggleCase={() => setSearchCase((c) => !c)}
+          onNav={handleSearchNav}
+          onClose={closeSearch}
+        />
+      )}
       {!loading && showPreview && isHtml && (
         <iframe
           ref={htmlFrameRef}
@@ -1134,7 +1360,9 @@ export function FileContentView({
             onDirtyChange={setEditorDirty}
             onSave={() => { void handleSave(); }}
             initialLine={line}
+            initialFlashTerm={lineTerm}
             onSelectText={onSelectCode ? setSelection : undefined}
+            onSymbolClick={onSymbolLookup ? handleCmSymbolClick : undefined}
           />
         )
       )}

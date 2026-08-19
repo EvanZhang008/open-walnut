@@ -72,6 +72,7 @@ import {
 } from './session-changes-core.js'
 import { scanExternalSessions } from './external-session-scan-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
+import { grepReferencesHostLocal } from './search-grep-core.js'
 import { ensureCodeServer, codeServerStatus, reapIdleCodeServer, stopCodeServer, resolveOpenTarget } from './vscode-server-core.js'
 import {
   GATEWAY_SOCKET_FILENAME,
@@ -1430,6 +1431,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'fs.find': return cmdFsFind(ws, id as number, cmd)
     case 'fs.stat': return cmdFsStat(ws, id as number, cmd)
     case 'fs.resolvePath': return cmdFsResolvePath(ws, id as number, cmd)
+    case 'fs.grep': return cmdFsGrep(ws, id as number, cmd)
     // NOT in BRIDGE_ALLOWED_COMMANDS: starts a process — only the trusted
     // SSH-tunneled walnut socket may ask, never the public cloud bridge.
     case 'vscode.ensure': return cmdVscodeEnsure(ws, id as number, cmd)
@@ -4052,6 +4054,29 @@ async function cmdFsResolvePath(ws: ServerWebSocket<WsData>, id: number, cmd: Re
     sendOk(ws, id, result as unknown as Record<string, unknown>)
   } catch (err: unknown) {
     sendError(ws, id, 'fs.resolvePath failed: ' + (err as Error).message)
+  }
+}
+
+/**
+ * Find every mention of a symbol in the tree that owns a file — capability
+ * 'grep-v1'. Same host-local rule as fs.resolvePath: git/grep run next to the
+ * files and only the small match list crosses the tunnel.
+ */
+async function cmdFsGrep(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const file = cmd.file as string
+  const symbol = cmd.symbol as string
+  if (!file || typeof file !== 'string') return sendError(ws, id, 'fs.grep: missing file')
+  if (!symbol || typeof symbol !== 'string') return sendError(ws, id, 'fs.grep: missing symbol')
+  try {
+    const result = await grepReferencesHostLocal({
+      file,
+      symbol,
+      maxMatches: typeof cmd.maxMatches === 'number' ? cmd.maxMatches : undefined,
+      budgetMs: typeof cmd.budgetMs === 'number' ? cmd.budgetMs : undefined,
+    })
+    sendOk(ws, id, result as unknown as Record<string, unknown>)
+  } catch (err: unknown) {
+    sendError(ws, id, 'fs.grep failed: ' + (err as Error).message)
   }
 }
 

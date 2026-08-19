@@ -123,8 +123,8 @@ describe('session isolation (the follow-up bug: cwd is NOT a session)', () => {
     expect(loadFileHistory(undefined, s2)).toEqual({ entries: [], index: -1 });
 
     saveFileHistory(undefined, s2, pushFileHistory(loadFileHistory(undefined, s2), '/repo/b.md'));
-    expect(loadFileHistory(undefined, s1).entries).toEqual(['/repo/a.md']);
-    expect(loadFileHistory(undefined, s2).entries).toEqual(['/repo/b.md']);
+    expect(loadFileHistory(undefined, s1).entries).toEqual([{ path: '/repo/a.md' }]);
+    expect(loadFileHistory(undefined, s2).entries).toEqual([{ path: '/repo/b.md' }]);
   });
 
   it('a session scope cannot collide with a session-less path scope', async () => {
@@ -150,52 +150,52 @@ describe('session isolation (the follow-up bug: cwd is NOT a session)', () => {
 describe('back/forward history (browser semantics)', () => {
   it('pushes visited files in order and points at the newest', async () => {
     const { pushFileHistory } = await load();
-    let h = { entries: [] as string[], index: -1 };
+    let h = { entries: [] as { path: string; line?: number }[], index: -1 };
     h = pushFileHistory(h, '/repo/a.md');
     h = pushFileHistory(h, '/repo/b.md');
-    expect(h).toEqual({ entries: ['/repo/a.md', '/repo/b.md'], index: 1 });
+    expect(h).toEqual({ entries: [{ path: '/repo/a.md' }, { path: '/repo/b.md' }], index: 1 });
   });
 
   it('re-opening the file already shown is a no-op (no duplicate stack entries)', async () => {
     const { pushFileHistory } = await load();
-    const h = pushFileHistory({ entries: ['/repo/a.md'], index: 0 }, '/repo/a.md');
-    expect(h).toEqual({ entries: ['/repo/a.md'], index: 0 });
+    const h = pushFileHistory({ entries: [{ path: '/repo/a.md' }], index: 0 }, '/repo/a.md');
+    expect(h).toEqual({ entries: [{ path: '/repo/a.md' }], index: 0 });
   });
 
   it('re-visiting an EARLIER file still pushes (browsers keep repeat visits)', async () => {
     const { pushFileHistory } = await load();
-    const h = pushFileHistory({ entries: ['/repo/a.md', '/repo/b.md'], index: 1 }, '/repo/a.md');
-    expect(h).toEqual({ entries: ['/repo/a.md', '/repo/b.md', '/repo/a.md'], index: 2 });
+    const h = pushFileHistory({ entries: [{ path: '/repo/a.md' }, { path: '/repo/b.md' }], index: 1 }, '/repo/a.md');
+    expect(h).toEqual({ entries: [{ path: '/repo/a.md' }, { path: '/repo/b.md' }, { path: '/repo/a.md' }], index: 2 });
   });
 
   it('navigating after Back truncates the forward tail — that future is gone', async () => {
     const { pushFileHistory } = await load();
     // a → b → c, then Back twice (index 0), then open d.
-    const h = pushFileHistory({ entries: ['/a', '/b', '/c'], index: 0 }, '/d');
-    expect(h).toEqual({ entries: ['/a', '/d'], index: 1 });
+    const h = pushFileHistory({ entries: [{ path: '/a' }, { path: '/b' }, { path: '/c' }], index: 0 }, '/d');
+    expect(h).toEqual({ entries: [{ path: '/a' }, { path: '/d' }], index: 1 });
   });
 
   it('caps the stack, dropping oldest — the index follows the shift', async () => {
     const { pushFileHistory, HISTORY_MAX_ENTRIES } = await load();
-    let h = { entries: [] as string[], index: -1 };
+    let h = { entries: [] as { path: string; line?: number }[], index: -1 };
     for (let i = 0; i < HISTORY_MAX_ENTRIES + 10; i++) h = pushFileHistory(h, `/f${i}.md`);
     expect(h.entries.length).toBe(HISTORY_MAX_ENTRIES);
     expect(h.index).toBe(HISTORY_MAX_ENTRIES - 1);
-    expect(h.entries[0]).toBe('/f10.md'); // the first 10 were evicted
-    expect(h.entries[h.index]).toBe(`/f${HISTORY_MAX_ENTRIES + 9}.md`);
+    expect(h.entries[0]!.path).toBe('/f10.md'); // the first 10 were evicted
+    expect(h.entries[h.index]!.path).toBe(`/f${HISTORY_MAX_ENTRIES + 9}.md`);
   });
 
   it('round-trips through storage, keyed per host + scope', async () => {
     const { saveFileHistory, loadFileHistory } = await load();
-    saveFileHistory(undefined, '/repo', { entries: ['/repo/a', '/repo/b'], index: 0 });
-    expect(loadFileHistory(undefined, '/repo')).toEqual({ entries: ['/repo/a', '/repo/b'], index: 0 });
+    saveFileHistory(undefined, '/repo', { entries: [{ path: '/repo/a' }, { path: '/repo/b' }], index: 0 });
+    expect(loadFileHistory(undefined, '/repo')).toEqual({ entries: [{ path: '/repo/a' }, { path: '/repo/b' }], index: 0 });
     expect(loadFileHistory('devbox', '/repo').entries).toEqual([]);
     expect(loadFileHistory(undefined, '/other').entries).toEqual([]);
   });
 
   it('an empty stack clears storage instead of persisting a husk', async () => {
     const { saveFileHistory } = await load();
-    saveFileHistory(undefined, '/repo', { entries: ['/a'], index: 0 });
+    saveFileHistory(undefined, '/repo', { entries: [{ path: '/a' }], index: 0 });
     saveFileHistory(undefined, '/repo', { entries: [], index: -1 });
     expect(storage.getItem('open-walnut-file-explorer-history:local:/repo')).toBeNull();
   });
@@ -215,25 +215,26 @@ describe('back/forward history (browser semantics)', () => {
       expect(loadFileHistory(undefined, '/repo')).toEqual({ entries: [], index: -1 });
     }
     storage.setItem('open-walnut-file-explorer-history:local:/repo', JSON.stringify({ entries: ['/a', 5, null, '/b'], index: 3 }));
-    expect(loadFileHistory(undefined, '/repo').entries).toEqual(['/a', '/b']);
+    expect(loadFileHistory(undefined, '/repo').entries).toEqual([{ path: '/a' }, { path: '/b' }]);
   });
 
   it('a deleted file leaves the stack — Back must not land on a dead file', async () => {
     const { removeFromFileHistory } = await load();
+    const e = (path: string) => ({ path });
     // Deleting the CURRENT entry lands on its predecessor.
-    expect(removeFromFileHistory({ entries: ['/a', '/b', '/c'], index: 1 }, '/b'))
-      .toEqual({ entries: ['/a', '/c'], index: 0 });
+    expect(removeFromFileHistory({ entries: [e('/a'), e('/b'), e('/c')], index: 1 }, '/b'))
+      .toEqual({ entries: [e('/a'), e('/c')], index: 0 });
     // Deleting an earlier entry keeps you on the same file (index shifts left).
-    expect(removeFromFileHistory({ entries: ['/a', '/b', '/c'], index: 2 }, '/a'))
-      .toEqual({ entries: ['/b', '/c'], index: 1 });
+    expect(removeFromFileHistory({ entries: [e('/a'), e('/b'), e('/c')], index: 2 }, '/a'))
+      .toEqual({ entries: [e('/b'), e('/c')], index: 1 });
     // Every occurrence goes, not just the first.
-    expect(removeFromFileHistory({ entries: ['/a', '/b', '/a'], index: 2 }, '/a'))
-      .toEqual({ entries: ['/b'], index: 0 });
+    expect(removeFromFileHistory({ entries: [e('/a'), e('/b'), e('/a')], index: 2 }, '/a'))
+      .toEqual({ entries: [e('/b')], index: 0 });
     // Removing the only entry empties the stack.
-    expect(removeFromFileHistory({ entries: ['/a'], index: 0 }, '/a'))
+    expect(removeFromFileHistory({ entries: [e('/a')], index: 0 }, '/a'))
       .toEqual({ entries: [], index: -1 });
     // A path that isn't there returns the SAME object (lets callers skip a write).
-    const h = { entries: ['/a'], index: 0 };
+    const h = { entries: [e('/a')], index: 0 };
     expect(removeFromFileHistory(h, '/zzz')).toBe(h);
   });
 
@@ -244,7 +245,7 @@ describe('back/forward history (browser semantics)', () => {
       setItem() { throw new Error('quota'); },
       removeItem() { throw new Error('denied'); },
     });
-    expect(() => saveFileHistory(undefined, '/repo', { entries: ['/a'], index: 0 })).not.toThrow();
+    expect(() => saveFileHistory(undefined, '/repo', { entries: [{ path: '/a' }], index: 0 })).not.toThrow();
     expect(loadFileHistory(undefined, '/repo')).toEqual({ entries: [], index: -1 });
   });
 });

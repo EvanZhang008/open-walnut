@@ -15,9 +15,10 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDragGesture } from '@/hooks/useDragGesture';
-import { fetchDirList, downloadFileUrl, type DirEntry } from '@/api/files';
+import { fetchDirList, downloadFileUrl, fetchReferences, type DirEntry, type ReferencesResponse } from '@/api/files';
 import { fetchSessionChangedPaths } from '@/api/session-changes';
 import { FileContentView } from '@/components/common/FileContentView';
+import { ReferencePanel } from '@/components/common/ReferencePanel';
 import { FileTreeContextMenu, type FileTreeContextTarget } from './FileTreeContextMenu';
 import { parentPath, revealAncestors } from './reveal-ancestors';
 import { ICON_REFRESH, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED } from '@/components/common/Icons';
@@ -26,6 +27,7 @@ import { getRecentFolders, fuzzyMatchRecents, type RecentFolder } from '@/utils/
 import {
   loadSelectedFile, saveSelectedFile,
   loadFileHistory, saveFileHistory, pushFileHistory, removeFromFileHistory,
+  stampFileHistoryLine,
   type FileHistory,
 } from '@/utils/file-view-state';
 import { vaultRelativeNotePath } from '@/utils/notes-link';
@@ -135,10 +137,10 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [rootError, setRootError] = useState<string | null>(null);
   // The path the user asked for when the backend could only offer a nearby
-  // directory instead. Rendered as a calm note above the tree — a raw
+  // directory instead. Rendered as a calm, dismissible note above the tree — a raw
   // `ENOENT: scandir` was the whole reported complaint. Only set when the answer is
-  // a STAND-IN: a successful heal explains itself, since the tree is already showing
-  // the right folder.
+  // a STAND-IN: a successful heal explains itself, since the tree is already
+  // showing the right folder.
   const [notFound, setNotFound] = useState<string | null>(null);
   // The folder the user last clicked into — shown in the toolbar path so it
   // follows navigation (falls back to the root when nothing is focused).
@@ -209,13 +211,15 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
   historyRef.current = history;
 
   /** Single writer for "the preview is now showing this file". */
-  const commitSelection = useCallback((filePath: string | null, opts: { push?: boolean } = {}) => {
+  const commitSelection = useCallback((filePath: string | null, opts: { push?: boolean; line?: number } = {}) => {
     setSelectedFile(filePath);
     saveSelectedFile(host, scopeRef.current, filePath);
     if (!filePath || opts.push === false) return;
     // pushFileHistory no-ops when this file is already the current entry, so a
     // restore (or a re-click on the open file) can't duplicate or truncate.
-    const next = pushFileHistory(historyRef.current, filePath);
+    // A positioned jump (opts.line — reference panel) records the line so
+    // Back/Forward return to the exact spot, editor-style.
+    const next = pushFileHistory(historyRef.current, filePath, opts.line);
     if (next === historyRef.current) return;
     historyRef.current = next;
     setHistory(next);
@@ -594,8 +598,17 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
     }
   }, [host]);
 
+  // Jump target of a positioned navigation (reference row / lined history stop):
+  // open that file at that line in the preview pane. `term` is the symbol that
+  // was jumped to — the preview flashes it so the eye lands on the keyword, not
+  // just the line. Rides separate state — `initialLine` is the mount deep link.
+  const [refLine, setRefLine] = useState<{ file: string; line: number; term?: string } | null>(null);
+
   const selectFile = useCallback((filePath: string) => {
     setFocusedDir(parentPath(filePath));
+    // A plain tree click is NOT a positioned jump — drop any leftover reference
+    // target, or reopening the same file would re-land on the old jump line.
+    setRefLine(null);
     commitSelection(filePath);
   }, [commitSelection]);
 
@@ -615,12 +628,79 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
     historyRef.current = next;
     setHistory(next);
     saveFileHistory(host, scopeRef.current, next);
-    setSelectedFile(target);
-    setFocusedDir(parentPath(target));
-    saveSelectedFile(host, scopeRef.current, target);
-    const dir = parentPath(target);
+    setSelectedFile(target.path);
+    setFocusedDir(parentPath(target.path));
+    saveSelectedFile(host, scopeRef.current, target.path);
+    // A stop recorded with a line (reference jump / stamped departure) returns
+    // to that exact position; un-lined stops resume via the scroll memory.
+    setRefLine(target.line ? { file: target.path, line: target.line } : null);
+    const dir = parentPath(target.path);
     if (!childrenMapRef.current.has(dir)) void loadDirRef.current?.(dir);
   }, [host]);
+
+  // ── Reference search (cmd+click an identifier in the preview) ──────────────
+  // The panel lives HERE (a third column of the explorer body) so a match click
+  // can reuse the normal file-open path — history, tree reveal, everything.
+  const [refState, setRefState] = useState<{
+    symbol: string; fromFile: string; loading: boolean; result: ReferencesResponse | null; error: string | null;
+  } | null>(null);
+  const refSeqRef = useRef(0);
+
+  const openReference = useCallback((file: string, lineNum: number, term?: string) => {
+    setRefLine({ file, line: lineNum, term });
+    setFocusedDir(parentPath(file));
+    commitSelectionRef.current(file, { line: lineNum });
+  }, []);
+
+  /** Editor-style history: before a positioned jump leaves, pin the departure
+   *  line on the CURRENT entry so Back returns to the exact spot, not just the
+   *  file. Plain scrolls don't stamp (the scroll memory owns those). */
+  const stampDeparture = useCallback((fromFile: string, fromLine: number) => {
+    const next = stampFileHistoryLine(historyRef.current, fromFile, fromLine);
+    if (next === historyRef.current) return;
+    historyRef.current = next;
+    setHistory(next);
+    saveFileHistory(host, scopeRef.current, next);
+  }, [host]);
+
+  const handleSymbolLookup = useCallback((symbol: string, fromFile: string, fromLine?: number) => {
+    if (fromLine) stampDeparture(fromFile, fromLine);
+    const seq = ++refSeqRef.current;
+    setRefState({ symbol, fromFile, loading: true, result: null, error: null });
+    fetchReferences(fromFile, symbol, host)
+      .then((res) => {
+        if (refSeqRef.current !== seq) return; // a newer lookup superseded this one
+        // Exactly one definition somewhere else → jump straight there (VS Code
+        // behavior); the panel still opens so the reader keeps the full picture.
+        setRefState({ symbol, fromFile, loading: false, result: res, error: null });
+        const defs = res.matches.filter((m) => m.kind === 'def');
+        if (defs.length === 1 && defs[0]!.file !== fromFile) {
+          openReference(defs[0]!.file, defs[0]!.line, symbol);
+        }
+        log.info('file-explorer', 'reference lookup', {
+          symbol, fromFile, host, matches: res.matches.length, tool: res.tool, truncated: res.truncated,
+        });
+      })
+      .catch((err) => {
+        if (refSeqRef.current !== seq) return;
+        setRefState({ symbol, fromFile, loading: false, result: null, error: err instanceof Error ? err.message : String(err) });
+      });
+  }, [host, openReference, stampDeparture]);
+
+  const closeReferences = useCallback(() => {
+    refSeqRef.current += 1;
+    setRefState(null);
+  }, []);
+
+  // Esc closes the panel (capture so the fullscreen/overlay handlers don't eat it).
+  useEffect(() => {
+    if (!refState) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); closeReferences(); }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [refState, closeReferences]);
 
   // ⌘/Ctrl + [ / ] — the shortcut every editor and browser uses. Listened on
   // window, NOT on the explorer subtree: tree rows are plain divs with no
@@ -667,7 +747,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
             className="sfe-btn sfe-nav-btn"
             onClick={() => navigateHistory(-1)}
             disabled={!canGoBack}
-            title={canGoBack ? `Back to ${lastSegment(history.entries[history.index - 1])} (⌘[)` : 'Back (no earlier file)'}
+            title={canGoBack ? `Back to ${lastSegment(history.entries[history.index - 1]!.path)} (⌘[)` : 'Back (no earlier file)'}
             aria-label="Back to the previously viewed file"
           >‹</button>
           <button
@@ -675,7 +755,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
             className="sfe-btn sfe-nav-btn"
             onClick={() => navigateHistory(1)}
             disabled={!canGoForward}
-            title={canGoForward ? `Forward to ${lastSegment(history.entries[history.index + 1])} (⌘])` : 'Forward (no later file)'}
+            title={canGoForward ? `Forward to ${lastSegment(history.entries[history.index + 1]!.path)} (⌘])` : 'Forward (no later file)'}
             aria-label="Forward to the next viewed file"
           >›</button>
         </div>
@@ -756,10 +836,22 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
         {!treeCollapsed && (
         <div className="session-file-explorer-tree" style={{ width: `${treeWidth}px` }}>
           {rootError && <div className="sfe-error">{rootError}</div>}
+          {/* Only a GENUINE miss gets a note (the errno-replacement contract).
+              A successful heal ("found it nearby") explains itself — the tree
+              is already showing the right folder, so a banner is just noise
+              (2026-08-18 feedback). Dismissible either way. */}
           {notFound && (
-            <div className="sfe-notice" title={notFound.ref}>
-              {notFound.exhaustive ? 'Couldn’t find ' : 'Not in the usual places: '}
-              <code>{notFound.ref}</code> {'—'} showing the nearest folder.
+            <div className="sfe-notice" title={notFound}>
+              Couldn't find <code>{notFound}</code> — showing the nearest folder.
+              <button
+                type="button"
+                className="sfe-notice-dismiss"
+                onClick={() => setNotFound(null)}
+                title="Dismiss"
+                aria-label="Dismiss path notice"
+              >
+                ✕
+              </button>
             </div>
           )}
           {rootSections.map((section) => {
@@ -843,9 +935,12 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
               key={selectedFile}
               path={selectedFile}
               host={host}
-              line={selectedFile === cwd ? initialLine : undefined}
+              // Reference jumps ride refLine; the mount-time deep link keeps initialLine.
+              line={refLine?.file === selectedFile ? refLine.line : (selectedFile === cwd ? initialLine : undefined)}
+              lineTerm={refLine?.file === selectedFile ? refLine.term : undefined}
               reloadToken={reloadToken}
               onSelectCode={onSelectCode}
+              onSymbolLookup={handleSymbolLookup}
               // A save changes the file's size on disk, so the tree's size column
               // is now stale — re-list just that file's directory (not the whole
               // tree: a full Refresh would also reload the file we just wrote).
@@ -855,6 +950,18 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
             <div className="sfe-preview-empty">Select a file to preview</div>
           )}
         </div>
+
+        {refState && (
+          <ReferencePanel
+            symbol={refState.symbol}
+            currentFile={refState.fromFile}
+            result={refState.result}
+            loading={refState.loading}
+            error={refState.error}
+            onOpen={(file, lineNum) => openReference(file, lineNum, refState.symbol)}
+            onClose={closeReferences}
+          />
+        )}
       </div>
 
       {ctxMenu && (

@@ -1744,6 +1744,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'fs.find': return cmdFsFind(ws, id, cmd);
     case 'fs.stat': return cmdFsStat(ws, id, cmd);
     case 'fs.resolvePath': return cmdFsResolvePath(ws, id, cmd);
+    case 'fs.grep': return cmdFsGrep(ws, id, cmd);
     // NOT in BRIDGE_ALLOWED_COMMANDS: starts a process — only the trusted
     // SSH-tunneled walnut socket may ask, never the public cloud bridge.
     case 'vscode.ensure': return cmdVscodeEnsure(ws, id, cmd);
@@ -4854,6 +4855,138 @@ let bridgeDialTimer = null;
 let bridgeDialStartedAt = null;
 let bridgeBackoffMs = 1000;
 let bridgeGeneration = 0;
+// -- Symbol search (host-local — capability 'grep-v1') --
+// Inlined equivalent of search-grep-core.ts (this template can NOT import and
+// must NOT contain backticks). NOT sidecar-gated: it needs only child_process,
+// which every node has. Keep the caps, the classification regexes, the sort,
+// and the reply shape in sync with search-grep-core.ts.
+const GREP_SYMBOL_RE = /^[A-Za-z_$][A-Za-z0-9_$]{0,127}$/;
+const GREP_PRUNE_DIRS = [
+  'node_modules', '.git', 'dist', 'build', 'out', '.next', 'target',
+  'coverage', '.cache', 'vendor', '__pycache__', '.venv', 'venv',
+  '.gradle', '.idea', 'Pods', '.terraform', '.tox', '.mypy_cache',
+];
+const GREP_LINE_RE = /^(.*?):(\\d+):(.*)$/;
+const GREP_MAX_TEXT_CHARS = 300;
+
+function grepEscapeRe(s) {
+  return s.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
+}
+
+// Does this line look like where the symbol is DECLARED? Keyword rules are
+// anchored to the symbol, so a closure line that merely contains 'func' stays a
+// ref. A wrong guess costs an ordering, never a wrong answer.
+function grepClassifyDefinition(lineText, symbol) {
+  if (!lineText || !GREP_SYMBOL_RE.test(symbol)) return false;
+  const sym = grepEscapeRe(symbol);
+  if (new RegExp('\\\\b(func|fn|def|function|class|struct|interface|trait|enum|impl|type|module|macro)\\\\s+(\\\\([^)]*\\\\)\\\\s*)?' + sym + '\\\\b').test(lineText)) return true;
+  if (new RegExp('\\\\b(const|let|var|val|final|readonly)\\\\s+' + sym + '\\\\b').test(lineText)) return true;
+  if (new RegExp('^\\\\s*' + sym + '\\\\s*:?=[^=]').test(lineText)) return true;
+  if (new RegExp('\\\\b(public|private|protected|internal|static)\\\\s+[^=;]*\\\\b' + sym + '\\\\s*\\\\(').test(lineText)) return true;
+  return false;
+}
+
+async function cmdFsGrep(ws, id, cmd) {
+  const file = cmd.file;
+  const symbol = cmd.symbol;
+  if (!file || typeof file !== 'string') return sendError(ws, id, 'fs.grep: missing file');
+  if (!symbol || typeof symbol !== 'string') return sendError(ws, id, 'fs.grep: missing symbol');
+  try {
+    if (!GREP_SYMBOL_RE.test(symbol)) {
+      return sendOk(ws, id, { root: '', matches: [], truncated: false, tool: 'none', error: 'invalid symbol' });
+    }
+    if (!path.isAbsolute(file)) {
+      return sendOk(ws, id, { root: '', matches: [], truncated: false, tool: 'none', error: 'file must be absolute' });
+    }
+    const requested = typeof cmd.maxMatches === 'number' && isFinite(cmd.maxMatches)
+      ? Math.floor(cmd.maxMatches) : 500;
+    const maxMatches = Math.max(1, Math.min(requested, 2000));
+    const budgetMs = typeof cmd.budgetMs === 'number' ? cmd.budgetMs : 10000;
+    const dir = path.dirname(file);
+
+    // Never throws: exit 1 (no matches) is a normal answer; -1 means the process
+    // could not run or was killed by the timeout.
+    const cp = require('child_process');
+    const run = (bin, args, runCwd) => new Promise((resolve) => {
+      const child = cp.execFile(bin, args,
+        { cwd: runCwd, timeout: Math.min(budgetMs, 8000), maxBuffer: 16 * 1024 * 1024, encoding: 'utf-8' },
+        (err, stdout) => {
+          if (!err) return resolve({ stdout: stdout || '', code: 0 });
+          resolve({ stdout: stdout || '', code: typeof err.code === 'number' ? err.code : -1 });
+        });
+      child.on('error', () => resolve({ stdout: '', code: -1 }));
+    });
+
+    const build = (res, tool, root, toAbs) => {
+      const failed = res.code !== 0 && res.code !== 1;
+      if (failed && !res.stdout) {
+        return { root: root, matches: [], truncated: false, tool: tool, error: 'search timed out or failed' };
+      }
+      const matches = [];
+      let truncated = false;
+      const lines = res.stdout.split('\\n');
+      for (let i = 0; i < lines.length; i++) {
+        const raw = lines[i];
+        if (!raw) continue;
+        if (matches.length >= maxMatches) { truncated = true; break; }
+        const m = GREP_LINE_RE.exec(raw);
+        if (!m) continue;
+        const text = m[3].replace(/\\r$/, '').slice(0, GREP_MAX_TEXT_CHARS);
+        matches.push({
+          file: toAbs(m[1]),
+          line: Number(m[2]),
+          text: text,
+          kind: grepClassifyDefinition(text, symbol) ? 'def' : 'ref',
+        });
+      }
+      // Definitions first, then file path, then line. Stable.
+      const decorated = matches.map((mm, idx) => ({ m: mm, i: idx }));
+      decorated.sort((a, b) =>
+        (a.m.kind === b.m.kind ? 0 : a.m.kind === 'def' ? -1 : 1)
+        || (a.m.file < b.m.file ? -1 : a.m.file > b.m.file ? 1 : 0)
+        || a.m.line - b.m.line
+        || a.i - b.i);
+      return {
+        root: root,
+        matches: decorated.map((e) => e.m),
+        truncated: truncated || failed,
+        tool: tool,
+      };
+    };
+
+    const top = await run('git', ['-C', dir, 'rev-parse', '--show-toplevel'], undefined);
+    const root = top.code === 0 && top.stdout.trim() ? top.stdout.trim() : null;
+    if (root) {
+      const res = await run('git',
+        ['grep', '-n', '-I', '--recurse-submodules', '-w', '-F', '-e', symbol, '--'], root);
+      return sendOk(ws, id, build(res, 'git-grep', root, (rel) => path.join(root, rel)));
+    }
+    // --devices=skip: one FIFO in the tree otherwise BLOCKS grep on the open
+    // until the timeout kills it (whole budget spent, zero results).
+    const args = ['-r', '-n', '-I', '-w', '-F', '--devices=skip'];
+    for (let i = 0; i < GREP_PRUNE_DIRS.length; i++) args.push('--exclude-dir=' + GREP_PRUNE_DIRS[i]);
+    args.push('-e', symbol, dir);
+    let res = await run('grep', args, dir);
+    // BSD grep without --devices= exits 2 on the usage error: retry its spelling,
+    // then plain (pre-existing behavior, not a regression).
+    if (res.code === 2 && !res.stdout) {
+      const bsd = [];
+      for (let i = 0; i < args.length; i++) {
+        if (args[i] === '--devices=skip') { bsd.push('-D'); bsd.push('skip'); } else bsd.push(args[i]);
+      }
+      res = await run('grep', bsd, dir);
+      if (res.code === 2 && !res.stdout) {
+        const plain = [];
+        for (let i = 0; i < args.length; i++) if (args[i] !== '--devices=skip') plain.push(args[i]);
+        res = await run('grep', plain, dir);
+      }
+    }
+    return sendOk(ws, id, build(res, 'grep', dir, (p) => p));
+  } catch (err) {
+    sendError(ws, id, 'fs.grep failed: ' + err.message);
+  }
+}
+
 // ── Session changes (host-local compute — capability 'changes-v1') ──
 // The pipeline lives in a SIDECAR bundle (changes-core.cjs) deployed next to
 // this script — this template can't import modules (and must not contain
@@ -4892,6 +5025,11 @@ function daemonCapabilities() {
   if (externalScanCore) caps.push('external-scan-v1');
   if (pathResolveCore) caps.push('path-resolve-v1');
   if (vscodeServerCore) caps.push('vscode-v1');
+  // 'grep-v1' is NOT sidecar-gated: cmdFsGrep is inlined above and needs only
+  // child_process, so this twin can always answer fs.grep. Stated explicitly
+  // here (and deduped) so the capability holds even if the static literal ever
+  // stops carrying it.
+  if (caps.indexOf('grep-v1') === -1) caps.push('grep-v1');
   return caps;
 }
 

@@ -52,6 +52,7 @@ SOURCES=(
   src/providers/session-changes-core.ts
   src/providers/external-session-scan-core.ts
   src/providers/path-resolve-core.ts
+  src/providers/search-grep-core.ts
   src/providers/vscode-server-core.ts
   src/core/bash-file-ops.ts
 )
