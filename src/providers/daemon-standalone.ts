@@ -4040,8 +4040,6 @@ async function cmdFsResolvePath(ws: ServerWebSocket<WsData>, id: number, cmd: Re
       claudeHome: path.join(HOME_DIR, '.claude'),
       homeDir: HOME_DIR,
       budgetMs: typeof cmd.budgetMs === 'number' ? cmd.budgetMs : undefined,
-      // Skip the exhaustive submodule scope when the caller has a user waiting.
-      fast: cmd.fast === true,
     })
     sendOk(ws, id, result as unknown as Record<string, unknown>)
   } catch (err: unknown) {

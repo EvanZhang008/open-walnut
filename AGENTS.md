@@ -168,9 +168,9 @@ path the model mentioned is almost always inside the subtree the session is work
 resolver tries superproject → submodules-under-cwd → submodules-under-cwd's-parent →
 everything, returning at the first hit: 2.3s became **~85ms** on the real repo. Two things make
 this safe to generalize: read `.gitmodules` as TEXT (~2ms; `git submodule status` stats every
-submodule and takes seconds at that scale), and expose a `fast` flag that skips the exhaustive
-scope for callers with a user waiting, reporting `exhaustive: false` so a negative from a fast
-pass is never mistaken for "definitely absent".
+submodule and takes seconds at that scale), and skip the whole submodule question outright when
+`.gitmodules` is absent — an ordinary repo spawns exactly ONE `git ls-files` and never touches
+the submodule path at all.
 
 **A confident wrong answer is worse than an error.** Trimming leading segments is what lets
 `repo/src/x.ts` find `src/x.ts`; taken to its limit it also let `no/such/thing.ts` "find" an

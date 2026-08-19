@@ -128,9 +128,6 @@ export interface DirListResponse {
   requestedPath?: string;
   /** Which resolver layer produced `path` ('transcript' | 'git' | 'find' | …). */
   resolvedVia?: string;
-  /** false when a fast search skipped its slowest scope, so `requestedPath` means
-   *  "not found in the likely places" rather than "definitely absent". */
-  exhaustive?: boolean;
 }
 
 export interface ResolvePathResponse {

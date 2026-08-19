@@ -91,16 +91,12 @@ async function resolveViaHost(
   cwd: string | undefined,
   host: string | undefined,
   sessionId: string | undefined,
-  /** Skip the exhaustive submodule scope. See ResolvePathOptions.fast: it is the
-   *  difference between ~85ms and ~1.2s on a large monorepo, and it only affects
-   *  how confidently a MISS can be reported. Set it whenever a user is waiting. */
-  fast = false,
 ): Promise<HostResolveResult | null> {
   // Local host: call the resolver in-process. It yields the event loop between
   // transcript windows and shells out for git/find, so it never blocks a route.
   if (!host) {
     const { resolvePathHostLocal } = await import('../../providers/path-resolve-core.js')
-    return await resolvePathHostLocal({ ref, cwd, sessionId, ...(fast ? { fast: true } : {}) })
+    return await resolvePathHostLocal({ ref, cwd, sessionId })
   }
 
   const config = await getConfig()
@@ -127,7 +123,6 @@ async function resolveViaHost(
   const res = await conn.send('fs.resolvePath', {
     ref, budgetMs: REMOTE_RESOLVE_BUDGET_MS,
     ...(cwd ? { cwd } : {}), ...(sessionId ? { sessionId } : {}),
-    ...(fast ? { fast: true } : {}),
   })
   if (!res.ok || typeof res.path !== 'string') return null
   return {
@@ -140,7 +135,6 @@ async function resolveViaHost(
     ...(typeof res.line === 'number' ? { line: res.line } : {}),
     ...(typeof res.column === 'number' ? { column: res.column } : {}),
     ...(typeof res.endLine === 'number' ? { endLine: res.endLine } : {}),
-    ...(res.exhaustive === false ? { exhaustive: false } : {}),
   }
 }
 
@@ -158,8 +152,6 @@ interface HostResolveResult {
   line?: number
   column?: number
   endLine?: number
-  /** false when a fast pass skipped the exhaustive scope — a weaker "not found". */
-  exhaustive?: boolean
 }
 
 /**
@@ -486,10 +478,6 @@ export interface FileListResult {
   requestedPath?: string
   /** How the shown path was arrived at, when resolution ran ('transcript', 'git', …). */
   resolvedVia?: string
-  /** false when the resolve was a FAST pass that skipped its slowest scope — the
-   *  accompanying `requestedPath` then means "not found in the likely places", not
-   *  "definitely absent", and the UI wording must not overclaim. */
-  exhaustive?: boolean
 }
 
 /** Optional context that lets a listing SELF-HEAL a path that doesn't exist. */
@@ -541,11 +529,7 @@ export async function listSessionFiles(
     if (!ctx || (!ctx.cwd && !ctx.sessionId)) throw err
     let healed: HostResolveResult | null = null
     try {
-      // FAST resolve: a person is waiting on this listing. The exhaustive submodule
-      // scope only strengthens a negative, and a negative here means "show the
-      // nearest folder" either way — so paying ~1.2s for it would be a second of
-      // dead UI in exchange for nothing the user can see.
-      healed = await resolveViaHost(reqPath, ctx.cwd, host, ctx.sessionId, true)
+      healed = await resolveViaHost(reqPath, ctx.cwd, host, ctx.sessionId)
     } catch { /* resolver refused the input — surface the original error */ }
     if (!healed || healed.path === reqPath) throw err
     log.web.info('files/list: healed an unlistable path', {
@@ -557,10 +541,7 @@ export async function listSessionFiles(
       // needs no flag: the user asked for a path and got that path's contents.
       return healed.resolved
         ? { ...listing, resolvedVia: healed.via }
-        : {
-          ...listing, requestedPath: reqPath, resolvedVia: healed.via,
-          ...(healed.exhaustive === false ? { exhaustive: false } : {}),
-        }
+        : { ...listing, requestedPath: reqPath, resolvedVia: healed.via }
     } catch {
       throw err // healed path doesn't list either — the original error is truer
     }

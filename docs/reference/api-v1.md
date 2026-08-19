@@ -1088,7 +1088,7 @@ rejected, 4096-char cap.
   pre-2026-08 behavior (a missing path is a `400`).
 - `GET /api/v1/files/resolve-path?rel=&cwd=&host=[&sessionId=]` →
   `{ "path", "resolved", "via"?, "degraded"?, "alternatives"?, "line"?, "column"?,
-    "endLine"?, "exhaustive"? }` — resolves a transcript-mentioned path (relative,
+    "endLine"? }` — resolves a transcript-mentioned path (relative,
   package-relative, or an absolute one with a wrong prefix) against the session cwd.
   The target host runs a layered search: paths the session already opened (its
   transcript), the ancestor walk, the git index (submodules included, any depth),
@@ -1103,10 +1103,6 @@ rejected, 4096-char cap.
   sentence period or comma, or spelled with Windows separators. The position comes
   back as `line`/`column`/`endLine` — present even on a failed resolve, since the
   reference asked for it either way.
-  **`exhaustive: false`** means a fast pass skipped the one search scope whose cost
-  scales with a repo's submodule count. On `resolved: false` that is the difference
-  between "not found in the likely places" and "definitely not here": only claim the
-  latter to a user when `exhaustive` is true.
 - `GET /api/v1/file-content?path=&host=` → `{ "content", "size",
   "truncated", "binary", "extension", "error"?, "contentHash"? }` — the
   FileViewer JSON payload (text, truncated at 512 KB, binary-detected). A

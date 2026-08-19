@@ -68,20 +68,6 @@ export interface ResolvePathOptions {
   homeDir?: string;
   /** Total wall-clock budget for the whole search. */
   budgetMs?: number;
-  /**
-   * Skip the one scope whose cost scales with the repo's submodule count.
-   *
-   * Every layer except that scope answers in tens of milliseconds; the exhaustive
-   * submodule traversal is what makes a genuine MISS take ~1.2s on a large
-   * monorepo (measured: 2,606 submodules). A caller that is blocking a UI can set
-   * this to get the fast answer, then re-ask without it if the result came back
-   * `resolved: false` and it still cares.
-   *
-   * A `false` result from a fast pass therefore means "not found in the likely
-   * places", not "does not exist" — which is why `exhaustive: false` is reported
-   * back on the result, so a caller can tell the two apart.
-   */
-  fast?: boolean;
 }
 
 export interface ResolvePathResult {
@@ -103,13 +89,6 @@ export interface ResolvePathResult {
   column?: number;
   /** End line for a range reference (`:10-20`). */
   endLine?: number;
-  /**
-   * false when a `fast` pass skipped the exhaustive submodule scope. On a
-   * `resolved: false` result this is the difference between "not found in the
-   * likely places" and "definitely not here" — a caller showing a
-   * "couldn't find X" message should only claim the latter when this is true.
-   */
-  exhaustive?: boolean;
 }
 
 /** Directories never worth walking into during L4. */
@@ -496,7 +475,6 @@ async function gitSearchScoped(
   wantDir: boolean,
   cwd: string | undefined,
   outOfTime: () => boolean,
-  fast: boolean,
 ): Promise<Map<string, string[]>> {
   const specs = pathspecsFor(needles, wantDir);
   const empty = new Map<string, string[]>();
@@ -554,9 +532,7 @@ async function gitSearchScoped(
   //
   // So confirming a reference is genuinely absent costs one full traversal. That
   // is the honest price of a definite "no", and it is only paid on the miss path;
-  // every hit returns from an earlier scope in tens of milliseconds. A caller that
-  // is blocking a UI opts out with `fast` and re-asks later if it still cares.
-  if (fast) return empty;
+  // every hit returns from an earlier scope in tens of milliseconds.
   const all = await run('git', ['ls-files', '--recurse-submodules', '-z', '--', ...specs], root);
   const allRels = all.split('\0').filter(Boolean);
   return allRels.length ? groupByNeedle(allRels, needles, root, wantDir) : empty;
@@ -612,10 +588,6 @@ export async function resolvePathHostLocal(opts: ResolvePathOptions): Promise<Re
   const claudeHome = opts.claudeHome ?? path.join(homeDir, '.claude');
   const deadline = Date.now() + (opts.budgetMs ?? DEFAULT_BUDGET_MS);
   const outOfTime = () => Date.now() >= deadline;
-  const fast = opts.fast === true;
-  // Stamped on every result: a `fast` pass never reaches the exhaustive scope, so
-  // its negatives are weaker than a full pass's.
-  const exh = fast ? { exhaustive: false } : { exhaustive: true };
 
   const rawRef = typeof opts.ref === 'string' ? opts.ref : '';
   // Parse decoration off BEFORE the safety check: a reference wrapped in backticks
@@ -638,7 +610,7 @@ export async function resolvePathHostLocal(opts: ResolvePathOptions): Promise<Re
   const isAbs = ref.startsWith('/');
   const asWritten = isAbs ? ref : cwd ? path.join(cwd, ref.replace(/^\.\//, '')) : null;
   if (asWritten && await exists(asWritten)) {
-    return { path: await realDir(asWritten), resolved: true, via: 'exact', ...pos, ...exh };
+    return { path: await realDir(asWritten), resolved: true, via: 'exact', ...pos };
   }
 
   // Needles to search for, longest (most specific) tail first. For an absolute
@@ -662,7 +634,7 @@ export async function resolvePathHostLocal(opts: ResolvePathOptions): Promise<Re
   const done = (p: string, via: ResolveVia, hits: string[] = []): ResolvePathResult => {
     remember(hits, p);
     return {
-      path: p, resolved: true, via, ...pos, ...exh,
+      path: p, resolved: true, via, ...pos,
       ...(alternatives.length ? { alternatives } : {}),
     };
   };
@@ -698,7 +670,7 @@ export async function resolvePathHostLocal(opts: ResolvePathOptions): Promise<Re
   const fsRoot = searchRoots[searchRoots.length - 1] ?? cwd;
   for (const root of searchRoots) {
     if (outOfTime()) break;
-    const byNeedle = await gitSearchScoped(root, needles, wantDir, cwd, outOfTime, fast);
+    const byNeedle = await gitSearchScoped(root, needles, wantDir, cwd, outOfTime);
     for (const needle of needles) {
       const hits = rankHits(byNeedle.get(needle) ?? [], needle, cwd);
       for (const hit of hits) {
@@ -750,9 +722,8 @@ export async function resolvePathHostLocal(opts: ResolvePathOptions): Promise<Re
       degraded: true,
       ref: rawRef,
       ...pos,
-      ...exh,
       ...(alternatives.length ? { alternatives } : {}),
     };
   }
-  return { path: fallback, resolved: false, via: 'none', ref: rawRef, ...pos, ...exh };
+  return { path: fallback, resolved: false, via: 'none', ref: rawRef, ...pos };
 }

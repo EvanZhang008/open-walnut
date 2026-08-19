@@ -136,10 +136,10 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
   const [rootError, setRootError] = useState<string | null>(null);
   // The path the user asked for when the backend could only offer a nearby
   // directory instead. Rendered as a calm note above the tree — a raw
-  // `ENOENT: scandir` was the whole reported complaint. `exhaustive` distinguishes
-  // "definitely not here" from "not found in the likely places" (a fast search
-  // skipped the slowest scope), so the wording never overclaims.
-  const [notFound, setNotFound] = useState<{ ref: string; exhaustive: boolean } | null>(null);
+  // `ENOENT: scandir` was the whole reported complaint. Only set when the answer is
+  // a STAND-IN: a successful heal explains itself, since the tree is already showing
+  // the right folder.
+  const [notFound, setNotFound] = useState<string | null>(null);
   // The folder the user last clicked into — shown in the toolbar path so it
   // follows navigation (falls back to the root when nothing is focused).
   const [focusedDir, setFocusedDir] = useState<string | null>(null);
@@ -247,9 +247,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
       const canonical = res.path && (isRoot || res.path !== dirPath) ? res.path : dirPath;
       setChildrenMap((prev) => new Map(prev).set(canonical, res.entries));
       // A stand-in listing gets a plain "couldn't find X" note, not an error.
-      setNotFound(res.requestedPath
-        ? { ref: res.requestedPath, exhaustive: res.exhaustive !== false }
-        : null);
+      setNotFound(res.requestedPath ?? null);
       if (isRoot) {
         if (canonical !== root) setRoot(canonical);
         setRootError(null);
