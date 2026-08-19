@@ -67,6 +67,9 @@ interface InstanceRecord {
   pid: number
   version: string
   startedAt: number
+  /** Runtime binary that spawned this instance. Absent = pre-runtime-fix
+   *  record, treated as suspect (may be bun) and respawned. */
+  runtime?: string
 }
 
 // In-flight spawn guard (within this process) + last attempt for the cooldown.
@@ -228,6 +231,52 @@ function pidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true } catch { return false }
 }
 
+/** Does this binary run AND report itself as node? (bun answers `bun-x.y`; a
+ *  glibc-mismatched bundled node dies before printing anything). */
+function worksAsNode(bin: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile(bin, ['-e', 'process.stdout.write(process.versions.node && !process.versions.bun ? "ok" : "no")'],
+      { timeout: 5_000, encoding: 'utf-8' },
+      (err, stdout) => resolve(!err && stdout === 'ok'))
+  })
+}
+
+let cachedNodeRuntime: string | null | undefined
+
+/**
+ * Resolve a REAL Node.js binary to run code-server under. process.execPath is
+ * wrong whenever the owner is the bun-compiled daemon: bun serves code-server's
+ * static HTML fine but its node-compat layer breaks the workbench's WebSocket
+ * path (ERR_STREAM_DESTROYED, missing net APIs) — healthz 200, blank editor.
+ * Candidates, first that verifiably runs as node wins:
+ *  1. code-server's own bundled lib/node (version-matched; dies on old-glibc hosts)
+ *  2. process.execPath when the owner itself IS node (local Mac server)
+ *  3. `node` from PATH and well-known user install locations
+ */
+async function resolveNodeRuntime(entry: string): Promise<string | null> {
+  if (cachedNodeRuntime !== undefined) return cachedNodeRuntime
+  const home = homeDir()
+  // entry = <install>/out/node/entry.js → bundled node at <install>/lib/node
+  const bundled = path.join(path.dirname(path.dirname(path.dirname(entry))), 'lib', 'node')
+  const candidates = [
+    bundled,
+    ...(path.basename(process.execPath).startsWith('node') ? [process.execPath] : []),
+    'node',
+    path.join(home, '.local', 'bin', 'node'),
+    '/usr/local/bin/node',
+    '/opt/homebrew/bin/node',
+    '/usr/bin/node',
+  ]
+  for (const cand of candidates) {
+    if (await worksAsNode(cand)) {
+      cachedNodeRuntime = cand
+      return cand
+    }
+  }
+  cachedNodeRuntime = null
+  return null
+}
+
 function killInstance(pid: number): void {
   // code-server handles SIGTERM with hot-exit (unsaved-buffer backups).
   try { process.kill(-pid, 'SIGTERM') } catch { try { process.kill(pid, 'SIGTERM') } catch { /* gone */ } }
@@ -243,15 +292,26 @@ async function waitForHealthy(port: number, timeoutMs: number): Promise<boolean>
 }
 
 async function startCodeServer(entry: string, version: string): Promise<VscodeEnsureResult> {
+  // A verified REAL node — never bun (inc-1787164003087: the bun-compiled
+  // daemon spawned code-server under bun; static HTML served fine so healthz
+  // was 200, but the workbench's WebSocket path died in bun's node-compat
+  // layer and the editor rendered blank).
+  const runtime = await resolveNodeRuntime(entry)
+  if (!runtime) {
+    return {
+      ok: false, running: false, installed: true,
+      error: 'no working Node.js runtime found for code-server (bundled lib/node failed and no system node)',
+      installHint: 'install Node.js ≥18 on this host (e.g. ~/.local/bin/node)',
+    }
+  }
+
   const port = await freePort()
   const token = crypto.randomBytes(16).toString('hex')
   await fsp.mkdir(dataDir(), { recursive: true })
   const logPath = path.join(dataDir(), 'code-server.log')
   const logFd = fs.openSync(logPath, 'a')
 
-  // process.execPath: run under the SAME node/bun that runs the owner — the
-  // host may have no node on PATH at all (thin launchd/systemd PATH).
-  const child = spawn(process.execPath, [
+  const child = spawn(runtime, [
     entry,
     '--auth', 'none',
     '--bind-addr', `127.0.0.1:${port}`,
@@ -280,7 +340,7 @@ async function startCodeServer(entry: string, version: string): Promise<VscodeEn
     }
   }
 
-  await writeInstance({ port, token, pid, version, startedAt: Date.now() })
+  await writeInstance({ port, token, pid, version, startedAt: Date.now(), runtime })
   return { ok: true, running: true, installed: true, port, token, version }
 }
 
@@ -290,10 +350,17 @@ async function startCodeServer(entry: string, version: string): Promise<VscodeEn
  * when missing (unless noInstall).
  */
 export async function ensureCodeServer(opts: { noInstall?: boolean } = {}): Promise<VscodeEnsureResult> {
-  // Adopt a live instance from the disk record (survives owner restarts).
+  // Adopt a live instance from the disk record (survives owner restarts) —
+  // but only one whose record proves a real-node spawn. A record without
+  // `runtime` predates the bun fix and may be a bun-spawned instance that
+  // answers healthz yet serves a blank workbench: kill and respawn.
   const existing = await readInstance()
   if (existing && pidAlive(existing.pid) && await healthz(existing.port)) {
-    return { ok: true, running: true, installed: true, port: existing.port, token: existing.token, version: existing.version }
+    if (existing.runtime) {
+      return { ok: true, running: true, installed: true, port: existing.port, token: existing.token, version: existing.version }
+    }
+    killInstance(existing.pid)
+    try { fs.rmSync(instanceFile()) } catch { /* already gone */ }
   }
 
   // A concurrent ensure in this process is already starting one — join it.
