@@ -71,6 +71,7 @@ import {
   type FileAccum as ChangesFileAccum,
 } from './session-changes-core.js'
 import { scanExternalSessions } from './external-session-scan-core.js'
+import { resolvePathHostLocal } from './path-resolve-core.js'
 import {
   GATEWAY_SOCKET_FILENAME,
   GATEWAY_MAX_LINE_BYTES,
@@ -1427,6 +1428,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'fs.ls': return cmdFsLs(ws, id as number, cmd)
     case 'fs.find': return cmdFsFind(ws, id as number, cmd)
     case 'fs.stat': return cmdFsStat(ws, id as number, cmd)
+    case 'fs.resolvePath': return cmdFsResolvePath(ws, id as number, cmd)
     case 'fs.readRange': return cmdFsReadRange(ws, id as number, cmd)
     case 'git.diff': return cmdGitDiff(ws, id as number, cmd)
     case 'list': return cmdList(ws, id as number)
@@ -4013,6 +4015,35 @@ async function cmdFsStat(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       return
     }
     sendError(ws, id, 'fs.stat failed: ' + e.message)
+  }
+}
+
+/**
+ * Resolve "whatever the model wrote" to a real path ON THIS HOST — capability
+ * 'path-resolve-v1'.
+ *
+ * The design-principle path (AGENTS.md): the whole layered search (transcript
+ * scan, ancestor walk, git index, pruned find) touches only files on this host,
+ * so it runs HERE and one small answer crosses the tunnel. The server's old
+ * version did the same search over RPC and needed ~2 round trips per ancestor
+ * level (~18 on a deep path), which routinely blew its own time budget and fell
+ * back to a path that did not exist.
+ */
+async function cmdFsResolvePath(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const ref = cmd.ref as string
+  if (!ref || typeof ref !== 'string') return sendError(ws, id, 'fs.resolvePath: missing ref')
+  try {
+    const result = await resolvePathHostLocal({
+      ref,
+      cwd: typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : undefined,
+      sessionId: typeof cmd.sessionId === 'string' && cmd.sessionId ? cmd.sessionId : undefined,
+      claudeHome: path.join(HOME_DIR, '.claude'),
+      homeDir: HOME_DIR,
+      budgetMs: typeof cmd.budgetMs === 'number' ? cmd.budgetMs : undefined,
+    })
+    sendOk(ws, id, result as unknown as Record<string, unknown>)
+  } catch (err: unknown) {
+    sendError(ws, id, 'fs.resolvePath failed: ' + (err as Error).message)
   }
 }
 

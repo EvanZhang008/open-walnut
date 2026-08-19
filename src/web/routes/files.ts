@@ -23,11 +23,17 @@ import { getConfig } from '../../core/config-manager.js'
 import { getFrequentDirs } from '../../core/frequent-dirs.js'
 import { recordMentionDir, getMentionDirs } from '../../core/mention-dirs.js'
 import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
+import { log } from '../../logging/index.js'
 
 export const filesRouter = Router()
 
 const MAX_ENTRIES = 1000
 const REMOTE_TIMEOUT_MS = 15_000
+/** Search budget handed to a REMOTE host's resolver. Larger than the resolver's
+ *  in-process default (a remote tree is usually a big monorepo on slower disk),
+ *  and still comfortably inside REMOTE_TIMEOUT_MS so the RPC can't outlive its
+ *  own connection deadline. */
+const REMOTE_RESOLVE_BUDGET_MS = 12_000
 
 /** Validation/lookup failure with an HTTP-ish status — each edge maps its own shape. */
 export class FilesOpError extends Error {
@@ -65,6 +71,77 @@ function candidateBases(cwd: string): string[] {
     cur = parent
   }
   return bases
+}
+
+/**
+ * Ask the host that owns the files to resolve a reference — the preferred path.
+ *
+ * The whole layered search (session transcript, ancestor walk, git index with
+ * submodules, pruned find) is host-local work, so it runs where the files are and
+ * ONE small answer crosses the tunnel. Compare the legacy walk below this: ~2
+ * stat RPCs per ancestor level, which spent its entire budget on round trips on
+ * any deep path and then returned a path that did not exist.
+ *
+ * Returns null when this host can't do it (old daemon without 'path-resolve-v1',
+ * daemon unreachable, unknown host) — the caller then uses the legacy walk.
+ */
+async function resolveViaHost(
+  ref: string,
+  cwd: string | undefined,
+  host: string | undefined,
+  sessionId: string | undefined,
+): Promise<HostResolveResult | null> {
+  // Local host: call the resolver in-process. It yields the event loop between
+  // transcript windows and shells out for git/find, so it never blocks a route.
+  if (!host) {
+    const { resolvePathHostLocal } = await import('../../providers/path-resolve-core.js')
+    return await resolvePathHostLocal({ ref, cwd, sessionId })
+  }
+
+  const config = await getConfig()
+  const hostDef = config.hosts?.[host]
+  if (!hostDef?.hostname) return null
+
+  const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
+  const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }
+  let conn
+  try {
+    let timeoutId: ReturnType<typeof setTimeout>
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error('timeout')), REMOTE_TIMEOUT_MS)
+    })
+    conn = await Promise.race([getDaemonConnection(host, sshTarget), timeoutPromise])
+      .finally(() => clearTimeout(timeoutId!))
+  } catch {
+    return null
+  }
+  if (!conn.hasCapability?.('path-resolve-v1')) return null
+  // A remote host's tree is typically a big monorepo on slower storage, and this
+  // is ONE RPC either way — so give the search a wider budget than the in-process
+  // default. Still bounded: expiring degrades to the nearest existing folder.
+  const res = await conn.send('fs.resolvePath', {
+    ref, budgetMs: REMOTE_RESOLVE_BUDGET_MS,
+    ...(cwd ? { cwd } : {}), ...(sessionId ? { sessionId } : {}),
+  })
+  if (!res.ok || typeof res.path !== 'string') return null
+  return {
+    path: res.path,
+    resolved: res.resolved === true,
+    via: typeof res.via === 'string' ? res.via : 'none',
+    ...(res.degraded === true ? { degraded: true } : {}),
+    ...(typeof res.ref === 'string' ? { ref: res.ref } : {}),
+    ...(Array.isArray(res.alternatives) ? { alternatives: res.alternatives as string[] } : {}),
+  }
+}
+
+/** Shape of a host resolution, mirrored from path-resolve-core's result. */
+interface HostResolveResult {
+  path: string
+  resolved: boolean
+  via: string
+  degraded?: boolean
+  ref?: string
+  alternatives?: string[]
 }
 
 /**
@@ -121,12 +198,23 @@ async function findDownwardLocal(root: string, rel: string): Promise<string | nu
  * Resolve a session-relative path against a cwd/host. Shared by the internal
  * route and GET /api/v1/files/resolve-path. Throws FilesOpError on invalid
  * input; unresolvable paths return `{ path: fallback, resolved: false }`.
+ *
+ * Two implementations, in preference order:
+ *  1. the HOST-LOCAL layered resolver (transcript / walk-up / git / find). One
+ *     round trip, and the only one that can use the session transcript or reach
+ *     into a submodule at arbitrary depth.
+ *  2. the legacy per-ancestor stat walk below, kept as the fallback for hosts
+ *     whose daemon predates 'path-resolve-v1'.
+ *
+ * `sessionId` is optional but strongly wanted: it unlocks the transcript layer,
+ * which is both the cheapest and the most accurate signal available.
  */
 export async function resolveSessionPath(
   rel: unknown,
   cwd: unknown,
   host: string | undefined,
-): Promise<{ path: string; resolved: boolean }> {
+  sessionId?: string,
+): Promise<{ path: string; resolved: boolean; via?: string; degraded?: boolean; ref?: string; alternatives?: string[] }> {
   if (!rel || typeof rel !== 'string' || !cwd || typeof cwd !== 'string') {
     throw new FilesOpError('Missing rel or cwd parameter', 400)
   }
@@ -136,7 +224,28 @@ export async function resolveSessionPath(
   if (/[;&|`$(){}!<>]/.test(rel) || /[;&|`$(){}!<>]/.test(cwd)) {
     throw new FilesOpError('invalid characters in path', 400)
   }
-  // Absolute rel needs no resolution — pass through.
+  // Preferred path. Absolute refs go through it too: an absolute path that does
+  // NOT exist is a common failure (a stale checkout root, or a prefix the model
+  // carried over from another machine), and the resolver's transcript/git layers
+  // fix exactly that by matching the path's TAIL. The old code returned every
+  // absolute ref as `resolved:true` without checking, so a wrong path was
+  // reported as a good one and the click died in the listing instead.
+  //
+  // A throw here means the resolver's own guards rejected the input, which the
+  // checks above already cover — so any throw is treated as "this host can't
+  // answer" and falls through to the legacy walk.
+  try {
+    const hostResult = await resolveViaHost(rel, cwd, host, sessionId)
+    if (hostResult) return hostResult
+  } catch (err) {
+    log.web.info('resolveSessionPath: host resolver unavailable, using legacy walk', {
+      host: host ?? 'local', error: err instanceof Error ? err.message : String(err),
+    })
+  }
+
+  // ── Legacy fallback (daemon without 'path-resolve-v1') ──
+  // Absolute rel needs no resolution here — this path can only stat, and the
+  // caller's listing surfaces a miss.
   if (rel.startsWith('/')) {
     return { path: rel, resolved: true }
   }
@@ -234,7 +343,8 @@ export async function resolveSessionPath(
 filesRouter.get('/resolve-path', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const host = typeof req.query.host === 'string' && req.query.host ? req.query.host : undefined
-    res.json(await resolveSessionPath(req.query.rel, req.query.cwd, host))
+    const sessionId = typeof req.query.sessionId === 'string' && req.query.sessionId ? req.query.sessionId : undefined
+    res.json(await resolveSessionPath(req.query.rel, req.query.cwd, host, sessionId))
   } catch (err) {
     if (err instanceof FilesOpError) {
       res.status(err.statusCode).json({ error: err.message })
@@ -248,17 +358,39 @@ export interface FileListResult {
   path: string
   selectedFile?: string
   entries: DirEntry[]
+  /** Set when `path` is NOT what was asked for: the request pointed at something
+   *  that doesn't exist, so this listing is the nearest usable directory instead.
+   *  The UI shows the listing plus "couldn't find <requestedPath>" rather than a
+   *  raw ENOENT — a dead-end error message was the whole reported complaint. */
+  requestedPath?: string
+  /** How the shown path was arrived at, when resolution ran ('transcript', 'git', …). */
+  resolvedVia?: string
+}
+
+/** Optional context that lets a listing SELF-HEAL a path that doesn't exist. */
+export interface ListSessionFilesContext {
+  /** Session cwd — anchors relative refs and the resolver's search. */
+  cwd?: string
+  /** Session id — unlocks the transcript layer of the resolver. */
+  sessionId?: string
 }
 
 /**
  * List a single directory's entries on a host. Shared by the internal route
  * and GET /api/v1/files/list. Path-traversal and shell-metacharacter guards
  * live HERE so every edge gets identical sandboxing. Throws FilesOpError.
+ *
+ * SELF-HEALING: when `ctx` is supplied and the requested path can't be listed,
+ * the layered resolver runs and the listing retries on what it found. That is the
+ * single fix for the whole "clicked a path, got `ENOENT: scandir`" complaint, and
+ * it lands for every surface at once (web, iOS, cloud) because they all call this
+ * one function. Without `ctx` the behavior is exactly as before.
  */
 export async function listSessionFiles(
   rawPath: unknown,
   host: string | undefined,
   showHidden: boolean,
+  ctx?: ListSessionFilesContext,
 ): Promise<FileListResult> {
   if (!rawPath || typeof rawPath !== 'string') {
     throw new FilesOpError('Missing or invalid path parameter', 400)
@@ -275,6 +407,38 @@ export async function listSessionFiles(
     throw new FilesOpError('invalid characters in path', 400)
   }
 
+  try {
+    return await listOneDir(rawPath, host, showHidden)
+  } catch (err) {
+    // Only a listing failure is worth healing; a guard rejection above is final.
+    if (!ctx || (!ctx.cwd && !ctx.sessionId)) throw err
+    let healed: HostResolveResult | null = null
+    try {
+      healed = await resolveViaHost(rawPath, ctx.cwd, host, ctx.sessionId)
+    } catch { /* resolver refused the input — surface the original error */ }
+    if (!healed || healed.path === rawPath) throw err
+    log.web.info('files/list: healed an unlistable path', {
+      host: host ?? 'local', requested: rawPath, healed: healed.path, via: healed.via,
+    })
+    try {
+      const listing = await listOneDir(healed.path, host, showHidden)
+      // Flag a STAND-IN so the UI can say "couldn't find X, showing Y". A real hit
+      // needs no flag: the user asked for a path and got that path's contents.
+      return healed.resolved
+        ? { ...listing, resolvedVia: healed.via }
+        : { ...listing, requestedPath: rawPath, resolvedVia: healed.via }
+    } catch {
+      throw err // healed path doesn't list either — the original error is truer
+    }
+  }
+}
+
+/** List exactly one directory, no healing. The pre-existing listing logic. */
+async function listOneDir(
+  rawPath: string,
+  host: string | undefined,
+  showHidden: boolean,
+): Promise<FileListResult> {
   // Expand ~ for local; remote keeps ~ (daemon's fs.ls expands on the remote host)
   let dirPath = rawPath
   if (!host && (dirPath === '~' || dirPath.startsWith('~/'))) {
@@ -381,7 +545,11 @@ filesRouter.get('/list', async (req: Request, res: Response, next: NextFunction)
   try {
     const host = typeof req.query.host === 'string' && req.query.host ? req.query.host : undefined
     const showHidden = req.query.showHidden === '1' || req.query.showHidden === 'true'
-    res.json(await listSessionFiles(req.query.path, host, showHidden))
+    // cwd + sessionId are OPTIONAL and only enable self-healing — an old client
+    // that omits them keeps the previous behavior exactly.
+    const cwd = typeof req.query.cwd === 'string' && req.query.cwd ? req.query.cwd : undefined
+    const sessionId = typeof req.query.sessionId === 'string' && req.query.sessionId ? req.query.sessionId : undefined
+    res.json(await listSessionFiles(req.query.path, host, showHidden, { cwd, sessionId }))
   } catch (err) {
     if (err instanceof FilesOpError) {
       res.status(err.statusCode).json({ error: err.message })

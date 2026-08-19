@@ -94,9 +94,10 @@ export function getDaemonSource(): string {
   // Sidecar-gated capabilities are EXCLUDED from the static list: their host-
   // local pipelines can't be inlined into this string template, so deploySource
   // ships each as a separate CJS bundle (changes-core.cjs,
-  // external-scan-core.cjs) and daemonCapabilities() in the template adds the
-  // capability back at runtime only when that sidecar actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1'])
+  // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
+  // the template adds the capability back at runtime only when that sidecar
+  // actually loads.
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'path-resolve-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -1742,6 +1743,7 @@ function dispatchCommand(ws, id, cmd) {
     case 'fs.ls': return cmdFsLs(ws, id, cmd);
     case 'fs.find': return cmdFsFind(ws, id, cmd);
     case 'fs.stat': return cmdFsStat(ws, id, cmd);
+    case 'fs.resolvePath': return cmdFsResolvePath(ws, id, cmd);
     case 'fs.readRange': return cmdFsReadRange(ws, id, cmd);
     case 'git.diff': return cmdGitDiff(ws, id, cmd);
     case 'list': return cmdList(ws, id);
@@ -4861,11 +4863,43 @@ try { changesCore = require(path.join(__dirname, 'changes-core.cjs')); } catch (
 let externalScanCore = null;
 try { externalScanCore = require(path.join(__dirname, 'external-scan-core.cjs')); } catch (err) { externalScanCore = null; }
 
+// Layered path resolution sidecar (path-resolve-core.cjs) — same sidecar
+// rationale: the transcript scan + git/find search can't live in this template.
+// 'path-resolve-v1' is advertised only when the load succeeds; without it the
+// server falls back to its own per-ancestor stat walk over RPC.
+let pathResolveCore = null;
+try { pathResolveCore = require(path.join(__dirname, 'path-resolve-core.cjs')); } catch (err) { pathResolveCore = null; }
+
 function daemonCapabilities() {
   const caps = __DAEMON_CAPABILITIES__.slice();
   if (changesCore) caps.push('changes-v1');
   if (externalScanCore) caps.push('external-scan-v1');
+  if (pathResolveCore) caps.push('path-resolve-v1');
   return caps;
+}
+
+// Resolve "whatever the model wrote" to a real path on THIS host. See
+// cmdFsResolvePath in daemon-standalone.ts for the design rationale.
+async function cmdFsResolvePath(ws, id, cmd) {
+  if (!pathResolveCore) {
+    sendError(ws, id, 'fs.resolvePath unsupported: path-resolve-core sidecar not loaded');
+    return;
+  }
+  const ref = cmd.ref;
+  if (!ref || typeof ref !== 'string') return sendError(ws, id, 'fs.resolvePath: missing ref');
+  try {
+    const result = await pathResolveCore.resolvePathHostLocal({
+      ref: ref,
+      cwd: typeof cmd.cwd === 'string' && cmd.cwd ? cmd.cwd : undefined,
+      sessionId: typeof cmd.sessionId === 'string' && cmd.sessionId ? cmd.sessionId : undefined,
+      claudeHome: path.join(HOME_DIR, '.claude'),
+      homeDir: HOME_DIR,
+      budgetMs: typeof cmd.budgetMs === 'number' ? cmd.budgetMs : undefined,
+    });
+    sendOk(ws, id, result);
+  } catch (err) {
+    sendError(ws, id, 'fs.resolvePath failed: ' + err.message);
+  }
 }
 
 // ── Discover sessions started OUTSIDE Walnut ──

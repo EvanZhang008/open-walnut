@@ -18801,6 +18801,21 @@ td.usage-share-col {
   white-space: normal;
 }
 
+/* "Couldn't find X — showing the nearest folder." Deliberately NOT error-red:
+   the listing below it is useful, so this is information, not a failure. */
+.sfe-notice {
+  padding: 6px 12px;
+  color: var(--fg-muted);
+  font-size: 12px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.sfe-notice code {
+  font-size: 11px;
+  opacity: 0.85;
+}
+
 .session-file-explorer-preview .file-content-view {
   height: 100%;
 }

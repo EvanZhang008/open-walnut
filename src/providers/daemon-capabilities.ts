@@ -100,6 +100,13 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * the `gateway-result` command). Optional: on an old daemon `wn` simply
  * exits 6 (socket absent) until the next auto-deploy upgrades it.
  *
+ * 'hooks-v1' — declarative daemon-hook rules (hooks.configure command). The
+ * server compiles ~/.open-walnut/hooks/*.yaml (runtime:daemon) into a rules
+ * JSON and pushes it at connect + on change; the daemon evaluates the rules
+ * at its intercept points (cron.create/cron.created/cron.fire/session.reap).
+ * Optional: an old daemon falls back to the WALNUT_ENFORCE_SESSION_CRON env
+ * (set at spawn), which covers only the built-in cron policy.
+ *
  * 'session.message' — narrow bridge message relay (phone → cloud → daemon →
  * connected walnut server, which enqueues into the DURABLE session message
  * queue — same store, delivery paths, and reconnect redelivery as web sends).
@@ -138,6 +145,17 @@ export const REQUIRED_DAEMON_CAPABILITIES = [
  * when that load succeeds. Optional: a host without it simply contributes no
  * external sessions (the importer skips it on capability) until the next
  * auto-deploy.
+ *
+ * 'path-resolve-v1' — host-local layered path resolution (fs.resolvePath). The
+ * daemon turns "whatever the model wrote" into a real path using its OWN files:
+ * the session transcript (paths the CLI already opened), the ancestor walk, the
+ * git index (--recurse-submodules, so any depth and any submodule), and a pruned
+ * find. One RPC replaces the server's old ~2-stats-per-ancestor-level walk, which
+ * routinely spent its whole time budget on round trips and then handed back a
+ * path that did not exist (the "cwd is A/, ref is 1/2/3, file is at A/B/C/1/2/3"
+ * failure). Binary daemons bundle the resolver; source-deployed daemons require()
+ * a sidecar (path-resolve-core.cjs) and advertise this only when that load
+ * succeeds. Optional: without it the server uses its own RPC-based walk.
  */
 export const ADVERTISED_DAEMON_CAPABILITIES = [
   ...REQUIRED_DAEMON_CAPABILITIES,
@@ -148,9 +166,16 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   'mobile-event',
   'agent-gateway',
   'session.message',
+  'hooks-v1',
   'changes-v1',
   'external-scan-v1',
+  'path-resolve-v1',
   'fs.readBounded',
+  // 'acpSteer' — mid-turn message injection into a live ACP turn (worker
+  // 'steer' op → adapter `_session/steering` → codex `turn/steer`). Optional:
+  // an old daemon answers unknown-command, and AcpSession.steer() degrades to
+  // the queue-until-turn-end path (pre-steering behavior).
+  'acpSteer',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

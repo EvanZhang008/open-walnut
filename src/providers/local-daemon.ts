@@ -507,14 +507,17 @@ export class LocalDaemon {
       fs.writeFileSync(hashFile, sourceHash, 'utf-8')
       log.session.info('materialized source-fallback local daemon', { scriptPath, sourceHash })
     }
-    // Session-changes sidecar — the template require()s changes-core.cjs next
-    // to itself and advertises 'changes-v1' only when the load succeeds.
-    // Best-effort: absent bundle (published npm package) = reader fallback.
-    try {
-      const sidecarSrc = path.join(DAEMON_BINARIES_DIR, 'changes-core.cjs')
-      const sidecarDst = path.join(this.daemonDir, 'changes-core.cjs')
-      if (fs.existsSync(sidecarSrc)) fs.copyFileSync(sidecarSrc, sidecarDst)
-    } catch { /* reader fallback stays */ }
+    // Sidecar bundles — the template require()s each next to itself and
+    // advertises the matching capability only when the load succeeds.
+    // Best-effort per file: an absent bundle (published npm package) just means
+    // the server keeps its own fallback for that feature.
+    for (const sidecarFile of ['changes-core.cjs', 'path-resolve-core.cjs']) {
+      try {
+        const sidecarSrc = path.join(DAEMON_BINARIES_DIR, sidecarFile)
+        const sidecarDst = path.join(this.daemonDir, sidecarFile)
+        if (fs.existsSync(sidecarSrc)) fs.copyFileSync(sidecarSrc, sidecarDst)
+      } catch { /* server-side fallback stays */ }
+    }
     return scriptPath
   }
 

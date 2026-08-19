@@ -1887,6 +1887,33 @@ export class DaemonConnection {
         proc.stdin!.end(source)
       })
 
+      // Sidecar bundles: the source template can't import modules, so each of
+      // these is require()d next to daemon.cjs and gates its own capability.
+      // Best-effort per file — a missing sidecar (npm-package install without
+      // dist/daemon-binaries) just means that host keeps the server-side
+      // fallback (changes) or reports no external sessions (external-scan).
+      for (const sidecarFile of ['changes-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs']) {
+        try {
+          const sidecar = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, sidecarFile), 'utf-8')
+          const scArgs = [...this.baseSshArgs, this.sshHostString, `cat > /tmp/open-walnut/${sidecarFile}`]
+          const scProc = spawn('ssh', scArgs, { stdio: ['pipe', 'pipe', 'pipe'] })
+          scProc.stdin!.on('error', () => {})
+          await new Promise<void>((resolve, reject) => {
+            scProc.on('close', (code) => {
+              if (code === 0) resolve()
+              else reject(new Error(`${sidecarFile} sidecar deploy failed with code ${code}`))
+            })
+            scProc.on('error', reject)
+            scProc.stdin!.end(sidecar)
+          })
+        } catch (err) {
+          log.session.info('DaemonConnection: sidecar not deployed (fallback stays)', {
+            host: this.hostKey, sidecar: sidecarFile,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }
+
       // Ensure 'ws' package is available for the daemon's WebSocket server.
       // When bun is the runtime we skip this entirely — daemon-source.ts has a
       // raw HTTP-upgrade fallback (createManualWsServer) that kicks in when
@@ -1928,33 +1955,6 @@ export class DaemonConnection {
       // look like success while the current spawn is already dead. Binary has
       // a `--status` subcommand; source daemon doesn't, so it uses `kill -0`
       // on the PID file. See daemon-source.ts — no --status handler.
-      // Sidecar bundles: the source template can't import modules, so each of
-      // these is require()d next to daemon.cjs and gates its own capability.
-      // Best-effort per file — a missing sidecar (npm-package install without
-      // dist/daemon-binaries) just means that host keeps the server-side
-      // fallback (changes) or reports no external sessions (external-scan).
-      for (const sidecarFile of ['changes-core.cjs', 'external-scan-core.cjs']) {
-        try {
-          const sidecar = fs.readFileSync(path.join(DAEMON_BINARIES_DIR, sidecarFile), 'utf-8')
-          const scArgs = [...this.baseSshArgs, this.sshHostString, `cat > /tmp/open-walnut/${sidecarFile}`]
-          const scProc = spawn('ssh', scArgs, { stdio: ['pipe', 'pipe', 'pipe'] })
-          scProc.stdin!.on('error', () => {})
-          await new Promise<void>((resolve, reject) => {
-            scProc.on('close', (code) => {
-              if (code === 0) resolve()
-              else reject(new Error(`${sidecarFile} sidecar deploy failed with code ${code}`))
-            })
-            scProc.on('error', reject)
-            scProc.stdin!.end(sidecar)
-          })
-        } catch (err) {
-          log.session.info('DaemonConnection: sidecar not deployed (fallback stays)', {
-            host: this.hostKey, sidecar: sidecarFile,
-            error: err instanceof Error ? err.message : String(err),
-          })
-        }
-      }
-
 
       // Opt-in session-only cron policy (config session.cron_policy): the
       // daemon reads WALNUT_ENFORCE_SESSION_CRON at boot, so it must be in

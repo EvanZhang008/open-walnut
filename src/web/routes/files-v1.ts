@@ -46,15 +46,21 @@ filesV1Router.get('/files/list', async (req: Request, res: Response, next: NextF
   try {
     const host = typeof req.query.host === 'string' && req.query.host ? req.query.host : undefined
     const showHidden = req.query.showHidden === '1' || req.query.showHidden === 'true'
+    // Optional self-healing context (additive): when the path can't be listed,
+    // the layered resolver retries against the session's cwd/transcript so the
+    // phone gets a usable listing instead of an errno. Old clients omit them.
+    const cwd = typeof req.query.cwd === 'string' && req.query.cwd ? req.query.cwd : undefined
+    const sessionId = typeof req.query.sessionId === 'string' && req.query.sessionId ? req.query.sessionId : undefined
     if (CLOUD_MODE) {
       await relayControlAction(res, 'server.files.list', SERVER_RELAY_SID, {
         path: req.query.path, ...(host ? { host } : {}), showHidden,
+        ...(cwd ? { cwd } : {}), ...(sessionId ? { sessionId } : {}),
       }, 200)
       return
     }
     const { listSessionFiles, FilesOpError } = await import('./files.js')
     try {
-      res.json(await listSessionFiles(req.query.path, host, showHidden))
+      res.json(await listSessionFiles(req.query.path, host, showHidden, { cwd, sessionId }))
     } catch (err) {
       if (err instanceof FilesOpError) {
         sendError(res, err.statusCode, 'bad_request', err.message)
@@ -73,15 +79,19 @@ filesV1Router.get('/files/list', async (req: Request, res: Response, next: NextF
 filesV1Router.get('/files/resolve-path', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const host = typeof req.query.host === 'string' && req.query.host ? req.query.host : undefined
+    // sessionId is optional and unlocks the resolver's transcript layer, which is
+    // both its cheapest and its most accurate signal. Additive: old clients omit it.
+    const sessionId = typeof req.query.sessionId === 'string' && req.query.sessionId ? req.query.sessionId : undefined
     if (CLOUD_MODE) {
       await relayControlAction(res, 'server.files.resolve', SERVER_RELAY_SID, {
         rel: req.query.rel, cwd: req.query.cwd, ...(host ? { host } : {}),
+        ...(sessionId ? { sessionId } : {}),
       }, 200)
       return
     }
     const { resolveSessionPath, FilesOpError } = await import('./files.js')
     try {
-      res.json(await resolveSessionPath(req.query.rel, req.query.cwd, host))
+      res.json(await resolveSessionPath(req.query.rel, req.query.cwd, host, sessionId))
     } catch (err) {
       if (err instanceof FilesOpError) {
         sendError(res, err.statusCode, 'bad_request', err.message)

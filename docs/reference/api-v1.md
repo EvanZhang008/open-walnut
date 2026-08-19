@@ -160,7 +160,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | DELETE | `/api/v1/sessions/:id/queue/:messageId` | Delete a queued message (cloud relays) |
 | GET | `/api/v1/files/list?path=&host=` | One directory level of a session file tree (cloud relays) |
 | GET | `/api/v1/files/resolve-path?rel=&cwd=&host=` | Resolve a transcript-mentioned path (cloud relays) |
-| GET | `/api/v1/file-content?path=&host=` | FileViewer text payload + `contentHash` (REPLICA: local safe roots only; `host=` → 501) |
+| GET | `/api/v1/file-content?path=&host=` | FileViewer text payload + `contentHash` (REPLICA: bounded bridge relay — 2MB cap 413, bridge down 503, old daemon 501) |
 | PUT | `/api/v1/file-content` | Save a file edit; optimistic lock via `expectedHash` → 409 (REPLICA: 403/501) |
 | GET | `/api/v1/config` | Read-only allowlist config projection + box diagnostics |
 | GET | `/api/v1/usage/overview` | Usage aggregates under one filter (501 on REPLICA) |
@@ -1072,16 +1072,31 @@ Same sandbox guards as the web console (shared implementation): directory
 traversal (`..`) rejected, absolute paths required, shell metacharacters
 rejected, 4096-char cap.
 
-- `GET /api/v1/files/list?path=/abs/dir&host=&showHidden=1` →
+- `GET /api/v1/files/list?path=/abs/dir&host=&showHidden=1[&cwd=&sessionId=]` →
   `{ "path", "selectedFile"?, "entries": [ { name, type: "dir"|"file",
-    size?, hasChildren? } ] }` — one directory level (lazy tree), dirs before
-  files. Entries carry `name` only (no `path` field) — join with the response's
-  top-level `path` to build absolute child paths. REPLICA: relays as the
-  box-level `server.files.list` action (names-only metadata).
-- `GET /api/v1/files/resolve-path?rel=&cwd=&host=` → `{ "path", "resolved" }`
-  — resolves a transcript-mentioned (possibly package-relative) path against
-  the session cwd; unresolvable → `resolved: false` with the cwd-joined
-  fallback. REPLICA: relays as `server.files.resolve`.
+    size?, hasChildren? } ], "requestedPath"?, "resolvedVia"? }` — one directory
+  level (lazy tree), dirs before files. Entries carry `name` only (no `path`
+  field) — join with the response's top-level `path` to build absolute child
+  paths. REPLICA: relays as the box-level `server.files.list` action
+  (names-only metadata).
+  **Self-healing (additive, 2026-08):** passing `cwd` and/or `sessionId` makes a
+  path that can't be listed resolve first (see resolve-path below) and the
+  listing retry on what was found, so a partial or stale path shows files
+  instead of an errno. `resolvedVia` names the layer that found it; when the
+  answer is only a nearby STAND-IN, `requestedPath` echoes what was asked for so
+  the client can say "couldn't find X, showing Y". Omit both parameters for the
+  pre-2026-08 behavior (a missing path is a `400`).
+- `GET /api/v1/files/resolve-path?rel=&cwd=&host=[&sessionId=]` →
+  `{ "path", "resolved", "via"?, "degraded"?, "alternatives"? }` — resolves a
+  transcript-mentioned path (relative, package-relative, or an absolute one with
+  a wrong prefix) against the session cwd. The target host runs a layered search:
+  paths the session already opened (its transcript), the ancestor walk, the git
+  index (`--recurse-submodules`, so any depth and any submodule), then a pruned
+  `find`. `via` reports which layer answered. Unresolvable → `resolved: false`
+  with the nearest existing directory (`degraded: true`) so a click always lands
+  somewhere. Passing `sessionId` enables the transcript layer, which is both the
+  cheapest and the most accurate — always send it when known.
+  REPLICA: relays as `server.files.resolve`.
 - `GET /api/v1/file-content?path=&host=` → `{ "content", "size",
   "truncated", "binary", "extension", "error"?, "contentHash"? }` — the
   FileViewer JSON payload (text, truncated at 512 KB, binary-detected). A
@@ -1090,11 +1105,20 @@ rejected, 4096-char cap.
   **absent for a truncated or binary read**, which is exactly what marks those
   files non-editable (hashing a served 512 KB prefix would let a save
   round-trip it back over the whole file and delete the tail).
-  **REPLICA threat model:** file CONTENT never rides the bridge — the daemon
-  channel deliberately has no arbitrary-read command, so `host=` on a
-  REPLICA answers `501 not_supported_cloud`, and replica-LOCAL reads are
-  confined to the safe `/tmp/open-walnut*` roots with secret-path denials
-  (`403` mapped to `not_supported_cloud`).
+  **REPLICA relay (2026-08):** content reads relay to the target host's
+  daemon over the bridge via the narrow `fs.readBounded` command — NOT
+  `fs.read`: the daemon enforces a **2 MB cap** and the path sandbox
+  (traversal/absolute checks, realpath resolution, secret-path denylist:
+  `~/.ssh`, `~/.aws`, key files, `.env`, `config.yaml`, …) HOST-SIDE.
+  `host=''`/absent targets the primary box's daemon (`__local__`), except
+  files already present in the replica's own safe `/tmp/open-walnut*` roots,
+  which are served locally. Outcomes: over the cap → `413 too_large`; the
+  host's bridge down or the read timing out (15 s deadline) →
+  `503 bridge_offline`; a daemon that predates `fs.readBounded` →
+  `501 not_supported_cloud` (self-heals via daemon auto-upgrade on the next
+  primary reconnect); a host-side sandbox denial → `403
+  not_supported_cloud`. Replica-LOCAL reads keep the safe-root confinement +
+  secret-path denials (`403` mapped to `not_supported_cloud`).
   **`raw=1` (additive, 2026-08):** serve the file's BYTES with a real
   Content-Type instead of the JSON envelope — `text/html` for `.html`/`.htm`,
   `image/svg+xml` for `.svg`, media/PDF/image types stream byte-exact with

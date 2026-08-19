@@ -143,11 +143,27 @@ of chunked tunnel reads is seconds host-local.
 
 Precedents: `git.diff` (daemon runs the whole diff host-side), `changes.compute`/`changes.file`
 (daemon parses session JSONLs + reads contents host-side, returns a light list / one file),
-snapshot-v1 (daemon folds its own stream files). When adding a feature that reads session/host
-data, default to a daemon command + a thin server relay; only fall back to DaemonFileReader
-byte-shuttling when the daemon genuinely can't own the work (e.g. cross-host aggregation).
-Capability-gate new commands (`daemon-capabilities.ts`) so old daemons degrade to the fallback
-path instead of erroring.
+snapshot-v1 (daemon folds its own stream files), `fs.resolvePath` (path-resolve-v1: the daemon
+runs the whole layered path search on its own tree). When adding a feature that reads
+session/host data, default to a daemon command + a thin server relay; only fall back to
+DaemonFileReader byte-shuttling when the daemon genuinely can't own the work (e.g. cross-host
+aggregation). Capability-gate new commands (`daemon-capabilities.ts`) so old daemons degrade to
+the fallback path instead of erroring.
+
+**Corollary — a search over host data is host work too, and a per-item RPC loop is the
+anti-pattern.** The old path resolver lived on the SERVER and probed the daemon with ~2
+`fs.stat` calls per ancestor level (~18 round trips on a deep path). It routinely spent its
+whole 10s budget on latency, then returned a path that didn't exist, which surfaced as a raw
+`ENOENT: scandir` in the Files tree. `fs.resolvePath` (`src/providers/path-resolve-core.ts`) is
+the same logic moved next to the data: one RPC, and it can use signals the server never had
+(the session transcript, `git ls-files --recurse-submodules`). Two rules it encodes: bound the
+CANDIDATE SET, not just the clock (an unbounded suffix list burns the budget on tails that
+can't match), and batch — every needle rides ONE `ls-files` call per repo root.
+
+**Never answer a path question with an errno.** `/api/files/list` accepts optional
+`cwd`/`sessionId` and, when the requested path can't be listed, resolves and retries, flagging
+a stand-in via `requestedPath`. A dead-end error message in a file tree is a bug, not a
+diagnosis: degrade to the nearest existing directory plus "couldn't find X".
 
 ### Remote Session Daemon (resilience model)
 

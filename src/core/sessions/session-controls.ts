@@ -992,6 +992,10 @@ export async function handleSessionControlRelay(
         try {
           result = await listSessionFiles(
             p.path, typeof p.host === 'string' && p.host ? p.host : undefined, p.showHidden === true,
+            {
+              cwd: typeof p.cwd === 'string' && p.cwd ? p.cwd : undefined,
+              sessionId: typeof p.sessionId === 'string' && p.sessionId ? p.sessionId : undefined,
+            },
           ) as unknown as Record<string, unknown>;
         } catch (err) {
           if (err instanceof FilesOpError) throw new SessionControlError(err.message, err.statusCode);
@@ -1004,6 +1008,7 @@ export async function handleSessionControlRelay(
         try {
           result = await resolveSessionPath(
             p.rel, p.cwd, typeof p.host === 'string' && p.host ? p.host : undefined,
+            typeof p.sessionId === 'string' && p.sessionId ? p.sessionId : undefined,
           ) as unknown as Record<string, unknown>;
         } catch (err) {
           if (err instanceof FilesOpError) throw new SessionControlError(err.message, err.statusCode);

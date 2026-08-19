@@ -162,7 +162,7 @@ interface SessionChatHistoryProps {
 }
 
 /** Memoized text block that caches renderMarkdownWithRefs output */
-function StreamingTextBlock({ content, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: { content: string; sessionCwd?: string; sessionHost?: string; onTaskClick?: (taskId: string) => void; onSessionClick?: (sessionId: string) => void; onFileOpen?: (path: string, line?: number) => void }) {
+function StreamingTextBlock({ content, sessionCwd, sessionHost, sessionId, onTaskClick, onSessionClick, onFileOpen }: { content: string; sessionCwd?: string; sessionHost?: string; sessionId?: string; onTaskClick?: (taskId: string) => void; onSessionClick?: (sessionId: string) => void; onFileOpen?: (path: string, line?: number) => void }) {
   // Freeze the rendered content while the user is selecting inside this block —
   // each delta otherwise swaps innerHTML and destroys the selection's anchor
   // nodes (the "selection disappears while generating" bug). Catches up the
@@ -408,7 +408,7 @@ function PermissionRequestCard({ sessionId, requestId, toolName, input, reason, 
 const StreamingBlockView = memo(function StreamingBlockView({ block, sessionId, sessionCwd, sessionHost, live, onTaskClick, onSessionClick, onFileOpen }: { block: StreamingBlock; sessionId: string; sessionCwd?: string; sessionHost?: string; live?: boolean; onTaskClick?: (taskId: string) => void; onSessionClick?: (sessionId: string) => void; onFileOpen?: (path: string, line?: number) => void }) {
   if (block.type === 'text') {
     if (!block.content.trim()) return null;
-    return <StreamingTextBlock content={block.content} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
+    return <StreamingTextBlock content={block.content} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
   }
 
   if (block.type === 'system') {
@@ -480,6 +480,7 @@ const StreamingBlockView = memo(function StreamingBlockView({ block, sessionId, 
       result={block.result}
       sessionCwd={sessionCwd}
       sessionHost={sessionHost}
+      sessionId={sessionId}
       onTaskClick={onTaskClick}
       onSessionClick={onSessionClick}
       onFileOpen={onFileOpen ? (p) => onFileOpen(p) : undefined}
@@ -2255,6 +2256,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                           result={b.result}
                           sessionCwd={sessionCwd}
                           sessionHost={sessionHost}
+                          sessionId={sessionId}
                           onTaskClick={onTaskClick}
                           onSessionClick={onSessionClick}
                           onFileOpen={onFileOpen ? (p) => onFileOpen(p) : undefined}

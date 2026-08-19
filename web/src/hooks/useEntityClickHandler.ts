@@ -21,6 +21,10 @@ export function useEntityClickHandler(
   onFileOpen?: (path: string, line?: number) => void,
   /** Host for resolving relative paths (remote sessions). Local when omitted. */
   fileHost?: string,
+  /** Session whose transcript should inform path resolution. Strongly wanted:
+   *  it lets the backend match against paths this session actually opened, which
+   *  is the cheapest and most accurate way to resolve what the model wrote. */
+  fileSessionId?: string,
 ) {
   const navigate = useNavigate();
 
@@ -60,18 +64,21 @@ export function useEntityClickHandler(
       const line = fileLine ? parseInt(fileLine, 10) : undefined;
       const filePath = fileAnchor.dataset.filePath;
       if (filePath) {
-        // Absolute path — open directly.
+        // Absolute path — open directly. The Files panel self-heals if it turns
+        // out not to exist (a stale or wrong-prefix path), so no round trip here.
         onFileOpen(filePath, line);
         return;
       }
-      // Relative path — resolve against cwd (walks up to repo root / sibling pkgs).
+      // Relative path — the host resolves it (transcript, ancestor walk, git
+      // index with submodules, pruned find), so a path from a deeper directory
+      // than cwd still opens.
       const rel = fileAnchor.dataset.relPath;
       const cwd = fileAnchor.dataset.cwd;
       if (rel && cwd) {
-        resolvePath(rel, cwd, fileHost)
+        resolvePath(rel, cwd, fileHost, fileSessionId)
           .then((r) => onFileOpen(r.path, line))
           .catch(() => onFileOpen(`${cwd.replace(/\/$/, '')}/${rel.replace(/^\.\//, '')}`, line));
       }
     }
-  }, [onTaskClick, onSessionClick, onFileOpen, fileHost, navigate]);
+  }, [onTaskClick, onSessionClick, onFileOpen, fileHost, fileSessionId, navigate]);
 }

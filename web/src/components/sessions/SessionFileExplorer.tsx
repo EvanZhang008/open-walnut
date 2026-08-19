@@ -134,6 +134,10 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
   const [errorPaths, setErrorPaths] = useState<Map<string, string>>(new Map());
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [rootError, setRootError] = useState<string | null>(null);
+  // The path the user asked for when the backend could only offer a nearby
+  // directory instead. Rendered as a calm note above the tree — a raw
+  // `ENOENT: scandir` was the whole reported complaint.
+  const [notFoundRef, setNotFoundRef] = useState<string | null>(null);
   // The folder the user last clicked into — shown in the toolbar path so it
   // follows navigation (falls back to the root when nothing is focused).
   const [focusedDir, setFocusedDir] = useState<string | null>(null);
@@ -229,12 +233,19 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
     setLoadingPaths((prev) => new Set(prev).add(dirPath));
     setErrorPaths((prev) => { const next = new Map(prev); next.delete(dirPath); return next; });
     try {
-      const res = await fetchDirList(dirPath, host, showHidden, { noCache });
+      // cwd + sessionId let the backend SELF-HEAL a path that doesn't exist
+      // (resolve it against the session's transcript / git index, then list what
+      // it found) instead of answering `ENOENT: scandir`.
+      const res = await fetchDirList(dirPath, host, showHidden, { noCache, cwd, sessionId });
       // Backend resolves ~ → absolute path and returns it; adopt it as the canonical
       // root so localStorage keys and child paths are all absolute (keeps the
       // persisted expand-state key stable instead of split between ~ and /abs).
-      const canonical = isRoot && res.path ? res.path : dirPath;
+      // The same applies when the backend HEALED an unlistable path: `res.path` is
+      // then a different directory entirely, and every child path must hang off it.
+      const canonical = res.path && (isRoot || res.path !== dirPath) ? res.path : dirPath;
       setChildrenMap((prev) => new Map(prev).set(canonical, res.entries));
+      // A stand-in listing gets a plain "couldn't find X" note, not an error.
+      setNotFoundRef(res.requestedPath ?? null);
       if (isRoot) {
         if (canonical !== root) setRoot(canonical);
         setRootError(null);
@@ -743,6 +754,11 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
         {!treeCollapsed && (
         <div className="session-file-explorer-tree" style={{ width: `${treeWidth}px` }}>
           {rootError && <div className="sfe-error">{rootError}</div>}
+          {notFoundRef && (
+            <div className="sfe-notice" title={notFoundRef}>
+              Couldn't find <code>{notFoundRef}</code> — showing the nearest folder.
+            </div>
+          )}
           {rootSections.map((section) => {
             const isOpen = openRoots.has(section.path);
             const rows = rowsByRoot.get(section.path) ?? [];

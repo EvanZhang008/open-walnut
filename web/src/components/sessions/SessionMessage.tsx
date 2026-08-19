@@ -566,6 +566,9 @@ interface GenericToolCallProps {
   sessionCwd?: string;
   /** Session host — used to resolve relative file paths on click (remote sessions) */
   sessionHost?: string;
+  /** Session id — lets path resolution consult this session's transcript, which
+   *  is the cheapest and most accurate way to turn a partial path into a real one. */
+  sessionId?: string;
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string) => void;
@@ -969,7 +972,7 @@ function SessionToolCall({ tool, assistantLabel, sessionId, sessionCwd, sessionH
     );
   }
 
-  return <GenericToolCall tool={tool} sessionCwd={sessionCwd} sessionHost={sessionHost} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen ? (p) => onFileOpen(p) : undefined} />;
+  return <GenericToolCall tool={tool} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen ? (p) => onFileOpen(p) : undefined} />;
 }
 
 export const SessionMessage = memo(function SessionMessage({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, showCopyActions = false, onPromoteToTask, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {

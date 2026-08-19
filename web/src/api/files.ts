@@ -122,20 +122,42 @@ export interface DirListResponse {
   /** Set when the requested path was a file: the listing is its parent dir and
    *  this is the file's basename, so the UI can select/preview it (VS Code style). */
   selectedFile?: string;
+  /** Set when `path` is NOT what was asked for: the request pointed at something
+   *  that doesn't exist, so this is the nearest usable directory. Show the listing
+   *  plus "couldn't find <requestedPath>" — never a raw errno. */
+  requestedPath?: string;
+  /** Which resolver layer produced `path` ('transcript' | 'git' | 'find' | …). */
+  resolvedVia?: string;
+}
+
+export interface ResolvePathResponse {
+  path: string;
+  resolved: boolean;
+  /** Which layer found it — useful in logs when a resolution looks surprising. */
+  via?: string;
+  /** true = `path` is a nearest-existing-ancestor stand-in, not the target. */
+  degraded?: boolean;
+  /** Other plausible matches, shallowest first. */
+  alternatives?: string[];
 }
 
 /**
- * Resolve a relative (possibly extensionless, package-relative) path against a
- * session cwd. Backend tries cwd, then walks up parent dirs to the repo root,
- * returning the first base where the path exists. Falls back to cwd/rel.
+ * Resolve a path a transcript mentioned into a real path on the session's host.
+ *
+ * The host runs a layered search: paths the session already opened (from its
+ * transcript), the ancestor walk, the git index (submodules included, any depth),
+ * then a pruned find. Passing `sessionId` unlocks the transcript layer, which is
+ * both the cheapest and the most accurate — always pass it when known.
  */
 export async function resolvePath(
   rel: string,
   cwd: string,
   host?: string,
-): Promise<{ path: string; resolved: boolean }> {
+  sessionId?: string,
+): Promise<ResolvePathResponse> {
   const params = new URLSearchParams({ rel, cwd });
   if (host) params.set('host', host);
+  if (sessionId) params.set('sessionId', sessionId);
   const res = await fetch(`/api/files/resolve-path?${params}`);
   if (!res.ok) {
     // Best-effort fallback: naive join so the click still does something.
@@ -144,16 +166,23 @@ export async function resolvePath(
   return res.json();
 }
 
-/** List one level of a directory (lazy-loaded tree). Supports local + remote (host). */
+/** List one level of a directory (lazy-loaded tree). Supports local + remote (host).
+ *
+ *  `cwd`/`sessionId` are optional and only enable SELF-HEALING: when the path
+ *  can't be listed, the backend resolves it against the session's context and
+ *  lists what it found, so a stale or shortened path shows files instead of
+ *  `ENOENT: scandir`. Always pass them from a session's file explorer. */
 export async function fetchDirList(
   dirPath: string,
   host?: string,
   showHidden = false,
-  opts: { noCache?: boolean } = {},
+  opts: { noCache?: boolean; cwd?: string; sessionId?: string } = {},
 ): Promise<DirListResponse> {
   const params = new URLSearchParams({ path: dirPath });
   if (host) params.set('host', host);
   if (showHidden) params.set('showHidden', '1');
+  if (opts.cwd) params.set('cwd', opts.cwd);
+  if (opts.sessionId) params.set('sessionId', opts.sessionId);
 
   const res = await fetch(`/api/files/list?${params}`, opts.noCache ? { cache: 'no-store' } : undefined);
   if (!res.ok) {

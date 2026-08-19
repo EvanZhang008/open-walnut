@@ -51,6 +51,7 @@ SOURCES=(
   src/providers/acp-worker/protocol.ts
   src/providers/session-changes-core.ts
   src/providers/external-session-scan-core.ts
+  src/providers/path-resolve-core.ts
   src/core/bash-file-ops.ts
 )
 
@@ -127,6 +128,14 @@ echo "$VERSION" > "$OUTDIR/acp-worker.js.version"
 "$BUN" build --minify --target=node --format=cjs \
   --outfile "$OUTDIR/external-scan-core.cjs" \
   src/providers/external-session-scan-core.ts
+
+# Layered path-resolution sidecar — same rationale as the two above: the
+# transcript scan + git/find search can't live in the source template, so
+# deploySource ships this next to daemon.cjs and the template require()s it;
+# 'path-resolve-v1' is advertised only when the sidecar loads.
+"$BUN" build --minify --target=node --format=cjs \
+  --outfile "$OUTDIR/path-resolve-core.cjs" \
+  src/providers/path-resolve-core.ts
 
 # Invalidate stale .gz caches — DaemonConnection.deployBinary reuses them
 # if present, which would ship an old binary under a new version label.
