@@ -29,12 +29,9 @@ commits.** The catalog below is generated from the live registry, so the op name
 in it always exist:
 
 ```bash
-A=http://127.0.0.1:3456/api/v1             # ← the fast path, use this by default
-curl -s "$A/status"                        # 0.02s
-
 walnut tools list                          # every op, with a one-line purpose
 walnut tools help search                   # one op's exact arguments
-walnut tools call walnut_status '{}'       # same answer, 0.6s (boots node first)
+walnut tools call walnut_status '{}'       # run it (~0.3s; fast entry, no server boot)
 ```
 
 Measured cost of skipping this (2026-08-19 A/B): asked for the server mode, an
@@ -42,43 +39,28 @@ agent ran `walnut --help`, guessed, and answered `mode=stdio` — wrong, and it 
 actually invoked the MCP server. `walnut tools call walnut_status '{}'` returns
 `{"mode":"LIVE","version":"0.3.2"}` in one call. When in doubt, `tools list`.
 
-### Fast path: on the primary box, call the API directly
-
-`walnut tools call` spends **~0.6s per invocation booting node before it does any
-work**. Every op is just an HTTP route on the local server, so `curl` skips that
-entirely: measured **0.01-0.02s** per call, 30-60x faster. Prefer it whenever the
-local server answers (`http://127.0.0.1:3456`), and put several reads in ONE Bash
-call so you pay one round of tool overhead instead of three:
+Batch several calls into ONE Bash invocation so you pay one round of tool
+overhead instead of three:
 
 ```bash
-A=http://127.0.0.1:3456/api/v1
-curl -s "$A/status"; curl -s "$A/projects"; curl -s "$A/search?q=registry&limit=3"
+walnut tools call walnut_status '{}'; walnut tools call project_list '{}'; walnut tools call search '{"q":"registry","limit":3}'
 ```
 
-Route = the op's binding: `search` → `GET /search`, `project_list` → `GET /projects`,
-`session_list` → `GET /sessions`, `walnut_status` → `GET /status`, `task_list` →
-`GET /tasks`, `task_get` → `GET /tasks/:id`, `task_create` → `POST /tasks`,
-`task_complete` → `POST /tasks/:id/complete`. Writes work the same way:
-
-```bash
-curl -s -X POST "$A/tasks" -H 'Content-Type: application/json' -d '{"title":"..."}'
-```
-
-Reach for `walnut tools call` when you are NOT on the primary box (remote host,
-cloud replica), when you want an op whose route you do not know (`tools help <op>`
-prints it), or when the server is down. Both surfaces run the same registry, so
-they never disagree — this is purely about which one is cheaper to reach.
+Every op is also an HTTP route on the local server (`search` → `GET /search`,
+`task_list` → `GET /tasks`, `task_create` → `POST /tasks`, `walnut_status` →
+`GET /status`; `tools help <op>` prints the exact one), so
+`curl -s http://127.0.0.1:3456/api/v1/...` works too — no auth on the primary
+box. The CLI is the primary surface; both run the same registry, so they never
+disagree.
 
 ### Recipes for the questions that get answered wrong
 
-With `A=http://127.0.0.1:3456/api/v1`:
-
 | Question | Do this |
 |---|---|
-| Which task/session produced commit `<sha>`? | `curl -s "$A/search?q=<sha>"` — indexed commit SHAs resolve to the owning task AND session (`matchField: commit_sha`); take the FIRST hit, a commit can appear in forks. **Do NOT use `git log`**: the mapping lives in Walnut's index, not in the repo. |
-| Is the server up / which version? | `curl -s "$A/status"` |
-| What did session `<id>` do? | `curl -s "$A/sessions/<id>/transcript"` (or `walnut tools call session_transcript '{"id":"<id>"}'`) |
-| Find anything by words | `curl -s "$A/search?q=..."` — searches tasks, memory, and session transcripts together. Add `&types=session` only when you specifically want transcripts. |
+| Which task/session produced commit `<sha>`? | `walnut tools call search '{"q":"<sha>"}'` — indexed commit SHAs resolve to the owning task AND session (`matchField: commit_sha`); take the FIRST hit, a commit can appear in forks. **Do NOT use `git log`**: the mapping lives in Walnut's index, not in the repo. |
+| Is the server up / which version? | `walnut tools call walnut_status '{}'` |
+| What did session `<id>` do? | `walnut tools call session_transcript '{"id":"<id>"}'` |
+| Find anything by words | `walnut tools call search '{"q":"..."}'` — searches tasks, memory, and session transcripts together. Add `"types":"session"` only when you specifically want transcripts. |
 
 ## CLI reference
 

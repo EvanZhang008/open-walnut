@@ -79,9 +79,6 @@ program.exitOverride((err) => {
     console.error('  walnut tools help <op>         # one op\'s parameters');
     console.error("  walnut tools call <op> '{...}' # run it");
     console.error('');
-    console.error('Faster on this box: every op is also an HTTP route —');
-    console.error('  curl -s http://127.0.0.1:3456/api/v1/status   # ~0.02s vs ~0.6s');
-    console.error('');
     console.error('Run `walnut --help` for the human subcommands.');
     process.exit(1);
   }

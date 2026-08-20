@@ -11,6 +11,7 @@ const pluginEntries = fs.readdirSync(integrationsDir, { withFileTypes: true })
 export default defineConfig({
   entry: [
     'src/cli.ts',
+    'src/cli-fast.ts',
     'src/hooks/on-stop.ts',
     'src/hooks/on-compact.ts',
     'src/web/server.ts',
@@ -23,6 +24,10 @@ export default defineConfig({
   target: 'node22',
   outDir: 'dist',
   clean: false,
+  // splitting stays OFF: tried `splitting: true` (2026-08-20) hoping to make
+  // the CLI boot lazily — it produced 205 chunks and made `tools call` SLOWER
+  // (0.62s → 1.3s, ESM loader overhead dominates). The CLI fast path is the
+  // dedicated cli-fast.ts entry below instead.
   splitting: false,
   sourcemap: true,
   dts: false,
