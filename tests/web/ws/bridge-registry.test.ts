@@ -304,7 +304,7 @@ describe('bridge lifecycle + proxied send + streaming', () => {
     }
   })
 
-  it('no bridge → 503 bridge_offline on send; stream still 200 with bridge-offline event', async () => {
+  it('no bridge → send is BANKED (202 queued), stream still 200 with bridge-offline event', async () => {
     // (no fake daemon connected for HOST at this point — previous tests closed theirs)
     await waitFor(async () => {
       const res = await fetch(apiUrl('/api/v1/status'), { headers: { Authorization: `Bearer ${deviceToken}` } })
@@ -317,9 +317,17 @@ describe('bridge lifecycle + proxied send + streaming', () => {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${deviceToken}` },
       body: JSON.stringify({ text: 'hello?' }),
     })
-    expect(res.status).toBe(503)
-    const body = await res.json() as { error: { code: string } }
-    expect(body.error.code).toBe('bridge_offline')
+    // This assertion USED to be 503. With no socket the primary provably never
+    // saw the message, so the replica now banks it (core/send-queue.ts) and
+    // fast-accepts — a text send is never lost to a bridge outage, however long
+    // it lasts (2026-08-20: a ~7-minute outage outlived the phone's own retry
+    // budget and surfaced as "Not sent" on a healthy streaming session).
+    expect(res.status).toBe(202)
+    const body = await res.json() as { messageId: string; queued?: boolean }
+    expect(body.messageId).toMatch(/^qm-mobile-/)
+    expect(body.queued).toBe(true)
+    // The STREAM still reports the honest transport state — accepting the write
+    // must not paint the session as online.
 
     const sse = await connectSse(apiUrl(`/api/v1/sessions/${SID}/stream`), {
       Authorization: `Bearer ${deviceToken}`,

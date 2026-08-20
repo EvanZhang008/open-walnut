@@ -140,11 +140,34 @@ describe('durable relay path', () => {
     expect(callsByCmd()).toEqual(['session.message']) // no status/send/resume followed
   })
 
-  it('bridge fully offline → 503 bridge_offline', async () => {
+  it('bridge fully offline → the send is BANKED and fast-accepted (202 queued)', async () => {
+    // Was 503. No socket means the primary provably never saw the message, so
+    // the replica persists it (core/send-queue.ts) and drains on reconnect.
+    // Before this, the only cover for a bridge outage was the phone's 120s
+    // retry ladder — and the 2026-08-20 outage ran ~7 minutes, so the ladder
+    // ran out and a healthy, still-streaming session showed "Not sent".
     bridgeRequestMock.mockRejectedValue(new BridgeOfflineError('devbox'))
     const res = await request(createApp())
       .post(`/api/v1/sessions/${SID}/messages`)
       .send({ text: 'hi' })
+    expect(res.status).toBe(202)
+    expect(res.body.messageId).toMatch(/^qm-mobile-/)
+    expect(res.body.queued).toBe(true)
+  })
+
+  it('an IMAGE send with no bridge still 503s — never a turn whose pictures vanished', async () => {
+    // The attachments only exist as host-side files created THROUGH the bridge,
+    // so banking the text alone would silently drop them.
+    bridgeRequestMock.mockRejectedValue(new BridgeOfflineError('devbox'))
+    const res = await request(createApp())
+      .post(`/api/v1/sessions/${SID}/messages`)
+      .send({
+        text: 'look at this',
+        images: [{
+          data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+          mediaType: 'image/png',
+        }],
+      })
     expect(res.status).toBe(503)
     expect(res.body.error.code).toBe('bridge_offline')
   })

@@ -4957,6 +4957,10 @@ let bridgeDialTimer: ReturnType<typeof setTimeout> | null = null
 // reconcile decision so an identical-config push can't kill a young dial.
 let bridgeDialStartedAt: number | null = null
 let bridgeBackoffMs = 1000
+// When the pending redial is due (null = none pending). Lets the Mac's periodic
+// heal push preempt a far-away redial instead of waiting out backoff that was
+// earned while the network was down — see decideBridgeRestart in daemon-core.ts.
+let bridgeRedialDueAt: number | null = null
 // Generation guard: every (re)start bumps this; stale socket callbacks and
 // queued redials check it and no-op, so an old dial can't fight a new config.
 let bridgeGeneration = 0
@@ -5012,6 +5016,7 @@ function cmdBridgeConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record
     redialPending: bridgeRedialTimer != null,
     dialAgeMs: bridgeDialStartedAt != null ? Date.now() - bridgeDialStartedAt : null,
     dialTimeoutMs: BRIDGE_DIAL_TIMEOUT_MS,
+    redialWaitRemainingMs: bridgeRedialDueAt != null ? bridgeRedialDueAt - Date.now() : null,
   })
   if (decision.restart) startBridge(decision.reason)
   logMsg('info', 'bridge: configured', {
@@ -5024,6 +5029,7 @@ function cmdBridgeConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record
 function stopBridge(): void {
   bridgeGeneration++
   if (bridgeRedialTimer) { clearTimeout(bridgeRedialTimer); bridgeRedialTimer = null }
+  bridgeRedialDueAt = null
   if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null }
   if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null }
   bridgeDialStartedAt = null
@@ -5049,8 +5055,12 @@ function scheduleBridgeRedial(gen: number): void {
   const jitter = 0.75 + Math.random() * 0.5
   const delay = Math.round(Math.min(bridgeBackoffMs, BRIDGE_BACKOFF_MAX_MS) * jitter)
   bridgeBackoffMs = Math.min(bridgeBackoffMs * 2, BRIDGE_BACKOFF_MAX_MS)
+  // When this redial is due — lets a heal push preempt a far-away one instead
+  // of waiting out backoff earned while the network was down (decideBridgeRestart).
+  bridgeRedialDueAt = Date.now() + delay
   bridgeRedialTimer = setTimeout(() => {
     bridgeRedialTimer = null
+    bridgeRedialDueAt = null
     dialBridge(gen)
   }, delay)
 }

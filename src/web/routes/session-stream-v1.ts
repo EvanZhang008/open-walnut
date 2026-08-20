@@ -48,6 +48,19 @@ const MAX_IMAGE_BASE64_LENGTH = 14_000_000 // ~10MB binary
 
 interface SessionImage { data: string; mediaType: string }
 
+/**
+ * Hard ceiling on how long POST /messages may take to ANSWER (text sends).
+ *
+ * Sized against the CLIENT, not the relay: the iOS app's URLSession request
+ * timeout is 30s, so a server answer arriving after that is indistinguishable
+ * from a dead server — and a timed-out POST is not auto-retried (it isn't
+ * idempotent from URLSession's point of view). 22s leaves the phone ~8s of
+ * margin for TLS + the round trip and still lets a merely SLOW bridge win the
+ * race normally. Image sends are exempt (they legitimately take minutes and the
+ * client raises its own timeout to 180s for them).
+ */
+const SEND_ANSWER_DEADLINE_MS = 22_000
+
 /** Extract valid image payloads from a request body (silently drops junk). */
 function extractValidImages(raw: unknown): SessionImage[] {
   if (!Array.isArray(raw)) return []
@@ -248,6 +261,11 @@ async function cloudSend(
     return
   }
   const host = projected.host
+  // Stable id: a client-supplied one (phone retry) makes the durable-queue
+  // enqueue idempotent end-to-end — the relay dedupes on it, so a retry after a
+  // lost ack cannot double-deliver. Declared OUTSIDE the try so the catch can
+  // bank the send under the same id the phone already holds.
+  const messageId = clientMessageId ?? `qm-mobile-${crypto.randomBytes(6).toString('hex')}`
   const { bridgeRequest, BridgeOfflineError } = await import('../ws/bridge-registry.js')
   try {
     // Images first: if any save fails the send is aborted with a precise error
@@ -258,17 +276,13 @@ async function cloudSend(
       const pathList = savedPaths.map((p) => `- ${p}`).join('\n')
       text = `[Images attached — use the Read tool to view them]\n${pathList}\n\n${text}`
     }
-    // Stable id: a client-supplied one (phone retry) makes the durable-queue
-    // enqueue idempotent end-to-end — the relay dedupes on it, so a retry
-    // after a lost ack cannot double-deliver.
-    const messageId = clientMessageId ?? `qm-mobile-${crypto.randomBytes(6).toString('hex')}`
 
     // ── Durable path (default): session.message relay → the primary's queue ──
     // The primary enqueues into the SAME persistent store web sends use;
     // session-runner owns delivery (FIFO / mid-turn / --resume) and the
     // reconnect redelivery drains anything a daemon death stranded. 50s so
     // the daemon's own 45s relay timeout surfaces its precise error first.
-    const relayed: Record<string, unknown> = await bridgeRequest(host, 'session.message', {
+    const relayPromise = bridgeRequest(host, 'session.message', {
       sessionId, message: text, messageId,
     }, 50_000).catch((err: unknown) => {
       if (err instanceof BridgeOfflineError) throw err
@@ -278,11 +292,52 @@ async function cloudSend(
       // with the same messageId dedupes at the queue.
       return { ok: false, error: err instanceof Error ? err.message : String(err), transport: true }
     })
+
+    // ANSWER DEADLINE — the real 2026-08-20 bug. This relay is allowed 50s, but
+    // the phone's URLSession gives up at 30s (timeoutIntervalForRequest), and a
+    // POST that dies on NSURLErrorTimedOut is deliberately NOT auto-retried
+    // (WalnutAPI.shouldRetryTransient: only GET / retrySafe). So during the
+    // bridge outage the phone abandoned two 30s POSTs, showed the red "Not sent"
+    // while the session kept streaming, and the 503 backoff ladder never even
+    // engaged — it only reacts to a 503 RESPONSE, and no response ever arrived.
+    // A budget the client won't wait for is not a budget; whoever holds the
+    // shorter deadline defines the contract. We now always answer inside it, and
+    // bank whatever the relay hasn't confirmed by then. Safe because the banked
+    // retry rides the SAME idempotent session.message path with the SAME
+    // messageId (queue dedupe + the relay ledger), which is exactly why the
+    // non-idempotent DIRECT fallback below still refuses this case.
+    const raced = await Promise.race([
+      relayPromise,
+      new Promise<'deadline'>((r) => setTimeout(() => r('deadline'), SEND_ANSWER_DEADLINE_MS).unref?.()),
+    ])
+    if (raced === 'deadline') {
+      const banked = await bankSend(sessionId, host, text, messageId, images.length)
+      if (banked) {
+        log.web.info('mobile session send banked at the answer deadline (relay still pending)', {
+          sessionId, host, messageId, deadlineMs: SEND_ANSWER_DEADLINE_MS,
+        })
+        res.status(202).json({ messageId, queued: true })
+        // A late success means the primary already has it — drop the banked copy
+        // so the sweep does no redundant (though harmless) re-relay.
+        void relayPromise.then((late) => {
+          if (late && (late as Record<string, unknown>).ok === true) void unbankSend(messageId)
+        }).catch(() => {})
+        return
+      }
+      // Couldn't bank (image send / queue write failed): let the relay finish on
+      // its own budget rather than inventing an outcome.
+    }
+    const relayed: Record<string, unknown> = raced === 'deadline'
+      ? await relayPromise
+      : (raced as Record<string, unknown>)
     if (relayed.ok === true) {
       log.web.info('mobile session send enqueued via relay (durable)', {
         sessionId, host, messageId, imageCount: images.length,
       })
       res.status(202).json({ messageId })
+      // Opportunistic drain: a live bridge is the only thing anything banked
+      // during the last outage was waiting for. After the response, never before.
+      void drainBankedSends()
       return
     }
     const relayErr = String(relayed.error ?? 'unknown')
@@ -310,11 +365,60 @@ async function cloudSend(
       return
     }
     if (err instanceof BridgeOfflineError) {
+      // FAST-ACCEPT: there is no socket, so the primary provably never saw this
+      // message — bank it and answer 202. Durability used to begin one hop too
+      // late (only AFTER the relay reached the primary's queue), which made the
+      // phone's 120s retry ladder the ONLY thing covering a bridge outage. Real
+      // outages are not bounded by that: the 2026-08-20 one ran ~7 minutes
+      // (Wi-Fi loss → dial-timeout → redial backoff), so the ladder ran out and
+      // the bubble went red on a healthy, still-streaming session. See
+      // core/send-queue.ts for why a queued 202 is honest and what stays 503.
+      const banked = await bankSend(sessionId, host, text, messageId, images.length)
+      if (banked) {
+        res.status(202).json({ messageId, queued: true })
+        return
+      }
       sendError(res, 503, 'bridge_offline', 'No live bridge to this session\'s host')
       return
     }
     sendError(res, 503, 'bridge_offline', err instanceof Error ? err.message : String(err))
   }
+}
+
+/**
+ * Bank a send for delivery when the host's bridge returns. Returns false when
+ * the caller must keep the honest 503: an IMAGE send (the attachments only
+ * exist as host-side files created through the bridge — banking the text alone
+ * would deliver a turn whose pictures silently vanished) or a failed queue
+ * write (never a 202 for something we did not store).
+ */
+async function bankSend(
+  sessionId: string, host: string, text: string, messageId: string, imageCount: number,
+): Promise<boolean> {
+  if (imageCount > 0) return false
+  const { enqueueSessionSend } = await import('../../core/send-queue.js')
+  const opId = await enqueueSessionSend(sessionId, host, text, messageId)
+  if (!opId) return false
+  log.web.info('mobile session send banked for bridge return (fast-accept)', {
+    sessionId, host, messageId, opId,
+  })
+  return true
+}
+
+/** Drop a banked row whose relay turned out to have succeeded after all. */
+async function unbankSend(messageId: string): Promise<void> {
+  try {
+    const { dropBankedSend } = await import('../../core/send-queue.js')
+    await dropBankedSend(messageId)
+  } catch { /* the sweep's idempotent re-relay is the safety net */ }
+}
+
+/** Fire-and-forget drain of anything banked during an earlier outage. */
+async function drainBankedSends(): Promise<void> {
+  try {
+    const { flushSendQueue } = await import('../../core/send-queue.js')
+    await flushSendQueue()
+  } catch { /* the 60s sweep and the reconnect hook remain */ }
 }
 
 /**

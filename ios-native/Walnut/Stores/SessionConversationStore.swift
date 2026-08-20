@@ -528,9 +528,21 @@ final class SessionConversationStore {
                 settleFailed(bubbleID)
                 return false
             }
-            if let apiError = error as? APIError, apiError.isBridgeOffline {
-                offline = true
-                startPolling()
+            // Two shapes ride the same ladder, for the same reason — nothing is
+            // wrong with the message and the condition clears on its own:
+            //  - 503 bridge_offline: the host's bridge is down right now.
+            //  - a TRANSPORT failure (timeout / connection lost): the request
+            //    never got an answer. This was the 2026-08-20 gap — the phone
+            //    abandoned two 30s POSTs mid-outage and jumped straight to the
+            //    red "Not sent" while the session was healthy and streaming,
+            //    because the ladder only reacted to a 503 RESPONSE. Safe to
+            //    retry only because the bubble's `qm-*` id makes the send
+            //    idempotent end-to-end (see SendRetryPolicy).
+            if SendRetryPolicy.isRetryable(error) {
+                if (error as? APIError)?.isBridgeOffline == true {
+                    offline = true
+                    startPolling()
+                }
                 // Retryable: ride it out on the backoff ladder rather than
                 // making the user the retry loop. The bubble stays visible and
                 // manually retryable throughout (same id, so a manual tap

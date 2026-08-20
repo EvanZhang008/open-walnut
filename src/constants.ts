@@ -146,6 +146,10 @@ export const TASK_QUEUE_DIR = path.join(WALNUT_HOME, 'cache', 'task-queue');
 /** Offline session-metadata patch queue (NON-git, cloud box only): 'patch'
  *  relays accepted while the bridge was down. See core/control-queue.ts. */
 export const CONTROL_QUEUE_DIR = path.join(WALNUT_HOME, 'cache', 'control-queue');
+/** Offline phone-send queue (NON-git, cloud box only): session messages banked
+ *  while the session host had no live bridge, drained on reconnect + a 60s
+ *  sweep. See core/send-queue.ts. */
+export const SEND_QUEUE_DIR = path.join(WALNUT_HOME, 'cache', 'send-queue');
 /** Last-known model catalog per host (from any session's list_models) — feeds pickers before/without a live CLI. */
 export const HOST_MODEL_CATALOG_FILE = path.join(WALNUT_HOME, 'cache', 'host-model-catalogs.json');
 export const HOOK_LOG_FILE = path.join(WALNUT_HOME, 'hook-errors.log');

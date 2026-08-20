@@ -279,6 +279,8 @@ let projectionSelfHealHandle: { stop: () => void } | null = null
 let taskQueueFlushHandle: { stop: () => void } | null = null
 /** Cloud box only: 60s drain of cache/control-queue/ (see core/control-queue.ts). */
 let controlQueueFlushHandle: { stop: () => void } | null = null
+/** Cloud box only: 60s drain of cache/send-queue/ (see core/send-queue.ts). */
+let sendQueueFlushHandle: { stop: () => void } | null = null
 let autoContinueHandle: { stop: () => void } | null = null
 let claudeSettingsWatcherStop: (() => void) | null = null
 // Pending deferred-markDone timers from the session:status-changed handler.
@@ -1813,6 +1815,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // own durable queue (core/control-queue.ts) — same drain triggers.
       const { startControlQueueFlush } = await import('../core/control-queue.js')
       controlQueueFlushHandle = startControlQueueFlush()
+      // Phone sends accepted while the session's host had no bridge ride their
+      // own durable queue (core/send-queue.ts) — same drain triggers, so a
+      // banked message reaches the CLI on reconnect with no human retry.
+      const { startSendQueueFlush } = await import('../core/send-queue.js')
+      sendQueueFlushHandle = startSendQueueFlush()
       // Seed the local replica from the synced projection shortly after boot.
       setTimeout(() => { void importProjectionOnCloud() }, 5_000)
     }
@@ -4160,6 +4167,10 @@ export async function stopServer(): Promise<void> {
   if (controlQueueFlushHandle) {
     controlQueueFlushHandle.stop()
     controlQueueFlushHandle = null
+  }
+  if (sendQueueFlushHandle) {
+    sendQueueFlushHandle.stop()
+    sendQueueFlushHandle = null
   }
   stopMobileEventsFeed()
   if (autoContinueHandle) {

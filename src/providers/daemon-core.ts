@@ -1289,6 +1289,12 @@ export interface BridgeConfigureState {
   dialAgeMs: number | null
   /** Dial timeout — a dial younger than this is still allowed to finish. */
   dialTimeoutMs: number
+  /**
+   * Milliseconds until the pending redial fires (null when none is pending).
+   * A redial that is still far away must NOT block a heal push — see the
+   * 'reconcile' note below.
+   */
+  redialWaitRemainingMs?: number | null
 }
 
 export type BridgeRestartDecision =
@@ -1300,12 +1306,23 @@ export type BridgeRestartDecision =
  *
  * - Config changed → always restart ('configure', pre-existing behavior).
  * - Config unchanged but the bridge SHOULD be up and nothing is working on it
- *   (no open socket, no pending redial, no young in-flight dial) → restart
- *   ('reconcile'). The Mac re-pushes an identical config on every daemon
+ *   (no open socket, no young in-flight dial, and no redial about to fire) →
+ *   restart ('reconcile'). The Mac re-pushes an identical config on every daemon
  *   (re)connect, so this makes each push a healing opportunity for a wedged
  *   dial (a socket stuck in CONNECTING never fires onopen/onclose, so the
- *   redial loop dies silently). No restart storms: a pending redial timer or
- *   a dial still within its timeout is left alone.
+ *   redial loop dies silently).
+ *
+ * A PENDING redial only blocks the heal while it is about to fire. It used to
+ * block unconditionally, which made exponential backoff a penalty EARNED during
+ * an outage but PAID AFTER connectivity returned: on 2026-08-20 a 2.5-minute
+ * Wi-Fi loss pushed the backoff to its 60s ceiling, so when the network came
+ * back at 02:01:27Z the bridge stayed down until 02:03:15Z — and BOTH of the
+ * Mac's heal pushes (02:02:01, 02:02:28) landed inside a pinned 60s timer and
+ * no-op'd ('restarted: false'). Waiting out a 60s timer is exactly what a heal
+ * push exists to short-circuit. Preempting only a FAR-AWAY redial keeps the
+ * anti-storm property: a redial within one dial-timeout is left alone, and
+ * pushes are minutes apart, so this adds at most a couple of cheap dials per
+ * push while a genuinely unreachable cloud stays unreachable.
  *
  * Mirrored verbatim in daemon-source.ts (template can't import) — parity test
  * locks the sync.
@@ -1314,8 +1331,13 @@ export function decideBridgeRestart(s: BridgeConfigureState): BridgeRestartDecis
   if (s.changed) return { restart: true, reason: 'configure' }
   if (!s.enabled) return { restart: false }
   if (s.adapterConnected) return { restart: false }
-  if (s.redialPending) return { restart: false }
   if (s.dialAgeMs != null && s.dialAgeMs < s.dialTimeoutMs) return { restart: false }
+  if (s.redialPending) {
+    // Unknown remaining wait (older caller) → keep the old conservative answer.
+    const remaining = s.redialWaitRemainingMs
+    if (remaining == null) return { restart: false }
+    if (remaining <= s.dialTimeoutMs) return { restart: false }
+  }
   return { restart: true, reason: 'reconcile' }
 }
 

@@ -55,11 +55,40 @@ describe('decideBridgeRestart', () => {
     expect(decideBridgeRestart(state({ adapterConnected: true }))).toEqual({ restart: false })
   })
 
-  it('unchanged + pending redial timer does not restart (no restart storm)', () => {
+  it('unchanged + pending redial of unknown age does not restart (no restart storm)', () => {
+    // An older daemon reports no remaining wait — keep the conservative answer.
     expect(decideBridgeRestart(state({ redialPending: true }))).toEqual({ restart: false })
     // Even alongside a stale dial timestamp.
     expect(decideBridgeRestart(state({ redialPending: true, dialAgeMs: DIAL_TIMEOUT * 2 })))
       .toEqual({ restart: false })
+  })
+
+  it('unchanged + redial about to fire does not restart (let it fire)', () => {
+    for (const remaining of [0, 1, DIAL_TIMEOUT - 1, DIAL_TIMEOUT]) {
+      expect(decideBridgeRestart(state({ redialPending: true, redialWaitRemainingMs: remaining })))
+        .toEqual({ restart: false })
+    }
+  })
+
+  it('unchanged + redial parked FAR out restarts — backoff earned offline is not paid after recovery', () => {
+    // The 2026-08-20 gap: a 2.5-minute Wi-Fi loss drove the daemon's backoff to
+    // its 60s ceiling, so when the network returned the bridge stayed down for
+    // another ~108s and BOTH of the Mac's heal pushes no-op'd behind the pinned
+    // timer. A heal push exists precisely to short-circuit that wait.
+    expect(decideBridgeRestart(state({ redialPending: true, redialWaitRemainingMs: DIAL_TIMEOUT + 1 })))
+      .toEqual({ restart: true, reason: 'reconcile' })
+    expect(decideBridgeRestart(state({ redialPending: true, redialWaitRemainingMs: 60_000 })))
+      .toEqual({ restart: true, reason: 'reconcile' })
+  })
+
+  it('a far-out redial still loses to a healthy adapter and to a young dial', () => {
+    // Preemption must not outrank the two "something is already working" guards.
+    expect(decideBridgeRestart(state({
+      redialPending: true, redialWaitRemainingMs: 60_000, adapterConnected: true,
+    }))).toEqual({ restart: false })
+    expect(decideBridgeRestart(state({
+      redialPending: true, redialWaitRemainingMs: 60_000, dialAgeMs: DIAL_TIMEOUT - 1,
+    }))).toEqual({ restart: false })
   })
 
   it('unchanged + dial in flight younger than the timeout does not restart', () => {

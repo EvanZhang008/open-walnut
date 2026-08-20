@@ -215,9 +215,13 @@ final class SendIdempotencyRetryTests: XCTestCase {
         XCTAssertFalse(SendRetryPolicy.shouldRetry(attempt: -1, elapsed: 0))
     }
 
-    // MARK: - Only bridge_offline auto-retries
+    // MARK: - What auto-retries
 
-    func testOnlyBridgeOfflineIsRetryable() {
+    private func transport(_ code: Int) -> APIError {
+        .network(underlying: NSError(domain: NSURLErrorDomain, code: code))
+    }
+
+    func testOnlyBridgeOfflineAndAnswerlessTransportAreRetryable() {
         XCTAssertTrue(SendRetryPolicy.isRetryable(bridgeOffline()))
         // 409: the CLI is gone — a retry can't conjure it back.
         XCTAssertFalse(SendRetryPolicy.isRetryable(APIError.server(
@@ -231,6 +235,76 @@ final class SendIdempotencyRetryTests: XCTestCase {
         )))
         XCTAssertFalse(SendRetryPolicy.isRetryable(APIError.cancelled))
         XCTAssertFalse(SendRetryPolicy.isRetryable(APIError.badResponse))
+
+        // NEW (2026-08-20): a request that got NO answer is retryable too. The
+        // real incident was two POSTs abandoned at the app's own 30s timeout
+        // during a bridge outage — the ladder never engaged because it only
+        // reacted to a 503 RESPONSE, so the bubble went red while the session
+        // was healthy and visibly streaming. Safe only because the bubble
+        // carries ONE stable qm- id across every attempt.
+        XCTAssertTrue(SendRetryPolicy.isRetryable(transport(NSURLErrorTimedOut)))
+        XCTAssertTrue(SendRetryPolicy.isRetryable(transport(NSURLErrorNetworkConnectionLost)))
+        XCTAssertTrue(SendRetryPolicy.isRetryable(transport(NSURLErrorNotConnectedToInternet)))
+        XCTAssertTrue(SendRetryPolicy.isRetryable(transport(NSURLErrorCannotConnectToHost)))
+        XCTAssertTrue(SendRetryPolicy.isRetryable(transport(NSURLErrorSecureConnectionFailed)))
+        XCTAssertTrue(SendRetryPolicy.isRetryable(transport(NSURLErrorDNSLookupFailed)))
+        XCTAssertTrue(SendRetryPolicy.isRetryable(transport(NSURLErrorCannotFindHost)))
+
+        // An answered-but-refused request, and non-URL errors, stay terminal:
+        // retrying those is how you get a double-delivery or a spin.
+        XCTAssertFalse(SendRetryPolicy.isRetryable(transport(NSURLErrorBadServerResponse)))
+        XCTAssertFalse(SendRetryPolicy.isRetryable(transport(NSURLErrorCancelled)))
+        XCTAssertFalse(SendRetryPolicy.isRetryable(
+            APIError.network(underlying: NSError(domain: "SomeOtherDomain", code: NSURLErrorTimedOut))
+        ))
+    }
+
+    /// Store-level proof of the same thing: a timed-out POST must land on the
+    /// backoff ladder with the waiting copy, NOT the red terminal bubble.
+    @MainActor
+    func testTimedOutSendRidesTheLadderInsteadOfGoingRed() async {
+        let transport = MockSessionSendTransport()
+        transport.failuresRemaining = 1
+        transport.failureError = APIError.network(
+            underlying: NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)
+        )
+        let store = SessionConversationStore(
+            session: ScriptedSSE.session(id: "timeout-ladder"), transport: transport
+        )
+        await store.open()
+        _ = await store.send("streaming fine, send timed out")
+
+        guard let bubble = store.messages.last(where: { $0.failed == true }) else {
+            return XCTFail("expected a retryable bubble")
+        }
+        XCTAssertNotNil(bubble.retryNotice,
+                        "a timed-out send must show 'waiting… retrying', never the terminal copy")
+        let firstId = transport.messageIds.first ?? nil
+        XCTAssertNotNil(firstId)
+
+        // The automatic attempt lands and succeeds, reusing the SAME id.
+        try? await Task.sleep(for: .seconds(SendRetryPolicy.baseDelay + 1.5))
+        XCTAssertGreaterThanOrEqual(transport.sendCallCount, 2,
+                                    "the ladder must fire an automatic retry")
+        XCTAssertEqual(transport.messageIds[1], firstId,
+                       "the retry must reuse the original id or it double-delivers")
+    }
+
+    /// A transport failure must NOT raise the bridge-offline banner: the bridge
+    /// may be perfectly fine and only this request died.
+    @MainActor
+    func testTimedOutSendDoesNotClaimTheBridgeIsOffline() async {
+        let transport = MockSessionSendTransport()
+        transport.permanentError = APIError.network(
+            underlying: NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)
+        )
+        let store = SessionConversationStore(
+            session: ScriptedSSE.session(id: "timeout-not-offline"), transport: transport
+        )
+        await store.open()
+        _ = await store.send("only this request died")
+        XCTAssertFalse(store.offline,
+                       "a request timeout says nothing about the host's bridge")
     }
 
     /// A dead session must settle immediately — no ladder, no waiting copy.

@@ -5225,6 +5225,7 @@ async function cmdChangesFile(ws, id, cmd) {
   }
 }
 
+let bridgeRedialDueAt = null;
 let bridgeLastInbound = 0;
 
 const BRIDGE_BACKOFF_MAX_MS = 60000;
@@ -5239,8 +5240,13 @@ function decideBridgeRestart(s) {
   if (s.changed) return { restart: true, reason: 'configure' };
   if (!s.enabled) return { restart: false };
   if (s.adapterConnected) return { restart: false };
-  if (s.redialPending) return { restart: false };
   if (s.dialAgeMs != null && s.dialAgeMs < s.dialTimeoutMs) return { restart: false };
+  if (s.redialPending) {
+    // Unknown remaining wait (older caller) → keep the old conservative answer.
+    const remaining = s.redialWaitRemainingMs;
+    if (remaining == null) return { restart: false };
+    if (remaining <= s.dialTimeoutMs) return { restart: false };
+  }
   return { restart: true, reason: 'reconcile' };
 }
 
@@ -5291,6 +5297,7 @@ function cmdBridgeConfigure(ws, id, cmd) {
     redialPending: bridgeRedialTimer != null,
     dialAgeMs: bridgeDialStartedAt != null ? Date.now() - bridgeDialStartedAt : null,
     dialTimeoutMs: BRIDGE_DIAL_TIMEOUT_MS,
+    redialWaitRemainingMs: bridgeRedialDueAt != null ? bridgeRedialDueAt - Date.now() : null,
   });
   if (decision.restart) startBridge(decision.reason);
   logMsg('info', 'bridge: configured', {
@@ -5303,6 +5310,7 @@ function cmdBridgeConfigure(ws, id, cmd) {
 function stopBridge() {
   bridgeGeneration++;
   if (bridgeRedialTimer) { clearTimeout(bridgeRedialTimer); bridgeRedialTimer = null; }
+  bridgeRedialDueAt = null;
   if (bridgePingTimer) { clearInterval(bridgePingTimer); bridgePingTimer = null; }
   if (bridgeDialTimer) { clearTimeout(bridgeDialTimer); bridgeDialTimer = null; }
   bridgeDialStartedAt = null;
@@ -5338,8 +5346,10 @@ function scheduleBridgeRedial(gen) {
   const jitter = 0.75 + Math.random() * 0.5;
   const delay = Math.round(Math.min(bridgeBackoffMs, BRIDGE_BACKOFF_MAX_MS) * jitter);
   bridgeBackoffMs = Math.min(bridgeBackoffMs * 2, BRIDGE_BACKOFF_MAX_MS);
+  bridgeRedialDueAt = Date.now() + delay;
   bridgeRedialTimer = setTimeout(function() {
     bridgeRedialTimer = null;
+    bridgeRedialDueAt = null;
     dialBridge(gen);
   }, delay);
 }

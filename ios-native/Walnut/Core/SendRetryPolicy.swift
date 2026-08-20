@@ -88,12 +88,48 @@ enum SendRetryPolicy {
         return elapsed + delay(forAttempt: attempt) <= budget
     }
 
-    /// Only this one server error auto-retries. Everything else is either the
-    /// user's problem (400), a genuinely dead session (409), or an unknown
-    /// state where a blind retry risks a double-delivery the queue can't
-    /// dedupe (the id protects us, but a 500 might mean something else broke).
+    /// What auto-retries. Everything else is either the user's problem (400), a
+    /// genuinely dead session (409), or an unknown state where a blind retry
+    /// risks a double-delivery the queue can't dedupe (the id protects us, but a
+    /// 500 might mean something else broke).
+    ///
+    /// Two classes qualify:
+    ///  - 503 `bridge_offline` — the host's bridge is down right now.
+    ///  - a transport failure with NO response at all (timeout, connection
+    ///    lost, TLS handshake). Field evidence 2026-08-20: during a ~7-minute
+    ///    bridge outage the app's two POSTs hit its own 30s URLSession timeout,
+    ///    so the server never answered and this ladder — which used to key only
+    ///    off a 503 RESPONSE — never engaged. The bubble went red on a session
+    ///    that was healthy and visibly streaming, which is the exact "not the
+    ///    connection, just delivery failed" report. Retrying is safe because the
+    ///    bubble carries ONE stable `qm-*` id across every attempt.
     static func isRetryable(_ error: Error) -> Bool {
-        (error as? APIError)?.isBridgeOffline == true
+        if let apiError = error as? APIError {
+            if apiError.isBridgeOffline { return true }
+            if case .network(let underlying) = apiError {
+                return isRetryableTransport(underlying as NSError)
+            }
+            return false
+        }
+        return false
+    }
+
+    /// NSURLError codes that mean "no answer came back", so the outcome is
+    /// unknown rather than a refusal. Pure + separate so it is unit-testable.
+    static func isRetryableTransport(_ error: NSError) -> Bool {
+        guard error.domain == NSURLErrorDomain else { return false }
+        switch error.code {
+        case NSURLErrorTimedOut,
+             NSURLErrorNetworkConnectionLost,
+             NSURLErrorCannotConnectToHost,
+             NSURLErrorNotConnectedToInternet,
+             NSURLErrorSecureConnectionFailed,
+             NSURLErrorDNSLookupFailed,
+             NSURLErrorCannotFindHost:
+            return true
+        default:
+            return false
+        }
     }
 
     /// Composer/bubble copy while an automatic retry is still pending. Names

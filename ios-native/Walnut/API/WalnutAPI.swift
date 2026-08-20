@@ -284,7 +284,17 @@ struct WalnutAPI {
                 images: images.isEmpty ? nil : images,
                 messageId: messageId.flatMap { SendRetryPolicy.isValidMessageId($0) ? $0 : nil }
             ),
-            timeout: images.isEmpty ? nil : 180
+            timeout: images.isEmpty ? nil : 180,
+            // A send carrying a client-minted `qm-*` id IS idempotent: the
+            // server's durable queue dedupes on it, and the bridge relay keeps a
+            // post-delivery ledger. So a -1001/-1005 (which can fire after the
+            // body was delivered) is safe to retry once here — and it must be:
+            // on 2026-08-20 two 30s POST timeouts during a bridge outage went
+            // straight to the red "Not sent" bubble with no attempt at all,
+            // because the 503 backoff ladder can only react to a 503 RESPONSE
+            // and no response ever arrived. Without an id, minting one per
+            // attempt would double-deliver, so the flag follows the id.
+            retrySafe: messageId.map(SendRetryPolicy.isValidMessageId) ?? false
         )
         return accepted.messageId
     }
@@ -455,13 +465,15 @@ struct WalnutAPI {
     }
 
     func send<T: Decodable, B: Encodable>(
-        _ method: String, _ path: String, body: B?, timeout: TimeInterval? = nil
+        _ method: String, _ path: String, body: B?, timeout: TimeInterval? = nil,
+        retrySafe: Bool = false
     ) async throws -> T {
-        try await sendAbsolute(method, "/api/v1" + path, body: body, timeout: timeout)
+        try await sendAbsolute(method, "/api/v1" + path, body: body, timeout: timeout, retrySafe: retrySafe)
     }
 
     func sendAbsolute<T: Decodable, B: Encodable>(
-        _ method: String, _ path: String, body: B?, timeout: TimeInterval? = nil
+        _ method: String, _ path: String, body: B?, timeout: TimeInterval? = nil,
+        retrySafe: Bool = false
     ) async throws -> T {
         guard let base = AppConfig.serverURL, let token = AppConfig.token else {
             throw APIError.notConfigured
@@ -477,7 +489,7 @@ struct WalnutAPI {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(body)
         }
-        let (data, response) = try await perform(request)
+        let (data, response) = try await perform(request, retrySafe: retrySafe)
         return try Self.decode(T.self, data: data, response: response)
     }
 
