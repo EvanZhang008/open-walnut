@@ -2,8 +2,8 @@ import chalk from 'chalk';
 import { outputJson } from '../utils/json-output.js';
 import { apiPost, reportApiError } from '../utils/api-client.js';
 import { taskRefTag } from '../utils/entity-refs.js';
+import { requireDirectRunners } from './direct-registry.js';
 import type { GlobalOptions } from '../core/types.js';
-import type { TaskPriority } from '../core/types.js';
 
 interface AddOptions {
   priority?: string;
@@ -13,7 +13,7 @@ interface AddOptions {
 }
 
 /** Slim ProjectedTask fields this command renders. */
-interface CreatedTask {
+export interface CreatedTask {
   id: string;
   title: string;
   [key: string]: unknown;
@@ -25,7 +25,10 @@ export async function runAdd(
   globals: GlobalOptions,
 ): Promise<void> {
   if (process.env.WALNUT_CLI_DIRECT === '1') {
-    await runAddDirect(title, options, globals);
+    // In-process legacy path, installed only by the full CLI entry — see
+    // direct-registry.ts. Keeping even a literal import of the direct module
+    // out of this file is what keeps the fast bundle at ~55KB.
+    await requireDirectRunners().add(title, options, globals);
     return;
   }
 
@@ -45,7 +48,7 @@ export async function runAdd(
 }
 
 /** Shared output for both paths — the ref tag is the AI-citable handle. */
-function printCreated(task: CreatedTask, globals: GlobalOptions): void {
+export function printCreated(task: CreatedTask, globals: GlobalOptions): void {
   const ref = taskRefTag(task.id, task.title);
   if (globals.json) {
     outputJson({ id: task.id, status: 'created', task, ref });
@@ -61,24 +64,4 @@ function printCreated(task: CreatedTask, globals: GlobalOptions): void {
     // renders the tag as a clickable pill.
     console.log(ref);
   }
-}
-
-/**
- * LEGACY direct-core path — second writer, enabled only by WALNUT_CLI_DIRECT=1.
- * Kept as the rollback lever for the HTTP migration.
- */
-async function runAddDirect(
-  title: string,
-  options: AddOptions,
-  globals: GlobalOptions,
-): Promise<void> {
-  const { addTask } = await import('../core/task-manager.js');
-  const { task } = await addTask({
-    title,
-    priority: options.priority as TaskPriority | undefined,
-    // Omitted → Inbox.
-    project: options.list ?? options.project,
-    due_date: options.due,
-  });
-  printCreated(task as unknown as CreatedTask, globals);
 }

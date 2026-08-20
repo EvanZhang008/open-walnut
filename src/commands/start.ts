@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import { outputJson } from '../utils/json-output.js';
 import { apiPost, reportApiError } from '../utils/api-client.js';
+import { requireDirectRunners } from './direct-registry.js';
 import type { GlobalOptions } from '../core/types.js';
 import type { TaskStartResult } from '../core/sessions/task-start.js';
 
@@ -24,7 +25,9 @@ export async function runStart(
   globals: GlobalOptions,
 ): Promise<void> {
   if (process.env.WALNUT_CLI_DIRECT === '1') {
-    await runStartDirect(taskIdPrefix, options, globals);
+    // In-process legacy path, installed only by the full CLI entry — see
+    // direct-registry.ts.
+    await requireDirectRunners().start(taskIdPrefix, options, globals);
     return;
   }
 
@@ -42,7 +45,7 @@ export async function runStart(
   }
 }
 
-function printStart(result: TaskStartResult, globals: GlobalOptions): void {
+export function printStart(result: TaskStartResult, globals: GlobalOptions): void {
   if (result.action === 'resume') {
     if (globals.json) {
       outputJson({ action: 'resume', sessionId: result.sessionId });
@@ -68,36 +71,4 @@ function printStart(result: TaskStartResult, globals: GlobalOptions): void {
   }
 }
 
-/**
- * LEGACY direct path — spawns the session runner IN THIS PROCESS (a second
- * writer of the session registry). Enabled only by WALNUT_CLI_DIRECT=1; the
- * rollback lever for the HTTP migration.
- */
-async function runStartDirect(
-  taskIdPrefix: string,
-  options: StartOptions,
-  globals: GlobalOptions,
-): Promise<void> {
-  const { startSessionForTask } = await import('../core/sessions/task-start.js');
-  // The bus emit only reaches a runner that exists in THIS process.
-  const { sessionRunner } = await import('../providers/claude-code-session.js');
-  sessionRunner.init();
-
-  try {
-    const result = await startSessionForTask({
-      taskIdPrefix,
-      ...(options.resume ? { resume: true } : {}),
-      ...(options.prompt !== undefined ? { prompt: options.prompt } : {}),
-      source: 'cli',
-    });
-    printStart(result, globals);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (globals.json) {
-      outputJson({ error: message });
-    } else {
-      console.error(chalk.red(message));
-    }
-    process.exitCode = 1;
-  }
-}
+// The WALNUT_CLI_DIRECT=1 implementation lives in direct-commands.ts.

@@ -2,10 +2,10 @@ import chalk from 'chalk';
 import { outputJson } from '../utils/json-output.js';
 import { apiPost, reportApiError } from '../utils/api-client.js';
 import { taskRefTag } from '../utils/entity-refs.js';
-import { opCallerFromEnv } from '../ops/executor.js';
+import { requireDirectRunners } from './direct-registry.js';
 import type { GlobalOptions } from '../core/types.js';
 
-interface CompletedTask {
+export interface CompletedTask {
   id: string;
   title: string;
   [key: string]: unknown;
@@ -23,19 +23,10 @@ export async function runDone(
   id: string,
   globals: GlobalOptions,
 ): Promise<void> {
-  if (opCallerFromEnv() === 'agent') {
-    const message = 'Only a human can complete a task. Hand work back with task_update phase=AGENT_COMPLETE or AWAIT_HUMAN_ACTION.';
-    if (globals.json) {
-      outputJson({ error: message });
-    } else {
-      console.error(chalk.red(message));
-    }
-    process.exitCode = 1;
-    return;
-  }
-
   if (process.env.WALNUT_CLI_DIRECT === '1') {
-    await runDoneDirect(id, globals);
+    // In-process legacy path, installed only by the full CLI entry — see
+    // direct-registry.ts.
+    await requireDirectRunners().done(id, globals);
     return;
   }
 
@@ -49,7 +40,7 @@ export async function runDone(
   }
 }
 
-function printCompleted(task: CompletedTask, globals: GlobalOptions): void {
+export function printCompleted(task: CompletedTask, globals: GlobalOptions): void {
   const ref = taskRefTag(task.id, task.title);
   if (globals.json) {
     outputJson({ id: task.id, status: 'completed', task, ref });
@@ -62,24 +53,5 @@ function printCompleted(task: CompletedTask, globals: GlobalOptions): void {
         chalk.strikethrough(task.title),
     );
     console.log(ref);
-  }
-}
-
-/**
- * LEGACY direct-core path — second writer, enabled only by WALNUT_CLI_DIRECT=1.
- * Kept as the rollback lever for the HTTP migration.
- */
-async function runDoneDirect(id: string, globals: GlobalOptions): Promise<void> {
-  try {
-    const { completeTask } = await import('../core/task-manager.js');
-    const { task } = await completeTask(id);
-    printCompleted(task as unknown as CompletedTask, globals);
-  } catch (err) {
-    if (globals.json) {
-      outputJson({ error: (err as Error).message });
-    } else {
-      console.error(chalk.red((err as Error).message));
-    }
-    process.exitCode = 1;
   }
 }

@@ -1,10 +1,17 @@
 #!/usr/bin/env node
-// Route the agent hot path (`walnut tools ...`, `walnut --version`) to the
-// slim dist/cli-fast.js entry (~0.1s boot: op registry + fetch only). The full
-// dist/cli.js is a single unsplit bundle that eagerly loads the web-server
-// graph (~0.5s boot) — fine for human commands, waste for a tools call an
-// agent runs in a loop. Fall back to the full CLI for everything else.
+// One interface, one rule: DATA commands (one HTTP request to the local
+// server) run the slim dist/cli-fast.js entry (~0.1s boot); process-owning
+// commands (web, mcp, chat, ...) run the full dist/cli.js (~0.5s boot is
+// irrelevant when the process lives for seconds-to-forever). Humans and
+// agents share the same path — the split is by what the command does.
+//
+// LITE list mirrors LITE_COMMANDS in src/cli-fast.ts — keep in sync.
+// WALNUT_CLI_DIRECT=1 always takes the full CLI: the in-process legacy
+// runners live only in that bundle (see src/commands/direct-registry.ts).
+const LITE = new Set(['tools', 'add', 'tasks', 'done', 'recall', 'projects', 'sessions', 'start']);
 const args = process.argv.slice(2);
-const nonFlag = args.find((a) => !a.startsWith('-'));
-const fast = nonFlag === 'tools' || (!nonFlag && (args.includes('--version') || args.includes('-V')));
+const sub = args.find((a) => !a.startsWith('-'));
+const fast = process.env.WALNUT_CLI_DIRECT !== '1'
+  && ((sub !== undefined && LITE.has(sub))
+    || (!sub && (args.includes('--version') || args.includes('-V'))));
 import(fast ? '../dist/cli-fast.js' : '../dist/cli.js');

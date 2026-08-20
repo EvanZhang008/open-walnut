@@ -285,6 +285,31 @@ Only eligible skills appear in the system prompt as `<available_skills>` XML. Th
 
 ---
 
+## Plugin System
+
+A plugin is a directory with `manifest.json` plus an entry point (`index.ts`/`plugin.ts`/`index.js`/`plugin.js`/`index.mjs`) that default-exports `(api: PluginApi) => void | Promise<void>`. Full authoring guide: [Plugin development](./docs/reference/plugin-development.md). Types: `src/core/integration-types.ts`. Loader: `src/core/integration-loader.ts`.
+
+**Capability model** (`manifest.capabilities`). Implemented: `sync` (task sync, requires `registerSync`), `ui` (an app page in the console), `tools` (`registerTool`, exposed to the Personal AI as `<pluginId>_<name>`), `skills` (`skills/<name>/SKILL.md`, auto-discovered at lowest priority so user skills override). Reserved and not implemented: `hooks`, `routines`. Three load-bearing rules: an ABSENT `capabilities` key means `{ sync: {} }` (every pre-capabilities manifest is a sync plugin); a manifest declaring ONLY reserved capabilities is reported `unsupported` without its code ever being imported, so a plugin written for a newer Walnut degrades instead of crashing; and a capability that is not DECLARED is inert (`registerTool` without `capabilities.tools` is logged and ignored, `skills/` is not scanned without `capabilities.skills`), so the manifest is the contract rather than a hint.
+
+**Discovery order, first id wins**: built-in (`src/integrations/` in dev, `dist/integrations/` in prod; `local` first and undisablable) → `~/.open-walnut/plugins/` → Plugin Store clones (`~/.open-walnut/plugin-stores/<slug>/`, from any git repo). A shadowed copy is reported `duplicate`, never silently dropped. Per-plugin sequence: manifest → `enabled` flag → capability check → `configSchema` validation (missing `required` = `needs-config`) → import (external `.ts` is esbuild-bundled on the fly, npm packages left external so they resolve from Walnut's `node_modules`) → call the default export → register. Then routes mount at `/api/plugins/<id>`, declared ext indexes open, migrations run. **Soft reload is additive**: a NEW plugin goes live with no restart, but changed code of an already-loaded plugin keeps running until restart (status `pending-restart`).
+
+**Trust model**: plugins run IN-PROCESS with Walnut's full privileges (all tasks, notes, config, network, filesystem). There is no server-side sandbox and no permission prompt; adding the source IS the consent step. No auto-pull either, so remote code changes stay explicit and the current SHA is visible in the UI.
+
+**App sandbox**: `<pluginDir>/app/` is served static at `/plugin-apps/<pluginId>/app/…` and rendered in a SANDBOXED iframe with no same-origin access (no Walnut cookies, no shared `localStorage`, no direct `fetch` to `/api`). The page reaches Walnut only through the SDK at `/walnut-app-sdk.js`, which wraps a `postMessage` bridge the host owns: the host holds the authenticated origin and makes each REST call on the page's behalf, validating it first (path must start with `/api/`, no `..`, method in GET/POST/PUT/PATCH/DELETE, and config WRITES refused since Settings owns those). Only `app/` is served, so plugin code and manifests are unreachable over HTTP. This protects the BROWSER side only, and says nothing about what the plugin's server-side code can do.
+
+```
+┌──────────────────────────────┐        ┌─────────────────────┐        ┌─────────────┐
+│ plugin app (sandboxed iframe)│        │ host console (SPA)  │        │ Walnut REST │
+│  Walnut.api(method, path) ───┼──post──┤─ bridge: validate  ─┼──fetch─┤─▶ response  │
+│  Walnut.on('task:', cb) ◀────┼─message┤◀ bus events         │        │             │
+│  Walnut.open('/tasks') ──────┼──post──┤─ SPA navigation     │        │             │
+└──────────────────────────────┘        └─────────────────────┘        └─────────────┘
+```
+
+**Example plugin**: [examples/plugins/hello-walnut](./examples/plugins/hello-walnut) exercises `ui` + `tools` + `skills` with no sync at all, plus one plugin HTTP route.
+
+---
+
 ## Claude Code Session Lifecycle — Detail
 
 ### Session data model (`sessions.json`)
@@ -470,11 +495,12 @@ See `web/src/AGENTS.md` for detailed UX implementation (message isolation, task 
 
 ## CLI — an HTTP client, never a second writer
 
-`open-walnut add|tasks|done|recall|projects|sessions|start` are HTTP clients of the running server's `/api/v1` facade (`src/utils/api-client.ts`; base URL `OPEN_WALNUT_API_URL`, default `http://127.0.0.1:3456`). They used to import `core/task-manager` and write SQLite from the CLI process, which made every invocation a SECOND WRITER racing the server — two processes each holding a stale in-memory store delete each other's rows. The server is now the single writer; localhost requests bypass auth, so no token plumbing is needed.
+`open-walnut add|tasks|done|recall|projects|sessions|start|tools` are HTTP clients of the running server's `/api/v1` facade (`src/utils/api-client.ts`; base URL `OPEN_WALNUT_API_URL`, default `http://127.0.0.1:3456`). They used to import `core/task-manager` and write SQLite from the CLI process, which made every invocation a SECOND WRITER racing the server — two processes each holding a stale in-memory store delete each other's rows. The server is now the single writer; localhost requests bypass auth, so no token plumbing is needed.
 
+- **One interface, one rule (2026-08-20):** the bin shim (`bin/open-walnut.js`) routes every DATA command above to the slim `dist/cli-fast.js` entry (~75KB, ~0.2s total), because their real work is one local HTTP request and the full bundle costs ~0.5s of boot first (tsup builds `dist/cli.js` as one unsplit 6.3MB file that eagerly loads the web-server graph). Process-owning/interactive commands (`web`, `mcp`, `chat`, `sync`, `backup`, `logs`, `device`, `lists`, `subtask`, `session-server`) stay on the full entry — they live seconds-to-forever, so boot cost is irrelevant. Humans and agents share the same path; the split is by what the command does, not who runs it. The `LITE` set in the bin shim mirrors `LITE_COMMANDS` in `src/cli-fast.ts` — keep in sync.
 - Task-mutating commands (`add`, `done`) print a `<task-ref id="…" label="…"/>` line so an AI session running them through Bash can cite the task (the web UI renders these as clickable pills). `--json` carries the same string in a `ref` field. Tag construction lives in `taskRefTag()` (`src/utils/entity-refs.ts`), next to the regex that parses it back.
 - Server down → ONE friendly line ("start it with: open-walnut web") + exit 1, never a stack trace (`reportApiError`).
-- `WALNUT_CLI_DIRECT=1` is the rollback lever: each command falls back to its original in-process path, kept as a clearly-marked `runXxxDirect` function in the same file. Anything that must run against an isolated temp store (the `tests/commands/*` CLI-subprocess tests) MUST set it — otherwise the child talks to production :3456.
+- `WALNUT_CLI_DIRECT=1` is the rollback lever: each data command falls back to its original in-process path. Those legacy implementations live together in `src/commands/direct-commands.ts` and are installed at boot ONLY by the full entry (`src/cli.ts`) through the `src/commands/direct-registry.ts` seam — a data command file must never name the direct module, or the bundler inlines core/task-manager into the slim bundle and re-inflates every call (this is measured: one literal import = 75KB → 6.3MB). The bin shim routes `WALNUT_CLI_DIRECT=1` invocations to the full entry. Anything that must run against an isolated temp store (the `tests/commands/*` CLI-subprocess tests) MUST set it — otherwise the child talks to production :3456; tests importing command modules directly must also call `installDirect()` first (the registry fails loud instead of silently writing to prod).
 - `open-walnut start <task_id>` posts to `POST /api/v1/tasks/:id/start` so the SESSION_START emit happens in the process that owns the session-runner. Core: `src/core/sessions/task-start.ts` (shared with the direct path). `POST /api/v1/sessions` can't serve this — its body requires an absolute `cwd`, while `start` names only a task and lets the runner resolve cwd from the task/project chain.
 - `open-walnut done` posts to `POST /api/v1/tasks/:id/complete`, NOT `PATCH {status:'done'}`: only `completeTask()` auto-unpins from the Focus bar and awaits the external-sync push.
 - Out of scope (still direct, by design): `chat`, `web`, `logs`, `sync`, `auth`, `device`, `dashboard`, `session-server`, and the legacy `subtask`/`lists` stubs.

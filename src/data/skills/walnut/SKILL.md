@@ -31,7 +31,7 @@ in it always exist:
 ```bash
 walnut tools list                          # every op, with a one-line purpose
 walnut tools help search                   # one op's exact arguments
-walnut tools call walnut_status '{}'       # run it (~0.3s; fast entry, no server boot)
+walnut tools call walnut_status '{}'       # run it (~0.2s — every data command is this fast)
 ```
 
 Measured cost of skipping this (2026-08-19 A/B): asked for the server mode, an

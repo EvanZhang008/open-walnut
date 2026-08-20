@@ -2,6 +2,7 @@ import chalk from 'chalk';
 import { outputJson } from '../utils/json-output.js';
 import { apiGet, reportApiError } from '../utils/api-client.js';
 import { statusSymbol, prioritySymbol, shortDate } from '../utils/format.js';
+import { requireDirectRunners } from './direct-registry.js';
 import type { GlobalOptions } from '../core/types.js';
 
 interface TasksOptions {
@@ -10,7 +11,7 @@ interface TasksOptions {
 }
 
 /** Fields this listing renders — a subset of both Task and ProjectedTask. */
-interface ListedTask {
+export interface ListedTask {
   id: string;
   title: string;
   status: string;
@@ -25,7 +26,9 @@ export async function runTasks(
   globals: GlobalOptions,
 ): Promise<void> {
   if (process.env.WALNUT_CLI_DIRECT === '1') {
-    await runTasksDirect(options, globals);
+    // In-process legacy path, installed only by the full CLI entry — see
+    // direct-registry.ts.
+    await requireDirectRunners().tasks(options, globals);
     return;
   }
 
@@ -45,7 +48,7 @@ export async function runTasks(
   }
 }
 
-function printTasks(tasks: ListedTask[], globals: GlobalOptions): void {
+export function printTasks(tasks: ListedTask[], globals: GlobalOptions): void {
   if (globals.json) {
     outputJson(tasks);
     return;
@@ -66,20 +69,4 @@ function printTasks(tasks: ListedTask[], globals: GlobalOptions): void {
 
     console.log(`  ${sym} ${pri.padEnd(3)} ${id}  ${title}  ${group}  ${date}`);
   }
-}
-
-/**
- * LEGACY direct-core path — reads SQLite in-process. Enabled only by
- * WALNUT_CLI_DIRECT=1; the rollback lever for the HTTP migration.
- */
-async function runTasksDirect(
-  options: TasksOptions,
-  globals: GlobalOptions,
-): Promise<void> {
-  const { listTasks } = await import('../core/task-manager.js');
-  const tasks = await listTasks({
-    status: options.status,
-    project: options.project,
-  });
-  printTasks(tasks as unknown as ListedTask[], globals);
 }

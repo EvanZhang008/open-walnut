@@ -2,12 +2,13 @@ import chalk from 'chalk';
 import { outputJson } from '../utils/json-output.js';
 import { apiGet, reportApiError } from '../utils/api-client.js';
 import { shortDate } from '../utils/format.js';
+import { requireDirectRunners } from './direct-registry.js';
 import type { GlobalOptions } from '../core/types.js';
 
-const LIST_LIMIT = 20;
+export const SESSION_LIST_LIMIT = 20;
 
 /** The columns this listing renders (ProjectedSession ∪ SessionRecord). */
-interface ListedSession {
+export interface ListedSession {
   id: string;
   process_status: string;
   project?: string;
@@ -20,7 +21,9 @@ interface ListedSession {
  */
 export async function runSessions(globals: GlobalOptions): Promise<void> {
   if (process.env.WALNUT_CLI_DIRECT === '1') {
-    await runSessionsDirect(globals);
+    // In-process legacy path, installed only by the full CLI entry — see
+    // direct-registry.ts.
+    await requireDirectRunners().sessions(globals);
     return;
   }
 
@@ -28,13 +31,13 @@ export async function runSessions(globals: GlobalOptions): Promise<void> {
     const { sessions } = await apiGet<{ sessions: ListedSession[] }>('/api/v1/sessions');
     // The projection is already sorted newest-first and capped; the CLI shows
     // the most recent 20.
-    printSessions(sessions.slice(0, LIST_LIMIT), globals);
+    printSessions(sessions.slice(0, SESSION_LIST_LIMIT), globals);
   } catch (err) {
     reportApiError(err, globals);
   }
 }
 
-function printSessions(sessions: ListedSession[], globals: GlobalOptions): void {
+export function printSessions(sessions: ListedSession[], globals: GlobalOptions): void {
   if (globals.json) {
     outputJson(sessions);
     return;
@@ -78,24 +81,7 @@ function printSessions(sessions: ListedSession[], globals: GlobalOptions): void 
   }
 }
 
-/**
- * LEGACY direct-core path — reads the session registry in-process. Enabled only
- * by WALNUT_CLI_DIRECT=1; the rollback lever for the HTTP migration.
- */
-async function runSessionsDirect(globals: GlobalOptions): Promise<void> {
-  const { getRecentSessions } = await import('../core/session-tracker.js');
-  const records = await getRecentSessions(LIST_LIMIT);
-  printSessions(
-    records.map((s) => ({
-      id: s.claudeSessionId,
-      process_status: s.process_status,
-      project: s.project,
-      task_id: s.taskId,
-      last_active_at: s.lastActiveAt,
-    })),
-    globals,
-  );
-}
+// The WALNUT_CLI_DIRECT=1 implementation lives in direct-commands.ts.
 
 function padRight(str: string, len: number): string {
   if (str.length >= len) return str.slice(0, len - 1) + ' ';

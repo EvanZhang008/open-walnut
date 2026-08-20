@@ -2,18 +2,21 @@ import chalk from 'chalk';
 import { outputJson } from '../utils/json-output.js';
 import { apiGet, reportApiError } from '../utils/api-client.js';
 import { prioritySymbol, statusSymbol } from '../utils/format.js';
+import { requireDirectRunners } from './direct-registry.js';
 import type { GlobalOptions } from '../core/types.js';
 import type { SearchResult } from '../core/search.js';
 
 /** Status/priority decoration for a task hit — the list payload's slim shape. */
-interface TaskFacts { status: string; priority: string }
+export interface TaskFacts { status: string; priority: string }
 
 export async function runRecall(
   query: string,
   globals: GlobalOptions,
 ): Promise<void> {
   if (process.env.WALNUT_CLI_DIRECT === '1') {
-    await runRecallDirect(query, globals);
+    // In-process legacy path, installed only by the full CLI entry — see
+    // direct-registry.ts.
+    await requireDirectRunners().recall(query, globals);
     return;
   }
 
@@ -43,7 +46,7 @@ export async function runRecall(
   }
 }
 
-function printResults(results: SearchResult[], facts: Map<string, TaskFacts>): void {
+export function printResults(results: SearchResult[], facts: Map<string, TaskFacts>): void {
   if (results.length === 0) {
     console.log(chalk.dim('No results found.'));
     return;
@@ -66,26 +69,4 @@ function printResults(results: SearchResult[], facts: Map<string, TaskFacts>): v
     console.log(`     ${chalk.dim('"' + result.snippet + '"')}`);
     console.log();
   }
-}
-
-/**
- * LEGACY direct-core path — runs the search engine in-process. Enabled only by
- * WALNUT_CLI_DIRECT=1; the rollback lever for the HTTP migration.
- */
-async function runRecallDirect(query: string, globals: GlobalOptions): Promise<void> {
-  const { search } = await import('../core/search.js');
-  const results = await search(query);
-
-  if (globals.json) {
-    outputJson(results);
-    return;
-  }
-
-  let facts = new Map<string, TaskFacts>();
-  if (results.some((r) => r.type === 'task')) {
-    const { listTasks } = await import('../core/task-manager.js');
-    const tasks = await listTasks();
-    facts = new Map(tasks.map((t) => [t.id, { status: t.status, priority: t.priority }]));
-  }
-  printResults(results, facts);
 }

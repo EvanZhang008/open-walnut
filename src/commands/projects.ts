@@ -1,9 +1,10 @@
 import chalk from 'chalk';
 import { outputJson } from '../utils/json-output.js';
 import { apiGet, reportApiError } from '../utils/api-client.js';
+import { requireDirectRunners } from './direct-registry.js';
 import type { GlobalOptions } from '../core/types.js';
 
-interface ProjectInfo {
+export interface ProjectInfo {
   name: string;
   taskCount: number;
   activeTasks: number;
@@ -32,7 +33,9 @@ interface ProjectedSessionSlim {
 
 export async function runProjects(globals: GlobalOptions): Promise<void> {
   if (process.env.WALNUT_CLI_DIRECT === '1') {
-    await runProjectsDirect(globals);
+    // In-process legacy path, installed only by the full CLI entry — see
+    // direct-registry.ts.
+    await requireDirectRunners().projects(globals);
     return;
   }
 
@@ -81,7 +84,7 @@ export async function runProjects(globals: GlobalOptions): Promise<void> {
   }
 }
 
-function printProjects(projects: ProjectInfo[], globals: GlobalOptions): void {
+export function printProjects(projects: ProjectInfo[], globals: GlobalOptions): void {
   if (globals.json) {
     outputJson(projects);
     return;
@@ -109,42 +112,4 @@ function printProjects(projects: ProjectInfo[], globals: GlobalOptions): void {
   }
 }
 
-/**
- * LEGACY direct-core path — reads SQLite + memory files in-process. Enabled
- * only by WALNUT_CLI_DIRECT=1; the rollback lever for the HTTP migration.
- */
-async function runProjectsDirect(globals: GlobalOptions): Promise<void> {
-  const { listTasks } = await import('../core/task-manager.js');
-  const { listMemories } = await import('../core/memory.js');
-  const tasks = await listTasks();
-  const projectMap = new Map<string, ProjectInfo>();
-
-  const ensure = (name: string): ProjectInfo => {
-    let info = projectMap.get(name);
-    if (!info) {
-      info = { name, taskCount: 0, activeTasks: 0, doneTasks: 0, sessions: [], memoryFiles: [] };
-      projectMap.set(name, info);
-    }
-    return info;
-  };
-
-  for (const task of tasks) {
-    const info = ensure(task.project ?? '(none)');
-    info.taskCount++;
-    if (task.status === 'done') info.doneTasks++;
-    else info.activeTasks++;
-    for (const sid of task.session_ids) {
-      if (!info.sessions.includes(sid)) info.sessions.push(sid);
-    }
-  }
-
-  // Add project memory files (the direct path always initializes the array)
-  for (const mem of listMemories('project')) {
-    ensure(mem.title).memoryFiles!.push(mem.path);
-  }
-
-  const projects = Array.from(projectMap.values()).sort((a, b) =>
-    a.name.localeCompare(b.name),
-  );
-  printProjects(projects, globals);
-}
+// The WALNUT_CLI_DIRECT=1 implementation lives in direct-commands.ts.

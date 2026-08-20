@@ -209,25 +209,35 @@ describe('open-walnut done → POST /api/v1/tasks/:id/complete', () => {
     expect(after.task.pinned).toBeFalsy();
   });
 
+  // Replaces the deleted "rejects managed agents" pair: `walnut done` no longer
+  // asks who is calling, so the contract to pin is that a managed session (the
+  // env that used to mean "agent, refuse") completes exactly like a terminal.
   it.each([
     ['HTTP', false],
     ['legacy direct', true],
-  ])('rejects managed agents before the %s completion path', async (_path, direct) => {
+  ])('completes from inside a managed session too (%s path)', async (_path, direct) => {
     const { runAdd } = await import('../../src/commands/add.js');
     const { runDone } = await import('../../src/commands/done.js');
-    await runAdd(`Agent completion guard ${_path}`, {}, { json: true });
+    await runAdd(`Managed session completion ${_path}`, {}, { json: true });
     const { id } = jsonOut<{ id: string }>();
     logSpy.mockClear();
 
     process.env.WALNUT_SESSION_ID = 'managed-session';
-    if (direct) process.env.WALNUT_CLI_DIRECT = '1';
+    if (direct) {
+      process.env.WALNUT_CLI_DIRECT = '1';
+      // Direct runners are installed by the full CLI entry at boot; direct
+      // src imports install them explicitly (see direct-registry.ts).
+      const { installDirect } = await import('../../src/commands/direct-commands.js');
+      installDirect();
+    }
     await runDone(id, { json: true });
 
-    expect(process.exitCode).toBe(1);
-    expect(jsonOut<{ error: string }>().error).toContain('Only a human can complete a task');
+    expect(stderr()).toBe('');
+    expect(process.exitCode).toBeUndefined();
+    expect(jsonOut<{ status: string }>().status).toBe('completed');
     const { task } = await api<{ task: { status: string; phase: string } }>(`/api/v1/tasks/${id}`);
-    expect(task.status).toBe('todo');
-    expect(task.phase).toBe('TODO');
+    expect(task.status).toBe('done');
+    expect(task.phase).toBe('COMPLETE');
   });
 
   it('unknown id → server 404 message on stderr, exit 1', async () => {
@@ -325,6 +335,11 @@ describe('server not running', () => {
 describe('WALNUT_CLI_DIRECT=1 escape hatch', () => {
   it('add still works through the in-process core path', async () => {
     process.env.WALNUT_CLI_DIRECT = '1';
+    // Direct runners live in a separate module the data commands can't import
+    // (bundle-size seam); the full CLI entry installs them at boot, tests do
+    // it explicitly.
+    const { installDirect } = await import('../../src/commands/direct-commands.js');
+    installDirect();
     // Point the HTTP path at a dead port too: if the direct branch were not
     // taken, this would fail with the unreachable-server message.
     const dead = await closedPort();

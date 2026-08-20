@@ -23,6 +23,14 @@ const program = new Command();
 // Initialize logging early
 initLogging();
 
+// WALNUT_CLI_DIRECT=1: install the in-process legacy runners for the data
+// commands (tests / rollback lever). Only this full entry may load them — the
+// slim entry must never see core/task-manager (see commands/direct-registry.ts).
+if (process.env.WALNUT_CLI_DIRECT === '1') {
+  const { installDirect } = await import('./commands/direct-commands.js');
+  installDirect();
+}
+
 program
   .name('open-walnut')
   .version(packageVersion)
