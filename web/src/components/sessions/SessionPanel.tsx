@@ -7,6 +7,7 @@ import { SessionFileExplorer } from './SessionFileExplorer';
 import { sessionScope } from '@/utils/file-view-state';
 import { SessionTerminal } from './SessionTerminal';
 import { SessionCodeView } from './SessionCodeView';
+import { prefetchVscodeEmbed } from './vscodeEmbedPrefetch';
 import { SessionDiffView } from './SessionDiffView';
 import { buildSelectionPrefill, displayPathForPrefill } from './diffPrefill';
 import type { SessionSplitView } from './sessionSplitView';
@@ -608,6 +609,15 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
       return next;
     });
   }, [enterFullscreen, exitFullscreen, fileViewTarget, activeView]);
+  // Keep-alive for the Code view: once opened, it stays MOUNTED (css-hidden)
+  // for the panel's lifetime. Unmounting destroys the iframe, and remounting
+  // reboots the whole VS Code workbench (seconds, worse over a tunnel) — the
+  // "switching back takes forever" report. display:none does not reload an
+  // iframe; moving it in the DOM does, so the hidden container never moves.
+  const [codeViewMounted, setCodeViewMounted] = useState(false);
+  useEffect(() => {
+    if (activeView === 'code') setCodeViewMounted(true);
+  }, [activeView]);
   // Clicking a file path in the chat opens it in the SAME split layout as
   // Changed/Files/Terminal — file explorer + preview on the left, the live chat
   // in the resizable right column (replaces the old full-screen FileViewer modal).
@@ -1179,6 +1189,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             <button
               className={`session-action-chip${activeView === 'code' ? ' session-action-chip-active' : ''}`}
               onClick={() => toggleView('code')}
+              // Hover = intent: warm the ensure (spawn/adopt + tunnel) so the
+              // click usually finds it already resolved. install=false inside.
+              onMouseEnter={() => sessionId && prefetchVscodeEmbed(sessionId)}
               title="Embedded VS Code in the session working directory — full-screen alongside the chat"
             >
               Code
@@ -1393,25 +1406,25 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
             shape — same JSX, same position — so SessionChatHistory's WS/stream stays
             mounted (no remount). */}
         <div className={`session-panel-split${splitOpen ? ' is-changed-open' : ''}${splitOpen && chatCollapsed ? ' is-chat-collapsed' : ''}`}>
-          {splitOpen && sessionId && (
-            <div className="session-panel-diff-col">
-              {(() => {
-                // Chat toggle while the chat is COLLAPSED: parks at the far right
-                // of the left view's toolbar, so the (now full-width) bar keeps
-                // both layout controls at its two corners. While the chat is open
-                // the toggle lives in the chat column's own bar segment below.
-                const chatBarSlot = chatCollapsed ? (
-                  <button
-                    type="button"
-                    className="sfe-btn sfe-tree-toggle session-chat-collapse-btn"
-                    onClick={() => setChatCollapsed(false)}
-                    title="Show chat"
-                    aria-label="Show chat"
-                    aria-expanded={false}
-                  >{ICON_PANEL_RIGHT}</button>
-                ) : null;
-                return (
-                  <>
+          {(() => {
+            // Chat toggle while the chat is COLLAPSED: parks at the far right
+            // of the left view's toolbar, so the (now full-width) bar keeps
+            // both layout controls at its two corners. While the chat is open
+            // the toggle lives in the chat column's own bar segment below.
+            const chatBarSlot = chatCollapsed ? (
+              <button
+                type="button"
+                className="sfe-btn sfe-tree-toggle session-chat-collapse-btn"
+                onClick={() => setChatCollapsed(false)}
+                title="Show chat"
+                aria-label="Show chat"
+                aria-expanded={false}
+              >{ICON_PANEL_RIGHT}</button>
+            ) : null;
+            return (
+              <>
+                {splitOpen && sessionId && activeView !== 'code' && (
+                  <div className="session-panel-diff-col">
                     {activeView === 'changed' && (
                       <SessionDiffView sessionId={sessionId} sessionCwd={session?.cwd} sessionHost={session?.host} onSelectCode={handleSelectCode} onComment={handleDiffComment} barRightSlot={chatBarSlot} />
                     )}
@@ -1445,18 +1458,27 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, loc
                         barRightSlot={chatBarSlot}
                       />
                     )}
-                    {activeView === 'code' && (
-                      <SessionCodeView
-                        sessionId={sessionId}
-                        host={session?.host}
-                        barRightSlot={chatBarSlot}
-                      />
-                    )}
-                  </>
-                );
-              })()}
-            </div>
-          )}
+                  </div>
+                )}
+                {/* Code view keep-alive: once opened it stays MOUNTED for the
+                    panel's lifetime, css-hidden when another view (or none) is
+                    active. Unmounting kills the iframe and remounting reboots
+                    the whole VS Code workbench — seconds each switch-back.
+                    display:none does not reload an iframe; REPARENTING does,
+                    which is why this is its own stable sibling rather than a
+                    child of the conditional diff-col above. */}
+                {codeViewMounted && sessionId && (
+                  <div className={`session-panel-diff-col session-panel-code-col${activeView === 'code' ? '' : ' session-panel-code-col-hidden'}`}>
+                    <SessionCodeView
+                      sessionId={sessionId}
+                      host={session?.host}
+                      barRightSlot={chatBarSlot}
+                    />
+                  </div>
+                )}
+              </>
+            );
+          })()}
           {splitOpen && !chatCollapsed && (
             <div className="session-panel-chat-resize" {...chatPanel.handleProps} title="Drag to resize chat" />
           )}

@@ -24077,6 +24077,14 @@ a.file-link:hover {
 }
 
 /* ── Session Code view (embedded VS Code / code-server iframe) ─────────── */
+/* Keep-alive: once opened, the Code column stays mounted and is HIDDEN with
+   display:none when another view is active (or the split is closed). Hiding
+   does not reload an iframe — unmounting/reparenting does, and a remount
+   reboots the whole VS Code workbench. */
+.session-panel-code-col-hidden {
+  display: none !important;
+}
+
 /* Fills the split's left column flush, same shape as the embedded terminal. */
 .session-code-panel {
   width: 100%;

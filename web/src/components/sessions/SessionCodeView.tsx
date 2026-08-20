@@ -18,7 +18,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ensureSessionVscodeEmbed, type VscodeEmbedInfo } from '@/api/sessions';
+import { type VscodeEmbedInfo } from '@/api/sessions';
+import { consumeVscodeEmbed } from './vscodeEmbedPrefetch';
 import { ApiError } from '@/api/client';
 import { log } from '@/utils/log';
 
@@ -47,7 +48,9 @@ export function SessionCodeView({ sessionId, host, barRightSlot }: SessionCodeVi
     let cancelled = false;
     setPhase('ensuring');
     setError(null);
-    ensureSessionVscodeEmbed(sessionId)
+    // attempt > 0 = explicit Retry: bypass the prefetch cache (its entry may
+    // BE the failure being retried) and allow install.
+    consumeVscodeEmbed(sessionId, attempt > 0)
       .then((res) => {
         if (cancelled) return;
         setInfo(res);
@@ -62,6 +65,13 @@ export function SessionCodeView({ sessionId, host, barRightSlot }: SessionCodeVi
       })
       .catch((err: unknown) => {
         if (cancelled) return;
+        // The hover prefetch probes with install=false; when it answered 503
+        // "not installed", a CLICK is install intent — escalate to the full
+        // ensure instead of surfacing the probe's refusal.
+        if (attempt === 0 && err instanceof ApiError && err.status === 503) {
+          setAttempt(1);
+          return;
+        }
         const hint = err instanceof ApiError && typeof (err.body as { hint?: string } | undefined)?.hint === 'string'
           ? (err.body as { hint: string }).hint
           : undefined;
