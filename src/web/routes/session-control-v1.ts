@@ -117,7 +117,7 @@ async function relayControlAction(
   // "no primary server connected" = daemon alive but its walnut server is
   // down; nothing can answer. Same user remedy as bridge-down.
   if (reason.includes('no primary server connected')) {
-    sendError(res, 503, 'bridge_offline', 'The primary box\'s server is not connected to its daemon')
+    sendError(res, 503, 'bridge_offline', 'Your primary box (Mac) is offline — the session\'s host is fine; retrying automatically')
     return
   }
   const errorKind = typeof reply.errorKind === 'string' ? reply.errorKind : 'bad_request'

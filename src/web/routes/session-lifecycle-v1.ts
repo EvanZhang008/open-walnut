@@ -78,6 +78,59 @@ async function runLocal(
  */
 const RESERVED_SESSION_SUBPATHS = new Set(['list-dirs', 'recent', 'summaries'])
 
+/**
+ * Degraded read-only detail for when the PRIMARY can't answer: the git-synced
+ * projection row, liveness-corrected by asking the SESSION HOST's own daemon
+ * over its own bridge when that link is up.
+ *
+ * Why this exists (2026-08-20 field incident): the Mac lost DNS for ~108 min.
+ * Its bridge to the cloud box dropped, but the clouddev bridge NEVER did — the
+ * session kept streaming to the phone, and sends kept delivering through the
+ * direct fallback. The only thing that failed was this detail poll (12s), and
+ * its 503 painted a perfectly healthy clouddev session as unreachable. A
+ * read-only status question must never be answered with a transport error when
+ * a truthful (if partial) answer exists one hop away.
+ *
+ * pendingPermissions is honestly empty: prompts live on the primary, and an
+ * empty list just means "none visible right now" — the same thing a pre-Wave-1
+ * server said. `degraded:true` is additive for clients that care.
+ */
+async function degradedSessionDetail(sessionId: string): Promise<Record<string, unknown> | null> {
+  try {
+    const { readSessionProjection } = await import('../../core/session-projection.js')
+    const row = (await readSessionProjection())?.sessions.find((s) => s.id === sessionId)
+    if (!row) return null
+    let processStatus = row.process_status
+    const hostAlias = row.host === '' ? '__local__' : row.host
+    try {
+      const { bridgeRequest, bridgeForHost } = await import('../ws/bridge-registry.js')
+      if (bridgeForHost(hostAlias).connected) {
+        // `status` is already bridge-allowlisted (the direct send path uses it).
+        const status = await bridgeRequest(hostAlias, 'status', { sid: sessionId }, 5_000)
+        if (status.exists === true) {
+          // The daemon knows process liveness, not turn activity — so only
+          // correct the projection where liveness contradicts it.
+          if (status.alive !== true) processStatus = 'stopped'
+          else if (processStatus === 'stopped') processStatus = 'idle'
+        }
+      }
+    } catch { /* host probe failed — the projection row is still the best truth */ }
+    return {
+      session: {
+        claudeSessionId: sessionId,
+        process_status: processStatus,
+        ...(row.title ? { title: row.title } : {}),
+        ...(row.mode ? { mode: row.mode } : {}),
+      },
+      pendingPermissions: [],
+      degraded: true,
+      degradedReason: 'primary_offline',
+    }
+  } catch {
+    return null
+  }
+}
+
 // GET /api/v1/sessions/:id — full session detail: the liveness-corrected
 // record + live pending permission prompts (pair with POST …/permission).
 sessionLifecycleV1Router.get('/sessions/:id', async (req: Request, res: Response, next: NextFunction) => {
@@ -86,7 +139,28 @@ sessionLifecycleV1Router.get('/sessions/:id', async (req: Request, res: Response
     const sessionId = validSid(req, res)
     if (!sessionId) return
     if (CLOUD_MODE) {
-      await relayControlAction(res, 'detail', sessionId, undefined, 200)
+      const { callPrimaryControl } = await import('./v1-control-relay.js')
+      // 10s, not the 30s relay default: the phone polls this on a 12s cadence
+      // and abandons requests at 30s — a stuck primary link must degrade well
+      // inside both budgets.
+      const reply = await callPrimaryControl('detail', sessionId, undefined, 10_000)
+      if (reply.ok) {
+        res.status(200).json(reply.result)
+        return
+      }
+      if (reply.failure.kind === 'error') {
+        // The primary RAN the lookup and refused (404 etc) — verbatim truth.
+        sendError(res, reply.failure.status, reply.failure.code, reply.failure.message)
+        return
+      }
+      // bridge_offline / needs_upgrade: the primary can't answer. Serve the
+      // degraded read-only detail instead of painting the session unreachable.
+      const degraded = await degradedSessionDetail(sessionId)
+      if (degraded) {
+        res.status(200).json(degraded)
+        return
+      }
+      sendError(res, 503, 'bridge_offline', reply.failure.message)
       return
     }
     const { getSessionDetail } = await import('../../core/sessions/session-lifecycle.js')

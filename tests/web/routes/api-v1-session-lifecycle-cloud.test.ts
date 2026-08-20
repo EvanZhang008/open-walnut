@@ -59,7 +59,7 @@ afterEach(async () => {
 const SID = 'cloud-lc-session-1'
 
 describe('lifecycle relay payloads on a REPLICA', () => {
-  it('GET detail relays action detail', async () => {
+  it('GET detail relays action detail (10s poll-friendly budget)', async () => {
     const result = { session: { claudeSessionId: SID }, pendingPermissions: [] }
     bridgeRequestMock.mockResolvedValue({ ok: true, result })
     const res = await request(createApp()).get(`/api/v1/sessions/${SID}`)
@@ -68,7 +68,7 @@ describe('lifecycle relay payloads on a REPLICA', () => {
     expect(bridgeRequestMock).toHaveBeenCalledWith(
       '__local__', 'session.control',
       { action: 'detail', sessionId: SID },
-      30_000,
+      10_000,
     )
   })
 
@@ -193,7 +193,7 @@ describe('failure ladder', () => {
     expect(res.body.error.code).toBe('bridge_offline')
   })
 
-  it('daemon up but primary server down → 503 bridge_offline', async () => {
+  it('daemon up but primary server down + no projection row → 503 bridge_offline', async () => {
     bridgeRequestMock.mockResolvedValue({ ok: false, error: 'session.control: no primary server connected' })
     const res = await request(createApp()).get(`/api/v1/sessions/${SID}`)
     expect(res.status).toBe(503)
@@ -206,6 +206,55 @@ describe('failure ladder', () => {
     expect(res.status).toBe(404)
     expect(res.body.error.code).toBe('not_found')
     expect(res.body.error.message).toBe('Session not found')
+  })
+
+  it('detail degrades to the projection row when the primary cannot answer (2026-08-20 incident)', async () => {
+    // The Mac lost DNS for ~108 min; clouddev's own bridge stayed up the whole
+    // time. The 12s detail poll answered 503 and painted a healthy, streaming
+    // clouddev session as unreachable. Read-only status must degrade, not error.
+    const path = await import('node:path')
+    await fs.mkdir(path.join(WALNUT_HOME, 'sessions'), { recursive: true })
+    await fs.writeFile(path.join(WALNUT_HOME, 'sessions', 'projection.json'), JSON.stringify({
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      sessions: [{
+        id: SID, host: 'clouddev', process_status: 'idle', title: 'Blog session',
+        started_at: new Date().toISOString(), last_active_at: new Date().toISOString(), message_count: 3,
+      }],
+    }))
+    // 1st call: the primary relay (no primary server connected).
+    // 2nd call: the degraded path's liveness probe against the SESSION host.
+    bridgeRequestMock
+      .mockResolvedValueOnce({ ok: false, error: 'session.control: no primary server connected' })
+      .mockResolvedValueOnce({ exists: true, alive: true })
+    const res = await request(createApp()).get(`/api/v1/sessions/${SID}`)
+    expect(res.status).toBe(200)
+    expect(res.body.degraded).toBe(true)
+    expect(res.body.session.claudeSessionId).toBe(SID)
+    expect(res.body.session.process_status).toBe('idle')
+    expect(res.body.pendingPermissions).toEqual([])
+    // The probe went to the session's OWN host, not the primary.
+    expect(bridgeRequestMock).toHaveBeenLastCalledWith('clouddev', 'status', { sid: SID }, 5_000)
+  })
+
+  it('degraded detail corrects liveness from the host daemon (alive=false → stopped)', async () => {
+    const path = await import('node:path')
+    await fs.mkdir(path.join(WALNUT_HOME, 'sessions'), { recursive: true })
+    await fs.writeFile(path.join(WALNUT_HOME, 'sessions', 'projection.json'), JSON.stringify({
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      sessions: [{
+        id: SID, host: 'clouddev', process_status: 'idle',
+        started_at: new Date().toISOString(), last_active_at: new Date().toISOString(), message_count: 1,
+      }],
+    }))
+    bridgeRequestMock
+      .mockRejectedValueOnce(new BridgeOfflineError('__local__'))
+      .mockResolvedValueOnce({ exists: true, alive: false })
+    const res = await request(createApp()).get(`/api/v1/sessions/${SID}`)
+    expect(res.status).toBe(200)
+    expect(res.body.degraded).toBe(true)
+    expect(res.body.session.process_status).toBe('stopped')
   })
 
   it('domain errorCode (cron_owner) rides the relay into the v1 error code', async () => {

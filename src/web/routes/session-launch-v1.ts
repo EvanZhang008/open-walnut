@@ -136,7 +136,7 @@ async function relayLaunchAction(
   // "no primary server connected" = daemon alive but its walnut server is
   // down; record creation is impossible. Same user remedy as bridge-down.
   if (reason.includes('no primary server connected')) {
-    sendError(res, 503, 'bridge_offline', 'The primary box\'s server is not connected to its daemon')
+    sendError(res, 503, 'bridge_offline', 'Your primary box (Mac) is offline — it must be up to create sessions')
     return
   }
   const errorKind = typeof reply.errorKind === 'string' ? reply.errorKind : 'bad_request'

@@ -105,9 +105,12 @@ export function classifyRelayReply(reply: Record<string, unknown>): RelayFailure
     }
   }
   // "no primary server connected" = daemon alive but its walnut server is
-  // down; nothing can answer. Same user remedy as bridge-down.
+  // down; nothing can answer. Same user remedy as bridge-down. Name the
+  // PRIMARY explicitly: during the 2026-08-20 incident the user read this
+  // family of errors as "clouddev is unreachable" when clouddev was fine and
+  // the Mac was the missing hop.
   if (reason.includes('no primary server connected')) {
-    return { kind: 'bridge_offline', message: 'The primary box\'s server is not connected to its daemon' }
+    return { kind: 'bridge_offline', message: 'Your primary box (Mac) is offline — the session\'s host is fine; retrying automatically' }
   }
   const errorKind = typeof reply.errorKind === 'string' ? reply.errorKind : 'bad_request'
   // Domain error codes (e.g. terminate's 'cron_owner') ride the relay so the
