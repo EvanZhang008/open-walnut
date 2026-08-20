@@ -21,6 +21,33 @@ project lives in the **Inbox**. Two ways in — use whichever is available:
   server is mounted in this session. Prefer these when present: structured
   results, no shell quoting.
 
+## Start here: one command answers "what can I call?"
+
+**Any Walnut question is an operation call. Never guess a subcommand, and never
+reach for `git`, `curl`, or a file read to answer a question about the user's
+tasks, sessions, or commits.** The catalog below is generated from the live
+registry, so the op names in it always exist:
+
+```bash
+walnut tools list                          # every op, with a one-line purpose
+walnut tools help search                   # one op's exact arguments
+walnut tools call walnut_status '{}'       # run one (JSON in, JSON out)
+```
+
+Measured cost of skipping this (2026-08-19 A/B): asked for the server mode, an
+agent ran `walnut --help`, guessed, and answered `mode=stdio` — wrong, and it had
+actually invoked the MCP server. `walnut tools call walnut_status '{}'` returns
+`{"mode":"LIVE","version":"0.3.2"}` in one call. When in doubt, `tools list`.
+
+### Recipes for the questions that get answered wrong
+
+| Question | Do this |
+|---|---|
+| Which task/session produced commit `<sha>`? | `walnut tools call search '{"q":"<sha>"}'` — indexed commit SHAs resolve to the owning task AND session (`matchField: commit_sha`). **Do NOT use `git log`**: the mapping lives in Walnut's index, not in the repo. |
+| Is the server up / which version? | `walnut tools call walnut_status '{}'` |
+| What did session `<id>` do? | `walnut tools call session_transcript '{"id":"<id>"}'` |
+| Find anything by words | `walnut tools call search '{"q":"..."}'` — searches tasks, memory, and session transcripts together. Narrow with `{"types":"session"}` only when you specifically want transcripts. |
+
 ## CLI reference
 
 ```bash
