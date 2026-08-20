@@ -38,15 +38,49 @@ registerCommands(program);
 // `walnut task-for-commit`, got "too many arguments", and burned FIVE turns on
 // --help spelunking before finding `walnut tools call`. Point at the catalog.
 program.showSuggestionAfterError(true);
+
+/**
+ * The handful of things people (and agents) actually type when they guess.
+ * Naming the op is not enough — a 2026-08-20 eval watched an agent guess
+ * `walnut status`, then `/api/system`, then read `ps aux` and invent
+ * "mode=web" from the process list, never once running an op. Printing the
+ * exact runnable line ends the guessing in one step.
+ */
+const GUESS_HINTS: Record<string, string> = {
+  status: "walnut tools call walnut_status '{}'",
+  version: 'walnut --version',
+  info: "walnut tools call walnut_status '{}'",
+  health: "walnut tools call walnut_status '{}'",
+  mode: "walnut tools call walnut_status '{}'",
+  search: `walnut tools call search '{"q":"..."}'`,
+  find: `walnut tools call search '{"q":"..."}'`,
+  task: "walnut tools call task_list '{}'",
+  list: "walnut tools call task_list '{}'",
+  session: "walnut tools call session_list '{}'",
+  project: "walnut tools call project_list '{}'",
+  commit: `walnut tools call search '{"q":"<sha>"}'   # resolves to the owning task + session`,
+  note: `walnut tools call note_search '{"q":"..."}'`,
+  memory: `walnut tools call memory_read '{"doc":"global"}'`,
+};
+
 program.exitOverride((err) => {
   const stray = process.argv.slice(2).find((a) => !a.startsWith('-'));
   if (err.code === 'commander.excessArguments' && stray) {
     console.error(`Unknown command: ${stray}`);
     console.error('');
+    const key = Object.keys(GUESS_HINTS).find((k) => stray.toLowerCase().includes(k));
+    if (key) {
+      console.error('You probably want:');
+      console.error(`  ${GUESS_HINTS[key]}`);
+      console.error('');
+    }
     console.error('Every Walnut capability is available as an operation:');
     console.error('  walnut tools list              # the full catalog');
     console.error('  walnut tools help <op>         # one op\'s parameters');
     console.error("  walnut tools call <op> '{...}' # run it");
+    console.error('');
+    console.error('Faster on this box: every op is also an HTTP route —');
+    console.error('  curl -s http://127.0.0.1:3456/api/v1/status   # ~0.02s vs ~0.6s');
     console.error('');
     console.error('Run `walnut --help` for the human subcommands.');
     process.exit(1);

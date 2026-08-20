@@ -24,14 +24,17 @@ project lives in the **Inbox**. Two ways in — use whichever is available:
 ## Start here: one command answers "what can I call?"
 
 **Any Walnut question is an operation call. Never guess a subcommand, and never
-reach for `git`, `curl`, or a file read to answer a question about the user's
-tasks, sessions, or commits.** The catalog below is generated from the live
-registry, so the op names in it always exist:
+answer from `git` or a file read a question about the user's tasks, sessions, or
+commits.** The catalog below is generated from the live registry, so the op names
+in it always exist:
 
 ```bash
+A=http://127.0.0.1:3456/api/v1             # ← the fast path, use this by default
+curl -s "$A/status"                        # 0.02s
+
 walnut tools list                          # every op, with a one-line purpose
 walnut tools help search                   # one op's exact arguments
-walnut tools call walnut_status '{}'       # run one (JSON in, JSON out)
+walnut tools call walnut_status '{}'       # same answer, 0.6s (boots node first)
 ```
 
 Measured cost of skipping this (2026-08-19 A/B): asked for the server mode, an
@@ -39,14 +42,43 @@ agent ran `walnut --help`, guessed, and answered `mode=stdio` — wrong, and it 
 actually invoked the MCP server. `walnut tools call walnut_status '{}'` returns
 `{"mode":"LIVE","version":"0.3.2"}` in one call. When in doubt, `tools list`.
 
+### Fast path: on the primary box, call the API directly
+
+`walnut tools call` spends **~0.6s per invocation booting node before it does any
+work**. Every op is just an HTTP route on the local server, so `curl` skips that
+entirely: measured **0.01-0.02s** per call, 30-60x faster. Prefer it whenever the
+local server answers (`http://127.0.0.1:3456`), and put several reads in ONE Bash
+call so you pay one round of tool overhead instead of three:
+
+```bash
+A=http://127.0.0.1:3456/api/v1
+curl -s "$A/status"; curl -s "$A/projects"; curl -s "$A/search?q=registry&limit=3"
+```
+
+Route = the op's binding: `search` → `GET /search`, `project_list` → `GET /projects`,
+`session_list` → `GET /sessions`, `walnut_status` → `GET /status`, `task_list` →
+`GET /tasks`, `task_get` → `GET /tasks/:id`, `task_create` → `POST /tasks`,
+`task_complete` → `POST /tasks/:id/complete`. Writes work the same way:
+
+```bash
+curl -s -X POST "$A/tasks" -H 'Content-Type: application/json' -d '{"title":"..."}'
+```
+
+Reach for `walnut tools call` when you are NOT on the primary box (remote host,
+cloud replica), when you want an op whose route you do not know (`tools help <op>`
+prints it), or when the server is down. Both surfaces run the same registry, so
+they never disagree — this is purely about which one is cheaper to reach.
+
 ### Recipes for the questions that get answered wrong
+
+With `A=http://127.0.0.1:3456/api/v1`:
 
 | Question | Do this |
 |---|---|
-| Which task/session produced commit `<sha>`? | `walnut tools call search '{"q":"<sha>"}'` — indexed commit SHAs resolve to the owning task AND session (`matchField: commit_sha`). **Do NOT use `git log`**: the mapping lives in Walnut's index, not in the repo. |
-| Is the server up / which version? | `walnut tools call walnut_status '{}'` |
-| What did session `<id>` do? | `walnut tools call session_transcript '{"id":"<id>"}'` |
-| Find anything by words | `walnut tools call search '{"q":"..."}'` — searches tasks, memory, and session transcripts together. Narrow with `{"types":"session"}` only when you specifically want transcripts. |
+| Which task/session produced commit `<sha>`? | `curl -s "$A/search?q=<sha>"` — indexed commit SHAs resolve to the owning task AND session (`matchField: commit_sha`); take the FIRST hit, a commit can appear in forks. **Do NOT use `git log`**: the mapping lives in Walnut's index, not in the repo. |
+| Is the server up / which version? | `curl -s "$A/status"` |
+| What did session `<id>` do? | `curl -s "$A/sessions/<id>/transcript"` (or `walnut tools call session_transcript '{"id":"<id>"}'`) |
+| Find anything by words | `curl -s "$A/search?q=..."` — searches tasks, memory, and session transcripts together. Add `&types=session` only when you specifically want transcripts. |
 
 ## CLI reference
 
@@ -54,15 +86,15 @@ actually invoked the MCP server. `walnut tools call walnut_status '{}'` returns
 walnut add "Fix the flaky auth test" --project marina --due 2026-08-20 --priority important
 walnut tasks --status todo                 # todo | in_progress | done
 walnut tasks --project marina              # pass --project "" for the Inbox
-walnut done 9f3a                           # human-only; agents hand work back
+walnut done 9f3a                           # complete a task (id or unique prefix)
 walnut recall "auth fixture"               # search tasks + memory
 walnut projects                            # projects with task/session counts
 walnut sessions                            # the user's other coding sessions
 ```
 
 Add `--json` to ANY command for machine-readable output — parse that instead of
-scraping the human table. `add` returns the created task; the human-only `done`
-command returns the completed task (both include `id` and `title`). Priorities:
+scraping the human table. `add` returns the created task; `done`
+returns the completed task (both include `id` and `title`). Priorities:
 `immediate | important | backlog | none`. Dates: `YYYY-MM-DD`.
 
 <!-- ops-catalog:begin (generated by scripts/generate-ops-docs.mjs, do not edit inside) -->
@@ -76,8 +108,8 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `task_list` | List Walnut tasks (read) | status? (todo\|in_progress\|done): todo \| in_progress \| done; project? (string): Project name; "" for the Inbox; tag? (string): Exact tag match; q? (string): Case-insensitive substring on the task title |
 | `task_get` | Get one Walnut task (read) | id (string): Task id or a unique id prefix |
 | `task_create` | Create a Walnut task (write) | title (string): Task title (required); project? (string): Project name; omit or "" for the Inbox; priority? (immediate\|important\|backlog\|none): immediate \| important \| backlog \| none; due_date? (string): YYYY-MM-DD or a full ISO-8601 datetime; description? (string): Longer body text (write-only) |
-| `task_update` | Update a Walnut task (write) | id (string): Task id or a unique id prefix; status? (todo\|in_progress\|done): Legacy status. Agents may use todo or in_progress; done is human-only; phase? (TODO\|IN_PROGRESS\|AGENT_COMPLETE\|AWAIT_HUMAN_ACTION): Agent lifecycle phase; use AGENT_COMPLETE or AWAIT_HUMAN_ACTION to hand work back; priority? (immediate\|important\|backlog\|none); due_date? (string): ISO-8601 date/datetime, or "" to clear; start_date? (string): ISO-8601 date/datetime, or "" to clear; project? (string): Project name; "" = Inbox; title? (string): New title (non-empty, <= 500 chars); description? (string): Replaces the description (write-only); tags? (array<string>): FULL replacement of the task tags |
-| `task_complete` | Complete a Walnut task (write, local-only, human-only) | id (string): Task id or a unique id prefix |
+| `task_update` | Update a Walnut task (write) | id (string): Task id or a unique id prefix; status? (todo\|in_progress\|done): Legacy status: todo \| in_progress \| done; phase? (TODO\|IN_PROGRESS\|AGENT_COMPLETE\|COMPLETE): Task lifecycle phase; priority? (immediate\|important\|backlog\|none); due_date? (string): ISO-8601 date/datetime, or "" to clear; start_date? (string): ISO-8601 date/datetime, or "" to clear; project? (string): Project name; "" = Inbox; title? (string): New title (non-empty, <= 500 chars); description? (string): Replaces the description (write-only); tags? (array<string>): FULL replacement of the task tags |
+| `task_complete` | Complete a Walnut task (write) | id (string): Task id or a unique id prefix |
 | `task_delete` | Delete a Walnut task (write, local-only) | id (string): Task id or a unique id prefix; force? (boolean): Stop the task's active sessions and delete anyway |
 | `search` | Search Walnut (read) | q (string): Search query; types? (string): Comma-separated subset of: task,memory,session (default: all three); limit? (integer): Max results (default 20) |
 | `project_list` | List Walnut projects (read) | (none) |
@@ -131,7 +163,7 @@ never inside a tool argument or a code block.
 ## Safety
 
 - **Read before write.** Search or list first; duplicates are the most common damage an agent does here.
-- **Hand work back, do not complete it.** Use `task_update phase=AGENT_COMPLETE`, or `AWAIT_HUMAN_ACTION` when a person must act. Only a human may set `COMPLETE`.
+- **Say where the work stands.** Use `task_update phase=AGENT_COMPLETE` when it is done and ready to look at, and `COMPLETE` when it is finished. A blocked or parked task is just `TODO`. There is no human-vs-agent restriction on any phase.
 - **Never bulk-delete.** Delete a task only when the user explicitly asked for that specific deletion.
 - **Do not reopen or re-prioritize the user's tasks unprompted.** Changing
   `status`, `priority`, or `project` is the user's call unless they asked.
