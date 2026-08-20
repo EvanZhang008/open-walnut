@@ -8,6 +8,8 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { SectionCard } from '../inputs/SectionCard';
+import { PermissionFixDialog } from '@/components/common/PermissionFixDialog';
+import { getPermissions, type PermissionsReport } from '@/api/permissions';
 import {
   listCalendarSources,
   updateCalendarSource,
@@ -20,6 +22,18 @@ export function CalendarSection() {
   const [status, setStatus] = useState<CalendarSourceStatus | null>(null);
   const [calendars, setCalendars] = useState<CalendarInfo[]>([]);
   const [busy, setBusy] = useState(false);
+  // Permission Doctor handoff: when the source is permission-denied we fetch
+  // the live permission report and open the guided fix dialog instead of
+  // leaving the user with a static "go find System Settings" sentence.
+  const [fixReport, setFixReport] = useState<PermissionsReport | null>(null);
+
+  const openFix = async () => {
+    try {
+      setFixReport(await getPermissions(true));
+    } catch {
+      /* fall back to the static hint text already on screen */
+    }
+  };
 
   const load = useCallback(async () => {
     try {
@@ -96,7 +110,12 @@ export function CalendarSection() {
           {status.enabled && !status.available && (
             <div className="settings-warning">
               {status.reason === 'permission-denied' ? (
-                <>Calendar access is denied. Grant it in System Settings → Privacy &amp; Security → Calendars (Full Access), then refresh.</>
+                <>
+                  Calendar access is not granted.{' '}
+                  <button className="btn btn-sm" onClick={openFix}>
+                    Fix it…
+                  </button>
+                </>
               ) : status.reason === 'cloud' ? (
                 <>macOS calendars aren't reachable from the cloud companion — open Walnut on the Mac to see them.</>
               ) : (
@@ -141,6 +160,23 @@ export function CalendarSection() {
           )}
         </>
       )}
+      {fixReport && (() => {
+        const perm = fixReport.permissions.find((p) => p.id === 'calendar');
+        if (!perm) return null;
+        return (
+          <PermissionFixDialog
+            permission={perm}
+            launcherName={fixReport.launcher.name}
+            onClose={() => {
+              setFixReport(null);
+              load(); // pick up whatever changed while the dialog was open
+            }}
+            // The server already refreshed events post-grant; reload the
+            // section so available:true + the calendar list appear.
+            onGranted={() => load()}
+          />
+        );
+      })()}
     </SectionCard>
   );
 }

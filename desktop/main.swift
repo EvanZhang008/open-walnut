@@ -741,6 +741,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // this the server orphans onto PID 1 and holds the port forever. See the
         // OPEN_WALNUT_EXIT_ON_ORPHAN handling in open-walnut's src/commands/web.ts.
         env["OPEN_WALNUT_EXIT_ON_ORPHAN"] = "1"
+        // Permission Doctor: authoritative "who launched me" signal. macOS TCC
+        // attributes every permission request from the server (and the agent
+        // sessions under it) to THIS app bundle as the responsible process, so
+        // fix instructions must say "grant to Walnut.app" — not to node or to
+        // whatever terminal the user last used. See src/core/permissions/.
+        env["WALNUT_LAUNCHER"] = "mac-app"
         let extraPaths = [
             "/opt/homebrew/bin",
             "/usr/local/bin",

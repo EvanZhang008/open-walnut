@@ -32,7 +32,12 @@ const execFileAsync = promisify(execFile);
 // the helper binary itself — not to whatever launched Walnut (iTerm, app
 // bundle, launchd). Without this, changing the launcher silently revoked
 // calendar access (tccd refused: parent had no NSCalendarsUsageDescription).
-const HELPER_VERSION = 'v2';
+// v3: adds the side-effect-free `status` subcommand for the Permission Doctor.
+// NOTE: every version bump (or any recompile) changes the binary's cdhash,
+// which is the identity TCC keys the grant to — so users see ONE fresh
+// permission prompt after an upgrade. That is expected, not a regression;
+// the Permission Doctor exists to walk them through it.
+const HELPER_VERSION = 'v3';
 const HELPER_TIMEOUT_MS = 30_000;
 
 /** Embedded plist: tccd reads usage keys from here once the helper is its own
@@ -157,6 +162,38 @@ async function runHelper<T>(args: string[]): Promise<T> {
       `calendar helper failed: ${(err as Error).message?.slice(0, 200)}`,
       'fetch-error'
     );
+  }
+}
+
+/**
+ * Permission Doctor probe: current calendar authorization WITHOUT prompting.
+ * Safe to poll (the `status` subcommand never touches requestAccess). Returns
+ * 'unknown' when the helper can't run at all (no swiftc, non-macOS) — callers
+ * must not present that as "denied", the fixes differ.
+ */
+export async function calendarAuthStatus(): Promise<'granted' | 'denied' | 'not-determined' | 'unknown'> {
+  try {
+    const { state } = await runHelper<{ state: string }>(['status']);
+    return state === 'granted' || state === 'denied' || state === 'not-determined' ? state : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
+ * Permission Doctor fix for the 'not-determined' state: run a real command so
+ * EventKit shows the ONE system prompt macOS allows. Blocks until the user
+ * answers (helper waits up to 30s). Returns the post-prompt state. Once the
+ * state is 'denied' this is useless — macOS never re-prompts — which is why
+ * the UI routes denied users to System Settings instead.
+ */
+export async function requestCalendarAccess(): Promise<'granted' | 'denied' | 'unknown'> {
+  try {
+    await runHelper<unknown>(['calendars']);
+    return 'granted';
+  } catch (err) {
+    if (err instanceof CalendarHelperError && err.code === 'permission-denied') return 'denied';
+    return 'unknown';
   }
 }
 

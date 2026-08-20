@@ -74,8 +74,11 @@
      READABILITY IS THE CONTRACT: chrome text must stay crisp even when dense
      message text is scrolling directly beneath it. 0.68 + 30px was too clear —
      transcript text read straight through the composer chrome. 0.88 + 44px is
-     the tuned floor; never go clearer than 0.84 / blur below 36px. */
-  --glass-g4-bg: rgba(250, 250, 252, 0.88);
+     the tuned floor; never go clearer than 0.84 / blur below 36px.
+     Tint matches --bg exactly (pure white): any darker tint (250,250,252 was
+     tried) renders as a visible grey slab with a hard edge where the wash
+     meets the untouched white page around it. */
+  --glass-g4-bg: rgba(255, 255, 255, 0.88);
   --glass-g4-blur: blur(44px) saturate(1.8);
   --glass-g4-shadow: 0 6px 24px rgba(0, 0, 0, 0.08);
   /* Distance over which a scroll-under glass wash dissolves into the content
@@ -1324,16 +1327,14 @@ select {
 .badge-phase-todo { background: var(--bg-tertiary); color: var(--fg-muted); }
 .badge-phase-in_progress { background: rgba(0, 122, 255, 0.12); color: var(--accent); }
 .badge-phase-agent_complete { background: rgba(255, 59, 48, 0.12); color: var(--error); }
-.badge-phase-await_human_action { background: rgba(255, 59, 48, 0.12); color: var(--error); }
-.badge-phase-human_verified { background: rgba(52, 199, 89, 0.12); color: #34C759; }
-.badge-phase-post_work_completed { background: rgba(90, 200, 250, 0.12); color: #5AC8FA; }
+.badge-phase-wait { background: rgba(255, 59, 48, 0.12); color: var(--error); }
 .badge-phase-human_verification { background: rgba(255, 107, 0, 0.12); color: #FF6B00; }
 .badge-phase-peer_code_review { background: rgba(175, 82, 222, 0.12); color: #AF52DE; }
 .badge-phase-release_in_pipeline { background: rgba(48, 176, 199, 0.12); color: #30B0C7; }
 .badge-phase-complete { background: rgba(52, 199, 89, 0.12); color: var(--success); }
 
 /* Task circle colors — deliberately session-driven, NOT phase-driven
-   (2026-08-13 user request: the 7-phase rainbow was unreadable).
+   (2026-08-13 user request: the per-phase rainbow was unreadable).
    grey = plain task, blue = has a session attached, green = done.
    Compound selectors so they beat the .task-phase-icon-btn base color. */
 .task-phase-icon-btn.task-circle-todo, .task-quick-phase-btn.task-circle-todo { color: var(--fg-muted); }
@@ -9686,15 +9687,15 @@ body.walnut-dragging {
   cursor: text;
 }
 
-.todo-pinned-card-unread {
+.todo-pinned-card-needs-action {
   background: rgba(255, 59, 48, 0.08);
 }
 
-.todo-pinned-card-unread:hover {
+.todo-pinned-card-needs-action:hover {
   background: rgba(255, 59, 48, 0.14);
 }
 
-.todo-pinned-card-unread.todo-pinned-card-active {
+.todo-pinned-card-needs-action.todo-pinned-card-active {
   background: rgba(255, 59, 48, 0.12);
 }
 
@@ -9965,11 +9966,11 @@ body.walnut-dragging {
   background: color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
-.todo-focus-card.todo-pinned-card-unread {
+.todo-focus-card.todo-pinned-card-needs-action {
   background: rgba(255, 59, 48, 0.08);
 }
 
-.todo-focus-card.todo-pinned-card-unread:hover {
+.todo-focus-card.todo-pinned-card-needs-action:hover {
   background: rgba(255, 59, 48, 0.14);
 }
 
@@ -10148,6 +10149,18 @@ body.walnut-dragging {
 
 .todo-panel-item:hover {
   background: var(--accent-subtle);
+}
+
+/* "Needs action" — phase is AGENT_COMPLETE / WAIT. Same red
+   tint as the pinned/focus cards (todo-pinned-card-needs-action) so the whole task
+   surface speaks one language: red row = act on me. Phase-driven, so it stays
+   on until the human completes the task or a new turn starts. */
+.todo-panel-item-needs-action {
+  background: rgba(255, 59, 48, 0.08);
+}
+
+.todo-panel-item-needs-action:hover {
+  background: rgba(255, 59, 48, 0.14);
 }
 
 .todo-panel-item-done {
@@ -18189,6 +18202,19 @@ td.usage-share-col {
   box-shadow: 0 1px 3px rgba(255, 59, 48, 0.3);
 }
 
+/* waiting: red + pulse — CLI paused on a permission/AskUserQuestion prompt.
+   The single most actionable session state; must be unmissable in lists. */
+.task-session-pill-waiting {
+  color: #fff;
+  background: var(--error);
+  box-shadow: 0 1px 3px rgba(255, 59, 48, 0.3);
+  animation: pill-waiting-pulse 1.6s ease-in-out infinite;
+}
+@keyframes pill-waiting-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
 /* completed: blue — work fully completed */
 .task-session-pill-completed {
   color: #fff;
@@ -18196,8 +18222,8 @@ td.usage-share-col {
   box-shadow: 0 1px 3px rgba(0, 122, 255, 0.3);
 }
 
-/* await_human_action: red — session pending human action */
-.task-session-pill-await-human {
+/* wait: red — session blocked / errored, needs a look */
+.task-session-pill-wait {
   color: #fff;
   background: var(--error);
   box-shadow: 0 1px 3px rgba(255, 59, 48, 0.3);
@@ -18249,7 +18275,12 @@ td.usage-share-col {
   background: rgba(255, 255, 255, 0.7);
 }
 
-.task-session-dot-await-human {
+.task-session-dot-waiting {
+  background: #fff;
+  animation: session-dot-glow 1.5s ease-in-out infinite;
+}
+
+.task-session-dot-wait {
   background: rgba(255, 255, 255, 0.7);
 }
 
@@ -18891,6 +18922,18 @@ td.usage-share-col {
   opacity: 0.85;
 }
 
+.sfe-notice-dismiss {
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+  margin-left: 6px;
+}
+.sfe-notice-dismiss:hover { opacity: 1; }
+
 .session-file-explorer-preview .file-content-view {
   height: 100%;
 }
@@ -18922,18 +18965,6 @@ td.usage-share-col {
 }
 
 .session-pill-status-dot.dot-active {
-.sfe-notice-dismiss {
-  border: none;
-  background: transparent;
-  color: inherit;
-  opacity: 0.6;
-  cursor: pointer;
-  font-size: 11px;
-  padding: 0 2px;
-  margin-left: 6px;
-}
-.sfe-notice-dismiss:hover { opacity: 1; }
-
   background: var(--success);
   animation: session-pulse 2s ease-in-out infinite;
 }
@@ -23353,6 +23384,7 @@ a.file-link:hover {
 .file-content-view:has(> .fv-source-editor) > .fv-save-error,
 .file-content-view:has(> .fv-source-editor) > .file-viewer-truncated,
 .file-content-view:has(> .fv-source-editor) > .fv-reloading-badge,
+.file-content-view:has(> .fv-source-editor) > .fv-search-bar,
 .file-content-view:has(> .fv-wysiwyg-editor) > .fv-html-toolbar,
 .file-content-view:has(> .fv-wysiwyg-editor) > .fv-save-error,
 .file-content-view:has(> .fv-wysiwyg-editor) > .file-viewer-truncated,
@@ -23361,38 +23393,6 @@ a.file-link:hover {
   flex: 0 0 auto;
 }
 
-/* WYSIWYG markdown edit surface (Files panel Preview-tab editing): hosts the
-   Notes TipTap editor. Scrolls itself like .fv-md-preview; same padding so
-   entering Edit doesn't visually jump. The tall bottom padding mirrors the
-   Notes surface — keeps the caret clear of the pane's bottom edge. */
-.fv-wysiwyg-editor {
-  flex: 1 1 auto;
-  min-height: 240px;
-  overflow-y: auto;
-  padding: 16px 20px 120px;
-}
-.fv-wysiwyg-editor .notes-editor .tiptap {
-  outline: none;
-  /* Ultra-wide by default: the Files pane is already a split column, so the
-     Notes page's 800px prose cap (globals .notes-editor .tiptap) left huge
-     dead gutters here. Fill the pane; the wrapper above owns the padding. */
-  max-width: none;
-  padding: 0;
-}
-.fv-source-editor {
-  flex: 1 1 auto;
-  /* A concrete floor so the editor is usable even if an ancestor has no
-     resolvable height (pop-out window, unusually short pane). */
-  min-height: 240px;
-  overflow: hidden;
-.file-content-view:has(> .fv-source-editor) > .fv-search-bar,
-}
-
-.fv-html-preview {
-  display: block;
-  width: 100%;
-  height: 100%;
-  min-height: 60vh;
 /* ── In-file search bar (⌘F) — a chrome row above the file body ─────────── */
 .fv-search-bar {
   display: flex;
@@ -23595,6 +23595,37 @@ a.file-link:hover {
   border-radius: 2px;
 }
 
+/* WYSIWYG markdown edit surface (Files panel Preview-tab editing): hosts the
+   Notes TipTap editor. Scrolls itself like .fv-md-preview; same padding so
+   entering Edit doesn't visually jump. The tall bottom padding mirrors the
+   Notes surface — keeps the caret clear of the pane's bottom edge. */
+.fv-wysiwyg-editor {
+  flex: 1 1 auto;
+  min-height: 240px;
+  overflow-y: auto;
+  padding: 16px 20px 120px;
+}
+.fv-wysiwyg-editor .notes-editor .tiptap {
+  outline: none;
+  /* Ultra-wide by default: the Files pane is already a split column, so the
+     Notes page's 800px prose cap (globals .notes-editor .tiptap) left huge
+     dead gutters here. Fill the pane; the wrapper above owns the padding. */
+  max-width: none;
+  padding: 0;
+}
+.fv-source-editor {
+  flex: 1 1 auto;
+  /* A concrete floor so the editor is usable even if an ancestor has no
+     resolvable height (pop-out window, unusually short pane). */
+  min-height: 240px;
+  overflow: hidden;
+}
+
+.fv-html-preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 60vh;
   border: none;
   background: #fff;
 }
@@ -24487,6 +24518,56 @@ a.file-link:hover {
   outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
   outline-offset: 2px;
 }
+
+/* ============================================================================
+   Permission Doctor — fix dialog + Settings → Permissions rows
+   ========================================================================== */
+.permission-fix-modal {
+  max-width: 440px;
+  /* var(--card-bg) is translucent glass in some themes; a permission dialog
+     over dense settings text must be fully opaque to stay readable. */
+  background: var(--bg-primary, #fff);
+}
+.permission-fix-modal .app-modal-message { white-space: normal; }
+.permission-grant-target code {
+  /* The grant target is the load-bearing detail (grant to the WRONG identity
+     and nothing works) — render it copy-friendly and visually distinct. */
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--bg-secondary, rgba(255, 255, 255, 0.08));
+  user-select: all;
+}
+.permission-steps {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+.permission-steps li { margin-top: 4px; }
+.permission-granted-check {
+  font-size: 28px;
+  color: var(--success, #30a46c);
+  text-align: center;
+  margin: 6px 0;
+}
+.permission-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+}
+.permission-row + .permission-row { border-top: 1px solid var(--border, rgba(0, 0, 0, 0.08)); }
+.permission-row-main { flex: 1 1 auto; min-width: 0; }
+.permission-row-label { font-weight: 500; }
+.permission-row-state { flex-shrink: 0; }
+.permission-state-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--fg-muted, #8b8f98);
+}
+.permission-state-dot.permission-state-granted { background: var(--success, #30a46c); }
+.permission-state-dot.permission-state-denied { background: var(--error, #e5484d); }
+.permission-state-dot.permission-state-not-determined { background: var(--warning, #f5a623); }
 
 /* ============================================================================
    Session "Changed" view — full-screen File Diff + relocated session chat
@@ -26359,10 +26440,13 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   padding-top: calc(var(--sp-header-h, 76px) + 8px);
   padding-bottom: calc(var(--sp-composer-h, 84px) + 8px);
 }
-/* The sticky scroll-to-bottom arrow must float above the composer glass. */
-.session-panel-body .scroll-to-bottom-btn {
-  bottom: calc(var(--sp-composer-h, 84px) + 8px);
-}
+/* NO bottom override for the sticky arrow here (removed 2026-08-14): the
+   history's padding-bottom above ALREADY lifts the sticky arrow clear of the
+   composer glass — a sticky element is confined to its containing block's
+   CONTENT box, which excludes that padding. Adding bottom:
+   calc(--sp-composer-h + 8px) on top double-counted the composer height and
+   floated the arrow to mid-page (318px above the glass with the recap tip
+   visible). The base rule's bottom: 8px is correct in glass panels too. */
 /* Non-scroll siblings rendered above the history (team tab bar, workflow
    card) sit in normal flow at the panel top — push the first one below the
    glass header and drop the history's compensating padding (the history's
@@ -28236,4 +28320,17 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   height: 7px;
   border-radius: 50%;
   flex: none;
+}
+
+/* ── Live task-circle state (2026-08-14, kept deliberately minimal: grey =
+   no session, blue = session attached, blue PULSING = actively working).
+   Error/waiting are not circle colors — errors turn the whole row red via
+   the phase (todo-*-needs-action) and waits show on the SessionPill. ── */
+.task-phase-icon-btn.task-circle-running, .task-quick-phase-btn.task-circle-running {
+  color: var(--accent);
+  animation: task-circle-pulse 1.6s ease-in-out infinite;
+}
+@keyframes task-circle-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
 }

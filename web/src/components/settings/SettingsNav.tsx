@@ -43,6 +43,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'focus-tiers', label: 'Focus Tiers' },
   { id: 'integrations', label: 'Integrations' },
   { id: 'calendar', label: 'Calendar' },
+  { id: 'permissions', label: 'Permissions' },
   { id: 'plugin-store', label: 'Plugin Store' },
   { id: 'search', label: 'Search & Embeddings' },
   { id: 'stt', label: 'Speech-to-Text' },

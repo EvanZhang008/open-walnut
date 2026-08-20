@@ -32,6 +32,7 @@ import { SessionsSection } from '@/components/settings/sections/SessionsSection'
 import { FocusTiersSection } from '@/components/settings/sections/FocusTiersSection';
 import { IntegrationsSection } from '@/components/settings/sections/IntegrationsSection';
 import { CalendarSection } from '@/components/settings/sections/CalendarSection';
+import { PermissionsSection } from '@/components/settings/sections/PermissionsSection';
 import { PluginStoreSection } from '@/components/settings/sections/PluginStoreSection';
 import { SearchSection } from '@/components/settings/sections/SearchSection';
 import { HeartbeatSection } from '@/components/settings/sections/HeartbeatSection';
@@ -140,6 +141,7 @@ export function SettingsPage() {
           <SectionErrorBoundary name="Focus Tiers"><FocusTiersSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Integrations"><IntegrationsSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Calendar"><CalendarSection /></SectionErrorBoundary>
+          <SectionErrorBoundary name="Permissions"><PermissionsSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Plugin Store"><PluginStoreSection /></SectionErrorBoundary>
           <SectionErrorBoundary name="Search"><SearchSection config={config} onSave={saveSection} /></SectionErrorBoundary>
           <SectionErrorBoundary name="Speech-to-Text"><SttSection config={config} onSave={saveSection} onReload={reload} /></SectionErrorBoundary>

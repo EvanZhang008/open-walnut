@@ -41,6 +41,8 @@ import { imagesRouter } from './routes/images.js'
 import { localImageRouter } from './routes/local-image.js'
 import { fileContentRouter } from './routes/file-content.js'
 import { calendarRouter } from './routes/calendar.js'
+import { permissionsRouter } from './routes/permissions.js'
+import { warmLauncherDetection } from '../core/permissions/darwin.js'
 import { getCalendarService } from '../core/calendar/index.js'
 import { filesRouter } from './routes/files.js'
 import { createCronRouter, setCronService } from './routes/cron.js'
@@ -1035,6 +1037,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/local-image', localImageRouter)
   app.use('/api/file-content', fileContentRouter)
   app.use('/api/calendar', calendarRouter)
+  app.use('/api/permissions', permissionsRouter)
   app.use('/api/files', filesRouter)
   app.use('/api/agents', createAgentsRouter())
   // Conversations share the /api/agents prefix. Registered AFTER the agents
@@ -3320,6 +3323,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   getCalendarService()
     .init()
     .catch((err) => log.web.warn('calendar service init failed', { error: String(err).slice(0, 200) }))
+
+  // Permission Doctor: snapshot the launcher chain NOW — deploy-script parents
+  // exit within seconds and the chain reparents to launchd, after which the
+  // responsible process (what TCC checks grants against) is unknowable.
+  warmLauncherDetection()
 
   // Soft-reload for the plugin store: after a source is added/updated, load any
   // NEW plugins without a restart (loadPlugins skips already-registered ids),

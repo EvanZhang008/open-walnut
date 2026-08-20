@@ -98,6 +98,25 @@ func formatLocal(_ d: Date) -> String { localFormatter.string(from: d) }
 
 // ── access ──────────────────────────────────────────────────────────────────
 
+/// `status` subcommand: report the CURRENT authorization state without ever
+/// triggering the system prompt. The Permission Doctor polls this while its
+/// fix dialog is open, so it must be side-effect free — requestAccess() would
+/// pop the dialog on every poll tick. Because this helper disclaims parent
+/// responsibility (see reexecDisclaimedIfNeeded), the state reported here is
+/// the helper's OWN grant — the one that actually gates list/create/update.
+func printAuthStatus() -> Never {
+    let status = EKEventStore.authorizationStatus(for: .event)
+    let state: String
+    switch status {
+    case .notDetermined: state = "not-determined"
+    case .fullAccess, .authorized: state = "granted"
+    case .writeOnly: state = "denied" // list needs read; write-only can't render the view
+    default: state = "denied" // .denied, .restricted
+    }
+    output(["state": state])
+    exit(0)
+}
+
 func requestAccess() {
     let sema = DispatchSemaphore(value: 0)
     var granted = false
@@ -184,8 +203,11 @@ func output(_ obj: Any) {
 // ── main ────────────────────────────────────────────────────────────────────
 
 let args = CommandLine.arguments
-guard args.count >= 2 else { fail("usage: walnut-calendar <calendars|list|update|create|delete> …", code: "usage") }
+guard args.count >= 2 else { fail("usage: walnut-calendar <status|calendars|list|update|create|delete> …", code: "usage") }
 reexecDisclaimedIfNeeded()
+// `status` must run BEFORE requestAccess(): it exists precisely to observe
+// the auth state without mutating it (no prompt, no denial recorded).
+if args[1] == "status" { printAuthStatus() }
 requestAccess()
 
 switch args[1] {
