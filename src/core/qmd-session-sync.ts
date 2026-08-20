@@ -18,7 +18,7 @@ import {
   getSessionStore,
   DEFAULT_QMD_MODEL,
 } from './qmd-store.js';
-import { listSessions } from './session-tracker.js';
+import { listSessions, isLaneSession } from './session-tracker.js';
 import { listTasks } from './task-manager.js';
 import { readSessionHistoryTail } from './session-history.js';
 import { buildIndexedContent } from './session-content-indexer.js';
@@ -27,6 +27,20 @@ import { pruneStaleQmdDocuments } from './qmd-sync-utils.js';
 import type { SessionRecord, Task } from './types.js';
 
 const COLLECTION = 'sessions';
+
+/**
+ * Chat-lane sessions stay OUT of the search index. A lane transcript is the
+ * main-chat conversation surface: the user TALKS ABOUT every topic there, so
+ * its 40KB+ docs match nearly any query and shove the session that actually
+ * DID the work off the first page (2026-08-20 eval: "star system removed" put
+ * "Main AI chat" and "Fork of Main" at #1/#2, the real session at #5). Every
+ * session-list surface already hides lane sessions (isListableSession) — the
+ * index was the one place that didn't. The chat conversation itself remains
+ * reachable via chat history, not search.
+ */
+function isIndexableSession(session: SessionRecord): boolean {
+  return !isLaneSession(session);
+}
 
 /** Timeout for reading JSONL conversation content during indexing. Remote reads
  *  go through the daemon (already 30s-capped); this is the outer guard so a slow
@@ -255,7 +269,8 @@ export interface SyncAllOptions {
 export async function syncAllSessions(opts?: SyncAllOptions): Promise<void> {
   const concurrency = Math.max(1, opts?.concurrency ?? 4);
   const store = await getSessionStore();
-  const [sessions, tasks] = await Promise.all([listSessions(), listTasks()]);
+  const [allSessions, tasks] = await Promise.all([listSessions(), listTasks()]);
+  const sessions = allSessions.filter(isIndexableSession);
   const taskMap = new Map(tasks.map(t => [t.id, t]));
 
   let inserted = 0;
@@ -301,9 +316,13 @@ export async function syncAllSessions(opts?: SyncAllOptions): Promise<void> {
 
   // Re-read at prune time so sessions created while workers were indexing are
   // retained even if their incremental sync won the race with this bulk pass.
+  // Lane sessions are excluded from expectedPaths, so the prune pass also
+  // evicts lane docs that older syncs already indexed.
   const currentSessions = await listSessions();
   const expectedPaths = new Set(
-    currentSessions.map((session) => sessionDocPath(session.claudeSessionId)),
+    currentSessions
+      .filter(isIndexableSession)
+      .map((session) => sessionDocPath(session.claudeSessionId)),
   );
   const pruned = pruneStaleQmdDocuments(store, COLLECTION, expectedPaths);
 
@@ -333,6 +352,7 @@ export async function syncSession(
   task?: Task,
   opts?: SerializeOptions,
 ): Promise<boolean> {
+  if (!isIndexableSession(session)) return false;
   const store = await getSessionStore();
 
   // If task not provided, try to load it

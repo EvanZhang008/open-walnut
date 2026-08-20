@@ -61,6 +61,7 @@ disagree.
 | Is the server up / which version? | `walnut tools call walnut_status '{}'` |
 | What did session `<id>` do? | `walnut tools call session_transcript '{"id":"<id>"}'` |
 | Find anything by words | `walnut tools call search '{"q":"..."}'` — searches tasks, memory, and session transcripts together. Add `"types":"session"` only when you specifically want transcripts. |
+| First search empty or wrong | Re-query in the OTHER language before giving up: the data is bilingual (Chinese titles on English work and vice versa) and search bridges zh↔en only weakly. "task 消失" misses the task titled "remove the task one by one"; "tasks disappear one by one" finds it. Translate the key phrase, keep proper nouns as-is. |
 
 ## CLI reference
 

@@ -8,7 +8,7 @@
  * dramatically improving recall for keyword-miss cases (e.g. doc says "travel" but
  * query says "trip"). The caller (Claude) generates focused 2-4 word queries.
  */
-import { CJK_RUN_RE, MIN_TERM_CHARS } from './cjk.js';
+import { CJK_RUN_RE, MIN_TERM_CHARS, contentQueryTerms, termInText, lightStem } from './cjk.js';
 import { getMemoryStore, getNotesStore, getTaskStore, getSessionStore } from './qmd-store.js';
 import { runQmdReadWork } from './qmd-work-queue.js';
 import { timed } from './observability/metrics.js';
@@ -55,6 +55,82 @@ export interface MemorySearchResult {
   collection: string;
   taskId?: string;
   sessionId?: string;
+  /** How many of the query's content terms occur in the FULL document (title +
+   *  body), not just the returned chunk. QMD's bestChunk is one slice of a
+   *  transcript and routinely misses the query terms even when the doc holds
+   *  them (2026-08-20: the star-incident session's chunk was about an
+   *  unrelated test file), so any coverage ranking computed on the snippet
+   *  punishes exactly the right documents. Computed here because this is the
+   *  only layer that still has the body in hand. */
+  coveredTermHits?: number;
+}
+
+/** Cap on how much of a document body the coverage scan reads. Bodies are
+ *  ≤~50KB by the indexer's own budget; this is a guard against outliers. */
+const COVERAGE_SCAN_MAX_CHARS = 64 * 1024;
+
+/** Window for proximity coverage. Terms that answer one query cluster inside
+ *  a sentence or two; 512 chars is roomy for that while staying far smaller
+ *  than the cross-section distance in a grab-bag doc. (160 was tried and cost
+ *  more than it bought: real transcripts phrase the answer across a few
+ *  turns, so tight windows dropped true hits as often as noise.) */
+const COVERAGE_WINDOW_CHARS = 512;
+
+/**
+ * Proximity-windowed coverage: the max number of DISTINCT query terms found
+ * within any COVERAGE_WINDOW_CHARS span of title+body.
+ *
+ * Raw whole-document counting looked right and failed in practice: a global
+ * memory file or a 46KB transcript contains almost any three common words
+ * SOMEWHERE, so mega-docs swept the coverage buckets and pushed the actually-
+ * relevant doc off the page (2026-08-20 eval, "star system removed": MEMORY.md
+ * and two progress logs outranked the incident session). Terms that answer
+ * the query appear NEAR each other ("...retire the star system..."); scatter
+ * across unrelated sections is noise. Classic two-pointer over term-hit
+ * positions; occurrences are capped per term so a pathological doc can't
+ * make this scan expensive.
+ */
+const MAX_POSITIONS_PER_TERM = 50;
+
+export function countCoveredTerms(queryTerms: string[], title: string, body: string): number {
+  if (queryTerms.length === 0) return 0;
+  const hay = `${title}\n${body.slice(0, COVERAGE_SCAN_MAX_CHARS)}`.toLowerCase();
+  // Collect (position, termIndex) hits.
+  const hits: Array<{ pos: number; term: number }> = [];
+  for (let i = 0; i < queryTerms.length; i++) {
+    const t = queryTerms[i];
+    // Scan by the term's STEM so inflection differences still count as
+    // presence ("removed" finds "removal"); the boundary/flex rule is then
+    // applied to the slice around each candidate via termInText.
+    const needle = lightStem(t);
+    let from = 0;
+    for (let n = 0; n < MAX_POSITIONS_PER_TERM; n++) {
+      const pos = hay.indexOf(needle, from);
+      if (pos === -1) break;
+      // Word-boundary + flex check on a bounded slice around the candidate.
+      const slice = hay.slice(Math.max(0, pos - 1), pos + needle.length + 6);
+      if (termInText(slice, t)) {
+        hits.push({ pos, term: i });
+      }
+      from = pos + needle.length;
+    }
+  }
+  if (hits.length === 0) return 0;
+  hits.sort((a, b) => a.pos - b.pos);
+  // Two-pointer: max distinct terms in any window.
+  const counts = new Array<number>(queryTerms.length).fill(0);
+  let distinct = 0;
+  let best = 0;
+  let lo = 0;
+  for (let hi = 0; hi < hits.length; hi++) {
+    if (counts[hits[hi].term]++ === 0) distinct++;
+    while (hits[hi].pos - hits[lo].pos > COVERAGE_WINDOW_CHARS) {
+      if (--counts[hits[lo].term] === 0) distinct--;
+      lo++;
+    }
+    if (distinct > best) best = distinct;
+  }
+  return best;
 }
 
 export interface MemorySearchOptions {
@@ -192,8 +268,24 @@ const LATIN_STOPWORDS = new Set([
 
 function buildLatinLexQueries(q: string): string[] {
   const words = q.split(/\s+/).filter((w) => w.length >= MIN_TERM_CHARS);
-  if (words.length < LATIN_RELAX_MIN_WORDS) return [q];
   const content = words.filter((w) => !LATIN_STOPWORDS.has(w.toLowerCase()));
+
+  // Exactly 3 content words is the annihilation sweet spot the relaxed list
+  // can't reach: long enough that one absent word zeroes the AND (the doc
+  // says "retire", the user typed "removed" — 2026-08-20 eval, "star system
+  // removed"), yet a longest-3 relaxed list would just repeat the original.
+  // Emit the two adjacent BIGRAMS as exact phrases: the word the user
+  // misremembers is usually the verb at an end, while the entity in the
+  // middle ("star system") survives as a phrase — and an exact phrase is
+  // selective enough to put the right doc at its list's top, which is what
+  // RRF fusion rewards. Measured on the star query: drop-one AND pairs left
+  // the target at #7 (each pair still matched hundreds of docs); phrase
+  // bigrams put it at #2. 1 + 2 lists stay within MAX_LEX_QUERIES.
+  if (content.length === 3 && words.length === 3) {
+    return [q, `"${content[0]} ${content[1]}"`, `"${content[1]} ${content[2]}"`];
+  }
+
+  if (words.length < LATIN_RELAX_MIN_WORDS) return [q];
   // Selectivity proxy: length. Keep original order among the survivors so the
   // relaxed list reads like the query, not like an anagram.
   const kept = new Set(
@@ -275,10 +367,22 @@ async function memoryNotesSearchUnlocked(
      .replace(/\s{2,}/g, ' ')             // collapse whitespace
      .trim();
 
+  // Vec FIRST: QMD's RRF gives its 2x weight to the first NON-EMPTY list, and
+  // vec is never empty. With lex first, whichever keyword list happened to
+  // survive AND-annihilation got doubled — often a relaxed 2-word list whose
+  // top rows are generic ("Investigate this EKS SIM ticket…"), which then
+  // outvoted a clean semantic #1. Measured 2026-08-20: vec-first moved the
+  // paraphrase targets from lane-rank 4-7 to 2-4 while exact-keyword queries
+  // stayed #1 (their doc tops BOTH lists, so the boost's owner is moot).
   const expandedQueries = queryList.flatMap(q => [
-    ...buildLexQueries(q).map(lex => ({ type: 'lex' as const, query: lex })),
     { type: 'vec' as const, query: sanitizeForVec(q) },
+    ...buildLexQueries(q).map(lex => ({ type: 'lex' as const, query: lex })),
   ]);
+
+  // Content terms of the ORIGINAL query, for whole-document coverage (see
+  // coveredTermHits). Multi-query calls concatenate: coverage of any query's
+  // terms counts.
+  const coverageTerms = queryList.flatMap((q) => contentQueryTerms(q));
 
   async function searchStore(
     storeFn: () => ReturnType<typeof getMemoryStore>,
@@ -329,6 +433,7 @@ async function memoryNotesSearchUnlocked(
             source,
             collection,
             finalScore: (r.score ?? 0) * weight * decay,
+            coveredTermHits: countCoveredTerms(coverageTerms, r.title ?? '', r.body ?? ''),
           };
         })
         .sort((a, b) => b.finalScore - a.finalScore)
@@ -385,6 +490,7 @@ async function memoryNotesSearchUnlocked(
             source: sourceLabel,
             collection: sourceLabel,
             finalScore: (r.score ?? 0) * weight * decay,
+            coveredTermHits: countCoveredTerms(coverageTerms, r.title ?? '', r.body ?? ''),
             ...(sourceLabel === 'task' && extractedId ? { taskId: extractedId } : {}),
             ...(sourceLabel === 'session' && extractedId ? { sessionId: extractedId } : {}),
           };

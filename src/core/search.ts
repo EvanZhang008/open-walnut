@@ -1,7 +1,7 @@
 import { log } from '../logging/index.js';
 import { timed } from './observability/metrics.js';
 import { CLOUD_MODE } from '../constants.js';
-import { CJK_CHAR_RE, splitQueryTerms } from './cjk.js';
+import { CJK_CHAR_RE, splitQueryTerms, contentQueryTerms, termInText } from './cjk.js';
 import { listTasks } from './task-manager.js';
 import { listSessions } from './session-tracker.js';
 import type { SessionRecord, Task } from './types.js';
@@ -17,6 +17,9 @@ export interface SearchResult {
   isAutoExpanded?: boolean; // true if included because parent matched (not direct hit)
   score: number;
   matchField: string;   // field name of best keyword match
+  /** Whole-document query-term hit count from the QMD layer (see
+   *  MemorySearchResult.coveredTermHits). Merge-ranking input, not API surface. */
+  coveredTermHits?: number;
 }
 
 export interface SearchOptions {
@@ -93,6 +96,64 @@ export function extractSnippet(
 
   return snippet;
 }
+
+/**
+ * Title-paraphrase lane: a deterministic score for "the query is a reworded
+ * title". Humans and agents overwhelmingly query by paraphrasing what they
+ * remember of the title, one or two synonyms off ("Helm chart CRD *upgrade
+ * handling* in CDK" for the title "Helm CRD *update behavior* in CDK") — and
+ * the QMD lanes lose exactly this shape: FTS AND-annihilates on the synonym,
+ * and no-rerank scoring is 1/rank, so the true hit surfaces at #4 in its lane
+ * with score 0.225 and drowns in the cross-store merge (2026-08-20 eval:
+ * A08-A10 all MISS despite 4+ of the title's words appearing verbatim).
+ *
+ * Fires only when the query has >= 2 terms and at least half of them (and
+ * >= 2 absolute) appear in the title. Returns a score in the 0.6..1.0 band —
+ * deliberately comparable to the QMD lanes' 1/rank x source-weight scale, so
+ * a full title paraphrase (1.0) ties the semantic #1 and a half match (0.8)
+ * lands just under it. Single-term queries stay with FTS (which handles them
+ * well) — firing there would surface every title containing one common word.
+ */
+export const TITLE_LANE_MIN_MATCHED = 2;
+// 0.4, not 0.5: the cross-language paraphrase shape maxes out around 0.44
+// (English query vs a Chinese title — only the title's Latin tokens can ever
+// match, and the CJK runs dilute both fractions). The junk shape this guards
+// against (two common words in a long unrelated title) scores ~0.16, so the
+// gap stays wide; the 3-row cap bounds whatever lands between.
+const TITLE_LANE_MIN_F1 = 0.4;
+
+export function titleMatchScore(title: string | undefined, query: string): number {
+  if (!title) return 0;
+  // Stopword-free terms: an agent-phrased query ("WHICH task removed THE star
+  // rating system FROM tasks") is half glue, and glue words dilute the query-
+  // side fraction below the threshold for exactly the paraphrase shape this
+  // lane exists to catch.
+  const terms = contentQueryTerms(query);
+  if (terms.length < TITLE_LANE_MIN_MATCHED) return 0;
+  const hay = title.toLowerCase();
+  const matched = terms.filter((t) => termInText(hay, t)).length;
+  if (matched < TITLE_LANE_MIN_MATCHED) return 0;
+  // Bidirectional F1, not one-way query coverage. One-way breaks the
+  // cross-language paraphrase: an English query against the Chinese title
+  // "云端Walnut迁移架构调查+设计(plan)" can only ever match the title's TWO Latin
+  // tokens — 2/5 query coverage fails a flat threshold even though the query
+  // matched 100% of the title vocabulary it could. The title-side fraction
+  // tells those apart from a long title that happens to contain two common
+  // words (2/20 title coverage → F1 0.16, stays out).
+  const fq = matched / terms.length;
+  const titleTermCount = Math.max(1, contentQueryTerms(title).length);
+  const ft = Math.min(1, matched / titleTermCount);
+  const f1 = (2 * fq * ft) / (fq + ft);
+  if (f1 < TITLE_LANE_MIN_F1) return 0;
+  return 0.6 + 0.4 * f1;
+}
+
+/** Cap on rows the title lane may add per type — a broad two-word query
+ * ("walnut task") half-matches dozens of titles; a handful of rows surfaces
+ * the lane without flooding the merged page. 5, not 3: cross-language titles
+ * bottom out at the 0.76 score band where ties are common, and a 3-row cap
+ * dropped the right doc on a tie (A08, 2026-08-20). */
+const TITLE_LANE_MAX_ROWS = 5;
 
 export function scoreMatch(text: string, query: string, weight: number): number {
   if (!text) return 0;
@@ -543,6 +604,26 @@ async function searchInner(
       appendTaskResult(result);
     }
 
+    // Title-paraphrase lane (see titleMatchScore). Runs before QMD so a task
+    // whose title the user is clearly reworsing can't be displaced by 1/rank
+    // scores from semantically-adjacent noise.
+    const titleHits = allTasks
+      .map((t) => ({ task: t, score: titleMatchScore(t.title, normalizedQuery) }))
+      .filter((h) => h.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, TITLE_LANE_MAX_ROWS);
+    for (const h of titleHits) {
+      appendTaskResult({
+        type: 'task',
+        title: h.task.title,
+        snippet: extractSnippet(h.task.title, normalizedQuery),
+        taskId: h.task.id,
+        parentTaskId: h.task.parent_task_id,
+        score: h.score,
+        matchField: 'title',
+      });
+    }
+
     // Exact references returned above. Partial references remain pinned first,
     // but still merge semantic matches instead of suppressing the whole result set.
     if (!qmdEnabled) {
@@ -566,6 +647,7 @@ async function searchInner(
           taskId: r.taskId,
           score: r.finalScore,
           matchField: 'task',
+          coveredTermHits: r.coveredTermHits,
         });
       }
     } catch (err) {
@@ -584,8 +666,30 @@ async function searchInner(
   if (types.includes('session')) {
     const referenceResults = searchSessionReferences(await getSessions(), normalizedQuery);
     results.push(...referenceResults);
+
+    // Title-paraphrase lane, session leg (same rationale as the task leg).
+    const seenForTitle = new Set(results.map((r) => r.sessionId).filter(Boolean));
+    const sessionTitleHits = (await getSessions())
+      .map((s) => ({ s, score: titleMatchScore(s.title, normalizedQuery) }))
+      .filter((h) => h.score > 0 && !seenForTitle.has(h.s.claudeSessionId))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, TITLE_LANE_MAX_ROWS);
+    for (const h of sessionTitleHits) {
+      results.push({
+        type: 'session',
+        title: h.s.title || h.s.claudeSessionId,
+        snippet: extractSnippet(h.s.title ?? '', normalizedQuery),
+        sessionId: h.s.claudeSessionId,
+        ...(h.s.taskId ? { taskId: h.s.taskId } : {}),
+        score: h.score,
+        matchField: 'title',
+      });
+    }
+    // Dedup set for the lanes below: reference hits AND title-lane hits.
+    const seenSessionIds = new Set(
+      results.filter((r) => r.type === 'session' && r.sessionId).map((r) => r.sessionId),
+    );
     if (!qmdEnabled) {
-      const seenSessionIds = new Set(referenceResults.map((result) => result.sessionId));
       results.push(...bm25ScoreSessions(await getSessions(), normalizedQuery)
         .filter((result) => !seenSessionIds.has(result.sessionId)));
     } else try {
@@ -604,7 +708,7 @@ async function searchInner(
         (await getSessions()).map((s) => [s.claudeSessionId, s.taskId]),
       );
       for (const r of qmdResults) {
-        if (referenceResults.some((result) => result.sessionId === r.sessionId)) continue;
+        if (seenSessionIds.has(r.sessionId)) continue;
         const ownerTaskId = r.sessionId ? taskBySession.get(r.sessionId) : undefined;
         results.push({
           type: 'session',
@@ -614,6 +718,7 @@ async function searchInner(
           ...(ownerTaskId ? { taskId: ownerTaskId } : {}),
           score: r.finalScore,
           matchField: r.source,
+          coveredTermHits: r.coveredTermHits,
         });
       }
     } catch (err) {
@@ -623,7 +728,6 @@ async function searchInner(
         error: msg,
       });
       qmdFailure ??= err;
-      const seenSessionIds = new Set(referenceResults.map((result) => result.sessionId));
       results.push(...bm25ScoreSessions(await getSessions(), normalizedQuery)
         .filter((result) => !seenSessionIds.has(result.sessionId)));
     }
@@ -659,6 +763,7 @@ async function searchInner(
           path: r.filepath,
           score: r.finalScore,
           matchField: r.source,
+          coveredTermHits: r.coveredTermHits,
         });
       }
     } catch (err) {
@@ -678,7 +783,7 @@ async function searchInner(
     || result.matchField === 'commit_sha'
     || result.matchField === 'external_url';
 
-  // CJK multi-term queries: rank by term coverage before per-store score.
+  // Multi-term queries: rank by term coverage before per-store score.
   // Each store ranks independently and no-rerank scores are 1/rank × source
   // weight (SOURCE_WEIGHTS in memory-search.ts), so cross-store scores are
   // NOT comparable — a memory doc matching only "timeout" at store-rank #1
@@ -691,24 +796,56 @@ async function searchInner(
   // the best doc usually misses a term or two in its selected chunk, and a
   // binary rule would silently never fire. Buckets (×4, rounded) absorb
   // one-term noise so near-ties fall through to the score comparator.
-  // Latin-only queries skip this (coverage stays 0 for all — no-op tiebreak):
-  // their FTS lane already ANDs correctly, so per-store score order is
-  // meaningful and coverage would only add chunk-selection noise.
+  //
+  // Originally CJK-only, widened to ALL multi-term queries (2026-08-20 eval):
+  // the same cross-store incomparability let "aihub progress log"
+  // (memory_skill, matched 1 of 5 terms, score 1.2) outrank the session
+  // titled "Helm CRD update behavior in CDK" (matched 4 of 5, title lane
+  // 0.846) on every English paraphrase query — A09/A10 stuck at #4-#5 purely
+  // because the merge sorted by scores from different scales. The old
+  // Latin-skip rationale ("their FTS lane ANDs correctly") is true WITHIN a
+  // store but was never true ACROSS stores, which is where this sort runs.
+  // Stopword-free terms so agent-phrased glue ("which…from…") doesn't dilute
+  // every candidate's fraction equally except the right one's.
   const coverage = new Map<SearchResult, number>();
-  if (CJK_CHAR_RE.test(normalizedQuery)) {
-    const terms = splitQueryTerms(normalizedQuery);
+  {
+    const terms = contentQueryTerms(normalizedQuery);
     if (terms.length > 1) {
       for (const result of results) {
-        const haystack = `${result.title}\n${result.snippet}`.toLowerCase();
-        const hits = terms.filter((t) => haystack.includes(t)).length;
-        coverage.set(result, Math.round((hits / terms.length) * 4));
+        // Whole-document hit count from the QMD layer when available; the
+        // title+snippet scan is the fallback for lanes that never had the
+        // body (references, title lane, BM25 fallback). The snippet is ONE
+        // chunk of a transcript and routinely misses terms the document
+        // contains, which made coverage punish exactly the right docs.
+        let hits = result.coveredTermHits;
+        if (hits === undefined) {
+          const haystack = `${result.title}\n${result.snippet}`.toLowerCase();
+          hits = terms.filter((t) => termInText(haystack, t)).length;
+        }
+        coverage.set(result, Math.round((Math.min(hits, terms.length) / terms.length) * 4));
       }
     }
   }
 
+  // Mega-doc guard on the coverage tiebreak: grab-bag docs (MEMORY.md, 40KB+
+  // progress logs, whale transcripts) contain almost any term combination
+  // SOMEWHERE, so raw coverage crowns them on every multi-term query. A
+  // focused doc earning full coverage is signal; a junk drawer earning it is
+  // base rate. Halve (floor) the coverage bucket of known grab-bag sources so
+  // they still rank by score within their reduced tier but can't sweep the
+  // page. Task docs and session docs are focused by construction (one task /
+  // one session's work) and keep full credit.
+  const GRAB_BAG_SOURCES = new Set([
+    'memory_global', 'memory_skill', 'memory_daily', 'memory_compaction',
+  ]);
+  const effectiveCoverage = (r: SearchResult): number => {
+    const c = coverage.get(r) ?? 0;
+    return GRAB_BAG_SOURCES.has(r.matchField) ? Math.floor(c / 2) : c;
+  };
+
   results.sort((a, b) =>
     Number(isReference(b)) - Number(isReference(a))
-    || (coverage.get(b) ?? 0) - (coverage.get(a) ?? 0)
+    || effectiveCoverage(b) - effectiveCoverage(a)
     || b.score - a.score);
 
   // Per-type floor on the merged page. Cross-store scores are 1/rank × source
@@ -783,12 +920,17 @@ export function expandChildTasks(results: SearchResult[], allTasks: Task[]): Sea
 
   if (childrenByParent.size === 0) return results;
 
-  // Insert children after their parent
+  // Insert children after their parent. Capped: expansion runs AFTER the
+  // page is sliced, so every inserted child physically pushes real hits down
+  // — a parent with 7 fork-children shoved the star-incident session from #4
+  // to #11 (2026-08-20 eval). Two children signal "this task has sub-work";
+  // the full fork family is one click away on the task itself.
+  const MAX_EXPANDED_CHILDREN = 2;
   const expanded: SearchResult[] = [];
   for (const result of results) {
     expanded.push(result);
     if (result.type === 'task' && result.taskId && childrenByParent.has(result.taskId)) {
-      const children = childrenByParent.get(result.taskId)!;
+      const children = childrenByParent.get(result.taskId)!.slice(0, MAX_EXPANDED_CHILDREN);
       for (const child of children) {
         expanded.push({
           type: 'task',

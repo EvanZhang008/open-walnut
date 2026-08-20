@@ -391,9 +391,20 @@ describe('buildLexQueries — mixed CJK/Latin lex splitting', () => {
     expect(out[1]).toBe('deprecate system focus');
   });
 
-  it('short pure-Latin queries stay single-list', () => {
+  it('two-word pure-Latin queries stay single-list', () => {
     expect(buildLexQueries('star system')).toEqual(['star system']);
-    expect(buildLexQueries('retire star system')).toEqual(['retire star system']);
+  });
+
+  it('three-content-word Latin queries add the two adjacent phrase bigrams', () => {
+    // The annihilation sweet spot: one misremembered word ("removed" for
+    // "retire") zeroes the AND, but the middle entity survives as a phrase.
+    // Measured: drop-one AND pairs left the star target at lane #7; phrase
+    // bigrams put it at #2 (2026-08-20).
+    expect(buildLexQueries('star system removed')).toEqual([
+      'star system removed',
+      '"star system"',
+      '"system removed"',
+    ]);
   });
 
   it('all-stopword Latin queries stay single-list', () => {
@@ -422,6 +433,22 @@ describe('buildLexQueries — mixed CJK/Latin lex splitting', () => {
     expect(lexQueries).toEqual(['timeout 自动重试', 'timeout', '自动重试']);
     // vec stays a single whole-sentence query — splitting only fixes the FTS lane
     expect(vecQueries).toEqual(['timeout 自动重试']);
+  });
+
+  it('vec query rides FIRST so RRF first-list boost goes to the never-empty lane', async () => {
+    // QMD doubles the weight of the first NON-EMPTY ranked list. With lex
+    // first, whichever keyword list survived AND-annihilation got the boost —
+    // often a relaxed list whose top rows are generic. Vec is never empty, so
+    // putting it first makes the boost deterministic (2026-08-20 eval:
+    // paraphrase targets moved from lane rank 4-7 to 2-4, exact-keyword
+    // queries unchanged).
+    qmdStore.__setMockMemoryResults([
+      { file: 'qmd://global/a.md', title: 'A', bestChunk: 'x', score: 0.9 },
+    ]);
+    await memoryNotesSearch('timeout 自动重试', ['memory_global']);
+    const store = qmdStore.__getMockStore();
+    const lastCall = store.search.mock.calls.at(-1)![0];
+    expect(lastCall.queries[0].type).toBe('vec');
   });
 });
 

@@ -409,7 +409,11 @@ describe('QMD memory search integration', () => {
     expect(results[1].title).toBe('triage memory');
   });
 
-  it('single-script query keeps pure score order (coverage tiebreak is a no-op)', async () => {
+  it('pure-Latin multi-term query: coverage outranks a higher-scored partial hit', async () => {
+    // Coverage ranking was CJK-only at first; the 2026-08-20 eval showed the
+    // same cross-store score incomparability buries English paraphrase hits
+    // ("aihub progress log" at memory-score 1.2 beat the session matching 4
+    // of 5 terms), so the tiebreak now applies to every multi-term query.
     vi.doMock('../../src/core/task-manager.js', () => ({
       listTasks: vi.fn().mockResolvedValue([]),
     }));
@@ -434,9 +438,42 @@ describe('QMD memory search integration', () => {
     const { search } = await import('../../src/core/search.js');
     const results = await search('timeout retry', { types: ['task', 'memory'] });
 
-    // Not a mixed-script query — higher raw score stays first even though
-    // the task covers more terms.
-    expect(results[0].title).toBe('timeout-only doc');
+    expect(results[0].title).toBe('timeout retry task');
+    expect(results[1].title).toBe('timeout-only doc');
+  });
+
+  it('grab-bag memory sources get their coverage bucket halved in the merge', async () => {
+    // MEMORY.md / progress logs contain almost any term combination
+    // somewhere, so full coverage from them is base rate, not signal.
+    vi.doMock('../../src/core/task-manager.js', () => ({
+      listTasks: vi.fn().mockResolvedValue([]),
+    }));
+    vi.doMock('../../src/core/session-tracker.js', () => ({
+      listSessions: vi.fn().mockResolvedValue([]),
+    }));
+    vi.doMock('../../src/core/memory-search.js', () => ({
+      memoryNotesSearch: vi.fn(async (_q: string, sources?: string[]) => {
+        if (sources?.includes('task')) {
+          return [{
+            title: 'timeout retry task', snippet: 'covers timeout and retry',
+            filepath: 'qmd://task/task-t1', taskId: 't1', finalScore: 0.5, source: 'task',
+            coveredTermHits: 2,
+          }];
+        }
+        return [{
+          title: 'MEMORY.md — Global', snippet: 'timeout somewhere, retry elsewhere',
+          filepath: 'memory/MEMORY.md', finalScore: 1.3, source: 'memory_global',
+          coveredTermHits: 2,
+        }];
+      }),
+    }));
+
+    const { search } = await import('../../src/core/search.js');
+    const results = await search('timeout retry', { types: ['task', 'memory'] });
+
+    // Both cover 2/2, but memory_global is a grab-bag source: its bucket is
+    // halved, so the focused task doc wins despite the lower raw score.
+    expect(results[0].title).toBe('timeout retry task');
   });
 });
 
@@ -489,5 +526,67 @@ describe('default search lanes (2026-08-15 star incident)', () => {
     );
     expect(sessionLaneQueried).toBe(true);
     expect(results.some((r) => r.type === 'session' && r.sessionId === '8df36131')).toBe(true);
+  });
+});
+
+describe('titleMatchScore — title-paraphrase lane (2026-08-20 eval)', () => {
+  it('scores a synonym-swapped title paraphrase', async () => {
+    const { titleMatchScore } = await import('../../src/core/search.js');
+    // "update behavior" remembered as "upgrade handling" — 4 of 6 content
+    // terms still hit the title.
+    const s = titleMatchScore('Helm CRD update behavior in CDK', 'Helm chart CRD upgrade handling in CDK');
+    expect(s).toBeGreaterThan(0.7);
+  });
+
+  it('cross-language: English query matches the Latin tokens of a Chinese title', async () => {
+    const { titleMatchScore } = await import('../../src/core/search.js');
+    const s = titleMatchScore('云端Walnut迁移架构调查+设计(plan)', 'cloud walnut migration architecture plan');
+    expect(s).toBeGreaterThan(0.7);
+  });
+
+  it('rejects two common words scattered in a long unrelated title', async () => {
+    const { titleMatchScore } = await import('../../src/core/search.js');
+    const s = titleMatchScore(
+      'Investigate the task list rendering system and plan a fix for the dropdown regression',
+      'cloud walnut migration architecture plan',
+    );
+    expect(s).toBe(0);
+  });
+
+  it('single-term queries never fire the lane', async () => {
+    const { titleMatchScore } = await import('../../src/core/search.js');
+    expect(titleMatchScore('walnut anything', 'walnut')).toBe(0);
+  });
+
+  it('stopword glue in agent phrasing does not dilute the match', async () => {
+    const { titleMatchScore } = await import('../../src/core/search.js');
+    const glued = titleMatchScore('Star system removal', 'which task removed the star system from tasks');
+    expect(glued).toBeGreaterThan(0);
+  });
+});
+
+describe('termInText — word-boundary + stem-flex containment', () => {
+  it('rejects substring-only hits (star vs starve/start)', async () => {
+    const { termInText } = await import('../../src/core/cjk.js');
+    expect(termInText("don't starve", 'star')).toBe(false);
+    expect(termInText('quick start guide', 'star')).toBe(false);
+    expect(termInText('the star system', 'star')).toBe(true);
+  });
+
+  it('matches morphological variants of long terms', async () => {
+    const { termInText } = await import('../../src/core/cjk.js');
+    expect(termInText('two conversations later', 'conversation')).toBe(true);
+    expect(termInText('the removal of the button', 'removed')).toBe(true);
+    expect(termInText('investigate the alarm', 'investigation')).toBe(true);
+  });
+
+  it('treats an adjacent CJK ideograph as a word boundary', async () => {
+    const { termInText } = await import('../../src/core/cjk.js');
+    expect(termInText('云端walnut迁移架构', 'walnut')).toBe(true);
+  });
+
+  it('CJK terms keep substring semantics', async () => {
+    const { termInText } = await import('../../src/core/cjk.js');
+    expect(termInText('排查任务日期自动建议错位问题', '日期')).toBe(true);
   });
 });

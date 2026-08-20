@@ -60,6 +60,7 @@ vi.mock('../../src/core/task-manager.js', () => ({
 
 vi.mock('../../src/core/session-tracker.js', () => ({
   listSessions: vi.fn(async () => []),
+  isLaneSession: (s: { lane?: string }) => typeof s.lane === 'string' && s.lane.length > 0,
 }));
 
 import {

@@ -51,6 +51,8 @@ const updateSessionRecordMock = vi.hoisted(() => vi.fn(async () => ({})));
 vi.mock('../../src/core/session-tracker.js', () => ({
   listSessions: vi.fn(async () => []),
   updateSessionRecord: updateSessionRecordMock,
+  // Real predicate shape: lane-bound sessions are excluded from indexing.
+  isLaneSession: (s: { lane?: string }) => typeof s.lane === 'string' && s.lane.length > 0,
 }));
 
 // Mock session-history: return canned messages for a known local sid, throw for "boom".
@@ -115,6 +117,19 @@ beforeEach(() => {
 });
 
 describe('qmd-session-sync v2 content indexing', () => {
+  it('chat-lane sessions never enter the search index', async () => {
+    // A lane transcript is the main-chat surface: the user TALKS ABOUT every
+    // topic there, so its docs match nearly any query and bury the session
+    // that did the work (2026-08-20 eval: "Main AI chat" + "Fork of Main"
+    // took #1/#2 on "star system removed", the real session sat at #5).
+    const wrote = await syncSession(sess({
+      claudeSessionId: 'lane-1',
+      lane: 'chat:general:conv-abc',
+    } as Partial<SessionRecord>));
+    expect(wrote).toBe(false);
+    expect(docs.has('sess-lane-1')).toBe(false);
+  });
+
   it('indexes local session conversation body with turn headings', async () => {
     await syncSession(sess({ claudeSessionId: 'sid-1' }));
     const content = docContent('sess-sid-1');
