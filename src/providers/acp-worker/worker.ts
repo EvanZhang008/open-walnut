@@ -250,9 +250,15 @@ export class AcpWorker {
   private async opLoadSession(params: LoadSessionParams): Promise<unknown> {
     const conn = this.requireConn()
     this.loadingSession = true
-    // A non-empty journal already holds this conversation, so the provider's
-    // replay burst is pure duplication (see the sessionUpdate handler).
-    this.skipReplayFrames = this.journal.offset > 0
+    // The journal already holds this conversation, so the provider's replay
+    // burst is pure duplication (see the sessionUpdate handler). Gate on
+    // EVIDENCE of the conversation being on disk, not on this.journal.offset:
+    // the in-memory offset stays non-zero after the file is deleted under us
+    // (retention sweep / rm), and a journal holding only an error meta line is
+    // non-empty without holding any conversation — both cases must keep the
+    // replay or the conversation becomes unrecoverable (the journal is
+    // walnut's only copy).
+    this.skipReplayFrames = journalHoldsConversation(this.journal.filePath)
     try {
       const resp = await conn.loadSession({
         sessionId: params.providerSessionId,
@@ -793,6 +799,21 @@ export class AcpWorker {
   private notifyJournal(): void { this.onJournalAppend(this.journal.offset) }
   private ok(req: WorkerRequest, result: unknown): WorkerResponse { return { id: req.id, ok: true, result } }
   private err(req: WorkerRequest, error: WorkerError): WorkerResponse { return { id: req.id, ok: false, error } }
+}
+
+/** True when the ON-DISK journal holds conversation evidence (a session
+ *  created/loaded or an accepted prompt) — the precondition for dropping a
+ *  resume's replay burst. Re-reads the file rather than trusting in-memory
+ *  state; see the call site in opLoadSession. */
+function journalHoldsConversation(journalPath: string): boolean {
+  try {
+    for (const { record } of readJournal(journalPath).records) {
+      if (record.kind !== 'meta') continue
+      const t = record.event.type
+      if (t === 'session-created' || t === 'session-loaded' || t === 'prompt-accepted') return true
+    }
+  } catch { /* unreadable = no evidence */ }
+  return false
 }
 
 function isWorkerError(e: unknown): e is WorkerError {

@@ -88,10 +88,22 @@ async function readConversationBody(
   session: SessionRecord,
 ): Promise<ConversationBodyRead> {
   if (session.engine === 'codex') {
+    let acpTimeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const { readAcpSessionHistoryState } =
         await import('../providers/acp-session-history.js');
-      const state = await readAcpSessionHistoryState(session);
+      // Same deadline as the native branch below: indexing keeps ≤50KB of
+      // cleaned text; bound the cold read to a tail window and never let a
+      // wedged fold stall the debounced flush.
+      const state = await Promise.race([
+        readAcpSessionHistoryState(session, { maxColdReadBytes: REMOTE_TAIL_BYTES }),
+        new Promise<never>((_, reject) => {
+          acpTimeout = setTimeout(
+            () => reject(new Error('content read timeout')),
+            CONTENT_READ_TIMEOUT_MS,
+          );
+        }),
+      ]);
       if (!state.journalExists) return { body: null, failed: true };
       if (state.messages.length === 0) return { body: null, failed: false };
       const { body, commitShas } = buildIndexedContent(state.messages);
@@ -102,6 +114,8 @@ async function readConversationBody(
         error: err instanceof Error ? err.message : String(err),
       });
       return { body: null, failed: true };
+    } finally {
+      if (acpTimeout) clearTimeout(acpTimeout);
     }
   }
 

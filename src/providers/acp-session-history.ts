@@ -257,7 +257,14 @@ async function readJournalStreaming(
       if (!cached.extending) {
         cached.extending = (async () => {
           try {
-            await extendFold(reader, journalPath, cached, size)
+            const verdict = await extendFold(reader, journalPath, cached, size)
+            if (verdict === 'vanished') {
+              // File disappeared mid-read (retention sweep / rm). The entry's
+              // prefix no longer corresponds to any on-disk file: evict so the
+              // next read re-resolves candidates instead of serving stale fold.
+              foldCache.delete(key)
+              return null
+            }
             // Never let an extended WINDOWED entry clobber a FULL entry that a
             // concurrent full fold installed while we were reading.
             const current = foldCache.get(key)
@@ -298,7 +305,15 @@ async function readJournalStreaming(
       // folds are bounded by their window and skip the gate.
       if (!windowed) await acquireFullFoldSlot()
       try {
-        await extendFold(reader, journalPath, entry, size, /* dropTornFirstLine */ windowed)
+        const verdict = await extendFold(reader, journalPath, entry, size, /* dropTornFirstLine */ windowed)
+        if (verdict === 'vanished') {
+          // Never cache/serve a partial fold of a vanished file — evict the
+          // install-before-fold entry and let the candidate loop try the next
+          // path (this is the migrated-journal recovery the old code had).
+          const current = foldCache.get(key)
+          if (current === entry) foldCache.delete(key)
+          return null
+        }
       } finally {
         if (!windowed) releaseFullFoldSlot()
       }
@@ -315,10 +330,15 @@ async function readJournalStreaming(
       if (isLegacy && !windowed) {
         if (size <= LEGACY_MATERIALIZE_MAX_BYTES) {
           const records: JournalRecord[] = []
-          await streamJournalLines(reader, journalPath, 0, size, (line) => {
+          const verdict = await streamJournalLines(reader, journalPath, 0, size, (line) => {
             const rec = parseJournalLine(line)
             if (rec) records.push(rec)
           })
+          if (verdict === 'vanished') {
+            const current = foldCache.get(key)
+            if (current === entry) foldCache.delete(key)
+            return null
+          }
           entry.legacy = { messages: projectAcpJournalHistory(runtimeId, records), size }
         } else {
           log.session.warn('acp history: legacy journal exceeds the materialization bound — legacy-era user prompts omitted', {
@@ -418,17 +438,20 @@ function dedupe(
 /** Fold journal bytes [entry.offset, size) into entry.fold. `entry.offset`
  *  advances line-by-line INSIDE the callback, so a mid-stream error (daemon
  *  flap) leaves the entry consistent at the last fully folded line — the next
- *  read simply resumes from there instead of double-folding. */
+ *  read simply resumes from there instead of double-folding. Note this holds
+ *  only for entries already installed in the cache (the extend path); a COLD
+ *  fold that throws is discarded by its caller. Returns streamJournalLines'
+ *  verdict — 'vanished' means the fold is partial and must not be served. */
 async function extendFold(
   reader: JournalReader,
   journalPath: string,
   entry: FoldCacheEntry,
   size: number,
   dropTornFirstLine = false,
-): Promise<void> {
-  if (entry.offset >= size) return
+): Promise<'done' | 'vanished'> {
+  if (entry.offset >= size) return 'done'
   let drop = dropTornFirstLine
-  await streamJournalLines(reader, journalPath, entry.offset, size, (line, endOffset) => {
+  return streamJournalLines(reader, journalPath, entry.offset, size, (line, endOffset) => {
     if (drop) { drop = false; entry.offset = endOffset; return } // window starts mid-record
     const rec = parseJournalLine(line)
     if (rec) {
@@ -467,6 +490,10 @@ function parseJournalLine(line: string): JournalRecord | null {
  * char spanning a chunk boundary can never be torn. `onLine` receives the byte
  * offset just past each line's newline. A trailing partial line (mid-write) is
  * never emitted; the next incremental read re-reads it.
+ *
+ * Returns 'vanished' when the file disappeared between stat and read — the
+ * caller must NOT cache or serve the partial fold as a complete history (a
+ * confidently short answer is worse than trying the next candidate path).
  */
 async function streamJournalLines(
   reader: JournalReader,
@@ -474,13 +501,13 @@ async function streamJournalLines(
   start: number,
   end: number,
   onLine: (line: string, endOffset: number) => void,
-): Promise<void> {
+): Promise<'done' | 'vanished'> {
   let offset = start
   let leftover: Buffer = Buffer.alloc(0)
   while (offset < end) {
     const want = Math.min(STREAM_CHUNK_BYTES, end - offset)
     const res = await reader.readRangeBytes!(journalPath, offset, want)
-    if (res === null) break // vanished between stat and read
+    if (res === null) return 'vanished'
     const { buf, eof } = res
     if (buf.length === 0) break
     offset += buf.length
@@ -497,6 +524,7 @@ async function streamJournalLines(
     leftover = lineStart < chunk.length ? Buffer.from(chunk.subarray(lineStart)) : Buffer.alloc(0)
     if (eof) break
   }
+  return 'done'
 }
 
 // ── Legacy whole-file path (seam readers without the range APIs) ──

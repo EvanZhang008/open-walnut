@@ -882,6 +882,10 @@ export interface RichHistoryResult {
   forkedFromSessionId?: string;
   forkBoundaryIndex?: number;
   historyUnavailable?: string;
+  /** True when only a tail window of a whale transcript was read — `total` is
+   *  then the WINDOW's count, not the conversation's. v1 clients should show a
+   *  "conversation truncated" affordance instead of trusting `total`. */
+  windowed?: boolean;
 }
 
 /** Backstop against pathological/cyclic fork chains. */
@@ -951,6 +955,7 @@ export async function readSessionRichHistory(sessionId: string, tail?: number): 
 
   let messages: SessionHistoryMessage[];
   let sourceAvailable = false;
+  let historyWindowed = false;
   try {
     // Snapshot API with a tail → bound a COLD read too (same rationale as the
     // web /history route; see ReadHistoryOptions.maxColdReadBytes).
@@ -959,6 +964,7 @@ export async function readSessionRichHistory(sessionId: string, tail?: number): 
       tail && tail > 0 ? { maxColdReadBytes: HISTORY_COLD_TAIL_READ_BYTES } : undefined);
     messages = history.messages;
     sourceAvailable = history.sourceAvailable;
+    historyWindowed = history.windowed;
   } catch (err) {
     throw new SessionControlError(err instanceof Error ? err.message : String(err), 502);
   }
@@ -1054,5 +1060,6 @@ export async function readSessionRichHistory(sessionId: string, tail?: number): 
     total,
     ...(forkedFromSessionId ? { forkedFromSessionId } : {}),
     ...(adjustedForkBoundary != null ? { forkBoundaryIndex: adjustedForkBoundary } : {}),
+    ...(historyWindowed ? { windowed: true } : {}),
   };
 }

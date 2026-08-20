@@ -653,6 +653,34 @@ describe('load / resume', () => {
     expect(metas(appended).some((event) => event.type === 'session-loaded')).toBe(true)
   })
 
+  it('a resume after the journal CONTENT was lost still records the replay burst', async () => {
+    // The skip gate must read the ON-DISK journal, not the in-memory offset:
+    // after a sweep/truncation the offset is still non-zero, but the disk holds
+    // no conversation evidence — dropping the replay there would lose the
+    // conversation forever (the journal is walnut's only copy).
+    worker = await initWorker()
+    const created = await op(worker, 'newSession', { cwd: tmpDir })
+    const providerSessionId = (created.result as { sessionId: string }).sessionId
+    await op(worker, 'prompt', {
+      commandId: 'acp-prompt:qm-lost-1',
+      walnutMessageId: 'qm-lost-1',
+      text: 'soon to be lost',
+    })
+    await waitForJournal(turnEnded)
+
+    // Simulate the loss under the LIVE worker (O_APPEND fd survives; the
+    // in-memory offset stays > 0 while the disk now holds nothing).
+    fs.truncateSync(journalPath(), 0)
+
+    const loaded = await op(worker, 'loadSession', { providerSessionId, cwd: tmpDir })
+    expect(loaded.ok).toBe(true)
+    await waitForJournal((recs) => metas(recs).some((e) => e.type === 'session-loaded'))
+
+    const recs = readJournal(journalPath()).records.map(({ record }) => record)
+    expect(recs.filter((record) =>
+      record.kind === 'acp' && record.source === 'provider-replay').length).toBeGreaterThan(0)
+  })
+
   it('loadSession failure surfaces load_failed (fallback decision is the caller\'s)', async () => {
     worker = await initWorker({ MOCK_ACP_FAIL_LOAD: '1' })
     const resp = await op(worker, 'loadSession', { providerSessionId: 'mock-session-1', cwd: tmpDir })

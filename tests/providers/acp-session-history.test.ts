@@ -279,6 +279,38 @@ describe('ACP streaming fold (range-reader path)', () => {
     expect(result.messages.map((m) => m.text)).toEqual(['legacy question', 'legacy answer'])
   })
 
+  it('a journal that vanishes mid-stream is NOT cached as a complete history', async () => {
+    let content = ''
+    for (let n = 1; n <= 30; n++) content += promptLine(n, `q${n}`, n * 2 - 1) + chunkLine(`a${n}`, n * 2)
+    const data = Buffer.from(content)
+    let vanishAfterCalls = 1 // first range read succeeds, then the file "disappears"
+    let calls = 0
+    const reader = {
+      readFile: async () => { throw new Error('whole-file read must not be used on the streaming path') },
+      stat: async () => ({ mtimeMs: 1, size: data.length }),
+      readRangeBytes: async (_p: string, start: number, length: number) => {
+        calls++
+        if (calls > vanishAfterCalls) return null // vanished between stat and read
+        const end = Math.min(start + Math.min(length, 4096), data.length)
+        return { buf: data.subarray(start, end), fileSize: data.length, eof: end >= data.length }
+      },
+    }
+    const record = journalRecord('vanish')
+
+    // Streaming path returns null internally → candidate loop exhausts → journalExists:false,
+    // and crucially the partial fold must NOT be cached.
+    const first = await readAcpSessionHistoryState(record, { reader })
+    expect(first.journalExists).toBe(false)
+    expect(first.messages).toEqual([])
+
+    // File "reappears" (e.g. later candidate resolves / transient flap over) —
+    // a fresh read must fold the WHOLE journal, not resume a poisoned entry.
+    vanishAfterCalls = Number.POSITIVE_INFINITY
+    const second = await readAcpSessionHistoryState(record, { reader })
+    expect(second.journalExists).toBe(true)
+    expect(second.messages).toHaveLength(60)
+  })
+
   it('a shrunk/replaced journal invalidates the cached fold instead of serving stale messages', async () => {
     const state = { data: Buffer.from(promptLine(1, 'old world', 1) + chunkLine('old answer', 2)), rangeCalls: 0 }
     const reader = rangeReader(state)
