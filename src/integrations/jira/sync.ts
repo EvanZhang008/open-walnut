@@ -18,6 +18,7 @@ import { createSubsystemLogger } from '../../logging/index.js';
 import { bus, EventNames } from '../../core/event-bus.js';
 import { deriveStatusFromPhase } from '../../core/phase.js';
 import { findTaskByExtId, listUnsyncedTasks } from '../../core/task-manager.js';
+import { isRemoteIdBlocked } from '../../core/task-remote-links.js';
 import { JiraClient, type JiraConfig } from './jira-client.js';
 import {
   PHASE_TO_JIRA_STATUS,
@@ -366,6 +367,13 @@ export async function deltaPull(
         syncLog.debug('updated local task from Jira', { key: remote.key, title: remote.fields.summary });
       }
     } else {
+      // Ledger gate: an issue key a local task once owned (released via source
+      // migration or deleted) never mints a new local task — same framework
+      // rule as the ms-todo pull paths.
+      if (isRemoteIdBlocked('jira', remote.key)) {
+        syncLog.debug('skipped ledgered remote id', { key: remote.key });
+        continue;
+      }
       // New task from Jira
       const partial = mapToLocal(remote, config);
       const now = remote.fields.created || new Date().toISOString();

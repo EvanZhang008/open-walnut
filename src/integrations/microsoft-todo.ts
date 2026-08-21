@@ -26,7 +26,7 @@ import {
   setProjectMetadata,
   findTaskByExtId,
 } from '../core/task-manager.js';
-import { isRemoteIdBlocked } from '../core/task-remote-links.js';
+import { isRemoteIdBlocked, recordRemoteLink } from '../core/task-remote-links.js';
 import type { Config } from '../core/types.js';
 
 // ── Plugin-system helpers ──
@@ -1231,6 +1231,10 @@ export async function fullPullAllTasks(): Promise<Array<{
 
     for (const msTask of allTasks) {
       if (deletedMsIds.has(msTask.id)) continue;
+      // Same [Moved]-marker gate as the delta path: a marked item is a released
+      // identity, not a task. Ledgered here so the reconciler's isRemoteIdBlocked
+      // create-gate also refuses it forever after.
+      if (ledgerMovedMarker(msTask, list.id)) continue;
       const fields = mapToLocal(msTask, list.displayName);
       fields.project = listProject;
       // Ensure ext includes list_id for completeness
@@ -1371,6 +1375,44 @@ export async function autoPushTask(task: Task): Promise<{ msTaskId: string; serv
 // -- Shared pull-reconcile logic --
 
 /**
+ * Parse the "[Moved] <title> [open-walnut:<taskId>]" marker task-manager's
+ * cross-source migration writes onto the OLD remote twin. A remote item wearing
+ * it is never a new task — it is the corpse of an identity this store already
+ * released. Returns the embedded local task id, or null when the title carries
+ * no marker. Kept tolerant: the [Moved] prefix alone (id suffix lost to a
+ * remote truncation) still counts, with a null taskId.
+ */
+export function parseMovedMarker(title: string): { taskId: string | null } | null {
+  if (!/^\s*\[Moved\]/.test(title)) return null;
+  const id = /\[open-walnut:([A-Za-z0-9-]+)\]/.exec(title)?.[1] ?? null;
+  return { taskId: id };
+}
+
+/**
+ * Shared "is this remote item a re-import trap?" gate for BOTH pull paths
+ * (delta reconcile below + the sync-reconciler's fullPull consumer via
+ * isRemoteIdBlocked). A [Moved]-marked item gets ledgered as released on
+ * sight, so even a marker written by a pre-ledger build (or a ledger write
+ * that failed mid-migration) converges to "never re-import" here.
+ */
+function ledgerMovedMarker(msTask: MSTodoTask, listId: string): boolean {
+  const marker = parseMovedMarker(msTask.title ?? '');
+  if (!marker) return false;
+  try {
+    recordRemoteLink({
+      source: 'ms-todo', remoteId: msTask.id, taskId: marker.taskId,
+      remoteList: listId, state: 'released', reason: 'moved-marker',
+    });
+  } catch {
+    // No task DB (unit-test env) — skipping the create below still holds.
+  }
+  log.web.debug('ms-todo pull: skipped [Moved]-marked remote item', {
+    title: msTask.title, msId: msTask.id, localTaskId: marker.taskId,
+  });
+  return true;
+}
+
+/**
  * @internal Exported for testing.
  *
  * Per-item lookup via `findTaskByExtId('ms-todo', …)` replaces the
@@ -1408,6 +1450,13 @@ export async function reconcilePulledTasks(
 
     // Skip tasks that were intentionally deleted locally (Layer 0b)
     if (deletedMsIds?.has(msTask.id)) continue;
+
+    // [Moved]-marker gate, BEFORE the local match: a marked item is a released
+    // identity — it must neither mint a new task nor let its rename echo
+    // overwrite a matched local task's title with "[Moved] …". Also ledgers
+    // the release, covering markers written before the ledger existed (or
+    // whose ledger write failed mid-migration).
+    if (ledgerMovedMarker(msTask, list.id)) continue;
 
     const existing =
       (await findTaskByExtId('ms-todo', msTask.id))

@@ -41,14 +41,22 @@ describe('default platform routing', () => {
     });
   });
 
-  it("an established project's claim wins over a conflicting explicit source request", async () => {
+  it("an established project's claim wins over a conflicting PROVIDER source request", async () => {
     // First task claims 'Shared' for the external plugin.
     await addTask({ title: 'first', project: 'Shared', source: EXTERNAL });
-    // A later capture asking for local in the SAME project keeps the established
-    // claim — a project is never split across two sources. (input.source only
-    // takes effect for brand-new project names, where the registry row is absent.)
-    const { task } = await addTask({ title: 'second', project: 'Shared', source: 'local' });
+    // A later capture asking for a DIFFERENT provider keeps the established
+    // claim — a project's synced tasks are never split across two providers.
+    const { task } = await addTask({ title: 'second', project: 'Shared', source: 'other-provider' as never });
     expect(task.source).toBe(EXTERNAL);
+  });
+
+  it('an explicit LOCAL source stays local even in a claimed project (never-sync)', async () => {
+    await addTask({ title: 'first', project: 'Shared', source: EXTERNAL });
+    // 'local' is the never-sync override: the project acts as a folder and the
+    // task never pushes — the quick-start duplication fix depends on this.
+    const { task } = await addTask({ title: 'second', project: 'Shared', source: 'local' });
+    expect(task.source).toBe('local');
+    expect(task.ext).toBeUndefined();
   });
 
   it('refuses a provider-sourced task with no project (Inbox is unclaimable)', async () => {

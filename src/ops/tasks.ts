@@ -124,6 +124,28 @@ defineOp({
 })
 
 defineOp({
+  name: 'task_merge',
+  title: 'Merge duplicate Walnut tasks',
+  description:
+    'Merge duplicate copies of a task into one survivor. Victims\' session links (session_ids, ' +
+    'session slots, sessions.task_id) move onto the survivor BEFORE the victim rows are deleted, ' +
+    'so no conversation history is lost. ALWAYS use this for duplicate cleanup — a plain ' +
+    'task_delete on a duplicate destroys whichever session links that copy held.',
+  input: {
+    survivor_id: z.string().min(1).describe('Task id (or unique prefix) that survives the merge'),
+    victim_ids: z.array(z.string().min(1)).min(1).describe('Duplicate task ids to merge into the survivor and delete'),
+  },
+  handler: async (args, call) => {
+    const { survivor_id, victim_ids } = args
+    const body = await call('POST', `/tasks/${encodeURIComponent(String(survivor_id))}/merge`, {
+      victim_ids,
+    }) as { task?: unknown; merged?: number; sessions_relinked?: number }
+    return withRef(body?.task, { merged: body?.merged, sessions_relinked: body?.sessions_relinked })
+  },
+  tags: { readonly: false, remote: 'deny', destructive: true },
+})
+
+defineOp({
   name: 'task_delete',
   title: 'Delete a Walnut task',
   description:

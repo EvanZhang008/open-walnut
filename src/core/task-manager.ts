@@ -981,8 +981,11 @@ export async function renameProject(
     // for a project that only exists implicitly (registry row lost in a restore).
     const renameSource: TaskSource = fromKey
       ? projects[fromKey].source
-      : (tasksToRename[0]?.source ?? 'local');
-    const mixed = tasksToRename.find((t) => t.source !== renameSource);
+      : (tasksToRename.find((t) => t.source !== 'local')?.source ?? tasksToRename[0]?.source ?? 'local');
+    // Local tasks are exempt from the mixed-source guard: a never-synced task
+    // parked in a provider project (quick-start tasks live like this) follows
+    // the rename as a plain string change, with no remote side to reconcile.
+    const mixed = tasksToRename.find((t) => t.source !== renameSource && t.source !== 'local');
     if (mixed) {
       throw new Error(
         `Project "${from}" has mixed sources (${renameSource} and ${mixed.source}). Clean it up before renaming.`,
@@ -1818,23 +1821,37 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
         );
       }
       source = 'local';
+    } else if (input.source === 'local' && !parentTask) {
+      // An EXPLICIT 'local' outranks the registry claim: the caller (quick-start,
+      // external-session import) is saying "this task must never sync". The
+      // project is then just a folder — a local task parked in a provider-claimed
+      // project is fine because it has no remote twin to fork. Without this, the
+      // claim silently promoted quick-start tasks to ms-todo, pushed them, and a
+      // later move orphaned the remote item into a duplicate-import loop.
+      source = 'local';
     } else {
-      // The registry row OUTRANKS input.source deliberately: the project's claim
-      // is the source of record, so a caller naming a claimed project gets that
-      // provider rather than a 409 (the task has to be pushable to live there).
-      // input.source only decides a project that has no row yet. A conflict is
-      // therefore only reachable through parent inheritance — a child whose
-      // parent belongs to provider A can't be filed under provider B's project.
+      // The registry row OUTRANKS an undefined/provider input.source: the
+      // project's claim is the source of record, so a caller naming a claimed
+      // project gets that provider rather than a 409 (the task has to be
+      // pushable to live there). input.source only decides a project that has
+      // no row yet. A conflict is therefore only reachable through parent
+      // inheritance — a child whose parent belongs to provider A can't be filed
+      // under provider B's project.
       source = parentTask?.source
         ?? registrySource
         ?? input.source
         ?? (await registry.getForProject(project)).id;
     }
 
-    // Validate project-source consistency
-    const validation = validateProjectSource(project, source, config, projects);
-    if (!validation.ok) {
-      throw new ProjectSourceConflictError(validation.error, project, source, validation.existingSource);
+    // Validate project-source consistency. Local tasks are exempt: 'local'
+    // means "never sync", and a local task may live in ANY project — the claim
+    // only governs which provider the project's SYNCED tasks push to. A local
+    // row in a claimed project has no remote twin, so there is nothing to fork.
+    if (source !== 'local') {
+      const validation = validateProjectSource(project, source, config, projects);
+      if (!validation.ok) {
+        throw new ProjectSourceConflictError(validation.error, project, source, validation.existingSource);
+      }
     }
 
     const newTask: Task = {
@@ -2942,10 +2959,21 @@ export async function updateTask(
         ? 'local'
         : registryKey ? projects[registryKey].source : undefined;
 
-      if (targetSource !== undefined && targetSource !== task.source) {
-        // Auto-migrate: the task adopts the destination project's claim (or
-        // 'local' for Inbox). Ext/external_url are dropped — the remote twin is
-        // marked moved by the post-lock cleanup.
+      if (task.source === 'local' && targetSource !== undefined && targetSource !== 'local') {
+        // A LOCAL task moving into a provider-claimed project keeps its source:
+        // the project is just a folder here, nothing is pushed. Promoting it
+        // (the old behavior) created a remote twin whose identity a later move
+        // severed — the root of the duplicate-import loop. A user who wants the
+        // task synced flips it explicitly, not by dragging it into a folder.
+        log.task.info('local task filed under provider project — staying local, no sync', {
+          taskId: task.id, newProject, projectClaim: targetSource,
+        });
+        // plain assignment below (assigned stays false)
+      } else if (targetSource !== undefined && targetSource !== task.source) {
+        // Auto-migrate (provider → provider, or provider → local/Inbox): the
+        // task adopts the destination project's claim. Ext/external_url are
+        // dropped — the remote twin is tombstoned + marked moved by the
+        // post-lock cleanup.
         migrationResult = migrateTaskSource(store, task, newProject, targetSource);
         assigned = true;
         log.task.info('cross-source migration triggered', {
@@ -2955,7 +2983,13 @@ export async function updateTask(
         });
       } else {
         const validation = validateProjectSource(newProject, task.source, config, projects);
-        if (!validation.ok) {
+        if (!validation.ok && task.source === 'local') {
+          // Same local-stays-local rule for claims validateProjectSource sees
+          // that the registry row misses (e.g. plugins.<id>.project config).
+          log.task.info('local task filed under provider project — staying local, no sync', {
+            taskId: task.id, newProject, projectClaim: validation.existingSource,
+          });
+        } else if (!validation.ok) {
           migrationResult = migrateTaskSource(store, task, newProject, validation.existingSource);
           assigned = true;
           log.task.info('cross-source migration triggered', {

@@ -592,6 +592,56 @@ describe('DELETE /api/tasks/:id', () => {
   });
 });
 
+describe('POST /api/tasks/:id/merge', () => {
+  it('merges victims into the survivor, unioning session links', async () => {
+    const { linkSession } = await import('../../../src/core/task-manager.js');
+    const { task: survivor } = await addTask({ title: 'H-1B RFE follow-up' });
+    const { task: victim } = await addTask({ title: 'H-1B RFE follow-up (copy)' });
+    await linkSession(survivor.id, 'sess-a');
+    await linkSession(victim.id, 'sess-b');
+
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/tasks/${survivor.id}/merge`)
+      .send({ victim_ids: [victim.id] });
+    expect(res.status).toBe(200);
+    expect(res.body.merged).toBe(1);
+    expect(res.body.task.session_ids).toEqual(expect.arrayContaining(['sess-a', 'sess-b']));
+
+    // Victim is gone; survivor holds both links.
+    const listRes = await request(app).get('/api/tasks');
+    expect(listRes.body.tasks).toHaveLength(1);
+    expect(listRes.body.tasks[0].id).toBe(survivor.id);
+  });
+
+  it('rejects a survivor listed among the victims', async () => {
+    const { task } = await addTask({ title: 'Self merge' });
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/tasks/${task.id}/merge`)
+      .send({ victim_ids: [task.id] });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects an empty victim list', async () => {
+    const { task } = await addTask({ title: 'No victims' });
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/tasks/${task.id}/merge`)
+      .send({ victim_ids: [] });
+    expect(res.status).toBe(400);
+  });
+
+  it('404s on an unknown victim', async () => {
+    const { task } = await addTask({ title: 'Lonely survivor' });
+    const app = createApp();
+    const res = await request(app)
+      .post(`/api/tasks/${task.id}/merge`)
+      .send({ victim_ids: ['nonexistent-task'] });
+    expect(res.status).toBe(404);
+  });
+});
+
 describe('Cross-source project change', () => {
   async function setupPluginConfig() {
     const { CONFIG_FILE } = await import('../../../src/constants.js');
@@ -610,19 +660,19 @@ describe('Cross-source project change', () => {
     );
   }
 
-  // A moved task adopts the target project's source rather than 409-ing; the
-  // route's ProjectSourceConflictError → 409 mapping still guards addTask /
-  // renameProject, but PATCH project is a 200 + migration.
-  it('PATCH /api/tasks/:id auto-migrates source into a plugin-reserved project', async () => {
+  // A LOCAL task moved into a plugin-reserved project stays local — the
+  // project is just a folder for a never-sync task (promoting it minted the
+  // remote twin that seeded the duplicate-import loop). Provider→provider and
+  // provider→Inbox moves still migrate (tested below).
+  it('PATCH /api/tasks/:id keeps a local task local in a plugin-reserved project', async () => {
     await setupPluginConfig();
 
-    // The migration push is AWAITED, so the target source must be a loaded
-    // plugin — otherwise updateTask throws "plugin not loaded" as a 500.
     const { registry } = await import('../../../src/core/integration-registry.js');
     const { createMockPlugin } = await import('../../core/plugin-test-utils.js');
     if (!registry.has('plugin-a')) registry.register('plugin-a', createMockPlugin({ id: 'plugin-a' }));
 
-    // 'Work' matches plugins.plugin-a.project, so the claim resolves to plugin-a.
+    // 'Work' matches plugins.plugin-a.project, so the claim resolves to plugin-a
+    // for a task created WITHOUT an explicit source.
     const { task: pluginTask } = await addTask({ title: 'Plugin task', project: 'Work' });
     expect(pluginTask.source).toBe('plugin-a');
 
@@ -637,7 +687,7 @@ describe('Cross-source project change', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.task.project).toBe('Work');
-    expect(res.body.task.source).toBe('plugin-a');
+    expect(res.body.task.source).toBe('local');
   });
 
   it('PATCH /api/tasks/:id succeeds for a same-source project change', async () => {

@@ -254,3 +254,82 @@ describe('reconcilePulledTasks — no project rollback', () => {
     expect(count).toBe(1);
   });
 });
+
+describe('reconcilePulledTasks — [Moved] marker gate', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('never creates a task for a [Moved]-marked remote item', async () => {
+    // The cross-source migration renames the OLD remote twin to
+    // "[Moved] <title> [open-walnut:<taskId>]". A pull that sees this item
+    // used to re-import it as a brand-new local task — the duplicate loop.
+    const msTask = createMsTask({
+      id: 'ms-task-moved',
+      title: '[Moved] H-1B RFE follow-up [open-walnut:mszf18jd-f69a]',
+      status: 'completed' as const,
+      lastModifiedDateTime: '2026-02-25T18:00:00Z',
+    });
+
+    mockFindByExtId(new Map()); // ext already cleared by the migration
+    const updateSpy = vi.fn();
+    const addSpy = vi.fn().mockResolvedValue({} as Task);
+
+    const count = await reconcilePulledTasks(
+      [msTask],
+      { id: 'list-mybot', displayName: 'Immigration' },
+      updateSpy,
+      addSpy,
+    );
+
+    expect(addSpy).not.toHaveBeenCalled();
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(count).toBe(0);
+  });
+
+  it('shields a matched local task from the [Moved] rename echo', async () => {
+    // Race window: the pull sees the renamed remote twin BEFORE the local ext
+    // is cleared (or via previous_ids). Without the gate the echo would
+    // overwrite the local title with "[Moved] …".
+    const localTask = createLocalTask({ updated_at: '2026-02-24T06:00:00Z' });
+    const msTask = createMsTask({
+      title: '[Moved] Test task [open-walnut:task-001]',
+      lastModifiedDateTime: '2026-02-25T18:00:00Z',
+    });
+
+    mockFindByExtId(new Map([['ms-task-1', localTask]]));
+    const updateSpy = vi.fn();
+    const addSpy = vi.fn().mockResolvedValue({} as Task);
+
+    const count = await reconcilePulledTasks(
+      [msTask],
+      { id: 'list-mybot', displayName: 'Immigration' },
+      updateSpy,
+      addSpy,
+    );
+
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(addSpy).not.toHaveBeenCalled();
+    expect(count).toBe(0);
+  });
+
+  it('still skips a bare [Moved] prefix whose id suffix was truncated', async () => {
+    const msTask = createMsTask({
+      id: 'ms-task-truncated',
+      title: '[Moved] Some very long title that lost its id suffix somewhere along the way',
+    });
+
+    mockFindByExtId(new Map());
+    const addSpy = vi.fn().mockResolvedValue({} as Task);
+
+    const count = await reconcilePulledTasks(
+      [msTask],
+      { id: 'list-mybot', displayName: 'Immigration' },
+      vi.fn(),
+      addSpy,
+    );
+
+    expect(addSpy).not.toHaveBeenCalled();
+    expect(count).toBe(0);
+  });
+});

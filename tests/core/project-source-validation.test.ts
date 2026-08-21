@@ -164,13 +164,26 @@ describe('addTask project registration', () => {
     expect(task.source).toBe('ms-todo');
   });
 
-  it('lets the registry claim outrank an input.source override', async () => {
+  it('lets the registry claim outrank a PROVIDER input.source override', async () => {
     // The project's claim is the source of record: a caller naming a claimed
     // project gets that provider, not a 409 — the task must be pushable to live
     // there at all. input.source only decides an unregistered name.
     await ensureProject('Synced', 'ms-todo');
     const { task } = await addTask({ title: 'Wrong owner', project: 'Synced', source: 'plugin-a' });
     expect(task.source).toBe('ms-todo');
+  });
+
+  it('an EXPLICIT local input.source outranks the registry claim (never-sync)', async () => {
+    // 'local' means "never sync" — the project is just a folder for this task.
+    // The old behavior silently promoted quick-start tasks (created with
+    // source:'local') to the claim and PUSHED them, seeding the duplicate-
+    // import loop. No remote twin ⇒ nothing to fork.
+    await ensureProject('Synced', 'ms-todo');
+    const { task, syncResult } = await addTask({ title: 'Session: walnut', project: 'Synced', source: 'local' });
+    expect(task.source).toBe('local');
+    expect(task.project).toBe('Synced');
+    expect(task.ext).toBeUndefined();
+    expect(syncResult.success).toBe(true); // local short-circuit, no push
   });
 
   it('throws ProjectSourceConflictError when an inherited parent source clashes', async () => {
@@ -192,12 +205,17 @@ describe('addTask project registration', () => {
       'utf-8',
     );
     // seedProjectsFromConfig (ensureInit) materializes the reservation as a
-    // claimed registry row, so the claim is enforced by the registry branch and
-    // input.source cannot override it.
-    const { task } = await addTask({ title: 'Reserved work', project: 'reserved', source: 'local' });
+    // claimed registry row, so a task created WITHOUT an explicit source
+    // inherits the claim. (An explicit source:'local' stays local — the
+    // never-sync override applies to reservations exactly like registry rows.)
+    const { task } = await addTask({ title: 'Reserved work', project: 'reserved' });
     expect(task.project).toBe('Reserved');
     expect(task.source).toBe('plugin-a');
     expect(await getProjectRecord('Reserved')).toMatchObject({ source: 'plugin-a' });
+
+    const { task: localTask } = await addTask({ title: 'Local note', project: 'reserved', source: 'local' });
+    expect(localTask.project).toBe('Reserved');
+    expect(localTask.source).toBe('local');
   });
 
   it('refuses to create a provider task in Inbox', async () => {
@@ -229,7 +247,10 @@ describe('updateTask project move', () => {
     expect(moved.source).toBe('local');
   });
 
-  it('adopts the destination project claim', async () => {
+  it('keeps a LOCAL task local when moved into a provider-claimed project', async () => {
+    // The project is just a folder for a never-sync task. The old behavior
+    // (adopt the claim + push) minted a remote twin whose identity a later
+    // move severed — the root of the duplicate-import loop.
     await ensureProject('Claimed', 'ms-todo');
     const { task } = await addTask({ title: 'Local task', project: 'Freeform' });
     expect(task.source).toBe('local');
@@ -237,7 +258,20 @@ describe('updateTask project move', () => {
     await updateTask(task.id, { project: 'Claimed' });
     const moved = await getTask(task.id);
     expect(moved.project).toBe('Claimed');
-    expect(moved.source).toBe('ms-todo');
+    expect(moved.source).toBe('local');
+    expect(moved.ext).toBeUndefined();
+  });
+
+  it('still migrates provider → provider on a project move', async () => {
+    await ensureProject('A-land', 'plugin-a');
+    await ensureProject('B-land', 'plugin-b');
+    const { task } = await addTask({ title: 'Cross', project: 'A-land' });
+    expect(task.source).toBe('plugin-a');
+
+    await updateTask(task.id, { project: 'B-land' });
+    const moved = await getTask(task.id);
+    expect(moved.project).toBe('B-land');
+    expect(moved.source).toBe('plugin-b');
   });
 
   it('auto-creates the registry row for a brand-new destination', async () => {

@@ -876,8 +876,14 @@ function migrateToProjectOnly(handle: DatabaseType): void {
     // unpushable. Adopt the winning claim and drop the stale remote identity
     // (`ext` / `external_url` / `sync_error`) so the next sync tick re-creates a
     // twin in the right place instead of PATCHing a twin in the wrong list.
+    //
+    // LOCAL tasks are exempt: a local task parked in a provider project is a
+    // deliberate never-sync state (quick-start tasks live like this), not an
+    // unpushable orphan. Promoting it here would re-open the duplicate-import
+    // loop this exemption exists to close. NULL source counts as local.
     const selectMinority = handle.prepare(
-      `SELECT id, source FROM tasks WHERE project = @name COLLATE NOCASE AND source IS NOT @source`,
+      `SELECT id, source FROM tasks WHERE project = @name COLLATE NOCASE AND source IS NOT @source
+         AND source IS NOT NULL AND source != 'local'`,
     );
     const normalizeMinority = handle.prepare(
       `UPDATE tasks SET source = @source, ext = NULL, sync_error = NULL, updated_at = @now,

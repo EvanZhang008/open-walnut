@@ -1,10 +1,12 @@
 /**
- * organizeQuickStartTask claim guard — the unattended fast-model placement
- * pass must NEVER walk a local task into a provider-claimed project. That
- * move triggers migrateTaskSource (local → provider), pushes the task to the
- * external tracker, and is how quick-start noise tasks multiplied in the
- * user's real tracker (19 "Session: walnut" copies by 2026-08-20). A human
- * move through updateTask still migrates — that's an explicit decision.
+ * organizeQuickStartTask placement safety — the unattended fast-model pass
+ * may file a local task into ANY project, including a provider-claimed one,
+ * because updateTask now keeps a local task local on that move (the project
+ * is just a folder; nothing is pushed). The old claim-skip guard protected
+ * against the pre-fix behavior where the move flipped the source and pushed
+ * the task to the external tracker (19 "Session: walnut" copies by
+ * 2026-08-20). These tests pin the new invariant: placed anywhere, but the
+ * source NEVER changes and nothing ever reaches a provider.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -50,7 +52,7 @@ afterEach(() => {
 });
 
 describe('organizeQuickStartTask claim guard', () => {
-  it('refuses to move a local task into a provider-claimed project', async () => {
+  it('places a local task into a provider-claimed project WITHOUT migrating it', async () => {
     await ensureProject('Provider Land', 'some-provider' as any);
     // Give the claimed project a task so the digest lists it.
     const { updateTaskRaw } = await import('../../src/core/task-manager.js');
@@ -63,8 +65,9 @@ describe('organizeQuickStartTask claim guard', () => {
     await organizeQuickStartTask(task.id, '/tmp/somewhere', 'do a thing');
 
     const after = await getTask(task.id);
-    expect(after?.project ?? '').toBe(''); // stayed in Inbox
-    expect(after?.source).toBe('local');   // never migrated / pushed
+    expect(after?.project).toBe('Provider Land'); // filed — the folder is usable
+    expect(after?.source).toBe('local');          // never migrated / pushed
+    expect(after?.ext).toBeUndefined();           // no remote identity minted
   });
 
   it('still places a local task into a local-claimed project', async () => {

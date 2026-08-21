@@ -17,6 +17,7 @@ import {
   updateTask,
   deleteTask,
   deleteTasksByIds,
+  mergeTaskInto,
   ActiveSessionError,
   ActiveChildrenError,
   InvalidProjectNameError,
@@ -1000,6 +1001,51 @@ tasksRouter.post('/:id/complete', async (req: Request, res: Response, next: Next
   } catch (err) {
     if (err instanceof ActiveChildrenError) {
       res.status(409).json({ error: err.message, active_children: err.activeCount })
+      return
+    }
+    next(err)
+  }
+})
+
+// POST /api/tasks/:id/merge — merge duplicate tasks INTO :id (the survivor).
+// Session links are the point: victims' session_ids/slots union into the
+// survivor and sessions.task_id rows are re-pointed BEFORE the victim rows
+// disappear. This is the sanctioned dedup path — a bare DELETE on a duplicate
+// drops whichever links that copy held (the H-1B RFE incident).
+tasksRouter.post('/:id/merge', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const survivorPrefix = param(req.params.id)
+    const victims: unknown = req.body?.victim_ids
+    if (!Array.isArray(victims) || victims.length === 0 || !victims.every((v) => typeof v === 'string' && v.trim())) {
+      res.status(400).json({ error: 'victim_ids must be a non-empty array of task ids' })
+      return
+    }
+    // Resolve prefixes → full ids up front (getTask throws on unknown/ambiguous).
+    const survivor = await getTask(survivorPrefix)
+    const victimTasks = []
+    for (const v of victims) victimTasks.push(await getTask(v))
+    if (victimTasks.some((t) => t.id === survivor.id)) {
+      res.status(400).json({ error: 'survivor cannot be one of the victims' })
+      return
+    }
+    let sessionsRelinked = 0
+    for (const victim of victimTasks) {
+      const result = await mergeTaskInto(survivor.id, victim.id)
+      sessionsRelinked += result.sessionsRelinked
+    }
+    const merged = await getTask(survivor.id)
+    log.web.info('tasks merged via REST', {
+      survivorId: survivor.id, victimIds: victimTasks.map((t) => t.id), sessionsRelinked,
+    })
+    res.json({ task: merged, merged: victimTasks.length, sessions_relinked: sessionsRelinked })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    if (msg.includes('No task found matching')) {
+      res.status(404).json({ error: msg })
+      return
+    }
+    if (msg.includes('Ambiguous ID prefix')) {
+      res.status(400).json({ error: msg })
       return
     }
     next(err)

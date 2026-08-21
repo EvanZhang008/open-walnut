@@ -6,6 +6,7 @@ import {
   addTask,
   listTasks,
   deleteTask,
+  mergeTaskInto,
   ActiveSessionError,
   ProjectSourceConflictError,
   CircularDependencyError,
@@ -1089,6 +1090,41 @@ For projects (type='project'): set default_host and default_cwd for session defa
         if (err instanceof ActiveSessionError) {
           return `Cannot delete: task has ${err.activeSessionIds.length} active session(s): ${err.activeSessionIds.join(', ')}. Stop or complete those sessions first.`;
         }
+        return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    },
+  },
+
+  {
+    name: 'task_merge',
+    description: 'Merge duplicate copies of a task into one survivor, then delete the copies. Session links (session_ids, session slots, sessions.task_id) move onto the survivor first, so no conversation history is lost. ALWAYS use this for duplicate cleanup instead of task_delete — deleting a duplicate directly destroys whichever session links that copy held.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        survivor_id: { type: 'string', description: 'Task ID (or unique prefix) that survives the merge. Pick the copy with the most context (sessions, notes).' },
+        victim_ids: { type: 'array', items: { type: 'string' }, description: 'Duplicate task IDs (or unique prefixes) to merge into the survivor and delete.' },
+      },
+      required: ['survivor_id', 'victim_ids'],
+    },
+    async execute(params) {
+      try {
+        const survivor = await getTask(params.survivor_id as string);
+        const victimIds = params.victim_ids as string[];
+        if (!Array.isArray(victimIds) || victimIds.length === 0) {
+          return 'Error: victim_ids must be a non-empty array of task ids.';
+        }
+        let sessionsRelinked = 0;
+        const mergedTitles: string[] = [];
+        for (const prefix of victimIds) {
+          const victim = await getTask(prefix);
+          if (victim.id === survivor.id) return 'Error: survivor cannot be one of the victims.';
+          const result = await mergeTaskInto(survivor.id, victim.id);
+          sessionsRelinked += result.sessionsRelinked;
+          mergedTitles.push(victim.title);
+        }
+        const merged = await getTask(survivor.id);
+        return `Merged ${mergedTitles.length} duplicate(s) into ${taskRef(merged.id, merged.title)} — ${sessionsRelinked} session link(s) moved, ${merged.session_ids.length} total sessions on the survivor.`;
+      } catch (err) {
         return `Error: ${err instanceof Error ? err.message : String(err)}`;
       }
     },

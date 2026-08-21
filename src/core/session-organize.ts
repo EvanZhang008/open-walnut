@@ -116,39 +116,26 @@ export async function organizeQuickStartTask(
   const suggestion = await suggestSessionPlacement({ cwd, message });
   if (!suggestion.project) return;
 
-  const { getTask, updateTask, getProjectRecord } = await import('./task-manager.js');
+  const { getTask, updateTask } = await import('./task-manager.js');
   const current = await getTask(taskId);
   if (!current) return;
   // Only move while the task is still unfiled — anything else means a human or
   // the Personal AI already placed it.
   if ((current.project ?? '') !== '') return;
 
-  // Claim guard: this unattended pass must never trigger a cross-source
-  // migration. Moving a local quick-start task into a provider-claimed project
-  // silently flips its source and PUSHES it to the external tracker — which is
+  // No claim guard needed anymore: updateTask keeps a LOCAL task local on a
+  // move into a provider-claimed project (the project is just a folder; nothing
+  // is pushed). The guard that used to sit here protected against the old
+  // behavior where this move flipped the source and PUSHED the task — which is
   // how "Session: walnut" noise tasks multiplied in the user's real MS To-Do
-  // (19 copies by 2026-08-20; the Apr 2026 Local-category fix targeted exactly
-  // this and was lost in the category removal). A HUMAN move still migrates —
-  // that is an explicit decision; nobody is watching this one.
-  if (current.source === 'local') {
-    try {
-      const record = await getProjectRecord(suggestion.project);
-      if (record && record.source !== 'local') {
-        log.web.info('session-auto-organize: skipped provider-claimed project (task stays in Inbox)', {
-          taskId, project: suggestion.project, claimedBy: record.source,
-        });
-        return;
-      }
-    } catch {
-      return; // claim unknown — leaving the task in Inbox is the safe default
-    }
-  }
-
+  // (19 copies by 2026-08-20). Now the placement is safe by construction, so
+  // the unattended pass may file the task anywhere the model suggests.
   await updateTask(taskId, {
     project: suggestion.project,
   }, { source: 'session-auto-organize', extraTargets: ['main-agent'] });
 
+  const placed = await getTask(taskId);
   log.web.info('session-auto-organize: placed quick-start task', {
-    taskId, project: suggestion.project,
+    taskId, project: suggestion.project, source: placed?.source,
   });
 }
