@@ -18,6 +18,9 @@ must live under one of these top-level categories instead of directly under
 - [QMD search performance](investigation/qmd-search-performance/README.md) -
   multilingual embedding quality, reranker latency, search races, and index
   maintenance.
+- [Duplicate task rows](investigation/duplicate-task-rows/README.md) - one remote
+  item owning several task rows, and the orphaned sessions left when a twin is
+  deleted.
 
 ## Decisions
 

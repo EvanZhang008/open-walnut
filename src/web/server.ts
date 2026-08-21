@@ -1415,6 +1415,27 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     })
   }
 
+  // -- Session↔task referential integrity (detect only, never repair) --
+  // Counts orphaned session.task_id pointers AND duplicate remote sync ids. Both
+  // corruptions are silent by nature: an orphaned session is invisible on every
+  // task surface, and duplicate rows only reveal themselves when one twin is
+  // deleted and strands its sessions. A 2026-08-20 sweep found 254 orphans and 69
+  // duplicate groups that had built up unnoticed over ~6 months. Repair needs a
+  // human to classify each row (scripts/repair-orphan-session-links.mjs), so this
+  // only reports. Cloud mode is skipped: a replica's sessions.sqlite is synced
+  // read-only state, and its task projection legitimately lags the primary.
+  if (!CLOUD_MODE) {
+    try {
+      const { checkSessionTaskIntegrity } = await import('../core/session-integrity.js')
+      const report = await checkSessionTaskIntegrity()
+      startupPhase(`session integrity check done (${report.orphanedSessions} orphans, ${report.duplicateRemoteIdGroups} dup groups)`)
+    } catch (err) {
+      log.session.debug('session integrity check failed', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
   // -- Clean up old stream files (preserve non-terminal sessions) --
   try {
     const { cleanupStreamFiles } = await import('../providers/claude-code-session.js')
