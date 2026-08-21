@@ -1969,10 +1969,30 @@ function startGatewayListener() {
   // otherwise (the file outlives the process).
   try { fs.unlinkSync(GATEWAY_SOCK_PATH) } catch {}
   try {
-    type GwSockData = { buf: string; done: boolean }
-    const reply = (socket: { write(s: string): number; end(): void }, resp: GatewayResponse) => {
-      try { socket.write(JSON.stringify(resp) + '\n') } catch {}
+    type GwSockData = { buf: string; done: boolean; out?: Buffer; sent?: number }
+    type GwSocket = { data: GwSockData; write(s: string | Buffer): number; end(): void }
+    // Bun.listen raw sockets do PARTIAL writes: write() returns the bytes the
+    // kernel buffer took (~8KB) and end() closes immediately, silently
+    // truncating anything larger (a skill_read reply is ~11KB — the wn client
+    // then saw "socket closed without a response"). Buffer the remainder and
+    // finish in drain(); node:net in daemon-source.ts queues internally, so
+    // only this twin needs the dance.
+    const pump = (socket: GwSocket) => {
+      const d = socket.data
+      if (!d.out) return
+      while ((d.sent ?? 0) < d.out.byteLength) {
+        let n = 0
+        try { n = socket.write(d.out.subarray(d.sent ?? 0)) } catch { return }
+        if (n <= 0) return // kernel buffer full — resume on next drain
+        d.sent = (d.sent ?? 0) + n
+      }
+      d.out = undefined
       try { socket.end() } catch {}
+    }
+    const reply = (socket: GwSocket, resp: GatewayResponse) => {
+      socket.data.out = Buffer.from(JSON.stringify(resp) + '\n', 'utf8')
+      socket.data.sent = 0
+      pump(socket)
     }
     Bun.listen<GwSockData>({
       unix: GATEWAY_SOCK_PATH,
@@ -1992,6 +2012,7 @@ function startGatewayListener() {
           d.done = true
           handleGatewayLine(d.buf.slice(0, nl), (resp) => reply(socket, resp))
         },
+        drain(socket) { pump(socket) },
         error() { /* client went away — pending timer self-cleans */ },
       },
     })
