@@ -171,7 +171,7 @@ WORK_LOG: \`append: <one entry>\` — what you DID, what you FOUND (conclusions,
 NEVER delete facts: when something is superseded, update it in place and keep an "(was: …)" trace.
 
 Then these status fields (same plain-label format):
-${title ? `TITLE: The task's current title is: "${title}". Default answer: \`unchanged\` — a title should almost never change. Only two exceptions: (a) the work CHANGED DIRECTION and the title no longer covers what's happening → answer \`prefix: <1-3 words>\` (English Title Case, one word if it's enough — it lands in FRONT of the title, replacing any previous "Topic · " prefix, so brevity is everything); (b) the title has grown long/stale/confusing as a whole → answer \`rewrite: <new title>\` (short, plain, still findable by someone searching for the ORIGINAL work). Never rewrite a title the human just set; when in doubt, \`unchanged\`.
+${title ? `TITLE: The task's current title is: "${title}". Default answer: \`unchanged\` — a title should almost never change. Three exceptions: (a) the title is VAGUE and you now know the real subject — it names only an activity or a source ("Handle Slack thread request", "Investigate the issue", "Check the ticket") because the first message was just a pointer, and this turn revealed what it's actually about → answer \`rewrite: <new title>\` naming the specific subject ("CoreDNS OOM Slack thread"), 2-6 words, no filler verbs like Handle/Process/Address. Do this the FIRST turn you know — a vague title is a bug, not a style choice; (b) the work CHANGED DIRECTION and the title no longer covers what's happening → answer \`prefix: <1-3 words>\` (English Title Case, one word if it's enough — it lands in FRONT of the title, replacing any previous "Topic · " prefix, so brevity is everything); (c) the title has grown long/stale/confusing as a whole → answer \`rewrite: <new title>\` (short, plain, still findable by someone searching for the ORIGINAL work). Never rewrite a title the human just set; when in doubt (except case a), \`unchanged\`.
 ` : ''}RECAP: ONE line, as simple as possible — what just happened in your latest turn(s), for a user re-opening this session ("Fixed the timeout bug, tests green, awaiting commit approval"). Always answer this; never "unchanged".
 PHASE_SIGNAL: one of — plan-written | implement-done | reconfirmed | verify-pass | verify-fail | review-done | committed(<hash>) | conversational(user-asked-question).
 STATUS: <succeeded|failed|blocked|waiting> — one sentence on what works / what doesn't.
@@ -919,7 +919,9 @@ interface TitleCapableSession {
 function buildTitleQuestion(message: string, placeholder: string, requirement: string | null): string {
   return [
     'Generate a title for this session (it appears in the user\'s session list).',
-    'Concise, 3-7 words, sentence case. Capture the main topic or goal.',
+    'Concise, 2-6 words, sentence case. Name the SPECIFIC subject — the thing being worked on — not the activity around it.',
+    'NEVER use filler verbs that restate that work is happening: "Handle", "Process", "Address", "Work on", "Look into", "Deal with". "Handle Slack thread request" says nothing; "CoreDNS OOM Slack thread" says which one.',
+    'Pull the most identifying nouns from the message (component, error, feature, ticket). If the message is only a pointer ("check this thread") with no identifiable subject yet, keep whatever concrete nouns exist and stay SHORT — a vague 3-word title beats a vague 7-word one.',
     ...(requirement ? [
       `MANDATORY RULE from the task system: ${requirement}`,
       'Obey this rule even if it conflicts with the language or style of the message below (translate, don\'t mirror).',
