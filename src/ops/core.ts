@@ -3,7 +3,7 @@
  *
  * search / project_list / session_list / walnut_status are ported
  * byte-compatible from the original hand-written MCP tools. The rest are the
- * first curated additions (the workflows the personal-walnut skill previously
+ * first curated additions (the workflows the walnut skill previously
  * taught via raw curl): session transcript, global/user memory read+write,
  * notes read/write/search.
  *

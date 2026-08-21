@@ -37,6 +37,13 @@ describe('buildSessionContext (gateway hint only)', () => {
     expect(systemPrompt).toMatch(/never approve/i)
   })
 
+  it('points at the walnut skill through wn tools (single source of truth)', async () => {
+    const { systemPrompt } = await buildSessionContext('task-2')
+    expect(systemPrompt).toContain('wn tools list')
+    expect(systemPrompt).toContain('skill_read')
+    expect(systemPrompt).toContain('"dirName":"walnut"')
+  })
+
   it('injects no vault / server-safety / task preamble and stays short', async () => {
     const { systemPrompt } = await buildSessionContext('task-2', '/x', 'h')
     expect(systemPrompt).not.toContain('<server_safety>')

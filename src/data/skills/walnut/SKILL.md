@@ -1,13 +1,17 @@
 ---
 name: walnut
 description: >-
-  Use the user's Walnut Personal AI from inside a coding session: create, list,
-  and update tasks, search their memory/tasks/sessions, hand work back for human
-  review, and emit clickable task refs. Use when the user says "add a task",
-  "put that on my list", "what's on my plate", "did I write anything about X",
-  or whenever finished work should be recorded in Walnut rather than only in
-  chat. Works through the `walnut` CLI over Bash, or the `walnut` MCP tools
-  when they are mounted.
+  Walnut is the user's personal AI for tasks, projects, memory, notes, coding
+  sessions, and search. Use for ANY question about Walnut itself or the data it
+  holds: server status, mode, or version; which task or session produced a
+  given commit; what is on the user's plate; creating, updating, completing,
+  searching, or recalling tasks, memory, and notes; handing finished work back
+  for human review. Triggers: "add a task", "put that on my list", "what's on
+  my plate", "did I write anything about X", "which task/session did X". Read
+  this BEFORE guessing subcommands, running --help, inspecting files, or
+  reaching for git: those guess, this gives the exact call. Works through the
+  `walnut` CLI over Bash (`wn tools ...` inside managed sessions), or the
+  Walnut MCP tools when mounted.
 ---
 
 # Walnut (tasks, search, sessions)

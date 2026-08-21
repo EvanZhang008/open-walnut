@@ -5,7 +5,7 @@
  *   - the stdio MCP server (src/mcp/tools.ts registers each op as an MCP tool)
  *   - the CLI (`walnut tools list | help <op> | call <op> '{json}'`)
  *   - the in-session `wn tools ...` gateway path (remote hosts, via the daemon)
- *   - generated docs (the personal-walnut skill's command tables)
+ *   - generated docs (the walnut skill's command tables)
  *
  * Design (docs/plan/unified-cli-mcp.md): the registry deliberately duplicates
  * endpoint knowledge — that duplication IS the curation layer (LLM-friendly
