@@ -555,8 +555,10 @@ export interface Task {
    *  search, sync and the frozen iOS /api/v1 contract consume a short field.
    *  Never author it directly; edit the note instead. */
   summary: string;
-  /** The task's single AI-maintained living document (5 sections: Executive
-   *  Summary / Goal / Context / Progress / Work Log). See session-hooks/builtins.ts. */
+  /** The task's single AI-maintained living document (sections: Executive
+   *  Summary / User Request / Context / Progress / References / Work Log —
+   *  References is the optional external-artifact index: ids + titles as
+   *  markdown links). See session-hooks/builtins.ts. */
   note: string;
   conversation_log?: string;  // Append-only markdown log of user↔agent interactions
   // `milestones` was removed 2026-07-18 — the note's Work Log section replaced it.

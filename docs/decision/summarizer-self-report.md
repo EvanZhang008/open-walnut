@@ -69,8 +69,8 @@ decision.
 After the trailing-debounce quiet window
 (`config.agent.triage.debounce_minutes`, default four minutes), the session
 answers `buildSelfReportPrompt` through `side_question`. The labeled response
-contains five note sections (`EXEC_SUMMARY`, `GOAL`, `CONTEXT`, `PROGRESS`,
-`WORK_LOG`) plus `WHAT_I_DID`, `STATUS`, `PHASE_SIGNAL`, `NEXT_STEPS`,
+contains the note sections (`EXEC_SUMMARY`, `USER_REQUEST`, `CONTEXT`,
+`PROGRESS`, `REFERENCES`, `WORK_LOG`) plus `WHAT_I_DID`, `STATUS`, `PHASE_SIGNAL`, `NEXT_STEPS`,
 `BLOCKERS`, `USER_INTENT`, and `VERIFIED`.
 
 ### One Living Note
@@ -86,6 +86,10 @@ and milestones pair:
 - **Context:** self-contained background for a newcomer; frozen once correct.
 - **Progress:** one high-level line per work item, prefixed with `DONE`, `WIP`,
   `TODO`, or `BLOCKED/WAIT`. Details belong in Work Log.
+- **References:** optional curated index of external artifacts (tickets,
+  issues, incident reports, tracking tasks, docs) as markdown links carrying
+  both the ID and the title in plain text, so the task is findable by either
+  (added 2026-08-20).
 - **Work Log:** append-only `did` / `found` / `result` entries retaining every
   ID and decision, without timestamps.
 
@@ -110,7 +114,8 @@ narration.
 - The assembler never shrinks a note on its own; unchanged sections remain
   byte-for-byte.
 - A pre-migration free-form note remains as a preamble until a complete
-  five-section response supersedes it.
+  response covering every mandatory section supersedes it (References is
+  optional).
 - `noteShrinkRejected` blocks a rewrite that drops more than 60 percent of a
   large note and emits an error log.
 - The prompt forbids deleting facts. Changed facts are superseded with

@@ -660,8 +660,8 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
 
       {/* Summary (AI) + Milestones cards were retired 2026-07-18: the NOTE below is
           the single AI-maintained living document (Executive Summary / User Request /
-          Context / Progress / Work Log); task.summary is derived from its Executive
-          Summary and shown only in list views. */}
+          Context / Progress / References / Work Log); task.summary is derived from its
+          Executive Summary and shown only in list views. */}
 
       {/* Description — shared rich editor, always-on autosave. */}
       <div className="card mb-4">

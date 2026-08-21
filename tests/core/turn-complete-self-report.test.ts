@@ -1,7 +1,7 @@
 /**
  * Integration test for the turn-complete summary flow (session self-report).
  *
- * 2026-07-18 redesign: the task NOTE is the single living document (five sections:
+ * 2026-07-18 redesign: the task NOTE is the single living document (canonical sections:
  * Executive Summary / User Request / Context / Progress / Work Log). The session answers
  * per-section (unchanged | append | content); code assembles + persists the NOTE,
  * derives the short task.summary from Executive Summary, and decides notify via

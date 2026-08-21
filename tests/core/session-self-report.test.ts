@@ -2,7 +2,7 @@
  * Unit tests for the session self-report parsing in session-hooks/builtins.ts.
  *
  * These cover the pure helpers of the NOTE-based self-report (2026-07-18 redesign:
- * the task NOTE is the single living document — five sections, per-section answers):
+ * the task NOTE is the single living document — canonical sections, per-section answers):
  * extractField (label extraction), parseNoteSections (note → sections),
  * parseSectionAnswer (per-section unchanged/append/rewrite), assembleNote
  * (existing note + report → new note), and noteShrinkRejected (fact-loss guard).
@@ -40,6 +40,9 @@ sessions.json hit lock contention at ~1400 sessions. SQLite chosen over LMDB for
 DONE dual-write — done
 WIP parity check — in progress
 
+## References
+- [ISSUE-4821 — Session store lock contention](https://tracker.example.com/ISSUE-4821) — driving issue
+
 ## Work Log
 - Implemented dual-write behind WALNUT_SQLITE=1; found EXDEV pitfall (tmp must be same-dir); committed def456.`;
 
@@ -65,11 +68,12 @@ describe('extractField', () => {
 });
 
 describe('parseNoteSections', () => {
-  it('splits a structured note into its five sections', () => {
+  it('splits a structured note into its sections', () => {
     const { sections, preamble } = parseNoteSections(STRUCTURED_NOTE);
     expect(preamble).toBe('');
     expect(sections['Executive Summary']).toContain('Migrating the session store');
     expect(sections['User Request']).toContain('48h parity check');
+    expect(sections['References']).toContain('ISSUE-4821');
     expect(sections['Work Log']).toContain('def456');
   });
 
@@ -159,7 +163,10 @@ describe('assembleNote', () => {
     expect(assembleNote(STRUCTURED_NOTE, allUnchanged)).toBeNull();
   });
 
-  it('a full five-section answer supersedes a free-form note (migration)', () => {
+  it('a full sectioned answer supersedes a free-form note (migration) — even without REFERENCES', () => {
+    // References is OPTIONAL: a migration answering every mandatory section but
+    // carrying no references must still count as complete (else the free-form
+    // preamble of a reference-less task is kept forever).
     const freeform = 'Goal: roll out READMEs\nProgress so far: pilot done';
     const migration = `EXEC_SUMMARY: Rolling out READMEs; pilot done.
 USER_REQUEST: Roll out READMEs to all teams.
@@ -169,8 +176,19 @@ WORK_LOG: append: Pilot synced 49 READMEs.`;
     const out = assembleNote(freeform, migration);
     expect(out).not.toBeNull();
     expect(out!.note).toContain('## Executive Summary');
-    // Old free-form body dropped ONLY because all five sections were provided.
+    // Old free-form body dropped ONLY because all mandatory sections were provided.
     expect(out!.note).not.toContain('Progress so far');
+  });
+
+  it('REFERENCES answers rewrite the curated index in place', () => {
+    const report = `REFERENCES: - [ISSUE-4821 — Session store lock contention](https://tracker.example.com/ISSUE-4821) — driving issue
+- [PM-77 — June session-store data-loss postmortem](https://postmortems.example.com/PM-77) — action item source`;
+    const out = assembleNote(STRUCTURED_NOTE, report);
+    expect(out).not.toBeNull();
+    expect(out!.changed).toEqual(['References']);
+    expect(out!.note).toContain('PM-77 — June session-store data-loss postmortem');
+    // Rendered under its own header, between Progress and Work Log.
+    expect(out!.note).toMatch(/## Progress[\s\S]*## References[\s\S]*## Work Log/);
   });
 
   it('an INCOMPLETE structured answer keeps the free-form body as preamble (nothing dropped)', () => {
@@ -221,6 +239,47 @@ describe('noteShrinkRejected', () => {
     expect(noteShrinkRejected('x'.repeat(15001), 'y'.repeat(5999))).toBe(false);
   });
 
+  it('References, once present, is protected from deletion (external-ID index)', () => {
+    // Bulk up Work Log so total length stays high — only the References drop
+    // should trip the guard.
+    const oldNote = STRUCTURED_NOTE.replace(/## Work Log\n/, `## Work Log\n- ${'evidence '.repeat(250)}\n`);
+    const newNote = oldNote.replace(/## References\n[\s\S]*?(?=\n\n## )/, '');
+    expect(noteShrinkRejected(oldNote, newNote)).toBe(true);
+  });
+
+  it('an EMPTY-bodied section header may disappear without tripping the guard (no freeze)', () => {
+    // The assembler renders no header for an empty body, so a note carrying an
+    // empty `## References` (or `## Progress`) header loses that header on the
+    // very next fire. Judging deletion on header PRESENCE would reject that fire
+    // and every one after it — permanent freeze. Deletion is judged on BODY.
+    const withEmptyRefs = STRUCTURED_NOTE.replace(/## References\n[\s\S]*?(?=\n\n## )/, '## References\n');
+    const nextFire = withEmptyRefs.replace(/## References\n\n/, '');
+    expect(noteShrinkRejected(withEmptyRefs, nextFire)).toBe(false);
+  });
+
+  it('over-cap reorganize may consolidate References below 40% (curated-index contract)', () => {
+    // The MANDATORY REORGANIZE prompt orders the index deduped/consolidated;
+    // the per-section proportional floor must not reject that exact compliance.
+    // Under the cap the same shrink is still caught (silent wipe protection).
+    const refs = Array.from({ length: 40 }, (_, i) =>
+      `- [ISSUE-${1000 + i} — Issue number ${i} with a long descriptive title](https://tracker.example.com/ISSUE-${1000 + i}) — related`).join('\n');
+    const consolidated = '- [ISSUE-1000 — Umbrella: session store issues](https://tracker.example.com/ISSUE-1000) — supersedes 40 duplicates';
+    const overCap = STRUCTURED_NOTE
+      .replace(/## References\n[\s\S]*?(?=\n\n## )/, `## References\n${refs}\n`)
+      .replace(/## Work Log\n/, `## Work Log\n- ${'evidence '.repeat(400)}\n`);
+    expect(overCap.length).toBeGreaterThan(NOTE_REORG_CAP);
+    // Only References is consolidated; the rest of the note keeps its bulk so
+    // the whole-note absolute floor (cap × 0.4) is not what's under test here.
+    const reorganized = overCap
+      .replace(/## References\n[\s\S]*?(?=\n\n## )/, `## References\n${consolidated}\n`);
+    expect(noteShrinkRejected(overCap, reorganized)).toBe(false);
+
+    const underCap = STRUCTURED_NOTE.replace(/## References\n[\s\S]*?(?=\n\n## )/, `## References\n${refs}\n`);
+    const wiped = underCap.replace(/## References\n[\s\S]*?(?=\n\n## )/, `## References\n${consolidated}\n`);
+    expect(underCap.length).toBeLessThan(NOTE_REORG_CAP);
+    expect(noteShrinkRejected(underCap, wiped)).toBe(true);
+  });
+
   it('protects each durable summary section even when Work Log keeps total length high', () => {
     const protectedSections = ['Executive Summary', 'User Request', 'Context', 'Progress'] as const;
     const oldNote = protectedSections
@@ -264,7 +323,7 @@ WIP audit.
 });
 
 describe('buildSelfReportPrompt', () => {
-  it('empty note → asks for all five sections', () => {
+  it('empty note → asks for all sections', () => {
     expect(buildSelfReportPrompt('')).toContain('NOTE is EMPTY');
   });
 
@@ -314,6 +373,15 @@ describe('buildSelfReportPrompt', () => {
     const p = buildSelfReportPrompt('');
     expect(p).toContain('ALWAYS carry EXTERNAL ids');
     expect(p).toContain('NEVER include commit hashes');
+  });
+
+  it('References asks for markdown links with both id and title findable as text', () => {
+    const p = buildSelfReportPrompt('');
+    expect(p).toContain('REFERENCES:');
+    expect(p).toContain('markdown link');
+    expect(p).toMatch(/ID and the TITLE must both appear/);
+    // Curated index semantics, not an append-only log.
+    expect(p).toContain('curated INDEX');
   });
 });
 
