@@ -1,21 +1,28 @@
 #!/usr/bin/env npx tsx
 /**
- * Cleanup script: delete duplicate MS To-Do tasks.
+ * Cleanup: merge duplicate MS To-Do task copies without losing session links.
  *
- * For each MS To-Do list, groups tasks by title (case-insensitive).
- * For groups with >1 item, keeps the most recently modified and deletes the rest.
- * Then reconciles local ext['ms-todo'].id to point to the surviving remote item.
+ * The old version of this script grouped REMOTE tasks by title, deleted the
+ * "extras" remotely, and rewrote local ext ids — transferring nothing. When
+ * duplicate LOCAL tasks existed, whichever copy held the session links could
+ * be deleted, orphaning its sessions (the H-1B RFE incident, 2026-08).
+ *
+ * This version works on the LOCAL store through task-manager:
+ *   1. Groups local ms-todo tasks by (project, normalized title).
+ *   2. Picks ONE survivor per group: most session links, then oldest.
+ *   3. mergeTaskInto() every victim → session_ids unioned, sessions.task_id
+ *      re-pointed, victim ledgered as deleted (task_remote_links), remote twin
+ *      deletion retried by the sync tick until confirmed.
  *
  * Usage:
- *   npx tsx scripts/cleanup-mstodo-duplicates.ts --dry-run   # Preview only
- *   npx tsx scripts/cleanup-mstodo-duplicates.ts              # Actually delete
+ *   npx tsx scripts/cleanup-mstodo-duplicates.ts --dry-run       # preview (default)
+ *   npx tsx scripts/cleanup-mstodo-duplicates.ts --live          # actually merge
+ *   npx tsx scripts/cleanup-mstodo-duplicates.ts --live --title "Session: walnut"
  */
 
 import path from 'node:path';
 
-// Resolve WALNUT_HOME before importing anything
 const WALNUT_HOME = process.env.OPEN_WALNUT_HOME ?? path.join(process.env.HOME!, '.open-walnut');
-const TASKS_FILE = path.join(WALNUT_HOME, 'tasks', 'tasks.json');
 
 // Guard: refuse to run in a test environment against production data
 const isTestEnv = !!(process.env.VITEST || process.env.VITEST_WORKER_ID || process.env.NODE_ENV === 'test');
@@ -24,156 +31,109 @@ if (isTestEnv && WALNUT_HOME === path.join(process.env.HOME!, '.open-walnut')) {
   process.exit(1);
 }
 
-interface MSTodoTask {
+const live = process.argv.includes('--live');
+const titleFlagIdx = process.argv.indexOf('--title');
+const onlyTitle = titleFlagIdx >= 0 ? process.argv[titleFlagIdx + 1]?.toLowerCase().trim() : undefined;
+
+interface TaskLite {
   id: string;
   title: string;
-  status: string;
-  lastModifiedDateTime: string;
-  createdDateTime: string;
-}
-
-interface MSTodoList {
-  id: string;
-  displayName: string;
-}
-
-interface LocalTask {
-  id: string;
-  title: string;
+  project?: string;
   source: string;
+  created_at?: string;
+  session_ids: string[];
+  session_id?: string;
+  plan_session_id?: string;
+  exec_session_id?: string;
   ext?: Record<string, unknown>;
-  [key: string]: unknown;
 }
 
-interface TaskStore {
-  version: number;
-  tasks: LocalTask[];
-  [key: string]: unknown;
+function sessionLinkCount(t: TaskLite): number {
+  return new Set([
+    ...(t.session_ids ?? []),
+    t.session_id, t.plan_session_id, t.exec_session_id,
+  ].filter(Boolean)).size;
 }
-
-const dryRun = process.argv.includes('--dry-run');
 
 async function main() {
-  console.log(`\n=== MS To-Do Duplicate Cleanup ${dryRun ? '(DRY RUN)' : '(LIVE)'} ===\n`);
+  console.log(`\n=== MS To-Do duplicate merge ${live ? '(LIVE)' : '(DRY RUN — pass --live to apply)'} ===\n`);
 
-  // 1. Load auth token
-  const { getAccessToken, graphRequest } = await import('../src/integrations/microsoft-todo.js');
-  const token = await getAccessToken();
-  console.log('✓ Authenticated with MS Graph');
+  const { listTasks, mergeTaskInto } = await import('../src/core/task-manager.js');
+  const tasks = (await listTasks()) as unknown as TaskLite[];
 
-  // 2. Fetch all lists
-  const listsResp = await graphRequest<{ value: MSTodoList[] }>(token, 'GET', '/me/todo/lists');
-  const lists = listsResp.value;
-  console.log(`✓ Found ${lists.length} lists`);
+  const msTodo = tasks.filter((t) => {
+    if (t.source !== 'ms-todo') return false;
+    return !onlyTitle || t.title.toLowerCase().trim() === onlyTitle;
+  });
 
-  let totalDeleted = 0;
-  let totalKept = 0;
-  const survivorMap = new Map<string, { listId: string; taskId: string }>(); // title-key → surviving remote
+  // Pass 1 groups: several LOCAL tasks holding the SAME remote id — literal
+  // identity duplicates (identity says so, whatever the titles say).
+  const byRemoteId = new Map<string, TaskLite[]>();
+  for (const t of msTodo) {
+    const rid = (t.ext?.['ms-todo'] as Record<string, unknown> | undefined)?.id as string | undefined;
+    if (!rid) continue;
+    if (!byRemoteId.has(rid)) byRemoteId.set(rid, []);
+    byRemoteId.get(rid)!.push(t);
+  }
 
-  // 3. For each list, fetch all tasks and find duplicates
-  for (const list of lists) {
-    // Fetch all tasks in this list (paginate)
-    let allTasks: MSTodoTask[] = [];
-    let nextLink: string | undefined = `/me/todo/lists/${list.id}/tasks?$top=100`;
+  // Pass 2 groups: same (project, normalized title) — the fork copies, each
+  // wearing a DIFFERENT remote id because each fork pushed its own remote twin.
+  const groups = new Map<string, TaskLite[]>();
+  const seenInPass1 = new Set<string>();
+  for (const members of byRemoteId.values()) {
+    if (members.length > 1) for (const m of members) seenInPass1.add(m.id);
+  }
+  for (const t of msTodo) {
+    if (seenInPass1.has(t.id)) continue; // pass 1 handles those first
+    const key = `${(t.project ?? '').toLowerCase()}::${t.title.toLowerCase().trim()}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(t);
+  }
+  for (const [rid, members] of byRemoteId) {
+    if (members.length > 1) groups.set(`remote-id::${rid}`, members);
+  }
 
-    while (nextLink) {
-      const resp = await graphRequest<{ value: MSTodoTask[]; '@odata.nextLink'?: string }>(
-        token, 'GET', nextLink,
-      );
-      allTasks = allTasks.concat(resp.value);
-      nextLink = resp['@odata.nextLink'];
-    }
+  let groupsMerged = 0;
+  let victimsMerged = 0;
+  let linksMoved = 0;
 
-    if (allTasks.length === 0) continue;
+  for (const [, members] of groups) {
+    if (members.length <= 1) continue;
 
-    // Group by title (case-insensitive)
-    const groups = new Map<string, MSTodoTask[]>();
-    for (const task of allTasks) {
-      const key = task.title.toLowerCase().trim();
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)!.push(task);
-    }
+    // Survivor: most session links wins; tie → oldest created_at; tie → lowest id.
+    const sorted = [...members].sort((a, b) =>
+      sessionLinkCount(b) - sessionLinkCount(a)
+      || (a.created_at ?? '9999').localeCompare(b.created_at ?? '9999')
+      || a.id.localeCompare(b.id),
+    );
+    const [survivor, ...victims] = sorted;
 
-    // Find groups with duplicates
-    let listDupes = 0;
-    for (const [key, tasks] of groups) {
-      if (tasks.length <= 1) {
-        // No duplicate — record survivor for reconciliation
-        survivorMap.set(`${list.id}::${key}`, { listId: list.id, taskId: tasks[0].id });
-        continue;
-      }
-
-      // Sort by lastModifiedDateTime desc — keep the most recently modified
-      tasks.sort((a, b) =>
-        new Date(b.lastModifiedDateTime).getTime() - new Date(a.lastModifiedDateTime).getTime(),
-      );
-
-      const [survivor, ...toDelete] = tasks;
-      survivorMap.set(`${list.id}::${key}`, { listId: list.id, taskId: survivor.id });
-
-      console.log(`\n  [${list.displayName}] "${survivor.title}" — ${tasks.length} copies, deleting ${toDelete.length}`);
-      console.log(`    Keep: ${survivor.id} (modified ${survivor.lastModifiedDateTime})`);
-
-      for (const dup of toDelete) {
-        console.log(`    Delete: ${dup.id} (modified ${dup.lastModifiedDateTime})`);
-        if (!dryRun) {
-          try {
-            await graphRequest<Record<string, never>>(
-              token, 'DELETE', `/me/todo/lists/${list.id}/tasks/${dup.id}`,
-            );
-          } catch (err) {
-            console.error(`    ✗ Failed to delete ${dup.id}: ${err instanceof Error ? err.message : err}`);
-          }
+    console.log(`\n[${survivor.project || 'Inbox'}] "${survivor.title}" — ${members.length} copies`);
+    console.log(`  KEEP  ${survivor.id} (${sessionLinkCount(survivor)} session links, created ${survivor.created_at ?? '?'})`);
+    for (const v of victims) {
+      console.log(`  MERGE ${v.id} (${sessionLinkCount(v)} session links, created ${v.created_at ?? '?'})`);
+      if (live) {
+        try {
+          const { sessionsRelinked } = await mergeTaskInto(survivor.id, v.id);
+          linksMoved += sessionsRelinked;
+          victimsMerged++;
+        } catch (err) {
+          console.error(`  ✗ merge failed for ${v.id}: ${err instanceof Error ? err.message : err}`);
         }
-        totalDeleted++;
+      } else {
+        victimsMerged++;
       }
-      totalKept++;
-      listDupes += toDelete.length;
     }
-
-    if (listDupes > 0) {
-      console.log(`  [${list.displayName}] total: ${allTasks.length} tasks, ${listDupes} duplicates ${dryRun ? 'would be' : ''} deleted`);
-    }
+    groupsMerged++;
   }
 
   console.log(`\n--- Summary ---`);
-  console.log(`Groups with duplicates: ${totalKept}`);
-  console.log(`Duplicates ${dryRun ? 'to delete' : 'deleted'}: ${totalDeleted}`);
-
-  // 4. Reconcile local tasks — point ext['ms-todo'].id to the surviving remote item
-  if (!dryRun && totalDeleted > 0) {
-    console.log('\nReconciling local task store...');
-    const { readJsonFile, writeJsonFile } = await import('../src/utils/fs.js');
-    const store = await readJsonFile<TaskStore>(TASKS_FILE, { version: 1, tasks: [] });
-    let reconciled = 0;
-
-    for (const task of store.tasks) {
-      if (task.source !== 'ms-todo') continue;
-      const msExt = task.ext?.['ms-todo'] as Record<string, unknown> | undefined;
-      if (!msExt?.id) continue;
-
-      const listId = (msExt.list_id ?? msExt.list) as string | undefined;
-      if (!listId) continue;
-
-      const key = `${listId}::${task.title.toLowerCase().trim()}`;
-      const survivor = survivorMap.get(key);
-      if (survivor && survivor.taskId !== msExt.id) {
-        console.log(`  Reconcile: "${task.title}" — ${msExt.id} → ${survivor.taskId}`);
-        msExt.id = survivor.taskId;
-        msExt.list_id = survivor.listId;
-        reconciled++;
-      }
-    }
-
-    if (reconciled > 0) {
-      await writeJsonFile(TASKS_FILE, store);
-      console.log(`✓ Reconciled ${reconciled} local tasks`);
-    } else {
-      console.log('No local reconciliation needed');
-    }
-  }
-
-  console.log('\nDone.');
+  console.log(`Duplicate groups: ${groupsMerged}`);
+  console.log(`Victims ${live ? 'merged' : 'to merge'}: ${victimsMerged}`);
+  if (live) console.log(`Session rows re-pointed: ${linksMoved}`);
+  console.log(live
+    ? 'Remote twins of merged victims are ledgered for deletion; the sync tick retries until confirmed.'
+    : 'Dry run only — nothing was changed.');
 }
 
 main().catch((err) => {

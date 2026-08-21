@@ -120,6 +120,24 @@ export default function register(api: PluginApi): void {
     extractRemoteId(task: Task): string | undefined {
       return (task.ext?.['ms-todo'] as Record<string, unknown>)?.id as string | undefined;
     },
+    extractRemoteIdAliases(task: Task): string[] {
+      // Old ids from list migrations (pushTask DELETE+POST re-keys the item).
+      const prev = (task.ext?.['ms-todo'] as Record<string, unknown>)?.previous_ids;
+      return Array.isArray(prev) ? prev.filter((v): v is string => typeof v === 'string') : [];
+    },
+    async confirmRemoteDeleted(remoteId: string, remoteList?: string | null): Promise<boolean> {
+      if (!remoteList) return true; // no list recorded — nothing more we can do
+      const { deleteMsTodoTask } = await import('../microsoft-todo.js');
+      try {
+        await deleteMsTodoTask(remoteList, remoteId);
+        return true;
+      } catch (err) {
+        // 404 = already gone = confirmed. graphRequest throws plain Errors with
+        // the status embedded in the message ("Graph API DELETE … returned 404: …").
+        const msg = err instanceof Error ? err.message : String(err);
+        return /returned 404\b/.test(msg);
+      }
+    },
   };
 
   api.registerSync(sync);

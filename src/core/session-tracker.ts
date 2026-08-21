@@ -1814,6 +1814,32 @@ export async function linkSessionToTask(claudeSessionId: string, taskId: string)
 }
 
 /**
+ * Re-point every session linked to `fromTaskId` at `toTaskId`. The merge-side
+ * sibling of unlinkSessionsFromTasks: when duplicate tasks are merged, the
+ * victims' sessions must FOLLOW the surviving task, never be dropped — dedup
+ * cleanups that deleted the copy holding the links are how sessions went
+ * invisible (35 tasks lost their links before 2026-08-20). Same raw-column
+ * UPDATE rationale as unlinkSessionsFromTasks.
+ */
+export async function relinkSessionsToTask(fromTaskId: string, toTaskId: string): Promise<number> {
+  if (!fromTaskId || !toTaskId || fromTaskId === toTaskId) return 0;
+  await ensureSessionInit();
+  return withWriteLock(async () => {
+    const db = getDb();
+    if (!db) return 0;
+    const result = db.prepare(
+      'UPDATE sessions SET task_id = ? WHERE task_id = ?',
+    ).run(toTaskId, fromTaskId);
+    if (result.changes > 0) {
+      log.session.info('re-pointed session task links to merge survivor', {
+        fromTaskId, toTaskId, sessionsRelinked: result.changes,
+      });
+    }
+    return result.changes;
+  });
+}
+
+/**
  * Mark all sessions in the given list as completed.
  * Skips sessions that are already in a terminal state (completed/error).
  * Also kills any orphaned OS processes (best-effort, fire-and-forget).

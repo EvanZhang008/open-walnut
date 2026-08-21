@@ -24,6 +24,7 @@ import { getDb, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction
 import { runMigrationIfNeeded } from './task-db-migration.js';
 import { migrateProjectMemoryDirs } from './memory-dir-migration.js';
 import { getExtIndexSpec } from './ext-index-registry.js';
+import { recordRemoteLink } from './task-remote-links.js';
 
 // CJK detection regex — used only for log enrichment so that "plugin not loaded"
 // warnings flag the cases that an external sync plugin's validateContent would
@@ -1475,6 +1476,11 @@ async function pushToPlugin(
             if (url) found.external_url = url;
           }
           await writeStore(store);
+          // Ledger ownership of the freshly assigned remote id.
+          const { ids, remoteList } = remoteIdsFromExt(found.source, found.ext);
+          for (const remoteId of ids) {
+            recordRemoteLink({ source: found.source, remoteId, taskId: found.id, remoteList, state: 'owned' });
+          }
           bus.emit(EventNames.TASK_UPDATED, { task: found }, ['web-ui'], { source: 'sync' });
         }
       });
@@ -1640,6 +1646,13 @@ async function autoPushIfConfiguredImpl(task: Task): Promise<SyncResult> {
           if (url) found.external_url = url;
         }
         await writeStore(store);
+        // Ledger ownership — covers first_create AND list-migration re-keys
+        // (the new remote id becomes owned; the old one stays reachable via
+        // previous_ids aliases, which the reconciler now resolves).
+        const { ids, remoteList } = remoteIdsFromExt(found.source, found.ext);
+        for (const remoteId of ids) {
+          recordRemoteLink({ source: found.source, remoteId, taskId: found.id, remoteList, state: 'owned' });
+        }
         bus.emit(EventNames.TASK_UPDATED, { task: found }, ['web-ui'], { source: 'sync' });
       }
     });
@@ -2743,6 +2756,75 @@ interface MigratedTask {
 }
 
 /**
+ * Every remote id (current + aliases) a task's ext carries for its source.
+ * Uses the plugin's extractRemoteId/extractRemoteIdAliases when loaded;
+ * falls back to the `ext[source].id` / `.previous_ids` convention so the
+ * ledger still gets written when a plugin failed to load.
+ */
+function remoteIdsFromExt(
+  source: string,
+  ext: Record<string, unknown> | undefined,
+): { ids: string[]; remoteList: string | null } {
+  if (!ext || source === 'local') return { ids: [], remoteList: null };
+  const shim = { source, ext } as unknown as Task;
+  const plugin = registry.get(source);
+  const primary = plugin?.sync.extractRemoteId?.(shim)
+    ?? ((ext[source] as Record<string, unknown> | undefined)?.id as string | undefined);
+  const aliases = plugin?.sync.extractRemoteIdAliases?.(shim)
+    ?? (((ext[source] as Record<string, unknown> | undefined)?.previous_ids as string[] | undefined) ?? []);
+  const ids = [primary, ...aliases].filter((v): v is string => !!v);
+  const remoteList = ((ext[source] as Record<string, unknown> | undefined)?.list_id as string | undefined) ?? null;
+  return { ids: [...new Set(ids)], remoteList };
+}
+
+/** Ledger a source migration: the task released its remote identity. */
+function recordReleasedRemoteId(
+  taskId: string,
+  oldSource: TaskSource,
+  oldExt: Record<string, unknown> | undefined,
+): void {
+  try {
+    const { ids, remoteList } = remoteIdsFromExt(oldSource, oldExt);
+    for (const remoteId of ids) {
+      recordRemoteLink({
+        source: oldSource, remoteId, taskId, remoteList,
+        state: 'released', reason: 'source-migration',
+      });
+    }
+  } catch (err) {
+    // Ledger writes must never break the mutation itself; a miss here degrades
+    // to the pre-ledger behavior (possible re-import), not to data loss.
+    log.task.warn('failed to record released remote id', {
+      taskId, oldSource, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * Ledger a local delete: the remote twin must go too (state='deleted',
+ * unconfirmed until the provider acknowledges). Framework-side so a plugin
+ * that forgets its deleteTask hook can't leave the id re-importable.
+ */
+function recordDeletedRemoteIds(tasks: Task[]): void {
+  for (const task of tasks) {
+    try {
+      const { ids, remoteList } = remoteIdsFromExt(task.source, task.ext);
+      for (const remoteId of ids) {
+        recordRemoteLink({
+          source: task.source, remoteId, taskId: task.id, remoteList,
+          state: 'deleted', reason: 'local-delete',
+        });
+      }
+    } catch (err) {
+      log.task.warn('failed to record deleted remote id', {
+        taskId: task.id, source: task.source,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+}
+
+/**
  * Migrate a task (and same-source children) to a new project + source.
  * Called inside withWriteLock — mutates store in place (no writeStore call).
  * Returns the list of migrated tasks with their old state snapshots.
@@ -2767,6 +2849,12 @@ function migrateTaskSource(
   task.sync_error = undefined;
   task.updated_at = now;
   results.push({ task, oldSource, oldExt, oldTitle });
+  // Ledger the released remote id BEFORE any network I/O — recorded here,
+  // inside the write lock, so a crash between "ext cleared" and "remote twin
+  // marked moved" cannot lose the fact. Without this record the next pull
+  // re-imported the still-alive remote twin as a fresh local task (the fork
+  // bug this ledger exists to kill).
+  recordReleasedRemoteId(task.id, oldSource, oldExt);
 
   // Migrate same-source children (they inherit parent's source)
   const children = store.tasks.filter(
@@ -2782,6 +2870,7 @@ function migrateTaskSource(
     child.sync_error = undefined;
     child.updated_at = now;
     results.push({ task: child, oldSource, oldExt: childOldExt, oldTitle: childOldTitle });
+    recordReleasedRemoteId(child.id, oldSource, childOldExt);
   }
 
   // Register the destination project (Inbox never gets a row).
@@ -3689,6 +3778,11 @@ export async function deleteTask(idPrefix: string): Promise<{ task: Task }> {
   if (deletedGroupId) pruneVirtualGroup(store, deletedGroupId);
   await writeStore(store);
 
+  // Ledger the remote id as deleted BEFORE attempting the remote delete: even
+  // if the network call fails, no pull may ever re-import this id. The sync
+  // tick retries unconfirmed deletes until the provider acknowledges.
+  recordDeletedRemoteIds([task]);
+
   // Fire-and-forget: delete from remote provider via plugin
   pushToPlugin(task, 'deleteTask').catch((err) => {
     log.task.warn('failed to delete task from remote', {
@@ -3776,7 +3870,8 @@ export async function deleteTasksByIds(
     return removed;
   });
 
-  // Fire-and-forget remote deletes (same as deleteTask).
+  // Ledger first (same reasoning as deleteTask), then fire-and-forget remote deletes.
+  recordDeletedRemoteIds(deleted);
   for (const task of deleted) {
     pushToPlugin(task, 'deleteTask').catch((err) => {
       log.task.warn('failed to delete task from remote', {
@@ -3788,6 +3883,98 @@ export async function deleteTasksByIds(
   }
 
   return { deleted, failed };
+}
+
+/**
+ * Merge one task into another, then delete the victim. Session links are the
+ * point: `session_ids` are unioned, empty session slots are filled from the
+ * victim, and every sessions.task_id row pointing at the victim is re-pointed
+ * at the survivor BEFORE the victim row disappears. Dedup cleanups that simply
+ * deleted "the extra copy" destroyed whichever links that copy held (the
+ * H-1B RFE incident) — this is the sanctioned replacement.
+ *
+ * The victim's remote id is ledgered as deleted (via the normal delete path's
+ * recordDeletedRemoteIds), so the surviving remote twin can never re-import.
+ * Content fields are NOT merged — the survivor's content wins; callers choose
+ * the survivor accordingly.
+ */
+export async function mergeTaskInto(
+  survivorId: string,
+  victimId: string,
+): Promise<{ survivor: Task; sessionsRelinked: number }> {
+  if (survivorId === victimId) throw new Error('mergeTaskInto: survivor and victim are the same task');
+  await ensureInit();
+
+  const merged = await withWriteLock(async () => {
+    const store = await readStore();
+    const survivor = store.tasks.find((t) => t.id === survivorId);
+    const victim = store.tasks.find((t) => t.id === victimId);
+    if (!survivor) throw new Error(`mergeTaskInto: survivor "${survivorId}" not found`);
+    if (!victim) throw new Error(`mergeTaskInto: victim "${victimId}" not found`);
+
+    // Union session history; fill empty slots from the victim.
+    survivor.session_ids = [...new Set([...(survivor.session_ids ?? []), ...(victim.session_ids ?? [])])];
+    if (!survivor.session_id && victim.session_id) survivor.session_id = victim.session_id;
+    if (!survivor.plan_session_id && victim.plan_session_id) survivor.plan_session_id = victim.plan_session_id;
+    if (!survivor.exec_session_id && victim.exec_session_id) survivor.exec_session_id = victim.exec_session_id;
+    // Keep the earliest birth time so the merged task's history stays honest.
+    if (victim.created_at && (!survivor.created_at || victim.created_at < survivor.created_at)) {
+      survivor.created_at = victim.created_at;
+    }
+    survivor.updated_at = new Date().toISOString();
+
+    // Re-home the victim's children.
+    for (const t of store.tasks) {
+      if (t.parent_task_id === victimId) t.parent_task_id = survivorId;
+    }
+
+    const victimSnapshot = structuredClone(victim);
+    const deletedGroupId = victim.group_id;
+    store.tasks = store.tasks.filter((t) => t.id !== victimId);
+    if (deletedGroupId) pruneVirtualGroup(store, deletedGroupId);
+    await writeStore(store);
+    return { survivor: structuredClone(survivor), victim: victimSnapshot };
+  });
+
+  // Ledger the victim's remote ids so its remote twin can't re-import as a
+  // third copy — EXCEPT ids the survivor itself still holds (two local rows
+  // can share one remote id; tombstoning it would queue the SURVIVOR's remote
+  // twin for deletion). Unconfirmed: the sync tick's retry loop performs the
+  // actual remote deletion.
+  try {
+    const survivorIds = new Set(remoteIdsFromExt(merged.survivor.source, merged.survivor.ext).ids);
+    const { ids, remoteList } = remoteIdsFromExt(merged.victim.source, merged.victim.ext);
+    for (const remoteId of ids) {
+      if (survivorIds.has(remoteId)) continue;
+      recordRemoteLink({
+        source: merged.victim.source, remoteId, taskId: merged.victim.id, remoteList,
+        state: 'deleted', reason: 'merged-duplicate',
+      });
+    }
+  } catch (err) {
+    log.task.warn('mergeTaskInto: failed to ledger victim remote ids', {
+      survivorId, victimId, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Re-point sessions OUTSIDE the task write lock (session-tracker has its own).
+  let sessionsRelinked = 0;
+  try {
+    const { relinkSessionsToTask } = await import('./session-tracker.js');
+    sessionsRelinked = await relinkSessionsToTask(victimId, survivorId);
+  } catch (err) {
+    log.task.warn('mergeTaskInto: failed to re-point session links', {
+      survivorId, victimId, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  bus.emit(EventNames.TASK_UPDATED, { task: merged.survivor }, ['web-ui'], { source: 'merge' });
+  bus.emit(EventNames.TASK_DELETED, { task: merged.victim }, ['web-ui'], { source: 'merge' });
+  log.task.info('merged duplicate task into survivor', {
+    survivorId, victimId, sessionsRelinked,
+    sessionIds: merged.survivor.session_ids,
+  });
+  return { survivor: merged.survivor, sessionsRelinked };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5247,6 +5434,7 @@ export async function addTasksBulk(
       insertCols.map((c) => '@' + c).join(', ') + ')';
 
     const created: Task[] = [];
+    const nowIso = new Date().toISOString();
     dbTransaction((handle) => {
       const stmt = handle.prepare(insertSql);
       for (const td of tasks) {
@@ -5263,6 +5451,12 @@ export async function addTasksBulk(
           id: td.id ?? generateId(),
           ...td,
           priority: sanitizePriority(td.priority),
+          // Timestamps are non-optional: a row born without them has an LWW
+          // threshold of 0, so every future remote echo beats it and the
+          // reconciler re-updates it forever (1,551 NULL-created_at rows
+          // accumulated this way before 2026-08-20).
+          created_at: td.created_at ?? nowIso,
+          updated_at: td.updated_at ?? nowIso,
         } as Task;
         const partial = taskToRow(task);
         const bound: Record<string, unknown> = {};
@@ -5285,7 +5479,7 @@ export async function addTasksBulk(
 export async function deleteTasksBulk(ids: string[]): Promise<{ deleted: Task[] }> {
   if (!ids.length) return { deleted: [] };
   await ensureInit();
-  return withWriteLock(async () => {
+  const result = await withWriteLock(async () => {
     const deleted: Task[] = [];
     dbTransaction((handle) => {
       const sel = handle.prepare('SELECT * FROM tasks WHERE id = ?');
@@ -5300,6 +5494,28 @@ export async function deleteTasksBulk(ids: string[]): Promise<{ deleted: Task[] 
     if (deleted.length) invalidateRowShadow(); // see invalidateRowShadow
     return { deleted };
   });
+  // Ledger the remote ids. deleteTasksBulk's only caller is the reconciler
+  // removing tasks whose remote twin is ALREADY gone, so these are born
+  // confirmed — there is nothing left to delete remotely, but the id must
+  // still never be re-importable (a stale delta echo can re-present it).
+  if (result.deleted.length) {
+    for (const task of result.deleted) {
+      try {
+        const { ids, remoteList } = remoteIdsFromExt(task.source, task.ext);
+        for (const remoteId of ids) {
+          recordRemoteLink({
+            source: task.source, remoteId, taskId: task.id, remoteList,
+            state: 'deleted', reason: 'remote-gone', remoteDeleteConfirmed: true,
+          });
+        }
+      } catch (err) {
+        log.task.warn('failed to record deleted remote id', {
+          taskId: task.id, error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+  return result;
 }
 
 // ── Plugin ext-id lookup ────────────────────────────────────────────────────

@@ -3907,6 +3907,34 @@ function startPluginSyncPolling(): void {
           }
         }
 
+        // Step 1.6: Retry unconfirmed remote deletions. A local delete ledgers
+        // the remote id (state='deleted', unconfirmed) and tries the remote
+        // delete once, fire-and-forget; this loop keeps retrying survivors
+        // each tick until the provider acknowledges (success or 404), so a
+        // network blip can't leave a remote twin alive forever. The tombstone
+        // itself already blocks re-import while unconfirmed.
+        if (plugin.sync.confirmRemoteDeleted) {
+          try {
+            const { listUnconfirmedRemoteDeletes, confirmRemoteDelete } = await import('../core/task-remote-links.js')
+            const pending = listUnconfirmedRemoteDeletes(plugin.id, 5)
+            for (const link of pending) {
+              try {
+                const gone = await plugin.sync.confirmRemoteDeleted(link.remote_id, link.remote_list)
+                if (gone) confirmRemoteDelete(plugin.id, link.remote_id)
+              } catch (err) {
+                log.web.debug(`${plugin.id} sync: remote delete retry failed`, {
+                  remoteId: link.remote_id,
+                  error: err instanceof Error ? err.message : String(err),
+                })
+              }
+            }
+          } catch (err) {
+            log.web.debug(`${plugin.id} sync: remote delete retry pass failed`, {
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
+
         // Step 2: Build SyncPollContext and run delta pull.
         // `listTasks()` is intentionally deferred to this step — Step 1/1.5
         // now go through targeted SQL (listUnsyncedTasks / listSyncErrorTasks).

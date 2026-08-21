@@ -141,6 +141,7 @@ export function getDb(): DatabaseType | null {
 
     handle.exec(SCHEMA_SQL);
     runOneTimeMigrations(handle);
+    backfillNullTimestamps(handle);
 
     // Truncate the WAL on open. Without this the WAL grows unboundedly
     // between process restarts — observed at 80MB in prod. Returns
@@ -442,6 +443,32 @@ const SCHEMA_SQL = `
     label TEXT NOT NULL,
     order_index INTEGER
   );
+  -- Remote-identity ledger: which remote item ids this store has ever owned,
+  -- released (ext cleared by a source migration), or deleted. Sync pull paths
+  -- consult it so a remote id a local task once owned can NEVER mint a second
+  -- local task (the fork bug: 141 tasks re-created under new ids, 35 losing
+  -- their session links, before 2026-08-20). Replaces the ms-todo-only
+  -- deletedMsIds array in ms-todo-delta.json, which was capped at 500 and
+  -- silently evicted old tombstones.
+  -- state: 'owned' | 'released' | 'deleted'.
+  -- remote_delete_confirmed: for state='deleted', 1 once the remote item is
+  -- verified gone (delete returned success or 404); the sync tick retries
+  -- unconfirmed deletions so local deletes never block on network.
+  CREATE TABLE IF NOT EXISTS task_remote_links (
+    remote_source TEXT NOT NULL,
+    remote_id     TEXT NOT NULL,
+    task_id       TEXT,
+    remote_list   TEXT,
+    state         TEXT NOT NULL,
+    reason        TEXT,
+    remote_delete_confirmed INTEGER NOT NULL DEFAULT 0,
+    updated_at    TEXT NOT NULL,
+    PRIMARY KEY (remote_source, remote_id)
+  );
+  CREATE INDEX IF NOT EXISTS task_remote_links_task ON task_remote_links(task_id);
+  CREATE INDEX IF NOT EXISTS task_remote_links_unconfirmed
+    ON task_remote_links(remote_source, state, remote_delete_confirmed)
+    WHERE state = 'deleted' AND remote_delete_confirmed = 0;
 `;
 
 /**
@@ -1055,6 +1082,75 @@ function migrateReadMarkerToUnread(handle: DatabaseType): void {
 
   if (summary.cleared > 0) {
     log.task.info('task-db v6: read marker renamed needs_attention → unread', summary);
+  }
+}
+
+// ── Timestamp backfill (idempotent, runs on every open) ────────────────────
+// Deliberately NOT a numbered one-time migration: the WHERE clause matches
+// nothing once repaired, so re-running is a single cheap SELECT — and keeping
+// it out of the version chain lets it land independently of concurrent
+// migration work.
+
+/**
+ * Decode the base36 millisecond timestamp that generateId() embeds before the
+ * dash. Returns an ISO string, or null when the prefix doesn't decode to a
+ * plausible time (imported/foreign ids). Exported for the migration test.
+ */
+export function timestampFromTaskId(id: string): string | null {
+  const prefix = id.split('-')[0];
+  if (!prefix || !/^[0-9a-z]+$/.test(prefix)) return null;
+  const ms = parseInt(prefix, 36);
+  // Plausibility window: 2020-01-01 .. 2100-01-01. Outside it the prefix is
+  // not one of ours (e.g. an imported id that happens to parse).
+  if (!Number.isFinite(ms) || ms < 1577836800000 || ms > 4102444800000) return null;
+  return new Date(ms).toISOString();
+}
+
+/**
+ * Backfill NULL timestamps. Bulk sync paths historically inserted rows with
+ * NULL created_at/updated_at/_synced_at, which zeroes the reconciler's
+ * Last-Write-Wins threshold (max(_syncedAt, updated_at)) and made those rows
+ * re-update every cycle forever (2026-08-20: 28 identical `updated 1197`
+ * cycles; 1,551 NULL-created_at rows). Seeds created_at from the base36
+ * timestamp inside the task id, falling back to updated_at, then now.
+ */
+function backfillNullTimestamps(handle: DatabaseType): void {
+  const summary = handle.transaction(() => {
+    let createdFixed = 0;
+    let updatedFixed = 0;
+    let syncedFixed = 0;
+    const rows = handle
+      .prepare(
+        `SELECT id, created_at, updated_at, _synced_at, source FROM tasks
+          WHERE created_at IS NULL OR created_at = ''
+             OR updated_at IS NULL OR updated_at = ''
+             OR ((_synced_at IS NULL OR _synced_at = '') AND source != 'local')`,
+      )
+      .all() as Array<{ id: string; created_at: string | null; updated_at: string | null; _synced_at: string | null; source: string | null }>;
+    const upd = handle.prepare(
+      `UPDATE tasks SET created_at = @created_at, updated_at = @updated_at, _synced_at = @_synced_at WHERE id = @id`,
+    );
+    const nowIso = new Date().toISOString();
+    for (const row of rows) {
+      const fromId = timestampFromTaskId(row.id);
+      const created = row.created_at || fromId || row.updated_at || nowIso;
+      const updated = row.updated_at || created;
+      // Synced rows (non-local source) with no _synced_at: stamp it equal to
+      // updated_at so the LWW threshold reflects "as of now, believed in sync".
+      // A genuinely newer remote edit still wins (remoteTime > threshold).
+      const synced = row.source && row.source !== 'local'
+        ? (row._synced_at || updated)
+        : row._synced_at;
+      if (!row.created_at) createdFixed++;
+      if (!row.updated_at) updatedFixed++;
+      if (synced !== row._synced_at) syncedFixed++;
+      upd.run({ id: row.id, created_at: created, updated_at: updated, _synced_at: synced ?? null });
+    }
+    return { rows: rows.length, createdFixed, updatedFixed, syncedFixed };
+  })();
+
+  if (summary.rows > 0) {
+    log.task.info('task-db: backfilled NULL timestamps (LWW threshold repair)', summary);
   }
 }
 

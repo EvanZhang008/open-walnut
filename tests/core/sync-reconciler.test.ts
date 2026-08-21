@@ -388,8 +388,11 @@ describe('SyncReconciler', () => {
       mockSessions.length = 0;
     });
 
-    it('removes tasks with stopped session (not actively running)', async () => {
-      // Session exists but is stopped — not blocking
+    it('does not remove tasks with a stopped session either — session history blocks removal', async () => {
+      // 2026-08-20 contract flip: a remote item vanishing from a pull is not
+      // authority to destroy local session history. The old "stopped sessions
+      // don't block" rule is exactly how the H-1B RFE task (whose only session
+      // had finished) was deleted and its session orphaned.
       mockSessions.length = 0;
       mockSessions.push({ claudeSessionId: 'sess-done', process_status: 'stopped' });
 
@@ -403,8 +406,43 @@ describe('SyncReconciler', () => {
 
       await reconciler.tick(plugin, ctx);
 
-      expect(await storedIds()).not.toContain('has-done-session');
+      expect(await storedIds()).toContain('has-done-session');
       mockSessions.length = 0;
+    });
+
+    it('does not remove tasks whose only link lives in session_ids', async () => {
+      // session_ids was invisible to the old guard — 1,641 tasks held their
+      // ONLY session link there, deletable on any remote disappearance.
+      mockSessions.length = 0;
+      mockSessions.push({ claudeSessionId: 'sess-hist', process_status: 'stopped' });
+
+      const localTask = makeTask({
+        id: 'has-session-ids-only',
+        session_ids: ['sess-hist'],
+        ext: { 'test-plugin': { remote_id: 'r-gone' } },
+      });
+      const plugin = makePlugin({ fullPullResult: [] });
+      const ctx = makeCtx(await seedStore([localTask]));
+
+      await reconciler.tick(plugin, ctx);
+
+      expect(await storedIds()).toContain('has-session-ids-only');
+      mockSessions.length = 0;
+    });
+
+    it('still removes session-less tasks so remote deletions propagate', async () => {
+      mockSessions.length = 0;
+      const localTask = makeTask({
+        id: 'no-sessions',
+        session_ids: [],
+        ext: { 'test-plugin': { remote_id: 'r-gone' } },
+      });
+      const plugin = makePlugin({ fullPullResult: [] });
+      const ctx = makeCtx(await seedStore([localTask]));
+
+      await reconciler.tick(plugin, ctx);
+
+      expect(await storedIds()).not.toContain('no-sessions');
     });
 
     it('protects local-only fields from being overwritten', async () => {
@@ -563,6 +601,174 @@ describe('SyncReconciler', () => {
       expect(await storedTitles()).toContain('New ground');
       const projects = await getStoreProjects();
       expect(projects['Fresh Project']?.source).toBe('test-plugin');
+    });
+  });
+
+  describe('alias adoption (re-keyed remote items)', () => {
+    function makePluginWithAliases(fullPullResult: RemoteSyncItem[]): RegisteredPlugin {
+      const plugin = makePlugin({ fullPullResult });
+      plugin.sync.extractRemoteIdAliases = (task: Task) => {
+        const prev = (task.ext?.['test-plugin'] as any)?.previous_ids;
+        return Array.isArray(prev) ? prev : [];
+      };
+      return plugin;
+    }
+
+    it('adopts a remote item wearing a former id instead of creating a duplicate', async () => {
+      // Fork shape: the local task re-keyed to r-new (list migration) and
+      // remembers r-old in previous_ids, but a remote row keyed r-old still
+      // shows up in the pull (the old twin survived the DELETE, or a stale
+      // delta echoes it). Old behavior: r-old lands in toCreate → duplicate.
+      const localTask = makeTask({
+        id: 'owner-task',
+        ext: { 'test-plugin': { remote_id: 'r-new', previous_ids: ['r-old'] } },
+      });
+      const remoteItems = [
+        makeRemoteItem({ remoteId: 'r-old', title: 'Re-keyed twin', fields: { title: 'Re-keyed twin' } }),
+      ];
+      const plugin = makePluginWithAliases(remoteItems);
+      const ctx = makeCtx(await seedStore([localTask]));
+
+      await reconciler.tick(plugin, ctx);
+
+      // No duplicate created; the owner adopted the remote's current id.
+      const stored = await listTasks();
+      expect(stored).toHaveLength(1);
+      expect(stored[0].id).toBe('owner-task');
+      expect((stored[0].ext?.['test-plugin'] as any)?.id).toBe('r-old');
+    });
+
+    it('does not queue the adopting task for removal', async () => {
+      // The adopted task's CURRENT id (r-new) is absent from the remote — that
+      // absence is expected (the remote wears the alias), never a removal.
+      const localTask = makeTask({
+        id: 'owner-task',
+        session_ids: [],
+        ext: { 'test-plugin': { remote_id: 'r-new', previous_ids: ['r-old'] } },
+      });
+      const remoteItems = [
+        makeRemoteItem({ remoteId: 'r-old', fields: { title: 'Twin' } }),
+      ];
+      const plugin = makePluginWithAliases(remoteItems);
+      const ctx = makeCtx(await seedStore([localTask]));
+
+      await reconciler.tick(plugin, ctx);
+
+      expect(await storedIds()).toContain('owner-task');
+    });
+  });
+
+  describe('remote-id ledger gate', () => {
+    it('never re-creates a task for a released remote id', async () => {
+      const { recordRemoteLink } = await import('../../src/core/task-remote-links.js');
+      recordRemoteLink({
+        source: 'test-plugin', remoteId: 'r-released', taskId: 'old-task',
+        state: 'released', reason: 'source-migration',
+      });
+      const remoteItems = [
+        makeRemoteItem({ remoteId: 'r-released', title: 'Orphaned twin', fields: { title: 'Orphaned twin' } }),
+      ];
+      const plugin = makePlugin({ fullPullResult: remoteItems });
+      const ctx = makeCtx(await seedStore([]));
+
+      await reconciler.tick(plugin, ctx);
+
+      expect(await storedTitles()).not.toContain('Orphaned twin');
+    });
+
+    it('never re-creates a task for a deleted remote id', async () => {
+      const { recordRemoteLink } = await import('../../src/core/task-remote-links.js');
+      recordRemoteLink({
+        source: 'test-plugin', remoteId: 'r-deleted', taskId: 'dead-task',
+        state: 'deleted', reason: 'local-delete',
+      });
+      const remoteItems = [
+        makeRemoteItem({ remoteId: 'r-deleted', title: 'Zombie twin', fields: { title: 'Zombie twin' } }),
+      ];
+      const plugin = makePlugin({ fullPullResult: remoteItems });
+      const ctx = makeCtx(await seedStore([]));
+
+      await reconciler.tick(plugin, ctx);
+
+      expect(await storedTitles()).not.toContain('Zombie twin');
+    });
+
+    it('still creates tasks for owned/unknown remote ids', async () => {
+      const remoteItems = [
+        makeRemoteItem({ remoteId: 'r-fresh', title: 'Legit new', fields: { title: 'Legit new' } }),
+      ];
+      const plugin = makePlugin({ fullPullResult: remoteItems });
+      const ctx = makeCtx(await seedStore([]));
+
+      await reconciler.tick(plugin, ctx);
+
+      expect(await storedTitles()).toContain('Legit new');
+    });
+  });
+
+  describe('convergence (LWW watermark advances)', () => {
+    it('addTasksBulk stamps timestamps, so a STALE remote echo no longer wins', async () => {
+      // The old corrupt shape: bulk-created rows carried NULL updated_at →
+      // LWW threshold 0 → even a years-old remote echo re-applied every cycle
+      // (28 identical `updated 1197` cycles observed 2026-08-20). Timestamps
+      // are now stamped at insert, so the stale echo loses.
+      const localTask = makeTask({
+        id: 'fresh-row',
+        title: 'Local title',
+        created_at: undefined as any,
+        updated_at: undefined as any,
+        ext: { 'test-plugin': { remote_id: 'r1' } },
+      });
+      const remoteItems = [
+        makeRemoteItem({
+          remoteId: 'r1', title: 'Stale echo', remoteUpdatedAt: '2025-06-01T00:00:00Z',
+          fields: { title: 'Stale echo' },
+        }),
+      ];
+      const plugin = makePlugin({ fullPullResult: remoteItems });
+      await reconciler.tick(plugin, makeCtx(await seedStore([localTask])));
+
+      const stored = (await listTasks()).find((t) => t.id === 'fresh-row')!;
+      expect(stored.title).toBe('Local title');
+      expect(stored.updated_at).toBeTruthy();
+      expect(stored.created_at).toBeTruthy();
+    });
+
+    it('an applied remote update advances the watermark and does not re-apply', async () => {
+      const localTask = makeTask({
+        id: 'stale-row',
+        title: 'Old title',
+        updated_at: '2025-01-01T00:00:00Z',
+        ext: { 'test-plugin': { remote_id: 'r1' } },
+      });
+      // A genuinely newer remote edit (newer than insert time + echo grace).
+      const remoteEditTime = new Date(Date.now() + 60_000).toISOString();
+      const remoteItems = [
+        makeRemoteItem({
+          remoteId: 'r1', title: 'New title', remoteUpdatedAt: remoteEditTime,
+          fields: { title: 'New title' },
+        }),
+      ];
+
+      const plugin1 = makePlugin({ fullPullResult: remoteItems });
+      await reconciler.tick(plugin1, makeCtx(await seedStore([localTask])));
+
+      const afterFirst = (await listTasks()).find((t) => t.id === 'stale-row')!;
+      expect(afterFirst.title).toBe('New title');
+      // The watermark must now cover the remote's timestamp — this is what
+      // makes the second cycle a no-op.
+      expect(afterFirst._syncedAt).toBe(remoteEditTime);
+
+      // Second reconcile over identical remote data: the diff must classify
+      // the row unchanged (remoteTime == watermark, not >).
+      const reconciler2 = new SyncReconciler();
+      reconciler2.forceNextReconcile('test-plugin');
+      const plugin2 = makePlugin({ fullPullResult: remoteItems });
+      await reconciler2.tick(plugin2, makeCtx(await listTasks()));
+
+      const afterSecond = (await listTasks()).find((t) => t.id === 'stale-row')!;
+      expect(afterSecond.title).toBe('New title');
+      expect(afterSecond._syncedAt).toBe(remoteEditTime);
     });
   });
 });

@@ -767,14 +767,19 @@ describe('task-db v5 migration', () => {
       [{ id: 'l1', title: 'local inbox', category: 'Inbox', project: 'Inbox', source: 'local' }],
       [['Inbox', 'local']],
     );
+    const warn = vi.spyOn(log.task, 'warn');
     getDb();
     const row = getDb()!
       .prepare('SELECT project, source, updated_at FROM tasks WHERE id = ?')
       .get('l1') as { project: string | null; source: string; updated_at: string | null };
     expect(row.project ?? '').toBe('');
     expect(row.source).toBe('local');
-    // Never inserted an updated_at → the reset pass did not touch this row.
-    expect(row.updated_at).toBeNull();
+    // The reset pass did not touch this row — it only fires (and warns) for
+    // provider-sourced Inbox tasks. (updated_at is no longer a usable proxy:
+    // the v9 timestamp backfill legitimately fills NULLs on every row.)
+    const reset = warn.mock.calls.find(([msg]) => String(msg).includes('provider-sourced Inbox tasks'));
+    expect(reset).toBeUndefined();
+    warn.mockRestore();
   });
 
   it('migrates a v4 db with no task_categories table at all', () => {

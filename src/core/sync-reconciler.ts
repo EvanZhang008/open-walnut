@@ -23,6 +23,7 @@ import {
 } from './task-manager.js';
 import { bus, EventNames } from './event-bus.js';
 import { isLegacyInboxGroup, isRetiredQuickStartGroup } from '../utils/format.js';
+import { isRemoteIdBlocked } from './task-remote-links.js';
 import type { RegisteredPlugin, RemoteSyncItem, SyncPollContext } from './integration-types.js';
 import type { Task } from './types.js';
 
@@ -51,6 +52,9 @@ const EMPTY_RESULT_MIN_RATIO = 0.1;    // Abort if result < 10% of last known co
 interface ReconcileDiffResult {
   toCreate: RemoteSyncItem[];
   toUpdate: Array<{ local: Task; remote: RemoteSyncItem }>;
+  /** Remote items matched to a local task via a FORMER id (alias): the task
+   *  adopts the remote's current id instead of a duplicate being created. */
+  toAdopt: Array<{ local: Task; remote: RemoteSyncItem }>;
   toRemove: Task[];
   unchanged: number;
 }
@@ -205,6 +209,7 @@ export class SyncReconciler {
     plugin: RegisteredPlugin,
   ): ReconcileDiffResult {
     const extractId = plugin.sync.extractRemoteId!;
+    const extractAliases = plugin.sync.extractRemoteIdAliases;
 
     // Build maps
     const remoteMap = new Map<string, RemoteSyncItem>();
@@ -224,14 +229,34 @@ export class SyncReconciler {
         localWithoutRemoteId.push(task);
       }
     }
+    // Alias map, SEPARATE from the current-id map: a remote item still keyed to
+    // a task's FORMER id (ms-todo re-keys on list migration) must join to that
+    // task — as an ADOPTION — instead of landing in toCreate as a duplicate.
+    // Kept separate because the removal loop below may only judge current ids:
+    // folding aliases in would queue a task for removal whenever one of its
+    // OLD ids is (correctly) absent from the remote.
+    const localByAlias = new Map<string, Task>();
+    if (extractAliases) {
+      for (const task of localTasks) {
+        for (const alias of extractAliases(task) ?? []) {
+          if (!localByRemoteId.has(alias) && !localByAlias.has(alias)) {
+            localByAlias.set(alias, task);
+          }
+        }
+      }
+    }
 
     const toCreate: RemoteSyncItem[] = [];
     const toUpdate: Array<{ local: Task; remote: RemoteSyncItem }> = [];
+    const toAdopt: Array<{ local: Task; remote: RemoteSyncItem }> = [];
     const toRemove: Task[] = [];
     let unchanged = 0;
+    // A task adopted via alias is accounted for — its current id pointing at
+    // nothing remote is EXPECTED (the remote item wears the alias id).
+    const adoptedTaskIds = new Set<string>();
 
     // remote ∩ local → check for updates
-    // remote - local → create
+    // remote - local → create (or adopt when a local task owned this id before)
     for (const [remoteId, remote] of remoteMap) {
       const local = localByRemoteId.get(remoteId);
       if (local) {
@@ -256,14 +281,22 @@ export class SyncReconciler {
         } else {
           unchanged++;
         }
-      } else {
-        toCreate.push(remote);
+        continue;
       }
+      const aliasOwner = localByAlias.get(remoteId);
+      if (aliasOwner && !isPushInflight(aliasOwner.id)) {
+        // The remote item wears an id this task USED to have — adopt it back
+        // (re-point ext to the current remote id) instead of forking a copy.
+        toAdopt.push({ local: aliasOwner, remote });
+        adoptedTaskIds.add(aliasOwner.id);
+        continue;
+      }
+      toCreate.push(remote);
     }
 
-    // local - remote → candidate for removal
+    // local - remote → candidate for removal (adopted tasks are matched)
     for (const [remoteId, local] of localByRemoteId) {
-      if (!remoteMap.has(remoteId)) {
+      if (!remoteMap.has(remoteId) && !adoptedTaskIds.has(local.id)) {
         toRemove.push(local);
       }
     }
@@ -271,7 +304,7 @@ export class SyncReconciler {
     // Tasks without remote ID are left alone (can't reconcile without a join key)
     unchanged += localWithoutRemoteId.length;
 
-    return { toCreate, toUpdate, toRemove, unchanged };
+    return { toCreate, toUpdate, toAdopt, toRemove, unchanged };
   }
 
   // ── Private: Apply diff ──
@@ -334,11 +367,53 @@ export class SyncReconciler {
       return 'ok';
     };
 
+    // ── Adoptions — a local task reclaims a remote item wearing its former id ──
+    // Runs BEFORE creates so a re-keyed item can never race into both lists.
+    if (diff.toAdopt.length > 0) {
+      const adoptPatches: Array<{ id: string; patch: Partial<Task> }> = [];
+      for (const { local, remote } of diff.toAdopt) {
+        const currentExt = (local.ext?.[pluginId] ?? {}) as Record<string, unknown>;
+        adoptPatches.push({
+          id: local.id,
+          patch: {
+            ext: {
+              ...local.ext,
+              [pluginId]: { ...currentExt, ...(remote.fields.ext?.[pluginId] as Record<string, unknown> | undefined), id: remote.remoteId },
+            },
+          },
+        });
+        log.web.info('sync-reconciler: adopted re-keyed remote item', {
+          pluginId, taskId: local.id, remoteId: remote.remoteId,
+        });
+      }
+      try {
+        const { changed } = await updateTasksBulk(adoptPatches);
+        for (const task of changed) {
+          bus.emit(EventNames.TASK_UPDATED, { task }, [], { source });
+        }
+        changeCount += changed.length;
+      } catch (err) {
+        log.web.warn('sync-reconciler: bulk adopt failed', {
+          pluginId, batchSize: adoptPatches.length,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     // ── Creates (batch limit: 50) ──
     const createBatch = diff.toCreate.slice(0, 50);
     if (createBatch.length > 0) {
       const creates: Array<Omit<Task, 'id'>> = [];
       for (const remote of createBatch) {
+        // Ledger gate: a remote id some local task once owned (released via a
+        // source migration, or deleted) never mints a new local task — that
+        // re-import is exactly how sync forked tasks into copies.
+        if (isRemoteIdBlocked(pluginId, remote.remoteId)) {
+          log.web.debug('sync-reconciler: skipped ledgered remote id', {
+            pluginId, remoteId: remote.remoteId, title: remote.title,
+          });
+          continue;
+        }
         const fields = {
           ...remote.fields,
           source: pluginId as Task['source'],
@@ -371,6 +446,17 @@ export class SyncReconciler {
       const updatesList: Array<{ id: string; patch: Partial<Task> }> = [];
       for (const { local, remote } of updateBatch) {
         const updates: Partial<Task> = { ...remote.fields };
+        // MERGE ext, never replace: remote.fields.ext carries only what the
+        // pull mapper knows ({id, list_id}); a wholesale write would wipe
+        // plugin-side keys like previous_ids — the aliases the adopt pass
+        // depends on — from the local row.
+        if (updates.ext) {
+          const pluginExt = {
+            ...(local.ext?.[pluginId] as Record<string, unknown> | undefined),
+            ...(updates.ext[pluginId] as Record<string, unknown> | undefined),
+          };
+          updates.ext = { ...local.ext, ...updates.ext, [pluginId]: pluginExt };
+        }
         // Never overwrite local-only fields from remote
         delete (updates as any).note;
         delete (updates as any).summary;
@@ -380,7 +466,7 @@ export class SyncReconciler {
         delete (updates as any).session_ids;
         delete (updates as any).plan_session_id;
         delete (updates as any).exec_session_id;
-        // Never overwrite local-only sync metadata
+        // Drop any _syncedAt the remote mapping happened to carry…
         delete (updates as any)._syncedAt;
         // Never overwrite phase/status/read-marker from remote (RC8 fix). BOTH
         // marker keys must be dropped — leaving the legacy one through would let a
@@ -391,6 +477,12 @@ export class SyncReconciler {
         // Claim conflict → keep the local project rather than moving the task
         // into another provider's group.
         if ((await resolveProject(updates)) === 'conflict') delete updates.project;
+        // …then stamp OUR OWN: the remote's lastModified becomes the row's
+        // sync watermark. Without this the LWW threshold never advances for
+        // rows with NULL timestamps and the reconciler re-applies the SAME
+        // update every cycle forever (28 identical `updated 1197` cycles
+        // observed on 2026-08-20 before this fix).
+        (updates as any)._syncedAt = remote.remoteUpdatedAt;
         updatesList.push({ id: local.id, patch: updates });
       }
       try {
@@ -422,8 +514,8 @@ export class SyncReconciler {
 
       const idsToDelete: string[] = [];
       for (const task of diff.toRemove) {
-        if (this.hasActiveSessionSync(task, sessionsSnapshot)) {
-          log.web.info('sync-reconciler: skipping removal of task with active session', {
+        if (this.hasSessionHistory(task, sessionsSnapshot)) {
+          log.web.info('sync-reconciler: skipping removal of task with session history', {
             pluginId,
             taskId: task.id,
             title: task.title,
@@ -470,22 +562,32 @@ export class SyncReconciler {
     }
   }
 
-  /** Check if a task has an actively-running session, given a pre-loaded session snapshot. */
-  private hasActiveSessionSync(
+  /**
+   * True when reconciler-driven removal must NOT touch this task because it
+   * carries session history. Checks ALL session link fields — session_ids
+   * included (1,641 tasks hold their ONLY session link there; the old
+   * slot-only check let the reconciler delete them, which is how the H-1B RFE
+   * task's session became unreachable). And ANY linked session blocks removal,
+   * not just a running one: a remote item disappearing from a pull is not
+   * authority to destroy local session history. Session-less tasks still
+   * remove normally, so remote deletions keep propagating.
+   */
+  private hasSessionHistory(
     task: Task,
     sessions: Awaited<ReturnType<typeof import('./session-tracker.js').listSessions>> | null,
   ): boolean {
-    const sessionIds = [task.session_id, task.plan_session_id, task.exec_session_id].filter(Boolean) as string[];
+    const sessionIds = [
+      task.session_id,
+      task.plan_session_id,
+      task.exec_session_id,
+      ...(task.session_ids ?? []),
+    ].filter(Boolean) as string[];
     if (sessionIds.length === 0) return false;
     if (!sessions) {
       // Couldn't load session list — be conservative and block removal.
       return true;
     }
-    for (const sid of sessionIds) {
-      const session = sessions.find((s) => s.claudeSessionId === sid);
-      if (session && session.process_status === 'running') return true;
-    }
-    return false;
+    return sessionIds.some((sid) => sessions.some((s) => s.claudeSessionId === sid));
   }
 
   // ── Private: State persistence ──

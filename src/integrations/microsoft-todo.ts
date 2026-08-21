@@ -26,6 +26,7 @@ import {
   setProjectMetadata,
   findTaskByExtId,
 } from '../core/task-manager.js';
+import { isRemoteIdBlocked } from '../core/task-remote-links.js';
 import type { Config } from '../core/types.js';
 
 // ── Plugin-system helpers ──
@@ -1205,6 +1206,7 @@ export async function fullPullAllTasks(): Promise<Array<{
     lastSync: '',
   });
   const deletedMsIds = new Set(deltaState.deletedMsIds ?? []);
+  importLegacyTombstonesOnce(deltaState.deletedMsIds);
 
   for (const list of lists) {
     // Non-delta full fetch: /me/todo/lists/{listId}/tasks (no /delta suffix)
@@ -1299,6 +1301,22 @@ export async function registerDeletedMsIds(task: Task): Promise<void> {
   const idsToRegister = [msId, ...(prev ?? [])].filter(Boolean) as string[];
   if (idsToRegister.length === 0) return;
 
+  // Durable tombstone: the task_remote_links ledger is uncapped and survives
+  // forever — the JSON array below is capped at 500 and silently evicted old
+  // tombstones (it was FULL when the 2026-08-20 fork investigation ran).
+  try {
+    const { recordRemoteLink } = await import('../core/task-remote-links.js');
+    const listId = getMsTodoList(task) ?? null;
+    for (const id of idsToRegister) {
+      recordRemoteLink({
+        source: 'ms-todo', remoteId: id, taskId: task.id, remoteList: listId,
+        state: 'deleted', reason: 'local-delete',
+      });
+    }
+  } catch {
+    // No task DB (unit-test env) — the JSON fallback below still applies.
+  }
+
   const deltaState = await readJsonFile<DeltaState>(DELTA_FILE, {
     deltaLinks: {},
     listNames: {},
@@ -1310,6 +1328,22 @@ export async function registerDeletedMsIds(task: Task): Promise<void> {
   const arr = [...existing];
   deltaState.deletedMsIds = arr.length > 500 ? arr.slice(arr.length - 500) : arr;
   await writeJsonFile(DELTA_FILE, deltaState);
+}
+
+/** One-shot flag: legacy deletedMsIds → ledger import runs once per process. */
+let legacyTombstonesImported = false;
+
+/**
+ * Merge the capped legacy deletedMsIds array into the durable ledger (once per
+ * process; INSERT OR IGNORE makes re-runs no-ops). Called from the pull paths,
+ * which have the delta state in hand anyway.
+ */
+function importLegacyTombstonesOnce(deletedMsIds: string[] | undefined): void {
+  if (legacyTombstonesImported || !deletedMsIds?.length) return;
+  legacyTombstonesImported = true;
+  import('../core/task-remote-links.js')
+    .then(({ importLegacyTombstones }) => importLegacyTombstones('ms-todo', deletedMsIds))
+    .catch(() => { legacyTombstonesImported = false; });
 }
 
 // -- Auto-push (fire-and-forget with per-task dedup) --
@@ -1391,6 +1425,17 @@ export async function reconcilePulledTasks(
         count++;
       }
     } else {
+      // Ledger gate (create only): a remote id a local task once owned — then
+      // released via source migration or deleted — must NEVER mint a new local
+      // task. That re-import is the fork that split tasks into sync copies
+      // (141 re-created, 35 losing session links, pre-2026-08-20). The
+      // deletedMsIds check above is the legacy capped array; this is durable.
+      if (isRemoteIdBlocked('ms-todo', msTask.id)) {
+        log.web.debug('reconcilePulledTasks: skipped ledgered remote id', {
+          title: msTask.title, listName: list.displayName,
+        });
+        continue;
+      }
       const partial = mapToLocal(msTask, list.displayName);
 
       try {
@@ -1573,6 +1618,7 @@ export async function deltaPull(
   // -- Load deleted MS IDs ignore set (Layer 0b) --
   // Use deltaState already loaded above (it has deletedMsIds from disk)
   const deletedMsIds = new Set(deltaState.deletedMsIds ?? []);
+  importLegacyTombstonesOnce(deltaState.deletedMsIds);
 
   // -- Pull task-level delta changes --
   for (const list of lists) {
@@ -1637,6 +1683,7 @@ export async function syncTasks(
     lastSync: '',
   });
   const deletedMsIds = new Set(deltaState.deletedMsIds ?? []);
+  importLegacyTombstonesOnce(deltaState.deletedMsIds);
 
   // Pull changes from each list
   for (const list of lists) {

@@ -150,6 +150,19 @@ export interface IntegrationSync {
   /** Extract the remote ID from a local task's ext data.
    *  Used to join local tasks with fullPull results. */
   extractRemoteId?(task: Task): string | undefined;
+
+  /** FORMER remote ids this task was known by (e.g. ms-todo re-keys an item on
+   *  list migration and records the old id in ext previous_ids). The
+   *  reconciler joins these too, so a re-keyed remote item is ADOPTED by the
+   *  task that owned it instead of imported as a duplicate. Return [] / omit
+   *  when the platform's ids are stable. */
+  extractRemoteIdAliases?(task: Task): string[];
+
+  /** Confirm one remote item is gone (used to retry unacknowledged deletions).
+   *  MUST resolve true when the item is verified deleted (including "already
+   *  404"), false to retry next tick. Omit → deletions are considered
+   *  confirmed at local-delete time (pre-ledger behavior). */
+  confirmRemoteDeleted?(remoteId: string, remoteList?: string | null): Promise<boolean>;
 }
 
 // ── ProjectClaimFn: determines if a plugin owns a project ──

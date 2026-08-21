@@ -47,7 +47,7 @@ vi.mock('../../../src/agent/loop.js', () => ({
   }),
 }))
 
-import { WALNUT_HOME, IMAGES_DIR, conversationFile } from '../../../src/constants.js'
+import { WALNUT_HOME, IMAGES_DIR, LOG_DIR, conversationFile } from '../../../src/constants.js'
 import { startServer, stopServer } from '../../../src/web/server.js'
 import { resetIndexBootstrap } from '../../../src/web/routes/notes-v2.js'
 import {
@@ -945,9 +945,11 @@ describe('client logs (additive)', () => {
     expect(body.ok).toBe(true)
     expect(body.received).toBe(2)
 
-    // Device name sanitized into the filename; content is JSON-lines.
+    // Device name sanitized into the filename; content is JSON-lines. The
+    // route derives its dir from LOG_DIR (mocked here) — a3944e85 moved it off
+    // the hardcoded production path, so the test must follow the constant.
     const day = new Date().toISOString().slice(0, 10)
-    const file = `/tmp/open-walnut/ios-client/Test-iPhone-1-${day}.log`
+    const file = `${LOG_DIR}/ios-client/Test-iPhone-1-${day}.log`
     const content = await fs.readFile(file, 'utf-8')
     const lines = content.trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>)
     const mine = lines.filter((l) => l.device === 'Test iPhone/1')
