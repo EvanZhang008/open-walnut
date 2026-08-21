@@ -73,7 +73,10 @@ function main() {
   console.log(`Backup DBs (newest first): ${backupPaths.join(', ')}`);
 
   const sessions = new Database(SESSIONS_DB, { readonly: !live });
-  const tasksDb = new Database(TASKS_DB, { readonly: true });
+  // Task side opens writable in live mode: the UI lists a task's sessions from
+  // task.session_ids (+ slots), so repairing only sessions.task_id would leave
+  // the session invisible on the task card.
+  const tasksDb = new Database(TASKS_DB, { readonly: !live });
   const backups = backupPaths.map((p) => new Database(p, { readonly: true }));
 
   // 1. Dangling sessions: task_id set, but no such task today.
@@ -122,6 +125,19 @@ function main() {
   const updateSession = live
     ? sessions.prepare('UPDATE sessions SET task_id = ? WHERE claude_session_id = ?')
     : null;
+  const readTaskSessionIds = tasksDb.prepare('SELECT session_ids FROM tasks WHERE id = ?');
+  const writeTaskSessionIds = live
+    ? tasksDb.prepare('UPDATE tasks SET session_ids = ? WHERE id = ?')
+    : null;
+  /** Add the session to the surviving task's session_ids (the UI's join key). */
+  const addSessionToTask = (taskId: string, sid: string) => {
+    const row = readTaskSessionIds.get(taskId) as { session_ids: string | null } | undefined;
+    let ids: string[] = [];
+    try { ids = row?.session_ids ? JSON.parse(row.session_ids) : []; } catch { ids = []; }
+    if (ids.includes(sid)) return;
+    ids.push(sid);
+    writeTaskSessionIds?.run(JSON.stringify(ids), taskId);
+  };
 
   for (const s of dangling) {
     const old = backupTask.get(s.task_id) as { id: string; source: string | null; ext: string | null; title: string | null } | undefined;
@@ -146,12 +162,36 @@ function main() {
     console.log(`REPAIR ${s.claude_session_id}`);
     console.log(`   session "${(s.title ?? '').slice(0, 60)}"`);
     console.log(`   ${s.task_id} (deleted) → ${current.id} "${current.title.slice(0, 60)}"`);
-    if (updateSession) updateSession.run(current.id, s.claude_session_id);
+    if (updateSession) {
+      updateSession.run(current.id, s.claude_session_id);
+      addSessionToTask(current.id, s.claude_session_id);
+    }
     repaired++;
+  }
+
+  // 3. Back-link sweep: sessions whose task EXISTS but whose task-side
+  //    session_ids misses them (the UI lists a task's sessions from
+  //    task.session_ids, so a one-sided link is still invisible). Also covers
+  //    re-running after a partial earlier repair.
+  let backlinked = 0;
+  const allLinked = sessions.prepare(
+    `SELECT claude_session_id, task_id FROM sessions
+      WHERE task_id IS NOT NULL AND task_id != ''`,
+  ).all() as Array<{ claude_session_id: string; task_id: string }>;
+  for (const s of allLinked) {
+    const row = readTaskSessionIds.get(s.task_id) as { session_ids: string | null } | undefined;
+    if (!row) continue; // task truly missing — the dangling pass above owns that case
+    let ids: string[] = [];
+    try { ids = row.session_ids ? JSON.parse(row.session_ids) : []; } catch { ids = []; }
+    if (ids.includes(s.claude_session_id)) continue;
+    console.log(`BACKLINK ${s.claude_session_id} → task ${s.task_id} session_ids`);
+    if (live) addSessionToTask(s.task_id, s.claude_session_id);
+    backlinked++;
   }
 
   console.log(`\n--- Summary ---`);
   console.log(`Repaired: ${repaired}${live ? '' : ' (dry run)'}`);
+  console.log(`Back-linked into task.session_ids: ${backlinked}${live ? '' : ' (dry run)'}`);
   console.log(`Unresolved: ${unresolved.length}`);
   for (const u of unresolved) {
     console.log(`  ${u.sid}  task=${u.taskId}  [${u.reason}]  "${(u.title ?? '').slice(0, 50)}"`);
