@@ -40,7 +40,9 @@ ENTRIES=(
 FAIL=0
 for entry in "${ENTRIES[@]}"; do
   [ -f "$TMP/$entry" ] || continue
-  if ! (cd "$TMP" && "$OLDPWD/$ESBUILD" "$entry" --bundle --platform=node \
+  # --format=esm matches tsup.config.ts (format: ['esm']) — esbuild's cjs
+  # default rejects legal top-level await (false positive, 2026-08-21).
+  if ! (cd "$TMP" && "$OLDPWD/$ESBUILD" "$entry" --bundle --platform=node --format=esm \
         --packages=external --loader:.node=file --outfile=/dev/null 2>"$TMP/err.log"); then
     echo ""
     echo "✗ Committed tree (HEAD) fails to bundle at $entry:"
