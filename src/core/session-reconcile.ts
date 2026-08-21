@@ -47,7 +47,8 @@
  *   error result            → 'error'
  *   process alive (FIFO up) → 'idle'
  *   process dead            → 'stopped'
- * Task phase target: IN_PROGRESS → AGENT_COMPLETE (or AWAIT_HUMAN_ACTION on error);
+ * Task phase target: IN_PROGRESS → AGENT_COMPLETE (errors too — the failure
+ * signal lives on the session record; WAIT phase removed 2026-08-18);
  * later phases are never regressed.
  *
  * Callers: attachToExisting() (restart recovery) and SessionHealthMonitor
@@ -371,8 +372,15 @@ export function foldSessionTail(
         }
       }
     } else if (type === 'result') {
-      const origin = (parsed as { origin?: { kind?: string } }).origin
-      if (origin?.kind === 'task-notification') continue // bookkeeping, never turn-over
+      // EVERY result — including origin:task-notification — is a turn verdict
+      // in this fold (mirrors daemon-fold.ts; the golden test pins the two
+      // folds to identical verdicts). The CLI's notification FOLLOWUP turn
+      // (bg task completes while idle → autonomous init + running + summary)
+      // closes with a notification-origin result; excluding it left the fold
+      // asymmetric — the followup's anchor opened the turn but its verdict was
+      // refused, wedging turnActive forever (incident b07ee156). Walnut's
+      // LIVE handler keeps its own task-notification exclusion — that one
+      // guards task-phase transitions mid-stream, not cliState.
       fold.lastResult = {
         isError: parsed.is_error === true,
         numTurns: parsed.num_turns as number | undefined,
@@ -823,7 +831,7 @@ export async function reconcileProcessStatus(
 
   // ── Phase sync: deliver what the lost result would have delivered ──
   // ONLY when the task is still IN_PROGRESS (i.e. the phase never saw the result).
-  // Later phases (AGENT_COMPLETE / AWAIT_HUMAN_ACTION / terminal) are never
+  // Later phases (AGENT_COMPLETE / terminal) are never
   // regressed — a stale reconcile must not re-trigger triage or notifications.
   let phaseSynced = false
   if (record.taskId) {
@@ -832,7 +840,10 @@ export async function reconcileProcessStatus(
       const task = await getTask(record.taskId)
       if (task?.phase === 'IN_PROGRESS') {
         const { applySessionPhase } = await import('./phase.js')
-        const newPhase: TaskPhase = workStatus === 'error' ? 'AWAIT_HUMAN_ACTION' : 'AGENT_COMPLETE'
+        // error and clean completion both land on AGENT_COMPLETE (WAIT removed
+        // 2026-08-18): the turn is over and the human decides what's next; the
+        // failure signal lives on the session record, not the task phase.
+        const newPhase: TaskPhase = 'AGENT_COMPLETE'
         const res = await applySessionPhase(record.taskId, 'reconciler', 'session-reconcile', {
           sessionId: sid,
           newPhase,

@@ -7,7 +7,7 @@ import { initDirectories } from './init.js';
 import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
 import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
-import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES, isAgentWritablePhase } from './phase.js';
+import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES } from './phase.js';
 import {
   COMPLETION_TO_PHASES,
   compareTasksForQuery,
@@ -942,7 +942,7 @@ export async function ensureProject(
  *    win (it already exists and may have a live cwd/alias).
  *  - Config lists follow: `favorites.projects` and `ordering.projects` are
  *    rewritten to the new name (NOCASE-deduped), so a rename doesn't silently
- *    unstar the project or drop it out of the user's hand-ordering.
+ *    unfavorite the project or drop it out of the user's hand-ordering.
  *  - For an ms-todo-claimed PLAIN rename (not a merge) the REMOTE LIST itself is
  *    renamed ONCE by display name (`renameListByName`, old alias → new name).
  *    Only if that fails do we fall back to per-task pushes, which would create a
@@ -1120,7 +1120,7 @@ export async function renameProject(
 /**
  * Keep `config.favorites.projects` / `config.ordering.projects` in step with a
  * project rename or delete. Both are plain NAME lists, so a rename that skipped
- * them would silently unstar the project and drop it out of the user's
+ * them would silently unfavorite the project and drop it out of the user's
  * hand-ordering — the same class of bug the retired renameCategory fixed for
  * `config.local.categories`.
  *
@@ -2492,6 +2492,25 @@ export function isTaskBlocked(task: Task, allTasks: Task[]): boolean {
 }
 
 /**
+ * Did somebody ASK for this exact write, or did it ride along on background
+ * work? Only the former may pull a task back out of COMPLETE.
+ *
+ * Deliberate: 'api' (a REST call — the web UI, the phone, the CLI, an agent
+ * tool), 'user' (a direct in-app edit), 'agent' (an in-process agent tool).
+ * Background: 'internal' (the default — anything that merely passed a phase
+ * along), 'sync' / plugin pulls (a stale remote row must not reopen finished
+ * work), cron, reconcilers, the session state machine.
+ *
+ * This replaced an `isHumanSource` check that allowed only 'api' and 'user'.
+ * That was the last piece of the human-vs-agent distinction: it let an agent
+ * SET COMPLETE but not UNSET it, purely because 'agent' wasn't on the list.
+ * The real question was never who is asking, it is whether anyone asked.
+ */
+function isDeliberateSource(source: string): boolean {
+  return source === 'api' || source === 'user' || source === 'agent';
+}
+
+/**
  * Guard: block completing a parent task that still has active (non-COMPLETE) children.
  * Call inside withWriteLock where the store is already loaded.
  */
@@ -3008,10 +3027,6 @@ export async function updateTask(
     if (!assigned) task.project = newProject;
   }
   if (updates.phase !== undefined && VALID_PHASES.has(updates.phase)) {
-    const source = eventOptions?.source ?? 'internal';
-    if (source === 'agent' && !isAgentWritablePhase(updates.phase)) {
-      throw new Error('Agents may set TODO, IN_PROGRESS, AGENT_COMPLETE, or AWAIT_HUMAN_ACTION only.');
-    }
     // CAS guard: if caller specified ifPhase, only apply phase change if current phase matches
     if (eventOptions?.ifPhase && task.phase !== eventOptions.ifPhase) {
       log.task.warn('ifPhase CAS guard: skipping phase change — task phase has moved on', {
@@ -3020,10 +3035,15 @@ export async function updateTask(
       });
       // Skip phase change but allow other fields to update
     } else {
-    // Terminal phase guard: only human-initiated sources can overwrite COMPLETE/HUMAN_VERIFIED
-    const isHumanSource = source === 'api' || source === 'user';
-    if (TERMINAL_PHASES.has(task.phase) && !TERMINAL_PHASES.has(updates.phase) && !isHumanSource) {
-      log.task.warn('terminal phase guard: blocked non-human phase change', {
+    // Terminal phase guard: only a DELIBERATE edit may move a task out of
+    // COMPLETE. Deliberate = somebody (human OR agent) asked for this exact
+    // change; background = a sync pull, a cron, a reconciler, or any default
+    // 'internal' write that merely passed a phase along. The distinction is
+    // intent, NOT identity — an agent tool call counts, and used to be blocked
+    // here purely because 'agent' wasn't in the old human-only allowlist.
+    const source = eventOptions?.source ?? 'internal';
+    if (TERMINAL_PHASES.has(task.phase) && !TERMINAL_PHASES.has(updates.phase) && !isDeliberateSource(source)) {
+      log.task.warn('terminal phase guard: blocked background phase change', {
         taskId: task.id, currentPhase: task.phase, requestedPhase: updates.phase, source,
       });
     } else {
@@ -3035,12 +3055,8 @@ export async function updateTask(
     // Legacy: status without phase → derive phase from status
     const derivedPhase = phaseFromStatus(updates.status);
     const source = eventOptions?.source ?? 'internal';
-    if (source === 'agent' && !isAgentWritablePhase(derivedPhase)) {
-      throw new Error('Agents cannot set status=done. Use phase=AGENT_COMPLETE or AWAIT_HUMAN_ACTION.');
-    }
-    const isHumanSource = source === 'api' || source === 'user';
-    if (TERMINAL_PHASES.has(task.phase) && !TERMINAL_PHASES.has(derivedPhase) && !isHumanSource) {
-      log.task.warn('terminal phase guard: blocked non-human status change', {
+    if (TERMINAL_PHASES.has(task.phase) && !TERMINAL_PHASES.has(derivedPhase) && !isDeliberateSource(source)) {
+      log.task.warn('terminal phase guard: blocked background status change', {
         taskId: task.id, currentPhase: task.phase, requestedPhase: derivedPhase, source,
       });
     } else {
@@ -3784,7 +3800,7 @@ export class CircularDependencyError extends Error {
  * Fire-and-forget deletes from MS To-Do / external plugins if applicable.
  */
 export async function deleteTask(idPrefix: string): Promise<{ task: Task }> {
-  return withWriteLock(async () => {
+  const result = await withWriteLock(async () => {
   const store = await readStore();
   const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
 
@@ -3828,6 +3844,23 @@ export async function deleteTask(idPrefix: string): Promise<{ task: Task }> {
 
   return { task };
   });
+
+  // Clear session-side task links so no session is left pointing at a task id
+  // that no longer exists (dangling task_id = session invisible on any task —
+  // 275 sessions were orphaned this way before 2026-08-20). Outside the task
+  // write lock: session-tracker takes its own lock and the two must never
+  // nest. Best-effort: a failure here must not undo the delete itself.
+  try {
+    const { unlinkSessionsFromTasks } = await import('./session-tracker.js');
+    await unlinkSessionsFromTasks([result.task.id]);
+  } catch (err) {
+    log.task.warn('failed to clear session links for deleted task', {
+      taskId: result.task.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  return result;
 }
 
 export interface BatchDeleteResult {
@@ -3903,6 +3936,19 @@ export async function deleteTasksByIds(
     await writeStore(store);
     return removed;
   });
+
+  // Clear session-side task links (same reasoning as deleteTask; best-effort).
+  if (deleted.length) {
+    try {
+      const { unlinkSessionsFromTasks } = await import('./session-tracker.js');
+      await unlinkSessionsFromTasks(deleted.map((t) => t.id));
+    } catch (err) {
+      log.task.warn('failed to clear session links for deleted tasks', {
+        taskIds: deleted.map((t) => t.id),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
   // Ledger first (same reasoning as deleteTask), then fire-and-forget remote deletes.
   recordDeletedRemoteIds(deleted);
@@ -4277,7 +4323,14 @@ export async function clearSessionSlot(
   const task = matches[0];
 
   if (sessionId) {
-    // Clear the specific session from whichever slot it occupies
+    // Clear the specific session from whichever slot it occupies. The legacy
+    // primary slot (session_id) must clear too — deleteTask's active-session
+    // check reads all three slots, so leaving it set made force-delete loop
+    // into the same ActiveSessionError forever (2026-08-12: 8 stress-test
+    // tasks undeletable with 500 despite ?force=true).
+    if (task.session_id === sessionId && !slot) {
+      task.session_id = undefined;
+    }
     if (task.plan_session_id === sessionId && (!slot || slot === 'plan')) {
       task.plan_session_id = undefined;
     }
@@ -4289,7 +4342,8 @@ export async function clearSessionSlot(
     if (slot === 'plan') task.plan_session_id = undefined;
     else task.exec_session_id = undefined;
   } else {
-    // Clear both slots
+    // Clear all slots (primary included)
+    task.session_id = undefined;
     task.plan_session_id = undefined;
     task.exec_session_id = undefined;
   }
@@ -5235,8 +5289,8 @@ function prepareRawUpdate(task: Task, updates: Partial<Task>): Partial<Task> | n
   if (isDayPrecisionEcho(task.end_date, safeUpdates.end_date)) {
     delete safeUpdates.end_date;
   }
-  // Terminal phase guard: sync pull cannot overwrite COMPLETE/HUMAN_VERIFIED
-  // (only humans can reopen completed tasks, via updateTask with source='api')
+  // Terminal phase guard: sync pull cannot overwrite COMPLETE
+  // (reopening a completed task takes a deliberate updateTask with source='api')
   const incomingPhase = (safeUpdates.phase as TaskPhase | undefined)
     ?? (safeUpdates.status ? phaseFromStatus(safeUpdates.status as TaskStatus) : undefined);
   if (TERMINAL_PHASES.has(task.phase) && incomingPhase && !TERMINAL_PHASES.has(incomingPhase)) {
@@ -5547,6 +5601,20 @@ export async function deleteTasksBulk(ids: string[]): Promise<{ deleted: Task[] 
           taskId: task.id, error: err instanceof Error ? err.message : String(err),
         });
       }
+    }
+  }
+  // Clear session-side task links (same reasoning as deleteTask; best-effort).
+  // Outside the task write lock — session-tracker has its own lock and the two
+  // must not nest in this direction anywhere else either.
+  if (result.deleted.length) {
+    try {
+      const { unlinkSessionsFromTasks } = await import('./session-tracker.js');
+      await unlinkSessionsFromTasks(result.deleted.map((t) => t.id));
+    } catch (err) {
+      log.task.warn('failed to clear session links for deleted tasks', {
+        taskIds: result.deleted.map((t) => t.id),
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
   return result;

@@ -43,6 +43,7 @@ import type {
   NewSessionParams,
   LoadSessionParams,
   PromptParams,
+  SteerParams,
   CancelParams,
   SetConfigOptionParams,
   PermissionResponseParams,
@@ -114,6 +115,7 @@ export class AcpWorker {
         case 'newSession':        return this.ok(req, await this.opNewSession(req.params as unknown as NewSessionParams))
         case 'loadSession':       return this.ok(req, await this.opLoadSession(req.params as unknown as LoadSessionParams))
         case 'prompt':            return this.ok(req, await this.opPrompt(req.params as unknown as PromptParams))
+        case 'steer':             return this.ok(req, await this.opSteer(req.params as unknown as SteerParams))
         case 'cancel':            return this.ok(req, await this.opCancel(req.params as unknown as CancelParams))
         case 'permissionResponse':return this.ok(req, this.opPermissionResponse(req.params as unknown as PermissionResponseParams))
         case 'setConfigOption':    return this.ok(req, await this.opSetConfigOption(req.params as unknown as SetConfigOptionParams))
@@ -372,6 +374,70 @@ export class AcpWorker {
       this.notifyJournal()
     })
     return acceptedResult
+  }
+
+  /**
+   * Mid-turn steering: inject text into the LIVE turn via the adapter's
+   * `_session/steering` extension (codex `turn/steer` underneath). The model
+   * folds the text into its next inference step — no queue wait, no interrupt.
+   *
+   * Contract with the caller (drainAcpQueue):
+   * - only valid while a turn is running AND the adapter advertised steering;
+   *   otherwise a typed error tells the caller to fall back to prompt/queue.
+   * - outcome 'injected' → joined the running turn (owner commandId = that
+   *   turn's), journal gets steer-accepted so history shows the user message.
+   * - outcome 'startedNewTurn' means the turn ended mid-flight and the adapter
+   *   ran the text as a NEW turn it now owns — our turnActive bookkeeping never
+   *   saw that turn start, so we conservatively report steer_race and let the
+   *   caller's queue redeliver (adapter-side turn is deduped by commandId).
+   */
+  private async opSteer(params: SteerParams): Promise<unknown> {
+    const dup = this.checkDuplicate('steer', params.commandId)
+    if (dup) return dup
+    const conn = this.requireConn()
+    if (!this.providerSessionId) throw <WorkerError>{ kind: 'no_session', message: 'no provider session — call newSession/loadSession first' }
+    if (!this.capabilities.steering) {
+      throw <WorkerError>{ kind: 'steer_unsupported', message: 'adapter does not support mid-turn steering' }
+    }
+    if (!this.turnActive || this.controlPrompt) {
+      throw <WorkerError>{ kind: 'no_turn', message: 'no live turn to steer into' }
+    }
+    if (!params.walnutMessageId) {
+      throw <WorkerError>{ kind: 'protocol', message: 'steer requires walnutMessageId' }
+    }
+
+    let outcome: string | undefined
+    try {
+      const resp = await conn.extMethod('_session/steering', {
+        sessionId: this.providerSessionId,
+        prompt: [{ type: 'text', text: params.text }],
+      })
+      outcome = (resp as { outcome?: string } | undefined)?.outcome
+    } catch (e) {
+      throw <WorkerError>{ kind: 'protocol', message: e instanceof Error ? e.message : String(e) }
+    }
+
+    if (outcome !== 'injected') {
+      // 'startedNewTurn' | 'failed': the live turn is gone (or codex refused —
+      // review/compact turns are non-steerable). Typed error → caller re-queues.
+      throw <WorkerError>{ kind: 'steer_race', message: 'live turn ended before steering applied' }
+    }
+
+    const accepted = {
+      accepted: true,
+      steered: true,
+      commandId: params.commandId,
+      walnutMessageId: params.walnutMessageId,
+    }
+    this.rememberAcceptedCommand('steer', params.commandId, accepted)
+    this.journal.appendMeta({
+      type: 'steer-accepted',
+      commandId: params.commandId,
+      walnutMessageId: params.walnutMessageId,
+      text: params.text,
+    })
+    this.notifyJournal()
+    return accepted
   }
 
   private opControlPrompt(
@@ -707,6 +773,13 @@ export class AcpWorker {
           const attempt = promptAttempts.get(event.commandId)
           if (attempt) attempt.terminal = true
         }
+      } else if (event.type === 'steer-accepted') {
+        this.rememberAcceptedCommand('steer', event.commandId, {
+          accepted: true,
+          steered: true,
+          commandId: event.commandId,
+          walnutMessageId: event.walnutMessageId,
+        })
       } else if (event.type === 'control-prompt-accepted') {
         this.rememberAcceptedCommand('controlPrompt', event.commandId, {
           accepted: true,
@@ -839,6 +912,9 @@ function safeWorkerErrorMessage(kind: WorkerError['kind']): string {
     case 'load_failed': return 'ACP provider session could not be loaded'
     case 'no_session': return 'ACP provider session is not established'
     case 'turn_active': return 'ACP provider turn is already active'
+    case 'no_turn': return 'ACP provider has no live turn to steer'
+    case 'steer_unsupported': return 'ACP adapter does not support mid-turn steering'
+    case 'steer_race': return 'ACP live turn ended before steering applied'
     case 'protocol': return 'ACP provider protocol operation failed'
     case 'internal': return 'ACP worker operation failed'
   }

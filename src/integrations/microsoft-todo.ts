@@ -6,7 +6,7 @@ import { readJsonFile, writeJsonFile } from '../utils/fs.js';
 import { getConfig } from '../core/config-manager.js';
 import { log } from '../logging/index.js';
 import type { Task, TaskPhase, TaskPriority, TaskStatus } from '../core/types.js';
-import { deriveStatusFromPhase, VALID_PHASES } from '../core/phase.js';
+import { deriveStatusFromPhase, migratePhase } from '../core/phase.js';
 import { phaseToMsStatus, phaseFromMsStatus } from './ms-todo/phase.js';
 
 /** Legacy Subtask interface — kept here for backward compat during plugin migration. */
@@ -625,8 +625,18 @@ export function parseMsTodoBody(body: string): { description: string; summary: s
   let match: RegExpMatchArray | null;
   while ((match = bodyToParse.match(headerPattern))) {
     const [fullMatch, key, value] = match;
-    if (key === 'Phase' && VALID_PHASES.has(value)) {
-      phase = value as TaskPhase;
+    // The remote body was written by whichever Walnut version last pushed, so a
+    // body still sitting on the server can carry a pre-5-phase name
+    // (AWAIT_HUMAN_ACTION, HUMAN_VERIFIED, POST_WORK_COMPLETED). A bare
+    // VALID_PHASES check would silently DROP such a header and reset the task to
+    // whatever the MS status implies, so the value goes through migratePhase —
+    // the same fold the v7 SQLite migration uses, so no second list to drift.
+    // migratePhase answers 'TODO' both for a real TODO and for anything it does
+    // not recognise, and only the literal 'TODO' counts as a header; genuine junk
+    // still leaves phase undefined and falls back to phaseFromMsStatus.
+    if (key === 'Phase') {
+      const migrated = migratePhase(value);
+      if (migrated !== 'TODO' || value === 'TODO') phase = migrated;
     } else if (key === 'Parent') {
       parentTaskId = value;
     } else if (key === 'Attention') {

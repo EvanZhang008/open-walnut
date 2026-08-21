@@ -28,9 +28,6 @@ const PHASE_ICON: Record<string, ReactNode> = {
   TODO: '○',
   IN_PROGRESS: '◐',
   AGENT_COMPLETE: '✓',
-  AWAIT_HUMAN_ACTION: '👤',
-  HUMAN_VERIFIED: '✅',
-  POST_WORK_COMPLETED: '📦',
   COMPLETE: '✓✓',
 };
 
@@ -38,9 +35,6 @@ const PHASE_LABEL: Record<string, string> = {
   TODO: 'To Do',
   IN_PROGRESS: 'In Progress',
   AGENT_COMPLETE: 'Agent Complete',
-  AWAIT_HUMAN_ACTION: 'Await Human Action',
-  HUMAN_VERIFIED: 'Human Verified',
-  POST_WORK_COMPLETED: 'Post-Work Done',
   COMPLETE: 'Complete',
 };
 

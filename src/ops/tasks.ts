@@ -7,11 +7,14 @@
 import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { taskRefTag } from '../utils/entity-refs.js'
-import { AGENT_WRITABLE_PHASES } from '../core/phase.js'
+import { PHASE_ORDER } from '../core/phase.js'
 
 const PRIORITY = z.enum(['immediate', 'important', 'backlog', 'none'])
 const STATUS = z.enum(['todo', 'in_progress', 'done'])
-const AGENT_PHASE = z.enum(AGENT_WRITABLE_PHASES)
+// Derived from PHASE_ORDER, never a hardcoded copy: phase.ts is the ONE place
+// the lifecycle is declared, so adding/renaming a phase there reaches every
+// surface (MCP tool schema, CLI help, gateway) without a second edit.
+const TASK_PHASE = z.enum(PHASE_ORDER)
 
 const REF_INSTRUCTION =
   'Include the `ref` string verbatim in your reply to the user so Walnut renders a clickable task pill.'
@@ -77,13 +80,13 @@ defineOp({
   name: 'task_update',
   title: 'Update a Walnut task',
   description:
-    'Patch any supported task fields. Agents hand work back with phase=AGENT_COMPLETE, or ' +
-    'phase=AWAIT_HUMAN_ACTION when a person must act. status=done and task_complete are human-only. ' +
+    'Patch any supported task fields. Use phase=AGENT_COMPLETE when work is done and ready to look at, ' +
+    'and phase=COMPLETE when it is finished; a blocked or parked task is just TODO. ' +
     '`tags` is a full replacement ([] clears). Pass "" to clear due_date/start_date.',
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
-    status: STATUS.optional().describe('Legacy status. Agents may use todo or in_progress; done is human-only'),
-    phase: AGENT_PHASE.optional().describe('Agent lifecycle phase; use AGENT_COMPLETE or AWAIT_HUMAN_ACTION to hand work back'),
+    status: STATUS.optional().describe('Legacy status: todo | in_progress | done'),
+    phase: TASK_PHASE.optional().describe('Task lifecycle phase'),
     priority: PRIORITY.optional(),
     due_date: z.string().optional().describe('ISO-8601 date/datetime, or "" to clear'),
     start_date: z.string().optional().describe('ISO-8601 date/datetime, or "" to clear'),
@@ -120,7 +123,11 @@ defineOp({
   // PATCH swallows it via asyncPush). Same reasoning as the CLI's `done`.
   bind: { method: 'POST', path: '/tasks/:id/complete' },
   mapResult: ({ body }) => withRef((body as { task?: unknown } | undefined)?.task, { completed: true }),
-  tags: { readonly: false, remote: 'deny', destructive: false, humanOnly: true },
+  // remote 'allow': completing a task is ordinary, reversible work. This was
+  // briefly 'deny' as the gateway half of the human-only completion gate; that
+  // whole distinction is gone, and a peer session finishing a task it was asked
+  // to finish is the point of the gateway.
+  tags: { readonly: false, remote: 'allow', destructive: false },
 })
 
 defineOp({

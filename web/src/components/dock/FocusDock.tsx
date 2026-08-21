@@ -30,8 +30,7 @@ function emitDockActivateChat() {
 
 const PHASE_LABELS: Record<string, string> = {
   TODO: 'To Do', IN_PROGRESS: 'In Progress', BLOCKED: 'Blocked',
-  AGENT_COMPLETE: 'Agent Complete', AWAIT_HUMAN: 'Await Human',
-  COMPLETE: 'Complete',
+  AGENT_COMPLETE: 'Agent Complete',  COMPLETE: 'Complete',
 };
 
 // ── Dock height constants ──

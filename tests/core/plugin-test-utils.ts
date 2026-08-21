@@ -15,6 +15,7 @@ import type {
   ExtData,
   ExtIndexSpec,
   SyncPollContext,
+  PluginToolSpec,
 } from '../../src/core/integration-types.js';
 import type { Task, TaskPhase, TaskPriority } from '../../src/core/types.js';
 
@@ -100,6 +101,7 @@ export function createTestPluginApi(
     migrations: MigrateFn[];
     httpRoutes: HttpRoute[];
     extIndex: ExtIndexSpec | null;
+    tools: PluginToolSpec[];
   };
 } {
   const m = { id: 'test', name: 'Test Plugin', ...manifest };
@@ -111,6 +113,7 @@ export function createTestPluginApi(
     migrations: [] as MigrateFn[],
     httpRoutes: [] as HttpRoute[],
     extIndex: null as ExtIndexSpec | null,
+    tools: [] as PluginToolSpec[],
   };
 
   const api: PluginApi = {
@@ -142,6 +145,19 @@ export function createTestPluginApi(
     },
     registerHttpRoute(route: HttpRoute) {
       collected.httpRoutes.push(route);
+    },
+    // Mirrors the loader's validation + namespacing, not just the collection, so
+    // a tool that could not actually load fails here too.
+    registerTool(tool: PluginToolSpec) {
+      if (!/^[a-z0-9_]+$/.test(tool?.name ?? '')) {
+        throw new Error(`Plugin "${m.id}" tool name "${String(tool?.name)}" must match /^[a-z0-9_]+$/.`);
+      }
+      const prefix = `${m.id.replace(/[^a-z0-9_]/gi, '_').toLowerCase()}_`;
+      const name = tool.name.startsWith(prefix) ? tool.name : `${prefix}${tool.name}`;
+      if (collected.tools.some(t => t.name === name)) {
+        throw new Error(`Plugin "${m.id}" registered tool "${name}" twice.`);
+      }
+      collected.tools.push({ ...tool, name });
     },
     // Mirrors integration-loader's validation, not just the collection: a plugin
     // that declares a malformed spec must fail the same way here as it does at

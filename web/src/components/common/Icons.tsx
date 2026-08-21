@@ -11,10 +11,6 @@ export const ICON_PHASE_TODO = <svg width="14" height="14" viewBox="0 0 16 16" f
 export const ICON_PHASE_IN_PROGRESS = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="6"/><path d="M8 2a6 6 0 010 12z" fill="currentColor"/></svg>;
 /** ✓ single check — Agent Complete */
 export const ICON_PHASE_AGENT_COMPLETE = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 8.5l3.5 3.5 6.5-8"/></svg>;
-/** ☑ shield check — Human Verified */
-export const ICON_PHASE_HUMAN_VERIFIED = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M8 1L2 4v4c0 3.3 2.6 6.4 6 7 3.4-.6 6-3.7 6-7V4z"/><path d="M5.5 8l2 2 3.5-4" strokeWidth="1.6"/></svg>;
-/** 📦 box — Post-Work Completed */
-export const ICON_PHASE_POST_WORK = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M2 5l6-3 6 3v6l-6 3-6-3z"/><path d="M2 5l6 3 6-3"/><path d="M8 8v6"/></svg>;
 /** ✓✓ double check — Complete */
 export const ICON_PHASE_COMPLETE = <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M1 8l3 3.5L10.5 4"/><path d="M5.5 8l3 3.5L15 4"/></svg>;
 
@@ -66,7 +62,7 @@ export const ICON_SLIDERS = <svg width="15" height="15" viewBox="0 0 16 16" fill
 
 /**
  * Binary task-state icon — the ONLY glyph pair the interactive task toggle uses:
- * hollow circle = open, single check = done. The 7-phase lifecycle still exists in
+ * hollow circle = open, single check = done. The 5-phase lifecycle still exists in
  * the data model (and keeps its per-phase COLOR via .task-phase-*), but the shape is
  * deliberately two-valued so a task row reads like a plain todo item.
  */
@@ -80,8 +76,6 @@ export function phaseIcon(phase: string): ReactNode {
     case 'TODO': return ICON_PHASE_TODO;
     case 'IN_PROGRESS': return ICON_PHASE_IN_PROGRESS;
     case 'AGENT_COMPLETE': return ICON_PHASE_AGENT_COMPLETE;
-    case 'HUMAN_VERIFIED': return ICON_PHASE_HUMAN_VERIFIED;
-    case 'POST_WORK_COMPLETED': return ICON_PHASE_POST_WORK;
     case 'COMPLETE': return ICON_PHASE_COMPLETE;
     default: return ICON_PHASE_TODO;
   }

@@ -483,6 +483,23 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     const advEnd = capsSrc.indexOf('] as const', advStart)
     expect(capsSrc.slice(advStart, advEnd)).toMatch(/'changes-v1'/)
   })
+  it("source twin gates 'changes-v1' on the sidecar load (static caps exclude it)", () => {
+    // Every sidecar-gated capability must be excluded from the STATIC caps
+    // literal (a source deploy that advertised one before its sidecar loaded
+    // would make the server route work to a daemon that can't do it) …
+    const gatedStart = templateSrc.indexOf('SIDECAR_GATED_CAPABILITIES = new Set([')
+    expect(gatedStart).toBeGreaterThan(-1)
+    const gatedBody = templateSrc.slice(gatedStart, templateSrc.indexOf('])', gatedStart))
+    expect(gatedBody).toContain("'changes-v1'")
+    expect(templateSrc).toMatch(/filter\(\(c\) => !SIDECAR_GATED_CAPABILITIES\.has\(c\)\)/)
+    // …hello answers with the runtime-gated list…
+    expect(templateSrc).toMatch(/capabilities:\s*daemonCapabilities\(\)/)
+    expect(templateSrc).toMatch(/if \(changesCore\) caps\.push\('changes-v1'\)/)
+    // …and both handlers refuse cleanly when the sidecar is absent.
+    expect(templateSrc).toMatch(/changes\.compute: core sidecar not available/)
+    expect(templateSrc).toMatch(/changes\.file: core sidecar not available/)
+  })
+
   // Host-local symbol search (fs.grep): the binary twin imports
   // search-grep-core.ts, the source twin inlines an equivalent. NOT sidecar-
   // gated — both need only child_process — so 'grep-v1' is unconditional on a
@@ -516,22 +533,6 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
       .toMatch(/search-grep-core\.ts/)
     expect(readFile(path.join(ROOT, 'src/providers/daemon-version-check.ts')))
       .toMatch(/search-grep-core\.ts/)
-  })
-  it("source twin gates 'changes-v1' on the sidecar load (static caps exclude it)", () => {
-    // Every sidecar-gated capability must be excluded from the STATIC caps
-    // literal (a source deploy that advertised one before its sidecar loaded
-    // would make the server route work to a daemon that can't do it) …
-    const gatedStart = templateSrc.indexOf('SIDECAR_GATED_CAPABILITIES = new Set([')
-    expect(gatedStart).toBeGreaterThan(-1)
-    const gatedBody = templateSrc.slice(gatedStart, templateSrc.indexOf('])', gatedStart))
-    expect(gatedBody).toContain("'changes-v1'")
-    expect(templateSrc).toMatch(/filter\(\(c\) => !SIDECAR_GATED_CAPABILITIES\.has\(c\)\)/)
-    // …hello answers with the runtime-gated list…
-    expect(templateSrc).toMatch(/capabilities:\s*daemonCapabilities\(\)/)
-    expect(templateSrc).toMatch(/if \(changesCore\) caps\.push\('changes-v1'\)/)
-    // …and both handlers refuse cleanly when the sidecar is absent.
-    expect(templateSrc).toMatch(/changes\.compute: core sidecar not available/)
-    expect(templateSrc).toMatch(/changes\.file: core sidecar not available/)
   })
 
   // External-session scan (sessions.discoverExternal): same sidecar-gated
@@ -1433,19 +1434,21 @@ describe('scheduled-task fire detection daemon-standalone vs daemon-source parit
       expect(src).toMatch(/appendFileSync\(session\.jsonlPath, marker\)/)
     }
   })
-  it('both EVICT the orphaned row on a foreign fire and inject NOTHING into the model', () => {
+  it('both EVICT the orphaned row on a hook cron.fire evict and inject NOTHING into the model', () => {
     // 2026-08-13: the old behavior injected a provenance warning on every foreign
     // fire — a turn + context burned hourly that could not stop the loop. A
     // foreign fire proves no CronDelete will come from this process, so the row
-    // must go. Regression guard: no FIFO write may reappear on this path.
+    // must go. Now gated by hook rules (cron.fire → evict, when foreign:true in
+    // the built-in set). Regression guard: no FIFO write may reappear here.
     for (const src of [standaloneSrc, templateSrc]) {
-      expect(src).toMatch(/if \(fire\.foreign && !ALLOW_DURABLE_CRON\)/)
+      expect(src).toMatch(/hookActions\('cron\.fire', \{\s*\n?\s*foreign: fire\.foreign, taskId: fire\.taskId,/)
       expect(src).toMatch(/stripCronTaskById\(tasksJson, fire\.taskId\)/)
-      expect(src).toMatch(/evicted orphaned foreign cron \(Walnut policy: session-scoped crons only\)/)
+      expect(src).toMatch(/hook evict: removed orphaned foreign cron/)
       expect(src).not.toMatch(/cronFireFifoWarning/)
       // The eviction block must not write to the FIFO at all.
-      const start = src.indexOf('if (fire.foreign && !ALLOW_DURABLE_CRON)')
-      const block = src.slice(start, start + 900)
+      const start = src.indexOf("hookActions('cron.fire'")
+      expect(start).toBeGreaterThan(-1)
+      const block = src.slice(start, start + 1400)
       expect(block).not.toMatch(/writeFifoRaw/)
     }
   })
@@ -1557,27 +1560,80 @@ describe('durable-cron invariant daemon-standalone vs daemon-source parity', () 
   const standaloneSrc = readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))
   const templateSrc = readFile(sourcePath)
 
-  it('both treat enforcement as OPT-IN (WALNUT_ENFORCE_SESSION_CRON) with the allow override', () => {
+  it('both source ALL interventions from pushed hook rules, with env back-compat + kill switch', () => {
     for (const src of [standaloneSrc, templateSrc]) {
-      // Default OFF: ALLOW is true unless the spawner explicitly set the
-      // enforce flag; WALNUT_ALLOW_DURABLE_CRON=1 still overrides (back-compat).
-      expect(src).toMatch(/ALLOW_DURABLE_CRON = process\.env\.WALNUT_ENFORCE_SESSION_CRON !== '1'/)
+      // Default OFF: no pushed hooks.json + no legacy enforce env ⇒ daemonHooks
+      // stays null ⇒ hookActions returns [] everywhere. A legacy server that
+      // still sets WALNUT_ENFORCE_SESSION_CRON=1 at spawn gets the synthesized
+      // built-in rule set; WALNUT_ALLOW_DURABLE_CRON=1 kills everything.
+      expect(src).toMatch(/loadDaemonHooksAtBoot\(\)/)
+      expect(src).toMatch(/WALNUT_ENFORCE_SESSION_CRON === '1'/)
+      expect(src).toMatch(/hash: 'env-compat', hooks: \[builtinSessionOnlyCronHook\(\)\]/)
+      // The kill switch guards BOTH boot load and every evaluation.
       expect(src).toMatch(/process\.env\.WALNUT_ALLOW_DURABLE_CRON === '1'/)
+      // hooks.configure persists to hooks.json and is NOT bridge-reachable.
+      expect(src).toMatch(/case 'hooks\.configure': return cmdHooksConfigure\(ws, id/)
+      expect(src).toMatch(/hooks\.configure: invalid config/)
+      const bridgeSetStart = src.indexOf('BRIDGE_ALLOWED_COMMANDS = new Set(')
+      const bridgeSetEnd = src.indexOf('])', bridgeSetStart)
+      expect(src.slice(bridgeSetStart, bridgeSetEnd)).not.toContain('hooks.configure')
     }
   })
 
-  it('both DENY a durable CronCreate permission request BEFORE the auto-allow check', () => {
+  it('both evaluate the cron.create hook (deny) BEFORE the auto-allow check', () => {
     // Order matters: a bypass-mode session hits shouldAutoRespond first and would
     // be waved through, so the deny must come earlier in the same block.
     for (const src of [standaloneSrc, templateSrc]) {
-      const denyAt = src.indexOf('isDurableCronRequest(toolName')
+      const denyAt = src.indexOf("hookActions('cron.create',")
       const autoAt = src.indexOf('if (shouldAutoRespond(s.mode, toolName))')
       expect(denyAt).toBeGreaterThan(-1)
       expect(autoAt).toBeGreaterThan(-1)
       expect(denyAt).toBeLessThan(autoAt)
       expect(src).toMatch(/durableCronDenyMessage\(\)/)
-      expect(src).toMatch(/denied durable CronCreate \(Walnut policy: session-scoped crons only\)/)
+      expect(src).toMatch(/hook deny: durable CronCreate refused \(session-scoped crons only\)/)
     }
+  })
+
+  it('template mirrors daemon-core rule evaluator + built-in rule set (behavioral, not grepped)', async () => {
+    // Extract the template's own evalDaemonHookRules/dotGet/builtinSessionOnlyCronHook
+    // and run them against daemon-core's — a drifted copy fails on behavior.
+    const extract = (name: string): string => {
+      const at = templateSrc.indexOf(`function ${name}(`)
+      expect(at, `${name} not found in template`).toBeGreaterThan(-1)
+      const end = templateSrc.indexOf('\n}', at)
+      return templateSrc.slice(at, end + 2)
+    }
+    const body = extract('dotGet') + '\n' + extract('evalDaemonHookRules') + '\n' + extract('builtinSessionOnlyCronHook')
+    const fns = new Function(`${body}\nreturn { evalDaemonHookRules, builtinSessionOnlyCronHook }`)() as {
+      evalDaemonHookRules: (c: unknown, p: string, ctx: unknown) => string[]
+      builtinSessionOnlyCronHook: () => unknown
+    }
+    const core = await import('../../src/providers/daemon-core.js')
+    const config = { version: 1 as const, hash: 'x', hooks: [core.builtinSessionOnlyCronHook()] }
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['cron.create', { input: { durable: true } }],
+      ['cron.create', { input: { durable: false } }],
+      ['cron.create', { input: {} }],
+      ['cron.created', { input: { durable: true }, mode: 'bypass' }],
+      ['cron.created', { input: { durable: false } }],
+      ['cron.fire', { foreign: true, taskId: 't1' }],
+      ['cron.fire', { foreign: false, taskId: 't1' }],
+      ['session.reap', { sid: 's1', cwd: '/tmp/x' }],
+    ]
+    for (const [point, ctx] of cases) {
+      expect(
+        fns.evalDaemonHookRules(config, point, ctx),
+        `${point} ${JSON.stringify(ctx)}`,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ).toEqual(core.evalDaemonHookRules(config as any, point as any, ctx))
+    }
+    // Pin the values themselves so "both wrong identically" fails too.
+    expect(fns.evalDaemonHookRules(config, 'cron.create', { input: { durable: true } })).toEqual(['deny'])
+    expect(fns.evalDaemonHookRules(config, 'cron.create', { input: { durable: false } })).toEqual([])
+    expect(fns.evalDaemonHookRules(config, 'cron.fire', { foreign: true })).toEqual(['evict'])
+    expect(fns.evalDaemonHookRules(config, 'session.reap', {})).toEqual(['strip-own-rows'])
+    // Built-in rule sets byte-equal across twins.
+    expect(fns.builtinSessionOnlyCronHook()).toEqual(core.builtinSessionOnlyCronHook())
   })
 
   it('both run the corrective stream check on CronCreate lines (bypass mode has no permission round-trip)', () => {
@@ -1590,9 +1646,11 @@ describe('durable-cron invariant daemon-standalone vs daemon-source parity', () 
   })
 
   it('template mirrors daemon-core durable predicate + messages (explicit-true only)', () => {
+    // The durable predicate moved out of code into the built-in RULE
+    // ('input.durable': true — strict equality, so only explicit true matches).
     const coreSrc = readFile(corePath)
     for (const src of [coreSrc, templateSrc]) {
-      expect(src).toMatch(/durable === true/)
+      expect(src).toMatch(/'input\.durable': true/)
       expect(src).toMatch(/Retry the same CronCreate with durable:false/)
       expect(src).toMatch(/call CronDelete on that task id/)
     }
@@ -1626,12 +1684,12 @@ describe('durable-cron death-funnel strip daemon-core vs daemon-source parity', 
     }
   })
 
-  it('both gate the strip on the opt-in + allow override and only ever remove OWN rows', () => {
+  it('both gate the strip on the session.reap hook rules and only ever remove OWN rows', () => {
+    // daemon-core consults the injected hookActionsFn; the template consults its
+    // local hookActions. Either way: no strip-own-rows action ⇒ no rewrite.
+    expect(coreSrc).toMatch(/hookActionsFn\?\.\('session\.reap', \{ sid, cwd: session\.cwd \}\)\s*\n?\s*\?\.includes\('strip-own-rows'\)/)
+    expect(templateSrc).toMatch(/hookActions\('session\.reap', \{ sid: sid, cwd: session\.cwd \}\)\.indexOf\('strip-own-rows'\) !== -1/)
     for (const src of [coreSrc, templateSrc]) {
-      expect(src).toMatch(/WALNUT_ALLOW_DURABLE_CRON/)
-      // The strip must be opt-in gated like points 1-2. daemon-core checks the
-      // env pair inline; the template funnels through the same ALLOW_DURABLE_CRON.
-      expect(src).toMatch(/WALNUT_ENFORCE_SESSION_CRON === '1'|!ALLOW_DURABLE_CRON/)
       expect(src).toMatch(/createdBySessionId !== sid\) return true/)
     }
   })

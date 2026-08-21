@@ -39,30 +39,33 @@ afterEach(() => {
 })
 
 describe('snapshot status mode flag', () => {
-  it('defaults to shadow when the env var is unset or garbage', () => {
+  it('defaults to enforce when the env var is unset or garbage (C4 flip, 2026-08-13)', () => {
+    // Shadow soak evidence: 4 days, 1880 divergences across 28 sessions, the
+    // snapshot side correct in every investigated incident. Shadow could see
+    // stale records but never fix them ("finished but still Running" family).
     delete process.env.WALNUT_SNAPSHOT_STATUS
     _resetSnapshotGateForTests()
-    expect(getSnapshotStatusMode()).toBe('shadow')
+    expect(getSnapshotStatusMode()).toBe('enforce')
     process.env.WALNUT_SNAPSHOT_STATUS = 'bogus-value'
     _resetSnapshotGateForTests()
-    expect(getSnapshotStatusMode()).toBe('shadow')
+    expect(getSnapshotStatusMode()).toBe('enforce')
   })
 
-  it('honors off and enforce from the environment', () => {
+  it('honors off and shadow from the environment (shadow = the revert switch)', () => {
     process.env.WALNUT_SNAPSHOT_STATUS = 'off'
     _resetSnapshotGateForTests()
     expect(getSnapshotStatusMode()).toBe('off')
-    process.env.WALNUT_SNAPSHOT_STATUS = 'enforce'
+    process.env.WALNUT_SNAPSHOT_STATUS = 'shadow'
     _resetSnapshotGateForTests()
-    expect(getSnapshotStatusMode()).toBe('enforce')
+    expect(getSnapshotStatusMode()).toBe('shadow')
   })
 
   it('setSnapshotModeForTests overrides and null re-derives from env', () => {
-    setSnapshotModeForTests('enforce')
-    expect(getSnapshotStatusMode()).toBe('enforce')
+    setSnapshotModeForTests('shadow')
+    expect(getSnapshotStatusMode()).toBe('shadow')
     delete process.env.WALNUT_SNAPSHOT_STATUS
     setSnapshotModeForTests(null)
-    expect(getSnapshotStatusMode()).toBe('shadow')
+    expect(getSnapshotStatusMode()).toBe('enforce')
   })
 })
 

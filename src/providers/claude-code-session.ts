@@ -414,6 +414,7 @@ export { shellQuote } from './session-io.js'
 // Exported for testing
 export { outputFileCheckResult, stripCliStartupNoise, isBenignSshStderr }
 
+
 /**
  * Immediate fail-closed contract for ACP providers that do not advertise
  * session.fork. Routes should call this before creating a target task; the
@@ -4852,7 +4853,7 @@ export class ClaudeCodeSession {
         // (fullText non-empty) and the only error marker is [ede_diagnostic], which fires
         // when stop_reason=tool_use + last message.type=user in print-mode stream-json.
         // This is NOT a real API failure — downgrade to a normal result so the task goes
-        // to AGENT_COMPLETE instead of AWAIT_HUMAN_ACTION.
+        // to AGENT_COMPLETE.
         const isSoftEdeError = result.is_error
           && !!this.fullText
           && this.fullText.trim().length > 0
@@ -7555,9 +7556,9 @@ export class SessionRunner {
   }
 
   /** PULL daemon-authoritative task state for a session that is NOT a turn-over
-   *  gating candidate — i.e. it's already idle / AWAIT_HUMAN_ACTION, so neither
+   *  gating candidate — i.e. it's already idle, so neither
    *  checkHungSessions (running-only) nor checkIdleTimeout's isBackgroundWorkActive
-   *  call (skipped for AWAIT_HUMAN_ACTION, and a no-op once _runningBgCount() is
+   *  call (a no-op once _runningBgCount() is
    *  already 0 because the only outstanding entry is `isBackgrounded`) ever reaches
    *  reconcileFromDaemon() for it. A backgrounded task's lost terminal event then has
    *  NO self-heal opportunity for the lifetime of the session (inc-1784012867247: a
@@ -8120,13 +8121,19 @@ export class SessionRunner {
 
   /**
    * Drain queued messages into ONE ACP prompt. ACP is one-prompt-per-turn (the
-   * worker rejects a prompt while a turn runs; there is no FIFO to inject into),
-   * so a mid-turn send stays queued and re-drains when the turn's
-   * SESSION_RESULT lands (processNext routes back here).
+   * worker rejects a prompt while a turn runs), so a mid-turn send first tries
+   * STEERING — codex `turn/steer` via the adapter's `_session/steering` ext —
+   * which folds the text into the LIVE turn (ChatGPT-app behavior). When the
+   * adapter/daemon predates steering or the turn ends mid-flight, the message
+   * stays queued and re-drains when the turn's SESSION_RESULT lands
+   * (processNext routes back here) — the pre-steering behavior.
    */
   private async drainAcpQueue(session: AcpSession, sessionId: string): Promise<void> {
     if (session.activity === 'processing') {
-      log.session.info('acp: turn active — message stays queued until turn end', { sessionId })
+      const steered = await this.steerAcpQueued(session, sessionId)
+      if (!steered) {
+        log.session.info('acp: turn active — message stays queued until turn end', { sessionId })
+      }
       return
     }
     const msgs = await markNextProcessing(sessionId)
@@ -8166,6 +8173,60 @@ export class SessionRunner {
       if (this.acpDeliverySettlements.get(sessionId) === settlement) {
         this.acpDeliverySettlements.delete(sessionId)
       }
+    }
+  }
+
+  /**
+   * Mid-turn delivery: steer every currently queued message into the LIVE
+   * turn, one at a time (the adapter serializes concurrent steers anyway).
+   * Returns true when at least one message was injected. On the first
+   * failure the message reverts to pending and the remainder stays queued —
+   * the turn-end drain picks them up exactly as before steering existed.
+   */
+  private async steerAcpQueued(session: AcpSession, sessionId: string): Promise<boolean> {
+    if (!session.canSteer) return false
+    let injected = false
+    for (;;) {
+      const msgs = await markNextProcessing(sessionId)
+      if (msgs.length === 0) return injected
+      const [message] = msgs
+      const deliverySessionId = session.sessionId ?? sessionId
+      let ok = false
+      try {
+        ok = await session.steer(message.message, message.id)
+      } catch (err) {
+        log.session.warn('acp: steer attempt failed — message stays queued', {
+          sessionId, messageId: message.id,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+      if (!ok) {
+        await revertToPending(msgs.map((queued) => ({ ...queued, sessionId: deliverySessionId })))
+        // Close the steer/turn-end race: if the turn ended while our message
+        // was marked 'processing', the turn-end drain saw a busy queue and
+        // returned empty — nobody would redeliver until the next event. Now
+        // that the message is pending again, re-drain if the turn is over.
+        if (session.activity !== 'processing') {
+          await this.drainAcpQueue(session, deliverySessionId)
+        }
+        return injected
+      }
+      await removeProcessed(deliverySessionId, [message.id])
+      // Fold the steered id into the running turn's batch so the turn-end
+      // SESSION_BATCH_COMPLETED clears its optimistic bubble too.
+      const batchKey = this.batchMessageIds.has(deliverySessionId) ? deliverySessionId : sessionId
+      const batch = this.batchMessageIds.get(batchKey)
+      if (batch) {
+        batch.push(message.id)
+        this.batchCounts.set(batchKey, (this.batchCounts.get(batchKey) ?? 1) + 1)
+      }
+      bus.emit(EventNames.SESSION_MESSAGES_DELIVERED, {
+        sessionId: deliverySessionId, count: 1, messageIds: [message.id],
+      }, ['main-ai'], { source: 'session-runner' })
+      log.session.info('acp: message steered into live turn', {
+        sessionId: deliverySessionId, messageId: message.id,
+      })
+      injected = true
     }
   }
 

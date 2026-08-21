@@ -32,8 +32,6 @@ beforeEach(() => {
     fs.rmSync(SESSION_DB_PATH + suffix, { force: true })
   }
   _resetSessionTrackerForTesting()
-  // The fold cache is process-global; without this, a second test reading the
-  // same runtimeId+path silently gets the first test's fold.
   _resetAcpHistoryCacheForTesting()
 })
 
@@ -93,6 +91,54 @@ describe('ACP session history', () => {
     })
 
     expect(history.map((m) => m.text)).toEqual(['exact user text', 'new answer'])
+  })
+
+  it('degrades an over-ceiling journal to a tail window instead of throwing (windowed:true)', async () => {
+    const journalPath = path.join(tmpDir, 'runtime-whale.acp.jsonl')
+    // Two records; the tail window starts mid-record-1, so only record 2 must
+    // survive (torn first line dropped).
+    const rec = (text: string, ts: number) => JSON.stringify({
+      kind: 'acp', ts, source: 'live',
+      frame: {
+        method: 'session/update',
+        params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } },
+      },
+    })
+    const line1 = rec('old message', 1) + '\n'
+    const line2 = rec('newest message', 2) + '\n'
+    const full = line1 + line2
+    // Window covers line2 + the tail half of line1.
+    const windowStart = Math.floor(line1.length / 2)
+
+    const state = await readAcpSessionHistoryState({
+      claudeSessionId: 'provider-whale',
+      acpRuntimeId: 'runtime-whale',
+      acpJournalPath: journalPath,
+    }, {
+      reader: {
+        readFile: async () => {
+          throw new Error(`file read exceeded the 33554432-byte ceiling (path=${journalPath}, size=41611935); read a bounded window instead`)
+        },
+        stat: async () => ({ mtimeMs: 1, size: windowStart + 4 * 1024 * 1024 }),
+        readFileRange: async () => ({
+          content: full.slice(windowStart), fileSize: full.length,
+        }),
+      },
+    })
+
+    expect(state.journalExists).toBe(true)
+    expect(state.windowed).toBe(true)
+    expect(state.messages.map((m) => m.text)).toEqual(['newest message'])
+  })
+
+  it('re-throws non-ceiling read errors (transport failures stay loud)', async () => {
+    await expect(readAcpSessionHistoryState({
+      claudeSessionId: 'provider-err',
+      acpRuntimeId: 'runtime-err',
+      acpJournalPath: path.join(tmpDir, 'runtime-err.acp.jsonl'),
+    }, {
+      reader: { readFile: async () => { throw new Error('fs.read transport failure: daemon down') } },
+    })).rejects.toThrow('transport failure')
   })
 
   it('distinguishes an empty existing journal from a missing journal', async () => {
@@ -494,6 +540,215 @@ describe('ACP session record primitives', () => {
       if (Date.now() > deadline) throw new Error('terminal cursor was not committed')
       await new Promise((resolve) => setTimeout(resolve, 10))
     }
+  })
+
+  it('persists the oldest ACP permission, advances it on answer, then clears it', async () => {
+    await createSessionRecord('provider-permissions', 'task-permissions', 'Project', tmpDir, {
+      engine: 'codex',
+      acpRuntimeId: 'runtime-permissions',
+      initialProcessStatus: 'running',
+    })
+    const session = new AcpSession({
+      taskId: 'task-permissions',
+      project: 'Project',
+      cwd: tmpDir,
+      mode: 'default',
+      providerSessionId: 'provider-permissions',
+      runtimeId: 'runtime-permissions',
+    })
+    const internals = session as unknown as {
+      ensureConn(): Promise<{
+        send(command: string, params: Record<string, unknown>): Promise<{
+          ok: boolean
+          result?: { answered?: boolean }
+        }>
+      }>
+      handleDaemonEvent(event: Record<string, unknown>): void
+    }
+    internals.ensureConn = async () => ({
+      send: async () => ({ ok: true, result: { answered: true } }),
+    })
+    const permission = (
+      v: number,
+      receivedAt: string,
+      requestId: string,
+      toolName: string,
+      optionId: string,
+    ) => internals.handleDaemonEvent({
+      ev: 'jsonl',
+      sid: 'runtime-permissions',
+      v,
+      line: JSON.stringify({
+        kind: 'acp',
+        ts: Date.parse(receivedAt),
+        source: 'live',
+        frame: {
+          method: 'session/request_permission',
+          providerRequestId: requestId,
+          params: {
+            toolCall: { title: toolName, rawInput: { requestId } },
+            options: [{ optionId, kind: 'allow_once', name: 'Allow once' }],
+          },
+        },
+      }),
+    })
+
+    permission(10, '2026-08-18T00:00:02.000Z', 'perm-2', 'Write second file', 'allow-2')
+    permission(20, '2026-08-18T00:00:01.000Z', 'perm-1', 'Write first file', 'allow-1')
+    await vi.waitFor(async () => {
+      expect((await getSessionByClaudeId('provider-permissions'))?.pendingPermission)
+        .toEqual(expect.objectContaining({
+          requestId: 'perm-1',
+          toolName: 'Write first file',
+          input: { requestId: 'perm-1' },
+          acpOptions: [{ optionId: 'allow-1', kind: 'allow_once', name: 'Allow once' }],
+        }))
+    })
+
+    expect(await session.resolvePermissionRequest('perm-1', true)).toBe(true)
+    await vi.waitFor(async () => {
+      expect((await getSessionByClaudeId('provider-permissions'))?.pendingPermission)
+        .toEqual(expect.objectContaining({ requestId: 'perm-2', toolName: 'Write second file' }))
+    })
+
+    expect(await session.resolvePermissionRequest('perm-2', true)).toBe(true)
+    await vi.waitFor(async () => {
+      expect((await getSessionByClaudeId('provider-permissions'))?.pendingPermission).toBeUndefined()
+    })
+  })
+
+  it('auto-approves Full Access permissions without persisting or emitting them', async () => {
+    await createSessionRecord('provider-full-access', 'task-full-access', 'Project', tmpDir, {
+      engine: 'codex',
+      acpRuntimeId: 'runtime-full-access',
+      initialProcessStatus: 'running',
+    })
+    const session = new AcpSession({
+      taskId: 'task-full-access',
+      project: 'Project',
+      cwd: tmpDir,
+      mode: 'default',
+      providerSessionId: 'provider-full-access',
+      runtimeId: 'runtime-full-access',
+    })
+    const permissionEvents: unknown[] = []
+    bus.subscribe('main-ai', (event) => {
+      if (event.name === EventNames.SESSION_PERMISSION_REQUEST) permissionEvents.push(event)
+    })
+    let responses = 0
+    const internals = session as unknown as {
+      _configOptions: Array<Record<string, unknown>>
+      ensureConn(): Promise<{
+        send(command: string, params: Record<string, unknown>): Promise<{
+          ok: boolean
+          result?: { answered?: boolean }
+        }>
+      }>
+      handleDaemonEvent(event: Record<string, unknown>): void
+    }
+    internals._configOptions = [{
+      id: 'mode',
+      name: 'Approval mode',
+      type: 'select',
+      currentValue: 'agent-full-access',
+      options: [],
+    }]
+    internals.ensureConn = async () => ({
+      send: async () => {
+        responses++
+        return { ok: true, result: { answered: true } }
+      },
+    })
+
+    internals.handleDaemonEvent({
+      ev: 'jsonl',
+      sid: 'runtime-full-access',
+      v: 10,
+      line: JSON.stringify({
+        kind: 'acp',
+        ts: Date.parse('2026-08-18T00:00:00.000Z'),
+        source: 'live',
+        frame: {
+          method: 'session/request_permission',
+          providerRequestId: 'perm-full-access',
+          params: {
+            toolCall: { title: 'Run command', rawInput: { command: 'pwd' } },
+            options: [{ optionId: 'allow-once', kind: 'allow_once' }],
+          },
+        },
+      }),
+    })
+
+    await vi.waitFor(() => expect(responses).toBe(1))
+    await vi.waitFor(() => expect(session.hasPendingPermission).toBe(false))
+    expect((await getSessionByClaudeId('provider-full-access'))?.pendingPermission).toBeUndefined()
+    expect(permissionEvents).toEqual([])
+  })
+
+  it('clears durable ACP permissions on auto-cancel and abort', async () => {
+    await createSessionRecord('provider-cancel', 'task-cancel', 'Project', tmpDir, {
+      engine: 'codex',
+      acpRuntimeId: 'runtime-cancel',
+      initialProcessStatus: 'running',
+    })
+    const session = new AcpSession({
+      taskId: 'task-cancel',
+      project: 'Project',
+      cwd: tmpDir,
+      mode: 'default',
+      providerSessionId: 'provider-cancel',
+      runtimeId: 'runtime-cancel',
+    })
+    const handle = (session as unknown as {
+      handleDaemonEvent(event: Record<string, unknown>): void
+    }).handleDaemonEvent.bind(session)
+    const request = (v: number, requestId: string) => handle({
+      ev: 'jsonl',
+      sid: 'runtime-cancel',
+      v,
+      line: JSON.stringify({
+        kind: 'acp',
+        ts: Date.parse('2026-08-18T00:00:00.000Z'),
+        source: 'live',
+        frame: {
+          method: 'session/request_permission',
+          providerRequestId: requestId,
+          params: {
+            toolCall: { title: 'Run command', rawInput: { command: 'pwd' } },
+            options: [{ optionId: 'allow-once', kind: 'allow_once' }],
+          },
+        },
+      }),
+    })
+
+    request(10, 'perm-auto-cancel')
+    await vi.waitFor(async () => {
+      expect((await getSessionByClaudeId('provider-cancel'))?.pendingPermission?.requestId)
+        .toBe('perm-auto-cancel')
+    })
+    handle({
+      ev: 'jsonl',
+      sid: 'runtime-cancel',
+      v: 20,
+      line: JSON.stringify({
+        kind: 'meta',
+        ts: Date.parse('2026-08-18T00:00:01.000Z'),
+        event: { type: 'permission-auto-cancelled', providerRequestId: 'perm-auto-cancel' },
+      }),
+    })
+    await vi.waitFor(async () => {
+      expect((await getSessionByClaudeId('provider-cancel'))?.pendingPermission).toBeUndefined()
+    })
+
+    request(30, 'perm-abort')
+    await vi.waitFor(async () => {
+      expect((await getSessionByClaudeId('provider-cancel'))?.pendingPermission?.requestId)
+        .toBe('perm-abort')
+    })
+    await session.abortTurn()
+    await vi.waitFor(async () => {
+      expect((await getSessionByClaudeId('provider-cancel'))?.pendingPermission).toBeUndefined()
+    })
   })
 
   it('collects self-report control chunks without committing them as a user turn', async () => {

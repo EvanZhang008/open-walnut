@@ -1,0 +1,54 @@
+# Walnut daemon hook TEMPLATE — not active until you copy it into
+# ~/.open-walnut/hooks/ (e.g. `cp session-only-cron.yaml ~/.open-walnut/hooks/`).
+#
+# What it does: keeps Claude CLI scheduled tasks (crons) session-scoped.
+# Background: the CLI persists a `durable:true` cron to the PROJECT DIRECTORY
+# ({cwd}/.claude/scheduled_tasks.json) under a directory-scoped lock, so the
+# job outlives its creator session and gets adopted + executed by whatever
+# other session shares that directory — delivered as if the user had typed the
+# prompt, with no provenance. This hook set closes every path:
+#
+#   cron.create   deny the durable CronCreate at the permission request
+#                 (the model is told to retry with durable:false)
+#   cron.created  a bypass-permissions session never asks, so when the durable
+#                 tool_use echoes in the stream, inject a fixed corrective
+#                 message asking the model to CronDelete + recreate non-durable
+#                 (advisory — the model may decline, hence the next two rules)
+#   cron.fire     a FOREIGN fire means an orphaned cron already hijacked this
+#                 session and nobody here will ever CronDelete it: evict the
+#                 row from disk (the only thing that ends the loop)
+#   session.reap  when the daemon reaps a session, strip that session's own
+#                 durable rows so nothing is left for a stranger to adopt
+#
+# One file = the whole hook. Rules compile to a small JSON pushed to every
+# daemon (hooks.configure); no other file needs to exist on the remote host.
+#
+# Shortcut: setting `session.cron_policy: session-only` in config.yaml compiles
+# this exact rule set without installing the file. Install the file when you
+# want to edit the rules (your file wins over the config sugar by id).
+
+id: session-only-cron
+name: Session-scoped crons only
+description: Deny durable CronCreate, correct bypass sessions, evict orphaned foreign crons, strip a dying session's durable rows.
+runtime: daemon   # rules are pushed to and evaluated inside the session daemon
+enabled: true
+
+rules:
+  # Deny durable CronCreate at the permission prompt (before auto-allow).
+  - on: cron.create
+    when: { input.durable: true }
+    action: deny
+
+  # Bypass sessions never prompt — ask the model to swap the job to durable:false.
+  - on: cron.created
+    when: { input.durable: true }
+    action: inject
+
+  # An orphaned foreign cron fired into this session: remove its row from disk.
+  - on: cron.fire
+    when: { foreign: true }
+    action: evict
+
+  # Session died: remove its own durable rows before anyone can adopt them.
+  - on: session.reap
+    action: strip-own-rows

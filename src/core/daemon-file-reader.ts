@@ -137,11 +137,13 @@ export class DaemonFileReader implements SessionFileReader {
     if (result.ok) return result.data as string
 
     // Distinguish "file doesn't exist" (null) from RPC/transport failure (throw).
-    // The daemon tags ENOENT in the error message (see cmdFsRead). Any other
-    // failure mode means the caller should NOT fall back to glob/find, because
-    // the daemon itself is unhealthy.
+    // The daemon tags ENOENT in the error message (see cmdFsRead). ENOTFILE
+    // (FIFO/dir/socket — the daemon refuses to open non-regular files) also
+    // maps to null: there IS no text content, same caller semantics as absent.
+    // Any other failure mode means the caller should NOT fall back to
+    // glob/find, because the daemon itself is unhealthy.
     const errMsg = typeof result.error === 'string' ? result.error : ''
-    if (/ENOENT|no such file/i.test(errMsg)) return null
+    if (/ENOENT|ENOTFILE|no such file/i.test(errMsg)) return null
     throw new Error('fs.read transport failure: ' + (errMsg || 'unknown'))
   }
 
@@ -195,7 +197,7 @@ export class DaemonFileReader implements SessionFileReader {
       })
       if (!res.ok) {
         const errMsg = typeof res.error === 'string' ? res.error : ''
-        if (/ENOENT|no such file/i.test(errMsg)) return null
+        if (/ENOENT|ENOTFILE|no such file/i.test(errMsg)) return null
         throw new Error('fs.readRange transport failure: ' + (errMsg || 'unknown'))
       }
       fileSize = (res.fileSize as number) ?? fileSize
@@ -242,7 +244,7 @@ export class DaemonFileReader implements SessionFileReader {
     const res = await conn.send('fs.readRange', { path: remotePath, start, length })
     if (!res.ok) {
       const errMsg = typeof res.error === 'string' ? res.error : ''
-      if (/ENOENT|no such file/i.test(errMsg)) return null
+      if (/ENOENT|ENOTFILE|no such file/i.test(errMsg)) return null
       throw new Error('fs.readRange transport failure: ' + (errMsg || 'unknown'))
     }
     const bytesRead = (res.bytesRead as number) ?? 0

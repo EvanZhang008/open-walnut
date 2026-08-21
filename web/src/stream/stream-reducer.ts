@@ -119,9 +119,21 @@ export function lastMainLaneIndex(blocks: readonly StreamingBlock[]): number {
 
 /** Last MAIN-LANE text block anywhere in the array (skips trailing tool calls
  *  and lane blocks) — used to reconstruct the text accumulator from a snapshot
- *  so future deltas append to the right content. */
-export function lastMainLaneText(blocks: readonly StreamingBlock[]): StreamingTextBlock | undefined {
-  for (let i = blocks.length - 1; i >= 0; i--) {
+ *  so future deltas append to the right content.
+ *
+ *  `completedLen` is the turn boundary: blocks before it belong to FINISHED
+ *  turns and MUST NOT seed the accumulator (inc-1786678797966). A snapshot
+ *  taken between the next turn's markStreaming and its first delta carries the
+ *  previous turn's blocks with isStreaming already true; seeding from one made
+ *  the next turn's first delta append to the OLD answer's full text, so the
+ *  rendered block read "…<entire previous answer>…<new answer>" — a duplicate
+ *  that is really one concatenated block, not two rendered copies. Omit (or 0)
+ *  to search the whole array, which is correct only for a live-turn buffer. */
+export function lastMainLaneText(
+  blocks: readonly StreamingBlock[],
+  completedLen = 0,
+): StreamingTextBlock | undefined {
+  for (let i = blocks.length - 1; i >= Math.max(0, completedLen); i--) {
     const b = blocks[i];
     if (b.type === 'text' && !b.parentToolUseId) return b;
   }
@@ -358,4 +370,50 @@ export function appendSystemBlock(
   ev: { variant: 'compact' | 'error' | 'info'; message: string; detail?: string },
 ): StreamingBlock[] {
   return [...blocks, { type: 'system', variant: ev.variant, message: ev.message, detail: ev.detail }];
+}
+
+// ── Permission requests ─────────────────────────────────────────────────────
+
+export interface PermissionRequestEvent {
+  requestId: string;
+  toolName: string;
+  input?: Record<string, unknown>;
+  reason?: string;
+  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
+}
+
+/** Add one permission card. Re-emits are expected while a request is pending. */
+export function appendPermissionBlock(
+  blocks: readonly StreamingBlock[],
+  ev: PermissionRequestEvent,
+): StreamingBlock[] {
+  if (blocks.some((b) => b.type === 'permission' && b.requestId === ev.requestId)) {
+    return blocks as StreamingBlock[];
+  }
+  return [...blocks, {
+    type: 'permission',
+    requestId: ev.requestId,
+    toolName: ev.toolName,
+    input: ev.input,
+    reason: ev.reason,
+    acpOptions: ev.acpOptions,
+  }];
+}
+
+/** Settle a permission card. Unknown request ids are a no-op. */
+export function resolvePermissionBlock(
+  blocks: readonly StreamingBlock[],
+  requestId: string,
+  allowed: boolean,
+): StreamingBlock[] {
+  let changed = false;
+  const status = allowed ? 'allowed' as const : 'denied' as const;
+  const next = blocks.map((block) => {
+    if (block.type !== 'permission' || block.requestId !== requestId || block.status === status) {
+      return block;
+    }
+    changed = true;
+    return { ...block, status };
+  });
+  return changed ? next : blocks as StreamingBlock[];
 }

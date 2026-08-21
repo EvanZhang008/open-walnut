@@ -39,7 +39,7 @@ describe('Local plugin: registerSync', () => {
     for (const method of expectedMethods) {
       expect(typeof (sync as any)[method]).toBe('function');
     }
-    expect(expectedMethods).toHaveLength(17);
+    expect(expectedMethods).toHaveLength(16);
   });
 
   it('B2: every sync method resolves without error', async () => {

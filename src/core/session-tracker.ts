@@ -111,6 +111,7 @@ function canonicalStatusProjection(
     | 'provider'
     | 'engine'
     | 'taskId'
+    | 'pendingPermission'
   >,
 ): CanonicalStatusProjection {
   return {
@@ -120,6 +121,10 @@ function canonicalStatusProjection(
     planCompleted: record.planCompleted ?? false,
     archived: record.archived ?? false,
     errorMessage: record.errorMessage ?? null,
+    // Rides every status snapshot so LIST surfaces (task pills, iOS) can show
+    // the red Waiting state — previously only the session panel saw it.
+    pendingPermissionTool: record.pendingPermission
+      ? (record.pendingPermission.toolName ?? 'unknown') : null,
     provider: record.provider ?? 'cli',
     engine: record.engine ?? 'claude',
     taskId: record.taskId || null,
@@ -157,7 +162,11 @@ function statusProjectionEquals(
     && left.errorMessage === right.errorMessage
     && left.provider === right.provider
     && left.engine === right.engine
-    && left.taskId === right.taskId;
+    && left.taskId === right.taskId
+    // A pendingPermission set/clear must bump statusRevision — it is what
+    // flips the list pills red; without this the revision stays flat and
+    // versioned consumers drop the change as a duplicate.
+    && left.pendingPermissionTool === right.pendingPermissionTool;
 }
 
 function initializeStatusVersion(record: SessionRecord, now?: string): void {
@@ -935,9 +944,13 @@ export async function healStalePendingPermissions(): Promise<number> {
   await ensureSessionInit();
   const db = getDb();
   if (!db) return 0;
+  // remote_unreachable carve-out: that "error" is connectivity loss, not death —
+  // the remote CLI may be alive and genuinely waiting on this prompt. Same
+  // exception as the terminal-transition clear in applyUpdateToSession.
   const rows = db.prepare(`
     SELECT * FROM sessions
     WHERE process_status IN ('stopped', 'error')
+      AND COALESCE(status_reason, '') != 'remote_unreachable'
       AND payload IS NOT NULL
       AND json_extract(payload, '$.pendingPermission') IS NOT NULL
   `).all() as Record<string, any>[];
@@ -1053,9 +1066,13 @@ export async function createSessionRecord(
         if (extra?.cliModel && existing.cliModel !== extra.cliModel) materialChange = true;
         if (extra?.effort && existing.effort !== extra.effort) materialChange = true;
         if (extra?.lane && existing.lane !== extra.lane) materialChange = true;
-        // Profile is a structured bundle — compare serialized so a re-spawn with
-        // the SAME profile stays a no-op (this path is re-invoked ~9× per resume).
-        if (extra?.profile && JSON.stringify(existing.profile) !== JSON.stringify(extra.profile)) materialChange = true;
+        // Profile: the RECORD is the source of truth for spawn-time config (the
+        // resume path rebuilds args from record.profile). The runner echoes its
+        // in-memory _profile through here at result time, which is stale the
+        // moment personal-ai-lane's drift repair refreshes the record — so an
+        // existing profile is write-once from this path: only fill a missing
+        // one; changes go through updateSessionRecord.
+        if (extra?.profile && existing.profile === undefined) materialChange = true;
 
         if (!materialChange) {
           return existing;
@@ -1090,7 +1107,9 @@ export async function createSessionRecord(
         if (extra?.forkedFromSessionId) existing.forkedFromSessionId = extra.forkedFromSessionId;
         if (extra?.cliModel) existing.cliModel = extra.cliModel;
         if (extra?.effort) existing.effort = extra.effort;
-        if (extra?.profile) existing.profile = extra.profile;
+        // Write-once (see materialChange above): never clobber a record profile
+        // with the runner's stale in-memory copy.
+        if (extra?.profile && existing.profile === undefined) existing.profile = extra.profile;
         if (extra?.lane) existing.lane = extra.lane;
 
         commitStatusVersion(existing, beforeStatus, now);
@@ -1442,6 +1461,39 @@ function applyUpdateToSession(
       process_status: session.process_status,
     });
     session.pid = undefined;
+  }
+
+  // Terminal-TRANSITION pendingPermission clear (incident d9df1a86, 2026-08-15).
+  // Invariant: a permission prompt cannot outlive its CLI, and the CLI never
+  // sends control_cancel_request when it dies — death IS the cancel. The
+  // startup heal (healStalePendingPermissions) only covers records that were
+  // ALREADY terminal at boot; a session dying MID-FLIGHT kept its prompt, and
+  // the attach-time Layer-2 recovery then resurrected it from the record 2s
+  // after death — a red "Waiting" pinned forever on a dead session.
+  // Scoped to the status TRANSITION (not any write touching a terminal
+  // record): the death event is the enforcement point. A prompt written to an
+  // already-terminal record is left for the boot heal — making that state
+  // unrepresentable here would turn the heal into untestable dead code while
+  // external raw-SQL writers (markSessionStoppedInSqlite) can still create it.
+  // EXCEPTION: 'remote_unreachable' is connectivity loss, not death — the CLI
+  // is likely still alive and genuinely waiting; clearing would lose a real
+  // question on every SSH flap (same liveness-unknown carve-out as the
+  // reconciler's phase guard).
+  if (
+    updates.process_status
+    && updates.process_status !== prevStatus
+    && isTerminalSession(session)
+    && session.pendingPermission
+    && session.status_reason !== 'remote_unreachable'
+  ) {
+    log.session.info('clearing pendingPermission on terminal transition', {
+      sessionId: session.claudeSessionId,
+      requestId: session.pendingPermission.requestId,
+      toolName: session.pendingPermission.toolName,
+      process_status: session.process_status,
+      status_reason: session.status_reason ?? null,
+    });
+    session.pendingPermission = undefined;
   }
   session.lastActiveAt = now;
   commitStatusVersion(session, beforeStatus, now);
@@ -1811,6 +1863,37 @@ export async function rollbackAcpSessionIdMigration(
  */
 export async function linkSessionToTask(claudeSessionId: string, taskId: string): Promise<void> {
   await updateSessionRecord(claudeSessionId, { taskId });
+}
+
+/**
+ * Clear the task link on every session that points at one of the given task
+ * ids. Called by task deletion (deleteTask / deleteTasksByIds / deleteTasksBulk)
+ * so a removed task never leaves dangling session.task_id pointers — a sweep on
+ * 2026-08-20 found 275 sessions orphaned this way, each invisible on its
+ * task's session list forever after.
+ *
+ * Raw column UPDATE is safe here: task_id is an explicit column (never spilled
+ * into `payload` by sessionToRow), and it is not part of the status projection,
+ * so the snapshot gate does not apply. Cache invalidation rides on
+ * withWriteLock's finally.
+ */
+export async function unlinkSessionsFromTasks(taskIds: string[]): Promise<number> {
+  if (!taskIds.length) return 0;
+  await ensureSessionInit();
+  return withWriteLock(async () => {
+    const db = getDb();
+    if (!db) return 0;
+    const placeholders = taskIds.map(() => '?').join(', ');
+    const result = db.prepare(
+      `UPDATE sessions SET task_id = NULL WHERE task_id IN (${placeholders})`,
+    ).run(...taskIds);
+    if (result.changes > 0) {
+      log.session.info('cleared task links for deleted tasks', {
+        taskIds, sessionsUnlinked: result.changes,
+      });
+    }
+    return result.changes;
+  });
 }
 
 /**

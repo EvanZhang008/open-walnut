@@ -149,12 +149,16 @@ describe('virtual group survives session phase transitions (REST → real phase 
    *      the group with BOTH members; both tasks carry group_id (persisted).
    *   3. Drive a REAL session phase transition on ONE member through the exact
    *      production function applySessionPhase('session:error'): TODO →
-   *      AWAIT_HUMAN_ACTION, which makes updateTaskRaw write `unread:true`
+   *      AGENT_COMPLETE, which makes updateTaskRaw write `unread:true`
    *      into the payload column. Then a second transition
-   *      ('session:streaming': AWAIT_HUMAN_ACTION → IN_PROGRESS, writes
-   *      unread:false), then a third ('session:error' again →
-   *      AWAIT_HUMAN_ACTION). Each rewrites the payload column — exactly what the
+   *      ('session:input': AGENT_COMPLETE → IN_PROGRESS, writes
+   *      unread:false), then a third ('session:result' →
+   *      AGENT_COMPLETE). Each rewrites the payload column — exactly what the
    *      bug exploited — so surviving all three is a strong guard.
+   *      (WAIT removed 2026-08-18: error now lands on AGENT_COMPLETE, and the
+   *      middle pullback moved from the retired session:streaming trigger to
+   *      session:input. The point of the test is three payload rewrites, and
+   *      that is unchanged.)
    *   4. Downstream over HTTP: GET /api/tasks/groups STILL lists the group with
    *      BOTH members; GET /api/tasks/:id shows group_id unchanged AND
    *      unread reflecting the last transition (proves BOTH the patch
@@ -185,35 +189,37 @@ describe('virtual group survives session phase transitions (REST → real phase 
 
     // 3. Drive REAL production phase transitions on member A. applySessionPhase is
     //    the exact function src/web/server.ts invokes on session:error /
-    //    session:streaming events; it calls updateTaskRaw with unread,
+    //    session:input / session:result events; it calls updateTaskRaw with unread,
     //    rewriting the payload column each time (the bug's trigger).
 
-    // TODO → AWAIT_HUMAN_ACTION (writes unread: true)
+    // TODO → AGENT_COMPLETE (writes unread: true) — (WAIT removed 2026-08-18)
     const t1 = await applySessionPhase(a.id, 'session:error', 'e2e:phase-persist');
     expect(t1.changed).toBe(true);
-    expect(t1.newPhase).toBe('AWAIT_HUMAN_ACTION');
+    expect(t1.newPhase).toBe('AGENT_COMPLETE');
 
     // group_id must survive the very first payload-rewriting transition.
     {
       const ra = await getTask(a.id);
-      expect(ra.phase).toBe('AWAIT_HUMAN_ACTION');
+      expect(ra.phase).toBe('AGENT_COMPLETE');
       expect(ra.unread).toBe(true); // the patch applied
       expect(ra.group_id).toBe(group.group_id); // ...and group_id survived
     }
 
-    // AWAIT_HUMAN_ACTION → IN_PROGRESS (writes unread: false)
-    const t2 = await applySessionPhase(a.id, 'session:streaming', 'e2e:phase-persist');
+    // AGENT_COMPLETE → IN_PROGRESS (writes unread: false). session:streaming was
+    // the old vehicle here; it is a no-op since the WAIT removal, so use the live
+    // pullback trigger instead.
+    const t2 = await applySessionPhase(a.id, 'session:input', 'e2e:phase-persist');
     expect(t2.changed).toBe(true);
     expect(t2.newPhase).toBe('IN_PROGRESS');
 
-    // IN_PROGRESS → AWAIT_HUMAN_ACTION (writes unread: true again)
-    const t3 = await applySessionPhase(a.id, 'session:error', 'e2e:phase-persist');
+    // IN_PROGRESS → AGENT_COMPLETE (writes unread: true again)
+    const t3 = await applySessionPhase(a.id, 'session:result', 'e2e:phase-persist');
     expect(t3.changed).toBe(true);
-    expect(t3.newPhase).toBe('AWAIT_HUMAN_ACTION');
+    expect(t3.newPhase).toBe('AGENT_COMPLETE');
 
     // 4. Downstream assertions over HTTP after THREE payload rewrites.
     const ra = await getTask(a.id);
-    expect(ra.phase).toBe('AWAIT_HUMAN_ACTION');
+    expect(ra.phase).toBe('AGENT_COMPLETE');
     expect(ra.unread).toBe(true); // last transition's payload field applied
     expect(ra.group_id).toBe(group.group_id); // group_id survived every rewrite
 

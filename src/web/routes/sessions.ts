@@ -490,6 +490,7 @@ import {
   executeContinueSession,
   getSessionChanges,
   getSessionFileChange,
+  getSessionPendingPermissions,
   isHistoryStartupWindow,
   CLAUDE_SESSION_MODES,
 } from '../../core/sessions/session-lifecycle.js'
@@ -740,28 +741,10 @@ sessionsRouter.get('/:sessionId', async (req: Request, res: Response, next: Next
       })
     }
     const [enriched] = await enrichWithHostnames(await enrichWithLiveStatus([session]))
-    // Include provider-neutral live pending permissions. ACP sessions attach
-    // lazily after a server restart, restoring pending state from the worker.
-    let pendingPermissions: Array<{
-      requestId: string
-      toolName?: string
-      input?: Record<string, unknown>
-      reason?: string
-    }> = []
-    try {
-      // Canonical id from the resolved record — NOT req.params, which may be a prefix.
-      const liveSession = session.engine === 'codex'
-        ? await sessionRunner.findOrAttachAcpSession(sessionId)
-        : sessionRunner.findByClaudeId(sessionId)
-      pendingPermissions = liveSession?.hasPendingPermission
-        ? liveSession.getPendingPermissionRequests()
-        : []
-    } catch (err) {
-      log.web.warn('failed to restore pending session permissions', {
-        sessionId,
-        error: err instanceof Error ? err.message : String(err),
-      })
-    }
+    // Canonical id from the resolved record is already on `enriched`. The
+    // shared helper uses the live provider when attached, then falls back to
+    // the durable record during the restart attach window.
+    const pendingPermissions = await getSessionPendingPermissions(enriched)
     res.json({ session: enriched, pendingPermissions })
   } catch (err) {
     next(err)
@@ -1390,6 +1373,26 @@ sessionsRouter.post('/:sessionId/execute-continue', async (req: Request, res: Re
       }
       throw err
     }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// POST /api/sessions/:sessionId/interrupt — stop the running turn (no message,
+// no queue drain). Same contract as the WS RPC session:interrupt; REST parity
+// so scripts/API users can interrupt without a WS client (gap found during the
+// 2026-08-12 codex live stress run).
+sessionsRouter.post('/:sessionId/interrupt', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sessionId = req.params.sessionId as string
+    const record = await getSessionByClaudeId(sessionId)
+    if (!record) {
+      res.status(404).json({ error: 'session not found' })
+      return
+    }
+    log.web.info('session interrupt via REST', { sessionId })
+    bus.emit(EventNames.SESSION_INTERRUPT, { sessionId }, ['session-runner'], { source: 'api' })
+    res.json({ ok: true })
   } catch (err) {
     next(err)
   }

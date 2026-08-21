@@ -54,6 +54,36 @@ describe('computeHiddenBlocks — absorption proof', () => {
     expect(hidden.has(1)).toBe(true);
   });
 
+  it('INCIDENT inc-1786664172811: resubscribe-after-send snapshot — live-tail guard must not protect a FINISHED turn\'s final block', () => {
+    // Send → markStreaming → resubscribe adopts the server snapshot BEFORE the
+    // new turn's first delta: blocks = previous turn's retained pair,
+    // isStreaming = true (next turn armed), completedLen = 2 (server stamped
+    // them finished). History holds their twins. Without the completedLen
+    // floor, the last text was excluded as "still accumulating" and rendered
+    // as a duplicate below the user's new bubble for ~14s.
+    const blocks = [toolCall('tu-old'), text('Old end message 1', 'msg-old')];
+    const messages = [
+      msg({ tools: [{ name: 'Bash', toolUseId: 'tu-old', input: {} }] } as Partial<SessionHistoryMessage>),
+      msg({ text: 'Old end message 1', msgId: 'msg-old' }),
+    ];
+    const hidden = computeHiddenBlocks({ blocks, messages, watermark: 0, isStreaming: true, completedLen: 2 });
+    expect(hidden.has(0)).toBe(true);
+    expect(hidden.has(1)).toBe(true); // the old final text absorbs despite isStreaming
+  });
+
+  it('live-tail guard still protects the CURRENT turn\'s accumulating block (index >= completedLen)', () => {
+    // Same shape but the last block belongs to the LIVE turn (completedLen=1):
+    // its early-known msgId must NOT hide it mid-accumulation.
+    const blocks = [text('finished turn text', 'msg-done'), text('partial live', 'msg-live')];
+    const messages = [
+      msg({ text: 'finished turn text', msgId: 'msg-done' }),
+      msg({ text: 'partial live and then some', msgId: 'msg-live' }),
+    ];
+    const hidden = computeHiddenBlocks({ blocks, messages, watermark: 0, isStreaming: true, completedLen: 1 });
+    expect(hidden.has(0)).toBe(true);  // finished block absorbs
+    expect(hidden.has(1)).toBe(false); // live tail stays protected
+  });
+
   it('keeps everything when history has not caught up (empty) — never vanishes', () => {
     const blocks = [text('a', 'msg-1'), toolCall('tu-1'), text('b', 'msg-2')];
     const hidden = computeHiddenBlocks({ blocks, messages: [], watermark: 0, isStreaming: false });

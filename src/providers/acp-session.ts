@@ -50,6 +50,7 @@ import {
   rollbackAcpSessionIdMigration,
   stageAcpSessionIdMigration,
   updateSessionRecord,
+  updateSessionRecordConditionally,
 } from '../core/session-tracker.js'
 import {
   migrateSessionQueue,
@@ -309,16 +310,56 @@ export function parseCodexBaseConfig(raw: string | undefined): Record<string, un
  * Environment for the ACP worker + adapter (and therefore for every shell the
  * provider spawns inside the session).
  *
- * `WALNUT_SESSION_ID` is the managed-session identity the `walnut` CLI reads to
- * classify itself as an agent rather than a human (ops/executor.ts
- * `opCallerFromEnv`). The native `claude` spawn sets it in daemon-standalone.ts
- * / daemon-source.ts; without it here, `walnut done <id>` inside a Codex
- * session looked like a human at a terminal and bypassed every human-only
- * completion guard. We deliberately do NOT set `WALNUT_AGENT_SOCKET`: the
+ * `WALNUT_SESSION_ID` is the managed-session identity the in-session `wn` CLI
+ * reads to resolve its own sid against the daemon gateway. The native `claude`
+ * spawn sets it in daemon-standalone.ts / daemon-source.ts; without it here, a
+ * Codex session has no managed identity at all. We deliberately do NOT set
+ * `WALNUT_AGENT_SOCKET`: the
  * daemon's gateway resolves caller sids against its native-CLI session map,
  * which does not track ACP runtime ids, so advertising the socket would only
  * turn "not a managed session" into a confusing `unknown_caller`.
  */
+/**
+ * Initial approval preset for a codex session, resolved from the user's OWN
+ * codex configuration — configure once in codex, every client respects it.
+ *
+ * Priority: `~/.codex/config.toml` (`approval_policy` + `sandbox_mode`,
+ * top-level keys only) → walnut config.yaml `session.codex_default_mode` →
+ * undefined (adapter default: 'agent'). Mapping mirrors the adapter's three
+ * presets: sandbox danger-full-access → agent-full-access, read-only →
+ * read-only, workspace-write → agent; a bare `approval_policy = "never"`
+ * only fits the full-access preset (it is the sole preset that never asks).
+ */
+export function resolveCodexInitialMode(
+  options: { env?: NodeJS.ProcessEnv; walnutDefault?: string } = {},
+): string | undefined {
+  const env = options.env ?? process.env
+  const home = env.HOME || env.USERPROFILE
+  if (home) {
+    try {
+      const raw = fsModule.readFileSync(path.join(home, '.codex/config.toml'), 'utf8')
+      let approval: string | undefined
+      let sandbox: string | undefined
+      for (const line of raw.split(/\r?\n/)) {
+        const trimmed = line.trim()
+        // Top-level keys only — [projects."…"] tables can carry unrelated keys.
+        if (trimmed.startsWith('[')) break
+        const m = trimmed.match(/^(approval_policy|sandbox_mode)\s*=\s*"([^"]+)"/)
+        if (!m) continue
+        if (m[1] === 'approval_policy') approval = m[2]
+        else sandbox = m[2]
+      }
+      if (sandbox === 'danger-full-access') return 'agent-full-access'
+      if (sandbox === 'read-only') return 'read-only'
+      if (sandbox === 'workspace-write') return 'agent'
+      if (approval === 'never') return 'agent-full-access'
+    } catch { /* no config.toml — fall through to the walnut default */ }
+  }
+  const w = options.walnutDefault
+  if (w === 'read-only' || w === 'agent' || w === 'agent-full-access') return w
+  return undefined
+}
+
 export function buildAcpAdapterEnv(
   systemCodex: string | undefined,
   options: {
@@ -326,6 +367,8 @@ export function buildAcpAdapterEnv(
     developerInstructions?: string
     baseConfig?: Record<string, unknown>
     sessionId?: string
+    /** Startup approval preset (adapter env INITIAL_AGENT_MODE). */
+    initialAgentMode?: string
   } = {},
 ): Record<string, string> | undefined {
   const existingInstructions = typeof options.baseConfig?.developer_instructions === 'string'
@@ -342,6 +385,7 @@ export function buildAcpAdapterEnv(
     ...(systemCodex ? { CODEX_PATH: systemCodex } : {}),
     ...(Object.keys(config).length > 0 ? { CODEX_CONFIG: JSON.stringify(config) } : {}),
     ...(options.sessionId ? { WALNUT_SESSION_ID: options.sessionId } : {}),
+    ...(options.initialAgentMode ? { INITIAL_AGENT_MODE: options.initialAgentMode } : {}),
   }
   return Object.keys(env).length > 0 ? env : undefined
 }
@@ -409,7 +453,8 @@ interface PendingPermission {
   requestId: string
   toolName: string
   input?: Record<string, unknown>
-  options: Array<{ optionId?: string; kind?: string }>
+  options: Array<{ optionId?: string; kind?: string; name?: string }>
+  receivedAt: number
 }
 
 export class AcpSession {
@@ -445,6 +490,7 @@ export class AcpSession {
    * died unanswerable). */
   private readonly _pendingPermissions = new Map<string, PendingPermission>()
   private readonly _emittedPermissionRequestIds = new Set<string>()
+  private _pendingPermissionCommit: Promise<void> = Promise.resolve()
   private _selfReport: PendingSelfReport | null = null
   private readonly normalizer: AcpStreamNormalizer
 
@@ -495,6 +541,7 @@ export class AcpSession {
     reason?: string
     acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>
   }> {
+    if (this.isFullAccessMode()) return []
     return [...this._pendingPermissions.values()].map(({ requestId, toolName, input, options }) => ({
       requestId, toolName, input, acpOptions: options,
     }))
@@ -573,6 +620,8 @@ export class AcpSession {
     if (ev.ev === 'acp_state' && ev.state === 'dead') {
       this._active = false
       this._turnActive = false
+      this._pendingPermissions.clear()
+      this.persistPendingPermission(true)
       this.cfg.onWorkerDead?.(this)
     }
   }
@@ -607,7 +656,9 @@ export class AcpSession {
       }
       if (t === 'error') this._turnHadError = true
       if (t === 'permission-answered' || t === 'permission-auto-cancelled') {
-        this._pendingPermissions.delete(record.event.providerRequestId)
+        if (this._pendingPermissions.delete(record.event.providerRequestId)) {
+          this.persistPendingPermission()
+        }
       }
     }
 
@@ -615,13 +666,28 @@ export class AcpSession {
       const full: Record<string, unknown> = { ...payload, sessionId: this.trackingId(), taskId: this.taskId }
       if (name === 'session:permission-request') {
         const requestId = full.requestId as string
+        const options = (full.acpOptions as Array<{ optionId?: string; kind?: string; name?: string }>) ?? []
         this._pendingPermissions.set(requestId, {
           requestId,
           toolName: full.toolName as string,
           input: full.input as Record<string, unknown> | undefined,
-          options: (full.acpOptions as Array<{ optionId?: string; kind?: string }>) ?? [],
+          options,
+          receivedAt: record.ts,
         })
         this._emittedPermissionRequestIds.add(requestId)
+        // Codex snapshots approvalPolicy per turn: a mid-turn switch to full
+        // access leaves the CURRENT turn still asking (2026-08-11 incident:
+        // 6 more asks after the switch; 2 unanswered ones wedged the turn for
+        // ~3min). Full access means "stop asking" — auto-allow EVERY incoming
+        // request while the mode is active, and don't render a card at all.
+        if (this.isFullAccessMode()) {
+          log.session.info('acp: full access active — auto-allowing incoming permission', {
+            sessionId: this.trackingId(), requestId,
+          })
+          void this.resolvePermissionRequest(requestId, true).catch(() => false)
+          continue
+        }
+        this.persistPendingPermission()
       }
       // Bus event names line up with EventNames values — emit directly.
       // Destinations MUST mirror the native emit contract: streaming events go
@@ -641,6 +707,48 @@ export class AcpSession {
 
   /** Records/API key: providerSessionId once known, else runtimeId (pending phase). */
   private trackingId(): string { return this._providerSessionId ?? this.runtimeId }
+
+  /** True while the session's approval preset is Agent (full access). */
+  private isFullAccessMode(): boolean {
+    return this._configOptions.find((c) => c.id === 'mode')?.currentValue === 'agent-full-access'
+  }
+
+  private persistPendingPermission(forceClear = false): void {
+    const sessionId = this.trackingId()
+    const pending = forceClear || this.isFullAccessMode()
+      ? undefined
+      : [...this._pendingPermissions.values()]
+          .sort((left, right) => left.receivedAt - right.receivedAt)[0]
+    const durable = pending
+      ? {
+          requestId: pending.requestId,
+          subtype: 'can_use_tool',
+          toolName: pending.toolName,
+          input: pending.input,
+          acpOptions: pending.options,
+          receivedAt: new Date(pending.receivedAt).toISOString(),
+        }
+      : undefined
+    this._pendingPermissionCommit = this._pendingPermissionCommit.then(async () => {
+      if (durable) {
+        await updateSessionRecordConditionally(
+          sessionId,
+          { pendingPermission: durable },
+          (record) => record.engine === 'codex'
+            && record.process_status !== 'stopped'
+            && record.process_status !== 'error',
+        )
+      } else {
+        await updateSessionRecord(sessionId, { pendingPermission: undefined })
+      }
+    }).catch((error) => {
+      log.session.warn('acp: failed to persist pending permission', {
+        sessionId,
+        requestId: pending?.requestId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
+  }
 
   // ── Lifecycle ops ──
 
@@ -716,6 +824,25 @@ export class AcpSession {
       this.ensureConn(),
     ])
     const parsedBaseConfig = parseCodexBaseConfig(process.env.CODEX_CONFIG)
+    // Startup approval preset: the session's OWN persisted choice wins (it is
+    // replayed post-establish by replayPersistedConfig); only a session with
+    // no saved mode inherits the default from ~/.codex/config.toml (respect
+    // what the user configured in codex itself) or walnut config.yaml
+    // session.codex_default_mode.
+    let initialAgentMode: string | undefined
+    const record = await getSessionByClaudeId(this.trackingId()).catch(() => undefined)
+    const persistedMode = record?.acpConfig?.mode ?? this.cfg.acpConfig?.mode
+    if (persistedMode) {
+      initialAgentMode = persistedMode
+    } else {
+      let walnutDefault: string | undefined
+      try {
+        const { getConfig } = await import('../core/config-manager.js')
+        const config = await getConfig()
+        walnutDefault = (config.session as { codex_default_mode?: string } | undefined)?.codex_default_mode
+      } catch { /* config unreadable — codex config.toml still applies */ }
+      initialAgentMode = resolveCodexInitialMode({ walnutDefault })
+    }
     // Non-lane codex sessions get the same walnut context every native claude
     // session gets (wn gateway + skill pointer); lanes get the self-knowledge
     // contract instead (they ARE the personal AI — the hint would be circular).
@@ -733,6 +860,7 @@ export class AcpSession {
       developerInstructions: this.cfg.developerInstructions ?? defaultInstructions,
       baseConfig: parsedBaseConfig,
       sessionId: this.runtimeId,
+      initialAgentMode,
     })
     const startResp = await conn.send('acpStart', {
       sid: this.runtimeId,
@@ -786,6 +914,7 @@ export class AcpSession {
       throw new Error('ACP session established without a provider session ID')
     }
     await this.replayPersistedConfig(conn)
+    this.persistPendingPermission()
     this._active = true
     return this._providerSessionId
   }
@@ -820,6 +949,13 @@ export class AcpSession {
         log.session.info('acp: replayed persisted config after worker spawn', {
           runtimeId: this.runtimeId, configId, value,
         })
+        // Pending permissions adopted from the worker snapshot predate this
+        // replay — under restored full access they must not wait for a click.
+        if (configId === 'mode' && value === 'agent-full-access') {
+          for (const requestId of [...this._pendingPermissions.keys()]) {
+            await this.resolvePermissionRequest(requestId, true).catch(() => false)
+          }
+        }
       } else {
         log.session.warn('acp: config replay failed', {
           runtimeId: this.runtimeId, configId, value,
@@ -872,6 +1008,39 @@ export class AcpSession {
       commandId,
       this._terminalCommands.has(commandId),
     )
+  }
+
+  /** True when this worker's adapter advertised mid-turn steering support. */
+  get canSteer(): boolean { return this._capabilities?.steering === true }
+
+  /**
+   * Inject a message into the RUNNING turn (codex `turn/steer` via the
+   * adapter's `_session/steering`). Returns true when the text joined the
+   * live turn — delivered, no queue wait. Returns false when steering could
+   * not apply (no live turn / unsupported adapter / turn ended mid-flight):
+   * the caller keeps the message queued and drains it at turn end as before.
+   * Never throws for steer-shaped failures; only infrastructure errors
+   * (daemon RPC transport) propagate.
+   */
+  async steer(message: string, walnutMessageId: string): Promise<boolean> {
+    if (!this._active || !this._turnActive) return false
+    if (this._capabilities && !this._capabilities.steering) return false
+    const conn = await this.ensureConn()
+    const commandId = `acp-steer:${walnutMessageId}`
+    const resp = await conn.send('acpSteer', {
+      sid: this.runtimeId,
+      commandId,
+      walnutMessageId,
+      text: message,
+    })
+    if (resp.ok) return true
+    const kind = (resp as { errorKind?: string }).errorKind
+    // Anything steer-shaped (no live turn, unsupported, race, old daemon
+    // without the acpSteer command) degrades to the queue path silently.
+    log.session.info('acp: steer not applied — message stays queued', {
+      runtimeId: this.runtimeId, walnutMessageId, errorKind: kind ?? 'unknown',
+    })
+    return false
   }
 
   private async publishSessionResponse(sessionResp: unknown): Promise<void> {
@@ -1060,13 +1229,23 @@ export class AcpSession {
         && !Array.isArray(toolCall.rawInput)
         ? toolCall.rawInput as Record<string, unknown>
         : undefined
-      const options = (p.options as Array<{ optionId?: string; kind?: string }>) ?? []
+      const options = (p.options as Array<{ optionId?: string; kind?: string; name?: string }>) ?? []
       this._pendingPermissions.set(p.providerRequestId, {
         requestId: p.providerRequestId,
         toolName,
         input,
         options,
+        receivedAt: p.receivedAt,
       })
+      // Under full access an adopted pending request is answered, not shown.
+      if (this.isFullAccessMode()) {
+        this._emittedPermissionRequestIds.add(p.providerRequestId)
+        log.session.info('acp: full access active — auto-allowing adopted permission', {
+          sessionId: this.trackingId(), requestId: p.providerRequestId,
+        })
+        void this.resolvePermissionRequest(p.providerRequestId, true).catch(() => false)
+        continue
+      }
       if (!this._emittedPermissionRequestIds.has(p.providerRequestId)) {
         this._emittedPermissionRequestIds.add(p.providerRequestId)
         bus.emit(EventNames.SESSION_PERMISSION_REQUEST, {
@@ -1155,6 +1334,7 @@ export class AcpSession {
     this._active = false
     this._turnActive = false
     this._pendingPermissions.clear()
+    this.persistPendingPermission(true)
     if (!this.conn?.connected) return
     await this.conn.send('acpStop', { sid: this.runtimeId }).catch(() => {})
   }
@@ -1170,8 +1350,15 @@ export class AcpSession {
     if (selectedOptionId && options.some((o) => o.optionId === selectedOptionId)) {
       optionId = selectedOptionId
     } else if (allow) {
+      // Amendment options (accept_execpolicy_amendment, apply_network_policy_
+      // amendment:*) also carry kind allow_always but mean "change durable
+      // policy", not "approve this call" — a kind-based picker must never
+      // select one implicitly (reference study 2026-08-12; KiRoom has this
+      // hole and is saved only by codex's option ordering).
+      const isAmendment = (o: { optionId?: string }) =>
+        typeof o.optionId === 'string' && o.optionId.includes('amendment')
       optionId = options.find((o) => o.kind === 'allow_once')?.optionId
-        ?? options.find((o) => o.kind?.startsWith('allow'))?.optionId
+        ?? options.find((o) => o.kind?.startsWith('allow') && !isAmendment(o))?.optionId
         ?? null
       if (!optionId) {
         // Unknown requestId (stale card / replaced worker) — refuse loudly.
@@ -1201,6 +1388,7 @@ export class AcpSession {
     const answered = (resp as { result?: { answered?: boolean } }).result?.answered !== false
     if (resp.ok && answered) {
       this._pendingPermissions.delete(requestId)
+      this.persistPendingPermission()
       log.session.info('acp: permission answered', {
         sessionId: this.trackingId(), requestId, optionId, allow,
       })
@@ -1215,6 +1403,7 @@ export class AcpSession {
       // Worker no longer tracks it — drop our stale copy so the UI stops
       // offering a dead card.
       this._pendingPermissions.delete(requestId)
+      this.persistPendingPermission()
     }
     return false
   }
@@ -1235,6 +1424,8 @@ export class AcpSession {
     }
     if (!this._active) {
       this._turnActive = false
+      this._pendingPermissions.clear()
+      this.persistPendingPermission(true)
       return
     }
     const conn = await this.ensureConn()
@@ -1248,6 +1439,7 @@ export class AcpSession {
     this._active = false
     this._turnActive = false
     this._pendingPermissions.clear()
+    this.persistPendingPermission(true)
   }
 
   /**
@@ -1313,10 +1505,13 @@ export class AcpSession {
       await this.cancelSelfReport('session stopped')
       return
     }
-    if (!this.conn?.connected) return
-    await this.conn.send('acpStop', { sid: this.runtimeId }).catch(() => {})
+    if (this.conn?.connected) {
+      await this.conn.send('acpStop', { sid: this.runtimeId }).catch(() => {})
+    }
     this._active = false
     this._turnActive = false
+    this._pendingPermissions.clear()
+    this.persistPendingPermission(true)
   }
 
   async kill(): Promise<void> { return this.gracefulStop() }
@@ -1340,7 +1535,10 @@ export class AcpSession {
     this._committedV = record.consumedOffset
     this._seenV = Math.max(this._seenV, record.consumedOffset)
     if (!this._journalPath) this._journalPath = record.acpJournalPath
-    if (!this._capabilities) this._capabilities = record.acpCapabilities
+    if (!this._capabilities && record.acpCapabilities) {
+      // Records persisted before the steering feature lack the flag → false.
+      this._capabilities = { steering: false, ...record.acpCapabilities }
+    }
   }
 
   private commitTerminal(
@@ -1461,6 +1659,7 @@ export class AcpSession {
     this._active = false
     this._turnActive = false
     this._pendingPermissions.clear()
+    this.persistPendingPermission(true)
     if (!resp.ok && (resp as { errorKind?: string }).errorKind !== 'no_worker') {
       throw new Error('ACP self-report abort failed: ' + resp.error)
     }

@@ -28,11 +28,11 @@ function makeHook(overrides: Partial<SessionHookDefinition> = {}): SessionHookDe
 }
 
 function emitPhaseChanged(overrides: Record<string, unknown> = {}, source = 'api'): void {
-  const task = makeTask({ phase: 'HUMAN_VERIFIED', session_id: 'sess-1' });
+  const task = makeTask({ phase: 'COMPLETE', session_id: 'sess-1' });
   bus.emit(EventNames.TASK_PHASE_CHANGED, {
     task,
     oldPhase: 'AGENT_COMPLETE',
-    newPhase: 'HUMAN_VERIFIED',
+    newPhase: 'COMPLETE',
     source,
     sessionId: 'sess-1',
     ...overrides,
@@ -62,7 +62,7 @@ describe('HookDispatcher task domain', () => {
     const payload = handler.mock.calls[0][0];
     expect(payload.domain).toBe('task');
     expect(payload.oldPhase).toBe('AGENT_COMPLETE');
-    expect(payload.newPhase).toBe('HUMAN_VERIFIED');
+    expect(payload.newPhase).toBe('COMPLETE');
     expect(payload.taskId).toBe('test-1234');
     expect(payload.task.title).toBe('Test task');
   });
@@ -158,8 +158,9 @@ describe('HookDispatcher task domain', () => {
     it('phases allows matching new phase, denies others', async () => {
       const match = vi.fn(); const noMatch = vi.fn();
       dispatcher.init([
-        makeHook({ handler: match, filter: { phases: ['HUMAN_VERIFIED'] } }),
-        makeHook({ handler: noMatch, filter: { phases: ['COMPLETE'] } }),
+        makeHook({ handler: match, filter: { phases: ['COMPLETE'] } }),
+        // (WAIT removed 2026-08-18 — TODO is the non-matching phase now.)
+        makeHook({ handler: noMatch, filter: { phases: ['TODO'] } }),
       ]);
 
       emitPhaseChanged();
@@ -198,7 +199,7 @@ describe('HookDispatcher task domain', () => {
 
       const task = makeTask({ session_id: undefined });
       bus.emit(EventNames.TASK_PHASE_CHANGED, {
-        task, oldPhase: 'TODO', newPhase: 'HUMAN_VERIFIED', source: 'api',
+        task, oldPhase: 'TODO', newPhase: 'COMPLETE', source: 'api',
       }, ['web-ui'], { source: 'api' });
       await tick();
 

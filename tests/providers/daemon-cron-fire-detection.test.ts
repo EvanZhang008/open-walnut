@@ -160,17 +160,25 @@ describe('cron fire messages', () => {
     expect(cronFireMarkerText(fire)).toContain('another session')
     expect(cronFireMarkerText({ ...fire, foreign: false })).toContain('this session')
   })
-  it('foreign marker tells the HUMAN what happened, and says it was removed', () => {
+  it('foreign marker tells the HUMAN what ACTUALLY happened — removed only when evicted', () => {
     // Design change 2026-08-13: a foreign fire no longer injects anything into
     // the model's input. The marker is a timeline row for the user only — the
     // hourly injected warning it replaced burned a turn + context every fire and
     // could not stop the loop (the model may rightly ignore an automated
-    // message; one did on 2026-08-11). Eviction is what stops it.
-    const m = cronFireMarkerText(fire)
-    expect(m).toContain('Orphaned')
-    expect(m).toContain(fire.taskId)
-    expect(m).toContain(SID_A)
-    expect(m).toContain('removed it')
+    // message; one did on 2026-08-11). Eviction is what stops it — and it is
+    // hook-gated, so the marker must not claim removal in the zero-hook
+    // default posture (the row is still on disk and WILL fire again).
+    const evictedMsg = cronFireMarkerText(fire, { evicted: true })
+    expect(evictedMsg).toContain('Orphaned')
+    expect(evictedMsg).toContain(fire.taskId)
+    expect(evictedMsg).toContain(SID_A)
+    expect(evictedMsg).toContain('removed it')
+
+    for (const notEvicted of [cronFireMarkerText(fire), cronFireMarkerText(fire, { evicted: false })]) {
+      expect(notEvicted).toContain('Orphaned')
+      expect(notEvicted).not.toContain('removed it')
+      expect(notEvicted).toContain('may fire here again')
+    }
   })
 })
 

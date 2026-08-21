@@ -28,6 +28,14 @@ const log = createSubsystemLogger('plugin-sources');
 
 export type PluginStatus = 'loaded' | 'needs-config' | 'unsupported' | 'duplicate' | 'error' | 'pending-restart';
 
+/**
+ * A LOADED plugin is 'loaded' whatever its capability mix — the registry check
+ * comes first on purpose. `unsupported` is now reserved for a plugin whose
+ * manifest declares NO capability this version implements (only `hooks` /
+ * `routines`), which is the only case the loader records there; a plugin that is
+ * ui-, tools- or skills-only loads normally and must never be labelled as
+ * needing a newer Walnut.
+ */
 function statusFor(pluginId: string | null, error?: string): PluginStatus {
   if (error || !pluginId) return 'error';
   if (registry.has(pluginId)) return 'loaded';
@@ -39,10 +47,25 @@ function statusFor(pluginId: string | null, error?: string): PluginStatus {
   return 'pending-restart';
 }
 
+/** What a loaded plugin actually contributes — so the store can say "app + 2 tools"
+ *  instead of leaving a non-sync plugin looking like it does nothing. */
+function capabilitiesFor(pluginId: string | null): string[] | undefined {
+  if (!pluginId) return undefined;
+  const plugin = registry.get(pluginId);
+  if (!plugin) {
+    return getUnsupportedPlugins().find(p => p.id === pluginId)?.capabilities;
+  }
+  return plugin.capabilities ?? ['sync'];
+}
+
 function withStatuses(view: PluginSourceView) {
   return {
     ...view,
-    plugins: view.plugins.map(p => ({ ...p, status: statusFor(p.id, p.error) })),
+    plugins: view.plugins.map(p => ({
+      ...p,
+      status: statusFor(p.id, p.error),
+      capabilities: capabilitiesFor(p.id),
+    })),
   };
 }
 

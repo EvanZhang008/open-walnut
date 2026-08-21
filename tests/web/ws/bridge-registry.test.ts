@@ -5,7 +5,9 @@
  *
  * Covers: machine-token gate on /bridge (device token rejected, machine
  * accepted), machine token rejected on REST and /ws, hello registration →
- * status.bridgeHosts, POST send proxied as status→appendUserMarker→send RPCs,
+ * status.bridgeHosts, POST send (this fake daemon predates session.message,
+ * so the route falls back to the loss-safe direct sequence
+ * status→send→appendUserMarker — marker strictly AFTER delivery),
  * daemon jsonl events reaching the phone SSE, 409 session_dead, disconnect →
  * 503 + bridge-offline, and same-host replacement (code 4000).
  */
@@ -240,7 +242,12 @@ describe('bridge lifecycle + proxied send + streaming', () => {
         await sse.waitFor((e) => e.event === 'bridge-online')
         await waitFor(() => daemon.received.some((m) => m.cmd === 'attach' && m.sid === SID))
 
-        // Send: 202 + the daemon saw status → appendUserMarker → send in order.
+        // Send: 202. This fake daemon predates session.message (answers
+        // unknown-command), so the route takes the direct fallback — which is
+        // now LOSS-SAFE ordered: status → send → appendUserMarker. Marker
+        // strictly AFTER the confirmed delivery (the old marker-first order
+        // produced ghost user bubbles when the daemon died between the steps —
+        // the 2026-08-13 data-loss family).
         const res = await fetch(apiUrl(`/api/v1/sessions/${SID}/messages`), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${deviceToken}` },
@@ -250,12 +257,13 @@ describe('bridge lifecycle + proxied send + streaming', () => {
         const { messageId } = await res.json() as { messageId: string }
         expect(messageId).toMatch(/^qm-mobile-/)
         const cmds = daemon.received.filter((m) => typeof m.id === 'number').map((m) => m.cmd)
+        expect(cmds).toContain('session.message') // durable relay attempted first
         const statusIdx = cmds.indexOf('status')
         const markerIdx = cmds.indexOf('appendUserMarker')
         const sendIdx = cmds.indexOf('send')
         expect(statusIdx).toBeGreaterThanOrEqual(0)
-        expect(markerIdx).toBeGreaterThan(statusIdx)
-        expect(sendIdx).toBeGreaterThan(markerIdx)
+        expect(sendIdx).toBeGreaterThan(statusIdx)
+        expect(markerIdx).toBeGreaterThan(sendIdx)
         const marker = daemon.received.find((m) => m.cmd === 'appendUserMarker')!
         expect(marker.message).toBe('hello from the phone')
         expect(marker.messageId).toBe(messageId)

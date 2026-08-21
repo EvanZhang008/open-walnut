@@ -39,6 +39,8 @@ import type {
   ExtIndexSpec,
   UnconfiguredPlugin,
   TaskFieldSpec,
+  PluginToolSpec,
+  RegisteredUiApp,
 } from './integration-types.js';
 
 const log = createSubsystemLogger('plugin-loader');
@@ -178,8 +180,40 @@ export function getDuplicatePluginIds(): string[] {
   return duplicatePluginIds;
 }
 
-/** Capability types this Walnut version can load. Everything else is reserved. */
-const SUPPORTED_CAPABILITIES = new Set(['sync']);
+/** Capability types this Walnut version can load. Everything else is reserved
+ *  (`hooks`, `routines`): a manifest declaring only those is recorded as
+ *  unsupported and its code is never imported. */
+const SUPPORTED_CAPABILITIES = new Set(['sync', 'ui', 'tools', 'skills']);
+
+/** Longest a plugin tool's description may be. Tool schemas ride the prompt-cache
+ *  prefix on EVERY turn, so an essay here is billed forever. */
+const MAX_TOOL_DESCRIPTION = 1024;
+/** Most tools one plugin may contribute (a runaway registerTool loop is a bug). */
+const MAX_TOOLS_PER_PLUGIN = 24;
+const MAX_UI_TITLE = 64;
+
+/**
+ * Validate a plugin-relative asset path (ui app entry / icon).
+ *
+ * Rules, in the order that matters: reject absolute paths and Windows drive
+ * prefixes, normalize separators, then check for `..` SEGMENT-wise (a substring
+ * test would reject an ordinary name like `v1..2/index.html`). An explicit
+ * leading `app/` is accepted and stripped, since the served root IS `app/` — a
+ * plugin author writing either form gets the same file.
+ */
+export function validatePluginAssetPath(raw: unknown): { ok: true; rel: string } | { ok: false; error: string } {
+  if (typeof raw !== 'string' || raw.trim() === '') return { ok: false, error: 'must be a non-empty string' };
+  const value = raw.trim().replace(/\\/g, '/');
+  if (value.startsWith('/') || /^[a-zA-Z]:/.test(value)) return { ok: false, error: 'must be a relative path' };
+  const segments = value.split('/').filter(s => s !== '' && s !== '.');
+  if (segments.length === 0) return { ok: false, error: 'must name a file' };
+  if (segments.some(s => s === '..')) return { ok: false, error: 'must not contain ".." segments' };
+  if (segments.some(s => s.includes('\0'))) return { ok: false, error: 'must not contain null bytes' };
+  // Accept both `index.html` and `app/index.html`; the served root is `app/`.
+  const rel = segments[0] === 'app' ? segments.slice(1).join('/') : segments.join('/');
+  if (!rel) return { ok: false, error: 'must name a file inside app/' };
+  return { ok: true, rel };
+}
 
 // ── Basic JSON Schema validation (type-only, no ajv needed) ──
 
@@ -240,6 +274,37 @@ function validateConfigValue(value: unknown, schema: Record<string, unknown>, fi
   return errors;
 }
 
+/**
+ * Inert sync for a plugin without the `sync` capability (ui/tools/skills only).
+ *
+ * Exists purely so `RegisteredPlugin.sync` stays non-optional and the ~20
+ * existing `registry.get(task.source)!.sync.method()` call sites keep compiling
+ * and never see undefined. Nothing routes work here: `hasSync: false` keeps the
+ * plugin out of sync polling, and it registers no source claim, so no task can
+ * carry it as `source`.
+ */
+function inertSync(): IntegrationSync {
+  const noop = async () => {};
+  return {
+    createTask: async () => null,
+    deleteTask: noop,
+    updateTitle: noop,
+    updateDescription: noop,
+    updateSummary: noop,
+    updateNote: noop,
+    updateConversationLog: noop,
+    updatePriority: noop,
+    updatePhase: noop,
+    updateDueDate: noop,
+    updateProject: noop,
+    updateDependencies: noop,
+    associateSubtask: noop,
+    disassociateSubtask: noop,
+    pushTask: async () => ({ serverTimestamp: new Date().toISOString() }),
+    syncPoll: noop,
+  };
+}
+
 // ── PluginApi builder: creates a mutable PluginApi that collects registrations ──
 
 interface PluginApiBuilder {
@@ -252,7 +317,18 @@ interface PluginApiBuilder {
     migrations: MigrateFn[];
     httpRoutes: HttpRoute[];
     extIndex: ExtIndexSpec | null;
+    tools: PluginToolSpec[];
   };
+}
+
+/**
+ * Namespace a plugin tool name: `<pluginId>_<name>`, hyphens folded to
+ * underscores so the result matches the Anthropic tool-name charset. Already
+ * prefixed names are left alone, so a plugin may spell out the full name itself.
+ */
+export function pluginToolName(pluginId: string, name: string): string {
+  const prefix = `${pluginId.replace(/[^a-z0-9_]/gi, '_').toLowerCase()}_`;
+  return name.startsWith(prefix) ? name : `${prefix}${name}`;
 }
 
 function createPluginApiBuilder(manifest: PluginManifest, pluginConfig: Record<string, unknown>): PluginApiBuilder {
@@ -266,6 +342,7 @@ function createPluginApiBuilder(manifest: PluginManifest, pluginConfig: Record<s
     migrations: [],
     httpRoutes: [],
     extIndex: null,
+    tools: [],
   };
 
   const api: PluginApi = {
@@ -299,6 +376,37 @@ function createPluginApiBuilder(manifest: PluginManifest, pluginConfig: Record<s
 
     registerHttpRoute(route: HttpRoute) {
       collected.httpRoutes.push(route);
+    },
+
+    registerTool(tool: PluginToolSpec) {
+      if (!tool || typeof tool !== 'object') {
+        throw new Error(`Plugin "${manifest.id}" registerTool: expected a tool object.`);
+      }
+      if (typeof tool.name !== 'string' || !/^[a-z0-9_]+$/.test(tool.name)) {
+        throw new Error(`Plugin "${manifest.id}" tool name "${String(tool.name)}" must match /^[a-z0-9_]+$/.`);
+      }
+      if (typeof tool.description !== 'string' || !tool.description.trim()) {
+        throw new Error(`Plugin "${manifest.id}" tool "${tool.name}": description is required.`);
+      }
+      if (typeof tool.execute !== 'function') {
+        throw new Error(`Plugin "${manifest.id}" tool "${tool.name}": execute must be a function.`);
+      }
+      if (collected.tools.length >= MAX_TOOLS_PER_PLUGIN) {
+        throw new Error(`Plugin "${manifest.id}" registered more than ${MAX_TOOLS_PER_PLUGIN} tools.`);
+      }
+      const name = pluginToolName(manifest.id, tool.name);
+      if (collected.tools.some(t => t.name === name)) {
+        throw new Error(`Plugin "${manifest.id}" registered tool "${name}" twice.`);
+      }
+      const schema = (tool.input_schema && typeof tool.input_schema === 'object' && !Array.isArray(tool.input_schema))
+        ? tool.input_schema
+        : { type: 'object', properties: {} };
+      collected.tools.push({
+        name,
+        description: tool.description.slice(0, MAX_TOOL_DESCRIPTION),
+        input_schema: schema,
+        execute: tool.execute.bind(tool),
+      });
     },
 
     registerExtIndex(spec: ExtIndexSpec) {
@@ -392,6 +500,42 @@ async function discoverPluginDirs(): Promise<Array<{ dir: string; isBuiltin: boo
 
 // ── Manifest validation ──
 
+/**
+ * Validate `capabilities.ui` → the app spec, or null (with a warn) when the
+ * block is unusable. Never throws: a bad ui block must not unload the plugin.
+ */
+function parseUiApp(uiCap: Record<string, unknown>, filePath: string): RegisteredUiApp | null {
+  const drop = (reason: string) => {
+    log.warn('Manifest capabilities.ui.app dropped', { filePath, reason });
+    return null;
+  };
+  const rawApp = uiCap.app;
+  if (rawApp === undefined) return null; // `ui: {}` is legal — just declares no app
+  if (!rawApp || typeof rawApp !== 'object' || Array.isArray(rawApp)) return drop('app must be an object');
+  const app = rawApp as Record<string, unknown>;
+
+  if (typeof app.title !== 'string' || !app.title.trim()) return drop('title is required');
+  const title = app.title.trim();
+  if (title.length > MAX_UI_TITLE) return drop(`title longer than ${MAX_UI_TITLE} chars`);
+
+  let entry = 'index.html';
+  if (app.entry !== undefined) {
+    const checked = validatePluginAssetPath(app.entry);
+    if (!checked.ok) return drop(`entry ${checked.error}`);
+    entry = checked.rel;
+  }
+
+  let icon: string | undefined;
+  if (app.icon !== undefined) {
+    const checked = validatePluginAssetPath(app.icon);
+    // An unusable icon is not worth losing the app over — drop just the icon.
+    if (!checked.ok) log.warn('Manifest capabilities.ui.app.icon dropped', { filePath, reason: checked.error });
+    else icon = `app/${checked.rel}`;
+  }
+
+  return { title, entry: `app/${entry}`, ...(icon ? { icon } : {}) };
+}
+
 function validateManifest(raw: unknown, filePath: string): PluginManifest | null {
   if (!raw || typeof raw !== 'object') {
     log.warn('Invalid manifest: not an object', { filePath });
@@ -421,6 +565,15 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
           filePath, capability: key,
         });
       }
+    }
+    // capabilities.ui.app — validated here so a malformed block costs the plugin
+    // its APP, not its whole load (same leniency as taskFields below). The `ui`
+    // key itself is kept either way: it is a capability this version supports, so
+    // dropping it could flip a ui-only plugin to "needs a newer Walnut" — a
+    // misleading diagnosis for what is really a typo in one field.
+    if (capabilities.ui) {
+      const parsed = parseUiApp(capabilities.ui, filePath);
+      capabilities.ui = parsed ? { app: parsed } : {};
     }
   }
 
@@ -514,17 +667,22 @@ async function loadPlugin(
   }
 
   // Manifest v2: absence of `capabilities` means a sync plugin (back-compat).
-  // A manifest declaring only capabilities we don't implement is skipped
-  // WITHOUT importing its code — it targets a newer Walnut.
-  const expectsSync = !manifest.capabilities || 'sync' in manifest.capabilities;
-  if (!expectsSync) {
-    const declared = Object.keys(manifest.capabilities ?? {});
+  // A manifest declaring only capabilities we DON'T implement is skipped WITHOUT
+  // importing its code — it targets a newer Walnut.
+  const declaredCapabilities = manifest.capabilities
+    ? Object.keys(manifest.capabilities)
+    : ['sync'];
+  const effectiveCapabilities = declaredCapabilities.filter(c => SUPPORTED_CAPABILITIES.has(c));
+  if (effectiveCapabilities.length === 0) {
     log.warn('Plugin not loaded — requires capabilities this Walnut version does not support', {
-      id: pluginId, capabilities: declared,
+      id: pluginId, capabilities: declaredCapabilities,
     });
-    unsupportedPlugins.push({ id: pluginId, name: manifest.name, capabilities: declared });
+    unsupportedPlugins.push({ id: pluginId, name: manifest.name, capabilities: declaredCapabilities });
     return;
   }
+  // `sync` is what makes a plugin a TASK SOURCE — required only when declared
+  // (or implied by an absent capabilities block).
+  const expectsSync = effectiveCapabilities.includes('sync');
 
   // Validate config against configSchema
   const { enabled: _enabled, ...pluginConfig } = configEntry;
@@ -626,10 +784,45 @@ async function loadPlugin(
     return;
   }
 
-  // Validate: registerSync must have been called
-  if (!builder.collected.sync) {
-    log.error('Plugin did not call registerSync()', { id: pluginId });
+  // registerSync is required only of a SYNC plugin. A ui/tools/skills-only
+  // plugin has nothing to sync, so demanding a 16-method no-op object from it
+  // would be pure ceremony.
+  if (expectsSync && !builder.collected.sync) {
+    log.error('Plugin did not call registerSync()', { id: pluginId, capabilities: effectiveCapabilities });
     return;
+  }
+
+  // A non-sync plugin still gets an inert sync stub so the many
+  // `registry.get(source)!.sync.x()` call sites stay total; `hasSync: false` is
+  // the signal that it must never be polled or offered as a task source.
+  const hasSync = !!builder.collected.sync;
+  if (!hasSync && builder.collected.claim) {
+    // A source claim without sync would make the plugin selectable as a task
+    // source and then silently drop every push. Refuse the claim, keep the plugin.
+    log.warn('Plugin registered a source claim without the sync capability — claim ignored', {
+      id: pluginId, capabilities: effectiveCapabilities,
+    });
+    builder.collected.claim = null;
+  }
+
+  // Capability-gated collections: a plugin must DECLARE what it contributes, so
+  // the manifest stays an honest description of what the plugin does.
+  const uiApp = effectiveCapabilities.includes('ui')
+    ? (manifest.capabilities?.ui as { app?: RegisteredUiApp } | undefined)?.app
+    : undefined;
+
+  let tools = builder.collected.tools;
+  if (tools.length > 0 && !effectiveCapabilities.includes('tools')) {
+    log.warn('Plugin called registerTool without declaring the "tools" capability — tools ignored', {
+      id: pluginId, tools: tools.map(t => t.name),
+    });
+    tools = [];
+  }
+
+  const hasSkills = effectiveCapabilities.includes('skills')
+    && await fsp.stat(path.join(pluginDir, 'skills')).then(s => s.isDirectory()).catch(() => false);
+  if (effectiveCapabilities.includes('skills') && !hasSkills) {
+    log.warn('Plugin declares the "skills" capability but has no skills/ directory', { id: pluginId, dir: pluginDir });
   }
 
   // Build RegisteredPlugin and register
@@ -639,7 +832,9 @@ async function loadPlugin(
     description: manifest.description,
     version: manifest.version,
     config: pluginConfig,
-    sync: builder.collected.sync,
+    sync: builder.collected.sync ?? inertSync(),
+    hasSync,
+    capabilities: effectiveCapabilities,
     claim: builder.collected.claim ?? undefined,
     display: builder.collected.display ?? undefined,
     agentContext: builder.collected.agentContext ?? undefined,
@@ -649,6 +844,10 @@ async function loadPlugin(
     configSchema: manifest.configSchema,
     uiHints: manifest.uiHints,
     taskFields: manifest.taskFields,
+    tools: tools.length > 0 ? tools : undefined,
+    uiApp,
+    pluginDir,
+    hasSkills,
   };
 
   registry.register(pluginId, registered);
@@ -657,11 +856,16 @@ async function loadPlugin(
     name: manifest.name,
     version: manifest.version ?? 'n/a',
     builtin: isBuiltin,
+    capabilities: effectiveCapabilities,
+    hasSync,
     hasClaim: !!registered.claim,
     hasDisplay: !!registered.display,
     migrations: registered.migrations.length,
     httpRoutes: registered.httpRoutes.length,
     extIndexPaths: registered.extIndex?.paths.length ?? 0,
+    tools: tools.map(t => t.name),
+    uiApp: uiApp?.entry,
+    hasSkills,
   });
 }
 
@@ -725,11 +929,62 @@ export async function loadPlugins(registry: IntegrationRegistry): Promise<void> 
     }
   }
 
+  // Plugin skills are a discovery SOURCE for the skills index (see
+  // skill-loader.getPluginSkillDirs). The index is cached, so a load that
+  // brought a `skills/` dir in — or dropped one — has to invalidate it, or a
+  // freshly installed plugin's skills stay invisible until a restart.
+  // Unconditional: the source LIST changes with the plugin set, not just with
+  // whether any plugin currently has skills.
+  try {
+    const { clearSkillsCache } = await import('./skill-loader.js');
+    clearSkillsCache();
+  } catch (err) {
+    log.debug('could not clear the skills cache after plugin load', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   log.info('Plugin loading complete', {
     total: loaded.length,
     ids: loaded.map(p => p.id),
     extIndexes: specs.length,
+    tools: loaded.flatMap(p => p.tools?.map(t => t.name) ?? []),
+    apps: loaded.filter(p => p.uiApp).map(p => p.id),
+    skillDirs: loaded.filter(p => p.hasSkills).map(p => p.id),
   });
+}
+
+// ── Deep-capability accessors (tools / apps / skill dirs) ──
+// Read the registry LIVE on every call so the plugin-store soft reload is picked
+// up without a restart — nothing here is cached.
+
+/** Plugins with a validated ui app, in registration order. */
+export function getPluginApps(registry: IntegrationRegistry): Array<{
+  id: string; pluginId: string; title: string; entry: string; icon?: string; pluginDir: string;
+}> {
+  const out: Array<{ id: string; pluginId: string; title: string; entry: string; icon?: string; pluginDir: string }> = [];
+  for (const p of registry.getAll()) {
+    if (!p.uiApp || !p.pluginDir) continue;
+    out.push({
+      // One app per plugin in v1, so the plugin id IS the app id. Keeping them
+      // separate fields leaves room for `<pluginId>/<appKey>` later without
+      // changing the route shape.
+      id: p.id,
+      pluginId: p.id,
+      title: p.uiApp.title,
+      entry: p.uiApp.entry,
+      icon: p.uiApp.icon,
+      pluginDir: p.pluginDir,
+    });
+  }
+  return out;
+}
+
+/** Every loaded plugin's contributed Personal AI tools, flattened.
+ *  (Plugin skill dirs are read straight off the registry by
+ *  skill-loader.getPluginSkillDirs — this module is too heavy to import there.) */
+export function getPluginToolSpecs(registry: IntegrationRegistry): PluginToolSpec[] {
+  return registry.getAll().flatMap(p => p.tools ?? []);
 }
 
 // ── Config migration: move top-level legacy integration keys to plugins.* ──

@@ -160,7 +160,7 @@ describe('GET /api/context', () => {
     // engine note explains ownership of tools/compaction.
     const role = res.body.sections.roleAndRules.content as string;
     expect(role).toContain('Claude Code session');
-    expect(role).toContain('Choose one mode for each request');
+    expect(role).toContain('## Walnut operating contract');
     for (const removed of [
       '## Error handling and integrity',
       '## Communication style',

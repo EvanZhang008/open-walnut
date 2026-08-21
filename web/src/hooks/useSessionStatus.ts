@@ -1,5 +1,7 @@
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import type { SessionRecord } from '@/types/session';
+import type { Task } from '@open-walnut/core';
+import { resolveTaskSessionId, taskCircleClass } from '@/utils/session-status';
 import {
   resolveSessionRecordStatus,
   sessionStatusStore,
@@ -49,4 +51,13 @@ export function useResolvedSessionRecord<T extends SessionRecord | null>(record:
     () => record ? resolveSessionRecordStatus(record) as T : record,
     [record, status],
   );
+}
+
+/** Live task-circle class: subscribes the circle to the session-status store
+ *  so error/waiting/running surface in task lists in real time (2026-08-14:
+ *  every unfinished Satellite task rendered the same calm blue). Falls back
+ *  to the task's REST enrichment snapshot when the store has nothing yet. */
+export function useTaskCircle(task: Task): string {
+  const status = useSessionStatus(resolveTaskSessionId(task));
+  return taskCircleClass(task, status);
 }

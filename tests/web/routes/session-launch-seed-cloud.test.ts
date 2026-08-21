@@ -129,8 +129,9 @@ describe('mobile launch through the replica → immediate use (projection gap)',
     })
     expect(send.status).toBe(202)
     expect((await send.json()).messageId).toMatch(/^qm-mobile-/)
-    // The send rode the bridge to the session's actual host.
-    expect(calls.some((c) => c.cmd === 'send' && c.host === HOST)).toBe(true)
+    // The send rode the bridge to the session's actual host, via the durable
+    // session.message relay (the 2026-08-13 asymmetry fix).
+    expect(calls.some((c) => c.cmd === 'session.message' && c.host === HOST)).toBe(true)
 
     // 3. Transcript poll (fresh=1 path the app uses while the view is open).
     const fresh = await fetch(apiUrl(`/api/v1/sessions/${SID}/transcript?fresh=1`), { headers: authHeaders() })
@@ -160,12 +161,18 @@ describe('mobile launch through the replica → immediate use (projection gap)',
     // milliseconds later sees status.exists=false; pre-fix it dropped into
     // the resume path and the daemon refused (no jsonl yet) → 409 on a
     // session seconds from alive. With a fresh seed the route now polls.
+    // The spawn-wait poll lives on the DIRECT fallback path (the durable
+    // session.message relay needs no probe — the primary's queue absorbs the
+    // race), so this fake daemon predates session.message to exercise it.
     let statusCalls = 0
     const calls = daemonAnswers()
     bridgeRequestMock.mockImplementation(async (host: string, cmd: string, params: Record<string, unknown> = {}) => {
       calls.push({ host, cmd })
       if (cmd === 'session.launch' && (params as { action?: string }).action === 'launch') {
         return { ok: true, result: { sessionId: SID, taskId: 'task-1', title: 'Session: repo' } }
+      }
+      if (cmd === 'session.message') {
+        return { ok: false, error: 'unknown command: session.message' }
       }
       if (cmd === 'status') {
         statusCalls++

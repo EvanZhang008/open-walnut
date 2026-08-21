@@ -33,11 +33,14 @@ import {
   decideBridgeRestart,
   detectCronFires,
   hasDiskCronInterest,
-  isDurableCronRequest,
   durableCronDenyMessage,
   durableCronCorrectionMessage,
   cronFireMarkerText,
   stripCronTaskById,
+  evalDaemonHookRules,
+  builtinSessionOnlyCronHook,
+  type DaemonHooksConfig,
+  type DaemonHookPoint,
   parseTurnErrorLine,
   resolveTurnRetryConfig,
   decideTurnRetry,
@@ -1278,6 +1281,9 @@ const core = createDaemonCore<SessionData>({
   pushSnapshotFn: (sid, immediate) => pushSnapshot(sid, immediate),
   // C18: synchronous pre-death fold drain (see drainSessionFold).
   drainFoldFn: (session) => drainSessionFold(session),
+  // Daemon hooks: core's session.reap point consults the same pushed rules as
+  // the tailer points (hookActions is hoisted; evaluated only at runtime).
+  hookActionsFn: (point, ctx) => hookActions(point, ctx),
   createAdoptedSession: (_sid, entry) => {
     // C1: rebuild fold state from the durable jsonl (streamed, whale-safe) AND
     // take the watcher offset from the SAME rebuild's complete-line boundary.
@@ -1441,15 +1447,18 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     )
     case 'fs.readRange': return cmdFsReadRange(ws, id as number, cmd)
     case 'git.diff': return cmdGitDiff(ws, id as number, cmd)
+    case 'changes.compute': return cmdChangesCompute(ws, id as number, cmd)
+    case 'changes.file': return cmdChangesFile(ws, id as number, cmd)
     case 'list': return cmdList(ws, id as number)
     case 'sessions.discoverExternal': return cmdDiscoverExternalSessions(ws, id as number, cmd)
     case 'bridge.configure': return cmdBridgeConfigure(ws, id as number, cmd)
+    // NOT in BRIDGE_ALLOWED_COMMANDS: rule content may only arrive over the
+    // trusted SSH-tunneled walnut socket, never from the public cloud bridge.
+    case 'hooks.configure': return cmdHooksConfigure(ws, id as number, cmd)
     case 'bridgeResume': return cmdBridgeResume(ws, id as number, cmd)
     case 'stt': return cmdSttRelay(ws, id as number, cmd)
     case 'stt-result': return cmdSttResult(ws, id as number, cmd)
     case 'session.launch': return cmdLaunchRelay(ws, id as number, cmd)
-    case 'changes.compute': return cmdChangesCompute(ws, id as number, cmd)
-    case 'changes.file': return cmdChangesFile(ws, id as number, cmd)
     case 'launch-result': return cmdLaunchResult(ws, id as number, cmd)
     case 'session.control': return cmdControlRelay(ws, id as number, cmd)
     case 'control-result': return cmdControlResult(ws, id as number, cmd)
@@ -1466,6 +1475,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'gateway-result': return cmdGatewayResult(ws, id as number, cmd)
     case 'acpStart': return cmdAcpStart(ws, id as number, cmd)
     case 'acpSend': return cmdAcpOp(ws, id as number, cmd, 'prompt')
+    case 'acpSteer': return cmdAcpOp(ws, id as number, cmd, 'steer')
     case 'acpCancel': return cmdAcpOp(ws, id as number, cmd, 'cancel')
     case 'acpRespond': return cmdAcpOp(ws, id as number, cmd, 'permissionResponse')
     case 'acpSetConfigOption': return cmdAcpOp(ws, id as number, cmd, 'setConfigOption')
@@ -2448,28 +2458,77 @@ async function cmdStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<str
 // Same-session fires get only the marker (normal /loop operation).
 const CRON_CHECK_THROTTLE_MS = 30_000
 
-// ── OPT-IN policy: session-scoped crons only ──
-// Full rationale + the experiment that established it: daemon-core.ts, the
-// block above isDurableCronRequest. OFF by default for the public build —
-// denying tool calls, injecting corrective messages, and rewriting
-// .claude/scheduled_tasks.json on death are opinionated interventions a
-// generic user did not ask for. Walnut sets WALNUT_ENFORCE_SESSION_CRON=1
-// at daemon spawn when config `session.cron_policy: 'session-only'`.
-// (WALNUT_ALLOW_DURABLE_CRON=1 is honored as an override for back-compat
-// with daemons already deployed with the old default.)
-const ALLOW_DURABLE_CRON = process.env.WALNUT_ENFORCE_SESSION_CRON !== '1'
-  || process.env.WALNUT_ALLOW_DURABLE_CRON === '1'
+// ── Daemon hooks (declarative rules pushed from walnut) ──
+// The daemon holds ONE compiled rules JSON (daemon-core DaemonHooksConfig),
+// received via the hooks.configure command and persisted to hooks.json so a
+// daemon restart keeps enforcing without waiting for the next connect. It is
+// the ONLY source of interventions: no pushed hooks ⇒ the daemon denies
+// nothing, evicts nothing, rewrites nothing (stream markers stay — they are
+// observation for the human, not intervention).
+//
+// Back-compat: a server older than this protocol sets WALNUT_ENFORCE_SESSION_CRON=1
+// at spawn instead of pushing; synthesize the equivalent built-in rule set at
+// boot (a later hooks.configure replaces it). WALNUT_ALLOW_DURABLE_CRON=1 wins
+// over everything (emergency off-switch).
+const HOOKS_FILE = path.join(DAEMON_DIR, 'hooks.json')
+let daemonHooks: DaemonHooksConfig | null = null
+function loadDaemonHooksAtBoot() {
+  if (process.env.WALNUT_ALLOW_DURABLE_CRON === '1') return
+  try {
+    const loaded = JSON.parse(fs.readFileSync(HOOKS_FILE, 'utf-8')) as DaemonHooksConfig
+    // Same shape gate as cmdHooksConfigure: a wrong-version/shape file (e.g.
+    // left by a future daemon) falls through to the env fallback, not silence.
+    if (loaded && loaded.version === 1 && Array.isArray(loaded.hooks)) {
+      daemonHooks = loaded
+      logMsg('info', 'daemon hooks loaded from disk', { hash: loaded.hash, hooks: loaded.hooks.length })
+      return
+    }
+  } catch {}
+  if (process.env.WALNUT_ENFORCE_SESSION_CRON === '1') {
+    daemonHooks = { version: 1, hash: 'env-compat', hooks: [builtinSessionOnlyCronHook()] }
+    logMsg('info', 'daemon hooks synthesized from WALNUT_ENFORCE_SESSION_CRON (legacy server)')
+  }
+}
+loadDaemonHooksAtBoot()
+/** Evaluate the pushed rules at one intercept point (empty when no hooks). */
+function hookActions(point: DaemonHookPoint, ctx: Record<string, unknown>): string[] {
+  if (process.env.WALNUT_ALLOW_DURABLE_CRON === '1') return []
+  try { return evalDaemonHookRules(daemonHooks, point, ctx) } catch { return [] }
+}
 
-// Enforcement point 2 (corrective): a bypassPermissions session never emits a
-// can_use_tool control_request, so the deny in the permission intercept can't
-// fire — the durable job is already on disk by the time we see the tool_use
-// echo. Tell the model to swap it for a session-scoped one. Once per tool_use
-// id so a re-read of the same line can't nag in a loop; `durableCronNudged` is
-// in-memory only (a respawn re-nudges, which is correct — the durable task is
-// still on disk). The FIFO write lands as queued stdin, so the model reads it
-// after the current turn, exactly like the foreign-fire provenance warning.
+function cmdHooksConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const next = cmd.config as DaemonHooksConfig | undefined
+  if (!next || next.version !== 1 || !Array.isArray(next.hooks) || typeof next.hash !== 'string') {
+    return sendError(ws, id, 'hooks.configure: invalid config')
+  }
+  const changed = !daemonHooks || next.hash !== daemonHooks.hash
+  daemonHooks = next
+  // The kill switch gates EVALUATION (hookActions), not storage — accepting
+  // the push keeps the daemon current for when the switch is lifted, but an
+  // operator debugging "why is nothing enforced" needs to see the switch.
+  if (process.env.WALNUT_ALLOW_DURABLE_CRON === '1') {
+    logMsg('warn', 'daemon hooks stored but INERT: WALNUT_ALLOW_DURABLE_CRON=1 disables all hook evaluation', { hash: next.hash })
+  }
+  if (changed) {
+    // Persist failure is non-fatal (rules ARE applied in memory; the next
+    // connect re-pushes) but must be visible: an unwritable DAEMON_DIR means
+    // enforcement silently reverts to zero-hook on the next daemon restart.
+    try { fs.writeFileSync(HOOKS_FILE, JSON.stringify(next), { mode: 0o600 }) }
+    catch (err) { logMsg('warn', 'daemon hooks persist failed (in-memory only)', { error: (err as Error).message }) }
+    logMsg('info', 'daemon hooks configured', { hash: next.hash, hooks: next.hooks.length })
+  }
+  return sendOk(ws, id, { applied: true, changed, hash: next.hash })
+}
+
+// Hook point cron.created: a bypassPermissions session never emits a
+// can_use_tool control_request, so the cron.create deny can't fire — the job
+// is already on disk by the time the tool_use echoes in the stream. The only
+// available action is `inject` (fixed corrective text — the model is asked to
+// CronDelete + recreate non-durable; it may decline, which is why the hook
+// set pairs this with cron.fire evict). Once per tool_use id so a re-read of
+// the same line can't nag in a loop; `durableCronNudged` is in-memory only (a
+// respawn re-nudges, which is correct — the durable task is still on disk).
 function checkDurableCronCreate(sid: string, session: SessionData, line: string) {
-  if (ALLOW_DURABLE_CRON) return
   let parsed: Record<string, unknown>
   try { parsed = JSON.parse(line) as Record<string, unknown> } catch { return }
   if (parsed.type !== 'assistant') return
@@ -2477,7 +2536,12 @@ function checkDurableCronCreate(sid: string, session: SessionData, line: string)
   if (!Array.isArray(content)) return
   for (const block of content as Array<Record<string, unknown>>) {
     if (block?.type !== 'tool_use') continue
-    if (!isDurableCronRequest(block.name as string | undefined, block.input)) continue
+    if ((block.name as string | undefined) !== 'CronCreate') continue
+    const actions = hookActions('cron.created', { input: block.input, mode: session.mode, sid })
+    if (actions.includes('log')) {
+      logMsg('info', 'hook log: cron.created', { sid, input: block.input, mode: session.mode })
+    }
+    if (!actions.includes('inject')) continue
     const key = String(block.id ?? 'unknown')
     if (!session.durableCronNudged) session.durableCronNudged = {}
     if (session.durableCronNudged[key]) continue
@@ -2490,7 +2554,7 @@ function checkDurableCronCreate(sid: string, session: SessionData, line: string)
     })
     const ok = writeFifoRaw(session.pipePath, payload)
     logMsg(ok ? 'warn' : 'error',
-      'durable CronCreate observed in stream — correction ' + (ok ? 'injected' : 'FIFO write FAILED'),
+      'hook inject: durable CronCreate correction ' + (ok ? 'sent' : 'FIFO write FAILED'),
       { sid, toolUseId: key, mode: session.mode })
   }
 }
@@ -2668,7 +2732,42 @@ function checkCronFires(sid: string, session: SessionData) {
       sid, taskId: fire.taskId, foreign: fire.foreign,
       createdBySessionId: fire.createdBySessionId, lastFiredAt: fire.lastFiredAt,
     })
-    // 1. Stream-file marker — same append pattern as handleAppendUserMarker
+    // 1. Hook point cron.fire — evaluated BEFORE the marker so the marker can
+    // report what actually happened. The interesting action is `evict` on a
+    // FOREIGN fire: an orphaned durable cron just hijacked this session, and
+    // nobody in this process will ever CronDelete it — removing the row is
+    // the only thing that ends the loop. Deliberately NO model-visible
+    // message here: the injected warning this replaced cost a turn + context
+    // every hour and could not stop anything (a model verifiably ignored one,
+    // 2026-08-11). The stream marker below tells the HUMAN.
+    let evicted = false
+    {
+      const actions = hookActions('cron.fire', {
+        foreign: fire.foreign, taskId: fire.taskId,
+        createdBySessionId: fire.createdBySessionId ?? null, sid,
+      })
+      if (actions.includes('log')) {
+        logMsg('info', 'hook log: cron.fire', { sid, taskId: fire.taskId, foreign: fire.foreign })
+      }
+      if (actions.includes('evict')) {
+        try {
+          const tasksPath = path.join(base, 'scheduled_tasks.json')
+          const strip = stripCronTaskById(tasksJson, fire.taskId)
+          if (strip.changed && strip.text != null) {
+            const tmp = tasksPath + '.walnut-' + String(process.pid) + '.tmp'
+            fs.writeFileSync(tmp, strip.text, { mode: 0o600 })
+            fs.renameSync(tmp, tasksPath)
+            evicted = true
+            logMsg('warn', 'hook evict: removed orphaned foreign cron', {
+              sid, taskId: fire.taskId, createdBySessionId: fire.createdBySessionId, tasksPath,
+            })
+          }
+        } catch (err) {
+          logMsg('warn', 'hook evict failed', { sid, taskId: fire.taskId, error: (err as Error).message })
+        }
+      }
+    }
+    // 2. Stream-file marker — same append pattern as handleAppendUserMarker
     // (never the canonical JSONL). The tailer folds it (unknown system subtype
     // = v-only, safe) and fans it out; session-history renders
     // scheduled_task_fire as a system info row.
@@ -2676,7 +2775,7 @@ function checkCronFires(sid: string, session: SessionData) {
       const marker = JSON.stringify({
         type: 'system',
         subtype: 'scheduled_task_fire',
-        content: cronFireMarkerText(fire),
+        content: cronFireMarkerText(fire, { evicted }),
         cron_task_id: fire.taskId,
         cron_created_by: fire.createdBySessionId ?? null,
         cron_foreign: fire.foreign,
@@ -2687,30 +2786,6 @@ function checkCronFires(sid: string, session: SessionData) {
       fs.appendFileSync(session.jsonlPath, marker)
     } catch (err) {
       logMsg('warn', 'scheduled-task fire: marker append failed', { sid, error: (err as Error).message })
-    }
-    // 2. Foreign fire = an ORPHANED durable cron just hijacked this session.
-    // EVICT it from disk. We deliberately do NOT talk to the model here:
-    // injecting a provenance warning (the original design) cost a turn + context
-    // every hour and could not actually stop anything — the model is entitled to
-    // ignore an automated message, and one verifiably did (2026-08-11). A
-    // foreign fire means the creating session is not this one, so nobody in this
-    // process will ever CronDelete it; removing the row is the only thing that
-    // ends the loop. The stream marker above still tells the HUMAN what happened.
-    if (fire.foreign && !ALLOW_DURABLE_CRON) {
-      try {
-        const tasksPath = path.join(base, 'scheduled_tasks.json')
-        const strip = stripCronTaskById(tasksJson, fire.taskId)
-        if (strip.changed && strip.text != null) {
-          const tmp = tasksPath + '.walnut-' + String(process.pid) + '.tmp'
-          fs.writeFileSync(tmp, strip.text, { mode: 0o600 })
-          fs.renameSync(tmp, tasksPath)
-          logMsg('warn', 'evicted orphaned foreign cron (Walnut policy: session-scoped crons only)', {
-            sid, taskId: fire.taskId, createdBySessionId: fire.createdBySessionId, tasksPath,
-          })
-        }
-      } catch (err) {
-        logMsg('warn', 'foreign cron eviction failed', { sid, taskId: fire.taskId, error: (err as Error).message })
-      }
     }
   }
 }
@@ -2937,23 +3012,33 @@ function ensureWatcher(sid: string) {
               && (parsed.request as Record<string, unknown>)?.subtype === 'can_use_tool') {
               const req = parsed.request as Record<string, unknown>
               const toolName = req.tool_name as string | undefined
-              // ── INVARIANT: no durable crons (see daemon-core.ts) ──
-              // Deny BEFORE the auto-allow check: a bypass-mode session would
-              // otherwise be waved through, and a durable job outlives this
-              // session to fire inside a stranger sharing the directory.
-              if (!ALLOW_DURABLE_CRON && isDurableCronRequest(toolName, req.input)) {
-                const resp = buildControlResponse(
-                  parsed.request_id as string, req, false, durableCronDenyMessage(),
-                )
-                if (writeFifoRaw(s.pipePath, resp)) {
-                  s.pendingCtrl = null
-                  try { persistRegistry() } catch {}
-                  logMsg('warn', 'denied durable CronCreate (Walnut policy: session-scoped crons only)', {
-                    sid, mode: s.mode,
-                  })
-                  continue
+              // ── Hook point cron.create (see daemon-core.ts) ──
+              // Evaluated BEFORE the auto-allow check: a bypass-mode session
+              // would otherwise be waved through, and a durable job outlives
+              // this session to fire inside a stranger sharing the directory.
+              if (toolName === 'CronCreate') {
+                const actions = hookActions('cron.create', { input: req.input, mode: s.mode, sid })
+                if (actions.includes('log')) {
+                  logMsg('info', 'hook log: cron.create', { sid, input: req.input, mode: s.mode })
                 }
-                logMsg('error', 'durable CronCreate deny could not be written to FIFO', { sid })
+                if (actions.includes('deny')) {
+                  const resp = buildControlResponse(
+                    parsed.request_id as string, req, false, durableCronDenyMessage(),
+                  )
+                  if (writeFifoRaw(s.pipePath, resp)) {
+                    s.pendingCtrl = null
+                    try { persistRegistry() } catch {}
+                    logMsg('warn', 'hook deny: durable CronCreate refused (session-scoped crons only)', {
+                      sid, mode: s.mode,
+                    })
+                    continue
+                  }
+                  // Deliberate fall-through: a failed deny write proceeds to
+                  // shouldAutoRespond (a bypass session then auto-allows the
+                  // durable cron). Blocking the turn forever would be worse —
+                  // cron.fire evict + session.reap strip still cover the row.
+                  logMsg('error', 'hook deny: response could not be written to FIFO', { sid })
+                }
               }
               if (shouldAutoRespond(s.mode, toolName)) {
                 const resp = buildControlResponse(parsed.request_id as string, req, true)
@@ -4225,112 +4310,6 @@ async function cmdGitDiff(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
   }
 }
 
-// ── Discover sessions started OUTSIDE Walnut (capability 'external-scan-v1') ──
-// Host-local by design: this host owns thousands of transcript files, so the
-// walk + head parse happen HERE and only the small descriptor list crosses the
-// tunnel. Serialized daemon-wide (one scan at a time) so a burst of server
-// ticks can't stack concurrent directory walks.
-let externalScanInflight: Promise<void> = Promise.resolve()
-
-async function cmdDiscoverExternalSessions(
-  ws: ServerWebSocket<WsData>,
-  id: number,
-  cmd: Record<string, unknown>,
-) {
-  const prev = externalScanInflight
-  let release!: () => void
-  externalScanInflight = new Promise<void>((r) => { release = r })
-  await prev.catch(() => {})
-  try {
-    const sinceMs = typeof cmd.sinceMs === 'number' && cmd.sinceMs > 0
-      ? cmd.sinceMs
-      : 30 * 24 * 60 * 60 * 1000
-    const knownSessionIds = Array.isArray(cmd.knownSessionIds)
-      ? (cmd.knownSessionIds as unknown[]).filter((s): s is string => typeof s === 'string')
-      : []
-    const limit = typeof cmd.limit === 'number' && cmd.limit > 0 ? cmd.limit : undefined
-    const t0 = Date.now()
-    const result = scanExternalSessions({ sinceMs, knownSessionIds, limit })
-    logMsg('info', 'external session scan', {
-      scanned: result.scanned,
-      found: result.candidates.length,
-      truncated: result.truncated,
-      ms: Date.now() - t0,
-    })
-    sendOk(ws, id, {
-      candidates: result.candidates,
-      scanned: result.scanned,
-      truncated: result.truncated,
-    })
-  } catch (err) {
-    sendError(ws, id, 'sessions.discoverExternal failed: ' + (err as Error).message)
-  } finally {
-    release()
-  }
-}
-
-// ── List all sessions ──
-function cmdList(ws: ServerWebSocket<WsData>, id: number) {
-  const result: Array<{
-    sid: string; pid: number | null; alive: boolean; mtime: string | null; size: number
-  }> = []
-
-  // Scan streams dir for PGID files
-  try {
-    const files = fs.readdirSync(STREAMS_DIR)
-    for (const f of files) {
-      if (!f.endsWith('.pgid')) continue
-      const sid = f.replace('.pgid', '')
-      try {
-        const pid = parseInt(fs.readFileSync(path.join(STREAMS_DIR, f), 'utf-8').trim(), 10)
-        let alive = false
-        try { process.kill(pid, 0); alive = true } catch {}
-
-        let mtime: string | null = null, size = 0
-        try {
-          const stat = fs.statSync(path.join(STREAMS_DIR, sid + '.jsonl'))
-          mtime = stat.mtime.toISOString()
-          size = stat.size
-        } catch {}
-
-        result.push({ sid, pid, alive, mtime, size })
-      } catch {}
-    }
-  } catch {}
-
-  // Also include in-memory sessions not yet persisted
-  for (const [sid, session] of sessions) {
-    if (!result.find(r => r.sid === sid)) {
-      // Prefer the authoritative state field; only fall back to kill(pid,0)
-      // if we've never seen a death signal for this record.
-      let alive = session.state === 'running' && session.pid !== null
-      if (alive && session.pid) {
-        try { process.kill(session.pid, 0) } catch { alive = false }
-      }
-      result.push({
-        sid,
-        pid: session.pid,
-        alive,
-        mtime: null,
-        size: 0,
-      })
-    }
-  }
-
-  sendOk(ws, id, { sessions: result })
-}
-
-// ── Protocol helpers ──
-// ALL socket writes MUST go through safeSend. Bun's ServerWebSocket.send()
-// SILENTLY DROPS the message (returns 0) once the socket's backpressure buffer
-// is saturated — a single ~28MB fs.read response is enough. Raw `try {
-// ws.send() } catch {}` therefore lost concurrent RPC replies (walnut → 30s
-// "Session file read timeout") and live `jsonl` events for other sessions on
-// the same shared connection (UI: frozen streaming until refresh). safeSend
-// queues on drop and flushes in FIFO order when Bun fires `drain`.
-// Regression: tests/providers/daemon-ws-backpressure.test.ts (real binary).
-const SEND_QUEUE_MAX_BYTES = 256 * 1024 * 1024
-
 // ── Session changes (host-local compute — capability 'changes-v1') ──
 // The design-principle path (AGENTS.md): this host parses its OWN session
 // JSONLs and reads its OWN files; only a light list / one file's diff crosses
@@ -4457,6 +4436,112 @@ async function cmdChangesFile(ws: ServerWebSocket<WsData>, id: number, cmd: Reco
     sendError(ws, id, 'changes.file failed: ' + (err as Error).message)
   }
 }
+
+// ── Discover sessions started OUTSIDE Walnut (capability 'external-scan-v1') ──
+// Host-local by design: this host owns thousands of transcript files, so the
+// walk + head/tail parse happen HERE and only the small descriptor list crosses
+// the tunnel. Serialized daemon-wide (one scan at a time) so a burst of server
+// ticks can't stack concurrent directory walks.
+let externalScanInflight: Promise<void> = Promise.resolve()
+
+async function cmdDiscoverExternalSessions(
+  ws: ServerWebSocket<WsData>,
+  id: number,
+  cmd: Record<string, unknown>,
+) {
+  const prev = externalScanInflight
+  let release!: () => void
+  externalScanInflight = new Promise<void>((r) => { release = r })
+  await prev.catch(() => {})
+  try {
+    const sinceMs = typeof cmd.sinceMs === 'number' && cmd.sinceMs > 0
+      ? cmd.sinceMs
+      : 30 * 24 * 60 * 60 * 1000
+    const knownSessionIds = Array.isArray(cmd.knownSessionIds)
+      ? (cmd.knownSessionIds as unknown[]).filter((s): s is string => typeof s === 'string')
+      : []
+    const limit = typeof cmd.limit === 'number' && cmd.limit > 0 ? cmd.limit : undefined
+    const t0 = Date.now()
+    const result = scanExternalSessions({ sinceMs, knownSessionIds, limit })
+    logMsg('info', 'external session scan', {
+      scanned: result.scanned,
+      found: result.candidates.length,
+      truncated: result.truncated,
+      ms: Date.now() - t0,
+    })
+    sendOk(ws, id, {
+      candidates: result.candidates,
+      scanned: result.scanned,
+      truncated: result.truncated,
+    })
+  } catch (err) {
+    sendError(ws, id, 'sessions.discoverExternal failed: ' + (err as Error).message)
+  } finally {
+    release()
+  }
+}
+
+// ── List all sessions ──
+function cmdList(ws: ServerWebSocket<WsData>, id: number) {
+  const result: Array<{
+    sid: string; pid: number | null; alive: boolean; mtime: string | null; size: number
+  }> = []
+
+  // Scan streams dir for PGID files
+  try {
+    const files = fs.readdirSync(STREAMS_DIR)
+    for (const f of files) {
+      if (!f.endsWith('.pgid')) continue
+      const sid = f.replace('.pgid', '')
+      try {
+        const pid = parseInt(fs.readFileSync(path.join(STREAMS_DIR, f), 'utf-8').trim(), 10)
+        let alive = false
+        try { process.kill(pid, 0); alive = true } catch {}
+
+        let mtime: string | null = null, size = 0
+        try {
+          const stat = fs.statSync(path.join(STREAMS_DIR, sid + '.jsonl'))
+          mtime = stat.mtime.toISOString()
+          size = stat.size
+        } catch {}
+
+        result.push({ sid, pid, alive, mtime, size })
+      } catch {}
+    }
+  } catch {}
+
+  // Also include in-memory sessions not yet persisted
+  for (const [sid, session] of sessions) {
+    if (!result.find(r => r.sid === sid)) {
+      // Prefer the authoritative state field; only fall back to kill(pid,0)
+      // if we've never seen a death signal for this record.
+      let alive = session.state === 'running' && session.pid !== null
+      if (alive && session.pid) {
+        try { process.kill(session.pid, 0) } catch { alive = false }
+      }
+      result.push({
+        sid,
+        pid: session.pid,
+        alive,
+        mtime: null,
+        size: 0,
+      })
+    }
+  }
+
+  sendOk(ws, id, { sessions: result })
+}
+
+// ── Protocol helpers ──
+// ALL socket writes MUST go through safeSend. Bun's ServerWebSocket.send()
+// SILENTLY DROPS the message (returns 0) once the socket's backpressure buffer
+// is saturated — a single ~28MB fs.read response is enough. Raw `try {
+// ws.send() } catch {}` therefore lost concurrent RPC replies (walnut → 30s
+// "Session file read timeout") and live `jsonl` events for other sessions on
+// the same shared connection (UI: frozen streaming until refresh). safeSend
+// queues on drop and flushes in FIFO order when Bun fires `drain`.
+// Regression: tests/providers/daemon-ws-backpressure.test.ts (real binary).
+const SEND_QUEUE_MAX_BYTES = 256 * 1024 * 1024
 
 function enqueueForDrain(ws: ServerWebSocket<WsData>, payload: string) {
   const data = ws.data

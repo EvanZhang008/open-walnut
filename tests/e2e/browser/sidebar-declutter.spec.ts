@@ -13,6 +13,12 @@ import { test, expect, type Page } from '@playwright/test'
  * This pins the shape so the icon wall can't grow back: the app sidebar was a
  * 13-item column of unlabelled glyphs when collapsed (the default), which is
  * exactly the state a user reported as unreadable.
+ *
+ * Plugin apps are the one sanctioned dynamic group. The list Walnut SHIPS is
+ * still exactly the 9 core entries, and installed apps may only appear as a
+ * contiguous group between Routines and Settings — so the assertion below pins
+ * the core prefix, the Settings suffix, and the fact that anything extra is a
+ * plugin app link (`/apps/…`), never another core page sneaking back in.
  */
 
 /** Expand the sidebar so the labels (not just glyphs) are assertable. */
@@ -30,10 +36,23 @@ test('app sidebar shows only the daily surfaces — no management pages, no Othe
   await expect(page.locator('.settings-nav')).toBeVisible({ timeout: 30_000 })
   await expandSidebar(page)
 
+  const CORE_PREFIX = ['Chat', 'Todo', 'Agenda', 'Home', 'Tasks', 'Notes', 'Calendar', 'Routines']
   const labels = (await page.locator('.sidebar-nav .sidebar-link').allTextContents()).map((t) => t.trim())
-  expect(labels).toEqual([
-    'Chat', 'Todo', 'Agenda', 'Home', 'Tasks', 'Notes', 'Calendar', 'Routines', 'Settings',
-  ])
+
+  // The core 8 come first, in this exact order, and Settings is always last.
+  expect(labels.slice(0, CORE_PREFIX.length)).toEqual(CORE_PREFIX)
+  expect(labels[labels.length - 1]).toBe('Settings')
+
+  // Anything between Routines and Settings must be a plugin app entry — i.e. a
+  // link into /apps/… carrying a sidebar-app-<id> test id. This is what keeps a
+  // new core page from being smuggled into the column via this allowance.
+  const middle = labels.slice(CORE_PREFIX.length, labels.length - 1)
+  const appLinks = page.locator('.sidebar-nav a[href^="/apps/"]')
+  const appLabels = (await appLinks.allTextContents()).map((t) => t.trim())
+  expect(appLabels).toEqual(middle)
+  for (let i = 0; i < middle.length; i++) {
+    await expect(appLinks.nth(i)).toHaveAttribute('data-testid', /^sidebar-app-/)
+  }
 
   // The removed group and the removed recording entry.
   await expect(page.getByRole('button', { name: /^Other$/ })).toHaveCount(0)

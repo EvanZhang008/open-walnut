@@ -13,7 +13,15 @@ export type SnapshotStatusMode = 'off' | 'shadow' | 'enforce'
 
 function readModeFromEnv(): SnapshotStatusMode {
   const raw = process.env.WALNUT_SNAPSHOT_STATUS
-  return raw === 'off' || raw === 'enforce' ? raw : 'shadow'
+  // Default flipped shadow → enforce (C4, 2026-08-13) after the shadow soak:
+  // 4 days, 1880 divergence logs across 28 sessions, and in EVERY investigated
+  // incident (019a7fe5, 936b0a44, a172ce49, 176935b9) the snapshot side was
+  // correct while the record was stale — shadow could see it but not write it,
+  // so "finished but still shows Running" kept recurring. Enforce is bounded:
+  // it gates legacy writers ONLY for sessions actively covered by snapshots
+  // (isSnapshotCovered); uncovered sessions keep legacy writers as fallback.
+  // Revert switch: WALNUT_SNAPSHOT_STATUS=shadow.
+  return raw === 'off' || raw === 'shadow' ? raw : 'enforce'
 }
 
 /** Read ONCE at module init (contract §6 flag semantics); tests may override. */

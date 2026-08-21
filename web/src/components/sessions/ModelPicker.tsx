@@ -17,6 +17,7 @@ import type { CodexModelInfo, SessionLiveSettings, SessionModelCatalog } from '@
 import { useHostModelCatalog, seedHostCatalog } from '@/hooks/useModelCatalog';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { formatModelName } from '@/hooks/useSessionUsage';
+import { sortByModelStrength } from '@/utils/model-strength-order';
 
 const EFFORTS = SESSION_EFFORTS;
 
@@ -470,7 +471,10 @@ export function ModelPicker({
       }
       fam.byEffort.set(effort, m);
     }
-    return [...fams.values()];
+    return sortByModelStrength(
+      [...fams.values()],
+      (family) => `${family.familyId} ${family.label}`,
+    );
   }, [codexModels]);
   const codexActive = codexCurrent ? parseCodexModelId(codexCurrent) : null;
   const codexActiveFamily = codexActive
@@ -490,6 +494,26 @@ export function ModelPicker({
       ?? [...fam.byEffort.values()][0];
     if (target && target.modelId !== codexCurrent) onCodexSwitch(target.modelId);
   };
+
+  type ClaudeModelRow =
+    | { kind: 'current'; model: string }
+    | { kind: 'auto'; resolvedLabel: string; active: boolean }
+    | { kind: 'catalog'; model: SessionModelCatalogEntry };
+  const claudeModelRows = sortByModelStrength<ClaudeModelRow>([
+    ...(liveModel && !activeRow && !autoRow
+      ? [{ kind: 'current' as const, model: liveModel }]
+      : []),
+    ...(autoRow
+      ? [{ kind: 'auto' as const, ...autoRow }]
+      : []),
+    ...models
+      .filter((model) => !(autoRow && model.value === 'default'))
+      .map((model) => ({ kind: 'catalog' as const, model })),
+  ], (row) => {
+    if (row.kind === 'current') return row.model;
+    if (row.kind === 'auto') return `auto ${row.resolvedLabel}`;
+    return `${row.model.value} ${row.model.resolvedModel ?? ''} ${catalogRowLabel(row.model)}`;
+  });
 
   const codexPane = (
     <>
@@ -719,31 +743,41 @@ export function ModelPicker({
       <div className="model-picker-columns">
         <div className="model-picker-col model-picker-col-models" role="listbox" aria-label="Model">
           <div className="model-picker-col-title">Model</div>
-          {/* Out-of-catalog live model: the session runs something no catalog
-              row claims (allowlist tightened mid-session, refusal fallback).
-              Shown truthfully as the active row — switchable nowhere. */}
-          {liveModel && !activeRow && !autoRow && (
-            <div className="model-picker-row model-picker-row-active" data-testid="picker-out-of-catalog" role="option" aria-selected="true"
-              title="Current model — not in this session's selectable catalog">
-              <span className="model-picker-row-check" aria-hidden>✓</span>
-              <span className="model-picker-row-name">{shortModelLabel(liveModel)}</span>
-            </div>
-          )}
-          {autoRow && (
-            <button
-              type="button"
-              className={`model-picker-row${autoRow.active ? ' model-picker-row-active' : ''}`}
-              data-testid="picker-auto-row"
-              role="option"
-              aria-selected={autoRow.active}
-              title="No --model flag — the CLI/config default decides"
-              onClick={() => { if (!autoRow.active) onSwitch(''); }}
-            >
-              <span className="model-picker-row-check" aria-hidden>{autoRow.active ? '✓' : ''}</span>
-              <span className="model-picker-row-name">{autoRow.resolvedLabel ? `Auto (${autoRow.resolvedLabel})` : 'Auto'}</span>
-            </button>
-          )}
-          {models.filter((m) => !(autoRow && m.value === 'default')).map((m) => {
+          {claudeModelRows.map((row) => {
+            if (row.kind === 'current') {
+              return (
+                <div
+                  key={`current:${row.model}`}
+                  className="model-picker-row model-picker-row-active"
+                  data-testid="picker-out-of-catalog"
+                  role="option"
+                  aria-selected="true"
+                  title="Current model — not in this session's selectable catalog"
+                >
+                  <span className="model-picker-row-check" aria-hidden>✓</span>
+                  <span className="model-picker-row-name">{shortModelLabel(row.model)}</span>
+                </div>
+              );
+            }
+            if (row.kind === 'auto') {
+              return (
+                <button
+                  key="auto"
+                  type="button"
+                  className={`model-picker-row${row.active ? ' model-picker-row-active' : ''}`}
+                  data-testid="picker-auto-row"
+                  role="option"
+                  aria-selected={row.active}
+                  title="No --model flag — the CLI/config default decides"
+                  onClick={() => { if (!row.active) onSwitch(''); }}
+                >
+                  <span className="model-picker-row-check" aria-hidden>{row.active ? '✓' : ''}</span>
+                  <span className="model-picker-row-name">{row.resolvedLabel ? `Auto (${row.resolvedLabel})` : 'Auto'}</span>
+                </button>
+              );
+            }
+
+            const m = row.model;
             const isActive = activeRow?.value === m.value;
             const isRequestedNotApplied = modelMismatch && requestedRow?.value === m.value;
             return (

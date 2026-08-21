@@ -288,7 +288,7 @@ describe("agent.provider = 'claude-code' → lane session", () => {
       expect(started[0].preassignedSessionId).toBe(laneSessionId)
       expect(started[0].message).toContain('plan my week')
       expect(started[0].profile?.systemPromptMode).toBe('replace')
-      expect(started[0].profile?.systemPrompt).toContain('Choose one mode for each request')
+      expect(started[0].profile?.systemPrompt).toContain('## Walnut operating contract')
       expect(started[0].profile?.mcpServers?.walnut).toEqual({ command: 'open-walnut', args: ['mcp'] })
 
       const { getSessionByLane } = await import('../../../src/core/session-tracker.js')

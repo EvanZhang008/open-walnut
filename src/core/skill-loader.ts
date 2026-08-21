@@ -7,6 +7,7 @@
  *   ~/.open-walnut/skills/       — walnut global
  *   dist/data/skills/      — shipped with walnut
  *   ~/.claude/skills/      — claude skills (Claude Code CLI's own store)
+ *   <pluginDir>/skills/    — installed plugins declaring the `skills` capability (lowest)
  *
  * TWO discovery scopes — do not collapse them:
  *   getPromptSearchDirs() — what the PERSONAL AI's prompt index is built from. Excludes
@@ -27,6 +28,7 @@ import { execFileSync } from 'node:child_process';
 import yaml from 'js-yaml';
 import { log } from '../logging/index.js';
 import { isMemorySafetyEnforced, screenMemoryText } from './memory-safety.js';
+import { registry } from './integration-registry.js';
 import { GLOBAL_SKILLS_DIR, CLAUDE_SKILLS_DIR, BUILTIN_SKILLS_DIR, SKILL_SETTINGS_FILE } from '../constants.js';
 
 export type SkillType = 'action' | 'knowledge';
@@ -66,6 +68,32 @@ interface SkillFrontmatter {
 // Preserve existing exports without retaining the retired product name in source.
 const LEGACY_PERSONAL_AI_SKILLS_ENV = `WALNUT_${String.fromCharCode(66, 85, 84, 76, 69, 82)}_CLAUDE_SKILLS`;
 
+/**
+ * `<pluginDir>/skills` for every loaded plugin declaring the `skills`
+ * capability. Appended LAST to both scopes, so first-wins discovery lets a
+ * workspace / global / shipped skill of the same name override a plugin's.
+ *
+ * Read from the registry live (a plugin-store soft reload changes the set) and
+ * fully guarded: the skills index is on the prompt path, so a registry that
+ * isn't initialised yet must degrade to "no plugin skills", never throw.
+ *
+ * Reads integration-REGISTRY, not integration-loader: the registry is a leaf
+ * (types only), while the loader pulls in task-manager/task-db/config-manager
+ * and would make this a cycle.
+ */
+export function getPluginSkillDirs(): string[] {
+  try {
+    return registry.getAll()
+      .filter((p) => p.hasSkills && p.pluginDir)
+      .map((p) => path.join(p.pluginDir!, 'skills'));
+  } catch (err) {
+    log.task.debug('skill-loader: could not read plugin skill dirs', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return [];
+  }
+}
+
 /** Sources the PERSONAL AI's prompt index is built from — no ~/.claude/skills/ (see file header). */
 function getPromptSearchDirs(): string[] {
   const dirs = [
@@ -77,6 +105,7 @@ function getPromptSearchDirs(): string[] {
     process.env.WALNUT_PERSONAL_AI_CLAUDE_SKILLS === '1'
     || process.env[LEGACY_PERSONAL_AI_SKILLS_ENV] === '1'
   ) dirs.push(CLAUDE_SKILLS_DIR);
+  dirs.push(...getPluginSkillDirs()); // lowest priority
   return dirs;
 }
 
@@ -87,6 +116,7 @@ function getSearchDirs(): string[] {
     GLOBAL_SKILLS_DIR,            // ~/.open-walnut/skills/
     BUILTIN_SKILLS_DIR,           // dist/data/skills/ (shipped with walnut)
     CLAUDE_SKILLS_DIR,            // ~/.claude/skills/
+    ...getPluginSkillDirs(),      // lowest priority
   ];
 }
 

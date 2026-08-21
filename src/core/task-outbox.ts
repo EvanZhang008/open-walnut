@@ -633,11 +633,13 @@ export async function importProjectionOnCloud(): Promise<number> {
   // PRIMARY's authoritative state — a human reopened the task on the Mac — so
   // route just the phase through the human-source path. Everything else in
   // the patch already landed above.
+  // COMPLETE is the only terminal phase (mirrors TERMINAL_PHASES in phase.ts),
+  // so it is the only phase whose guard the raw path can silently drop.
   for (const { id, patch } of toUpdate) {
     const phase = patch.phase as Task['phase'] | undefined;
-    if (!phase || phase === 'COMPLETE' || phase === 'HUMAN_VERIFIED') continue;
+    if (!phase || phase === 'COMPLETE') continue;
     const row = local.get(id);
-    if (!row || !(row.phase === 'COMPLETE' || row.phase === 'HUMAN_VERIFIED')) continue;
+    if (!row || row.phase !== 'COMPLETE') continue;
     await tm.updateTask(id, { phase }, { source: 'api' }).catch((err) => {
       log.task.warn('task-outbox: projection reopen failed', { id, err: String(err) });
     });

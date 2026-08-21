@@ -18,6 +18,7 @@ import { SkillsPage } from './pages/SkillsPage';
 import { MemoryPage } from './pages/MemoryPage';
 import { NotesPage } from './pages/NotesPage';
 import { CalendarPage } from './pages/CalendarPage';
+import { PluginAppPage } from './pages/PluginAppPage';
 
 import { PopoutRoot } from './popout/PopoutRoot';
 
@@ -97,6 +98,9 @@ export function App() {
         <Route path="/timeline" element={<Navigate to="/settings#timeline" replace />} />
         <Route path="/chat" element={<Navigate to="/" replace />} />
         <Route path="/settings" element={<SettingsPage />} />
+        {/* Plugin-provided app pages (sandboxed iframes) — must stay above the
+            catch-all, which would otherwise bounce them home. */}
+        <Route path="/apps/:appId" element={<PluginAppPage />} />
         <Route path="/dashboard" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

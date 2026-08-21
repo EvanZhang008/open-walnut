@@ -35,7 +35,7 @@ import {
   renameGroup,
   listGroups,
 } from '../core/task-manager.js';
-import { AGENT_WRITABLE_PHASES, isAgentWritablePhase } from '../core/phase.js';
+import { PHASE_ORDER } from '../core/phase.js';
 import {
   LEGACY_STATUS_TO_COMPLETION,
   MAX_QUERY_LIMIT,
@@ -67,6 +67,9 @@ import { bus, EventNames } from '../core/event-bus.js';
 import { getConfig, updateConfig } from '../core/config-manager.js';
 import { SESSION_MODES, SESSION_MODE_IDS } from '../core/types.js';
 import type { Config, SessionRecord, Task, TaskPhase, TaskPriority, TaskSource } from '../core/types.js';
+// Leaf module (types only) — safe to import statically; getPluginTools() needs it
+// on the synchronous tool-lookup path in executeTool().
+import { registry } from '../core/integration-registry.js';
 import { getOp, opInputJsonSchema } from '../ops/index.js';
 import path from 'node:path';
 import { log } from '../logging/index.js';
@@ -512,10 +515,10 @@ export const tools: ToolDefinition[] = [
             completion: {
               type: 'array',
               items: { type: 'string', enum: ['todo', 'in_progress', 'complete'] },
-              description: 'Coarse 3-group state (OR within the array). todo=TODO; in_progress=the five middle phases; complete=COMPLETE. Combine with phase to narrow further (they AND).',
+              description: 'Coarse 3-group state (OR within the array). todo=TODO; in_progress=the middle phases (IN_PROGRESS, AGENT_COMPLETE); complete=COMPLETE. Combine with phase to narrow further (they AND).',
             },
-            phase: { type: 'string', enum: ['TODO', 'IN_PROGRESS', 'AGENT_COMPLETE', 'AWAIT_HUMAN_ACTION', 'HUMAN_VERIFIED', 'POST_WORK_COMPLETED', 'COMPLETE'], description: 'Filter by exact 7-state phase.' },
-            status: { type: 'string', enum: ['todo', 'in_progress', 'done'], description: 'Legacy 3-state filter. Maps to phases: todo→TODO, in_progress→IN_PROGRESS+AGENT_COMPLETE+AWAIT_HUMAN_ACTION+HUMAN_VERIFIED+POST_WORK_COMPLETED, done→COMPLETE.' },
+            phase: { type: 'string', enum: [...PHASE_ORDER], description: 'Filter by exact phase.' },
+            status: { type: 'string', enum: ['todo', 'in_progress', 'done'], description: 'Legacy 3-state filter. Maps to phases: todo→TODO, in_progress→IN_PROGRESS+AGENT_COMPLETE, done→COMPLETE.' },
             project: { type: 'string', description: 'Filter by project name. Pass "" to get Inbox (tasks with no project).' },
             priority: { type: 'string', enum: ['immediate', 'important', 'backlog', 'none'] },
             source: { type: 'string', description: 'Filter by task source (exact), e.g. "local".' },
@@ -744,9 +747,11 @@ export const tools: ToolDefinition[] = [
           const source = (params.source as TaskSource | undefined) ?? 'local';
           // Same rule as POST /api/projects: 'local' or any registered plugin id.
           if (source !== 'local') {
-            const { registry } = await import('../core/integration-registry.js');
-            if (!registry.has(source)) {
-              const valid = ['local', ...registry.getAll().map((p) => p.id)];
+            // isTaskSource, not has(): a plugin without the sync capability
+            // (ui/tools/skills only) can't back a project — it would take the
+            // binding and never push.
+            if (!registry.isTaskSource(source)) {
+              const valid = ['local', ...registry.getSyncPlugins().map((p) => p.id)];
               return `Error: unknown source "${source}". Valid sources: ${valid.join(', ')}.`;
             }
           }
@@ -826,7 +831,18 @@ export const tools: ToolDefinition[] = [
           : ', synced';
         const groupLabel = task.project || 'Inbox';
         const newNote = projectWasNew ? ' (new project)' : '';
-        return `Task created: ${taskRef(task.id, task.title)} (${task.priority}, ${groupLabel}${newNote} → ${task.source}${syncStatus})`;
+        // An auto-created project has no default_cwd, so a later session would
+        // land in the project's memory dir instead of the intended repo. The
+        // explicit type=project branch already warns; this is the same warning
+        // for the far more common implicit path (task_create with a new name).
+        let cwdWarning = '';
+        if (projectWasNew && !task.cwd) {
+          const metadata = await getProjectMetadata(task.project || '');
+          if (!metadata?.default_cwd) {
+            cwdWarning = `\n⚠️ New project "${task.project}" has no default_cwd — sessions for its tasks will NOT run in a repo. Confirm the working directory with the user, then set it via task_update type=project default_cwd, or pass a task-level cwd.`;
+          }
+        }
+        return `Task created: ${taskRef(task.id, task.title)} (${task.priority}, ${groupLabel}${newNote} → ${task.source}${syncStatus})${cwdWarning}`;
       } catch (err) {
         if (err instanceof ProjectSourceConflictError) {
           return `Error: Project "${err.project}" is synced from ${err.existingSource}; tasks there must come from that provider (cannot add a ${err.intendedSource} task).`;
@@ -840,7 +856,7 @@ export const tools: ToolDefinition[] = [
     name: 'task_update',
     description: `Update a task or a project. Supports multiple fields in a single call.
 
-For tasks (type='task'): update structural fields (priority, phase, project, unread, due_date, start_date, end_date, title, pinned, focus_tier) and/or text fields (description, summary, note, append_note) in one call. Use phase='AGENT_COMPLETE' to mark a task done (only humans can set COMPLETE). Use pinned + focus_tier to pin/unpin tasks for the Focus Bar. Pass project='' to move a task to Inbox.
+For tasks (type='task'): update structural fields (priority, phase, project, unread, due_date, start_date, end_date, title, pinned, focus_tier) and/or text fields (description, summary, note, append_note) in one call. Use phase='AGENT_COMPLETE' when work is done and awaiting review, 'COMPLETE' when finished. A blocked or parked task is just TODO. Use pinned + focus_tier to pin/unpin tasks for the Focus Bar. Pass project='' to move a task to Inbox.
 
 For projects (type='project'): set default_host and default_cwd for session defaults, or rename the project across all its tasks (old_name + new_name; renaming onto an existing project merges them).`,
     input_schema: {
@@ -851,7 +867,7 @@ For projects (type='project'): set default_host and default_cwd for session defa
         id: { type: 'string', description: 'Task ID or prefix. Required for type=task.' },
         title: { type: 'string', description: 'New title. Format: "<≤3-word prefix> — <short description>". Prefix MUST be the most unique identifier of the task (max 3 words) — the thing that instantly tells you WHICH task this is. Use em-dash (—). Good: "Sprint选择器 — 查询/选择当前sprint", "Task不跳转 — 点击task不定位到列表位置". Bad: generic prefixes like "Sprint功能增强", "Bug:", "Tool Description".' },
         priority: { type: 'string', enum: ['immediate', 'important', 'backlog', 'none'], description: 'New priority: immediate (urgent), important (can wait), backlog (future), none.' },
-        phase: { type: 'string', enum: [...AGENT_WRITABLE_PHASES], description: 'Agent-writable task phase. Use AGENT_COMPLETE or AWAIT_HUMAN_ACTION to hand work back.' },
+        phase: { type: 'string', enum: [...PHASE_ORDER], description: 'Task phase: TODO (not started or blocked), IN_PROGRESS (working), AGENT_COMPLETE (work done, awaiting review), COMPLETE (finished).' },
         project: { type: 'string', description: 'New project for the task (empty string moves it to Inbox). For type=project: the project to update settings on.' },
         due_date: { type: 'string', description: 'New due date — the deadline (YYYY-MM-DD, or ISO datetime). Empty string clears.' },
         start_date: { type: 'string', description: 'New start date — when to begin working (YYYY-MM-DD, or ISO datetime). Tasks with a future start_date are hidden from the "Now" view until then. Empty string clears.' },
@@ -923,10 +939,6 @@ For projects (type='project'): set default_host and default_cwd for session defa
       // type === 'task'
       const id = params.id as string;
       if (!id) return 'Error: id is required for type=task.';
-
-      if (params.phase !== undefined && !isAgentWritablePhase(params.phase)) {
-        return 'Error: Agents may set TODO, IN_PROGRESS, AGENT_COMPLETE, or AWAIT_HUMAN_ACTION only.';
-      }
 
       try {
         const results: string[] = [];
@@ -2647,10 +2659,56 @@ defaults (same resolution chain as session_start).`,
 ];
 
 /**
+ * Plugin-contributed tools (manifest capability `tools` → api.registerTool),
+ * resolved LIVE from the integration registry so a plugin-store soft reload is
+ * picked up without a server restart.
+ *
+ * Two invariants worth keeping:
+ *  - APPENDED AFTER the static list, never merged in. Tool schemas sit in the
+ *    prompt-cache prefix, so the static prefix must stay byte-identical when no
+ *    plugin contributes a tool (which is the default install).
+ *  - A built-in name always WINS. Plugin tool names are namespaced
+ *    `<pluginId>_<name>` by the loader, so a collision means a plugin picked a
+ *    name that a later Walnut version shipped as a built-in; silently shadowing
+ *    a core tool is the one outcome that must never happen.
+ */
+export function getPluginTools(): ToolDefinition[] {
+  let specs: import('../core/integration-types.js').PluginToolSpec[];
+  try {
+    specs = registry.getAll().flatMap((p) => p.tools ?? []);
+  } catch (err) {
+    log.agent.debug('plugin tools unavailable', { error: err instanceof Error ? err.message : String(err) });
+    return [];
+  }
+  if (specs.length === 0) return [];
+  const builtinNames = new Set(tools.map((t) => t.name));
+  const out: ToolDefinition[] = [];
+  const seen = new Set<string>();
+  for (const spec of specs) {
+    if (builtinNames.has(spec.name)) {
+      log.agent.warn('plugin tool shadows a built-in tool — plugin tool ignored', { tool: spec.name });
+      continue;
+    }
+    if (seen.has(spec.name)) {
+      log.agent.warn('duplicate plugin tool name across plugins — first wins', { tool: spec.name });
+      continue;
+    }
+    seen.add(spec.name);
+    out.push({
+      name: spec.name,
+      description: spec.description,
+      input_schema: spec.input_schema,
+      execute: (params, meta) => spec.execute(params, meta) as Promise<ToolResultContent>,
+    });
+  }
+  return out;
+}
+
+/**
  * Get tool definitions in the format expected by the Anthropic API.
  */
 export function getToolSchemas(): Array<{ name: string; description: string; input_schema: Record<string, unknown> }> {
-  return tools.map((t) => ({
+  return [...tools, ...getPluginTools()].map((t) => ({
     name: t.name,
     description: t.description,
     input_schema: t.input_schema,
@@ -2710,7 +2768,9 @@ export function getReadOnlyTools(): ToolDefinition[] {
  * Execute a tool by name with given parameters.
  */
 export async function executeTool(name: string, params: Record<string, unknown>, meta?: ToolExecuteMeta): Promise<ToolResultContent> {
-  const tool = tools.find((t) => t.name === name);
+  // Built-ins first (a built-in always wins), then plugin-contributed tools.
+  // getPluginTools() is only consulted on a miss, so the common path is unchanged.
+  const tool = tools.find((t) => t.name === name) ?? getPluginTools().find((t) => t.name === name);
   if (!tool) {
     log.agent.warn(`unknown tool requested: ${name}`);
     return `Error: Unknown tool "${name}"`;

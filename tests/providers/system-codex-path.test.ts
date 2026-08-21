@@ -5,11 +5,11 @@ import path from 'node:path'
 import {
   buildAcpAdapterEnv,
   parseCodexBaseConfig,
+  resolveCodexInitialMode,
   resolveSystemCodexPath,
   SystemCodexPathError,
 } from '../../src/providers/acp-session.js'
 import { buildAcpLaneConfig } from '../../src/providers/claude-code-session.js'
-import { opCallerFromEnv } from '../../src/ops/executor.js'
 
 let tmpDir: string
 
@@ -70,13 +70,53 @@ describe('buildAcpAdapterEnv', () => {
     expect(buildAcpAdapterEnv(undefined)).toBeUndefined()
   })
 
-  it('marks the session as Walnut-managed so the CLI classifies itself as an agent', () => {
-    // Without this, `walnut done <id>` inside a Codex session read as a human
-    // and bypassed the human-only completion guard (native claude was blocked).
+  it('passes the managed-session id through so `wn` can resolve its own sid', () => {
+    // WALNUT_SESSION_ID is the managed-session identity the in-session `wn` CLI
+    // reads to reach the daemon gateway. (It also used to classify the caller as
+    // human vs agent for the completion guard; that whole distinction is gone.)
     const env = buildAcpAdapterEnv('/usr/local/bin/codex', { sessionId: 'acp-deadbeef' })
     expect(env).toEqual({ CODEX_PATH: '/usr/local/bin/codex', WALNUT_SESSION_ID: 'acp-deadbeef' })
-    expect(opCallerFromEnv(env as NodeJS.ProcessEnv)).toBe('agent')
-    expect(opCallerFromEnv({ CODEX_PATH: '/usr/local/bin/codex' } as NodeJS.ProcessEnv)).toBe('human')
+    expect(buildAcpAdapterEnv('/usr/local/bin/codex')).toEqual({ CODEX_PATH: '/usr/local/bin/codex' })
+  })
+
+  it('forwards the startup approval preset as INITIAL_AGENT_MODE', () => {
+    expect(buildAcpAdapterEnv('/usr/local/bin/codex', { initialAgentMode: 'agent-full-access' }))
+      .toEqual({ CODEX_PATH: '/usr/local/bin/codex', INITIAL_AGENT_MODE: 'agent-full-access' })
+  })
+})
+
+describe('resolveCodexInitialMode', () => {
+  const writeToml = (content: string): NodeJS.ProcessEnv => {
+    const home = fs.mkdtempSync(path.join(tmpDir, 'home-'))
+    fs.mkdirSync(path.join(home, '.codex'), { recursive: true })
+    fs.writeFileSync(path.join(home, '.codex/config.toml'), content)
+    return { HOME: home }
+  }
+
+  it('maps sandbox danger-full-access to the full-access preset', () => {
+    const env = writeToml('approval_policy = "on-request"\nsandbox_mode = "danger-full-access"\n')
+    expect(resolveCodexInitialMode({ env })).toBe('agent-full-access')
+  })
+
+  it('maps workspace-write to agent and read-only to read-only', () => {
+    expect(resolveCodexInitialMode({ env: writeToml('sandbox_mode = "workspace-write"\n') })).toBe('agent')
+    expect(resolveCodexInitialMode({ env: writeToml('sandbox_mode = "read-only"\n') })).toBe('read-only')
+  })
+
+  it('maps approval_policy never (no sandbox key) to full access', () => {
+    expect(resolveCodexInitialMode({ env: writeToml('approval_policy = "never"\n') })).toBe('agent-full-access')
+  })
+
+  it('ignores keys inside [projects] tables', () => {
+    const env = writeToml('[projects."/tmp/x"]\ntrust_level = "trusted"\nsandbox_mode = "danger-full-access"\n')
+    expect(resolveCodexInitialMode({ env })).toBeUndefined()
+  })
+
+  it('falls back to the walnut default, validated', () => {
+    const env = { HOME: fs.mkdtempSync(path.join(tmpDir, 'nohome-')) }
+    expect(resolveCodexInitialMode({ env, walnutDefault: 'agent-full-access' })).toBe('agent-full-access')
+    expect(resolveCodexInitialMode({ env, walnutDefault: 'bogus' })).toBeUndefined()
+    expect(resolveCodexInitialMode({ env })).toBeUndefined()
   })
 })
 

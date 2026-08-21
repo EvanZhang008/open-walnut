@@ -232,28 +232,38 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
     }
   }, []);
 
-  /** Retry a failed message — resets to pending and re-sends via RPC. */
+  /** Retry a failed message — resets to pending and re-sends via RPC.
+   *
+   *  `retryOf` carries the ORIGINAL queueId so the server can re-drain the row
+   *  that is still sitting in its pending queue instead of enqueueing a second
+   *  copy of the same text (inc-1786774073558: a --resume spawn failure reverts
+   *  its batch to 'pending' AND reports the batch failed, so a blind re-send put
+   *  the words in the queue twice and the next batch joined both with '\n\n' —
+   *  the CLI received the user's message duplicated inside ONE enqueue line).
+   *  The queueId is kept STABLE for the same reason: minting a new temp id would
+   *  orphan the server row's identity and re-open the duplicate path. When the
+   *  row is already gone server-side, the server falls back to a fresh enqueue
+   *  and answers with a new messageId, which is adopted below. */
   const retryFailed = useCallback((queueId: string, sessionId: string) => {
     const failedMsg = msgsRef.current.find(m => m.queueId === queueId && m.status === 'failed');
     if (!failedMsg) return;
 
     setSendError(null);
-    const newTempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    log.info('send', 'retrying', { sessionId, oldQueueId: queueId, newQueueId: newTempId });
+    log.info('send', 'retrying', { sessionId, queueId });
 
     setOptimisticMsgs((prev) => prev.map((m) =>
-      m.queueId === queueId ? { ...m, queueId: newTempId, status: 'pending' as const, failedError: undefined } : m
+      m.queueId === queueId ? { ...m, status: 'pending' as const, failedError: undefined } : m
     ));
 
     buildImageRefsPayload(failedMsg.images)
       .then((imagePayload) => wsClient.sendRpc<{ messageId: string; dedupText?: string }>(
         'session:send',
-        { sessionId, message: failedMsg.text, ...imagePayload },
+        { sessionId, message: failedMsg.text, retryOf: queueId, ...imagePayload },
       ))
       .then((res) => {
         if (res?.messageId) {
           setOptimisticMsgs((prev) => prev.map((m) =>
-            m.queueId === newTempId
+            m.queueId === queueId
               ? { ...m, queueId: res.messageId, status: 'received' as const, ...(res.dedupText ? { dedupText: res.dedupText } : {}) }
               : m
           ));
@@ -263,7 +273,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         log.error('send', 'Retry failed', { sessionId, error: e.message });
         setSendError(e.message);
         setOptimisticMsgs((prev) => prev.map((m) =>
-          m.queueId === newTempId ? { ...m, status: 'failed' as const, failedError: e.message } : m
+          m.queueId === queueId ? { ...m, status: 'failed' as const, failedError: e.message } : m
         ));
       });
   }, []);

@@ -1,15 +1,26 @@
 /**
- * E2E: a streaming session corrects a stale AWAIT_HUMAN_ACTION.
+ * E2E: the session:streaming phase trigger is RETIRED — streaming never moves
+ * the task phase. (WAIT removed 2026-08-18.)
  *
- * Bug 3 (2026-06-14 investigation): a transient/late session:error flipped a
- * task to AWAIT_HUMAN_ACTION while the session had actually recovered (remote
- * CLI exited cleanly at a turn boundary → --resume recovered it). The task
- * then showed "awaiting human" while the session was visibly streaming.
+ * WHAT THIS FILE USED TO PIN (Bug 3, 2026-06-14 investigation): a transient/late
+ * session:error flipped a task to WAIT while the session had actually recovered
+ * (remote CLI exited cleanly at a turn boundary → --resume recovered it). The
+ * task then showed "awaiting human" while the session was visibly streaming, so
+ * server.ts applied a 'session:streaming' trigger on status-changed{running} and
+ * on text-delta to pull WAIT back to IN_PROGRESS.
  *
- * Fix: when server.ts receives session:status-changed{process_status:running}
- * for a task stuck in AWAIT_HUMAN_ACTION, it applies the 'session:streaming'
- * phase trigger which corrects it back to IN_PROGRESS — but ONLY for
- * AWAIT_HUMAN_ACTION (terminal / other phases untouched).
+ * WHY THE PREMISE IS GONE: WAIT was removed on 2026-08-18 (a blocked/parked task
+ * is just TODO). session:error now lands on AGENT_COMPLETE, and a newly-running
+ * turn is already pulled back to IN_PROGRESS by session:turn-start — the CLI's own
+ * turn-start signal, which is authoritative where a delta was only circumstantial.
+ * sessionStreamingPhase() is therefore an unconditional no-op, kept parseable so a
+ * replayed event from an old server doesn't crash.
+ *
+ * SO THE FILE NOW PINS THE RETIREMENT: both streaming signals still reach the
+ * server bus handlers (the emit sites and enforceStreamingPhase are untouched, and
+ * enforceStreamingPhase still owns the 'error' record self-heal of incident
+ * 10e7df54), but NO phase write comes out the other side, for ANY phase. If
+ * someone re-points session:streaming at a real phase, these fail.
  *
  * This drives the REAL server bus handler (not the phase pure-function) by
  * emitting on the shared bus singleton and asserting via REST.
@@ -66,8 +77,8 @@ async function emitRunning(sessionId: string, taskId: string): Promise<void> {
 
 /** Emit a text-delta exactly like claude-code-session does for streaming text.
  *  Critically: NO accompanying status-changed{running} — a pure-text turn never
- *  emits emitStatusChanged('IN_PROGRESS'), which is why the discrete-status fix
- *  alone missed this path. */
+ *  emits emitStatusChanged('IN_PROGRESS'), which is why the old discrete-status fix
+ *  needed this second path at all. */
 async function emitTextDelta(sessionId: string, taskId: string): Promise<void> {
   const { bus, EventNames } = await import('../../src/core/event-bus.js');
   bus.emit(EventNames.SESSION_TEXT_DELTA, {
@@ -89,18 +100,29 @@ afterAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
-describe('streaming session corrects stale AWAIT_HUMAN_ACTION', () => {
-  it('AWAIT_HUMAN_ACTION → IN_PROGRESS when the session streams again', async () => {
-    const task = await createTask('streaming-corrects-await');
+describe('status-changed{running}: session:streaming writes no phase', () => {
+  // AGENT_COMPLETE is the interesting one: it is where session:error lands now,
+  // i.e. exactly the "stale red row while the session streams" shape the old
+  // trigger was built for. Proving it stays put proves the retirement — the
+  // pullback is session:turn-start's job (a real CLI turn-start signal), not a delta's.
+  it('leaves AGENT_COMPLETE alone (the old error-repaint shape)', async () => {
+    const task = await createTask('streaming-leaves-agent-complete');
     const taskId = task.id as string;
-    await patchTask(taskId, { phase: 'AWAIT_HUMAN_ACTION' });
-    expect((await fetchTask(taskId)).phase).toBe('AWAIT_HUMAN_ACTION');
+    await patchTask(taskId, { phase: 'AGENT_COMPLETE' });
 
-    await emitRunning('sess-await-1', taskId);
+    await emitRunning('sess-ac-1', taskId);
 
-    const fetched = await fetchTask(taskId);
-    expect(fetched.phase).toBe('IN_PROGRESS');
-    expect(fetched.status).toBe('in_progress');
+    expect((await fetchTask(taskId)).phase).toBe('AGENT_COMPLETE');
+  });
+
+  it('leaves TODO alone (where retired WAIT rows migrated to)', async () => {
+    const task = await createTask('streaming-leaves-todo');
+    const taskId = task.id as string;
+    await patchTask(taskId, { phase: 'TODO' });
+
+    await emitRunning('sess-todo-1', taskId);
+
+    expect((await fetchTask(taskId)).phase).toBe('TODO');
   });
 
   it('does NOT disturb a COMPLETE task (terminal phase stays put)', async () => {
@@ -112,34 +134,31 @@ describe('streaming session corrects stale AWAIT_HUMAN_ACTION', () => {
 
     expect((await fetchTask(taskId)).phase).toBe('COMPLETE');
   });
+});
 
-  it('does NOT disturb an AGENT_COMPLETE task (only await is corrected)', async () => {
-    const task = await createTask('streaming-leaves-agent-complete');
+// The path the old discrete-status fix missed: a PURE-TEXT streaming turn
+// (text-delta with NO status-changed{running}). It still reaches
+// enforceStreamingPhase — that function keeps its replay guard and its 'error'
+// record self-heal — but the phase trigger it ends on is now a no-op.
+describe('text-delta alone: session:streaming writes no phase', () => {
+  it('leaves AGENT_COMPLETE alone on text-delta', async () => {
+    const task = await createTask('text-delta-leaves-agent-complete');
     const taskId = task.id as string;
     await patchTask(taskId, { phase: 'AGENT_COMPLETE' });
 
-    await emitRunning('sess-ac-1', taskId);
+    await emitTextDelta('sess-delta-3', taskId);
 
     expect((await fetchTask(taskId)).phase).toBe('AGENT_COMPLETE');
   });
-});
 
-// The decisive regression coverage: a PURE-TEXT streaming turn (text-delta with
-// NO status-changed{running}) must still correct a stale AWAIT_HUMAN_ACTION.
-// This is exactly the path the discrete status-changed fix missed — the agent
-// visibly streams text while the task stays stuck "awaiting human".
-describe('text-delta alone corrects stale AWAIT_HUMAN_ACTION', () => {
-  it('AWAIT_HUMAN_ACTION → IN_PROGRESS on text-delta (no status-changed)', async () => {
-    const task = await createTask('text-delta-corrects-await');
+  it('leaves TODO alone on text-delta', async () => {
+    const task = await createTask('text-delta-leaves-todo');
     const taskId = task.id as string;
-    await patchTask(taskId, { phase: 'AWAIT_HUMAN_ACTION' });
-    expect((await fetchTask(taskId)).phase).toBe('AWAIT_HUMAN_ACTION');
+    await patchTask(taskId, { phase: 'TODO' });
 
-    await emitTextDelta('sess-delta-1', taskId);
+    await emitTextDelta('sess-delta-4', taskId);
 
-    const fetched = await fetchTask(taskId);
-    expect(fetched.phase).toBe('IN_PROGRESS');
-    expect(fetched.status).toBe('in_progress');
+    expect((await fetchTask(taskId)).phase).toBe('TODO');
   });
 
   it('does NOT disturb a COMPLETE task on text-delta (terminal stays put)', async () => {
@@ -151,16 +170,6 @@ describe('text-delta alone corrects stale AWAIT_HUMAN_ACTION', () => {
 
     expect((await fetchTask(taskId)).phase).toBe('COMPLETE');
   });
-
-  it('does NOT disturb an AGENT_COMPLETE task on text-delta', async () => {
-    const task = await createTask('text-delta-leaves-agent-complete');
-    const taskId = task.id as string;
-    await patchTask(taskId, { phase: 'AGENT_COMPLETE' });
-
-    await emitTextDelta('sess-delta-3', taskId);
-
-    expect((await fetchTask(taskId)).phase).toBe('AGENT_COMPLETE');
-  });
 });
 
 // Fix C2 (incident 10e7df54): a REPLAYED delta must never raise the phase.
@@ -168,10 +177,13 @@ describe('text-delta alone corrects stale AWAIT_HUMAN_ACTION', () => {
 // so a daemon-replayed text-delta passes upstream dedup and reaches
 // enforceStreamingPhase looking like live output. The tell is the persisted
 // session record: live output always rides a record flipped 'running' at send
-// time, so a non-running record means replay noise — the guard must skip the
-// raise. The tests above cover sessions with NO record (record==null passes
-// through); these cover the record-present branches on both sides of the guard.
-describe('replayed delta (record not running) must not raise AWAIT_HUMAN_ACTION', () => {
+// time, so a non-running record means replay noise.
+//
+// Since the trigger's retirement (2026-08-18) NEITHER branch can write a phase,
+// which is a strictly stronger guarantee than the guard gave. Both sides of the
+// guard are still exercised here so a future re-wiring of session:streaming can't
+// silently reintroduce the raise on either path.
+describe('replayed vs live delta: neither raises the phase any more', () => {
   async function seedSessionRecord(
     sessionId: string, taskId: string, processStatus: 'idle' | 'running',
   ): Promise<void> {
@@ -182,28 +194,27 @@ describe('replayed delta (record not running) must not raise AWAIT_HUMAN_ACTION'
     }
   }
 
-  it('record idle (replay): AWAIT_HUMAN_ACTION stays put on text-delta', async () => {
-    const task = await createTask('replay-delta-leaves-await');
+  it('record idle (replay): phase stays put on text-delta', async () => {
+    const task = await createTask('replay-delta-leaves-phase');
     const taskId = task.id as string;
-    await patchTask(taskId, { phase: 'AWAIT_HUMAN_ACTION' });
+    await patchTask(taskId, { phase: 'AGENT_COMPLETE' });
     await seedSessionRecord('sess-replay-idle-1', taskId, 'idle');
 
     await emitTextDelta('sess-replay-idle-1', taskId);
 
-    // REVERT CHECK: without the guard, the delta raises AWAIT → IN_PROGRESS here.
-    expect((await fetchTask(taskId)).phase).toBe('AWAIT_HUMAN_ACTION');
+    expect((await fetchTask(taskId)).phase).toBe('AGENT_COMPLETE');
   });
 
-  it('record running (live): AWAIT_HUMAN_ACTION → IN_PROGRESS still works', async () => {
-    const task = await createTask('live-delta-corrects-await');
+  it('record running (live): phase ALSO stays put (the retirement)', async () => {
+    // REVERT CHECK: before 2026-08-18 this branch was the one that DID raise —
+    // the assertion below is what flips if session:streaming is re-armed.
+    const task = await createTask('live-delta-leaves-phase');
     const taskId = task.id as string;
-    await patchTask(taskId, { phase: 'AWAIT_HUMAN_ACTION' });
+    await patchTask(taskId, { phase: 'AGENT_COMPLETE' });
     await seedSessionRecord('sess-live-running-1', taskId, 'running');
 
     await emitTextDelta('sess-live-running-1', taskId);
 
-    const fetched = await fetchTask(taskId);
-    expect(fetched.phase).toBe('IN_PROGRESS');
-    expect(fetched.status).toBe('in_progress');
+    expect((await fetchTask(taskId)).phase).toBe('AGENT_COMPLETE');
   });
 });

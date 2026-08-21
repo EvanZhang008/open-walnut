@@ -754,20 +754,12 @@ export async function runTriage(p: OnTurnCompletePayload): Promise<void> {
       });
     }
 
-    // (c) Phase sync — deterministic, replaces the triage subagent's Step 3 AND the
-    // server's old post-triage fallback (which ran after EVERY triage result). The
-    // session has been quiet for the debounce window and the turn is over, so the
-    // ball is in the human's court: AGENT_COMPLETE → AWAIT_HUMAN_ACTION
-    // (which keeps the task unread). applySessionPhase's 'triage-sync' only fires from
-    // AGENT_COMPLETE, so an in-progress or human-verified task is never touched.
-    try {
-      const { applySessionPhase } = await import('../phase.js');
-      await applySessionPhase(taskId, 'triage-sync', 'turn-complete-summary', { sessionId: p.sessionId });
-    } catch (err) {
-      log.session.warn('turn-complete-summary: phase sync failed', {
-        taskId: p.taskId, error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    // (c) Phase sync: RETIRED 2026-08-17 (inc-1786983019552). This used to push
+    // AGENT_COMPLETE → WAIT after the debounce, which repainted every normally
+    // finished turn as "waiting on a human" minutes later — zero added signal
+    // (both states are red+unread) and it diluted WAIT, now reserved for genuine
+    // blockage (session:error / idle-timeout kill / all-dead reconcile). The
+    // result's own session:result → AGENT_COMPLETE flip is the terminal state.
 
     const notifyMessage = decideNotify(selfReport, dedupKey);
     if (notifyMessage) {

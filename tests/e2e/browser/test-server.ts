@@ -28,6 +28,8 @@ process.env.WALNUT_DISABLE_SEARCH = '1'
 // fixture — the host's real ~/.aws would make quick-start POSTs hit live
 // Bedrock and move tasks mid-assertion. See backgroundAiDisabled().
 process.env.WALNUT_DISABLE_BACKGROUND_AI = '1'
+process.env.MOCK_ACP_LOAD_DELAY_MS = '10000'
+process.env.MOCK_ACP_LOAD_DELAY_SESSION_ID = 'pw-codex-cold-detail-session'
 // Keep host discovery, Claude history, credentials, and child processes inside
 // the fixture. Inheriting the developer's HOME makes browser tests probe real
 // SSH aliases and can even project unrelated ~/.claude journals.
@@ -129,6 +131,29 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        id: 'pw-task-question-recovery',
+        title: 'Question recovery fixture',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'immediate',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-question-recovery-session'],
+        active_session_ids: ['pw-question-recovery-session'],
+        session_id: 'pw-question-recovery-session',
+        session_status: {
+          process_status: 'running',
+          mode: 'bypass',
+          pendingPermissionTool: 'AskUserQuestion',
+        },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         id: 'pw-task-vscode',
         title: 'Editor fixture task',
         status: 'in_progress',
@@ -159,6 +184,25 @@ await fs.writeFile(
         active_session_ids: [],
         session_id: 'pw-codex-customer-session',
         session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        id: 'pw-task-codex-cold-detail',
+        title: 'Durable Codex cold title',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'immediate',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-codex-cold-detail-session'],
+        active_session_ids: ['pw-codex-cold-detail-session'],
+        session_id: 'pw-codex-cold-detail-session',
+        session_status: { process_status: 'idle', mode: 'default' },
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         description: '',
@@ -511,7 +555,9 @@ await fs.writeFile(
         id: 'pw-tq-other-project-stale',
         title: 'tq other project stale',
         status: 'todo',
-        phase: 'AWAIT_HUMAN_ACTION',
+        // (WAIT removed 2026-08-18 — TODO matches this row's status anyway; the
+        // filters under test key off project / priority / updated_at, not phase.)
+        phase: 'TODO',
         priority: 'backlog',
         project: 'Meadow',
         source: 'local',
@@ -535,9 +581,11 @@ await fs.writeFile(planPlanFile, '# Test Plan\n\nStep 1: Do the thing\nStep 2: V
 const codexModeRuntimeId = 'pw-mode-runtime'
 const codexCustomerRuntimeId = 'pw-customer-runtime'
 const codexOrderRuntimeId = 'pw-order-runtime'
+const codexColdDetailRuntimeId = 'pw-cold-detail-runtime'
 const codexModeJournalPath = path.join(tmpBase, 'daemon-streams', `${codexModeRuntimeId}.acp.jsonl`)
 const codexCustomerJournalPath = path.join(tmpBase, 'daemon-streams', `${codexCustomerRuntimeId}.acp.jsonl`)
 const codexOrderJournalPath = path.join(tmpBase, 'daemon-streams', `${codexOrderRuntimeId}.acp.jsonl`)
+const codexColdDetailJournalPath = path.join(tmpBase, 'daemon-streams', `${codexColdDetailRuntimeId}.acp.jsonl`)
 await fs.mkdir(path.dirname(codexModeJournalPath), { recursive: true })
 const codexJournal = [
   {
@@ -612,6 +660,7 @@ await Promise.all([
   fs.writeFile(codexModeJournalPath, seededCodexJournal),
   fs.writeFile(codexCustomerJournalPath, seededCodexJournal),
   fs.writeFile(codexOrderJournalPath, ''),
+  fs.writeFile(codexColdDetailJournalPath, seededCodexJournal),
 ])
 const sessionFixtureNow = Date.now()
 const vscodeFixtureRoot = path.join(tmpBase, 'projects', 'editor-fixture')
@@ -899,6 +948,40 @@ await fs.writeFile(
         title: 'Normal: fix the bug',
       },
       {
+        claudeSessionId: 'pw-question-recovery-session',
+        taskId: 'pw-task-question-recovery',
+        project: 'Walnut',
+        process_status: 'running',
+        mode: 'bypass',
+        // User-visible, but intentionally processless: startup reconciliation
+        // only checks interactive sessions, and health scans skip SDK records.
+        provider: 'sdk',
+        type: 'subagent',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 180_000).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 1,
+        cwd: process.cwd(),
+        title: 'Pending question recovery',
+        pendingPermission: {
+          requestId: 'req-question-recovery',
+          toolName: 'AskUserQuestion',
+          input: {
+            questions: [{
+              header: 'Target',
+              question: 'Which deployment?',
+              options: [
+                { label: 'Staging', description: 'Deploy to staging' },
+                { label: 'Production', description: 'Deploy to production' },
+              ],
+              multiSelect: false,
+            }],
+          },
+          reason: 'Need a deployment target',
+          receivedAt: new Date().toISOString(),
+        },
+      },
+      {
         claudeSessionId: '2532066a-e210-4702-be34-ed01008adbde',
         project: 'URL Restoration',
         process_status: 'stopped',
@@ -978,6 +1061,29 @@ await fs.writeFile(
         engine: 'codex',
         acpRuntimeId: codexCustomerRuntimeId,
         acpJournalPath: codexCustomerJournalPath,
+        acpCapabilities: {
+          loadSession: true,
+          listSessions: true,
+          closeSession: true,
+          forkSession: false,
+          promptImages: true,
+        },
+      },
+      {
+        claudeSessionId: 'pw-codex-cold-detail-session',
+        taskId: 'pw-task-codex-cold-detail',
+        project: 'Walnut',
+        process_status: 'idle',
+        mode: 'default',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 60_000).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 2,
+        cwd: process.cwd(),
+        title: 'Durable Codex cold title',
+        engine: 'codex',
+        acpRuntimeId: codexColdDetailRuntimeId,
+        acpJournalPath: codexColdDetailJournalPath,
         acpCapabilities: {
           loadSession: true,
           listSessions: true,

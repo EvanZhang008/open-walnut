@@ -207,14 +207,31 @@ describe('walnut mcp — task write path', () => {
     }
   })
 
-  it('does not advertise or execute human-only task completion', async () => {
+  // Replaces the b7e23c32 test that asserted task_complete was hidden as
+  // "human-only". That gate is deleted — completion is an ordinary op again, so
+  // what needs pinning is that it is advertised AND really flips the row.
+  it('task_complete is advertised, marks the task done, and returns a <task-ref/>', async () => {
     const { client, close } = await connect()
     try {
       const names = (await client.listTools()).tools.map((tool) => tool.name)
-      expect(names).not.toContain('task_complete')
-      const refused = await client.callTool({ name: 'task_complete', arguments: { id: 'x' } })
-      expect(refused.isError).toBe(true)
-      expect(textOf(refused)).toMatch(/task_complete not found/)
+      expect(names).toContain('task_complete')
+
+      const created = jsonOf(await client.callTool({
+        name: 'task_create',
+        arguments: { title: 'Complete me from MCP' },
+      }))
+      const id = (created.task as { id: string }).id
+
+      const completed = await client.callTool({ name: 'task_complete', arguments: { id } })
+      expect(completed.isError).toBeFalsy()
+      const payload = jsonOf(completed)
+      expect(payload.completed).toBe(true)
+      expect(payload.ref).toBe(`<task-ref id="${id}" label="Complete me from MCP"/>`)
+
+      const res = await fetch(`http://127.0.0.1:${port}/api/v1/tasks/${id}`)
+      const detail = await res.json() as { task: { phase: string; status: string } }
+      expect(detail.task.phase).toBe('COMPLETE')
+      expect(detail.task.status).toBe('done')
     } finally {
       await close()
     }

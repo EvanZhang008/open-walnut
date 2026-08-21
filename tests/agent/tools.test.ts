@@ -17,6 +17,7 @@ import {
 import { closeDb as closeTaskDb } from '../../src/core/task-db.js';
 import { closeDb as closeSessionDb } from '../../src/core/session-db.js';
 import { getOp, opInputJsonSchema } from '../../src/ops/index.js';
+import { PHASE_ORDER } from '../../src/core/phase.js';
 
 /** Pre-create a project via the agent tool (task_create also auto-creates by name). */
 async function ensureProject(name: string, source = 'local') {
@@ -491,14 +492,30 @@ describe('task tools', () => {
     expect(task.status).toBe('in_progress');
   });
 
-  it('update_task rejects human-owned lifecycle phases', async () => {
-    const addResult = await executeTool('task_create', { title: 'Human phase guard' });
+  // The human-vs-AI phase gate is deleted: every phase in PHASE_ORDER is
+  // writable by the agent, COMPLETE included. The old test asserted the
+  // opposite ("Agents may set … only") and is intentionally gone.
+  it('update_task accepts every phase, COMPLETE included', async () => {
+    const addResult = await executeTool('task_create', { title: 'Any phase' });
     const idMatch = addResult.match(/id="([^"]+)"/);
 
-    for (const phase of ['HUMAN_VERIFIED', 'POST_WORK_COMPLETED', 'COMPLETE']) {
+    for (const phase of PHASE_ORDER) {
       const result = await executeTool('task_update', { id: idMatch![1], phase });
-      expect(result).toContain('Agents may set TODO, IN_PROGRESS, AGENT_COMPLETE, or AWAIT_HUMAN_ACTION only');
+      expect(result, `phase ${phase} was rejected`).toContain('Task updated:');
+      const task = JSON.parse(await executeTool('task_get', { id: idMatch![1] }));
+      expect(task.phase).toBe(phase);
     }
+    // COMPLETE really landed as the terminal phase, not just echoed back.
+    const finalTask = JSON.parse(await executeTool('task_get', { id: idMatch![1] }));
+    expect(finalTask.phase).toBe('COMPLETE');
+    expect(finalTask.status).toBe('done');
+  });
+
+  it('task_update advertises the phase enum straight from PHASE_ORDER', () => {
+    const schema = tools.find((t) => t.name === 'task_update')!.input_schema as {
+      properties: Record<string, { enum?: string[] }>;
+    };
+    expect(schema.properties.phase.enum).toEqual([...PHASE_ORDER]);
   });
 
   it('update_task modifies task fields', async () => {

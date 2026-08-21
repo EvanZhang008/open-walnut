@@ -551,6 +551,33 @@ describe('parseMsTodoBody', () => {
     expect(result.note).toBe('Some description');
   });
 
+  // A body sitting on the MS server was written by whatever Walnut version last
+  // pushed it, so retired phase names outlive the local SQLite migration. Dropping
+  // the header would reset the task to whatever the MS status implies.
+  it('folds a legacy Phase: header through migratePhase instead of dropping it', () => {
+    expect(parseMsTodoBody('Phase: HUMAN_VERIFIED\n\nReviewed task').phase).toBe('AGENT_COMPLETE');
+    expect(parseMsTodoBody('Phase: POST_WORK_COMPLETED\n\nShipped task').phase).toBe('AGENT_COMPLETE');
+  });
+
+  // (WAIT removed 2026-08-18) — WAIT and its ancestors now migrate to TODO, and
+  // the parser's guard (`migrated !== 'TODO' || value === 'TODO'`) deliberately
+  // treats a non-literal TODO fold as "not a phase I recognise". So these headers
+  // leave phase undefined and the task falls back to phaseFromMsStatus — the MS
+  // server's own status, which is the fresher signal for a parked task anyway.
+  it('a retired blocked-phase header falls back to the MS status (folds to TODO → not claimed)', () => {
+    expect(parseMsTodoBody('Phase: WAIT\n\nBlocked task').phase).toBeUndefined();
+    expect(parseMsTodoBody('Phase: AWAIT_HUMAN_ACTION\n\nBlocked task').phase).toBeUndefined();
+    expect(parseMsTodoBody('Phase: HUMAN_VERIFICATION\n\nBlocked task').phase).toBeUndefined();
+    // A literal TODO header IS still honored — that's what the `value === 'TODO'` half is for.
+    expect(parseMsTodoBody('Phase: TODO\n\nPlain task').phase).toBe('TODO');
+  });
+
+  it('leaves phase undefined for a junk Phase: value', () => {
+    // Falls through to phaseFromMsStatus rather than silently claiming TODO.
+    expect(parseMsTodoBody('Phase: NOT_A_PHASE\n\nSome task').phase).toBeUndefined();
+    expect(parseMsTodoBody('Phase: TODO\n\nSome task').phase).toBe('TODO');
+  });
+
   it('returns no parent_task_id when not present', () => {
     const body = 'Phase: TODO\n\nJust a task';
     const result = parseMsTodoBody(body);

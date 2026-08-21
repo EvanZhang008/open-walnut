@@ -14,6 +14,7 @@
 import type { Request, Response, NextFunction } from 'express'
 import crypto from 'node:crypto'
 import { log } from '../../logging/index.js'
+import { observe } from '../../core/observability/metrics.js'
 
 // Extend Express Request to carry the request ID
 declare global {
@@ -29,6 +30,16 @@ const SKIP_PATHS = new Set([
   '/api/heartbeat',
   '/api/heartbeat/',
 ])
+
+/**
+ * A path segment that is an identifier, not part of the route template:
+ * UUIDs, hex ids, walnut ids like `ms4utt4g-1bc6`, numeric ids. Heuristic:
+ * pure number, or ≥8 chars containing ≥2 digits. Route WORDS with a version
+ * suffix (`notes-v2`, `search-memory-v1`) have only ONE digit and stay intact;
+ * real ids always carry several. Errs toward collapsing — one id per request
+ * minting a new metric series is the failure mode this guards against.
+ */
+const ID_SEGMENT_RE = /^(?=(?:.*\d){2}).{8,}$|^\d+$/
 
 /** Paths that are polled frequently — log at debug level instead of info. */
 const QUIET_PREFIXES = [
@@ -108,6 +119,24 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
     }
 
     const line = `${method} ${url} → ${status} (${duration}ms)`
+
+    // Metric: one histogram per route TEMPLATE. Raw paths carry ids (UUIDs,
+    // task ids, session ids) which would explode label cardinality — replace
+    // any id-looking segment with ':id' before truncating to three segments.
+    // NB: derived from originalUrl, NOT req.path — inside res.on('finish') the
+    // router has already rewritten req.path (mount-prefix stripping), which
+    // produced garbage labels like '/:id/history' with no subsystem segment.
+    const fullPath = url.split('?')[0]
+    const routeGroup = fullPath
+      .split('/')
+      .map((seg) => (ID_SEGMENT_RE.test(seg) ? ':id' : seg))
+      .slice(0, 4) // '', 'api', '<subsystem>', '<action-or-:id>'
+      .join('/') || fullPath
+    observe('http.request', duration, {
+      route: routeGroup,
+      method,
+      status: String(Math.floor(status / 100) * 100), // 200/300/400/500 buckets
+    })
 
     if (status >= 500) {
       log.web.error(line, meta)

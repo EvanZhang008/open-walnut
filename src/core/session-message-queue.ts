@@ -423,6 +423,30 @@ export async function getQueue(sessionId: string): Promise<QueuedMessage[]> {
 }
 
 /**
+ * Is this message id STILL IN THE QUEUE for the session (any status)?
+ *
+ * Retry-after-delivery-failure guard (inc-1786774073558). A failed --resume spawn
+ * calls revertToPending(), so the message stays in the queue as 'pending' AND the
+ * UI is told the batch failed. The user's Retry then enqueued a SECOND copy of the
+ * same text, and the next batch combined both into one payload joined by '\n\n' —
+ * the CLI literally received the user's words twice (canonical enqueue line held
+ * two identical halves). A retry must re-DRAIN the surviving row, never add one.
+ *
+ * 'processing' counts as queued too: delivery is in flight and hasn't settled
+ * (every delivery point removes the row EAGERLY, so a surviving 'processing' row
+ * means no delivery happened yet). Enqueueing beside it would re-open the same
+ * doubling window one step later — if that in-flight batch also fails,
+ * revertToPending restores the original next to the copy. Only a row that is
+ * fully GONE justifies a fresh enqueue.
+ */
+export async function isMessageQueued(sessionId: string, messageId: string): Promise<boolean> {
+  const s = await getStore();
+  const queue = s.queues[sessionId];
+  if (!queue) return false;
+  return queue.some((m) => m.id === messageId);
+}
+
+/**
  * Get all session IDs that have pending messages (for startup recovery).
  */
 export async function getAllSessionsWithPending(): Promise<string[]> {

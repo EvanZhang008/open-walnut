@@ -20,6 +20,8 @@ import {
   backfillToolResult,
   findToolCall,
   appendSystemBlock,
+  appendPermissionBlock,
+  resolvePermissionBlock,
   lastMainLaneText,
   type StreamingBlock,
   type StreamingPermissionBlock,
@@ -48,6 +50,14 @@ interface UseSessionStreamReturn {
   blocks: StreamingBlock[];
   /** Whether there's an active stream running */
   isStreaming: boolean;
+  /** Turn boundary: blocks[0..completedLen) belong to FINISHED turns. The
+   *  render filter needs it so its live-tail guard never protects a previous
+   *  turn's retained final block (inc-1786664172811: resubscribe-after-send
+   *  adopts the old-turn snapshot with isStreaming already true → the old
+   *  ending message double-rendered under the new bubble). Every mutation of
+   *  this value is accompanied by a setBlocks/setIsStreaming in the same
+   *  commit, so reading it at render time is always fresh. */
+  completedLen: number;
   /** Memory reclamation: full reset iff EVERY block is hidden (absorbed by
    *  history) and no turn is live. All-or-nothing keeps indices stable — no
    *  partial deletion, no anchor shifting, no ordering sensitivity. The caller
@@ -142,6 +152,9 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     // Session switch OR reconnect: the server buffer may be a new generation —
     // forget the adopted seq so the next snapshot falls back to legacy rules.
     lastAdoptedSeq.current = null;
+    // TTFT markers are per-session-per-turn; a switch invalidates both.
+    sawFirstTextDelta.current = false;
+    sawFirstTextFlush.current = false;
 
     // Always subscribe to get server snapshot for correction (background).
     //
@@ -162,6 +175,10 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
         if (activeSessionId.current !== sessionId) return;
         if (!snapshot) return;
         log.info('stream', `subscribe snapshot: blocks=${snapshot.blocks.length} isStreaming=${snapshot.isStreaming}`, { sessionId });
+        // Snapshot's own boundary, computed BEFORE the deferred updater runs
+        // (see doResubscribe for why reading the ref synchronously is wrong).
+        const snapCompletedLen = snapshot.completedLen
+          ?? (snapshot.isStreaming ? 0 : snapshot.blocks.length);
         let appliedBlocks = false;
         setBlocks((prev) => {
           // Adoption rules live in shouldAdoptSnapshot (pure, unit-tested) —
@@ -181,13 +198,16 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
           if (snapshot.seq != null) lastAdoptedSeq.current = snapshot.seq;
           // Server-authoritative boundary when present (see StreamSnapshot doc);
           // legacy fallback: finished turn → all completed, live turn → none.
-          completedLen.current = snapshot.completedLen
-            ?? (snapshot.isStreaming ? 0 : snapshot.blocks.length);
+          completedLen.current = snapCompletedLen;
           return snapshot.blocks;
         });
         setIsStreaming((prev) => (snapshot.isStreaming && !prev) ? true : prev);
         if (appliedBlocks) {
-          const lastText = lastMainLaneText(snapshot.blocks);
+          // Seed ONLY from the live turn (index >= completedLen). Seeding from a
+          // finished turn's final text made the next turn's first delta append to
+          // the OLD answer (inc-1786678797966: one block rendering
+          // "<whole previous answer><new answer>").
+          const lastText = lastMainLaneText(snapshot.blocks, snapCompletedLen);
           streamBuffer.current = lastText ? lastText.content : '';
           // Seed global cache with server snapshot for correction
           initStreamState(sessionId, snapshot.blocks, snapshot.isStreaming, snapshot.completedLen);
@@ -253,12 +273,18 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
         resubscribePending.current = false;
         if (activeSessionId.current !== sid) return;
         if (snapshot) {
+          // Snapshot's own boundary, computed BEFORE the updater runs: React
+          // defers setBlocks callbacks, so anything reading completedLen.current
+          // synchronously below would otherwise see the PREVIOUS turn's value.
+          const snapCompletedLen = snapshot.completedLen
+            ?? (snapshot.isStreaming ? 0 : snapshot.blocks.length);
           // Only apply snapshot if we don't already have streaming data
           // (avoid clobbering blocks from incremental events that arrived in between)
+          let adopted = false;
           setBlocks((prev) => {
             if (prev.length > 0) return prev;
-            completedLen.current = snapshot.completedLen
-              ?? (snapshot.isStreaming ? 0 : snapshot.blocks.length);
+            adopted = true;
+            completedLen.current = snapCompletedLen;
             if (snapshot.seq != null) lastAdoptedSeq.current = snapshot.seq;
             return snapshot.blocks;
           });
@@ -278,8 +304,14 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
             }
             return prev;
           });
-          const lastText = lastMainLaneText(snapshot.blocks);
-          if (lastText) streamBuffer.current = lastText.content;
+          // Live-turn blocks only — see the seeding note in the subscribe effect.
+          // Skipped when the snapshot was NOT adopted: local blocks (and their
+          // accumulator) are newer, so overwriting the buffer here would drop
+          // in-flight text.
+          if (adopted) {
+            const lastText = lastMainLaneText(snapshot.blocks, snapCompletedLen);
+            streamBuffer.current = lastText ? lastText.content : '';
+          }
         }
       })
       .catch(() => {
@@ -309,6 +341,17 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
   // Handle text deltas — coalesced on a timer (see TEXT_FLUSH_INTERVAL_MS below).
   // Historic name kept (textDeltaRaf) — it used to be a rAF handle; now a timeout id.
   const textDeltaRaf = useRef<number | null>(null);
+  // ── TTFT forensics (inc-1786665503510 "text renders only at the very end") ──
+  // Per-turn one-shot markers: arrival of the FIRST main-lane text delta over
+  // the WS, and the FIRST flush of text into React state (≈ first paint).
+  // Together with the server's "first text emit of turn" line they attribute a
+  // felt stall to a layer: server emitted early + browser arrived late = WS/
+  // event-bus lag; arrived early + flushed late = render-side coalescing bug;
+  // all three late together = the model genuinely produced text late (today's
+  // proven case: Bedrock TTFB + text block last in the turn). Reset on the
+  // false→true isStreaming edge (new turn) and on session switch.
+  const sawFirstTextDelta = useRef(false);
+  const sawFirstTextFlush = useRef(false);
   // msgId of the message currently accumulating in streamBuffer. ACP-dialect
   // boundary rule: when an incoming delta carries a DIFFERENT msgId, the
   // previous message is complete — flush it and start a fresh block. Stamped
@@ -329,6 +372,10 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       const accumulated = streamBuffer.current;
       const msgId = currentTextMsgId.current;
       if (accumulated) {
+        if (!sawFirstTextFlush.current) {
+          sawFirstTextFlush.current = true;
+          log.info('stream', 'first text flush to blocks (sync)', { sessionId: activeSessionId.current });
+        }
         setBlocks((prev) => writeMainText(prev, accumulated, msgId, completedLen.current));
       }
     }
@@ -396,6 +443,13 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       return true;
     });
 
+    // TTFT: first main-lane text delta ARRIVAL at the browser (compare with the
+    // server's "first text emit of turn" line — same sessionId, same clock family).
+    if (!parentToolUseId && !sawFirstTextDelta.current) {
+      sawFirstTextDelta.current = true;
+      log.info('stream', 'first text-delta arrived', { sessionId: sid });
+    }
+
     // Subagent lane: the CLI interleaves inline-subagent text into the middle
     // of the main turn's token stream. It must NEVER touch the main rAF
     // accumulator (that's what split main text mid-token) — append/merge
@@ -429,6 +483,10 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
         textDeltaRaf.current = null;
         const accumulated = streamBuffer.current;
         const accMsgId = currentTextMsgId.current;
+        if (accumulated && !sawFirstTextFlush.current) {
+          sawFirstTextFlush.current = true;
+          log.info('stream', 'first text flush to blocks', { sessionId: activeSessionId.current });
+        }
         setBlocks((prev) => writeMainText(prev, accumulated, accMsgId, completedLen.current));
       }, TEXT_FLUSH_INTERVAL_MS);
     }
@@ -566,12 +624,10 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     // the extra flush on a duplicate re-emit is harmless (it's a no-op between
     // text deltas of a blocked turn).
     flushPendingTextRaf();
-    setBlocks(prev => {
-      const already = prev.some(b => b.type === 'permission' && b.requestId === requestId);
-      if (already) return prev;
-      streamBuffer.current = '';
-      return [...prev, { type: 'permission', requestId, toolName, input, reason, acpOptions }];
-    });
+    setBlocks(prev => appendPermissionBlock(prev, {
+      requestId, toolName, input, reason, acpOptions,
+    }));
+    streamBuffer.current = '';
   });
 
   // Handle permission resolved events (update block status from pending → allowed/denied)
@@ -580,11 +636,7 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       sessionId: string; requestId: string; allowed: boolean;
     };
     if (!sessionId || sid !== sessionId) return;
-    setBlocks(prev => prev.map(b =>
-      b.type === 'permission' && b.requestId === requestId
-        ? { ...b, status: allowed ? 'allowed' as const : 'denied' as const }
-        : b,
-    ));
+    setBlocks(prev => resolvePermissionBlock(prev, requestId, allowed));
   });
 
   // Handle session result (streaming done). NOTE: session:batch-completed for
@@ -611,6 +663,9 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
       return prev;
     });
     streamBuffer.current = '';
+    // TTFT markers are per-turn — re-arm for the next turn.
+    sawFirstTextDelta.current = false;
+    sawFirstTextFlush.current = false;
   });
 
   // Handle session error (streaming done with error)
@@ -621,6 +676,9 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     flushPendingTextRaf();
     setIsStreaming(false);
     streamBuffer.current = '';
+    // TTFT markers are per-turn — error ends the turn.
+    sawFirstTextDelta.current = false;
+    sawFirstTextFlush.current = false;
 
     // Show the error inline in the session chat timeline
     if (error) {
@@ -658,5 +716,5 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     return true;
   }, []);
 
-  return { blocks, isStreaming, resetIfAbsorbed };
+  return { blocks, isStreaming, completedLen: completedLen.current, resetIfAbsorbed };
 }

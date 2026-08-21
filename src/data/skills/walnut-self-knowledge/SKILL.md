@@ -32,9 +32,8 @@ Use the current tool schema for exact arguments. This skill explains decisions, 
 
 ## Hand work back
 
-- Use `AGENT_COMPLETE` when agent work is ready for human review.
-- Use `AWAIT_HUMAN_ACTION` when a person must decide, approve, answer, or unblock something.
-- Never set `COMPLETE`. That is the human's final action.
+- Use `AGENT_COMPLETE` when your work is ready for someone to look at.
+- Use `COMPLETE` when the whole task is finished. No phase is reserved for humans.
 
 ## Where to get facts
 

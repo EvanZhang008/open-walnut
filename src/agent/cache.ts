@@ -148,6 +148,16 @@ export function injectMessageCacheMarkers(
  * `system` (before messages in render order) would invalidate the message-history
  * cache every turn instead.
  *
+ * WHY the block itself is never cache-marked (evaluated 2026-08-13, don't redo the
+ * math): prompt caching is positional, and this block must stay OUT of every prefix
+ * the next turn replays (it changes per turn and is never persisted). Anchoring it to
+ * the turn's first user message + a 4th (5m) breakpoint DOES let rounds 2+ read it —
+ * but then every later round's 1h entry bakes the block's bytes into its prefix, so
+ * the NEXT turn (whose history lacks the block) misses everything after the previous
+ * user message and re-writes the previous turn's assistant+tool_results (~33K at 2x
+ * write cost) to save ~11K×1 per extra round. At the measured ~2 rounds/turn that is
+ * clearly not worth it; paying for the block as plain input each round is cheaper.
+ *
  * Call this AFTER injectMessageCacheMarkers so the breakpoint is already on the last
  * real (persisted) message; we then append the ephemeral block past it.
  *

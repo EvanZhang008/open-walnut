@@ -95,6 +95,10 @@ export async function isSessionProcessAlive(session: SessionRecord): Promise<boo
 
   // If the session was already marked stopped (e.g. by health monitor idle timeout),
   // it's definitively dead — no need to probe PIDs or daemon connections.
+  // (Callers who must see through a STALE 'stopped' flag — e.g. the phase
+  // reconciler racing a cold --resume — consult the session-manager registry
+  // themselves; changing the order here would also change the orphan-kill
+  // sweep's target set, which is not safe.)
   if (session.process_status === 'stopped' || session.process_status === 'error') return false
 
   // Prefer the registry — the active SessionManager knows the truth

@@ -48,4 +48,9 @@ describe('/api/keep-awake', () => {
     expect(body.state.holding).toBe(false)
     expect(['disabled', 'unsupported']).toContain(body.state.reason)
   })
+
+  it('does not expose the removed hotspot auto-connect endpoint', async () => {
+    const res = await fetch(`http://localhost:${port}/api/keep-awake/hotspot-candidates`)
+    expect(res.status).toBe(404)
+  })
 })

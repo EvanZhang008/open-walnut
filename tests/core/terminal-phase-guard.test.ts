@@ -24,33 +24,56 @@ afterEach(async () => {
 });
 
 describe('terminal phase guard — updateTask', () => {
-  it('blocks agent from overwriting COMPLETE → AWAIT_HUMAN_ACTION', async () => {
+  it('blocks a BACKGROUND source from reopening COMPLETE', async () => {
     const { task } = await addTask({ title: 'Guard test 1' });
 
-    // Set phase to COMPLETE via human source
     await updateTask(task.id, { phase: 'COMPLETE' }, { source: 'api' });
-    const before = (await listTasks()).find(t => t.id === task.id)!;
-    expect(before.phase).toBe('COMPLETE');
+    expect((await listTasks()).find(t => t.id === task.id)!.phase).toBe('COMPLETE');
 
-    // Agent tries to overwrite COMPLETE → AWAIT_HUMAN_ACTION — should be blocked
-    await updateTask(task.id, { phase: 'AWAIT_HUMAN_ACTION' }, { source: 'agent' });
+    // 'internal' is the DEFAULT source — anything that merely passed a phase
+    // along (reconciler, cron, a plugin echo). Nobody asked for this, so a
+    // finished task must not silently reopen.
+    // (WAIT removed 2026-08-18 — was 'WAIT'; TODO is a valid non-terminal
+    // phase, so this still exercises the guard rather than enum validation.)
+    await updateTask(task.id, { phase: 'TODO' }, { source: 'internal' });
     const after = (await listTasks()).find(t => t.id === task.id)!;
     expect(after.phase).toBe('COMPLETE');
     expect(after.status).toBe('done');
   });
 
-  it('blocks agent from overwriting HUMAN_VERIFIED → IN_PROGRESS', async () => {
-    const { task } = await addTask({ title: 'Guard test 2' });
+  it('lets an agent reopen COMPLETE — deliberate is deliberate, human or not', async () => {
+    // The guard used to allow only 'api'/'user', which left an asymmetry: an
+    // agent could SET COMPLETE but not UNSET it, purely because 'agent' wasn't
+    // on the human-only allowlist. The question is whether anyone ASKED, not who.
+    const { task } = await addTask({ title: 'Agent reopens' });
 
-    // Set phase to HUMAN_VERIFIED via human source
-    await updateTask(task.id, { phase: 'HUMAN_VERIFIED' }, { source: 'api' });
-    const before = (await listTasks()).find(t => t.id === task.id)!;
-    expect(before.phase).toBe('HUMAN_VERIFIED');
+    await updateTask(task.id, { phase: 'COMPLETE' }, { source: 'agent' });
+    expect((await listTasks()).find(t => t.id === task.id)!.phase).toBe('COMPLETE');
 
-    // Agent tries to overwrite HUMAN_VERIFIED → IN_PROGRESS — should be blocked
     await updateTask(task.id, { phase: 'IN_PROGRESS' }, { source: 'agent' });
     const after = (await listTasks()).find(t => t.id === task.id)!;
-    expect(after.phase).toBe('HUMAN_VERIFIED');
+    expect(after.phase).toBe('IN_PROGRESS');
+    expect(after.status).toBe('in_progress');
+  });
+
+  // The 5-phase model has no human-vs-agent write gate: an agent may complete a
+  // task outright. COMPLETE stays terminal only against BACKGROUND overwrites.
+  it('allows an agent to set COMPLETE (no human-only completion gate)', async () => {
+    const { task } = await addTask({ title: 'Agent completes' });
+
+    await updateTask(task.id, { phase: 'COMPLETE' }, { source: 'agent' });
+    const after = (await listTasks()).find(t => t.id === task.id)!;
+    expect(after.phase).toBe('COMPLETE');
+    expect(after.status).toBe('done');
+  });
+
+  it('allows an agent to set status=done (legacy status path, no gate)', async () => {
+    const { task } = await addTask({ title: 'Agent status done' });
+
+    await updateTask(task.id, { status: 'done' }, { source: 'agent' });
+    const after = (await listTasks()).find(t => t.id === task.id)!;
+    expect(after.phase).toBe('COMPLETE');
+    expect(after.status).toBe('done');
   });
 
   it('allows human to overwrite COMPLETE → IN_PROGRESS', async () => {
@@ -68,18 +91,10 @@ describe('terminal phase guard — updateTask', () => {
     expect(after.status).toBe('in_progress');
   });
 
-  it('rejects human-owned phases from agent sources', async () => {
-    const { task } = await addTask({ title: 'Guard human phases' });
-
-    for (const phase of ['HUMAN_VERIFIED', 'POST_WORK_COMPLETED', 'COMPLETE'] as const) {
-      await expect(updateTask(task.id, { phase }, { source: 'agent' }))
-        .rejects.toThrow(/Agents may set/);
-    }
-    await expect(updateTask(task.id, { status: 'done' }, { source: 'agent' }))
-      .rejects.toThrow(/Agents cannot set status=done/);
-  });
-
-  it('allows agent to overwrite non-terminal phase AGENT_COMPLETE → AWAIT_HUMAN_ACTION', async () => {
+  // (WAIT removed 2026-08-18 — this pinned AGENT_COMPLETE → WAIT; TODO is the
+  // landing WAIT rows migrated to, and is equally non-terminal, so the guard's
+  // behavior is pinned the same way.)
+  it('allows agent to overwrite non-terminal phase AGENT_COMPLETE → TODO', async () => {
     const { task } = await addTask({ title: 'Guard test 5' });
 
     // Set phase to AGENT_COMPLETE (non-terminal)
@@ -87,10 +102,22 @@ describe('terminal phase guard — updateTask', () => {
     const before = (await listTasks()).find(t => t.id === task.id)!;
     expect(before.phase).toBe('AGENT_COMPLETE');
 
-    // Agent changes AGENT_COMPLETE → AWAIT_HUMAN_ACTION — should succeed
-    await updateTask(task.id, { phase: 'AWAIT_HUMAN_ACTION' }, { source: 'agent' });
+    // Agent changes AGENT_COMPLETE → TODO — should succeed
+    await updateTask(task.id, { phase: 'TODO' }, { source: 'agent' });
     const after = (await listTasks()).find(t => t.id === task.id)!;
-    expect(after.phase).toBe('AWAIT_HUMAN_ACTION');
+    expect(after.phase).toBe('TODO');
+  });
+
+  // WAIT is no longer in VALID_PHASES (removed 2026-08-18). updateTask's phase
+  // branch is gated on `VALID_PHASES.has(updates.phase)`, so a stale caller's
+  // WAIT is silently IGNORED (no throw, phase untouched) rather than written.
+  it('a stale WAIT write through updateTask is ignored, not applied', async () => {
+    const { task } = await addTask({ title: 'Stale WAIT write' });
+    await updateTask(task.id, { phase: 'AGENT_COMPLETE' }, { source: 'api' });
+
+    await updateTask(task.id, { phase: 'WAIT' as never }, { source: 'agent' });
+    const after = (await listTasks()).find(t => t.id === task.id)!;
+    expect(after.phase).toBe('AGENT_COMPLETE');
   });
 });
 
@@ -104,7 +131,8 @@ describe('terminal phase guard — updateTaskRaw', () => {
     expect(before.phase).toBe('COMPLETE');
 
     // Sync pull tries to change phase + title — phase should be blocked, title should update
-    await updateTaskRaw(task.id, { phase: 'AWAIT_HUMAN_ACTION', title: 'Updated by sync' } as any);
+    // (WAIT removed 2026-08-18 — was 'WAIT'; TODO is a live non-terminal phase.)
+    await updateTaskRaw(task.id, { phase: 'TODO', title: 'Updated by sync' } as any);
     const after = (await listTasks()).find(t => t.id === task.id)!;
     expect(after.phase).toBe('COMPLETE');
     expect(after.status).toBe('done');

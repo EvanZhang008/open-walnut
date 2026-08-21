@@ -21,8 +21,8 @@ export { resolveApiBase }
  * Read/write tool name sets — derived from the registry now, kept as exports
  * because tests and callers pin the surface through them.
  */
-export const READ_TOOL_NAMES: readonly string[] = opNames({ readonly: true, humanOnly: false })
-export const WRITE_TOOL_NAMES: readonly string[] = opNames({ readonly: false, humanOnly: false })
+export const READ_TOOL_NAMES: readonly string[] = opNames({ readonly: true })
+export const WRITE_TOOL_NAMES: readonly string[] = opNames({ readonly: false })
 
 /** JSON text content — the one result shape every tool returns on success. */
 function ok(payload: unknown): CallToolResult {
@@ -46,7 +46,6 @@ export function registerWalnutTools(
   const base = resolveApiBase(options.apiBase)
 
   for (const op of listOps()) {
-    if (op.tags.humanOnly) continue
     if (options.readonly && !op.tags.readonly) continue
     server.registerTool(op.name, {
       title: op.title,
@@ -67,7 +66,7 @@ export function registerWalnutTools(
       // cost, far cheaper than every op-call spawning a CLI via Bash.
       _meta: { 'anthropic/alwaysLoad': true },
     }, async (args: Record<string, unknown>) => {
-      const r = await executeOp(op.name, args ?? {}, { apiBase: base, caller: 'agent' })
+      const r = await executeOp(op.name, args ?? {}, { apiBase: base })
       return r.ok ? ok(r.result) : fail(r.message)
     })
   }

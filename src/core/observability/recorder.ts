@@ -15,6 +15,7 @@
 
 import { log } from '../../logging/index.js';
 import { evaluateInvariants } from './invariants.js';
+import { observe } from './metrics.js';
 import type { InvariantViolation, TurnEvent } from './types.js';
 
 /**
@@ -56,9 +57,29 @@ export function recordTurn(partial: Omit<TurnEvent, 'ts'> & { ts?: number }): vo
       resultLen: turn.resultLen,
       deliveryMs: turn.deliveryMs,
       deliveryPath: turn.deliveryPath,
+      firstThinkingMs: turn.firstThinkingMs ?? null,
+      firstTextMs: turn.firstTextMs ?? null,
+      firstToolMs: turn.firstToolMs ?? null,
       teamActive: turn.teamActive,
       backgroundActive: turn.backgroundActive,
     });
+
+    // 1b. Metrics — the same numbers as histograms, so p50/p90 turn duration and
+    // delivery latency are queryable without re-aggregating the wide events.
+    if (typeof turn.durationMs === 'number') {
+      observe('session.turn.duration', turn.durationMs, { host: turn.host ?? 'local' });
+    }
+    if (typeof turn.deliveryMs === 'number') {
+      observe('session.delivery', turn.deliveryMs, { path: turn.deliveryPath ?? 'unknown' });
+    }
+    // TTFT histograms — p50/p90 "how long until the user saw anything" per host.
+    // A rising session.first_text with flat session.first_thinking = the model
+    // is producing text later in the turn (or Bedrock TTFB got worse), NOT a
+    // walnut delivery regression.
+    const ttftHost = { host: turn.host ?? 'local' };
+    if (typeof turn.firstThinkingMs === 'number') observe('session.first_thinking', turn.firstThinkingMs, ttftHost);
+    if (typeof turn.firstTextMs === 'number') observe('session.first_text', turn.firstTextMs, ttftHost);
+    if (typeof turn.firstToolMs === 'number') observe('session.first_tool', turn.firstToolMs, ttftHost);
 
     // 2. Invariants — catch "silent success" the moment it happens.
     const violations = evaluateInvariants(turn);

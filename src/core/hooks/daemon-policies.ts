@@ -2,10 +2,16 @@
  * Daemon policy descriptors — pure data, ZERO daemon code.
  *
  * These policies are enforced inside the session daemon (daemon-standalone.ts /
- * daemon-source.ts twins), configured via env AT SPAWN TIME. They appear in the
- * unified hook registry as runtime:'daemon' entries so every intervention
- * Walnut can perform is visible in one place — but the dispatcher never
- * executes them, and toggling one only takes effect after a daemon restart.
+ * daemon-source.ts twins). They appear in the unified hook registry as
+ * runtime:'daemon' entries so every intervention Walnut can perform is visible
+ * in one place — the dispatcher never executes them.
+ *
+ * Two delivery mechanisms, per policy:
+ *  - hooks-v1 push (session-only-cron-policy): compiled from user YAML +
+ *    config sugar by core/hooks/daemon-hooks.ts and pushed hot via the
+ *    hooks.configure RPC — NO daemon restart needed on current daemons.
+ *  - spawn env (turn-retry, auto-approve): read once at daemon boot, so a
+ *    change takes effect after the daemon restarts (DAEMON_RESTART_NOTE).
  */
 
 import type { Config } from '../types.js';
@@ -25,6 +31,9 @@ export interface DaemonPolicyDescriptor {
   /** Tunable knobs shown under the toggle in Settings → Hooks. Declared as
    *  data so the API/UI need no per-policy code (see hooks/settings.ts). */
   settings?: HookSettingDescriptor[];
+  /** true = delivered via the hooks-v1 push (applies hot on connected daemons,
+   *  no restart); absent/false = read from spawn env (needs daemon restart). */
+  hotPushed?: boolean;
   note: string;
 }
 
@@ -34,17 +43,18 @@ export const DAEMON_POLICIES: DaemonPolicyDescriptor[] = [
   {
     id: 'session-only-cron-policy',
     name: 'Session-only cron enforcement',
-    description: 'Denies durable CronCreate (persists to {cwd}/.claude/scheduled_tasks.json), injects a correction into bypass sessions, and strips a dying session\'s durable rows — guards against the CLI\'s directory-scoped scheduler-lock adoption, where another session sharing the directory executes a dead session\'s cron as if the user typed it.',
-    on: ['daemon:cron-create', 'daemon:session-reap'],
+    description: 'Denies durable CronCreate (persists to {cwd}/.claude/scheduled_tasks.json), injects a correction into bypass sessions, evicts an orphaned foreign cron when it fires, and strips a dying session\'s durable rows — guards against the CLI\'s directory-scoped scheduler-lock adoption, where another session sharing the directory executes a dead session\'s cron as if the user typed it. Delivered as hooks-v1 rules (same rule set as the hook-templates/session-only-cron.yaml file; installing that file into ~/.open-walnut/hooks/ lets you edit the rules and wins over this toggle).',
+    on: ['daemon:cron-create', 'daemon:cron-created', 'daemon:cron-fire', 'daemon:session-reap'],
     configPath: 'session.cron_policy',
     isEnabled: (c) => c.session?.cron_policy === 'session-only',
     setter: (enabled) => ({ session: { cron_policy: enabled ? 'session-only' : 'unrestricted' } } as Partial<Config>),
-    note: DAEMON_RESTART_NOTE,
+    hotPushed: true,
+    note: 'Pushed hot to connected hooks-v1 daemons on save; an older daemon falls back to the spawn env and needs a restart.',
   },
   {
     id: 'foreign-cron-fire-marker',
     name: 'Foreign cron-fire provenance marker',
-    description: 'When a cron created by ANOTHER session fires into this one (directory-lock adoption), the daemon appends a stream marker and a model-visible provenance warning. Observation only — never blocks the fire.',
+    description: 'When a cron created by ANOTHER session fires into this one (directory-lock adoption), the daemon appends a scheduled_task_fire stream marker so the human can see the provenance. Observation only — never blocks the fire and sends nothing to the model.',
     on: ['daemon:cron-fire'],
     configPath: null,
     isEnabled: () => true,

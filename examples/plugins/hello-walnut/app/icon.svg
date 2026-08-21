@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="Hello Walnut">
+  <circle cx="16" cy="16" r="14" fill="#f1e7dc" stroke="#8a5a2b" stroke-width="1.5"/>
+  <path d="M16 4c3.6 3.4 5.4 7.4 5.4 12S19.6 24.6 16 28c-3.6-3.4-5.4-7.4-5.4-12S12.4 7.4 16 4Z" fill="none" stroke="#8a5a2b" stroke-width="1.5" stroke-linejoin="round"/>
+  <path d="M16 5v22" fill="none" stroke="#8a5a2b" stroke-width="1.2"/>
+  <path d="M11.4 11.5c2 1 3.4 2.4 4.6 4.2 1.2-1.8 2.6-3.2 4.6-4.2M11.4 20.5c2-1 3.4-2.4 4.6-4.2 1.2 1.8 2.6 3.2 4.6 4.2" fill="none" stroke="#8a5a2b" stroke-width="1.1" stroke-linecap="round"/>
+</svg>

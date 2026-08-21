@@ -1309,8 +1309,8 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       sendError(res, 400, 'bad_request', 'status must be one of: todo, in_progress, done')
       return
     }
-    if (phase !== undefined && !(typeof phase === 'string' && VALID_PHASES.has(phase) && phase !== 'COMPLETE')) {
-      sendError(res, 400, 'bad_request', 'phase must be a non-COMPLETE task phase')
+    if (phase !== undefined && !(typeof phase === 'string' && VALID_PHASES.has(phase))) {
+      sendError(res, 400, 'bad_request', `phase must be one of: ${[...VALID_PHASES].join(', ')}`)
       return
     }
     if (status !== undefined && phase !== undefined) {
@@ -1375,8 +1375,6 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
 
     const tm = await import('../../core/task-manager.js')
     const { projectTask } = await import('../../core/task-projection.js')
-    const opCaller = req.get('X-Walnut-Op-Caller')
-    const updateSource = opCaller === 'agent' || opCaller === 'gateway' ? 'agent' : 'api'
     // Window coherence on the EFFECTIVE row: a PATCH touching one half of the
     // pair must be judged against the stored other half, otherwise
     // `{ end_date: <before the stored start> }` would sail through. Only read
@@ -1431,7 +1429,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         updated = result.task
       }
       if (Object.keys(patch).length > 0) {
-        const result = await tm.updateTask(id, patch, { source: updateSource, extraTargets: ['main-agent'], asyncPush: true })
+        const result = await tm.updateTask(id, patch, { source: 'api', extraTargets: ['main-agent'], asyncPush: true })
         updated = result.task
       }
       if (!updated) {

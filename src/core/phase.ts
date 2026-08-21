@@ -16,28 +16,34 @@
  *                        never went idle; covers queued/mid-turn sends whose input
  *                        transition was a no-op and whose phase was then flipped by
  *                        the previous turn's result)
- *   session:error      → AWAIT_HUMAN_ACTION  unconditional
- *   session:streaming  → IN_PROGRESS         only when === AWAIT_HUMAN_ACTION
- *   triage-sync        → AWAIT_HUMAN_ACTION  only when === AGENT_COMPLETE
- *                        AND the session is not actively running (checked at the
- *                        call sites via process_status — a late triage from the
- *                        previous turn must not repaint a live turn red)
+ *   session:error      → AGENT_COMPLETE      unconditional (the turn is over —
+ *                        possibly badly — and the ball is back with the human;
+ *                        the session's own Error badge carries the "it failed"
+ *                        signal, the phase only says "handed back, look at it")
+ *   session:streaming  → (retired 2026-08-18 with the WAIT phase) it existed
+ *                        only to undo a stale error→WAIT repaint; error now
+ *                        lands on AGENT_COMPLETE and session:turn-start already
+ *                        pulls any new turn back to IN_PROGRESS.
+ *   triage-sync        → (retired 2026-08-17) was AGENT_COMPLETE → WAIT on a
+ *                        debounce after every normal turn — pure noise.
  *
  *   All go through applySessionPhase() — unified retry + logging + error handling.
  *
  * Layer 2: Reconciler (30s, catches rare failures)
  *   Health monitor derives expected phase from session facts.
- *   Only Rule A: all primary sessions dead + task IN_PROGRESS → AWAIT_HUMAN_ACTION.
+ *   Only Rule A: all primary sessions dead + task IN_PROGRESS → AGENT_COMPLETE.
  *   No Rule B: never infer phase from session status (could propagate stale data).
  *
- * Terminal phases: COMPLETE, HUMAN_VERIFIED — system never overwrites these.
+ * Terminal phase: COMPLETE — the session machine never overwrites it.
  *
- * Task Phases (7):
- *   TODO → IN_PROGRESS → AGENT_COMPLETE → AWAIT_HUMAN_ACTION
- *        → HUMAN_VERIFIED → POST_WORK_COMPLETED → COMPLETE
+ * Task Phases (4) — WAIT was removed 2026-08-18 (user call: "blocked on
+ * something external" IS just TODO — a separate parked state confused both
+ * humans and agents; the Focus Bar's 'wait' PIN TIER still exists for parking
+ * and is a different axis entirely):
+ *   TODO → IN_PROGRESS → AGENT_COMPLETE → COMPLETE
  *
  * Read/unread lifecycle (task.unread — see readMarkerForPhase):
- *   AGENT_COMPLETE / AWAIT_HUMAN_ACTION → unread   (agent handed work back)
+ *   AGENT_COMPLETE                      → unread   (agent handed work back)
  *   IN_PROGRESS                         → read     (new turn supersedes it)
  *   COMPLETE                            → read     (applyPhase clears it)
  *   opening the task in the UI          → read     (the actual "read" event)
@@ -48,19 +54,16 @@
 import { log } from '../logging/index.js'
 import type { TaskPhase, TaskStatus, Task } from './types.js';
 
-// ── Phase → Status (7 → 3) ──
+// ── Phase → Status (4 → 3) ──
 
 export const PHASE_TO_STATUS: Record<TaskPhase, TaskStatus> = {
   TODO: 'todo',
   IN_PROGRESS: 'in_progress',
   AGENT_COMPLETE: 'in_progress',
-  AWAIT_HUMAN_ACTION: 'in_progress',
-  HUMAN_VERIFIED: 'in_progress',
-  POST_WORK_COMPLETED: 'in_progress',
   COMPLETE: 'done',
 };
 
-// ── Status → Default Phase (3 → 7, for migration) ──
+// ── Status → Default Phase (3 → 4, for migration) ──
 
 export const STATUS_TO_DEFAULT_PHASE: Record<TaskStatus, TaskPhase> = {
   todo: 'TODO',
@@ -74,43 +77,26 @@ export const PHASE_ORDER: TaskPhase[] = [
   'TODO',
   'IN_PROGRESS',
   'AGENT_COMPLETE',
-  'AWAIT_HUMAN_ACTION',
-  'HUMAN_VERIFIED',
-  'POST_WORK_COMPLETED',
   'COMPLETE',
 ];
 
 export const VALID_PHASES = new Set<string>(PHASE_ORDER);
 
-export const AGENT_HANDOFF_PHASES = {
-  readyForReview: 'AGENT_COMPLETE',
-  needsHuman: 'AWAIT_HUMAN_ACTION',
-} as const satisfies Record<string, TaskPhase>;
-
-export const AGENT_WRITABLE_PHASES = [
-  'TODO',
-  'IN_PROGRESS',
-  AGENT_HANDOFF_PHASES.readyForReview,
-  AGENT_HANDOFF_PHASES.needsHuman,
-] as const satisfies readonly TaskPhase[];
-
-const AGENT_WRITABLE_PHASE_SET = new Set<TaskPhase>(AGENT_WRITABLE_PHASES);
-
-export function isAgentWritablePhase(phase: unknown): phase is (typeof AGENT_WRITABLE_PHASES)[number] {
-  return typeof phase === 'string' && AGENT_WRITABLE_PHASE_SET.has(phase as TaskPhase);
-}
-
-export const HUMAN_COMPLETE_PHASE = 'COMPLETE' satisfies TaskPhase;
-
-/** Phases that only humans can set — system never overwrites.
- *  HUMAN_VERIFIED is terminal because it represents explicit human approval.
- *  If the system could overwrite it (e.g. session:input → IN_PROGRESS),
- *  auto-push workflows would lose the signal that a human already verified. */
-export const TERMINAL_PHASES = new Set<TaskPhase>(['COMPLETE', 'HUMAN_VERIFIED']);
+/** Phases the BACKGROUND session machine must never overwrite.
+ *  COMPLETE is terminal because it is a deliberate statement that the work is
+ *  done — whoever made it, human or agent. If a background event could
+ *  overwrite it (e.g. session:input → IN_PROGRESS, a late session:result →
+ *  AGENT_COMPLETE), a finished task would silently reopen itself the next time
+ *  anything touched its session.
+ *  This gates ONLY applySessionPhase (the event-driven machine) and the sync-pull
+ *  path in updateTaskRaw. A deliberate write through updateTask — from a human in
+ *  the UI or from an agent tool call — may both set COMPLETE and move a task back
+ *  out of it. */
+export const TERMINAL_PHASES = new Set<TaskPhase>(['COMPLETE']);
 
 // ── Core functions ──
 
-/** Derive the 3-state status from a 7-state phase. */
+/** Derive the 3-state status from a 4-state phase. */
 export function deriveStatusFromPhase(phase: TaskPhase): TaskStatus {
   return PHASE_TO_STATUS[phase] ?? 'todo';
 }
@@ -127,22 +113,19 @@ export function phaseFromStatus(status: TaskStatus): TaskPhase {
  * for the session machine) derive from this one function.
  *
  * UNREAD (the agent handed work back and the human hasn't looked):
- *   - AGENT_COMPLETE     — the turn finished and produced output. This is the
- *     COMMON case and used to set nothing at all, which is why a normally
- *     completed session never showed a dot: only the error path
- *     (AWAIT_HUMAN_ACTION) marked the task, so the dot fired on failures and
- *     stayed dark on success.
- *   - AWAIT_HUMAN_ACTION — errored / waiting on a human decision.
+ *   - AGENT_COMPLETE — the turn finished (successfully OR with an error) and
+ *     the ball is back with the human. Errors ride the same phase since the
+ *     WAIT removal (2026-08-18); the session's own Error badge distinguishes.
  *
  * READ (nothing new to look at):
  *   - IN_PROGRESS — a fresh turn started; whatever was pending is superseded.
  *   - COMPLETE    — finishing a task is itself an act of reading it.
  *
- * TODO / HUMAN_VERIFIED / POST_WORK_COMPLETED leave the marker untouched: a
- * human already drove those, so neither setting nor clearing is implied.
+ * TODO leaves the marker untouched: it says nothing about whether the last
+ * output was seen, so neither setting nor clearing is implied.
  */
 export function readMarkerForPhase(phase: TaskPhase): Partial<Task> {
-  if (phase === 'AGENT_COMPLETE' || phase === 'AWAIT_HUMAN_ACTION') return { unread: true }
+  if (phase === 'AGENT_COMPLETE') return { unread: true }
   if (phase === 'IN_PROGRESS' || phase === 'COMPLETE') return { unread: false }
   return {}
 }
@@ -181,21 +164,31 @@ export function applyPhase(task: Task, phase: TaskPhase): void {
 /**
  * Migrate legacy phase values to current ones.
  * Returns the migrated phase, or the original if no migration needed.
+ *
+ * WAIT was removed 2026-08-18 ("blocked/parked" is just TODO — the row stays
+ * visible and actionable, and the 'wait' PIN TIER covers deliberate parking).
+ * Its ancestors (AWAIT_HUMAN_ACTION, HUMAN_VERIFICATION) follow it to TODO.
+ * PEER_CODE_REVIEW / RELEASE_IN_PIPELINE pointed at the deleted
+ * HUMAN_VERIFIED / POST_WORK_COMPLETED, so they land on AGENT_COMPLETE.
  */
 export function migratePhase(phase: string): TaskPhase {
   if (phase === 'INVESTIGATION') return 'TODO';
-  if (phase === 'HUMAN_VERIFICATION') return 'AWAIT_HUMAN_ACTION';
-  if (phase === 'PEER_CODE_REVIEW') return 'HUMAN_VERIFIED';
-  if (phase === 'RELEASE_IN_PIPELINE') return 'POST_WORK_COMPLETED';
+  if (phase === 'WAIT') return 'TODO';
+  if (phase === 'AWAIT_HUMAN_ACTION') return 'TODO';
+  if (phase === 'HUMAN_VERIFICATION') return 'TODO';
+  if (phase === 'PEER_CODE_REVIEW') return 'AGENT_COMPLETE';
+  if (phase === 'RELEASE_IN_PIPELINE') return 'AGENT_COMPLETE';
+  if (phase === 'HUMAN_VERIFIED') return 'AGENT_COMPLETE';
+  if (phase === 'POST_WORK_COMPLETED') return 'AGENT_COMPLETE';
   if (VALID_PHASES.has(phase)) return phase as TaskPhase;
   return 'TODO';
 }
 
 // WHY unconditional: The old computeSessionCompletionPhase only advanced forward
 // (phase < AGENT_COMPLETE), which blocked self-healing — if a task drifted to
-// AWAIT_HUMAN_ACTION, the next session:result couldn't correct it back to
-// AGENT_COMPLETE. Unconditional transitions ensure any event always sets the
-// correct phase regardless of current state.
+// WAIT, the next session:result couldn't correct it back to AGENT_COMPLETE.
+// Unconditional transitions ensure any event always sets the correct phase
+// regardless of current state.
 
 // ── Unconditional Session → Phase State Machine ──
 
@@ -226,7 +219,7 @@ export function sessionInputPhase(current: TaskPhase): TaskPhase | null {
  * message while the previous turn is still running (queued / mid-turn inject),
  * so that input transition is a no-op (phase already IN_PROGRESS) — then the
  * PREVIOUS turn's result flips the phase to AGENT_COMPLETE (triage may push it
- * on to AWAIT_HUMAN_ACTION), and when the queued message finally starts
+ * on to WAIT), and when the queued message finally starts
  * running NOTHING pulls the phase back: the task shows completed/red while
  * the CLI is visibly streaming (incidents 46f42871 + 1f11596b, 2026-08-03).
  * Trigger: session_state_changed{running} — the CLI's own turn-start signal —
@@ -238,25 +231,24 @@ export function sessionTurnStartPhase(current: TaskPhase): TaskPhase | null {
   return 'IN_PROGRESS'
 }
 
-/** Session errored → AWAIT_HUMAN_ACTION. Unconditional. */
+/** Session errored → AGENT_COMPLETE. Unconditional. The turn is over (badly)
+ *  and the ball is back with the human — same handed-back semantics as a
+ *  normal result. The "it failed" signal lives on the SESSION (error badge /
+ *  red pill), not the task phase; a dedicated WAIT phase for this was removed
+ *  2026-08-18. */
 export function sessionErrorPhase(current: TaskPhase): TaskPhase | null {
-  if (TERMINAL_PHASES.has(current) || current === 'AWAIT_HUMAN_ACTION') return null
-  return 'AWAIT_HUMAN_ACTION'
+  if (TERMINAL_PHASES.has(current) || current === 'AGENT_COMPLETE') return null
+  return 'AGENT_COMPLETE'
 }
 
 /**
- * Session is actively streaming again → undo a stale AWAIT_HUMAN_ACTION.
- *
- * Invariant: a session that is streaming output (or that just produced a
- * result) cannot logically be "waiting for human action". This corrects the
- * race where a transient/late session:error flipped the task to
- * AWAIT_HUMAN_ACTION while the session had already recovered (e.g. remote CLI
- * exited cleanly at a turn boundary and was resumed via --resume in the same
- * send). ONLY acts on AWAIT_HUMAN_ACTION — never disturbs any other phase, so
- * a genuinely-stuck session a human paused stays put unless output resumes.
+ * session:streaming — RETIRED with the WAIT phase (2026-08-18). It existed
+ * only to undo a stale error→WAIT repaint; error now lands on AGENT_COMPLETE
+ * and session:turn-start already pulls any newly-running turn back to
+ * IN_PROGRESS. Kept as an explicit no-op so replayed events from old servers
+ * parse cleanly.
  */
-export function sessionStreamingPhase(current: TaskPhase): TaskPhase | null {
-  if (current === 'AWAIT_HUMAN_ACTION') return 'IN_PROGRESS'
+export function sessionStreamingPhase(_current: TaskPhase): TaskPhase | null {
   return null
 }
 
@@ -311,30 +303,19 @@ export async function applySessionPhase(
     case 'session:error':   newPhase = sessionErrorPhase(task.phase); break
     case 'session:streaming': newPhase = sessionStreamingPhase(task.phase); break
     case 'session:turn-start': newPhase = sessionTurnStartPhase(task.phase); break
-    case 'triage-sync':     newPhase = task.phase === 'AGENT_COMPLETE' ? 'AWAIT_HUMAN_ACTION' : null; break
+    // triage-sync: RETIRED 2026-08-17 (incident inc-1786983019552). It auto-
+    // upgraded AGENT_COMPLETE → WAIT a few minutes after every normal turn,
+    // which added zero information (both render red+unread) and diluted WAIT —
+    // the state is reserved for genuine blockage (session:error, idle-timeout
+    // kill, reconciler all-dead). The trigger value stays parseable so a replayed
+    // event from an old server is a no-op instead of a crash.
+    case 'triage-sync':     newPhase = null; break
     case 'reconciler':      newPhase = opts?.newPhase ?? null; break
   }
 
-  // Triage gate: triage summarizes the PREVIOUS turn on a debounce, so it can
-  // land minutes after the user already sent the next message. If that next
-  // turn is actively running, pushing AWAIT_HUMAN_ACTION would repaint a live
-  // task red moments after session:turn-start pulled it back to IN_PROGRESS
-  // (the reverse race of incidents 46f42871 + 1f11596b). The push is not lost
-  // work: when THIS turn ends, its own result→triage cycle re-evaluates.
-  // Centralized here so both call sites (turn-complete-summary hook,
-  // server.ts triage-done) get the guard.
-  if (newPhase && trigger === 'triage-sync' && opts?.sessionId) {
-    try {
-      const { getSessionByClaudeId } = await import('./session-tracker.js')
-      const record = await getSessionByClaudeId(opts.sessionId)
-      if (record?.process_status === 'running') {
-        log.session.info('applySessionPhase: triage-sync skipped — session is actively running', {
-          taskId, sessionId: opts.sessionId, currentPhase: task.phase, source,
-        })
-        return { changed: false, oldPhase: task.phase }
-      }
-    } catch { /* record unreadable — proceed with the push (pre-guard behavior) */ }
-  }
+  // (The old "triage gate" — skip triage-sync while the session runs the next
+  // turn — was deleted with the trigger's retirement above: triage-sync now
+  // never produces a phase, so the gate had nothing left to guard.)
 
   // Stale-result gate (incident ed347bde, 2026-08-05): SESSION_RESULT enrichment
   // adds latency (~800ms measured) between the CLI's result line and this flip.
@@ -382,7 +363,7 @@ export async function applySessionPhase(
       // SAFETY: updateTaskRaw skips updateTask's guardActiveChildren (which
       // blocks COMPLETE while children are active). That's fine ONLY because
       // every newPhase computed above is non-terminal (IN_PROGRESS /
-      // AGENT_COMPLETE / AWAIT_HUMAN_ACTION) — applySessionPhase never targets
+      // AGENT_COMPLETE / WAIT) — applySessionPhase never targets
       // COMPLETE. If you ever add a COMPLETE transition here, route it through
       // updateTask or you'll bypass the active-children guard.
       await updateTaskRaw(taskId, {

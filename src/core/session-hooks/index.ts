@@ -4,7 +4,6 @@
 
 export { SessionHookDispatcher, HookDispatcher } from './dispatcher.js';
 export { builtinHooks } from './builtins.js';
-export { builtinTaskHooks } from './builtins-task.js';
 export { discoverFileHooks } from './discovery.js';
 export { HOOK_POINT_DOMAIN } from './types.js';
 export type {

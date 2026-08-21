@@ -181,6 +181,13 @@ export class DaemonConnection {
   /** True while a bridge.configure push is in flight — periodic re-pushes
    *  must never overlap (a slow RPC + a 5-min tick would stack them). */
   private bridgePushInFlight = false
+  /** hooks.configure serialization (see pushDaemonHooks): in-flight guard +
+   *  coalesced rerun flag + last-acked hash for RPC dedup. The hash resets on
+   *  disconnect so a reconnect always re-pushes (the daemon may be a fresh
+   *  process that never saw the rules). */
+  private hooksPushInFlight = false
+  private hooksPushRerun = false
+  private lastHooksPushHash: string | null = null
 
   /**
    * Bulk data channel — a SECOND WebSocket to the same daemon (same tunnel
@@ -377,6 +384,13 @@ export class DaemonConnection {
     // connect(), reconnect() and forceRedeployAndReconnect() all land here.
     // Fire-and-forget — bridge provisioning must never block or fail a connect.
     if (changed && value) this.pushBridgeConfig()
+    // Push the compiled daemon-hook rules on every (re)connect. Cheap (the
+    // daemon hash-skips no-ops) and idempotent; changes are hot-pushed by
+    // pushDaemonHooksToAllHosts on config/file change. The hash cache resets
+    // on disconnect: a reconnect may be a FRESH daemon process that never saw
+    // the rules, so "same hash as last push" must not skip it.
+    if (changed) this.lastHooksPushHash = null
+    if (changed && value) this.pushDaemonHooks()
     // Keep bridge health fresh while connected: without a periodic re-push,
     // _lastBridgeConnected only updates on (re)connect and rots for days.
     if (changed) {
@@ -439,6 +453,61 @@ export class DaemonConnection {
         })
       } finally {
         this.bridgePushInFlight = false
+      }
+    })()
+  }
+
+  /**
+   * Push the compiled daemon-hook rules (see core/hooks/daemon-hooks.ts).
+   * The rules JSON is the ONLY artifact the daemon ever gets — everything a
+   * hook needs must be inside it, so there is no side-file distribution
+   * problem. Ephemeral sandboxes skip (they attach to production daemons and
+   * must not rewire them); pre-hooks-v1 daemons are skipped (they enforce via
+   * the legacy WALNUT_ENFORCE_SESSION_CRON spawn env instead).
+   *
+   * Serialized per connection: overlapping calls (connect racing a
+   * config:changed) could otherwise land out of order and leave the daemon
+   * holding a stale rule set until the next reconnect. A call arriving while
+   * one is in flight sets a rerun flag instead of stacking — the in-flight
+   * push recompiles from fresh config on the rerun, so the LAST state always
+   * wins. Also skips the RPC when the compiled hash matches the last push to
+   * this host (config:changed fires for many unrelated keys — focus bar,
+   * favorites, ordering — and each would otherwise cost an RPC per host).
+   */
+  pushDaemonHooks(): void {
+    if (this.isReadOnlyRemote) return
+    if (this._capabilities && !this.hasCapability('hooks-v1')) return
+    if (this.hooksPushInFlight) { this.hooksPushRerun = true; return }
+    this.hooksPushInFlight = true
+    void (async () => {
+      try {
+        do {
+          this.hooksPushRerun = false
+          const [{ compileDaemonHooks }, { getConfig }] = await Promise.all([
+            import('../core/hooks/daemon-hooks.js'),
+            import('../core/config-manager.js'),
+          ])
+          const config = compileDaemonHooks(await getConfig())
+          if (config.hash === this.lastHooksPushHash) continue
+          const reply = await this.send('hooks.configure', { config: config as unknown as Record<string, unknown> })
+          if (reply.ok !== true) {
+            log.session.warn('DaemonConnection: daemon hooks push rejected', {
+              host: this.hostKey, error: typeof reply.error === 'string' ? reply.error : undefined,
+            })
+            continue
+          }
+          this.lastHooksPushHash = config.hash
+          log.session.info('DaemonConnection: daemon hooks pushed', {
+            host: this.hostKey, hash: config.hash, hooks: config.hooks.length,
+            changed: (reply as Record<string, unknown>).changed === true,
+          })
+        } while (this.hooksPushRerun)
+      } catch (err) {
+        log.session.warn('DaemonConnection: daemon hooks push failed', {
+          host: this.hostKey, error: err instanceof Error ? err.message : String(err),
+        })
+      } finally {
+        this.hooksPushInFlight = false
       }
     })()
   }
@@ -3128,6 +3197,18 @@ const connectingPromises = new Map<string, Promise<DaemonConnection>>()
 /** Cache recent connection failures to avoid repeated 42s SSH timeouts. */
 const failureCache = new Map<string, { time: number; error: string }>()
 const FAILURE_CACHE_TTL_MS = 60_000  // 60s — longer than the worst-case SSH timeout (~42s) to avoid retrying mid-failure
+
+/**
+ * Hot-push the daemon-hook rules to every currently connected daemon.
+ * Call after ~/.open-walnut/hooks/*.yaml or the cron_policy config changes —
+ * a hook edit takes effect without a daemon restart. Fire-and-forget per
+ * host; each push is hash-skipped daemon-side when nothing changed.
+ */
+export function pushDaemonHooksToAllHosts(): void {
+  for (const conn of connectionPool.values()) {
+    if (conn.connected) conn.pushDaemonHooks()
+  }
+}
 
 /**
  * Get or create a DaemonConnection for a remote host.

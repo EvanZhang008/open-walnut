@@ -4,7 +4,7 @@
  * file-content.ts): directory-traversal rejection, absolute-path requirement,
  * shell-metacharacter rejection, and length caps. These guards are the whole
  * point of exposing file reads over the frozen contract — pin them.
- * Cloud behavior (relay + the file-content 501) lives in
+ * Cloud behavior (relay + the file-content bounded bridge read) lives in
  * api-v1-files-cloud.test.ts.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -133,5 +133,52 @@ describe('GET /api/v1/file-content', () => {
     expect(traversal.status).toBe(400)
     const rel = await request(app).get('/api/v1/file-content?path=relative.md')
     expect(rel.status).toBe(400)
+  })
+})
+
+// raw=1 (additive 2026-08): byte serving with a real Content-Type — the iOS
+// WKWebView HTML preview points here. Shares the internal route's raw
+// implementation AND its sandbox, so pin both behaviors on this edge too.
+describe('GET /api/v1/file-content?raw=1', () => {
+  it('serves .html raw with text/html (WKWebView preview path)', async () => {
+    const html = '<!doctype html><h1 id="t">HTML preview</h1><script>document.getElementById("t").textContent += " + JS"</script>'
+    await fs.writeFile(path.join(base, 'page.html'), html)
+    const res = await request(createApp())
+      .get(`/api/v1/file-content?path=${encodeURIComponent(path.join(base, 'page.html'))}&raw=1`)
+    expect(res.status).toBe(200)
+    expect(res.headers['content-type']).toContain('text/html')
+    expect(res.text).toBe(html)
+  })
+
+  it('serves non-HTML text as text/plain (no sniffing surprises)', async () => {
+    const res = await request(createApp())
+      .get(`/api/v1/file-content?path=${encodeURIComponent(path.join(base, 'readme.md'))}&raw=1`)
+    expect(res.status).toBe(200)
+    expect(res.headers['content-type']).toContain('text/plain')
+    expect(res.text).toContain('hello from wave 2')
+  })
+
+  it('missing file → 404 plain text (raw mode has no JSON viewer contract)', async () => {
+    const res = await request(createApp())
+      .get(`/api/v1/file-content?path=${encodeURIComponent(path.join(base, 'ghost.html'))}&raw=1`)
+    expect(res.status).toBe(404)
+    expect(res.headers['content-type']).toContain('text/plain')
+  })
+
+  it('SANDBOX: raw mode rejects traversal and relative paths identically', async () => {
+    const app = createApp()
+    const traversal = await request(app)
+      .get(`/api/v1/file-content?path=${encodeURIComponent(base + '/../../../etc/passwd')}&raw=1`)
+    expect(traversal.status).toBe(400)
+    const rel = await request(app).get('/api/v1/file-content?path=relative.html&raw=1')
+    expect(rel.status).toBe(400)
+  })
+
+  it('download=1 forces Content-Disposition attachment', async () => {
+    await fs.writeFile(path.join(base, 'notes.txt'), 'plain text\n')
+    const res = await request(createApp())
+      .get(`/api/v1/file-content?path=${encodeURIComponent(path.join(base, 'notes.txt'))}&raw=1&download=1`)
+    expect(res.status).toBe(200)
+    expect(res.headers['content-disposition']).toContain('attachment')
   })
 })

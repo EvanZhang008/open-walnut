@@ -229,9 +229,28 @@ export async function applySnapshot(
   // A changed epoch invalidates BOTH coordinates: the in-memory appliedV and
   // the durable consumedOffset. The reset is epoch-gated in the tracker's
   // arbitration (see applyUpdateToSession), so this is the sanctioned path.
-  const epochChanged = typeof snapshot.streamEpoch === 'string' && snapshot.streamEpoch.length > 0
+  const bothEpochsDiffer = typeof snapshot.streamEpoch === 'string' && snapshot.streamEpoch.length > 0
     && typeof record.streamEpoch === 'string' && record.streamEpoch.length > 0
     && snapshot.streamEpoch !== record.streamEpoch
+  // EPOCH-LESS RECORD + PROVABLY-STALE WATERMARK (incident 267a4b68): records
+  // that predate epoch stamping have streamEpoch NULL, so the two-sided compare
+  // above can never fire — and stamping only happens on an enforce WRITE, which
+  // the v-gate below blocks because the stale watermark IS the gate. Chicken
+  // and egg: such a record is permanently immune to the snapshot channel while
+  // its live guards suppress every real result ("finished but still Running").
+  // The proof staleness needs no epoch pair: a settled/dead snapshot's v is the
+  // fold's EOF position, and a consumed line-end offset can never exceed the
+  // EOF of the append-only file it was measured in (same argument as
+  // isStaleWatermark / the spawn-path guard). `waiting` is excluded for the
+  // same reason adoptsWatermark excludes it (v may predate an opening turn).
+  const settledOrDead = snapshot.cliState === 'dead'
+    || (snapshot.cliState !== 'waiting' && snapshot.turnActive === false)
+  const epochlessStaleWatermark = !bothEpochsDiffer
+    && typeof snapshot.streamEpoch === 'string' && snapshot.streamEpoch.length > 0
+    && !record.streamEpoch
+    && typeof record.consumedOffset === 'number'
+    && settledOrDead && record.consumedOffset > snapshot.v
+  const epochChanged = bothEpochsDiffer || epochlessStaleWatermark
   if (epochChanged) {
     log.session.warn('snapshot stream-epoch changed — resetting watermarks', {
       sessionId, prevEpoch: record.streamEpoch, nextEpoch: snapshot.streamEpoch,
@@ -403,7 +422,19 @@ export async function applySnapshot(
   try {
     const { sessionRunner } = await import('../providers/claude-code-session.js')
     const liveSession = sessionRunner.findSessionByClaudeId(sessionId)
-    if (liveSession) liveSession.setProcessStatusFromReconciler(projected)
+    if (liveSession) {
+      liveSession.setProcessStatusFromReconciler(projected)
+      // Epoch reset: the live CCS's in-memory _consumedOffset is the SAME dead
+      // coordinate the record held — and it is what the replay guards actually
+      // read ("suppressing replayed result", incident 267a4b68: the record was
+      // healed but the live instance kept swallowing real results until a
+      // restart). This is the one sanctioned regression path, mirroring the
+      // record-side epoch arbitration.
+      if (epochChanged) {
+        const resetTo = typeof updates.consumedOffset === 'number' ? updates.consumedOffset : 0
+        liveSession.resetConsumedOffsetFromSnapshot(resetTo)
+      }
+    }
   } catch { /* runner not loaded — session is attach-only */ }
 
   return { outcome: 'applied', projected }

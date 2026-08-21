@@ -18,6 +18,8 @@ import { sessionLifecycleV1Router } from '../../../src/web/routes/session-lifecy
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../../src/core/session-tracker.js'
+import { handleSessionControlRelay } from '../../../src/core/sessions/session-controls.js'
+import { sessionRunner } from '../../../src/providers/claude-code-session.js'
 
 function createApp() {
   const app = express()
@@ -28,6 +30,7 @@ function createApp() {
 }
 
 beforeEach(async () => {
+  vi.restoreAllMocks()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
   await fs.mkdir(WALNUT_HOME, { recursive: true })
 })
@@ -45,6 +48,99 @@ describe('GET /api/v1/sessions/:id (detail)', () => {
     expect(res.status).toBe(200)
     expect(res.body.session.claudeSessionId).toBe('lc-detail-1')
     expect(res.body.session.title).toBe('Detail session')
+    expect(res.body.pendingPermissions).toEqual([])
+  })
+
+  it('restores a durable pending question before the live CLI reattaches', async () => {
+    await createSessionRecord('lc-detail-pending', 'task-dp', 'proj', '/tmp', {
+      initialProcessStatus: 'running',
+      pid: process.pid,
+    })
+    await updateSessionRecord('lc-detail-pending', {
+      pendingPermission: {
+        requestId: 'req-question',
+        toolName: 'AskUserQuestion',
+        input: {
+          questions: [{
+            question: 'Which deployment?',
+            options: [{ label: 'Staging', description: 'Deploy to staging' }],
+          }],
+        },
+        reason: 'Need a target',
+        receivedAt: '2026-08-17T00:56:52.000Z',
+      },
+    })
+
+    const res = await request(createApp()).get('/api/v1/sessions/lc-detail-pending')
+
+    expect(res.status).toBe(200)
+    expect(res.body.pendingPermissions).toEqual([expect.objectContaining({
+      requestId: 'req-question',
+      toolName: 'AskUserQuestion',
+      reason: 'Need a target',
+    })])
+    expect(res.body.pendingPermissions[0].input.questions[0].question).toBe('Which deployment?')
+  })
+
+  it('returns Codex detail through v1 and cloud-primary relay without waiting for cold attach', async () => {
+    await createSessionRecord('lc-detail-codex-cold', 'task-cold', 'proj', '/tmp', {
+      initialProcessStatus: 'idle',
+      engine: 'codex',
+      acpRuntimeId: 'runtime-codex-cold',
+      title: 'Durable Codex title',
+    })
+    await updateSessionRecord('lc-detail-codex-cold', {
+      pendingPermission: {
+        requestId: 'perm-codex-cold',
+        toolName: 'Run command',
+        acpOptions: [{ optionId: 'allow-once', kind: 'allow_once', name: 'Allow once' }],
+        receivedAt: '2026-08-18T00:00:00.000Z',
+      },
+    })
+    vi.spyOn(sessionRunner, 'findAcpSession').mockReturnValue(undefined)
+    const attach = vi.spyOn(sessionRunner, 'findOrAttachAcpSession')
+      .mockReturnValue(new Promise<never>(() => {}))
+
+    const v1 = await Promise.race([
+      request(createApp()).get('/api/v1/sessions/lc-detail-codex-cold'),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('v1 detail blocked')), 2_000)),
+    ])
+    expect(v1.status).toBe(200)
+    expect(v1.body.session.title).toBe('Durable Codex title')
+    expect(v1.body.pendingPermissions[0]).toEqual(expect.objectContaining({
+      requestId: 'perm-codex-cold',
+      acpOptions: [{ optionId: 'allow-once', kind: 'allow_once', name: 'Allow once' }],
+    }))
+
+    const relay = await Promise.race([
+      handleSessionControlRelay('detail', 'lc-detail-codex-cold', {}),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('relay detail blocked')), 2_000)),
+    ])
+    expect(relay).toMatchObject({
+      ok: true,
+      result: {
+        session: { title: 'Durable Codex title' },
+        pendingPermissions: [{ requestId: 'perm-codex-cold' }],
+      },
+    })
+    expect(attach).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not restore a stale durable question on a terminal record', async () => {
+    await createSessionRecord('lc-detail-stale', 'task-ds', 'proj', '/tmp', {
+      initialProcessStatus: 'stopped',
+    })
+    await updateSessionRecord('lc-detail-stale', {
+      pendingPermission: {
+        requestId: 'req-stale',
+        toolName: 'AskUserQuestion',
+        receivedAt: '2026-08-17T00:56:52.000Z',
+      },
+    })
+
+    const res = await request(createApp()).get('/api/v1/sessions/lc-detail-stale')
+
+    expect(res.status).toBe(200)
     expect(res.body.pendingPermissions).toEqual([])
   })
 

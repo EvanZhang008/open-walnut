@@ -214,6 +214,14 @@ for spid in $stray_pids; do
   if [[ "$cmd" == *"--_ephemeral-child"* || "$cmd" == *"--ephemeral"* ]]; then
     continue
   fi
+  # A server started with an explicit NON-prod --port is a test instance
+  # (provider-matrix harness, ad-hoc dev), not a stray prod boot — never reap
+  # it. 2026-08-12: a concurrent deploy's sweep SIGKILLed the live-matrix
+  # ephemeral server on :4105 mid-run, failing 10 scenarios on a dead server.
+  port_arg="$(printf '%s' "$cmd" | sed -n 's/.*--port[= ]\([0-9][0-9]*\).*/\1/p')"
+  if [[ -n "$port_arg" && "$port_arg" != "$PORT" ]]; then
+    continue
+  fi
   echo "Reaping stray Walnut server PID $spid (never bound :$PORT): $cmd" >&2
   kill -15 "$spid" 2>/dev/null || true
   for _ in {1..6}; do

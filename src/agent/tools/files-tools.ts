@@ -153,7 +153,7 @@ IMPORTANT: You must read a file before editing or writing to it. The system trac
 Special sources (use these URIs instead of raw file paths):
   notes/global           — The Notes panel on the home page: user's personal scratchpad
                            with todos, checklists, task-refs, and links (WYSIWYG markdown).
-  notes/instructions     — Vault instructions injected into all Claude Code sessions.
+  notes/instructions     — Vault instructions for note work, read on demand.
                            Reads AGENTS.md. Writes sync to both AGENTS.md + CLAUDE.md.
   notes/{name}           — Named note document (e.g. notes/recipes, notes/reading-list).
   memory/global          — Agent's curated knowledge & user preferences (MEMORY.md).

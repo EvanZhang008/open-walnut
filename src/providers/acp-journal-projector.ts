@@ -156,6 +156,19 @@ export class AcpJournalProjector {
           text: event.text,
           msgId: this.id(event.commandId, 'user'),
         }]
+      case 'steer-accepted':
+        // Mid-turn injection: the user message joins the RUNNING turn. Break
+        // the current text segment so the reply after the steer renders as a
+        // new bubble, but keep the turn identity (no startTurn).
+        this.currentSegment = null
+        return [{
+          type: 'user',
+          ts: record.ts,
+          commandId: this.currentCommandId,
+          walnutMessageId: event.walnutMessageId,
+          text: event.text,
+          msgId: this.id(this.currentCommandId, 'user', event.walnutMessageId),
+        }]
       case 'turn-started':
         if (!this.terminalCommands.has(event.commandId)
           && event.commandId !== this.currentCommandId) {

@@ -1,0 +1,29 @@
+{
+  "id": "hello-walnut",
+  "name": "Hello Walnut",
+  "description": "Example plugin: an app page, an AI tool, and a skill",
+  "version": "1.0.0",
+  "capabilities": {
+    "ui": {
+      "app": {
+        "title": "Hello",
+        "icon": "app/icon.svg",
+        "entry": "app/index.html"
+      }
+    },
+    "tools": {},
+    "skills": {}
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "greeting": { "type": "string", "default": "Hello" }
+    }
+  },
+  "uiHints": {
+    "greeting": {
+      "label": "Greeting",
+      "help": "Text the hello tool responds with."
+    }
+  }
+}

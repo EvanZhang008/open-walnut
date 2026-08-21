@@ -341,10 +341,13 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
     })
     expect(patchResponse.status).toBe(200)
 
-    const afterPatch = await fetch(apiUrl(`/api/sessions/${sessionId}/controls`))
-    expect((await afterPatch.json() as {
-      controls: Array<{ id: string; currentValue: string }>
-    }).controls.find((control) => control.id === 'collaboration_mode')?.currentValue).toBe('plan')
+    await waitForAsync(async () => {
+      const response = await fetch(apiUrl(`/api/sessions/${sessionId}/controls`))
+      const body = await response.json() as {
+        controls: Array<{ id: string; currentValue: string }>
+      }
+      return body.controls.find((control) => control.id === 'collaboration_mode')?.currentValue === 'plan'
+    }, 5_000, 'live collaboration mode plan')
 
     const restoreResponse = await fetch(apiUrl(`/api/sessions/${sessionId}`), {
       method: 'PATCH',
@@ -352,6 +355,13 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
       body: JSON.stringify({ mode: 'default' }),
     })
     expect(restoreResponse.status).toBe(200)
+    await waitForAsync(async () => {
+      const response = await fetch(apiUrl(`/api/sessions/${sessionId}/controls`))
+      const body = await response.json() as {
+        controls: Array<{ id: string; currentValue: string }>
+      }
+      return body.controls.find((control) => control.id === 'collaboration_mode')?.currentValue === 'default'
+    }, 5_000, 'live collaboration mode restore')
   }, 30_000)
 
   it('warm follow-up reuses the live worker (no session-loaded replay)', async () => {
@@ -424,7 +434,7 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
       .not.toContain('stopped')
   }, 35_000)
 
-  it('keeps status authoritative through a slow tool and drains queued prompts separately', async () => {
+  it('keeps status authoritative while steering follow-ups into a slow tool turn', async () => {
     const runtimeId = findRuntimeId()
     const before = eventsFor(sessionId, EventNames.SESSION_RESULT).length
     const statusesBefore = eventsFor(sessionId, EventNames.SESSION_STATUS_CHANGED).length
@@ -447,34 +457,30 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
 
     await sendMessageToSession(sessionId, 'rapid follow-up one', { source: 'ui', taskId })
     await sendMessageToSession(sessionId, 'rapid follow-up two', { source: 'ui', taskId })
-    await waitForAsync(async () => {
-      const queue = await getQueue(sessionId)
-      return queue.length === 2
-        && queue.every((message) => message.status === 'pending')
-    }, 5_000, 'two queued prompts behind active tool')
+    await waitForAsync(async () => (await getQueue(sessionId)).length === 0,
+      5_000, 'steered queue drain')
     expect((await getSessionsForTask(taskId))
       .find((candidate) => candidate.claudeSessionId === sessionId)?.process_status)
       .toBe('running')
 
     await waitFor(
-      () => eventsFor(sessionId, EventNames.SESSION_RESULT).length >= before + 3,
+      () => eventsFor(sessionId, EventNames.SESSION_RESULT).length >= before + 1,
       20_000,
-      'three separate terminal turns',
+      'one steered terminal turn',
     )
-    const texts = promptFacts(runtimeId).map((fact) => fact.event.text)
-    expect(texts.slice(-3)).toEqual([
-      'status-slow-tool queue gate',
-      'rapid follow-up one',
-      'rapid follow-up two',
-    ])
-    expect(texts).not.toContain('rapid follow-up one\n\nrapid follow-up two')
-    await waitForAsync(async () => (await getQueue(sessionId)).length === 0,
-      5_000, 'queue drain')
+    const records = journalRecords(runtimeId)
+    const prompts = records.filter((record) =>
+      record.kind === 'meta'
+        && (record.event as { type?: string } | undefined)?.type === 'prompt-accepted')
+    const steers = records.filter((record) =>
+      record.kind === 'meta'
+        && (record.event as { type?: string } | undefined)?.type === 'steer-accepted')
+      .map((record) => (record.event as { text?: string }).text)
+    expect((prompts.at(-1)?.event as { text?: string }).text).toBe('status-slow-tool queue gate')
+    expect(steers.slice(-2)).toEqual(['rapid follow-up one', 'rapid follow-up two'])
     const statusEvents = eventsFor(sessionId, EventNames.SESSION_STATUS_CHANGED)
       .slice(statusesBefore)
     expect(statusEvents.map((event) => event.data.process_status)).toEqual([
-      'running', 'idle',
-      'running', 'idle',
       'running', 'idle',
     ])
     expect(statusEvents.every((event) => {
@@ -482,8 +488,8 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
       const status = data.status as Record<string, unknown> | undefined
       const snapshotFields = [
         'sessionId', 'taskId', 'process_status', 'activity', 'mode',
-        'planCompleted', 'archived', 'errorMessage', 'provider', 'engine',
-        'statusRevision', 'statusUpdatedAt',
+        'planCompleted', 'archived', 'errorMessage', 'pendingPermissionTool',
+        'provider', 'engine', 'statusRevision', 'statusUpdatedAt',
       ]
       return typeof data.statusRevision === 'number'
         && typeof data.statusUpdatedAt === 'string'
@@ -523,6 +529,11 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
       'permission request before reload',
     )
     const requestId = initialPermission.data.requestId as string
+    await waitForAsync(async () => {
+      const record = (await getSessionsForTask(taskId))
+        .find((candidate) => candidate.claudeSessionId === sessionId)
+      return record?.pendingPermission?.requestId === requestId ? record : false
+    }, 5_000, 'durable ACP permission')
 
     const state = sessionRunner as unknown as {
       acpSessions: Map<string, { detach(): void }>
@@ -566,6 +577,11 @@ describe.runIf(HAVE_BIN)('ACP codex session through the real server', () => {
       15_000,
       'permission turn result after reload',
     )
+    await waitForAsync(async () => {
+      const record = (await getSessionsForTask(taskId))
+        .find((candidate) => candidate.claudeSessionId === sessionId)
+      return record?.pendingPermission === undefined
+    }, 5_000, 'durable ACP permission clear')
   }, 30_000)
 
   it('permission approve round-trips through the HTTP permission route', async () => {

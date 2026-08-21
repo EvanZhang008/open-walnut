@@ -67,6 +67,13 @@ integrationsRouter.get('/settings', async (_req, res) => {
       configSchema: p.configSchema ?? null,
       uiHints: p.uiHints ?? null,
       values: maskValues(pluginConfigs[p.id] ?? {}),
+      // What the plugin actually contributes. A deep-capability plugin
+      // (ui/tools/skills, no sync) has no display badge and no config schema, so
+      // without this it would render as an empty card that looks broken.
+      capabilities: p.capabilities ?? ['sync'],
+      tools: p.tools?.map(t => t.name) ?? [],
+      hasApp: !!p.uiApp,
+      hasSkills: !!p.hasSkills,
     }));
 
   const unconfigured = getUnconfiguredPlugins().map(p => ({

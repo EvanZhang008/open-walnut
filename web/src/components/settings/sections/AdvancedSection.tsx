@@ -17,13 +17,10 @@ interface KeepAwakeStatus {
     online: boolean | null;
     needsSudo: boolean;
     setupDone: boolean | null;
-    lastHotspotAttempt: { at: string; ok: boolean; detail: string } | null;
     checkedAt: string | null;
   };
   sudoSetupCommand: string;
 }
-
-interface HotspotCandidate { ssid: string; likely: boolean }
 
 interface Props { config: Config; onSave: (partial: Partial<Config>) => Promise<void>; }
 
@@ -45,20 +42,6 @@ export function AdvancedSection({ config, onSave }: Props) {
     apiPost<KeepAwakeStatus>('/api/keep-awake/poll').then(setKaStatus).catch(() => {});
   }, []);
 
-  // Hotspot SSID detection: saved Wi-Fi networks, hotspot-looking names first.
-  const [kaCandidates, setKaCandidates] = useState<HotspotCandidate[] | null>(null);
-  const [kaDetecting, setKaDetecting] = useState(false);
-  const detectHotspots = useCallback(async () => {
-    setKaDetecting(true);
-    try {
-      const res = await apiGet<{ candidates: HotspotCandidate[] }>('/api/keep-awake/hotspot-candidates');
-      setKaCandidates(res.candidates);
-    } catch {
-      setKaCandidates([]);
-    } finally {
-      setKaDetecting(false);
-    }
-  }, []);
   // One-click setup: server pops the native macOS password dialog (osascript).
   const [kaSettingUp, setKaSettingUp] = useState(false);
   const [kaSetupError, setKaSetupError] = useState<string | null>(null);
@@ -77,15 +60,6 @@ export function AdvancedSection({ config, onSave }: Props) {
     } finally {
       setKaSettingUp(false);
     }
-  }, []);
-
-  const pickSsid = useCallback((ssid: string) => {
-    const input = document.getElementById('ka-ssid') as HTMLInputElement | null;
-    if (!input) return;
-    input.value = ssid;
-    // Uncontrolled form: fire 'input' so the section's autosave listener persists it.
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    setKaCandidates(null);
   }, []);
 
   const handleSave = useCallback(async () => {
@@ -123,15 +97,10 @@ export function AdvancedSection({ config, onSave }: Props) {
         },
       },
       keep_awake: {
-        ...config.keep_awake,
         enabled: bool('ka-enabled'),
         battery_floor_pct: num('ka-battery'),
         offline_grace_minutes: num('ka-offline'),
         linger_minutes: num('ka-linger'),
-        hotspot_ssid: val('ka-ssid') || undefined,
-        // Empty = keep whatever is stored (the field shows a masked value in
-        // cloud mode; never overwrite the real secret with the mask or '').
-        ...(val('ka-password') && !val('ka-password').includes('••') ? { hotspot_password: val('ka-password') } : {}),
       },
     });
     // Re-evaluate immediately so the toggle takes effect without waiting a minute.
@@ -277,11 +246,10 @@ export function AdvancedSection({ config, onSave }: Props) {
             </summary>
             <div className="settings-collapsible-body">
               <p className="text-sm text-muted" style={{ margin: '0 0 12px 0' }}>
-                While Claude Code sessions run, the Mac stays on and connected —
-                <strong> even with the lid closed</strong>. Great for commutes: toss the
-                closed MacBook in your bag on your iPhone hotspot and sessions keep working.
-                It sleeps again when sessions end, battery hits the floor, or it stays
-                offline too long.
+                While local sessions run, Walnut prevents <strong>system sleep</strong>,
+                including with the lid closed. The screen can still turn off normally.
+                Connect an iPhone hotspot yourself. If internet stays unavailable for
+                15 minutes, Walnut restores normal sleep.
               </p>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
                 <input type="checkbox" name="ka-enabled" defaultChecked={keepAwake.enabled === true} style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
@@ -313,46 +281,18 @@ export function AdvancedSection({ config, onSave }: Props) {
                   <input id="ka-battery" name="ka-battery" type="number" defaultValue={keepAwake.battery_floor_pct ?? ''} placeholder="30" min={5} max={95} />
                 </div>
                 <div className="form-group">
-                  <label htmlFor="ka-offline">Offline Grace (min)</label>
-                  <input id="ka-offline" name="ka-offline" type="number" defaultValue={keepAwake.offline_grace_minutes ?? ''} placeholder="30" min={1} />
+                  <label htmlFor="ka-offline">Offline Release (min)</label>
+                  <input id="ka-offline" name="ka-offline" type="number" defaultValue={keepAwake.offline_grace_minutes ?? ''} placeholder="15" min={1} />
                 </div>
                 <div className="form-group">
                   <label htmlFor="ka-linger">Linger After Last Session (min)</label>
                   <input id="ka-linger" name="ka-linger" type="number" defaultValue={keepAwake.linger_minutes ?? ''} placeholder="5" min={0} />
                 </div>
               </div>
-              <div className="form-row">
-                <div className="form-group">
-                  <label htmlFor="ka-ssid">iPhone Hotspot SSID (optional)</label>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <input id="ka-ssid" name="ka-ssid" type="text" defaultValue={keepAwake.hotspot_ssid ?? ''} placeholder="Never auto-join" style={{ flex: 1 }} />
-                    <button type="button" className="btn-secondary" onClick={detectHotspots} disabled={kaDetecting}>
-                      {kaDetecting ? 'Detecting…' : 'Detect'}
-                    </button>
-                  </div>
-                  {kaCandidates !== null && (
-                    kaCandidates.length === 0 ? (
-                      <p className="text-sm text-muted" style={{ margin: '6px 0 0 0' }}>
-                        No saved Wi-Fi networks found. Join the hotspot once from the Wi-Fi menu, then detect again.
-                      </p>
-                    ) : (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
-                        {kaCandidates.slice(0, 8).map((c) => (
-                          <button key={c.ssid} type="button" className="btn-secondary" onClick={() => pickSsid(c.ssid)} title={c.likely ? 'Looks like a phone hotspot' : 'Saved network'}>
-                            {c.likely ? '📱 ' : ''}{c.ssid}
-                          </button>
-                        ))}
-                      </div>
-                    )
-                  )}
-                </div>
-                <div className="form-group">
-                  <label htmlFor="ka-password">Hotspot Password (optional if saved)</label>
-                  <input id="ka-password" name="ka-password" type="password" defaultValue={keepAwake.hotspot_password ?? ''} placeholder="Keychain if already saved" autoComplete="off" />
-                </div>
-              </div>
               <p className="text-sm text-muted" style={{ margin: '4px 0 12px 0' }}>
-                If offline, Walnut tries this hotspot (the iPhone must have Personal Hotspot on).
+                Using an iPhone hotspot? Connect it yourself from the macOS Wi-Fi menu.
+                Walnut does not control Wi-Fi. If internet stays unavailable for the
+                offline-release window, normal system sleep is restored.
               </p>
               {kaStatus && (
                 <div className="text-sm" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -364,11 +304,6 @@ export function AdvancedSection({ config, onSave }: Props) {
                     {kaStatus.state.battery ? ` · battery ${kaStatus.state.battery.pct}%${kaStatus.state.battery.onAc ? ' (AC)' : ''}` : ''}
                     {kaStatus.state.online === false ? ' · offline' : ''}
                   </span>
-                  {kaStatus.state.lastHotspotAttempt && (
-                    <span className="text-muted">
-                      Last hotspot attempt: {kaStatus.state.lastHotspotAttempt.ok ? 'joined' : 'failed'} ({kaStatus.state.lastHotspotAttempt.detail})
-                    </span>
-                  )}
                 </div>
               )}
             </div>

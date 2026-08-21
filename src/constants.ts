@@ -335,7 +335,7 @@ export const MENTION_DIRS_FILE = path.join(WALNUT_HOME, 'mention-directories.jso
 export const NOTES_DIR = path.join(WALNUT_HOME, 'notes');
 /** Reserved filename inside NOTES_DIR — consumers listing NOTES_DIR must exclude it */
 export const GLOBAL_NOTES_FILE = path.join(NOTES_DIR, 'global-notes.md');
-/** Primary instructions file — Walnut injects into all session contexts */
+/** Primary vault instructions file, read on demand through notes/instructions. */
 export const NOTES_AGENTS_FILE = path.join(NOTES_DIR, 'AGENTS.md');
 /** Mirror of AGENTS.md — Claude Code discovers this natively when CWD is NOTES_DIR */
 export const NOTES_CLAUDE_FILE = path.join(NOTES_DIR, 'CLAUDE.md');

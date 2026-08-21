@@ -46,6 +46,25 @@ class IntegrationRegistry {
     return [...this.plugins.values()];
   }
 
+  /**
+   * Plugins that can back a task's `source` — i.e. the ones that actually sync.
+   *
+   * A deep-capability plugin (ui / tools / skills only) is registered like any
+   * other but has no sync implementation, so filing a task against it would
+   * accept the write and then push nowhere, forever. `hasSync === undefined` is
+   * treated as syncing, so hand-built registrations (tests, the local fallback)
+   * behave exactly as before.
+   */
+  getSyncPlugins(): RegisteredPlugin[] {
+    return [...this.plugins.values()].filter(p => p.hasSync !== false);
+  }
+
+  /** True when `id` names a plugin a task may be sourced from (see getSyncPlugins). */
+  isTaskSource(id: string): boolean {
+    const plugin = this.plugins.get(id);
+    return !!plugin && plugin.hasSync !== false;
+  }
+
   /** Check if a plugin is registered. */
   has(id: string): boolean {
     return this.plugins.has(id);
@@ -92,6 +111,8 @@ class IntegrationRegistry {
       name: 'Local (fallback)',
       config: {},
       sync: noopLocalSync,
+      hasSync: true,
+      capabilities: ['sync'],
       claim: { fn: (() => true) as ProjectClaimFn, priority: -1 },
       migrations: [],
       httpRoutes: [],

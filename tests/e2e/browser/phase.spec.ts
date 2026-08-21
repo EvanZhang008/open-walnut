@@ -214,15 +214,17 @@ test('clicking outside phase picker closes it', async ({ page }) => {
 
 test('task detail page shows phase badge', async ({ page }) => {
   const task = await createTaskViaApi('Detail page phase test')
-  await updateTaskPhase(task.id, 'HUMAN_VERIFIED')
+  // (WAIT removed 2026-08-18 — AGENT_COMPLETE is the handed-back phase that
+  // renders the same red badge; PATCH would answer 400 for 'WAIT' now.)
+  await updateTaskPhase(task.id, 'AGENT_COMPLETE')
 
   await page.goto(`/tasks/${task.id}`)
   await page.waitForLoadState('networkidle')
 
   // The StatusBadge should show phase text
-  const badge = page.locator('.badge-phase-human_verified')
+  const badge = page.locator('.badge-phase-agent_complete')
   await expect(badge).toBeVisible({ timeout: 5000 })
-  await expect(badge).toContainText('Human Verified')
+  await expect(badge).toContainText('Agent Complete')
 })
 
 // ── New task gets phase=TODO ──

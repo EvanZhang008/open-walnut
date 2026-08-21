@@ -18,6 +18,7 @@ import yaml from 'js-yaml';
 import { TASKS_DIR } from '../constants.js';
 import { log } from '../logging/index.js';
 import type { Task } from './types.js';
+import { migratePhase } from './phase.js';
 import type { ExtIndexSpec } from './integration-types.js';
 
 /** SQLite file path. Sits next to the legacy tasks.json in the same dir. */
@@ -261,6 +262,15 @@ export function rowToTask(row: Record<string, any>): Task {
   if (typeof task.summary === 'undefined') task.summary = '';
   if (typeof task.note === 'undefined') task.note = '';
 
+  // Retired phase names → their current equivalent. The v7 migration already
+  // rewrote every row in THIS database, so this is the net for rows that arrive
+  // by another door: a cloud replica seeded from an older primary's projection,
+  // a plugin pull echoing a stale remote status, a hand-edited row. Without it
+  // an old value survives hydration, fails VALID_PHASES, and renders as a blank
+  // phase — migratePhase existed for exactly this and had NO caller at all
+  // until now.
+  if (typeof task.phase === 'string') task.phase = migratePhase(task.phase);
+
   return task as Task;
 }
 
@@ -443,6 +453,7 @@ const SCHEMA_SQL = `
     label TEXT NOT NULL,
     order_index INTEGER
   );
+
   -- Remote-identity ledger: which remote item ids this store has ever owned,
   -- released (ext cleared by a source migration), or deleted. Sync pull paths
   -- consult it so a remote id a local task once owned can NEVER mint a second
@@ -489,7 +500,7 @@ const SCHEMA_SQL = `
  * Exported so migration tests can assert "the DB ended up current" without
  * hardcoding a number that every future bump would break.
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 8;
 
 function runOneTimeMigrations(handle: DatabaseType): void {
   const current = handle.pragma('user_version', { simple: true }) as number;
@@ -552,6 +563,18 @@ function runOneTimeMigrations(handle: DatabaseType): void {
   if (current < 6) {
     // v5 → v6: `needs_attention` → `unread` (the read/unread marker rename).
     migrateReadMarkerToUnread(handle);
+  }
+
+  if (current < 7) {
+    // v6 → v7: the 7-phase lifecycle collapses to 5.
+    migratePhasesToFive(handle);
+  }
+
+  if (current < 8) {
+    // v7 → v8: WAIT removed — "blocked/parked" is just TODO (user call
+    // 2026-08-18: a separate parked phase confused humans and agents alike;
+    // deliberate parking lives on the 'wait' PIN TIER, a different axis).
+    migrateWaitToTodo(handle);
   }
 
   handle.pragma('user_version = ' + SCHEMA_VERSION);
@@ -1088,6 +1111,92 @@ function migrateReadMarkerToUnread(handle: DatabaseType): void {
 
   if (summary.cleared > 0) {
     log.task.info('task-db v6: read marker renamed needs_attention → unread', summary);
+  }
+}
+
+// ── v7: 7 phases → 5 ───────────────────────────────────────────────────────
+
+/**
+ * Collapse the lifecycle to TODO → IN_PROGRESS → AGENT_COMPLETE → COMPLETE,
+ * plus WAIT for blocked/needs-a-look work.
+ *
+ * `AWAIT_HUMAN_ACTION` → `WAIT`: same meaning, honest name (it always covered
+ * "errored / blocked / someone should look", not "a human must perform an
+ * action"). 99 live tasks sat in it when this shipped, so it is a rename, not
+ * a drop.
+ *
+ * `HUMAN_VERIFIED` / `POST_WORK_COMPLETED` → `AGENT_COMPLETE`: both are
+ * deleted. Measured on the author's install, ZERO of 3525 tasks had ever
+ * reached either one — they modelled a human-approval ceremony the product
+ * never actually performed. Landing on AGENT_COMPLETE (not COMPLETE) is the
+ * conservative direction: it keeps the row in the active list where its owner
+ * can see it, instead of silently declaring work finished.
+ *
+ * Phase lives in TWO places — the indexed `phase` column and `$.phase` inside
+ * the payload JSON. Both are rewritten in one transaction; migrating only the
+ * column would leave every read (which hydrates from payload) still seeing the
+ * old value. `updated_at` is left alone: renaming a phase is not a task edit,
+ * and bumping it would reshuffle every updated_at-sorted list on upgrade.
+ */
+function migratePhasesToFive(handle: DatabaseType): void {
+  const RENAMES: Array<[string, string]> = [
+    ['AWAIT_HUMAN_ACTION', 'WAIT'],
+    ['HUMAN_VERIFIED', 'AGENT_COMPLETE'],
+    ['POST_WORK_COMPLETED', 'AGENT_COMPLETE'],
+  ];
+
+  const summary = handle.transaction(() => {
+    const counts: Record<string, number> = {};
+    for (const [from, to] of RENAMES) {
+      const column = handle
+        .prepare(`UPDATE tasks SET phase = ? WHERE phase = ?`)
+        .run(to, from).changes;
+      const payload = handle
+        .prepare(
+          `UPDATE tasks SET payload = json_set(payload, '$.phase', ?)
+            WHERE payload IS NOT NULL AND json_valid(payload)
+              AND json_extract(payload, '$.phase') = ?`,
+        )
+        .run(to, from).changes;
+      if (column > 0 || payload > 0) counts[from] = Math.max(column, payload);
+    }
+    return counts;
+  })();
+
+  if (Object.keys(summary).length > 0) {
+    log.task.info('task-db v7: 7-phase lifecycle collapsed to 5', summary);
+  }
+}
+
+/**
+ * v7 → v8: `WAIT` → `TODO`. The WAIT phase is deleted: a blocked/parked task
+ * is just a TODO (row stays visible and actionable); deliberate parking is
+ * the 'wait' PIN TIER's job, which is orthogonal to phase. TODO (not
+ * AGENT_COMPLETE) is the right landing: WAIT rows were "waiting on something
+ * external", i.e. work not yet done — sending them to AGENT_COMPLETE would
+ * flag them all red+unread on upgrade. Same dual-write shape as v7: the
+ * indexed `phase` column and `$.phase` in the payload move in one transaction.
+ * `updated_at` untouched (a rename is not an edit); `unread` untouched (WAIT
+ * rows were unread=true, and their "look at me" claim is still honest until
+ * the human opens them).
+ */
+function migrateWaitToTodo(handle: DatabaseType): void {
+  const summary = handle.transaction(() => {
+    const column = handle
+      .prepare(`UPDATE tasks SET phase = 'TODO' WHERE phase = 'WAIT'`)
+      .run().changes;
+    const payload = handle
+      .prepare(
+        `UPDATE tasks SET payload = json_set(payload, '$.phase', 'TODO')
+          WHERE payload IS NOT NULL AND json_valid(payload)
+            AND json_extract(payload, '$.phase') = 'WAIT'`,
+      )
+      .run().changes;
+    return { migrated: Math.max(column, payload) };
+  })();
+
+  if (summary.migrated > 0) {
+    log.task.info('task-db v8: WAIT phase removed — rows moved to TODO', summary);
   }
 }
 

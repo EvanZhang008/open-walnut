@@ -4,8 +4,8 @@
  * Spins up a real server with Express + WebSocket, then tests:
  * 1. New tasks get phase=TODO by default
  * 2. Phase can be updated via PATCH /api/tasks/:id
- * 3. Phase drives derived status correctly (7→3 mapping)
- * 4. Phase cycling through all 7 states
+ * 3. Phase drives derived status correctly (4→3 mapping)
+ * 4. Phase cycling through all 4 states (WAIT removed 2026-08-18)
  * 5. Toggle complete uses phase (TODO ↔ COMPLETE)
  * 6. Invalid phase values are rejected with 400
  * 7. Legacy status-only updates derive phase
@@ -151,17 +151,14 @@ describe('Phase lifecycle E2E', () => {
     expect(updated.status).toBe('in_progress');
   });
 
-  // Test 3: Phase → status mapping for all 7 phases
-  it('all 7 phases derive correct status', async () => {
+  // Test 3: Phase → status mapping for all 4 phases (WAIT removed 2026-08-18)
+  it('all 4 phases derive correct status', async () => {
     const task = await createTask('Phase test: status mapping');
 
     const phaseToExpectedStatus: [string, string][] = [
       ['TODO', 'todo'],
       ['IN_PROGRESS', 'in_progress'],
       ['AGENT_COMPLETE', 'in_progress'],
-      ['AWAIT_HUMAN_ACTION', 'in_progress'],
-      ['HUMAN_VERIFIED', 'in_progress'],
-      ['POST_WORK_COMPLETED', 'in_progress'],
       ['COMPLETE', 'done'],
     ];
 
@@ -172,17 +169,14 @@ describe('Phase lifecycle E2E', () => {
     }
   });
 
-  // Test 4: Phase cycling through all 7 states in order
-  it('phase cycles through all 7 states in order', async () => {
+  // Test 4: Phase cycling through all 4 states in order (WAIT removed 2026-08-18)
+  it('phase cycles through all 4 states in order', async () => {
     const task = await createTask('Phase test: cycle');
     expect(task.phase).toBe('TODO');
 
     const cycle = [
       'IN_PROGRESS',
       'AGENT_COMPLETE',
-      'AWAIT_HUMAN_ACTION',
-      'HUMAN_VERIFIED',
-      'POST_WORK_COMPLETED',
       'COMPLETE',
       'TODO', // back to start (full loop)
     ];
@@ -194,18 +188,25 @@ describe('Phase lifecycle E2E', () => {
     }
   });
 
-  // Test 4b: AWAIT_HUMAN_ACTION phase derives in_progress status
-  it('AWAIT_HUMAN_ACTION phase derives in_progress status', async () => {
-    const task = await createTask('Phase test: await human action');
+  // Test 4b: the removed phase is rejected at the REST boundary (was "WAIT
+  // derives in_progress status"). VALID_PHASES no longer contains it, so PATCH
+  // answers 400 with the live enum instead of writing a phase nothing renders.
+  it('a retired WAIT phase is rejected with 400 (WAIT removed 2026-08-18)', async () => {
+    const task = await createTask('Phase test: retired phase rejected');
 
-    const updated = await updateTask(task.id, { phase: 'AWAIT_HUMAN_ACTION' });
-    expect(updated.phase).toBe('AWAIT_HUMAN_ACTION');
-    expect(updated.status).toBe('in_progress');
+    const res = await fetch(apiUrl(`/api/tasks/${task.id}`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phase: 'WAIT' }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: string };
+    expect(body.error).toContain('phase must be one of');
+    expect(body.error).not.toContain('WAIT');
 
-    // Verify persisted via GET
+    // The task is untouched — no half-applied write.
     const fetched = await getTask(task.id);
-    expect(fetched.phase).toBe('AWAIT_HUMAN_ACTION');
-    expect(fetched.status).toBe('in_progress');
+    expect(fetched.phase).toBe('TODO');
   });
 
   // Test 5: Toggle complete uses phase (TODO ↔ COMPLETE)
@@ -283,11 +284,13 @@ describe('Phase lifecycle E2E', () => {
       const task = await createTask('Phase test: WS event');
 
       const eventPromise = waitForWsEvent(ws, 'task:updated');
-      await updateTask(task.id, { phase: 'HUMAN_VERIFIED' });
+      // (WAIT removed 2026-08-18 — AGENT_COMPLETE is the handed-back phase that
+      // also derives in_progress, so the event shape under test is unchanged.)
+      await updateTask(task.id, { phase: 'AGENT_COMPLETE' });
 
       const event = await eventPromise;
       const eventTask = (event.data as { task: TaskResponse }).task;
-      expect(eventTask.phase).toBe('HUMAN_VERIFIED');
+      expect(eventTask.phase).toBe('AGENT_COMPLETE');
       expect(eventTask.status).toBe('in_progress');
     } finally {
       ws.close();

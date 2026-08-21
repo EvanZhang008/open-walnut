@@ -9,9 +9,6 @@ export const PHASE_TO_MS_STATUS: Record<TaskPhase, MSTodoStatus> = {
   TODO: 'notStarted',
   IN_PROGRESS: 'inProgress',
   AGENT_COMPLETE: 'inProgress',
-  AWAIT_HUMAN_ACTION: 'inProgress',
-  HUMAN_VERIFIED: 'inProgress',
-  POST_WORK_COMPLETED: 'inProgress',
   COMPLETE: 'completed',
 };
 

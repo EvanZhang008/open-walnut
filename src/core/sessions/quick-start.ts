@@ -280,7 +280,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   }
 
   // AUTO-ORGANIZE: fast-model project placement, replacing the old client-side
-  // "[Quick Start] …move the task" wake-up of the Personal AI. Only for
+  // "[Quick Start] …move the task" wake-up of the Personal AI agent. Only for
   // tasks the caller left unfiled — a caller that supplied a project
   // (fix-walnut, routines) placed the task deliberately; retries were already
   // organized (or deliberately left) on the original launch. Gated off in

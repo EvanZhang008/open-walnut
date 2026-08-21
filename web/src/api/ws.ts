@@ -35,6 +35,7 @@ type WsFrame = WsEventFrame | WsResFrame;
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected';
 type EventCallback = (data: unknown) => void;
+type AnyEventCallback = (name: string, data: unknown) => void;
 type ConnectionCallback = (state: ConnectionState) => void;
 
 let reqCounter = 0;
@@ -113,6 +114,9 @@ interface QueuedRpc {
 class WsClient {
   private ws: WebSocket | null = null;
   private eventListeners = new Map<string, Set<EventCallback>>();
+  // Wildcard listeners — see subscribeAll(). Deliberately separate from
+  // eventListeners so the named path stays a plain Map lookup.
+  private anyEventListeners = new Set<AnyEventCallback>();
   private connectionListeners = new Set<ConnectionCallback>();
   private pendingRpc = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; lowValue?: boolean }>();
   // RPCs issued before the socket reaches OPEN (cold-load race: useChat/session
@@ -242,6 +246,24 @@ class WsClient {
     log.debug('ws', `listener removed: "${name}"`, { remaining: set?.size ?? 0 });
   }
 
+  /**
+   * Subscribe to EVERY inbound event (name + data). Additive to onEvent, which
+   * stays the normal path — a component that knows its event names must use it.
+   *
+   * This exists for the plugin-app bridge: an app declares interest as name
+   * PREFIXES, so the host cannot enumerate the concrete names up front. The
+   * callback runs for every frame, so it must stay cheap (the bridge does one
+   * `startsWith` per registered prefix and drops non-matches). Returns an
+   * unsubscribe.
+   */
+  subscribeAll(cb: AnyEventCallback): () => void {
+    this.anyEventListeners.add(cb);
+    log.debug('ws', 'wildcard listener added', { count: this.anyEventListeners.size });
+    return () => {
+      this.anyEventListeners.delete(cb);
+    };
+  }
+
   onConnectionChange(cb: ConnectionCallback) {
     this.connectionListeners.add(cb);
   }
@@ -369,6 +391,15 @@ class WsClient {
       // the browser-logger forwarder. Surface via the frontend debug gate.
       const summary = this.summarizeEventData(frame.name, frame.data);
       log.debug('ws', `event "${frame.name}"`, { seq: frame.seq, listeners: listenerCount, ...summary });
+    }
+
+    // Wildcard listeners run regardless of whether a named listener exists.
+    for (const cb of this.anyEventListeners) {
+      try {
+        cb(frame.name, frame.data);
+      } catch (err) {
+        log.error('ws', `wildcard callback error for "${frame.name}"`, { error: String(err) });
+      }
     }
 
     if (!cbs) return;

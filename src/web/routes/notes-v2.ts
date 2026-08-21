@@ -19,6 +19,7 @@ import { withFileLock } from '../../utils/file-lock.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { log } from '../../logging/index.js'
 import { memoryNotesSearch } from '../../core/memory-search.js'
+import { timed } from '../../core/observability/metrics.js'
 import { isQmdBackgroundIndexRunning } from '../../core/qmd-background-indexer.js'
 import { getConfig } from '../../core/config-manager.js'
 import {
@@ -980,6 +981,17 @@ export interface NotesSearchPayload {
  * (search-memory-v1.ts). One implementation, two error shapes at the edges.
  */
 export async function performNotesSearch(opts: {
+  q: string
+  limit?: number
+  mode?: 'hybrid' | 'string' | 'semantic'
+  includeAll?: boolean
+}): Promise<NotesSearchPayload> {
+  // Metric per mode: `string` must stay double-digit ms (keystroke path);
+  // `hybrid` is the two-stage upgrade. A regression shows as a p90 split.
+  return timed('search.notes', () => performNotesSearchInner(opts), { mode: opts.mode || 'hybrid' })
+}
+
+async function performNotesSearchInner(opts: {
   q: string
   limit?: number
   mode?: 'hybrid' | 'string' | 'semantic'

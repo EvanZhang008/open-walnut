@@ -79,6 +79,7 @@ import type { SyncPollContext } from '../core/integration-types.js'
 import { syncReconciler } from '../core/sync-reconciler.js'
 import { integrationsRouter } from './routes/integrations.js'
 import { createPluginSourcesRouter } from './routes/plugin-sources.js'
+import { appsRouter, pluginAppStaticRouter } from './routes/apps.js'
 import { systemRouter } from './routes/system.js'
 import { cloudSetupRouter } from './routes/cloud-setup.js'
 import { qmdRouter } from './routes/qmd.js'
@@ -114,6 +115,7 @@ import { notesExtrasV1Router } from './routes/notes-extras-v1.js'
 import { libraryV1Router } from './routes/library-v1.js'
 import { consoleExtrasV1Router } from './routes/console-extras-v1.js'
 import { incidentsRouter } from './routes/incidents.js'
+import { metricsRouter } from './routes/metrics.js'
 import { clientEvidenceRouter } from './routes/client-evidence.js'
 import { notificationsRouter } from './routes/notifications.js'
 import { hooksRouter } from './routes/hooks.js'
@@ -1102,6 +1104,17 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   const pluginRouter = Router()
   app.use('/api/plugins', pluginRouter)
 
+  // Plugin apps: the catalogue (under /api, so it inherits auth) and the static
+  // file surface for a plugin's own HTML. Both read the registry live per request,
+  // so ONE mount here covers plugins installed later by the plugin-store soft
+  // reload — nothing to re-mount, nothing to double-register.
+  //
+  // /plugin-apps MUST be mounted here, ahead of the production SPA static
+  // middleware and its catch-all index.html fallback further down; otherwise every
+  // app URL would serve the Walnut shell instead of the plugin's page.
+  app.use('/api/apps', appsRouter)
+  app.use('/plugin-apps', pluginAppStaticRouter)
+
   app.use('/api/system', systemRouter)
   // One-click cloud-companion provisioning (Mac-side job engine).
   app.use('/api/cloud-setup', cloudSetupRouter)
@@ -1158,7 +1171,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // B-class relay on a REPLICA.
   app.use('/api/v1', sessionExtrasV1Router)
   // File browsing (additive, Wave 2): list/resolve relay on a REPLICA;
-  // file-content never rides the bridge (see files-v1.ts threat model).
+  // file-content reads relay via the bounded fs.readBounded bridge command
+  // (2MB cap + host-side sandbox — see files-v1.ts / file-content-bridge.ts).
   app.use('/api/v1', filesV1Router)
   // Console reads (additive, Wave 2): config allowlist projection (A),
   // usage overview (C: 501 on replica), slash-commands (B), skills read (A).
@@ -1180,6 +1194,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/audio', audioRouter)
   app.use('/api/stt', sttRouter)
   app.use('/api/incidents', incidentsRouter)
+  app.use('/api/metrics', metricsRouter)
   app.use('/api/client-evidence', clientEvidenceRouter)
   app.use('/api/notifications', notificationsRouter)
   app.use('/api/hooks', hooksRouter)
@@ -1373,6 +1388,18 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     initIncidentSink()
   } catch (err) {
     log.web.warn('forensic observability incident sink not initialized', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+
+  // -- Metrics registry: periodic flush of windowed histograms (http/llm/tool/
+  //    search/event-loop latencies) into `obs` wide log lines. The live registry
+  //    is served at GET /api/metrics. --
+  try {
+    const { startMetricsFlush } = await import('../core/observability/metrics.js')
+    startMetricsFlush()
+  } catch (err) {
+    log.web.warn('metrics flush loop not started', {
       error: err instanceof Error ? err.message : String(err),
     })
   }
@@ -1983,7 +2010,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // emitting bus events (reconnect replays, plugin sync mutating tasks) and
   // hooks registered after the fact would silently miss them.
   try {
-    const { SessionHookDispatcher, builtinHooks, builtinTaskHooks, discoverFileHooks, setSessionHookDispatcher } = await import('../core/session-hooks/index.js')
+    const { SessionHookDispatcher, builtinHooks, discoverFileHooks, setSessionHookDispatcher } = await import('../core/session-hooks/index.js')
     const { loadConfigHooks, mergedOverrides } = await import('../core/hooks/config-hooks.js')
     const { getConfig: getHooksConfig } = await import('../core/config-manager.js')
     const bootConfig = await getHooksConfig()
@@ -1992,7 +2019,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     } else {
       const fileHooks = await discoverFileHooks()
       const buildDefs = (cfg: typeof bootConfig) =>
-        [...builtinHooks, ...builtinTaskHooks, ...fileHooks, ...loadConfigHooks(cfg)]
+        [...builtinHooks, ...fileHooks, ...loadConfigHooks(cfg)]
       const buildCfg = (cfg: typeof bootConfig) =>
         ({ ...cfg.session_hooks, overrides: mergedOverrides(cfg) })
       const hookDispatcher = new SessionHookDispatcher(buildCfg(bootConfig))
@@ -2012,6 +2039,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         }).catch((err) => {
           log.web.warn('hook dispatcher reload failed', { error: err instanceof Error ? err.message : String(err) })
         })
+        // Daemon-runtime hooks ride the same trigger: recompile the YAML rules
+        // and hot-push to every connected daemon (hash-skipped when unchanged).
+        void import('../providers/daemon-connection.js').then(({ pushDaemonHooksToAllHosts }) => {
+          pushDaemonHooksToAllHosts()
+        }).catch(() => {})
       }, { global: true, interest: ['config:changed'] })
       log.web.info('hook dispatcher initialized', { cloudMode: CLOUD_MODE })
     }
@@ -2292,16 +2324,16 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // session:text-delta handler below for why this lives on the delta path.
   const streamingPhaseChecked = new Set<string>()
 
-  // Enforce the invariant "a session producing real output cannot be
-  // AWAIT_HUMAN_ACTION" at the SOLE point every streaming turn must pass through:
+  // Enforce the invariant "a session producing real output cannot be in WAIT"
+  // at the SOLE point every streaming turn must pass through:
   // the text/thinking delta. The discrete session:status-changed{running} signal
   // MISSES pure-text turns — claude-code-session.ts emits text-delta WITHOUT an
   // accompanying emitStatusChanged('IN_PROGRESS') (only init / ExitPlanMode / mode
-  // changes emit that), so a task left stuck at AWAIT_HUMAN_ACTION by a transient
+  // changes emit that), so a task left stuck at WAIT by a transient
   // session:error never gets corrected while the agent visibly streams text. A
   // real delta is ground truth that the CLI is producing output right now (replay
   // is deduped upstream via _emittedStreamKeys, so this only fires on live output).
-  // sessionStreamingPhase() only touches AWAIT_HUMAN_ACTION → a genuinely
+  // sessionStreamingPhase() only touches WAIT → a genuinely
   // human-paused task is never disturbed unless output actually resumes.
   const enforceStreamingPhase = (sessionId: string, taskId?: string, replayed?: boolean): void => {
     if (!taskId || streamingPhaseChecked.has(sessionId)) return
@@ -2314,7 +2346,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // Guard (incident 10e7df54): a daemon REPLAY delta must never raise the phase.
         // After a server restart the fresh session object has an empty stream-dedup set,
         // so replayed deltas pass upstream dedup and land here looking like live output —
-        // in that incident one raised AWAIT_HUMAN_ACTION back to IN_PROGRESS on a session
+        // in that incident one raised WAIT back to IN_PROGRESS on a session
         // whose turn had already ended, wedging the task.
         //
         // The verdict is POSITIONAL when available: `replayed` carries the emitter's
@@ -2707,10 +2739,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             lastMarkStreamingAt.set(sid, Date.now())
           }
           // Invariant: a streaming session can't be "awaiting human action".
-          // Undo a stale AWAIT_HUMAN_ACTION left by a transient/late session:error
+          // Undo a stale WAIT left by a transient/late session:error
           // that lost the race against recovery (e.g. clean turn-end at send-time
           // → --resume recovered the session, but the bogus error flipped phase).
-          // sessionStreamingPhase() only touches AWAIT_HUMAN_ACTION, so a session
+          // sessionStreamingPhase() only touches WAIT, so a session
           // a human genuinely paused is unaffected until output actually resumes.
           //
           // Only correct on a genuine session-runner streaming signal —
@@ -2920,7 +2952,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             await clearSession(taskId, sessionId).catch(() => {})
             bus.emit(EventNames.TASK_UPDATED, { task }, ['web-ui'], { source: 'session-error' })
           } catch (err) { log.web.warn('failed to clear session slot', { sessionId, taskId, error: String(err) }) }
-          // Phase sync: session error → AWAIT_HUMAN_ACTION
+          // Phase sync: session error → WAIT
           try {
             const { applySessionPhase } = await import('../core/phase.js')
             await applySessionPhase(taskId, 'session:error', 'server.ts:session-result-error', { sessionId })
@@ -3052,7 +3084,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           // Also clear new single-slot field (parallel 1-slot transition)
           await clearSession(taskId, sessionId).catch(() => {})
         } catch (err) { log.web.warn('failed to clear session slot', { sessionId, taskId, error: String(err) }) }
-        // Phase sync: session error → AWAIT_HUMAN_ACTION
+        // Phase sync: session error → WAIT
         try {
           const { applySessionPhase } = await import('../core/phase.js')
           await applySessionPhase(taskId, 'session:error', 'server.ts:session-error', { sessionId })
@@ -3330,20 +3362,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           }, ['web-ui'])
         }
 
-        // Synchronous, not delayed. The old setTimeout(5000) caused a cross-turn race:
-        // if a new session:input arrived during the 5s window, the delayed callback
-        // would overwrite the correct IN_PROGRESS with AWAIT_HUMAN_ACTION.
-        //
-        // Synchronous phase check: if triage completed but task is still at AGENT_COMPLETE,
-        // the triage failed to act. Transition to AWAIT_HUMAN_ACTION immediately (no timer).
-        if (taskId) {
-          try {
-            const { applySessionPhase } = await import('../core/phase.js')
-            await applySessionPhase(taskId, 'triage-sync', 'server.ts:triage-done', { sessionId: runId })
-          } catch (err) {
-            log.web.warn('triage phase sync error', { taskId, error: err instanceof Error ? err.message : String(err) })
-          }
-        }
+        // Post-triage phase sync: RETIRED 2026-08-17 (inc-1786983019552) — it
+        // pushed AGENT_COMPLETE → WAIT after every triage, repainting normal
+        // completions as "waiting on a human" with zero added signal. WAIT is
+        // reserved for genuine blockage (session:error / idle-timeout kill /
+        // all-dead reconcile); AGENT_COMPLETE is the terminal state of a
+        // normal turn.
       } else {
         // Non-triage subagent: persist full result as notification
         const usageStr = usage ? ` (${usage.input_tokens}+${usage.output_tokens} tokens)` : ''
@@ -3877,7 +3901,10 @@ function startPluginSyncPolling(): void {
   }
   // Idempotent: callable again after a plugin soft-reload — only plugins that
   // don't have a polling loop yet get one (existing loops keep running).
-  const plugins = registry.getAll().filter(p => p.id !== 'local' && !pollingPluginIds.has(p.id))
+  // hasSync === false means a ui/tools/skills-only plugin whose `sync` is an
+  // inert stub: polling it would burn a timer forever to call no-ops.
+  const plugins = registry.getAll().filter(p =>
+    p.id !== 'local' && p.hasSync !== false && !pollingPluginIds.has(p.id))
   for (const p of plugins) pollingPluginIds.add(p.id)
   const FIRST_TICK_DELAY_MS = 60_000 // boot grace — let startup quiet down first
   // Yield to the event loop every N sync iterations — a compromise between two

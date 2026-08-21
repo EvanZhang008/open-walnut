@@ -448,7 +448,6 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
                 background: parent.status === 'done' ? '#34c759'
                   : parent.phase === 'IN_PROGRESS' ? '#007aff'
                   : parent.phase === 'AGENT_COMPLETE' ? 'var(--error)'
-                  : parent.phase === 'AWAIT_HUMAN_ACTION' ? 'var(--error)'
                   : 'var(--text-secondary)',
               }} />
               <span style={{ fontSize: '0.9rem' }}>{parent.title}</span>
@@ -484,7 +483,6 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
                   background: child.status === 'done' ? '#34c759'
                     : child.phase === 'IN_PROGRESS' ? '#007aff'
                     : child.phase === 'AGENT_COMPLETE' ? 'var(--error)'
-                    : child.phase === 'AWAIT_HUMAN_ACTION' ? 'var(--error)'
                     : 'var(--text-secondary)',
                   opacity: child.status === 'done' ? 0.6 : 1,
                 }} />

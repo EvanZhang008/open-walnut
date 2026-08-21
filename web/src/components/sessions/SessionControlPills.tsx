@@ -55,6 +55,27 @@ function PlanIcon() {
 }
 
 /**
+ * ChatGPT's EXACT wording overlaid on codex's three presets (user request:
+ * same labels as the ChatGPT desktop app, minus Custom). Values stay the
+ * provider's own ids — only the display strings change, so setControl and
+ * config replay are untouched. Unknown values fall back to provider text.
+ */
+const CHATGPT_MODE_WORDING: Record<string, { name: string; description: string }> = {
+  'read-only': {
+    name: 'Ask for approval',
+    description: 'Always ask to edit external files and use the internet',
+  },
+  'agent': {
+    name: 'Approve for me',
+    description: 'Only ask for actions detected as potentially unsafe',
+  },
+  'agent-full-access': {
+    name: 'Full access',
+    description: 'Unrestricted access to the internet and any file on your computer',
+  },
+};
+
+/**
  * ChatGPT-parity approval menu: ONE pill (current mode) opening a dropdown of
  * the provider's own options — icon + name + description, check on the RIGHT,
  * full-access row in warning orange. Plan mode rides as a toggle row at the
@@ -108,11 +129,11 @@ export function SessionControlPills({
           className="mode-toggle-pill"
           aria-haspopup="listbox"
           aria-expanded={open}
-          title={`${mode.name}: ${current?.name ?? mode.currentValue}`}
+          title={`${mode.name}: ${CHATGPT_MODE_WORDING[mode.currentValue]?.name ?? current?.name ?? mode.currentValue}`}
           onClick={() => setOpen((value) => !value)}
         >
           <span className="mode-toggle-pill-label">
-            {current?.name ?? mode.currentValue}
+            {CHATGPT_MODE_WORDING[mode.currentValue]?.name ?? current?.name ?? mode.currentValue}
           </span>
           {showModeShortcut && (
             <span className="mode-toggle-pill-shortcut">{'⇧'}Tab</span>
@@ -143,9 +164,13 @@ export function SessionControlPills({
                     <ModeIcon value={option.value} />
                   </span>
                   <span className="session-control-option-copy">
-                    <span className="session-control-option-name">{option.name}</span>
-                    {option.description && (
-                      <span className="session-control-option-description">{option.description}</span>
+                    <span className="session-control-option-name">
+                      {CHATGPT_MODE_WORDING[option.value]?.name ?? option.name}
+                    </span>
+                    {(CHATGPT_MODE_WORDING[option.value]?.description ?? option.description) && (
+                      <span className="session-control-option-description">
+                        {CHATGPT_MODE_WORDING[option.value]?.description ?? option.description}
+                      </span>
                     )}
                   </span>
                   <span className="session-control-option-check" aria-hidden>{active ? '✓' : ''}</span>

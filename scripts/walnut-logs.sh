@@ -23,6 +23,8 @@
 #   scripts/walnut-logs.sh daemon <sid>         which daemon log serves a sid + its lines
 #   scripts/walnut-logs.sh jsonl <sid>          locate + tail a session's CLI .jsonl stream
 #   scripts/walnut-logs.sh bundle <sid> [mins]  freeze an all-layer evidence bundle for a sid (mirrors the in-process captureBundle)
+#   scripts/walnut-logs.sh metrics [pfx] [mins] windowed latency histograms (http/llm/tool/search/eventloop; prefix filter, default 60min; live: GET /api/metrics)
+#   scripts/walnut-logs.sh ttft [sid] [mins]    ⭐ time-to-first-text per turn: turn wide-event firstThinking/Text/Tool + per-layer first-emit/arrival lines — attributes "text shows late" to model vs pipeline
 #   scripts/walnut-logs.sh errors [n]           last n ERR/WARN lines (default 40)
 #   scripts/walnut-logs.sh grep <pattern>       raw grep across today's JSON log
 #   scripts/walnut-logs.sh tail [n]             follow the live JSON log (n lines back, default 40)
@@ -439,6 +441,52 @@ PY
     need_log; n="${1:-40}"
     echo "── last $n WARN/ERR lines ──"
     grep -aE '"level":"(warn|error)"' "$JSON_LOG" | tail -"$n" | fmt
+    ;;
+
+  metrics)
+    # metrics [prefix] [mins] — windowed histograms flushed by the metrics
+    # registry (subsystem=obs, message=metric). Live view: GET /api/metrics.
+    need_log; pfx="${1:-}"; mins="${2:-60}"
+    if [[ "$mins" == "0" ]]; then since="1970-01-01T00:00:00Z"; else
+      since=$(date -u -v "-${mins}M" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || date -u -d "-${mins} minutes" '+%Y-%m-%dT%H:%M:%S')
+    fi
+    echo "── metric windows (prefix='${pfx:-*}', last ${mins}min; UTC) ──"
+    grep -aF '"message":"metric"' "$JSON_LOG" | jq -r --arg pfx "$pfx" --arg since "$since" '
+      select(.time >= $since) | select(.metric | startswith($pfx)) |
+      "\(.time[11:19]) \(.metric)\(if .labels then (.labels|to_entries|map("\(.key)=\(.value)")|join(",")|" {"+.+"}") else "" end) n=\(.count) avg=\(.avg) p50=\(.p50) p90=\(.p90) p99=\(.p99) max=\(.max)"'
+    ;;
+
+  ttft)
+    # ttft [sid] [mins] — time-to-first-text attribution (inc-1786665503510).
+    # Three evidence families, one timeline:
+    #   1. obs turn wide-events: firstThinkingMs/firstTextMs/firstToolMs (server
+    #      bus emit times, anchored at the turn-start FIFO write)
+    #   2. per-layer first-emit lines: server "first text emit of turn",
+    #      browser "first text-delta arrived" / "first text flush to blocks"
+    #   3. daemon "ttft:" lines live in the DAEMON's log on the exec host —
+    #      surfaced here as a reminder, fetch with: walnut-logs.sh daemon <sid>
+    # Reading: firstTextMs >> firstThinkingMs/firstToolMs = model produced text
+    # late (upstream). server-emit ≈ browser-arrival ≈ flush = pipeline healthy.
+    need_log; sid="${1:-}"; mins="${2:-60}"
+    if [[ "$mins" == "0" ]]; then since="1970-01-01T00:00:00Z"; else
+      since=$(date -u -v "-${mins}M" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || date -u -d "-${mins} minutes" '+%Y-%m-%dT%H:%M:%S')
+    fi
+    echo "── per-turn TTFT (wide events${sid:+, sid=$sid}; last ${mins}min; UTC) ──"
+    grep -aF '"message":"turn"' "$JSON_LOG" | jq -r --arg sid "$sid" --arg since "$since" '
+      select(.time >= $since) | select($sid == "" or .sessionId == $sid) |
+      "\(.time[11:19]) sid=\(.sessionId[0:8]) turn=\(.durationMs)ms firstThinking=\(.firstThinkingMs // "-")ms firstText=\(.firstTextMs // "-")ms firstTool=\(.firstToolMs // "-")ms delivery=\(.deliveryMs // "-")ms(\(.deliveryPath // "?"))"'
+    echo ""
+    echo "── per-layer first-emit / arrival lines (server emit + browser arrival/flush) ──"
+    # Browser-forwarded lines carry a "[stream] " message prefix and their
+    # sessionId inside the stringified `args`, not as a top-level field.
+    grep -aE '"message":"(\[stream\] )?(first (thinking|text|tool) emit of turn|first text-delta arrived|first text flush to blocks( \(sync\))?)"' "$JSON_LOG" | \
+      jq -r --arg sid "$sid" --arg since "$since" '
+        select(.time >= $since) |
+        (.sessionId // (try (.args | fromjson | .sessionId) catch null)) as $rowSid |
+        select($sid == "" or $rowSid == $sid) |
+        "\(.time[11:23]) [\(.subsystem)] \(.message)\(if .sinceTurnStartMs != null then " +\(.sinceTurnStartMs)ms" else "" end) sid=\(($rowSid // "?")[0:8])"'
+    echo ""
+    echo "(daemon-side 'ttft:' lines live on the exec host's daemon log — see: $0 daemon <sid>)"
     ;;
 
   grep)

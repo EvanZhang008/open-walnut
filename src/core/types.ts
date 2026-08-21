@@ -3,9 +3,6 @@ export type TaskPhase =
   | 'TODO'
   | 'IN_PROGRESS'
   | 'AGENT_COMPLETE'
-  | 'AWAIT_HUMAN_ACTION'
-  | 'HUMAN_VERIFIED'
-  | 'POST_WORK_COMPLETED'
   | 'COMPLETE';
 export type TaskPriority = 'immediate' | 'important' | 'backlog' | 'none';
 /** Canonical list of valid priority values — use for runtime validation. */
@@ -530,6 +527,9 @@ export interface Task {
     provider?: SessionProvider;
     engine?: SessionEngine;
     planCompleted?: boolean;
+    /** Pending permission/AskUserQuestion tool name — the CLI is blocked on a
+     *  human click; drives the red waiting circle/pill in task lists. */
+    pendingPermissionTool?: string;
   };
   /** @deprecated Use session_id instead. Kept for backward compat during migration. */
   plan_session_id?: string;
@@ -589,7 +589,7 @@ export interface Task {
    *
    * Semantics: "the agent produced something the human has not looked at yet".
    * Set true by the phase machine whenever a session hands work back
-   * (AGENT_COMPLETE — turn finished; AWAIT_HUMAN_ACTION — errored / needs a
+   * (AGENT_COMPLETE — turn finished; WAIT — errored / needs a
    * decision). Set false the moment the human OPENS the task — that IS the read
    * event — and on IN_PROGRESS / COMPLETE. See readMarkerForPhase in phase.ts.
    *
@@ -1397,6 +1397,13 @@ export interface SessionStatusSnapshot {
   errorMessage: string | null;
   provider: SessionProvider;
   engine: SessionEngine;
+  /** Tool name of the pending permission/AskUserQuestion prompt the CLI is
+   *  paused on, or null. ADDITIVE to the frozen v1 contract (old clients
+   *  ignore it). This is what lets EVERY status consumer (task-list pills,
+   *  iOS) derive the red "Waiting" display — before this, only the session
+   *  panel (which reads the full record) could see it, so list surfaces
+   *  showed a calm blue for sessions blocked on a human click. */
+  pendingPermissionTool: string | null;
   statusRevision: number;
   statusUpdatedAt: string;
 }
@@ -1413,6 +1420,9 @@ export interface AcpSessionCapabilities {
   forkSession: boolean;
   resumeSession: boolean;
   closeSession: boolean;
+  /** Adapter advertises mid-turn steering (`_meta.steering.supported`). Absent
+   *  on records persisted before the steering feature — treat as false. */
+  steering?: boolean;
 }
 
 /** One MCP server mount, in `--mcp-config`'s stdio shape. */
@@ -1556,13 +1566,14 @@ export interface SessionRecord {
   /** ISO timestamp at which statusRevision last changed. */
   statusUpdatedAt?: string;
   /** Pending permission request — persisted so it survives server crashes.
-   *  Set when Claude Code emits control_request, cleared on resolve. */
+   *  Set when a provider asks for approval, cleared on resolve. */
   pendingPermission?: {
     requestId: string;
     subtype?: string;     // control_request subtype (e.g. 'can_use_tool')
     toolName?: string;
     input?: Record<string, unknown>;
     reason?: string;
+    acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
     receivedAt: string;  // ISO timestamp — for stale detection
   };
   /** Consumed-offset watermark: byte position (the daemon's `v`) of the last

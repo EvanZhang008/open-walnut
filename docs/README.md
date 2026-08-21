@@ -47,6 +47,8 @@ must live under one of these top-level categories instead of directly under
 - [Heartbeat example](reference/heartbeat-example.md)
 - [ACP seam map](reference/acp-seam-map.md)
 - [Frozen API v1 contract](reference/api-v1.md)
+- [Plugin development](reference/plugin-development.md) - manifest, capabilities,
+  PluginApi, the app SDK, distribution via any git repo, and troubleshooting.
 - [Cloud sync](reference/cloud-sync.md) - one-click cloud-companion setup, the
   git-over-HTTPS data plane, and the live-session bridge.
 - [Claude model configuration](reference/claude-model-configuration.md)

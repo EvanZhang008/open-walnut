@@ -35,23 +35,18 @@ import type { SessionRecord } from './types.js'
 import { log } from '../logging/index.js'
 
 // ── Retry-exhaustion signature ──
-// The CLI surfaces retry exhaustion as an error result whose text contains
-// "Request timed out"; the `--debug` trace marks the same event `api_timeout`.
-// Both are the SAME underlying failure, so matching either on the result text is
-// sufficient and needs no remote debug-file read.
-// "The operation timed out." is the undici/fetch AbortSignal timeout text the CLI
-// passes through verbatim ("API Error: The operation timed out.") — observed
-// 2026-07-31 on clouddev sessions; same terminal retry-exhaustion failure, so it
-// must trigger auto-continue too.
-const RETRY_EXHAUSTION_PATTERNS: RegExp[] = [
-  /request timed out/i,
-  /operation timed out/i,
-  /\bapi_timeout\b/i,
-]
+// ONE signature list for "transient upstream turn death", shared with the
+// daemon's turn-retry layer (classifyTurnError in providers/daemon-core.ts —
+// allowlist audited from real log corpora, terminal-wins semantics so refusals /
+// auth failures / context overflow NEVER trigger a retry loop). This module used
+// to keep its own 3-pattern list, which is exactly how "API Error: Server error
+// mid-response." slipped through on 2026-08-13: the daemon's list had it, this
+// one didn't. Never maintain two lists again.
+import { classifyTurnError } from '../providers/daemon-core.js'
 
 export function matchesRetryExhaustion(text: string | null | undefined): boolean {
   if (!text) return false
-  return RETRY_EXHAUSTION_PATTERNS.some((re) => re.test(text))
+  return classifyTurnError(text) === 'retryable'
 }
 
 // ── Config ──

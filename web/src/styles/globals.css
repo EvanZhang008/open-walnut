@@ -388,6 +388,16 @@ select {
   margin: 6px 12px;
 }
 
+/* Plugin-app entries: a plugin-supplied icon sits where an inline SVG would,
+   so it must match the 18px svg box exactly or the labels stop aligning. */
+.sidebar-app-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
 /* Sidebar collapse */
 
 .sidebar {
@@ -24198,6 +24208,84 @@ a.file-link:hover {
 .session-code-error-title { font-size: 15px; font-weight: 600; }
 .session-code-error-body { font-size: 13px; color: var(--fg-muted); max-width: 480px; }
 .session-code-error-hint { font-size: 12px; color: var(--fg-muted); max-width: 480px; }
+
+/* ===== Plugin app page (/apps/:appId) ===== */
+/* Full-bleed: AppShell drops its gutter for /apps, so the iframe fills the
+   content area. flex column + min-height:0 or the iframe collapses to zero. */
+.plugin-app-page {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.plugin-app-iframe {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: none;
+  background: var(--bg);
+}
+
+.plugin-app-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 40px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--fg-muted);
+  background: var(--bg);
+}
+
+.plugin-app-spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: plugin-app-spin 0.8s linear infinite;
+}
+@keyframes plugin-app-spin { to { transform: rotate(360deg); } }
+
+.plugin-app-message-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px;
+  text-align: center;
+  color: var(--fg);
+  background: var(--bg);
+}
+.plugin-app-message-title { font-size: 15px; font-weight: 600; }
+.plugin-app-message-body { font-size: 13px; color: var(--fg-muted); max-width: 480px; }
+.plugin-app-message-body code {
+  font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
+  font-size: 12px;
+}
+
+.plugin-app-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.plugin-app-btn:hover { background: var(--bg-hover, var(--bg-tertiary)); }
 
 /* AgentDropdown — reveal rename/delete icon buttons only on row hover */
 .agent-dd-hover-btn { opacity: 0; transition: opacity 0.12s; }

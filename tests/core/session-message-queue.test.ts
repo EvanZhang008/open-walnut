@@ -19,6 +19,7 @@ import {
   editMessage,
   deleteMessage,
   getQueue,
+  isMessageQueued,
   getAllSessionsWithPending,
   migrateSessionQueue,
   rollbackSessionQueueMigration,
@@ -412,6 +413,27 @@ describe('delivery failure survival (Fix 2 regression)', () => {
     expect(after).toHaveLength(1);
     expect(after[0].status).toBe('pending');
     expect(after[0].message).toBe('survive restart');
+  });
+
+  // inc-1786774073558: the row a Retry must re-drain instead of re-enqueueing.
+  it('isMessageQueued sees the row through the whole failed-delivery cycle', async () => {
+    const msg = await enqueueMessage('sess-retry', 'retry me');
+    expect(await isMessageQueued('sess-retry', msg.id)).toBe(true);
+
+    const batch = await markProcessing('sess-retry');
+    // 'processing' still counts: delivery is in flight and hasn't settled, so
+    // enqueueing a copy beside it would re-open the doubling window.
+    expect(await isMessageQueued('sess-retry', msg.id)).toBe(true);
+
+    await revertToPending(batch);
+    expect(await isMessageQueued('sess-retry', msg.id)).toBe(true);
+
+    // Drained (really delivered) → a Retry may legitimately enqueue fresh.
+    await markProcessing('sess-retry');
+    await removeProcessed('sess-retry', [msg.id]);
+    expect(await isMessageQueued('sess-retry', msg.id)).toBe(false);
+    expect(await isMessageQueued('sess-retry', 'never-existed')).toBe(false);
+    expect(await isMessageQueued('no-such-session', msg.id)).toBe(false);
   });
 
   it('contrast: removeProcessed would have lost the message (documents the old bug)', async () => {

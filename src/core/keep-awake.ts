@@ -12,13 +12,13 @@
  *   - feature disabled (default — this is an opt-in advanced feature)
  *   - no local session has been 'running' for linger_minutes
  *   - on battery and charge ≤ battery_floor_pct (default 30%)
- *   - offline for ≥ offline_grace_minutes (default 30)
+ *   - offline for ≥ offline_grace_minutes (default 15)
  *
- * While holding and offline, macOS gets ~2 polls to auto-join a known network
- * itself; after that, if a hotspot SSID is configured, the monitor tries
- * `networksetup -setairportnetwork` every HOTSPOT_RETRY_MS. Best-effort: an
- * iPhone hotspot is only joinable while it is broadcasting (hotspot screen
- * open, or "Allow Others to Join" + Maximize Compatibility).
+ * This feature only prevents SYSTEM sleep. It does not assert display activity,
+ * so normal macOS display-sleep settings still turn the screen off. Network
+ * recovery is deliberately left to macOS/the user: on macOS 15, third-party code
+ * cannot wake a Bluetooth-discovered Instant Hotspot. If the Mac stays offline
+ * for the grace window, Walnut restores normal sleep.
  *
  * Safety: `disablesleep` is a global machine flag, so a crash while holding
  * would leave the Mac unable to sleep. Mitigations: the desired state is
@@ -39,25 +39,17 @@ export interface KeepAwakeConfig {
   enabled?: boolean;
   /** On battery power, release the hold at or below this charge. Default: 30. */
   battery_floor_pct?: number;
-  /** Release the hold after this many minutes without internet. Default: 30. */
+  /** Release the hold after this many minutes without internet. Default: 15. */
   offline_grace_minutes?: number;
   /** Keep holding this many minutes after the last running session ended, so
    *  back-to-back turns don't flap the hold. Default: 5. */
   linger_minutes?: number;
-  /** iPhone hotspot SSID to try joining when offline. Unset = never join. */
-  hotspot_ssid?: string;
-  /** Hotspot password (WPA). Redacted from cloud-mode config reads. */
-  hotspot_password?: string;
 }
 
 export const DEFAULT_BATTERY_FLOOR_PCT = 30;
-export const DEFAULT_OFFLINE_GRACE_MINUTES = 30;
+export const DEFAULT_OFFLINE_GRACE_MINUTES = 15;
 export const DEFAULT_LINGER_MINUTES = 5;
 const DEFAULT_POLL_INTERVAL_MS = 60_000;
-/** Give macOS this many consecutive offline polls to auto-join a known network
- *  before Walnut starts forcing the hotspot. */
-const HOTSPOT_MIN_OFFLINE_POLLS = 2;
-const HOTSPOT_RETRY_MS = 5 * 60_000;
 
 export type KeepAwakeReason = 'unsupported' | 'disabled' | 'needs-sudo' | 'no-sessions' | 'battery-low' | 'offline-too-long' | 'active';
 
@@ -76,7 +68,6 @@ export interface KeepAwakeState {
   needsSudo: boolean;
   /** True once the sudoers rule is verified installed (sudo -n -l probe). */
   setupDone: boolean | null;
-  lastHotspotAttempt: { at: string; ok: boolean; detail: string } | null;
   checkedAt: string | null;
 }
 
@@ -95,11 +86,21 @@ const defaultExec: ExecFn = async (cmd, args) => {
   }
 };
 
+/**
+ * A tethered connection can be slow. Measured on a live phone hotspot, this
+ * request took 0.3-4.0s across samples, so the original 4s deadline produced
+ * false offline readings on a working connection. A generous deadline costs one
+ * slow poll; a tight one can release the sleep hold incorrectly.
+ */
+const ONLINE_CHECK_TIMEOUT_MS = 12_000;
+
 async function defaultCheckOnline(): Promise<boolean> {
   // Any HTTP response at all counts — captive portals still mean a live NIC,
   // and the grace window is about "can sessions reach their APIs eventually".
   try {
-    await fetch('http://captive.apple.com/hotspot-detect.html', { signal: AbortSignal.timeout(4000) });
+    await fetch('http://captive.apple.com/hotspot-detect.html', {
+      signal: AbortSignal.timeout(ONLINE_CHECK_TIMEOUT_MS),
+    });
     return true;
   } catch {
     return false;
@@ -148,7 +149,6 @@ let state: KeepAwakeState = {
   offlineSince: null,
   needsSudo: false,
   setupDone: null,
-  lastHotspotAttempt: null,
   checkedAt: null,
 };
 
@@ -157,10 +157,7 @@ let state: KeepAwakeState = {
 let lastApplied: boolean | null = null;
 let lastRunningAtMs: number | null = null;
 let offlineSinceMs: number | null = null;
-let consecutiveOfflinePolls = 0;
-let lastHotspotAttemptMs: number | null = null;
 let notifiedNeedsSudo = false;
-let wifiDeviceCache: string | null = null;
 
 export function getKeepAwakeState(): Readonly<KeepAwakeState> {
   return { ...state };
@@ -178,16 +175,12 @@ export function resetKeepAwakeForTest(): void {
     offlineSince: null,
     needsSudo: false,
     setupDone: null,
-    lastHotspotAttempt: null,
     checkedAt: null,
   };
   lastApplied = null;
   lastRunningAtMs = null;
   offlineSinceMs = null;
-  consecutiveOfflinePolls = 0;
-  lastHotspotAttemptMs = null;
   notifiedNeedsSudo = false;
-  wifiDeviceCache = null;
 }
 
 /** The one-time root rule this feature needs, scoped to exactly two commands. */
@@ -266,84 +259,6 @@ async function readBattery(): Promise<BatteryStatus | null> {
   const m = res.stdout.match(/(\d{1,3})%/);
   if (!m) return null; // no battery lines — desktop Mac
   return { pct: Number(m[1]), onAc: res.stdout.includes("'AC Power'") };
-}
-
-async function findWifiDevice(): Promise<string | null> {
-  if (wifiDeviceCache) return wifiDeviceCache;
-  const res = await execImpl('/usr/sbin/networksetup', ['-listallhardwareports']);
-  if (!res.ok) return null;
-  const m = res.stdout.match(/Hardware Port: Wi-Fi\nDevice: (\S+)/);
-  wifiDeviceCache = m ? m[1] : null;
-  return wifiDeviceCache;
-}
-
-// ── Hotspot SSID discovery (settings UI helper) ─────────────────────────────
-
-export interface HotspotCandidate {
-  ssid: string;
-  /** Name looks like a phone hotspot (iPhone/iPad/hotspot/热点 …). */
-  likely: boolean;
-}
-
-const HOTSPOT_NAME_PATTERN = /iphone|ipad|phone|hotspot|热点|熱點/i;
-
-/**
- * Parse `networksetup -listpreferredwirelessnetworks` output into ranked
- * candidates: hotspot-looking names first, otherwise the Mac's own saved-
- * network priority order. Pure — unit-tested directly.
- */
-export function rankHotspotCandidates(preferredOutput: string): HotspotCandidate[] {
-  const ssids = preferredOutput
-    .split('\n')
-    .slice(1) // drop the "Preferred networks on en0:" header
-    .map((l) => l.trim())
-    .filter(Boolean);
-  return ssids
-    .map((ssid) => ({ ssid, likely: HOTSPOT_NAME_PATTERN.test(ssid) }))
-    .sort((a, b) => Number(b.likely) - Number(a.likely)); // stable: keeps saved order within each group
-}
-
-/**
- * The Mac's saved Wi-Fi networks, hotspot-looking names first. The menubar's
- * "Personal Hotspot" entry itself is Bluetooth-discovered (Apple-private, not
- * scriptable) — but a hotspot the Mac has EVER joined is in this saved list,
- * and rejoining a saved network needs no password (keychain supplies it).
- */
-export async function listHotspotCandidates(): Promise<HotspotCandidate[]> {
-  const device = await findWifiDevice();
-  if (!device) return [];
-  const res = await execImpl('/usr/sbin/networksetup', ['-listpreferredwirelessnetworks', device]);
-  if (!res.ok) return [];
-  return rankHotspotCandidates(res.stdout);
-}
-
-async function maybeJoinHotspot(cfg: KeepAwakeConfig, notify?: KeepAwakeNotify): Promise<void> {
-  if (!cfg.hotspot_ssid) return;
-  if (consecutiveOfflinePolls < HOTSPOT_MIN_OFFLINE_POLLS) return; // let macOS auto-join known networks first
-  const now = nowImpl();
-  if (lastHotspotAttemptMs !== null && now - lastHotspotAttemptMs < HOTSPOT_RETRY_MS) return;
-  lastHotspotAttemptMs = now;
-
-  const device = await findWifiDevice();
-  if (!device) {
-    state.lastHotspotAttempt = { at: new Date(now).toISOString(), ok: false, detail: 'no Wi-Fi device found' };
-    return;
-  }
-  const args = ['-setairportnetwork', device, cfg.hotspot_ssid];
-  if (cfg.hotspot_password) args.push(cfg.hotspot_password);
-  const res = await execImpl('/usr/sbin/networksetup', args);
-  // networksetup exits 0 even on failure and prints the error to stdout.
-  const failed = !res.ok || /could not find|failed to join|error/i.test(res.stdout);
-  const detail = failed ? (res.stdout || res.stderr).trim().slice(0, 200) || 'join failed' : `joined ${cfg.hotspot_ssid}`;
-  state.lastHotspotAttempt = { at: new Date(now).toISOString(), ok: !failed, detail };
-  log.web.info('keep-awake hotspot join attempt', { ssid: cfg.hotspot_ssid, device, ok: !failed, detail });
-  if (failed) {
-    notify?.(
-      'Keep-Awake: Hotspot Join Failed',
-      `No internet and joining "${cfg.hotspot_ssid}" failed (${detail}). The Mac will be allowed to sleep after the offline grace period.`,
-      'keep-awake:hotspot',
-    );
-  }
 }
 
 async function applyDisableSleep(desired: boolean, notify?: KeepAwakeNotify): Promise<boolean> {
@@ -426,10 +341,8 @@ export async function pollKeepAwakeOnce(notify: KeepAwakeNotify | undefined = mo
   if (runningLocalSessions > 0) lastRunningAtMs = now;
   if (online) {
     offlineSinceMs = null;
-    consecutiveOfflinePolls = 0;
   } else {
     offlineSinceMs ??= now;
-    consecutiveOfflinePolls += 1;
   }
   const offlineMinutes = offlineSinceMs === null ? 0 : (now - offlineSinceMs) / 60_000;
 
@@ -443,8 +356,6 @@ export async function pollKeepAwakeOnce(notify: KeepAwakeNotify | undefined = mo
     offlineGraceMinutes: cfg.offline_grace_minutes ?? DEFAULT_OFFLINE_GRACE_MINUTES,
     lingerMinutes: cfg.linger_minutes ?? DEFAULT_LINGER_MINUTES,
   });
-
-  if (decision.awake && !online) await maybeJoinHotspot(cfg, notify);
 
   const prevReason = state.reason;
   const applied = await applyDisableSleep(decision.awake, notify);
@@ -469,7 +380,6 @@ export async function pollKeepAwakeOnce(notify: KeepAwakeNotify | undefined = mo
     offlineSince: offlineSinceMs === null ? null : new Date(offlineSinceMs).toISOString(),
     needsSudo: state.needsSudo,
     setupDone: state.setupDone,
-    lastHotspotAttempt: state.lastHotspotAttempt,
     checkedAt: new Date(now).toISOString(),
   };
   return { ...state };

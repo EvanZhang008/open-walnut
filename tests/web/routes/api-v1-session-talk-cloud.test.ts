@@ -60,18 +60,32 @@ function authHeaders(): Record<string, string> {
 const TINY_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
-/** Happy-path daemon: alive session, image.save returns a host path. */
+/**
+ * Happy-path daemon: alive session, image.save returns a host path. The text
+ * send itself rides the durable `session.message` relay by default (the
+ * 2026-08-13 asymmetry fix); the OLD-DAEMON override below exercises the
+ * direct marker/send fallback.
+ */
 function daemonAnswers(overrides: Record<string, (params: Record<string, unknown>) => Record<string, unknown>> = {}) {
   let imageCounter = 0
   bridgeRequestMock.mockImplementation(async (_host: string, cmd: string, params: Record<string, unknown> = {}) => {
     if (overrides[cmd]) return overrides[cmd](params)
     switch (cmd) {
+      case 'session.message': return { ok: true, result: { messageId: params.messageId } }
       case 'status': return { ok: true, exists: true, alive: true }
       case 'appendUserMarker': return { ok: true }
       case 'send': return { ok: true }
       case 'image.save': return { ok: true, path: `/tmp/open-walnut/images/mobile/17000000${imageCounter++}-abcd1234.png`, size: 68 }
       default: return { ok: true }
     }
+  })
+}
+
+/** Same happy path, but the daemon predates session.message → the route
+ *  falls back to the loss-safe direct sequence (send first, marker after). */
+function oldDaemonAnswers() {
+  daemonAnswers({
+    'session.message': () => ({ ok: false, error: 'unknown command: session.message' }),
   })
 }
 
@@ -116,7 +130,7 @@ beforeEach(() => {
 })
 
 describe('POST /api/v1/sessions/:id/messages with images (CLOUD_MODE)', () => {
-  it('saves each image on the session host via image.save and sends the augmented text', async () => {
+  it('saves each image on the session host via image.save and relays the augmented text durably', async () => {
     daemonAnswers()
     const res = await postMessage({
       text: 'look at these on the cloud',
@@ -137,21 +151,40 @@ describe('POST /api/v1/sessions/:id/messages with images (CLOUD_MODE)', () => {
       expect(call[2]).toEqual({ data: TINY_PNG_BASE64, mediaType: expect.stringMatching(/^image\//) })
     }
 
-    // The FIFO send carries the augmented text: image-path list + original text,
-    // same format the primary box uses (CLI reads the files with its Read tool).
+    // The durable relay carries the augmented text: image-path list + original
+    // text, same format the primary box uses (CLI reads the files with Read).
+    const relay = bridgeRequestMock.mock.calls.find((c) => c[1] === 'session.message')
+    expect(relay).toBeDefined()
+    const sentText = (relay![2] as { message: string }).message
+    expect(sentText).toContain('[Images attached — use the Read tool to view them]')
+    expect(sentText).toMatch(/- \/tmp\/open-walnut\/images\/mobile\/\d+-abcd1234\.png/)
+    expect(sentText.endsWith('look at these on the cloud')).toBe(true)
+    expect((relay![2] as { messageId: string }).messageId).toBe(body.messageId)
+    // Images must be saved BEFORE the relay runs.
+    const firstSaveIdx = bridgeRequestMock.mock.calls.findIndex((c) => c[1] === 'image.save')
+    const relayIdx = bridgeRequestMock.mock.calls.findIndex((c) => c[1] === 'session.message')
+    expect(firstSaveIdx).toBeLessThan(relayIdx)
+  })
+
+  it('old daemon fallback: image send delivers via the direct sequence, marker AFTER send (ghost-bubble fix)', async () => {
+    oldDaemonAnswers()
+    const res = await postMessage({
+      text: 'look at these on an old daemon',
+      images: [{ data: TINY_PNG_BASE64, mediaType: 'image/png' }],
+    })
+    expect(res.status).toBe(202)
     const send = bridgeRequestMock.mock.calls.find((c) => c[1] === 'send')
     expect(send).toBeDefined()
     const sentText = (send![2] as { message: string }).message
     expect(sentText).toContain('[Images attached — use the Read tool to view them]')
-    expect(sentText).toMatch(/- \/tmp\/open-walnut\/images\/mobile\/\d+-abcd1234\.png/)
-    expect(sentText.endsWith('look at these on the cloud')).toBe(true)
-    // The marker (transcript echo) carries the same augmented text.
+    // The marker (transcript echo) carries the same augmented text — and lands
+    // strictly AFTER the confirmed delivery (the old marker-first order is what
+    // produced ghost user bubbles when the daemon died between the steps).
+    const cmds = bridgeRequestMock.mock.calls.map((c) => c[1] as string)
     const marker = bridgeRequestMock.mock.calls.find((c) => c[1] === 'appendUserMarker')
     expect((marker![2] as { message: string }).message).toBe(sentText)
-    // Images must be saved BEFORE the liveness precheck/send sequence runs.
-    const firstSaveIdx = bridgeRequestMock.mock.calls.findIndex((c) => c[1] === 'image.save')
-    const sendIdx = bridgeRequestMock.mock.calls.findIndex((c) => c[1] === 'send')
-    expect(firstSaveIdx).toBeLessThan(sendIdx)
+    expect(cmds.indexOf('send')).toBeGreaterThan(-1)
+    expect(cmds.indexOf('send')).toBeLessThan(cmds.indexOf('appendUserMarker'))
   })
 
   it('old daemon (unknown command) → 400 images_need_daemon_upgrade, nothing sent', async () => {
@@ -203,8 +236,8 @@ describe('POST /api/v1/sessions/:id/messages with images (CLOUD_MODE)', () => {
     const res = await postMessage({ text: 'text only, no images' })
     expect(res.status).toBe(202)
     expect(bridgeRequestMock.mock.calls.some((c) => c[1] === 'image.save')).toBe(false)
-    const send = bridgeRequestMock.mock.calls.find((c) => c[1] === 'send')
-    expect((send![2] as { message: string }).message).toBe('text only, no images')
+    const relay = bridgeRequestMock.mock.calls.find((c) => c[1] === 'session.message')
+    expect((relay![2] as { message: string }).message).toBe('text only, no images')
   })
 
   it('unknown session → 404 before any bridge traffic', async () => {

@@ -35,7 +35,7 @@ const HEALTH_V2 = process.env.WALNUT_HEALTH_V2 !== '0'
  * reaping forces a slow `--resume` spawn (~10s) and leaves a misleading
  * `[Request interrupted by user]` marker in the transcript (CLI SIGINT handler
  * writes it — there's no "silent shutdown" path in print mode). Users leaving
- * AWAIT_HUMAN_ACTION sessions overnight for review hit this constantly.
+ * handed-back (AGENT_COMPLETE) sessions overnight for review hit this constantly.
  *
  * Local sessions share the laptop's RAM/CPU, so we're stricter — but 30 min
  * was too aggressive for turns with long think time.
@@ -321,15 +321,19 @@ export class SessionHealthMonitor {
     }
     endPhase('loadTasks')
 
-    // Detect stale AWAIT_HUMAN_ACTION sessions (stuck sub-agents)
+    // Detect stale handed-back sessions (stuck sub-agents)
     if (ctx.overBudget()) return
-    await this.checkStaleAwaitingSessions(sessions, updateSessionRecord, taskMap)
+    // (checkStaleAwaitingSessions was deleted with the WAIT phase, 2026-08-18.
+    // It stamped `activity: "Possibly stuck — no output for N min"` on WAIT
+    // sessions; with handed-back work now living on AGENT_COMPLETE — the
+    // normal state of every finished session — the warning would fire on
+    // everything. Genuine wedges are covered by reconcileStuckRunningSessions.)
     endPhase('staleAwaiting')
 
     // Self-heal background-task panels for sessions that are NOT turn-over gating
-    // candidates (idle / AWAIT_HUMAN_ACTION) — checkHungSessions only runs for
+    // candidates (idle / WAIT) — checkHungSessions only runs for
     // process_status==='running', and checkIdleTimeout's own reconcile call is
-    // skipped entirely for AWAIT_HUMAN_ACTION and is a no-op once a `isBackgrounded`
+    // skipped entirely for WAIT and is a no-op once a `isBackgrounded`
     // task has already zeroed the turn-over count. Without this, a backgrounded
     // task's terminal event lost in a transport gap (SSH flap / daemon restart) has
     // NO tick that will ever PULL the daemon's authoritative state for it — the UI
@@ -471,7 +475,9 @@ export class SessionHealthMonitor {
                 error: err instanceof Error ? err.message : String(err),
               })
             }
-            // Phase sync: process death → AGENT_COMPLETE (has result) or AWAIT_HUMAN_ACTION (no result)
+            // Phase sync: process death → AGENT_COMPLETE either way (session:result
+            // with a result, session:error without — both land there since the
+            // WAIT phase removal 2026-08-18; the error detail lives on the record)
             try {
               const { applySessionPhase } = await import('./phase.js')
               await applySessionPhase(
@@ -591,9 +597,9 @@ export class SessionHealthMonitor {
   /**
    * PULL daemon-authoritative background-task state for every non-terminal session
    * still holding a non-terminal `_bgTasks` entry, REGARDLESS of process_status or
-   * task phase. This is the ONLY tick that reaches sessions in idle/AWAIT_HUMAN_ACTION
+   * task phase. This is the ONLY tick that reaches idle sessions
    * — checkHungSessions gates on process_status==='running', and checkIdleTimeout's
-   * isBackgroundWorkActive call both skips AWAIT_HUMAN_ACTION outright and would be a
+   * isBackgroundWorkActive call would be a
    * no-op anyway once a `isBackgrounded` task alone has zeroed the turn-over count
    * (see ClaudeCodeSession.hasPendingBackgroundTasks doc). Cheap: the session-side
    * check short-circuits before the daemon RPC when the task set has nothing
@@ -720,7 +726,7 @@ export class SessionHealthMonitor {
    * the transcript — see CLI print.ts SIGINT handler). Override via
    * config.session.idle_timeout_minutes (applies to both unless 0 = disabled).
    *
-   * Skips sessions whose task phase is AWAIT_HUMAN_ACTION — they're waiting for user input, not truly idle.
+   * (The old skip for WAIT-phase tasks went away with the WAIT phase, 2026-08-18.)
    */
   private async checkIdleTimeout(
     sessions: SessionRecord[],
@@ -786,9 +792,11 @@ export class SessionHealthMonitor {
         idleTimeoutMs = Math.max(idleTimeoutMs, CRON_ARMED_IDLE_TIMEOUT_MS)
       }
 
-      // Skip sessions whose task is awaiting human action — they're waiting for user input, not truly idle
-      const taskPhase = session.taskId ? taskMap.get(session.taskId)?.phase : undefined
-      if (taskPhase === 'AWAIT_HUMAN_ACTION') continue
+      // (The old WAIT-task exemption was deleted with the WAIT phase,
+      // 2026-08-18. It must NOT be re-pointed at AGENT_COMPLETE: that is now
+      // the normal post-turn state of every finished session, so exempting it
+      // would make nearly every idle CLI immortal. A reaped session resumes
+      // via --resume on the next send; nothing is lost.)
 
       // Skip team-active sessions — lead session is polling for in-process teammate
       // results (Claude Code team mode). No JSONL output during poll loop sleep, but
@@ -854,7 +862,7 @@ export class SessionHealthMonitor {
       if (idleDurationMs < idleTimeoutMs) continue
 
       // Second-line defense: if the session record shows a recent status
-      // transition (e.g. AWAIT_HUMAN_ACTION → IN_PROGRESS triggered by a
+      // transition (e.g. AGENT_COMPLETE → IN_PROGRESS triggered by a
       // fresh user message), treat that as activity even if lastEventAt is
       // stale. Otherwise a remote session that just received a new message
       // — but whose first JSONL response hasn't arrived yet — would be
@@ -930,7 +938,7 @@ export class SessionHealthMonitor {
 
       emitSessionStatusChanged(updated, {}, ['*'], { source: 'health-monitor' })
 
-      // Phase sync: idle timeout → AWAIT_HUMAN_ACTION (we killed the session, not a normal completion)
+      // Phase sync: idle timeout → WAIT (we killed the session, not a normal completion)
       if (session.taskId) {
         try {
           const { applySessionPhase } = await import('./phase.js')
@@ -950,66 +958,7 @@ export class SessionHealthMonitor {
     return killedIds
   }
 
-  /**
-   * Detect sessions that are "idle" with await_human_action but haven't produced
-   * any JSONL output for a long time. These sessions likely have stuck sub-agents.
-   * Emits a status change event so the UI shows a warning.
-   */
-  private async checkStaleAwaitingSessions(
-    sessions: SessionRecord[],
-    updateSessionRecord: (id: string, update: Record<string, unknown>) => Promise<SessionRecord>,
-    taskMap: Map<string, Task>,
-  ): Promise<void> {
-    const STALE_THRESHOLD_MS = 60 * 60 * 1000  // 1 hour with no output = stale
 
-    const { getRegisteredSessionManager } = await import('../providers/session-manager.js')
-
-    for (const session of sessions) {
-      // Check both running and idle — AWAIT_HUMAN_ACTION can be in either state
-      if (session.process_status === 'stopped' || session.process_status === 'error') continue
-      const taskPhase = session.taskId ? taskMap.get(session.taskId)?.phase : undefined
-      if (taskPhase !== 'AWAIT_HUMAN_ACTION') continue
-
-      // Determine last activity time via session manager or file mtime
-      const mgr = getRegisteredSessionManager(session.claudeSessionId)
-      let lastActiveMs: number
-      if (mgr) {
-        lastActiveMs = mgr.lastEventAt
-        if (lastActiveMs === 0) continue  // No events yet — not stale
-      } else if (session.outputFile && !session.outputFile.startsWith('remote://')) {
-        try {
-          lastActiveMs = (await fsp.stat(session.outputFile)).mtimeMs
-        } catch {
-          continue
-        }
-      } else {
-        continue  // No manager and no output file (or remote sentinel) — skip
-      }
-
-      const ageMs = Date.now() - lastActiveMs
-      if (ageMs < STALE_THRESHOLD_MS) continue  // Still active
-
-      // Output is stale — update activity to warn user
-      const staleMinutes = Math.round(ageMs / 60_000)
-      log.session.warn('health monitor: await_human_action session has stale output', {
-        sessionId: session.claudeSessionId,
-        taskId: session.taskId,
-        staleMinutes,
-      })
-
-      const updated = await updateSessionRecord(session.claudeSessionId, {
-        activity: `Possibly stuck — no output for ${staleMinutes} min`,
-        last_status_change: new Date().toISOString(),
-      })
-
-      emitSessionStatusChanged(
-        updated,
-        { phase: 'AWAIT_HUMAN_ACTION' as TaskPhase },
-        ['*'],
-        { source: 'health-monitor' },
-      )
-    }
-  }
 
   /**
    * C2 snapshot pull channel (contract §5): every 30s tick, for records in
@@ -1469,18 +1418,47 @@ export class SessionHealthMonitor {
     // Collect primary sessions per task, then decide phase per task.
     const taskSessions = new Map<string, { alive: SessionRecord[]; dead: SessionRecord[] }>()
 
+    // Freshness grace: the reconciler exists for tasks STUCK at IN_PROGRESS,
+    // not tasks that just started a turn. A send flips the phase IN_PROGRESS and
+    // then cold-resumes the CLI, which for a whale session takes minutes before
+    // any liveness signal (manager registration / snapshot) is visible — the
+    // 30s tick landing inside that window flipped a 19-second-old IN_PROGRESS
+    // back to AGENT_COMPLETE while the CLI was booting (incident 0dc8352f,
+    // 2026-08-18: "Running 但 Agent Complete"). Anything written within the
+    // grace window is in flight, not stuck; a genuinely stuck task ages past
+    // this in one tick cycle.
+    const RECONCILE_GRACE_MS = 10 * 60 * 1000
+    const graceNow = Date.now()
+
     for (const session of sessions) {
       if (session.archived || !session.taskId) continue
       // Only consider primary sessions — skip subagents/triage
       if (!primarySessionIds.has(session.claudeSessionId)) continue
       const task = taskMap.get(session.taskId)
       if (!task || TERMINAL_PHASES.has(task.phase)) continue
+      const updatedMs = Date.parse(task.updated_at ?? '')
+      if (Number.isFinite(updatedMs) && graceNow - updatedMs < RECONCILE_GRACE_MS) continue
 
       if (!taskSessions.has(session.taskId)) {
         taskSessions.set(session.taskId, { alive: [], dead: [] })
       }
       const bucket = taskSessions.get(session.taskId)!
-      const processAlive = await cachedIsAlive(session)
+      let processAlive = await cachedIsAlive(session)
+      // See-through for a STALE stopped/error flag: isSessionProcessAlive
+      // short-circuits on the record's process_status BEFORE consulting the
+      // manager registry (that order is load-bearing for the orphan-kill
+      // sweep — do not change it there). But during a cold --resume the record
+      // still says 'stopped' (enforce mode suppresses the legacy running write
+      // until the daemon snapshot lands) while a live manager is already
+      // registered and its CLI is booting/streaming. For the reconciler that
+      // stale flag must not count as a death (incident 0dc8352f, 2026-08-18).
+      if (!processAlive) {
+        try {
+          const { getRegisteredSessionManager } = await import('../providers/session-manager.js')
+          const mgr = getRegisteredSessionManager(session.claudeSessionId)
+          if (mgr && await mgr.isAlive()) processAlive = true
+        } catch { /* registry unavailable — keep the probe's verdict */ }
+      }
       ;(processAlive ? bucket.alive : bucket.dead).push(session)
     }
 
@@ -1493,7 +1471,7 @@ export class SessionHealthMonitor {
       // GUARD: if ALL dead sessions are remote and the daemon is currently disconnected
       // (status_reason === 'remote_unreachable'), liveness is UNKNOWN — a tunnel flap
       // causes isAlive→false but the CLI is likely still running on the remote host.
-      // Do NOT force AWAIT_HUMAN_ACTION from connectivity loss alone (inc-311a517d).
+      // Do NOT force WAIT from connectivity loss alone (inc-311a517d).
       //
       // NO Rule B (alive → force IN_PROGRESS): if process_status is accurate, Layer 1
       // already set IN_PROGRESS on session:input. If process_status is wrong (e.g. stuck
@@ -1502,11 +1480,26 @@ export class SessionHealthMonitor {
       let expectedPhase: TaskPhase | null = null
       if (alive.length === 0 && task.phase === 'IN_PROGRESS') {
         // All dead sessions are remote + unreachable? → connectivity unknown, skip.
+        //
+        // TWO signals, either one means "the isAlive probe is connectivity noise,
+        // not a death" (inc-1786691991988, 2026-08-14): the status_reason
+        // breadcrumb is stamped by the unreachable write path — but under the
+        // snapshot gate's enforce mode that whole legacy write is SUPPRESSED
+        // when the daemon-authoritative record still says 'running', so the
+        // breadcrumb never lands. In that shape the record's process_status IS
+        // the daemon's truth: a remote record still marked running while the
+        // probe says dead = an SSH flap, and flipping the task to
+        // WAIT paints a live session red (reported verbatim as "Running 又是
+        // Await Human Action 这不对吧" — WAIT was named AWAIT_HUMAN_ACTION then).
         const allRemoteUnreachable = dead.length > 0 && dead.every(
-          s => s.host && s.status_reason === 'remote_unreachable',
+          s => s.host && (s.status_reason === 'remote_unreachable' || s.process_status === 'running'),
         )
         if (!allRemoteUnreachable) {
-          expectedPhase = 'AWAIT_HUMAN_ACTION'  // all primary sessions dead + stuck at IN_PROGRESS
+          // All primary sessions dead + stuck at IN_PROGRESS → the work was
+          // handed back whether or not a result event survived. AGENT_COMPLETE
+          // (was WAIT until that phase's removal 2026-08-18): red+unread, the
+          // human decides whether it actually finished.
+          expectedPhase = 'AGENT_COMPLETE'
         }
       }
 

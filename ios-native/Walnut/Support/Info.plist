@@ -19,7 +19,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0.0</string>
 	<key>CFBundleVersion</key>
-	<string>44</string>
+	<string>48</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSAppTransportSecurity</key>
@@ -38,10 +38,10 @@
 		<dict>
 			<key>UIApplicationShortcutItemIconSymbolName</key>
 			<string>mic.fill</string>
-			<key>UIApplicationShortcutItemTitle</key>
-			<string>Voice to Walnut</string>
 			<key>UIApplicationShortcutItemSubtitle</key>
 			<string>Record and send to your AI</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Voice to Walnut</string>
 			<key>UIApplicationShortcutItemType</key>
 			<string>dev.openwalnut.ios.voice</string>
 		</dict>

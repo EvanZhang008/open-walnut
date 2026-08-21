@@ -84,8 +84,6 @@ export interface WalnutOp {
     remote: 'allow' | 'deny'
     /** MCP destructiveHint (irreversible data loss). */
     destructive?: boolean
-    /** Only a direct human caller may invoke this operation. */
-    humanOnly?: boolean
     /** Its server route rejects replicas; exposed for discovery and generated docs. */
     primaryOnly?: boolean
   }
@@ -111,10 +109,9 @@ export function getOp(name: string): WalnutOp | undefined {
 }
 
 /** Names only — convenience for allowlists and tests. */
-export function opNames(filter?: { readonly?: boolean; humanOnly?: boolean }): string[] {
+export function opNames(filter?: { readonly?: boolean }): string[] {
   return listOps()
     .filter((o) => filter?.readonly === undefined || o.tags.readonly === filter.readonly)
-    .filter((o) => filter?.humanOnly === undefined || !!o.tags.humanOnly === filter.humanOnly)
     .map((o) => o.name)
 }
 

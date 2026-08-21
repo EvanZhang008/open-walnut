@@ -190,11 +190,47 @@ describe('runAgentLoop', () => {
     expect(result.messages).toHaveLength(4);
     expect(result.messages[0].content).toBe('Previous question');
     expect(result.messages[1].content).toBe('Previous answer');
-    // runAgentLoop prepends a [Current: <date/time>] prefix to the user message
-    const newUserContent = result.messages[2].content as string;
-    expect(newUserContent).toContain('Follow-up');
-    expect(newUserContent).toMatch(/^\[Current: .+\]\n\nFollow-up$/);
+    // CACHE CONTRACT (2026-08-13): the default path must NOT prefix the user
+    // message with [Current: …]. The sent bytes must equal the persisted bytes —
+    // the prefix rode only the SENT copy while eager-persist stored the raw
+    // message, so every next turn's replayed history missed the cached prefix
+    // and the whole message history was re-written (2x cost) every single turn.
+    // The timestamp now rides the dynamic context block instead.
+    expect(result.messages[2].content).toBe('Follow-up');
     expect(result.messages[3].role).toBe('assistant');
+  });
+
+  it('prefixes [Current: …] on the user message ONLY on the subagent path', async () => {
+    // Subagents have no dynamic context block to carry the date, and their
+    // in-memory history replays byte-identically, so the prefix is safe there.
+    mockSendMessage.mockResolvedValueOnce({
+      content: [{ type: 'text', text: 'ok' }],
+      stopReason: 'end_turn',
+    });
+
+    const result = await runAgentLoop('Sub task', [], undefined, {
+      system: 'You are a test subagent.',
+    });
+    const userContent = result.messages[0].content as string;
+    expect(userContent).toMatch(/^\[Current: .+\]\n\nSub task$/);
+  });
+
+  it('default path carries [Current: …] in the dynamic context sent to the model', async () => {
+    // The timestamp must still reach the model — on the ephemeral dynamic block
+    // (past the cache breakpoint), not on the persisted user message.
+    mockSendMessage.mockResolvedValueOnce({
+      content: [{ type: 'text', text: 'ok' }],
+      stopReason: 'end_turn',
+    });
+
+    await runAgentLoop('What time is it?', []);
+    const sent = mockSendMessage.mock.calls[0][0] as { messages: MessageParam[] };
+    const lastUser = sent.messages.filter((m) => m.role === 'user').at(-1)!;
+    const text = typeof lastUser.content === 'string'
+      ? lastUser.content
+      : (lastUser.content as Array<{ type: string; text?: string }>)
+          .map((b) => b.text ?? '').join('\n');
+    expect(text).toMatch(/\[Current: .+\]/);
   });
 
   it('handles tool execution errors gracefully', async () => {

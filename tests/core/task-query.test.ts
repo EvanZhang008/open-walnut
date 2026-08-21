@@ -54,7 +54,7 @@ function expectQueryError(raw: TaskQuery, code?: string): void {
 }
 
 describe('completion semantics', () => {
-  // task-query.ts lists the 7 phases literally instead of importing PHASE_ORDER:
+  // task-query.ts lists the 4 phases literally instead of importing PHASE_ORDER:
   // phase.ts drags in the logger (node:fs/os), and this module ships to the
   // browser bundle. This test is the seam that keeps the copy honest.
   it('keeps its phase list identical to PHASE_ORDER', () => {
@@ -63,14 +63,13 @@ describe('completion semantics', () => {
     expect(mapped.slice().sort()).toEqual([...PHASE_ORDER].sort());
   });
 
-  it('maps all seven phases to exactly one completion bucket', () => {
+  // (WAIT removed 2026-08-18 — five buckets became four; WAIT's in_progress
+  // membership is gone with it.)
+  it('maps all four phases to exactly one completion bucket', () => {
     const expected: Record<TaskPhase, TaskCompletion> = {
       TODO: 'todo',
       IN_PROGRESS: 'in_progress',
       AGENT_COMPLETE: 'in_progress',
-      AWAIT_HUMAN_ACTION: 'in_progress',
-      HUMAN_VERIFIED: 'in_progress',
-      POST_WORK_COMPLETED: 'in_progress',
       COMPLETE: 'complete',
     };
 
@@ -79,7 +78,9 @@ describe('completion semantics', () => {
         expect(matchesTaskQuery(task({ phase }), query({ completion: [candidate] }))).toBe(candidate === completion);
       }
     }
-    expect(COMPLETION_TO_PHASES.in_progress).toContain('HUMAN_VERIFIED');
+    // The agent-stopped-but-still-open phase stays in in_progress, so a handed-back
+    // task can't vanish from the in_progress bucket.
+    expect(COMPLETION_TO_PHASES.in_progress).toEqual(['IN_PROGRESS', 'AGENT_COMPLETE']);
     expect(COMPLETION_TO_PHASES.complete).toEqual(['COMPLETE']);
   });
 

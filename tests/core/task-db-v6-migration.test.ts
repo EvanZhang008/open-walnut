@@ -20,7 +20,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-task-db-v6'));
 
-import { getDb, closeDb, rowToTask, taskToRow, TASK_DB_PATH } from '../../src/core/task-db.js';
+import { getDb, closeDb, rowToTask, taskToRow, TASK_DB_PATH, SCHEMA_VERSION } from '../../src/core/task-db.js';
 import { WALNUT_HOME, TASKS_DIR } from '../../src/constants.js';
 
 /** The tasks schema as shipped at SCHEMA_VERSION = 5 (project-only, no category). */
@@ -163,11 +163,13 @@ describe('task-db v5 → v6 migration: needs_attention → unread', () => {
     expect(rawPayload('corrupt-payload')).toBe('{not json');
   });
 
-  it('marks the DB as v6 and is a no-op on the second open', () => {
+  it('marks the DB current and is a no-op on the second open', () => {
     buildV5Db([{ id: 'once', payload: JSON.stringify({ needs_attention: true }) }]);
 
     expect(readTask('once').unread).toBe(true);
-    expect(getDb()!.pragma('user_version', { simple: true })).toBe(6);
+    // SCHEMA_VERSION, not a literal — later migrations (v7 collapsed the phase
+    // lifecycle) run in the same open and carry the version past 6.
+    expect(getDb()!.pragma('user_version', { simple: true })).toBe(SCHEMA_VERSION);
 
     closeDb();
     // Second open: the version gate short-circuits, and the value stays put.

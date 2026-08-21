@@ -16,6 +16,7 @@
  *
  * Test server is started by playwright.config.ts webServer.
  */
+import fs from 'node:fs/promises'
 import { test, expect } from '@playwright/test'
 import { presetPanelView } from './todo-panel-helpers'
 
@@ -61,6 +62,29 @@ test('session deep link redirects to home and opens the session column', async (
   await expect(panel).toBeVisible({ timeout: 10_000 })
 })
 
+test('Codex cold attach does not block the durable session title', async ({ page }) => {
+  await fs.mkdir('/tmp/codex-session-detail-fix', { recursive: true })
+  await presetPanelView(page)
+  await page.goto('/')
+  await page.waitForLoadState('networkidle')
+
+  const task = page.locator('.todo-panel-item[data-task-id="pw-task-codex-cold-detail"]')
+  await expect(task).toBeVisible({ timeout: 10_000 })
+  await task.locator('.todo-item-title').click()
+
+  const panel = page.locator(
+    '.main-page-session-column .session-panel[data-session-id="pw-codex-cold-detail-session"]',
+  )
+  await expect(panel).toBeVisible({ timeout: 5_000 })
+  await expect(panel.locator('.session-panel-title')).toHaveText('Durable Codex cold title', {
+    timeout: 5_000,
+  })
+  await expect(panel.getByText('Untitled session', { exact: true })).toHaveCount(0)
+  await expect(panel.getByText('Loading...', { exact: true })).toHaveCount(0)
+
+  await panel.screenshot({ path: '/tmp/codex-session-detail-fix/title-loaded-isolated.png' })
+})
+
 // ═══════════════════════════════════════════════════════════════════
 //  2. Session panel — verify it renders on the home page
 // ═══════════════════════════════════════════════════════════════════
@@ -86,9 +110,9 @@ test('session panel renders for a task with session', async ({ page }) => {
 // ═══════════════════════════════════════════════════════════════════
 
 test('session chat history shows messages after opening session', async ({ page }) => {
-  // Without this the row isn't in the DOM at all (panel defaults to the Focus
-  // section + ★ project chip), and the `isVisible()` guard below would silently skip
-  // every assertion in this test rather than fail.
+  // Without this the row isn't in the DOM at all (the panel defaults to the Focus
+  // section, which doesn't mount the main list), and the `isVisible()` guard below
+  // would silently skip every assertion in this test rather than fail.
   await presetPanelView(page)
   await page.goto('/')
   await page.waitForLoadState('networkidle')

@@ -62,6 +62,8 @@ interface SessionInfo {
   engine?: import('../../core/types.js').SessionEngine
   planCompleted?: boolean
   archived?: boolean
+  /** Pending permission/AskUserQuestion prompt (record.pendingPermission). */
+  pendingPermission?: { toolName?: string }
 }
 
 /** Map SessionInfo to the enriched status shape attached to tasks. */
@@ -134,6 +136,7 @@ export async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[
         engine: rec.engine,
         planCompleted: rec.planCompleted,
         archived: rec.archived,
+        pendingPermission: rec.pendingPermission,
       })
     }
   }
@@ -214,6 +217,12 @@ export async function enrichTasksWithSessionStatus(tasks: Task[]): Promise<Task[
         provider: singleInfo.provider,
         engine: singleInfo.engine,
         ...(singleInfo.planCompleted ? { planCompleted: true } : {}),
+        // Rides the task list so circles/pills can show the red waiting state
+        // without a per-session status fetch (2026-08-14: Satellite list gave
+        // zero signal for sessions blocked on a human click).
+        ...(singleInfo.pendingPermission
+          ? { pendingPermissionTool: singleInfo.pendingPermission.toolName ?? 'unknown' }
+          : {}),
       }
     }
 
@@ -958,8 +967,8 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
     // the external sync round-trip (2-3s each) held browser connections long enough
     // to saturate the 6-per-origin pool and time out every other request (2026-07-31).
     // Push failures still surface via sync_error + TASK_UPDATED, which the UI renders.
-    // Phase-transition automation (e.g. human-verified-auto-push) now rides the
-    // task:phase-changed bus event emitted inside updateTask — no inline executor.
+    // Phase-transition automation rides the task:phase-changed bus event emitted
+    // inside updateTask — no inline executor.
     const result = await updateTask(id, req.body, { source: 'api', extraTargets: ['main-agent'], asyncPush: true })
     log.web.info('task updated via REST', { taskId: id, fields: Object.keys(req.body) })
 

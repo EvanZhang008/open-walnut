@@ -132,7 +132,7 @@ export const notesHandler: FileHandler = {
       items.push({
         source: 'notes/instructions',
         name: 'Instructions',
-        description: 'Agent instructions injected into all sessions (dual-writes to AGENTS.md + CLAUDE.md)',
+        description: 'Vault instructions for note work (dual-writes to AGENTS.md + CLAUDE.md)',
         size: agentsStat.size,
         modified: agentsStat.mtime.toISOString(),
       });

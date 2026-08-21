@@ -3,12 +3,11 @@
  * fixes that need real task + session records:
  *
  *  1. session:turn-start — the CLI's session_state_changed{running} pulls a
- *     task flipped to AGENT_COMPLETE/AWAIT back to IN_PROGRESS (queued-send
+ *     task flipped to AGENT_COMPLETE back to IN_PROGRESS (queued-send
  *     race, incidents 46f42871 + 1f11596b).
- *  2. triage-sync running gate — a late triage (debounced summary of the
- *     PREVIOUS turn) must not push AGENT_COMPLETE → AWAIT_HUMAN_ACTION while
- *     the session is actively running the NEXT turn (the reverse race of the
- *     same incidents).
+ *  2. triage-sync retired — it used to push AGENT_COMPLETE → WAIT on a debounce
+ *     after every turn. Retired 2026-08-17, and WAIT itself removed 2026-08-18;
+ *     the trigger stays parseable and must be a no-op in every shape.
  *  3. session:result stale-result gate — a SESSION_RESULT whose turnGen is
  *     older than the live session's current turnGen belongs to a superseded
  *     turn and must not flip AGENT_COMPLETE (incident ed347bde, 2026-08-05).
@@ -76,7 +75,9 @@ describe('applySessionPhase: session:turn-start', () => {
   })
 
   it('marks the task READ on the pullback (red row goes away)', async () => {
-    const taskId = await taskInPhase('AWAIT_HUMAN_ACTION')
+    // (WAIT removed 2026-08-18 — the unread/red phase this starts from is now
+    // AGENT_COMPLETE, which is where both a clean result and an error land.)
+    const taskId = await taskInPhase('AGENT_COMPLETE')
     await updateTaskRaw(taskId, { unread: true })
     await applySessionPhase(taskId, 'session:turn-start', 'test', { sessionId: 'sid-1' })
     const task = await getTask(taskId)
@@ -98,8 +99,23 @@ describe('applySessionPhase: session:turn-start', () => {
   })
 })
 
-describe('applySessionPhase: triage-sync running gate', () => {
-  it('REVERSE RACE: triage does NOT push AWAIT while the session is running the next turn', async () => {
+describe('applySessionPhase: triage-sync retired (inc-1786983019552, 2026-08-17)', () => {
+  // The auto-upgrade AGENT_COMPLETE → WAIT after every normal turn was pure
+  // noise (both states render red+unread) and diluted WAIT. WAIT itself was
+  // removed a day later (2026-08-18), so there is no longer any phase this
+  // trigger could push to. The trigger stays parseable — a replayed event from
+  // an old server must be a NO-OP in every shape, never a phase write.
+  it('settled session (idle): triage-sync no longer pushes a phase', async () => {
+    const taskId = await taskInPhase('AGENT_COMPLETE')
+    await createSessionRecord('sid-idle', taskId, 'proj')
+    await updateSessionRecord('sid-idle', { process_status: 'idle' })
+
+    const res = await applySessionPhase(taskId, 'triage-sync', 'test', { sessionId: 'sid-idle' })
+    expect(res.changed).toBe(false)
+    expect((await getTask(taskId)).phase).toBe('AGENT_COMPLETE')
+  })
+
+  it('running session: still a no-op (was the old gate, now unconditional)', async () => {
     const taskId = await taskInPhase('AGENT_COMPLETE')
     await createSessionRecord('sid-running', taskId, 'proj')
     await updateSessionRecord('sid-running', { process_status: 'running' })
@@ -109,21 +125,11 @@ describe('applySessionPhase: triage-sync running gate', () => {
     expect((await getTask(taskId)).phase).toBe('AGENT_COMPLETE')
   })
 
-  it('triage still pushes AWAIT when the session is settled (idle)', async () => {
-    const taskId = await taskInPhase('AGENT_COMPLETE')
-    await createSessionRecord('sid-idle', taskId, 'proj')
-    await updateSessionRecord('sid-idle', { process_status: 'idle' })
-
-    const res = await applySessionPhase(taskId, 'triage-sync', 'test', { sessionId: 'sid-idle' })
-    expect(res.changed).toBe(true)
-    expect((await getTask(taskId)).phase).toBe('AWAIT_HUMAN_ACTION')
-  })
-
-  it('unknown session record → gate fails open (pre-guard behavior preserved)', async () => {
+  it('unknown session record: no-op (no fail-open write anymore)', async () => {
     const taskId = await taskInPhase('AGENT_COMPLETE')
     const res = await applySessionPhase(taskId, 'triage-sync', 'test', { sessionId: 'sid-ghost' })
-    expect(res.changed).toBe(true)
-    expect((await getTask(taskId)).phase).toBe('AWAIT_HUMAN_ACTION')
+    expect(res.changed).toBe(false)
+    expect((await getTask(taskId)).phase).toBe('AGENT_COMPLETE')
   })
 })
 
@@ -173,10 +179,12 @@ describe('applySessionPhase: session:result stale-result gate (incident ed347bde
 // ── Read/unread lifecycle ──────────────────────────────────────────────────
 //
 // THE BUG THIS LOCKS DOWN (2026-08-09): the marker was only ever set on
-// AWAIT_HUMAN_ACTION, so the dot appeared when a session ERRORED and stayed dark
+// WAIT, so the dot appeared when a session ERRORED and stayed dark
 // when a session finished NORMALLY (AGENT_COMPLETE) — which is the overwhelmingly
 // common case. "Session finished, go look at it" was therefore invisible, and the
 // feature read as "needs attention on failure" instead of "unread".
+// (WAIT removed 2026-08-18: both paths now land on AGENT_COMPLETE, so that phase
+// is the ONE phase that sets the dot — see readMarkerForPhase.)
 describe('applySessionPhase: read/unread marker rides the phase write', () => {
   it('AGENT_COMPLETE marks the task UNREAD (the normal turn-finished path)', async () => {
     const taskId = await taskInPhase('IN_PROGRESS')
@@ -186,11 +194,26 @@ describe('applySessionPhase: read/unread marker rides the phase write', () => {
     expect(task.unread).toBe(true)
   })
 
-  it('AWAIT_HUMAN_ACTION marks the task UNREAD (the error path)', async () => {
+  // (WAIT removed 2026-08-18 — the error path lands on the SAME AGENT_COMPLETE
+  // as a clean result; the "it failed" signal is the session's error badge.)
+  it('the error path also lands on AGENT_COMPLETE and marks the task UNREAD', async () => {
     const taskId = await taskInPhase('IN_PROGRESS')
     await applySessionPhase(taskId, 'session:error', 'test', { sessionId: 'sid-e' })
     const task = await getTask(taskId)
-    expect(task.phase).toBe('AWAIT_HUMAN_ACTION')
+    expect(task.phase).toBe('AGENT_COMPLETE')
+    expect(task.unread).toBe(true)
+  })
+
+  // session:streaming is retired with WAIT (2026-08-18) — it only ever existed
+  // to undo a stale error→WAIT repaint. It must now touch nothing.
+  it('session:streaming is a no-op and leaves the phase + marker alone', async () => {
+    const taskId = await taskInPhase('AGENT_COMPLETE')
+    await updateTaskRaw(taskId, { unread: true })
+
+    const res = await applySessionPhase(taskId, 'session:streaming', 'test', { sessionId: 'sid-s' })
+    expect(res.changed).toBe(false)
+    const task = await getTask(taskId)
+    expect(task.phase).toBe('AGENT_COMPLETE')
     expect(task.unread).toBe(true)
   })
 

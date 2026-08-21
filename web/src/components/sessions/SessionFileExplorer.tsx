@@ -303,7 +303,7 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, memoryS
       inFlightRef.current.delete(dirPath);
       setLoadingPaths((prev) => { const next = new Set(prev); next.delete(dirPath); return next; });
     }
-  }, [host, showHidden, root]);
+  }, [host, showHidden, root, cwd, sessionId]);
   loadDirRef.current = loadDir;
 
   // Full reset + load root only when the session (cwd/host) changes — NOT when

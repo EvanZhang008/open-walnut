@@ -8,7 +8,7 @@
  *   1. IDENTITY — one session per conversation, forever. A second call must reuse
  *      the record, and two conversations must never share a session.
  *   2. LAUNCH SHAPE — the SESSION_START the lane emits carries the Personal AI profile
- *      (coordinator persona, full-replace, walnut MCP mounted) and the lane tag.
+ *      (two work modes, full-replace, walnut MCP mounted) and the lane tag.
  *
  * ZERO real side effects: no `claude` is ever spawned — the 'session-runner'
  * subscriber here is a FAKE that only records events (and, being registered under
@@ -203,7 +203,7 @@ describe('the SESSION_START a lane emits', () => {
     // Full replacement of the CLI's own prompt, carrying the two work modes.
     expect(ev.profile?.systemPromptMode).toBe('replace')
     expect(ev.profile?.systemPrompt).toContain('Personal AI')
-    expect(ev.profile?.systemPrompt).toContain('Choose one mode for each request')
+    expect(ev.profile?.systemPrompt).toContain('## Walnut operating contract')
     // Walnut's data reaches the CLI over MCP, not native tools.
     expect(ev.profile?.mcpServers).toEqual(walnutMcpProfile().mcpServers)
     // Latency guard: without an explicit effort the CLI inherits the user's
@@ -230,12 +230,13 @@ describe('personalAiProfile', () => {
     expect(personalAiProfile('Ada').systemPrompt).toContain('Ada')
   })
 
-  it('carries the two work modes without repeating tool instructions', () => {
+  it('carries the short operating contract without parameter tables', () => {
     const prompt = personalAiProfile('Ada').systemPrompt!
-    expect(prompt).toContain('Do it yourself.')
-    expect(prompt).toContain('Delegate.')
-    expect(prompt).not.toContain('task_list')
-    expect(prompt).not.toContain('verbatim')
+    expect(prompt).toContain('## Walnut operating contract')
+    expect(prompt).toContain('Use `delegate`')
+    expect(prompt).toContain('Only a human may set `COMPLETE`')
+    expect(prompt).not.toContain('/api/')
+    expect(prompt).not.toContain('tasks.sqlite')
   })
 })
 
@@ -245,16 +246,17 @@ describe('personalAiProfile', () => {
 // ══════════════════════════════════════════════════════════════════
 
 describe('buildLaneMemoryContext', () => {
-  it('folds AGENTS.md + memory/MEMORY.md + memory/USER.md into one prompt block', async () => {
+  it('injects memory and user profile without the home-directory AGENTS.md', async () => {
     const { buildLaneMemoryContext, LANE_MEMORY_HEADER } = await import('../../src/core/sessions/personal-ai-lane.js')
     await fsp.mkdir(`${WALNUT_HOME}/memory`, { recursive: true })
-    await fsp.writeFile(`${WALNUT_HOME}/AGENTS.md`, '# Vault layout\nPARA method\n', 'utf-8')
+    await fsp.writeFile(`${WALNUT_HOME}/AGENTS.md`, '# Old vault layout\nSTALE-PARA-MARKER\n', 'utf-8')
     await fsp.writeFile(`${WALNUT_HOME}/memory/MEMORY.md`, '## Deploy rule\nuse dev:prod\n', 'utf-8')
     await fsp.writeFile(`${WALNUT_HOME}/memory/USER.md`, '## Name\nAda\n', 'utf-8')
 
     const block = await buildLaneMemoryContext()
     expect(block).toContain(LANE_MEMORY_HEADER)
-    expect(block).toContain('PARA method')
+    expect(block).not.toContain('STALE-PARA-MARKER')
+    expect(block).not.toContain('Home directory guide')
     expect(block).toContain('Deploy rule')
     expect(block).toContain('## Name')
   })

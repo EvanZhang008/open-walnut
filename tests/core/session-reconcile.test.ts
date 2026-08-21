@@ -18,7 +18,9 @@
  *   gatingBgCount === 0                           — backgrounded tasks excluded (incident D)
  *   !teamActive                                   — no team poll loop
  * Target: error→'error'; alive→'idle'; dead→'stopped'. Task phase: IN_PROGRESS
- * → AGENT_COMPLETE (AWAIT_HUMAN_ACTION on error); later phases never regressed.
+ * → AGENT_COMPLETE, error or not (WAIT removed 2026-08-18 — the turn is over and
+ * the ball is back with the human either way; the failure signal lives on the
+ * session record, not the task phase); later phases never regressed.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -268,12 +270,17 @@ describe('foldSessionTail — turn-end evidence semantics', () => {
     expect(fold.turnEnded).toBe(true)
   })
 
-  it('task-notification-origin result is bookkeeping — never turn-over', () => {
+  it('task-notification-origin result IS a turn verdict — the followup turn settles (incident b07ee156)', () => {
+    // The CLI's notification followup turn closes with a notification-origin
+    // result; excluding it wedged turnActive forever (anchor accepted,
+    // verdict refused). Mirrors daemon-fold.ts — the golden test pins the two
+    // folds to identical verdicts. Walnut's LIVE handler keeps its own
+    // exclusion (guards task-phase transitions, not cliState).
     const fold = foldSessionTail([
       userEvent(sid), notificationOriginResult(sid), stateEvent(sid, 'idle'),
     ].join('\n'))
-    expect(fold.lastResult).toBe(null)
-    expect(fold.turnEnded).toBe(false)
+    expect(fold.lastResult).not.toBe(null)
+    expect(fold.turnEnded).toBe(true)
   })
 
   it('TeamCreate without TeamDelete blocks the verdict', () => {
@@ -587,10 +594,13 @@ describe('reconcileProcessStatus — task phase sync (incident C shape)', () => 
     expect((await getSessionByClaudeId(sid))?.process_status).toBe('idle')
   })
 
+  // (WAIT removed 2026-08-18 — the "already past IN_PROGRESS" fixture phase was
+  // WAIT; COMPLETE is now the phase past AGENT_COMPLETE, and the gate is still
+  // "only sync when the task is exactly IN_PROGRESS".)
   it('never regresses a task already past IN_PROGRESS', async () => {
     const { addTaskFull, getTask } = await import('../../src/core/task-manager.js')
     const task = await addTaskFull({
-      title: 'already handled', type: 'task', status: 'in_progress', phase: 'AWAIT_HUMAN_ACTION',
+      title: 'already handled', type: 'task', status: 'done', phase: 'COMPLETE',
       project: 'proj', source: 'local', created_at: new Date().toISOString(),
     } as any)
 
@@ -600,7 +610,27 @@ describe('reconcileProcessStatus — task phase sync (incident C shape)', () => 
 
     const outcome = await reconcileProcessStatus(record, { isAlive: false })
     expect(outcome.converged).toBe(true)
-    expect((await getTask(task.id)).phase).toBe('AWAIT_HUMAN_ACTION')
+    expect((await getTask(task.id)).phase).toBe('COMPLETE')
+  })
+
+  // The error branch used to land on WAIT; since the removal (2026-08-18) an
+  // errored turn reconciles to the SAME AGENT_COMPLETE as a clean one — the
+  // failure signal is the session record's 'error' process_status.
+  it('an errored turn also syncs the phase to AGENT_COMPLETE (no separate blocked phase)', async () => {
+    const { addTaskFull, getTask } = await import('../../src/core/task-manager.js')
+    const task = await addTaskFull({
+      title: 'errored turn', type: 'task', status: 'in_progress', phase: 'IN_PROGRESS',
+      project: 'proj', source: 'local', created_at: new Date().toISOString(),
+    } as any)
+
+    const sid = 'phase-error'
+    await writeStream(sid, [initEvent(sid), userEvent(sid), resultEvent(sid, true)])
+    const record = await stuckRunningRecord(sid, { taskId: task.id })
+
+    const outcome = await reconcileProcessStatus(record, { isAlive: true })
+    expect(outcome.converged).toBe(true)
+    expect((await getSessionByClaudeId(sid))?.process_status).toBe('error')
+    expect((await getTask(task.id)).phase).toBe('AGENT_COMPLETE')
   })
 })
 

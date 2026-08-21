@@ -74,6 +74,7 @@ import {
   registerSessionManager,
   unregisterSessionManager,
 } from '../../../src/providers/session-manager.js';
+import { sessionRunner } from '../../../src/providers/claude-code-session.js';
 
 function createApp() {
   const app = express();
@@ -84,6 +85,7 @@ function createApp() {
 }
 
 beforeEach(async () => {
+  vi.restoreAllMocks();
   taskSlotInterleave.beforeLink = undefined;
   // This router-only fixture deliberately has no SessionRunner. A prior
   // startServer() in the same Vitest worker must not turn its failure-path
@@ -1026,6 +1028,71 @@ describe('POST /api/sessions/:sessionId/execute', () => {
 // sessionStorage that replayed the loop on every reload — observed as 144 404s
 // for one id, and reported as "new sessions are broken" even though the session
 // existed and was running the whole time.
+describe('GET /api/sessions/:sessionId — Codex cold attach', () => {
+  it('uses an attached worker empty result instead of a stale durable permission', async () => {
+    await createSessionRecord('codex-live-empty', 'task-live', 'project-a', '/tmp', {
+      initialProcessStatus: 'running',
+      engine: 'codex',
+      acpRuntimeId: 'runtime-live-empty',
+      title: 'Live Codex title',
+    });
+    await updateSessionRecord('codex-live-empty', {
+      pendingPermission: {
+        requestId: 'perm-stale',
+        toolName: 'Stale tool',
+        receivedAt: '2026-08-18T00:00:00.000Z',
+      },
+    });
+    vi.spyOn(sessionRunner, 'findAcpSession').mockReturnValue({
+      getPendingPermissionRequests: () => [],
+    } as never);
+    const attach = vi.spyOn(sessionRunner, 'findOrAttachAcpSession');
+
+    const response = await request(createApp()).get('/api/sessions/codex-live-empty');
+
+    expect(response.status).toBe(200);
+    expect(response.body.pendingPermissions).toEqual([]);
+    expect(attach).not.toHaveBeenCalled();
+  });
+
+  it('returns durable metadata and permission without waiting for session/load', async () => {
+    await createSessionRecord('codex-cold-detail', 'task-cold', 'project-a', '/tmp', {
+      initialProcessStatus: 'idle',
+      engine: 'codex',
+      acpRuntimeId: 'runtime-cold-detail',
+      title: 'Saved Codex title',
+    });
+    await updateSessionRecord('codex-cold-detail', {
+      pendingPermission: {
+        requestId: 'perm-cold',
+        toolName: 'Write file /tmp/mock.txt',
+        input: { path: '/tmp/mock.txt' },
+        acpOptions: [{ optionId: 'allow-once', kind: 'allow_once', name: 'Allow once' }],
+        receivedAt: '2026-08-18T00:00:00.000Z',
+      },
+    });
+    vi.spyOn(sessionRunner, 'findAcpSession').mockReturnValue(undefined);
+    const attach = vi.spyOn(sessionRunner, 'findOrAttachAcpSession')
+      .mockReturnValue(new Promise<never>(() => {}));
+
+    const response = await Promise.race([
+      request(createApp()).get('/api/sessions/codex-cold-detail'),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('detail blocked on cold attach')), 2_000)),
+    ]);
+
+    expect(response.status).toBe(200);
+    expect(response.body.session.title).toBe('Saved Codex title');
+    expect(response.body.pendingPermissions).toEqual([{
+      requestId: 'perm-cold',
+      toolName: 'Write file /tmp/mock.txt',
+      input: { path: '/tmp/mock.txt' },
+      acpOptions: [{ optionId: 'allow-once', kind: 'allow_once', name: 'Allow once' }],
+    }]);
+    expect(attach).toHaveBeenCalledTimes(1);
+    expect(attach).toHaveBeenCalledWith('codex-cold-detail');
+  });
+});
+
 describe('GET /api/sessions/:sessionId — id prefix resolution', () => {
   const FULL = '8f3095b3-abfc-47d7-93db-e1ba726151e8';
 

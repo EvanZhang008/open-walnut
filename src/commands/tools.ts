@@ -71,7 +71,7 @@ function parseFlagArgs(
 }
 
 export async function runTools(args: string[], globals: GlobalOptions): Promise<void> {
-  const { listOps, getOp, executeOp, opCallerFromEnv } = await import('../ops/index.js')
+  const { listOps, getOp, executeOp } = await import('../ops/index.js')
   const sub = args[0]
 
   if (sub === 'list' || sub === undefined) {
@@ -182,7 +182,7 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
         }
       }
     }
-    const r = await executeOp(name, parsed, { caller: opCallerFromEnv() })
+    const r = await executeOp(name, parsed)
     if (!r.ok) {
       console.error(r.message)
       process.exitCode = 1

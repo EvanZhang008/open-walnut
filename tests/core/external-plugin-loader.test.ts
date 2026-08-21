@@ -320,12 +320,14 @@ export default function register(api) {
     expect(registry.has('cap-sync')).toBe(true);
   });
 
+  // `tools` and `ui` became SUPPORTED capabilities (see plugin-capabilities.test.ts),
+  // so this forward-compat check now uses the two still-reserved names.
   it('skips a plugin declaring only unsupported capabilities, without importing it', async () => {
     const pluginDir = path.join(tmpDir, 'plugins', 'future-only');
     await writeManifest(pluginDir, {
       id: 'future-only',
       name: 'Future Only',
-      capabilities: { tools: { entry: 'tools.ts' }, ui: { entry: 'ui.tsx' } },
+      capabilities: { hooks: { entry: 'hooks.ts' }, routines: { entry: 'routines.ts' } },
     });
     // Deliberately broken entry — must NOT be imported/bundled
     await writePluginTs(pluginDir, 'this is not valid typescript {{{');
@@ -336,7 +338,7 @@ export default function register(api) {
     expect(registry.has('future-only')).toBe(false);
     const entry = getUnsupportedPlugins().find(p => p.id === 'future-only');
     expect(entry).toBeDefined();
-    expect(entry!.capabilities.sort()).toEqual(['tools', 'ui']);
+    expect(entry!.capabilities.sort()).toEqual(['hooks', 'routines']);
   });
 
   it('loads a sync plugin that also declares unknown capabilities (warn + ignore)', async () => {

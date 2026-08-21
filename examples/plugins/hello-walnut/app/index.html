@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hello Walnut</title>
+  <!-- Same-origin is NOT available inside the app iframe: no cookies, no
+       localStorage, no direct fetch to /api. The SDK is the only way to reach
+       Walnut. It is served by the host, so nothing here loads from a CDN. -->
+  <script src="/walnut-app-sdk.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="page">
+    <header class="head">
+      <img class="logo" src="icon.svg" alt="" width="28" height="28">
+      <div>
+        <h1>Hello Walnut</h1>
+        <p class="sub">An example plugin app: read state, send a message, watch events.</p>
+      </div>
+    </header>
+
+    <section class="card" aria-labelledby="status-title">
+      <div class="card-head">
+        <h2 id="status-title">Server</h2>
+        <span class="dot" id="status-dot" data-state="loading"></span>
+      </div>
+      <dl class="kv" id="status-kv">
+        <div><dt>Mode</dt><dd id="status-mode">…</dd></div>
+        <div><dt>Version</dt><dd id="status-version">…</dd></div>
+        <div><dt>Server time</dt><dd id="status-time">…</dd></div>
+      </dl>
+    </section>
+
+    <section class="card" aria-labelledby="tasks-title">
+      <div class="card-head">
+        <h2 id="tasks-title">Recent tasks</h2>
+        <button class="ghost" id="tasks-refresh" type="button">Refresh</button>
+      </div>
+      <ul class="tasks" id="tasks-list">
+        <li class="empty">Loading…</li>
+      </ul>
+    </section>
+
+    <section class="card" aria-labelledby="say-title">
+      <div class="card-head"><h2 id="say-title">Say something to your Personal AI</h2></div>
+      <form class="say" id="say-form">
+        <label class="sr-only" for="say-text">Message</label>
+        <input id="say-text" type="text" autocomplete="off" placeholder="What is on my plate today?">
+        <button type="submit" id="say-send">Send</button>
+      </form>
+      <p class="hint" id="say-hint">The turn runs in the background. Open the chat to read the reply.</p>
+    </section>
+
+    <section class="card" aria-labelledby="events-title">
+      <div class="card-head">
+        <h2 id="events-title">Live task events</h2>
+        <span class="count" id="events-count">0</span>
+      </div>
+      <p class="hint">Counted since this page opened, from the <code>task:</code> event prefix.</p>
+      <ul class="events" id="events-list">
+        <li class="empty">Waiting for the first event…</li>
+      </ul>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

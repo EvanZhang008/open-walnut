@@ -553,7 +553,13 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
     while (next < entries.length) {
       const accum = entries[next++]!;
       let current: string | null = null;
-      try { current = await fsp.readFile(accum.filePath, 'utf-8'); } catch { current = null; }
+      // stat-before-read: transcript ops can name FIFOs/sockets/dirs (a session
+      // that ran mkfifo, or wrote a .pipe path). open() on a writer-less FIFO
+      // blocks a fs-pool thread FOREVER (2026-08-15: wedged all daemon fs RPCs).
+      try {
+        const cst = await fsp.stat(accum.filePath);
+        current = cst.isFile() ? await fsp.readFile(accum.filePath, 'utf-8') : null;
+      } catch { current = null; }
       const isDeleted = accum.ops[accum.ops.length - 1]?.kind === 'delete';
       const deletedBefore = isDeleted ? await readDeletedBeforeHostLocal(accum.filePath) : null;
       const { renamedFrom, ...recon } = reconstructFile(current, accum, deletedBefore);

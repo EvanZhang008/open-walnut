@@ -21,6 +21,9 @@ export interface SessionStatusSnapshot {
   errorMessage: string | null;
   provider: SessionProvider;
   engine: SessionEngine;
+  /** Pending permission/AskUserQuestion tool name, or null — drives the red
+   *  Waiting display on LIST surfaces (pills). Additive; absent on old servers. */
+  pendingPermissionTool?: string | null;
   statusRevision: number;
   statusUpdatedAt: string;
 }
@@ -165,6 +168,9 @@ function normalizeVersionedStatus(value: unknown, fallbackSessionId?: string): S
     errorMessage: value.errorMessage,
     provider: value.provider,
     engine: value.engine,
+    // Additive: absent on old servers → null (no waiting display).
+    pendingPermissionTool: typeof value.pendingPermissionTool === 'string'
+      ? value.pendingPermissionTool : null,
     statusRevision: value.statusRevision as number,
     statusUpdatedAt: value.statusUpdatedAt,
   };
@@ -194,6 +200,13 @@ function normalizeVersionedSessionRecord(
     ),
     provider: isSessionProvider(value.provider) ? value.provider : 'cli',
     engine: isSessionEngine(value.engine) ? value.engine : 'claude',
+    // Records carry the full pendingPermission object; snapshots carry the
+    // pre-projected tool name. Accept either shape.
+    pendingPermissionTool: typeof value.pendingPermissionTool === 'string'
+      ? value.pendingPermissionTool
+      : isRecord(value.pendingPermission)
+        ? String((value.pendingPermission as UnknownRecord).toolName ?? 'unknown')
+        : null,
     statusRevision: value.statusRevision as number,
     statusUpdatedAt: value.statusUpdatedAt,
   };
@@ -203,6 +216,13 @@ function legacyPatchFromRecord(value: UnknownRecord): LegacyStatusPatch {
   const patch: LegacyStatusPatch = {};
   if ('taskId' in value) patch.taskId = nullableString(value.taskId);
   if (isProcessStatus(value.process_status)) patch.process_status = value.process_status;
+  // Waiting state rides task-enrichment seeds too (session_status has no
+  // statusRevision, so it always lands on this legacy path).
+  if ('pendingPermissionTool' in value) {
+    patch.pendingPermissionTool = nullableString(value.pendingPermissionTool);
+  } else if (isRecord(value.pendingPermission)) {
+    patch.pendingPermissionTool = String((value.pendingPermission as UnknownRecord).toolName ?? 'unknown');
+  }
   if ('activity' in value) patch.activity = nullableString(value.activity);
   if ('mode' in value) patch.mode = isSessionMode(value.mode) ? value.mode : 'default';
   if ('planCompleted' in value) patch.planCompleted = value.planCompleted === true;

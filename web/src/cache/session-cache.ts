@@ -21,6 +21,8 @@ import {
   appendToolCall,
   backfillToolResult,
   appendSystemBlock,
+  appendPermissionBlock,
+  resolvePermissionBlock,
   flushMainTextBuffer,
   lastMainLaneText,
   lastMainLaneIndex,
@@ -139,7 +141,11 @@ export function initStreamState(
   // text-delta events append correctly (textBuffer must equal that block's
   // content for continuity). Subagent-lane blocks (parentToolUseId set) never
   // participate in the main accumulator.
-  const lastText = lastMainLaneText(blocks);
+  // Live-turn blocks only: a finished turn's final text must never seed the
+  // accumulator, or the next turn's first delta appends to the OLD answer
+  // (inc-1786678797966 — one block rendering "<previous answer><new answer>").
+  const boundary = completedLen ?? (isStreaming ? 0 : blocks.length);
+  const lastText = lastMainLaneText(blocks, boundary);
   streamStates.set(sid, {
     blocks: blocks.map((b) => ({ ...b })),
     textBuffer: lastText ? lastText.content : '',
@@ -148,7 +154,7 @@ export function initStreamState(
     // snapshot taken between the next turn's markStreaming and its first delta
     // holds the PREVIOUS turn's blocks with isStreaming=true — deriving from
     // isStreaming would mislabel them "live". Legacy fallback keeps the old rule.
-    completedLen: completedLen ?? (isStreaming ? 0 : blocks.length),
+    completedLen: boundary,
   });
 }
 
@@ -301,6 +307,36 @@ function registerGlobalListeners(): void {
     flushText(state);
     state.textBuffer = '';
     state.blocks = appendSystemBlock(state.blocks, { variant, message, detail });
+  });
+
+  // ── permission request/resolved ──
+  onSessionEvent('session:permission-request', (data: unknown) => {
+    const { sessionId: sid, requestId, toolName, input, reason, acpOptions } = data as {
+      sessionId: string;
+      requestId: string;
+      toolName: string;
+      input?: Record<string, unknown>;
+      reason?: string;
+      acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
+    };
+    if (!sid || !requestId || !toolName || !trackedSessions.has(sid)) return;
+    const state = ensureState(sid);
+    flushText(state);
+    state.textBuffer = '';
+    state.blocks = appendPermissionBlock(state.blocks, {
+      requestId, toolName, input, reason, acpOptions,
+    });
+  });
+
+  onSessionEvent('session:permission-resolved', (data: unknown) => {
+    const { sessionId: sid, requestId, allowed } = data as {
+      sessionId: string;
+      requestId: string;
+      allowed: boolean;
+    };
+    if (!sid || !requestId || !trackedSessions.has(sid)) return;
+    const state = ensureState(sid);
+    state.blocks = resolvePermissionBlock(state.blocks, requestId, allowed);
   });
 
   // ── thinking-delta ──

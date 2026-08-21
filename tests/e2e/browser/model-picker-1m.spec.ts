@@ -48,6 +48,44 @@ const CLI_CATALOG = {
   ],
 }
 
+const STRENGTH_CATALOG = {
+  source: 'cli',
+  live: true,
+  fetchedAt: new Date(0).toISOString(),
+  models: [
+    {
+      value: 'global.anthropic.claude-opus-5[1m]',
+      resolvedModel: 'global.anthropic.claude-opus-5[1m]',
+      displayName: 'Opus',
+    },
+    {
+      value: 'default',
+      resolvedModel: 'global.anthropic.claude-opus-5[1m]',
+      displayName: 'Default',
+    },
+    {
+      value: 'global.anthropic.claude-fable-5[1m]',
+      resolvedModel: 'global.anthropic.claude-fable-5[1m]',
+      displayName: 'Fable',
+    },
+    {
+      value: 'global.anthropic.claude-sonnet-5',
+      resolvedModel: 'global.anthropic.claude-sonnet-5',
+      displayName: 'Sonnet',
+    },
+    {
+      value: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      resolvedModel: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      displayName: 'Haiku',
+    },
+    {
+      value: 'openai.gpt-5.6-sol',
+      resolvedModel: 'openai.gpt-5.6-sol',
+      displayName: 'GPT-5.6 Sol',
+    },
+  ],
+}
+
 async function openSessionPanel(page: import('@playwright/test').Page) {
   // The SECTION tab defaults to Focus, which doesn't mount the main task list.
   // Preset both axes to "All" before the first render.
@@ -122,13 +160,13 @@ test.describe('ModelPicker fallback registry', () => {
     await expect(options).toHaveCount(7)
 
     const names = picker.locator('.model-picker-col-models .model-picker-row-name')
-    await expect(names.nth(0)).toHaveText('Opus')
-    await expect(names.nth(1)).toHaveText('Opus 1M')
-    await expect(names.nth(2)).toHaveText('Sonnet')
-    await expect(names.nth(3)).toHaveText('Sonnet 1M')
-    await expect(names.nth(4)).toHaveText('Haiku')
-    await expect(names.nth(5)).toHaveText('Fable')
-    await expect(names.nth(6)).toHaveText('Fable 1M')
+    await expect(names.nth(0)).toHaveText('Haiku')
+    await expect(names.nth(1)).toHaveText('Sonnet')
+    await expect(names.nth(2)).toHaveText('Sonnet 1M')
+    await expect(names.nth(3)).toHaveText('Fable')
+    await expect(names.nth(4)).toHaveText('Fable 1M')
+    await expect(names.nth(5)).toHaveText('Opus')
+    await expect(names.nth(6)).toHaveText('Opus 1M')
 
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-fallback-7-options.png') })
   })
@@ -158,6 +196,33 @@ test.describe('ModelPicker fallback registry', () => {
 // ── Regime 2: CLI catalog (route intercepted) ──
 
 test.describe('ModelPicker CLI catalog', () => {
+  test('sorts mixed provider models and effort from low to high', async ({ page }) => {
+    await interceptCatalog(page, STRENGTH_CATALOG)
+    // The live session reports a short canonical ID that does not match the
+    // catalog's provider-prefixed Fable row. Its synthetic current row must
+    // still sort at the Fable tier instead of being pinned above Haiku.
+    await interceptLiveSettings(page, 'claude-fable-5[1m]', 'high')
+
+    const input = await openSessionPanel(page)
+    const picker = await openModelPicker(page, input)
+
+    const modelNames = await picker.locator('.model-picker-col-models .model-picker-row-name').allTextContents()
+    expect(modelNames).toEqual([
+      'Haiku 4.5',
+      'Sonnet 5',
+      'claude-fable-5 1M',
+      'Fable 5 1M',
+      'GPT-5.6 Sol',
+      'Default (Opus 5 1M)',
+      'Opus 5 1M',
+    ])
+
+    const effortNames = await picker.locator('.model-picker-col-effort .model-picker-row-name').allTextContents()
+    expect(effortNames).toEqual(['Low', 'Medium', 'High', 'X-High', 'Max'])
+
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-strength-order.png') })
+  })
+
   test('renders catalog rows; disabled row greyed with no Switch; active via resolvedModel', async ({ page }) => {
     await interceptCatalog(page, CLI_CATALOG)
     // Live model = fable full ID → matches the SPECIFIC Fable row (not 'default',

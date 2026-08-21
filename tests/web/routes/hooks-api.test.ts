@@ -43,7 +43,9 @@ interface HookInfo {
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
   await fs.mkdir(WALNUT_HOME, { recursive: true });
-  // Seed a declarative config hook + a defs entry that a PATCH must not clobber.
+  // Seed declarative config hooks + defs entries that a PATCH must not clobber.
+  // The phase-changed def also stands in for the deleted human-verified-auto-push
+  // builtin, keeping the deprecated /api/task-phase-hooks shape under test.
   await fs.writeFile(path.join(WALNUT_HOME, 'config.yaml'), yaml.dump({
     hooks: {
       defs: [{
@@ -51,6 +53,12 @@ beforeAll(async () => {
         name: 'Notify on task complete',
         on: ['onTaskCompleted'],
         action: { type: 'notify', message: '{{task.title}} finished' },
+      }, {
+        id: 'config-phase-message',
+        name: 'Message the session on AGENT_COMPLETE',
+        on: ['onTaskPhaseChanged'],
+        action: { type: 'send_message_to_session', message: 'Task {{task.title}} needs attention' },
+        filter: { phases: ['AGENT_COMPLETE'], requiresSession: true },
       }],
     },
   }));
@@ -74,10 +82,13 @@ describe('GET /api/hooks', () => {
     // session builtins
     expect(ids).toContain('turn-complete-triage');
     expect(ids).toContain('session-auto-title');
-    // task builtin (ported phase hook)
-    expect(ids).toContain('human-verified-auto-push');
-    // config def
+    // There is deliberately NO task-domain BUILTIN any more: the only one was
+    // human-verified-auto-push, deleted with the HUMAN_VERIFIED phase. Task
+    // automation is now user-declared (config defs / hook files) only.
+    expect(ids).not.toContain('human-verified-auto-push');
+    // config defs
     expect(ids).toContain('config-notify-complete');
+    expect(ids).toContain('config-phase-message');
     // inline interventions
     expect(ids).toContain('askuserquestion-p-mode-correction');
     expect(ids).toContain('auto-deny-stale-permissions');
@@ -93,7 +104,8 @@ describe('GET /api/hooks', () => {
     expect(cron.runtime).toBe('daemon');
     expect(cron.source).toBe('daemon-policy');
     expect(cron.configPath).toBe('session.cron_policy');
-    expect(cron.note).toMatch(/daemon restart/i);
+    // hooks-v1: pushed hot to connected daemons; only legacy daemons need a restart.
+    expect(cron.note).toMatch(/pushed hot/i);
     expect(cron.enabled).toBe(false); // default unrestricted
     expect(cron.mutable).toBe('config-path');
 
@@ -112,7 +124,7 @@ describe('GET /api/hooks', () => {
 
 describe('PATCH /api/hooks/:id', () => {
   it('override round-trip persists, live-reloads, and preserves hooks.defs', async () => {
-    const patch = await fetch(apiUrl('/api/hooks/human-verified-auto-push'), {
+    const patch = await fetch(apiUrl('/api/hooks/turn-complete-triage'), {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ enabled: false }),
@@ -123,26 +135,26 @@ describe('PATCH /api/hooks/:id', () => {
     const raw = yaml.load(await fs.readFile(path.join(WALNUT_HOME, 'config.yaml'), 'utf8')) as {
       hooks?: { overrides?: Record<string, { enabled?: boolean }>; defs?: unknown[] };
     };
-    expect(raw.hooks?.overrides?.['human-verified-auto-push']?.enabled).toBe(false);
-    expect(raw.hooks?.defs).toHaveLength(1);
+    expect(raw.hooks?.overrides?.['turn-complete-triage']?.enabled).toBe(false);
+    expect(raw.hooks?.defs).toHaveLength(2);
 
     // Inventory reflects it (disabled hooks resurface as stubs)
     const body = await (await fetch(apiUrl('/api/hooks'))).json() as HookInfo[];
-    const hook = body.find(h => h.id === 'human-verified-auto-push')!;
+    const hook = body.find(h => h.id === 'turn-complete-triage')!;
     expect(hook.enabled).toBe(false);
 
     // Re-enable for the rest of the suite
-    const reEnable = await fetch(apiUrl('/api/hooks/human-verified-auto-push'), {
+    const reEnable = await fetch(apiUrl('/api/hooks/turn-complete-triage'), {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ enabled: true }),
     });
     expect(reEnable.status).toBe(200);
     const after = await (await fetch(apiUrl('/api/hooks'))).json() as HookInfo[];
-    expect(after.find(h => h.id === 'human-verified-auto-push')!.enabled).toBe(true);
+    expect(after.find(h => h.id === 'turn-complete-triage')!.enabled).toBe(true);
   });
 
-  it('daemon policy PATCH flips the config key and flags requiresDaemonRestart', async () => {
+  it('daemon policy PATCH flips the config key; hooks-v1 policy needs no restart', async () => {
     const res = await fetch(apiUrl('/api/hooks/session-only-cron-policy'), {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
@@ -150,14 +162,16 @@ describe('PATCH /api/hooks/:id', () => {
     });
     expect(res.status).toBe(200);
     const body = await res.json() as { requiresDaemonRestart?: boolean };
-    expect(body.requiresDaemonRestart).toBe(true);
+    // hooks-v1 delivery: the toggle hot-pushes compiled rules to connected
+    // daemons (hotPushed:true on the descriptor), so no restart is required.
+    expect(body.requiresDaemonRestart).toBe(false);
 
     const raw = yaml.load(await fs.readFile(path.join(WALNUT_HOME, 'config.yaml'), 'utf8')) as {
       session?: { cron_policy?: string };
       hooks?: { defs?: unknown[] };
     };
     expect(raw.session?.cron_policy).toBe('session-only');
-    expect(raw.hooks?.defs).toHaveLength(1); // untouched
+    expect(raw.hooks?.defs).toHaveLength(2); // untouched
 
     const inventory = await (await fetch(apiUrl('/api/hooks'))).json() as HookInfo[];
     expect(inventory.find(h => h.id === 'session-only-cron-policy')!.enabled).toBe(true);
@@ -336,7 +350,7 @@ describe('PATCH /api/hooks/:id', () => {
     });
     expect(notFound.status).toBe(404);
 
-    const badBody = await fetch(apiUrl('/api/hooks/human-verified-auto-push'), {
+    const badBody = await fetch(apiUrl('/api/hooks/turn-complete-triage'), {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ enabled: 'yes' }),
@@ -346,7 +360,7 @@ describe('PATCH /api/hooks/:id', () => {
 });
 
 describe('GET /api/task-phase-hooks (deprecated alias)', () => {
-  it('keeps the legacy byte shape for human-verified-auto-push', async () => {
+  it('keeps the legacy byte shape for a phase-filtered task hook', async () => {
     const res = await fetch(apiUrl('/api/task-phase-hooks'));
     expect(res.status).toBe(200);
     const body = await res.json() as Array<{
@@ -354,9 +368,13 @@ describe('GET /api/task-phase-hooks (deprecated alias)', () => {
       actionDetail: string; conditions: string[]; priority: number;
     }>;
 
-    const hook = body.find(h => h.id === 'human-verified-auto-push')!;
+    // The old builtin (human-verified-auto-push) is gone with HUMAN_VERIFIED,
+    // so the shape is now proven with the seeded config def — the endpoint
+    // contract is unchanged, only its last builtin producer disappeared.
+    const hook = body.find(h => h.id === 'config-phase-message')!;
     expect(hook).toBeDefined();
-    expect(hook.triggerPhase).toBe('HUMAN_VERIFIED');
+    // (WAIT removed 2026-08-18 — the fixture hook now filters on AGENT_COMPLETE.)
+    expect(hook.triggerPhase).toBe('AGENT_COMPLETE');
     expect(hook.actionType).toBe('send_message');
     expect(hook.actionDetail).toMatch(/^Send message:/);
     expect(hook.conditions).toEqual(['Requires active session']);

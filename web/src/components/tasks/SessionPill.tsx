@@ -8,7 +8,7 @@
  * Examples:
  *   Session · Plan · In Progress / Running
  *   Session · Bypass · Agent Complete / Stopped
- *   Session · Plan · Awaiting Human / Stopped
+ *   Session · Plan · Wait / Stopped
  */
 import { PHASE_LABELS, PROCESS_LABELS, pillPhaseClassSuffix } from '@/utils/session-status';
 import type { TaskPhase, ProcessStatus } from '@/types/session';
@@ -31,6 +31,10 @@ interface SessionStatus {
   provider?: string | null;
   planCompleted?: boolean;
   mode?: string | null;
+  /** Pending permission/AskUserQuestion tool name — the CLI is BLOCKED on a
+   *  human click. Drives the red waiting pill (incident 2026-08-14: a session
+   *  paused on AskUserQuestion showed a calm blue pill in the task list). */
+  pendingPermissionTool?: string | null;
 }
 
 interface SessionPillProps {
@@ -75,17 +79,28 @@ function stateClassFromPhase(phase: TaskPhase | undefined): string {
   return pillPhaseClassSuffix(phase);
 }
 
+/** True when the CLI is paused on a permission/AskUserQuestion prompt — the
+ *  most actionable state a session can be in; outranks everything but error.
+ *  Only meaningful on a live (running/idle) record: a prompt cannot outlive
+ *  its process (same rule as deriveDisplayStatus in session-status.ts). */
+function isWaiting(status: SessionStatus | undefined): boolean {
+  return !!status?.pendingPermissionTool
+    && (status.process_status === 'running' || status.process_status === 'idle');
+}
+
 function stateClass(status: SessionStatus | undefined, phase: TaskPhase | undefined): string {
-  if (status?.process_status === 'running') return 'running';
   if (status?.process_status === 'error') return 'error';
+  if (isWaiting(status)) return 'waiting';
+  if (status?.process_status === 'running') return 'running';
   return stateClassFromPhase(phase);
 }
 
 /** CSS class suffix from two legacy statuses — picks the most important. */
 function stateClassLegacy(plan: SessionStatus | undefined, exec: SessionStatus | undefined, phase: TaskPhase | undefined): string {
   const ps = (s: SessionStatus | undefined) => s?.process_status;
-  if (ps(plan) === 'running' || ps(exec) === 'running') return 'running';
   if (ps(plan) === 'error' || ps(exec) === 'error') return 'error';
+  if (isWaiting(plan) || isWaiting(exec)) return 'waiting';
+  if (ps(plan) === 'running' || ps(exec) === 'running') return 'running';
   return pillPhaseClassSuffix(phase);
 }
 
@@ -118,11 +133,15 @@ export function SessionPill({ sessionId, sessionStatus, phase, planSessionId, ex
     const status = resolvedSessionStatus;
     const cls = stateClass(status, phase);
     const wl = phaseLabel(phase);
-    const pl = processLabel(status);
+    // Waiting outranks the raw process label: "Session · Plan · In Progress /
+    // Idle" hides that the CLI is blocked on a human click.
+    const pl = isWaiting(status) ? 'Waiting' : processLabel(status);
     const isEmbedded = status?.provider === 'embedded';
-    const title = status
-      ? `Session · ${modeLabel}: ${phase ?? 'unknown'} / ${status.process_status}${isEmbedded ? ' (embedded)' : ''}`
-      : 'Session';
+    const title = isWaiting(status)
+      ? `Waiting for your answer: ${status!.pendingPermissionTool}`
+      : status
+        ? `Session · ${modeLabel}: ${phase ?? 'unknown'} / ${status.process_status}${isEmbedded ? ' (embedded)' : ''}`
+        : 'Session';
 
     return (
       <span className={`task-session-pill task-session-pill-${cls}${clickClass}${activeClass}`} title={title} onClick={handleClick}>

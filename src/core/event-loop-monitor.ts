@@ -26,6 +26,7 @@
 import { monitorEventLoopDelay } from 'node:perf_hooks'
 import { execFile } from 'node:child_process'
 import { log } from '../logging/index.js'
+import { observe } from './observability/metrics.js'
 
 /** Loop delay above this (ms) in a window is reported as a stall. */
 const STALL_THRESHOLD_MS = 250
@@ -205,6 +206,10 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
       return
     }
     const maxMs = histogram.max / 1e6 // ns → ms
+    // Metric: every window's worst loop delay — the continuous baseline the
+    // stall warnings below are the outliers of. Lets "was the loop healthy at
+    // 14:32?" be answered from metrics instead of absence-of-warnings.
+    observe('eventloop.delay.max', Math.round(maxMs))
     if (maxMs >= STALL_THRESHOLD_MS) {
       const payload = {
         windowMs: WINDOW_MS,
@@ -262,6 +267,9 @@ export function startEventLoopMonitor(clocksOverride?: MonitorClocks): void {
       clearSectionForSleep()
     } else {
       const lateBy = monoDelta - PROBE_INTERVAL_MS
+      // Metric: probe lateness every tick (usually ~0ms). The p99 of this series
+      // IS the user-felt scheduling delay for any queued request.
+      observe('eventloop.probe.late', Math.max(0, Math.round(lateBy)))
       if (lateBy >= STALL_THRESHOLD_MS) {
         const { section, detail, awaiting } = describeOpenSections()
         const payload = {

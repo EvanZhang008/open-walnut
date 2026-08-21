@@ -218,6 +218,62 @@ export interface TaskFieldSpec {
   coreField?: 'sprint';
 }
 
+// ── UiAppCapability: plugin-declared embedded app (manifest `capabilities.ui`) ──
+// A plugin may ship a small static HTML surface Walnut embeds in a sandboxed
+// iframe. The files live in `<pluginDir>/app/` and are served read-only under
+// /plugin-apps/<pluginId>/app/… — nothing else in the plugin directory is
+// reachable, so plugin server code, manifests and configs stay private.
+
+export interface UiAppSpec {
+  /** Sidebar / page title. Required, non-empty, ≤64 chars. */
+  title: string;
+  /** Entry page, relative to the plugin's `app/` dir. Default `index.html`.
+   *  An explicit `app/` prefix is accepted and normalized away. */
+  entry?: string;
+  /** Icon (png/svg) relative to the plugin's `app/` dir. Same rules as entry. */
+  icon?: string;
+}
+
+export interface UiAppCapability {
+  app?: UiAppSpec;
+}
+
+/** Validated ui app, as stored on RegisteredPlugin. Paths are plugin-dir
+ *  relative and always start with `app/`. */
+export interface RegisteredUiApp {
+  title: string;
+  /** e.g. `app/index.html` — resolve against the plugin dir. */
+  entry: string;
+  /** e.g. `app/icon.svg`, when declared. */
+  icon?: string;
+}
+
+// ── PluginToolSpec: plugin-contributed Personal AI tool (capability `tools`) ──
+// Structurally compatible with src/agent/tools.ts ToolDefinition. Declared here
+// rather than imported so core keeps no dependency (not even a type one) on the
+// agent layer — integration-types.ts is a leaf that task-manager and the whole
+// core tree import.
+
+export type PluginToolTextBlock = { type: 'text'; text: string };
+export type PluginToolImageBlock = { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+/** Plain string, or content blocks (text + image). Mirrors ToolResultContent. */
+export type PluginToolResult = string | Array<PluginToolTextBlock | PluginToolImageBlock>;
+
+/** Mirrors ToolExecuteMeta — correlation id + the calling turn's source. */
+export interface PluginToolMeta {
+  toolUseId?: string;
+  source?: string;
+}
+
+export interface PluginToolSpec {
+  /** [a-z0-9_]+. The loader prefixes it with the plugin id unless already prefixed. */
+  name: string;
+  description: string;
+  /** JSON Schema for the tool's arguments (object schema). */
+  input_schema: Record<string, unknown>;
+  execute(params: Record<string, unknown>, meta?: PluginToolMeta): Promise<PluginToolResult>;
+}
+
 // ── HttpRoute: plugin-registered HTTP routes ──
 
 export interface HttpRoute {
@@ -259,12 +315,19 @@ export interface PluginApi {
   config: Record<string, unknown>;
   logger: SubsystemLogger;
 
+  /** Required only when the plugin's effective capabilities include `sync`
+   *  (which is the case whenever `capabilities` is absent — every pre-v2
+   *  manifest is a sync plugin). A ui/tools/skills-only plugin omits it. */
   registerSync(sync: IntegrationSync): void;
   registerSourceClaim(fn: ProjectClaimFn, opts?: { priority?: number }): void;
   registerDisplay(meta: DisplayMeta): void;
   registerAgentContext(snippet: string): void;
   registerMigration(fn: MigrateFn): void;
   registerHttpRoute(route: HttpRoute): void;
+  /** Contribute a tool to the Personal AI's tool set (capability `tools`).
+   *  Names are namespaced `<pluginId>_<name>` so two plugins can't collide;
+   *  a built-in tool of the same name always wins. */
+  registerTool(tool: PluginToolSpec): void;
   /** Declare ext-id indexes the plugin wants opened on the tasks table.
    *  spec.source must equal the plugin id. May be called at most once. */
   registerExtIndex(spec: ExtIndexSpec): void;
@@ -278,7 +341,22 @@ export interface RegisteredPlugin {
   description?: string;
   version?: string;
   config: Record<string, unknown>;
+  /**
+   * The plugin's sync implementation.
+   *
+   * ALWAYS present so the dozens of `registry.get(task.source)!.sync.xxx()` call
+   * sites stay total. For a plugin WITHOUT the `sync` capability (ui/tools/skills
+   * only) this is an inert stub and `hasSync` is false — read `hasSync`, never
+   * the presence of this field, when deciding whether a plugin syncs anything.
+   */
   sync: IntegrationSync;
+  /** False only for a plugin without the `sync` capability (ui/tools/skills
+   *  only): its `sync` is an inert stub, it must not be polled, and it must
+   *  never be offered as a task source. ABSENT is read as `true` so any
+   *  hand-constructed registration (tests, the local fallback) keeps working. */
+  hasSync?: boolean;
+  /** Effective capability names (absent manifest capabilities ⇒ ['sync']). */
+  capabilities?: string[];
   claim?: { fn: ProjectClaimFn; priority: number };
   display?: DisplayMeta;
   agentContext?: string;
@@ -290,6 +368,17 @@ export interface RegisteredPlugin {
   uiHints?: Record<string, { label?: string; help?: string }>;
   /** Manifest taskFields — plugin-declared per-task fields the console renders generically. */
   taskFields?: TaskFieldSpec[];
+  /** Tools contributed via registerTool (capability `tools`), names already
+   *  namespaced with the plugin id. */
+  tools?: PluginToolSpec[];
+  /** Validated manifest `capabilities.ui.app` (capability `ui`). */
+  uiApp?: RegisteredUiApp;
+  /** Absolute path of the plugin's directory on disk. Needed to serve its app
+   *  files and to find its `skills/` dir. */
+  pluginDir?: string;
+  /** True when `<pluginDir>/skills/` exists (capability `skills`) — the skill
+   *  loader appends it as a lowest-priority discovery source. */
+  hasSkills?: boolean;
 }
 
 /** Plugin discovered on disk but not loaded because required config is missing.
@@ -313,10 +402,15 @@ export interface PluginManifest {
   /** Advisory in v1 — not enforced. e.g. { walnut: ">=0.5" } */
   engines?: { walnut?: string };
   /** Capability declarations (manifest v2). ABSENT means { sync: {} } — every
-   *  pre-v2 manifest is a sync plugin. Only `sync` is honored today; other keys
-   *  (tools, hooks, skills, routines, ui) are reserved: a manifest declaring only
-   *  unknown capabilities is reported as `unsupported` instead of being loaded,
-   *  so plugins written for a future Walnut degrade gracefully here. */
+   *  pre-v2 manifest is a sync plugin.
+   *
+   *  Implemented: `sync` (task provider), `ui` (an embedded app — see
+   *  UiAppCapability), `tools` (Personal AI tools via api.registerTool),
+   *  `skills` (a `<pluginDir>/skills/` dir folded into the skills index).
+   *  Still reserved: `hooks`, `routines`. A manifest declaring ONLY
+   *  unimplemented capabilities is reported as `unsupported` instead of being
+   *  loaded (its code is never imported), so a plugin written for a future
+   *  Walnut degrades gracefully here. */
   capabilities?: Record<string, Record<string, unknown>>;
   configSchema?: Record<string, unknown>;
   uiHints?: Record<string, { label?: string; help?: string }>;

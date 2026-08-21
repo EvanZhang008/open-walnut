@@ -184,9 +184,8 @@ defineOp({
   name: 'api',
   title: 'Call any Walnut API endpoint',
   description:
-    'Escape hatch for an endpoint with no named operation. Agents may use it only for GET reads; ' +
-    'writes require a named operation. `path` must start with /api/. Prefer named operations because ' +
-    'they carry validation, authorization, and product semantics.',
+    'Escape hatch for an endpoint with no named operation. `path` must start with /api/. Prefer named ' +
+    'operations because they carry validation, authorization, and product semantics.',
   input: {
     method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).describe('HTTP method'),
     path: z.string().min(1).describe('Absolute API path starting with /api/'),

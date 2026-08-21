@@ -34,10 +34,11 @@ export function createWalnutMcpServer(options: McpOptions = {}): McpServer {
     { name: 'walnut', version: '1' },
     {
       instructions:
-        'Walnut is the user\'s personal task + session hub. Read before you write ' +
-        '(task_list / search) so you never duplicate an existing task. After task_create ' +
-        'or task_complete, paste the returned `ref` tag verbatim into your reply so the user ' +
-        'gets a clickable task pill. Never delete tasks unless the user explicitly asked.',
+        'Walnut is the user\'s personal task + session hub. Use delegate to start tracked work; ' +
+        'task_create only records it. Reuse tasks only by explicit id. Hand work back with ' +
+        'task_update phase=AGENT_COMPLETE when work is done and awaiting review, or WAIT when a ' +
+        'person has to act; COMPLETE means the whole task is finished. ' +
+        'Never delete tasks unless the user explicitly asked.',
     },
   )
   registerWalnutTools(server, options)

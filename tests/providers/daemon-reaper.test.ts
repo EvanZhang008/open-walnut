@@ -214,4 +214,46 @@ describe('L1.1 daemon-reaper: idempotent cleanup + broadcast', () => {
     expect(ctx.spies.broadcastSessionStateFn).not.toHaveBeenCalled()
     expect(ctx.spies.killProcessGroupFn).not.toHaveBeenCalled()
   })
+
+  // R13 — session.reap hook: strip-own-rows actually rewrites scheduled_tasks.json
+  // (positive case — the default fixture omits hookActionsFn, so every other
+  // test here exercises the never-strip path; this one proves the wired path).
+  it('reapSession strips the dying session durable rows when the hook dep says strip-own-rows', () => {
+    const cwd = fs.mkdtempSync(path.join(ctx.tmpDir, 'reap-strip-'))
+    fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true })
+    const tasksPath = path.join(cwd, '.claude', 'scheduled_tasks.json')
+    fs.writeFileSync(tasksPath, JSON.stringify({
+      version: 1,
+      tasks: [
+        { id: 'own-task', createdBySessionId: 'sid13', prompt: 'x' },
+        { id: 'sibling-task', createdBySessionId: 'other-live-sid', prompt: 'y' },
+      ],
+    }))
+
+    const hookActionsFn = vi.fn(() => ['strip-own-rows'])
+    const core = createDaemonCore({ ...ctx.deps, hookActionsFn })
+    ctx.sessions.set('sid13', makeTestSession({ pid: 1013, cwd }))
+
+    core.reapSession('sid13', 0, 'test-strip')
+
+    expect(hookActionsFn).toHaveBeenCalledWith('session.reap', { sid: 'sid13', cwd })
+    const after = JSON.parse(fs.readFileSync(tasksPath, 'utf-8')) as { tasks: Array<{ id: string }> }
+    expect(after.tasks.map((t) => t.id)).toEqual(['sibling-task'])
+  })
+
+  // R14 — no strip-own-rows action ⇒ the file is untouched (zero-hook default)
+  it('reapSession leaves scheduled_tasks.json alone when the hook dep returns nothing', () => {
+    const cwd = fs.mkdtempSync(path.join(ctx.tmpDir, 'reap-nostrip-'))
+    fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true })
+    const tasksPath = path.join(cwd, '.claude', 'scheduled_tasks.json')
+    const original = JSON.stringify({ version: 1, tasks: [{ id: 'own-task', createdBySessionId: 'sid14' }] })
+    fs.writeFileSync(tasksPath, original)
+
+    const core = createDaemonCore({ ...ctx.deps, hookActionsFn: () => [] })
+    ctx.sessions.set('sid14', makeTestSession({ pid: 1014, cwd }))
+
+    core.reapSession('sid14', 0, 'test-nostrip')
+
+    expect(fs.readFileSync(tasksPath, 'utf-8')).toBe(original)
+  })
 })

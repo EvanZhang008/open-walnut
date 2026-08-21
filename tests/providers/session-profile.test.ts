@@ -225,10 +225,10 @@ describe('profile record round-trip', () => {
       mcpServers: { walnut: { command: 'open-walnut', args: ['mcp'] } },
       allowedTools: ['Read'],
     }
-    await createSessionRecord('sid-profile', 'task-1', 'proj', tmpBase, { pid: 1234, profile, lane: 'Personal AI' })
+    await createSessionRecord('sid-profile', 'task-1', 'proj', tmpBase, { pid: 1234, profile, lane: 'personal-ai' })
     const record = await getSessionByClaudeId('sid-profile')
     expect(record?.profile).toEqual(profile)
-    expect(record?.lane).toBe('Personal AI')
+    expect(record?.lane).toBe('personal-ai')
   })
 
   it('the persisted profile survives an unrelated record update (payload spill)', async () => {
@@ -254,7 +254,7 @@ describe('profile record round-trip', () => {
     session.send(
       'hello', tmpBase, undefined, 'bypass', undefined, undefined,
       undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
-      { profile, lane: 'Personal AI' },
+      { profile, lane: 'personal-ai' },
     )
     await session.awaitSpawn().catch(() => {})
     const sid = session.sessionId!
@@ -268,7 +268,7 @@ describe('profile record round-trip', () => {
     }
     await session.gracefulStop(true).catch(() => {})
     expect(record?.profile).toEqual(profile)
-    expect(record?.lane).toBe('Personal AI')
+    expect(record?.lane).toBe('personal-ai')
   })
 
   it('resolveResumeArgs returns the record profile + lane for the cold-resume spawn', async () => {
@@ -280,7 +280,7 @@ describe('profile record round-trip', () => {
       mcpServers: { walnut: { command: 'open-walnut', args: ['mcp'] } },
       allowedTools: ['Read', 'Grep'],
     }
-    await createSessionRecord('sid-resume', 'task-3', 'proj', tmpBase, { pid: 4321, profile, lane: 'Personal AI' })
+    await createSessionRecord('sid-resume', 'task-3', 'proj', tmpBase, { pid: 4321, profile, lane: 'personal-ai' })
     // Private method — reached through the instance under test, deliberately:
     // the contract asserted here is "the resume path re-reads the profile", and
     // every cold-spawn caller funnels through this one resolver.
@@ -293,7 +293,7 @@ describe('profile record round-trip', () => {
       }>
     }).resolveResumeArgs('sid-resume')
     expect(resolved.profile).toEqual(profile)
-    expect(resolved.lane).toBe('Personal AI')
+    expect(resolved.lane).toBe('personal-ai')
   })
 
   it('resolveResumeArgs leaves profile undefined for a plain session', async () => {
@@ -315,7 +315,7 @@ describe('profile record round-trip', () => {
 describe('checkSessionLimit ignores lane sessions', () => {
   it('a lane session does not count toward the host limit', async () => {
     const { createSessionRecord, checkSessionLimit } = await import('../../src/core/session-tracker.js')
-    await createSessionRecord('cap-lane', 't1', 'p', tmpBase, { pid: 1001, lane: 'Personal AI' })
+    await createSessionRecord('cap-lane', 't1', 'p', tmpBase, { pid: 1001, lane: 'personal-ai' })
     await createSessionRecord('cap-normal', 't2', 'p', tmpBase, { pid: 1002 })
     const result = await checkSessionLimit(undefined, { local: 2 })
     expect(result.running).toBe(1)
@@ -324,7 +324,7 @@ describe('checkSessionLimit ignores lane sessions', () => {
 
   it('lane sessions cannot exhaust capacity even at the limit', async () => {
     const { createSessionRecord, checkSessionLimit } = await import('../../src/core/session-tracker.js')
-    await createSessionRecord('cap-lane-1', 't1', 'p', tmpBase, { pid: 1101, lane: 'Personal AI' })
+    await createSessionRecord('cap-lane-1', 't1', 'p', tmpBase, { pid: 1101, lane: 'personal-ai' })
     await createSessionRecord('cap-lane-2', 't2', 'p', tmpBase, { pid: 1102, lane: 'other' })
     const result = await checkSessionLimit(undefined, { local: 1 })
     expect(result.running).toBe(0)
@@ -346,8 +346,8 @@ describe('lane sessions are hidden from the default listings', () => {
     }
     expect(isListableSession(base)).toBe(true)
     expect(isLaneSession(base)).toBe(false)
-    expect(isListableSession({ ...base, lane: 'Personal AI' })).toBe(false)
-    expect(isLaneSession({ ...base, lane: 'Personal AI' })).toBe(true)
+    expect(isListableSession({ ...base, lane: 'personal-ai' })).toBe(false)
+    expect(isLaneSession({ ...base, lane: 'personal-ai' })).toBe(true)
     // Empty string is not a lane (a blank field must not hide a real session).
     expect(isLaneSession({ ...base, lane: '' })).toBe(false)
   })
@@ -355,7 +355,7 @@ describe('lane sessions are hidden from the default listings', () => {
   it('getRecentSessions excludes lane records by default and includes them on request', async () => {
     const { createSessionRecord, getRecentSessions } = await import('../../src/core/session-tracker.js')
     await createSessionRecord('list-normal', 't1', 'p', tmpBase, { pid: 2001 })
-    await createSessionRecord('list-lane', 't2', 'p', tmpBase, { pid: 2002, lane: 'Personal AI' })
+    await createSessionRecord('list-lane', 't2', 'p', tmpBase, { pid: 2002, lane: 'personal-ai' })
     const ids = (await getRecentSessions(10)).map((s) => s.claudeSessionId)
     expect(ids).toContain('list-normal')
     expect(ids).not.toContain('list-lane')
@@ -367,7 +367,7 @@ describe('lane sessions are hidden from the default listings', () => {
     const { createSessionRecord } = await import('../../src/core/session-tracker.js')
     const { buildSessionProjection } = await import('../../src/core/session-projection.js')
     await createSessionRecord('proj-normal', 't1', 'p', tmpBase, { pid: 3001 })
-    await createSessionRecord('proj-lane', 't2', 'p', tmpBase, { pid: 3002, lane: 'Personal AI' })
+    await createSessionRecord('proj-lane', 't2', 'p', tmpBase, { pid: 3002, lane: 'personal-ai' })
     const projection = await buildSessionProjection()
     const ids = projection.sessions.map((s) => s.id)
     expect(ids).toContain('proj-normal')

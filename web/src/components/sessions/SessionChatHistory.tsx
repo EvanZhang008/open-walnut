@@ -166,7 +166,7 @@ function StreamingTextBlock({ content, sessionCwd, sessionHost, sessionId, onTas
   const { value: displayContent, hostRef } = useSelectionFrozen(content);
   const html = useMemo(() => renderMarkdownWithRefs(displayContent, sessionCwd), [displayContent, sessionCwd]);
   const imagePaths = useMemo(() => findImagePaths(displayContent), [displayContent]);
-  const handleClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost);
+  const handleClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost, sessionId);
   return (
     <>
       <div
@@ -326,8 +326,17 @@ function PermissionRequestCard({ sessionId, requestId, toolName, input, reason, 
       await respondToPermission(sessionId, requestId, allow, message, optionId, answers);
       if (answers) setSubmittedAnswers(answers);
       setStatus(allow ? 'allowed' : 'denied');
-    } catch {
-      setStatus('pending'); // revert on error
+    } catch (err) {
+      // 404 = the request no longer exists server-side (answered elsewhere,
+      // auto-cancelled, or the turn died). Reverting to 'pending' bred zombie
+      // cards the user clicked forever (2026-08-11: 8 approve→404 loops on 2
+      // cards). Settle the card as denied-stale instead of re-arming it.
+      const status = (err as { status?: number }).status;
+      if (status === 404 || status === 409) {
+        setStatus('denied');
+      } else {
+        setStatus('pending'); // transient (network/5xx): let the user retry
+      }
     }
   };
 
@@ -479,7 +488,7 @@ const StreamingBlockView = memo(function StreamingBlockView({ block, sessionId, 
       sessionId={sessionId}
       onTaskClick={onTaskClick}
       onSessionClick={onSessionClick}
-      onFileOpen={onFileOpen ? (p) => onFileOpen(p) : undefined}
+      onFileOpen={onFileOpen}
     />
   );
 });
@@ -658,10 +667,16 @@ type TimelineItem =
 
 type HistoryPart = { kind: 'msg'; m: SessionHistoryMessage; globalIndex: number; suppressTools?: boolean }
   | { kind: 'run'; members: { m: SessionHistoryMessage; globalIndex: number }[];
+      /** Pre-mapped member messages — a STABLE array ref so the memoized
+       *  MergedHistoryToolRun can skip re-render on streaming frames (mapping
+       *  in JSX would mint a fresh array every 150ms flush). */
+      memberMsgs: SessionHistoryMessage[];
       /** First member is a tools-only clone of the preceding msg part (same
        *  globalIndex) — skip the fork-divider check for it. */
       seeded?: boolean }
-  | { kind: 'system-run'; members: { m: SessionHistoryMessage; globalIndex: number }[] };
+  | { kind: 'system-run'; members: { m: SessionHistoryMessage; globalIndex: number }[];
+      /** Pre-mapped stable array for the memoized SystemGroupRun (same reason). */
+      systemMembers: SystemGroupMember[] };
 
 function isTransparentStreamItem(item: TimelineItem): boolean {
   if (item.kind !== 'block') return false;
@@ -859,11 +874,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // reading position out of view. Bottom distance is invariant to any
   // content inserted above the viewport.
   const pendingBottomDistance = useRef<number | null>(null);
-  // Reading-mode render-window pin: while the user is scrolled up, the
-  // truncation window's START index is frozen here so message growth can't
-  // slide rows out from above the reader (see the visibleStart computation).
-  // null = not pinned (user at bottom / initial). Index into messages[].
-  const readingPinStart = useRef<number | null>(null);
+  // Monotonic render-window start: once computed, only ratchets DOWN (older)
+  // so already-rendered rows never unmount from the top (see visibleStart).
+  // null = fresh session view. Index into messages[].
+  const renderWindowStart = useRef<number | null>(null);
   const { lightboxSrc, openLightbox, closeLightbox } = useLightbox();
 
   // ── blockIndexMap: assigns each optimistic message a fixed position in the streaming timeline ──
@@ -885,7 +899,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
 
   const { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, loadFullHistory } = useSessionHistory(sessionId, historyVersion);
   const historyUnavailableRaw = parseHistoryUnavailable(error);
-  const { blocks, isStreaming, resetIfAbsorbed } = useSessionStream(sessionId);
+  const { blocks, isStreaming, completedLen, resetIfAbsorbed } = useSessionStream(sessionId);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const messagesRef = useRef(messages);
@@ -920,8 +934,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         turnWatermark.current = Math.min(messages.length, turnWatermark.current + k);
         // The reading pin is an index too — shift it by the same insertion
         // count or it would point k rows too old after a backfill.
-        if (readingPinStart.current !== null) {
-          readingPinStart.current = Math.min(messages.length, readingPinStart.current + k);
+        if (renderWindowStart.current !== null) {
+          renderWindowStart.current = Math.min(messages.length, renderWindowStart.current + k);
         }
       }
     }
@@ -982,8 +996,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // vanish). If you ever write the watermark on an independent trigger, this
   // memo will keep serving a stale filter until some dep happens to change.
   const { hidden: liveHiddenBlocks, unmatched: unmatchedBlocks } = useMemo(
-    () => computeRenderFilter({ blocks, messages, watermark: turnWatermark.current, isStreaming, historyEvidence, finishedAgentIds }),
-    [blocks, messages, isStreaming, historyEvidence, finishedAgentIds],
+    () => computeRenderFilter({ blocks, messages, watermark: turnWatermark.current, isStreaming, completedLen, historyEvidence, finishedAgentIds }),
+    [blocks, messages, isStreaming, completedLen, historyEvidence, finishedAgentIds],
   );
   // Freeze the hidden set while a selection lives in the container: absorption
   // hides a streaming block and mounts its persisted twin — brand-new DOM — so
@@ -1268,7 +1282,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const forensicsRef = useRef({ msgs: 0, blocks: 0, hidden: 0, trunc: 0, streaming: false });
   forensicsRef.current = { msgs: messages.length, blocks: blocks.length, hidden: hiddenBlocks.size, trunc: truncationOffset, streaming: isStreaming };
   const scrollLog = useCallback((layer: string, action: string, el?: HTMLElement | null) => {
-    if (!scrollDebugEnabled()) return;
+    // Always log during the initial-load window (inc-1786654438334: the
+    // load-time up-then-down jump left zero trace because all scroll writes
+    // were gated). Bounded: a handful of lines per mount, then gated again.
+    if (!scrollDebugEnabled() && initialLoadDone.current) return;
     if (el) {
       const top = Math.round(el.scrollTop);
       const ch = Math.round(el.clientHeight);
@@ -1302,7 +1319,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     setEditingId(null);
     setTruncationOffset(0);
     pendingBottomDistance.current = null;
-    readingPinStart.current = null;
+    renderWindowStart.current = null;
     blockIndexMap.current.clear();
     consumedQueueIds.current.clear();
     notifiedConsumedIds.current.clear();
@@ -1410,6 +1427,42 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         flickCount = 0; flickNet = 0; flickMax = 0;
       }
     };
+    // User-intent tracking (inc-1786654438334 structural fix): a scroll event
+    // is USER intent only if real input arrived recently — wheel, touch,
+    // pointerdown (scrollbar drag), or a key. Content GROWTH also fires
+    // scroll-position-relative changes (gap opens with no event at all, then
+    // our own corrective write's echo arrives after MORE growth and reads
+    // gap>NEAR_BOTTOM_PX) — those echoes used to flip isAtBottom=false with
+    // zero user action, parking the view mid-history ("jumps up then down
+    // while loading"). Growth may never flip isAtBottom; only people may.
+    let lastUserInput = 0;
+    const markUserInput = () => { lastUserInput = Date.now(); };
+    // Wheel-UP is unambiguous "stop following, I'm reading" intent — honor it
+    // SYNCHRONOUSLY (inc-1786690697303: while streaming, debouncedScroll
+    // re-arms ignoreScrollUntil every content tick, so the wheel's scroll
+    // events were swallowed at the ignore gate → isAtBottom never flipped →
+    // every follow-bottom path kept dragging the view down against the
+    // user's fingers — the "can't scroll up, screen jitters" fight). Flipping
+    // here (input event, not scroll echo) beats the gate: intent lands even
+    // if every scroll event in flight gets ignored.
+    const onWheel = (e: WheelEvent) => {
+      markUserInput();
+      if (e.deltaY < 0) {
+        isAtBottom.current = false;
+        ignoreScrollUntil.current = 0; // user input overrides any quiet window
+        setShowScrollArrow(el.scrollHeight > el.clientHeight);
+      }
+    };
+    const onTouchMove = () => {
+      markUserInput();
+      // Touch pan direction isn't in the event; just lift the suppression so
+      // the resulting scroll events are evaluated instead of swallowed.
+      ignoreScrollUntil.current = 0;
+    };
+    el.addEventListener('wheel', onWheel, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: true });
+    el.addEventListener('pointerdown', markUserInput, { passive: true });
+    el.addEventListener('keydown', markUserInput, { passive: true });
     const onScroll = () => {
       const rawTop = el.scrollTop;
       const rawSh = el.scrollHeight;
@@ -1420,6 +1473,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       // collapse — the reported "scrolling up suddenly jumps to top").
       if (dSh < -1000 || dTop < -2000) {
         jumpForensics('teleport', el, ` dTop=${Math.round(dTop)} dSh=${Math.round(dSh)} ignored=${Date.now() < ignoreScrollUntil.current}`);
+      } else if (!initialLoadDone.current && Math.abs(dTop) > 800) {
+        // Load-window shift (inc-1786654438334): during initial load the view
+        // visibly jumped up then back down, but every write path was silent —
+        // the churn lived below the teleport threshold and load-time scroll
+        // writes weren't logged. Catch ANY large scrollTop move before the
+        // first Phase 2 completes, both directions.
+        jumpForensics('load-shift', el, ` dTop=${Math.round(dTop)} dSh=${Math.round(dSh)}`);
       } else if (Math.abs(dSh) > 150 && !isAtBottom.current) {
         // Content height changed DURING a user scroll away from the bottom —
         // the reader-visible jitter class (at bottom, follow-bottom makes
@@ -1431,6 +1491,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       // Skip scroll events triggered by ResizeObserver-induced geometry shifts
       if (Date.now() < ignoreScrollUntil.current) return;
       const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - NEAR_BOTTOM_PX;
+      // Echo guard: leaving-the-bottom requires recent user input. A no-input
+      // "left bottom" is our own write racing content growth — heal it by
+      // re-closing the gap instead of surrendering follow-bottom.
+      if (isAtBottom.current && !nearBottom && Date.now() - lastUserInput > 500) {
+        if (!selectionActive()) {
+          el.scrollTop = el.scrollHeight;
+          ignoreScrollUntil.current = Date.now() + 100;
+        }
+        return; // isAtBottom stays true
+      }
       const prev = isAtBottom.current;
       isAtBottom.current = nearBottom;
       // Log only on transitions (not every scroll tick)
@@ -1461,8 +1531,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       prevSh = sh; // keep onScroll's baseline in sync so one shift isn't double-counted
       if (Math.abs(dSh) > 150 && !isAtBottom.current) noteFlicker(dSh, 'stationary');
     }, 500);
-    return () => { el.removeEventListener('scroll', onScroll); clearInterval(pollTimer); };
-  }, [sid8, jumpForensics]);
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('pointerdown', markUserInput);
+      el.removeEventListener('keydown', markUserInput);
+      clearInterval(pollTimer);
+    };
+  }, [sid8, jumpForensics, selectionActive]);
 
   // Mark initial load done once Phase 2 completes for the first time.
   // This prevents force-scroll from firing on batch-refresh re-fetches
@@ -1517,6 +1594,74 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       scrollLog('debounced', `SCROLL(${reason}${force ? ',forced' : ''})`, el);
     }, 250);
   }, [scrollLog, selectionActive, noteSuppressedScroll]);
+
+  // Path A-3: LOAD-WINDOW BOTTOM PIN (inc-1786654438334 — "opens normal, jumps
+  // up, then jumps back down while loading"). During initial load, content
+  // keeps growing AFTER the pre-paint forced scroll (Phase 2 replace, images,
+  // lazy row heights, sibling panels): scrollTop stays numerically fixed
+  // (overflow-anchor:none) so the view visibly rides UP mid-history for the
+  // 170-900ms until the debounced pass catches it. Kill the intermediate
+  // frames: while the initial load hasn't settled and the user is at bottom,
+  // pin scrollTop to bottom EVERY FRAME. Self-terminates when initialLoadDone
+  // flips (checked per-frame — it's a ref); a user scrolling up mid-load flips
+  // isAtBottom=false and the pin yields immediately (user intent wins).
+  useEffect(() => {
+    let raf: number | null = null;
+    const started = Date.now();
+    let quietFrames = 0;
+    let lastSh = 0;
+    let frame = 0;
+    // User-INPUT authority: during load, isAtBottom can be corrupted by our
+    // own write echoes (a scroll event delivered after content grew reads
+    // gap>80 → flips it false with no user action; measured as the parked
+    // 224px gap that IMG-FIX then refused to close). Real reading intent
+    // arrives as wheel/touch — until one occurs, the pin owns the bottom.
+    let userScrolled = false;
+    const el0 = containerRef.current;
+    const markUser = () => { userScrolled = true; };
+    el0?.addEventListener('wheel', markUser, { passive: true });
+    el0?.addEventListener('touchmove', markUser, { passive: true });
+    const pin = () => {
+      raf = null;
+      frame++;
+      const el = containerRef.current;
+      if (el && (userScrolled ? isAtBottom.current : true) && !selectionActive()) {
+        const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+        if (gap > 2) {
+          el.scrollTop = el.scrollHeight;
+          isAtBottom.current = true; // heal echo corruption
+          ignoreScrollUntil.current = Date.now() + 120;
+        }
+      }
+      // Exit once: Phase 2 truly completed (phase2PendingRef — NOT
+      // initialLoadDone, which is marked on the first commit before the
+      // fetch even flags pending) AND geometry quiet ~1s AND every image is
+      // decoded (late image loads reopened a 224px gap 4s after quiet).
+      // Absolute 15s lifetime caps the raf loop.
+      const sh = el?.scrollHeight ?? 0;
+      quietFrames = sh === lastSh ? quietFrames + 1 : 0;
+      lastSh = sh;
+      let imagesPending = false;
+      if (el && frame % 15 === 0) {
+        for (const img of el.querySelectorAll('img')) {
+          if (!(img as HTMLImageElement).complete) { imagesPending = true; break; }
+        }
+      }
+      const settled = !phase2PendingRef.current && quietFrames >= 60 && !imagesPending;
+      if (settled || Date.now() - started > 15_000) {
+        el0?.removeEventListener('wheel', markUser);
+        el0?.removeEventListener('touchmove', markUser);
+        return;
+      }
+      raf = requestAnimationFrame(pin);
+    };
+    raf = requestAnimationFrame(pin);
+    return () => {
+      if (raf !== null) cancelAnimationFrame(raf);
+      el0?.removeEventListener('wheel', markUser);
+      el0?.removeEventListener('touchmove', markUser);
+    };
+  }, [sessionId, selectionActive]);
 
   // Path A-0: User just sent a message — force follow-bottom so the sent message
   // and subsequent streaming response are visible. Runs before A-1 so isAtBottom
@@ -1737,93 +1882,106 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
 
   // Prepare both render partitions together so a persisted tool run can absorb
   // the unpersisted run at the streaming boundary instead of producing two rows.
-  const visibleLimit = INITIAL_RENDER_LIMIT + truncationOffset;
-  // Reading-mode window pin (inc-1786553756848 / inc-1786603990062): the
-  // window is a TAIL slice, so message growth slides it forward — rows the
-  // reader is looking at leave the render window while tall streaming blocks
-  // above them get absorbed, collapsing scrollHeight by thousands of px and
-  // clamping scrollTop toward the top. While the user reads (not at bottom),
-  // pin the window START: growth only APPENDS below, never evicts above.
-  // The pin only ratchets DOWN (older); returning to bottom releases it and
-  // the window collapses back to the tail (follow-bottom keeps them pinned).
-  let visibleStart = Math.max(0, messages.length - visibleLimit);
-  if (!isAtBottom.current) {
-    if (readingPinStart.current !== null) {
-      visibleStart = Math.min(visibleStart, readingPinStart.current);
+  // MONOTONIC render window (inc-1786553756848 + the flash regression it
+  // caused): the window is a TAIL slice, so message growth slides it forward
+  // and evicts rows from the TOP — scrollHeight collapses by thousands of px
+  // under the reader (teleport class). The first fix pinned the start only
+  // while !isAtBottom — but that read a scroll-event-mutated ref DURING
+  // render, so hovering near the bottom made the window oscillate
+  // pin↔release every few renders: rows unmounted/remounted in bursts
+  // ("full page → half page, text gone and back" flashing, 03:21 teleports
+  // dTop=-8871/-10544 with atBot=true). Rule now: once a row is rendered it
+  // STAYS rendered until session switch — the start index only ratchets
+  // DOWN (Show-earlier clicks, backfill shifts). No isAtBottom involvement,
+  // no render-time oscillation, nothing ever evicts above the reader.
+  // Bounded by messages held (lazy tail = 400) per session view.
+  // MEMOIZED history-parts pass (whale-session lag fix): this walk — and
+  // crucially the OBJECT IDENTITIES it mints (part.memberMsgs arrays, the
+  // thinking-merge `{...m}` clones) — must be stable across streaming frames.
+  // The 150ms text-delta flush re-renders this component; before memoization
+  // it rebuilt every part, so every memoized child (SessionMessage,
+  // MergedHistoryToolRun) saw fresh props and re-rendered the whole
+  // conversation — the measured 5-32s slow commits on 20K-event sessions.
+  // Ref note: renderWindowStart is written inside the memo (a render-phase
+  // ratchet, same as before); every write path to it is triggered by a dep
+  // change (messages / truncationOffset), so the memo can never serve a
+  // visibleStart computed from a stale ratchet.
+  const { historyParts, hiddenCount } = useMemo(() => {
+    let visibleStart = Math.max(0, messages.length - (INITIAL_RENDER_LIMIT + truncationOffset));
+    if (renderWindowStart.current !== null) {
+      visibleStart = Math.min(visibleStart, renderWindowStart.current);
     }
-    readingPinStart.current = visibleStart;
-  } else {
-    readingPinStart.current = null;
-  }
-  const visibleMessages = messages.slice(visibleStart);
-  const hiddenCount = visibleStart;
-  const historyParts: HistoryPart[] = [];
-  let historyRun: { m: SessionHistoryMessage; globalIndex: number }[] = [];
-  let historyRunSeeded = false;
-  let systemRun: { m: SessionHistoryMessage; globalIndex: number }[] = [];
-  const flushHistoryRun = () => {
-    if (historyRun.length > 0) {
-      historyParts.push({ kind: 'run', members: historyRun, seeded: historyRunSeeded });
-      historyRun = [];
-    }
-    historyRunSeeded = false;
-  };
-  const flushSystemRun = () => {
-    if (systemRun.length === 1) {
-      historyParts.push({ kind: 'msg', ...systemRun[0] });
-    } else if (systemRun.length > 1) {
-      historyParts.push({ kind: 'system-run', members: systemRun });
-    }
-    systemRun = [];
-  };
-  for (let i = 0; i < visibleMessages.length; i++) {
-    const m = visibleMessages[i];
-    const globalIndex = visibleStart + i;
-    if (forkBoundaryIndex != null && globalIndex === forkBoundaryIndex) {
-      flushHistoryRun();
-      flushSystemRun();
-    }
-    if (m.role === 'system') {
-      flushHistoryRun();
-      systemRun.push({ m, globalIndex });
-      continue;
-    }
-    flushSystemRun();
-    if (isToolOnlyMessage(m)) {
-      historyRun.push({ m, globalIndex });
-      continue;
-    }
-    flushHistoryRun();
-    // Adjacent thinking collapses into ONE "Thinking ›" row: a thinking-only
-    // message concatenates into a preceding thinking-only part, and a message
-    // whose own thinking follows a thinking-only part absorbs it. Never merge
-    // across the fork divider (it renders inside the second part).
-    const prevPart = historyParts[historyParts.length - 1];
-    const prevIsThinkingOnly = prevPart?.kind === 'msg' && isThinkingOnlyMessage(prevPart.m);
-    const atForkDivider = forkBoundaryIndex != null && globalIndex === forkBoundaryIndex;
-    let msg = m;
-    if (prevIsThinkingOnly && !atForkDivider
-      && m.role === 'assistant' && (m.thinking ?? '').trim()) {
-      if (isThinkingOnlyMessage(m)) {
-        prevPart.m = { ...prevPart.m, thinking: `${prevPart.m.thinking}\n\n${m.thinking}` };
+    renderWindowStart.current = visibleStart;
+    const visibleMessages = messages.slice(visibleStart);
+    const parts: HistoryPart[] = [];
+    let historyRun: { m: SessionHistoryMessage; globalIndex: number }[] = [];
+    let historyRunSeeded = false;
+    let systemRun: { m: SessionHistoryMessage; globalIndex: number }[] = [];
+    const flushHistoryRun = () => {
+      if (historyRun.length > 0) {
+        parts.push({ kind: 'run', members: historyRun, memberMsgs: historyRun.map(({ m }) => m), seeded: historyRunSeeded });
+        historyRun = [];
+      }
+      historyRunSeeded = false;
+    };
+    const flushSystemRun = () => {
+      if (systemRun.length === 1) {
+        parts.push({ kind: 'msg', ...systemRun[0] });
+      } else if (systemRun.length > 1) {
+        parts.push({ kind: 'system-run', members: systemRun, systemMembers: systemRun.map(({ m }) => systemGroupMemberFromHistory(m)) });
+      }
+      systemRun = [];
+    };
+    for (let i = 0; i < visibleMessages.length; i++) {
+      const m = visibleMessages[i];
+      const globalIndex = visibleStart + i;
+      if (forkBoundaryIndex != null && globalIndex === forkBoundaryIndex) {
+        flushHistoryRun();
+        flushSystemRun();
+      }
+      if (m.role === 'system') {
+        flushHistoryRun();
+        systemRun.push({ m, globalIndex });
         continue;
       }
-      msg = { ...m, thinking: `${prevPart.m.thinking}\n\n${m.thinking}` };
-      historyParts.pop();
+      flushSystemRun();
+      if (isToolOnlyMessage(m)) {
+        historyRun.push({ m, globalIndex });
+        continue;
+      }
+      flushHistoryRun();
+      // Adjacent thinking collapses into ONE "Thinking ›" row: a thinking-only
+      // message concatenates into a preceding thinking-only part, and a message
+      // whose own thinking follows a thinking-only part absorbs it. Never merge
+      // across the fork divider (it renders inside the second part).
+      const prevPart = parts[parts.length - 1];
+      const prevIsThinkingOnly = prevPart?.kind === 'msg' && isThinkingOnlyMessage(prevPart.m);
+      const atForkDivider = forkBoundaryIndex != null && globalIndex === forkBoundaryIndex;
+      let msg = m;
+      if (prevIsThinkingOnly && !atForkDivider
+        && m.role === 'assistant' && (m.thinking ?? '').trim()) {
+        if (isThinkingOnlyMessage(m)) {
+          prevPart.m = { ...prevPart.m, thinking: `${prevPart.m.thinking}\n\n${m.thinking}` };
+          continue;
+        }
+        msg = { ...m, thinking: `${prevPart.m.thinking}\n\n${m.thinking}` };
+        parts.pop();
+      }
+      if (isTextPlusMergeableTools(msg)) {
+        // CLI content order is prose first, tool_use after. Render the prose as
+        // its own part and dissolve the tools FORWARD into the next run so a
+        // text-carrying message no longer splits two adjacent runs apart.
+        parts.push({ kind: 'msg', m: msg, globalIndex, suppressTools: true });
+        historyRun.push({ m: { ...msg, text: '', thinking: undefined }, globalIndex });
+        historyRunSeeded = true;
+        continue;
+      }
+      parts.push({ kind: 'msg', m: msg, globalIndex });
     }
-    if (isTextPlusMergeableTools(msg)) {
-      // CLI content order is prose first, tool_use after. Render the prose as
-      // its own part and dissolve the tools FORWARD into the next run so a
-      // text-carrying message no longer splits two adjacent runs apart.
-      historyParts.push({ kind: 'msg', m: msg, globalIndex, suppressTools: true });
-      historyRun.push({ m: { ...msg, text: '', thinking: undefined }, globalIndex });
-      historyRunSeeded = true;
-      continue;
-    }
-    historyParts.push({ kind: 'msg', m: msg, globalIndex });
-  }
-  flushHistoryRun();
-  flushSystemRun();
+    flushHistoryRun();
+    flushSystemRun();
+    return { historyParts: parts, hiddenCount: visibleStart };
+  }, [messages, truncationOffset, forkBoundaryIndex]);
 
   // Pre-group once for both boundary detection and streaming rendering.
   const groupedBlocks = groupStreamingBlocks(blocks, hiddenBlocks);
@@ -2121,7 +2279,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                   </div>
                 )}
                 <MergedHistoryToolRun
-                  messages={part.members.map(({ m }) => m)}
+                  messages={part.memberMsgs}
                   assistantLabel={assistantLabel}
                   sessionId={sessionId}
                   sessionCwd={sessionCwd}
@@ -2141,7 +2299,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 data-msg-index={first.globalIndex}
                 key={`sys-${first.m.msgId ?? first.globalIndex}`}
               >
-                <SystemGroupRun members={part.members.map(({ m }) => systemGroupMemberFromHistory(m))} />
+                <SystemGroupRun members={part.systemMembers} />
               </div>
             );
           }
@@ -2173,7 +2331,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               </div>
             )}
             <MergedHistoryToolRun
-              messages={boundaryHistoryRun.members.map(member => member.m)}
+              messages={boundaryHistoryRun.memberMsgs}
               trailingTools={leadingStreamRunIndices.flatMap((index) => {
                 const item = timeline[index];
                 return item.kind === 'block' && item.block.type === 'tool_call' ? [item.block] : [];
@@ -2255,7 +2413,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                           sessionId={sessionId}
                           onTaskClick={onTaskClick}
                           onSessionClick={onSessionClick}
-                          onFileOpen={onFileOpen ? (p) => onFileOpen(p) : undefined}
+                          onFileOpen={onFileOpen}
                         />
                       ))}
                     </ToolRunShell>

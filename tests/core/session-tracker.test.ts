@@ -131,6 +131,7 @@ describe('emitSessionStatusChanged', () => {
       errorMessage: 'provider failed',
       provider: 'sdk',
       engine: 'codex',
+      pendingPermissionTool: null,
       statusRevision: committed.statusRevision,
       statusUpdatedAt: committed.statusUpdatedAt,
     };
@@ -157,7 +158,7 @@ describe('emitSessionStatusChanged', () => {
     } as unknown as Parameters<typeof toSessionStatusSnapshot>[0]);
 
     expect(snapshot.process_status).toBe('stopped');
-    expect(Object.keys(snapshot)).toHaveLength(12);
+    expect(Object.keys(snapshot)).toHaveLength(13);
     expect(Object.keys(snapshot)).toEqual(expect.arrayContaining([
       'sessionId',
       'taskId',
@@ -169,6 +170,7 @@ describe('emitSessionStatusChanged', () => {
       'errorMessage',
       'provider',
       'engine',
+      'pendingPermissionTool',
       'statusRevision',
       'statusUpdatedAt',
     ]));
@@ -338,6 +340,7 @@ describe('updateSessionRecord', () => {
       errorMessage: null,
       provider: 'cli',
       engine: 'claude',
+      pendingPermissionTool: null,
       statusRevision: 2,
       statusUpdatedAt: updated.statusUpdatedAt,
     });
@@ -1065,11 +1068,18 @@ describe('healStalePendingPermissions (incident a172ce49)', () => {
   it('clears pendingPermission on stopped/error records, leaves live ones alone', async () => {
     const { healStalePendingPermissions } = await import('../../src/core/session-tracker.js');
 
+    // Seed the prompt AFTER the terminal transition (two writes): the
+    // transition-time clear (incident d9df1a86) now wipes a prompt riding the
+    // SAME write as the death, so the boot heal's remaining constituency is
+    // prompts landing on already-terminal records (external raw-SQL writers,
+    // crash ordering) — which is exactly what this seeds.
     await createSessionRecord('heal-stopped', 'task-h1', 'walnut');
-    await updateSessionRecord('heal-stopped', { process_status: 'stopped', pendingPermission: PP });
+    await updateSessionRecord('heal-stopped', { process_status: 'stopped' });
+    await updateSessionRecord('heal-stopped', { pendingPermission: PP });
 
     await createSessionRecord('heal-error', 'task-h2', 'walnut');
-    await updateSessionRecord('heal-error', { process_status: 'error', pendingPermission: { ...PP, requestId: 'req-stale-2' } });
+    await updateSessionRecord('heal-error', { process_status: 'error' });
+    await updateSessionRecord('heal-error', { pendingPermission: { ...PP, requestId: 'req-stale-2' } });
 
     // Live sessions: daemon pendingCtrl is their truth — heal must NOT touch them.
     await createSessionRecord('heal-running', 'task-h3', 'walnut', undefined, { pid: 4242 });
@@ -1090,7 +1100,8 @@ describe('healStalePendingPermissions (incident a172ce49)', () => {
   it('is idempotent — second run heals nothing', async () => {
     const { healStalePendingPermissions } = await import('../../src/core/session-tracker.js');
     await createSessionRecord('heal-idem', 'task-h5', 'walnut');
-    await updateSessionRecord('heal-idem', { process_status: 'stopped', pendingPermission: PP });
+    await updateSessionRecord('heal-idem', { process_status: 'stopped' });
+    await updateSessionRecord('heal-idem', { pendingPermission: PP });
     expect(await healStalePendingPermissions()).toBe(1);
     expect(await healStalePendingPermissions()).toBe(0);
   });
@@ -1099,5 +1110,47 @@ describe('healStalePendingPermissions (incident a172ce49)', () => {
     const { healStalePendingPermissions } = await import('../../src/core/session-tracker.js');
     await createSessionRecord('heal-clean', 'task-h6', 'walnut');
     expect(await healStalePendingPermissions()).toBe(0);
+  });
+
+  // ── mid-flight death (incident d9df1a86, 2026-08-15) ────────────────────
+  // The heal above only runs at BOOT. A session dying while the server is up
+  // kept its prompt, and attach-time Layer-2 recovery resurrected it from the
+  // record seconds after death — a permanent red Waiting on a dead session.
+  // The clear now rides the terminal TRANSITION itself (applyUpdateToSession).
+
+  it('INCIDENT SHAPE: transition to error clears the prompt in the same write', async () => {
+    await createSessionRecord('die-mid-flight', 'task-h7', 'walnut', undefined, { pid: 9015 });
+    await updateSessionRecord('die-mid-flight', { pendingPermission: { ...PP, requestId: 'req-mid-1' } });
+    expect((await getSessionByClaudeId('die-mid-flight'))?.pendingPermission?.requestId).toBe('req-mid-1');
+
+    await updateSessionRecord('die-mid-flight', {
+      process_status: 'error',
+      status_reason: 'snapshot_projection',
+      status_changed_by: 'snapshot-projection',
+    } as never);
+
+    const rec = await getSessionByClaudeId('die-mid-flight');
+    expect(rec?.process_status).toBe('error');
+    expect(rec?.pendingPermission).toBeUndefined();
+  });
+
+  it('remote_unreachable keeps the prompt (connectivity loss ≠ death)', async () => {
+    await createSessionRecord('ssh-flap', 'task-h8', 'walnut', undefined, { pid: 9016 });
+    await updateSessionRecord('ssh-flap', { pendingPermission: { ...PP, requestId: 'req-flap-1' } });
+
+    await updateSessionRecord('ssh-flap', {
+      process_status: 'error',
+      status_reason: 'remote_unreachable',
+      status_changed_by: 'health-monitor',
+    } as never);
+
+    const rec = await getSessionByClaudeId('ssh-flap');
+    expect(rec?.process_status).toBe('error');
+    expect(rec?.pendingPermission?.requestId).toBe('req-flap-1');
+
+    // …and the boot heal must ALSO skip it (same carve-out, both layers).
+    const { healStalePendingPermissions } = await import('../../src/core/session-tracker.js');
+    expect(await healStalePendingPermissions()).toBe(0);
+    expect((await getSessionByClaudeId('ssh-flap'))?.pendingPermission?.requestId).toBe('req-flap-1');
   });
 });

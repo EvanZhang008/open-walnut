@@ -95,6 +95,48 @@ describe('ACP journal projector', () => {
     )
   })
 
+  it('renders a mid-turn steer as a user message inside the SAME turn, splitting the reply bubble', () => {
+    const records: JournalRecord[] = [
+      meta(1, {
+        type: 'prompt-accepted',
+        commandId: 'acp-prompt:qm-a',
+        walnutMessageId: 'qm-a',
+        text: 'long task',
+      } as never),
+      meta(2, { type: 'turn-started', commandId: 'acp-prompt:qm-a' } as never),
+      frame(3, {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'working on it ' },
+      }),
+      meta(4, {
+        type: 'steer-accepted',
+        commandId: 'acp-steer:qm-b',
+        walnutMessageId: 'qm-b',
+        text: 'also do X',
+      } as never),
+      frame(5, {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'ok, adding X' },
+      }),
+      meta(6, { type: 'turn-ended', commandId: 'acp-prompt:qm-a', stopReason: 'end_turn' } as never),
+    ]
+
+    const first = projectAcpJournalHistory('runtime-steer', records)
+    const second = projectAcpJournalHistory('runtime-steer', records)
+    expect(second).toEqual(first)
+    // Order: user prompt → partial reply → steered user message → post-steer reply.
+    expect(first.map((m) => [m.role, m.text])).toEqual([
+      ['user', 'long task'],
+      ['assistant', 'working on it '],
+      ['user', 'also do X'],
+      ['assistant', 'ok, adding X'],
+    ])
+    expect(first[2]).toMatchObject({ walnutMessageId: 'qm-b' })
+    // Both replies stay under the ORIGINAL turn's identity (no new turn).
+    expect(first[1].msgId).toBe('acp:runtime-steer:acp-prompt:qm-a:segment:0')
+    expect(first[3].msgId).toBe('acp:runtime-steer:acp-prompt:qm-a:segment:1')
+  })
+
   it('keeps recycled toolCallIds as distinct tool instances within one turn', () => {
     // Codex reuses short toolCallIds (call_2 here) for DIFFERENT tools in a turn.
     // Each call instance must get its own toolUseId (its own panel) and its result

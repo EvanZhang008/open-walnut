@@ -57,7 +57,10 @@ function AppShellInner({ children }: AppShellProps) {
   // Full-bleed pages own their whole canvas (multi-pane layouts with internal
   // scrolling) — no content-area padding, no outer scrollbar. Everything else
   // keeps the default 24px page gutter.
-  const isFullBleed = isMainPage || location.pathname.startsWith('/notes');
+  const isFullBleed = isMainPage
+    || location.pathname.startsWith('/notes')
+    // A plugin app owns its whole canvas — the iframe fills the content area.
+    || location.pathname.startsWith('/apps');
   const focusBar = useFocusBarContext();
   const contentRef = useRef<HTMLDivElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);

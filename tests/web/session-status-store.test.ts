@@ -19,6 +19,10 @@ function status(
     errorMessage: null,
     provider: 'cli',
     engine: 'codex',
+    // Canonicalized by every normalize path (2026-08-14): absent on old servers
+    // → null, so a versioned snapshot always carries the key. Drives the red
+    // Waiting display on list surfaces.
+    pendingPermissionTool: null,
     statusRevision: revision,
     statusUpdatedAt: `2026-07-19T12:00:0${revision}.000Z`,
     ...overrides,

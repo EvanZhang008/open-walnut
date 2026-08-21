@@ -107,6 +107,23 @@ describe('matchesRetryExhaustion', () => {
   it('matches the api_timeout debug marker', () => {
     expect(matchesRetryExhaustion('turn ended: api_timeout')).toBe(true)
   })
+  it('matches the full transient corpus via the shared daemon classifier (2026-08-13 unification)', () => {
+    // These previously slipped through when this module kept its own 3-pattern
+    // list — the daemon's audited allowlist had them, auto-continue didn't.
+    expect(matchesRetryExhaustion('API Error: Server error mid-response. The response above may be incomplete.')).toBe(true)
+    expect(matchesRetryExhaustion('API Error: Stream idle timeout - no chunks received')).toBe(true)
+    expect(matchesRetryExhaustion('API Error: Response stalled mid-stream.')).toBe(true)
+    expect(matchesRetryExhaustion('API Error: The system encountered an unexpected error during processing.')).toBe(true)
+    expect(matchesRetryExhaustion('502 Bad Gateway')).toBe(true)
+    expect(matchesRetryExhaustion('503 Bedrock is unable to process your request.')).toBe(true)
+  })
+  it('does NOT match terminal errors (refusals, auth, overflow) — terminal wins', () => {
+    expect(matchesRetryExhaustion("Claude can't help with this. Start a new session to continue.")).toBe(false)
+    expect(matchesRetryExhaustion('401 unauthorized: invalid api key')).toBe(false)
+    expect(matchesRetryExhaustion('prompt too long: context window exceeded')).toBe(false)
+    // A refusal whose text ALSO contains a retryable token must stay terminal.
+    expect(matchesRetryExhaustion("can't help with this (upstream timeout)")).toBe(false)
+  })
   it('does NOT match ordinary errors or clean results', () => {
     expect(matchesRetryExhaustion('No conversation found with session ID')).toBe(false)
     expect(matchesRetryExhaustion('Hello! I processed your message')).toBe(false)

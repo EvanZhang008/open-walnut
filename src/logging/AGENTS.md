@@ -1,7 +1,8 @@
 # Logging — Quick Reference
 
-**Full implementation details: `.claude/skills/walnut-logging/SKILL.md`** (levels, redaction
-patterns, browser log persistence architecture, investigation commands).
+**Full implementation details: `.claude/skills/walnut-ops/SKILL.md`** (incident investigation
+playbook, always-on sentinels, levels, redaction patterns, browser log persistence
+architecture, investigation commands).
 
 ## Essentials
 

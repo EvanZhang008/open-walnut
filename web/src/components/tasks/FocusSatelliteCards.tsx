@@ -3,6 +3,8 @@
  * Each tier gets a SortableTierCard with a kebab menu (same as regular task items).
  */
 import { useState, useRef, useCallback, useEffect, memo, type CSSProperties, type ReactNode } from 'react';
+import { useTaskCircle } from '@/hooks/useSessionStatus';
+import { taskNeedsAction } from '@/utils/session-status';
 import type { Task } from '@open-walnut/core';
 import type { FocusTier } from '@/api/focus';
 import { useSortable } from '@dnd-kit/sortable';
@@ -10,9 +12,8 @@ import { useDroppable, useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { TaskKebabMenu } from './TaskKebabMenu';
 import { TaskStartButton } from './TaskStartButton';
-import { PersonIcon } from '../common/PersonIcon';
 import * as ICONS from '../common/Icons';
-import { taskCircleClass } from '@/utils/session-status';
+
 
 /** Sortable id for a group's chip in a tier — encodes the tier so a group split
  *  across tiers renders distinct chips without an id collision. Kept in sync with
@@ -100,9 +101,6 @@ const PHASE_ICON: Record<string, ReactNode> = {
   TODO: ICONS.ICON_PHASE_TODO,
   IN_PROGRESS: ICONS.ICON_PHASE_IN_PROGRESS,
   AGENT_COMPLETE: ICONS.ICON_PHASE_AGENT_COMPLETE,
-  AWAIT_HUMAN_ACTION: <PersonIcon />,
-  HUMAN_VERIFIED: ICONS.ICON_PHASE_HUMAN_VERIFIED,
-  POST_WORK_COMPLETED: ICONS.ICON_PHASE_POST_WORK,
   COMPLETE: ICONS.ICON_PHASE_COMPLETE,
 };
 
@@ -110,9 +108,6 @@ const PHASE_LABEL: Record<string, string> = {
   TODO: 'To Do',
   IN_PROGRESS: 'In Progress',
   AGENT_COMPLETE: 'Agent Complete',
-  AWAIT_HUMAN_ACTION: 'Await Human Action',
-  HUMAN_VERIFIED: 'Human Verified',
-  POST_WORK_COMPLETED: 'Post-Work Done',
   COMPLETE: 'Complete',
 };
 
@@ -172,6 +167,8 @@ interface SortableTierCardProps {
 }
 
 export const SortableTierCard = memo(function SortableTierCard({ task, tier, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, onSetStartDate, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject, groupInfo, selectMode, isSelected, onSelectToggle, onStartSelect, isGroupTarget }: SortableTierCardProps) {
+  // Live circle: error red / waiting red-pulse / running green-pulse.
+  const circleClass = useTaskCircle(task);
   const {
     attributes,
     listeners,
@@ -255,10 +252,12 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
   };
 
   const isDone = task.status === 'done' || task.phase === 'COMPLETE';
-  // Stored marker, not a phase derivation — see the note on PinnedCard in
-  // TodoPanel.tsx. This card is the Focus/Satellite strip the user pointed at:
-  // it used to stay red forever because opening a task clears the marker but
-  // never changes the phase this line was reading.
+  // Two red affordances, two semantics (2026-08-14 regression: the tint had been
+  // moved onto `unread`, which clears on OPEN — so a task still sitting at
+  // AGENT_COMPLETE went quiet after one glance and nothing flagged it needed
+  // action). The tint follows the PHASE (clears only when the human acts); the
+  // dot follows the stored marker (clears on open).
+  const needsAction = taskNeedsAction(task);
   const unread = !isDone && Boolean(task.unread);
   const cardClass = tier === 'focus' ? 'todo-focus-card' : 'todo-pinned-card';
   // Virtual-group cluster classes — reuse the main list's rail/rounding styling.
@@ -275,7 +274,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       style={style}
       data-task-id={task.id}
       data-group-id={groupInfo?.groupId}
-      className={`${cardClass}${groupClass}${isFocused ? ' todo-pinned-card-active' : ''}${unread ? ' todo-pinned-card-unread' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isSelected ? ' task-multi-selected' : ''}${isGroupTarget ? ' todo-panel-item-group-target' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}`}
+      className={`${cardClass}${groupClass}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isSelected ? ' task-multi-selected' : ''}${isGroupTarget ? ' todo-panel-item-group-target' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}`}
       onClick={(e) => {
         if (isEditing) return;
         // Select mode: a click anywhere toggles selection (no navigation/edit).
@@ -311,7 +310,7 @@ export const SortableTierCard = memo(function SortableTierCard({ task, tier, isF
       )}
       {/* Phase icon — one click toggles To Do ↔ Complete */}
       <button
-        className={`task-phase-icon-btn pinned-phase-picker ${taskCircleClass(task)}`}
+        className={`task-phase-icon-btn pinned-phase-picker ${circleClass}`}
         onClick={(e) => {
           e.stopPropagation();
           onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');

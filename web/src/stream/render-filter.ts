@@ -49,6 +49,14 @@ export interface RenderFilterInput {
    *  first-load behavior where the whole fetch was the delta). */
   watermark: number;
   isStreaming: boolean;
+  /** Turn boundary: blocks[0..completedLen) belong to FINISHED turns. The
+   *  live-tail guard must not protect those (inc-1786664172811): a resubscribe
+   *  right after send adopts a server snapshot holding the PREVIOUS turn's
+   *  retained blocks with isStreaming already true for the next turn — without
+   *  this floor, the old final text was treated as "still accumulating",
+   *  excluded from matching, and rendered as a duplicate below the new bubble
+   *  until the next turn's first delta. 0 = everything is current-turn. */
+  completedLen?: number;
   /** Prebuilt buildHistoryEvidence(messages) — pass to avoid a full-history
    *  walk per call; rebuilt internally when omitted. */
   historyEvidence?: DeltaEvidence;
@@ -79,6 +87,12 @@ export interface RenderFilterResult {
  * the moment the turn ends or a newer main-lane block lands. Trailing
  * subagent-lane blocks after it belong to live background agents — their lane
  * rule (running parent → keep) makes exclusion harmless.
+ *
+ * The guard only protects a block of the LIVE turn (index >= completedLen).
+ * A finished turn's final block can sit last while isStreaming is true — send
+ * → markStreaming → resubscribe adopts the old-turn snapshot before the first
+ * delta — and protecting it just double-renders proven-absorbed content
+ * (inc-1786664172811's "old / new / old" sandwich).
  */
 export function computeRenderFilter(input: RenderFilterInput): RenderFilterResult {
   const { blocks, messages, watermark, isStreaming } = input;
@@ -89,7 +103,8 @@ export function computeRenderFilter(input: RenderFilterInput): RenderFilterResul
   // the watermark), id matching below is unaffected.
   const contentDelta = messages.slice(Math.min(Math.max(watermark, 0), messages.length));
   const fullEv = input.historyEvidence ?? buildHistoryEvidence(messages);
-  const liveTail = isStreaming ? lastMainLaneIndex(blocks) : -1;
+  const tailIdx = isStreaming ? lastMainLaneIndex(blocks) : -1;
+  const liveTail = tailIdx >= (input.completedLen ?? 0) ? tailIdx : -1;
   const boundary = liveTail >= 0 ? liveTail : blocks.length;
   const { absorbed, unmatched } = computeAbsorbedIndices(
     blocks, contentDelta as SessionHistoryMessage[], boundary, fullEv, input.finishedAgentIds,

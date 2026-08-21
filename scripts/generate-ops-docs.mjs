@@ -14,7 +14,7 @@ const END = '<!-- ops-catalog:end -->'
 // The repo skill is the ONLY target: it is the single source of truth,
 // shipped in dist/data and served to sessions via skill_read. The old
 // hand-copied ~/.claude/skills/personal-walnut/ duplicate was deleted
-// 2026-08-20 (it rotted: stale phase model, outdated wording).
+// 2026-08-20 (it rotted: stale phase model, banned wording).
 const targets = [
   {
     path: path.join(repo, 'src', 'data', 'skills', 'walnut', 'SKILL.md'),
@@ -45,7 +45,6 @@ function fieldLine(name, schema, required) {
 function accessLabel(op) {
   const labels = [op.tags.readonly ? 'read' : 'write']
   if (op.tags.remote === 'deny') labels.push('local-only')
-  if (op.tags.humanOnly) labels.push('human-only')
   if (op.tags.primaryOnly) labels.push('primary-only')
   return labels.join(', ')
 }

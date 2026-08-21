@@ -50,16 +50,13 @@ export class TaskQueryError extends Error {
 
 // This module is imported by the browser bundle, so it may only import from
 // types.ts (types + plain literals). phase.ts pulls in the logger, which pulls
-// in node:fs/os — so PHASE_ORDER can't be reused here and the 7 phases are
+// in node:fs/os — so PHASE_ORDER can't be reused here and the 4 phases are
 // listed literally. tests/core/task-query.test.ts locks this list against
 // PHASE_ORDER so a new phase can't land in one place only.
 export const QUERY_TASK_PHASES: readonly TaskPhase[] = [
   'TODO',
   'IN_PROGRESS',
   'AGENT_COMPLETE',
-  'AWAIT_HUMAN_ACTION',
-  'HUMAN_VERIFIED',
-  'POST_WORK_COMPLETED',
   'COMPLETE',
 ];
 const TASK_PRIORITIES: readonly TaskPriority[] = VALID_PRIORITIES;
@@ -86,20 +83,15 @@ const ARRAY_FIELDS = [
 /** Max rows one query may return. Mirrored in the REST 400 message + tool schema. */
 export const MAX_QUERY_LIMIT = 200;
 
-// HUMAN_VERIFIED and POST_WORK_COMPLETED count as in_progress ON PURPOSE: this
-// mirrors PHASE_TO_STATUS (only COMPLETE is "done" to a human), NOT
-// TERMINAL_PHASES in phase.ts (which is about "the agent may stop working").
-// Don't "fix" this to follow phase.ts — a task the human hasn't signed off on
-// must stay visible in the in_progress bucket.
+// AGENT_COMPLETE counts as in_progress ON PURPOSE: this mirrors
+// PHASE_TO_STATUS in phase.ts, where COMPLETE is the only phase that reads as
+// "done". The agent stopped but the task is still open work (a turn finished
+// and nobody has looked), so it must stay visible in the in_progress bucket
+// rather than disappearing into complete. Don't collapse it into `complete`
+// just because the agent has nothing left to do.
 export const COMPLETION_TO_PHASES: Record<TaskCompletion, readonly TaskPhase[]> = {
   todo: ['TODO'],
-  in_progress: [
-    'IN_PROGRESS',
-    'AGENT_COMPLETE',
-    'AWAIT_HUMAN_ACTION',
-    'HUMAN_VERIFIED',
-    'POST_WORK_COMPLETED',
-  ],
+  in_progress: ['IN_PROGRESS', 'AGENT_COMPLETE'],
   complete: ['COMPLETE'],
 };
 

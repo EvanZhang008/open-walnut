@@ -19,6 +19,7 @@ import { estimateMessagesTokens, estimateFullPayload } from '../core/daily-log.j
 import { hydrateImagePaths } from '../core/chat-history.js';
 import { guardBudget, emergencyTrim, type ToolSchema } from './token-budget.js';
 import { beginMemoryPromptTurn, getBoundedMemory } from '../core/bounded-memory.js';
+import { observe, count } from '../core/observability/metrics.js';
 import { buildSkillPrefetchHint } from './skill-prefetch.js';
 import { getContextWindowSize } from './model.js';
 import { CONTEXT_WINDOW_DEFAULT } from './providers/defaults.js';
@@ -248,14 +249,35 @@ export async function runAgentLoop(
     ? { enabled: false } as CacheConfig
     : (options?.cacheConfig ?? config.agent?.cache);
 
-  // Inject current date/time into first user message (not system prompt, to preserve cache)
+  // Inject current date/time. Placement differs by path, and the difference is
+  // load-bearing for the prompt cache:
+  //
+  // - DEFAULT (Personal AI) path: the date rides the DYNAMIC CONTEXT block, never the
+  //   user message. It used to be prefixed onto the SENT user message — but the
+  //   persisted copy (chat.ts eager-persist) is the RAW message, so on the next
+  //   turn the replayed history never byte-matched the cached prefix and the
+  //   ENTIRE message-history cache was re-written every turn. Measured (usage DB,
+  //   2026-08-13): cross-turn cache_read pinned at 38K (= system+tools only)
+  //   while cache_creation grew 334K→614K per turn — a 2x-write bill on the whole
+  //   history, every turn, forever. The dynamic block already sits past the cache
+  //   breakpoint and changes per turn, so the timestamp is free there.
+  //
+  // - SUBAGENT path (options.system set): keep prefixing the user message. There
+  //   is no dynamic block to carry the date, and subagent history lives in memory
+  //   (replayed byte-identically within the run), so the mismatch class above
+  //   does not exist there.
   const now = new Date();
-  const dateTimePrefix = `[Current: ${now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}, ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}]\n\n`;
-  const prefixedMessage = typeof userMessage === 'string'
-    ? dateTimePrefix + userMessage
-    : [{ type: 'text', text: dateTimePrefix } as unknown, ...userMessage];
-
-  const userTurnMessage = { role: 'user', content: prefixedMessage } as MessageParam;
+  const currentDateTime = `[Current: ${now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}, ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}]`;
+  let userTurnMessage: MessageParam;
+  if (options?.system !== undefined) {
+    const prefixedMessage = typeof userMessage === 'string'
+      ? `${currentDateTime}\n\n${userMessage}`
+      : [{ type: 'text', text: `${currentDateTime}\n\n` } as unknown, ...userMessage];
+    userTurnMessage = { role: 'user', content: prefixedMessage } as MessageParam;
+  } else {
+    dynamicContext = dynamicContext ? `${currentDateTime}\n\n${dynamicContext}` : currentDateTime;
+    userTurnMessage = { role: 'user', content: userMessage } as MessageParam;
+  }
   let messages: MessageParam[] = [
     ...history,
     userTurnMessage,
@@ -354,7 +376,8 @@ export async function runAgentLoop(
     const prepared = prepareWithCache(system, toolSchemas, hydratedMessages, cacheConfig, dynamicContext);
     // Always use streaming — non-streaming bedrock.messages.create() can timeout
     // on models that produce long responses (e.g. embedded subagents).
-    return sendMessageStream({
+    const llmStart = performance.now();
+    const result = await sendMessageStream({
       system: prepared.system,
       messages: prepared.messages,
       tools: prepared.tools,
@@ -362,6 +385,17 @@ export async function runAgentLoop(
       signal,
       onTextDelta: callbacks?.onTextDelta,
     });
+    // Metric: one LLM round-trip (request → full stream drained). The cache
+    // counters make cross-turn cache regressions (the [Current:] prefix bug
+    // class) visible as a ratio shift instead of a silent 2x bill.
+    observe('llm.roundtrip', performance.now() - llmStart, { source: logTag });
+    if (result.usage) {
+      count('llm.tokens.input', result.usage.input_tokens ?? 0, { source: logTag });
+      count('llm.tokens.output', result.usage.output_tokens ?? 0, { source: logTag });
+      count('llm.tokens.cache_read', result.usage.cache_read_input_tokens ?? 0, { source: logTag });
+      count('llm.tokens.cache_write', result.usage.cache_creation_input_tokens ?? 0, { source: logTag });
+    }
+    return result;
   }
 
   let finalText = '';
@@ -578,7 +612,11 @@ export async function runAgentLoop(
       callbacks?.onToolActivity?.({ toolName: toolUse.name, status: 'calling' });
       callbacks?.onToolCall?.(toolUse.name, toolUse.input, toolUse.id);
 
+      const toolStart = performance.now();
       const toolResult = await executeToolLocal(toolUse.name, toolUse.input, toolUse.id);
+      // Metric: per-tool latency. Tool name is a bounded set (registered tools),
+      // so it's a safe label; inputs are NOT (unbounded) and never become labels.
+      observe('tool.exec', performance.now() - toolStart, { tool: toolUse.name });
 
       callbacks?.onToolActivity?.({ toolName: toolUse.name, status: 'done' });
       // For the callback (WS broadcast to frontend), send a display-safe string.

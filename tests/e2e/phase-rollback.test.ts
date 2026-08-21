@@ -2,9 +2,9 @@
  * E2E tests for automatic phase rollback when sessions resume.
  *
  * When send_to_session is called and the task is in a post-completion phase
- * (AGENT_COMPLETE, AWAIT_HUMAN_ACTION, POST_WORK_COMPLETED),
- * the phase should auto-rollback to IN_PROGRESS. COMPLETE and pre-completion
- * phases are unaffected.
+ * (AGENT_COMPLETE — WAIT was the other one until its removal 2026-08-18), the
+ * phase should auto-rollback to IN_PROGRESS. COMPLETE and pre-completion phases
+ * are unaffected.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -68,16 +68,15 @@ afterAll(async () => {
 describe('sessionInputPhase (replaces shouldRollbackToInProgress)', () => {
   it('returns IN_PROGRESS for post-completion phases', async () => {
     const { sessionInputPhase } = await import('../../src/core/phase.js');
+    // (WAIT removed 2026-08-18 — AGENT_COMPLETE is the only post-completion,
+    // non-terminal phase left.)
     expect(sessionInputPhase('AGENT_COMPLETE')).toBe('IN_PROGRESS');
-    expect(sessionInputPhase('AWAIT_HUMAN_ACTION')).toBe('IN_PROGRESS');
-    expect(sessionInputPhase('POST_WORK_COMPLETED')).toBe('IN_PROGRESS');
     expect(sessionInputPhase('TODO')).toBe('IN_PROGRESS');
   });
 
   it('returns null for terminal and already-IN_PROGRESS phases', async () => {
     const { sessionInputPhase } = await import('../../src/core/phase.js');
     expect(sessionInputPhase('COMPLETE')).toBeNull();
-    expect(sessionInputPhase('HUMAN_VERIFIED')).toBeNull();
     expect(sessionInputPhase('IN_PROGRESS')).toBeNull();
   });
 });
@@ -151,16 +150,19 @@ describe('Phase rollback on send_to_session', () => {
     expect(fetched.phase).toBe('IN_PROGRESS');
   });
 
-  it('rolls back AWAIT_HUMAN_ACTION to IN_PROGRESS', async () => {
-    const task = await createTask('Rollback test - AWAIT_HUMAN_ACTION');
+  // (WAIT removed 2026-08-18 — this used to pin "rolls back WAIT". TODO is where
+  // retired WAIT rows migrated to, and it rolls back the same way: any
+  // non-terminal, non-IN_PROGRESS phase is pulled to IN_PROGRESS on send.)
+  it('rolls back TODO to IN_PROGRESS (the phase retired WAIT rows became)', async () => {
+    const task = await createTask('Rollback test - TODO');
     const taskId = task.id as string;
-    await patchTask(taskId, { phase: 'AWAIT_HUMAN_ACTION' });
+    await patchTask(taskId, { phase: 'TODO' });
 
     const { getTask, updateTask } = await import('../../src/core/task-manager.js');
     const { sessionInputPhase } = await import('../../src/core/phase.js');
 
     const loaded = await getTask(taskId);
-    expect(loaded!.phase).toBe('AWAIT_HUMAN_ACTION');
+    expect(loaded!.phase).toBe('TODO');
 
     const newPhase = sessionInputPhase(loaded!.phase);
     if (newPhase) {

@@ -196,9 +196,11 @@ export function ContextInspectorPanel({ data, loading, error, onRefresh }: Conte
           </>
         )}
 
-        <ContextSection title="Notes Context" tokens={sections.notesContext.tokens}>
-          <ContextMarkdown content={sections.notesContext.content} fallback="(No notes/AGENTS.md)" />
-        </ContextSection>
+        {sections.notesContext.content && (
+          <ContextSection title="Notes Context" tokens={sections.notesContext.tokens}>
+            <ContextMarkdown content={sections.notesContext.content} />
+          </ContextSection>
+        )}
 
         {/* Non-General agents: show split daily log sections */}
         {sections.agentDailyLogs && (

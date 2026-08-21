@@ -17,6 +17,7 @@
  * tests can assert suppression/handling, then succeeds.
  * Set MOCK_ACP_FAIL_LOAD=1 to make every session/load fail.
  * Set MOCK_ACP_FAIL_LOAD_FILE to a marker path consumed on the next load only.
+ * Set MOCK_ACP_LOAD_DELAY_MS and optional MOCK_ACP_LOAD_DELAY_SESSION_ID to delay load.
  * Set MOCK_ACP_SESSION_LOG to record every session/new + session/load request
  * (method + mcpServers + cwd), so tests can assert what the CLIENT actually
  * sent — the only honest check for MCP mount wiring.
@@ -33,6 +34,8 @@ const pendingServerRequests = new Map(); // id -> {resolve}
 let sessionCounter = 0;
 let cancelled = false;
 let ignoreCancel = false;
+let turnRunning = false;          // a session/prompt turn is streaming
+const steeredTexts = [];          // texts injected mid-turn via _session/steering
 const sessionModels = new Map();
 const sessionModes = new Map();
 const sessionCollaborationModes = new Map();
@@ -152,6 +155,7 @@ function chunk(sessionId, text) {
 async function handlePrompt(id, params) {
   cancelled = false;
   ignoreCancel = false;
+  turnRunning = true;
   const sessionId = params.sessionId;
   const text = (params.prompt || [])
     .filter((b) => b.type === 'text')
@@ -305,6 +309,23 @@ async function handlePrompt(id, params) {
     return;
   }
 
+  if (text.includes('steer-window')) {
+    // A long streaming turn (~5s) that leaves a window for _session/steering.
+    // Steered texts are echoed into the SAME turn as "steered:<text>" chunks.
+    chunk(sessionId, 'steer window open ');
+    for (let i = 0; i < 50; i++) {
+      if (cancelled) { reply(id, { stopReason: 'cancelled' }); return; }
+      while (steeredTexts.length > 0) {
+        chunk(sessionId, `steered:${steeredTexts.shift()} `);
+      }
+      chunk(sessionId, `tick${i} `);
+      await sleep(100);
+    }
+    chunk(sessionId, 'steer window closed');
+    reply(id, { stopReason: 'end_turn' });
+    return;
+  }
+
   const gaps = text.includes('lifecycle-slow-mobile') ? 3000
     : text.includes('lifecycle-slow') ? 1000
       : text.includes('slow') ? 150 : 5;
@@ -349,8 +370,31 @@ rl.on('line', async (line) => {
         },
         agentInfo: { name: 'mock-acp-agent', version: '1.0.0' },
         authMethods: [],
+        // codex-acp ≥1.2 advertises mid-turn steering here. Suppress with
+        // MOCK_ACP_NO_STEERING=1 to model an old adapter (fallback path).
+        ...(process.env.MOCK_ACP_NO_STEERING === '1'
+          ? {}
+          : { _meta: { steering: { supported: true } } }),
       });
       break;
+    case '_session/steering': {
+      // codex-acp extension: inject into the live turn, else start a new turn.
+      if (process.env.MOCK_ACP_NO_STEERING === '1') {
+        replyError(msg.id, 'mock agent: unsupported method _session/steering');
+        break;
+      }
+      const text = (msg.params?.prompt || [])
+        .filter((b) => b.type === 'text')
+        .map((b) => b.text)
+        .join(' ');
+      if (turnRunning && !cancelled) {
+        steeredTexts.push(text);
+        reply(msg.id, { outcome: 'injected' });
+      } else {
+        reply(msg.id, { outcome: 'failed' });
+      }
+      break;
+    }
     case 'session/new':
       sessionCounter++;
       logSessionRequest('session/new', msg.params);
@@ -384,8 +428,11 @@ rl.on('line', async (line) => {
       // slow. The daemon budgets it at 120s (OP_TIMEOUT_MS); the fix is that the
       // WALNUT-SIDE acpStart RPC waits past its old flat 30s ceiling for it.
       const loadDelayMs = Number(process.env.MOCK_ACP_LOAD_DELAY_MS ?? 0);
-      if (loadDelayMs > 0) await sleep(loadDelayMs);
+      const loadDelaySessionId = process.env.MOCK_ACP_LOAD_DELAY_SESSION_ID;
       const sid = msg.params?.sessionId;
+      if (loadDelayMs > 0 && (!loadDelaySessionId || loadDelaySessionId === sid)) {
+        await sleep(loadDelayMs);
+      }
       if (!sessionModels.has(sid)) sessionModels.set(sid, 'mock-gpt-best');
       if (!sessionModes.has(sid)) sessionModes.set(sid, 'agent');
       if (!sessionCollaborationModes.has(sid)) sessionCollaborationModes.set(sid, 'default');
@@ -418,7 +465,7 @@ rl.on('line', async (line) => {
       break;
     }
     case 'session/prompt':
-      void handlePrompt(msg.id, msg.params ?? {});
+      void handlePrompt(msg.id, msg.params ?? {}).finally(() => { turnRunning = false; });
       break;
     case 'session/cancel':
       // Notification (no id). Mark cancelled; in-flight prompt loop observes it.

@@ -743,3 +743,99 @@ describe('journal replay contract', () => {
     expect(metas(recs).some((e) => e.type === 'turn-interrupted')).toBe(true)
   })
 })
+
+describe('mid-turn steering', () => {
+  it('advertises steering from the adapter _meta at initialize', async () => {
+    worker = await initWorker()
+    const state = (await op(worker, 'getState')).result as WorkerStateSnapshot
+    expect(state.capabilities.steering).toBe(true)
+  })
+
+  it('steer injects into the LIVE turn: journal steer-accepted + echoed reply in the SAME turn', async () => {
+    worker = await initWorker()
+    await op(worker, 'newSession', { cwd: tmpDir })
+    await op(worker, 'prompt', { commandId: 'acp-prompt:qm-long', walnutMessageId: 'qm-long', text: 'steer-window' })
+    // Wait until the turn is streaming (window open).
+    await waitForJournal((r) => r.some((rec) => rec.kind === 'acp'
+      && JSON.stringify(rec.frame).includes('steer window open')))
+
+    const resp = await op(worker, 'steer', {
+      commandId: 'acp-steer:qm-mid',
+      walnutMessageId: 'qm-mid',
+      text: 'ALSO check the tests',
+    })
+    expect(resp.ok).toBe(true)
+    expect(resp.result).toEqual({
+      accepted: true,
+      steered: true,
+      commandId: 'acp-steer:qm-mid',
+      walnutMessageId: 'qm-mid',
+    })
+
+    const recs = await waitForJournal((r) => turnEnded(r), 10000)
+    const steerAccepted = metas(recs).find((e) => e.type === 'steer-accepted')
+    expect(steerAccepted).toEqual({
+      type: 'steer-accepted',
+      commandId: 'acp-steer:qm-mid',
+      walnutMessageId: 'qm-mid',
+      text: 'ALSO check the tests',
+    })
+    // The steered text was folded into the SAME turn's stream (mock echoes it).
+    const streamed = recs.filter((r) => r.kind === 'acp').map((r) => JSON.stringify(r.frame)).join('')
+    expect(streamed).toContain('steered:ALSO check the tests')
+    // Exactly ONE turn: no second prompt-accepted / turn-started pair.
+    expect(metas(recs).filter((e) => e.type === 'turn-started')).toHaveLength(1)
+    expect(metas(recs).filter((e) => e.type === 'turn-ended')).toHaveLength(1)
+  })
+
+  it('steer with no live turn → typed no_turn error (caller falls back to prompt)', async () => {
+    worker = await initWorker()
+    await op(worker, 'newSession', { cwd: tmpDir })
+    const resp = await op(worker, 'steer', {
+      commandId: 'acp-steer:qm-idle',
+      walnutMessageId: 'qm-idle',
+      text: 'nothing running',
+    })
+    expect(resp.ok).toBe(false)
+    expect(resp.error?.kind).toBe('no_turn')
+  })
+
+  it('steer against a non-steering adapter → typed steer_unsupported error', async () => {
+    worker = await initWorker({ MOCK_ACP_NO_STEERING: '1' })
+    const state = (await op(worker, 'getState')).result as WorkerStateSnapshot
+    expect(state.capabilities.steering).toBe(false)
+    await op(worker, 'newSession', { cwd: tmpDir })
+    await op(worker, 'prompt', { commandId: 'acp-prompt:qm-old', walnutMessageId: 'qm-old', text: 'steer-window' })
+    const resp = await op(worker, 'steer', {
+      commandId: 'acp-steer:qm-unsup',
+      walnutMessageId: 'qm-unsup',
+      text: 'should not reach adapter',
+    })
+    expect(resp.ok).toBe(false)
+    expect(resp.error?.kind).toBe('steer_unsupported')
+    await op(worker, 'cancel', { commandId: 'cancel-old' })
+  })
+
+  it('steer is idempotent: duplicate commandId returns the original result without re-injecting', async () => {
+    worker = await initWorker()
+    await op(worker, 'newSession', { cwd: tmpDir })
+    await op(worker, 'prompt', { commandId: 'acp-prompt:qm-dup', walnutMessageId: 'qm-dup', text: 'steer-window' })
+    await waitForJournal((r) => r.some((rec) => rec.kind === 'acp'
+      && JSON.stringify(rec.frame).includes('steer window open')))
+
+    const first = await op(worker, 'steer', {
+      commandId: 'acp-steer:qm-same', walnutMessageId: 'qm-same', text: 'once only',
+    })
+    const second = await op(worker, 'steer', {
+      commandId: 'acp-steer:qm-same', walnutMessageId: 'qm-same', text: 'once only',
+    })
+    expect(first.ok).toBe(true)
+    expect(second.ok).toBe(true)
+    expect(second.result).toEqual(first.result)
+
+    const recs = await waitForJournal((r) => turnEnded(r), 10000)
+    expect(metas(recs).filter((e) => e.type === 'steer-accepted')).toHaveLength(1)
+    const streamed = recs.filter((r) => r.kind === 'acp').map((r) => JSON.stringify(r.frame)).join('')
+    expect(streamed.match(/steered:once only/g)).toHaveLength(1)
+  })
+})

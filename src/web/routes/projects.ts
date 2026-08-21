@@ -128,9 +128,11 @@ projectsRouter.post('/', async (req: Request, res: Response, next: NextFunction)
       return
     }
     if (source !== undefined) {
-      // Any registered plugin id (plus 'local') is valid — no hardcoded list, so
-      // an installed third-party plugin can claim a project.
-      const validSources = new Set(['local', ...registry.getAll().map((p) => p.id)])
+      // Any registered SYNC plugin id (plus 'local') is valid — no hardcoded
+      // list, so an installed third-party plugin can claim a project. A plugin
+      // without the sync capability (ui/tools/skills only) is excluded: it would
+      // accept the binding and then never push anything.
+      const validSources = new Set(['local', ...registry.getSyncPlugins().map((p) => p.id)])
       if (typeof source !== 'string' || !validSources.has(source)) {
         res.status(400).json({ error: `source must be one of: ${[...validSources].join(', ')}` })
         return

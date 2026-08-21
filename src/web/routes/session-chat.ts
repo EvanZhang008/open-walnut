@@ -11,7 +11,7 @@ import { bus, EventNames } from '../../core/event-bus.js'
 import { VALID_SESSION_EFFORT_IDS, resolveModelSwitchValue } from '../../core/types.js'
 import type { SessionEffort, SessionMode } from '../../core/types.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
-import { sendMessageToSession, editMessage, deleteMessage, getQueue } from '../../core/session-message-queue.js'
+import { sendMessageToSession, editMessage, deleteMessage, getQueue, isMessageQueued } from '../../core/session-message-queue.js'
 import { sessionStreamBuffer } from '../session-stream-buffer.js'
 import { saveImageToDisk, resolveImageRefs } from './images.js'
 import { log } from '../../logging/index.js'
@@ -175,6 +175,37 @@ export function registerSessionChatRpc(): void {
     if (record?.host) {
       const { clearDaemonFailureCache } = await import('../../providers/daemon-connection.js')
       clearDaemonFailureCache(record.host)
+    }
+
+    // RETRY OF A FAILED DELIVERY (inc-1786774073558): a --resume spawn failure
+    // reverts its batch to 'pending' (the text must survive) AND tells the UI the
+    // batch failed. If Retry then enqueued a fresh copy, the queue held the same
+    // words twice and the next batch joined both with '\n\n' — the CLI received
+    // the user's message DUPLICATED inside one enqueue line, which is exactly what
+    // the canonical JSONL showed (two identical 364-byte halves).
+    // The surviving row is already queued and drainable, so a retry must only
+    // re-trigger delivery. Falls through to a normal enqueue when the row is gone
+    // (already drained / deleted), so a retry can never silently do nothing.
+    if (typeof data.retryOf === 'string' && data.retryOf) {
+      const stillQueued = await isMessageQueued(data.sessionId, data.retryOf)
+      if (stillQueued) {
+        log.web.info('session:send retry — re-draining the queued row (no duplicate enqueue)', {
+          sessionId: data.sessionId, messageId: data.retryOf,
+        })
+        // Re-trigger delivery only. SESSION_SEND → session-runner → handleSend →
+        // processNext, which markProcessing()es whatever is pending and drains it.
+        // No SESSION_MESSAGE_QUEUED: the bubble already exists in the UI under
+        // this very id, and a second queued event would mint a second bubble.
+        bus.emit(EventNames.SESSION_SEND, {
+          sessionId: data.sessionId,
+          taskId: record?.taskId,
+          message: data.message as string,
+        }, ['session-runner'], { source: 'web-ui-retry' })
+        return { messageId: data.retryOf }
+      }
+      log.web.info('session:send retry — original row no longer queued, enqueueing fresh', {
+        sessionId: data.sessionId, messageId: data.retryOf,
+      })
     }
 
     // Enqueue and notify in one call. augmentedMessage may include image refs;

@@ -423,7 +423,7 @@ export function systemGroupMemberFromHistory(message: SessionHistoryMessage): Sy
 }
 
 /** Collapsed run of consecutive system notices from history or the live stream. */
-export function SystemGroupRun({ members }: { members: SystemGroupMember[] }) {
+export const SystemGroupRun = memo(function SystemGroupRun({ members }: { members: SystemGroupMember[] }) {
   const [open, setOpen] = useState(false);
   const allErrors = members.length > 0 && members.every((member) => member.variant === 'error');
   const label = allErrors ? `${members.length} errors` : `${members.length} system messages`;
@@ -448,7 +448,7 @@ export function SystemGroupRun({ members }: { members: SystemGroupMember[] }) {
       )}
     </div>
   );
-}
+});
 
 /** History-side merged run of generic tools. */
 function ToolRunRow({ tools, assistantLabel, sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: {
@@ -506,8 +506,11 @@ export function isTextPlusMergeableTools(m: SessionHistoryMessage): boolean {
 
 /** Cross-MESSAGE merged tool run (the iOS look): consecutive tool-only
  *  assistant messages collapse into ONE muted line. Expanding shows each
- *  message's thinking + tool cards. */
-export function MergedHistoryToolRun({ messages, trailingTools = [], assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: {
+ *  message's thinking + tool cards.
+ *  memo: the parent re-renders every 150ms streaming flush; with a stable
+ *  `messages` array (built once in the memoized history-parts pass) this
+ *  entire subtree skips — the fix for whale-session scroll/typing lag. */
+export const MergedHistoryToolRun = memo(function MergedHistoryToolRun({ messages, trailingTools = [], assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: {
   messages: SessionHistoryMessage[];
   trailingTools?: { name: string; input?: Record<string, unknown>; status: 'calling' | 'done' | 'error'; result?: string; toolUseId: string }[];
   assistantLabel?: string;
@@ -545,12 +548,12 @@ export function MergedHistoryToolRun({ messages, trailingTools = [], assistantLa
           sessionHost={sessionHost}
           onTaskClick={onTaskClick}
           onSessionClick={onSessionClick}
-          onFileOpen={onFileOpen ? (path) => onFileOpen(path) : undefined}
+          onFileOpen={onFileOpen}
         />
       ))}
     </ToolRunShell>
   );
-}
+});
 
 interface GenericToolCallProps {
   tool: { name: string; input: Record<string, unknown> };
@@ -570,7 +573,10 @@ interface GenericToolCallProps {
   onFileOpen?: (path: string) => void;
 }
 
-export function GenericToolCall(props: GenericToolCallProps) {
+// memo: hundreds of these render inside a whale session's history; the
+// streaming flush re-renders the parent every 150ms. tool/input are stable
+// object refs from the parsed history rows, so memo actually skips.
+export const GenericToolCall = memo(function GenericToolCall(props: GenericToolCallProps) {
   // Bash gets terminal-style rendering (real newlines, plain-pre output, popup)
   // instead of the JSON input dump. Dispatch BEFORE any hooks; single choke
   // point covering history, streaming, and ClaudeStreamView callers alike.
@@ -578,9 +584,9 @@ export function GenericToolCall(props: GenericToolCallProps) {
     return <BashToolCall tool={props.tool} status={props.status} result={props.result} sessionCwd={props.sessionCwd} />;
   }
   return <GenericToolCallInner {...props} />;
-}
+});
 
-function GenericToolCallInner({ tool, status: statusProp = 'done', result: resultProp, sessionCwd, sessionHost, onTaskClick, onSessionClick, onFileOpen }: GenericToolCallProps) {
+function GenericToolCallInner({ tool, status: statusProp = 'done', result: resultProp, sessionCwd, sessionHost, sessionId, onTaskClick, onSessionClick, onFileOpen }: GenericToolCallProps) {
   const [open, setOpen] = useState(false);
   // Merge result from explicit prop (streaming path) and tool.result (persisted history path)
   const result = resultProp ?? (tool as { result?: string }).result;
@@ -590,13 +596,19 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
   const safeInput = (tool.input && typeof tool.input === 'object') ? tool.input : {};
   const rawDesc = typeof safeInput.description === 'string' ? safeInput.description.trim() : '';
   const description = rawDesc ? (rawDesc.length > 120 ? rawDesc.slice(0, 120) + '...' : rawDesc) : null;
-  const inputSummary = Object.entries(safeInput)
+  // Memoized: JSON.stringify over a large Write/Edit input on EVERY render was
+  // the measured hot spot behind whale-session slow commits (5-32s).
+  // slice-before-stringify keeps a multi-100KB string value from being
+  // serialized wholesale just to keep 60 chars of it.
+  const inputSummary = useMemo(() => Object.entries(safeInput)
     .filter(([k]) => k !== 'description')
     .map(([k, v]) => {
-      const val = typeof v === 'string' ? v : JSON.stringify(v);
+      const val = typeof v === 'string'
+        ? v
+        : JSON.stringify(v)?.slice(0, 200) ?? String(v);
       return `${k}: ${val.length > 60 ? val.slice(0, 60) + '...' : val}`;
     })
-    .join(', ');
+    .join(', '), [safeInput]);
 
   // Dynamic icon and class based on status
   const statusIcon = status === 'error' ? '\u2717' : status === 'done' ? '\u2713' : '\u25B6';
@@ -663,7 +675,7 @@ function GenericToolCallInner({ tool, status: statusProp = 'done', result: resul
   }, [safeInput, open, resultImages, sessionCwd]);
 
   // Unified click handler for entity ref links (.task-link, .session-link, .file-link) inside tool blocks
-  const handlePreClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen ? (p) => onFileOpen(p) : undefined, sessionHost);
+  const handlePreClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen ? (p) => onFileOpen(p) : undefined, sessionHost, sessionId);
 
   // [View File] button for tools that operate on files
   const toolFilePath = typeof safeInput.file_path === 'string' ? safeInput.file_path : null;
@@ -963,12 +975,12 @@ function SessionToolCall({ tool, assistantLabel, sessionId, sessionCwd, sessionH
         replaceAll={tool.input.replace_all === true}
         status={((tool as { status?: string }).status === 'error' || (tool as { isError?: boolean }).isError) ? 'error' : 'done'}
         result={(tool as { result?: string }).result}
-        onViewFile={onFileOpen ? (p) => onFileOpen(p) : undefined}
+        onViewFile={onFileOpen}
       />
     );
   }
 
-  return <GenericToolCall tool={tool} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen ? (p) => onFileOpen(p) : undefined} />;
+  return <GenericToolCall tool={tool} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
 }
 
 export const SessionMessage = memo(function SessionMessage({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, showCopyActions = false, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
@@ -1016,7 +1028,7 @@ export const SessionMessage = memo(function SessionMessage({ message, assistantL
   }, [text, isUser]);
 
   // Unified click handler for entity ref links + file links in message content
-  const handleContentClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost);
+  const handleContentClick = useEntityClickHandler(onTaskClick, onSessionClick, onFileOpen, sessionHost, sessionId);
 
   return (
     <div className={`session-msg ${isUser ? 'session-msg-user' : 'session-msg-assistant'}`}>

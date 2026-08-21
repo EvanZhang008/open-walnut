@@ -1,0 +1,292 @@
+/*
+ * Hello Walnut app styling. Two themes driven by [data-theme] on <html>, which
+ * app.js sets from the theme the host reports in Walnut.ready(). No web fonts,
+ * no CDN: the page must work with no network of its own.
+ */
+
+:root {
+  --bg: #f7f7f5;
+  --panel: #ffffff;
+  --border: #e3e2dd;
+  --text: #1c1b19;
+  --muted: #6c6a64;
+  --accent: #8a5a2b;
+  --accent-soft: #f1e7dc;
+  --ok: #3f8f5f;
+  --bad: #b4442e;
+  --radius: 10px;
+}
+
+[data-theme='dark'] {
+  --bg: #17171a;
+  --panel: #1f1f23;
+  --border: #32323a;
+  --text: #ecebe8;
+  --muted: #9a988f;
+  --accent: #d9a56b;
+  --accent-soft: #2b2521;
+  --ok: #6cc38b;
+  --bad: #e0806c;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 20px;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page {
+  max-width: 620px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ── Header ── */
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo { flex: 0 0 auto; }
+
+h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+}
+
+.sub {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* ── Cards ── */
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+h2 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.hint {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.dot[data-state='ok'] { background: var(--ok); }
+.dot[data-state='bad'] { background: var(--bad); }
+
+.count {
+  min-width: 24px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
+
+/* ── Status list ── */
+
+.kv {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 0;
+}
+
+.kv dt {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.kv dd {
+  margin: 2px 0 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Tasks ── */
+
+.tasks, .events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tasks .task + .task { border-top: 1px solid var(--border); }
+
+.task-open {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.task-open:hover .task-title { color: var(--accent); }
+.task-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.task-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-meta {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.empty {
+  padding: 8px 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* ── Composer ── */
+
+.say {
+  display: flex;
+  gap: 8px;
+}
+
+input[type='text'] {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+input[type='text']:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+button {
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 560;
+  cursor: pointer;
+}
+
+button:disabled { opacity: 0.55; cursor: progress; }
+
+button.ghost {
+  padding: 4px 10px;
+  background: none;
+  border-color: var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+button.ghost:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── Event log ── */
+
+.event {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 12.5px;
+}
+
+.event + .event { border-top: 1px solid var(--border); }
+
+.event code {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: 11.5px;
+}
+
+.event span {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.event time {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Utility ── */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

@@ -1,6 +1,7 @@
 import { useState, useEffect, type RefObject } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
+import { useApps } from '@/hooks/useApps';
 import { useAudioCapture } from '@/hooks/useAudioCapture';
 import { useNotifications } from '@/contexts/notifications';
 import { NotificationPanel } from '@/components/common/NotificationPanel';
@@ -14,7 +15,13 @@ const SS_CALENDAR_VISIBLE_KEY = 'open-walnut-home-calendar-visible';
 // The sidebar carries ONLY the daily surfaces (panels + Home/Tasks/Notes/Calendar/
 // Routines) plus Settings. Management pages (Agents, Skills, Commands, Memory,
 // Repositories, Hooks) and audio recording live in the Settings sidebar's Manage
-// group / Audio Capture, so this list can never grow back into an icon wall.
+// group / Audio Capture, so this CORE list can never grow back into an icon wall.
+//
+// Plugin apps are the one dynamic group, rendered after Routines behind their own
+// divider. They are user-installed daily surfaces (the user chose to install
+// them), and the declutter rule applies to what WALNUT ships, not to what the
+// user adds — but keep them a single flat group with real labels, never a second
+// unlabelled glyph column.
 
 interface SidebarProps {
   asideRef: RefObject<HTMLElement | null>;
@@ -35,6 +42,7 @@ export function Sidebar({
 }: SidebarProps) {
   const cls = `sidebar${open ? ' open' : ''}${collapsed ? ' collapsed' : ''}`;
   const { hasIssues } = useSystemHealth();
+  const { apps } = useApps();
   const audio = useAudioCapture();
   const { notify, unreadCount } = useNotifications();
   const [notifOpen, setNotifOpen] = useState(false);
@@ -179,6 +187,22 @@ export function Sidebar({
           <span className="sidebar-label">Routines</span>
         </NavLink>
 
+        {apps.length > 0 && <div className="sidebar-nav-divider" />}
+        {apps.map((app) => (
+          <NavLink
+            key={app.id}
+            to={`/apps/${app.id}`}
+            className={navLinkClass}
+            title={collapsed ? app.title : undefined}
+            data-testid={`sidebar-app-${app.id}`}
+          >
+            {app.icon
+              ? <img src={app.icon} alt="" className="sidebar-app-icon" />
+              : <PuzzleIcon />}
+            <span className="sidebar-label">{app.title}</span>
+          </NavLink>
+        ))}
+
         <NavLink to="/settings" className={navLinkClass} title={collapsed ? 'Settings' : undefined}>
           <SettingsIcon />
           <span className="sidebar-label">Settings</span>
@@ -303,6 +327,15 @@ function CalendarIcon() {
       <line x1="16" y1="2" x2="16" y2="6" />
       <line x1="8" y1="2" x2="8" y2="6" />
       <line x1="3" y1="10" x2="21" y2="10" />
+    </svg>
+  );
+}
+
+/** Fallback glyph for a plugin app that ships no icon. */
+function PuzzleIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M10 3h4a1 1 0 0 1 1 1v1.5a2 2 0 1 0 4 0V4h1a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-1.5a2 2 0 1 0 0 4H20a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-1.5a2 2 0 1 0-4 0V20a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1h1.5a2 2 0 1 0 0-4H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1z" />
     </svg>
   );
 }

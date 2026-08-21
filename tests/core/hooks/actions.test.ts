@@ -20,14 +20,14 @@ import type { HookDefinition, TaskHookContext } from '../../../src/core/session-
 import { makeTask } from '../../helpers/factories.js';
 
 function taskCtx(overrides: Partial<TaskHookContext> = {}): TaskHookContext {
-  const task = makeTask({ phase: 'HUMAN_VERIFIED', session_id: 'sess-9' });
+  const task = makeTask({ phase: 'COMPLETE', session_id: 'sess-9' });
   return {
     domain: 'task',
     taskId: task.id,
     task,
     sessionId: 'sess-9',
     oldPhase: 'AGENT_COMPLETE',
-    newPhase: 'HUMAN_VERIFIED',
+    newPhase: 'COMPLETE',
     eventSource: 'api',
     timestamp: new Date().toISOString(),
     traceId: 't-1',
@@ -55,7 +55,7 @@ describe('renderTemplate', () => {
   it('substitutes whitelisted keys', () => {
     const ctx = taskCtx();
     expect(renderTemplate('Task {{task.title}} → {{newPhase}} (was {{oldPhase}}) in {{sessionId}}', ctx))
-      .toBe('Task Test task → HUMAN_VERIFIED (was AGENT_COMPLETE) in sess-9');
+      .toBe('Task Test task → COMPLETE (was AGENT_COMPLETE) in sess-9');
   });
 
   it('unknown keys render empty — no expression evaluation', () => {
@@ -97,7 +97,7 @@ describe('executeHookAction', () => {
     const [input] = addNotification.mock.calls[0] as [Record<string, unknown>];
     expect(input.kind).toBe('hook');
     expect(input.severity).toBe('warning');
-    expect(input.body).toBe('Test task moved to HUMAN_VERIFIED');
+    expect(input.body).toBe('Test task moved to COMPLETE');
   });
 
   it('run_agent emits subagent:start with hook source', async () => {

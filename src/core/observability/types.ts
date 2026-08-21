@@ -53,6 +53,19 @@ export interface TurnEvent {
   /** Which delivery path: 'stdin' | 'mid-turn' | 'resume'. */
   deliveryPath?: string;
 
+  // ── streaming shape (TTFT — inc-1786665503510 "text only shows at the end") ──
+  // Latency from the turn-start edge to the FIRST main-lane emit of each kind,
+  // as seen by the server when it puts the event on the UI bus. null = that
+  // kind never appeared this turn. Reading them together attributes the felt
+  // stall: firstTextMs huge but firstThinkingMs/firstToolMs normal = the model
+  // genuinely produced text late (upstream); ALL huge = pipeline stall.
+  /** turn-start → first thinking delta emitted to the UI bus. */
+  firstThinkingMs?: number | null;
+  /** turn-start → first assistant text delta emitted to the UI bus. */
+  firstTextMs?: number | null;
+  /** turn-start → first main-lane tool_use emitted to the UI bus. */
+  firstToolMs?: number | null;
+
   /** Count of API 4xx/5xx retries observed during the turn (if tracked). */
   apiRetries?: number;
   /** Whether a Claude Code Team was active (suppresses some invariants). */

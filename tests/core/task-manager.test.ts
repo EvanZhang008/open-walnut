@@ -9,7 +9,7 @@ let configFile: string;
 vi.mock('../../src/constants.js', () => createMockConstants());
 
 // Import after mocking
-import { addTask, addTaskFull, addTasksBulk, listTasks, completeTask, getDashboardData, reorderTasks, deleteTask, linkSessionSlot, clearSessionSlot, ActiveSessionError, updateTask, autoPushIfConfigured, updateTaskRaw, getTask, _resetForTesting } from '../../src/core/task-manager.js';
+import { addTask, addTaskFull, addTasksBulk, listTasks, completeTask, getDashboardData, reorderTasks, deleteTask, linkSession, linkSessionSlot, clearSessionSlot, ActiveSessionError, updateTask, autoPushIfConfigured, updateTaskRaw, getTask, _resetForTesting } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
 import { log } from '../../src/logging/index.js';
 import { WALNUT_HOME, TASKS_FILE, CONFIG_FILE } from '../../src/constants.js';
@@ -538,6 +538,31 @@ describe('linkSessionSlot / clearSessionSlot', () => {
     expect(updated.exec_session_id).toBeUndefined();
   });
 
+  // Regression (2026-08-12): the primary slot (session_id, set by linkSession /
+  // quick-start) was never cleared by clearSessionSlot(taskId, sessionId), so
+  // force-delete's stop→clear→retry loop re-threw ActiveSessionError forever
+  // (HTTP 500 on DELETE ?force=true).
+  it('clears the primary session_id slot by session id', async () => {
+    const { task } = await addTask({ title: 'Primary slot' });
+    await linkSession(task.id, 'sess-primary');
+    const { task: updated } = await clearSessionSlot(task.id, 'sess-primary');
+
+    expect(updated.session_id).toBeUndefined();
+    // deletion must now succeed (this was the force-delete 500)
+    const { task: deleted } = await deleteTask(task.id);
+    expect(deleted.id).toBe(task.id);
+  });
+
+  it('clears the primary slot too when clearing all slots', async () => {
+    const { task } = await addTask({ title: 'Clear all incl primary' });
+    await linkSession(task.id, 'sess-primary');
+    await linkSessionSlot(task.id, 'sess-exec', 'exec');
+    const { task: updated } = await clearSessionSlot(task.id);
+
+    expect(updated.session_id).toBeUndefined();
+    expect(updated.exec_session_id).toBeUndefined();
+  });
+
 });
 
 describe('updateTask — unread (read marker)', () => {
@@ -593,9 +618,10 @@ describe('updateTask — unread (read marker)', () => {
     const { task: running } = await updateTask(task.id, { phase: 'IN_PROGRESS' }, { source: 'api' });
     expect(running.unread).toBe(false);
 
-    // The error path marks it too.
-    const { task: awaiting } = await updateTask(task.id, { phase: 'AWAIT_HUMAN_ACTION' }, { source: 'api' });
-    expect(awaiting.unread).toBe(true);
+    // The error path marks it too — it lands on the SAME phase now that WAIT is
+    // gone (removed 2026-08-18), so re-applying AGENT_COMPLETE re-sets the dot.
+    const { task: handedBackAgain } = await updateTask(task.id, { phase: 'AGENT_COMPLETE' }, { source: 'api' });
+    expect(handedBackAgain.unread).toBe(true);
   });
 
   it('an explicit marker in the same patch beats the phase-implied one', async () => {

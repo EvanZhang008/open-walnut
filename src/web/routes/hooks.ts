@@ -4,8 +4,9 @@
  * GET  /api/hooks      → HookInfo[] (dispatcher hooks + daemon policies + inline)
  * PATCH /api/hooks/:id → { enabled?, priority?, timeoutMs?, settings? }
  *   - mutable=config-override → writes hooks.overrides[id] (live reload via CONFIG_CHANGED)
- *   - mutable=config-path (daemon) → flips the dedicated config key; responds
- *     requiresDaemonRestart:true (env is read at daemon spawn)
+ *   - mutable=config-path (daemon) → flips the dedicated config key and emits
+ *     CONFIG_CHANGED (hooks-v1 policies hot-push to connected daemons);
+ *     requiresDaemonRestart is true only for spawn-env policies (hotPushed absent)
  *   - mutable=readonly → 409
  *   - `settings` writes the hook's declared knobs (hooks/settings.ts) to their
  *     own config paths — so a hook with parameters is configured HERE, not in a
@@ -116,12 +117,19 @@ hooksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
         merged = { ...merged, ...built.patch }
       }
       await updateConfig(merged)
+      // Emit config:changed so hooks-v1 policies hot-push to connected daemons
+      // (server.ts subscribes pushDaemonHooksToAllHosts to this event). Without
+      // it, toggling e.g. session-only cron enforcement OFF would leave every
+      // connected daemon enforcing the old rules until its next reconnect.
+      const freshCfg = await getConfig()
+      bus.emit(EventNames.CONFIG_CHANGED, { config: freshCfg }, ['web-ui'], { source: 'hooks-api' })
       log.web.info('daemon policy updated via /api/hooks', {
         id, enabled, settingKeys: settings ? Object.keys(settings as object) : undefined,
       })
       const fresh = await getHookInventory()
       res.json({
-        ok: true, id, enabled, requiresDaemonRestart: true, note: policy.note,
+        // hooks-v1-delivered policies apply hot; spawn-env ones need a restart.
+        ok: true, id, enabled, requiresDaemonRestart: policy.hotPushed !== true, note: policy.note,
         settings: fresh.find(h => h.id === id)?.settings,
       })
       return

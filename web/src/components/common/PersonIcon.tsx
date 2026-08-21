@@ -1,5 +1,5 @@
 /**
- * SVG person icon (head + shoulders outline) — used for AWAIT_HUMAN_ACTION phase.
+ * SVG person icon (head + shoulders outline) — used for the WAIT phase.
  * Inherits text color via currentColor. Default size 12px.
  */
 export function PersonIcon({ size = 12 }: { size?: number }) {

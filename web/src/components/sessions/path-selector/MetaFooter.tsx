@@ -15,6 +15,7 @@ import { PinTierPicker } from '@/components/common/PinTierPicker';
 import { useHostModelCatalog } from '@/hooks/useModelCatalog';
 import { formatModelName } from '@/hooks/useSessionUsage';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { sortByModelStrength } from '@/utils/model-strength-order';
 import { catalogRowLabel } from '../ModelPicker';
 
 interface Props {
@@ -45,8 +46,10 @@ export function useModelOptions(host?: string | null): {
   const catalog = useHostModelCatalog(host);
   if (catalog) {
     return {
-      options: catalog.models
-        .filter((m) => m.value !== 'default' && !m.disabled)
+      options: sortByModelStrength(
+        catalog.models.filter((m) => m.value !== 'default' && !m.disabled),
+        (model) => `${model.value} ${model.resolvedModel ?? ''} ${catalogRowLabel(model)}`,
+      )
         // Versioned label ("Opus 5 1M", not "Opus") — same rule as the
         // picker's catalogRowLabel: the user must see WHICH version launches.
         .map((m) => ({ value: m.value, label: catalogRowLabel(m) })),
@@ -54,7 +57,10 @@ export function useModelOptions(host?: string | null): {
     };
   }
   return {
-    options: SESSION_MODELS.map((sm) => ({ value: sm.id, label: sm.label })),
+    options: sortByModelStrength(
+      SESSION_MODELS,
+      (model) => `${model.cliModel} ${model.label}`,
+    ).map((sm) => ({ value: sm.id, label: sm.label })),
     autoResolved: '',
   };
 }

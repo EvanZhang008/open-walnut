@@ -19,11 +19,14 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-snap-apply')
 // Live runner registry: applySnapshot (enforce) syncs the in-memory status of
 // a live ClaudeCodeSession via setProcessStatusFromReconciler.
 const liveRunnerSync = vi.fn()
+const liveWatermarkReset = vi.fn()
 let liveSessionId: string | null = null
 vi.mock('../../src/providers/claude-code-session.js', () => ({
   sessionRunner: {
     findSessionByClaudeId: (sid: string) =>
-      sid === liveSessionId ? { setProcessStatusFromReconciler: liveRunnerSync } : undefined,
+      sid === liveSessionId
+        ? { setProcessStatusFromReconciler: liveRunnerSync, resetConsumedOffsetFromSnapshot: liveWatermarkReset }
+        : undefined,
   },
 }))
 
@@ -79,6 +82,7 @@ beforeEach(async () => {
   bus.clear()
   liveSessionId = null
   liveRunnerSync.mockClear()
+  liveWatermarkReset.mockClear()
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
   await fsp.mkdir(WALNUT_HOME, { recursive: true })
 })
@@ -999,5 +1003,94 @@ describe('applyUpdateToSession — epoch-gated consumedOffset arbitration', () =
     await seedSession(sid, { streamEpoch: 'dev:ino:birth' })
     closeDb() // force a re-read from disk
     expect((await getSessionByClaudeId(sid))?.streamEpoch).toBe('dev:ino:birth')
+  })
+})
+
+describe('applySnapshot — epoch-less record with a provably-stale watermark (incident 267a4b68)', () => {
+  const NEW_EPOCH = '16777231:1302716146:1786167189042'
+
+  // The trap: records that predate epoch stamping (streamEpoch NULL) could
+  // never take the epoch-reset path (two-sided compare needs both epochs), and
+  // could never GET an epoch either (stamping requires an enforce write, which
+  // the stale watermark's v-gate blocks). Meanwhile the live replay guards kept
+  // swallowing real results ("suppressing replayed result", turn ended but the
+  // record stayed Running until the next user message).
+
+  it('INCIDENT SHAPE (enforce): settled snapshot below an over-EOF watermark converges + stamps the epoch', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'epochless-stale'
+    // No streamEpoch; watermark measured in the pre-move file (134 MB) while
+    // the migrated file is only ~119 MB — offsets can never exceed the EOF of
+    // the file they were measured in, so this watermark is provably foreign.
+    await seedSession(sid, { process_status: 'running', consumedOffset: 134_248_535 })
+    liveSessionId = sid
+
+    const res = await applySnapshot(sid, snap({
+      v: 115_135_073, cliState: 'idle', turnActive: false, streamEpoch: NEW_EPOCH,
+      lastResult: { isError: false, endOffset: 115_134_908 },
+    }), 'pull-30s')
+
+    expect(res).toMatchObject({ outcome: 'applied', projected: 'idle' })
+    const after = await getSessionByClaudeId(sid)
+    expect(after?.process_status).toBe('idle')
+    expect(after?.streamEpoch).toBe(NEW_EPOCH)
+    expect(after?.consumedOffset).toBe(115_135_073)
+    // The live instance's in-memory watermark must reset too — it is what the
+    // replay guards read; healing only the record leaves the guards swallowing.
+    expect(liveWatermarkReset).toHaveBeenCalledWith(115_135_073)
+  })
+
+  it('an epoch-less record whose watermark is BELOW the snapshot v is NOT treated as an epoch change', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'epochless-fresh'
+    // Same-file continuation: watermark < v is perfectly normal ordering.
+    await seedSession(sid, { process_status: 'running', consumedOffset: 1_000 })
+    const res = await applySnapshot(sid, snap({
+      v: 2_000, cliState: 'idle', turnActive: false, streamEpoch: NEW_EPOCH,
+      lastResult: { isError: false, endOffset: 1_900 },
+    }), 'pull-30s')
+    expect(res).toMatchObject({ outcome: 'applied', projected: 'idle' })
+    // First-sight stamp rides the ordinary adoptWatermark write — no reset log needed.
+    const after = await getSessionByClaudeId(sid)
+    expect(after?.streamEpoch).toBe(NEW_EPOCH)
+    expect(after?.consumedOffset).toBe(2_000)
+  })
+
+  it('a RUNNING snapshot below an over-EOF watermark does NOT trigger the reset (mid-turn v proves nothing)', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'epochless-running'
+    await seedSession(sid, { process_status: 'running', consumedOffset: 134_248_535 })
+    // Mid-turn: v < watermark could just be an early offset of a genuinely
+    // huge file — only a settled/dead fold's v is an EOF position.
+    const res = await applySnapshot(sid, snap({
+      v: 115_000_000, cliState: 'running', turnActive: true, streamEpoch: NEW_EPOCH,
+    }), 'pull-30s')
+    expect(res).toMatchObject({ outcome: 'stale' })
+  })
+
+  it('a WAITING snapshot below an over-EOF watermark does NOT trigger the reset (same exclusion as adoptsWatermark)', async () => {
+    setSnapshotModeForTests('enforce')
+    const sid = 'epochless-waiting'
+    await seedSession(sid, { process_status: 'running', consumedOffset: 134_248_535 })
+    const res = await applySnapshot(sid, snap({
+      v: 115_000_000, cliState: 'waiting', turnActive: false,
+      pendingPermission: { requestId: 'r1', toolName: 'Bash' }, streamEpoch: NEW_EPOCH,
+    }), 'pull-30s')
+    expect(res).toMatchObject({ outcome: 'stale' })
+  })
+
+  it('shadow mode: the epoch-less reset unblocks the v-gate so the divergence becomes VISIBLE (no write)', async () => {
+    setSnapshotModeForTests('shadow')
+    const sid = 'epochless-shadow'
+    await seedSession(sid, { process_status: 'running', consumedOffset: 134_248_535 })
+    const res = await applySnapshot(sid, snap({
+      v: 115_135_073, cliState: 'idle', turnActive: false, streamEpoch: NEW_EPOCH,
+      lastResult: { isError: false, endOffset: 115_134_908 },
+    }), 'pull-30s')
+    expect(res).toMatchObject({ outcome: 'shadow', diverged: true, projected: 'idle' })
+    const after = await getSessionByClaudeId(sid)
+    expect(after?.process_status).toBe('running')
+    expect(after?.consumedOffset).toBe(134_248_535)
+    expect(after?.streamEpoch).toBeUndefined()
   })
 })

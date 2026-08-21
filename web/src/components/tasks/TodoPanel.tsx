@@ -14,7 +14,7 @@ import { timeAgo } from '@/utils/time';
 import { scrollLog } from '@/utils/scroll-debug';
 import type { ProcessStatus } from '@open-walnut/core';
 import type { TaskPhase } from '@/types/session';
-import { PHASE_LABELS, PHASE_COLORS, PROCESS_COLORS, resolveTaskSessionId, taskCircleClass, phasePickerChoices, matchesPhaseFilter } from '@/utils/session-status';
+import { PHASE_LABELS, PHASE_COLORS, PROCESS_COLORS, resolveTaskSessionId, phasePickerChoices, matchesPhaseFilter, taskNeedsAction } from '@/utils/session-status';
 import type { UseFavoritesReturn } from '@/hooks/useFavorites';
 import type { UseOrderingReturn } from '@/hooks/useOrdering';
 import * as ICONS from '../common/Icons';
@@ -90,7 +90,6 @@ import {
 } from '@open-walnut/task-query';
 import { INBOX_TAB, LS_TAB_KEY } from './task-tabs';
 import { DatePicker, formatDateDisplay, formatDateTimeDisplay, isOverdue, parseDateLocal } from '../common/DatePicker';
-import { PersonIcon } from '../common/PersonIcon';
 import { useVerticalSplitter } from '@/hooks/useVerticalSplitter';
 import { useResizableHeight } from '@/hooks/useResizableHeight';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
@@ -100,7 +99,7 @@ import { useGlobalNotes } from '@/hooks/useGlobalNotes';
 import { SortableTierCard, TierDropZone, GroupChip, groupSortableId } from './FocusSatelliteCards';
 import { TodoSectionTabs, TODO_SECTIONS, type TodoSection } from './TodoSectionTabs';
 import { isBuiltinTier, type FocusTier, type CustomTierDef } from '@/api/focus';
-import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
+import { useSessionStatusEpoch, useTaskCircle } from '@/hooks/useSessionStatus';
 import {
   resolveSessionRecordStatus,
   sessionStatusStore,
@@ -238,9 +237,6 @@ const PHASE_ICON: Record<string, ReactNode> = {
   TODO: ICONS.ICON_PHASE_TODO,
   IN_PROGRESS: ICONS.ICON_PHASE_IN_PROGRESS,
   AGENT_COMPLETE: ICONS.ICON_PHASE_AGENT_COMPLETE,
-  AWAIT_HUMAN_ACTION: <PersonIcon />,
-  HUMAN_VERIFIED: ICONS.ICON_PHASE_HUMAN_VERIFIED,
-  POST_WORK_COMPLETED: ICONS.ICON_PHASE_POST_WORK,
   COMPLETE: ICONS.ICON_PHASE_COMPLETE,
 };
 
@@ -248,9 +244,6 @@ const PHASE_LABEL: Record<string, string> = {
   TODO: 'To Do',
   IN_PROGRESS: 'In Progress',
   AGENT_COMPLETE: 'Agent Complete',
-  AWAIT_HUMAN_ACTION: 'Await Human Action',
-  HUMAN_VERIFIED: 'Human Verified',
-  POST_WORK_COMPLETED: 'Post-Work Done',
   COMPLETE: 'Complete',
 };
 
@@ -601,6 +594,8 @@ function buildTierGroupMeta(displayed: Task[], labels?: Record<string, string>):
 }
 
 function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVanishing, isNestTarget, isGroupTarget, depth = 0, childCount, isExpanded, onToggleExpand, onClick, isSelected, selectMode, onSelectToggle, onStartSelect, onSetPhase, onDelete, onSetPriority, onUpdateTitle, onOpenSession, onStartSession, onExpandDetail, onClearFocus, onPinTask, onUnpinTask, onSetTier, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveToProject, isPinned, pinnedTier, searchContext, filterOverrideReason, isFadingOverride, groupInfo, onRenameGroup, onUngroupTask, onDissolveGroup, isGroupHidden, onUnhideGroup }: SortableTaskItemProps) {
+  // Live circle: error red / waiting red-pulse / running green-pulse.
+  const circleClass = useTaskCircle(task);
   const {
     attributes,
     listeners,
@@ -624,9 +619,14 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVan
   };
 
   const isDone = task.status === 'done' || task.phase === 'COMPLETE';
+  // Red row tint = "needs human action" (phase-driven, survives opening the
+  // task). The unread DOT below is the open-to-clear marker. Same split as the
+  // pinned/focus cards — the list rows must flag handed-back work too.
+  const needsAction = taskNeedsAction(task);
 
   const className = [
     'todo-panel-item',
+    needsAction ? 'todo-panel-item-needs-action' : '',
     isDone ? 'todo-panel-item-done' : '',
     isRecentlyDone ? 'todo-panel-item-recently-done' : '',
     isVanishing ? 'todo-panel-item-vanishing' : '',
@@ -846,7 +846,7 @@ function SortableTaskItem({ task, isFocused, isDetailOpen, isRecentlyDone, isVan
           )}
           {/* Phase icon — one click toggles To Do ↔ Complete */}
           <button
-            className={`task-phase-icon-btn ${taskCircleClass(task)}`}
+            className={`task-phase-icon-btn ${circleClass}`}
             onClick={(e) => {
               e.stopPropagation();
               onSetPhase(task.id, isDone ? 'TODO' : 'COMPLETE');
@@ -1461,7 +1461,6 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
                 background: parentTask.status === 'done' ? '#34c759'
                   : parentTask.phase === 'IN_PROGRESS' ? '#007aff'
                   : parentTask.phase === 'AGENT_COMPLETE' ? 'var(--error)'
-                  : parentTask.phase === 'AWAIT_HUMAN_ACTION' ? 'var(--error)'
                   : 'var(--fg-muted)',
               }}
             />
@@ -1621,7 +1620,6 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
                     background: child.status === 'done' ? '#34c759'
                       : child.phase === 'IN_PROGRESS' ? '#007aff'
                       : child.phase === 'AGENT_COMPLETE' ? 'var(--error)'
-                      : child.phase === 'AWAIT_HUMAN_ACTION' ? 'var(--error)'
                       : 'var(--fg-muted)',
                     opacity: child.status === 'done' ? 0.5 : 1,
                   }}
@@ -1913,6 +1911,8 @@ interface RecentCardProps {
 // ── SortableRecentCard — draggable recent-activity card with kebab menu ──
 
 function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDetailOpen, onClick, onPinTask, onUnpinTask, isPinned, pinnedTier, pinnedTierLabel, onSetPriority, onSetDate, onSetStartDate, onSetTier, onExpandDetail, onClearFocus, onOpenSession, onStartSession, onSetPhase, onUpdateTitle, onDelete, onMoveToProject }: RecentCardProps) {
+  // Live circle: error red / waiting red-pulse / running green-pulse.
+  const circleClass = useTaskCircle(task);
   // Static cards: done (tiers filter them out — a drag would silently vanish) and
   // pinned (already placed in a tier; that tier card is the draggable one). Static
   // cards register under a NAMESPACED sortable id — the raw task.id is already
@@ -1987,10 +1987,10 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
   }, [onUpdateTitle]);
 
   const isDone = task.status === 'done' || task.phase === 'COMPLETE';
-  // Read the STORED marker, never re-derive it from phase. Deriving is what made
-  // this card stay red after the list row's dot had already cleared: opening a
-  // task marks it read but does NOT change its phase, so a phase-derived card
-  // had no way to go quiet. One field, one truth, every surface.
+  // Two red affordances (2026-08-14): the row TINT follows the phase — a task at
+  // AGENT_COMPLETE stays red until the human acts (opening it
+  // is not acting). The DOT follows the stored unread marker and clears on open.
+  const needsAction = taskNeedsAction(task);
   const unread = !isDone && Boolean(task.unread);
   // Done cards show completion time (that's what "recently completed" means here)
   const ago = timeAgo((isDone && task.completed_at) || task.last_session_update || task.created_at);
@@ -2006,7 +2006,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
       ref={setNodeRef}
       style={style}
       data-task-id={task.id}
-      className={`todo-pinned-card${isFocused ? ' todo-pinned-card-active' : ''}${unread ? ' todo-pinned-card-unread' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}`}
+      className={`todo-pinned-card${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${isSessionOpen ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${isVanishing ? ' todo-card-vanishing' : ''}`}
       onClick={(e) => {
         if (isEditing) return;
         if ((e.target as HTMLElement).closest('.pinned-phase-picker')) return;
@@ -2034,7 +2034,7 @@ function SortableRecentCard({ task, isFocused, isVanishing, isSessionOpen, isDet
       )}
       {/* Phase icon — one click toggles To Do ↔ Complete */}
       <button
-        className={`task-phase-icon-btn pinned-phase-picker ${taskCircleClass(task)}`}
+        className={`task-phase-icon-btn pinned-phase-picker ${circleClass}`}
         onClick={(e) => {
           e.stopPropagation();
           onSetPhase?.(task.id, isDone ? 'TODO' : 'COMPLETE');
@@ -3872,9 +3872,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // `pinned: true` inherits the tier area's cross-project contract: pinning
       // means "keep this in front of me no matter which project tab I'm on". The
       // tab NAVIGATES and the Date select is a VIEW; neither may silently
-      // subtract from the answer to "show me my pins" — ★ is the default tab and
-      // Date defaults to "Now", so both would otherwise eat the pin list (a
-      // pinned task with a deferred due date used to disappear entirely).
+      // subtract from the answer to "show me my pins" — Date defaults to "Now",
+      // which would otherwise eat the pin list (a pinned task with a deferred
+      // due date used to disappear entirely).
       // Checked BEFORE the date filter for exactly that reason.
       if (taskQueryState.pinned === true && t.pinned) return true;
 
@@ -3960,8 +3960,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   //     IS a refinement — the user picked those project chips in the View panel);
   //   • the legacy toolbar selects, folded into that same query (phase, priority,
   //     tag), plus the due-date view filter.
-  // What it deliberately does NOT apply is the legacy nav PROJECT TAB and the ★
-  // tab: those navigate rather than refine. Used by the Pinned/Recent visibility
+  // What it deliberately does NOT apply is the legacy nav PROJECT TAB: it
+  // navigates rather than refines. Used by the Pinned/Recent visibility
   // set below, so a pin/recent card never disappears merely because the user
   // switched project tabs — pins are a cross-project focus view by design. NOT
   // used by search, which ignores all view controls (see `searchMatches`).

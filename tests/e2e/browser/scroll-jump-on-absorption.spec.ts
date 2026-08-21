@@ -121,19 +121,80 @@ const geom = (page: Page): Promise<Geom> => page.evaluate(() => {
   return { top: Math.round(el.scrollTop), sh: Math.round(el.scrollHeight), ch: Math.round(el.clientHeight) };
 });
 
-/** First row whose bottom edge is inside the viewport = what the reader sees. */
+/** The text the reader actually sees at the top of the viewport. Uses
+ *  elementFromPoint (deepest node at that pixel) instead of scanning row
+ *  wrappers: a streaming region can be ONE tall wrapper whose textContent
+ *  starts at its first paragraph, which made a wrapper-based anchor claim
+ *  "paragraph 0" while the reader was really at paragraph 31. Samples a few
+ *  y-offsets to skip inter-row padding. */
 const viewportAnchor = (page: Page): Promise<string | null> => page.evaluate(() => {
   const el = document.querySelector('.session-history') as HTMLElement;
-  const rows = el.querySelectorAll('[data-msg-index], .session-msg, .session-msg-bare');
   const cRect = el.getBoundingClientRect();
-  for (const r of rows) {
-    const rect = r.getBoundingClientRect();
-    if (rect.bottom > cRect.top + 10) return (r.textContent ?? '').slice(0, 60);
+  const x = cRect.left + cRect.width / 2;
+  for (const dy of [15, 40, 80, 130]) {
+    let n = document.elementFromPoint(x, cRect.top + dy) as HTMLElement | null;
+    // climb from the deepest node to the nearest block with real text
+    while (n && n !== el) {
+      const text = (n.textContent ?? '').trim();
+      if (text && n.getBoundingClientRect().height < 400) return text.slice(0, 60);
+      n = n.parentElement;
+    }
   }
   return null;
 });
 
 test.describe('Scroll teleport on turn-end absorption', () => {
+  test('wheel-up during live streaming escapes follow-bottom — no drag-back fight', async ({ page }) => {
+    // inc-1786690697303: while tokens flowed, debouncedScroll re-armed
+    // ignoreScrollUntil every content tick, so the user's wheel-up scroll
+    // events were swallowed at the ignore gate — isAtBottom never flipped and
+    // every follow-bottom path kept yanking the view back down against the
+    // user's fingers ("can't scroll up, screen jitters"). Fix: wheel-up flips
+    // isAtBottom synchronously at the INPUT event, which no gate can swallow.
+    await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
+      const url = new URL(route.request().url());
+      const since = url.searchParams.get('since');
+      if (since !== null) return route.fulfill({ json: { messages: [], cursor: base.length, delta: true, total: base.length } });
+      return route.fulfill({ json: { messages: base, cursor: base.length, delta: false, total: base.length } });
+    });
+    await mockSessionDetail(page);
+
+    await page.goto(`/sessions?id=${SESSION_ID}`);
+    await page.waitForSelector('.session-history .session-msg, .session-history .session-msg-bare', { timeout: 15000 });
+    await waitForWs(page);
+    await page.waitForTimeout(1500);
+
+    // Live turn: keep tokens flowing every 120ms for the whole test — the
+    // fight only reproduces while content churn keeps re-arming the gates.
+    let tok = 0;
+    const pump = setInterval(() => {
+      tok++;
+      void injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: `token burst ${tok} — streaming output flowing. `, msgId: 'turn-live' }).catch(() => {});
+    }, 120);
+    try {
+      await page.waitForTimeout(1200); // following bottom mid-stream
+
+      const box = (await page.locator('.session-history').boundingBox())!;
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      const gaps: number[] = [];
+      for (let i = 0; i < 20; i++) {
+        await page.mouse.wheel(0, -400);
+        await page.waitForTimeout(100);
+        gaps.push(await page.evaluate(() => {
+          const el = document.querySelector('.session-history') as HTMLElement;
+          return Math.round(el.scrollHeight - el.scrollTop - el.clientHeight);
+        }));
+      }
+      // After a few wheels the user must have ESCAPED (gap large) and STAYED
+      // escaped — a drag-back fight shows up as gap snapping back under 30.
+      const dragBacks = gaps.filter((g, i) => i > 3 && g < 30).length;
+      expect(dragBacks, `drag-backs after escape: gaps=${gaps.join(',')}`).toBe(0);
+      expect(gaps[gaps.length - 1]).toBeGreaterThan(500);
+    } finally {
+      clearInterval(pump);
+    }
+  });
+
   test('reader scrolled up mid-turn survives the absorption collapse without a jump to top', async ({ page }) => {
     // FIXED 2026-08-13 (inc-1786553756848): the reading-mode render-window
     // pin (readingPinStart in SessionChatHistory) freezes the truncation

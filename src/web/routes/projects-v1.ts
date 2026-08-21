@@ -94,8 +94,9 @@ projectsV1Router.post('/projects', async (req: Request, res: Response, next: Nex
     }
     const { registry } = await import('../../core/integration-registry.js')
     if (source !== undefined) {
-      // Any registered plugin id (plus 'local') is valid — no hardcoded list.
-      const validSources = new Set(['local', ...registry.getAll().map((p) => p.id)])
+      // Any registered SYNC plugin id (plus 'local') is valid — no hardcoded
+      // list. A ui/tools/skills-only plugin can't be a task source (no sync).
+      const validSources = new Set(['local', ...registry.getSyncPlugins().map((p) => p.id)])
       if (typeof source !== 'string' || !validSources.has(source)) {
         sendError(res, 400, 'bad_request', `source must be one of: ${[...validSources].join(', ')}`)
         return

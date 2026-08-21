@@ -17,6 +17,7 @@ export type WorkerOp =
   | 'newSession'        // ACP session/new → providerSessionId
   | 'loadSession'       // ACP session/load(providerSessionId) — cold resume
   | 'prompt'            // ACP session/prompt (mutating, commandId)
+  | 'steer'             // inject text into the LIVE turn (_session/steering ext, mutating, commandId)
   | 'cancel'            // ACP session/cancel (mutating, commandId, idempotent)
   | 'permissionResponse'// answer a pending session/request_permission (mutating, commandId)
   | 'setConfigOption'   // ACP session/set_config_option (mutating, commandId)
@@ -46,6 +47,9 @@ export interface WorkerError {
     | 'load_failed'            // session/load rejected (bad/expired providerSessionId)
     | 'no_session'             // op requires a session but none established
     | 'turn_active'            // prompt while a turn is already running
+    | 'no_turn'                // steer requires a live turn but none is running
+    | 'steer_unsupported'      // adapter did not advertise _meta.steering at initialize
+    | 'steer_race'             // turn ended mid-steer; message must re-queue as a prompt
     | 'protocol'               // ACP-level error from the adapter
     | 'internal'
   message: string
@@ -147,6 +151,19 @@ export type PromptParams =
 
 export interface CancelParams { commandId: string }
 
+/**
+ * Mid-turn steering (codex `turn/steer` via the adapter's `_session/steering`
+ * extension). The worker forwards the text into the LIVE turn; the provider
+ * folds it into the model's next inference step. Only valid while a turn is
+ * active and the adapter advertised `_meta.steering.supported` at initialize.
+ */
+export interface SteerParams {
+  commandId: string
+  /** Durable Walnut queue identity (same contract as PromptParams). */
+  walnutMessageId: string
+  text: string
+}
+
 export interface SetConfigOptionParams {
   commandId: string
   configId: string
@@ -229,6 +246,8 @@ export interface AcpCapabilitySnapshot {
   forkSession: boolean
   resumeSession: boolean
   closeSession: boolean
+  /** Adapter advertises `_meta.steering.supported` (codex-acp ≥1.2) — mid-turn text injection. */
+  steering: boolean
 }
 
 export const EMPTY_ACP_CAPABILITIES: AcpCapabilitySnapshot = {
@@ -242,6 +261,7 @@ export const EMPTY_ACP_CAPABILITIES: AcpCapabilitySnapshot = {
   forkSession: false,
   resumeSession: false,
   closeSession: false,
+  steering: false,
 }
 
 /** Reduce the versioned ACP initialize response to Walnut's stable capability contract. */
@@ -250,6 +270,7 @@ export function snapshotAcpCapabilities(response: unknown): AcpCapabilitySnapsho
   const agent = asRecord(root.agentCapabilities)
   const prompt = asRecord(agent.promptCapabilities)
   const session = asRecord(agent.sessionCapabilities)
+  const steering = asRecord(asRecord(root._meta).steering)
   return {
     loadSession: agent.loadSession === true,
     promptImages: prompt.image === true,
@@ -261,6 +282,7 @@ export function snapshotAcpCapabilities(response: unknown): AcpCapabilitySnapsho
     forkSession: isAdvertised(session.fork),
     resumeSession: isAdvertised(session.resume),
     closeSession: isAdvertised(session.close),
+    steering: steering.supported === true,
   }
 }
 
@@ -354,6 +376,8 @@ export type JournalMetaEvent =
   | { type: 'prompt-dispatched'; commandId: string }
   | { type: 'prompt-abandoned'; commandId: string; reason: 'worker-crash' | 'dispatch-failed' }
   | { type: 'prompt-accepted'; commandId: string; walnutMessageId: string; text: string }
+  /** A mid-turn steer joined the LIVE turn (owner commandId = the running prompt's). */
+  | { type: 'steer-accepted'; commandId: string; walnutMessageId: string; text: string }
   | { type: 'control-prompt-accepted'; commandId: string; purpose: 'self-report' }
   | {
       type: 'control-ended'

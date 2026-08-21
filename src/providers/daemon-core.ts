@@ -167,6 +167,13 @@ export interface DaemonCoreDeps<S extends CoreSessionData = CoreSessionData> {
    * disk. Bounded by the tailer carry cap in the adapter.
    */
   drainFoldFn?: (session: S) => void
+  /**
+   * Daemon-hook rule evaluation (see the Daemon hooks block below). Adapters
+   * pass their live pushed-config evaluator so core intercept points
+   * (session.reap) honor the same user-defined rules as the tailer points.
+   * Absent ⇒ no hooks ⇒ core intervenes in nothing.
+   */
+  hookActionsFn?: (point: DaemonHookPoint, ctx: Record<string, unknown>) => string[]
 }
 
 /** Outcome of a cmdSend attempt — mirrors the wire envelope sent to clients. */
@@ -414,14 +421,13 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     // path means next open(O_WRONLY|O_NONBLOCK) returns ENXIO instead.
     try { fs.unlinkSync(session.pipePath) } catch {}
 
-    // ── Enforcement point 3 (opt-in, see block above isDurableCronRequest):
-    // no adoptable durable crons. A durable task whose creator just died is
-    // the 2026-08-09 incident in waiting: the next lock holder in this
-    // directory would execute it as a bare user message. Strip our own rows
-    // (never a live sibling's) — the only enforcement point the model cannot
-    // decline. Gated on the same opt-in as points 1-2.
-    if (session.cwd && process.env.WALNUT_ENFORCE_SESSION_CRON === '1'
-      && process.env.WALNUT_ALLOW_DURABLE_CRON !== '1') {
+    // ── Hook point session.reap (see the Daemon hooks block below): no
+    // adoptable durable crons. A durable task whose creator just died is the
+    // 2026-08-09 incident in waiting: the next lock holder in this directory
+    // would execute it as a bare user message. Strip our own rows (never a
+    // live sibling's) — the only enforcement point the model cannot decline.
+    if (session.cwd && deps.hookActionsFn?.('session.reap', { sid, cwd: session.cwd })
+      ?.includes('strip-own-rows')) {
       try {
         const tasksPath = pathJoin(session.cwd, '.claude', 'scheduled_tasks.json')
         let raw: string | null = null
@@ -1162,7 +1168,113 @@ export function hasDiskCronInterest(args: {
 //      this is the point that actually holds the invariant.
 // Pure predicates here; adapters own the I/O. Mirrored in daemon-source.ts.
 
-/** Does this `can_use_tool` request (or CronCreate tool_use input) ask for a durable cron? */
+// ── Daemon hooks: declarative rules pushed from walnut (hooks.configure) ──
+//
+// A daemon hook is ONE YAML file in the user's ~/.open-walnut/hooks/ with
+// `runtime: daemon`. The server compiles every enabled file into this JSON
+// shape and pushes it over the RPC socket at connect + on change; the daemon
+// persists it (hooks.json next to sessions.json) and evaluates it at its
+// intercept points. Everything the daemon enforces therefore traces back to a
+// file the user placed on their own disk — nothing is compiled-in policy.
+// Default is ZERO hooks: without a pushed config the daemon intervenes in
+// nothing (the observation-only stream markers are the sole exception).
+//
+// Phase-1 points and actions (the interpreter is deliberately a tiny word
+// list, not a script engine — the daemon runs on remote hosts and must never
+// execute pushed code):
+//   cron.create   permission request, still deniable    ctx {input, mode, sid} → deny | log
+//   cron.created  tool_use echoed in the stream — job already on disk (bypass
+//                 sessions never emit a permission request)
+//                                                       ctx {input, mode, sid} → inject | log
+//   cron.fire     a task fired into this session        ctx {foreign, taskId, createdBySessionId, sid} → evict | log
+//   session.reap  session died (any path)               ctx {sid, cwd} → strip-own-rows | log
+// `when` is a flat map of dot-path → expected value, matched with strict
+// equality; a rule with no `when` always matches its point. `inject` sends the
+// point's FIXED corrective text (durableCronCorrectionMessage) — pushed rules
+// carry no free text into the model, by design.
+
+export type DaemonHookPoint = 'cron.create' | 'cron.created' | 'cron.fire' | 'session.reap'
+export type DaemonHookAction = 'deny' | 'inject' | 'evict' | 'strip-own-rows' | 'log'
+
+export interface DaemonHookRule {
+  on: DaemonHookPoint
+  when?: Record<string, unknown>
+  action: DaemonHookAction
+}
+
+export interface DaemonHooksConfig {
+  version: 1
+  /** Content hash of the compiled set — lets the daemon skip a no-op re-push. */
+  hash: string
+  hooks: Array<{ id: string; enabled: boolean; rules: DaemonHookRule[] }>
+}
+
+/** Dot-path lookup: get(ctx, 'input.durable') → ctx.input?.durable. */
+function dotGet(obj: unknown, dotPath: string): unknown {
+  let cur: unknown = obj
+  for (const key of dotPath.split('.')) {
+    if (cur == null || typeof cur !== 'object') return undefined
+    cur = (cur as Record<string, unknown>)[key]
+  }
+  return cur
+}
+
+/**
+ * Evaluate the pushed hook rules at one intercept point. Pure; returns the
+ * matched actions in hook order (deduped). Malformed entries are skipped —
+ * a bad rule must never take the tailer down. Mirrored in daemon-source.ts.
+ */
+export function evalDaemonHookRules(
+  config: DaemonHooksConfig | null | undefined,
+  point: DaemonHookPoint,
+  ctx: Record<string, unknown>,
+): DaemonHookAction[] {
+  if (!config || !Array.isArray(config.hooks)) return []
+  const out: DaemonHookAction[] = []
+  for (const hook of config.hooks) {
+    if (!hook || hook.enabled === false || !Array.isArray(hook.rules)) continue
+    for (const rule of hook.rules) {
+      if (!rule || rule.on !== point || typeof rule.action !== 'string') continue
+      if (rule.when && typeof rule.when === 'object') {
+        let matched = true
+        for (const [k, v] of Object.entries(rule.when)) {
+          if (dotGet(ctx, k) !== v) { matched = false; break }
+        }
+        if (!matched) continue
+      }
+      if (!out.includes(rule.action)) out.push(rule.action)
+    }
+  }
+  return out
+}
+
+/**
+ * The built-in session-only-cron rule set. Two consumers: the server compiles
+ * it when config sugar `session.cron_policy: 'session-only'` is on and the
+ * user has no own file for it; the daemon synthesizes it at boot when spawned
+ * with WALNUT_ENFORCE_SESSION_CRON=1 but no pushed hooks.json exists yet
+ * (back-compat: an old server sets only the env).
+ */
+export function builtinSessionOnlyCronHook(): DaemonHooksConfig['hooks'][number] {
+  return {
+    id: 'session-only-cron',
+    enabled: true,
+    rules: [
+      { on: 'cron.create', when: { 'input.durable': true }, action: 'deny' },
+      { on: 'cron.created', when: { 'input.durable': true }, action: 'inject' },
+      { on: 'cron.fire', when: { foreign: true }, action: 'evict' },
+      { on: 'session.reap', action: 'strip-own-rows' },
+    ],
+  }
+}
+
+/**
+ * Does this `can_use_tool` request (or CronCreate tool_use input) ask for a
+ * durable cron? No production callers since hooks-v1 — the predicate now lives
+ * in the built-in RULE (`when: {'input.durable': true}`, strict equality).
+ * Kept because tests replay captured CLI wire shapes through it to pin the
+ * exact predicate the rule encodes (durable === true, never truthy coercion).
+ */
 export function isDurableCronRequest(toolName: string | undefined, input: unknown): boolean {
   if (toolName !== 'CronCreate') return false
   const i = input as { durable?: unknown } | null | undefined
@@ -1267,10 +1379,16 @@ export function stripCronTaskById(
 /** Human-readable marker text for the stream-file scheduled_task_fire line.
  *  This is the ONLY thing a foreign fire produces for a human to read — it lands
  *  in the session timeline as a system row. Deliberately not sent to the model. */
-export function cronFireMarkerText(f: DetectedCronFire): string {
-  return f.foreign
-    ? `Orphaned scheduled task ${f.taskId} fired here — created by another session (${f.createdBySessionId}) that shares this directory. Walnut removed it so it cannot fire again.`
-    : `Scheduled task ${f.taskId} fired (created by this session).`
+export function cronFireMarkerText(f: DetectedCronFire, opts?: { evicted?: boolean }): string {
+  if (!f.foreign) return `Scheduled task ${f.taskId} fired (created by this session).`
+  // The removal claim must track what ACTUALLY happened: eviction is
+  // hook-gated (cron.fire → evict), so in the zero-hook default posture the
+  // row stays on disk and WILL fire again — saying "removed" there would tell
+  // the human the loop is handled when it is not.
+  const base = `Orphaned scheduled task ${f.taskId} fired here — created by another session (${f.createdBySessionId}) that shares this directory.`
+  return opts?.evicted
+    ? `${base} Walnut removed it so it cannot fire again.`
+    : `${base} It is still scheduled and may fire here again (enable the session-only-cron hook to auto-remove orphans, or CronDelete it).`
 }
 
 // ── Cloud bridge: restart decision (pure) ──

@@ -17,6 +17,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-ops-registry
 
 import { BUILTIN_SKILLS_DIR, WALNUT_HOME } from '../../src/constants.js'
 import { listOps, materializeBinding, executeOp } from '../../src/ops/index.js'
+import { PHASE_ORDER } from '../../src/core/phase.js'
 
 describe('ops registry — shape contract', () => {
   it('every op has a stable snake_case name, title, description, and tags', () => {
@@ -93,53 +94,42 @@ describe('ops registry — binding materialization', () => {
 
 describe('ops registry — arg validation (executor front door)', () => {
   it('rejects unknown args and type mismatches identically for every surface', async () => {
-    const bad = await executeOp('task_get', { id: 'x', nope: 1 }, { caller: 'human' })
+    const bad = await executeOp('task_get', { id: 'x', nope: 1 })
     expect(bad.ok).toBe(false)
     if (!bad.ok) expect(bad.message).toContain('Invalid arguments')
 
-    const missing = await executeOp('task_get', {}, { caller: 'human' })
+    const missing = await executeOp('task_get', {})
     expect(missing.ok).toBe(false)
   })
 
   it('the api passthrough refuses non-/api/ paths', async () => {
-    const r = await executeOp('api', { method: 'GET', path: '/etc/passwd' }, { caller: 'human' })
+    const r = await executeOp('api', { method: 'GET', path: '/etc/passwd' })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.message).toContain('/api/')
   })
 
-  it('enforces human completion and agent API boundaries before transport', async () => {
-    const human = await executeOp('task_complete', {}, { caller: 'human' })
-    expect(human.ok).toBe(false)
-    if (!human.ok) {
-      expect(human.message).toContain('Invalid arguments')
-      expect(human.message).not.toContain('human-only')
+  it('validates task_update phase against the WHOLE lifecycle — no caller distinction', async () => {
+    // The human-vs-AI gate is deliberately gone: both write every phase,
+    // COMPLETE included. Only the phase VALUE is still checked, and it is
+    // derived from PHASE_ORDER so a rename can't drift out of the schema.
+    for (const phase of PHASE_ORDER) {
+      const r = await executeOp('task_update', { id: 'x', phase })
+      // Reaches transport (no local policy rejection) — the id is fake, so the
+      // only possible failure is a server/transport error, never a phase error.
+      if (!r.ok) expect(r.message).not.toContain('Invalid arguments')
     }
 
-    for (const caller of ['agent', 'gateway'] as const) {
-      const complete = await executeOp('task_complete', { id: 'x' }, { caller })
-      expect(complete.ok).toBe(false)
-      if (!complete.ok) expect(complete.message).toContain('human-only')
-
-      const done = await executeOp('task_update', { id: 'x', status: 'done' }, { caller })
-      expect(done.ok).toBe(false)
-      if (!done.ok) expect(done.message).toContain('phase=AGENT_COMPLETE')
-
-      for (const phase of ['HUMAN_VERIFIED', 'POST_WORK_COMPLETED', 'COMPLETE']) {
-        const phaseWrite = await executeOp('task_update', { id: 'x', phase }, { caller })
-        expect(phaseWrite.ok).toBe(false)
-        if (!phaseWrite.ok) expect(phaseWrite.message).toContain('Agents may set')
-      }
-
-      const apiWrite = await executeOp('api', {
-        method: 'DELETE', path: '/api/v1/tasks/x',
-      }, { caller })
-      expect(apiWrite.ok).toBe(false)
-      if (!apiWrite.ok) expect(apiWrite.message).toContain('read-only for agents')
+    // The DELETED phases and a nonsense value must all fail the enum.
+    // ('WAIT' joined that list on 2026-08-18 — a blocked task is just TODO.)
+    for (const phase of ['HUMAN_VERIFIED', 'POST_WORK_COMPLETED', 'AWAIT_HUMAN_ACTION', 'WAIT', 'NOT_A_PHASE']) {
+      const r = await executeOp('task_update', { id: 'x', phase })
+      expect(r.ok, `${phase} must be rejected`).toBe(false)
+      if (!r.ok) expect(r.message).toContain('Invalid arguments')
     }
   })
 
   it('unknown op name yields a friendly catalog pointer, not a throw', async () => {
-    const r = await executeOp('definitely_not_an_op', {}, { caller: 'human' })
+    const r = await executeOp('definitely_not_an_op', {})
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.message).toContain('walnut tools list')
   })
@@ -234,26 +224,42 @@ describe('ops registry — parity with the live server (P4)', () => {
   it('spot-check: a live call through the executor round-trips', async () => {
     const addr = server.address()
     if (!addr || typeof addr === 'string') throw new Error('no port')
-    const r = await executeOp('walnut_status', {}, { apiBase: `http://127.0.0.1:${addr.port}`, caller: 'human' })
+    const r = await executeOp('walnut_status', {}, { apiBase: `http://127.0.0.1:${addr.port}` })
     expect(r.ok).toBe(true)
     if (r.ok) expect((r.result as { mode?: unknown }).mode).toBeDefined()
   })
 
-  it('propagates the caller so agents cannot reopen a human-completed task', async () => {
+  // Replaces the old caller-policy test: the human-vs-AI gate is gone, so the
+  // contract to pin is the opposite one — every caller drives the FULL
+  // lifecycle through the ops surface, COMPLETE included, and can move a task
+  // back out of COMPLETE. (The terminal-phase guard survives only for the
+  // background session machine, which does not run through here.)
+  it('a phase write drives the whole lifecycle, COMPLETE included', async () => {
     const addr = server.address()
     if (!addr || typeof addr === 'string') throw new Error('no port')
     const base = `http://127.0.0.1:${addr.port}`
-    const created = await executeOp('task_create', { title: 'caller policy probe' }, { apiBase: base, caller: 'human' })
+    const created = await executeOp('task_create', { title: 'lifecycle probe' }, { apiBase: base })
     expect(created.ok).toBe(true)
     const id = ((created as { result?: { task?: { id?: string } } }).result?.task?.id) ?? ''
     expect(id).toBeTruthy()
-    expect((await executeOp('task_complete', { id }, { apiBase: base, caller: 'human' })).ok).toBe(true)
 
-    const reopened = await executeOp('task_update', { id, phase: 'IN_PROGRESS' }, { apiBase: base, caller: 'agent' })
-    expect(reopened.ok).toBe(true)
-    const detail = await executeOp('task_get', { id }, { apiBase: base, caller: 'human' })
-    expect(detail.ok).toBe(true)
-    if (detail.ok) expect((detail.result as { task?: { phase?: string } }).task?.phase).toBe('COMPLETE')
+    const phaseOf = async (): Promise<string | undefined> => {
+      const detail = await executeOp('task_get', { id }, { apiBase: base })
+      expect(detail.ok).toBe(true)
+      return detail.ok ? (detail.result as { task?: { phase?: string } }).task?.phase : undefined
+    }
+
+    // The v1 PATCH used to reject phase=COMPLETE outright ("non-COMPLETE task
+    // phase"); it must now accept it like any other phase.
+    expect((await executeOp('task_update', { id, phase: 'COMPLETE' }, { apiBase: base })).ok).toBe(true)
+    expect(await phaseOf()).toBe('COMPLETE')
+
+    // …and back out again — nothing is one-way and nothing is reserved.
+    expect((await executeOp('task_update', { id, phase: 'IN_PROGRESS' }, { apiBase: base })).ok).toBe(true)
+    expect(await phaseOf()).toBe('IN_PROGRESS')
+
+    expect((await executeOp('task_complete', { id }, { apiBase: base })).ok).toBe(true)
+    expect(await phaseOf()).toBe('COMPLETE')
   })
 
   it('reads a shipped skill by directory name', async () => {
@@ -262,7 +268,7 @@ describe('ops registry — parity with the live server (P4)', () => {
     const result = await executeOp(
       'skill_read',
       { dirName: 'walnut-self-knowledge' },
-      { apiBase: `http://127.0.0.1:${addr.port}`, caller: 'agent' },
+      { apiBase: `http://127.0.0.1:${addr.port}` },
     )
     expect(result.ok).toBe(true)
     if (result.ok) {
@@ -275,29 +281,29 @@ describe('ops registry — parity with the live server (P4)', () => {
     const addr = server.address()
     if (!addr || typeof addr === 'string') throw new Error('no port')
     const base = `http://127.0.0.1:${addr.port}`
-    const created = await executeOp('task_create', { title: 'focus op probe' }, { apiBase: base, caller: 'human' })
+    const created = await executeOp('task_create', { title: 'focus op probe' }, { apiBase: base })
     expect(created.ok).toBe(true)
     const id = ((created as { result?: { task?: { id?: string } } }).result?.task?.id) ?? ''
     const prefix = id.slice(0, -1)
 
-    expect((await executeOp('task_pin_set', { id: prefix, pinned: true }, { apiBase: base, caller: 'agent' })).ok).toBe(true)
-    const tier = await executeOp('task_focus_tier_set', { id: prefix, tier: 'focus' }, { apiBase: base, caller: 'agent' })
+    expect((await executeOp('task_pin_set', { id: prefix, pinned: true }, { apiBase: base })).ok).toBe(true)
+    const tier = await executeOp('task_focus_tier_set', { id: prefix, tier: 'focus' }, { apiBase: base })
     expect(tier.ok).toBe(true)
     if (tier.ok) expect((tier.result as { focus_tasks?: string[] }).focus_tasks).toContain(id)
-    expect((await executeOp('task_pin_set', { id: prefix, pinned: false }, { apiBase: base, caller: 'agent' })).ok).toBe(true)
+    expect((await executeOp('task_pin_set', { id: prefix, pinned: false }, { apiBase: base })).ok).toBe(true)
   })
 
   it('handler-based ops still hit real endpoints (task_update round-trip)', async () => {
     const addr = server.address()
     if (!addr || typeof addr === 'string') throw new Error('no port')
     const base = `http://127.0.0.1:${addr.port}`
-    const created = await executeOp('task_create', { title: 'parity probe' }, { apiBase: base, caller: 'human' })
+    const created = await executeOp('task_create', { title: 'parity probe' }, { apiBase: base })
     expect(created.ok).toBe(true)
     const id = ((created as { result?: { task?: { id?: string } } }).result?.task?.id) ?? ''
     expect(id).toBeTruthy()
-    const updated = await executeOp('task_update', { id, priority: 'backlog' }, { apiBase: base, caller: 'human' })
+    const updated = await executeOp('task_update', { id, priority: 'backlog' }, { apiBase: base })
     expect(updated.ok).toBe(true)
-    const deleted = await executeOp('task_delete', { id }, { apiBase: base, caller: 'human' })
+    const deleted = await executeOp('task_delete', { id }, { apiBase: base })
     expect(deleted.ok).toBe(true)
   })
 })

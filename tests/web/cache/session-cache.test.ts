@@ -105,6 +105,8 @@ describe('global WS listener registration', () => {
       'session:tool-use',
       'session:tool-result',
       'session:system-event',
+      'session:permission-request',
+      'session:permission-resolved',
       'session:result',
       'session:error',
       'session:batch-completed',
@@ -206,6 +208,39 @@ describe('stream state', () => {
     expect(state!.isStreaming).toBe(true);
     // textBuffer should be the content of the last text block
     expect(state!.textBuffer).toBe('hello world');
+  });
+
+  it('INCIDENT inc-1786678797966: a FINISHED-turn snapshot must not seed the accumulator', () => {
+    // The exact server shape logged during the incident: send → markStreaming →
+    // resubscribe returns the PREVIOUS turn's blocks with isStreaming=true and
+    // completedLen = blocks.length (server says "all of these are finished").
+    trackSession('sid-dup');
+    const finishedTurn = [
+      { type: 'tool_call' as const, toolUseId: 'tu-old', name: 'Read', status: 'done' as const },
+      { type: 'text' as const, content: 'PREVIOUS ANSWER IN FULL', msgId: 'msg-old' },
+    ];
+    initStreamState('sid-dup', finishedTurn, true, 2);
+    // Buffer must be EMPTY — nothing in that snapshot belongs to the live turn.
+    expect(getStreamState('sid-dup')!.textBuffer).toBe('');
+
+    // Next turn's first delta must open a NEW block with only its own text,
+    // not "PREVIOUS ANSWER IN FULL" + new text concatenated.
+    fireEvent('session:text-delta', { sessionId: 'sid-dup', delta: 'new answer', msgId: 'msg-new' });
+    const state = getStreamState('sid-dup')!;
+    expect(state.textBuffer).toBe('new answer');
+    const texts = state.blocks.filter(b => b.type === 'text') as Array<{ content: string }>;
+    expect(texts.map(t => t.content)).toEqual(['PREVIOUS ANSWER IN FULL', 'new answer']);
+  });
+
+  it('a LIVE-turn snapshot still seeds the accumulator (continuity preserved)', () => {
+    trackSession('sid-live');
+    // completedLen=0 → the text block belongs to the turn currently streaming.
+    initStreamState('sid-live', [{ type: 'text' as const, content: 'partial', msgId: 'm1' }], true, 0);
+    expect(getStreamState('sid-live')!.textBuffer).toBe('partial');
+    fireEvent('session:text-delta', { sessionId: 'sid-live', delta: ' continued', msgId: 'm1' });
+    const state = getStreamState('sid-live')!;
+    expect(state.textBuffer).toBe('partial continued');
+    expect(state.blocks).toHaveLength(1);
   });
 
   it('initStreamState with no text blocks → empty textBuffer', () => {
@@ -425,7 +460,62 @@ describe('WS: session:system-event', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SECTION 9: WS Event Handlers — result (streaming done)
+// SECTION 9: WS Event Handlers — permission request/resolved
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('WS: session:permission-request and permission-resolved', () => {
+  it('caches a pending question and deduplicates periodic re-emits', () => {
+    trackSession('sid');
+    const event = {
+      sessionId: 'sid',
+      requestId: 'req-question',
+      toolName: 'AskUserQuestion',
+      input: {
+        questions: [{
+          question: 'Which deployment?',
+          options: [{ label: 'Staging', description: 'Deploy to staging' }],
+        }],
+      },
+      reason: 'Need a target',
+    };
+
+    fireEvent('session:permission-request', event);
+    fireEvent('session:permission-request', event);
+
+    const state = getStreamState('sid')!;
+    expect(state.blocks).toHaveLength(1);
+    expect(state.blocks[0]).toMatchObject({
+      type: 'permission',
+      requestId: 'req-question',
+      toolName: 'AskUserQuestion',
+      input: event.input,
+      reason: 'Need a target',
+    });
+  });
+
+  it('marks the cached question resolved', () => {
+    trackSession('sid');
+    fireEvent('session:permission-request', {
+      sessionId: 'sid',
+      requestId: 'req-question',
+      toolName: 'AskUserQuestion',
+    });
+    fireEvent('session:permission-resolved', {
+      sessionId: 'sid',
+      requestId: 'req-question',
+      allowed: true,
+    });
+
+    expect(getStreamState('sid')!.blocks[0]).toMatchObject({
+      type: 'permission',
+      requestId: 'req-question',
+      status: 'allowed',
+    });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SECTION 10: WS Event Handlers — result (streaming done)
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('WS: session:result', () => {

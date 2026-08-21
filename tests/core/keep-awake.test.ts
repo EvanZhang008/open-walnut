@@ -1,8 +1,7 @@
 /**
- * Keep-Awake monitor — decision logic, pmset assertion, hotspot fallback, and
- * fail-safe behavior. Every collaborator (pmset/networksetup exec, battery,
- * connectivity, session count, config, clock) is injected, so no test touches
- * the real machine's power management.
+ * Keep-Awake monitor — decision logic, pmset assertion, and fail-safe behavior.
+ * Every collaborator (pmset exec, battery, connectivity, session count, config,
+ * clock) is injected, so no test touches the real machine's power management.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
@@ -12,8 +11,6 @@ import {
   getSudoSetupCommand,
   checkSudoSetup,
   runSudoSetup,
-  rankHotspotCandidates,
-  listHotspotCandidates,
   resetKeepAwakeForTest,
   _setExecForTest,
   _setOnlineCheckForTest,
@@ -21,6 +18,7 @@ import {
   _setConfigReaderForTest,
   _setNowForTest,
   DEFAULT_BATTERY_FLOOR_PCT,
+  DEFAULT_OFFLINE_GRACE_MINUTES,
   type KeepAwakeConfig,
 } from '../../src/core/keep-awake.js';
 
@@ -60,15 +58,6 @@ function installWorld(): void {
     if (cmd === '/usr/bin/osascript') {
       return world.osascriptResult;
     }
-    if (cmd === '/usr/sbin/networksetup' && args[0] === '-listallhardwareports') {
-      return { ok: true, stdout: 'Hardware Port: Wi-Fi\nDevice: en0\n', stderr: '' };
-    }
-    if (cmd === '/usr/sbin/networksetup' && args[0] === '-listpreferredwirelessnetworks') {
-      return { ok: true, stdout: 'Preferred networks on en0:\n\tHomeNet\n\tEvan’s iPhone\n\tOffice Guest\n', stderr: '' };
-    }
-    if (cmd === '/usr/sbin/networksetup' && args[0] === '-setairportnetwork') {
-      return { ok: true, stdout: '', stderr: '' };
-    }
     return { ok: true, stdout: '', stderr: '' };
   });
 }
@@ -79,10 +68,6 @@ function disableSleepCalls(): string[] {
   return world.execCalls
     .filter((c) => c.cmd === '/usr/bin/sudo' && c.args.includes('disablesleep') && !c.args.includes('-l'))
     .map((c) => c.args[c.args.length - 1]);
-}
-
-function hotspotJoinCalls(): Array<{ cmd: string; args: string[] }> {
-  return world.execCalls.filter((c) => c.cmd === '/usr/sbin/networksetup' && c.args[0] === '-setairportnetwork');
 }
 
 const MINUTE = 60_000;
@@ -122,7 +107,7 @@ describe('decideKeepAwake', () => {
     battery: { pct: 80, onAc: false },
     batteryFloorPct: 30,
     offlineMinutes: 0,
-    offlineGraceMinutes: 30,
+    offlineGraceMinutes: 15,
     lingerMinutes: 5,
   };
 
@@ -162,9 +147,9 @@ describe('decideKeepAwake', () => {
   });
 
   it('releases once offline past the grace window', () => {
-    expect(decideKeepAwake({ ...base, offlineMinutes: 30 }))
+    expect(decideKeepAwake({ ...base, offlineMinutes: 15 }))
       .toEqual({ awake: false, reason: 'offline-too-long' });
-    expect(decideKeepAwake({ ...base, offlineMinutes: 29 }).awake).toBe(true);
+    expect(decideKeepAwake({ ...base, offlineMinutes: 14 }).awake).toBe(true);
   });
 });
 
@@ -208,60 +193,27 @@ darwinOnly('pollKeepAwakeOnce', () => {
     await pollKeepAwakeOnce(); // offline clock starts
     expect(getKeepAwakeState().holding).toBe(true);
 
-    world.nowMs += 29 * MINUTE;
+    world.nowMs += 14 * MINUTE;
     await pollKeepAwakeOnce();
     expect(getKeepAwakeState().holding).toBe(true);
 
-    world.nowMs += 2 * MINUTE; // 31 min offline total
+    world.nowMs += 2 * MINUTE; // 16 min offline total
     await pollKeepAwakeOnce();
     expect(getKeepAwakeState().reason).toBe('offline-too-long');
     expect(disableSleepCalls().at(-1)).toBe('0');
+    expect(DEFAULT_OFFLINE_GRACE_MINUTES).toBe(15);
   });
 
   it('a moment of connectivity resets the offline clock', async () => {
     world.online = false;
     await pollKeepAwakeOnce();
-    world.nowMs += 20 * MINUTE;
+    world.nowMs += 10 * MINUTE;
     world.online = true;
     await pollKeepAwakeOnce();
     world.online = false;
-    world.nowMs += 20 * MINUTE;
-    await pollKeepAwakeOnce(); // only 20 min into the NEW offline stretch
+    world.nowMs += 10 * MINUTE;
+    await pollKeepAwakeOnce(); // only 10 min into the NEW offline stretch
     expect(getKeepAwakeState().holding).toBe(true);
-  });
-
-  it('tries the configured hotspot after two offline polls, not immediately', async () => {
-    world.config = { enabled: true, hotspot_ssid: 'MyPhone', hotspot_password: 'pw123456' };
-    world.online = false;
-    await pollKeepAwakeOnce();
-    expect(hotspotJoinCalls()).toHaveLength(0); // poll 1: let macOS auto-join first
-
-    world.nowMs += MINUTE;
-    await pollKeepAwakeOnce();
-    expect(hotspotJoinCalls()).toHaveLength(1); // poll 2: force the hotspot
-    expect(hotspotJoinCalls()[0].args).toEqual(['-setairportnetwork', 'en0', 'MyPhone', 'pw123456']);
-  });
-
-  it('rate-limits hotspot retries to one per 5 minutes', async () => {
-    world.config = { enabled: true, hotspot_ssid: 'MyPhone' };
-    world.online = false;
-    for (let i = 0; i < 4; i++) {
-      await pollKeepAwakeOnce();
-      world.nowMs += MINUTE;
-    }
-    expect(hotspotJoinCalls()).toHaveLength(1);
-    world.nowMs += 5 * MINUTE;
-    await pollKeepAwakeOnce();
-    expect(hotspotJoinCalls()).toHaveLength(2);
-  });
-
-  it('never touches the hotspot without an SSID configured', async () => {
-    world.online = false;
-    for (let i = 0; i < 5; i++) {
-      await pollKeepAwakeOnce();
-      world.nowMs += MINUTE;
-    }
-    expect(hotspotJoinCalls()).toHaveLength(0);
   });
 
   it('reports needs-sudo (and does not claim holding) when pmset is refused', async () => {
@@ -309,28 +261,6 @@ darwinOnly('pollKeepAwakeOnce', () => {
     await pollKeepAwakeOnce();
     expect(getKeepAwakeState().reason).toBe('no-sessions');
     expect(disableSleepCalls().at(-1)).toBe('0');
-  });
-});
-
-describe('hotspot SSID discovery', () => {
-  it('ranks hotspot-looking names first, preserving saved order within groups', () => {
-    const out = 'Preferred networks on en0:\n\tHomeNet\n\tEvan’s iPhone\n\tOffice Guest\n\tMy Hotspot\n';
-    expect(rankHotspotCandidates(out)).toEqual([
-      { ssid: 'Evan’s iPhone', likely: true },
-      { ssid: 'My Hotspot', likely: true },
-      { ssid: 'HomeNet', likely: false },
-      { ssid: 'Office Guest', likely: false },
-    ]);
-  });
-
-  it('handles an empty saved list', () => {
-    expect(rankHotspotCandidates('Preferred networks on en0:\n')).toEqual([]);
-  });
-
-  it('listHotspotCandidates goes through the injected exec', async () => {
-    const candidates = await listHotspotCandidates();
-    expect(candidates[0]).toEqual({ ssid: 'Evan’s iPhone', likely: true });
-    expect(candidates).toHaveLength(3);
   });
 });
 

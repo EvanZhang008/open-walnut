@@ -82,6 +82,18 @@ describe('lastMainLaneText', () => {
   it('undefined when only lane text exists', () => {
     expect(lastMainLaneText([text('sub', undefined, 'p-1')])).toBeUndefined();
   });
+
+  it('INCIDENT inc-1786678797966: never seeds from a FINISHED turn (completedLen floor)', () => {
+    // Snapshot taken between the next turn's markStreaming and its first delta:
+    // blocks are entirely the PREVIOUS turn's, completedLen = blocks.length.
+    // Seeding the accumulator from that text made the next delta append to the
+    // old answer → one block rendering "<whole previous answer><new answer>".
+    const blocks = [tool('tu-old'), text('previous answer, in full')];
+    expect(lastMainLaneText(blocks, blocks.length)).toBeUndefined();
+    // Live block present past the boundary → that one seeds.
+    const mixed = [text('finished turn'), text('live partial')];
+    expect(lastMainLaneText(mixed, 1)).toBe(mixed[1]);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

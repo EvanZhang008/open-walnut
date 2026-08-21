@@ -713,12 +713,59 @@ export async function executeContinueSession(sessionId: string): Promise<Execute
 
 export interface SessionDetailResult {
   session: SessionRecord;
-  pendingPermissions: Array<{
-    requestId: string;
-    toolName?: string;
-    input?: Record<string, unknown>;
-    reason?: string;
-  }>;
+  pendingPermissions: SessionPendingPermission[];
+}
+
+export interface SessionPendingPermission {
+  requestId: string;
+  toolName?: string;
+  input?: Record<string, unknown>;
+  reason?: string;
+  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
+}
+
+/**
+ * Read pending permissions from the live provider when it is attached. During
+ * restart recovery the provider map is briefly empty, so a non-terminal
+ * record's durable pendingPermission is the fallback until attach completes.
+ */
+export async function getSessionPendingPermissions(
+  record: SessionRecord,
+): Promise<SessionPendingPermission[]> {
+  try {
+    const { sessionRunner } = await import('../../providers/claude-code-session.js');
+    const liveSession = record.engine === 'codex'
+      ? sessionRunner.findAcpSession(record.claudeSessionId)
+      : sessionRunner.findByClaudeId(record.claudeSessionId);
+    if (liveSession) return liveSession.getPendingPermissionRequests();
+
+    const canAttach = record.engine === 'codex'
+      && (record.process_status === 'running' || record.process_status === 'idle');
+    if (canAttach) {
+      void sessionRunner.findOrAttachAcpSession(record.claudeSessionId).catch((err: unknown) => {
+        log.session.warn('failed to restore pending Codex permissions in background', {
+          sessionId: record.claudeSessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+  } catch (err) {
+    log.session.warn('failed to read pending session permissions from live provider', {
+      sessionId: record.claudeSessionId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  const pending = record.pendingPermission;
+  const canRestore = record.process_status === 'running' || record.process_status === 'idle';
+  if (!pending || !canRestore) return [];
+  return [{
+    requestId: pending.requestId,
+    toolName: pending.toolName,
+    input: pending.input,
+    reason: pending.reason,
+    acpOptions: pending.acpOptions,
+  }];
 }
 
 /**
@@ -734,20 +781,7 @@ export async function getSessionDetail(sessionId: string): Promise<SessionDetail
   const { enrichWithLiveStatus, enrichWithHostnames } = await import('./session-enrich.js');
   const [enriched] = await enrichWithHostnames(await enrichWithLiveStatus([record]));
 
-  let pendingPermissions: SessionDetailResult['pendingPermissions'] = [];
-  try {
-    const { sessionRunner } = await import('../../providers/claude-code-session.js');
-    const liveSession = record.engine === 'codex'
-      ? await sessionRunner.findOrAttachAcpSession(sessionId)
-      : sessionRunner.findByClaudeId(sessionId);
-    pendingPermissions = liveSession?.hasPendingPermission
-      ? liveSession.getPendingPermissionRequests()
-      : [];
-  } catch (err) {
-    log.session.warn('failed to restore pending session permissions', {
-      sessionId, error: err instanceof Error ? err.message : String(err),
-    });
-  }
+  const pendingPermissions = await getSessionPendingPermissions(enriched);
   return { session: enriched, pendingPermissions };
 }
 
