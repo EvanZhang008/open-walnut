@@ -128,8 +128,15 @@ export function NotificationToaster() {
  */
 function PermissionToast({ n, onDismiss }: { n: Notification; onDismiss: () => void }) {
   const [busy, setBusy] = useState(false);
-  const [settled, setSettled] = useState<'allowed' | 'denied' | 'stale' | null>(null);
+  const [sent, setSent] = useState<'allowed' | 'denied' | 'stale' | null>(null);
   const [failed, setFailed] = useState(false);
+  // The record's own outcome wins over local state (same precedence as the panel
+  // card), so an 'expired' — session died, CLI withdrew the ask — renders as
+  // settled rather than as live buttons. Today the toaster only routes UNresolved
+  // permissions here and the provider dismisses the toast on resolution, so this
+  // is the belt to that braces: if either gate changes, the chip is already right
+  // instead of offering Approve/Deny for a dead request.
+  const settled = n.resolved ?? sent;
   const detail = permissionDetail(n);
   const requestId = requestIdOf(n);
   const acpOptions = validAcpOptions(n);
@@ -143,12 +150,12 @@ function PermissionToast({ n, onDismiss }: { n: Notification; onDismiss: () => v
     setFailed(false);
     try {
       await respondToPermission(n.sessionId, requestId, allow, opts?.message, opts?.optionId, opts?.answers);
-      setSettled(allow ? 'allowed' : 'denied');
+      setSent(allow ? 'allowed' : 'denied');
       setTimeout(onDismiss, RESOLVED_DISMISS_MS);
     } catch (err) {
       const status = (err as { status?: number }).status;
       if (status === 404 || status === 409) {
-        setSettled('stale');
+        setSent('stale');
         setTimeout(onDismiss, RESOLVED_DISMISS_MS);
       } else {
         setFailed(true);
@@ -225,7 +232,11 @@ function PermissionToast({ n, onDismiss }: { n: Notification; onDismiss: () => v
 
       {settled ? (
         <div className="nfc-perm-settled">
-          {settled === 'allowed' ? 'Approved' : settled === 'denied' ? 'Denied' : 'Already answered'}
+          {settled === 'allowed' ? 'Approved'
+            : settled === 'denied' ? 'Denied'
+            // Nobody answered and nobody can — neutral, never a decision.
+            : settled === 'expired' ? 'Session ended'
+            : 'Already answered'}
         </div>
       ) : (
         <div className="nfc-perm-actions">

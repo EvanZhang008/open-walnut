@@ -41,8 +41,10 @@ export interface NotificationRecord {
   sessionId?: string;
   /** Optional deep-link target for task-producing notifications (e.g. cron). */
   taskId?: string;
-  /** Permission notifications only — how the request ended, if it did. */
-  resolved?: 'allowed' | 'denied';
+  /** Permission notifications only — how the request ended, if it did.
+   *  'expired' = nobody ever answered and nobody ever can (session died, the
+   *  CLI withdrew the ask, or a newer request superseded it). */
+  resolved?: 'allowed' | 'denied' | 'expired';
 
   // ── Permission detail (so the feed can render + answer a request itself) ──
   /** Permission: the provider's request id. First-class instead of parsed back out of dedupKey. */
@@ -330,17 +332,24 @@ export async function dismissNotifications(
 /**
  * Stamp a permission notification with its outcome (found by `perm:<requestId>`
  * dedupKey). No-op if the record was already dismissed or aged off the feed.
+ *
+ * 'expired' is the outcome NOBODY chose: the session died, the CLI withdrew the
+ * request, or a newer ask superseded it. Without it an unanswerable request
+ * stayed `resolved: undefined` forever, which sectionOf() reads as "pending" —
+ * a permanent phantom in the Needs Action rail (the live prod record
+ * perm:7cc9e8ce… on a session that had been dead with status Error for days).
  */
 export async function resolvePermissionNotification(
   requestId: string,
-  resolved: 'allowed' | 'denied',
+  resolved: 'allowed' | 'denied' | 'expired',
 ): Promise<void> {
   return withWriteLock(() => withStore((store) => {
     const rec = store.notifications.find(n => n.dedupKey === `perm:${requestId}`);
     if (!rec || rec.resolved === resolved) return;
     rec.resolved = resolved;
-    // denied → 'info' (not warning/error): a deny is a neutral user decision,
-    // nothing needs fixing. NotificationProvider mirrors this mapping for the
+    // denied/expired → 'info' (not warning/error): a deny is a neutral user
+    // decision and an expiry is a neutral fact about a dead session — nothing
+    // needs fixing in either. NotificationProvider mirrors this mapping for the
     // optimistic client-side stamp — keep the two in sync.
     rec.severity = resolved === 'allowed' ? 'success' : 'info';
   }));

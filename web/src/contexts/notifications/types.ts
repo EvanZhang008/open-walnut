@@ -43,8 +43,10 @@ export interface Notification {
   sessionId?: string;
   /** deep-link target for task-producing notifications (e.g. cron). */
   taskId?: string;
-  /** permission notifications only — outcome once the request settles. */
-  resolved?: 'allowed' | 'denied';
+  /** permission notifications only — outcome once the request settles.
+   *  'expired' = nobody answered and nobody can (session died, CLI withdrew the
+   *  ask, a newer request superseded it). Settled history, not an action item. */
+  resolved?: 'allowed' | 'denied' | 'expired';
   action?: NotificationAction;
   onAction?: () => void;
   /** emit a browser Notification when the tab is hidden (permission only). */

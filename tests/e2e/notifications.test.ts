@@ -44,10 +44,13 @@ function delay(ms: number): Promise<void> {
 interface FeedEntry {
   id: string;
   kind: string;
+  severity: string;
   title: string;
   body?: string;
   read: boolean;
   dedupKey: string;
+  /** permission only — 'expired' = nobody answered and nobody can. */
+  resolved?: 'allowed' | 'denied' | 'expired';
   sessionId?: string;
   taskId?: string;
   requestId?: string;
@@ -314,6 +317,55 @@ describe('Notification feed API', () => {
     } finally {
       setErrorNotificationRepeatTtlMs(0);
     }
+  });
+
+  it("stamps 'expired' when the CLI WITHDRAWS a request (control_cancel_request)", async () => {
+    // The cancel emit carries `allowed: false` AND `cancelled: true`. The server
+    // handler used to stamp only on `typeof allowed === 'boolean'`… which this
+    // event satisfies, so the risk cuts both ways: the OLD build left the record
+    // unresolved forever (phantom in Needs Action), and a naive fix would label a
+    // withdrawal as the user's "Denied". It must read 'expired'.
+    bus.emit(EventNames.SESSION_PERMISSION_REQUEST, {
+      sessionId: 'sess-e2e-cancel',
+      requestId: 'req-e2e-cancel',
+      toolName: 'ExitPlanMode',
+      input: { plan: 'Step 1' },
+    }, ['*']);
+    await pollFeed((f) => f.feed.some((n) => n.dedupKey === 'perm:req-e2e-cancel'));
+
+    bus.emit(EventNames.SESSION_PERMISSION_RESOLVED, {
+      sessionId: 'sess-e2e-cancel',
+      requestId: 'req-e2e-cancel',
+      allowed: false,
+      cancelled: true,
+    }, ['*'], { source: 'session-runner' });
+
+    const body = await pollFeed((f) =>
+      f.feed.some((n) => n.dedupKey === 'perm:req-e2e-cancel' && n.resolved === 'expired'));
+    const rec = body.feed.find((n) => n.dedupKey === 'perm:req-e2e-cancel')!;
+    expect(rec.resolved).toBe('expired');
+    // Neutral severity: an expiry is a fact about a dead ask, not a failure.
+    expect(rec.severity).toBe('info');
+  });
+
+  it('still records a REAL user decision as allowed/denied', async () => {
+    bus.emit(EventNames.SESSION_PERMISSION_REQUEST, {
+      sessionId: 'sess-e2e-answer',
+      requestId: 'req-e2e-answer',
+      toolName: 'Bash',
+      input: { command: 'echo hi' },
+    }, ['*']);
+    await pollFeed((f) => f.feed.some((n) => n.dedupKey === 'perm:req-e2e-answer'));
+
+    bus.emit(EventNames.SESSION_PERMISSION_RESOLVED, {
+      sessionId: 'sess-e2e-answer',
+      requestId: 'req-e2e-answer',
+      allowed: true,
+    }, ['*'], { source: 'session-runner' });
+
+    const body = await pollFeed((f) =>
+      f.feed.some((n) => n.dedupKey === 'perm:req-e2e-answer' && n.resolved === 'allowed'));
+    expect(body.feed.find((n) => n.dedupKey === 'perm:req-e2e-answer')?.severity).toBe('success');
   });
 
   it('marks all read, clearing the unread count', async () => {

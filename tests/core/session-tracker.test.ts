@@ -1153,4 +1153,94 @@ describe('healStalePendingPermissions (incident a172ce49)', () => {
     expect(await healStalePendingPermissions()).toBe(0);
     expect((await getSessionByClaudeId('ssh-flap'))?.pendingPermission?.requestId).toBe('req-flap-1');
   });
+
+  // ── the NOTIFICATION half of the same death ─────────────────────────────
+  // Clearing the record was only half the job: the durable notification
+  // (`perm:<requestId>`) stayed resolved:undefined, which the panel reads as
+  // still-pending — a permanent phantom in Needs Action with Approve/Deny
+  // buttons that 404 against a session dead for days. Both clear paths now
+  // stamp 'expired' as they clear.
+
+  /** Poll the store: the stamp is fire-and-forget off the session write. */
+  async function waitForResolved(dedupKey: string, expected: string | undefined): Promise<string | undefined> {
+    const { listNotifications } = await import('../../src/core/notifications/store.js');
+    for (let i = 0; i < 40; i++) {
+      const { feed } = await listNotifications();
+      const rec = feed.find(n => n.dedupKey === dedupKey);
+      if (rec?.resolved === expected) return rec?.resolved;
+      await new Promise(r => setTimeout(r, 25));
+    }
+    const { feed } = await listNotifications();
+    return feed.find(n => n.dedupKey === dedupKey)?.resolved;
+  }
+
+  async function seedPermNotification(requestId: string, sessionId: string): Promise<void> {
+    const { addNotification } = await import('../../src/core/notifications/store.js');
+    await addNotification({
+      kind: 'permission', severity: 'warning', title: 'ExitPlanMode',
+      sessionId, dedupKey: `perm:${requestId}`, requestId,
+    });
+  }
+
+  it('terminal transition expires the NOTIFICATION and emits the settle event', async () => {
+    await seedPermNotification('req-notif-1', 'die-with-notif');
+    const seen: Array<Record<string, unknown>> = [];
+    bus.subscribe('session-status-contract-test', (event) => {
+      if (event.name === EventNames.SESSION_PERMISSION_RESOLVED) {
+        seen.push(event.data as Record<string, unknown>);
+      }
+    });
+
+    await createSessionRecord('die-with-notif', 'task-n1', 'walnut', undefined, { pid: 9020 });
+    await updateSessionRecord('die-with-notif', { pendingPermission: { ...PP, requestId: 'req-notif-1' } });
+    await updateSessionRecord('die-with-notif', {
+      process_status: 'error', status_reason: 'process_died', status_changed_by: 'health-monitor',
+    } as never);
+
+    expect(await waitForResolved('perm:req-notif-1', 'expired')).toBe('expired');
+
+    // The live-tab settle event: allowed:false for old consumers, expired:true
+    // as the thing that says nobody decided. Emitted after the tx commits, so
+    // give the setImmediate a tick.
+    await new Promise(r => setTimeout(r, 50));
+    const ev = seen.find(e => e.requestId === 'req-notif-1');
+    expect(ev).toMatchObject({
+      sessionId: 'die-with-notif', taskId: 'task-n1', requestId: 'req-notif-1',
+      allowed: false, expired: true,
+    });
+  });
+
+  it('boot heal expires the notification too, with NO bus event', async () => {
+    await seedPermNotification('req-notif-2', 'heal-with-notif');
+    const seen: unknown[] = [];
+    bus.subscribe('session-status-contract-test', (event) => {
+      if (event.name === EventNames.SESSION_PERMISSION_RESOLVED) seen.push(event.data);
+    });
+
+    // Prompt lands AFTER the terminal transition, so the boot heal is the path
+    // that clears it (same shape as the heal tests above).
+    await createSessionRecord('heal-with-notif', 'task-n2', 'walnut');
+    await updateSessionRecord('heal-with-notif', { process_status: 'stopped' });
+    await updateSessionRecord('heal-with-notif', { pendingPermission: { ...PP, requestId: 'req-notif-2' } });
+
+    const { healStalePendingPermissions } = await import('../../src/core/session-tracker.js');
+    expect(await healStalePendingPermissions()).toBe(1);
+    expect(await waitForResolved('perm:req-notif-2', 'expired')).toBe('expired');
+    // No browser exists at boot — an event would fan out to nobody.
+    await new Promise(r => setTimeout(r, 50));
+    expect(seen).toHaveLength(0);
+  });
+
+  it('remote_unreachable leaves the notification pending (expiry inherits the carve-out)', async () => {
+    await seedPermNotification('req-notif-3', 'flap-with-notif');
+    await createSessionRecord('flap-with-notif', 'task-n3', 'walnut', undefined, { pid: 9021 });
+    await updateSessionRecord('flap-with-notif', { pendingPermission: { ...PP, requestId: 'req-notif-3' } });
+    await updateSessionRecord('flap-with-notif', {
+      process_status: 'error', status_reason: 'remote_unreachable', status_changed_by: 'health-monitor',
+    } as never);
+
+    // The expiry only runs where the CLEAR runs, so the SSH-flap carve-out
+    // protects both copies of the question with no extra code.
+    expect(await waitForResolved('perm:req-notif-3', 'expired')).toBeUndefined();
+  });
 });

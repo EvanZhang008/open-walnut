@@ -347,6 +347,13 @@ export interface SessionPermissionResolvedEvent {
   sessionId: string;
   requestId: string;
   allowed: boolean;
+  /** The CLI withdrew the request (control_cancel_request), or a daemon
+   *  reconcile found it stale. Emitters have always sent this; the type didn't
+   *  say so, which is how the server's stamp path came to ignore it. */
+  cancelled?: boolean;
+  /** Nobody answered and nobody can: the session died / the ask was superseded.
+   *  `allowed:false` rides along for old consumers, but it is NOT a user deny. */
+  expired?: boolean;
 }
 
 export interface SessionSystemEventPayload {

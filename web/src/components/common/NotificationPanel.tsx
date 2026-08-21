@@ -449,6 +449,10 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
         <div className="notification-feed-item-resolved">
           {resolved === 'allowed' ? 'Approved'
             : resolved === 'denied' ? 'Denied'
+            // Nobody ever answered and nobody can: the session died or the CLI
+            // withdrew the ask. Neutral, same family as 'stale' below — the one
+            // thing it must not read as is a decision the user made.
+            : resolved === 'expired' ? 'Session ended'
             // 404/409: settled somewhere else and we never learned which way —
             // a neutral label, never a guessed outcome.
             : 'Already answered'}

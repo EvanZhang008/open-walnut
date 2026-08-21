@@ -2127,10 +2127,22 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // copy on dead sessions — leaving permanent "Waiting" badges and
     // unanswerable cards (incident a172ce49; 28 stale rows found). Runs after
     // listen, best-effort, off the startup critical path.
+    // -- …then expire the NOTIFICATION half of those same dead requests --
+    // The record-side clear above always left the durable notification
+    // (`perm:<requestId>`) unresolved, and the panel reads unresolved as
+    // "pending" — a permanent phantom in the Needs Action rail whose
+    // Approve/Deny 404s. Both live death paths now stamp as they clear; this
+    // sweep drains the BACKLOG. Chained after the heal (not parallel) so it
+    // sees healed state and can't mistake a mid-heal row for a live pending one.
     import('../core/session-tracker.js')
       .then(({ healStalePendingPermissions }) => healStalePendingPermissions())
       .then(healed => {
         if (healed > 0) log.web.info('startup: healed stale pendingPermission rows', { healed })
+      })
+      .then(() => import('../core/notifications/permission-expiry.js'))
+      .then(({ expireOrphanedPermissionNotifications }) => expireOrphanedPermissionNotifications())
+      .then(expired => {
+        if (expired > 0) log.web.info('startup: expired orphaned permission notifications', { expired })
       })
       .catch(err => log.web.warn('startup: pendingPermission heal failed', {
         error: err instanceof Error ? err.message : String(err),
@@ -2557,8 +2569,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         }
       }
     } else if (event.name === 'session:permission-resolved') {
-      const { sessionId, requestId, allowed } = event.data as {
-        sessionId?: string; requestId?: string; allowed?: boolean;
+      const { sessionId, requestId, allowed, cancelled, expired } = event.data as {
+        sessionId?: string; requestId?: string; allowed?: boolean; cancelled?: boolean; expired?: boolean;
       }
       if (sessionId) {
         // Update the buffered permission block status
@@ -2571,8 +2583,20 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           // is optional on the event — skip the stamp rather than persist a
           // missing value as "denied" (the store's idempotence check would then
           // block a later correct stamp).
-          if (typeof allowed === 'boolean') {
-            void resolvePermissionNotification(requestId, allowed ? 'allowed' : 'denied')
+          //
+          // A WITHDRAWN request (control_cancel_request, a daemon reconcile
+          // dropping a stale ask, the terminal-transition expiry) gets
+          // 'expired': nobody decided, so recording it as the user's "Denied"
+          // would be a lie. cancelled/expired are checked FIRST for exactly
+          // that reason — those emitters ALSO send `allowed: false` to keep the
+          // event's required field populated, so a boolean-first branch would
+          // swallow the flag and mislabel every withdrawal as a deny.
+          const outcome: 'allowed' | 'denied' | 'expired' | null =
+            (cancelled === true || expired === true) ? 'expired'
+            : typeof allowed === 'boolean' ? (allowed ? 'allowed' : 'denied')
+            : null
+          if (outcome) {
+            void resolvePermissionNotification(requestId, outcome)
               .catch(err => log.web.warn('failed to resolve permission notification', { sessionId, error: err instanceof Error ? err.message : String(err) }))
           }
         }

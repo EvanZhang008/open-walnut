@@ -44,6 +44,14 @@ describe('sectionOf', () => {
     expect(sectionOf(n({ kind: 'permission', dedupKey: 'perm:r2', resolved: 'denied' }))).toBe('all');
   });
 
+  it("drops an EXPIRED permission out of Needs Action too (the phantom fix)", () => {
+    // The bug this pins: a request whose session died stayed resolved:undefined,
+    // so it sat in Needs Action forever with buttons that 404. 'expired' is a
+    // truthy resolved, so the existing branch handles it — asserted here so a
+    // future refactor that enumerates outcomes can't drop it back to 'action'.
+    expect(sectionOf(n({ kind: 'permission', dedupKey: 'perm:r3', resolved: 'expired' }))).toBe('all');
+  });
+
   it('routes operation errors to Errors and automation kinds to Automation', () => {
     expect(sectionOf(n({ kind: 'operation-error' }))).toBe('errors');
     expect(sectionOf(n({ kind: 'cron' }))).toBe('automation');
@@ -90,6 +98,15 @@ describe('sectionCounts', () => {
 
   it('is all-zero for an empty feed', () => {
     expect(sectionCounts([])).toEqual({ action: 0, errors: 0, automation: 0, all: 0 });
+  });
+
+  it('an EXPIRED permission stops inflating the Needs Action badge', () => {
+    const withExpired = [
+      ...feed,
+      n({ kind: 'permission', dedupKey: 'perm:d', read: false, resolved: 'expired' }),
+    ];
+    // Still 2 (perm:a + perm:b) — the dead one is history, not a to-do.
+    expect(sectionCounts(withExpired).action).toBe(2);
   });
 });
 

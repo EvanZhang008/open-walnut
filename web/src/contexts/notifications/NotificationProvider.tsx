@@ -80,7 +80,7 @@ export interface FeedRecord {
   dedupKey: string;
   sessionId?: string;
   taskId?: string;
-  resolved?: 'allowed' | 'denied';
+  resolved?: 'allowed' | 'denied' | 'expired';
   requestId?: string;
   toolName?: string;
   input?: Record<string, unknown>;
@@ -466,17 +466,26 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   // The feed entry is stamped with the outcome instead — the panel shows it as
   // settled and drops the approve/deny actions (mirrors the server-side stamp).
   useEvent('session:permission-resolved', (data) => {
-    const { requestId, allowed } = data as { requestId?: string; allowed?: boolean };
+    const { requestId, allowed, cancelled, expired } = data as {
+      requestId?: string; allowed?: boolean; cancelled?: boolean; expired?: boolean;
+    };
     if (!requestId) return;
     dismissToastByDedup(`perm:${requestId}`);
-    // `allowed` is optional on the event — never stamp a missing outcome as
-    // "denied". Severity mapping (allowed→success, denied→info) mirrors
-    // resolvePermissionNotification in src/core/notifications/store.ts.
-    if (typeof allowed !== 'boolean') return;
-    const resolved = allowed ? 'allowed' as const : 'denied' as const;
+    // Outcome mapping mirrors resolvePermissionNotification in
+    // src/core/notifications/store.ts (allowed→success, denied/expired→info),
+    // AND the same precedence as the server's stamp: a WITHDRAWN request
+    // (cancelled/expired — session died, CLI took the ask back, superseded) also
+    // carries `allowed: false`, so checking the boolean first would label it as
+    // the user's "Denied". A missing outcome altogether is never stamped: it
+    // would block the later correct stamp via the idempotence check.
+    const resolved: 'allowed' | 'denied' | 'expired' | null =
+      (cancelled === true || expired === true) ? 'expired'
+      : typeof allowed === 'boolean' ? (allowed ? 'allowed' : 'denied')
+      : null;
+    if (!resolved) return;
     setFeed(prev => prev.map(f => (
       f.dedupKey === `perm:${requestId}` && f.resolved !== resolved
-        ? { ...f, resolved, severity: allowed ? 'success' : 'info' }
+        ? { ...f, resolved, severity: resolved === 'allowed' ? 'success' : 'info' }
         : f
     )));
   });

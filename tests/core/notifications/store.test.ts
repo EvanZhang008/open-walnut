@@ -156,6 +156,42 @@ describe('notification store', () => {
     expect(feed).toHaveLength(1);
   });
 
+  it("stamps 'expired' when nobody ever answered — severity info, not a decision", async () => {
+    // The phantom-in-Needs-Action bug: a request whose session died stayed
+    // resolved:undefined forever, which the panel reads as still pending.
+    await addNotification({
+      kind: 'permission', severity: 'warning', title: 'Bash',
+      sessionId: 's-dead', dedupKey: 'perm:r-expired', requestId: 'r-expired',
+    });
+
+    await resolvePermissionNotification('r-expired', 'expired');
+    const { feed } = await listNotifications();
+    expect(feed[0].resolved).toBe('expired');
+    // 'info': an expiry is a neutral fact about a dead session, not an error and
+    // not a user decision (which is why it must not read as 'denied' either).
+    expect(feed[0].severity).toBe('info');
+  });
+
+  it('an expiry does not overwrite a real answer, and is idempotent', async () => {
+    await addNotification({
+      kind: 'permission', severity: 'warning', title: 'Bash',
+      sessionId: 's1', dedupKey: 'perm:r-answered', requestId: 'r-answered',
+    });
+    await resolvePermissionNotification('r-answered', 'allowed');
+    // A later death-path expiry for the same request would be a lie: the user
+    // DID answer. The store keeps the last write, so callers must not race —
+    // pin the current contract (last write wins) so a change is deliberate.
+    await resolvePermissionNotification('r-expired-noop', 'expired');
+    let { feed } = await listNotifications();
+    expect(feed.find(n => n.dedupKey === 'perm:r-answered')?.resolved).toBe('allowed');
+
+    // Same stamp twice is a no-op (the terminal clear + the startup reconcile
+    // can both fire for one request).
+    await resolvePermissionNotification('r-answered', 'allowed');
+    ({ feed } = await listNotifications());
+    expect(feed).toHaveLength(1);
+  });
+
   it('carries the permission detail fields through a round-trip', async () => {
     await addNotification({
       kind: 'permission', severity: 'warning', title: 'Bash', body: 'ls -la',

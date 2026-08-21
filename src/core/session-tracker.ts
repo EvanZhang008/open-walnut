@@ -957,8 +957,17 @@ export async function healStalePendingPermissions(): Promise<number> {
   let healed = 0;
   for (const row of rows) {
     const record = rowToSession(row);
+    const requestId = record.pendingPermission?.requestId;
     try {
       await updateSessionRecord(record.claudeSessionId, { pendingPermission: undefined });
+      // Expire the notification half too. NO bus emit at boot: this runs before
+      // any browser has connected (and a reload fetches GET /api/notifications
+      // anyway), so an event would fan out to zero subscribers. The startup
+      // reconcile in server.ts covers the inverse case — a notification whose
+      // record was ALREADY healed by an earlier boot.
+      expirePermissionNotificationOnDeath(
+        record.claudeSessionId, record.taskId, requestId, { emitBusEvent: false },
+      );
       healed++;
       log.session.info('healed stale pendingPermission on terminal session', {
         sessionId: record.claudeSessionId,
@@ -1307,6 +1316,58 @@ export async function importSessionRecord(opts: {
 }
 
 /**
+ * Expire the FEED half of a permission the session record just lost.
+ *
+ * The record's pendingPermission and the notification (`perm:<requestId>`) are
+ * two copies of the same question, and only the record's copy was ever cleared
+ * on death — so the notification stayed `resolved: undefined`, which the panel
+ * reads as still-pending: a permanent phantom in the Needs Action rail offering
+ * Approve/Deny buttons that 404.
+ *
+ * Fire-and-forget on purpose: the caller is a SYNCHRONOUS in-transaction mutator
+ * (applyUpdateToSession) and the session write must never wait on — or fail
+ * because of — a notifications.json read-modify-write.
+ *
+ * Import-cycle safety: core/notifications/store.ts imports only constants,
+ * utils/fs, and logging (all leaves) — it never reaches back into session code —
+ * so a static import here would be acyclic. It stays dynamic anyway to keep the
+ * store off the import path of every module that pulls in the tracker.
+ */
+function expirePermissionNotificationOnDeath(
+  sessionId: string,
+  taskId: string | undefined,
+  requestId: string | undefined,
+  options: { emitBusEvent?: boolean } = {},
+): void {
+  if (!requestId) return;
+  import('./notifications/store.js')
+    .then(({ resolvePermissionNotification }) => resolvePermissionNotification(requestId, 'expired'))
+    .catch(err => log.session.warn('failed to expire permission notification', {
+      sessionId, requestId, error: err instanceof Error ? err.message : String(err),
+    }));
+  if (options.emitBusEvent === false) return;
+  // Settle any LIVE tab: the frontend's existing session:permission-resolved
+  // handler dismisses the toast and stamps the feed entry, so a tab that is open
+  // right now converges without a refresh. `allowed: false` keeps the event's
+  // required field honest for old consumers; `expired: true` is what tells the
+  // new ones this was nobody's decision.
+  //
+  // setImmediate, not a direct emit: the caller runs INSIDE the session
+  // SQLite transaction, and bus.emit invokes every subscriber synchronously —
+  // so a direct emit would let a subscriber observe (or read around) a session
+  // row that hasn't committed yet.
+  setImmediate(() => {
+    bus.emit(EventNames.SESSION_PERMISSION_RESOLVED, {
+      sessionId,
+      ...(taskId ? { taskId } : {}),
+      requestId,
+      allowed: false,
+      expired: true,
+    }, ['*'], { source: 'session-tracker' });
+  });
+}
+
+/**
  * Apply the patch to `session` in-place and produce the `lastActiveAt`-bumped
  * final state. Shared by updateSessionRecord + updateSessionRecordConditionally
  * so status_history ring-buffer + terminal PID clear + lastActiveAt bump behave
@@ -1478,7 +1539,9 @@ function applyUpdateToSession(
   // EXCEPTION: 'remote_unreachable' is connectivity loss, not death — the CLI
   // is likely still alive and genuinely waiting; clearing would lose a real
   // question on every SSH flap (same liveness-unknown carve-out as the
-  // reconciler's phase guard).
+  // reconciler's phase guard). The notification EXPIRY below inherits that
+  // carve-out for free: it only runs where the clear runs, so an SSH flap
+  // leaves both copies of the question intact.
   if (
     updates.process_status
     && updates.process_status !== prevStatus
@@ -1493,7 +1556,9 @@ function applyUpdateToSession(
       process_status: session.process_status,
       status_reason: session.status_reason ?? null,
     });
+    const expiredRequestId = session.pendingPermission.requestId;
     session.pendingPermission = undefined;
+    expirePermissionNotificationOnDeath(session.claudeSessionId, session.taskId, expiredRequestId);
   }
   session.lastActiveAt = now;
   commitStatusVersion(session, beforeStatus, now);
