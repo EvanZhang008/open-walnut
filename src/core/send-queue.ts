@@ -219,10 +219,24 @@ export async function flushSendQueue(): Promise<number> {
         });
       } else {
         const reason = String(reply.error ?? 'unknown');
-        // "no primary server connected" = the daemon is up but its walnut
-        // server is down. Nothing can enqueue yet, so this is transport, not a
-        // domain refusal — keep the row and stop.
-        if (reason.includes('no primary server connected') || reason.startsWith('unknown command')) {
+        // Transport-shaped failures — the primary never definitively answered,
+        // so keep the row and stop (order matters; identical retries are
+        // exactly-once by messageId):
+        // - "no primary server connected": daemon up, its walnut server down.
+        // - "unknown command": pre-relay daemon; self-heals on upgrade.
+        // - "timed out": the daemon's own relay to the primary hit its budget.
+        //   2026-08-21 incident: the Mac was ASLEEP, its bridge socket half
+        //   alive, so relays reached the clouddev daemon and then timed out
+        //   waiting on the Mac — and this branch used to read that as a
+        //   domain REJECTION and DROP the banked send. Two user messages were
+        //   permanently lost after the phone had already been told 202. A
+        //   timeout is never a refusal; only an explicit domain answer is.
+        if (
+          reason.includes('no primary server connected')
+          || reason.startsWith('unknown command')
+          || reason.toLowerCase().includes('timed out')
+          || reason.toLowerCase().includes('timeout')
+        ) {
           log.session.info('send-queue: primary not ready for banked sends yet — retrying later', {
             opId: op.opId, reason,
           });

@@ -281,4 +281,28 @@ describe('phone send during a bridge outage (CLOUD_MODE)', () => {
     // Still banked — this is transport, not a refusal.
     expect(await queuedSessionSendCount()).toBe(1)
   })
+
+  it('keeps the row when the daemon relay times out waiting on the primary (2026-08-21 sleeping-Mac loss)', async () => {
+    // The Mac was asleep with its bridge socket half alive: relays reached the
+    // remote daemon, then timed out waiting on the Mac. The old flush read
+    // "timed out" as a domain rejection and DROPPED two banked sends the phone
+    // had already been told 202 for. A timeout is never a refusal.
+    bridgeDown()
+    expect((await postMessage({ text: 'zzz', messageId: 'qm-mobile-00000000000a' })).status).toBe(202)
+    bridgeConnected = true
+    bridgeRequestMock.mockImplementation(async (_host: string, cmd: string) => {
+      if (cmd === 'session.message') return { ok: false, error: 'session.message: primary server timed out' }
+      return { ok: true }
+    })
+    expect(await flushSendQueue()).toBe(0)
+    expect(await queuedSessionSendCount()).toBe(1)
+
+    // Primary wakes → the same row delivers exactly-once.
+    bridgeRequestMock.mockImplementation(async (_host: string, cmd: string) => {
+      if (cmd === 'session.message') return { ok: true }
+      return { ok: true }
+    })
+    expect(await flushSendQueue()).toBe(1)
+    expect(await queuedSessionSendCount()).toBe(0)
+  })
 })
