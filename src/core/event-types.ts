@@ -338,6 +338,8 @@ export interface SessionPermissionRequestEvent {
   toolName: string;
   input?: Record<string, unknown>;
   reason?: string;
+  /** ACP adapters offer their own option list instead of a plain allow/deny. */
+  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
 }
 
 /** ACP dialect: ≈ session/request_permission outcome. */

@@ -65,7 +65,7 @@ describe('notification center feed', () => {
   it('stamps a resolved permission so the UI can settle the card', async () => {
     await addNotification({
       kind: 'permission', severity: 'warning', title: 'ExitPlanMode',
-      body: 'Session needs permission approval', sessionId: 'sess-2',
+      body: 'Plan ready for review', sessionId: 'sess-2',
       dedupKey: 'perm:req-1',
     });
     await resolvePermissionNotification('req-1', 'allowed');
@@ -84,7 +84,7 @@ describe('notification center feed', () => {
     // The 60s re-ask path re-adds an unresolved permission under the same key.
     await addNotification({
       kind: 'permission', severity: 'warning', title: 'ExitPlanMode',
-      body: 'Session needs permission approval', sessionId: 'sess-2',
+      body: 'Plan ready for review', sessionId: 'sess-2',
       dedupKey: 'perm:req-1',
     });
     r = await api('GET', '/api/notifications');

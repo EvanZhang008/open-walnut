@@ -127,6 +127,8 @@ test('notification panel: Remote Hosts rows say Connected/Disconnected, never Id
   const panel = page.locator('.notification-panel')
   await expect(panel).toBeVisible()
 
+  // System-zone cards live behind the System rail tab now.
+  await panel.locator('.nfc-rail-btn', { hasText: 'System' }).click()
   // Wait for the System zone to finish loading (health fetch).
   await expect(panel.locator('.notification-card-label', { hasText: 'Data Backup' })).toBeVisible({ timeout: 10_000 })
 
@@ -135,7 +137,7 @@ test('notification panel: Remote Hosts rows say Connected/Disconnected, never Id
   })
   if (await hostsCard.count() === 0) {
     // Fixture without configured hosts: the panel must still render cleanly.
-    await expect(panel.locator('.notification-panel-body')).toBeVisible()
+    await expect(panel.locator('.nfc-body')).toBeVisible()
     test.info().annotations.push({ type: 'note', description: 'No daemons card in fixture — presence-only check.' })
   } else {
     await expect(hostsCard).toBeVisible()

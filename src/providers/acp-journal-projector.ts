@@ -126,6 +126,10 @@ export class AcpJournalProjector {
   private tools = new Map<string, ToolIdentity>()
   private turnHasError = false
   private terminalCommands = new Set<string>()
+  /** providerRequestId → optionId → ACP option `kind`, harvested from the
+   *  request frame so an ANSWER can tell an allow from a reject. Dropped as
+   *  soon as the request resolves. */
+  private permissionOptionKinds = new Map<string, Map<string, string>>()
 
   constructor(readonly runtimeId: string) {}
 
@@ -192,14 +196,28 @@ export class AcpJournalProjector {
         this.finishTurn()
         return out
       }
-      case 'permission-answered':
+      case 'permission-answered': {
+        // `optionId !== null` only means "the user picked SOMETHING" — a REJECT
+        // is a non-null optionId too (codex: reject_once / revise_plan /
+        // decline), so that test stamped "Approved" on every denial. The
+        // request frame's own option list carries each option's ACP `kind`,
+        // which is the authoritative signal; the id prefix is the fallback for
+        // an answer whose request frame isn't in this fold (mid-journal attach).
+        const optionId = event.optionId
+        const kind = optionId === null
+          ? undefined
+          : this.permissionOptionKinds.get(event.providerRequestId)?.get(optionId)
+        this.permissionOptionKinds.delete(event.providerRequestId)
         return [{
           type: 'permission-resolved',
           ts: record.ts,
           requestId: event.providerRequestId,
-          allowed: event.optionId !== null,
+          allowed: optionId !== null
+            && !(kind ?? optionId).startsWith('reject'),
         }]
+      }
       case 'permission-auto-cancelled':
+        this.permissionOptionKinds.delete(event.providerRequestId)
         return [{
           type: 'permission-resolved',
           ts: record.ts,
@@ -228,6 +246,7 @@ export class AcpJournalProjector {
     if (frame.method === 'session/request_permission') {
       const params = frame.params
       if (!frame.providerRequestId || !params?.toolCall) return []
+      this.permissionOptionKinds.set(frame.providerRequestId, optionKinds(params.options))
       return [{
         type: 'permission-request',
         ts: record.ts,
@@ -607,6 +626,17 @@ function asInput(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined
+}
+
+/** optionId → ACP option `kind` (allow_once | allow_always | reject_once | reject_always). */
+function optionKinds(options: unknown[] | undefined): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const option of options ?? []) {
+    if (!option || typeof option !== 'object') continue
+    const { optionId, kind } = option as { optionId?: unknown; kind?: unknown }
+    if (typeof optionId === 'string' && typeof kind === 'string') out.set(optionId, kind)
+  }
+  return out
 }
 
 function toolResultText(update: AcpUpdate): string {

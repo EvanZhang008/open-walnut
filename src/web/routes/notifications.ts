@@ -2,7 +2,9 @@
  * Notification center routes — the durable feed behind the bell icon.
  *
  * Backs the persistent feed + unread badge in NotificationPanel. Realtime toasts
- * still arrive over WebSocket (cron:notification, session:permission-request);
+ * still arrive over WebSocket (`cron:notification`, and `notification:new` /
+ * `notification:updated` — a permission toast now rides the notification frame
+ * carrying the durable record, not the raw `session:permission-request`);
  * this endpoint is the on-load snapshot + the read/dismiss mutators so the feed
  * and unread count survive a refresh. Store lives in core/notifications/store.ts.
  */

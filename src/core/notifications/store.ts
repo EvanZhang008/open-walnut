@@ -43,6 +43,36 @@ export interface NotificationRecord {
   taskId?: string;
   /** Permission notifications only — how the request ended, if it did. */
   resolved?: 'allowed' | 'denied';
+
+  // ── Permission detail (so the feed can render + answer a request itself) ──
+  /** Permission: the provider's request id. First-class instead of parsed back out of dedupKey. */
+  requestId?: string;
+  /** Permission: the tool asking for approval. */
+  toolName?: string;
+  /** Permission: COMPACTED tool input (see permission-detail.ts) — enough to render, bounded in size. */
+  input?: Record<string, unknown>;
+  /** Permission: the provider's decision reason, when it supplied one. */
+  reason?: string;
+  /** Permission (ACP): the option list the adapter offered. */
+  acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
+
+  // ── Shared enrichment: enough context to act without opening the session ──
+  /** Resolved hostname / host alias of the session this notification came from. */
+  host?: string;
+  /** Friendly label for the session (task title > session title > description > slug). */
+  sessionTitle?: string;
+  /** Project the session/task belongs to. */
+  project?: string;
+
+  // ── Occurrence folding (upsertNotification) ──
+  /** Occurrences folded into this record. Absent = 1.
+   *  On a log-bridge record this counts the 60s WINDOWS in which the error
+   *  fired, not raw occurrences: the bridge's TTL absorber swallows repeats
+   *  inside a window and never reaches the store, so the absorber's TTL and
+   *  this counter are the same knob. Same for publishErrorNotification. */
+  count?: number;
+  /** Latest occurrence (epoch ms). `timestamp` stays first-seen. */
+  lastTimestamp?: number;
 }
 
 interface NotificationsStore {
@@ -167,6 +197,79 @@ export async function addNotification(input: NewNotification): Promise<Notificat
     };
     store.notifications.push(record);
     return record;
+  }));
+}
+
+/** Optional detail fields a refresh copies over when the caller supplies them.
+ *  Additive BY DESIGN: a refresh can SET a field but never clear one — an
+ *  `undefined` in the input means "the caller didn't look it up this time"
+ *  (enrichment is best-effort), not "the value is gone". */
+const REFRESHABLE_DETAIL_KEYS = [
+  'body', 'sessionId', 'taskId',
+  'requestId', 'toolName', 'input', 'reason', 'acpOptions',
+  'host', 'sessionTitle', 'project',
+] as const;
+
+/**
+ * Append OR fold-in-place, and tell the caller which happened.
+ *
+ * `addNotification` is deliberately "first write wins" (a permission re-ask must
+ * not bump the feed). A repeating ERROR wants the opposite: one entry that shows
+ * the latest body and how many times it happened. So this variant refreshes the
+ * existing record, bumps `count`, stamps `lastTimestamp`, keeps `id`/`timestamp`
+ * (first-seen) so the UI's identity is stable, and moves the record to the tail
+ * so a live recurring error can't be evicted by the 200-cap.
+ *
+ * `kind: 'permission'` is REJECTED here: a permission re-ask is the same pending
+ * request, so folding it would make `count` read as "this happened N times" for
+ * something that happened once. The permission path stays on addNotification.
+ */
+export async function upsertNotification(
+  input: NewNotification,
+): Promise<{ record: NotificationRecord; outcome: 'inserted' | 'refreshed' }> {
+  if (input.kind === 'permission') {
+    throw new Error(
+      'upsertNotification does not accept kind:"permission" — a permission re-ask is not a '
+      + 'recurrence (it would inflate count). Use addNotification (first-write-wins).',
+    );
+  }
+  return withWriteLock(() => withStore((store) => {
+    const idx = store.notifications.findIndex(n => n.dedupKey === input.dedupKey);
+    if (idx === -1) {
+      const record: NotificationRecord = {
+        ...input,
+        id: input.id ?? generateId(),
+        timestamp: input.timestamp ?? Date.now(),
+        read: input.read ?? false,
+      };
+      store.notifications.push(record);
+      return { record, outcome: 'inserted' as const };
+    }
+
+    const existing = store.notifications[idx];
+    existing.title = input.title;
+    existing.severity = input.severity;
+    for (const key of REFRESHABLE_DETAIL_KEYS) {
+      const value = input[key];
+      if (value !== undefined) (existing as unknown as Record<string, unknown>)[key] = value;
+    }
+    existing.count = (existing.count ?? 1) + 1;
+    existing.lastTimestamp = input.timestamp ?? Date.now();
+    // Deliberate: a re-FIRE re-badges the bell — the thing is happening again,
+    // so it's news even if the user already read the earlier occurrence. The
+    // frontend's sticky-read behavior applies to a re-LOAD of the same
+    // occurrence, which is a different event.
+    existing.read = false;
+    // A stamped outcome only means anything for a permission request; on any
+    // other kind a fresh occurrence means the thing is happening again.
+    if (existing.resolved && existing.kind !== 'permission') delete existing.resolved;
+    // Tail = most recent, which is also what the cap keeps.
+    store.notifications.splice(idx, 1);
+    store.notifications.push(existing);
+    // Return a SHALLOW CLONE, not the live store object: callers broadcast the
+    // record after awaits, and a concurrent fold would otherwise mutate the
+    // payload under them (count/body changing between read and send).
+    return { record: { ...existing }, outcome: 'refreshed' as const };
   }));
 }
 

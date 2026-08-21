@@ -133,8 +133,9 @@ test('notification panel does not contain Embedding or Search Index card', async
   const panelTitle = panel.locator('.notification-panel-title')
   await expect(panelTitle).toContainText('Notifications')
 
-  // Grab the panel text content and verify no Embedding/Search Index section
-  const panelBody = panel.locator('.notification-panel-body')
+  // The Embedding Search health card lives behind the System rail tab now —
+  // the DEFAULT view (what this test pins) must not surface it.
+  const panelBody = panel.locator('.nfc-body')
   await expect(panelBody).toBeVisible()
   const bodyText = await panelBody.textContent()
 

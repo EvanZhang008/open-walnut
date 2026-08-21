@@ -21,7 +21,7 @@
 
 import { setErrorNotificationSink, type ErrorNotifyPayload } from '../../logging/subsystem.js';
 import { redactSensitiveText } from '../../logging/redact.js';
-import { addNotification } from './store.js';
+import { upsertNotification } from './store.js';
 import { log } from '../../logging/index.js';
 
 /** Storm absorber: skip repeat sink calls for the same key within this window. */
@@ -39,9 +39,8 @@ function pruneRecent(now: number): void {
 }
 
 /** djb2 — same cheap non-crypto hash external sync plugins use for comment dedup.
- *  Shared by every notification dedupKey producer (this bridge + server.ts's
- *  hand-published error notifications) so identical bodies hash identically. */
-export function djb2(s: string): string {
+ *  Keys this bridge's dedup fingerprint so identical failures hash identically. */
+function djb2(s: string): string {
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
   return h.toString(36);
@@ -115,17 +114,16 @@ export function installLogErrorNotifications(
     const sessionId = typeof payload.meta?.sessionId === 'string' ? payload.meta.sessionId : undefined;
     const taskId = typeof payload.meta?.taskId === 'string' ? payload.meta.taskId : undefined;
 
-    void addNotification({
+    void upsertNotification({
       kind: 'operation-error', severity: 'error', title, body,
       timestamp: now, dedupKey,
       ...(sessionId ? { sessionId } : {}),
       ...(taskId ? { taskId } : {}),
-    }).then((record) => {
-      // Only broadcast when this call actually created the record (dedup
-      // returns the existing one) — repeats must not re-toast the UI.
-      if (record.timestamp === now && broadcast) {
-        broadcast('notification:new', record);
-      }
+    }).then(({ record, outcome }) => {
+      // A first occurrence toasts; a later one (after the TTL window) patches the
+      // existing card's count/body in place rather than re-toasting the UI.
+      if (!broadcast) return;
+      broadcast(outcome === 'inserted' ? 'notification:new' : 'notification:updated', record);
     }).catch((err) => {
       // Persist failed → drop the TTL entry so the next occurrence retries
       // instead of being suppressed for a full window with nothing durable.

@@ -578,12 +578,6 @@ select {
   background: var(--accent-subtle);
 }
 
-.notification-panel-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px;
-}
-
 .notification-card {
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -689,20 +683,7 @@ select {
   word-break: break-word;
 }
 
-/* ===== Notification feed (Recent zone in the panel) ===== */
-
-.notification-section-label {
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--fg-muted);
-  margin: 4px 0 8px;
-}
-
-.notification-section-label:not(:first-child) {
-  margin-top: 16px;
-}
+/* ===== Notification feed (the panel's detail pane) ===== */
 
 .notification-feed-empty {
   font-size: 12px;
@@ -812,12 +793,6 @@ select {
   color: var(--fg);
 }
 
-.notification-section-label--row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
 .notification-clear-all {
   border: none;
   background: none;
@@ -899,28 +874,6 @@ select {
   flex-basis: 100%;
   font-size: 11px;
   color: var(--error, #d64545);
-}
-
-.notification-retry-btn {
-  margin-top: 10px;
-  width: 100%;
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 500;
-  color: #fff;
-  background: var(--accent);
-  border: none;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.notification-retry-btn:hover {
-  opacity: 0.9;
-}
-
-.notification-retry-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 /* ── Setup Banner ── */
@@ -28333,4 +28286,392 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 @keyframes task-circle-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.45; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Notification center v2 (`nfc-` = notification center) — rail + detail panes,
+   rich permission cards, answerable permission toasts.
+   Appended at the END of the file on purpose: the notification panel/toast
+   rules above are shared with other work in flight.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Two panes need more room than the 320px single column. Kept under 600px so
+   the panel still reads as a slide-out beside the sidebar, not a takeover.
+   The min() is load-bearing: the panel sits at left:200px, so a fixed 560px hung
+   60px off-screen in the 641-768px band (where the sidebar is still laid out but
+   this block's mobile query had not kicked in yet). */
+.notification-panel.nfc-panel-wide { width: min(560px, calc(100vw - 200px)); }
+
+/* Body: rail + detail. Unlike .vd-body (whose height comes from an inline
+   maxHeight, so it needs `flex: 0 1 <basis>`), this panel is a fixed slide-out
+   pinned top:0/bottom:0 — the viewport already determines the height, so
+   flex:1 + min-height:0 is the correct pairing here. */
+.nfc-body {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  flex: 1;
+  min-height: 0;
+}
+
+.nfc-rail {
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+.nfc-rail-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-left: 2px solid transparent;
+  font-size: 12.5px;
+  color: var(--fg-secondary);
+  transition: background 0.1s;
+}
+
+.nfc-rail-btn:hover { background: var(--bg-secondary); color: var(--fg); }
+
+.nfc-rail-btn.nfc-active {
+  background: var(--bg-secondary);
+  border-left-color: var(--accent);
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.nfc-rail-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.nfc-rail-badge {
+  margin-left: auto;
+  flex-shrink: 0;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Pending permissions block a session — warning-styled, never the calm accent. */
+.nfc-rail-badge.nfc-warn { background: var(--warning); }
+
+/* The System zone has nothing to count — a dot marks "something in here is
+   unhealthy" (failing backup, broken index) without inventing a number. */
+.nfc-rail-dot {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.nfc-rail-dot.nfc-warn { background: var(--warning); }
+
+.nfc-detail {
+  overflow-y: auto;
+  padding: 12px;
+  min-width: 0;
+}
+
+/* Clear All moved into the header row (the rail owns the section labels now). */
+.nfc-header-clear { margin-left: auto; margin-right: 10px; }
+
+/* Narrow viewports: the panel goes full-width, so the rail becomes a horizontal
+   tab strip on top — 150px of vertical rail would eat a third of a phone screen.
+   768px, not 640px: that is where the sidebar transforms off-screen, and the two
+   breakpoints disagreeing is exactly what left the 641-768px band clipped. */
+@media (max-width: 768px) {
+  /* left:0 belongs with the width: the base rule only zeroes the offset at
+     640px, so full-width alone would restore the same overflow one band up. */
+  .notification-panel.nfc-panel-wide,
+  .notification-panel.nfc-panel-wide.sidebar-collapsed {
+    left: 0;
+    width: 100vw;
+    border-right: none;
+  }
+  .nfc-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .nfc-rail {
+    display: flex;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0 4px;
+    gap: 2px;
+  }
+  .nfc-rail-btn {
+    width: auto;
+    flex: 0 0 auto;
+    border-left: none;
+    border-bottom: 2px solid transparent;
+    padding: 9px 10px;
+    white-space: nowrap;
+  }
+  .nfc-rail-btn.nfc-active {
+    border-left-color: transparent;
+    border-bottom-color: var(--accent);
+  }
+}
+
+/* ── Card context + detail blocks (shared by permission + error cards) ── */
+
+.nfc-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.nfc-chip {
+  max-width: 100%;
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nfc-card-sub {
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  word-break: break-word;
+}
+
+.nfc-card-cmd {
+  margin-top: 5px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--fg);
+  cursor: pointer;
+  word-break: break-all;
+  /* Two lines by default — a long heredoc must not push the buttons off-screen. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.nfc-card-cmd.nfc-expanded {
+  -webkit-line-clamp: unset;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.nfc-card-path {
+  margin-top: 5px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+  word-break: break-all;
+}
+
+.nfc-card-plan { margin-top: 5px; }
+
+.nfc-card-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.nfc-card-pre {
+  margin: 6px 0 0;
+  padding: 8px;
+  max-height: 240px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--fg-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Occurrence fold: 36 identical failures are one row plus how often. */
+.nfc-count-badge {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+/* A permission card is a decision surface, not a link — no hover-navigate. */
+.notification-feed-item.nfc-perm-card { cursor: default; }
+
+/* ── Inline AskUserQuestion answer form (panel) ── */
+
+.nfc-answer {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.nfc-answer-q + .nfc-answer-q {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.nfc-answer-text {
+  margin: 3px 0 6px;
+  font-size: 12.5px;
+  color: var(--fg);
+  line-height: 1.4;
+}
+
+.nfc-answer-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.nfc-answer-opt {
+  padding: 4px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  font-size: 12px;
+  color: var(--fg-secondary);
+  cursor: pointer;
+}
+
+.nfc-answer-opt:hover:not(:disabled) { border-color: var(--accent); color: var(--fg); }
+
+.nfc-answer-opt.nfc-picked {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.nfc-answer-opt:disabled { opacity: 0.5; cursor: default; }
+
+.nfc-answer-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.nfc-answer-input:focus { outline: none; border-color: var(--accent); }
+
+/* ── Answerable permission toast (top-right) ── */
+
+.nfc-perm-toast { max-width: 380px; }
+
+.nfc-perm-context {
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-bottom: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nfc-perm-cmd {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  padding: 5px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg);
+  word-break: break-all;
+  margin-bottom: 8px;
+}
+
+.nfc-perm-ask {
+  font-size: 12.5px;
+  color: var(--fg-secondary);
+  line-height: 1.4;
+  margin-bottom: 8px;
+  word-break: break-word;
+}
+
+.nfc-perm-path {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  color: var(--fg-secondary);
+  margin-bottom: 8px;
+  word-break: break-all;
+}
+
+.nfc-perm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.nfc-perm-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.nfc-perm-btn.nfc-perm-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.nfc-perm-btn:disabled { opacity: 0.5; cursor: default; }
+.nfc-perm-btn:not(:disabled):hover { opacity: 0.9; }
+.nfc-perm-more { color: var(--fg-muted); }
+
+.nfc-perm-settled {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.nfc-perm-error {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--error);
 }

@@ -110,6 +110,55 @@ describe('log-error → notification bridge', () => {
     expect(feed).toHaveLength(0);
   });
 
+  it('a repeat INSIDE the TTL window never reaches the store, so nothing is broadcast', async () => {
+    const events: string[] = [];
+    uninstallLogErrorNotifications();
+    installLogErrorNotifications((name) => { events.push(name); });
+
+    const logger = createSubsystemLogger('bridge-test');
+    logger.error('storming error', { error: 'same cause' });
+    await feedAfterFlush();
+    for (let i = 0; i < 10; i++) logger.error('storming error', { error: 'same cause' });
+    await new Promise(r => setTimeout(r, 200));
+
+    const { feed } = await listNotifications();
+    expect(feed).toHaveLength(1);
+    expect(feed[0].count).toBeUndefined(); // suppressed repeats are not counted
+    expect(events).toEqual(['notification:new']);
+  });
+
+  it('a repeat AFTER the TTL expires refreshes the record and broadcasts notification:updated', async () => {
+    const events: Array<{ name: string; count?: number; body?: string }> = [];
+    uninstallLogErrorNotifications();
+    installLogErrorNotifications((name, data) => {
+      const record = data as { count?: number; body?: string };
+      events.push({ name, count: record.count, body: record.body });
+    });
+
+    const logger = createSubsystemLogger('bridge-test');
+    logger.error('flaky sync failed', { error: 'timeout' });
+    await feedAfterFlush();
+
+    // The TTL map is a broadcast-storm guard only; past the window the same
+    // error must fold into the existing record instead of creating a new card.
+    // Shift the clock (not the timers — the awaits below need real ones).
+    const realNow = Date.now;
+    const shift = 61_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + shift);
+    try {
+      logger.error('flaky sync failed', { error: 'timeout' });
+      await new Promise(r => setTimeout(r, 200));
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    const { feed } = await listNotifications();
+    expect(feed).toHaveLength(1);
+    expect(feed[0].count).toBe(2);
+    expect(events.map(e => e.name)).toEqual(['notification:new', 'notification:updated']);
+    expect(events[1].count).toBe(2);
+  });
+
   it('sink exceptions never break the logger', async () => {
     const { setErrorNotificationSink } = await import('../../../src/logging/subsystem.js');
     setErrorNotificationSink(() => { throw new Error('sink exploded'); });

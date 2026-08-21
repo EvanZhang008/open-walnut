@@ -66,6 +66,48 @@ describe('GET /api/notifications', () => {
     expect(body).toContain('CLI run');
     expect(body.length).toBeLessThanOrEqual(601); // 600 + ellipsis
   });
+
+  it('passes the permission detail + fold fields through untouched', async () => {
+    await addNotification({
+      kind: 'permission', severity: 'warning', title: 'Bash',
+      body: 'npm run build', sessionId: 's1', taskId: 't1',
+      dedupKey: 'perm:r1',
+      requestId: 'r1', toolName: 'Bash', input: { command: 'npm run build' },
+      reason: 'not on the allowlist',
+      acpOptions: [{ optionId: 'allow', kind: 'allow_once', name: 'Allow' }],
+      host: 'devbox', sessionTitle: 'Fix the parser', project: 'walnut',
+      count: 3, lastTimestamp: 1_700_000_000_000,
+    });
+
+    const res = await request(createApp()).get('/api/notifications');
+    expect(res.status).toBe(200);
+    expect(res.body.feed[0]).toMatchObject({
+      requestId: 'r1',
+      toolName: 'Bash',
+      input: { command: 'npm run build' },
+      reason: 'not on the allowlist',
+      acpOptions: [{ optionId: 'allow', kind: 'allow_once', name: 'Allow' }],
+      host: 'devbox',
+      sessionTitle: 'Fix the parser',
+      project: 'walnut',
+      count: 3,
+      lastTimestamp: 1_700_000_000_000,
+      body: 'npm run build',
+    });
+  });
+
+  it('does not truncate `input` (already compacted at write time)', async () => {
+    // sanitizeBody only rewrites `body`; a 700-char plan preview must survive.
+    const plan = 'p'.repeat(700);
+    await addNotification({
+      kind: 'permission', severity: 'warning', title: 'ExitPlanMode',
+      body: 'Plan ready for review', dedupKey: 'perm:r2',
+      toolName: 'ExitPlanMode', input: { plan },
+    });
+
+    const res = await request(createApp()).get('/api/notifications');
+    expect((res.body.feed[0].input as { plan: string }).plan).toHaveLength(700);
+  });
 });
 
 describe('POST /api/notifications/mark-read', () => {

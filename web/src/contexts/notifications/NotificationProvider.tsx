@@ -3,7 +3,8 @@
  *
  * Consolidates what used to be 6 independent toast/notification implementations.
  * It owns:
- *   - a unified toast stack (top-right), with per-kind auto-dismiss
+ *   - a unified toast stack (top-right), with per-kind auto-dismiss, gated by the
+ *     SHOULD_TOAST policy (routine automation goes to the feed only)
  *   - dedup by dedupKey (replaces PermissionToast's seenRequestIds ref)
  *   - the persistent feed + unread count (loaded from /api/notifications, then
  *     appended to live via the same WS events)
@@ -24,14 +25,22 @@ import { log } from '@/utils/log';
 import { stripEntityRefsToText, extractFirstRefIds } from '@/utils/markdown';
 import {
   type Notification, type NotificationInput,
-  TOAST_DURATION_MS, IS_PERSISTENT, MAX_FEED_BODY_CHARS,
+  TOAST_DURATION_MS, IS_PERSISTENT, MAX_FEED_BODY_CHARS, SHOULD_TOAST,
 } from './types';
+import { effectiveTs } from './notification-model';
 
 interface NotificationContextValue {
   /** Current top-right toast stack. */
   toasts: Notification[];
   /** Durable feed (persistent notifications), newest-last. */
   feed: Notification[];
+  /**
+   * true once the initial GET /api/notifications merge has finished — success OR
+   * failure. Consumers that make a ONE-TIME decision from the feed (the panel
+   * choosing its landing section on open) need to know the feed is merely empty
+   * so far vs. actually empty, otherwise a slow GET lands them on the wrong tab.
+   */
+  loaded: boolean;
   /** Count of unread feed entries. */
   unreadCount: number;
   /** Push a notification from any source. Returns the resolved id (or null if deduped away). */
@@ -55,8 +64,12 @@ const NotificationContext = createContext<NotificationContextValue | null>(null)
  *  interval (30min) so a persistent failure toasts about twice an hour, not 36x. */
 const AGENT_ERROR_TOAST_THROTTLE_MS = 10 * 60 * 1000;
 
-/** Server feed record shape from GET /api/notifications. */
-interface FeedRecord {
+/** Server feed record shape from GET /api/notifications (and the WS twins).
+ *  Everything below `resolved` is server enrichment — absent on records written
+ *  before that half deployed, so every reader treats it as optional.
+ *  Exported so the browser spec seeds fixtures against THIS type instead of
+ *  re-declaring a copy that can silently drift from the wire shape. */
+export interface FeedRecord {
   id: string;
   kind: Notification['kind'];
   severity: Notification['severity'];
@@ -68,11 +81,46 @@ interface FeedRecord {
   sessionId?: string;
   taskId?: string;
   resolved?: 'allowed' | 'denied';
+  requestId?: string;
+  toolName?: string;
+  input?: Record<string, unknown>;
+  reason?: string;
+  acpOptions?: Notification['acpOptions'];
+  host?: string;
+  sessionTitle?: string;
+  project?: string;
+  count?: number;
+  lastTimestamp?: number;
+}
+
+/** Copy the enrichment fields off a wire record, omitting absent ones so a
+ *  spread never overwrites a present value with undefined. */
+function enrichmentOf(r: FeedRecord): Partial<Notification> {
+  return {
+    ...(r.requestId ? { requestId: r.requestId } : {}),
+    ...(r.toolName ? { toolName: r.toolName } : {}),
+    ...(r.input ? { input: r.input } : {}),
+    ...(r.reason ? { reason: r.reason } : {}),
+    ...(r.acpOptions ? { acpOptions: r.acpOptions } : {}),
+    ...(r.host ? { host: r.host } : {}),
+    ...(r.sessionTitle ? { sessionTitle: r.sessionTitle } : {}),
+    ...(r.project ? { project: r.project } : {}),
+    ...(typeof r.count === 'number' ? { count: r.count } : {}),
+    ...(typeof r.lastTimestamp === 'number' ? { lastTimestamp: r.lastTimestamp } : {}),
+  };
 }
 
 export function NotificationProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Notification[]>([]);
   const [feed, setFeed] = useState<Notification[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  // Latest feed, for callbacks that need a SNAPSHOT rather than a dependency.
+  // dismissFeed's clear-all path is the only such reader: depending on `feed`
+  // rebuilt the callback (and so the whole context value) on every notification,
+  // re-rendering every consumer of useNotifications.
+  const feedRef = useRef<Notification[]>(feed);
+  useEffect(() => { feedRef.current = feed; }, [feed]);
 
   // dedupKeys we've already surfaced as toasts this session — mirrors the old
   // per-component dedup but unified. Feed dedup is keyed separately (below) so a
@@ -115,9 +163,18 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
   const notify = useCallback((input: NotificationInput) => {
     const persistent = input.persistent ?? IS_PERSISTENT[input.kind];
-    // Toast-level dedup: don't re-show the same dedupKey while it's live.
-    if (toastDedup.current.has(input.dedupKey)) return;
-    toastDedup.current.add(input.dedupKey);
+    // Toast policy: only what needs a human NOW interrupts (permissions, hard
+    // errors, hooks, the two ephemeral kinds). Routine automation — a cron run,
+    // a new skill — lands in the feed + bell badge with no toast.
+    const shouldToast = SHOULD_TOAST(input);
+
+    // Toast-level dedup: don't re-show the same dedupKey while it's live. Only
+    // toastable inputs consult/claim the key — a feed-only entry has no toast
+    // lifetime to release it, so claiming it would wedge the key for the session.
+    if (shouldToast) {
+      if (toastDedup.current.has(input.dedupKey)) return;
+      toastDedup.current.add(input.dedupKey);
+    }
 
     const id = input.id ?? `notif-${crypto.randomUUID()}`;
     const notification: Notification = {
@@ -128,7 +185,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       read: false,
     };
 
-    setToasts(prev => [...prev, notification]);
+    if (shouldToast) setToasts(prev => [...prev, notification]);
 
     // Append persistent notifications to the local feed. Note the asymmetry:
     // cron/permission/server-side operation-error (the log.error bridge) are
@@ -146,9 +203,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
     // Auto-dismiss the toast after the per-kind lifetime. dismissToast drops the
     // dedupKey too, so the same key (e.g. a new sort change) can toast again later.
-    const duration = TOAST_DURATION_MS[input.kind];
-    const timer = setTimeout(() => dismissToast(id), duration);
-    timers.current.set(id, timer);
+    if (shouldToast) {
+      const duration = TOAST_DURATION_MS[input.kind];
+      const timer = setTimeout(() => dismissToast(id), duration);
+      timers.current.set(id, timer);
+    }
 
     // Browser notification when the tab is hidden (permission only).
     if (input.browserNotify && typeof document !== 'undefined' && document.hidden
@@ -160,7 +219,14 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   }, [dismissToast]);
 
   const markAllRead = useCallback(() => {
-    setFeed(prev => prev.map(f => ({ ...f, read: true })));
+    // Identity-preserving: the panel re-fires this on every WS event while it is
+    // open, and a blanket `prev.map(f => ({...f}))` would hand every card a new
+    // object each time — a full re-render of the feed for a no-op. Already-read
+    // entries keep their identity, and an all-read feed returns `prev` itself so
+    // React bails out of the update entirely.
+    setFeed(prev => (prev.some(f => !f.read)
+      ? prev.map(f => (f.read ? f : { ...f, read: true }))
+      : prev));
     fetch('/api/notifications/mark-read', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -181,7 +247,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     // unfiltered server wipe: a notification landing between the click and the
     // server's write lock would otherwise be deleted on disk while the WS
     // handler had already surfaced it locally — a ghost entry gone on refresh.
-    const keys = dedupKeys ?? feed.map(f => f.dedupKey);
+    // Read the snapshot from feedRef, NOT from a `feed` dependency: depending on
+    // the feed rebuilt this callback — and with it the whole context value — on
+    // every single notification, re-rendering every useNotifications consumer.
+    const keys = dedupKeys ?? feedRef.current.map(f => f.dedupKey);
     for (const k of keys) dismissedKeys.current.add(k);
     setFeed(prev => prev.filter(f => !keys.includes(f.dedupKey)));
     if (keys.length === 0) return;
@@ -190,7 +259,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ dedupKeys: keys }),
     }).catch(err => log.warn('notifications', 'dismiss failed', { error: String(err) }));
-  }, [feed]);
+  }, []);
 
   // ── Initial feed load (server-persisted cron/permission survive refresh) ──
   useEffect(() => {
@@ -203,6 +272,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           body: r.body, timestamp: r.timestamp, persistent: true, read: r.read,
           dedupKey: r.dedupKey, sessionId: r.sessionId, taskId: r.taskId,
           resolved: r.resolved,
+          ...enrichmentOf(r),
         }));
         // Merge with anything that arrived live before the fetch resolved. Live
         // entries (prev) win on identity so a stale server snapshot can't stomp a
@@ -221,12 +291,19 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           }
           return [...byKey.values()]
             .filter(n => !dismissedKeys.current.has(n.dedupKey))
-            .sort((a, b) => a.timestamp - b.timestamp);
+            // effectiveTs, not timestamp: a folded recurring error keeps its
+            // first-seen timestamp, so sorting on that would sink a still-firing
+            // error below entries that stopped happening hours ago.
+            .sort((a, b) => effectiveTs(a) - effectiveTs(b));
         });
+        setLoaded(true);
       })
       .catch(err => {
         if (err instanceof DOMException && err.name === 'AbortError') return;
         log.warn('notifications', 'initial feed load failed', { error: String(err) });
+        // Failure still ends the "waiting on the server" state: consumers that
+        // defer a one-time decision until `loaded` would otherwise defer forever.
+        setLoaded(true);
       });
     return () => ac.abort();
   }, []);
@@ -300,15 +377,22 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     });
   });
 
-  // ── WS source: server-side log.error() bridge (and any other server-created
-  // feed record pushed live). The record is already persisted server-side; this
-  // event just makes the bell update without a refresh. Storm control lives in
-  // the server bridge (TTL + dedupKey), so a plain notify() here is safe.
+  // ── WS source: every server-created feed record pushed live — the log.error()
+  // bridge, cron/skill/hook records, AND permission requests (the server now
+  // broadcasts the ENRICHED permission record here, which is why
+  // `session:permission-request` is no longer handled HERE — the session stream
+  // consumers still subscribe to it; the notification center just doesn't need a
+  // second, thinner lane, and one lane means the toast always has the tool input
+  // it needs to be answerable). The record is
+  // already persisted server-side; this event just makes the bell update without
+  // a refresh. Storm control lives in the server bridge (TTL + dedupKey), and the
+  // CLI's 60s permission re-ask is not re-broadcast.
   useEvent('notification:new', (data) => {
     const r = data as FeedRecord | undefined;
     if (!r?.dedupKey || !r.title) return;
+    const kind = r.kind ?? 'operation-error';
     notify({
-      kind: r.kind ?? 'operation-error',
+      kind,
       severity: r.severity ?? 'error',
       title: r.title,
       body: r.body,
@@ -317,26 +401,61 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       ...(r.timestamp ? { timestamp: r.timestamp } : {}),
       ...(r.sessionId ? { sessionId: r.sessionId } : {}),
       ...(r.taskId ? { taskId: r.taskId } : {}),
+      ...(r.resolved ? { resolved: r.resolved } : {}),
+      ...enrichmentOf(r),
+      // Permissions are the one kind worth waking a hidden tab for.
+      ...(kind === 'permission' ? { browserNotify: true } : {}),
       ...(r.sessionId
         ? { action: { label: 'Go to Session', kind: 'navigate' as const, to: `/sessions?id=${r.sessionId}` } }
         : {}),
     });
   });
 
-  // ── WS source: permission requests ──
-  useEvent('session:permission-request', (data) => {
-    const { sessionId, requestId, toolName } = data as {
-      sessionId?: string; requestId?: string; toolName?: string;
-    };
-    if (!sessionId || !requestId) return;
-    notify({
-      kind: 'permission', severity: 'warning', title: toolName ?? 'Permission',
-      body: 'Session needs permission approval', sessionId,
-      dedupKey: `perm:${requestId}`,
+  // ── WS source: a folded record changed (recurring error re-fired) ──
+  // Same dedupKey, count++, lastTimestamp bumped, read reset. This is an UPDATE,
+  // never a new event: toasting it would re-interrupt on every repeat of a
+  // failure the user already saw (the 36-identical-403s problem). It upserts
+  // rather than only patching — if the record's notification:new was missed (WS
+  // reconnect, or a fold that started before this tab loaded), dropping the
+  // update would hide a live error until a refresh.
+  //
+  // Dismissal policy, which differs BY DESIGN between the two lanes: notify()
+  // (the notification:new path) CLEARS the dismissal, because a fresh live event
+  // is a new occurrence and a re-ask must resurrect. This path honors it instead,
+  // because a dismissed record was deleted server-side — so an update naming that
+  // key is describing a record the user already discarded, and the next REAL
+  // occurrence will arrive as notification:new and re-arm there.
+  //
+  // The merge rule: fields present on the wire win, absent fields keep the base.
+  // A blind rebuild from the wire record dropped a locally-stamped `resolved`
+  // (session:permission-resolved stamps 'allowed' before the server record shows
+  // it), flipping an answered permission back to pending mid-fold.
+  useEvent('notification:updated', (data) => {
+    const r = data as FeedRecord | undefined;
+    if (!r?.dedupKey || !r.title) return;
+    if (dismissedKeys.current.has(r.dedupKey)) return;
+    const patch = (base?: Notification): Notification => ({
+      ...base,
+      id: base?.id ?? r.id ?? `notif-${crypto.randomUUID()}`,
+      kind: r.kind ?? base?.kind ?? 'operation-error',
+      severity: r.severity ?? base?.severity ?? 'error',
+      title: r.title,
+      ...(r.body !== undefined ? { body: r.body } : {}),
+      timestamp: r.timestamp ?? base?.timestamp ?? Date.now(),
       persistent: true,
-      browserNotify: true,
-      action: { label: 'Go to Session', kind: 'navigate', to: `/sessions?id=${sessionId}` },
+      dedupKey: r.dedupKey,
+      ...(r.sessionId ? { sessionId: r.sessionId } : {}),
+      ...(r.taskId ? { taskId: r.taskId } : {}),
+      ...(r.resolved ? { resolved: r.resolved } : {}),
+      ...(r.sessionId
+        ? { action: { label: 'Go to Session', kind: 'navigate' as const, to: `/sessions?id=${r.sessionId}` } }
+        : {}),
+      ...enrichmentOf(r),
+      read: false,
     });
+    setFeed(prev => (prev.some(f => f.dedupKey === r.dedupKey)
+      ? prev.map(f => (f.dedupKey === r.dedupKey ? patch(f) : f))
+      : [...prev, patch()]));
   });
 
   // Dismiss the permission toast once it's resolved (the feed entry stays).
@@ -376,8 +495,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const unreadCount = useMemo(() => feed.filter(f => !f.read).length, [feed]);
 
   const value = useMemo<NotificationContextValue>(() => ({
-    toasts, feed, unreadCount, notify, dismissToast, markAllRead, dismissFeed,
-  }), [toasts, feed, unreadCount, notify, dismissToast, markAllRead, dismissFeed]);
+    toasts, feed, loaded, unreadCount, notify, dismissToast, markAllRead, dismissFeed,
+  }), [toasts, feed, loaded, unreadCount, notify, dismissToast, markAllRead, dismissFeed]);
 
   return (
     <NotificationContext.Provider value={value}>

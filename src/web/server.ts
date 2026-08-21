@@ -117,8 +117,8 @@ import { incidentsRouter } from './routes/incidents.js'
 import { clientEvidenceRouter } from './routes/client-evidence.js'
 import { notificationsRouter } from './routes/notifications.js'
 import { hooksRouter } from './routes/hooks.js'
-import { addNotification as addFeedNotification, resolvePermissionNotification } from '../core/notifications/store.js'
-import { djb2 as notificationHash } from '../core/notifications/log-error-bridge.js'
+import { addNotification as addFeedNotification, upsertNotification as upsertFeedNotification, resolvePermissionNotification } from '../core/notifications/store.js'
+import { compactPermissionInput, summarizePermissionRequest } from '../core/notifications/permission-detail.js'
 import { redactSensitiveText } from '../logging/redact.js'
 import { stripEntityRefs, extractFirstRefs } from '../utils/entity-refs.js'
 import { registerAuthRpc } from './routes/auth-rpc.js'
@@ -171,15 +171,52 @@ const DEFAULT_PORT = 3456
 const SYNC_INTERVAL_MS = 30_000 // Default plugin sync interval (30s)
 const MAX_ERROR_NOTIFICATION_BODY = 600
 
+// Storm absorber for hand-published error notifications — same shape as the
+// log-error bridge's REPEAT_TTL_MS. Without it, a failure sitting on a 30s timer
+// (git:auto-commit) or a poll loop (disk watermark) does an unconditional
+// read-modify-write of notifications.json (cross-process file lock) PLUS a WS
+// broadcast on every single occurrence, forever.
+let errorNotificationRepeatTtlMs = 60_000
+/** Tests only: shrink/disable the absorber (0 = every occurrence reaches the store). */
+export function setErrorNotificationRepeatTtlMs(ms: number): void {
+  errorNotificationRepeatTtlMs = ms
+  errorNotificationRecentScopes.clear()
+}
+const errorNotificationRecentScopes = new Map<string, number>()
+
+/**
+ * Permission requestIds already persisted to the durable feed.
+ *
+ * The CLI re-emits the SAME requestId every 60s while nobody answers. Without
+ * this, each re-emit paid for a session lookup + a task lookup + a full
+ * read-modify-write of notifications.json just to land on the store's dedup and
+ * change nothing. A restart loses the set → at most ONE redundant (still
+ * dedup-absorbed) write per pending request, which is acceptable.
+ * Entries are removed when the request resolves.
+ */
+const persistedPermissionRequestIds = new Set<string>()
 
 async function publishErrorNotification(input: {
   title: string
   body: string
+  /**
+   * The ONLY dedup axis (the key carries no body hash), so its granularity is a
+   * correctness decision: one scope must mean one root cause. Two different
+   * failures sharing a scope collapse into one card that keeps overwriting its
+   * own body; splitting one failure across scopes floods the feed.
+   */
   dedupScope: string
   sessionId?: string
   taskId?: string
 }): Promise<boolean> {
   const timestamp = Date.now()
+  const lastAt = errorNotificationRecentScopes.get(input.dedupScope)
+  if (lastAt !== undefined && timestamp - lastAt < errorNotificationRepeatTtlMs) return false
+  if (errorNotificationRecentScopes.size > 500) {
+    for (const [scope, at] of errorNotificationRecentScopes) {
+      if (timestamp - at > errorNotificationRepeatTtlMs) errorNotificationRecentScopes.delete(scope)
+    }
+  }
   // Session stderr / provider errors can embed tokens or keys; the log-error
   // bridge redacts its own path, but this hand-published path writes to the
   // durable store directly — redact BEFORE hashing/truncating/persisting.
@@ -187,10 +224,13 @@ async function publishErrorNotification(input: {
   const body = plainBody.length > MAX_ERROR_NOTIFICATION_BODY
     ? `${plainBody.slice(0, MAX_ERROR_NOTIFICATION_BODY)}…`
     : plainBody
-  const dedupKey = `error:${input.dedupScope}:${notificationHash(plainBody)}`
+  // Scope-only key (no body hash): one failing thing = ONE feed entry that folds
+  // its repeats. Hashing the body used to split "same outage, slightly different
+  // message" into a pile of near-identical cards.
+  const dedupKey = `error:${input.dedupScope}`
 
   try {
-    const record = await addFeedNotification({
+    const { record, outcome } = await upsertFeedNotification({
       kind: 'operation-error',
       severity: 'error',
       title: input.title,
@@ -200,13 +240,12 @@ async function publishErrorNotification(input: {
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       ...(input.taskId ? { taskId: input.taskId } : {}),
     })
-    // Insert detection via cross-module contract: on a dedup hit the store
-    // returns the EXISTING record unchanged, so record.timestamp only equals
-    // our timestamp when this call actually created it — repeats must not
-    // re-toast connected UIs. (Same trick as log-error-bridge.)
-    if (record.timestamp === timestamp) {
-      broadcastEvent('notification:new', record)
-    }
+    // Armed only after the write landed — a failed persist must not silence this
+    // failure for a full TTL window with nothing durable to show for it.
+    errorNotificationRecentScopes.set(input.dedupScope, timestamp)
+    // 'inserted' → a new card; 'refreshed' → the same card with a live count and
+    // the latest body, so connected UIs patch in place instead of re-toasting.
+    broadcastEvent(outcome === 'inserted' ? 'notification:new' : 'notification:updated', record)
     return true
   } catch (err) {
     log.web.warn('failed to publish error notification', {
@@ -1876,17 +1915,21 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         ]
         return candidates.find((c) => fs.existsSync(c)) ?? null
       })()
-      const reportCompactionFailure = (failure: string): void => {
+      // `scope` splits the two root causes the caller already distinguishes: a
+      // MISSING worker build (a packaging bug — fixed by a rebuild) vs a real RUN
+      // failure (tree mismatch, ENOBUFS). One dedupScope for both would let
+      // whichever fires first hide the other behind its card.
+      const reportCompactionFailure = (failure: string, scope: 'missing-worker' | 'run'): void => {
         log.git.warn('git compaction failed', { error: failure })
         void publishErrorNotification({
           title: 'Data Repo Compaction Failing',
           body: `Git history compaction failed: ${failure}. The data repo will grow unbounded until this is fixed — check open-walnut logs -s git.`,
-          dedupScope: 'git:compaction',
+          dedupScope: `git:compaction:${scope}`,
         })
       }
       const attemptCompaction = async (retriesLeft = 2): Promise<void> => {
         if (!workerPath) {
-          reportCompactionFailure('compaction worker build is missing from dist/workers')
+          reportCompactionFailure('compaction worker build is missing from dist/workers', 'missing-worker')
           return
         }
         // Pause the 30s auto-commit/sync tick IN THIS PROCESS for the worker's
@@ -1905,7 +1948,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         // paused forever — that would silently stop ALL data backups.
         child.on('error', (err) => {
           setCompactionInProgress(false)
-          reportCompactionFailure(`compaction worker failed to spawn: ${err.message}`)
+          reportCompactionFailure(`compaction worker failed to spawn: ${err.message}`, 'run')
         })
         child.on('exit', () => {
           setCompactionInProgress(false)
@@ -1925,7 +1968,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
             setTimeout(() => { void attemptCompaction(retriesLeft - 1) }, 45_000).unref?.()
             return
           }
-          reportCompactionFailure(failure)
+          reportCompactionFailure(failure, 'run')
         })
       }
       // 75s start delay: deliberately NOT a multiple of the 30s sync tick —
@@ -2415,8 +2458,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         sendStreamEvent(sessionId, event.name, event.data)
       }
     } else if (event.name === 'session:permission-request') {
-      const { sessionId, requestId, toolName, input, reason, acpOptions } = event.data as {
-        sessionId?: string; requestId?: string; toolName?: string;
+      const { sessionId, taskId, requestId, toolName, input, reason, acpOptions } = event.data as {
+        sessionId?: string; taskId?: string; requestId?: string; toolName?: string;
         input?: Record<string, unknown>; reason?: string;
         acpOptions?: Array<{ optionId?: string; kind?: string; name?: string }>;
       }
@@ -2428,12 +2471,57 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         sendStreamEvent(sessionId, event.name, event.data)
         // Persist to the durable notification feed (survives refresh). Fire-and-forget;
         // de-duped by requestId so the 60s permission re-ask never doubles the feed.
-        if (requestId && toolName) {
-          void addFeedNotification({
-            kind: 'permission', severity: 'warning', title: toolName,
-            body: 'Session needs permission approval', sessionId,
-            dedupKey: `perm:${requestId}`,
-          }).catch(err => log.web.warn('failed to persist permission notification', { sessionId, error: err instanceof Error ? err.message : String(err) }))
+        // The in-memory set short-circuits a re-emit BEFORE the two lookups + the
+        // store write, which would all end at that same dedup having changed nothing.
+        if (requestId && toolName && !persistedPermissionRequestIds.has(requestId)) {
+          void (async () => {
+            const timestamp = Date.now()
+            // Enrichment is best-effort context (host / friendly title / project):
+            // a lookup failure must degrade the card, never drop the notification.
+            let enrichment: { host?: string; sessionTitle?: string; project?: string; taskId?: string } = {}
+            try {
+              const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+              const sessionRecord = await getSessionByClaudeId(sessionId)
+              const resolvedTaskId = taskId || sessionRecord?.taskId || undefined
+              let sessionTitle = sessionRecord?.title || sessionRecord?.description || undefined
+              let project = sessionRecord?.project || undefined
+              if (resolvedTaskId) {
+                try {
+                  const task = await getTask(resolvedTaskId)
+                  if (task?.title) sessionTitle = task.title
+                  if (task?.project) project = task.project
+                } catch { /* task gone / not a task-backed session — keep session labels */ }
+              }
+              enrichment = {
+                ...(sessionRecord?.hostname || sessionRecord?.host ? { host: sessionRecord.hostname || sessionRecord.host } : {}),
+                ...(sessionTitle ? { sessionTitle } : {}),
+                ...(project ? { project } : {}),
+                ...(resolvedTaskId ? { taskId: resolvedTaskId } : {}),
+              }
+            } catch (err) {
+              log.web.warn('permission notification enrichment failed', { sessionId, error: err instanceof Error ? err.message : String(err) })
+            }
+            const compactInput = compactPermissionInput(toolName, input)
+            const record = await addFeedNotification({
+              kind: 'permission', severity: 'warning', title: toolName,
+              body: summarizePermissionRequest(toolName, input), sessionId,
+              timestamp,
+              dedupKey: `perm:${requestId}`,
+              requestId,
+              toolName,
+              ...(compactInput ? { input: compactInput } : {}),
+              ...(reason ? { reason } : {}),
+              ...(acpOptions ? { acpOptions } : {}),
+              ...enrichment,
+            })
+            persistedPermissionRequestIds.add(requestId)
+            // Insert detection via the store's contract: on a dedup hit it returns
+            // the EXISTING record, so timestamps only match when this call created
+            // it. The CLI's 60s re-ask must not re-toast connected UIs.
+            if (record.timestamp === timestamp) {
+              broadcastEvent('notification:new', record)
+            }
+          })().catch(err => log.web.warn('failed to persist permission notification', { sessionId, error: err instanceof Error ? err.message : String(err) }))
         }
       }
     } else if (event.name === 'session:permission-resolved') {
@@ -2443,6 +2531,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       if (sessionId) {
         // Update the buffered permission block status
         if (requestId) {
+          persistedPermissionRequestIds.delete(requestId)
           sessionStreamBuffer.resolvePermission(sessionId, requestId, allowed ? 'allowed' : 'denied')
           // Stamp the outcome onto the feed record too, so the notification
           // center can show resolved permissions as settled (and hide the
@@ -3290,7 +3379,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       await publishErrorNotification({
         title: 'Subagent Error',
         body: `${agentId ? `${agentId}${subErrTaskRef ? ` for ${subErrTaskRef}` : ''}: ` : ''}${error}`,
-        dedupScope: `subagent:${runId ?? agentId ?? taskId ?? 'unknown'}`,
+        // No shared 'unknown' bucket: with every id missing there is nothing
+        // proving two failures are the same one, so each gets its own scope
+        // (a fold would silently hide unrelated subagent failures).
+        dedupScope: `subagent:${runId ?? agentId ?? taskId ?? `anon:${Date.now()}`}`,
         sessionId: runId,
         taskId,
       })

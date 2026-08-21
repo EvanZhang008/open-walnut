@@ -1,20 +1,36 @@
 /**
- * Notification panel — slide-out overlay from sidebar. Two zones:
- *   1. Recent — the persistent notification feed (cron / permission / errors),
- *      from NotificationProvider. Opening the panel marks all read.
- *      iPhone-style: entries with the same origin (same cron job, same session's
- *      permissions) collapse into an expandable group; tapping an entry deep-links
- *      to its session/task; each entry (and the whole feed) can be cleared.
- *   2. System — ambient health (remote hosts, data backup, embedding search).
+ * Notification panel — slide-out overlay from the sidebar, laid out as a
+ * rail + detail pair (same shape as ViewDropdown's receipt body).
+ *
+ * The rail sorts the feed by WHAT THE USER HAS TO DO:
+ *   Needs Action — pending permission asks, answerable right here
+ *   Errors       — operation errors (with the server's ×N occurrence folding)
+ *   Automation   — cron / skill / hook receipts
+ *   System       — ambient health (remote hosts, data backup, embedding search)
+ *   All          — the whole feed, newest first
+ * A flat single list buried the one entry that blocks a session under twenty
+ * receipts, which is why permissions used to need a session round-trip.
+ *
+ * Opening the panel marks the feed read. Same-origin entries (one cron job's
+ * runs, one session's permissions) still collapse into an expandable group, and a
+ * collapsed group never hides a pending ask.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useSystemHealth } from '@/hooks/useSystemHealth';
-import { useNotifications, type Notification } from '@/contexts/notifications';
+import {
+  useNotifications, sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
+  toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
+  type Notification, type NotificationSection,
+} from '@/contexts/notifications';
 import { respondToPermission } from '@/api/sessions';
+import {
+  buildAskUserAnswers, allAskUserQuestionsAnswered, toggleAskUserSelection,
+  type AskQuestion,
+} from '@/components/sessions/ask-user-question';
+import { NotificationSystemPane, useQmdStatus, qmdUnhealthy } from './NotificationSystemPane';
 import { navigateToTarget } from '@/utils/open-session';
-import { visibleInterval } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
 
 interface NotificationPanelProps {
@@ -23,46 +39,48 @@ interface NotificationPanelProps {
   sidebarCollapsed: boolean;
 }
 
-interface QmdStoreStats {
-  totalIndexed: number;
-  totalEmbedded: number;
-  totalChunks: number;
-  collections: Record<string, { indexed: number; embedded: number; chunks: number }>;
-}
-
-interface QmdStatus {
-  model: { name: string; downloaded: boolean };
-  stores: {
-    memory: QmdStoreStats | null;
-    notes: QmdStoreStats | null;
-    tasks: QmdStoreStats | null;
-    sessions: QmdStoreStats | null;
-  };
-  status: 'ready' | 'indexing' | 'downloading' | 'error';
-  error: string | null;
-  progress: { chunksEmbedded: number; totalChunks: number; store: string } | null;
-}
+/** Rail tabs — the notification sections plus the ambient System zone. */
+type RailSection = NotificationSection | 'system';
 
 export function NotificationPanel({ open, onClose, sidebarCollapsed }: NotificationPanelProps) {
-  const { health, gitSync, loading } = useSystemHealth();
-  const { feed, unreadCount, markAllRead, dismissFeed } = useNotifications();
-  const [qmdStatus, setQmdStatus] = useState<QmdStatus | null>(null);
+  const { hasIssues } = useSystemHealth();
+  const { feed, loaded, unreadCount, markAllRead, dismissFeed } = useNotifications();
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [section, setSection] = useState<RailSection>('all');
   const navigate = useNavigate();
+  const qmdStatus = useQmdStatus(open, section === 'system');
+
+  const counts = useMemo(() => sectionCounts(feed), [feed]);
+
+  // The System zone's own health signal. `hasIssues` is useSystemHealth's own
+  // derivation (git-sync unprotected or failing) — the same one the Sidebar's
+  // status pill reads; the index error state is the other thing shown in there
+  // that can be broken.
+  const systemUnhealthy = hasIssues || qmdUnhealthy(qmdStatus);
+
+  // Items of the active section, newest first. Sorting on effectiveTs (not
+  // timestamp) keeps a folded recurring error at the top of the list — its
+  // `timestamp` is first-seen and can be hours old while it is still firing.
+  const items = useMemo(() => {
+    const pool = section === 'system' ? []
+      : section === 'all' ? feed
+      : feed.filter(n => sectionOf(n) === section);
+    return [...pool].sort((a, b) => effectiveTs(b) - effectiveTs(a));
+  }, [feed, section]);
 
   // Same-origin entries collapse into one expandable group (iPhone-style):
   // a cron job's repeated runs stack under the job name, a session's permission
-  // asks stack under the session. Groups are ordered by their newest entry.
+  // asks stack under the session. Groups keep the newest-first item order.
   const groups = useMemo(() => {
     const byKey = new Map<string, Notification[]>();
-    for (const n of [...feed].reverse()) {
+    for (const n of items) {
       const key = groupKeyOf(n);
       const list = byKey.get(key);
       if (list) list.push(n);
       else byKey.set(key, [n]);
     }
-    return [...byKey.entries()].map(([key, items]) => ({ key, items }));
-  }, [feed]);
+    return [...byKey.entries()].map(([key, list]) => ({ key, items: list }));
+  }, [items]);
 
   // Opening the panel clears the unread badge (everything in the feed is now seen).
   // Re-fires while open if new persistent events arrive (unreadCount climbs again) —
@@ -71,30 +89,49 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
     if (open && unreadCount > 0) markAllRead();
   }, [open, unreadCount, markAllRead]);
 
-  // Fetch QMD status on mount, poll every 3s while indexing/downloading
+  // Did the user pick a rail section themselves since this open? Once they have,
+  // nothing may move them (see the re-choose effect below). Reset per open.
+  const userPickedSection = useRef(false);
+  const pickSection = useCallback((next: RailSection) => {
+    userPickedSection.current = true;
+    setSection(next);
+  }, []);
+
+  // Landing section is chosen ONCE per open (not derived every render): a pending
+  // ask answered while the panel is open must not yank the user back to an empty
+  // Needs Action, and a new ask arriving must not steal the section they're reading.
   useEffect(() => {
     if (!open) return;
-    const ac = new AbortController();
-    const fetchQmd = () => {
-      fetch('/api/qmd/status', { signal: ac.signal })
-        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-        .then((data: QmdStatus) => setQmdStatus(data))
-        .catch(err => {
-          if (err instanceof DOMException && err.name === 'AbortError') return;
-          log.warn('notifications', 'QMD status fetch failed', { error: String(err) });
-        });
-    };
-    fetchQmd();
-    // visibleInterval: indexing can run for many minutes — hidden tabs skip.
-    const cancel = visibleInterval(() => {
-      if (qmdStatus?.status === 'indexing' || qmdStatus?.status === 'downloading') fetchQmd();
-    }, 3000);
-    return () => { ac.abort(); cancel(); };
-  }, [open, qmdStatus?.status]);
+    userPickedSection.current = false;
+    setSection(sectionCounts(feed).action > 0 ? 'action' : 'all');
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- open-transition only
+  }, [open]);
+
+  // …but on the FIRST open the initial GET may still be in flight, so the feed is
+  // empty-so-far and the choice above lands on All even with pending permissions
+  // waiting. Re-choose exactly once when the load finishes — unless the user has
+  // already clicked a section, in which case their choice wins.
+  useEffect(() => {
+    if (!open || !loaded || userPickedSection.current) return;
+    setSection(sectionCounts(feed).action > 0 ? 'action' : 'all');
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loaded-transition only
+  }, [open, loaded]);
+
+  // Escape closes, same idiom as Lightbox/FileViewer: the panel is a portalled
+  // overlay, so there is no ancestor to catch the key — it has to be on document.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  const onNavigate = useCallback((to: string) => {
+    navigateToTarget(to, navigate);
+    onClose();
+  }, [navigate, onClose]);
 
   if (!open) return null;
-
-  const gitOk = gitSync.protected && gitSync.consecutiveFailures < 3;
 
   // Portal to <body>: the panel is mounted inside the Sidebar, whose mobile
   // styles apply a transform — that turns the sidebar into the containing
@@ -107,10 +144,18 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
 
       {/* Panel */}
       <div
-        className={`notification-panel${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}
+        className={`notification-panel nfc-panel-wide${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}
       >
         <div className="notification-panel-header">
           <span className="notification-panel-title">Notifications</span>
+          {feed.length > 0 && (
+            <button
+              className="notification-clear-all nfc-header-clear"
+              onClick={() => { dismissFeed(); setExpandedGroups(new Set()); }}
+            >
+              Clear All
+            </button>
+          )}
           <button className="notification-panel-close" onClick={onClose} aria-label="Close">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="16" height="16">
               <line x1="18" y1="6" x2="6" y2="18" />
@@ -119,248 +164,140 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
           </button>
         </div>
 
-        <div className="notification-panel-body">
-          {/* Zone 1 — Recent: the persistent notification feed, grouped by origin. */}
-          <div className="notification-section-label notification-section-label--row">
-            <span>Recent</span>
-            {feed.length > 0 && (
-              <button
-                className="notification-clear-all"
-                onClick={() => { dismissFeed(); setExpandedGroups(new Set()); }}
-              >
-                Clear All
-              </button>
+        {/* Body: rail + detail. The panel is a fixed slide-out (top:0/bottom:0),
+            so the body's height is fully determined by the viewport — `flex:1` +
+            `min-height:0` is safe here (ViewDropdown needs `flex:0 1 <basis>`
+            because ITS height comes from an inline maxHeight instead). */}
+        <div className="nfc-body">
+          {/* Plain buttons + aria-current, deliberately NOT role=tablist/tab —
+              same call as ViewDropdown's rail: the ARIA tab pattern obliges a
+              tabpanel, arrow-key navigation and a roving tabIndex, and a
+              half-implemented contract misleads a screen reader worse than an
+              honest list of buttons does. */}
+          <div className="nfc-rail" aria-label="Notification sections">
+            <RailButton
+              label="Needs Action" count={counts.action} warn
+              active={section === 'action'} onClick={() => pickSection('action')}
+            />
+            <RailButton
+              label="Errors" count={counts.errors}
+              active={section === 'errors'} onClick={() => pickSection('errors')}
+            />
+            <RailButton
+              label="Automation" count={counts.automation}
+              active={section === 'automation'} onClick={() => pickSection('automation')}
+            />
+            {/* System has no countable entries — it wears a warning DOT instead,
+                so a failing backup or a broken index is visible from the rail
+                without opening the tab. */}
+            <RailButton
+              label="System" count={0} warn dot={systemUnhealthy}
+              active={section === 'system'} onClick={() => pickSection('system')}
+            />
+            <RailButton
+              label="All" count={counts.all}
+              active={section === 'all'} onClick={() => pickSection('all')}
+            />
+          </div>
+
+          <div className="nfc-detail">
+            {section === 'system' ? (
+              /* Ambient health (daemons / backup / embedding search) — its own
+                 component so the QMD poll only runs while this tab is showing. */
+              <NotificationSystemPane qmdStatus={qmdStatus} />
+            ) : groups.length === 0 ? (
+              <div className="notification-feed-empty">{EMPTY_TEXT[section]}</div>
+            ) : (
+              <div className="notification-feed">
+                {groups.map(({ key, items: groupItems }) => {
+                  const expanded = expandedGroups.has(key) || groupItems.length === 1;
+                  // A collapsed group must never bury an actionable entry: a newer
+                  // resolved permission would otherwise cover an older still-pending
+                  // one, hiding its Approve/Deny buttons behind "Show N more".
+                  const pending = groupItems.find(i => i.kind === 'permission' && !i.resolved);
+                  // `slice(0, 1)` for the fallback, not `[groupItems[0]]`: an empty
+                  // group would otherwise render one `undefined` child.
+                  const visible = expanded ? groupItems : (pending ? [pending] : groupItems.slice(0, 1));
+                  return (
+                    <div key={key} className="notification-feed-group">
+                      {visible.map((n) => (
+                        n.kind === 'permission' ? (
+                          <PermissionCard
+                            key={n.id}
+                            n={n}
+                            // Session links open on the HOME page's session columns
+                            // (the primary surface), not the /sessions page.
+                            onNavigate={onNavigate}
+                            onDismiss={() => dismissFeed([n.dedupKey])}
+                          />
+                        ) : (
+                          <FeedItem
+                            key={n.id}
+                            n={n}
+                            onNavigate={onNavigate}
+                            onDismiss={() => dismissFeed([n.dedupKey])}
+                          />
+                        )
+                      ))}
+                      {groupItems.length > 1 && (
+                        <button
+                          className="notification-group-toggle"
+                          onClick={() => setExpandedGroups(prev => {
+                            const next = new Set(prev);
+                            if (next.has(key)) next.delete(key);
+                            else next.add(key);
+                            return next;
+                          })}
+                        >
+                          {expanded ? 'Show less' : `Show ${groupItems.length - 1} more`}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
-          {groups.length === 0 ? (
-            <div className="notification-feed-empty">No notifications yet</div>
-          ) : (
-            <div className="notification-feed">
-              {groups.map(({ key, items }) => {
-                const expanded = expandedGroups.has(key) || items.length === 1;
-                // A collapsed group must never bury an actionable entry: a newer
-                // resolved permission would otherwise cover an older still-pending
-                // one, hiding its Approve/Deny buttons behind "Show N more".
-                const pending = items.find(i => i.kind === 'permission' && !i.resolved);
-                const visible = expanded ? items : [pending ?? items[0]];
-                return (
-                  <div key={key} className="notification-feed-group">
-                    {visible.map((n) => (
-                      <FeedItem
-                        key={n.id}
-                        n={n}
-                        // Session links open on the HOME page's session columns
-                        // (the primary surface), not the /sessions page.
-                        onNavigate={(to) => { navigateToTarget(to, navigate); onClose(); }}
-                        onDismiss={() => dismissFeed([n.dedupKey])}
-                      />
-                    ))}
-                    {items.length > 1 && (
-                      <button
-                        className="notification-group-toggle"
-                        onClick={() => setExpandedGroups(prev => {
-                          const next = new Set(prev);
-                          if (next.has(key)) next.delete(key);
-                          else next.add(key);
-                          return next;
-                        })}
-                      >
-                        {expanded ? 'Show less' : `Show ${items.length - 1} more`}
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {/* Zone 2 — System: ambient health (daemons / backup / embedding search). */}
-          <div className="notification-section-label">System</div>
-          {loading ? (
-            <div className="notification-card">
-              <span className="notification-card-icon loading">...</span>
-              <span>Loading...</span>
-            </div>
-          ) : (
-            <>
-              {/* Remote daemons status */}
-              {health.daemons && health.daemons.length > 0 && (
-                <div className={`notification-card ${health.daemons.some(d => d.connected) ? 'ok' : 'neutral'}`}>
-                  <div className="notification-card-row">
-                    <span className={`notification-card-icon ${health.daemons.some(d => d.connected) ? 'ok' : 'neutral'}`}>
-                      {health.daemons.some(d => d.connected) ? '\u2713' : '\u25CB'}
-                    </span>
-                    <span className="notification-card-label">Remote Hosts</span>
-                  </div>
-
-                  <div className="notification-card-details">
-                    {health.daemons.map((d) => (
-                      <div key={d.host} className="notification-detail-row">
-                        <span>{d.label ?? d.host}</span>
-                        <span className={`notification-detail-value ${d.connected ? 'ok' : 'muted'}`}>
-                          {/* 'Idle' used to render for connected:false, hiding real outages. */}
-                          {d.connected ? 'Connected' : 'Disconnected'}
-                          {/* Cloud-bridge state (phone reachability) — only when a bridge is
-                              configured AND the host itself is connected: bridge liveness rides
-                              the daemon connection, so next to 'Disconnected' any ✓/✗ is stale
-                              and contradictory. */}
-                          {d.connected && d.bridgeConnected != null && (
-                            <span className={`notification-detail-value ${d.bridgeConnected ? 'ok' : 'warn'}`}>
-                              {d.bridgeConnected ? ' · bridge ✓' : ' · bridge ✗'}
-                            </span>
-                          )}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Git backup status */}
-              <div className={`notification-card ${gitOk ? 'ok' : 'warn'}`}>
-                <div className="notification-card-row">
-                  <span className={`notification-card-icon ${gitOk ? 'ok' : 'warn'}`}>
-                    {gitOk ? '\u2713' : '\u26A0'}
-                  </span>
-                  <span className="notification-card-label">Data Backup</span>
-                </div>
-
-                <div className="notification-card-details">
-                  {!gitSync.protected ? (
-                    <div className="notification-detail-row warn">
-                      <span>Not protected</span>
-                      <span className="notification-detail-value">
-                        {gitSync.error ?? 'git unavailable'}
-                      </span>
-                    </div>
-                  ) : gitSync.consecutiveFailures >= 3 ? (
-                    <>
-                      <div className="notification-detail-row warn">
-                        <span>Status</span>
-                        <span className="notification-detail-value">Failing</span>
-                      </div>
-                      <div className="notification-detail-row">
-                        <span>Consecutive failures</span>
-                        <span className="notification-detail-value">{gitSync.consecutiveFailures}</span>
-                      </div>
-                      {gitSync.error && (
-                        <div className="notification-detail-row error">
-                          <span className="notification-error-text">{gitSync.error}</span>
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <div className="notification-detail-row">
-                      <span>Status</span>
-                      <span className="notification-detail-value ok">Protected</span>
-                    </div>
-                  )}
-
-                  {gitSync.lastCommitAt && (
-                    <div className="notification-detail-row muted">
-                      <span>Last backup</span>
-                      <span className="notification-detail-value">
-                        {formatRelative(gitSync.lastCommitAt)}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Embedding Search status */}
-              {qmdStatus && (
-                <div className={`notification-card ${qmdStatus.status === 'error' ? 'warn' : 'ok'}`}>
-                  <div className="notification-card-row">
-                    <span className={`notification-card-icon ${
-                      qmdStatus.status === 'error' ? 'error'
-                        : (qmdStatus.status === 'downloading' || qmdStatus.status === 'indexing') ? 'pulsing'
-                        : 'ok'
-                    }`}>
-                      {qmdStatus.status === 'error' ? '\u2717' : '\u2713'}
-                    </span>
-                    <span className="notification-card-label">Embedding Search</span>
-                  </div>
-
-                  <div className="notification-card-details">
-                    <div className="notification-detail-row">
-                      <span>Model</span>
-                      <span className={`notification-detail-value ${
-                        qmdStatus.status === 'ready' ? 'ok'
-                          : qmdStatus.status === 'error' ? 'warn'
-                          : ''
-                      }`}>
-                        {qmdStatus.model.name}{' '}
-                        ({qmdStatus.status === 'ready' ? 'Ready'
-                          : qmdStatus.status === 'downloading' ? 'Downloading'
-                          : qmdStatus.status === 'indexing'
-                            ? (qmdStatus.progress && qmdStatus.progress.totalChunks > 0
-                              ? `Indexing ${qmdStatus.progress.store} ${Math.round(qmdStatus.progress.chunksEmbedded / qmdStatus.progress.totalChunks * 100)}%`
-                              : 'Indexing')
-                          : 'Error'})
-                      </span>
-                    </div>
-                    {/* Memory store health */}
-                    {qmdStatus.stores.memory && (
-                      <div className="notification-detail-row">
-                        <span>Memory</span>
-                        <span className={`notification-detail-value ${
-                          qmdStatus.stores.memory.totalEmbedded >= qmdStatus.stores.memory.totalIndexed ? 'ok' : 'warn'
-                        }`}>
-                          {qmdStatus.stores.memory.totalEmbedded}/{qmdStatus.stores.memory.totalIndexed} docs
-                          {' \u00b7 '}{qmdStatus.stores.memory.totalChunks} chunks
-                        </span>
-                      </div>
-                    )}
-                    {/* Notes store health */}
-                    {qmdStatus.stores.notes && (
-                      <div className="notification-detail-row">
-                        <span>Notes</span>
-                        <span className={`notification-detail-value ${
-                          qmdStatus.stores.notes.totalEmbedded >= qmdStatus.stores.notes.totalIndexed ? 'ok' : 'warn'
-                        }`}>
-                          {qmdStatus.stores.notes.totalEmbedded}/{qmdStatus.stores.notes.totalIndexed} docs
-                          {' \u00b7 '}{qmdStatus.stores.notes.totalChunks} chunks
-                        </span>
-                      </div>
-                    )}
-                    {/* Tasks store health */}
-                    {qmdStatus.stores.tasks && (
-                      <div className="notification-detail-row">
-                        <span>Tasks</span>
-                        <span className={`notification-detail-value ${
-                          qmdStatus.stores.tasks.totalEmbedded >= qmdStatus.stores.tasks.totalIndexed ? 'ok' : 'warn'
-                        }`}>
-                          {qmdStatus.stores.tasks.totalEmbedded}/{qmdStatus.stores.tasks.totalIndexed} docs
-                          {' \u00b7 '}{qmdStatus.stores.tasks.totalChunks} chunks
-                        </span>
-                      </div>
-                    )}
-                    {/* Sessions store health */}
-                    {qmdStatus.stores.sessions && (
-                      <div className="notification-detail-row">
-                        <span>Sessions</span>
-                        <span className={`notification-detail-value ${
-                          qmdStatus.stores.sessions.totalEmbedded >= qmdStatus.stores.sessions.totalIndexed ? 'ok' : 'warn'
-                        }`}>
-                          {qmdStatus.stores.sessions.totalEmbedded}/{qmdStatus.stores.sessions.totalIndexed} docs
-                          {' \u00b7 '}{qmdStatus.stores.sessions.totalChunks} chunks
-                        </span>
-                      </div>
-                    )}
-                    {qmdStatus.error && (
-                      <div className="notification-detail-row error">
-                        <span className="notification-error-text">{qmdStatus.error}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </>
-          )}
         </div>
       </div>
     </>,
     document.body,
+  );
+}
+
+const EMPTY_TEXT: Record<NotificationSection, string> = {
+  action: 'Nothing waiting on you',
+  errors: 'No errors',
+  automation: 'No automation activity',
+  all: 'No notifications yet',
+};
+
+function RailButton({ label, count, active, warn, dot, onClick }: {
+  label: string;
+  count: number;
+  active: boolean;
+  warn?: boolean;
+  /** Countless attention marker (the System zone: health, not a list length). */
+  dot?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className={`nfc-rail-btn${active ? ' nfc-active' : ''}`}
+      aria-current={active}
+      onClick={onClick}
+    >
+      <span className="nfc-rail-name">{label}</span>
+      {count > 0 ? (
+        <span className={`nfc-rail-badge${warn ? ' nfc-warn' : ''}`}>{count > 99 ? '99+' : count}</span>
+      ) : dot ? (
+        <span
+          className={`nfc-rail-dot${warn ? ' nfc-warn' : ''}`}
+          aria-label={`${label} needs attention`}
+          role="img"
+        />
+      ) : null}
+    </button>
   );
 }
 
@@ -385,48 +322,297 @@ function linkTargetOf(n: Notification): string | null {
   return null;
 }
 
-function FeedItem({ n, onNavigate, onDismiss }: {
+/**
+ * Rich permission card — the whole point of the redesign: decide here instead of
+ * opening the session. Renders what is being asked from the server's compacted
+ * tool input, then the buttons that actually answer it (ACP option list, an
+ * AskUserQuestion answer form, or Approve/Deny).
+ */
+const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }: {
   n: Notification;
   onNavigate: (to: string) => void;
   onDismiss: () => void;
 }) {
-  // Pending permission asks get inline Approve/Deny (the same endpoint the
-  // session view uses). 'busy' debounces the double-tap. On success the card
-  // stamps itself optimistically (`sent`) instead of waiting for the
+  // 'sent' stamps the card optimistically instead of waiting for the
   // session:permission-resolved WS round-trip — a dropped WS would otherwise
-  // leave the buttons pending forever. The WS event later stamps the feed
-  // entry itself (idempotent). On failure (e.g. the request already expired
-  // on the CLI side) an inline error shows; the session deep link remains the
-  // fallback.
+  // leave the buttons pending forever. The WS event later stamps the feed entry
+  // itself (idempotent). 'stale' is the THIRD outcome (see respond below).
   const [busy, setBusy] = useState(false);
-  const [sent, setSent] = useState<'allowed' | 'denied' | null>(null);
+  const [sent, setSent] = useState<'allowed' | 'denied' | 'stale' | null>(null);
   const [respondError, setRespondError] = useState(false);
-  // Entries without a navigation target (e.g. plugin/system errors) expand on
-  // click instead — otherwise a truncated error message is simply unreadable.
-  const [expanded, setExpanded] = useState(false);
+  const [detailExpanded, setDetailExpanded] = useState(false);
   const resolved = n.resolved ?? sent;
-  const pendingPermission = n.kind === 'permission' && !resolved && !!n.sessionId;
-  // dedupKey is `perm:<requestId>` for permission entries — the requestId is
-  // recovered from it because the record doesn't carry it as its own field.
-  const requestId = n.dedupKey.startsWith('perm:') ? n.dedupKey.slice(5) : null;
+  const detail = permissionDetail(n);
+  const requestId = requestIdOf(n);
   const target = linkTargetOf(n);
+  const acpOptions = validAcpOptions(n);
+  const answerable = !resolved && !!n.sessionId && !!requestId;
 
-  const respond = async (allow: boolean) => {
+  const respond = async (
+    allow: boolean,
+    opts?: { optionId?: string; answers?: Record<string, string>; message?: string },
+  ) => {
     if (!n.sessionId || !requestId || busy) return;
     setBusy(true);
     setRespondError(false);
     try {
-      await respondToPermission(n.sessionId, requestId, allow);
+      await respondToPermission(n.sessionId, requestId, allow, opts?.message, opts?.optionId, opts?.answers);
       setSent(allow ? 'allowed' : 'denied');
     } catch (err) {
-      setRespondError(true);
+      // 404/409 = the request already settled elsewhere (answered in another
+      // surface, or the turn died). Settle the card instead of re-arming buttons
+      // the user would keep clicking (the zombie-card class of bug) — but as its
+      // OWN state: stamping 'denied' claimed an outcome we never saw, so a request
+      // the user had just APPROVED in the session view read "Denied" here.
+      const status = (err as { status?: number }).status;
+      if (status === 404 || status === 409) setSent('stale');
+      else setRespondError(true);
       log.warn('notifications', 'inline permission respond failed', {
-        sessionId: n.sessionId, requestId, error: String(err),
+        sessionId: n.sessionId, requestId, status: String(status ?? ''), error: String(err),
       });
     } finally {
       setBusy(false);
     }
   };
+
+  // An AskUserQuestion whose questions we couldn't recover must NOT offer a
+  // blanket Approve — the session view has the live request, send them there.
+  const askWithoutInput = isUnanswerableAsk(n, detail);
+
+  return (
+    <div className={`notification-feed-item nfc-perm-card notification-feed-item--${n.severity}${n.read ? '' : ' unread'}`}>
+      <div className="notification-feed-item-head">
+        <span className={`notification-feed-dot notification-feed-dot--${n.severity}`} />
+        <span className="notification-feed-item-title">{toolNameOf(n) ?? n.title}</span>
+        <span className="notification-feed-item-time">
+          {formatRelative(effectiveTs(n))}
+        </span>
+        <button
+          className="notification-feed-item-dismiss"
+          onClick={onDismiss}
+          aria-label="Dismiss notification"
+        >
+          &times;
+        </button>
+      </div>
+
+      <ContextChips n={n} />
+
+      {/* What is being asked. */}
+      {detail.type === 'bash' && (
+        <>
+          {detail.description && <div className="nfc-card-sub">{detail.description}</div>}
+          <code
+            className={`nfc-card-cmd${detailExpanded ? ' nfc-expanded' : ''}`}
+            onClick={() => setDetailExpanded(v => !v)}
+            title={detailExpanded ? 'Collapse' : 'Expand'}
+          >
+            {detail.command}
+          </code>
+        </>
+      )}
+      {detail.type === 'plan' && (
+        <div className="nfc-card-plan">
+          {/* No plan text (dropped over the size ceiling) → no expand toggle: a
+              toggle that reveals nothing is a dead end, so just name the ask. */}
+          {detail.plan ? (
+            <>
+              <button className="nfc-card-toggle" onClick={() => setDetailExpanded(v => !v)}>
+                {detailExpanded ? '▼' : '▶'} Plan ready for review
+              </button>
+              {detailExpanded && <pre className="nfc-card-pre">{detail.plan}</pre>}
+            </>
+          ) : (
+            <div className="nfc-card-sub">Plan ready for review</div>
+          )}
+        </div>
+      )}
+      {detail.type === 'file' && <div className="nfc-card-path">{detail.filePath}</div>}
+      {detail.type === 'generic' && (
+        /* The over-ceiling case: `preview` is the only thing left of the input, so
+           render it — the degraded card otherwise showed nothing about the ask. */
+        detail.preview ? (
+          <code
+            className={`nfc-card-cmd${detailExpanded ? ' nfc-expanded' : ''}`}
+            onClick={() => setDetailExpanded(v => !v)}
+            title={detailExpanded ? 'Collapse' : 'Expand'}
+          >
+            {detail.preview}
+          </code>
+        ) : n.body ? (
+          <div className="notification-feed-item-body">{n.body}</div>
+        ) : null
+      )}
+      {n.reason && <div className="nfc-card-sub">{n.reason}</div>}
+
+      {resolved && (
+        <div className="notification-feed-item-resolved">
+          {resolved === 'allowed' ? 'Approved'
+            : resolved === 'denied' ? 'Denied'
+            // 404/409: settled somewhere else and we never learned which way —
+            // a neutral label, never a guessed outcome.
+            : 'Already answered'}
+        </div>
+      )}
+
+      {/* The answer form / buttons. */}
+      {detail.type === 'question' ? (
+        <AnswerForm
+          questions={detail.questions}
+          disabled={!answerable || busy}
+          resolved={!!resolved}
+          onSubmit={(answers) => void respond(true, { answers })}
+          onDismissQuestions={() => void respond(false, { message: 'User dismissed the questions' })}
+        />
+      ) : (!answerable || askWithoutInput) ? (
+        /* Two reasons the card can't answer, ONE affordance: nothing to answer
+           WITH (no session/requestId, or already settled), or an AskUserQuestion
+           whose questions we couldn't recover — a blanket Approve there would
+           tell the model the user answered nothing. */
+        (!resolved && target) && (
+          <div className="notification-feed-item-actions">
+            <button className="notification-perm-btn" onClick={() => onNavigate(target)}>
+              Go to Session
+            </button>
+          </div>
+        )
+      ) : acpOptions.length > 0 ? (
+        <div className="notification-feed-item-actions">
+          {acpOptions.map((o) => {
+            const isReject = isRejectOption(o);
+            return (
+              <button
+                key={o.optionId}
+                className={`notification-perm-btn${isReject ? '' : ' approve'}`}
+                disabled={busy}
+                onClick={() => void respond(!isReject, { optionId: o.optionId })}
+              >
+                {o.name ?? o.optionId}
+              </button>
+            );
+          })}
+          {/* The adapter's own reject option may be absent — keep a plain Deny. */}
+          {!acpOptions.some(isRejectOption) && (
+            <button className="notification-perm-btn" disabled={busy} onClick={() => void respond(false)}>
+              Deny
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="notification-feed-item-actions">
+          <button
+            className="notification-perm-btn approve"
+            disabled={busy}
+            onClick={() => void respond(true)}
+          >
+            Approve
+          </button>
+          <button className="notification-perm-btn" disabled={busy} onClick={() => void respond(false)}>
+            Deny
+          </button>
+        </div>
+      )}
+      {respondError && (
+        <span className="notification-perm-error">Failed — open the session to respond</span>
+      )}
+    </div>
+  );
+});
+
+/** Where the notification came from: session, host, project. */
+function ContextChips({ n }: { n: Notification }) {
+  const label = sessionLabelOf(n);
+  if (!label && !n.host && !n.project) return null;
+  return (
+    <div className="nfc-card-chips">
+      {label && <span className="nfc-chip">{label}</span>}
+      {n.host && <span className="nfc-chip">{n.host}</span>}
+      {n.project && <span className="nfc-chip">{n.project}</span>}
+    </div>
+  );
+}
+
+/**
+ * Inline AskUserQuestion answer form — the same pure helpers the session card
+ * uses (`ask-user-question.ts`), so the `answers` map on the wire is identical.
+ * Submit is gated on every question having an answer; free text beats the pills.
+ */
+function AnswerForm({ questions, disabled, resolved, onSubmit, onDismissQuestions }: {
+  questions: AskQuestion[];
+  disabled: boolean;
+  resolved: boolean;
+  onSubmit: (answers: Record<string, string>) => void;
+  onDismissQuestions: () => void;
+}) {
+  const [selections, setSelections] = useState<Record<string, string[]>>({});
+  const [otherText, setOtherText] = useState<Record<string, string>>({});
+  const complete = allAskUserQuestionsAnswered(questions, selections, otherText);
+
+  if (resolved) return null;
+
+  return (
+    <div className="nfc-answer">
+      {questions.map((q) => {
+        const picked = selections[q.question] ?? [];
+        return (
+          <div key={q.question} className="nfc-answer-q">
+            {q.header && <div className="nfc-chip">{q.header}</div>}
+            <div className="nfc-answer-text">{q.question}</div>
+            {q.options.length > 0 && (
+              <div className="nfc-answer-opts">
+                {q.options.map((opt) => (
+                  <button
+                    key={opt.label}
+                    className={`nfc-answer-opt${picked.includes(opt.label) ? ' nfc-picked' : ''}`}
+                    title={opt.description}
+                    disabled={disabled}
+                    onClick={() => setSelections(prev => ({
+                      ...prev,
+                      [q.question]: toggleAskUserSelection(prev[q.question], opt.label, q.multiSelect),
+                    }))}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <input
+              className="nfc-answer-input"
+              placeholder={q.options.length > 0 ? 'Other…' : 'Type your answer…'}
+              value={otherText[q.question] ?? ''}
+              disabled={disabled}
+              onChange={(e) => setOtherText(prev => ({ ...prev, [q.question]: e.target.value }))}
+            />
+          </div>
+        );
+      })}
+      <div className="notification-feed-item-actions">
+        <button
+          className="notification-perm-btn approve"
+          disabled={disabled || !complete}
+          onClick={() => onSubmit(buildAskUserAnswers(questions, selections, otherText))}
+        >
+          Submit
+        </button>
+        <button className="notification-perm-btn" disabled={disabled} onClick={onDismissQuestions}>
+          Dismiss
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Error / automation card: title, body, ×N fold badge, deep-link chips. */
+const FeedItem = memo(function FeedItem({ n, onNavigate, onDismiss }: {
+  n: Notification;
+  onNavigate: (to: string) => void;
+  onDismiss: () => void;
+}) {
+  // Entries without a navigation target (e.g. plugin/system errors) expand on
+  // click instead — otherwise a truncated error message is simply unreadable.
+  const [expanded, setExpanded] = useState(false);
+  const target = linkTargetOf(n);
+  const count = n.count ?? 1;
 
   return (
     <div
@@ -445,7 +631,14 @@ function FeedItem({ n, onNavigate, onDismiss }: {
       <div className="notification-feed-item-head">
         <span className={`notification-feed-dot notification-feed-dot--${n.severity}`} />
         <span className={`notification-feed-item-title${expanded ? ' expanded' : ''}`}>{n.title}</span>
-        <span className="notification-feed-item-time">{formatRelative(new Date(n.timestamp).toISOString())}</span>
+        {/* Occurrence fold: the server collapses repeats into one record so 36
+            identical failures are one line, with how often it happened. Clamped
+            at 99+ like the rail badge — a 4-digit count would push the row's
+            timestamp and dismiss button out of the card. */}
+        {count >= 2 && <span className="nfc-count-badge">&times;{count > 99 ? '99+' : count}</span>}
+        <span className="notification-feed-item-time">
+          {formatRelative(effectiveTs(n))}
+        </span>
         <button
           className="notification-feed-item-dismiss"
           onClick={(e) => { e.stopPropagation(); onDismiss(); }}
@@ -455,43 +648,7 @@ function FeedItem({ n, onNavigate, onDismiss }: {
         </button>
       </div>
       {n.body && <div className={`notification-feed-item-body${expanded ? '' : ' clamped'}`}>{n.body}</div>}
-      {n.kind === 'permission' && resolved && (
-        <div className="notification-feed-item-resolved">
-          {resolved === 'allowed' ? 'Approved' : 'Denied'}
-        </div>
-      )}
-      {pendingPermission && (
-        <div className="notification-feed-item-actions">
-          <button
-            className="notification-perm-btn approve"
-            disabled={busy}
-            onClick={(e) => { e.stopPropagation(); void respond(true); }}
-          >
-            Approve
-          </button>
-          <button
-            className="notification-perm-btn deny"
-            disabled={busy}
-            onClick={(e) => { e.stopPropagation(); void respond(false); }}
-          >
-            Deny
-          </button>
-          {respondError && (
-            <span className="notification-perm-error">Failed — open the session to respond</span>
-          )}
-        </div>
-      )}
+      <ContextChips n={n} />
     </div>
   );
-}
-
-function formatRelative(isoStr: string): string {
-  const diff = Date.now() - new Date(isoStr).getTime();
-  const secs = Math.floor(diff / 1000);
-  if (secs < 60) return `${secs}s ago`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
+});
