@@ -716,10 +716,21 @@ export class AcpSession {
       this.ensureConn(),
     ])
     const parsedBaseConfig = parseCodexBaseConfig(process.env.CODEX_CONFIG)
+    // Non-lane codex sessions get the same walnut context every native claude
+    // session gets (wn gateway + skill pointer); lanes get the self-knowledge
+    // contract instead (they ARE the personal AI — the hint would be circular).
+    let defaultInstructions: string | undefined
+    if (this.cfg.lane) {
+      defaultInstructions = renderSelfKnowledgeContract()
+    } else {
+      try {
+        const { buildSessionContext } = await import('../agent/session-context.js')
+        defaultInstructions = (await buildSessionContext(this.taskId, this.cfg.cwd)).systemPrompt || undefined
+      } catch { /* context is additive — never block establish */ }
+    }
     const adapterEnv = buildAcpAdapterEnv(systemCodex, {
       disableProjectInstructions: this.cfg.disableProjectInstructions,
-      developerInstructions: this.cfg.developerInstructions
-        ?? (this.cfg.lane ? renderSelfKnowledgeContract() : undefined),
+      developerInstructions: this.cfg.developerInstructions ?? defaultInstructions,
       baseConfig: parsedBaseConfig,
       sessionId: this.runtimeId,
     })

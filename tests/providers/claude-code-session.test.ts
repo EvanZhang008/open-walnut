@@ -1345,10 +1345,11 @@ describe('appendSystemPrompt parameter', () => {
 // ══════════════════════════════════════════════════════════════════
 
 describe('SessionRunner context enrichment', () => {
-  // buildSessionContext is a no-op as of 2026-06-18 — starting a session for a
-  // task no longer injects a system prompt. The session must still start and
-  // deliver the message; it just carries no [has-system-prompt] marker.
-  it('handleStart starts the session without injecting a system prompt', async () => {
+  // buildSessionContext injects EXACTLY the short walnut context hint (wn
+  // gateway + skill pointer) — task-independent, no task/vault/server preamble
+  // (that blanket was removed 2026-06-18 and must stay gone; the unit tests in
+  // tests/agent/session-context.test.ts pin the content and a size ceiling).
+  it('handleStart injects the walnut context hint as the system prompt', async () => {
     const tasksDir = path.join(tmpBase, 'tasks');
     await fsp.mkdir(tasksDir, { recursive: true });
     await fsp.writeFile(
@@ -1379,13 +1380,13 @@ describe('SessionRunner context enrichment', () => {
     const result = await waitForResult(collected);
     const rd = result.data as { result: string };
 
-    expect(rd.result).not.toContain('[has-system-prompt]');
+    expect(rd.result).toContain('[has-system-prompt]');
     expect(rd.result).toContain('context enrichment test');
 
     runner.destroyAndKill();
   });
 
-  it('session starts even if buildSessionContext fails', async () => {
+  it('session starts even if the task does not exist (hint still injected)', async () => {
     const collected = collectEvents();
     const runner = useDaemon(new SessionRunner(MOCK_CLI));
     runner.init();
@@ -1400,9 +1401,9 @@ describe('SessionRunner context enrichment', () => {
     const rd = result.data as { result: string };
 
     expect(rd.result).toContain('should still work');
-    // buildSessionContext is a no-op now, so no system prompt is injected for a
-    // task with no explicit appendSystemPrompt — the session must still start.
-    expect(rd.result).not.toContain('[has-system-prompt]');
+    // The walnut context hint is task-independent — a nonexistent task must
+    // not block the session, and the hint still rides the system prompt.
+    expect(rd.result).toContain('[has-system-prompt]');
 
     runner.destroyAndKill();
   });

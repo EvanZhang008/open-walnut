@@ -8338,11 +8338,12 @@ export class SessionRunner {
       log.session.info('using caller-provided system prompt', { taskId, promptLength: data.appendSystemPrompt.length })
     }
 
-    // Build session context from task info (task details, project memory, etc.)
-    if (taskId) {
+    // Session context (wn gateway + walnut skill pointer). Task-independent —
+    // every managed session gets it, taskless ones included.
+    {
       try {
         const { buildSessionContext } = await import('../agent/session-context.js')
-        const ctx = await buildSessionContext(taskId, cwd, data.host)
+        const ctx = await buildSessionContext(taskId ?? '', cwd, data.host)
         if (ctx.systemPrompt) {
           // Combine: caller-provided prompt takes priority, task context appended after
           appendSystemPrompt = appendSystemPrompt
@@ -8577,25 +8578,24 @@ export class SessionRunner {
       }
     }
 
-    // Build system prompt
+    // Build system prompt. Session context (wn gateway + walnut skill pointer)
+    // is task-independent — taskless sessions get it too.
     let systemPrompt: string | undefined
     if (data.appendSystemPrompt) {
       systemPrompt = data.appendSystemPrompt
     }
-    if (taskId) {
-      try {
-        const { buildSessionContext } = await import('../agent/session-context.js')
-        const ctx = await buildSessionContext(taskId, cwd, data.host)
-        if (ctx.systemPrompt) {
-          systemPrompt = systemPrompt
-            ? `${systemPrompt}\n\n---\n\n## Task Context\n\n${ctx.systemPrompt}`
-            : ctx.systemPrompt
-        }
-      } catch (err) {
-        log.session.warn('failed to build SDK session context', {
-          taskId, error: err instanceof Error ? err.message : String(err),
-        })
+    try {
+      const { buildSessionContext } = await import('../agent/session-context.js')
+      const ctx = await buildSessionContext(taskId ?? '', cwd, data.host)
+      if (ctx.systemPrompt) {
+        systemPrompt = systemPrompt
+          ? `${systemPrompt}\n\n---\n\n## Task Context\n\n${ctx.systemPrompt}`
+          : ctx.systemPrompt
       }
+    } catch (err) {
+      log.session.warn('failed to build SDK session context', {
+        taskId, error: err instanceof Error ? err.message : String(err),
+      })
     }
 
     // Pass the requested mode through UNCHANGED — the session server maps it to

@@ -1954,7 +1954,10 @@ function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => voi
   const parsed = parseGatewayLine(line)
   if (!parsed.ok) return respond({ ok: false, error: parsed.error })
   const req = parsed.request
+  // ACP sessions (engine=codex) live in the acp worker map, not `sessions` —
+  // their WALNUT_SESSION_ID is the runtimeId, stable for the worker's life.
   const callerSid = resolveCallerSid(req.sid, sessions, gatewaySidAliases)
+    ?? (acp.hasWorker(req.sid) ? req.sid : null)
   if (!callerSid) {
     // Unknown sid (CLI adopted from before a daemon restart) — refuse locally,
     // the request never leaves this host. A respawn self-heals (plan §5).
@@ -2052,6 +2055,17 @@ function writeWnShim() {
 function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   const params = cmd as unknown as AcpStartParams
   if (!params.sid || !params.cwd) return sendError(ws, id, 'acpStart: missing sid/cwd')
+  // Agent gateway for ACP sessions: same wiring the native `claude` spawn gets.
+  // WALNUT_SESSION_ID arrives hub-side (the runtimeId; acp.hasWorker() vouches
+  // for it in handleGatewayLine); the daemon owns the socket path and the `wn`
+  // shim dir, so those are injected here, not hub-side. PATH is overridden (not
+  // appended in-shell like the native spawn) because ACP workers don't run
+  // through the RC-sourcing shell wrapper.
+  params.env = {
+    ...params.env,
+    WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
+    PATH: (process.env.PATH || '') + path.delimiter + GATEWAY_SHIM_DIR,
+  }
   void acp.acpStart(ws, params).then((resp) => {
     if (resp.ok) sendOk(ws, id, resp.result ?? {})
     else safeSend(ws, JSON.stringify({ id, ok: false, error: resp.error, errorKind: resp.errorKind }))
