@@ -564,6 +564,15 @@ export async function handlePrimaryChatTurnRelay(
     imageData = adopted
   }
 
+  // Materialize the index row for a replica-created conversation NOW, on this
+  // box, instead of waiting for git-sync to deliver it. The old "the row
+  // arrives by git-sync LWW" plan lost the row whenever both boxes touched
+  // _index.json inside one sync window (whole-file LWW keeps ONE side) — the
+  // conversation file survived everywhere but every list/read 404'd. With the
+  // row written here too, both sides of any index merge carry it.
+  const { ensureConversationRow } = await import('../../core/conversations.js')
+  await ensureConversationRow(agentId, conversationId, text)
+
   const engine = await resolvePrimaryEngineLabel()
   rememberTurnId(turnId)
   primaryTurns.set(conversationId, turnId)

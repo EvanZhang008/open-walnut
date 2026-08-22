@@ -238,8 +238,121 @@ export async function migrateIfNeeded(agentId: string): Promise<void> {
 /** List conversations for an agent (pinned first, then lastMessageAt desc). */
 export async function listConversations(agentId: string): Promise<ConversationMeta[]> {
   await migrateIfNeeded(agentId);
+  await adoptOrphanedConversationFiles(agentId);
   const index = await readIndex(agentId);
   return sortConversations(index.conversations);
+}
+
+/**
+ * Self-heal the index: adopt conversation FILES that have no index row.
+ *
+ * Why this exists (2026-08-22 incident): _index.json is one JSON file synced
+ * whole-file with last-writer-wins. When two boxes both touch it inside one
+ * sync window (a replica adding a phone-created conversation while the primary
+ * bumps lastMessageAt on another row), the merge picks ONE side and the other
+ * side's new row is annihilated — the conversation file survives on every box
+ * but no longer appears in any list and its reads 404. The files are the
+ * ground truth (one file per conversation, no cross-box conflict), so the
+ * index is treated as a materialized view and rebuilt from disk: any
+ * `conv-*.json` with no row is re-adopted with metadata derived from its
+ * content. Derivation is deterministic, so every box converges to the same
+ * row and the LWW merge can no longer eat it (both sides carry it).
+ *
+ * Cheap on the happy path: one readdir + a set diff; the lock and file reads
+ * only happen when an orphan is actually found.
+ */
+async function adoptOrphanedConversationFiles(agentId: string): Promise<void> {
+  let names: string[];
+  try {
+    names = await fsp.readdir(conversationDir(agentId));
+  } catch {
+    return; // no dir yet — nothing to reconcile
+  }
+  const onDisk = names
+    .filter((n) => /^conv-[a-z0-9-]{1,64}\.json$/i.test(n))
+    .map((n) => n.slice(0, -'.json'.length));
+  if (onDisk.length === 0) return;
+  const known = new Set((await readIndex(agentId)).conversations.map((c) => c.id));
+  const orphans = onDisk.filter((id) => !known.has(id));
+  if (orphans.length === 0) return;
+
+  await withIndexLock(agentId, async () => {
+    const index = await readIndex(agentId);
+    const knownNow = new Set(index.conversations.map((c) => c.id));
+    const adopted: string[] = [];
+    for (const id of orphans) {
+      if (knownNow.has(id)) continue; // raced: someone re-added it meanwhile
+      let store: ChatHistoryStore | null = null;
+      try {
+        store = await readJsonFile<ChatHistoryStore | null>(conversationFile(agentId, id), null);
+      } catch { /* corrupt JSON — readJsonFile throws on parse errors */ }
+      if (!store || !Array.isArray(store.entries)) continue; // unreadable/garbage — leave for a human
+      const now = new Date().toISOString();
+      const firstTs = store.entries.find((e) => typeof e?.timestamp === 'string' && e.timestamp)?.timestamp;
+      const createdAt = firstTs || store.lastUpdated || now;
+      index.conversations.push({
+        id,
+        agentId,
+        title: deriveTitle(firstUserMessage(store)) || 'Recovered Conversation',
+        createdAt,
+        lastMessageAt: store.lastUpdated || createdAt,
+        messageCount: await countLogicalMessages(store),
+        lastDistilledAt: null,
+        lastDistilledMessageCount: 0,
+        // Derived createdAt can predate the real main; keep this row out of
+        // the oldest-is-main self-heal (see getMainConversationId).
+        recovered: true,
+      });
+      adopted.push(id);
+    }
+    if (adopted.length > 0) {
+      await writeIndex(agentId, index);
+      log.agent.warn('conversation index reconcile: adopted orphaned conversation files', {
+        agentId, adopted,
+      });
+    }
+  });
+}
+
+/**
+ * Make sure an index row exists for `conversationId`, creating one when
+ * missing (title derived from `seedText`). Used by the cloud chat-turn relay:
+ * the replica created the conversation in ITS index, and waiting for git-sync
+ * to deliver the row proved lossy (whole-file LWW can drop it — see
+ * adoptOrphanedConversationFiles). Writing the row on the primary too means
+ * BOTH sides of any index merge carry it, so no resolution can lose it.
+ * Best-effort by contract: a failure here must never block a chat turn.
+ */
+export async function ensureConversationRow(
+  agentId: string,
+  conversationId: string,
+  seedText?: string,
+): Promise<void> {
+  try {
+    validateConversationId(conversationId);
+    await migrateIfNeeded(agentId);
+    await withIndexLock(agentId, async () => {
+      const index = await readIndex(agentId);
+      if (index.conversations.some((c) => c.id === conversationId)) return;
+      const now = new Date().toISOString();
+      index.conversations.push({
+        id: conversationId,
+        agentId,
+        title: deriveTitle(seedText ?? '') || 'New Conversation',
+        createdAt: now,
+        lastMessageAt: now,
+        messageCount: 0,
+        lastDistilledAt: null,
+        lastDistilledMessageCount: 0,
+      });
+      await writeIndex(agentId, index);
+      log.agent.info('conversation row ensured (relay/adoption path)', { agentId, conversationId });
+    });
+  } catch (err) {
+    log.agent.warn('ensureConversationRow failed (non-critical)', {
+      agentId, conversationId, error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /** The active conversation id for an agent (guaranteed non-null after migrate). */
@@ -270,7 +383,12 @@ export async function getMainConversationId(agentId: string): Promise<string> {
   await migrateIfNeeded(agentId);
   return withIndexLock(agentId, async () => {
     const index = await readIndex(agentId);
-    const oldest = [...index.conversations].sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+    // Recovered rows (orphan-file adoption) have createdAt DERIVED from file
+    // content — a re-adopted months-old thread would otherwise look "oldest"
+    // and capture main. Only fall back to them when nothing else exists.
+    const eligible = index.conversations.filter((c) => !c.recovered);
+    const pool = eligible.length > 0 ? eligible : index.conversations;
+    const oldest = [...pool].sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
     const existing = index.conversations.find((c) => c.isMain);
     if (existing) {
       // Self-heal a mis-assigned main. `isMain` is only ever set by auto-logic
