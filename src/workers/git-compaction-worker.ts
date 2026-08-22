@@ -20,7 +20,9 @@ import { runScheduledCompaction } from '../integrations/git-compaction.js';
 initLogging();
 
 try {
-  const result = runScheduledCompaction();
+  // async since the bundle-fallback push (T65) — the worker is a dedicated
+  // child process, so awaiting here blocks nobody.
+  const result = await runScheduledCompaction();
   if (process.connected) process.send?.({ ok: true, result });
   process.exit(0);
 } catch (err) {

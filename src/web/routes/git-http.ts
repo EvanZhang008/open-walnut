@@ -35,6 +35,7 @@ import { isSafeGroupPid } from '../../core/process-group-kill.js'
 import { isDiskWriteBlocked } from '../../core/disk-watermark.js'
 import { validateBearerCredential } from '../middleware/auth.js'
 import { recordAuthFailure, isAuthRateLimited } from '../middleware/auth-rate-limit.js'
+import { gitBundlePushRouter } from './git-bundle-push.js'
 import { log } from '../../logging/index.js'
 
 /** Fixed repo name inside the hub dir — one data repo per companion box. */
@@ -305,6 +306,11 @@ function runHttpBackend(req: Request, res: Response, pathInfo: string): void {
 
 export const gitHttpRouter = Router()
 gitHttpRouter.use(gitAuthMiddleware)
+
+// Chunked bundle push — the big-push channel for clients whose networks kill
+// long sustained uploads (see git-bundle-push.ts). Mounted inside this router
+// so it rides the same device-token auth and raw-body middleware position.
+gitHttpRouter.use(gitBundlePushRouter)
 
 // Smart-HTTP discovery: GET /info/refs?service=git-upload-pack|git-receive-pack
 gitHttpRouter.get('/info/refs', (req, res) => runHttpBackend(req, res, '/info/refs'))

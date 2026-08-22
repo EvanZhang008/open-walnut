@@ -797,6 +797,49 @@ export function noteNetworkSuccess(): void {
   guard.consecutiveNetworkFailures = 0;
 }
 
+// ── Bundle-push fallback (T65) ───────────────────────────────────────────────
+// Endpoint-security TLS filters on some machines corrupt long sustained
+// uploads: a push whose pack exceeds a few dozen MB dies mid-stream with
+// "SSL bad record mac" — reproducibly (2026-08-22 controlled experiment; the
+// hub accepted the same 250MB pack pushed locally in 20s). One-off failures
+// are ordinary network weather; a STREAK of them while local commits pile up
+// is the filter signature, so after PUSH_FAILURES_FOR_BUNDLE consecutive
+// failures the delta is delivered through the chunked bundle channel
+// (git-bundle-client.ts — small requests, one fresh connection each).
+
+export const PUSH_FAILURES_FOR_BUNDLE = 3;
+let pushFailureStreak = 0;
+
+async function tryBundlePushFallback(branch: string): Promise<boolean> {
+  const remoteUrl = await gitSafeAsync('remote get-url origin');
+  if (!remoteUrl) return false;
+  const remoteTip = await gitSafeAsync(`rev-parse origin/${branch}`);
+  try {
+    const { pushViaBundle } = await import('./git-bundle-client.js');
+    const result = await pushViaBundle({
+      branch,
+      remoteUrl,
+      // CAS against the tip we believe; basis makes the bundle incremental
+      // (only the un-pushed commits travel, not the whole history).
+      oldValue: remoteTip ?? '',
+      basis: remoteTip ?? undefined,
+    });
+    if (result.ok) {
+      log.git.warn('sync push delivered via bundle channel after repeated push failures', {
+        branch, bytes: result.bytes, chunks: result.chunks, streak: pushFailureStreak,
+      });
+      // Remote moved under us (from git's viewpoint) — refresh the tracking ref.
+      await gitSafeAsync(`fetch origin ${branch}`, { timeout: FETCH_TIMEOUT });
+      return true;
+    }
+    log.git.warn('bundle push fallback failed', { branch, error: result.error });
+    return false;
+  } catch (err) {
+    log.git.warn('bundle push fallback threw', { error: err instanceof Error ? err.message : String(err) });
+    return false;
+  }
+}
+
 /** Test hook: reset all guard state between tests. */
 export function resetSyncGuardForTest(): void {
   diskPullOnly = false;
@@ -804,6 +847,7 @@ export function resetSyncGuardForTest(): void {
   guard.safeModeReason = null;
   guard.safeModeSince = null;
   guard.consecutiveNetworkFailures = 0;
+  pushFailureStreak = 0;
   lastSafeModeRefusalLog = 0;
   lastSurgeryWarnLog = 0;
   // The tracked-file count is per-repo and cached for 10 minutes; tests rebuild
@@ -1264,6 +1308,22 @@ async function syncInner(): Promise<{ pulled: number; pushed: number; conflicts:
       const pushResult = await gitSafeAsync(`push origin ${branch}`, { timeout: NETWORK_TIMEOUT });
       if (pushResult === null) {
         pushed = 0; // push failed
+        // Endpoint-security TLS filters kill large sustained pushes mid-stream
+        // (T65) — a push that keeps failing while commits pile up locally is
+        // that signature, and retrying it every 30s just re-packs the same
+        // doomed pack. After a few consecutive failures, deliver the delta
+        // through the chunked bundle channel instead (small requests, one
+        // connection each — the filters never see a long stream).
+        pushFailureStreak++;
+        if (pushFailureStreak >= PUSH_FAILURES_FOR_BUNDLE) {
+          const delivered = await tryBundlePushFallback(branch);
+          if (delivered) {
+            pushed = 1;
+            pushFailureStreak = 0;
+          }
+        }
+      } else {
+        pushFailureStreak = 0;
       }
     }
   }

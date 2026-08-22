@@ -62,13 +62,13 @@ function addHub(repoDir: string): string {
 }
 
 describe('compactGitHistory remote coordination', () => {
-  it('force-pushes the compacted chain to the hub (heads match, hub history shrinks)', () => {
+  it('force-pushes the compacted chain to the hub (heads match, hub history shrinks)', async () => {
     const repo = tmp('compact-repo-');
     seedRepo(repo, 120, 60);
     const hub = addHub(repo);
     const hubBefore = Number(sh(hub, 'git rev-list --count main'));
 
-    const result = compactGitHistory(repo);
+    const result = await compactGitHistory(repo);
 
     expect(result.error).toBeUndefined();
     expect(result.skipped).toBeUndefined();
@@ -78,19 +78,19 @@ describe('compactGitHistory remote coordination', () => {
     expect(Number(sh(hub, 'git rev-list --count main'))).toBeLessThan(hubBefore);
   });
 
-  it('defers (skip, history untouched) when the remote is unreachable', () => {
+  it('defers (skip, history untouched) when the remote is unreachable', async () => {
     const repo = tmp('compact-repo-');
     seedRepo(repo, 60, 60);
     sh(repo, 'git remote add origin /nonexistent/hub.git');
     const headBefore = sh(repo, 'git rev-parse main');
 
-    const result = compactGitHistory(repo);
+    const result = await compactGitHistory(repo);
 
     expect(result.skipped).toBe(true);
     expect(sh(repo, 'git rev-parse main')).toBe(headBefore);
   });
 
-  it('defers when origin/main has commits not merged locally (never destroys hub work)', () => {
+  it('defers when origin/main has commits not merged locally (never destroys hub work)', async () => {
     const repo = tmp('compact-repo-');
     seedRepo(repo, 60, 60);
     const hub = addHub(repo);
@@ -103,7 +103,7 @@ describe('compactGitHistory remote coordination', () => {
     sh(other, 'git add -A && git commit -m "cloud edit" && git push origin main');
 
     const headBefore = sh(repo, 'git rev-parse main');
-    const result = compactGitHistory(repo);
+    const result = await compactGitHistory(repo);
 
     expect(result.skipped).toBe(true);
     expect(sh(repo, 'git rev-parse main')).toBe(headBefore);
@@ -111,7 +111,7 @@ describe('compactGitHistory remote coordination', () => {
     expect(sh(hub, 'git log --format=%s -1 main')).toBe('cloud edit');
   });
 
-  it('rolls back to the pre-compaction chain when the push is rejected', () => {
+  it('rolls back to the pre-compaction chain when the push is rejected', async () => {
     const repo = tmp('compact-repo-');
     seedRepo(repo, 120, 60);
     const hub = addHub(repo);
@@ -122,7 +122,7 @@ describe('compactGitHistory remote coordination', () => {
     const hook = path.join(hub, 'hooks', 'pre-receive');
     fs.writeFileSync(hook, '#!/bin/sh\necho rejected >&2\nexit 1\n', { mode: 0o755 });
 
-    const result = compactGitHistory(repo);
+    const result = await compactGitHistory(repo);
 
     expect(result.error).toMatch(/push of compacted history failed/);
     // Local main restored — repo and hub still agree, sync keeps working.
@@ -131,11 +131,11 @@ describe('compactGitHistory remote coordination', () => {
     expect(sh(hub, 'git rev-parse main')).toBe(headBefore);
   });
 
-  it('still compacts a repo with no remote at all (local-only path unchanged)', () => {
+  it('still compacts a repo with no remote at all (local-only path unchanged)', async () => {
     const repo = tmp('compact-repo-');
     seedRepo(repo, 120, 60);
 
-    const result = compactGitHistory(repo);
+    const result = await compactGitHistory(repo);
 
     expect(result.error).toBeUndefined();
     expect(result.after).toBeLessThan(result.before);

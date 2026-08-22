@@ -233,15 +233,15 @@ describe('git-compaction', () => {
   // -------------------------------------------------------------------------
 
   describe('compactGitHistory', () => {
-    it('skips when fewer than 50 commits', () => {
+    it('skips when fewer than 50 commits', async () => {
       for (let i = 0; i < 10; i++) {
         commitAt(repoDir, 40 - i, `content-${i}`);
       }
-      const result = compactGitHistory(repoDir);
+      const result = await compactGitHistory(repoDir);
       expect(result.skipped).toBe(true);
     });
 
-    it('compacts a repo with 200+ commits spanning 60 days', () => {
+    it('compacts a repo with 200+ commits spanning 60 days', async () => {
       // Capture expected final file state
       // Create commits across time tiers
       // Old tier (>30 days): 5 commits per day for days 60-35
@@ -269,7 +269,7 @@ describe('git-compaction', () => {
       expect(beforeCount).toBeGreaterThan(100);
 
       // Run compaction
-      const result = compactGitHistory(repoDir);
+      const result = await compactGitHistory(repoDir);
 
       expect(result.skipped).toBeFalsy();
       expect(result.error).toBeUndefined();
@@ -306,7 +306,7 @@ describe('git-compaction', () => {
       expect(fs.existsSync(path.join(repoDir, '.git', 'compaction-state.json'))).toBe(false);
     });
 
-    it('preserves multiple files across directories', () => {
+    it('preserves multiple files across directories', async () => {
       // Create a repo with complex file structure
       fs.mkdirSync(path.join(repoDir, 'tasks'), { recursive: true });
       fs.mkdirSync(path.join(repoDir, 'notes'), { recursive: true });
@@ -332,7 +332,7 @@ describe('git-compaction', () => {
       const beforeFiles = getAllFiles(repoDir);
       const beforeCount = getCommitCount(repoDir);
 
-      const result = compactGitHistory(repoDir);
+      const result = await compactGitHistory(repoDir);
 
       expect(result.error).toBeUndefined();
       expect(result.skipped).toBeFalsy();
@@ -347,20 +347,20 @@ describe('git-compaction', () => {
       expect(getCommitCount(repoDir)).toBeLessThan(beforeCount);
     });
 
-    it('creates backup branch and cleans up old ones', () => {
+    it('creates backup branch and cleans up old ones', async () => {
       // Create enough commits
       for (let day = 60; day >= 1; day--) {
         commitAt(repoDir, day, `content-${day}`);
       }
 
-      compactGitHistory(repoDir);
+      await compactGitHistory(repoDir);
 
       const branches = execSync('git branch', { cwd: repoDir, encoding: 'utf-8' });
       const backupBranches = branches.split('\n').filter((b) => b.includes('backup-'));
       expect(backupBranches.length).toBeGreaterThanOrEqual(1);
     });
 
-    it('is idempotent — running twice does not corrupt', () => {
+    it('is idempotent — running twice does not corrupt', async () => {
       for (let day = 60; day >= 1; day--) {
         createAutoSaveCommits(repoDir, day, 3);
       }
@@ -369,11 +369,11 @@ describe('git-compaction', () => {
       const expectedFiles = getAllFiles(repoDir);
 
       // First compaction
-      const r1 = compactGitHistory(repoDir);
+      const r1 = await compactGitHistory(repoDir);
       expect(r1.error).toBeUndefined();
 
       // Second compaction (should skip — not enough improvement)
-      const r2 = compactGitHistory(repoDir);
+      const r2 = await compactGitHistory(repoDir);
       // Either skipped or successful, but files must be intact
       const afterFiles = getAllFiles(repoDir);
       for (const [file, content] of expectedFiles) {
@@ -440,17 +440,17 @@ describe('git-compaction', () => {
   // -------------------------------------------------------------------------
 
   describe('edge cases', () => {
-    it('handles repo with only recent commits', () => {
+    it('handles repo with only recent commits', async () => {
       for (let i = 0; i < 100; i++) {
         commitAt(repoDir, 0, `content-${i}`, `file-${i}.txt`);
       }
 
-      const result = compactGitHistory(repoDir);
+      const result = await compactGitHistory(repoDir);
       // All commits are recent — should skip (not enough reduction)
       expect(result.skipped).toBe(true);
     });
 
-    it('handles binary-like content (no corruption)', () => {
+    it('handles binary-like content (no corruption)', async () => {
       // Create a file with special characters
       const specialContent = 'line1\nline2\ttab\r\nwindows\n\0nullbyte';
       for (let day = 60; day >= 1; day--) {
@@ -464,14 +464,14 @@ describe('git-compaction', () => {
       }
 
       const beforeContent = fs.readFileSync(path.join(repoDir, 'special.txt'), 'utf-8');
-      const result = compactGitHistory(repoDir);
+      const result = await compactGitHistory(repoDir);
 
       expect(result.error).toBeUndefined();
       const afterContent = fs.readFileSync(path.join(repoDir, 'special.txt'), 'utf-8');
       expect(afterContent).toBe(beforeContent);
     });
 
-    it('handles deleted files in history correctly', () => {
+    it('handles deleted files in history correctly', async () => {
       // Create file, commit, delete file, commit more
       commitAt(repoDir, 50, 'temp content', 'temp-file.txt');
       for (let day = 49; day >= 1; day--) {
@@ -484,7 +484,7 @@ describe('git-compaction', () => {
       const beforeFiles = getAllFiles(repoDir);
       expect(beforeFiles.has('temp-file.txt')).toBe(false);
 
-      const result = compactGitHistory(repoDir);
+      const result = await compactGitHistory(repoDir);
       expect(result.error).toBeUndefined();
 
       const afterFiles = getAllFiles(repoDir);
@@ -569,13 +569,13 @@ describe('git-compaction', () => {
   // -------------------------------------------------------------------------
 
   describe('runScheduledCompaction', () => {
-    it('returns null when compaction is not due', () => {
+    it('returns null when compaction is not due', async () => {
       markCompactionDone(repoDir);
-      const result = runScheduledCompaction(repoDir);
+      const result = await runScheduledCompaction(repoDir);
       expect(result).toBeNull();
     });
 
-    it('runs compaction when due and writes .last-compaction', () => {
+    it('runs compaction when due and writes .last-compaction', async () => {
       // Create enough history to trigger compaction
       for (let day = 60; day >= 1; day--) {
         createAutoSaveCommits(repoDir, day, 2);
@@ -585,7 +585,7 @@ describe('git-compaction', () => {
       // No .last-compaction file → due
       expect(isCompactionDue(repoDir)).toBe(true);
 
-      const result = runScheduledCompaction(repoDir);
+      const result = await runScheduledCompaction(repoDir);
       expect(result).not.toBeNull();
       expect(result!.before).toBeGreaterThan(result!.after);
 
@@ -596,16 +596,16 @@ describe('git-compaction', () => {
       expect(compactionInProgress).toBe(false);
 
       // Second call should return null (not due)
-      expect(runScheduledCompaction(repoDir)).toBeNull();
+      expect(await runScheduledCompaction(repoDir)).toBeNull();
     });
 
-    it('resets compactionInProgress flag even when compaction skips', () => {
+    it('resets compactionInProgress flag even when compaction skips', async () => {
       // Only a few commits — compaction will skip
       for (let i = 0; i < 5; i++) {
         commitAt(repoDir, i, `content-${i}`);
       }
 
-      const result = runScheduledCompaction(repoDir);
+      const result = await runScheduledCompaction(repoDir);
       // Skipped (< 50 commits) but should not crash
       expect(result).not.toBeNull();
       expect(result!.skipped).toBe(true);

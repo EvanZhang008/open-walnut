@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { WALNUT_HOME } from '../constants.js';
 import { git, gitSafe, setCompactionInProgress, clearStaleLock } from './git-sync.js';
+import { pushViaBundle } from './git-bundle-client.js';
 import { log } from '../logging/index.js';
 
 // ---------------------------------------------------------------------------
@@ -179,7 +180,7 @@ export function collectCommitsPaged(repoDir: string): Commit[] {
  * Run tiered history compaction on a git repo.
  * @param repoDir - path to the git working directory (defaults to WALNUT_HOME)
  */
-export function compactGitHistory(repoDir = WALNUT_HOME): CompactionResult {
+export async function compactGitHistory(repoDir = WALNUT_HOME): Promise<CompactionResult> {
   const opts = { cwd: repoDir };
 
   // 0. Ensure we're on main and working tree is clean
@@ -310,11 +311,38 @@ export function compactGitHistory(repoDir = WALNUT_HOME): CompactionResult {
       // 120s: pushing the compacted history is one big pack; the default 30s
       // LOCAL_TIMEOUT is calibrated for local ops, not a full-history upload.
       if (gitSafe(`push ${lease} origin main`, { ...opts, timeout: 120_000 }) === null) {
-        log.git.warn('compaction: force-with-lease push failed — restoring pre-compaction main so sync stays consistent with the hub');
-        git(`update-ref refs/heads/main ${backupName}`, opts);
-        gitSafe('reset --mixed HEAD', opts);
-        removeState(repoDir);
-        return { before: commits.length, after: commits.length, error: 'push of compacted history failed (lease lost or network) — rolled back, will retry next run' };
+        // The compacted history is one huge pack (full rewritten chain), and
+        // large sustained pushes are exactly what endpoint-security TLS
+        // filters kill mid-stream (2026-08-22: reproducible "bad record mac"
+        // past ~25MB while the hub itself was healthy). Before rolling back —
+        // which re-runs this doomed push every day and strands a quarantine
+        // dir on the hub per attempt — deliver the same ref update through
+        // the chunked bundle channel, which those filters can't touch.
+        log.git.warn('compaction: push failed — attempting chunked bundle delivery');
+        const remoteUrl = gitSafe('remote get-url origin', opts);
+        const bundled = remoteUrl
+          ? await pushViaBundle({
+              repoDir,
+              branch: 'main',
+              remoteUrl,
+              // Same lease semantics as the push: the hub must still be at
+              // the pre-rewrite head or the CAS fails and we roll back.
+              oldValue: remoteHeadBeforeRewrite ?? '',
+              // No basis: the rewritten chain shares no ancestry with what
+              // the hub has, so the bundle must be self-contained.
+            })
+          : { ok: false as const, bytes: 0, chunks: 0, error: 'no origin url' };
+        if (!bundled.ok) {
+          log.git.warn('compaction: bundle delivery also failed — restoring pre-compaction main so sync stays consistent with the hub', { error: bundled.error });
+          git(`update-ref refs/heads/main ${backupName}`, opts);
+          gitSafe('reset --mixed HEAD', opts);
+          removeState(repoDir);
+          return { before: commits.length, after: commits.length, error: `push of compacted history failed (${bundled.error ?? 'lease lost or network'}) — rolled back, will retry next run` };
+        }
+        log.git.info('compaction: rewritten history delivered via bundle channel', { bytes: bundled.bytes, chunks: bundled.chunks });
+        // The hub ref moved but our remote-tracking ref doesn't know yet —
+        // sync's next fetch would otherwise see a surprise. Update it now.
+        gitSafe('fetch origin main', opts);
       }
     }
 
@@ -438,13 +466,13 @@ export function markCompactionDone(repoDir = WALNUT_HOME): void {
 /**
  * Run compaction if due, with full safety (lock coordination with git-sync).
  */
-export function runScheduledCompaction(repoDir = WALNUT_HOME): CompactionResult | null {
+export async function runScheduledCompaction(repoDir = WALNUT_HOME): Promise<CompactionResult | null> {
   if (!isCompactionDue(repoDir)) return null;
 
   setCompactionInProgress(true);
   try {
     clearStaleLock();
-    const result = compactGitHistory(repoDir);
+    const result = await compactGitHistory(repoDir);
     if (!result.skipped && !result.error) {
       markCompactionDone(repoDir);
     }
