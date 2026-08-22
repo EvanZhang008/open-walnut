@@ -1087,7 +1087,8 @@ function loadDiffMemory(sessionId: string): DiffViewMemory {
     if (!parsed || typeof parsed !== 'object') return {};
     const out: DiffViewMemory = {};
     if (BASE_OPTIONS.some((o) => o.value === parsed.base)) out.base = parsed.base;
-    if (parsed.scope === 'all' || parsed.scope === 'session') out.scope = parsed.scope;
+    // scope is no longer read: the 'all' scope was removed, and ignoring old
+    // stored values also heals any memory that had the repo-wide trap saved.
     if (typeof parsed.selectedId === 'string') out.selectedId = parsed.selectedId;
     return out;
   } catch { return {}; }
@@ -1265,12 +1266,14 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     });
   }, []);
   const [rendered, setRendered] = useState(false);
-  // Base/scope/selected file are remembered per session — coming back to the
+  // Base/selected file are remembered per session — coming back to the
   // Changed tab restores the exact view you left (loadDiffMemory above).
   const [base, setBase] = useState<SessionDiffBase>(() => loadDiffMemory(sessionId).base ?? 'session');
-  // Default to the files THIS session changed; 'all' widens to every change in
-  // the repos it touched (never untouched repos). See computeSessionGitDiff.
-  const [scope, setScope] = useState<SessionDiffScope>(() => loadDiffMemory(sessionId).scope ?? 'session');
+  // Always the files THIS session changed. The old 'all' scope ("All in repo":
+  // every change in the repos the session touched, other sessions' included)
+  // confused more than it helped and its repo-wide git diff timed out on huge
+  // remote monorepos — the toggle is gone. The API still accepts scope=all.
+  const scope: SessionDiffScope = 'session';
   const [selectedId, setSelectedId] = useState<string | null>(() => loadDiffMemory(sessionId).selectedId ?? null);
   // The remembered file to restore once data arrives. Held in a ref because the
   // on-data effect below runs with an EMPTY tree first (data still loading) and
@@ -1380,7 +1383,6 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     memSessionRef.current = sessionId;
     const mem = loadDiffMemory(sessionId);
     setBase(mem.base ?? 'session');
-    setScope(mem.scope ?? 'session');
     setSelectedId(null);
     pendingRestoreRef.current = mem.selectedId ?? null;
   }, [sessionId]);
@@ -1391,10 +1393,10 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   // arriving file list.
   useEffect(() => {
     saveDiffMemory(sessionId, {
-      base, scope,
+      base,
       selectedId: selectedId ?? loadDiffMemory(sessionId).selectedId,
     });
-  }, [sessionId, base, scope, selectedId]);
+  }, [sessionId, base, selectedId]);
 
   const tree2 = useMemo<DiffTreeRepoNode[]>(() => buildDiffTree(data?.groups ?? []), [data]);
   const files = useMemo(() => flattenFiles(tree2), [tree2]);
@@ -1613,18 +1615,6 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
           {/* Hover affordance → the vertical schematic explaining all three spans. */}
           <CompareHelp base={base} />
         </div>
-        {base !== 'session' && (
-          <div className="session-diff-scope-toggle" role="group" aria-label="File scope" title="Only the files this session edited, or every change in the repos it touched">
-            <button
-              className={`session-diff-scope-btn${scope === 'session' ? ' is-active' : ''}`}
-              onClick={() => setScope('session')}
-            >This session</button>
-            <button
-              className={`session-diff-scope-btn${scope === 'all' ? ' is-active' : ''}`}
-              onClick={() => setScope('all')}
-            >All in repo</button>
-          </div>
-        )}
         <div className="session-diff-toolbar-actions">
           {selectedIsMd && (
             <button
@@ -1685,7 +1675,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
           {/* Git bases run on the (possibly remote) repo and can time out on
               huge monorepos — offer the always-works comparison as a way out. */}
           {base !== 'session' && (
-            <button className="btn btn-sm" onClick={() => { setBase('session'); setScope('session'); }}>
+            <button className="btn btn-sm" onClick={() => setBase('session')}>
               View this session's changes instead
             </button>
           )}
@@ -1705,15 +1695,10 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               <p>This session hasn't edited any files yet.</p>
               <p className="text-muted">Edits, writes, and subagent changes will appear here as a diff.</p>
             </>
-          ) : scope === 'session' ? (
-            <>
-              <p>Nothing this session changed differs for this comparison.</p>
-              <p className="text-muted">None of the files this session edited differ from "{BASE_OPTIONS.find((o) => o.value === base)?.label}". Switch to "All in repo" to see other changes in the same repo.</p>
-            </>
           ) : (
             <>
-              <p>No changes in this session's repos for this comparison.</p>
-              <p className="text-muted">{BASE_OPTIONS.find((o) => o.value === base)?.hint}</p>
+              <p>Nothing this session changed differs for this comparison.</p>
+              <p className="text-muted">None of the files this session edited differ from "{BASE_OPTIONS.find((o) => o.value === base)?.label}".</p>
             </>
           )}
         </div>

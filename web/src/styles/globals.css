@@ -24979,23 +24979,6 @@ a.file-link:hover {
   color: var(--fg-secondary);
 }
 .compare-graph-warn { display: block; margin-top: 4px; color: var(--warning); }
-/* Scope toggle (All files ↔ This session) — only shown for git bases. */
-.session-diff-scope-toggle {
-  display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  overflow: hidden;
-}
-.session-diff-scope-btn {
-  border: none;
-  background: var(--bg);
-  color: var(--fg-muted);
-  font-size: 12px;
-  padding: 3px 10px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.session-diff-scope-btn.is-active { background: var(--accent); color: #fff; }
 .session-diff-viewtoggle {
   display: inline-flex;
   border: 1px solid var(--border);
