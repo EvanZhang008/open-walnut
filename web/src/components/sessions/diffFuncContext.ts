@@ -46,19 +46,46 @@ export function splitSourceLines(source: string | null | undefined): string[] {
 }
 
 /**
- * The nearest enclosing definition at/above 1-based `line` in `lines`, or null.
- * Deliberately scans from `line` itself: when a hunk STARTS at a definition,
- * naming that definition ("the code below is X") beats naming the previous one.
+ * The nearest enclosing definition at/above 1-based `line` in `lines`, with the
+ * line it was found on, or null. Scans from `line` itself: when a hunk STARTS
+ * at a definition, that definition IS the context (the caller's hidden-range
+ * check then decides whether it's worth showing).
  */
-export function functionContext(lines: string[], line: number): string | null {
+export function functionContext(lines: string[], line: number): { text: string; line: number } | null {
   const start = Math.min(lines.length, Math.max(1, line));
   const stop = Math.max(0, start - MAX_SCAN);
   for (let i = start; i > stop; i--) {
     const text = lines[i - 1];
     if (!text || !text.trim()) continue;
     if (NOISE.test(text)) continue;
-    if (DEF_PATTERNS.some((re) => re.test(text))) return clean(text);
-    if (GIT_DEFAULT.test(text)) return clean(text);
+    if (DEF_PATTERNS.some((re) => re.test(text)) || GIT_DEFAULT.test(text)) {
+      return { text: clean(text), line: i };
+    }
   }
   return null;
+}
+
+/** A definition line pinned onto an unfold bar (VS Code sticky-scroll style):
+ *  the ORIGINAL text with indentation intact, plus its 1-based line number. */
+export interface StickyDef { raw: string; line: number }
+
+const MAX_RAW = 200;
+
+/**
+ * The definition to PIN on a collapsed gap's bar, or null when nothing should
+ * show. The pin appears iff the definition line itself is hidden inside
+ * [hiddenLo, hiddenHi):
+ *  - definition visible on screen (adjacent hunk above, or the first line
+ *    below the bar) → null — it would duplicate what the eye can already see;
+ *  - definition hidden in an EARLIER gap → null — that earlier bar is the one
+ *    pinning it, so consecutive bars inside one long function never repeat the
+ *    same signature (the VS Code behavior).
+ */
+export function hiddenFunctionContext(
+  lines: string[], scanFrom: number, hiddenLo: number, hiddenHi: number,
+): StickyDef | null {
+  const ctx = functionContext(lines, scanFrom);
+  if (!ctx || ctx.line < hiddenLo || ctx.line >= hiddenHi) return null;
+  const raw = (lines[ctx.line - 1] ?? '').replace(/\s+$/, '');
+  return { raw: raw.length > MAX_RAW ? `${raw.slice(0, MAX_RAW - 1)}…` : raw, line: ctx.line };
 }

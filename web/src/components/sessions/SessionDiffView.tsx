@@ -15,7 +15,7 @@ import { languageForPath, diffRefractor } from '@/components/sessions/diffHighli
 import { buildCommentMessage, buildReviewMessage } from '@/components/sessions/diffPrefill';
 import { markdownBlocksWithLines, markdownCommentRange, type MarkdownBlock } from '@/components/sessions/diffMarkdownBlocks';
 import { computeExpandGaps, oldSourceLineCount, UNFOLD_CHUNK } from '@/components/sessions/diffExpand';
-import { functionContext, splitSourceLines } from '@/components/sessions/diffFuncContext';
+import { hiddenFunctionContext, splitSourceLines, type StickyDef } from '@/components/sessions/diffFuncContext';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { SelectionAskPill } from '@/components/common/SelectionAskPill';
@@ -300,43 +300,67 @@ function PendingCommentCard({ loc, code, comment, onCopy, onRemove }: {
 
 // ── Expand-collapsed-context control (GitHub-style "unfold") ──────────────────
 
-/** A clickable bar rendered (via `Decoration`) in place of a collapsed block of
- *  unchanged lines, letting the user reveal the surrounding context that the diff
- *  hides by default.
+/** The unfold control rendered (via `Decoration`) in place of a collapsed block
+ *  of unchanged lines — VS Code sticky-scroll style, two stacked rows:
  *
- *  Layout is FIXED so nothing jumps between bars: function context on the left
- *  (git hunk-header style), compact controls docked right in constant slots —
- *  ↓/↑ reveal one UNFOLD_CHUNK slice nearest the adjacent hunk, `↕ N` reveals
- *  the whole gap. Directions that don't apply render disabled, not absent, so
- *  every bar's buttons sit in exactly the same place.
- *
- *  The old and new sides of a split diff can be inside DIFFERENT functions
- *  (code moved/renamed between them) — when the two contexts differ, both are
- *  shown (−old / +new); when equal they collapse to one label. */
-function ExpandRow({ lines, funcOld, funcNew, onAll, onUp, onDown }: {
+ *  1. STICKY ROW (only when a definition is actually hidden in this gap): the
+ *     definition line pinned verbatim — ghost line number, original indentation,
+ *     faded italic — per column in split view, stacked in unified when the two
+ *     sides differ. Clicking it reveals the gap down to that definition. A
+ *     definition that's visible on screen, or already pinned by an earlier bar,
+ *     yields no sticky row (see hiddenFunctionContext) — so one long function
+ *     never repeats its signature across consecutive bars.
+ *  2. RAIL: a thin strip with the compact controls centered — ↓/↑ reveal one
+ *     UNFOLD_CHUNK slice nearest the adjacent hunk, `↕ N` reveals everything.
+ *     Directions that don't apply render disabled, not absent, so the buttons
+ *     sit in the same place on every bar. */
+function ExpandRow({ lines, split, funcOld, funcNew, onAll, onUp, onDown, onJumpOld, onJumpNew }: {
   lines: number;
-  /** Enclosing definition of the code just below this bar, per diff side. */
-  funcOld?: string | null;
-  funcNew?: string | null;
+  /** Split view pins old/new side by side; unified stacks them. */
+  split: boolean;
+  /** The hidden definition to pin, per diff side (null = nothing hidden). */
+  funcOld?: StickyDef | null;
+  funcNew?: StickyDef | null;
   onAll: () => void;
   onUp?: () => void;
   onDown?: () => void;
+  /** Reveal the gap down to the pinned definition (per side). */
+  onJumpOld?: () => void;
+  onJumpNew?: () => void;
 }) {
   const big = lines > UNFOLD_CHUNK;
-  const same = (funcOld ?? null) === (funcNew ?? null);
+  const pin = (def: StickyDef, onJump: (() => void) | undefined, side: 'old' | 'new') => (
+    <button
+      key={side}
+      className="session-diff-sticky-cell"
+      onClick={onJump}
+      disabled={!onJump}
+      title={onJump ? `Reveal down to line ${def.line}` : undefined}
+    >
+      <span className="session-diff-sticky-num">{def.line}</span>
+      <span className="session-diff-sticky-code">{def.raw}</span>
+    </button>
+  );
+  // Unified view: one column — when both sides pin the SAME text, one row is
+  // enough (the reader can't tell sides apart there anyway).
+  const unifiedDefs: Array<[StickyDef, (() => void) | undefined, 'old' | 'new']> =
+    funcOld && funcNew && funcOld.raw === funcNew.raw
+      ? [[funcOld, onJumpOld, 'old']]
+      : ([[funcOld, onJumpOld, 'old'], [funcNew, onJumpNew, 'new']] as Array<[StickyDef | null | undefined, (() => void) | undefined, 'old' | 'new']>)
+        .filter((d): d is [StickyDef, (() => void) | undefined, 'old' | 'new'] => !!d[0]);
   return (
     <div className="session-diff-expander">
-      <span className="session-diff-expand-ctx">
-        {same ? (
-          funcOld && <span className="session-diff-expand-func" title={funcOld}>@ {funcOld}</span>
-        ) : (
-          <>
-            {funcOld && <span className="session-diff-expand-func is-old" title={`old side: ${funcOld}`}>− {funcOld}</span>}
-            {funcNew && <span className="session-diff-expand-func is-new" title={`new side: ${funcNew}`}>+ {funcNew}</span>}
-          </>
-        )}
-      </span>
-      <span className="session-diff-expand-controls">
+      {split ? (funcOld || funcNew) && (
+        <div className="session-diff-sticky is-split">
+          <span className="session-diff-sticky-half">{funcOld && pin(funcOld, onJumpOld, 'old')}</span>
+          <span className="session-diff-sticky-half">{funcNew && pin(funcNew, onJumpNew, 'new')}</span>
+        </div>
+      ) : unifiedDefs.length > 0 && (
+        <div className="session-diff-sticky">
+          {unifiedDefs.map(([def, onJump, side]) => pin(def, onJump, side))}
+        </div>
+      )}
+      <div className="session-diff-expand-rail">
         {big && (
           <>
             <button className="session-diff-expand-btn is-dir" onClick={onDown} disabled={!onDown} title={`Show ${UNFOLD_CHUNK} lines below`}>↓ {UNFOLD_CHUNK}</button>
@@ -346,7 +370,7 @@ function ExpandRow({ lines, funcOld, funcNew, onAll, onUp, onDown }: {
         <button className="session-diff-expand-btn is-all" onClick={onAll} title={`Show all ${lines} hidden line${lines === 1 ? '' : 's'}`}>
           ↕ {lines}
         </button>
-      </span>
+      </div>
     </div>
   );
 }
@@ -587,6 +611,18 @@ function FileDiffPane({
   // `file.hunks` identity or the source changes — i.e. on every file switch.
   const [hunks, expandRange] = useSourceExpansion(file?.hunks ?? EMPTY_HUNKS, change.before ?? null);
   const tokens = useTokens(hunks, change.relPath);
+
+  // Auto-reveal tiny BETWEEN-hunk gaps: two hunks separated by ≤ UNFOLD_CHUNK
+  // unchanged lines read better as one continuous block than as two sections
+  // split by an expand bar. One gap per pass — expanding merges hunks, which
+  // re-runs this effect until no small between-gap remains (bounded by the
+  // number of hunks). The file's head/tail gaps keep their bars: auto-showing
+  // dozens of leading imports would be noise, not context.
+  useEffect(() => {
+    const gaps = computeExpandGaps(hunks, oldSourceLineCount(change.before));
+    const small = gaps.find((g) => g.hunkIndex > 0 && g.hunkIndex < hunks.length && g.lines <= UNFOLD_CHUNK);
+    if (small) expandRange(small.all[0], small.all[1]);
+  }, [hunks, change.before, expandRange]);
 
   // Added files have no "before" — a split view would show an empty left pane.
   // Force unified so the whole new file reads as one continuous green column
@@ -914,22 +950,34 @@ function FileDiffPane({
     const gapByIndex = new Map(gaps.map((g) => [g.hunkIndex, g]));
     const out: ReactElement[] = [];
     const emit = (g: typeof gaps[number]) => {
-      // Context of the code just below the bar, per side: the next hunk's
-      // old/new start, or (trailing gap) the first hidden line after the last
-      // hunk on each side.
+      // The definition to pin, per side: scan up from the next hunk's old/new
+      // start (trailing gap: the first hidden line after the last hunk). Pinned
+      // ONLY when the definition itself is hidden inside THIS gap — visible on
+      // screen or pinned by an earlier bar → null (no repeats).
       const next = g.hunkIndex < rendered.length ? rendered[g.hunkIndex]! : null;
+      const prev = g.hunkIndex > 0 ? rendered[g.hunkIndex - 1]! : null;
       const last = rendered[rendered.length - 1];
       const oldAt = next ? next.oldStart : g.all[0];
+      const newLo = prev ? prev.newStart + prev.newLines : 1;
       const newAt = next ? next.newStart : (last ? last.newStart + last.newLines : 1);
+      const funcOld = hiddenFunctionContext(oldLines, oldAt, g.all[0], g.all[1]);
+      const funcNew = hiddenFunctionContext(newLines, newAt, newLo, next ? next.newStart : Number.MAX_SAFE_INTEGER);
+      // Click-to-reveal: expandRange speaks OLD line numbers. The gap is an
+      // unchanged region, so a new-side line maps exactly via the gap offset.
+      const jumpOld = funcOld ? () => expandRange(funcOld.line, g.all[1]) : undefined;
+      const jumpNew = funcNew ? () => expandRange(g.all[0] + (funcNew.line - newLo), g.all[1]) : undefined;
       out.push(
         <Decoration key={`exp-${g.hunkIndex}`}>
           <ExpandRow
             lines={g.lines}
-            funcOld={functionContext(oldLines, oldAt)}
-            funcNew={functionContext(newLines, newAt)}
+            split={effectiveViewType === 'split'}
+            funcOld={funcOld}
+            funcNew={funcNew}
             onAll={() => expandRange(g.all[0], g.all[1])}
             onDown={g.down ? () => expandRange(g.down![0], g.down![1]) : undefined}
             onUp={g.up ? () => expandRange(g.up![0], g.up![1]) : undefined}
+            onJumpOld={jumpOld}
+            onJumpNew={jumpNew}
           />
         </Decoration>,
       );
@@ -942,7 +990,7 @@ function FileDiffPane({
     const tail = gapByIndex.get(rendered.length);
     if (tail) emit(tail);
     return out;
-  }, [expandRange, oldLineCount, oldLines]);
+  }, [expandRange, oldLineCount, oldLines, newLines, effectiveViewType]);
 
   return (
     <div className="session-diff-filepane" data-file-path={change.filePath}>

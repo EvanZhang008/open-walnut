@@ -25656,24 +25656,80 @@ a.file-link:hover {
   opacity: 0.7;
 }
 
-/* Expand-collapsed-context bar (GitHub-style "unfold"), rendered via the
-   react-diff-view Decoration row in place of a hidden block of unchanged lines.
-   It fills the whole decoration row; the buttons reveal more surrounding source. */
+/* Unfold control (rendered via the react-diff-view Decoration row in place of
+   a hidden block of unchanged lines) — VS Code sticky-scroll style, two rows:
+   the pinned definition line(s), then a thin centered button rail. */
 .session-diff-expander {
-  display: flex;
-  align-items: center;
-  justify-content: space-between; /* ctx left, controls docked right — fixed slots */
-  gap: 8px;
-  padding: 2px 8px;
-  background: color-mix(in srgb, var(--accent) 5%, var(--bg-subtle, transparent));
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
+}
+/* Row 1: the hidden definition pinned verbatim — ghost line number, original
+   indentation, faded italic. Split view puts old/new side by side (each half
+   maps onto its column); unified stacks them. */
+.session-diff-sticky {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-subtle, #fbfcfd);
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+.session-diff-sticky.is-split {
+  flex-direction: row;
+}
+.session-diff-sticky.is-split .session-diff-sticky-half {
+  flex: 1 1 50%;
+  min-width: 0;
+  display: flex;
+}
+.session-diff-sticky-cell {
+  display: flex;
+  align-items: baseline;
+  width: 100%;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.75;
+}
+.session-diff-sticky-cell:disabled { cursor: default; }
+.session-diff-sticky-cell:hover .session-diff-sticky-code { color: var(--fg); }
+.session-diff-sticky-num {
+  flex: 0 0 auto;
+  min-width: 44px;
+  padding: 0 8px;
+  text-align: right;
+  color: color-mix(in srgb, var(--fg-muted) 55%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  user-select: none;
+}
+.session-diff-sticky-code {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 10px;
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg-muted);
+  font-style: italic;
+}
+/* Row 2: the thin rail — compact controls centered, constant order (↓ ↑ ↕);
+   inapplicable directions render disabled, not absent, so nothing ever moves. */
+.session-diff-expand-rail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg-subtle, transparent));
 }
 .session-diff-expand-btn {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 1px 9px;
+  padding: 0 8px;
   font-size: 11px;
   font-family: var(--font-mono);
   line-height: 1.7;
@@ -25693,37 +25749,6 @@ a.file-link:hover {
   font-variant-numeric: tabular-nums;
   min-width: 44px;
   justify-content: center;
-}
-.session-diff-expand-glyph { font-size: 12px; line-height: 1; }
-/* Enclosing-definition context on the unfold bar (git hunk-header style):
-   says which function the code below the bar lives in, even while collapsed.
-   Left-docked in a fixed slot; when old/new sides sit in DIFFERENT functions
-   both are shown (−old / +new) with diff colors. */
-.session-diff-expand-ctx {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex: 1 1 auto;
-  min-width: 0; /* let the labels ellipsize instead of pushing the controls */
-  overflow: hidden;
-}
-.session-diff-expand-func {
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--fg-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 0 1 auto;
-}
-.session-diff-expand-func.is-old { color: var(--error, #cf222e); opacity: 0.85; }
-.session-diff-expand-func.is-new { color: var(--success, #1a7f37); opacity: 0.9; }
-/* Right-docked control cluster — constant order (↓ ↑ ↕), so buttons never move. */
-.session-diff-expand-controls {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
 }
 .session-diff-expand-btn:disabled {
   opacity: 0.35;
