@@ -43,7 +43,7 @@ vi.mock('../../src/core/sessions/session-lifecycle.js', () => ({
 import { WALNUT_HOME } from '../../src/constants.js';
 import {
   diffSummaryHash, buildDiffText, buildDiffSummaryPrompt, isSensitivePath,
-  summarizeSessionFileChange, DiffSummaryError,
+  normalizeLang, summarizeSessionFileChange, DiffSummaryError,
 } from '../../src/core/diff-summary.js';
 
 function textResult(text: string) {
@@ -95,6 +95,23 @@ describe('diffSummaryHash', () => {
     const base = diffSummaryHash(fileChange());
     expect(diffSummaryHash(fileChange({ after: 'other\n' }))).not.toBe(base);
     expect(diffSummaryHash(fileChange({ status: 'deleted' }))).not.toBe(base);
+  });
+
+  it('moves with the output language (switching languages regenerates)', () => {
+    expect(diffSummaryHash(fileChange(), 'zh')).not.toBe(diffSummaryHash(fileChange(), 'en'));
+  });
+});
+
+describe('normalizeLang', () => {
+  it('reduces locale tags to the primary subtag', () => {
+    expect(normalizeLang('zh-CN')).toBe('zh');
+    expect(normalizeLang('ZH_Hans')).toBe('zh');
+    expect(normalizeLang('en')).toBe('en');
+  });
+  it('rejects junk', () => {
+    expect(normalizeLang('')).toBeUndefined();
+    expect(normalizeLang(undefined)).toBeUndefined();
+    expect(normalizeLang('!!')).toBeUndefined();
   });
 });
 
@@ -332,5 +349,18 @@ describe('summarizeSessionFileChange', () => {
   it('errors carry DiffSummaryError type', async () => {
     getSessionByClaudeIdMock.mockResolvedValue(null);
     await expect(summarizeSessionFileChange('x', '/y')).rejects.toBeInstanceOf(DiffSummaryError);
+  });
+
+  it('langHint=zh-CN → Chinese system prompt and Chinese deterministic captions', async () => {
+    // Model path: the system prompt must ask for Chinese.
+    await summarizeSessionFileChange('s1', '/repo/src/a.ts', { langHint: 'zh-CN' });
+    const req = sendMessageMock.mock.calls[0][0] as { system: string };
+    expect(req.system).toContain('简体中文');
+    // Deterministic path: caption itself is Chinese.
+    getSessionFileChangeMock.mockResolvedValue({
+      sessionId: 's1', file: fileChange({ before: 'same\n', after: 'same\n' }),
+    });
+    const res = await summarizeSessionFileChange('s1', '/repo/src/b.ts', { langHint: 'zh-CN' });
+    expect(res.summary).toBe('无文本改动。');
   });
 });

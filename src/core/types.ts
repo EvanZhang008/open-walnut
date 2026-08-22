@@ -844,6 +844,9 @@ export interface AgentConfig {
   main_model?: string;
   /** Model ID for cheap background parses (quick-task parse, fork/conversation titles); unset = first haiku in the provider catalog. */
   fast_model?: string;
+  /** Preferred language for AI-generated UI text (diff summaries etc.), ISO
+   *  639-1 (e.g. 'zh'). Unset = follow the browser locale, else English. */
+  language?: string;
   /** Default provider name for the main agent. Maps to config.providers[name]. */
   main_provider?: string;
   /**

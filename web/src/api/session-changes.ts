@@ -126,7 +126,9 @@ export async function fetchFileChangeSummary(
 ): Promise<FileChangeSummary> {
   return apiGet<FileChangeSummary>(
     `/api/sessions/${sessionId}/changes/summary`,
-    { path: filePath },
+    // Browser locale rides along so the summary matches the user's language
+    // (server-side config agent.language overrides it when set).
+    { path: filePath, lang: navigator.language || 'en' },
     { signal: opts?.signal, timeoutMs: 35_000 },
   );
 }

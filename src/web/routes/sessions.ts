@@ -1362,8 +1362,10 @@ sessionsRouter.get('/:sessionId/changes/summary', async (req: Request, res: Resp
       const timeout = new Promise<never>((_, reject) => {
         deadline = setTimeout(() => reject(new SessionControlError('Summary timed out', 504)), 30_000)
       })
+      // lang = the browser locale (config agent.language overrides server-side).
+      const langHint = typeof req.query.lang === 'string' ? req.query.lang : undefined
       res.json(await Promise.race([
-        summarizeSessionFileChange(String(req.params.sessionId), filePath),
+        summarizeSessionFileChange(String(req.params.sessionId), filePath, { langHint }),
         timeout,
       ]))
     } catch (err) {

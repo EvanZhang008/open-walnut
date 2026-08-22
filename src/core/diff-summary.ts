@@ -27,9 +27,9 @@ import { log } from '../logging/index.js';
 import { fastModelFor } from './cheap-model.js';
 import { SessionControlError } from './sessions/session-controls.js';
 
-/** Bump when the prompt changes shape (DIFF_SUMMARY_SYSTEM, buildDiffText, or
+/** Bump when the prompt changes shape (diffSummarySystem, buildDiffText, or
  *  the MAX_* budgets) — invalidates every cached summary. */
-const PROMPT_V = 'v2';
+const PROMPT_V = 'v4';
 
 /** Diff text budget for the prompt. Beyond this the model gets a truncated
  *  patch plus a note — a 5000-line diff summarized from its head is still far
@@ -55,7 +55,7 @@ const MAX_CONTEXT_FILES = 60;
 const LLM_TIMEOUT_MS = 20_000;
 const FILE_FETCH_TIMEOUT_MS = 15_000;
 const SIBLINGS_TIMEOUT_MS = 2_500;
-const MAX_OUTPUT_TOKENS = 300;
+const MAX_OUTPUT_TOKENS = 200;
 
 /** Global gate: at most N model calls in flight across all sessions, and a
  *  bounded queue behind them — a click-through-everything burst gets a fast
@@ -100,20 +100,42 @@ interface ContextFile {
 
 // ── Pure helpers (unit-tested) ───────────────────────────────────────────────
 
-/** Content hash: same diff → same summary, forever.
+/** Content hash: same diff → same summary, forever. Includes the output
+ *  language — switching languages must regenerate, not serve the old tongue.
  *  DELIBERATELY excludes the sibling list: folding it in would regenerate
  *  EVERY file's summary each time any file joins the changeset — the cache
- *  would never hit during active work. Cost: the "In this changeset:" sentence
- *  can go stale as the changeset grows. Accepted trade-off. */
-export function diffSummaryHash(file: Pick<FileForSummary, 'before' | 'after' | 'status'>): string {
+ *  would never hit during active work. Cost: the changeset-role words can go
+ *  stale as the changeset grows. Accepted trade-off. */
+export function diffSummaryHash(
+  file: Pick<FileForSummary, 'before' | 'after' | 'status'>,
+  lang = 'en',
+): string {
   return createHash('sha256')
     .update(PROMPT_V).update('\0')
+    .update(lang).update('\0')
     .update(file.status).update('\0')
     .update(file.before).update('\0')
     .update(file.after)
     .digest('hex')
     .slice(0, 16);
 }
+
+/** Normalize a language hint ('zh-CN', 'ZH_Hans') to its primary subtag. */
+export function normalizeLang(hint: string | undefined): string | undefined {
+  const primary = (hint ?? '').trim().toLowerCase().split(/[-_]/)[0];
+  return /^[a-z]{2,3}$/.test(primary) ? primary : undefined;
+}
+
+const LANG_NAMES: Record<string, string> = {
+  zh: 'Simplified Chinese (简体中文)',
+  en: 'English',
+  ja: 'Japanese (日本語)',
+  ko: 'Korean (한국어)',
+  de: 'German',
+  fr: 'French',
+  es: 'Spanish',
+  pt: 'Portuguese',
+};
 
 /** Filenames whose content we never ship to a model provider, even though the
  *  session itself may have touched them. Matched on the basename. */
@@ -178,17 +200,21 @@ export function buildDiffText(file: FileForSummary): string {
   return `${caveat}${moved}${text}${truncated ? '\n…(truncated)' : ''}`;
 }
 
-export const DIFF_SUMMARY_SYSTEM =
-  'You review code diffs. Given ONE file\'s diff plus the list of every other file in the same ' +
-  'changeset, write a compact summary of what THIS file\'s change does.\n' +
-  'Rules:\n' +
-  '- Scale length to complexity: a trivial change gets ONE short sentence; a complex one gets 2-4 short sentences.\n' +
-  '- If (and only if) the change is a multi-step flow, you may add one line like `flow: parse → cache → render`.\n' +
-  '- End with one sentence starting "In this changeset:" placing the file\'s role relative to the sibling files. ' +
-  'If the prompt says the changeset context is unavailable, OMIT this sentence instead of guessing.\n' +
-  '- Plain prose. You may use `backticks` for identifiers. No headings, no bullet lists, no code blocks.\n' +
-  '- No preamble ("This change...") — start with the verb or the subject.\n' +
-  '- Never invent behavior not visible in the diff.';
+/** EXTREMELY short by design (user feedback: "几个词几句话 + 一个 simple
+ *  diagram 就够了") — the reader is mid-review and wants a glance, not prose. */
+export function diffSummarySystem(lang: string): string {
+  const langName = LANG_NAMES[lang] ?? `the language with ISO 639-1 code '${lang}'`;
+  return (
+    'You caption code diffs in as FEW words as possible — the reader glances, not reads.\n' +
+    'Output:\n' +
+    '- Line 1: what this change does. A few words up to ONE short sentence; only a genuinely complex change may use two.\n' +
+    '- Optional line 2, only for a real multi-step flow: ONE tiny arrow diagram like `parse → cache → render` (nothing else on the line).\n' +
+    '- If sibling files are listed, you may end line 1 with the file\'s changeset role in ≤4 words, in parentheses, written in the SAME output language as the rest.\n' +
+    `- Write in ${langName}. Keep identifiers, file names, and technical terms in their original form, in \`backticks\`.\n` +
+    '- No preamble, no headings, no bullets, no code blocks.\n' +
+    '- Never invent behavior not visible in the diff.'
+  );
+}
 
 /** The user message for one file. `siblings === null` means the changeset list
  *  could not be fetched — say so, instead of the confidently-false "only
@@ -196,7 +222,7 @@ export const DIFF_SUMMARY_SYSTEM =
 export function buildDiffSummaryPrompt(file: FileForSummary, siblings: ContextFile[] | null): string {
   let contextBlock: string;
   if (siblings === null) {
-    contextBlock = '  (changeset context unavailable — omit the "In this changeset:" sentence)';
+    contextBlock = '  (changeset context unavailable — omit the changeset-role words)';
   } else {
     const others = siblings.filter((s) => s.relPath !== file.relPath);
     const shown = others.slice(0, MAX_CONTEXT_FILES);
@@ -335,11 +361,12 @@ function withTimeout<T>(p: Promise<T>, ms: number, onTimeout: () => Error): Prom
 export function summarizeSessionFileChange(
   sessionId: string,
   filePath: string,
+  opts?: { langHint?: string },
 ): Promise<DiffSummaryResult> {
-  const key = `${sessionId}:${filePath}`;
+  const key = `${sessionId}:${filePath}:${normalizeLang(opts?.langHint) ?? ''}`;
   const existing = inflight.get(key);
   if (existing) return existing;
-  const run = summarizeInner(sessionId, filePath).finally(() => { inflight.delete(key); });
+  const run = summarizeInner(sessionId, filePath, opts?.langHint).finally(() => { inflight.delete(key); });
   inflight.set(key, run);
   return run;
 }
@@ -347,10 +374,17 @@ export function summarizeSessionFileChange(
 async function summarizeInner(
   sessionId: string,
   filePath: string,
+  langHint?: string,
 ): Promise<DiffSummaryResult> {
   const { getSessionByClaudeId } = await import('./session-tracker.js');
   const record = await getSessionByClaudeId(sessionId);
   if (!record) throw new DiffSummaryError('Session not found', 404);
+
+  // Output language: explicit config wins, else the browser locale the client
+  // sent, else English. Part of the content hash — switching regenerates.
+  const { getConfig } = await import('./config-manager.js');
+  const config = await getConfig();
+  const lang = normalizeLang(config.agent?.language) ?? normalizeLang(langHint) ?? 'en';
 
   // Reuse the Changed tab's own retrieval chain (cache → daemon → compute).
   // The cold path can be a whale recompute — cap it and answer degraded.
@@ -362,7 +396,7 @@ async function summarizeInner(
   ) as unknown as { file: FileForSummary };
   const file = fileRes.file;
 
-  const hash = diffSummaryHash(file);
+  const hash = diffSummaryHash(file, lang);
   const cache = await readCache(sessionId, record.host);
   const hit = cache.entries[filePath];
   if (hit && hit.hash === hash) {
@@ -384,8 +418,8 @@ async function summarizeInner(
   // gate below on purpose: no model is involved.
   if (file.before === file.after) {
     const summary = file.status === 'renamed' && file.oldRelPath
-      ? `Moved from \`${file.oldRelPath}\` — content unchanged.`
-      : 'No textual change to this file.';
+      ? (lang === 'zh' ? `从 \`${file.oldRelPath}\` 移动过来,内容未变。` : `Moved from \`${file.oldRelPath}\` — content unchanged.`)
+      : (lang === 'zh' ? '无文本改动。' : 'No textual change to this file.');
     return { filePath, relPath: file.relPath, summary, model: 'rule-based', cached: false, hash };
   }
 
@@ -415,8 +449,6 @@ async function summarizeInner(
     });
   }
 
-  const { getConfig } = await import('./config-manager.js');
-  const config = await getConfig();
   const model = fastModelFor(config); // undefined → sendMessage uses main_model
 
   const { sendMessage } = await import('../agent/model.js');
@@ -429,7 +461,7 @@ async function summarizeInner(
   let result;
   try {
     result = await sendMessage({
-      system: DIFF_SUMMARY_SYSTEM,
+      system: diffSummarySystem(lang),
       messages: [{ role: 'user', content: buildDiffSummaryPrompt(file, siblings) }],
       // Small cap keeps this a fast NON-streaming call (the catalog default of
       // 64K trips the SDK's "streaming required" rejection — see fork-title.ts).
