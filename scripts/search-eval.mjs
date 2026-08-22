@@ -9,7 +9,10 @@
  * Backends:
  *   qmd   (default) — live queries via HTTP GET /api/search on a running
  *                     server (read-only; never mutates any index)
- *   v2              — the in-house engine (wired up in a later phase)
+ *   v2              — the in-house hybrid-search engine. Fixture queries run
+ *                     against an in-memory index built from the public yaml's
+ *                     corpus; live queries need --index-db (a search.sqlite
+ *                     built by src/core/search/build.ts — never production's)
  *
  * Usage:
  *   node scripts/search-eval.mjs                      run all, print report
@@ -35,10 +38,18 @@ const yaml = require('js-yaml');
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_GOLDEN = path.join(ROOT, 'tests', 'search-golden.yaml');
-const LOCAL_GOLDEN = path.join(
-  process.env.OPEN_WALNUT_HOME ?? path.join(os.homedir(), '.open-walnut'),
-  'search-golden.local.yaml',
-);
+// First existing candidate wins. ~/.claude is the durable home: files that
+// exist only on this machine get dropped from ~/.open-walnut by the cloud
+// git-sync's LWW conflict resolution (observed twice on 2026-08-22).
+const LOCAL_GOLDEN_CANDIDATES = [
+  path.join(os.homedir(), '.claude', 'walnut-search-golden.local.yaml'),
+  path.join(
+    process.env.OPEN_WALNUT_HOME ?? path.join(os.homedir(), '.open-walnut'),
+    'search-golden.local.yaml',
+  ),
+];
+const LOCAL_GOLDEN = LOCAL_GOLDEN_CANDIDATES.find((p) => fs.existsSync(p))
+  ?? LOCAL_GOLDEN_CANDIDATES[0];
 const BASELINE_PATH = path.join(ROOT, 'tests', 'search-golden-baseline.json');
 
 // Regression tolerances for --check (absolute for rates, relative for latency).
@@ -53,12 +64,22 @@ function opt(name, dflt) {
 }
 const BACKEND = opt('--backend', 'qmd');
 const SERVER = opt('--server', 'http://localhost:3456');
+const INDEX_DB = opt('--index-db', '/tmp/walnut-search-v2/search.sqlite');
 const LIMIT = parseInt(opt('--limit', '10'), 10);
 const EXPLAIN_ID = opt('--explain', null);
 const FAMILY = opt('--family', null);
 const DUMP = flag('--dump');
 const WRITE_BASELINE = flag('--write-baseline');
 const CHECK = flag('--check');
+
+/** Per-kind score multipliers (kept in sync with the walnut adapter). */
+const KIND_WEIGHTS = {
+  task: { weight: 1.0 },
+  memory: { weight: 1.1 },
+  session: { weight: 0.9 },
+  note: { weight: 1.0 },
+  skill: { weight: 1.0 },
+};
 
 // ── load golden files ──
 function loadGolden(file, source) {
@@ -87,6 +108,64 @@ if (EXPLAIN_ID && queries.length === 0) {
 
 // ── backends ──
 // Each returns { hits: [{ ref: 'kind:id', title, score, coverage? }], ms }.
+
+let v2Lib = null;
+async function loadV2() {
+  if (!v2Lib) {
+    // Requires the tsx-based npm script (plain node cannot import the TS lib).
+    v2Lib = await import('../src/lib/hybrid-search/index.js');
+  }
+  return v2Lib;
+}
+
+let v2LiveIndex = null;
+async function getV2LiveIndex() {
+  if (v2LiveIndex) return v2LiveIndex;
+  if (!fs.existsSync(INDEX_DB)) {
+    throw new Error(
+      `no v2 index at ${INDEX_DB} — build one with src/core/search/build.ts (buildFullSearchIndex) or pass --index-db`,
+    );
+  }
+  const { createSearchIndex } = await loadV2();
+  v2LiveIndex = createSearchIndex({ dbPath: INDEX_DB, kinds: KIND_WEIGHTS });
+  return v2LiveIndex;
+}
+
+let v2FixtureIndex = null;
+async function getV2FixtureIndex() {
+  if (v2FixtureIndex) return v2FixtureIndex;
+  const { createSearchIndex } = await loadV2();
+  v2FixtureIndex = createSearchIndex({ dbPath: ':memory:', kinds: KIND_WEIGHTS });
+  for (const doc of pub.corpus) {
+    v2FixtureIndex.upsert({
+      kind: doc.kind,
+      ref: doc.ref,
+      title: doc.title ?? '',
+      summary: doc.summary ?? '',
+      note: doc.note ?? '',
+      meta: doc.meta ?? '',
+      updatedAt: Date.parse(String(doc.updated_at ?? '')) || 0,
+      identifiers: doc.identifiers,
+    });
+  }
+  return v2FixtureIndex;
+}
+
+function runV2(index, query) {
+  const t0 = performance.now();
+  const hits = index.search(query.query, { limit: LIMIT });
+  const ms = performance.now() - t0;
+  return {
+    hits: hits.map((h) => ({
+      ref: `${h.kind}:${h.ref}`,
+      title: h.title,
+      score: h.score,
+      coverage: h.components.coverage,
+    })),
+    ms,
+  };
+}
+
 async function runQmdHttp(query) {
   const url = `${SERVER}/api/search?q=${encodeURIComponent(query.query)}&limit=${LIMIT}`;
   const t0 = performance.now();
@@ -107,13 +186,17 @@ async function runQmdHttp(query) {
 }
 
 async function runBackend(query) {
+  if (BACKEND === 'v2') {
+    return query.dataset === 'live'
+      ? runV2(await getV2LiveIndex(), query)
+      : runV2(await getV2FixtureIndex(), query);
+  }
   if (query.dataset !== 'live') {
-    // Fixture-corpus queries need an engine that can index the inline corpus;
-    // the v2 engine gains that in a later phase. QMD cannot (would touch prod).
+    // QMD cannot index the inline fixture corpus without touching prod.
     return null;
   }
   if (BACKEND === 'qmd') return runQmdHttp(query);
-  throw new Error(`backend "${BACKEND}" not implemented yet`);
+  throw new Error(`unknown backend "${BACKEND}"`);
 }
 
 // ── assertions ──
