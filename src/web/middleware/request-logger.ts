@@ -8,13 +8,21 @@
  *
  * Example log output:
  *   INF [web] GET /api/tasks → 200 (12ms) { reqId: "a1b2c3", query: { status: "active" } }
- *   ERR [web] POST /api/sessions/start-quick → 500 (340ms) { reqId: "d4e5f6" }
+ *   ERR [web] POST /api/sessions/start-quick → 500 { reqId: "d4e5f6", ms: 340 }
+ *
+ * The 5xx line is deliberately SHAPED DIFFERENTLY from the others: it carries no
+ * latency and no query string in the message, because it becomes a notification
+ * card and the log-error bridge fingerprints the message. See the ERROR-LINE
+ * IDENTITY block below — nine cards for one broken endpoint is what the old
+ * shape produced.
  */
 
 import type { Request, Response, NextFunction } from 'express'
 import crypto from 'node:crypto'
 import { log } from '../../logging/index.js'
 import { observe } from '../../core/observability/metrics.js'
+import { routeLogMessage, routeRecoveryKey } from '../../core/notifications/route-condition.js'
+import { createRecoveryTransitionTracker } from '../../core/notifications/recovery-transition.js'
 
 // Extend Express Request to carry the request ID
 declare global {
@@ -48,6 +56,45 @@ const QUIET_PREFIXES = [
 
 function isQuietPath(path: string): boolean {
   return QUIET_PREFIXES.some((p) => path.startsWith(p))
+}
+
+// ── Route recovery (an endpoint that fails and then works again) ───────────────
+//
+// A 5xx log becomes an error card keyed `route:<METHOD> <path>`; the card is
+// retired the next time that same endpoint answers <500. This middleware cannot
+// import the notification store (server.ts owns it, and importing server.ts from
+// a middleware would be a cycle), so the signal is INJECTED at startup — same
+// seam shape the disk/backup success points use.
+
+type RecoveryPublisher = (keys: string[]) => void
+let publishRouteRecovery: RecoveryPublisher | null = null
+
+/**
+ * Wire the recovery signal (server.ts, at startup). Null clears it.
+ *
+ * Also resets the failing-route memory: a fresh server has observed nothing, and
+ * a leftover "failing" entry from a previous in-process server (tests start
+ * several) would make the first healthy response of the new one fire a bogus
+ * recovery.
+ */
+export function setRouteRecoveryPublisher(publish: RecoveryPublisher | null): void {
+  publishRouteRecovery = publish
+  routeHealth.reset()
+}
+
+/**
+ * Which routes are currently failing. ONLY failing routes are ever inserted:
+ * `observe()` on a healthy request would put an entry in this map for every
+ * route the box serves, forever, to remember something that can never fire. So
+ * the healthy branch pre-checks `isFailing` (a Map.get) and does nothing else —
+ * which is the whole cost on the hot path for the overwhelming majority of
+ * requests.
+ */
+const routeHealth = createRecoveryTransitionTracker()
+
+/** Tests: inspect/clear the failing-route memory without a server. */
+export function _resetRouteHealthForTest(): void {
+  routeHealth.reset()
 }
 
 /**
@@ -139,13 +186,41 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
     })
 
     if (status >= 500) {
-      log.web.error(line, meta)
-    } else if (status >= 400) {
-      log.web.warn(line, meta)
-    } else if (isQuietPath(req.path)) {
-      log.web.debug(line, meta)
+      // ── ERROR-LINE IDENTITY (the nine-cards bug) ────────────────────────────
+      // log.error routes into the notification center, and the bridge's dedup
+      // fingerprint is the MESSAGE. `${url}` carries the query string and
+      // `(${duration}ms)` changes on literally every request, so one broken
+      // endpoint minted a brand-new card per occurrence: the live feed held NINE
+      // unresolved `GET/PUT /api/ui-prefs → 500` cards for a single condition,
+      // none of them foldable and none retirable.
+      //
+      // So the 5xx message is normalized and latency-free, and everything that
+      // varies moves into the meta — which the bridge's DEDUP_META_KEYS
+      // allowlist ('error', 'code', 'sessionId', …) deliberately excludes, so
+      // `ms`/`query`/`reqId` can't split the record either.
+      //
+      // 4xx and below keep the raw, fully detailed line: they log at warn/info,
+      // never reach the sink, and their per-request detail is what makes the
+      // request log useful. Only the notification path needs stable identity.
+      const key = routeRecoveryKey(method, url)
+      log.web.error(routeLogMessage(method, url, status), {
+        ...meta, ms: duration, url, recoveryKey: key,
+      })
+      routeHealth.observe(key, true)
     } else {
-      log.web.info(line, meta)
+      if (status >= 400) log.web.warn(line, meta)
+      else if (isQuietPath(req.path)) log.web.debug(line, meta)
+      else log.web.info(line, meta)
+      // Recovery edge: this endpoint answered. A 4xx counts as recovered — the
+      // condition the card described was "this endpoint is throwing", and a 404
+      // or 400 means the route is reachable and reasoning about its input again.
+      // isFailing() first so a healthy box never allocates: the tracker only
+      // holds routes that have actually failed (see routeHealth above).
+      const key = routeRecoveryKey(method, url)
+      if (publishRouteRecovery && routeHealth.isFailing(key)) {
+        routeHealth.forget(key)
+        publishRouteRecovery([key])
+      }
     }
   })
 

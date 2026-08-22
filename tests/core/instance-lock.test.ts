@@ -19,6 +19,9 @@ import {
   listForeignDbHolders,
   listPersistentForeignDbHolders,
   InstanceLockError,
+  stepForeignWriterWatch,
+  initialForeignWriterWatchState,
+  TASK_DB_WRITERS_RECOVERY_KEY,
 } from '../../src/core/instance-lock.js';
 import { WALNUT_HOME, TASKS_DIR } from '../../src/constants.js';
 
@@ -134,5 +137,87 @@ describe('foreign DB-holder detection (lsof layer)', () => {
     setTimeout(() => holder.kill('SIGKILL'), 100);
     const persistent = await listPersistentForeignDbHolders(600);
     expect(persistent.some((h) => h.pid === holder.pid)).toBe(false);
+  });
+});
+
+/**
+ * The watchdog's two edges, without lsof or a real second writer.
+ *
+ * The alert edge was already the point of the persistence rule (one rogue writer
+ * must alert once, not every minute). The all-clear edge is new: the SECOND
+ * WRITER card is keyed 'task-db-writers', and the user killing the rogue process
+ * is what retires it — otherwise the scariest card in the feed stays red after the
+ * danger is gone, and starts being ignored.
+ */
+describe('foreign-writer watchdog edges (stepForeignWriterWatch)', () => {
+  const rogue = { pid: 999, command: 'open-walnut' };
+  const other = { pid: 1000, command: 'open-walnut' };
+
+  /** Feed a sequence of per-tick holder lists; collect what each tick reported. */
+  function run(ticks: Array<Array<{ pid: number; command: string }>>) {
+    let state = initialForeignWriterWatchState();
+    return ticks.map((holders) => {
+      const out = stepForeignWriterWatch(holders, state);
+      state = out.next;
+      return { alert: out.alert.map(h => h.pid), allClear: out.allClear };
+    });
+  }
+
+  it('has a stable condition key', () => {
+    expect(TASK_DB_WRITERS_RECOVERY_KEY).toBe('task-db-writers');
+  });
+
+  it('alerts only on the SECOND consecutive tick (the transient-hook filter)', () => {
+    const out = run([[rogue], [rogue]]);
+    expect(out[0]).toEqual({ alert: [], allClear: false }); // first sighting
+    expect(out[1]).toEqual({ alert: [999], allClear: false });
+  });
+
+  it('a transient holder (one tick only) never alerts, and never "recovers"', () => {
+    // An on-stop hook child holds the DB for milliseconds. It was never a
+    // condition, so its disappearance must not fire a recovery either.
+    const out = run([[rogue], [], []]);
+    expect(out.every(o => o.alert.length === 0)).toBe(true);
+    expect(out.every(o => !o.allClear)).toBe(true);
+  });
+
+  it('does not re-alert for the same pid tick after tick', () => {
+    const out = run([[rogue], [rogue], [rogue], [rogue]]);
+    expect(out.map(o => o.alert.length)).toEqual([0, 1, 0, 0]);
+  });
+
+  it('THE RECOVERY EDGE: all-clear fires once, on the tick the rogue is gone', () => {
+    const out = run([[rogue], [rogue], [], []]);
+    expect(out[1].alert).toEqual([999]);
+    expect(out[2]).toEqual({ alert: [], allClear: true });
+    // …and exactly once: a healthy box must not signal recovery every minute.
+    expect(out[3]).toEqual({ alert: [], allClear: false });
+  });
+
+  it('does NOT announce all-clear while the writer is still there', () => {
+    // The trap this pins: on the tick AFTER an alert, `fresh` is empty (the pid is
+    // already in alertedPids), so an implementation keyed off `fresh`/`persistent`
+    // would report recovery with the rogue writer still holding the database.
+    const out = run([[rogue], [rogue], [rogue]]);
+    expect(out.every(o => !o.allClear)).toBe(true);
+  });
+
+  it('waits for EVERY holder to leave, not just the alerted one', () => {
+    const out = run([[rogue], [rogue], [other], [other], []]);
+    expect(out[1].alert).toEqual([999]);   // rogue alerted
+    expect(out[2].allClear).toBe(false);   // `other` still holding
+    expect(out[3].alert).toEqual([1000]);  // `other` becomes persistent → alerts
+    expect(out[4].allClear).toBe(true);    // now genuinely nobody
+  });
+
+  it('re-arms across episodes', () => {
+    const out = run([[rogue], [rogue], [], [rogue], [rogue], []]);
+    expect(out.map(o => o.alert.length)).toEqual([0, 1, 0, 0, 1, 0]);
+    expect(out.map(o => o.allClear)).toEqual([false, false, true, false, false, true]);
+  });
+
+  it('never fires all-clear on a box that has never seen a foreign writer', () => {
+    const out = run([[], [], [], []]);
+    expect(out.every(o => !o.allClear && o.alert.length === 0)).toBe(true);
   });
 });

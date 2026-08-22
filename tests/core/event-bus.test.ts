@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { EventBus, CoalescingQueue, bus, EventNames, type BusEvent } from '../../src/core/event-bus.js';
+import {
+  EventBus, CoalescingQueue, bus, EventNames, type BusEvent,
+  busRecoveryKey, setBusRecoveryPublisher, _resetBusRecoveryForTest, _failedBusPairsForTest,
+} from '../../src/core/event-bus.js';
 
 // ── Helper ──
 
@@ -283,6 +286,169 @@ describe('EventBus', () => {
     }
 
     expect(invoked).toBe(0);
+  });
+});
+
+// ── Subscriber-failure recovery ──
+//
+// A throwing subscriber logs at error level, which lands a card in the
+// notification center — and that card described a CONDITION ("main-ai chokes on
+// session:result") that is gone the moment the same pair dispatches cleanly. The
+// live feed had a `subscriber "main-ai" threw` card long after its cause was
+// fixed, because nothing ever retired it.
+//
+// The hard constraint: emit() is the hottest path in the app (tens of thousands of
+// streaming deltas per session), so a healthy dispatch must cost nothing.
+
+describe('bus subscriber-failure recovery', () => {
+  let eventBus: EventBus;
+  let signals: string[][];
+
+  beforeEach(() => {
+    eventBus = new EventBus();
+    signals = [];
+    _resetBusRecoveryForTest();
+    setBusRecoveryPublisher((keys) => { signals.push(keys); });
+  });
+
+  afterEach(() => {
+    setBusRecoveryPublisher(null);
+  });
+
+  it('busRecoveryKey names the (subscriber, event) pair', () => {
+    expect(busRecoveryKey('main-ai', 'session:result')).toBe('bus:main-ai:session:result');
+  });
+
+  it('a SYNC throw is remembered, and the next clean dispatch recovers it', () => {
+    let boom = true;
+    eventBus.subscribe('main-ai', () => { if (boom) throw new Error('handler bug'); });
+
+    eventBus.emit(EventNames.SESSION_RESULT, { x: 1 }, ['main-ai']);
+    expect(_failedBusPairsForTest()).toEqual(['bus:main-ai:session:result']);
+    expect(signals).toEqual([]);
+
+    boom = false;
+    eventBus.emit(EventNames.SESSION_RESULT, { x: 2 }, ['main-ai']);
+    expect(signals).toEqual([['bus:main-ai:session:result']]);
+    // Map cleaned: the pair is healthy, so there is nothing left to remember.
+    expect(_failedBusPairsForTest()).toEqual([]);
+  });
+
+  it('recovers ONCE, not on every subsequent healthy dispatch', () => {
+    let boom = true;
+    eventBus.subscribe('main-ai', () => { if (boom) throw new Error('x'); });
+    eventBus.emit(EventNames.SESSION_RESULT, {}, ['main-ai']);
+    boom = false;
+    for (let i = 0; i < 50; i++) eventBus.emit(EventNames.SESSION_RESULT, {}, ['main-ai']);
+    expect(signals).toHaveLength(1);
+  });
+
+  it('an ASYNC rejection is remembered, and a later resolved handler recovers it', async () => {
+    let boom = true;
+    eventBus.subscribe('projector', async () => {
+      if (boom) throw new Error('async bug');
+    });
+
+    eventBus.emit(EventNames.SESSION_RESULT, {}, ['projector']);
+    await Promise.resolve(); await Promise.resolve();
+    expect(_failedBusPairsForTest()).toEqual(['bus:projector:session:result']);
+
+    boom = false;
+    eventBus.emit(EventNames.SESSION_RESULT, {}, ['projector']);
+    await Promise.resolve(); await Promise.resolve();
+    expect(signals).toEqual([['bus:projector:session:result']]);
+  });
+
+  it('an async handler is NOT counted as recovered before its promise settles', async () => {
+    // The trap: the sync `return` of an async function happens immediately, so
+    // treating "handler returned" as success would retire the card while the work
+    // is still in flight — and then the rejection would re-add it a tick later.
+    let release: (() => void) | null = null;
+    let boom = true;
+    eventBus.subscribe('slow', () => new Promise<void>((resolve, reject) => {
+      release = () => (boom ? reject(new Error('late failure')) : resolve());
+    }));
+
+    eventBus.emit(EventNames.SESSION_RESULT, {}, ['slow']);
+    expect(_failedBusPairsForTest()).toEqual([]);   // nothing decided yet
+    expect(signals).toEqual([]);
+    release!();
+    await Promise.resolve(); await Promise.resolve();
+    expect(_failedBusPairsForTest()).toEqual(['bus:slow:session:result']);
+
+    boom = false;
+    eventBus.emit(EventNames.SESSION_RESULT, {}, ['slow']);
+    expect(signals).toEqual([]);                   // still in flight → still no signal
+    release!();
+    await Promise.resolve(); await Promise.resolve();
+    expect(signals).toEqual([['bus:slow:session:result']]);
+  });
+
+  it('tracks pairs INDEPENDENTLY — a different event or subscriber is a different condition', () => {
+    let boom = true;
+    eventBus.subscribe('main-ai', (e) => {
+      if (boom && e.name === EventNames.SESSION_RESULT) throw new Error('x');
+    });
+    eventBus.subscribe('other', () => {});
+
+    eventBus.emit(EventNames.SESSION_RESULT, {}, ['main-ai']);
+    // A clean dispatch of a DIFFERENT event to the same subscriber says nothing
+    // about the failing one, so it must not retire its card.
+    eventBus.emit(EventNames.TASK_UPDATED, {}, ['main-ai']);
+    // …nor does a different subscriber handling the same event.
+    eventBus.emit(EventNames.SESSION_RESULT, {}, ['other']);
+    expect(signals).toEqual([]);
+    expect(_failedBusPairsForTest()).toEqual(['bus:main-ai:session:result']);
+
+    boom = false;
+    eventBus.emit(EventNames.SESSION_RESULT, {}, ['main-ai']);
+    expect(signals).toEqual([['bus:main-ai:session:result']]);
+  });
+
+  it('HOT PATH: a box where nothing has ever failed records nothing and signals nothing', () => {
+    eventBus.subscribe('stream', () => {}, { global: true });
+    for (let i = 0; i < 2000; i++) eventBus.emit(EventNames.SESSION_TEXT_DELTA, { i }, ['*']);
+    // No per-(subscriber × event) bookkeeping accumulates — the whole cost of a
+    // healthy dispatch is one `.size === 0` check.
+    expect(_failedBusPairsForTest()).toEqual([]);
+    expect(signals).toEqual([]);
+  });
+
+  it('re-arms across repeated failure episodes', () => {
+    let boom = true;
+    eventBus.subscribe('main-ai', () => { if (boom) throw new Error('x'); });
+    for (let episode = 0; episode < 3; episode++) {
+      boom = true;
+      eventBus.emit(EventNames.SESSION_RESULT, {}, ['main-ai']);
+      boom = false;
+      eventBus.emit(EventNames.SESSION_RESULT, {}, ['main-ai']);
+    }
+    expect(signals).toHaveLength(3);
+  });
+
+  it('a throwing PUBLISHER never breaks the bus', () => {
+    // Notification bookkeeping must never become the reason a dispatch fails.
+    setBusRecoveryPublisher(() => { throw new Error('store exploded'); });
+    let boom = true;
+    const seen: number[] = [];
+    eventBus.subscribe('main-ai', () => {
+      if (boom) throw new Error('x');
+      seen.push(1);
+    });
+    eventBus.emit(EventNames.SESSION_RESULT, {}, ['main-ai']);
+    boom = false;
+    expect(() => eventBus.emit(EventNames.SESSION_RESULT, {}, ['main-ai'])).not.toThrow();
+    expect(seen).toHaveLength(1);
+  });
+
+  it('with no publisher wired, failures are still tracked but nothing is signalled', () => {
+    setBusRecoveryPublisher(null);
+    let boom = true;
+    eventBus.subscribe('main-ai', () => { if (boom) throw new Error('x'); });
+    eventBus.emit(EventNames.SESSION_RESULT, {}, ['main-ai']);
+    boom = false;
+    expect(() => eventBus.emit(EventNames.SESSION_RESULT, {}, ['main-ai'])).not.toThrow();
+    expect(_failedBusPairsForTest()).toEqual([]); // still cleaned up
   });
 });
 

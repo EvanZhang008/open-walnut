@@ -22,7 +22,7 @@ import { useSystemHealth } from '@/hooks/useSystemHealth';
 import {
   useNotifications, sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
-  linkTargetOf,
+  linkTargetOf, resolvedLabelOf,
   type Notification, type NotificationSection,
 } from '@/contexts/notifications';
 import { respondToPermission } from '@/api/sessions';
@@ -452,17 +452,10 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
       {n.reason && <div className="nfc-card-sub">{n.reason}</div>}
 
       {resolved && (
-        <div className="notification-feed-item-resolved">
-          {resolved === 'allowed' ? 'Approved'
-            : resolved === 'denied' ? 'Denied'
-            // Nobody ever answered and nobody can: the session died or the CLI
-            // withdrew the ask. Neutral, same family as 'stale' below — the one
-            // thing it must not read as is a decision the user made.
-            : resolved === 'expired' ? 'Session ended'
-            // 404/409: settled somewhere else and we never learned which way —
-            // a neutral label, never a guessed outcome.
-            : 'Already answered'}
-        </div>
+        /* Labels live in resolvedLabelOf (kind-aware: 'expired' on a permission
+           is "Session ended", on an error it is "Stale") so the panel and the
+           toast can't drift apart. */
+        <div className="notification-feed-item-resolved">{resolvedLabelOf(n)}</div>
       )}
 
       {/* The answer form / buttons. */}
@@ -562,10 +555,14 @@ const FeedItem = memo(function FeedItem({ n, onNavigate, onDismiss }: {
   // 'info' server-side, so the red dot follows automatically — the chip is what
   // tells the user WHY the row went quiet instead of it just looking stale.
   const recovered = n.resolved === 'recovered';
+  // 'expired' on an error is the OTHER end of the lifecycle: nothing can ever
+  // recover it (its session died, or it predates recoveryKey), which reads as
+  // "Stale" — deliberately not the green Recovered chip, because nobody fixed it.
+  const stale = n.resolved === 'expired';
 
   return (
     <div
-      className={`notification-feed-item notification-feed-item--${n.severity}${n.read ? '' : ' unread'}${target ? ' clickable' : ''}${expanded ? ' expanded' : ''}${recovered ? ' recovered' : ''}`}
+      className={`notification-feed-item notification-feed-item--${n.severity}${n.read ? '' : ' unread'}${target ? ' clickable' : ''}${expanded ? ' expanded' : ''}${recovered || stale ? ' recovered' : ''}`}
       onClick={target ? () => onNavigate(target) : () => setExpanded(v => !v)}
       role="button"
       tabIndex={0}
@@ -580,7 +577,8 @@ const FeedItem = memo(function FeedItem({ n, onNavigate, onDismiss }: {
       <div className="notification-feed-item-head">
         <span className={`notification-feed-dot notification-feed-dot--${n.severity}`} />
         <span className={`notification-feed-item-title${expanded ? ' expanded' : ''}`}>{n.title}</span>
-        {recovered && <span className="nfc-chip nfc-chip-recovered">Recovered ✓</span>}
+        {recovered && <span className="nfc-chip nfc-chip-recovered">{resolvedLabelOf(n)}</span>}
+        {stale && <span className="nfc-chip">{resolvedLabelOf(n)}</span>}
         {/* Occurrence fold: the server collapses repeats into one record so 36
             identical failures are one line, with how often it happened. Clamped
             at 99+ like the rail badge — a 4-digit count would push the row's

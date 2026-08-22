@@ -35,11 +35,42 @@ const REPEAT_TTL_MS = 60_000;
 const MAX_BODY = 600;
 
 const recentKeys = new Map<string, number>();
+/** dedupKey → recoveryKey, for the absorber release below. The absorber is keyed
+ *  by dedupKey (a hash) and a recovery arrives by CONDITION, so the mapping is
+ *  recorded as each record is published rather than reverse-engineered. Pruned in
+ *  lockstep with recentKeys — it exists only to release entries in that map. */
+const recentKeyConditions = new Map<string, string>();
 
 function pruneRecent(now: number): void {
   if (recentKeys.size < 500) return;
   for (const [k, ts] of recentKeys) {
-    if (now - ts > REPEAT_TTL_MS) recentKeys.delete(k);
+    if (now - ts > REPEAT_TTL_MS) {
+      recentKeys.delete(k);
+      recentKeyConditions.delete(k);
+    }
+  }
+}
+
+/**
+ * Release the storm absorber for conditions that just recovered.
+ *
+ * Same reasoning as the server-side absorber release in publishRecovery: the
+ * window suppresses repeats for 60s, and a condition that fails → recovers →
+ * fails again INSIDE one window would have its re-failure swallowed, leaving the
+ * card stamped 'recovered' (severity info, green chip) while the thing is broken
+ * again. This matters most for the route family, which can flap within seconds.
+ *
+ * Called by the server's publishRecovery. Exported (not wired via a callback)
+ * because the direction is safe: the server already imports this module to
+ * install the bridge.
+ */
+export function releaseAbsorbedKeys(recoveryKeys: string[]): void {
+  if (recoveryKeys.length === 0) return;
+  const keys = new Set(recoveryKeys);
+  for (const [dedupKey, condition] of recentKeyConditions) {
+    if (!keys.has(condition)) continue;
+    recentKeys.delete(dedupKey);
+    recentKeyConditions.delete(dedupKey);
   }
 }
 
@@ -99,6 +130,9 @@ const DEDUP_META_KEYS = [
  * ever signals (they behave exactly as they do today: they stay until dismissed).
  */
 const CORE_SUBSYSTEM_ROOTS = new Set([
+  // 'session' and 'obs' are core AND session-scoped: SESSION_SCOPED_ROOTS is
+  // checked FIRST in recoveryKeyOf, so they get a `session:<sid>` key when the
+  // log names one and fall through to "no lifecycle" here when it doesn't.
   'agent', 'audio', 'browser', 'bus', 'calendar', 'cron', 'daemon', 'git',
   'heartbeat', 'hook', 'memory', 'notif', 'obs', 'session', 'stt', 'subagent',
   'task', 'usage', 'web', 'ws',
@@ -108,11 +142,25 @@ const CORE_SUBSYSTEM_ROOTS = new Set([
 ]);
 
 /**
+ * Subsystem roots whose errors belong to a SESSION rather than to a global
+ * condition. A session error recovers when that session's next turn completes
+ * cleanly, and expires when the session dies — so a `session:<sid>` key gives
+ * the whole family (transport start, stream-convergence violations, unparseable
+ * self-reports, and anything the session subsystem logs in future) a lifecycle
+ * without each call site having to know about notifications.
+ *
+ * `obs` rides along because its session-scoped diagnostics (stream-convergence)
+ * are about one session's stream, and are meaningless once it's gone.
+ */
+const SESSION_SCOPED_ROOTS = new Set(['session', 'obs']);
+
+/**
  * Which recoverable condition a log error belongs to, or undefined for "no
  * lifecycle" (the record behaves exactly as it did before this feature).
  *
  * Precedence: an explicit `meta.recoveryKey` (a producer that knows best) →
- * `meta.pluginId` → the subsystem's first path segment when it isn't core.
+ * `meta.pluginId` → a session/task scope for the session-family subsystems →
+ * the subsystem's first path segment when it isn't core.
  * The subsystem fallback is what covers a plugin's own logger (`<plugin>/http`,
  * `plugin/<id>`) and its sync helpers without every log call having to remember
  * to pass pluginId.
@@ -132,6 +180,20 @@ export function recoveryKeyOf(payload: ErrorNotifyPayload): string | undefined {
   if (typeof pluginId === 'string' && pluginId.trim()) return `plugin:${pluginId.trim()}`;
 
   const root = payload.subsystem.split('/')[0]?.trim();
+
+  // Session family: scope to the session (a clean turn recovers it, death
+  // expires it), else to the task when that's the only id the log carried —
+  // 'transport start failed' knows its taskId but not yet a session id, because
+  // the session it was trying to start never existed.
+  if (root && SESSION_SCOPED_ROOTS.has(root)) {
+    const sessionId = payload.meta?.sessionId;
+    if (typeof sessionId === 'string' && sessionId.trim()) return `session:${sessionId.trim()}`;
+    const taskId = payload.meta?.taskId;
+    if (typeof taskId === 'string' && taskId.trim()) return `task:${taskId.trim()}`;
+    // Neither id: nothing to recover against, so no lifecycle (today's behavior).
+    return undefined;
+  }
+
   if (!root || CORE_SUBSYSTEM_ROOTS.has(root)) return undefined;
   // `plugin/<id>` (integration-loader's per-plugin logger) names the plugin in
   // the SECOND segment — its root is the generic word, so read one deeper.
@@ -140,6 +202,13 @@ export function recoveryKeyOf(payload: ErrorNotifyPayload): string | undefined {
     return id ? `plugin:${id}` : undefined;
   }
   return `plugin:${root}`;
+}
+
+/** Tests: the exact string whose hash becomes the dedupKey. Exported so a producer
+ *  can assert that two of its log lines fold into ONE card, rather than asserting
+ *  on a paraphrase of the rule and drifting from it. */
+export function dedupFingerprintForTest(payload: ErrorNotifyPayload): string {
+  return dedupFingerprint(payload);
 }
 
 function dedupFingerprint(payload: ErrorNotifyPayload): string {
@@ -166,6 +235,7 @@ export function installLogErrorNotifications(
   broadcast?: (name: string, data: unknown) => void,
 ): void {
   recentKeys.clear();
+  recentKeyConditions.clear();
   setErrorNotificationSink((payload) => {
     // Producers that hand-publish a richer notification for the same failure
     // (e.g. server.ts's 'Subagent Error' with task ref + deep links) opt out
@@ -191,6 +261,7 @@ export function installLogErrorNotifications(
     const taskId = typeof payload.meta?.taskId === 'string' ? payload.meta.taskId : undefined;
     // The condition this error belongs to, so a later success can retire it.
     const recoveryKey = recoveryKeyOf(payload);
+    if (recoveryKey) recentKeyConditions.set(dedupKey, recoveryKey);
 
     void upsertNotification({
       kind: 'operation-error', severity: 'error', title, body,
@@ -206,7 +277,10 @@ export function installLogErrorNotifications(
     }).catch((err) => {
       // Persist failed → drop the TTL entry so the next occurrence retries
       // instead of being suppressed for a full window with nothing durable.
-      if (recentKeys.get(dedupKey) === now) recentKeys.delete(dedupKey);
+      if (recentKeys.get(dedupKey) === now) {
+        recentKeys.delete(dedupKey);
+        recentKeyConditions.delete(dedupKey);
+      }
       // notif-subsystem logs are excluded from the sink, so this cannot loop.
       log.notif.warn('log-error bridge: failed to persist notification', {
         dedupKey, error: err instanceof Error ? err.message : String(err),
@@ -219,4 +293,5 @@ export function installLogErrorNotifications(
 export function uninstallLogErrorNotifications(): void {
   setErrorNotificationSink(null);
   recentKeys.clear();
+  recentKeyConditions.clear();
 }

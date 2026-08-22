@@ -18,6 +18,24 @@ export interface RecoveryTransitionTracker {
    * failing→healthy edge, which is the caller's cue to signal recovery.
    */
   observe: (key: string, failing: boolean) => boolean;
+  /**
+   * Whether `key` is currently on the failing side.
+   *
+   * For callers on a genuinely HOT path — the HTTP request logger runs per
+   * request, the session-result handler per turn — where `observe(key, false)`
+   * would otherwise insert a healthy entry for every key that has never failed.
+   * That map would then grow with the route table and with every session id the
+   * box ever saw, to remember something that can never fire. Pre-check with this
+   * and only observe when there is an edge to detect.
+   */
+  isFailing: (key: string) => boolean;
+  /**
+   * Drop `key` entirely. For an unbounded key SPACE (session ids): after the
+   * recovery edge has fired there is nothing left to remember, and keeping a
+   * healthy entry per session would leak for the life of the process. A later
+   * failure re-arms it from scratch.
+   */
+  forget: (key: string) => void;
   /** Forget all keys (tests, or a subsystem restarting). */
   reset: () => void;
 }
@@ -34,6 +52,8 @@ export function createRecoveryTransitionTracker(): RecoveryTransitionTracker {
       // fires exactly once.
       return wasFailing && !isFailing;
     },
+    isFailing(key) { return failing.get(key) === true; },
+    forget(key) { failing.delete(key); },
     reset() { failing.clear(); },
   };
 }

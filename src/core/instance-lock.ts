@@ -216,29 +216,85 @@ export async function assertNoForeignDbHolders(): Promise<void> {
   throw new ForeignDbHolderError(holders)
 }
 
+/** The condition id the SECOND WRITER card carries, so the all-clear retires it. */
+export const TASK_DB_WRITERS_RECOVERY_KEY = 'task-db-writers'
+
+/** What the watchdog remembers between ticks. */
+export interface ForeignWriterWatchState {
+  /** Holders seen last tick — the persistence filter (transient hooks last ms). */
+  prevPids: Set<number>
+  /** Pids already alerted on, so one rogue writer alerts once, not every minute. */
+  alertedPids: Set<number>
+  /** True since the last alert, until an all-clear — the recovery edge memory. */
+  alerting: boolean
+}
+
+export function initialForeignWriterWatchState(): ForeignWriterWatchState {
+  return { prevPids: new Set(), alertedPids: new Set(), alerting: false }
+}
+
+/**
+ * One watchdog tick, as a pure decision: given this tick's holders and the
+ * previous state, what should be reported and what is the next state?
+ *
+ * Extracted from the interval body so the two EDGES can be tested without lsof or
+ * a real second writer. The subtle one is `allClear`: it must key off `holders`
+ * being empty, NOT off `fresh`/`persistent` being empty. Those are also empty on
+ * the tick right after an alert (alertedPids deliberately suppresses a re-alert
+ * for the same pid), so keying the recovery off them would announce "fixed" while
+ * the rogue writer is still holding the database.
+ */
+export function stepForeignWriterWatch(
+  holders: DbHolder[],
+  state: ForeignWriterWatchState,
+): { alert: DbHolder[]; allClear: boolean; next: ForeignWriterWatchState } {
+  const current = new Set(holders.map((h) => h.pid))
+  const persistent = holders.filter((h) => state.prevPids.has(h.pid))
+  const fresh = persistent.filter((h) => !state.alertedPids.has(h.pid))
+  const alert = fresh.length > 0 ? fresh : []
+  const allClear = alert.length === 0 && state.alerting && holders.length === 0
+  return {
+    alert,
+    allClear,
+    next: {
+      prevPids: current,
+      alertedPids: new Set(persistent.map((h) => h.pid)),
+      alerting: alert.length > 0 ? true : state.alerting && !allClear,
+    },
+  }
+}
+
 /**
  * Runtime watchdog: catches a rogue writer that appears AFTER startup (an old
  * binary launched later bypasses both the lock file and the startup gate from
  * OUR side — only we can see it arrive). log.web.error routes into the
  * notification center via the log-error bridge, so this surfaces in the UI.
  * Persistence rule (same pid on consecutive ticks) filters transient hooks.
+ *
+ * `onAllClear` is the recovery half: the user kills the rogue process, and the
+ * next tick that sees a single holder (us) retires the card. Optional and
+ * injected, because this module must not import the notification store; the
+ * server owns that. Fires on the failing→clear EDGE only — a healthy box would
+ * otherwise pay for a locked scan of notifications.json every 60s forever.
  */
-export function startForeignWriterWatchdog(intervalMs = 60_000): { stop: () => void } {
-  let prevPids = new Set<number>()
-  let alertedPids = new Set<number>()
+export function startForeignWriterWatchdog(
+  intervalMs = 60_000,
+  onAllClear?: () => void,
+): { stop: () => void } {
+  let state = initialForeignWriterWatchState()
   const timer = setInterval(() => {
     void listForeignDbHolders().then((holders) => {
-      const current = new Set(holders.map((h) => h.pid))
-      const persistent = holders.filter((h) => prevPids.has(h.pid))
-      const fresh = persistent.filter((h) => !alertedPids.has(h.pid))
-      if (fresh.length > 0) {
+      const { alert, allClear, next } = stepForeignWriterWatch(holders, state)
+      state = next
+      if (alert.length > 0) {
         log.web.error(
           'SECOND WRITER on the task database — tasks WILL silently disappear. Kill the listed process now.',
-          { holders: fresh, dbFile: TASK_DB_FILE },
+          { holders: alert, dbFile: TASK_DB_FILE, recoveryKey: TASK_DB_WRITERS_RECOVERY_KEY },
         )
+      } else if (allClear) {
+        log.web.info('task-db second-writer all clear — sole holder again')
+        try { onAllClear?.() } catch { /* notification bookkeeping is best-effort */ }
       }
-      alertedPids = new Set(persistent.map((h) => h.pid))
-      prevPids = current
     })
   }, intervalMs)
   timer.unref?.()

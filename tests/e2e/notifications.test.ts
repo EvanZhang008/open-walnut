@@ -502,6 +502,236 @@ describe('Notification feed API', () => {
     }
   });
 
+  // ── Round 2: every error class gets a recovery signal or a terminal point ──
+  //
+  // Round 1 wired plugin/git/backup/disk. The live feed then proved the gaps: 20
+  // unresolved cards, including NINE for one failing route, session errors on
+  // long-dead sessions, a SERVER EXIT: SIGTERM from a server already replaced, and
+  // a bus subscriber card outliving its bug. These drive the new seams through the
+  // REAL server (its own middleware, its own bus, its own publishers) rather than a
+  // re-implementation of them in the test.
+
+  it('ROUTE: repeated 5xx on one endpoint = ONE card, retired by the next success', async () => {
+    // Driven through the SERVER's real request-logger middleware — the failing-route
+    // memory lives inside that module, so a test that logged the line itself would
+    // pass while production's recovery edge stayed unwired.
+    //
+    // The 5xx generator is the disk guard: a critically-full disk answers every
+    // mutating /api request 507 (a 5xx), which is exactly a route failing for a
+    // reason outside the route. Freeing the disk makes the same request succeed.
+    const { _setStatfsForTest, resetDiskWatermarkForTest } =
+      await import('../../src/core/disk-watermark.js');
+    const handle = getDiskWatermarkHandle();
+    expect(handle, 'server must have started the disk watermark monitor').toBeTruthy();
+    const stubUsedPct = (pct: number): void => {
+      const blocks = 30 * 256;
+      const bsize = 4 * 1024 * 1024;
+      const bavail = Math.round((blocks * (100 - pct)) / 100);
+      _setStatfsForTest(async () => ({ bsize, blocks, bfree: bavail, bavail }));
+    };
+
+    const path = '/api/tasks';
+    const key = 'route:POST /api/tasks';
+    try {
+      resetDiskWatermarkForTest();
+      stubUsedPct(96);
+      await handle!.poll(); // arms the 507 gate
+
+      // Three occurrences with different bodies/latencies. Under the OLD log shape
+      // (`POST /api/tasks → 507 (23ms)`) each hashed to its own card — that is how
+      // one broken endpoint became nine unresolved cards in the live feed.
+      for (const title of ['a', 'bb', 'ccc']) {
+        const res = await fetch(apiUrl(path), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title }),
+        });
+        expect(res.status).toBe(507);
+        await delay(30);
+      }
+
+      const failing = await pollFeed((f) => f.feed.some((n) => n.recoveryKey === key));
+      const cards = failing.feed.filter((n) => n.recoveryKey === key);
+      // ONE card for one condition, whatever the latency and body were.
+      expect(cards).toHaveLength(1);
+      expect(cards[0].title).toBe('POST /api/tasks → 507');
+      expect(cards[0].title).not.toMatch(/ms\)/);
+      expect(cards[0].resolved).toBeUndefined();
+      const dedupKey = cards[0].dedupKey;
+
+      // Disk freed → the SAME request now answers <500, and the middleware's
+      // failing→healthy edge fires publishRecovery through the injected publisher.
+      stubUsedPct(40);
+      await handle!.poll();
+      const ok = await fetch(apiUrl(path), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'recovered' }),
+      });
+      expect(ok.status).toBeLessThan(500);
+
+      const settled = await pollFeed((f) =>
+        f.feed.some((n) => n.dedupKey === dedupKey && n.resolved === 'recovered'));
+      const rec = settled.feed.find((n) => n.dedupKey === dedupKey)!;
+      expect(rec.resolved).toBe('recovered');
+      expect(rec.severity).toBe('info');
+    } finally {
+      _setStatfsForTest(null);
+      resetDiskWatermarkForTest();
+      await handle!.poll();
+    }
+  });
+
+  it('SESSION: a session error retires on that session\'s next clean result', async () => {
+    const sessionId = 'sess-recovery-e2e';
+    bus.emit(EventNames.SESSION_ERROR, {
+      sessionId, error: 'turn blew up',
+    }, ['main-ai', 'session-runner'], { source: 'session-runner' });
+
+    const failing = await pollFeed((f) =>
+      f.feed.some((n) => n.dedupKey === `error:session:${sessionId}:runtime`));
+    const card = failing.feed.find((n) => n.dedupKey === `error:session:${sessionId}:runtime`)!;
+    // The key the round-1 code never set, which is why these sat red forever.
+    expect(card.recoveryKey).toBe(`session:${sessionId}`);
+    expect(card.resolved).toBeUndefined();
+
+    // The session runs again and finishes cleanly — its own recovery signal.
+    bus.emit(EventNames.SESSION_RESULT, {
+      sessionId, result: 'done', isError: false,
+    }, ['main-ai', 'session-runner'], { source: 'session-runner' });
+
+    const settled = await pollFeed((f) =>
+      f.feed.some((n) => n.dedupKey === `error:session:${sessionId}:runtime` && n.resolved === 'recovered'));
+    const rec = settled.feed.find((n) => n.dedupKey === `error:session:${sessionId}:runtime`)!;
+    expect(rec.resolved).toBe('recovered');
+    expect(rec.severity).toBe('info');
+  });
+
+  it('SESSION: a clean result for a session that never failed changes nothing', async () => {
+    // The hot path — this fires on every turn of every session. It must not scan
+    // the store, and above all must not retire ANOTHER session's card.
+    const other = 'sess-innocent-e2e';
+    bus.emit(EventNames.SESSION_ERROR, {
+      sessionId: other, error: 'still broken',
+    }, ['main-ai', 'session-runner'], { source: 'session-runner' });
+    await pollFeed((f) => f.feed.some((n) => n.dedupKey === `error:session:${other}:runtime`));
+
+    bus.emit(EventNames.SESSION_RESULT, {
+      sessionId: 'sess-never-failed-e2e', result: 'fine', isError: false,
+    }, ['main-ai', 'session-runner'], { source: 'session-runner' });
+    await delay(300);
+
+    const feed = await getFeed();
+    expect(feed.feed.find((n) => n.dedupKey === `error:session:${other}:runtime`)?.resolved)
+      .toBeUndefined();
+  });
+
+  it('SESSION FAMILY: a bridge-written session log shares the session\'s key', async () => {
+    // 'self-report UNPARSEABLE' (session subsystem) and 'stream-convergence
+    // VIOLATION' (obs) were both keyless one-shots in the live feed. Scoping them
+    // to the session means the session's next clean turn retires them with the
+    // rest of its family — no per-call-site wiring.
+    const sessionId = 'sess-family-e2e';
+    const { createSubsystemLogger } = await import('../../src/logging/index.js');
+    createSubsystemLogger('session').error(
+      'turn-complete-summary: self-report UNPARSEABLE — no note section labels found',
+      { sessionId, taskId: 'task-family-e2e' },
+    );
+
+    const seen = await pollFeed((f) => f.feed.some((n) => n.recoveryKey === `session:${sessionId}`));
+    const dedupKey = seen.feed.find((n) => n.recoveryKey === `session:${sessionId}`)!.dedupKey;
+
+    // Mark the session as failing through the same publish site production uses,
+    // then let a clean result retire BOTH cards at once.
+    bus.emit(EventNames.SESSION_ERROR, {
+      sessionId, error: 'and the turn failed too',
+    }, ['main-ai', 'session-runner'], { source: 'session-runner' });
+    await pollFeed((f) => f.feed.some((n) => n.dedupKey === `error:session:${sessionId}:runtime`));
+
+    bus.emit(EventNames.SESSION_RESULT, {
+      sessionId, result: 'ok', isError: false,
+    }, ['main-ai', 'session-runner'], { source: 'session-runner' });
+
+    const settled = await pollFeed((f) =>
+      f.feed.some((n) => n.dedupKey === dedupKey && n.resolved === 'recovered'));
+    // The log-bridge card AND the hand-published one, one signal.
+    expect(settled.feed.find((n) => n.dedupKey === dedupKey)?.resolved).toBe('recovered');
+    expect(settled.feed.find((n) => n.dedupKey === `error:session:${sessionId}:runtime`)?.resolved)
+      .toBe('recovered');
+  });
+
+  it('BUS: a throwing subscriber\'s card retires on the next clean dispatch', async () => {
+    // The live feed's `subscriber "main-ai" threw` card. The bus is core and cannot
+    // import the store, so this rides the publisher the server injects at startup.
+    let boom = true;
+    const eventName = 'e2e:bus-recovery-probe';
+    bus.subscribe('e2e-probe', () => { if (boom) throw new Error('probe bug'); });
+    try {
+      bus.emit(eventName, {}, ['e2e-probe']);
+      const failing = await pollFeed((f) =>
+        f.feed.some((n) => n.recoveryKey === `bus:e2e-probe:${eventName}`));
+      const card = failing.feed.find((n) => n.recoveryKey === `bus:e2e-probe:${eventName}`)!;
+      expect(card.title).toContain('threw on event');
+      expect(card.resolved).toBeUndefined();
+
+      boom = false;
+      bus.emit(eventName, {}, ['e2e-probe']);
+      const settled = await pollFeed((f) =>
+        f.feed.some((n) => n.dedupKey === card.dedupKey && n.resolved === 'recovered'));
+      expect(settled.feed.find((n) => n.dedupKey === card.dedupKey)?.resolved).toBe('recovered');
+    } finally {
+      bus.unsubscribe('e2e-probe');
+    }
+  });
+
+  it('SERVER LIFECYCLE: the running server IS the recovery for an exit card', async () => {
+    // 'SERVER EXIT: SIGTERM' has no later success point by definition — the failing
+    // process is gone. Every deploy therefore left a permanent red card for a
+    // server that had already been replaced by a healthy one. A boot is the signal.
+    const { createSubsystemLogger } = await import('../../src/logging/index.js');
+    createSubsystemLogger('web').error('SERVER EXIT: SIGTERM (killed by another process)', {
+      pid: 12345, uptime: 900, recoveryKey: 'server-lifecycle',
+    });
+    const failing = await pollFeed((f) => f.feed.some((n) => n.recoveryKey === 'server-lifecycle'));
+    const dedupKey = failing.feed.find((n) => n.recoveryKey === 'server-lifecycle')!.dedupKey;
+
+    // What startServer() does at boot, verbatim.
+    await publishRecovery(['server-lifecycle']);
+    const settled = await pollFeed((f) =>
+      f.feed.some((n) => n.dedupKey === dedupKey && n.resolved === 'recovered'));
+    expect(settled.feed.find((n) => n.dedupKey === dedupKey)?.resolved).toBe('recovered');
+  });
+
+  it('COMPACTION has its OWN key — the auto-commit edge must not retire it', async () => {
+    // Round-1 bug: compaction cards carried 'git', so a healthy 30s auto-commit
+    // tick marked a still-broken daily history rewrite as recovered. Worse than
+    // never recovering it: the user is told the repo-growth problem is fixed while
+    // the repo keeps growing.
+    const { createSubsystemLogger } = await import('../../src/logging/index.js');
+    const logger = createSubsystemLogger('web');
+    logger.error('Data Repo Compaction Failing (e2e)', { recoveryKey: 'git:compaction', error: 'tree mismatch' });
+    logger.error('Data Backup Failing (e2e)', { recoveryKey: 'git', error: 'push rejected' });
+
+    const failing = await pollFeed((f) =>
+      f.feed.some((n) => n.recoveryKey === 'git:compaction')
+      && f.feed.some((n) => n.recoveryKey === 'git'));
+    const compaction = failing.feed.find((n) => n.recoveryKey === 'git:compaction')!;
+    const autoCommit = failing.feed.find((n) => n.recoveryKey === 'git')!;
+
+    // The auto-commit tick recovers — and only its OWN family.
+    await publishRecovery(['git']);
+    const afterGit = await pollFeed((f) =>
+      f.feed.some((n) => n.dedupKey === autoCommit.dedupKey && n.resolved === 'recovered'));
+    expect(afterGit.feed.find((n) => n.dedupKey === autoCommit.dedupKey)?.resolved).toBe('recovered');
+    // Compaction is STILL broken and still says so.
+    expect(afterGit.feed.find((n) => n.dedupKey === compaction.dedupKey)?.resolved).toBeUndefined();
+
+    // A completed compaction run is the only thing that retires it.
+    await publishRecovery(['git:compaction']);
+    const afterCompaction = await pollFeed((f) =>
+      f.feed.some((n) => n.dedupKey === compaction.dedupKey && n.resolved === 'recovered'));
+    expect(afterCompaction.feed.find((n) => n.dedupKey === compaction.dedupKey)?.resolved)
+      .toBe('recovered');
+  });
+
   it('marks all read, clearing the unread count', async () => {
     const res = await fetch(apiUrl('/api/notifications/mark-read'), {
       method: 'POST',

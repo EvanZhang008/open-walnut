@@ -159,6 +159,58 @@ describe('log-error → notification bridge', () => {
     expect(events[1].count).toBe(2);
   });
 
+  it('releaseAbsorbedKeys lets a RE-failure notify fresh inside the TTL window', async () => {
+    // A route that 500s → recovers → 500s again seconds later is the common flap,
+    // and it happens well inside the bridge's 60s storm absorber. With the
+    // absorber still armed, the second failure never reaches the store, so the
+    // card sits stamped 'recovered' (green chip, severity info) while the endpoint
+    // is broken again. Recovery is exactly the moment suppression stops being
+    // correct — for the bridge's own map, not only the server's.
+    const { releaseAbsorbedKeys } = await import('../../../src/core/notifications/log-error-bridge.js');
+    const events: string[] = [];
+    uninstallLogErrorNotifications();
+    await dismissNotifications();
+    installLogErrorNotifications((name) => { events.push(name); });
+
+    const logger = createSubsystemLogger('bridge-test');
+    const meta = { recoveryKey: 'route:GET /api/flappy', error: 'boom' };
+    logger.error('GET /api/flappy → 500', meta);
+    await feedAfterFlush();
+    expect(events).toEqual(['notification:new']);
+
+    // Still absorbed while armed…
+    logger.error('GET /api/flappy → 500', meta);
+    await new Promise(r => setTimeout(r, 150));
+    expect(events).toEqual(['notification:new']);
+
+    // …released by the recovery, so the next failure folds and re-broadcasts.
+    releaseAbsorbedKeys(['route:GET /api/flappy']);
+    logger.error('GET /api/flappy → 500', meta);
+    await new Promise(r => setTimeout(r, 200));
+    expect(events).toEqual(['notification:new', 'notification:updated']);
+    const { feed } = await listNotifications();
+    expect(feed).toHaveLength(1);
+    expect(feed[0].count).toBe(2);
+  });
+
+  it('releaseAbsorbedKeys only releases the keys it was given', async () => {
+    const { releaseAbsorbedKeys } = await import('../../../src/core/notifications/log-error-bridge.js');
+    const events: string[] = [];
+    uninstallLogErrorNotifications();
+    await dismissNotifications();
+    installLogErrorNotifications((name) => { events.push(name); });
+
+    const logger = createSubsystemLogger('bridge-test');
+    logger.error('other condition failed', { recoveryKey: 'backup', error: 'x' });
+    await feedAfterFlush();
+
+    releaseAbsorbedKeys(['route:GET /api/unrelated']);
+    logger.error('other condition failed', { recoveryKey: 'backup', error: 'x' });
+    await new Promise(r => setTimeout(r, 150));
+    // Still absorbed: an unrelated recovery must not un-throttle every error.
+    expect(events).toEqual(['notification:new']);
+  });
+
   it('sink exceptions never break the logger', async () => {
     const { setErrorNotificationSink } = await import('../../../src/logging/subsystem.js');
     setErrorNotificationSink(() => { throw new Error('sink exploded'); });
@@ -203,8 +255,11 @@ describe('recoveryKeyOf', () => {
   it('gives CORE subsystems no recoveryKey (this iteration)', () => {
     // A core failure has no single success point that proves it recovered, so
     // these records keep today's behavior: they stay until dismissed.
-    for (const core of ['web', 'session', 'task', 'bus', 'ws', 'git', 'memory', 'agent',
-      'cron', 'daemon', 'notif', 'obs', 'audio', 'heartbeat', 'subagent',
+    // NB 'session'/'obs' are excluded here — they DO get a key when the log names
+    // a session or task (see the session-scope block below); with no ids they
+    // fall back to this same no-lifecycle behavior, asserted there.
+    for (const core of ['web', 'task', 'bus', 'ws', 'git', 'memory', 'agent',
+      'cron', 'daemon', 'notif', 'audio', 'heartbeat', 'subagent',
       'plugin-loader', 'plugin-sources']) {
       expect(recoveryKeyOf({ subsystem: core, message: 'x' })).toBeUndefined();
       // A sub-logger of a core subsystem is still core.
@@ -212,6 +267,86 @@ describe('recoveryKeyOf', () => {
     }
     // 'plugin' alone (no id) is not attributable to any one plugin.
     expect(recoveryKeyOf({ subsystem: 'plugin', message: 'x' })).toBeUndefined();
+  });
+
+  // ── Session-scoped derivation (round 2) ──
+  //
+  // The live feed's session cards (runtime error, delivery failed, transport
+  // start failed, stream-convergence VIOLATION, self-report UNPARSEABLE) all had
+  // no key, so none of them could ever retire — even after the very session they
+  // were about ran a hundred clean turns, or died. Scoping them to the session
+  // gives the whole family both ends of a lifecycle at once: a clean result
+  // recovers them, death expires them.
+
+  it('scopes a session-subsystem error to session:<sid>', () => {
+    expect(recoveryKeyOf({
+      subsystem: 'session', message: 'CLI exited', meta: { sessionId: 'sess-1' },
+    })).toBe('session:sess-1');
+    // Sub-loggers ride along.
+    expect(recoveryKeyOf({
+      subsystem: 'session/stream', message: 'x', meta: { sessionId: 'sess-1' },
+    })).toBe('session:sess-1');
+  });
+
+  it("scopes an 'obs' session diagnostic the same way (stream-convergence VIOLATION)", () => {
+    expect(recoveryKeyOf({
+      subsystem: 'obs',
+      message: 'stream-convergence VIOLATION: streamed message(s) missing from persisted history',
+      meta: { sessionId: 'sess-2', missing: ['a'], checked: 3 },
+    })).toBe('session:sess-2');
+  });
+
+  it('falls back to task:<id> when the log has a taskId but no sessionId', () => {
+    // The real shape of 'transport start failed': the session it was trying to
+    // start never existed, so there is no session id to key on — only the task.
+    expect(recoveryKeyOf({
+      subsystem: 'session', message: 'transport start failed',
+      meta: { taskId: 'task-9', host: 'clouddev', error: 'ssh: publickey' },
+    })).toBe('task:task-9');
+  });
+
+  it('prefers the session over the task when the log carries both', () => {
+    // A session id is the narrower, more accurate condition: the task may own
+    // several sessions, and only THIS one failed.
+    expect(recoveryKeyOf({
+      subsystem: 'session', message: 'x', meta: { sessionId: 'sess-3', taskId: 'task-3' },
+    })).toBe('session:sess-3');
+  });
+
+  it('gives a session-family log with NEITHER id no key (nothing to recover against)', () => {
+    expect(recoveryKeyOf({ subsystem: 'session', message: 'generic failure' })).toBeUndefined();
+    expect(recoveryKeyOf({ subsystem: 'obs', message: 'x', meta: { host: 'mac' } })).toBeUndefined();
+    // Blank ids are not ids.
+    expect(recoveryKeyOf({
+      subsystem: 'session', message: 'x', meta: { sessionId: '  ', taskId: '' },
+    })).toBeUndefined();
+  });
+
+  it('PRECEDENCE: explicit recoveryKey > pluginId > session scope', () => {
+    // A producer that knows best always wins — this is what lets the route
+    // middleware and the bus hand the bridge their own condition ids.
+    expect(recoveryKeyOf({
+      subsystem: 'session', message: 'x',
+      meta: { recoveryKey: 'route:GET /api/x', sessionId: 'sess-1', pluginId: 'plugin-a' },
+    })).toBe('route:GET /api/x');
+    // pluginId beats the session scope: a plugin failing while touching a session
+    // is the PLUGIN's condition, and retires when the plugin's sync succeeds.
+    expect(recoveryKeyOf({
+      subsystem: 'session', message: 'x', meta: { pluginId: 'plugin-a', sessionId: 'sess-1' },
+    })).toBe('plugin:plugin-a');
+  });
+
+  it('does not give a NON-session subsystem a session scope', () => {
+    // 'web' logs sessionId constantly (every session route). Those are route/web
+    // conditions, not session conditions — a session's clean turn says nothing
+    // about them, so scoping them here would retire cards on the wrong signal
+    // (the exact round-1 compaction bug, one layer up).
+    expect(recoveryKeyOf({
+      subsystem: 'web', message: 'x', meta: { sessionId: 'sess-1' },
+    })).toBeUndefined();
+    expect(recoveryKeyOf({
+      subsystem: 'daemon', message: 'x', meta: { sessionId: 'sess-1' },
+    })).toBeUndefined();
   });
 
   it('does not pollute the dedup hash — tagging a record cannot split its card', async () => {

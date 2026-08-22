@@ -17,7 +17,7 @@ import { describe, it, expect } from 'vitest';
 import {
   sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
-  linkTargetOf,
+  linkTargetOf, resolvedLabelOf,
 } from '../../web/src/contexts/notifications/notification-model';
 import { SHOULD_TOAST } from '../../web/src/contexts/notifications/types';
 import type { Notification, NotificationKind, NotificationSeverity } from '../../web/src/contexts/notifications/types';
@@ -73,9 +73,62 @@ describe('sectionOf', () => {
     expect(sectionOf(n({ kind: 'hook' }))).toBe('automation');
   });
 
+  it('drops an EXPIRED operation-error out of Errors too', () => {
+    // The other end of an error's lifecycle: nothing can ever recover it (its
+    // session died, or it predates recoveryKey). Settled either way, so it leaves
+    // the rail — a card nobody can act on is not a diagnosis.
+    expect(sectionOf(n({
+      kind: 'operation-error', dedupKey: 'error:stale', resolved: 'expired',
+    }))).toBe('all');
+  });
+
   it('puts the ephemeral kinds nowhere but All (they never reach the feed anyway)', () => {
     expect(sectionOf(n({ kind: 'sort', persistent: false }))).toBe('all');
     expect(sectionOf(n({ kind: 'audio-error', persistent: false }))).toBe('all');
+  });
+});
+
+/**
+ * resolvedLabelOf — one implementation for the panel card and the toast, and
+ * KIND-AWARE because 'expired' means two different things.
+ */
+describe('resolvedLabelOf', () => {
+  it('labels an expired PERMISSION "Session ended"', () => {
+    // Nobody answered and nobody can: the session died or the CLI withdrew the
+    // ask. The one thing it must not read as is a decision the user made.
+    expect(resolvedLabelOf(n({ kind: 'permission', resolved: 'expired' }))).toBe('Session ended');
+  });
+
+  it('labels an expired ERROR "Stale", not "Session ended"', () => {
+    // A keyless `GET /api/ui-prefs → 500` from three days ago has no session at
+    // all — "Session ended" would be simply false. It is stale: unresolvable, and
+    // nobody is going to act on it.
+    expect(resolvedLabelOf(n({ kind: 'operation-error', resolved: 'expired' }))).toBe('Stale');
+  });
+
+  it('never shows the GREEN recovered wording for an expiry', () => {
+    // The distinction the user acts on: 'recovered' means someone fixed it,
+    // 'expired' means nobody ever will. Conflating them would tell the user a
+    // broken thing is working.
+    expect(resolvedLabelOf(n({ kind: 'operation-error', resolved: 'recovered' }))).toBe('Recovered ✓');
+    expect(resolvedLabelOf(n({ kind: 'operation-error', resolved: 'expired' })))
+      .not.toBe(resolvedLabelOf(n({ kind: 'operation-error', resolved: 'recovered' })));
+  });
+
+  it('keeps the permission decisions as they were', () => {
+    expect(resolvedLabelOf(n({ kind: 'permission', resolved: 'allowed' }))).toBe('Approved');
+    expect(resolvedLabelOf(n({ kind: 'permission', resolved: 'denied' }))).toBe('Denied');
+  });
+
+  it('returns null for an unresolved record (nothing to show)', () => {
+    expect(resolvedLabelOf(n({ kind: 'operation-error' }))).toBeNull();
+    expect(resolvedLabelOf(n({ kind: 'permission' }))).toBeNull();
+  });
+
+  it('falls back to a NEUTRAL label for an outcome it does not know', () => {
+    // The toaster's local 'stale' state and any future server value: never a
+    // guessed outcome.
+    expect(resolvedLabelOf({ kind: 'permission', resolved: 'stale' })).toBe('Already answered');
   });
 });
 

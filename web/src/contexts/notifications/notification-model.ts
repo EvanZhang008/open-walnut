@@ -13,7 +13,7 @@
  */
 
 import { parseAskUserQuestionInput, type AskQuestion } from '@/components/sessions/ask-user-question';
-import type { Notification, NotificationAcpOption } from './types';
+import type { Notification, NotificationAcpOption, NotificationKind } from './types';
 
 export type NotificationSection = 'action' | 'errors' | 'automation' | 'all';
 
@@ -30,6 +30,35 @@ export function sectionOf(n: Notification): NotificationSection {
   if (n.kind === 'operation-error') return n.resolved ? 'all' : 'errors';
   if (n.kind === 'cron' || n.kind === 'skill' || n.kind === 'hook') return 'automation';
   return 'all';
+}
+
+/**
+ * The human label for a settled notification.
+ *
+ * KIND-AWARE because 'expired' means two different things. On a permission it is
+ * "nobody answered and nobody can" — the session ended. On an ERROR it is "this
+ * condition can never be observed again": its session is dead, or the record
+ * predates recoveryKey and no success signal can ever reach it. Showing "Session
+ * ended" on a keyless `GET /api/ui-prefs → 500` from three days ago would be
+ * simply wrong, so an expired error reads "Stale".
+ *
+ * Shared by the panel card and the toast so the two can't drift.
+ */
+export function resolvedLabelOf(
+  // `resolved` is widened to string so the toaster can pass its local
+  // 'stale' outcome (which is not a server value) through the same function
+  // rather than keeping a second copy of these labels.
+  n: { kind: NotificationKind; resolved?: string | null },
+): string | null {
+  switch (n.resolved) {
+    case 'allowed': return 'Approved';
+    case 'denied': return 'Denied';
+    case 'recovered': return 'Recovered ✓';
+    case 'expired': return n.kind === 'operation-error' ? 'Stale' : 'Session ended';
+    // A truthy `resolved` we don't recognise: settled somewhere else and we never
+    // learned which way. Neutral, never a guessed outcome.
+    default: return n.resolved ? 'Already answered' : null;
+  }
 }
 
 export interface SectionCounts {

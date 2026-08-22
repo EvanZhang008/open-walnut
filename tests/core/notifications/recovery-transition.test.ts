@@ -51,4 +51,60 @@ describe('createRecoveryTransitionTracker', () => {
     t.reset();
     expect(t.observe('git', false)).toBe(false);
   });
+
+  /**
+   * isFailing/forget exist for the HOT-path callers (the HTTP request logger runs
+   * per request, the session-result handler per turn). `observe(key, false)` would
+   * insert a healthy entry for every route in the table and every session id the
+   * box ever saw, to remember something that can never fire.
+   */
+  describe('hot-path guards', () => {
+    it('isFailing reports the failing side WITHOUT inserting anything', () => {
+      const t = createRecoveryTransitionTracker();
+      // A key that has never been observed is not failing, and asking must not
+      // create it — otherwise the pre-check is the very leak it exists to avoid.
+      expect(t.isFailing('route:GET /api/x')).toBe(false);
+      // Proof it wasn't inserted: a later healthy observe is still not an edge.
+      expect(t.observe('route:GET /api/x', false)).toBe(false);
+    });
+
+    it('isFailing flips with observe', () => {
+      const t = createRecoveryTransitionTracker();
+      t.observe('route:GET /api/x', true);
+      expect(t.isFailing('route:GET /api/x')).toBe(true);
+      t.observe('route:GET /api/x', false);
+      expect(t.isFailing('route:GET /api/x')).toBe(false);
+    });
+
+    it('forget drops the key, so nothing is retained for an unbounded key space', () => {
+      // The session-id case: after the recovery edge has fired there is nothing
+      // left to remember, and one healthy entry per session would leak for the
+      // life of the process.
+      const t = createRecoveryTransitionTracker();
+      t.observe('session:sess-1', true);
+      t.forget('session:sess-1');
+      expect(t.isFailing('session:sess-1')).toBe(false);
+      // Re-arms from scratch on a later failure.
+      t.observe('session:sess-1', true);
+      expect(t.observe('session:sess-1', false)).toBe(true);
+    });
+
+    it('the guarded pattern signals exactly once per failure episode', () => {
+      // What the request logger and the session-result handler both do.
+      const t = createRecoveryTransitionTracker();
+      const signals: string[] = [];
+      const onHealthy = (key: string) => {
+        if (!t.isFailing(key)) return;   // healthy traffic: one Map.get, no alloc
+        t.forget(key);
+        signals.push(key);
+      };
+
+      for (let i = 0; i < 50; i++) onHealthy('route:GET /api/x'); // never failed
+      expect(signals).toEqual([]);
+
+      t.observe('route:GET /api/x', true);
+      for (let i = 0; i < 50; i++) onHealthy('route:GET /api/x');
+      expect(signals).toEqual(['route:GET /api/x']); // exactly one, not fifty
+    });
+  });
 });

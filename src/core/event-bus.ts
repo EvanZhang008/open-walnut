@@ -222,6 +222,74 @@ const KEY_BUS_EVENTS = new Set([
   'task:phase-changed', 'session:cron-fired',
 ]);
 
+// ── Subscriber-failure recovery ────────────────────────────────────────────────
+//
+// A throwing subscriber logs at error level, which lands a card in the
+// notification center — and that card described a CONDITION ("main-ai chokes on
+// session:result") that goes away the moment the same pair dispatches cleanly.
+// Without a lifecycle it stayed red forever; the live feed had a bus
+// `subscriber "main-ai" threw` card long after the bug behind it was gone.
+//
+// The bus is core and must never import server code, so the signal is injected.
+
+type BusRecoveryPublisher = (keys: string[]) => void;
+let publishBusRecovery: BusRecoveryPublisher | null = null;
+
+/**
+ * (subscriber, event) pairs that have thrown. ONLY failed pairs are inserted —
+ * emit() is the hottest path in the app (tens of thousands of streaming deltas
+ * per session), so the healthy branch must be a single Map.size check plus, in
+ * the rare non-empty case, one Map.has. Recording every healthy dispatch would
+ * mean a Map entry per (subscriber × event name) the box has ever seen.
+ */
+const failedBusPairs = new Set<string>();
+
+/** `bus:<subscriber>:<eventName>` — the condition id for one failing pair. */
+export function busRecoveryKey(subscriber: string, eventName: string): string {
+  return `bus:${subscriber}:${eventName}`;
+}
+
+/** Wire the recovery signal (server.ts, at startup). Null clears it + the memory. */
+export function setBusRecoveryPublisher(publish: BusRecoveryPublisher | null): void {
+  publishBusRecovery = publish;
+  failedBusPairs.clear();
+}
+
+/** Tests: clear the failed-pair memory without a server. */
+export function _resetBusRecoveryForTest(): void {
+  failedBusPairs.clear();
+}
+
+/** Tests: which pairs the bus currently considers failing. */
+export function _failedBusPairsForTest(): string[] {
+  return [...failedBusPairs];
+}
+
+function noteBusSubscriberFailure(subscriber: string, eventName: string): void {
+  failedBusPairs.add(busRecoveryKey(subscriber, eventName));
+}
+
+/**
+ * A dispatch of `(subscriber, eventName)` completed without throwing. Retires the
+ * pair's error card if it had one, on the failing→healthy EDGE (the pair leaves
+ * the set, so a steady stream of healthy dispatches signals exactly once).
+ *
+ * Zero cost when nothing has ever failed: `.size === 0` short-circuits before any
+ * string is built.
+ */
+function noteBusSubscriberSuccess(subscriber: string, eventName: string): void {
+  if (failedBusPairs.size === 0) return;
+  const key = busRecoveryKey(subscriber, eventName);
+  if (!failedBusPairs.delete(key)) return;
+  // Never let the recovery signal become the reason a dispatch "failed": this is
+  // called from inside emit()'s try and from a promise continuation, where a
+  // throw would either be attributed to the subscriber or surface as an
+  // unhandled rejection.
+  try {
+    publishBusRecovery?.([key]);
+  } catch { /* notification bookkeeping must not break the bus */ }
+}
+
 // ── EventBus ──
 
 export class EventBus {
@@ -311,21 +379,35 @@ export class EventBus {
         const result = subscriber.handler(event);
         // If handler returns a promise, catch async errors too
         if (result && typeof result.then === 'function') {
-          result.catch((err: unknown) => {
-            log.bus.error(`subscriber "${subscriber.name}" threw on event "${name}" (async)`, {
-              eventName: name,
-              traceId: event.traceId,
-              error: err instanceof Error ? err.message : String(err),
-              stack: err instanceof Error ? err.stack : undefined,
-            });
-          });
+          result.then(
+            () => { noteBusSubscriberSuccess(subscriber.name, name); },
+            (err: unknown) => {
+              noteBusSubscriberFailure(subscriber.name, name);
+              log.bus.error(`subscriber "${subscriber.name}" threw on event "${name}" (async)`, {
+                eventName: name,
+                traceId: event.traceId,
+                error: err instanceof Error ? err.message : String(err),
+                stack: err instanceof Error ? err.stack : undefined,
+                // The condition, so the next clean dispatch of this exact pair
+                // retires the card instead of it staying red forever.
+                recoveryKey: busRecoveryKey(subscriber.name, name),
+              });
+            },
+          );
+        } else {
+          // Sync handler that returned: the dispatch is already complete here.
+          // (An async one is NOT — its success is the .then above; calling this
+          // now would retire the card while the promise is still in flight.)
+          noteBusSubscriberSuccess(subscriber.name, name);
         }
       } catch (err) {
+        noteBusSubscriberFailure(subscriber.name, name);
         log.bus.error(`subscriber "${subscriber.name}" threw on event "${name}"`, {
           eventName: name,
           traceId: event.traceId,
           error: err instanceof Error ? err.message : String(err),
           stack: err instanceof Error ? err.stack : undefined,
+          recoveryKey: busRecoveryKey(subscriber.name, name),
         });
       }
     }

@@ -6497,6 +6497,10 @@ export class ClaudeCodeSession {
           requestId,
           toolName: pending.request.tool_name,
           allowed: false,
+          // System-settled (archived session retirement) — no human decided.
+          // Consumers that branch human-vs-withdrawn (feed stamp 'expired',
+          // task-phase pullback) must not read this as the user's "Denied".
+          cancelled: true,
         }, ['*'], { source: 'session-runner' })
       }
     }

@@ -26,6 +26,8 @@ import {
   dismissNotifications,
   resolvePermissionNotification,
   recoverNotifications,
+  expireErrorNotifications,
+  expireKeylessErrorNotifications,
 } from '../../../src/core/notifications/store.js';
 
 const NOTIFICATIONS_FILE = path.join(WALNUT_HOME, 'notifications.json');
@@ -490,5 +492,171 @@ describe('recoverNotifications', () => {
     });
     const { recovered } = await recoverNotifications(['plugin:plugin-a']);
     expect(recovered).toHaveLength(1);
+  });
+});
+
+/**
+ * The OTHER end of an error's lifecycle: conditions that can never recover.
+ *
+ * Recovery needs a future success to arrive. A session error whose session is
+ * dead will never get one, and a keyless record predating recoveryKey has nothing
+ * that could ever signal it — both would sit red forever. 'expired' says
+ * "settled, nothing to do"; 'recovered' would be a lie (nobody fixed anything).
+ */
+describe('expireErrorNotifications', () => {
+  async function seedError(dedupKey: string, recoveryKey?: string): Promise<void> {
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: `failed ${dedupKey}`,
+      dedupKey, ...(recoveryKey ? { recoveryKey } : {}),
+    });
+  }
+
+  it('stamps expired + info on the matching unresolved errors', async () => {
+    await seedError('error:s1', 'session:sess-dead');
+    await seedError('error:s2', 'session:sess-dead');
+    await seedError('error:other', 'session:sess-alive');
+
+    const { expired } = await expireErrorNotifications(['session:sess-dead']);
+    expect(expired.map(r => r.dedupKey).sort()).toEqual(['error:s1', 'error:s2']);
+    expect(expired.every(r => r.resolved === 'expired')).toBe(true);
+    expect(expired.every(r => r.severity === 'info')).toBe(true);
+
+    const byKey = new Map((await listNotifications()).feed.map(n => [n.dedupKey, n]));
+    expect(byKey.get('error:other')?.resolved).toBeUndefined();
+  });
+
+  it('does NOT overwrite an already-settled record, in either direction', async () => {
+    // A card the git tick already RECOVERED must not be downgraded to 'expired'
+    // by a later death sweep: recovery is the more informative outcome and it
+    // was true when it was stamped.
+    await seedError('error:done', 'session:sess-x');
+    await recoverNotifications(['session:sess-x']);
+    const { expired } = await expireErrorNotifications(['session:sess-x']);
+    expect(expired).toHaveLength(0);
+    const { feed } = await listNotifications();
+    expect(feed[0].resolved).toBe('recovered');
+  });
+
+  it('never touches permissions, other kinds, or read state', async () => {
+    await addNotification({
+      kind: 'permission', severity: 'warning', title: 'Bash',
+      dedupKey: 'perm:req-1', requestId: 'req-1', recoveryKey: 'session:sess-dead',
+    });
+    await upsertNotification({
+      kind: 'cron', severity: 'info', title: 'ran',
+      dedupKey: 'cron:x', recoveryKey: 'session:sess-dead',
+    });
+    await seedError('error:read', 'session:sess-dead');
+    await markRead();
+
+    const { expired } = await expireErrorNotifications(['session:sess-dead']);
+    expect(expired.map(r => r.dedupKey)).toEqual(['error:read']);
+    const { feed, unreadCount } = await listNotifications();
+    // Expiry is not news — the bell must not re-badge (same rule as recovery).
+    expect(unreadCount).toBe(0);
+    const byKey = new Map(feed.map(n => [n.dedupKey, n]));
+    expect(byKey.get('perm:req-1')?.resolved).toBeUndefined();
+    expect(byKey.get('cron:x')?.resolved).toBeUndefined();
+  });
+
+  it('no-ops on empty keys and on no matches (the common session death)', async () => {
+    await seedError('error:live', 'session:sess-live');
+    expect((await expireErrorNotifications([])).expired).toHaveLength(0);
+    // The cheap path every ordinary session death takes: a lock-free read finds
+    // nothing to do and returns before taking the write lock.
+    expect((await expireErrorNotifications(['session:never-failed'])).expired).toHaveLength(0);
+    expect((await listNotifications()).feed[0].resolved).toBeUndefined();
+  });
+
+  it('a re-fire after expiry goes RED again (the condition came back)', async () => {
+    // A remote session flapping: died (expired) then resumed and failed again.
+    await seedError('error:flap', 'session:sess-flap');
+    await expireErrorNotifications(['session:sess-flap']);
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'failed again',
+      dedupKey: 'error:flap', recoveryKey: 'session:sess-flap',
+    });
+    const { feed } = await listNotifications();
+    expect(feed[0].resolved).toBeUndefined();
+    expect(feed[0].severity).toBe('error');
+  });
+});
+
+/**
+ * The one-time debris sweep (W7): keyless, old, unresolvable.
+ *
+ * The live feed had 20 unresolved cards written before recoveryKey existed —
+ * nine of them the SAME failing route. No key means no success signal can ever
+ * reach them, so they are permanent by construction. One age rule, no
+ * per-producer special-casing.
+ */
+describe('expireKeylessErrorNotifications', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const NOW = 1_800_000_000_000;
+
+  async function seedAt(dedupKey: string, timestamp: number, recoveryKey?: string): Promise<void> {
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: `GET /api/ui-prefs → 500 ${dedupKey}`,
+      dedupKey, timestamp, ...(recoveryKey ? { recoveryKey } : {}),
+    });
+  }
+
+  it('expires an OLD KEYLESS error — the pre-lifecycle debris case', async () => {
+    await seedAt('error:legacy', NOW - 3 * DAY);
+    const { expired } = await expireKeylessErrorNotifications(2 * DAY, NOW);
+    expect(expired.map(r => r.dedupKey)).toEqual(['error:legacy']);
+    const { feed } = await listNotifications();
+    expect(feed[0].resolved).toBe('expired');
+    expect(feed[0].severity).toBe('info');
+  });
+
+  it('leaves a FRESH keyless error alone (it may be happening right now)', async () => {
+    await seedAt('error:fresh', NOW - 60_000);
+    const { expired } = await expireKeylessErrorNotifications(2 * DAY, NOW);
+    expect(expired).toHaveLength(0);
+    expect((await listNotifications()).feed[0].resolved).toBeUndefined();
+  });
+
+  it('leaves a KEYED error alone however old — it still has a lifecycle', async () => {
+    // A plugin that has been broken for a week must stay red: the moment the user
+    // re-authenticates, its own success signal retires it honestly.
+    await seedAt('error:keyed', NOW - 30 * DAY, 'plugin:plugin-a');
+    const { expired } = await expireKeylessErrorNotifications(2 * DAY, NOW);
+    expect(expired).toHaveLength(0);
+    expect((await listNotifications()).feed[0].resolved).toBeUndefined();
+  });
+
+  it('ages off the LATEST occurrence, not first-seen', async () => {
+    // A card first seen a week ago that folded a repeat a minute ago describes
+    // something still happening — the first-seen stamp is not its age.
+    await seedAt('error:folding', NOW - 7 * DAY);
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'still failing',
+      dedupKey: 'error:folding', timestamp: NOW - 60_000,
+    });
+    const { expired } = await expireKeylessErrorNotifications(2 * DAY, NOW);
+    expect(expired).toHaveLength(0);
+  });
+
+  it('never touches other kinds or already-settled records', async () => {
+    await addNotification({
+      kind: 'permission', severity: 'warning', title: 'Bash',
+      dedupKey: 'perm:old', requestId: 'old', timestamp: NOW - 30 * DAY,
+    });
+    await upsertNotification({
+      kind: 'cron', severity: 'info', title: 'ran long ago',
+      dedupKey: 'cron:old', timestamp: NOW - 30 * DAY,
+    });
+    await seedAt('error:already', NOW - 30 * DAY);
+    await expireKeylessErrorNotifications(2 * DAY, NOW);
+
+    const { expired } = await expireKeylessErrorNotifications(2 * DAY, NOW);
+    expect(expired).toHaveLength(0); // idempotent
+    const byKey = new Map((await listNotifications()).feed.map(n => [n.dedupKey, n]));
+    // A stale unanswered PERMISSION is the permission sweep's business, not ours:
+    // it would read "Session ended", and only after checking the session.
+    expect(byKey.get('perm:old')?.resolved).toBeUndefined();
+    expect(byKey.get('cron:old')?.resolved).toBeUndefined();
+    expect(byKey.get('error:already')?.resolved).toBe('expired');
   });
 });

@@ -1368,6 +1368,41 @@ function expirePermissionNotificationOnDeath(
 }
 
 /**
+ * Expire the ERROR notifications a dead session can never recover.
+ *
+ * A session's error cards ('Session Error', 'Session Delivery Failed', plus
+ * everything the session/obs subsystems log with a sessionId) carry recoveryKey
+ * `session:<sid>` and are retired by that session's next clean result. Death
+ * removes that possibility, so the card must be stamped instead of left looking
+ * live — 'expired' (nothing can settle it) rather than 'recovered' (which would
+ * claim the failure was fixed by a session dying).
+ *
+ * Fire-and-forget for the same reason as expirePermissionNotificationOnDeath: the
+ * caller is a synchronous in-transaction mutator and the session write must never
+ * wait on, or fail because of, a notifications.json read-modify-write. No bus
+ * emit: unlike a pending permission there is no live interactive widget to settle,
+ * and the panel picks the stamp up on its next fetch.
+ *
+ * Cost on the common path (a session that never errored) is ONE unlocked read of
+ * notifications.json: expireErrorNotifications pre-checks for a matching record
+ * before it takes the write lock, so a mass reap doesn't serialize dozens of
+ * read-modify-write cycles behind each other to change nothing.
+ */
+function expireErrorNotificationsOnDeath(sessionId: string): void {
+  import('./notifications/store.js')
+    .then(({ expireErrorNotifications }) => expireErrorNotifications([`session:${sessionId}`]))
+    .then(({ expired }) => {
+      if (expired.length === 0) return;
+      log.session.info('expired session error notifications on death', {
+        sessionId, count: expired.length,
+      });
+    })
+    .catch(err => log.session.warn('failed to expire session error notifications', {
+      sessionId, error: err instanceof Error ? err.message : String(err),
+    }));
+}
+
+/**
  * Apply the patch to `session` in-place and produce the `lastActiveAt`-bumped
  * final state. Shared by updateSessionRecord + updateSessionRecordConditionally
  * so status_history ring-buffer + terminal PID clear + lastActiveAt bump behave
@@ -1559,6 +1594,23 @@ function applyUpdateToSession(
     const expiredRequestId = session.pendingPermission.requestId;
     session.pendingPermission = undefined;
     expirePermissionNotificationOnDeath(session.claudeSessionId, session.taskId, expiredRequestId);
+  }
+
+  // Terminal-transition ERROR-notification expiry — the same lesson one field
+  // over. A session's error cards are keyed `session:<sid>` and recover on that
+  // session's next clean result; death means that signal will never arrive, so
+  // without this the card sits red in the Errors rail forever with nothing that
+  // could ever retire it. Runs on the death EDGE only (not on every write to a
+  // terminal record), and inherits the same 'remote_unreachable' carve-out as the
+  // permission clear above: a dropped tunnel is not death, and the remote CLI may
+  // still produce the clean result that legitimately recovers these.
+  if (
+    updates.process_status
+    && updates.process_status !== prevStatus
+    && isTerminalSession(session)
+    && session.status_reason !== 'remote_unreachable'
+  ) {
+    expireErrorNotificationsOnDeath(session.claudeSessionId);
   }
   session.lastActiveAt = now;
   commitStatusVersion(session, beforeStatus, now);

@@ -46,15 +46,20 @@ export interface NotificationRecord {
    *  ever answered and nobody ever can (session died, the CLI withdrew the ask,
    *  or a newer request superseded it).
    *  operation-error: 'recovered' = the underlying operation succeeded again, so
-   *  the condition this error described is gone (see recoverNotifications). */
+   *  the condition this error described is gone (see recoverNotifications), or
+   *  'expired' = nothing can ever recover it (the session it belongs to is dead,
+   *  or the record predates recoveryKey entirely). The UI labels an expired ERROR
+   *  "Stale" — an expired PERMISSION "Session ended". */
   resolved?: 'allowed' | 'denied' | 'expired' | 'recovered';
 
   /** operation-error only — WHICH condition this error is about, so a later
    *  success can retire it. An error notification describes a CONDITION (plugin
    *  auth expired, git auto-commit failing, backup failing, disk full) and
    *  conditions recover; without this the feed was fire-and-forget and a wall of
-   *  red stayed forever after the user fixed the cause. Shape: `plugin:<id>` for
-   *  a plugin, else a bare subsystem name ('git', 'backup', 'disk'). */
+   *  red stayed forever after the user fixed the cause. Shapes in use:
+   *  `plugin:<id>`, 'git', 'git:compaction', 'backup', 'disk',
+   *  `route:<METHOD> <path>`, `session:<sid>`, `task:<id>`, 'server-lifecycle',
+   *  `bus:<subscriber>:<event>`, 'task-db-writers'. */
   recoveryKey?: string;
 
   // ── Permission detail (so the feed can render + answer a request itself) ──
@@ -392,6 +397,90 @@ export async function recoverNotifications(
       recovered.push({ ...rec });
     }
     return { recovered };
+  }));
+}
+
+/**
+ * Stamp `expired` on the error notifications for conditions that can never be
+ * observed again — the other half of the lifecycle recoverNotifications gives.
+ *
+ * Recovery needs a future SUCCESS to arrive. Some conditions lose that
+ * possibility: a `session:<sid>` error whose session is dead and gone will never
+ * produce a clean result, so leaving it unresolved pins it in the Errors rail
+ * forever with nothing that could ever retire it. 'expired' is the honest stamp
+ * — it says "settled, nobody's fault, nothing to do" rather than claiming the
+ * thing was fixed ('recovered' would be a lie about a session that just died).
+ *
+ * Same non-behaviors as recoverNotifications: never touches `read` (this is not
+ * news), only `operation-error`, only `!resolved`. Returns shallow clones so the
+ * caller can broadcast `notification:updated` per record.
+ */
+export async function expireErrorNotifications(
+  recoveryKeys: string[],
+): Promise<{ expired: NotificationRecord[] }> {
+  if (recoveryKeys.length === 0) return { expired: [] };
+  const keys = new Set(recoveryKeys);
+  // Lock-free pre-check. Unlike recoverNotifications (whose callers are all
+  // edge-gated polls), this is called on EVERY session death — including the
+  // overwhelming majority that never errored, and including a mass reap where
+  // dozens of sessions die at once. A plain read costs no cross-process lock and
+  // no write; only a session that actually has cards pays for the real cycle.
+  // Racing with a concurrent publish is harmless: the notification would just be
+  // expired by the boot reconcile instead of now.
+  const { notifications } = await readStore();
+  const anyMatch = notifications.some(
+    n => n.kind === 'operation-error' && !n.resolved && n.recoveryKey && keys.has(n.recoveryKey),
+  );
+  if (!anyMatch) return { expired: [] };
+  return withWriteLock(() => withStore((store) => {
+    const expired: NotificationRecord[] = [];
+    for (const rec of store.notifications) {
+      if (rec.kind !== 'operation-error' || rec.resolved) continue;
+      if (!rec.recoveryKey || !keys.has(rec.recoveryKey)) continue;
+      rec.resolved = 'expired';
+      rec.severity = 'info';
+      expired.push({ ...rec });
+    }
+    return { expired };
+  }));
+}
+
+/**
+ * One-time debris sweep: stamp `expired` on unresolved error records that carry
+ * NO recoveryKey and are older than `olderThanMs`.
+ *
+ * These records predate the recovery lifecycle. They have no key, so no success
+ * signal can ever reach them and no amount of fixing the underlying condition
+ * will retire them — the live feed accumulated 20 such cards (nine of them the
+ * SAME failing route, each hashed to its own card because the log message
+ * embedded the request latency). Their conditions are also unverifiable now, so
+ * 'recovered' would be a guess: 'expired' states the truth, that the record can
+ * no longer be reasoned about.
+ *
+ * Deliberately ONE rule with no per-producer special cases, and age-gated: every
+ * producer that can name a condition now passes a key, so the only records this
+ * can ever match are genuine legacy debris. A keyless record written minutes ago
+ * is left alone — it may be a producer that legitimately has no lifecycle (a
+ * one-shot event), and stamping it the moment it appears would erase a live error.
+ */
+export async function expireKeylessErrorNotifications(
+  olderThanMs: number,
+  now = Date.now(),
+): Promise<{ expired: NotificationRecord[] }> {
+  const cutoff = now - olderThanMs;
+  return withWriteLock(() => withStore((store) => {
+    const expired: NotificationRecord[] = [];
+    for (const rec of store.notifications) {
+      if (rec.kind !== 'operation-error' || rec.resolved) continue;
+      if (rec.recoveryKey) continue;
+      // Age off the LATEST occurrence: a record that folded a repeat five minutes
+      // ago describes something still happening, whatever its first-seen stamp.
+      if ((rec.lastTimestamp ?? rec.timestamp) > cutoff) continue;
+      rec.resolved = 'expired';
+      rec.severity = 'info';
+      expired.push({ ...rec });
+    }
+    return { expired };
   }));
 }
 

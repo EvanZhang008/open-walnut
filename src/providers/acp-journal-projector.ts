@@ -80,6 +80,9 @@ export type AcpProjectedEvent =
       ts: number
       requestId: string
       allowed: boolean
+      /** true = withdrawn/auto-cancelled, NOT a human decision (consumers must
+       *  not treat it as a deny — e.g. the task-phase pullback skips it). */
+      cancelled?: boolean
     }
   | {
       type: 'usage'
@@ -236,6 +239,7 @@ export class AcpJournalProjector {
           ts: record.ts,
           requestId: event.providerRequestId,
           allowed: false,
+          cancelled: true,
         }]
       case 'error': {
         this.turnHasError = true

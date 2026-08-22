@@ -52,6 +52,9 @@ must live under one of these top-level categories instead of directly under
 - [Cloud sync](reference/cloud-sync.md) - one-click cloud-companion setup, the
   git-over-HTTPS data plane, and the live-session bridge.
 - [Claude model configuration](reference/claude-model-configuration.md)
+- [Notification lifecycle](reference/notification-lifecycle.md) - the condition
+  system: every error/permission notification declares how it ends (recover,
+  expire, one-shot), enforced by a ratchet test
 
 ## Plans
 

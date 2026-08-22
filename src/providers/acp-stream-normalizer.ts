@@ -88,7 +88,14 @@ function normalizeProjectedEvent(event: AcpProjectedEvent): NormalizedEvent[] {
     case 'permission-resolved':
       return [{
         name: 'session:permission-resolved',
-        payload: { requestId: event.requestId, allowed: event.allowed },
+        payload: {
+          requestId: event.requestId,
+          allowed: event.allowed,
+          // Withdrawn ≠ denied: server.ts's task-phase pullback and the feed
+          // stamp both branch on this flag (a bare allowed:false would record
+          // an auto-cancel as the human's "Denied" and wrongly resume the row).
+          ...(event.cancelled ? { cancelled: true } : {}),
+        },
       }]
     case 'usage':
       return [{

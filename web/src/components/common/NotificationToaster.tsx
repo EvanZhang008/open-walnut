@@ -30,7 +30,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   useNotifications, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf,
-  linkTargetOf,
+  linkTargetOf, resolvedLabelOf,
   type Notification, type NotificationSeverity,
 } from '@/contexts/notifications';
 import { respondToPermission } from '@/api/sessions';
@@ -275,13 +275,11 @@ function PermissionToast({ n, onDismiss, onPin, navigate }: {
       )}
 
       {settled ? (
-        <div className="nfc-perm-settled">
-          {settled === 'allowed' ? 'Approved'
-            : settled === 'denied' ? 'Denied'
-            // Nobody answered and nobody can — neutral, never a decision.
-            : settled === 'expired' ? 'Session ended'
-            : 'Already answered'}
-        </div>
+        /* Labels live in resolvedLabelOf so the panel and the toast can't drift
+           ('expired' is kind-aware: "Session ended" on a permission, "Stale" on
+           an error). The toaster's local 'stale' outcome falls through to its
+           neutral "Already answered". */
+        <div className="nfc-perm-settled">{resolvedLabelOf({ kind: n.kind, resolved: settled })}</div>
       ) : questionForm ? (
         /* The whole ask, answerable in the popup: every question, every option,
            multi-select, per-question free text. Height-capped + internally

@@ -16,7 +16,7 @@ import { bus, EventNames, eventData } from '../core/event-bus.js'
 import { attachWss, broadcastEvent, sendStreamEvent, closeWss } from './ws/handler.js'
 import { sessionStreamBuffer } from './session-stream-buffer.js'
 import { notFoundHandler, errorHandler } from './middleware/error-handler.js'
-import { requestLogger } from './middleware/request-logger.js'
+import { requestLogger, setRouteRecoveryPublisher } from './middleware/request-logger.js'
 import { tasksRouter } from './routes/tasks.js'
 import { dashboardRouter } from './routes/dashboard.js'
 import { sessionsRouter } from './routes/sessions.js'
@@ -121,6 +121,7 @@ import { notificationsRouter } from './routes/notifications.js'
 import { hooksRouter } from './routes/hooks.js'
 import { addNotification as addFeedNotification, upsertNotification as upsertFeedNotification, resolvePermissionNotification, recoverNotifications } from '../core/notifications/store.js'
 import { createRecoveryTransitionTracker } from '../core/notifications/recovery-transition.js'
+import { releaseAbsorbedKeys } from '../core/notifications/log-error-bridge.js'
 import { compactPermissionInput, summarizePermissionRequest } from '../core/notifications/permission-detail.js'
 import { redactSensitiveText } from '../logging/redact.js'
 import { stripEntityRefs, extractFirstRefs } from '../utils/entity-refs.js'
@@ -315,6 +316,12 @@ export async function publishRecovery(keys: string[]): Promise<number> {
       errorNotificationRecentScopes.delete(scope)
       errorNotificationScopeRecoveryKeys.delete(scope)
     }
+    // The log-error BRIDGE keeps its own absorber (60s per dedup hash) for
+    // everything that arrives as a log.error — routes, bus pairs, session
+    // family. Same argument, different map, so release both: a route that 500s,
+    // recovers, and 500s again seconds later is the common case, and only this
+    // makes the second failure visible.
+    releaseAbsorbedKeys(keys)
     if (recovered.length === 0) return 0
     // One frame per record: the panel patches in place (F2 merge), so the card
     // gains its Recovered chip live without a refresh.
@@ -330,6 +337,71 @@ export async function publishRecovery(keys: string[]): Promise<number> {
     })
     return 0
   }
+}
+
+// ── Session-scoped error lifecycle ────────────────────────────────────────────
+//
+// A session error ('Session Error', 'Session Delivery Failed', plus everything
+// the session/obs subsystems log through the bridge with a sessionId) is a
+// condition about ONE session, and it has both a recovery signal and a terminal
+// point: the session's next clean result retires it, and the session's death
+// expires it (session-tracker's terminal transition + the boot reconcile).
+
+/**
+ * Which sessions currently have an unresolved error card.
+ *
+ * `session:result` fires on every turn of every session, so the healthy path has
+ * to be free: nothing is inserted unless an error was actually published for that
+ * session, and the entry is dropped again on the recovery edge (`forget`) — so
+ * this can't grow into a per-session-id leak over a long-running server.
+ */
+const sessionErrorTracker = createRecoveryTransitionTracker()
+
+/** The condition id for a session's error family. */
+function sessionRecoveryKey(sessionId: string): string {
+  return `session:${sessionId}`
+}
+
+/**
+ * A session's turn completed cleanly → retire its error cards.
+ *
+ * Called from the `session:result` handler on a NON-error result. Cheap by
+ * construction: an isFailing() Map.get for a session that never failed, and only
+ * a real failing→healthy edge reaches the store. The task key rides along because
+ * 'transport start failed' knows only a taskId (the session it was starting never
+ * existed), so its card is keyed `task:<id>` and would otherwise never retire.
+ */
+function recoverSessionErrors(sessionId: string | undefined, taskId: string | undefined): void {
+  const keys: string[] = []
+  if (sessionId && sessionErrorTracker.isFailing(sessionRecoveryKey(sessionId))) {
+    sessionErrorTracker.forget(sessionRecoveryKey(sessionId))
+    keys.push(sessionRecoveryKey(sessionId))
+  }
+  if (taskId && sessionErrorTracker.isFailing(`task:${taskId}`)) {
+    sessionErrorTracker.forget(`task:${taskId}`)
+    keys.push(`task:${taskId}`)
+  }
+  if (keys.length > 0) void publishRecovery(keys)
+}
+
+/**
+ * Publish a session-scoped error AND mark the session failing, so the next clean
+ * result recovers it. One helper rather than two lines at each of the two publish
+ * sites, because forgetting the tracker half would leave a card that can never be
+ * retired — exactly the class of bug this round is closing.
+ */
+function publishSessionErrorNotification(input: {
+  title: string
+  body: string
+  dedupScope: string
+  sessionId?: string
+  taskId?: string
+}): Promise<boolean> {
+  const key = input.sessionId
+    ? sessionRecoveryKey(input.sessionId)
+    : input.taskId ? `task:${input.taskId}` : undefined
+  if (key) sessionErrorTracker.observe(key, true)
+  return publishErrorNotification({ ...input, ...(key ? { recoveryKey: key } : {}) })
 }
 
 /**
@@ -477,7 +549,15 @@ function installExitDiagnostics(): void {
   // Log WHY the server dies so we can diagnose silent crashes
   const exitLog = (reason: string, detail?: unknown) => {
     const msg = `SERVER EXIT: ${reason}`
-    const meta = { pid: process.pid, uptime: process.uptime(), detail: detail instanceof Error ? detail.message : detail }
+    // recoveryKey 'server-lifecycle': the next successful boot retires this card
+    // (see the publishRecovery(['server-lifecycle']) call in startServer). Without
+    // it, every deploy left a permanent red 'SERVER EXIT: SIGTERM' in the feed for
+    // a server that had already been replaced by a healthy one.
+    const meta = {
+      pid: process.pid, uptime: process.uptime(),
+      detail: detail instanceof Error ? detail.message : detail,
+      recoveryKey: 'server-lifecycle',
+    }
     log.web.error(msg, meta)
     console.error(`[${new Date().toISOString()}] ${msg}`, JSON.stringify(meta))
   }
@@ -661,6 +741,27 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   {
     const { installLogErrorNotifications } = await import('../core/notifications/log-error-bridge.js')
     installLogErrorNotifications(broadcastEvent)
+
+    // ── Recovery signals for the seams that must not import server.ts ──
+    //
+    // Both of these are on HOT paths (every HTTP request; every bus dispatch) and
+    // both live in modules the server imports, so the dependency has to run this
+    // way round: they hold an injected publisher, default no-op, and only ever
+    // call it on a failing→healthy EDGE for a key that actually failed.
+    setRouteRecoveryPublisher((keys) => { void publishRecovery(keys) })
+    const { setBusRecoveryPublisher } = await import('../core/event-bus.js')
+    setBusRecoveryPublisher((keys) => { void publishRecovery(keys) })
+
+    // ── The server being up IS the recovery for a lifecycle card ──
+    //
+    // 'SERVER EXIT: SIGTERM' / uncaughtException / unhandledRejection describe a
+    // condition — "this server died" — and the ONE observation that settles it is
+    // this process running. There is no later success point to hook: by
+    // definition the failing process is gone. So a boot retires the previous
+    // life's exit cards (and, when a crash loop is what's happening, each boot's
+    // recovery is immediately followed by the next exit card, which reads
+    // correctly as a flapping condition rather than one stale card).
+    void publishRecovery(['server-lifecycle'])
   }
 
   // ── Setup health checks: Claude CLI + provider readiness ──
@@ -776,14 +877,21 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   //   3. watchdog       — a rogue writer arriving AFTER startup raises a
   //                       notification-center error within ~2 ticks.
   {
-    const { acquireInstanceLock, assertNoForeignDbHolders, startForeignWriterWatchdog, releaseInstanceLock } =
-      await import('../core/instance-lock.js')
+    const {
+      acquireInstanceLock, assertNoForeignDbHolders, startForeignWriterWatchdog, releaseInstanceLock,
+      TASK_DB_WRITERS_RECOVERY_KEY,
+    } = await import('../core/instance-lock.js')
     acquireInstanceLock(port)
     // Capture for the fatal-signal path (which cannot await an import).
     releaseInstanceLockSync = releaseInstanceLock
     if (!CLOUD_MODE) {
       await assertNoForeignDbHolders()
-      foreignWriterWatchdog = startForeignWriterWatchdog()
+      // The all-clear (the user killed the rogue writer) retires the SECOND
+      // WRITER card. Edge-gated inside the watchdog, so a healthy box's 60s tick
+      // stays a bare lsof and never touches notifications.json.
+      foreignWriterWatchdog = startForeignWriterWatchdog(undefined, () => {
+        void publishRecovery([TASK_DB_WRITERS_RECOVERY_KEY])
+      })
     }
   }
 
@@ -1886,7 +1994,15 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { startSendPathCanary } = await import('../core/send-path-canary.js')
     sendPathCanaryHandle = startSendPathCanary({
       notify: (title, body, dedupScope) => {
-        void publishErrorNotification({ title, body, dedupScope })
+        // The canary computes its own edges: 'canary:recovered' is the
+        // all-clear alert, which maps to the condition system's recovery for
+        // every canary card (they share the 'send-path' condition) instead of
+        // becoming yet another card.
+        if (dedupScope === 'canary:recovered') {
+          void publishRecovery(['send-path'])
+          return
+        }
+        void publishErrorNotification({ title, body, dedupScope, recoveryKey: 'send-path' })
       },
     })
 
@@ -1916,6 +2032,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         const { startKeepAwakeMonitor } = await import('../core/keep-awake.js')
         keepAwakeHandle = startKeepAwakeMonitor({
           notify: (title, body, dedupScope) => {
+            // lifecycle: one-shot — "assertion released" is a completed past
+            // event, not an ongoing condition; there is nothing to recover.
+            // The 48h keyless debris sweep is its terminal point.
             void publishErrorNotification({ title, body, dedupScope })
           },
         })
@@ -2058,13 +2177,24 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // MISSING worker build (a packaging bug — fixed by a rebuild) vs a real RUN
       // failure (tree mismatch, ENOBUFS). One dedupScope for both would let
       // whichever fires first hide the other behind its card.
+      // Compaction has its OWN condition key, not the git family's.
+      //
+      // Round-1 bug: these cards carried 'git', so the auto-commit tick's
+      // failing→healthy edge retired them. Those are different conditions on
+      // different clocks — auto-commit runs every 30s and compaction once a day —
+      // so a perfectly healthy commit tick was silently marking a compaction that
+      // is STILL broken as recovered, which is worse than never recovering it: the
+      // user is told the repo-growth problem is fixed while it keeps growing.
+      // Both compaction scopes share one key (missing-worker vs run are two causes
+      // of one condition, and a successful run disproves both).
+      const COMPACTION_RECOVERY_KEY = 'git:compaction'
       const reportCompactionFailure = (failure: string, scope: 'missing-worker' | 'run'): void => {
         log.git.warn('git compaction failed', { error: failure })
         void publishErrorNotification({
           title: 'Data Repo Compaction Failing',
           body: `Git history compaction failed: ${failure}. The data repo will grow unbounded until this is fixed — check open-walnut logs -s git.`,
           dedupScope: `git:compaction:${scope}`,
-          recoveryKey: 'git',
+          recoveryKey: COMPACTION_RECOVERY_KEY,
         })
       }
       const attemptCompaction = async (retriesLeft = 2): Promise<void> => {
@@ -2095,6 +2225,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           const result = reply?.ok ? reply.result : null
           if (result && !result.skipped && !result.error) {
             log.git.info('git compaction complete', { before: result.before, after: result.after })
+            // A completed run is the ONLY honest proof the compaction condition is
+            // gone, so this is where its cards retire. Not transition-gated: this
+            // path runs once a day at most (a `skipped`/not-due reply returns
+            // below without reaching here), so a store scan per success is free —
+            // the tracker exists for 30s polls, not for a daily job.
+            void publishRecovery([COMPACTION_RECOVERY_KEY])
             return
           }
           // result.error (e.g. tree-verification mismatch) is returned, not
@@ -2253,9 +2389,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         if (healed > 0) log.web.info('startup: healed stale pendingPermission rows', { healed })
       })
       .then(() => import('../core/notifications/permission-expiry.js'))
-      .then(({ expireOrphanedPermissionNotifications }) => expireOrphanedPermissionNotifications())
-      .then(expired => {
+      .then(async ({ expireOrphanedPermissionNotifications, expireStaleErrorNotifications }) => {
+        const expired = await expireOrphanedPermissionNotifications()
         if (expired > 0) log.web.info('startup: expired orphaned permission notifications', { expired })
+        // -- …and the ERROR half of the same lifecycle problem --
+        // An error card is about a CONDITION, and a condition needs a recovery
+        // signal to retire it. Two families can never receive one: a session
+        // error whose session is dead (no future turn will ever complete), and a
+        // keyless record written before recoveryKey existed (nothing to signal
+        // against). Both are stamped 'expired' here — see expireStaleErrorNotifications.
+        const errors = await expireStaleErrorNotifications()
+        if (errors.deadSession > 0 || errors.keylessDebris > 0) {
+          log.web.info('startup: expired unresolvable error notifications', errors)
+        }
       })
       .catch(err => log.web.warn('startup: pendingPermission heal failed', {
         error: err instanceof Error ? err.message : String(err),
@@ -3058,14 +3204,25 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const isLaneSession = !!(sessionId && (await laneCheckRead(sessionId).catch(() => null))?.lane)
       const willBeTriage = !isError && !!taskId
       if (isError) {
-        await publishErrorNotification({
+        await publishSessionErrorNotification({
           title: 'Session Error',
           body: `${taskRef ? `${taskRef}: ` : ''}${result || 'Session ended with an error.'}`,
           dedupScope: `session:${sessionId ?? taskId ?? 'unknown'}:runtime`,
           sessionId,
           taskId,
         })
-      } else if (result && !willBeTriage && !isLaneSession) {
+      } else {
+        // A clean result is this session's recovery signal: the turn ran, so
+        // whatever its previous error card described (a failed turn, a delivery
+        // outage, a transport that wouldn't start) is over. Placed on the result
+        // path rather than on `message delivered`: delivery lives in the provider
+        // layer, which would need its own injected seam, and a session cannot
+        // produce a clean result without its message having been delivered — so
+        // the result already implies delivery recovery, one signal instead of two.
+        // No-ops for a session that never failed (see recoverSessionErrors).
+        recoverSessionErrors(sessionId, taskId)
+      }
+      if (!isError && result && !willBeTriage && !isLaneSession) {
         const content = taskRef
           ? `**Session Result** (${taskRef}):\n\n${result}`
           : `**Session Result**:\n\n${result}`
@@ -3196,7 +3353,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         const body = isDeliveryFailure
           ? `${errorTaskRef ? `${errorTaskRef}: ` : ''}${error}\n\nYour message was not lost. It stays queued and will be re-sent when you press Retry, send another message, or the connection recovers.`
           : `${errorTaskRef ? `${errorTaskRef}: ` : ''}${error}`
-        const published = await publishErrorNotification({
+        const published = await publishSessionErrorNotification({
           title: isDeliveryFailure ? 'Session Delivery Failed' : 'Session Error',
           body,
           dedupScope: `session:${sessionId ?? taskId ?? 'unknown'}:${isDeliveryFailure ? 'delivery' : 'runtime'}`,
@@ -3537,14 +3694,19 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (event.name === 'subagent:error') {
       const { runId, agentId, taskId, error } = eventData<'subagent:error'>(event)
       const subErrTaskRef = taskId ? await resolveTaskRef(taskId) : null
-      await publishErrorNotification({
+      // liveness contract: a subagent belongs to its task — the helper keys the
+      // card `task:<id>` and marks it failing, so the task's next clean session
+      // result retires it (and task death expires it). runId is a subagent run
+      // id, not a claude session id, so it must NOT feed the session:<sid> key —
+      // hence sessionId is deliberately omitted from the key derivation input.
+      // With no taskId the failure is a one-shot (48h debris sweep applies).
+      await publishSessionErrorNotification({
         title: 'Subagent Error',
         body: `${agentId ? `${agentId}${subErrTaskRef ? ` for ${subErrTaskRef}` : ''}: ` : ''}${error}`,
         // No shared 'unknown' bucket: with every id missing there is nothing
         // proving two failures are the same one, so each gets its own scope
         // (a fold would silently hide unrelated subagent failures).
         dedupScope: `subagent:${runId ?? agentId ?? taskId ?? `anon:${Date.now()}`}`,
-        sessionId: runId,
         taskId,
       })
     }
@@ -3817,12 +3979,15 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
         }
       }
     } finally {
-      // Recovery edge for the whole git family (auto-commit, repo-size,
-      // compaction, safe mode). Placed in `finally` so BOTH exits are observed
-      // by one gate — the try's own success paths and the catch's failure. The
-      // tracker fires exactly once per failing→healthy edge, which is why a 30s
-      // poll doesn't turn into a permanent store scan (the reason this is
-      // transition-gated and not "signal on every success").
+      // Recovery edge for the auto-commit git family (auto-commit, repo-size,
+      // safe mode). NOT compaction — that has its own key ('git:compaction') and
+      // its own success point, because a healthy commit tick says nothing about a
+      // daily history rewrite and used to retire its card while it was still
+      // broken. Placed in `finally` so BOTH exits are observed by one gate — the
+      // try's own success paths and the catch's failure. The tracker fires exactly
+      // once per failing→healthy edge, which is why a 30s poll doesn't turn into a
+      // permanent store scan (the reason this is transition-gated and not "signal
+      // on every success").
       if (gitRecoveryTracker.observe('git', health.consecutiveFailures > 0 || health.safeMode === true)) {
         void publishRecovery(['git'])
       }
