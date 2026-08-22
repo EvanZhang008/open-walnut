@@ -1384,6 +1384,38 @@ sessionsRouter.get('/:sessionId/changes/summary', async (req: Request, res: Resp
   }
 })
 
+// GET /api/sessions/:sessionId/changes/triage — ONE side question that asks the
+// session which changed files are CRITICAL (reviewer-must-read-first), strict
+// JSON out, cached by changeset shape. Also seeds the per-file summary cache
+// with the returned one-liners, so clicking a starred file is an instant hit.
+// Same error contract as /changes/summary (ai_disabled marker, 503 dead CLI).
+sessionsRouter.get('/:sessionId/changes/triage', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    let deadline: NodeJS.Timeout | undefined
+    try {
+      const { triageSessionChangeset } = await import('../../core/diff-summary.js')
+      const langHint = typeof req.query.lang === 'string' ? req.query.lang : undefined
+      const timeout = new Promise<never>((_, reject) => {
+        deadline = setTimeout(() => reject(new SessionControlError('Triage timed out', 504)), 40_000)
+      })
+      res.json(await Promise.race([
+        triageSessionChangeset(String(req.params.sessionId), { langHint }),
+        timeout,
+      ]))
+    } catch (err) {
+      if (err instanceof SessionControlError) {
+        res.status(err.statusCode).json({ error: err.message, ...(err.extra ?? {}) })
+        return
+      }
+      throw err
+    } finally {
+      clearTimeout(deadline)
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/sessions/:sessionId/plan — read plan content for a plan session
 // (or its source plan session). Core logic lives in
 // core/sessions/session-extras.ts (getSessionPlanPayload) — shared with the

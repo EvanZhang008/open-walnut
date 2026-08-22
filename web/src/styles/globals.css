@@ -25253,6 +25253,13 @@ a.file-link:hover {
 @media (prefers-reduced-motion: reduce) {
   .session-diff-ai-skeleton span { animation: none; opacity: 0.6; }
 }
+/* Tree ✦ marker for AI-triaged critical files */
+.session-diff-tree-critical {
+  color: var(--accent);
+  font-size: 10px;
+  flex: 0 0 auto;
+  margin-left: 2px;
+}
 /* Toolbar ✦ toggle */
 .session-diff-ai-toggle {
   border: 1px solid var(--border);

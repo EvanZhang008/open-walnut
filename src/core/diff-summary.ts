@@ -230,6 +230,9 @@ interface CacheFile {
   /** Absolute filePath → entry (relPath alone collides across the repos of a
    *  multi-repo changeset). Bounded by the changeset itself. */
   entries: Record<string, { hash: string; summary: string; model: string; at: string }>;
+  /** Changeset triage (which files are critical), keyed by a hash of the file
+   *  list — regenerates when the changeset's shape changes. */
+  triage?: { hash: string; critical: TriageEntry[]; at: string };
 }
 
 function cachePath(sessionId: string, host?: string): string {
@@ -449,12 +452,220 @@ async function summarizeInner(
   const summary = answer.trim();
   if (!summary) throw new DiffSummaryError('Session returned an empty summary', 502);
 
-  // The session answered with its own model; mirror session-extras' precedence.
-  const rec = record as { cliModel?: string; model?: string };
-  const usedModel = (rec.cliModel ?? rec.model)?.trim() || 'session';
+  const usedModel = recordModel(record);
   await queueCacheUpdate(sessionId, record.host, (fresh) => {
     fresh.entries[filePath] = { hash, summary, model: usedModel, at: new Date().toISOString() };
   });
 
   return { filePath, relPath: file.relPath, summary, model: usedModel, cached: false, hash };
+}
+
+/** The session answered with its own model; mirror session-extras' precedence. */
+function recordModel(record: unknown): string {
+  const rec = record as { cliModel?: string; model?: string };
+  return (rec.cliModel ?? rec.model)?.trim() || 'session';
+}
+
+// ── Changeset triage (which files are critical) ──────────────────────────────
+
+export interface TriageEntry {
+  filePath: string;
+  relPath: string;
+  /** ≤6 words: why this file matters in the change. */
+  reason: string;
+  /** The triage answer's one-liner — also seeded into the per-file cache. */
+  summary?: string;
+}
+
+export interface TriageResult {
+  critical: TriageEntry[];
+  cached: boolean;
+  hash: string;
+}
+
+const TRIAGE_MAX_LIST = 120;
+const TRIAGE_MAX_CRITICAL = 6;
+const TRIAGE_LIST_TIMEOUT_MS = 10_000;
+const SEED_FETCH_TIMEOUT_MS = 5_000;
+
+interface TriageFile { filePath: string; relPath: string; status: string }
+
+/** Triage hash: the changeset's SHAPE (paths + statuses), not content — a new
+ *  or renamed file re-triages; ongoing edits to the same files don't. */
+export function triageHash(files: TriageFile[], lang: string): string {
+  const h = createHash('sha256').update(PROMPT_V).update('\0').update(lang);
+  for (const f of [...files].sort((a, b) => a.filePath.localeCompare(b.filePath))) {
+    h.update('\0').update(f.status).update('\t').update(f.filePath);
+  }
+  return h.digest('hex').slice(0, 16);
+}
+
+/** The triage side question. STRICT JSON out — the session picks the files a
+ *  reviewer must read first and captions each in one short sentence. */
+export function buildTriageQuestion(files: TriageFile[], lang: string): string {
+  const langName = LANG_NAMES[lang] ?? `the language with ISO 639-1 code '${lang}'`;
+  const listed = files.slice(0, TRIAGE_MAX_LIST);
+  const lines = listed.map((f) => `${f.status.padEnd(8)} ${f.relPath}`).join('\n');
+  const more = files.length > listed.length ? `\n…and ${files.length - listed.length} more files` : '';
+  return [
+    'Below are ALL files changed in this session\'s changeset. You made these changes.',
+    `Pick the ${Math.min(TRIAGE_MAX_CRITICAL, Math.max(1, files.length))} or fewer files at the HEART of the change — the ones a reviewer must read first. Skip mechanical edits (lockfiles, generated files, snapshots, pure formatting).`,
+    'Return ONLY strict JSON — no code fences, no prose before or after:',
+    `{"critical":[{"path":"<relPath exactly as listed>","reason":"<≤6 words, in ${langName}>","summary":"<ONE short sentence in ${langName}: what your change to this file does>"}]}`,
+    '',
+    'Files:',
+    lines + more,
+  ].join('\n');
+}
+
+/** Tolerant JSON extraction: models wrap JSON in fences or prose despite
+ *  instructions. Take the outermost {...} slice and parse that. */
+export function parseTriageAnswer(answer: string): Array<{ path: string; reason?: string; summary?: string }> {
+  const start = answer.indexOf('{');
+  const end = answer.lastIndexOf('}');
+  if (start < 0 || end <= start) throw new Error('no JSON object in triage answer');
+  const parsed = JSON.parse(answer.slice(start, end + 1)) as { critical?: unknown };
+  if (!Array.isArray(parsed.critical)) throw new Error('triage answer missing critical[]');
+  return parsed.critical
+    .filter((e): e is { path: string; reason?: string; summary?: string } =>
+      !!e && typeof (e as { path?: unknown }).path === 'string')
+    .slice(0, TRIAGE_MAX_CRITICAL);
+}
+
+const triageInflight = new Map<string, Promise<TriageResult>>();
+
+/**
+ * Ask the session which changed files are critical, cache by changeset shape,
+ * and SEED the per-file summary cache with the returned one-liners so clicking
+ * a critical file is an instant cache hit (no second side question).
+ * Same channel, gates, and error contract as summarizeSessionFileChange.
+ */
+export function triageSessionChangeset(
+  sessionId: string,
+  opts?: { langHint?: string },
+): Promise<TriageResult> {
+  const key = `${sessionId}:${normalizeLang(opts?.langHint) ?? ''}`;
+  const existing = triageInflight.get(key);
+  if (existing) return existing;
+  const run = triageInner(sessionId, opts?.langHint).finally(() => { triageInflight.delete(key); });
+  triageInflight.set(key, run);
+  return run;
+}
+
+async function triageInner(sessionId: string, langHint?: string): Promise<TriageResult> {
+  const { getSessionByClaudeId } = await import('./session-tracker.js');
+  const record = await getSessionByClaudeId(sessionId);
+  if (!record) throw new DiffSummaryError('Session not found', 404);
+
+  const { getConfig } = await import('./config-manager.js');
+  const config = await getConfig();
+  const lang = normalizeLang(config.agent?.language) ?? normalizeLang(langHint) ?? 'en';
+
+  const { getSessionChanges } = await import('./sessions/session-lifecycle.js');
+  const list = await withTimeout(
+    getSessionChanges(sessionId, { light: true, swr: true }),
+    TRIAGE_LIST_TIMEOUT_MS,
+    () => new DiffSummaryError('Changeset list not ready — try again', 503),
+  ) as unknown as { groups?: Array<{ files: Array<{ filePath: string; relPath: string; status: string }> }> };
+  const files: TriageFile[] = (list.groups ?? [])
+    .flatMap((g) => g.files.map((f) => ({ filePath: f.filePath, relPath: f.relPath, status: f.status })));
+  if (!files.length) return { critical: [], cached: false, hash: triageHash(files, lang) };
+
+  const hash = triageHash(files, lang);
+  const cache = await readCache(sessionId, record.host);
+  if (cache.triage && cache.triage.hash === hash) {
+    return { critical: cache.triage.critical, cached: true, hash };
+  }
+
+  const { backgroundAiDisabled } = await import('./cheap-model.js');
+  if (backgroundAiDisabled()) {
+    throw new DiffSummaryError('AI summaries disabled in this environment', 503, { code: 'ai_disabled' });
+  }
+
+  const { sessionRunner } = await import('../providers/claude-code-session.js');
+  try {
+    await sessionRunner.getOrAttachLiveSession(sessionId);
+  } catch { /* not attachable → requestTurnCompleteSelfReport reports it */ }
+
+  await acquireCallSlot();
+  let answer: string;
+  try {
+    answer = await sessionRunner.requestTurnCompleteSelfReport(
+      sessionId,
+      buildTriageQuestion(files, lang),
+      SIDE_QUESTION_TIMEOUT_MS,
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.web.warn('diff-summary triage failed', { sessionId, error: msg });
+    if (/no live session/i.test(msg)) {
+      throw new DiffSummaryError('Session not running — triage generates while it is live', 503);
+    }
+    throw new DiffSummaryError('Triage generation failed', 502);
+  } finally {
+    releaseCallSlot();
+  }
+
+  let picked: Array<{ path: string; reason?: string; summary?: string }>;
+  try {
+    picked = parseTriageAnswer(answer);
+  } catch (err) {
+    log.web.warn('diff-summary triage answer unparseable', {
+      sessionId, error: err instanceof Error ? err.message : String(err), head: answer.slice(0, 200),
+    });
+    throw new DiffSummaryError('Triage answer unparseable', 502);
+  }
+
+  // Validate against the real list: the model must not invent files.
+  const byRel = new Map<string, TriageFile>();
+  for (const f of files) if (!byRel.has(f.relPath)) byRel.set(f.relPath, f);
+  const critical: TriageEntry[] = [];
+  for (const p of picked) {
+    const f = byRel.get(p.path.trim());
+    if (!f) continue;
+    critical.push({
+      filePath: f.filePath,
+      relPath: f.relPath,
+      reason: (p.reason ?? '').trim().slice(0, 80),
+      summary: (p.summary ?? '').trim().slice(0, 400) || undefined,
+    });
+  }
+
+  const usedModel = recordModel(record);
+  // Seed the per-file cache with the triage one-liners so a click on a
+  // critical file is an instant hit. Best-effort and sequential (each needs
+  // one content fetch to compute the entry's content hash); a lazily-generated
+  // entry for the same content is never overwritten.
+  for (const entry of critical) {
+    if (!entry.summary) continue;
+    try {
+      if (isSensitivePath(entry.relPath)) continue;
+      const { getSessionFileChange } = await import('./sessions/session-lifecycle.js');
+      const fRes = await withTimeout(
+        getSessionFileChange(sessionId, entry.filePath),
+        SEED_FETCH_TIMEOUT_MS,
+        () => new Error('seed fetch timed out'),
+      ) as unknown as { file: FileForSummary };
+      const f = fRes.file;
+      if (looksBinary(f) || f.before === f.after) continue;
+      const fileHash = diffSummaryHash(f, lang);
+      await queueCacheUpdate(sessionId, record.host, (fresh) => {
+        const existing = fresh.entries[entry.filePath];
+        if (existing && existing.hash === fileHash) return; // keep the richer lazy one
+        fresh.entries[entry.filePath] = {
+          hash: fileHash, summary: entry.summary!, model: usedModel, at: new Date().toISOString(),
+        };
+      });
+    } catch (err) {
+      log.web.debug('diff-summary triage seed skipped', {
+        sessionId, relPath: entry.relPath, error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  await queueCacheUpdate(sessionId, record.host, (fresh) => {
+    fresh.triage = { hash, critical, at: new Date().toISOString() };
+  });
+
+  return { critical, cached: false, hash };
 }

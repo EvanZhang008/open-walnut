@@ -7,7 +7,7 @@ import {
 import 'react-diff-view/style/index.css';
 import { Marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { fetchSessionChanges, fetchSessionFileChange, fetchFileChangeSummary, type SessionChangesResult, type SessionFileChange, type SessionDiffBase, type SessionDiffScope, type FileChangeSummary } from '@/api/session-changes';
+import { fetchSessionChanges, fetchSessionFileChange, fetchFileChangeSummary, fetchChangesTriage, type SessionChangesResult, type SessionFileChange, type SessionDiffBase, type SessionDiffScope, type FileChangeSummary } from '@/api/session-changes';
 import { ApiError } from '@/api/client';
 import { buildFileData } from '@/components/sessions/diffPatch';
 import { buildDiffTree, flattenFiles, allContainerIds, isMarkdownPath, type DiffTreeNode, type DiffTreeRepoNode } from '@/components/sessions/diffTree';
@@ -143,7 +143,7 @@ function statusGlyph(status: SessionFileChange['status']): { ch: string; cls: st
 }
 
 function TreeRow({
-  node, depth, expanded, onToggle, selectedId, onSelectFile,
+  node, depth, expanded, onToggle, selectedId, onSelectFile, critical,
 }: {
   node: DiffTreeNode;
   depth: number;
@@ -151,6 +151,8 @@ function TreeRow({
   onToggle: (id: string) => void;
   selectedId: string | null;
   onSelectFile: (change: SessionFileChange) => void;
+  /** filePath → reason for the changeset's AI-triaged critical files (✦). */
+  critical?: Map<string, string>;
 }) {
   const pad = { paddingLeft: 6 + depth * 14 };
 
@@ -166,6 +168,9 @@ function TreeRow({
       >
         <span className={`session-diff-tree-status status-${g.cls}`} title={g.title}>{g.ch}</span>
         <span className="session-diff-tree-name">{node.name}</span>
+        {critical?.has(node.change.filePath) && (
+          <span className="session-diff-tree-critical" title={`AI: ${critical.get(node.change.filePath)}`}>✦</span>
+        )}
         {node.change.status === 'renamed' && node.change.oldRelPath && (
           <span className="session-diff-tree-renamed-from" title={`moved from ${node.change.oldRelPath}`}>← {node.change.oldRelPath.split('/').pop()}</span>
         )}
@@ -203,6 +208,7 @@ function TreeRow({
           onToggle={onToggle}
           selectedId={selectedId}
           onSelectFile={onSelectFile}
+          critical={critical}
         />
       ))}
     </>
@@ -456,6 +462,9 @@ const RenderedMarkdown = memo(function RenderedMarkdown({ blocks, dragging, rend
  *  content-hash cached anyway, so evictions only cost a fast re-fetch. */
 const aiSummaryMemo = new Map<string, FileChangeSummary>();
 const AI_SUMMARY_MEMO_CAP = 200;
+/** Triage results (critical-file map) per changeset shape — the server caches
+ *  too; this only avoids a refetch on remount. */
+const triageMemo = new Map<string, Map<string, string>>();
 /** Latched when the server answers 503 + {code:'ai_disabled'} (test env / AI
  *  globally off) — an environment fact, so page-lifetime by design; turning
  *  the ✦ toggle back on re-probes. Plain 503s (transient content-unavailable)
@@ -1443,6 +1452,40 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     });
   }, [tree2, files]);
 
+  // AI triage: one hidden side question marks the changeset's critical files
+  // (✦ in the tree) and pre-seeds their summaries server-side. Keyed by the
+  // changeset SHAPE (paths + statuses) so it refreshes when files join/leave,
+  // not on every keystroke of ongoing edits.
+  const [criticalMap, setCriticalMap] = useState<Map<string, string>>(() => new Map());
+  const triageKey = useMemo(() => {
+    if (!isSessionBase || !files.length) return '';
+    const shape = files.map((f) => `${f.change.status}\t${f.change.filePath}`).sort().join('\n');
+    return `${sessionId}:${contentDigest(shape)}`;
+  }, [sessionId, isSessionBase, files]);
+  useEffect(() => {
+    if (!triageKey || !aiSummaryOn || aiSummaryUnavailable) { setCriticalMap(new Map()); return; }
+    const memoHit = triageMemo.get(triageKey);
+    if (memoHit) { setCriticalMap(memoHit); return; }
+    const ctrl = new AbortController();
+    fetchChangesTriage(sessionId, { signal: ctrl.signal })
+      .then((res) => {
+        const map = new Map(res.critical.map((e) => [e.filePath, e.reason || e.summary || 'critical']));
+        triageMemo.set(triageKey, map);
+        if (!ctrl.signal.aborted) setCriticalMap(map);
+      })
+      .catch((err) => {
+        if (ctrl.signal.aborted) return;
+        // Same latch contract as the strip: only the explicit marker disables.
+        const code = err instanceof ApiError ? (err.body as { code?: string } | undefined)?.code : undefined;
+        if (err instanceof ApiError && err.status === 503 && code === 'ai_disabled') {
+          aiSummaryUnavailable = true;
+        }
+        // Quiet degrade: an unstared tree is not an error state.
+        log.info('session-changes', 'changes triage unavailable', { sessionId, error: String(err) });
+      });
+    return () => ctrl.abort();
+  }, [triageKey, aiSummaryOn, sessionId]);
+
   const selectedChangeRaw = useMemo(
     () => files.find((f) => f.id === selectedId)?.change ?? null,
     [files, selectedId],
@@ -1762,6 +1805,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
                     onToggle={toggleDir}
                     selectedId={selectedId}
                     onSelectFile={selectFile}
+                    critical={aiSummaryOn && isSessionBase ? criticalMap : undefined}
                   />
                 ))}
               </div>

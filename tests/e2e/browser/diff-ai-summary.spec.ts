@@ -77,6 +77,17 @@ async function stubChangesApi(page: Page, opts: StubOpts): Promise<{ summaryCall
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fullFile[path]) })
       return
     }
+    if (url.pathname.endsWith('/changes/triage')) {
+      // FILE_A is the changeset's critical file → ✦ star in the tree.
+      await route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({
+          critical: [{ filePath: FILE_A, relPath: 'src/alpha.ts', reason: 'core change' }],
+          cached: false, hash: 'th1',
+        }),
+      })
+      return
+    }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(lightList) })
   })
   return { summaryCalls }
@@ -160,4 +171,17 @@ test('failed generation shows a quiet error with a working Retry', async ({ page
   await expect(strip).toContainText('AI summary unavailable', { timeout: 10_000 })
   await strip.locator('.session-diff-ai-retry').click()
   await expect(strip).toContainText('Recovered summary.', { timeout: 10_000 })
+})
+
+test('triage stars the critical file in the tree with a reason tooltip', async ({ page }) => {
+  await stubChangesApi(page, { summary: () => ({ summary: 'Whatever.' }) })
+  const panel = await openChangedTab(page)
+
+  const star = panel.locator('.session-diff-tree-critical')
+  await expect(star).toHaveCount(1, { timeout: 10_000 })
+  await expect(star).toHaveAttribute('title', 'AI: core change')
+  // The star sits on FILE_A's row, not FILE_B's.
+  await expect(
+    panel.locator('.session-diff-tree-file', { hasText: 'alpha.ts' }).locator('.session-diff-tree-critical'),
+  ).toHaveCount(1)
 })

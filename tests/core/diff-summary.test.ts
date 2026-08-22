@@ -39,14 +39,17 @@ vi.mock('../../src/core/session-tracker.js', () => ({
 }));
 
 const getSessionFileChangeMock = vi.fn();
+const getSessionChangesMock = vi.fn();
 vi.mock('../../src/core/sessions/session-lifecycle.js', () => ({
   getSessionFileChange: (...args: unknown[]) => getSessionFileChangeMock(...args),
+  getSessionChanges: (...args: unknown[]) => getSessionChangesMock(...args),
 }));
 
 import { WALNUT_HOME } from '../../src/constants.js';
 import {
   diffSummaryHash, buildDiffText, buildDiffSummaryQuestion, isSensitivePath,
   normalizeLang, summarizeSessionFileChange, DiffSummaryError,
+  triageHash, buildTriageQuestion, parseTriageAnswer, triageSessionChangeset,
 } from '../../src/core/diff-summary.js';
 
 function fileChange(over: Partial<{
@@ -74,6 +77,14 @@ beforeEach(async () => {
   getSessionByClaudeIdMock.mockResolvedValue({ host: undefined, cwd: '/repo', model: 'opus' });
   getSessionFileChangeMock.mockReset();
   getSessionFileChangeMock.mockResolvedValue({ sessionId: 's1', file: fileChange() });
+  getSessionChangesMock.mockReset();
+  getSessionChangesMock.mockResolvedValue({
+    groups: [{ files: [
+      { filePath: '/repo/src/a.ts', relPath: 'src/a.ts', status: 'modified' },
+      { filePath: '/repo/src/b.ts', relPath: 'src/b.ts', status: 'added' },
+      { filePath: '/repo/package-lock.json', relPath: 'package-lock.json', status: 'modified' },
+    ] }],
+  });
 });
 
 afterEach(async () => {
@@ -311,6 +322,19 @@ describe('summarizeSessionFileChange', () => {
     await expect(summarizeSessionFileChange('x', '/y')).rejects.toBeInstanceOf(DiffSummaryError);
   });
 
+  it('triage seeds the per-file cache: clicking a critical file asks nothing', async () => {
+    askMock.mockResolvedValueOnce(JSON.stringify({
+      critical: [{ path: 'src/a.ts', reason: '核心改动', summary: '重写 sync 入口。' }],
+    }));
+    const triage = await triageSessionChangeset('s1');
+    expect(triage.critical).toHaveLength(1);
+    // The per-file summary now serves from the seeded cache — one ask total.
+    const res = await summarizeSessionFileChange('s1', '/repo/src/a.ts');
+    expect(res.cached).toBe(true);
+    expect(res.summary).toBe('重写 sync 入口。');
+    expect(askMock).toHaveBeenCalledTimes(1);
+  });
+
   it('langHint=zh-CN → Chinese question and Chinese deterministic captions', async () => {
     // Side-question path: the question must ask for Chinese.
     await summarizeSessionFileChange('s1', '/repo/src/a.ts', { langHint: 'zh-CN' });
@@ -322,5 +346,65 @@ describe('summarizeSessionFileChange', () => {
     });
     const res = await summarizeSessionFileChange('s1', '/repo/src/b.ts', { langHint: 'zh-CN' });
     expect(res.summary).toBe('无文本改动。');
+  });
+});
+
+describe('triage', () => {
+  it('triageHash is order-independent and moves when the changeset shape changes', () => {
+    const a = { filePath: '/r/a.ts', relPath: 'a.ts', status: 'modified' };
+    const b = { filePath: '/r/b.ts', relPath: 'b.ts', status: 'added' };
+    expect(triageHash([a, b], 'en')).toBe(triageHash([b, a], 'en'));
+    expect(triageHash([a], 'en')).not.toBe(triageHash([a, b], 'en'));
+    expect(triageHash([a, b], 'zh')).not.toBe(triageHash([a, b], 'en'));
+  });
+
+  it('buildTriageQuestion lists files and demands strict JSON', () => {
+    const q = buildTriageQuestion([
+      { filePath: '/r/a.ts', relPath: 'a.ts', status: 'modified' },
+    ], 'zh');
+    expect(q).toContain('a.ts');
+    expect(q).toContain('"critical"');
+    expect(q).toContain('简体中文');
+  });
+
+  it('parseTriageAnswer tolerates fences and prose around the JSON', () => {
+    const wrapped = 'Sure!\n```json\n{"critical":[{"path":"a.ts","reason":"core"}]}\n```\ndone';
+    expect(parseTriageAnswer(wrapped)).toEqual([{ path: 'a.ts', reason: 'core' }]);
+    expect(() => parseTriageAnswer('no json here')).toThrow();
+  });
+
+  it('drops files the model invented, caches by changeset shape', async () => {
+    askMock.mockResolvedValue(JSON.stringify({ critical: [
+      { path: 'src/a.ts', reason: 'core', summary: 'Core edit.' },
+      { path: 'src/GHOST.ts', reason: 'invented', summary: 'nope' },
+    ] }));
+    const first = await triageSessionChangeset('s1');
+    expect(first.critical.map((c) => c.relPath)).toEqual(['src/a.ts']);
+    expect(first.cached).toBe(false);
+    const second = await triageSessionChangeset('s1');
+    expect(second.cached).toBe(true);
+    expect(askMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('unparseable answer → 502; dead CLI → 503', async () => {
+    askMock.mockResolvedValueOnce('I cannot answer that.');
+    await expect(triageSessionChangeset('s1')).rejects.toMatchObject({ statusCode: 502 });
+    askMock.mockRejectedValueOnce(new Error('No live session found for self-report: s1'));
+    await expect(triageSessionChangeset('s1')).rejects.toMatchObject({ statusCode: 503 });
+  });
+
+  it('AI disabled → 503 with the ai_disabled marker, but a cached triage still serves', async () => {
+    askMock.mockResolvedValue(JSON.stringify({ critical: [{ path: 'src/a.ts', reason: 'core' }] }));
+    await triageSessionChangeset('s1');
+    aiDisabled = true;
+    const cached = await triageSessionChangeset('s1');
+    expect(cached.cached).toBe(true);
+    // A changed shape can't regenerate while disabled.
+    getSessionChangesMock.mockResolvedValue({ groups: [{ files: [
+      { filePath: '/repo/src/z.ts', relPath: 'src/z.ts', status: 'added' },
+    ] }] });
+    await expect(triageSessionChangeset('s1')).rejects.toMatchObject({
+      statusCode: 503, extra: { code: 'ai_disabled' },
+    });
   });
 });

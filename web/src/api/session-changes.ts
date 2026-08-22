@@ -134,6 +134,36 @@ export async function fetchFileChangeSummary(
   );
 }
 
+/** One critical file from the changeset triage (Changed tab's tree stars). */
+export interface ChangesTriageEntry {
+  filePath: string;
+  relPath: string;
+  reason: string;
+  summary?: string;
+}
+
+export interface ChangesTriageResult {
+  critical: ChangesTriageEntry[];
+  cached: boolean;
+  hash: string;
+}
+
+/**
+ * Ask the session which changed files are critical. Server-cached by changeset
+ * shape; a cold call is one hidden side question (seconds). The server also
+ * pre-seeds those files' summaries, so starred files open with an instant ✦.
+ */
+export async function fetchChangesTriage(
+  sessionId: string,
+  opts?: { signal?: AbortSignal },
+): Promise<ChangesTriageResult> {
+  return apiGet<ChangesTriageResult>(
+    `/api/sessions/${sessionId}/changes/triage`,
+    { lang: navigator.language || 'en' },
+    { signal: opts?.signal, timeoutMs: 45_000 },
+  );
+}
+
 /**
  * Lightweight changed-files fetch for quick-access lists (Files tab): same
  * compute/cache as the full call but before/after are stripped server-side
