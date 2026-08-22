@@ -12,6 +12,7 @@ import { initUiPrefsSync } from './utils/ui-prefs-sync';
 import { selectionIntersects } from './utils/selection-guard';
 import { initSessionStatusStore } from './stores/init-session-status-store';
 import { installGlobalAutofillSuppression } from './utils/no-autofill';
+import { initStaleAssetRecovery } from './utils/stale-assets';
 import './styles/globals.css';
 
 // Persist browser console logs to disk (view with: open-walnut logs -s browser)
@@ -27,6 +28,10 @@ initLongTaskMonitor();
 initMainThreadTracer();
 // Cache server version/mode for crash reports (survives to server-down crashes).
 initAppInfo();
+// A deploy wipes the hashed assets this tab was built against, so its next
+// code-split import silently dies (that is how a .go file lost its syntax
+// colors mid-session). Reload once the tab has no unsaved text.
+initStaleAssetRecovery();
 // No login form anywhere in Walnut — suppress password-manager autofill popups
 // (iCloud Passwords etc.) on every input/textarea, present and future.
 installGlobalAutofillSuppression();

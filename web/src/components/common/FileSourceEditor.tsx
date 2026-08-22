@@ -30,6 +30,7 @@ import {
   cmFlashExtension, cmFlashTerm, type CmSearchStatus,
 } from '@/utils/cm-search';
 import { SYMBOL_RE } from '@/utils/dom-text-search';
+import { log } from '@/utils/log';
 
 export interface FileSourceEditorHandle {
   /** Current editor text — pulled by the parent at save time. */
@@ -291,7 +292,16 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
           // that wasn't known at EditorState.create time (there is no "add
           // extension" API), which is what a lazily-loaded grammar needs.
           view.dispatch({ effects: StateEffect.appendConfig.of(support.extension) });
-        }).catch(() => { /* grammar unavailable — plain text is fine */ });
+        }).catch((err: unknown) => {
+          // Plain text is an acceptable outcome, a SILENT one is not: the usual
+          // cause is a chunk from a build the server has already replaced (a
+          // deploy landed while this tab was open), which looked exactly like
+          // "Walnut doesn't highlight Go". stale-assets.ts reloads on the same
+          // signal; this line is how you tell the two apart in the log.
+          log.warn('file-editor', 'syntax grammar failed to load — plain text', {
+            path, language: desc.name, error: String((err as Error)?.message ?? err),
+          });
+        });
       }
 
       return () => {

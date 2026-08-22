@@ -15,6 +15,7 @@ import compression from 'compression'
 import { bus, EventNames, eventData } from '../core/event-bus.js'
 import { attachWss, broadcastEvent, sendStreamEvent, closeWss } from './ws/handler.js'
 import { sessionStreamBuffer } from './session-stream-buffer.js'
+import { isStaticAssetPath } from './static-asset-path.js'
 import { notFoundHandler, errorHandler } from './middleware/error-handler.js'
 import { requestLogger, setRouteRecoveryPublisher } from './middleware/request-logger.js'
 import { tasksRouter } from './routes/tasks.js'
@@ -1454,6 +1455,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // SPA fallback: serve index.html for non-API routes
     app.use((req, res, next) => {
       if (req.method !== 'GET' || req.path.startsWith('/api/')) return next()
+      // A build artifact express.static could NOT find is a stale chunk: every
+      // deploy re-hashes and wipes /assets, so tabs opened before it still ask
+      // for the old names. Answering those with index.html made the browser
+      // parse HTML as a module — a failure the app could only see as "this
+      // lazily-loaded feature does nothing" (a .go file with no syntax colors
+      // for the rest of the tab's life). 404 keeps it loud, and lets the
+      // client's vite:preloadError recovery reload onto the current build.
+      if (isStaticAssetPath(req.path)) return next()
       res.sendFile('index.html', { root: staticDir })
     })
   }
