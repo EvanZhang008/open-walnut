@@ -19,6 +19,7 @@ import {
   _setNowForTest,
   DEFAULT_BATTERY_FLOOR_PCT,
   DEFAULT_OFFLINE_GRACE_MINUTES,
+  pollClosedLidDisplayOnce,
   type KeepAwakeConfig,
 } from '../../src/core/keep-awake.js';
 
@@ -30,6 +31,7 @@ interface FakeWorld {
   batteryPct: number | null;
   onAc: boolean;
   online: boolean;
+  lidClosed: boolean | null;
   nowMs: number;
   sudoFails: boolean;
   osascriptResult: { ok: boolean; stdout: string; stderr: string };
@@ -45,6 +47,10 @@ function installWorld(): void {
   _setNowForTest(() => world.nowMs);
   _setExecForTest(async (cmd, args) => {
     world.execCalls.push({ cmd, args });
+    if (cmd === '/usr/sbin/ioreg') {
+      if (world.lidClosed === null) return { ok: false, stdout: '', stderr: 'unavailable' };
+      return { ok: true, stdout: `\"AppleClamshellState\" = ${world.lidClosed ? 'Yes' : 'No'}\n`, stderr: '' };
+    }
     if (cmd === '/usr/bin/pmset' && args[0] === '-g') {
       if (world.batteryPct === null) return { ok: true, stdout: 'no batteries here\n', stderr: '' };
       const src = world.onAc ? "'AC Power'" : "'Battery Power'";
@@ -80,6 +86,7 @@ beforeEach(() => {
     batteryPct: 80,
     onAc: false,
     online: true,
+    lidClosed: false,
     nowMs: 1_000_000_000,
     sudoFails: false,
     osascriptResult: { ok: true, stdout: '', stderr: '' },
@@ -261,6 +268,47 @@ darwinOnly('pollKeepAwakeOnce', () => {
     await pollKeepAwakeOnce();
     expect(getKeepAwakeState().reason).toBe('no-sessions');
     expect(disableSleepCalls().at(-1)).toBe('0');
+  });
+});
+
+darwinOnly('closed-lid display sleep', () => {
+  const displaySleepCalls = () => world.execCalls.filter(
+    (c) => c.cmd === '/usr/bin/osascript' && c.args.at(-1)?.includes('IORequestIdle'),
+  );
+  const lidStateCalls = () => world.execCalls.filter((c) => c.cmd === '/usr/sbin/ioreg');
+
+  it('sleeps displays once when the lid closes while holding', async () => {
+    await pollKeepAwakeOnce();
+    await pollClosedLidDisplayOnce();
+    expect(displaySleepCalls()).toHaveLength(0);
+
+    world.lidClosed = true;
+    await pollClosedLidDisplayOnce();
+    await pollClosedLidDisplayOnce();
+    expect(displaySleepCalls()).toHaveLength(1);
+  });
+
+  it('does not poll the lid when the feature is not holding', async () => {
+    world.config = { enabled: false };
+    await pollKeepAwakeOnce();
+    world.lidClosed = true;
+    await pollClosedLidDisplayOnce();
+    expect(lidStateCalls()).toHaveLength(0);
+    expect(displaySleepCalls()).toHaveLength(0);
+  });
+
+  it('re-arms after the lid opens and closes again', async () => {
+    await pollKeepAwakeOnce();
+    await pollClosedLidDisplayOnce();
+
+    world.lidClosed = true;
+    await pollClosedLidDisplayOnce();
+    world.lidClosed = false;
+    await pollClosedLidDisplayOnce();
+    world.lidClosed = true;
+    await pollClosedLidDisplayOnce();
+
+    expect(displaySleepCalls()).toHaveLength(2);
   });
 });
 

@@ -14,9 +14,10 @@
  *   - on battery and charge ≤ battery_floor_pct (default 30%)
  *   - offline for ≥ offline_grace_minutes (default 15)
  *
- * This feature only prevents SYSTEM sleep. It does not assert display activity,
- * so normal macOS display-sleep settings still turn the screen off. Network
- * recovery is deliberately left to macOS/the user: on macOS 15, third-party code
+ * This feature only prevents SYSTEM sleep. It never keeps displays awake. When
+ * the lid closes, Walnut requests display-only sleep so external screens turn
+ * off while sessions continue. Network recovery is left to macOS/the user: on
+ * macOS 15, third-party code
  * cannot wake a Bluetooth-discovered Instant Hotspot. If the Mac stays offline
  * for the grace window, Walnut restores normal sleep.
  *
@@ -50,6 +51,7 @@ export const DEFAULT_BATTERY_FLOOR_PCT = 30;
 export const DEFAULT_OFFLINE_GRACE_MINUTES = 15;
 export const DEFAULT_LINGER_MINUTES = 5;
 const DEFAULT_POLL_INTERVAL_MS = 60_000;
+const LID_POLL_INTERVAL_MS = 1_000;
 
 export type KeepAwakeReason = 'unsupported' | 'disabled' | 'needs-sudo' | 'no-sessions' | 'battery-low' | 'offline-too-long' | 'active';
 
@@ -158,6 +160,8 @@ let lastApplied: boolean | null = null;
 let lastRunningAtMs: number | null = null;
 let offlineSinceMs: number | null = null;
 let notifiedNeedsSudo = false;
+let lidWasClosed = false;
+let displaySleepRequestedForClosure = false;
 
 export function getKeepAwakeState(): Readonly<KeepAwakeState> {
   return { ...state };
@@ -181,6 +185,8 @@ export function resetKeepAwakeForTest(): void {
   lastRunningAtMs = null;
   offlineSinceMs = null;
   notifiedNeedsSudo = false;
+  lidWasClosed = false;
+  displaySleepRequestedForClosure = false;
 }
 
 /** The one-time root rule this feature needs, scoped to exactly two commands. */
@@ -291,6 +297,61 @@ async function applyDisableSleep(desired: boolean, notify?: KeepAwakeNotify): Pr
 }
 
 export type KeepAwakeNotify = (title: string, body: string, dedupScope: string) => void;
+
+const SLEEP_DISPLAYS_JXA = `
+ObjC.import('IOKit');
+const service = $.IOServiceGetMatchingService(0, $.IOServiceMatching('IODisplayWrangler'));
+if (!service) throw new Error('IODisplayWrangler unavailable');
+const result = $.IORegistryEntrySetCFProperty(service, $('IORequestIdle'), $.kCFBooleanTrue);
+$.IOObjectRelease(service);
+if (result !== 0) throw new Error('IORequestIdle failed: ' + result);
+`;
+
+async function readLidClosed(): Promise<boolean | null> {
+  const res = await execImpl('/usr/sbin/ioreg', ['-r', '-n', 'IOPMrootDomain', '-d', '1']);
+  if (!res.ok) return null;
+  const match = res.stdout.match(/"AppleClamshellState"\s*=\s*(Yes|No)/);
+  return match ? match[1] === 'Yes' : null;
+}
+
+async function requestDisplaySleep(): Promise<boolean> {
+  const res = await execImpl('/usr/bin/osascript', ['-l', 'JavaScript', '-e', SLEEP_DISPLAYS_JXA]);
+  if (!res.ok) {
+    log.web.warn('keep-awake could not sleep displays after lid close', { stderr: res.stderr.slice(0, 200) });
+  }
+  return res.ok;
+}
+
+/**
+ * Keep display behavior independent from system sleep. `pmset disablesleep`
+ * keeps sessions alive with the lid closed, but clamshell mode can leave an
+ * external display lit. Request display-only sleep once per lid closure while
+ * Walnut is holding; opening the lid re-arms the next closure.
+ */
+export async function pollClosedLidDisplayOnce(): Promise<void> {
+  if (!state.holding) {
+    lidWasClosed = false;
+    displaySleepRequestedForClosure = false;
+    return;
+  }
+
+  const lidClosed = await readLidClosed();
+  if (lidClosed === null) return;
+
+  if (!lidClosed) {
+    lidWasClosed = false;
+    displaySleepRequestedForClosure = false;
+    return;
+  }
+
+  if (!lidWasClosed) {
+    lidWasClosed = true;
+    displaySleepRequestedForClosure = false;
+  }
+
+  if (!state.holding || displaySleepRequestedForClosure) return;
+  displaySleepRequestedForClosure = await requestDisplaySleep();
+}
 
 let monitorNotify: KeepAwakeNotify | undefined;
 
@@ -403,6 +464,7 @@ export function startKeepAwakeMonitor(opts: { notify?: KeepAwakeNotify; interval
 
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let lidTimer: ReturnType<typeof setInterval> | null = null;
   const tick = async (): Promise<void> => {
     try {
       await pollKeepAwakeOnce(opts.notify);
@@ -418,13 +480,25 @@ export function startKeepAwakeMonitor(opts: { notify?: KeepAwakeNotify; interval
   // First check shortly after boot (not instantly — let startup I/O settle).
   timer = setTimeout(() => { void tick(); }, Math.min(5_000, intervalMs));
   timer.unref?.();
+  let lidPollRunning = false;
+  lidTimer = setInterval(() => {
+    if (lidPollRunning) return;
+    lidPollRunning = true;
+    void pollClosedLidDisplayOnce()
+      .catch((err) => {
+        log.web.warn('keep-awake lid monitor failed', { error: err instanceof Error ? err.message : String(err) });
+      })
+      .finally(() => { lidPollRunning = false; });
+  }, LID_POLL_INTERVAL_MS);
+  lidTimer.unref?.();
 
-  log.web.info('keep-awake monitor started', { intervalMs });
+  log.web.info('keep-awake monitor started', { intervalMs, lidPollIntervalMs: LID_POLL_INTERVAL_MS });
 
   return {
     stop() {
       stopped = true;
       if (timer) clearTimeout(timer);
+      if (lidTimer) clearInterval(lidTimer);
     },
     poll: () => pollKeepAwakeOnce(opts.notify),
     async release() {

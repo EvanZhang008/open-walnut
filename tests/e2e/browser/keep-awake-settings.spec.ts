@@ -14,7 +14,7 @@ test('Keep-Awake only prevents system sleep and releases after 15 minutes offlin
   await section.getByText(/Keep Mac Awake During Sessions/).click()
 
   await expect(section).toContainText('prevents system sleep')
-  await expect(section).toContainText('screen can still turn off normally')
+  await expect(section).toContainText('Closing the lid turns connected screens off')
   await expect(section).toContainText('Connect an iPhone hotspot yourself')
   await expect(section.locator('#ka-offline')).toHaveAttribute('placeholder', '15')
   await expect(section.locator('#ka-ssid')).toHaveCount(0)

@@ -247,8 +247,8 @@ export function AdvancedSection({ config, onSave }: Props) {
             <div className="settings-collapsible-body">
               <p className="text-sm text-muted" style={{ margin: '0 0 12px 0' }}>
                 While local sessions run, Walnut prevents <strong>system sleep</strong>,
-                including with the lid closed. The screen can still turn off normally.
-                Connect an iPhone hotspot yourself. If internet stays unavailable for
+                including with the lid closed. Closing the lid turns connected screens off
+                while sessions keep running. Connect an iPhone hotspot yourself. If internet stays unavailable for
                 15 minutes, Walnut restores normal sleep.
               </p>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
