@@ -18,8 +18,15 @@ export const MAX_EVENT_PREFIXES = 16;
 export interface BridgeContext {
   appId: string;
   pluginId: string;
-  /** Resolved theme, forwarded so the app can match Walnut's look. */
-  theme: 'light' | 'dark';
+  /**
+   * Resolved theme, read live at handshake time.
+   *
+   * A getter, not a value: the bridge must NOT be rebuilt when the theme flips.
+   * Rebuilding drops the app's registered event prefixes, and the already-loaded
+   * page never re-sends `walnut:ready`, so its live feed would die silently.
+   * Theme changes are pushed as their own `walnut:theme` frame instead.
+   */
+  getTheme: () => 'light' | 'dark';
   /** The live iframe window — the ONLY accepted message source. */
   getFrameWindow: () => Window | null;
   /** Dispatch an HTTP call on the app's behalf (client.ts helpers). */
@@ -39,6 +46,8 @@ const API_METHODS: ReadonlySet<string> = new Set(['GET', 'POST', 'PUT', 'PATCH',
 export interface PluginAppBridge {
   /** Feed a window 'message' event in. Non-plugin messages are ignored. */
   handleMessage: (event: MessageEvent) => void;
+  /** Push a theme change to a page that already handshook. */
+  sendTheme: (theme: 'light' | 'dark') => void;
   /** Drop the event subscription. Call on unmount. */
   dispose: () => void;
   /** Test/diagnostic view of the registered prefixes. */
@@ -59,16 +68,25 @@ export function validateApiRequest(method: string, path: unknown): { ok: true; m
   if (typeof path !== 'string' || !path.startsWith('/api/')) {
     return { ok: false, error: 'path must be a string starting with /api/' };
   }
-  // Segment-wise traversal check (a substring test would reject an ordinary
-  // name like `foo..bar`), applied to the path portion only.
-  const pathOnly = path.split(/[?#]/)[0];
-  if (pathOnly.split('/').some((seg) => seg === '..')) {
-    return { ok: false, error: 'path must not contain .. segments' };
+  // Judge the path fetch() will ACTUALLY request, not the string the app typed.
+  // fetch() percent-decodes, resolves `.`/`..`, and folds `\` to `/`, so a
+  // literal check here and the real request can disagree: `/api/x/%2e%2e/config`
+  // passes a string test and then lands on `/api/config`. Normalize first, then
+  // decide, and hand the normalized path onward so the two can never diverge.
+  let url: URL;
+  try {
+    url = new URL(path, 'http://localhost');
+  } catch {
+    return { ok: false, error: 'path could not be parsed' };
+  }
+  const pathOnly = url.pathname;
+  if (!pathOnly.startsWith('/api/')) {
+    return { ok: false, error: 'path must resolve under /api/' };
   }
   if (method !== 'GET' && (pathOnly === '/api/config' || pathOnly.startsWith('/api/config/'))) {
     return { ok: false, error: 'config writes are not available to plugin apps — use Settings' };
   }
-  return { ok: true, method: method as ApiMethod, path };
+  return { ok: true, method: method as ApiMethod, path: pathOnly + url.search };
 }
 
 /** Our own origin, or '' where there is no window (unit tests run under node). */
@@ -135,7 +153,7 @@ export function createPluginAppBridge(ctx: BridgeContext): PluginAppBridge {
       case 'walnut:ready':
         post({
           type: 'walnut:init',
-          payload: { appId: ctx.appId, pluginId: ctx.pluginId, theme: ctx.theme },
+          payload: { appId: ctx.appId, pluginId: ctx.pluginId, theme: ctx.getTheme() },
         });
         return;
 
@@ -180,8 +198,11 @@ export function createPluginAppBridge(ctx: BridgeContext): PluginAppBridge {
 
       case 'walnut:open': {
         const path = msg.path;
-        if (typeof path !== 'string' || !path.startsWith('/')) {
-          ctx.logWarn('walnut:open rejected — path must start with /', { appId: ctx.appId });
+        // A single leading slash only. `//evil.com` and `/\evil.com` are
+        // protocol-relative URLs, not in-app paths: they satisfy startsWith('/')
+        // and would take the user off-site (the classic open-redirect shape).
+        if (typeof path !== 'string' || !path.startsWith('/') || /^[/\\]/.test(path.slice(1))) {
+          ctx.logWarn('walnut:open rejected — must be an in-app absolute path', { appId: ctx.appId });
           return;
         }
         ctx.navigate(path);
@@ -195,6 +216,10 @@ export function createPluginAppBridge(ctx: BridgeContext): PluginAppBridge {
 
   return {
     handleMessage,
+    sendTheme: (theme) => {
+      if (disposed) return;
+      post({ type: 'walnut:theme', payload: { theme } });
+    },
     dispose: () => {
       disposed = true;
       prefixes = [];

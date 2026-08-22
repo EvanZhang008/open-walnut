@@ -1113,7 +1113,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // middleware and its catch-all index.html fallback further down; otherwise every
   // app URL would serve the Walnut shell instead of the plugin's page.
   app.use('/api/apps', appsRouter)
-  app.use('/plugin-apps', pluginAppStaticRouter)
+  // Not mounted in cloud mode. The route sits outside /api, so authMiddleware never
+  // runs on it (that middleware treats everything outside /api as a public SPA
+  // asset). On a Mac that is fine: the files are the user's own, on their own box.
+  // On a reachable cloud replica it would be the one world-readable route, so the
+  // deliberate call is to serve plugin apps on the primary only.
+  if (!CLOUD_MODE) app.use('/plugin-apps', pluginAppStaticRouter)
 
   app.use('/api/system', systemRouter)
   // One-click cloud-companion provisioning (Mac-side job engine).

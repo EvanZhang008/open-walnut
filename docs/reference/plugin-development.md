@@ -168,7 +168,7 @@ The absence of `allow-same-origin` is the whole point. Concretely, inside the pa
 
 A plugin page is untrusted browser code from the console's point of view, so it asks the host to make calls on its behalf instead of making them itself.
 
-**Only `app/` is ever served.** Plugin code, `manifest.json`, and config files are unreachable over HTTP, there are no directory listings, dotfiles inside `app/` are refused, and only GET and HEAD are answered (anything else is a 405). So `app/` is the plugin's public surface and nothing else is.
+**Only `app/` is ever served.** Plugin code, `manifest.json`, and config files are unreachable over HTTP, there are no directory listings, dotfiles inside `app/` are refused, and only GET and HEAD are answered (anything else is a 405). So `app/` is the plugin's public surface and nothing else is. Treat everything under `app/` as world-readable to anyone who can reach the console, because the route sits outside the authenticated `/api` mount (a sandboxed page cannot attach a token). Never put a secret in there. For the same reason `/plugin-apps` is served on the primary only: the cloud companion does not mount it, so plugin apps are a primary-console feature.
 
 To list the installed apps, read `GET /api/apps` → `[{ id, pluginId, title, icon, url }]`. The `url` is server-owned and opaque: use it as given, never assemble the path yourself.
 
@@ -196,9 +196,10 @@ Load it from the host (never from a CDN, so the page keeps working offline):
 | `Walnut.ready(cb)` | Runs `cb({ appId, pluginId, theme })` once the bridge is live. Do all setup here, not on `DOMContentLoaded`: before this fires there is no channel. `theme` is `'light'` or `'dark'`, so mirror it instead of guessing from `prefers-color-scheme`. |
 | `Walnut.api(method, path, body?)` | Promise resolving to the parsed response body, for example `Walnut.api('GET', '/api/v1/tasks')` or `Walnut.api('POST', '/api/v1/conversations/<conv-id>/messages', { text: 'hi' })`. Non-2xx rejects, so wrap calls in `try`/`catch` and show something useful. Validated, not unrestricted: see below. |
 | `Walnut.on(prefix, cb)` | Subscribes to live event-bus frames whose name starts with `prefix`, a SINGLE string. `'task:'` covers `task:created`, `task:updated`, `task:completed`, `task:deleted`, `task:phase-changed`. `cb` receives `{ name, data }`. Returns an unsubscribe function. To watch several prefixes, call it several times. |
-| `Walnut.open(path)` | Navigates the HOST console (`Walnut.open('/tasks')`). This is how an app hands the user back to the real UI instead of rebuilding it. |
+| `Walnut.onTheme(cb)` | Runs `cb('light'\|'dark')` on every LATER theme change. The initial value rides `Walnut.ready`'s context, not this. Returns an unsubscribe function. |
+| `Walnut.open(path)` | Navigates the HOST console (`Walnut.open('/tasks')`). This is how an app hands the user back to the real UI instead of rebuilding it. Must be a single-leading-slash in-app path: protocol-relative forms like `//host` are refused. |
 
-**What `Walnut.api` will and will not do.** The host validates every call before making it: the path must be a string starting with `/api/`, must contain no `..` segments, and the method must be one of GET, POST, PUT, PATCH, DELETE. One carve-out on top of that: **non-GET requests to `/api/config` and `/api/config/*` are refused** ("config writes are not available to plugin apps, use Settings"). Reading config is allowed.
+**What `Walnut.api` will and will not do.** The host resolves your path the same way the browser will (percent-decoding, `.` and `..`, backslashes) and then judges the RESULT: it must land under `/api/`, and the method must be one of GET, POST, PUT, PATCH, DELETE. One carve-out on top of that: **non-GET requests to `/api/config` and `/api/config/*` are refused** ("config writes are not available to plugin apps, use Settings"). Reading config is allowed. Because the check runs on the normalized path, encoded spellings such as `/api/x/%2e%2e/config` are refused too rather than sneaking through as literals.
 
 Calls ride the **host's own credential**, so they carry whatever auth the user's session has and an app never sees or holds a token. That is also why the rules above are the real boundary: within them, an app acts as the signed-in user.
 
@@ -225,8 +226,7 @@ Frames from the host to the app:
 | `walnut:init` | `{ payload: { appId, pluginId, theme } }` | The bridge is live. This is what `Walnut.ready` waits for. Note the nested `payload`. |
 | `walnut:api-result` | `{ id, ok, status?, data?, error? }` | The answer to one `walnut:api`. Match on `id`: results can arrive out of order. |
 | `walnut:event` | `{ name, data }` | A bus event matching one of your subscriptions. |
-
-There is **no theme-change frame**: `theme` arrives once, in `walnut:init`.
+| `walnut:theme` | `{ payload: { theme } }` | The console's theme changed after the handshake. Your subscriptions survive it: the host pushes this frame instead of rebuilding the bridge. |
 
 `walnut:subscribe` is a full replacement, not an addition: the SDK keeps its own listener list and resends every registered prefix in ONE frame whenever a listener is added or removed. So the cap of 16 applies to **distinct prefixes across the whole app**, not per call, and it is the complete set that gets truncated when you go over.
 

@@ -43,6 +43,7 @@ function fakeFrame(): FakeFrame {
 }
 
 interface Harness {
+  setTheme: (t: 'light' | 'dark') => void;
   frame: FakeFrame;
   bridge: ReturnType<typeof createPluginAppBridge>;
   apiCall: ReturnType<typeof vi.fn>;
@@ -65,10 +66,11 @@ function harness(opts?: { apiCall?: (m: string, p: string, b?: unknown) => Promi
   let unsubscribes = 0;
   const apiCall = vi.fn(opts?.apiCall ?? (() => Promise.resolve({ ok: true })));
 
+  let theme: 'light' | 'dark' = 'dark';
   const ctx: BridgeContext = {
     appId: 'demo-app',
     pluginId: 'demo-plugin',
-    theme: 'dark',
+    getTheme: () => theme,
     getFrameWindow: () => frame as unknown as Window,
     apiCall: apiCall as unknown as BridgeContext['apiCall'],
     subscribeAll: (cb) => {
@@ -83,6 +85,7 @@ function harness(opts?: { apiCall?: (m: string, p: string, b?: unknown) => Promi
   const bridge = createPluginAppBridge(ctx);
   return {
     frame, bridge, apiCall, warnings, navigated,
+    setTheme: (t: 'light' | 'dark') => { theme = t; },
     emit: (name, data) => sink?.(name, data),
     subscribeCount: () => subscribes,
     unsubscribeCount: () => unsubscribes,
@@ -123,6 +126,28 @@ describe('validateApiRequest', () => {
     }
     // Query strings must not launder the check.
     expect(validateApiRequest('POST', '/api/config?x=1')).toMatchObject({ ok: false });
+  });
+
+  // Regression: a literal string check and fetch()'s URL normalizer disagreed, so
+  // each of these passed validation and then landed on the real config-write route.
+  it('refuses config writes that only reach /api/config after URL normalization', () => {
+    for (const path of [
+      '/api/x/%2e%2e/config',
+      '/api/./config',
+      '/api/x/..\\config',
+      '/api/x/.%2e/config',
+      '/api/x/../config',
+      '/api/x/%2E%2E/config/providers',
+    ]) {
+      expect(validateApiRequest('PUT', path), `must refuse ${path}`).toMatchObject({ ok: false });
+    }
+  });
+
+  it('returns the NORMALIZED path so the guard and the HTTP client cannot diverge', () => {
+    expect(validateApiRequest('GET', '/api/x/../tasks')).toMatchObject({ ok: true, path: '/api/tasks' });
+    expect(validateApiRequest('GET', '/api/./tasks?limit=5')).toMatchObject({ ok: true, path: '/api/tasks?limit=5' });
+    // Normalizing out of /api/ entirely is still a refusal.
+    expect(validateApiRequest('GET', '/api/../secret')).toMatchObject({ ok: false });
   });
 });
 
@@ -274,6 +299,51 @@ describe('walnut:open', () => {
     h.fromFrame({ type: 'walnut:open' });
     expect(h.navigated).toEqual([]);
     expect(h.warnings).toHaveLength(3);
+  });
+
+  // Regression: `startsWith('/')` alone accepted protocol-relative URLs, which are
+  // off-site navigations wearing an in-app path's clothes (open-redirect shape).
+  it('refuses protocol-relative and backslash-escaped paths', () => {
+    const h = harness();
+    for (const path of ['//evil.example', '/\\evil.example', '//evil.example/x', '/\\\\evil.example']) {
+      h.fromFrame({ type: 'walnut:open', path });
+    }
+    expect(h.navigated).toEqual([]);
+    expect(h.warnings).toHaveLength(4);
+  });
+});
+
+describe('theme', () => {
+  it('reads the theme live at handshake time', () => {
+    const h = harness();
+    h.setTheme('light');
+    h.fromFrame({ type: 'walnut:ready' });
+    expect(h.frame.sent[0].msg).toMatchObject({
+      type: 'walnut:init',
+      payload: { theme: 'light' },
+    });
+  });
+
+  it('pushes a later theme change as its own frame, keeping subscriptions alive', () => {
+    const h = harness();
+    h.fromFrame({ type: 'walnut:subscribe', prefixes: ['task:'] });
+    h.bridge.sendTheme('light');
+    expect(h.frame.sent[h.frame.sent.length - 1].msg).toEqual({
+      type: 'walnut:theme',
+      payload: { theme: 'light' },
+    });
+    // The whole point: the event feed survives a theme flip.
+    expect(h.bridge.getPrefixes()).toEqual(['task:']);
+    h.emit('task:created', { id: 't1' });
+    expect(h.frame.sent[h.frame.sent.length - 1].msg).toMatchObject({ type: 'walnut:event', name: 'task:created' });
+  });
+
+  it('stays quiet after dispose', () => {
+    const h = harness();
+    h.bridge.dispose();
+    const before = h.frame.sent.length;
+    h.bridge.sendTheme('light');
+    expect(h.frame.sent).toHaveLength(before);
   });
 });
 

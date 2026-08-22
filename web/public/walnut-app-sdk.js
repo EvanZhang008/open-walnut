@@ -25,6 +25,7 @@
   var context = null;              // { appId, pluginId, theme } once init arrives
   var pending = {};                // id → { resolve, reject, timer }
   var listeners = [];              // { prefix, cb }
+  var themeCallbacks = [];         // cb(theme) on every later theme flip
   var nextId = 0;
 
   /** Post a message to the Walnut host. '*' because our origin is opaque. */
@@ -59,12 +60,23 @@
     }
   }
 
+  function handleTheme(payload) {
+    var theme = payload && payload.theme;
+    if (theme !== 'light' && theme !== 'dark') return;
+    if (context) context.theme = theme;
+    for (var i = 0; i < themeCallbacks.length; i++) {
+      try { themeCallbacks[i](theme); }
+      catch (e) { console.error('[walnut-sdk] theme callback failed', e); }
+    }
+  }
+
   window.addEventListener('message', function (event) {
     var msg = event.data;
     if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') return;
     if (msg.type === 'walnut:init') handleInit(msg.payload);
     else if (msg.type === 'walnut:api-result') handleApiResult(msg);
     else if (msg.type === 'walnut:event') handleEvent(msg);
+    else if (msg.type === 'walnut:theme') handleTheme(msg.payload);
   });
 
   var Walnut = {
@@ -118,6 +130,21 @@
         var i = listeners.indexOf(entry);
         if (i >= 0) listeners.splice(i, 1);
         resubscribe();
+      };
+    },
+
+    /**
+     * Run `cb(theme)` whenever Walnut's theme changes after the handshake (the
+     * INITIAL theme arrives on the `ready` context, not here).
+     * @param {function('light'|'dark')} cb
+     * @returns {function()} unsubscribe
+     */
+    onTheme: function (cb) {
+      if (typeof cb !== 'function') return function () {};
+      themeCallbacks.push(cb);
+      return function () {
+        var i = themeCallbacks.indexOf(cb);
+        if (i >= 0) themeCallbacks.splice(i, 1);
       };
     },
 

@@ -17,7 +17,7 @@ import { useApps } from '@/hooks/useApps';
 import { useTheme } from '@/hooks/useTheme';
 import { wsClient } from '@/api/ws';
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete } from '@/api/client';
-import { createPluginAppBridge, type ApiMethod } from './pluginAppBridge';
+import { createPluginAppBridge, type ApiMethod, type PluginAppBridge } from './pluginAppBridge';
 import { log } from '@/utils/log';
 
 /** The iframe must fire onload within this, or the user gets a Retry card. */
@@ -62,6 +62,13 @@ export function PluginAppPage() {
     };
   }, [app, attempt]);
 
+  // Theme lives in a ref so a light/dark flip never rebuilds the bridge below:
+  // a rebuild drops the app's registered event prefixes, and the already-loaded
+  // page never re-handshakes, so its live feed would die silently.
+  const themeRef = useRef(resolvedTheme);
+  themeRef.current = resolvedTheme;
+  const bridgeRef = useRef<PluginAppBridge | null>(null);
+
   // postMessage bridge. Lives for as long as this app is mounted; a Retry keeps
   // the same bridge (the frame identity is read live via getFrameWindow).
   useEffect(() => {
@@ -69,21 +76,32 @@ export function PluginAppPage() {
     const bridge = createPluginAppBridge({
       appId: app.id,
       pluginId: app.pluginId,
-      theme: resolvedTheme,
+      getTheme: () => themeRef.current,
       getFrameWindow: () => frameRef.current?.contentWindow ?? null,
       apiCall: callApi,
       subscribeAll: (cb) => wsClient.subscribeAll(cb),
       navigate: (path) => navigate(path),
       logWarn: (message, data) => log.warn('plugin-app', message, data),
     });
+    bridgeRef.current = bridge;
     const onMessage = (event: MessageEvent) => bridge.handleMessage(event);
     window.addEventListener('message', onMessage);
     log.info('plugin-app', 'bridge attached', { appId: app.id, pluginId: app.pluginId });
     return () => {
       window.removeEventListener('message', onMessage);
       bridge.dispose();
+      bridgeRef.current = null;
     };
-  }, [app, resolvedTheme, navigate]);
+  }, [app, navigate]);
+
+  // Push theme changes to an app that already handshook (skips the first run:
+  // the initial value rides `walnut:init`).
+  const themePushed = useRef(resolvedTheme);
+  useEffect(() => {
+    if (themePushed.current === resolvedTheme) return;
+    themePushed.current = resolvedTheme;
+    bridgeRef.current?.sendTheme(resolvedTheme);
+  }, [resolvedTheme]);
 
   const handleLoad = useCallback(() => {
     if (loadTimerRef.current) clearTimeout(loadTimerRef.current);

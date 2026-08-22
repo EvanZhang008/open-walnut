@@ -205,6 +205,11 @@ export function validatePluginAssetPath(raw: unknown): { ok: true; rel: string }
   if (typeof raw !== 'string' || raw.trim() === '') return { ok: false, error: 'must be a non-empty string' };
   const value = raw.trim().replace(/\\/g, '/');
   if (value.startsWith('/') || /^[a-zA-Z]:/.test(value)) return { ok: false, error: 'must be a relative path' };
+  // A URL is not a file path. `http://…` and `javascript:…` can never resolve to
+  // an asset (the route always prefixes /plugin-apps/<id>/), so refusing them at
+  // load time tells the author what is wrong instead of serving a 404 later.
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)) return { ok: false, error: 'must be a file path, not a URL' };
+  if (/["'<>]/.test(value)) return { ok: false, error: 'must not contain quotes or angle brackets' };
   const segments = value.split('/').filter(s => s !== '' && s !== '.');
   if (segments.length === 0) return { ok: false, error: 'must name a file' };
   if (segments.some(s => s === '..')) return { ok: false, error: 'must not contain ".." segments' };
