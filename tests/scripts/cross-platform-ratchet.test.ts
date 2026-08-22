@@ -92,6 +92,17 @@ const ALLOWED: Array<{ file: string; needle: string; reason: string }> = [
   },
 ]
 
+/**
+ * A daemon binary name written as a literal. This is the OTHER half of issue #11
+ * and the guard-marker rule cannot catch it: the offending literal
+ * ('daemon-darwin-arm64') contains its own platform word, so any window check
+ * sees "darwin" and calls it guarded. The name must be built from the host's
+ * platform/arch instead — see getLocalDaemonBinaryName().
+ */
+const HARDCODED_DAEMON_BINARY = /daemon-(darwin|linux|win32)-(arm64|x64)/
+/** build-daemon.sh names all three targets because it BUILDS them. */
+const BINARY_LITERAL_EXEMPT = ['scripts/build-daemon.sh']
+
 interface Violation { file: string; line: number; needle: string; text: string }
 
 function isComment(line: string): boolean {
@@ -110,6 +121,10 @@ export function scanForMacOnlyAssumptions(
 
   lines.forEach((line, i) => {
     if (isComment(line)) return
+    const binary = HARDCODED_DAEMON_BINARY.exec(line)
+    if (binary && !BINARY_LITERAL_EXEMPT.includes(file)) {
+      violations.push({ file, line: i + 1, needle: binary[0], text: line.trim() })
+    }
     for (const needle of needles) {
       if (!line.includes(needle)) continue
       if (allowed.some((a) => a.file === file && a.needle === needle)) continue
@@ -149,6 +164,34 @@ describe('cross-platform ratchet', () => {
       expect(content.includes(entry.needle), `stale exemption: ${entry.file} / ${entry.needle}`).toBe(true)
       expect(entry.reason.length).toBeGreaterThan(20)
     }
+  })
+
+  // The two bugs of issue #11, replayed. Both must be caught, or this ratchet
+  // does not cover the thing it was written for.
+  it('catches the exact code issue #11 reported', () => {
+    const oldLogLine = [
+      'PORT=3456',
+      'LOCK_DIR="${TMPDIR:-/tmp}/open-walnut-dev-prod.lock"',
+      'SERVER_LOG=/private/tmp/open-walnut-launchd.log',
+    ].join('\n')
+    expect(scanForMacOnlyAssumptions('scripts/dev-prod.sh', oldLogLine, []))
+      .toMatchObject([{ line: 3, needle: '/private/tmp' }])
+
+    // The guard-marker rule alone would clear this line, because the literal
+    // contains 'darwin' — hence the dedicated binary-name check.
+    const oldBinaryLine = "    const binaryName = 'daemon-darwin-arm64'"
+    expect(scanForMacOnlyAssumptions('src/providers/local-daemon.ts', oldBinaryLine, []))
+      .toMatchObject([{ line: 1, needle: 'daemon-darwin-arm64' }])
+
+    // Building the name from the host is the fix, and must stay clean.
+    const fixed = 'return `daemon-${platform}-${arch}`'
+    expect(scanForMacOnlyAssumptions('src/providers/local-daemon.ts', fixed, [])).toEqual([])
+  })
+
+  it('lets build-daemon.sh name the targets it builds', () => {
+    const buildLine = '  --outfile "$OUTDIR/daemon-darwin-arm64" \\'
+    expect(scanForMacOnlyAssumptions('scripts/build-daemon.sh', buildLine, [])).toEqual([])
+    expect(scanForMacOnlyAssumptions('src/providers/other.ts', buildLine, [])).toHaveLength(1)
   })
 
   // A ratchet that cannot fail is worse than no ratchet: it reads as coverage.
