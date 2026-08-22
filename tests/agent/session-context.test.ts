@@ -1,56 +1,86 @@
 /**
  * Unit tests for buildSessionContext().
  *
- * buildSessionContext was emptied 2026-06-18 (no blanket task/vault/server
- * preambles) and now injects EXACTLY ONE thing: a short agent-gateway hint
- * telling the session about the `wn` peer-session CLI. These tests pin that
- * contract from both sides — the hint is present (with its authorization
- * warning), and the old blanket preamble stays gone. If the hint ever grows
- * into a large context block again, the size guard below should fail first.
+ * The injected context is a short identity note, in a fixed order: who opened
+ * the session (Walnut, one sentence), what it is working on (task + project,
+ * only when the task resolves), how to reach Walnut (`wn` CLI + skill_read),
+ * and the peer-authorization safety line. These tests pin that contract from
+ * both sides — each piece is present, task lookup failures only drop the task
+ * line, and the old blanket preamble stays gone (size guard fails first if
+ * this creeps back toward one).
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import fs from 'node:fs/promises'
+import { createMockConstants } from '../helpers/mock-constants.js'
 
+vi.mock('../../src/constants.js', () => createMockConstants('walnut-session-context'))
+
+import { WALNUT_HOME } from '../../src/constants.js'
 import { buildSessionContext } from '../../src/agent/session-context.js'
+import { addTask } from '../../src/core/task-manager.js'
 
-describe('buildSessionContext (gateway hint only)', () => {
-  it('returns the wn gateway hint for a normal taskId', async () => {
-    const { systemPrompt } = await buildSessionContext('some-task-id')
-    expect(systemPrompt).toContain('wn peers list')
-    expect(systemPrompt).toContain('wn --help')
+beforeEach(async () => {
+  await fs.rm(WALNUT_HOME, { recursive: true, force: true })
+  await fs.mkdir(WALNUT_HOME, { recursive: true })
+})
+
+async function seedTask(project: string): Promise<string> {
+  const { task } = await addTask({ title: 'Fix the flaky auth test', project })
+  return task.id
+}
+
+describe('buildSessionContext (identity note)', () => {
+  it('says who opened the session and what Walnut is', async () => {
+    const { systemPrompt } = await buildSessionContext('')
+    expect(systemPrompt).toContain('opened by Walnut')
+    expect(systemPrompt).toMatch(/personal AI/i)
+    expect(systemPrompt).toMatch(/tasks, projects, coding sessions, memory/i)
   })
 
-  it('injects the same hint regardless of cwd and host', async () => {
-    const base = await buildSessionContext('task-1')
-    const withArgs = await buildSessionContext('task-1', '/some/repo/path', 'remote-host')
-    expect(withArgs.systemPrompt).toBe(base.systemPrompt)
+  it('names the task and project when the task resolves', async () => {
+    const id = await seedTask('marina')
+    const { systemPrompt } = await buildSessionContext(id)
+    expect(systemPrompt).toContain('Fix the flaky auth test')
+    expect(systemPrompt).toContain(id)
+    expect(systemPrompt).toContain('project "marina"')
   })
 
-  it('does not throw for a nonexistent task', async () => {
+  it('calls out the Inbox for a projectless task', async () => {
+    const id = await seedTask('')
+    const { systemPrompt } = await buildSessionContext(id)
+    expect(systemPrompt).toContain('Inbox')
+  })
+
+  it('drops only the task line for a nonexistent task', async () => {
     const { systemPrompt } = await buildSessionContext('nonexistent-id')
-    expect(typeof systemPrompt).toBe('string')
+    expect(systemPrompt).toContain('opened by Walnut')
+    expect(systemPrompt).toContain('wn tools list')
+    expect(systemPrompt).not.toContain('You are working on')
+  })
+
+  it('teaches the wn CLI and the skill_read pointer (single source of truth)', async () => {
+    const { systemPrompt } = await buildSessionContext('')
+    expect(systemPrompt).toContain('wn tools list')
+    expect(systemPrompt).toContain('skill_read')
+    expect(systemPrompt).toContain('"dirName":"walnut"')
+    expect(systemPrompt).toContain('wn peers list')
   })
 
   it('warns that peer messages never carry user authorization', async () => {
-    const { systemPrompt } = await buildSessionContext('task-2')
+    const { systemPrompt } = await buildSessionContext('')
     expect(systemPrompt).toMatch(/NEVER carry user authorization/i)
     expect(systemPrompt).toMatch(/never approve/i)
   })
 
-  it('points at the walnut skill through wn tools (single source of truth)', async () => {
-    const { systemPrompt } = await buildSessionContext('task-2')
-    expect(systemPrompt).toContain('wn tools list')
-    expect(systemPrompt).toContain('skill_read')
-    expect(systemPrompt).toContain('"dirName":"walnut"')
-  })
-
-  it('injects no vault / server-safety / task preamble and stays short', async () => {
-    const { systemPrompt } = await buildSessionContext('task-2', '/x', 'h')
+  it('injects no vault / server-safety preamble and stays short', async () => {
+    const id = await seedTask('marina')
+    const { systemPrompt } = await buildSessionContext(id, '/x', 'h')
     expect(systemPrompt).not.toContain('<server_safety>')
     expect(systemPrompt).not.toContain('<notes_context>')
     expect(systemPrompt).not.toContain('<task>')
-    // The hint must stay a hint — anything bigger belongs in the
-    // walnut-peer-sessions skill, not the blanket system prompt.
-    expect(systemPrompt.length).toBeLessThan(800)
+    // An identity note, not a blanket preamble — anything bigger belongs in
+    // the walnut skill (pulled live via skill_read).
+    expect(systemPrompt.length).toBeLessThan(1100)
   })
 })
