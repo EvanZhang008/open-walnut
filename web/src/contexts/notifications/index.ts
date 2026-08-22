@@ -5,6 +5,9 @@ export type {
 export {
   sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
-  linkTargetOf, resolvedLabelOf,
+  linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory,
+  systemIssueCount,
 } from './notification-model';
-export type { NotificationSection } from './notification-model';
+export type {
+  NotificationSection, PresentedError, ErrorCategoryGroup,
+} from './notification-model';

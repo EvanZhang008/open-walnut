@@ -51,8 +51,18 @@ export interface Notification {
   resolved?: 'allowed' | 'denied' | 'expired' | 'recovered';
   /** operation-error only — which recoverable condition the error belongs to
    *  (`plugin:<id>`, 'git', 'backup', 'disk'). Server-owned; the UI renders the
-   *  `resolved` stamp, this is carried through for debugging + parity. */
+   *  `resolved` stamp, this is carried through for debugging + parity — AND as
+   *  the client-side fallback for `category` on records written before the
+   *  humanizer shipped (see categoryOf in notification-model.ts). */
   recoveryKey?: string;
+  /** operation-error only — the FAMILY the Errors rail groups by ('Sessions',
+   *  'API', a plugin's display name, …). Server-derived
+   *  (src/core/notifications/humanize.ts); absent on pre-humanizer records. */
+  category?: string;
+  /** operation-error only — the RAW technical line (`[subsystem] {json}`, a
+   *  stack) shown behind the card's Details toggle. `body` is the human
+   *  sentence; this is the developer detail that used to BE the body. */
+  detail?: string;
   action?: NotificationAction;
   onAction?: () => void;
   /** emit a browser Notification when the tab is hidden (permission only). */

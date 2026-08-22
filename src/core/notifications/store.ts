@@ -62,6 +62,22 @@ export interface NotificationRecord {
    *  `bus:<subscriber>:<event>`, 'task-db-writers'. */
   recoveryKey?: string;
 
+  /** operation-error only — the FAMILY this error belongs to ('Sessions', 'API',
+   *  'Data & Sync', a plugin's display name, …), derived at write time by
+   *  src/core/notifications/humanize.ts. The Errors rail groups by it, so three
+   *  failures of one plugin read as one problem instead of three unrelated
+   *  cards. Derived server-side (not in the panel) so the iOS app and /api/v1
+   *  consumers get the same grouping. Absent on records written before this
+   *  landed — the frontend re-derives those from `recoveryKey`. */
+  category?: string;
+
+  /** operation-error only — the RAW technical line (the old `[subsystem] {json}`
+   *  body, a stack, the producer's own wording), shown behind a "Details"
+   *  toggle. `body` is now the humanized one-sentence message; this is where the
+   *  detail a developer needs went, instead of being the primary body a user
+   *  cannot read. Capped like `body`. */
+  detail?: string;
+
   // ── Permission detail (so the feed can render + answer a request itself) ──
   /** Permission: the provider's request id. First-class instead of parsed back out of dedupKey. */
   requestId?: string;
@@ -230,6 +246,10 @@ const REFRESHABLE_DETAIL_KEYS = [
   // the key (or before this feature shipped) gains one on the next fold, and can
   // then be retired by a recovery instead of sitting red forever.
   'recoveryKey',
+  // Same argument for the humanized pair: a record written before the humanizer
+  // shipped gains its category + Details block on the next occurrence, so an old
+  // card in a live feed joins the grouping instead of sitting in a lone 'Other'.
+  'category', 'detail',
 ] as const;
 
 /**

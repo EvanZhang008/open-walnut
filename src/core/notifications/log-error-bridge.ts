@@ -18,6 +18,13 @@
  * its unresolved errors is stamped 'recovered' and leaves the Errors rail
  * instead of staying red forever after the user fixed the cause.
  *
+ * Human copy: the log MESSAGE and its JSON meta are a developer's words, so they
+ * go through humanize.ts on the way in — the card gets a readable title, a
+ * one-sentence body and a CATEGORY to group by, while the old
+ * `[subsystem] {json}` line moves to `detail` (a Details toggle). The dedup
+ * fingerprint deliberately still hashes the RAW message: card identity must not
+ * move when copy is reworded.
+ *
  * Wiring: server.ts installs via installLogErrorNotifications() at startup and
  * uninstalls in stopServer(). The logging layer only sees an opaque sink
  * (logging must not import this module — everything imports logging, so that
@@ -27,6 +34,7 @@
 import { setErrorNotificationSink, type ErrorNotifyPayload } from '../../logging/subsystem.js';
 import { redactSensitiveText } from '../../logging/redact.js';
 import { upsertNotification } from './store.js';
+import { humanizeErrorNotification } from './humanize.js';
 import { log } from '../../logging/index.js';
 
 /** Storm absorber: skip repeat sink calls for the same key within this window. */
@@ -86,7 +94,16 @@ function djb2(s: string): string {
  *  (`skipNotify` never reaches here: it returns early in the sink.) */
 const BODY_META_OMIT = new Set(['recoveryKey']);
 
-function buildBody(payload: ErrorNotifyPayload): string | undefined {
+/**
+ * The RAW technical line — `[subsystem] {json meta}`.
+ *
+ * This used to be the card's `body`, which is exactly the complaint that made
+ * the Errors rail unreadable ("[web] {\"holders\":[{\"pid\":22198…"). It is now
+ * the record's `detail`, shown only behind the card's Details toggle, and the
+ * body carries the humanizer's one-sentence message instead. Kept byte-identical
+ * so nothing a developer used to read from a card is lost.
+ */
+function buildDetail(payload: ErrorNotifyPayload): string | undefined {
   let metaStr = '';
   const meta = payload.meta
     ? Object.fromEntries(Object.entries(payload.meta).filter(([k]) => !BODY_META_OMIT.has(k)))
@@ -101,6 +118,12 @@ function buildBody(payload: ErrorNotifyPayload): string | undefined {
   const raw = metaStr ? `[${payload.subsystem}] ${metaStr}` : `[${payload.subsystem}]`;
   const clean = redactSensitiveText(raw);
   return clean.length > MAX_BODY ? `${clean.slice(0, MAX_BODY)}…` : clean;
+}
+
+/** Bound the humanized body to the same read-time cap the feed applies. */
+function capBody(text: string): string | undefined {
+  if (!text) return undefined;
+  return text.length > MAX_BODY ? `${text.slice(0, MAX_BODY)}…` : text;
 }
 
 // ALLOWLIST, not a denylist — anything absent here (including `recoveryKey`) is
@@ -252,10 +275,8 @@ export function installLogErrorNotifications(
     // catch so a failed write doesn't silence this error for a full TTL.
     recentKeys.set(dedupKey, now);
 
-    const title = payload.message.length > 120
-      ? `${payload.message.slice(0, 120)}…`
-      : payload.message;
-    const body = buildBody(payload);
+    // The RAW line the card keeps behind its Details toggle (was the body).
+    const detail = buildDetail(payload);
     // sessionId/taskId in meta → deep-link targets on the card
     const sessionId = typeof payload.meta?.sessionId === 'string' ? payload.meta.sessionId : undefined;
     const taskId = typeof payload.meta?.taskId === 'string' ? payload.meta.taskId : undefined;
@@ -263,9 +284,29 @@ export function installLogErrorNotifications(
     const recoveryKey = recoveryKeyOf(payload);
     if (recoveryKey) recentKeyConditions.set(dedupKey, recoveryKey);
 
+    // Human copy. Note the ORDER relative to the dedupKey above: the fingerprint
+    // hashes the RAW log message + stable meta and is computed BEFORE this, so
+    // rewording a title here can never split one failure into two cards (nor
+    // merge two). That independence is pinned by a test.
+    //
+    // `sanitize` is passed because this path reads RAW log meta, which can carry
+    // a token inside an error string. The humanizer applies it to its inputs
+    // before any rule runs — redacting the finished sentence instead would miss a
+    // secret whose prefix got cut off by truncation.
+    const human = humanizeErrorNotification({
+      title: payload.message,
+      subsystem: payload.subsystem,
+      ...(recoveryKey ? { recoveryKey } : {}),
+      ...(payload.meta ? { meta: payload.meta } : {}),
+    }, { sanitize: redactSensitiveText });
+    const title = human.title.length > 120 ? `${human.title.slice(0, 120)}…` : human.title;
+    const body = human.message ? capBody(human.message) : undefined;
+
     void upsertNotification({
       kind: 'operation-error', severity: 'error', title, body,
       timestamp: now, dedupKey,
+      category: human.category,
+      ...(detail ? { detail } : {}),
       ...(sessionId ? { sessionId } : {}),
       ...(taskId ? { taskId } : {}),
       ...(recoveryKey ? { recoveryKey } : {}),

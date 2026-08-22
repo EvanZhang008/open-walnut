@@ -56,6 +56,10 @@ interface FeedEntry {
   resolved?: 'allowed' | 'denied' | 'expired' | 'recovered';
   /** operation-error only — which condition a recovery can retire this under. */
   recoveryKey?: string;
+  /** operation-error only — the family the Errors rail groups by (humanize.ts). */
+  category?: string;
+  /** operation-error only — the raw technical line, behind a Details toggle. */
+  detail?: string;
   sessionId?: string;
   taskId?: string;
   requestId?: string;
@@ -238,19 +242,26 @@ describe('Notification feed API', () => {
       source: 'session-runner',
     });
 
-    await pollFeed((feed) => feed.feed.some((n) =>
-      n.title === 'Session Delivery Failed' && n.sessionId === sessionId));
+    // Matched on the dedupKey, not the title: the title is humanized copy now
+    // ("Message couldn't be delivered"), and a test keyed on display text breaks
+    // on every wording change while proving nothing about the record's identity.
+    const dedupKey = `error:session:${sessionId}:delivery`;
+    await pollFeed((feed) => feed.feed.some((n) => n.dedupKey === dedupKey));
     await delay(100);
 
     const feed = await getFeed();
-    const deliveryFailures = feed.feed.filter((n) =>
-      n.title === 'Session Delivery Failed' && n.sessionId === sessionId);
+    const deliveryFailures = feed.feed.filter((n) => n.dedupKey === dedupKey);
     expect(deliveryFailures).toHaveLength(1);
     expect(deliveryFailures[0]).toMatchObject({
       kind: 'operation-error',
-      body: expect.stringContaining(error),
+      title: "Message couldn't be delivered",
+      category: 'Sessions',
       sessionId,
     });
+    // The producer's reassurance body is already human, so the humanizer keeps it
+    // verbatim rather than replacing it with a weaker summary.
+    expect(deliveryFailures[0].body).toContain(error);
+    expect(deliveryFailures[0].body).toContain('not lost');
 
     const historyRes = await fetch(apiUrl('/api/chat/history'));
     expect(historyRes.status).toBe(200);
@@ -279,12 +290,14 @@ describe('Notification feed API', () => {
     }, ['main-ai', 'session-runner'], { source: 'session-runner' });
 
     const body = await pollFeed((f) => f.feed.some((n) => n.sessionId === sessionId && n.count === 2));
-    const matches = body.feed.filter((n) => n.sessionId === sessionId && n.title === 'Session Error');
+    const scope = `error:session:${sessionId}:runtime`;
+    const matches = body.feed.filter((n) => n.dedupKey === scope);
     expect(matches).toHaveLength(1);
     expect(matches[0].count).toBe(2);
+    expect(matches[0].title).toBe('A session hit an error');
     // The card shows the LATEST failure, keyed on first-seen identity.
     expect(matches[0].body).toContain('CLI exited with code 2');
-    expect(matches[0].dedupKey).toBe(`error:session:${sessionId}:runtime`);
+    expect(matches[0].dedupKey).toBe(scope);
     expect(matches[0].lastTimestamp).toBeGreaterThanOrEqual(matches[0].timestamp);
 
     // First occurrence toasts; the fold patches the same card in place.
@@ -669,7 +682,12 @@ describe('Notification feed API', () => {
       const failing = await pollFeed((f) =>
         f.feed.some((n) => n.recoveryKey === `bus:e2e-probe:${eventName}`));
       const card = failing.feed.find((n) => n.recoveryKey === `bus:e2e-probe:${eventName}`)!;
-      expect(card.title).toContain('threw on event');
+      // Humanized on the way in: the raw log line ('subscriber "e2e-probe" threw
+      // on event …') is now the card's `detail`, behind a Details toggle.
+      expect(card.title).toBe('An internal event handler failed');
+      expect(card.category).toBe('Internal');
+      expect(card.body).toContain('"e2e-probe"');
+      expect(card.detail).toContain('[bus]');
       expect(card.resolved).toBeUndefined();
 
       boom = false;

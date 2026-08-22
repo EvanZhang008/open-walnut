@@ -121,6 +121,7 @@ import { notificationsRouter } from './routes/notifications.js'
 import { hooksRouter } from './routes/hooks.js'
 import { addNotification as addFeedNotification, upsertNotification as upsertFeedNotification, resolvePermissionNotification, recoverNotifications } from '../core/notifications/store.js'
 import { createRecoveryTransitionTracker } from '../core/notifications/recovery-transition.js'
+import { humanizeErrorNotification } from '../core/notifications/humanize.js'
 import { releaseAbsorbedKeys } from '../core/notifications/log-error-bridge.js'
 import { compactPermissionInput, summarizePermissionRequest } from '../core/notifications/permission-detail.js'
 import { redactSensitiveText } from '../logging/redact.js'
@@ -245,9 +246,28 @@ async function publishErrorNotification(input: {
   // bridge redacts its own path, but this hand-published path writes to the
   // durable store directly — redact BEFORE hashing/truncating/persisting.
   const plainBody = redactSensitiveText(stripEntityRefs(input.body))
-  const body = plainBody.length > MAX_ERROR_NOTIFICATION_BODY
-    ? `${plainBody.slice(0, MAX_ERROR_NOTIFICATION_BODY)}…`
-    : plainBody
+  const cap = (text: string): string => text.length > MAX_ERROR_NOTIFICATION_BODY
+    ? `${text.slice(0, MAX_ERROR_NOTIFICATION_BODY)}…`
+    : text
+  const rawBody = cap(plainBody)
+  // Human copy + the family the Errors rail groups by. Most titles reaching here
+  // are already prose ('Data Backup Failing'), and the humanizer's rules pass
+  // those through unchanged — what every card gains is the `category`. When a
+  // rule DOES rewrite the copy (Session Error / Delivery Failed / Subagent
+  // Error), the producer's original body is kept as `detail` so nothing is lost.
+  // sanitize is passed even though `plainBody` is already redacted: the TITLE
+  // arrives un-redacted on this path (producers pass a literal), and one hook is
+  // cheaper to reason about than two half-covered inputs.
+  const human = humanizeErrorNotification({
+    title: input.title,
+    body: plainBody,
+    ...(input.recoveryKey ? { recoveryKey: input.recoveryKey } : {}),
+  }, { sanitize: redactSensitiveText })
+  const body = human.message ? cap(human.message) : rawBody
+  // Only when the humanizer actually replaced the body — an identical string in
+  // both fields would render the same sentence twice (once inline, once behind
+  // the toggle).
+  const detail = body === rawBody ? undefined : rawBody
   // Scope-only key (no body hash): one failing thing = ONE feed entry that folds
   // its repeats. Hashing the body used to split "same outage, slightly different
   // message" into a pile of near-identical cards.
@@ -257,10 +277,12 @@ async function publishErrorNotification(input: {
     const { record, outcome } = await upsertFeedNotification({
       kind: 'operation-error',
       severity: 'error',
-      title: input.title,
+      title: human.title,
       body,
       timestamp,
       dedupKey,
+      category: human.category,
+      ...(detail ? { detail } : {}),
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       ...(input.taskId ? { taskId: input.taskId } : {}),
       ...(input.recoveryKey ? { recoveryKey: input.recoveryKey } : {}),

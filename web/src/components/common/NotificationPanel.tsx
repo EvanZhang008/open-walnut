@@ -22,7 +22,8 @@ import { useSystemHealth } from '@/hooks/useSystemHealth';
 import {
   useNotifications, sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
-  linkTargetOf, resolvedLabelOf,
+  linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory,
+  systemIssueCount,
   type Notification, type NotificationSection,
 } from '@/contexts/notifications';
 import { respondToPermission } from '@/api/sessions';
@@ -55,6 +56,12 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   // status pill reads; the index error state is the other thing shown in there
   // that can be broken.
   const systemUnhealthy = hasIssues || qmdUnhealthy(qmdStatus);
+  // …and how MANY of them are broken, for the rail badge (the derivation is in
+  // the model so it is testable and can't drift from the flags above).
+  const systemIssues = systemIssueCount({
+    gitSyncFailing: hasIssues,
+    indexUnhealthy: qmdUnhealthy(qmdStatus),
+  });
 
   // Items of the active section, newest first. Sorting on effectiveTs (not
   // timestamp) keeps a folded recurring error at the top of the list — its
@@ -69,16 +76,22 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
   // Same-origin entries collapse into one expandable group (iPhone-style):
   // a cron job's repeated runs stack under the job name, a session's permission
   // asks stack under the session. Groups keep the newest-first item order.
-  const groups = useMemo(() => {
-    const byKey = new Map<string, Notification[]>();
-    for (const n of items) {
-      const key = groupKeyOf(n);
-      const list = byKey.get(key);
-      if (list) list.push(n);
-      else byKey.set(key, [n]);
-    }
-    return [...byKey.entries()].map(([key, list]) => ({ key, items: list }));
-  }, [items]);
+  const groups = useMemo(() => collapseSameOrigin(items), [items]);
+
+  // Errors get a SECOND level of structure: a category header per family, so
+  // three failures of one plugin read as one problem. Category order is
+  // most-recent-activity (groupErrorsByCategory), and the same-origin collapse
+  // still applies INSIDE each category — the two groupings answer different
+  // questions ("what family" vs "is this the same origin repeating").
+  const errorBlocks = useMemo(() => (
+    section === 'errors'
+      ? groupErrorsByCategory(items).map(g => ({
+        category: g.category,
+        count: g.items.length,
+        groups: collapseSameOrigin(g.items),
+      }))
+      : null
+  ), [items, section]);
 
   // Opening the panel clears the unread badge (everything in the feed is now seen).
   // Re-fires while open if new persistent events arrive (unreadCount climbs again) —
@@ -129,6 +142,15 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
     onClose();
   }, [navigate, onClose]);
 
+  const toggleGroup = useCallback((key: string) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
   if (!open) return null;
 
   // Portal to <body>: the panel is mounted inside the Sidebar, whose mobile
@@ -177,23 +199,29 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
               label="Needs Action" count={counts.action} warn
               active={section === 'action'} onClick={() => pickSection('action')}
             />
+            {/* Every rail section carries a badge, and the non-action ones show
+                what the tab LISTS (not just what is unread): a rail where only
+                Needs Action had a number left the user unable to see that nine
+                errors were sitting one click away, because opening the panel
+                marks everything read. Neutral accent — only pending permissions
+                get the warning colour. */}
             <RailButton
-              label="Errors" count={counts.errors}
+              label="Errors" count={counts.errorsTotal}
               active={section === 'errors'} onClick={() => pickSection('errors')}
             />
             <RailButton
-              label="Automation" count={counts.automation}
+              label="Automation" count={counts.automationTotal}
               active={section === 'automation'} onClick={() => pickSection('automation')}
             />
-            {/* System has no countable entries — it wears a warning DOT instead,
-                so a failing backup or a broken index is visible from the rail
-                without opening the tab. */}
+            {/* System has no feed entries, so its number comes from the two
+                ambient health signals the pane renders (git-sync + the search
+                index). Zero unhealthy but still flagged → the old dot. */}
             <RailButton
-              label="System" count={0} warn dot={systemUnhealthy}
+              label="System" count={systemIssues} warn dot={systemUnhealthy}
               active={section === 'system'} onClick={() => pickSection('system')}
             />
             <RailButton
-              label="All" count={counts.all}
+              label="All" count={counts.allTotal}
               active={section === 'all'} onClick={() => pickSection('all')}
             />
           </div>
@@ -205,54 +233,37 @@ export function NotificationPanel({ open, onClose, sidebarCollapsed }: Notificat
               <NotificationSystemPane qmdStatus={qmdStatus} />
             ) : groups.length === 0 ? (
               <div className="notification-feed-empty">{EMPTY_TEXT[section]}</div>
+            ) : errorBlocks ? (
+              /* Errors: one block per CATEGORY. The header is the whole point of
+                 the grouping — it names the family and how many cards are in it,
+                 so a rail of twenty reds becomes four readable problems. */
+              <div className="notification-feed">
+                {errorBlocks.map(block => (
+                  <div key={block.category} className="nfc-cat-block">
+                    <div className="nfc-cat-header">
+                      <span className="nfc-cat-name">{block.category}</span>
+                      <span className="nfc-cat-count">{block.count}</span>
+                    </div>
+                    <FeedGroups
+                      groups={block.groups}
+                      expandedGroups={expandedGroups}
+                      onToggleGroup={toggleGroup}
+                      onNavigate={onNavigate}
+                      onDismissKey={key => dismissFeed([key])}
+                    />
+                  </div>
+                ))}
+              </div>
             ) : (
               <div className="notification-feed">
-                {groups.map(({ key, items: groupItems }) => {
-                  const expanded = expandedGroups.has(key) || groupItems.length === 1;
-                  // A collapsed group must never bury an actionable entry: a newer
-                  // resolved permission would otherwise cover an older still-pending
-                  // one, hiding its Approve/Deny buttons behind "Show N more".
-                  const pending = groupItems.find(i => i.kind === 'permission' && !i.resolved);
-                  // `slice(0, 1)` for the fallback, not `[groupItems[0]]`: an empty
-                  // group would otherwise render one `undefined` child.
-                  const visible = expanded ? groupItems : (pending ? [pending] : groupItems.slice(0, 1));
-                  return (
-                    <div key={key} className="notification-feed-group">
-                      {visible.map((n) => (
-                        n.kind === 'permission' ? (
-                          <PermissionCard
-                            key={n.id}
-                            n={n}
-                            // Session links open on the HOME page's session columns
-                            // (the primary surface), not the /sessions page.
-                            onNavigate={onNavigate}
-                            onDismiss={() => dismissFeed([n.dedupKey])}
-                          />
-                        ) : (
-                          <FeedItem
-                            key={n.id}
-                            n={n}
-                            onNavigate={onNavigate}
-                            onDismiss={() => dismissFeed([n.dedupKey])}
-                          />
-                        )
-                      ))}
-                      {groupItems.length > 1 && (
-                        <button
-                          className="notification-group-toggle"
-                          onClick={() => setExpandedGroups(prev => {
-                            const next = new Set(prev);
-                            if (next.has(key)) next.delete(key);
-                            else next.add(key);
-                            return next;
-                          })}
-                        >
-                          {expanded ? 'Show less' : `Show ${groupItems.length - 1} more`}
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
+                <FeedGroups
+                  groups={groups}
+                  expandedGroups={expandedGroups}
+                  onToggleGroup={toggleGroup}
+                  onNavigate={onNavigate}
+                  onDismissKey={key => dismissFeed([key])}
+                  showCategoryChip={section === 'all'}
+                />
               </div>
             )}
           </div>
@@ -309,6 +320,87 @@ function groupKeyOf(n: Notification): string {
   if (n.kind === 'operation-error' && n.taskId) return `error:task:${n.taskId}`;
   if (n.kind === 'cron') return `cron:${n.title}`;
   return n.dedupKey;
+}
+
+interface FeedGroup { key: string; items: Notification[] }
+
+/** Partition a list into same-origin groups, preserving the caller's order. */
+function collapseSameOrigin(items: Notification[]): FeedGroup[] {
+  const byKey = new Map<string, Notification[]>();
+  for (const n of items) {
+    const key = groupKeyOf(n);
+    const list = byKey.get(key);
+    if (list) list.push(n);
+    else byKey.set(key, [n]);
+  }
+  return [...byKey.entries()].map(([key, list]) => ({ key, items: list }));
+}
+
+/**
+ * The card list for one set of same-origin groups.
+ *
+ * Extracted when Errors gained its category headers: the same list body is now
+ * rendered once per category AND once flat for the other sections, and a second
+ * copy of the collapse rules (the "a collapsed group must never bury a pending
+ * ask" rule especially) would drift.
+ */
+function FeedGroups({
+  groups, expandedGroups, onToggleGroup, onNavigate, onDismissKey, showCategoryChip,
+}: {
+  groups: FeedGroup[];
+  expandedGroups: Set<string>;
+  onToggleGroup: (key: string) => void;
+  onNavigate: (to: string) => void;
+  onDismissKey: (dedupKey: string) => void;
+  /** All-section only: name the family on an error card, since there is no header. */
+  showCategoryChip?: boolean;
+}) {
+  return (
+    <>
+      {groups.map(({ key, items: groupItems }) => {
+        const expanded = expandedGroups.has(key) || groupItems.length === 1;
+        // A collapsed group must never bury an actionable entry: a newer
+        // resolved permission would otherwise cover an older still-pending
+        // one, hiding its Approve/Deny buttons behind "Show N more".
+        const pending = groupItems.find(i => i.kind === 'permission' && !i.resolved);
+        // `slice(0, 1)` for the fallback, not `[groupItems[0]]`: an empty
+        // group would otherwise render one `undefined` child.
+        const visible = expanded ? groupItems : (pending ? [pending] : groupItems.slice(0, 1));
+        return (
+          <div key={key} className="notification-feed-group">
+            {visible.map((n) => (
+              n.kind === 'permission' ? (
+                <PermissionCard
+                  key={n.id}
+                  n={n}
+                  // Session links open on the HOME page's session columns
+                  // (the primary surface), not the /sessions page.
+                  onNavigate={onNavigate}
+                  onDismiss={() => onDismissKey(n.dedupKey)}
+                />
+              ) : (
+                <FeedItem
+                  key={n.id}
+                  n={n}
+                  onNavigate={onNavigate}
+                  onDismiss={() => onDismissKey(n.dedupKey)}
+                  showCategoryChip={showCategoryChip}
+                />
+              )
+            ))}
+            {groupItems.length > 1 && (
+              <button
+                className="notification-group-toggle"
+                onClick={() => onToggleGroup(key)}
+              >
+                {expanded ? 'Show less' : `Show ${groupItems.length - 1} more`}
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
 }
 
 /**
@@ -540,16 +632,28 @@ function ContextChips({ n }: { n: Notification }) {
 }
 
 /** Error / automation card: title, body, ×N fold badge, deep-link chips. */
-const FeedItem = memo(function FeedItem({ n, onNavigate, onDismiss }: {
+const FeedItem = memo(function FeedItem({ n, onNavigate, onDismiss, showCategoryChip }: {
   n: Notification;
   onNavigate: (to: string) => void;
   onDismiss: () => void;
+  showCategoryChip?: boolean;
 }) {
   // Entries without a navigation target (e.g. plugin/system errors) expand on
   // click instead — otherwise a truncated error message is simply unreadable.
   const [expanded, setExpanded] = useState(false);
+  // The raw technical block, opened deliberately. Separate from `expanded`
+  // (which unclamps the human body) so unclamping a long sentence doesn't dump
+  // JSON on the user, and reading the JSON doesn't force the body open.
+  const [detailOpen, setDetailOpen] = useState(false);
   const target = linkTargetOf(n);
   const count = n.count ?? 1;
+  // Human title/body + the raw line for the toggle. `presentError` also repairs a
+  // PRE-humanizer record at display time: its `[subsystem] {json}` body moves
+  // into the Details block instead of being the card's only text.
+  const presented = n.kind === 'operation-error'
+    ? presentError(n)
+    : { title: n.title, body: n.body ?? '', detail: undefined as string | undefined };
+  const category = n.kind === 'operation-error' && showCategoryChip ? categoryOf(n) : null;
   // The condition this error described is gone (the plugin re-authenticated, the
   // disk was freed, the commit landed). The severity is already remapped to
   // 'info' server-side, so the red dot follows automatically — the chip is what
@@ -576,7 +680,10 @@ const FeedItem = memo(function FeedItem({ n, onNavigate, onDismiss }: {
     >
       <div className="notification-feed-item-head">
         <span className={`notification-feed-dot notification-feed-dot--${n.severity}`} />
-        <span className={`notification-feed-item-title${expanded ? ' expanded' : ''}`}>{n.title}</span>
+        <span className={`notification-feed-item-title${expanded ? ' expanded' : ''}`}>{presented.title}</span>
+        {/* All-section only: the Errors rail has category HEADERS, so a chip
+            there would repeat the header on every row. */}
+        {category && <span className="nfc-chip nfc-chip-category">{category}</span>}
         {recovered && <span className="nfc-chip nfc-chip-recovered">{resolvedLabelOf(n)}</span>}
         {stale && <span className="nfc-chip">{resolvedLabelOf(n)}</span>}
         {/* Occurrence fold: the server collapses repeats into one record so 36
@@ -595,7 +702,28 @@ const FeedItem = memo(function FeedItem({ n, onNavigate, onDismiss }: {
           &times;
         </button>
       </div>
-      {n.body && <div className={`notification-feed-item-body${expanded ? '' : ' clamped'}`}>{n.body}</div>}
+      {presented.body && (
+        <div className={`notification-feed-item-body${expanded ? '' : ' clamped'}`}>{presented.body}</div>
+      )}
+      {/* The raw technical line, opt-in. This is where the old JSON-as-body went:
+          a developer still gets every byte, and the user is no longer shown a log
+          line as the card's message. stopPropagation because the card itself is a
+          click target (navigate / expand) — without it, opening Details would
+          also navigate away from the panel. */}
+      {presented.detail && (
+        <div className="nfc-card-detail">
+          <button
+            className="nfc-card-toggle"
+            onClick={(e) => { e.stopPropagation(); setDetailOpen(v => !v); }}
+            aria-expanded={detailOpen}
+          >
+            {detailOpen ? '▼' : '▶'} Details
+          </button>
+          {detailOpen && (
+            <pre className="nfc-card-pre" onClick={(e) => e.stopPropagation()}>{presented.detail}</pre>
+          )}
+        </div>
+      )}
       <ContextChips n={n} />
     </div>
   );

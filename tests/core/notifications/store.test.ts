@@ -493,6 +493,39 @@ describe('recoverNotifications', () => {
     const { recovered } = await recoverNotifications(['plugin:plugin-a']);
     expect(recovered).toHaveLength(1);
   });
+
+  it('a fold can SET category + detail on a pre-humanizer record', async () => {
+    // Same argument as recoveryKey above: a record written before the humanizer
+    // shipped joins the Errors rail's grouping (and gains its Details block) on
+    // the next occurrence, instead of sitting alone in 'Other' forever.
+    await seedError('error:legacy');
+    const { record } = await upsertNotification({
+      kind: 'operation-error', severity: 'error',
+      title: "Couldn't start a session",
+      body: 'The working folder no longer exists: /data/gone',
+      dedupKey: 'error:legacy',
+      category: 'Sessions',
+      detail: '[session] {"cwd":"/data/gone"}',
+    });
+    expect(record.category).toBe('Sessions');
+    expect(record.detail).toBe('[session] {"cwd":"/data/gone"}');
+    expect(record.body).toBe('The working folder no longer exists: /data/gone');
+  });
+
+  it('a refresh that omits category/detail leaves the existing ones alone', async () => {
+    // REFRESHABLE_DETAIL_KEYS is additive by design: undefined means "the caller
+    // didn't compute it this time", never "clear it".
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'API request failed',
+      dedupKey: 'error:keep', category: 'API', detail: '[web] {"reqId":"a"}',
+    });
+    const { record } = await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'API request failed',
+      dedupKey: 'error:keep',
+    });
+    expect(record.category).toBe('API');
+    expect(record.detail).toBe('[web] {"reqId":"a"}');
+  });
 });
 
 /**

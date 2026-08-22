@@ -10,8 +10,10 @@ import os from 'node:os';
 const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-logerr-bridge-'));
 process.env.OPEN_WALNUT_HOME = testHome;
 
-const { installLogErrorNotifications, uninstallLogErrorNotifications, recoveryKeyOf } =
-  await import('../../../src/core/notifications/log-error-bridge.js');
+const {
+  installLogErrorNotifications, uninstallLogErrorNotifications, recoveryKeyOf,
+  dedupFingerprintForTest,
+} = await import('../../../src/core/notifications/log-error-bridge.js');
 const { listNotifications, dismissNotifications } =
   await import('../../../src/core/notifications/store.js');
 const { createSubsystemLogger } = await import('../../../src/logging/index.js');
@@ -49,7 +51,9 @@ describe('log-error → notification bridge', () => {
     expect(feed).toHaveLength(1);
     expect(feed[0].kind).toBe('operation-error');
     expect(feed[0].severity).toBe('error');
-    expect(feed[0].title).toBe('push totally failed');
+    // Sentence-cased by the humanizer's fallback — the raw log message is a
+    // developer's words, and the card gets a title a person can read.
+    expect(feed[0].title).toBe('Push totally failed');
     expect(feed[0].taskId).toBe('t-123');
     expect(feed[0].dedupKey).toMatch(/^logerr:bridge-test:/);
   });
@@ -381,5 +385,134 @@ describe('recoveryKeyOf', () => {
     expect(feed[0].recoveryKey).toBe('plugin:plugin-a');
     // …but never into the human-facing body (it is plumbing, not context).
     expect(feed[0].body ?? '').not.toContain('recoveryKey');
+  });
+});
+
+/**
+ * Human copy — the bridge runs every log error through humanize.ts on the way in,
+ * so a card carries a readable title, one sentence, and a CATEGORY, while the raw
+ * `[subsystem] {json}` line moves to `detail`.
+ *
+ * The load-bearing invariant in here is the LAST test: card identity (the dedup
+ * fingerprint) hashes the RAW message, so rewording copy can never split one
+ * failure into two cards or merge two into one.
+ */
+describe('humanized copy on the way into the feed', () => {
+  beforeEach(async () => {
+    uninstallLogErrorNotifications();
+    await dismissNotifications();
+    installLogErrorNotifications();
+  });
+
+  afterEach(() => {
+    uninstallLogErrorNotifications();
+  });
+
+  it('rewrites a known family and keeps the raw line as `detail`', async () => {
+    const logger = createSubsystemLogger('session');
+    logger.error('transport start failed', {
+      taskId: 'mq8c-97e0', host: 'local', cwd: '/data/notes/Gone',
+      error: 'ENOENT: no such file or directory',
+    });
+
+    const feed = await feedAfterFlush();
+    expect(feed[0].title).toBe("Couldn't start a session");
+    expect(feed[0].body).toBe('The working folder no longer exists: /data/notes/Gone');
+    expect(feed[0].category).toBe('Sessions');
+    // The old body — every byte a developer used to read off the card — survives
+    // behind the Details toggle instead of being the primary message.
+    expect(feed[0].detail).toContain('[session]');
+    expect(feed[0].detail).toContain('"cwd":"/data/notes/Gone"');
+    // …and the body is no longer a JSON dump.
+    expect(feed[0].body).not.toContain('{');
+  });
+
+  it('gives an unruled error a readable title and NO json body', async () => {
+    const logger = createSubsystemLogger('bridge-test');
+    logger.error('weird thing exploded', { holders: [{ pid: 22198 }], dbFile: '/data/x' });
+
+    const feed = await feedAfterFlush();
+    expect(feed[0].title).toBe('Weird thing exploded');
+    // No prose anywhere to make a sentence from → title-only card, never a dump.
+    expect(feed[0].body).toBeUndefined();
+    expect(feed[0].detail).toContain('"pid":22198');
+  });
+
+  it('derives the category from the recoveryKey the same log call produced', async () => {
+    const logger = createSubsystemLogger('web');
+    logger.error('GET /api/ui-prefs → 500', {
+      reqId: 'a1', recoveryKey: 'route:GET /api/ui-prefs',
+    });
+
+    const feed = await feedAfterFlush();
+    expect(feed[0].category).toBe('API');
+    expect(feed[0].title).toBe('GET /api/ui-prefs → 500');
+    expect(feed[0].body).toBe('This API endpoint is failing (HTTP 500).');
+  });
+
+  it("groups a plugin's whole family under the plugin's own name", async () => {
+    // The user-visible complaint: three failures of one plugin read as three
+    // unrelated cards. They now share a category, whatever the log wording.
+    const client = createSubsystemLogger('plugin-a/client');
+    const sync = createSubsystemLogger('plugin-a/sync');
+    client.error('Plugin A API error', { statusCode: 302, operationName: 'TaskCollections' });
+    sync.error('failed to push task to the tracker', { error: 'API error (HTTP 400)' });
+
+    const feed = await feedAfterCount(2);
+    expect(feed).toHaveLength(2);
+    expect(new Set(feed.map(n => n.category))).toEqual(new Set(['Plugin A']));
+    // Neither body is the JSON wrapper.
+    for (const n of feed) expect(n.body ?? '').not.toContain('{');
+  });
+
+  it('redacts a secret before any rule can compose it into the sentence', async () => {
+    // The humanizer reads RAW log meta, which can carry a credential inside an
+    // error string, and its output is truncated on the way out — so redacting the
+    // finished sentence would miss a secret whose recognizable prefix got cut
+    // off. The hook is applied to the INPUTS instead; this pins that.
+    const secret = 'ThisIsALongLivedDeviceToken1234567890';
+    const logger = createSubsystemLogger('web');
+    logger.error('config migration failed', {
+      error: `remote rejected: Authorization: Bearer ${secret}`,
+    });
+
+    const feed = await feedAfterFlush();
+    expect(feed[0].body ?? '').not.toContain(secret);
+    expect(feed[0].body ?? '').toContain('[REDACTED]');
+    expect(feed[0].detail ?? '').not.toContain(secret);
+  });
+
+  it('redacts a secret in the TITLE too, not only the meta', async () => {
+    const secret = 'AnotherVeryLongSecretValue0987654321';
+    const logger = createSubsystemLogger('bridge-test');
+    logger.error(`push refused for Bearer ${secret}`);
+
+    const feed = await feedAfterFlush();
+    expect(feed[0].title).not.toContain(secret);
+    expect(feed[0].title).toContain('[REDACTED]');
+  });
+
+  it('DEDUP IS UNCHANGED: the fingerprint hashes the RAW message, not the copy', async () => {
+    // Two log calls whose humanized TITLE is identical ("Couldn't start a
+    // session") but whose raw cause differs must stay two cards; and the
+    // fingerprint must contain the raw message, never the rewritten one.
+    const fp = dedupFingerprintForTest({
+      subsystem: 'session',
+      message: 'transport start failed',
+      meta: { error: 'ENOENT', cwd: '/a' },
+    });
+    expect(fp).toContain('transport start failed');
+    expect(fp).not.toContain("Couldn't start a session");
+
+    const logger = createSubsystemLogger('session');
+    logger.error('transport start failed', { cwd: '/a', error: 'ENOENT' });
+    logger.error('transport start failed', { cwd: '/b', error: 'permission denied' });
+
+    const feed = await feedAfterCount(2);
+    // Same humanized title on both, still TWO distinct cards — identity did not
+    // move to the copy.
+    expect(feed).toHaveLength(2);
+    expect(feed.every(n => n.title === "Couldn't start a session")).toBe(true);
+    expect(new Set(feed.map(n => n.dedupKey)).size).toBe(2);
   });
 });

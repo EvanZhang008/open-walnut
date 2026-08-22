@@ -94,6 +94,10 @@ export interface FeedRecord {
   taskId?: string;
   resolved?: 'allowed' | 'denied' | 'expired' | 'recovered';
   recoveryKey?: string;
+  /** humanizer output: the family the Errors rail groups by. */
+  category?: string;
+  /** humanizer output: the raw technical line, behind the card's Details toggle. */
+  detail?: string;
   requestId?: string;
   toolName?: string;
   input?: Record<string, unknown>;
@@ -116,6 +120,8 @@ function enrichmentOf(r: FeedRecord): Partial<Notification> {
     ...(r.reason ? { reason: r.reason } : {}),
     ...(r.acpOptions ? { acpOptions: r.acpOptions } : {}),
     ...(r.recoveryKey ? { recoveryKey: r.recoveryKey } : {}),
+    ...(r.category ? { category: r.category } : {}),
+    ...(r.detail ? { detail: r.detail } : {}),
     ...(r.host ? { host: r.host } : {}),
     ...(r.sessionTitle ? { sessionTitle: r.sessionTitle } : {}),
     ...(r.project ? { project: r.project } : {}),

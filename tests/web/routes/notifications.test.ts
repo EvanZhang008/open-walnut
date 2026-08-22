@@ -67,6 +67,39 @@ describe('GET /api/notifications', () => {
     expect(body.length).toBeLessThanOrEqual(601); // 600 + ellipsis
   });
 
+  it('carries the humanized category + detail, and caps detail like body', async () => {
+    // `detail` is the raw technical line behind an error card's Details toggle.
+    // It comes from the same producers as `body` and is read by the same UI, so
+    // an uncapped one would be the hole the read-time bound exists to close.
+    await addNotification({
+      kind: 'operation-error', severity: 'error',
+      title: "Couldn't start a session",
+      body: 'The working folder no longer exists: /data/gone',
+      detail: `[session] {"cwd":"/data/gone","trace":"${'y'.repeat(700)}"}`,
+      category: 'Sessions',
+      dedupKey: 'error:session:s1',
+    });
+
+    const res = await request(createApp()).get('/api/notifications');
+    expect(res.status).toBe(200);
+    const rec = res.body.feed[0];
+    expect(rec.category).toBe('Sessions');
+    expect(rec.title).toBe("Couldn't start a session");
+    expect(rec.body).toBe('The working folder no longer exists: /data/gone');
+    expect(rec.detail.length).toBeLessThanOrEqual(601); // 600 + ellipsis
+    expect(rec.detail.startsWith('[session]')).toBe(true);
+  });
+
+  it('leaves a record with no detail alone (undefined, not empty string)', async () => {
+    await addNotification({
+      kind: 'operation-error', severity: 'error', title: 'API request failed',
+      body: 'This API endpoint is failing (HTTP 500).', category: 'API',
+      dedupKey: 'error:route',
+    });
+    const res = await request(createApp()).get('/api/notifications');
+    expect(res.body.feed[0].detail).toBeUndefined();
+  });
+
   it('passes the permission detail + fold fields through untouched', async () => {
     await addNotification({
       kind: 'permission', severity: 'warning', title: 'Bash',

@@ -63,26 +63,62 @@ export function resolvedLabelOf(
 
 export interface SectionCounts {
   action: number;
+  /** UNREAD errors — bell-badge parity, NOT what the rail badge shows. */
   errors: number;
+  /** UNREAD automation receipts. */
   automation: number;
+  /** UNREAD across the whole feed (the bell badge's number). */
   all: number;
+  /** Errors the rail actually lists: unresolved, read or not. */
+  errorsTotal: number;
+  /** Automation receipts the rail lists. */
+  automationTotal: number;
+  /** The whole feed. */
+  allTotal: number;
 }
 
 /**
- * Rail badge counts. Needs Action counts PENDING permissions regardless of read
- * state (marking it read doesn't answer it — the session is still blocked); the
- * other sections count unread, matching the bell badge.
+ * Rail badge counts, in two flavours because the rail and the bell ask different
+ * questions.
+ *
+ * Needs Action counts PENDING permissions regardless of read state (marking it
+ * read doesn't answer it — the session is still blocked). The `*Total` fields
+ * count what each section LISTS, which is what the rail badge shows: a badge that
+ * only appeared while something was unread meant a rail with four labels and one
+ * number, and the user couldn't see there were nine errors sitting under a tab
+ * they had already opened once. The unread fields stay for the bell badge, which
+ * legitimately means "new since you looked".
  */
 export function sectionCounts(feed: Notification[]): SectionCounts {
-  const counts: SectionCounts = { action: 0, errors: 0, automation: 0, all: 0 };
+  const counts: SectionCounts = {
+    action: 0, errors: 0, automation: 0, all: 0,
+    errorsTotal: 0, automationTotal: 0, allTotal: 0,
+  };
   for (const n of feed) {
+    counts.allTotal++;
     if (!n.read) counts.all++;
     const section = sectionOf(n);
     if (section === 'action') counts.action++;
-    else if (section === 'errors') { if (!n.read) counts.errors++; }
-    else if (section === 'automation') { if (!n.read) counts.automation++; }
+    else if (section === 'errors') { counts.errorsTotal++; if (!n.read) counts.errors++; }
+    else if (section === 'automation') { counts.automationTotal++; if (!n.read) counts.automation++; }
   }
   return counts;
+}
+
+/**
+ * How many System-zone checks are currently unhealthy.
+ *
+ * The System zone has no feed entries, so its rail marker can't come from
+ * sectionCounts — it comes from the two ambient signals the pane actually
+ * renders. A count instead of a bare dot so the rail says "two things in here
+ * are broken" rather than "something, somewhere". Falls back to the dot when
+ * this is 0 but the caller still believes something is wrong.
+ */
+export function systemIssueCount(flags: {
+  gitSyncFailing?: boolean;
+  indexUnhealthy?: boolean;
+}): number {
+  return (flags.gitSyncFailing ? 1 : 0) + (flags.indexUnhealthy ? 1 : 0);
 }
 
 /** Sort/display timestamp: the latest occurrence for a folded record. */
@@ -218,6 +254,115 @@ export function sessionLabelOf(n: Notification): string | undefined {
   if (n.sessionTitle) return n.sessionTitle;
   if (!n.sessionId) return undefined;
   return n.sessionId.length > 8 ? `${n.sessionId.slice(0, 8)}…` : n.sessionId;
+}
+
+// ── Error categories + human copy ────────────────────────────────────────────
+//
+// The server humanizes every NEW error record at write time
+// (src/core/notifications/humanize.ts): it derives a `category`, a readable
+// `title`, a one-sentence `body`, and moves the raw technical line to `detail`.
+// The two functions below exist for what the server can't retroactively fix: the
+// records ALREADY on disk, written before that landed, whose title is a log line
+// and whose body is `[subsystem] {json}`. They are display-time only — nothing
+// here is persisted — and they are in this module (not the panel) so they are
+// unit-testable and shared by every surface.
+
+/** A plugin id / subsystem root as a display name: `plugin-a` → `Plugin A`. */
+function titleizeId(id: string): string {
+  return id
+    .split(/[-_.]+/)
+    .filter(Boolean)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+/**
+ * The family an error belongs to.
+ *
+ * Prefers the server's value; for a pre-humanizer record it mirrors the server's
+ * recoveryKey→category mapping (the key SHAPES are the contract between the two
+ * implementations — `categoryFromRecoveryKey` in humanize.ts is the original, and
+ * both must be extended together). Anything unkeyed lands in 'Other', which is
+ * honest: a keyless legacy record genuinely has no signal to classify it by.
+ */
+export function categoryOf(n: Notification): string {
+  if (n.category) return n.category;
+  const key = n.recoveryKey;
+  if (key) {
+    if (key.startsWith('plugin:')) {
+      const id = key.slice('plugin:'.length).trim();
+      if (id) return titleizeId(id);
+    }
+    if (key.startsWith('session:') || key.startsWith('task:')) return 'Sessions';
+    if (key.startsWith('route:')) return 'API';
+    if (key.startsWith('bus:')) return 'Internal';
+    if (key === 'git' || key === 'git:compaction' || key === 'backup' || key === 'disk') {
+      return 'Data & Sync';
+    }
+    if (key === 'server-lifecycle') return 'Server';
+    if (key === 'task-db-writers') return 'Internal';
+    if (key === 'send-path') return 'Cloud';
+  }
+  return 'Other';
+}
+
+/** A raw log-meta body: `[web] {"reqId":…}` — the shape the old cards showed. */
+const RAW_META_BODY_RE = /^\[[\w/@.-]+\]\s*[{[]/;
+
+export interface PresentedError {
+  title: string;
+  /** The human sentence, or empty when the title says everything. */
+  body: string;
+  /** Raw technical line for the Details toggle, or undefined when there is none. */
+  detail?: string;
+}
+
+/**
+ * What an error card renders: `{ title, body, detail }`.
+ *
+ * A new record passes through untouched (the server already humanized it). An OLD
+ * record gets the one repair that can be done client-side without guessing: its
+ * `[subsystem] {json}` body is MOVED into the Details toggle, so the card shows a
+ * title and a quiet "Details" affordance instead of a wall of JSON. The title is
+ * left as the producer wrote it — inventing human copy for a legacy record would
+ * mean shipping the whole rule table twice, and the record will be rewritten with
+ * real copy the next time its condition fires (`category`/`detail` are
+ * refreshable in the store).
+ */
+export function presentError(n: Notification): PresentedError {
+  const body = n.body ?? '';
+  if (n.detail || !RAW_META_BODY_RE.test(body.trim())) {
+    return { title: n.title, body, ...(n.detail ? { detail: n.detail } : {}) };
+  }
+  return { title: n.title, body: '', detail: body };
+}
+
+export interface ErrorCategoryGroup {
+  category: string;
+  items: Notification[];
+}
+
+/**
+ * Errors grouped by category, categories ordered by most-recent activity.
+ *
+ * Recency rather than a fixed category order: the rail is read top-down when
+ * something just broke, and a static alphabetical list would bury the live
+ * failure under a quiet family. Items keep the caller's order (the panel hands
+ * them in newest-first), so this is a stable partition, not a re-sort.
+ */
+export function groupErrorsByCategory(items: Notification[]): ErrorCategoryGroup[] {
+  const byCategory = new Map<string, Notification[]>();
+  for (const n of items) {
+    const category = categoryOf(n);
+    const list = byCategory.get(category);
+    if (list) list.push(n);
+    else byCategory.set(category, [n]);
+  }
+  const groups = [...byCategory.entries()].map(([category, list]) => ({ category, items: list }));
+  return groups.sort((a, b) => {
+    const recency = (g: ErrorCategoryGroup) => Math.max(...g.items.map(effectiveTs));
+    return recency(b) - recency(a);
+  });
 }
 
 /**

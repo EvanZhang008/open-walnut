@@ -25202,6 +25202,10 @@ a.file-link:hover {
   text-align: center;
 }
 
+@keyframes walnut-ai-shimmer {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
 /* Rendered-markdown view of a changed .md file */
 .session-diff-rendered {
   padding: 24px 32px 80px;
@@ -28582,6 +28586,48 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   color: #34c759;
   font-weight: 600;
 }
+
+/* ── Error categories ─────────────────────────────────────────────────────────
+   The Errors rail groups by FAMILY ('Sessions', 'API', a plugin's name), so the
+   same problem reported three ways reads as one thing. The header is deliberately
+   quiet: it is a divider with a label, not a card. */
+.nfc-cat-block { margin-bottom: 10px; }
+
+.nfc-cat-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px 5px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+
+.nfc-cat-name {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nfc-cat-count {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  opacity: 0.75;
+}
+
+/* In the All list there are no category headers, so an error card names its own
+   family inline. Muted, like the context chips — it is a label, not a status. */
+.nfc-chip-category { flex-shrink: 0; }
+
+/* The raw technical line, behind a toggle. It used to BE the card body ("[web]
+   {\"holders\":[{\"pid\":22198…"), which is a log file with a red dot. */
+.nfc-card-detail { margin-top: 5px; }
 
 .nfc-card-sub {
   margin-top: 5px;

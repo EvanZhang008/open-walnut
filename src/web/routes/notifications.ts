@@ -41,7 +41,14 @@ function sanitizeBody(body?: string): string | undefined {
 notificationsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const { feed, unreadCount } = await listNotifications()
-    res.json({ feed: feed.map(n => ({ ...n, body: sanitizeBody(n.body) })), unreadCount })
+    // `detail` (the raw technical line behind an error card's Details toggle)
+    // gets the SAME treatment as body — it is written by the same producers and
+    // read by the same UI, so an uncapped one would be the hole the cap exists
+    // to close. Mirrored in the /api/v1 twin.
+    res.json({
+      feed: feed.map(n => ({ ...n, body: sanitizeBody(n.body), detail: sanitizeBody(n.detail) })),
+      unreadCount,
+    })
   } catch (err) {
     next(err)
   }

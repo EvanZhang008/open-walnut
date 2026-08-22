@@ -257,7 +257,12 @@ searchMemoryV1Router.get('/notifications', async (_req: Request, res: Response, 
     }
     const { listNotifications } = await import('../../core/notifications/store.js')
     const { feed, unreadCount } = await listNotifications()
-    res.json({ feed: feed.map((n) => ({ ...n, body: sanitizeBody(n.body) })), unreadCount })
+    // `detail` capped alongside `body` — same reasoning as the /api twin in
+    // routes/notifications.ts (same producers, same UI, same read-time bound).
+    res.json({
+      feed: feed.map((n) => ({ ...n, body: sanitizeBody(n.body), detail: sanitizeBody(n.detail) })),
+      unreadCount,
+    })
   } catch (err) {
     next(err)
   }

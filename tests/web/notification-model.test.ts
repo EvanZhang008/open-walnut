@@ -17,7 +17,8 @@ import { describe, it, expect } from 'vitest';
 import {
   sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
-  linkTargetOf, resolvedLabelOf,
+  linkTargetOf, resolvedLabelOf, categoryOf, presentError, groupErrorsByCategory,
+  systemIssueCount,
 } from '../../web/src/contexts/notifications/notification-model';
 import { SHOULD_TOAST } from '../../web/src/contexts/notifications/types';
 import type { Notification, NotificationKind, NotificationSeverity } from '../../web/src/contexts/notifications/types';
@@ -164,7 +165,10 @@ describe('sectionCounts', () => {
   });
 
   it('is all-zero for an empty feed', () => {
-    expect(sectionCounts([])).toEqual({ action: 0, errors: 0, automation: 0, all: 0 });
+    expect(sectionCounts([])).toEqual({
+      action: 0, errors: 0, automation: 0, all: 0,
+      errorsTotal: 0, automationTotal: 0, allTotal: 0,
+    });
   });
 
   it('an EXPIRED permission stops inflating the Needs Action badge', () => {
@@ -466,4 +470,193 @@ describe('SHOULD_TOAST policy', () => {
       expect(SHOULD_TOAST({ kind, severity })).toBe(expected);
     });
   }
+});
+
+/**
+ * Rail badge totals — the second half of sectionCounts.
+ *
+ * Opening the panel marks the whole feed read, so an unread-only badge went to
+ * zero the moment the user glanced at it: a rail with nine errors one click away
+ * showed no number at all. The `*Total` fields count what each tab LISTS; the
+ * unread fields stay for the bell badge, which legitimately means "new".
+ */
+describe('sectionCounts totals (rail badges)', () => {
+  const feed: Notification[] = [
+    n({ kind: 'permission', dedupKey: 'perm:a', read: true }),
+    n({ kind: 'operation-error', dedupKey: 'e1', read: true }),
+    n({ kind: 'operation-error', dedupKey: 'e2', read: true }),
+    // Resolved errors leave the Errors rail, so they must not inflate its badge.
+    n({ kind: 'operation-error', dedupKey: 'e3', read: true, resolved: 'recovered' }),
+    n({ kind: 'cron', dedupKey: 'c1', read: true }),
+    n({ kind: 'skill', dedupKey: 's1', read: false }),
+  ];
+
+  it('counts what the Errors tab lists, read or not', () => {
+    const counts = sectionCounts(feed);
+    expect(counts.errorsTotal).toBe(2); // e1 + e2; the recovered one is history
+    expect(counts.errors).toBe(0);      // …and nothing is unread
+  });
+
+  it('counts what the Automation tab lists', () => {
+    expect(sectionCounts(feed).automationTotal).toBe(2); // cron + skill
+  });
+
+  it('counts the whole feed for All', () => {
+    expect(sectionCounts(feed).allTotal).toBe(6);
+    expect(sectionCounts(feed).all).toBe(1); // only s1 is unread
+  });
+});
+
+describe('systemIssueCount', () => {
+  it('counts each unhealthy ambient signal', () => {
+    expect(systemIssueCount({})).toBe(0);
+    expect(systemIssueCount({ gitSyncFailing: true })).toBe(1);
+    expect(systemIssueCount({ gitSyncFailing: true, indexUnhealthy: true })).toBe(2);
+  });
+});
+
+/**
+ * Error categories — what the Errors rail groups by. The server derives these at
+ * write time; these tests cover the CLIENT fallback for records already on disk.
+ */
+describe('categoryOf', () => {
+  it("prefers the server's value", () => {
+    expect(categoryOf(n({ kind: 'operation-error', dedupKey: 'e', category: 'Sessions' }))).toBe('Sessions');
+  });
+
+  it("beats a recoveryKey that would say something else", () => {
+    // The server may have classified by an explicit RULE; the key is only the
+    // structural fallback, so it must not override the shipped value.
+    expect(categoryOf(n({
+      kind: 'operation-error', dedupKey: 'e', category: 'Acme', recoveryKey: 'git',
+    }))).toBe('Acme');
+  });
+
+  it('mirrors every server recoveryKey shape for a pre-humanizer record', () => {
+    const c = (recoveryKey: string) =>
+      categoryOf(n({ kind: 'operation-error', dedupKey: `e-${recoveryKey}`, recoveryKey }));
+    expect(c('plugin:plugin-a')).toBe('Plugin A');
+    expect(c('session:s-1')).toBe('Sessions');
+    expect(c('task:t-1')).toBe('Sessions');
+    expect(c('route:GET /api/x')).toBe('API');
+    expect(c('bus:main-ai:task:updated')).toBe('Internal');
+    expect(c('git')).toBe('Data & Sync');
+    expect(c('git:compaction')).toBe('Data & Sync');
+    expect(c('backup')).toBe('Data & Sync');
+    expect(c('disk')).toBe('Data & Sync');
+    expect(c('server-lifecycle')).toBe('Server');
+    expect(c('task-db-writers')).toBe('Internal');
+    expect(c('send-path')).toBe('Cloud');
+  });
+
+  it("falls back to 'Other' when there is nothing to classify by", () => {
+    expect(categoryOf(n({ kind: 'operation-error', dedupKey: 'e' }))).toBe('Other');
+    expect(categoryOf(n({ kind: 'operation-error', dedupKey: 'e', recoveryKey: 'brand-new-shape' })))
+      .toBe('Other');
+  });
+});
+
+describe('presentError', () => {
+  it('passes a humanized record through untouched', () => {
+    const rec = n({
+      kind: 'operation-error', dedupKey: 'e',
+      title: "Couldn't start a session",
+      body: 'The working folder no longer exists: /data/gone',
+      detail: '[session] {"cwd":"/data/gone"}',
+    });
+    expect(presentError(rec)).toEqual({
+      title: "Couldn't start a session",
+      body: 'The working folder no longer exists: /data/gone',
+      detail: '[session] {"cwd":"/data/gone"}',
+    });
+  });
+
+  it('MOVES a legacy raw-json body into the Details block', () => {
+    // The screenshot case: the card's only text was a log dump. Nothing can
+    // invent human copy client-side, but the JSON can stop being the message.
+    const rec = n({
+      kind: 'operation-error', dedupKey: 'e',
+      title: 'SECOND WRITER on the task database',
+      body: '[web] {"holders":[{"pid":22198,"command":"node"}],"dbFile":"/data/x"}',
+    });
+    const out = presentError(rec);
+    expect(out.body).toBe('');
+    expect(out.detail).toBe('[web] {"holders":[{"pid":22198,"command":"node"}],"dbFile":"/data/x"}');
+    expect(out.title).toBe('SECOND WRITER on the task database');
+  });
+
+  it('leaves a legacy PROSE body as the message', () => {
+    const rec = n({
+      kind: 'operation-error', dedupKey: 'e',
+      title: 'Data Backup Failing',
+      body: 'Git auto-commit has failed 3+ times consecutively.',
+    });
+    const out = presentError(rec);
+    expect(out.body).toBe('Git auto-commit has failed 3+ times consecutively.');
+    expect(out.detail).toBeUndefined();
+  });
+
+  it('never moves the body when the server already sent a detail', () => {
+    // Belt and braces: with both present the body is authoritative, even if it
+    // happens to look bracket-ish.
+    const rec = n({
+      kind: 'operation-error', dedupKey: 'e', title: 'T',
+      body: '[web] {"a":1}', detail: 'raw line',
+    });
+    expect(presentError(rec)).toEqual({ title: 'T', body: '[web] {"a":1}', detail: 'raw line' });
+  });
+
+  it('handles a record with no body at all', () => {
+    const out = presentError(n({ kind: 'operation-error', dedupKey: 'e', title: 'Just a title' }));
+    expect(out).toEqual({ title: 'Just a title', body: '' });
+  });
+});
+
+describe('groupErrorsByCategory', () => {
+  const err = (dedupKey: string, category: string, ts: number) =>
+    n({ kind: 'operation-error', dedupKey, category, timestamp: ts });
+
+  it('groups by category and orders categories by most-recent activity', () => {
+    const groups = groupErrorsByCategory([
+      err('e1', 'Sessions', 1_000),
+      err('e2', 'API', 5_000),
+      err('e3', 'Sessions', 9_000),
+      err('e4', 'Data & Sync', 3_000),
+    ]);
+    expect(groups.map(g => g.category)).toEqual(['Sessions', 'API', 'Data & Sync']);
+    expect(groups[0].items.map(i => i.dedupKey)).toEqual(['e1', 'e3']);
+  });
+
+  it('orders by the LATEST occurrence of a folded record, not first-seen', () => {
+    // A still-firing error keeps an hours-old `timestamp`; sorting on that would
+    // sink the live problem below a family that stopped happening.
+    const groups = groupErrorsByCategory([
+      n({ kind: 'operation-error', dedupKey: 'live', category: 'API', timestamp: 1_000, lastTimestamp: 90_000 }),
+      err('quiet', 'Sessions', 50_000),
+    ]);
+    expect(groups.map(g => g.category)).toEqual(['API', 'Sessions']);
+  });
+
+  it('keeps the caller item order inside a group (stable partition)', () => {
+    const groups = groupErrorsByCategory([
+      err('newest', 'API', 9_000), err('older', 'API', 2_000),
+    ]);
+    expect(groups[0].items.map(i => i.dedupKey)).toEqual(['newest', 'older']);
+  });
+
+  it('groups pre-humanizer records by their recoveryKey fallback', () => {
+    // The three-cards-are-one-problem case, for records already on disk.
+    const groups = groupErrorsByCategory([
+      n({ kind: 'operation-error', dedupKey: 'a', recoveryKey: 'plugin:acme', timestamp: 3_000 }),
+      n({ kind: 'operation-error', dedupKey: 'b', recoveryKey: 'plugin:acme', timestamp: 2_000 }),
+      n({ kind: 'operation-error', dedupKey: 'c', recoveryKey: 'plugin:acme', timestamp: 1_000 }),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ category: 'Acme' });
+    expect(groups[0].items).toHaveLength(3);
+  });
+
+  it('is empty for an empty list', () => {
+    expect(groupErrorsByCategory([])).toEqual([]);
+  });
 });
