@@ -55,11 +55,43 @@ afterEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
-describe('C-class on a REPLICA', () => {
-  it('GET /search → 501 not_supported_cloud', async () => {
+describe('global search B-relay on a REPLICA', () => {
+  it('GET /search relays server.search to the primary and returns its results', async () => {
+    bridgeRequestMock.mockResolvedValue({
+      ok: true,
+      result: { results: [{ type: 'task', id: 't1', title: 'NVDA research' }] },
+    })
+    const res = await request(createApp()).get('/api/v1/search?q=NVDA&types=task&limit=5')
+    expect(res.status).toBe(200)
+    expect(res.body.results).toHaveLength(1)
+    expect(res.body.results[0].title).toBe('NVDA research')
+    expect(bridgeRequestMock).toHaveBeenCalledWith(
+      '__local__', 'session.control',
+      expect.objectContaining({
+        action: 'server.search', sessionId: '__server__',
+        params: { q: 'NVDA', types: ['task'], limit: 5 },
+      }),
+      expect.any(Number),
+    )
+  })
+
+  it('GET /search → 501 not_supported_cloud when the bridge is down (honest degraded state)', async () => {
+    bridgeRequestMock.mockRejectedValue(new BridgeOfflineError('__local__'))
     const res = await request(createApp()).get('/api/v1/search?q=anything')
     expect(res.status).toBe(501)
     expect(res.body.error.code).toBe('not_supported_cloud')
+  })
+
+  it('GET /search → 501 not_supported_cloud when the primary predates server.search', async () => {
+    bridgeRequestMock.mockResolvedValue({ ok: false, error: 'Unknown control action: server.search', errorKind: 'bad_request' })
+    const res = await request(createApp()).get('/api/v1/search?q=anything')
+    expect(res.status).toBe(501)
+    expect(res.body.error.code).toBe('not_supported_cloud')
+  })
+
+  it('GET /search without q → 400 before any relay', async () => {
+    const res = await request(createApp()).get('/api/v1/search?q=')
+    expect(res.status).toBe(400)
     expect(bridgeRequestMock).not.toHaveBeenCalled()
   })
 

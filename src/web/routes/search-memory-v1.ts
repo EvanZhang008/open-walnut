@@ -3,7 +3,7 @@
  * (additive) — the Wave-1 read/utility set. Every endpoint reuses the SAME
  * core/shared functions as the internal web routes; no logic duplication.
  *
- *   GET  /search?q&types&limit        → { results }              (C: 501 on replica)
+ *   GET  /search?q&types&limit        → { results }              (B: relay on replica; 501 only when the bridge can't serve)
  *   GET  /notes/search?q&mode&limit   → { results, folders?, degraded? } (A: string leg on replica)
  *   GET  /memory/browse               → { tree }                 (A: git-synced files)
  *   GET  /memory?category=            → { memories }
@@ -22,9 +22,11 @@
  *   POST /notes/move { from, to }     → { ok }
  *   POST /notes/folder { path }       → { ok }
  *
- * Replica classes: /search needs the QMD semantic store which never initializes
- * on the cloud box (would pin the small instance) → explicit 501
- * not_supported_cloud. Notes search degrades gracefully to its string leg
+ * Replica classes: /search needs the QMD semantic store which never
+ * initializes on the cloud box (would pin the small instance) → relayed to
+ * the primary over `server.search`; 501 not_supported_cloud only when the
+ * relay can't serve (bridge down / old primary). Notes search degrades
+ * gracefully to its string leg
  * (performNotesSearch already gates the semantic leg on !CLOUD_MODE). Memory,
  * favorites, and notes ride the git-synced data dir (Class A — local files on
  * both boxes). Notifications live in the primary's store only → Class B relay
@@ -49,14 +51,14 @@ const SERVER_RELAY_SID = '__server__'
 // ─── Global search ───────────────────────────────────────────────────────────
 
 // GET /api/v1/search?q=&types=task,memory,session&limit=20
-// C-class on replica: the semantic QMD store never initializes on the cloud
-// box, so answer an explicit 501 instead of a half-empty result set.
+// B-class on replica since 2026-08-22: the semantic QMD store never
+// initializes on the cloud box, but the primary is usually REACHABLE over the
+// bridge — so relay the query (`server.search`) instead of refusing outright.
+// The 501 remains only when the relay itself can't serve (bridge down, old
+// primary), so the phone's honest degraded state is "Mac offline", which is
+// true, rather than "not supported", which wasn't.
 searchMemoryV1Router.get('/search', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    if (CLOUD_MODE) {
-      sendError(res, 501, 'not_supported_cloud', 'Global search runs on the primary box only')
-      return
-    }
     const q = typeof req.query.q === 'string' ? req.query.q : ''
     if (!q.trim()) {
       sendError(res, 400, 'bad_request', 'q (non-empty string) is required')
@@ -78,6 +80,22 @@ searchMemoryV1Router.get('/search', async (req: Request, res: Response, next: Ne
       types = [...new Set(requested)] as Array<(typeof VALID_TYPES)[number]>
     }
     const limit = req.query.limit ? Math.max(1, Math.min(100, Number(req.query.limit) || 20)) : undefined
+    if (CLOUD_MODE) {
+      const { callPrimaryControl } = await import('./v1-control-relay.js')
+      const outcome = await callPrimaryControl('server.search', SERVER_RELAY_SID, {
+        q, ...(types ? { types } : {}), ...(limit !== undefined ? { limit } : {}),
+      })
+      if (outcome.ok) {
+        res.json(outcome.result)
+        return
+      }
+      // Bridge down / old primary → the pre-relay contract the app already
+      // renders ("needs your Mac online"). needs_upgrade lands here too: an
+      // old primary genuinely can't serve the relay, same user-facing truth.
+      sendError(res, 501, 'not_supported_cloud',
+        `Global search needs the primary box: ${outcome.failure.message}`)
+      return
+    }
     const { search } = await import('../../core/search.js')
     res.json({ results: await search(q, { types, limit }) })
   } catch (err) {

@@ -651,6 +651,10 @@ export type SessionControlAction =
   | 'queue' | 'queue.edit' | 'queue.delete'
   // Box-level family (sessionId ignored):
   | 'server.notifications' | 'server.notifications.mark-read' | 'server.notifications.dismiss'
+  // Global search: the QMD/semantic store lives on the primary only, so a
+  // replica relays the query here instead of refusing outright — the Mac
+  // being reachable is exactly the common case for a phone on the replica.
+  | 'server.search'
   // Wave 2 box-level family: routines CRUD/control (single-writer: the
   // PRIMARY's cron engine owns cron-jobs.json — replicas never write it
   // locally, avoiding the dual-engine blind-write storms), the launcher's
@@ -663,6 +667,12 @@ export type SessionControlAction =
   // credentials live (the answering box); a REPLICA relays to the primary.
   | 'server.routines.draft'
   | 'server.list-dirs' | 'server.slash-commands'
+  // Human inbox (letters). Box-level: the letters live on the primary and
+  // answering one has to reach the origin session's daemon, which only the
+  // primary can do — a replica relays every route here.
+  | 'server.human-inbox' | 'server.human-inbox.get' | 'server.human-inbox.send'
+  | 'server.human-inbox.reply' | 'server.human-inbox.read' | 'server.human-inbox.pin'
+  | 'server.human-inbox.archive' | 'server.human-inbox.answer' | 'server.human-inbox.human-reply'
   // Wave 2 box-level family: file-explorer metadata (names/types only — file
   // CONTENT never rides the bridge; see files-v1.ts for the threat model).
   | 'server.files.list' | 'server.files.resolve'
@@ -955,6 +965,25 @@ export async function handleSessionControlRelay(
         result = await dismissNotifications({ ids, dedupKeys }) as unknown as Record<string, unknown>;
         break;
       }
+      case 'server.search': {
+        // Same validation surface as GET /api/v1/search — the relay must not
+        // accept inputs the direct route would refuse.
+        const q = typeof p.q === 'string' ? p.q.trim() : '';
+        if (!q) throw new Error('q (non-empty string) is required');
+        const VALID = ['task', 'memory', 'session'];
+        let types: Array<'task' | 'memory' | 'session'> | undefined;
+        if (Array.isArray(p.types) && p.types.length > 0) {
+          const requested = p.types.map(String);
+          const invalid = requested.filter((t) => !VALID.includes(t));
+          if (invalid.length > 0) throw new Error(`invalid types: ${invalid.join(', ')}`);
+          types = [...new Set(requested)] as Array<'task' | 'memory' | 'session'>;
+        }
+        const limit = p.limit !== undefined
+          ? Math.max(1, Math.min(100, Number(p.limit) || 20)) : undefined;
+        const { search } = await import('../search.js');
+        result = { results: await search(q, { types, limit }) };
+        break;
+      }
       // ── Wave 2 box-level family: routines (PRIMARY's engine is the single writer) ──
       case 'server.routines':
       case 'server.routines.actions':
@@ -1038,6 +1067,26 @@ export async function handleSessionControlRelay(
       case 'server.chat.turn': {
         const { handlePrimaryChatTurnRelay } = await import('../../web/routes/chat-turn-relay.js');
         result = await handlePrimaryChatTurnRelay(p) as unknown as Record<string, unknown>;
+        break;
+      }
+      // ── Human inbox family: one handler, same functions the routes call ──
+      case 'server.human-inbox':
+      case 'server.human-inbox.get':
+      case 'server.human-inbox.send':
+      case 'server.human-inbox.reply':
+      case 'server.human-inbox.read':
+      case 'server.human-inbox.pin':
+      case 'server.human-inbox.archive':
+      case 'server.human-inbox.answer':
+      case 'server.human-inbox.human-reply': {
+        const { handleHumanInboxRelayAction, LetterError } = await import('../human-inbox/relay.js');
+        const sub = action.slice('server.human-inbox'.length).replace(/^\./, '') || 'list';
+        try {
+          result = await handleHumanInboxRelayAction(sub, p);
+        } catch (err) {
+          if (err instanceof LetterError) throw new SessionControlError(err.message, err.status);
+          throw err;
+        }
         break;
       }
       case 'server.tasks.get': {
