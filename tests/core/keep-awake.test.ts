@@ -288,6 +288,21 @@ darwinOnly('closed-lid display sleep', () => {
     expect(displaySleepCalls()).toHaveLength(1);
   });
 
+  it('does not retry a failed display sleep until the lid closes again', async () => {
+    await pollKeepAwakeOnce();
+    world.lidClosed = true;
+    world.osascriptResult = { ok: false, stdout: '', stderr: 'display sleep unavailable' };
+    await pollClosedLidDisplayOnce();
+    await pollClosedLidDisplayOnce();
+    expect(displaySleepCalls()).toHaveLength(1);
+
+    world.lidClosed = false;
+    await pollClosedLidDisplayOnce();
+    world.lidClosed = true;
+    await pollClosedLidDisplayOnce();
+    expect(displaySleepCalls()).toHaveLength(2);
+  });
+
   it('does not poll the lid when the feature is not holding', async () => {
     world.config = { enabled: false };
     await pollKeepAwakeOnce();

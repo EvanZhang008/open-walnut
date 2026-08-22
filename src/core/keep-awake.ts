@@ -51,7 +51,7 @@ export const DEFAULT_BATTERY_FLOOR_PCT = 30;
 export const DEFAULT_OFFLINE_GRACE_MINUTES = 15;
 export const DEFAULT_LINGER_MINUTES = 5;
 const DEFAULT_POLL_INTERVAL_MS = 60_000;
-const LID_POLL_INTERVAL_MS = 1_000;
+const LID_POLL_INTERVAL_MS = 5_000;
 
 export type KeepAwakeReason = 'unsupported' | 'disabled' | 'needs-sudo' | 'no-sessions' | 'battery-low' | 'offline-too-long' | 'active';
 
@@ -350,7 +350,8 @@ export async function pollClosedLidDisplayOnce(): Promise<void> {
   }
 
   if (!state.holding || displaySleepRequestedForClosure) return;
-  displaySleepRequestedForClosure = await requestDisplaySleep();
+  displaySleepRequestedForClosure = true;
+  await requestDisplaySleep();
 }
 
 let monitorNotify: KeepAwakeNotify | undefined;
