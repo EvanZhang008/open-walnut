@@ -1,0 +1,155 @@
+{
+  "backend": "qmd",
+  "generatedAt": "2026-08-22T21:30:54.963Z",
+  "aggregate": {
+    "queries": 28,
+    "passed": 1,
+    "recall10": 0.9583333333333334,
+    "mrr": 0.6219,
+    "top1": 1,
+    "p50LatencyMs": 1017,
+    "p90LatencyMs": 1562
+  },
+  "perQuery": {
+    "ident-task-id-exact": {
+      "pass": true,
+      "rank": null,
+      "ms": 66
+    },
+    "ident-task-id-prefix": {
+      "pass": false,
+      "rank": 1,
+      "ms": 1197
+    },
+    "ident-commit-sha-full": {
+      "pass": false,
+      "rank": 1,
+      "ms": 575
+    },
+    "ident-commit-sha-prefix-live": {
+      "pass": false,
+      "rank": 1,
+      "ms": 779
+    },
+    "ident-cr-number-live": {
+      "pass": false,
+      "rank": 1,
+      "ms": 1285
+    },
+    "gvr-reconciler-failure": {
+      "pass": false,
+      "rank": 7,
+      "ms": 1407
+    },
+    "camel-component-exact": {
+      "pass": false,
+      "rank": null,
+      "ms": 1562
+    },
+    "camel-component-subwords": {
+      "pass": false,
+      "rank": 6,
+      "ms": 952
+    },
+    "camel-kebab-channel-live": {
+      "pass": false,
+      "rank": 3,
+      "ms": 1330
+    },
+    "camel-kebab-subwords": {
+      "pass": false,
+      "rank": 2,
+      "ms": 783
+    },
+    "cjk-search-index-fix": {
+      "pass": false,
+      "rank": 2,
+      "ms": 883
+    },
+    "cjk-search-quality": {
+      "pass": false,
+      "rank": 2,
+      "ms": 772
+    },
+    "cjk-orphan-pods": {
+      "pass": false,
+      "rank": 1,
+      "ms": 625
+    },
+    "cjk-calendar-view": {
+      "pass": false,
+      "rank": 5,
+      "ms": 1016
+    },
+    "mixed-timeout-retry-live": {
+      "pass": false,
+      "rank": 3,
+      "ms": 1123
+    },
+    "mixed-qmd-quality": {
+      "pass": false,
+      "rank": 2,
+      "ms": 908
+    },
+    "mixed-reconciler-timeout": {
+      "pass": false,
+      "rank": 1,
+      "ms": 894
+    },
+    "mixed-title-not-indexed": {
+      "pass": false,
+      "rank": 1,
+      "ms": 1017
+    },
+    "para-duplicate-gvr": {
+      "pass": false,
+      "rank": 1,
+      "ms": 1665
+    },
+    "para-slack-cron": {
+      "pass": false,
+      "rank": 3,
+      "ms": 2426
+    },
+    "para-client-retry": {
+      "pass": false,
+      "rank": 1,
+      "ms": 959
+    },
+    "para-ddb-lambda-timeout": {
+      "pass": false,
+      "rank": 6,
+      "ms": 999
+    },
+    "para-stale-pods": {
+      "pass": false,
+      "rank": 4,
+      "ms": 1478
+    },
+    "transcript-bad-record-mac": {
+      "pass": false,
+      "rank": null,
+      "ms": 1000
+    },
+    "transcript-tcc-calendar": {
+      "pass": false,
+      "rank": 1,
+      "ms": 1313
+    },
+    "transcript-fifo-wedge": {
+      "pass": false,
+      "rank": 1,
+      "ms": 1098
+    },
+    "junk-burst-echo": {
+      "pass": false,
+      "rank": null,
+      "ms": 1170
+    },
+    "junk-echo-token": {
+      "pass": false,
+      "rank": null,
+      "ms": 1418
+    }
+  }
+}

@@ -55,6 +55,7 @@
     "dev": "tsup --watch",
     "test": "node scripts/test-parallel.mjs",
     "test:quick": "npm run docs:check && vitest run --config vitest.quick.config.ts",
+    "search:eval": "node scripts/search-eval.mjs",
     "test:slow": "vitest run --config vitest.slow.config.ts",
     "test:focus": "vitest run --config vitest.focus.config.ts",
     "test:frontend:ci": "node scripts/test-frontend.mjs",

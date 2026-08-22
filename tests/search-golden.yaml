@@ -1,0 +1,235 @@
+# Search v2 golden set — PUBLIC, self-contained.
+#
+# Two layers exist (see docs/investigation/search-v2/):
+#   1. THIS file: neutral synthetic corpus + queries. Runs anywhere (CI included)
+#      once the v2 engine can index the inline corpus. Guards TOKENIZER and
+#      SCORING behavior; every name here is invented.
+#   2. ~/.open-walnut/search-golden.local.yaml (never committed): the same
+#      query families phrased with real terms, asserting real entity IDs
+#      against the live corpus. Guards REAL recall. The runner merges both
+#      when the local file exists.
+#
+# Assertion vocabulary (all optional except id/query):
+#   must_include:    [kind:ref, ...]  every listed doc must appear in top 10
+#   top1: kind:ref                    exact top result
+#   top1_kind: task                   top result's kind
+#   must_rank_above: [[A, B], ...]    doc A must rank above doc B
+#   must_exclude:    [kind:ref, ...]  must NOT appear in top 10
+#   min_coverage: 0.5                 top must_include hit's term coverage
+#   max_latency_ms: 200               wall-clock budget for the query
+
+corpus:
+  # -- camelCase / identifier docs --
+  - kind: task
+    ref: t-gvr-check
+    title: "Reconciler duplicate kind across GVRs check"
+    note: >
+      Verify the AcmeEventOperator reconciler handles a duplicate kind that
+      appears across two GVRs. The AcmeEventOperator watch cache keys by kind
+      alone, so events for the second GVR are dropped silently.
+    meta: "project:platform"
+    updated_at: 2026-08-01
+  - kind: task
+    ref: t-gateway-cron
+    title: "CRON - Monitor acme-gateway-dev channel with agent loop"
+    note: "Poll acme-gateway-dev for unanswered questions every hour."
+    updated_at: 2026-07-15
+  - kind: memory
+    ref: m-http-code
+    title: "getHTTPResponseCode returns cached value"
+    note: >
+      getHTTPResponseCode short-circuits on the memoized response; call
+      resetHTTPCache before retrying. Applies to marina proxy clients only.
+    updated_at: 2026-06-10
+  - kind: task
+    ref: t-cr-review
+    title: "Review code change CR-291543784 for the ingest pipeline"
+    note: "Standard review, focus on the retry budget change."
+    identifiers: ["CR-291543784"]
+    updated_at: 2026-08-10
+  - kind: session
+    ref: s-commit-fix
+    title: "Fix flaky boot test"
+    note: "Committed as 3f9c2ab71e0d44b5a2c9d8e1f6a7b8c9d0e1f2a3 after two red runs."
+    identifiers: ["3f9c2ab71e0d44b5a2c9d8e1f6a7b8c9d0e1f2a3"]
+    updated_at: 2026-08-12
+  - kind: task
+    ref: t-url-import
+    title: "Import roadmap doc"
+    note: "Source: https://example.com/docs/roadmap-2026"
+    identifiers: ["https://example.com/docs/roadmap-2026"]
+    updated_at: 2026-05-20
+
+  # -- CJK / mixed docs --
+  - kind: task
+    ref: t-retry-timeout
+    title: "请求 timeout 频发 — 查客户端能否自动重试"
+    note: "上游代理超时后客户端直接报错;希望加自动重试,最多 3 次,指数退避。"
+    updated_at: 2026-08-14
+  - kind: task
+    ref: t-search-fix
+    title: "搜索索引修复 — task title 未被正确索引"
+    note: "搜索质量差,标题里的词搜不到。重建索引后验证。"
+    updated_at: 2026-08-05
+  - kind: memory
+    ref: m-deploy-cn
+    title: "部署顺序:先数据库迁移再重启服务"
+    note: "顺序反了会丢写入。迁移脚本必须幂等。"
+    updated_at: 2026-07-01
+  - kind: note
+    ref: n-mixed-glossary
+    title: "术语表:retry 重试 / timeout 超时 / backoff 退避"
+    note: "跨团队沟通用的中英对照,retry 统一译作 重试。"
+    updated_at: 2026-06-01
+
+  # -- scoring traps --
+  - kind: session
+    ref: s-long-transcript
+    title: "Long refactor session"
+    note: >
+      A very long transcript about renaming modules, moving files, updating
+      imports, fixing tests, rebasing, resolving conflicts, cleaning up dead
+      code, adjusting build scripts, bumping versions, and editing docs.
+      operator operator operator appears often but never together with the
+      other query terms in one topic.
+    updated_at: 2026-08-16
+  - kind: task
+    ref: t-junk-echo
+    title: "Burst message echo test"
+    note: "fixture task created by an automated test run"
+    updated_at: 2026-08-18
+  - kind: task
+    ref: t-recency-new
+    title: "Rotate signing keys for the sync service"
+    note: "Quarterly rotation."
+    updated_at: 2026-08-18
+  - kind: task
+    ref: t-recency-old
+    title: "Rotate signing keys for the sync service"
+    note: "Quarterly rotation."
+    updated_at: 2025-09-01
+
+queries:
+  # ── family: identifier (exact reference lane) ──
+  - id: ident-task-ref
+    family: identifier
+    query: "t-gvr-check"
+    top1: task:t-gvr-check
+    max_latency_ms: 50
+  - id: ident-cr-number
+    family: identifier
+    query: "CR-291543784"
+    top1: task:t-cr-review
+    max_latency_ms: 50
+  - id: ident-commit-sha-prefix
+    family: identifier
+    query: "3f9c2ab71e0d"
+    must_include: [session:s-commit-fix]
+    max_latency_ms: 50
+  - id: ident-url
+    family: identifier
+    query: "https://example.com/docs/roadmap-2026"
+    top1: task:t-url-import
+    max_latency_ms: 50
+
+  # ── family: camel-subword ──
+  - id: camel-gvr-reconciler
+    family: camel-subword
+    query: "kind event operator reconciler"
+    must_include: [task:t-gvr-check]
+    top1: task:t-gvr-check
+    must_exclude: [task:t-junk-echo]
+    min_coverage: 0.5
+    max_latency_ms: 200
+  - id: camel-exact-component
+    family: camel-subword
+    query: "AcmeEventOperator"
+    must_include: [task:t-gvr-check]
+    top1: task:t-gvr-check
+    max_latency_ms: 200
+  - id: camel-kebab-channel
+    family: camel-subword
+    query: "acme gateway dev"
+    must_include: [task:t-gateway-cron]
+    max_latency_ms: 200
+  - id: camel-kebab-exact
+    family: camel-subword
+    query: "acme-gateway-dev"
+    top1: task:t-gateway-cron
+    max_latency_ms: 200
+  - id: camel-http-subwords
+    family: camel-subword
+    query: "http response code"
+    must_include: [memory:m-http-code]
+    max_latency_ms: 200
+
+  # ── family: cjk ──
+  - id: cjk-search-index
+    family: cjk
+    query: "搜索 索引 修复"
+    must_include: [task:t-search-fix]
+    top1: task:t-search-fix
+    max_latency_ms: 200
+  - id: cjk-timeout-retry
+    family: cjk
+    query: "超时 重试"
+    must_include: [task:t-retry-timeout]
+    max_latency_ms: 200
+  - id: cjk-phrase-order
+    family: cjk
+    query: "自动重试"
+    must_include: [task:t-retry-timeout]
+    # ordered-bigram phrase: the glossary note has 重试 but never 自动重试
+    must_rank_above: [[task:t-retry-timeout, note:n-mixed-glossary]]
+    max_latency_ms: 200
+  - id: cjk-deploy-order
+    family: cjk
+    query: "数据库迁移 重启"
+    must_include: [memory:m-deploy-cn]
+    max_latency_ms: 200
+
+  # ── family: mixed (CJK + Latin in one query) ──
+  - id: mixed-timeout-retry
+    family: mixed
+    query: "timeout 自动重试"
+    must_include: [task:t-retry-timeout]
+    top1: task:t-retry-timeout
+    max_latency_ms: 200
+  - id: mixed-title-partial
+    family: mixed
+    query: "task title 索引"
+    must_include: [task:t-search-fix]
+    max_latency_ms: 200
+
+  # ── family: paraphrase (no exact term overlap guaranteed) ──
+  - id: para-dropped-events
+    family: paraphrase
+    query: "watch events silently dropped for second resource"
+    must_include: [task:t-gvr-check]
+    max_latency_ms: 200
+  - id: para-key-rotation
+    family: paraphrase
+    query: "quarterly credential rotation"
+    must_include: [task:t-recency-new]
+    max_latency_ms: 200
+
+  # ── family: scoring traps ──
+  - id: trap-coverage-long-doc
+    family: trap
+    query: "kind event operator reconciler"
+    # the long transcript spams 'operator' but never covers the other terms:
+    # coverage must beat term-frequency
+    must_rank_above: [[task:t-gvr-check, session:s-long-transcript]]
+    max_latency_ms: 200
+  - id: trap-recency-tiebreak
+    family: trap
+    query: "rotate signing keys"
+    must_rank_above: [[task:t-recency-new, task:t-recency-old]]
+    max_latency_ms: 200
+
+  # ── family: junk exclusion ──
+  - id: junk-echo-excluded
+    family: junk
+    query: "message test"
+    must_exclude: [task:t-junk-echo]
+    max_latency_ms: 200
