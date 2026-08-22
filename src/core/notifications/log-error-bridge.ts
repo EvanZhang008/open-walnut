@@ -13,6 +13,11 @@
  *   - a short in-memory TTL cache absorbs storms (600 errors/hour) without
  *     re-reading notifications.json on every repeat.
  *
+ * Recovery: each record is tagged with the CONDITION it belongs to
+ * (`recoveryKeyOf` below), so when that operation succeeds again every one of
+ * its unresolved errors is stamped 'recovered' and leaves the Errors rail
+ * instead of staying red forever after the user fixed the cause.
+ *
  * Wiring: server.ts installs via installLogErrorNotifications() at startup and
  * uninstalls in stopServer(). The logging layer only sees an opaque sink
  * (logging must not import this module — everything imports logging, so that
@@ -46,11 +51,18 @@ function djb2(s: string): string {
   return h.toString(36);
 }
 
+/** Plumbing meta the CARD must not show — it steers the bridge, it isn't context.
+ *  (`skipNotify` never reaches here: it returns early in the sink.) */
+const BODY_META_OMIT = new Set(['recoveryKey']);
+
 function buildBody(payload: ErrorNotifyPayload): string | undefined {
   let metaStr = '';
-  if (payload.meta && Object.keys(payload.meta).length > 0) {
+  const meta = payload.meta
+    ? Object.fromEntries(Object.entries(payload.meta).filter(([k]) => !BODY_META_OMIT.has(k)))
+    : undefined;
+  if (meta && Object.keys(meta).length > 0) {
     try {
-      metaStr = JSON.stringify(payload.meta);
+      metaStr = JSON.stringify(meta);
     } catch {
       metaStr = '[unserializable meta]';
     }
@@ -60,11 +72,75 @@ function buildBody(payload: ErrorNotifyPayload): string | undefined {
   return clean.length > MAX_BODY ? `${clean.slice(0, MAX_BODY)}…` : clean;
 }
 
+// ALLOWLIST, not a denylist — anything absent here (including `recoveryKey`) is
+// already out of the dedup fingerprint, so tagging a record for recovery can
+// never split one failure into two cards.
 const DEDUP_META_KEYS = [
   'error', 'err', 'reason', 'cause', 'code', 'status',
   'sessionId', 'taskId', 'runId', 'conversationId', 'agentId',
   'pluginId', 'jobName', 'host',
 ] as const;
+
+/**
+ * Subsystem roots that belong to Walnut itself, so a record from one is NOT a
+ * plugin condition. Everything else with a root segment is treated as a plugin
+ * (`plugin:<root>`), which is what makes an external sync plugin's wall of
+ * `[<plugin>/http]` errors retire together the moment its next sync succeeds.
+ *
+ * DENYLIST rather than a registry lookup, on purpose: this bridge is installed
+ * BY the logging layer's sink and must stay leaf-ish — its whole import closure
+ * today is logging (subsystem, redact, index) + the store. Importing the plugin
+ * registry (integration-loader) would pull in the config manager, task manager
+ * and the plugin sandbox, and integration-loader itself logs through this very
+ * sink, so the edge would be a cycle back into the module installing it. The
+ * list is the complete set of `createSubsystemLogger` roots in src/ (plus the
+ * `log.*` keys in logging/index.ts) — a new core subsystem must be added here,
+ * and the cost of forgetting is only that its errors gain a recovery key nobody
+ * ever signals (they behave exactly as they do today: they stay until dismissed).
+ */
+const CORE_SUBSYSTEM_ROOTS = new Set([
+  'agent', 'audio', 'browser', 'bus', 'calendar', 'cron', 'daemon', 'git',
+  'heartbeat', 'hook', 'memory', 'notif', 'obs', 'session', 'stt', 'subagent',
+  'task', 'usage', 'web', 'ws',
+  // plugin INFRASTRUCTURE, not one plugin's condition: a loader/registry failure
+  // is not retired by any single plugin's sync succeeding.
+  'plugin-loader', 'plugin-sources',
+]);
+
+/**
+ * Which recoverable condition a log error belongs to, or undefined for "no
+ * lifecycle" (the record behaves exactly as it did before this feature).
+ *
+ * Precedence: an explicit `meta.recoveryKey` (a producer that knows best) →
+ * `meta.pluginId` → the subsystem's first path segment when it isn't core.
+ * The subsystem fallback is what covers a plugin's own logger (`<plugin>/http`,
+ * `plugin/<id>`) and its sync helpers without every log call having to remember
+ * to pass pluginId.
+ *
+ * That fallback assumes a plugin's bespoke subsystem name IS its plugin id
+ * (true today — the built-in one matches, and `plugin/<id>` from the loader is
+ * read by id). A plugin that logs under some unrelated word would get a key its
+ * own sync-success signal never sends, so its records would keep today's
+ * behavior (stay until dismissed) rather than misbehave; the fix in that case is
+ * to pass `pluginId` in the log meta.
+ */
+export function recoveryKeyOf(payload: ErrorNotifyPayload): string | undefined {
+  const explicit = payload.meta?.recoveryKey;
+  if (typeof explicit === 'string' && explicit.trim()) return explicit.trim();
+
+  const pluginId = payload.meta?.pluginId;
+  if (typeof pluginId === 'string' && pluginId.trim()) return `plugin:${pluginId.trim()}`;
+
+  const root = payload.subsystem.split('/')[0]?.trim();
+  if (!root || CORE_SUBSYSTEM_ROOTS.has(root)) return undefined;
+  // `plugin/<id>` (integration-loader's per-plugin logger) names the plugin in
+  // the SECOND segment — its root is the generic word, so read one deeper.
+  if (root === 'plugin') {
+    const id = payload.subsystem.split('/')[1]?.trim();
+    return id ? `plugin:${id}` : undefined;
+  }
+  return `plugin:${root}`;
+}
 
 function dedupFingerprint(payload: ErrorNotifyPayload): string {
   const stableMeta: Record<string, unknown> = {};
@@ -113,12 +189,15 @@ export function installLogErrorNotifications(
     // sessionId/taskId in meta → deep-link targets on the card
     const sessionId = typeof payload.meta?.sessionId === 'string' ? payload.meta.sessionId : undefined;
     const taskId = typeof payload.meta?.taskId === 'string' ? payload.meta.taskId : undefined;
+    // The condition this error belongs to, so a later success can retire it.
+    const recoveryKey = recoveryKeyOf(payload);
 
     void upsertNotification({
       kind: 'operation-error', severity: 'error', title, body,
       timestamp: now, dedupKey,
       ...(sessionId ? { sessionId } : {}),
       ...(taskId ? { taskId } : {}),
+      ...(recoveryKey ? { recoveryKey } : {}),
     }).then(({ record, outcome }) => {
       // A first occurrence toasts; a later one (after the TTL window) patches the
       // existing card's count/body in place rather than re-toasting the UI.

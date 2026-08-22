@@ -43,10 +43,16 @@ export interface Notification {
   sessionId?: string;
   /** deep-link target for task-producing notifications (e.g. cron). */
   taskId?: string;
-  /** permission notifications only — outcome once the request settles.
-   *  'expired' = nobody answered and nobody can (session died, CLI withdrew the
-   *  ask, a newer request superseded it). Settled history, not an action item. */
-  resolved?: 'allowed' | 'denied' | 'expired';
+  /** outcome once the notification settles — settled history, not an action item.
+   *  permission: 'allowed'/'denied' (a human answered) or 'expired' = nobody
+   *  answered and nobody can (session died, CLI withdrew the ask, superseded).
+   *  operation-error: 'recovered' = the failing operation succeeded again, so the
+   *  condition the error described is gone. */
+  resolved?: 'allowed' | 'denied' | 'expired' | 'recovered';
+  /** operation-error only — which recoverable condition the error belongs to
+   *  (`plugin:<id>`, 'git', 'backup', 'disk'). Server-owned; the UI renders the
+   *  `resolved` stamp, this is carried through for debugging + parity. */
+  recoveryKey?: string;
   action?: NotificationAction;
   onAction?: () => void;
   /** emit a browser Notification when the tab is hidden (permission only). */

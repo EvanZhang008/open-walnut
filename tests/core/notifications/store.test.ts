@@ -25,6 +25,7 @@ import {
   markRead,
   dismissNotifications,
   resolvePermissionNotification,
+  recoverNotifications,
 } from '../../../src/core/notifications/store.js';
 
 const NOTIFICATIONS_FILE = path.join(WALNUT_HOME, 'notifications.json');
@@ -376,5 +377,118 @@ describe('upsertNotification', () => {
     });
     expect(second.count).toBe(2);
     expect(second.body).toBe('b2');
+  });
+});
+
+/**
+ * recoverNotifications — the lifecycle an error notification was missing.
+ *
+ * An error describes a CONDITION (plugin auth expired, backup failing, disk
+ * full). Conditions recover, but the feed was fire-and-forget, so a wall of red
+ * survived the fix forever. These pin what a recovery may and may NOT touch.
+ */
+describe('recoverNotifications', () => {
+  /** One unresolved operation-error under `key`. */
+  async function seedError(dedupKey: string, recoveryKey?: string): Promise<void> {
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: `failed ${dedupKey}`,
+      dedupKey, ...(recoveryKey ? { recoveryKey } : {}),
+    });
+  }
+
+  it('stamps only the matching unresolved operation-errors', async () => {
+    await seedError('error:a1', 'plugin:plugin-a');
+    await seedError('error:a2', 'plugin:plugin-a');
+    await seedError('error:b1', 'plugin:plugin-b'); // other key
+    await seedError('error:nokey');                 // no key at all
+    // Wrong KIND: a cron receipt under the same key is not an error condition.
+    await upsertNotification({
+      kind: 'cron', severity: 'info', title: 'ran', dedupKey: 'cron:x', recoveryKey: 'plugin:plugin-a',
+    });
+    // Already settled: a second recovery must not re-stamp or re-clone it.
+    await seedError('error:done', 'plugin:plugin-a');
+    await recoverNotifications(['plugin:plugin-a']);
+
+    const { recovered } = await recoverNotifications(['plugin:plugin-a']);
+    // error:a1/a2/done were all retired by the FIRST call, so the second finds none.
+    expect(recovered).toHaveLength(0);
+
+    const { feed } = await listNotifications();
+    const byKey = new Map(feed.map(n => [n.dedupKey, n]));
+    expect(byKey.get('error:a1')?.resolved).toBe('recovered');
+    expect(byKey.get('error:a2')?.resolved).toBe('recovered');
+    expect(byKey.get('error:done')?.resolved).toBe('recovered');
+    // Untouched: different key, no key, wrong kind.
+    expect(byKey.get('error:b1')?.resolved).toBeUndefined();
+    expect(byKey.get('error:nokey')?.resolved).toBeUndefined();
+    expect(byKey.get('cron:x')?.resolved).toBeUndefined();
+  });
+
+  it('remaps severity to info and returns the changed records', async () => {
+    await seedError('error:sev', 'git');
+    const { recovered } = await recoverNotifications(['git']);
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0].dedupKey).toBe('error:sev');
+    expect(recovered[0].resolved).toBe('recovered');
+    // 'info', same mapping as denied/expired: settled, nothing left to fix. The
+    // panel's red severity dot follows this, so a stale 'error' would keep the
+    // row screaming while the condition is gone.
+    expect(recovered[0].severity).toBe('info');
+    const { feed } = await listNotifications();
+    expect(feed[0].severity).toBe('info');
+  });
+
+  it('NEVER touches read — recovery is good news, not a re-badge', async () => {
+    await seedError('error:read', 'backup');
+    await markRead();
+    let { unreadCount } = await listNotifications();
+    expect(unreadCount).toBe(0);
+
+    await recoverNotifications(['backup']);
+    ({ unreadCount } = await listNotifications());
+    // A re-FIRE legitimately resets read (upsertNotification does). A RECOVERY
+    // must not: re-badging the bell to announce "the thing you fixed is fixed"
+    // is exactly the noise this feature removes.
+    expect(unreadCount).toBe(0);
+    const { feed } = await listNotifications();
+    expect(feed[0].read).toBe(true);
+  });
+
+  it('returns CLONES, so a later fold cannot mutate a broadcast payload', async () => {
+    await seedError('error:clone2', 'disk');
+    const { recovered } = await recoverNotifications(['disk']);
+    expect(recovered[0].severity).toBe('info');
+
+    // The card re-fires after the recovery: the store record goes back to error,
+    // but the payload the caller is mid-broadcast with must not change.
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'failed again', dedupKey: 'error:clone2',
+    });
+    expect(recovered[0].severity).toBe('info');
+    expect(recovered[0].resolved).toBe('recovered');
+    const { feed } = await listNotifications();
+    // upsert clears a non-permission `resolved` — a fresh occurrence means the
+    // condition is back, so the card must go red again rather than stay green.
+    expect(feed[0].resolved).toBeUndefined();
+    expect(feed[0].severity).toBe('error');
+  });
+
+  it('no-ops cleanly on empty keys and on no matches', async () => {
+    await seedError('error:none', 'git');
+    expect((await recoverNotifications([])).recovered).toHaveLength(0);
+    expect((await recoverNotifications(['plugin:nobody'])).recovered).toHaveLength(0);
+    const { feed } = await listNotifications();
+    expect(feed[0].resolved).toBeUndefined();
+  });
+
+  it('a fold can SET recoveryKey on a record that had none (refreshable)', async () => {
+    // The backlog case: a record written before its producer learned the key.
+    await seedError('error:late');
+    await upsertNotification({
+      kind: 'operation-error', severity: 'error', title: 'failed error:late',
+      dedupKey: 'error:late', recoveryKey: 'plugin:plugin-a',
+    });
+    const { recovered } = await recoverNotifications(['plugin:plugin-a']);
+    expect(recovered).toHaveLength(1);
   });
 });

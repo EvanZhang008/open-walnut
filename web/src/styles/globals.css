@@ -28536,6 +28536,18 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   white-space: nowrap;
 }
 
+/* The error's condition recovered (the plugin re-authenticated, the disk was
+   freed). Green rather than muted: the row is settled GOOD news, and it sits
+   right next to the title where a muted chip would read as another context tag.
+   Same green as .notification-feed-dot--success. */
+.nfc-chip-recovered {
+  flex-shrink: 0;
+  border-color: rgba(52, 199, 89, 0.4);
+  background: rgba(52, 199, 89, 0.12);
+  color: #34c759;
+  font-weight: 600;
+}
+
 .nfc-card-sub {
   margin-top: 5px;
   font-size: 12px;

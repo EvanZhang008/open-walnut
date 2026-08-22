@@ -41,10 +41,21 @@ export interface NotificationRecord {
   sessionId?: string;
   /** Optional deep-link target for task-producing notifications (e.g. cron). */
   taskId?: string;
-  /** Permission notifications only — how the request ended, if it did.
-   *  'expired' = nobody ever answered and nobody ever can (session died, the
-   *  CLI withdrew the ask, or a newer request superseded it). */
-  resolved?: 'allowed' | 'denied' | 'expired';
+  /** How the notification ended, if it did.
+   *  Permission: 'allowed' / 'denied' (a human answered) or 'expired' = nobody
+   *  ever answered and nobody ever can (session died, the CLI withdrew the ask,
+   *  or a newer request superseded it).
+   *  operation-error: 'recovered' = the underlying operation succeeded again, so
+   *  the condition this error described is gone (see recoverNotifications). */
+  resolved?: 'allowed' | 'denied' | 'expired' | 'recovered';
+
+  /** operation-error only — WHICH condition this error is about, so a later
+   *  success can retire it. An error notification describes a CONDITION (plugin
+   *  auth expired, git auto-commit failing, backup failing, disk full) and
+   *  conditions recover; without this the feed was fire-and-forget and a wall of
+   *  red stayed forever after the user fixed the cause. Shape: `plugin:<id>` for
+   *  a plugin, else a bare subsystem name ('git', 'backup', 'disk'). */
+  recoveryKey?: string;
 
   // ── Permission detail (so the feed can render + answer a request itself) ──
   /** Permission: the provider's request id. First-class instead of parsed back out of dedupKey. */
@@ -210,6 +221,10 @@ const REFRESHABLE_DETAIL_KEYS = [
   'body', 'sessionId', 'taskId',
   'requestId', 'toolName', 'input', 'reason', 'acpOptions',
   'host', 'sessionTitle', 'project',
+  // recoveryKey is refreshable so a record written before its producer learned
+  // the key (or before this feature shipped) gains one on the next fold, and can
+  // then be retired by a recovery instead of sitting red forever.
+  'recoveryKey',
 ] as const;
 
 /**
@@ -339,6 +354,47 @@ export async function dismissNotifications(
  * a permanent phantom in the Needs Action rail (the live prod record
  * perm:7cc9e8ce… on a session that had been dead with status Error for days).
  */
+/**
+ * Retire the error notifications for conditions that just recovered.
+ *
+ * An error notification describes a CONDITION, and conditions recover: the user
+ * re-authenticates a plugin, frees disk space, fixes the git remote. The feed
+ * used to be fire-and-forget, so the wall of red stayed after the cause was gone
+ * and the Errors rail became something to ignore rather than read. Every success
+ * point (plugin sync, git auto-commit, backup, disk watermark) now calls this
+ * with the key(s) it owns, and everything unresolved under those keys turns quiet.
+ *
+ * Deliberate non-behaviors:
+ *   - `read` is NEVER touched. Recovery is good news; re-badging the bell to
+ *     announce "the thing you fixed is fixed" is noise (this is the opposite of
+ *     upsertNotification, where a re-FIRE legitimately re-badges).
+ *   - only `operation-error` and only `!resolved` — a permission outcome is not
+ *     ours to overwrite, and a record already recovered stays as it is.
+ *
+ * Returns SHALLOW CLONES of the records it changed so the caller can broadcast
+ * `notification:updated` per record without handing out live store objects.
+ */
+export async function recoverNotifications(
+  recoveryKeys: string[],
+): Promise<{ recovered: NotificationRecord[] }> {
+  if (recoveryKeys.length === 0) return { recovered: [] };
+  const keys = new Set(recoveryKeys);
+  return withWriteLock(() => withStore((store) => {
+    const recovered: NotificationRecord[] = [];
+    for (const rec of store.notifications) {
+      if (rec.kind !== 'operation-error' || rec.resolved) continue;
+      if (!rec.recoveryKey || !keys.has(rec.recoveryKey)) continue;
+      rec.resolved = 'recovered';
+      // 'info', matching the denied/expired mapping: a recovered error is a
+      // settled fact, not something that still needs fixing. sectionOf() reads
+      // the stamp and routes it out of the Errors rail.
+      rec.severity = 'info';
+      recovered.push({ ...rec });
+    }
+    return { recovered };
+  }));
+}
+
 export async function resolvePermissionNotification(
   requestId: string,
   resolved: 'allowed' | 'denied' | 'expired',

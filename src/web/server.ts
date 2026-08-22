@@ -119,7 +119,8 @@ import { metricsRouter } from './routes/metrics.js'
 import { clientEvidenceRouter } from './routes/client-evidence.js'
 import { notificationsRouter } from './routes/notifications.js'
 import { hooksRouter } from './routes/hooks.js'
-import { addNotification as addFeedNotification, upsertNotification as upsertFeedNotification, resolvePermissionNotification } from '../core/notifications/store.js'
+import { addNotification as addFeedNotification, upsertNotification as upsertFeedNotification, resolvePermissionNotification, recoverNotifications } from '../core/notifications/store.js'
+import { createRecoveryTransitionTracker } from '../core/notifications/recovery-transition.js'
 import { compactPermissionInput, summarizePermissionRequest } from '../core/notifications/permission-detail.js'
 import { redactSensitiveText } from '../logging/redact.js'
 import { stripEntityRefs, extractFirstRefs } from '../utils/entity-refs.js'
@@ -183,8 +184,14 @@ let errorNotificationRepeatTtlMs = 60_000
 export function setErrorNotificationRepeatTtlMs(ms: number): void {
   errorNotificationRepeatTtlMs = ms
   errorNotificationRecentScopes.clear()
+  errorNotificationScopeRecoveryKeys.clear()
 }
 const errorNotificationRecentScopes = new Map<string, number>()
+/** dedupScope → recoveryKey, for the scopes that carry one. publishRecovery needs
+ *  the reverse direction (a recovering key must release its scopes' absorbers)
+ *  and the absorber map itself is keyed by scope, so the mapping is recorded here
+ *  as each notification is published rather than re-derived by string surgery. */
+const errorNotificationScopeRecoveryKeys = new Map<string, string>()
 
 /**
  * Permission requestIds already persisted to the durable feed.
@@ -210,13 +217,27 @@ async function publishErrorNotification(input: {
   dedupScope: string
   sessionId?: string
   taskId?: string
+  /**
+   * The recoverable CONDITION this failure is about ('git', 'backup', 'disk',
+   * `plugin:<id>`), so the matching success point can retire the card via
+   * publishRecovery. Omitted = no lifecycle: the card stays until dismissed,
+   * which is right for a one-shot event (a session that already ended).
+   */
+  recoveryKey?: string
 }): Promise<boolean> {
   const timestamp = Date.now()
   const lastAt = errorNotificationRecentScopes.get(input.dedupScope)
   if (lastAt !== undefined && timestamp - lastAt < errorNotificationRepeatTtlMs) return false
   if (errorNotificationRecentScopes.size > 500) {
     for (const [scope, at] of errorNotificationRecentScopes) {
-      if (timestamp - at > errorNotificationRepeatTtlMs) errorNotificationRecentScopes.delete(scope)
+      if (timestamp - at > errorNotificationRepeatTtlMs) {
+        errorNotificationRecentScopes.delete(scope)
+        // Pruned in LOCKSTEP: the recovery-key map exists only to release entries
+        // in the map above, so a survivor here would be unbounded garbage. The
+        // handful of recovery keys (git/backup/disk/plugin:*) are all long-lived
+        // anyway — the growth risk is per-session/per-subagent scopes.
+        errorNotificationScopeRecoveryKeys.delete(scope)
+      }
     }
   }
   // Session stderr / provider errors can embed tokens or keys; the log-error
@@ -241,10 +262,12 @@ async function publishErrorNotification(input: {
       dedupKey,
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       ...(input.taskId ? { taskId: input.taskId } : {}),
+      ...(input.recoveryKey ? { recoveryKey: input.recoveryKey } : {}),
     })
     // Armed only after the write landed — a failed persist must not silence this
     // failure for a full TTL window with nothing durable to show for it.
     errorNotificationRecentScopes.set(input.dedupScope, timestamp)
+    if (input.recoveryKey) errorNotificationScopeRecoveryKeys.set(input.dedupScope, input.recoveryKey)
     // 'inserted' → a new card; 'refreshed' → the same card with a live count and
     // the latest body, so connected UIs patch in place instead of re-toasting.
     broadcastEvent(outcome === 'inserted' ? 'notification:new' : 'notification:updated', record)
@@ -255,6 +278,57 @@ async function publishErrorNotification(input: {
       error: err instanceof Error ? err.message : String(err),
     })
     return false
+  }
+}
+
+/**
+ * Retire the error cards for conditions that just recovered.
+ *
+ * The user's complaint this exists for: an error notification describes a
+ * CONDITION (plugin auth expired, git auto-commit failing, backup failing, disk
+ * full), and conditions recover — but the feed was fire-and-forget, so after the
+ * user re-authenticated a plugin the wall of red stayed forever and the Errors
+ * rail became something to scroll past instead of read. Every success point
+ * signals here with the key it owns; everything unresolved under that key turns
+ * quiet and leaves the rail.
+ *
+ * Callers MUST gate on a failure→success TRANSITION, not call this on every
+ * healthy tick: a 30s poll would otherwise pay for a locked read-modify-write of
+ * notifications.json forever just to scan and change nothing
+ * (createRecoveryTransitionTracker is the shared gate).
+ *
+ * Exported so the e2e suite can drive a recovery without waiting out a real poll
+ * interval; production callers are the success points below.
+ */
+export async function publishRecovery(keys: string[]): Promise<number> {
+  if (keys.length === 0) return 0
+  try {
+    const { recovered } = await recoverNotifications(keys)
+    // The TTL absorber must be released for these scopes even when nothing was
+    // recovered. It is keyed by dedupScope and suppresses a repeat for 60s; if a
+    // condition fails → recovers → fails again inside one window, an armed
+    // absorber would swallow the RE-failure and leave the card sitting green
+    // ('recovered', severity info) while the thing is broken again. Recovery is
+    // exactly the moment that suppression stops being correct.
+    for (const [scope, key] of errorNotificationScopeRecoveryKeys) {
+      if (!keys.includes(key)) continue
+      errorNotificationRecentScopes.delete(scope)
+      errorNotificationScopeRecoveryKeys.delete(scope)
+    }
+    if (recovered.length === 0) return 0
+    // One frame per record: the panel patches in place (F2 merge), so the card
+    // gains its Recovered chip live without a refresh.
+    for (const record of recovered) broadcastEvent('notification:updated', record)
+    log.notif.info('recovered error notifications', {
+      keys: keys.join(','), count: recovered.length,
+    })
+    return recovered.length
+  } catch (err) {
+    log.web.warn('failed to publish notification recovery', {
+      keys: keys.join(','),
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return 0
   }
 }
 
@@ -314,6 +388,12 @@ let diskWatermarkHandle: { stop: () => void; poll: () => Promise<unknown> } | nu
 let backupSchedulerHandle: import('../core/backup/backup-scheduler.js').BackupSchedulerHandle | null = null
 let keepAwakeHandle: import('../core/keep-awake.js').KeepAwakeHandle | null = null
 let gitMaintenanceHandle: { stop: () => void } | null = null
+/** Tests only: force a watermark poll through the SERVER's own notify/onRecovered
+ *  wiring, rather than re-implementing that wiring in the test (which is how a
+ *  test can pass while the real seam is unwired). */
+export function getDiskWatermarkHandle(): { stop: () => void; poll: () => Promise<unknown> } | null {
+  return diskWatermarkHandle
+}
 let taskProjectionHandle: { stop: () => void } | null = null
 let foreignWriterWatchdog: { stop: () => void } | null = null
 let sessionProjectionHandle: { stop: () => void } | null = null
@@ -1772,9 +1852,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // companion, but the primary box has the same failure mode.
     const { startDiskWatermarkMonitor } = await import('../core/disk-watermark.js')
     diskWatermarkHandle = startDiskWatermarkMonitor({
+      // Both levels share the 'disk' condition: freeing space fixes them
+      // together, so one recovery signal retires whichever card is showing.
       notify: (title, body, dedupScope) => {
-        void publishErrorNotification({ title, body, dedupScope })
+        void publishErrorNotification({ title, body, dedupScope, recoveryKey: 'disk' })
       },
+      // Already an edge (the module only calls this when the level CHANGES to
+      // ok), so no transition tracker is needed on this side.
+      onRecovered: () => { void publishRecovery(['disk']) },
     })
 
     // Scheduled git maintenance (weekly / size-triggered): sweeps the debris
@@ -1799,6 +1884,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       backupSchedulerHandle = startBackupScheduler({
         emit: broadcastEvent,
         notify: (n) => publishErrorNotification(n),
+        // The scheduler owns the transition gate (it holds consecutiveFailures),
+        // so this only ever fires on a failing→success edge.
+        onRecovered: () => { void publishRecovery(['backup']) },
       })
       setBackupScheduler(backupSchedulerHandle)
 
@@ -1957,6 +2045,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           title: 'Data Repo Compaction Failing',
           body: `Git history compaction failed: ${failure}. The data repo will grow unbounded until this is fixed — check open-walnut logs -s git.`,
           dedupScope: `git:compaction:${scope}`,
+          recoveryKey: 'git',
         })
       }
       const attemptCompaction = async (retriesLeft = 2): Promise<void> => {
@@ -3562,6 +3651,8 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
   const health: GitAutoCommitHealth = { protected: false, consecutiveFailures: 0 }
   let notifiedForEpisode = false // only send one feed notification per failure episode
   let lockContentionCount = 0
+  /** Fires publishRecovery(['git']) on the failing→healthy edge only. */
+  const gitRecoveryTracker = createRecoveryTransitionTracker()
 
   const emitStatus = () => {
     broadcastEvent('git-sync:status', health)
@@ -3653,6 +3744,7 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
           title: 'Data Repo Growing Too Large',
           body: sizeWarning,
           dedupScope: 'git:repo-size',
+          recoveryKey: 'git',
         })
       }
       // Mass-revert / torn-worktree safe mode: surface the refusal to the
@@ -3667,6 +3759,7 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
             title: 'Data Sync Paused (Safe Mode)',
             body: 'git-sync detected a suspicious mass change (possible stale-worktree revert) and stopped auto-committing. Pull-only mode is active. Check open-walnut logs -s git.',
             dedupScope: 'git:safe-mode',
+            recoveryKey: 'git',
           })
         }
       }
@@ -3698,12 +3791,22 @@ function startGitAutoCommit(): { stop: () => void; health: GitAutoCommitHealth }
             title: 'Data Backup Failing',
             body: `Git auto-commit has failed ${health.consecutiveFailures}+ times consecutively. Check logs with open-walnut logs -s git.`,
             dedupScope: 'git:auto-commit',
+            recoveryKey: 'git',
           }).then((published) => {
             if (!published) notifiedForEpisode = false // reset so next cycle retries
           })
         }
       }
     } finally {
+      // Recovery edge for the whole git family (auto-commit, repo-size,
+      // compaction, safe mode). Placed in `finally` so BOTH exits are observed
+      // by one gate — the try's own success paths and the catch's failure. The
+      // tracker fires exactly once per failing→healthy edge, which is why a 30s
+      // poll doesn't turn into a permanent store scan (the reason this is
+      // transition-gated and not "signal on every success").
+      if (gitRecoveryTracker.observe('git', health.consecutiveFailures > 0 || health.safeMode === true)) {
+        void publishRecovery(['git'])
+      }
       if (!gitTickStopped) {
         gitTickTimer = setTimeout(() => { void gitTick() }, GIT_POLL_INTERVAL_MS)
         gitTickTimer.unref?.()
@@ -4179,7 +4282,17 @@ function startPluginSyncPolling(): void {
             })
           }
         }
+        // A sync that completed is proof the plugin's whole condition (auth,
+        // network, remote API) is healthy again — so this is where its wall of
+        // red retires. Gated on the failure→success EDGE: firing on every
+        // healthy tick would mean a locked read-modify-write scan of
+        // notifications.json every 30s, per plugin, forever, to change nothing.
+        // Every record under this key retires at once, including the ones the
+        // log bridge wrote from the plugin's own subsystem (its http client, the
+        // sync reconciler) — they all carry `plugin:<id>`.
+        const recovered = consecutiveFailures > 0
         consecutiveFailures = 0
+        if (recovered) void publishRecovery([`plugin:${plugin.id}`])
         const syncElapsed = Date.now() - syncT0
         if (syncElapsed > 2000) {
           log.web.warn(`${plugin.id} sync: slow tick`, { elapsed: syncElapsed })
@@ -4188,7 +4301,13 @@ function startPluginSyncPolling(): void {
         consecutiveFailures++
         const errorMsg = err instanceof Error ? err.message : String(err)
         if (consecutiveFailures >= 5) {
-          log.web.error(`${plugin.id} sync failing repeatedly`, { consecutiveFailures, error: errorMsg })
+          // pluginId in meta is load-bearing, not decoration: the log-error
+          // bridge derives this record's recoveryKey from it (the 'web'
+          // subsystem is core, so without pluginId the card would have no
+          // lifecycle and stay red after the plugin recovered).
+          log.web.error(`${plugin.id} sync failing repeatedly`, {
+            pluginId: plugin.id, consecutiveFailures, error: errorMsg,
+          })
         } else {
           log.web.debug(`${plugin.id} sync failed`, { consecutiveFailures, error: errorMsg })
         }

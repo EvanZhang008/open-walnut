@@ -144,6 +144,15 @@ export function isDiskWriteBlocked(): boolean {
 
 export type WatermarkNotify = (title: string, body: string, dedupScope: string) => void;
 
+/**
+ * Called when the disk drops back to 'ok', so the caller can retire the
+ * "filling up" / "critically full" cards it published. A PARALLEL optional
+ * callback rather than a new shape for WatermarkNotify: every existing caller
+ * and test passes a 3-arg notify, and a recovery has no title/body to give it.
+ * The condition key is the caller's ('disk') — this module only reports the edge.
+ */
+export type WatermarkRecovered = () => void;
+
 function fmtGiB(bytes: number): string {
   return `${(bytes / GiB).toFixed(1)}GB`;
 }
@@ -153,7 +162,11 @@ function fmtGiB(bytes: number): string {
  * Exported so tests/E2E can force an immediate evaluation instead of waiting
  * out the interval.
  */
-export async function pollDiskWatermarkOnce(notify?: WatermarkNotify, dir = WALNUT_HOME): Promise<DiskWatermarkState> {
+export async function pollDiskWatermarkOnce(
+  notify?: WatermarkNotify,
+  dir = WALNUT_HOME,
+  onRecovered?: WatermarkRecovered,
+): Promise<DiskWatermarkState> {
   let usedPct: number;
   let availBytes: number;
   try {
@@ -204,6 +217,11 @@ export async function pollDiskWatermarkOnce(notify?: WatermarkNotify, dir = WALN
       }
     } else {
       log.web.info('disk-watermark back to ok', { usedPct, availBytes, dir });
+      // The condition the warn/critical cards described is gone — tell the
+      // caller so those notifications stop sitting red in the Errors rail. The
+      // transition guard is the `level !== prev` branch itself, so this fires
+      // once per recovery, never on a steady healthy poll.
+      onRecovered?.();
     }
   }
 
@@ -227,6 +245,8 @@ export interface DiskWatermarkHandle {
  */
 export function startDiskWatermarkMonitor(opts: {
   notify?: WatermarkNotify;
+  /** Called once when the level drops back to 'ok' (see WatermarkRecovered). */
+  onRecovered?: WatermarkRecovered;
   intervalMs?: number;
   dir?: string;
 } = {}): DiskWatermarkHandle {
@@ -238,7 +258,7 @@ export function startDiskWatermarkMonitor(opts: {
   let timer: ReturnType<typeof setTimeout> | null = null;
   const tick = async (): Promise<void> => {
     try {
-      await pollDiskWatermarkOnce(opts.notify, dir);
+      await pollDiskWatermarkOnce(opts.notify, dir, opts.onRecovered);
     } finally {
       if (!stopped) {
         timer = setTimeout(() => { void tick(); }, intervalMs);
@@ -263,6 +283,6 @@ export function startDiskWatermarkMonitor(opts: {
       stopped = true;
       if (timer) clearTimeout(timer);
     },
-    poll: () => pollDiskWatermarkOnce(opts.notify, dir),
+    poll: () => pollDiskWatermarkOnce(opts.notify, dir, opts.onRecovered),
   };
 }

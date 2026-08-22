@@ -20,7 +20,9 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants());
 
 import { WALNUT_HOME } from '../../src/constants.js';
-import { startServer, stopServer, setErrorNotificationRepeatTtlMs } from '../../src/web/server.js';
+import {
+  startServer, stopServer, setErrorNotificationRepeatTtlMs, publishRecovery, getDiskWatermarkHandle,
+} from '../../src/web/server.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 import { dismissNotifications } from '../../src/core/notifications/store.js';
 
@@ -49,8 +51,11 @@ interface FeedEntry {
   body?: string;
   read: boolean;
   dedupKey: string;
-  /** permission only — 'expired' = nobody answered and nobody can. */
-  resolved?: 'allowed' | 'denied' | 'expired';
+  /** permission: 'expired' = nobody answered and nobody can.
+   *  operation-error: 'recovered' = the failing operation succeeded again. */
+  resolved?: 'allowed' | 'denied' | 'expired' | 'recovered';
+  /** operation-error only — which condition a recovery can retire this under. */
+  recoveryKey?: string;
   sessionId?: string;
   taskId?: string;
   requestId?: string;
@@ -366,6 +371,135 @@ describe('Notification feed API', () => {
     const body = await pollFeed((f) =>
       f.feed.some((n) => n.dedupKey === 'perm:req-e2e-answer' && n.resolved === 'allowed'));
     expect(body.feed.find((n) => n.dedupKey === 'perm:req-e2e-answer')?.severity).toBe('success');
+  });
+
+  // ── Error recovery: an error describes a CONDITION, and conditions recover ──
+  //
+  // The bug this closes: the feed was fire-and-forget, so after the user fixed a
+  // plugin's auth the wall of red errors stayed forever and the Errors rail
+  // stopped being worth reading. Full loop here: a real log.error through the
+  // live bridge → recoveryKey on the record → publishRecovery stamps it, pushes
+  // notification:updated, and releases the TTL absorber.
+
+  it('tags a plugin log error with its recoveryKey, then retires it on recovery', async () => {
+    const { createSubsystemLogger } = await import('../../src/logging/index.js');
+    // Logged under the CORE 'web' subsystem, exactly like the sync poll loop —
+    // so `pluginId` in the meta is the only thing that gives it a lifecycle.
+    createSubsystemLogger('web').error('plugin-a sync failing repeatedly', {
+      pluginId: 'plugin-a', consecutiveFailures: 5, error: 'auth token expired',
+    });
+
+    const seen = await pollFeed((f) => f.feed.some((n) => n.recoveryKey === 'plugin:plugin-a'));
+    const rec = seen.feed.find((n) => n.recoveryKey === 'plugin:plugin-a')!;
+    expect(rec.kind).toBe('operation-error');
+    expect(rec.severity).toBe('error');
+    expect(rec.resolved).toBeUndefined();
+    const dedupKey = rec.dedupKey;
+    notifFrames = [];
+
+    // The user runs the auth flow; the next sync tick succeeds and signals.
+    const count = await publishRecovery(['plugin:plugin-a']);
+    expect(count).toBeGreaterThanOrEqual(1);
+
+    const after = await pollFeed((f) =>
+      f.feed.some((n) => n.dedupKey === dedupKey && n.resolved === 'recovered'));
+    const settled = after.feed.find((n) => n.dedupKey === dedupKey)!;
+    expect(settled.resolved).toBe('recovered');
+    // 'info' so the panel's red severity dot goes quiet with the stamp.
+    expect(settled.severity).toBe('info');
+
+    // Live tabs get the stamp pushed — the card gains its Recovered chip without
+    // a refresh (the panel's F2 merge patches in place).
+    const frames = notifFrames.filter((f) => f.data?.dedupKey === dedupKey);
+    expect(frames.map((f) => f.name)).toEqual(['notification:updated']);
+    expect(frames[0].data.resolved).toBe('recovered');
+  });
+
+  it('a recovery does NOT re-badge the bell (read is left alone)', async () => {
+    const { createSubsystemLogger } = await import('../../src/logging/index.js');
+    createSubsystemLogger('plugin-b').error('list fetch failed', { error: '401' });
+    const seen = await pollFeed((f) => f.feed.some((n) => n.recoveryKey === 'plugin:plugin-b'));
+    const dedupKey = seen.feed.find((n) => n.recoveryKey === 'plugin:plugin-b')!.dedupKey;
+
+    // Read it, as the user would when triaging the outage.
+    await fetch(apiUrl('/api/notifications/mark-read'), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+    });
+    const readBefore = await getFeed();
+    expect(readBefore.unreadCount).toBe(0);
+
+    await publishRecovery(['plugin:plugin-b']);
+    const after = await pollFeed((f) =>
+      f.feed.some((n) => n.dedupKey === dedupKey && n.resolved === 'recovered'));
+    // Recovery is good news; announcing "the thing you fixed is fixed" with a
+    // fresh badge is exactly the noise this feature removes.
+    expect(after.unreadCount).toBe(0);
+    expect(after.feed.find((n) => n.dedupKey === dedupKey)?.read).toBe(true);
+  });
+
+  it('disk full → recovered → full again: the real seam, and the absorber is released', async () => {
+    // The whole loop through the SERVER's own wiring (its notify + onRecovered
+    // callbacks, not a copy of them in the test — a re-implemented seam is how a
+    // test passes while production is unwired).
+    //
+    // The sequence that used to lie to the user: fail → recover → fail again
+    // inside one 60s absorber window. With the absorber still armed, the
+    // re-failure was swallowed and the card sat green while the disk was full.
+    // So this runs with the PRODUCTION 60s TTL, not the test's 0.
+    const handle = getDiskWatermarkHandle();
+    expect(handle, 'server must have started the disk watermark monitor').toBeTruthy();
+
+    setErrorNotificationRepeatTtlMs(60_000);
+    const { _setStatfsForTest, resetDiskWatermarkForTest } =
+      await import('../../src/core/disk-watermark.js');
+    /** 30GiB filesystem at `pct` used — small enough to trip the absolute-free gate too. */
+    const stubUsedPct = (pct: number): void => {
+      const blocks = 30 * 256;
+      const bsize = 4 * 1024 * 1024;
+      const bavail = Math.round((blocks * (100 - pct)) / 100);
+      _setStatfsForTest(async () => ({ bsize, blocks, bfree: bavail, bavail }));
+    };
+    try {
+      resetDiskWatermarkForTest();
+
+      // ok → critical: the server publishes under recoveryKey 'disk' and arms the
+      // absorber for the disk:critical scope.
+      stubUsedPct(95);
+      await handle!.poll();
+      const failing = await pollFeed((f) => f.feed.some((n) => n.dedupKey === 'error:disk:critical'));
+      const broken = failing.feed.find((n) => n.dedupKey === 'error:disk:critical')!;
+      expect(broken.recoveryKey).toBe('disk');
+      expect(broken.resolved).toBeUndefined();
+      expect(broken.severity).toBe('error');
+
+      // Space freed → critical → warn → ok. The module reports the ok edge through
+      // onRecovered, which the server turns into publishRecovery(['disk']).
+      stubUsedPct(85); // below critical hysteresis, still warn
+      await handle!.poll();
+      stubUsedPct(40);
+      await handle!.poll();
+      const recovered = await pollFeed((f) =>
+        f.feed.some((n) => n.dedupKey === 'error:disk:critical' && n.resolved === 'recovered'));
+      const settled = recovered.feed.find((n) => n.dedupKey === 'error:disk:critical')!;
+      expect(settled.resolved).toBe('recovered');
+      expect(settled.severity).toBe('info');
+
+      // Broken AGAIN, immediately — well inside the 60s absorber window that the
+      // first failure armed. Because recovery released it, this notifies fresh.
+      stubUsedPct(96);
+      await handle!.poll();
+      const refailed = await pollFeed((f) =>
+        f.feed.some((n) => n.dedupKey === 'error:disk:critical' && n.resolved === undefined));
+      const again = refailed.feed.find((n) => n.dedupKey === 'error:disk:critical')!;
+      // Back to red: the fold clears a non-permission `resolved`, so the card
+      // stops claiming recovery the moment the condition returns.
+      expect(again.resolved).toBeUndefined();
+      expect(again.severity).toBe('error');
+    } finally {
+      _setStatfsForTest(null);
+      resetDiskWatermarkForTest();
+      setErrorNotificationRepeatTtlMs(0);
+    }
   });
 
   it('marks all read, clearing the unread count', async () => {

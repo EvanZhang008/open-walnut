@@ -20,7 +20,17 @@ const FAILURE_NOTIFY_THRESHOLD = 3;
 
 export interface BackupSchedulerDeps {
   emit: (name: string, data: unknown) => void;
-  notify: (n: { title: string; body: string; dedupScope: string }) => Promise<boolean>;
+  notify: (n: { title: string; body: string; dedupScope: string; recoveryKey?: string }) => Promise<boolean>;
+  /**
+   * A backup succeeded after failures — retire the failure notification.
+   *
+   * Injected through the SAME seam the failure path already uses (this module
+   * must never import server code; the server owns the notification store). It
+   * is optional so an existing caller/test that only wires `notify` keeps
+   * compiling, and the scheduler self-gates on the failure→success transition
+   * below so this fires once per episode, not on every healthy run.
+   */
+  onRecovered?: () => void;
 }
 
 export interface BackupSchedulerHandle {
@@ -44,6 +54,11 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
     health.progress = undefined;
     health.versioningEnabled = result.versioningEnabled;
     if (result.ok) {
+      // Captured BEFORE the reset below: this is the failure→success edge, and
+      // the only moment the 'S3 Backup Failing' card should be retired. Reading
+      // it after the reset would make every healthy run look like a recovery and
+      // turn the 60s tick into a permanent no-op store scan.
+      const wasFailing = health.consecutiveFailures > 0;
       health.lastBackupAt = new Date().toISOString();
       health.lastDurationMs = result.durationMs;
       health.lastFileCount = result.uploaded + result.unchanged;
@@ -52,6 +67,7 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
       health.consecutiveFailures = 0;
       health.error = undefined;
       notifiedForEpisode = false;
+      if (wasFailing) deps.onRecovered?.();
     } else {
       health.consecutiveFailures++;
       health.error = result.error;
@@ -62,6 +78,7 @@ export function startBackupScheduler(deps: BackupSchedulerDeps): BackupScheduler
             title: 'S3 Backup Failing',
             body: `Backup has failed ${health.consecutiveFailures} times in a row: ${result.error}`,
             dedupScope: 'backup:s3',
+            recoveryKey: 'backup',
           })
           .then((published) => {
             if (!published) notifiedForEpisode = false;

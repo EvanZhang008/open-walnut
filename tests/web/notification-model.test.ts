@@ -53,6 +53,19 @@ describe('sectionOf', () => {
     expect(sectionOf(n({ kind: 'permission', dedupKey: 'perm:r3', resolved: 'expired' }))).toBe('all');
   });
 
+  it('keeps an UNRESOLVED operation-error in the Errors rail', () => {
+    expect(sectionOf(n({ kind: 'operation-error', dedupKey: 'error:live' }))).toBe('errors');
+  });
+
+  it('drops a RECOVERED operation-error out of Errors (the wall-of-red fix)', () => {
+    // An error describes a CONDITION. Once the operation succeeds again the
+    // condition is gone, so the entry is history — it must leave the rail rather
+    // than stay red forever after the user fixed the cause.
+    expect(sectionOf(n({
+      kind: 'operation-error', dedupKey: 'error:git', resolved: 'recovered',
+    }))).toBe('all');
+  });
+
   it('routes operation errors to Errors and automation kinds to Automation', () => {
     expect(sectionOf(n({ kind: 'operation-error' }))).toBe('errors');
     expect(sectionOf(n({ kind: 'cron' }))).toBe('automation');

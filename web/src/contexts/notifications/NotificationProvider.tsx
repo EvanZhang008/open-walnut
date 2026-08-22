@@ -92,7 +92,8 @@ export interface FeedRecord {
   dedupKey: string;
   sessionId?: string;
   taskId?: string;
-  resolved?: 'allowed' | 'denied' | 'expired';
+  resolved?: 'allowed' | 'denied' | 'expired' | 'recovered';
+  recoveryKey?: string;
   requestId?: string;
   toolName?: string;
   input?: Record<string, unknown>;
@@ -114,6 +115,7 @@ function enrichmentOf(r: FeedRecord): Partial<Notification> {
     ...(r.input ? { input: r.input } : {}),
     ...(r.reason ? { reason: r.reason } : {}),
     ...(r.acpOptions ? { acpOptions: r.acpOptions } : {}),
+    ...(r.recoveryKey ? { recoveryKey: r.recoveryKey } : {}),
     ...(r.host ? { host: r.host } : {}),
     ...(r.sessionTitle ? { sessionTitle: r.sessionTitle } : {}),
     ...(r.project ? { project: r.project } : {}),
@@ -474,7 +476,14 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
         ? { action: { label: 'Go to Session', kind: 'navigate' as const, to: `/sessions?id=${r.sessionId}` } }
         : {}),
       ...enrichmentOf(r),
-      read: false,
+      // The server's read state wins when it sent one. Two producers share this
+      // frame and they disagree ON PURPOSE: a re-FIRE (upsertNotification) sets
+      // read:false server-side because the thing is happening again, while a
+      // RECOVERY (recoverNotifications) deliberately leaves read untouched —
+      // recovery is good news and must never re-badge the bell. Hardcoding
+      // `read: false` here would have re-badged every recovered error, which is
+      // exactly the noise this feature removes.
+      read: typeof r.read === 'boolean' ? r.read : false,
     });
     setFeed(prev => (prev.some(f => f.dedupKey === r.dedupKey)
       ? prev.map(f => (f.dedupKey === r.dedupKey ? patch(f) : f))

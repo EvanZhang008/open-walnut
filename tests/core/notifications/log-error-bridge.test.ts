@@ -10,7 +10,7 @@ import os from 'node:os';
 const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-logerr-bridge-'));
 process.env.OPEN_WALNUT_HOME = testHome;
 
-const { installLogErrorNotifications, uninstallLogErrorNotifications } =
+const { installLogErrorNotifications, uninstallLogErrorNotifications, recoveryKeyOf } =
   await import('../../../src/core/notifications/log-error-bridge.js');
 const { listNotifications, dismissNotifications } =
   await import('../../../src/core/notifications/store.js');
@@ -164,5 +164,87 @@ describe('log-error → notification bridge', () => {
     setErrorNotificationSink(() => { throw new Error('sink exploded'); });
     const logger = createSubsystemLogger('bridge-test');
     expect(() => logger.error('boom')).not.toThrow();
+  });
+});
+
+/**
+ * recoveryKey derivation — what lets a wall of red retire when the thing it
+ * described starts working again. Tested through the pure helper (the sink path
+ * is covered end-to-end in tests/e2e/notifications.test.ts).
+ */
+describe('recoveryKeyOf', () => {
+  it('prefers an explicit meta.recoveryKey over everything else', () => {
+    expect(recoveryKeyOf({
+      subsystem: 'web', message: 'x', meta: { recoveryKey: 'backup', pluginId: 'plugin-a' },
+    })).toBe('backup');
+    // Blank/non-string is not an override — fall through to the next rule.
+    expect(recoveryKeyOf({ subsystem: 'web', message: 'x', meta: { recoveryKey: '  ' } })).toBeUndefined();
+    expect(recoveryKeyOf({ subsystem: 'web', message: 'x', meta: { recoveryKey: 7 } })).toBeUndefined();
+  });
+
+  it('maps meta.pluginId to plugin:<id>, even from a core subsystem', () => {
+    // This is the case that matters most: the sync poll loop logs under 'web'
+    // (core), so pluginId is the ONLY thing that gives those records a lifecycle.
+    expect(recoveryKeyOf({
+      subsystem: 'web', message: 'sync failing repeatedly', meta: { pluginId: 'plugin-a' },
+    })).toBe('plugin:plugin-a');
+  });
+
+  it('treats a non-core subsystem ROOT as a plugin', () => {
+    // A plugin's own logger and its sub-loggers all collapse onto one key, so
+    // the whole wall retires together on the next successful sync.
+    expect(recoveryKeyOf({ subsystem: 'plugin-a', message: 'x' })).toBe('plugin:plugin-a');
+    expect(recoveryKeyOf({ subsystem: 'plugin-a/http', message: 'x' })).toBe('plugin:plugin-a');
+    expect(recoveryKeyOf({ subsystem: 'plugin-a/http/retry', message: 'x' })).toBe('plugin:plugin-a');
+    // integration-loader's per-plugin logger names the id one segment deeper.
+    expect(recoveryKeyOf({ subsystem: 'plugin/plugin-a', message: 'x' })).toBe('plugin:plugin-a');
+  });
+
+  it('gives CORE subsystems no recoveryKey (this iteration)', () => {
+    // A core failure has no single success point that proves it recovered, so
+    // these records keep today's behavior: they stay until dismissed.
+    for (const core of ['web', 'session', 'task', 'bus', 'ws', 'git', 'memory', 'agent',
+      'cron', 'daemon', 'notif', 'obs', 'audio', 'heartbeat', 'subagent',
+      'plugin-loader', 'plugin-sources']) {
+      expect(recoveryKeyOf({ subsystem: core, message: 'x' })).toBeUndefined();
+      // A sub-logger of a core subsystem is still core.
+      expect(recoveryKeyOf({ subsystem: `${core}/inner`, message: 'x' })).toBeUndefined();
+    }
+    // 'plugin' alone (no id) is not attributable to any one plugin.
+    expect(recoveryKeyOf({ subsystem: 'plugin', message: 'x' })).toBeUndefined();
+  });
+
+  it('does not pollute the dedup hash — tagging a record cannot split its card', async () => {
+    // recoveryKey rides in log meta, and meta feeds the dedup fingerprint. If it
+    // leaked in, the SAME failure logged with and without a key would land as two
+    // near-identical cards.
+    uninstallLogErrorNotifications();
+    await dismissNotifications();
+    installLogErrorNotifications();
+    const logger = createSubsystemLogger('bridge-hash-test');
+    logger.error('identical failure', { error: 'same cause' });
+    const first = await feedAfterFlush();
+    const keyWithout = first[0].dedupKey;
+
+    // Same body, now tagged. Shift the clock past the storm absorber so the
+    // second call actually reaches the store.
+    const realNow = Date.now;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 61_000);
+    try {
+      logger.error('identical failure', { error: 'same cause', recoveryKey: 'plugin:plugin-a' });
+      await new Promise(r => setTimeout(r, 200));
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    const { feed } = await listNotifications();
+    // ONE card that folded, not two.
+    expect(feed).toHaveLength(1);
+    expect(feed[0].dedupKey).toBe(keyWithout);
+    expect(feed[0].count).toBe(2);
+    // The tag landed on the record…
+    expect(feed[0].recoveryKey).toBe('plugin:plugin-a');
+    // …but never into the human-facing body (it is plumbing, not context).
+    expect(feed[0].body ?? '').not.toContain('recoveryKey');
   });
 });

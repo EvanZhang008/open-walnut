@@ -20,11 +20,14 @@ export type NotificationSection = 'action' | 'errors' | 'automation' | 'all';
 /**
  * Which rail section an entry belongs to. Only a PENDING permission is an action
  * item — a resolved one is history, so it stays out of Needs Action (it still
- * shows under All).
+ * shows under All). Same rule for a RECOVERED error: an error notification
+ * describes a CONDITION, and once the operation succeeds again the condition is
+ * gone, so the entry becomes history and leaves the Errors rail (without it, the
+ * wall of red survived the fix and the rail stopped being worth reading).
  */
 export function sectionOf(n: Notification): NotificationSection {
   if (n.kind === 'permission') return n.resolved ? 'all' : 'action';
-  if (n.kind === 'operation-error') return 'errors';
+  if (n.kind === 'operation-error') return n.resolved ? 'all' : 'errors';
   if (n.kind === 'cron' || n.kind === 'skill' || n.kind === 'hook') return 'automation';
   return 'all';
 }

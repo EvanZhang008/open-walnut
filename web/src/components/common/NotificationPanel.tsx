@@ -557,10 +557,15 @@ const FeedItem = memo(function FeedItem({ n, onNavigate, onDismiss }: {
   const [expanded, setExpanded] = useState(false);
   const target = linkTargetOf(n);
   const count = n.count ?? 1;
+  // The condition this error described is gone (the plugin re-authenticated, the
+  // disk was freed, the commit landed). The severity is already remapped to
+  // 'info' server-side, so the red dot follows automatically — the chip is what
+  // tells the user WHY the row went quiet instead of it just looking stale.
+  const recovered = n.resolved === 'recovered';
 
   return (
     <div
-      className={`notification-feed-item notification-feed-item--${n.severity}${n.read ? '' : ' unread'}${target ? ' clickable' : ''}${expanded ? ' expanded' : ''}`}
+      className={`notification-feed-item notification-feed-item--${n.severity}${n.read ? '' : ' unread'}${target ? ' clickable' : ''}${expanded ? ' expanded' : ''}${recovered ? ' recovered' : ''}`}
       onClick={target ? () => onNavigate(target) : () => setExpanded(v => !v)}
       role="button"
       tabIndex={0}
@@ -575,6 +580,7 @@ const FeedItem = memo(function FeedItem({ n, onNavigate, onDismiss }: {
       <div className="notification-feed-item-head">
         <span className={`notification-feed-dot notification-feed-dot--${n.severity}`} />
         <span className={`notification-feed-item-title${expanded ? ' expanded' : ''}`}>{n.title}</span>
+        {recovered && <span className="nfc-chip nfc-chip-recovered">Recovered ✓</span>}
         {/* Occurrence fold: the server collapses repeats into one record so 36
             identical failures are one line, with how often it happened. Clamped
             at 99+ like the rail badge — a 4-digit count would push the row's
