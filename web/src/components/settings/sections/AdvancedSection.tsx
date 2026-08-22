@@ -31,6 +31,7 @@ export function AdvancedSection({ config, onSave }: Props) {
   const exec = config.tools?.exec ?? {};
   const sub = config.agent?.subagent ?? {};
   const keepAwake = config.keep_awake ?? {};
+  const offlineReleaseMinutes = keepAwake.offline_grace_minutes ?? 5;
 
   // Keep-Awake live status (macOS console feature; route 404s elsewhere → hidden)
   const [kaStatus, setKaStatus] = useState<KeepAwakeStatus | null>(null);
@@ -248,8 +249,8 @@ export function AdvancedSection({ config, onSave }: Props) {
               <p className="text-sm text-muted" style={{ margin: '0 0 12px 0' }}>
                 While local sessions run, Walnut prevents <strong>system sleep</strong>,
                 including with the lid closed. Closing the lid turns connected screens off
-                while sessions keep running. Connect an iPhone hotspot yourself. If internet stays unavailable for
-                15 minutes, Walnut restores normal sleep.
+                while sessions keep running. Connect an iPhone hotspot yourself. If internet stays unavailable
+                for {offlineReleaseMinutes} minutes, Walnut restores normal sleep.
               </p>
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
                 <input type="checkbox" name="ka-enabled" defaultChecked={keepAwake.enabled === true} style={{ width: 16, height: 16, accentColor: 'var(--accent)' }} />
@@ -282,7 +283,7 @@ export function AdvancedSection({ config, onSave }: Props) {
                 </div>
                 <div className="form-group">
                   <label htmlFor="ka-offline">Offline Release (min)</label>
-                  <input id="ka-offline" name="ka-offline" type="number" defaultValue={keepAwake.offline_grace_minutes ?? ''} placeholder="15" min={1} />
+                  <input id="ka-offline" name="ka-offline" type="number" defaultValue={keepAwake.offline_grace_minutes ?? ''} placeholder="5" min={1} />
                 </div>
                 <div className="form-group">
                   <label htmlFor="ka-linger">Linger After Last Session (min)</label>

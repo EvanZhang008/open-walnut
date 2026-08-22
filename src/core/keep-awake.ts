@@ -12,7 +12,7 @@
  *   - feature disabled (default — this is an opt-in advanced feature)
  *   - no local session has been 'running' for linger_minutes
  *   - on battery and charge ≤ battery_floor_pct (default 30%)
- *   - offline for ≥ offline_grace_minutes (default 15)
+ *   - offline for ≥ offline_grace_minutes (default 5)
  *
  * This feature only prevents SYSTEM sleep. It never keeps displays awake. When
  * the lid closes, Walnut requests display-only sleep so external screens turn
@@ -40,7 +40,7 @@ export interface KeepAwakeConfig {
   enabled?: boolean;
   /** On battery power, release the hold at or below this charge. Default: 30. */
   battery_floor_pct?: number;
-  /** Release the hold after this many minutes without internet. Default: 15. */
+  /** Release the hold after this many minutes without internet. Default: 5. */
   offline_grace_minutes?: number;
   /** Keep holding this many minutes after the last running session ended, so
    *  back-to-back turns don't flap the hold. Default: 5. */
@@ -48,7 +48,7 @@ export interface KeepAwakeConfig {
 }
 
 export const DEFAULT_BATTERY_FLOOR_PCT = 30;
-export const DEFAULT_OFFLINE_GRACE_MINUTES = 15;
+export const DEFAULT_OFFLINE_GRACE_MINUTES = 5;
 export const DEFAULT_LINGER_MINUTES = 5;
 const DEFAULT_POLL_INTERVAL_MS = 60_000;
 const LID_POLL_INTERVAL_MS = 5_000;

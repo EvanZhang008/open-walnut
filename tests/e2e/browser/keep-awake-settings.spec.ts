@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 
-test('Keep-Awake only prevents system sleep and releases after 15 minutes offline', async ({ page }) => {
+test('Keep-Awake settings show system-sleep-only behavior and a 5-minute offline default', async ({ page }) => {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
   if ((await page.locator('.sidebar.collapsed').count()) > 0) {
@@ -16,7 +16,8 @@ test('Keep-Awake only prevents system sleep and releases after 15 minutes offlin
   await expect(section).toContainText('prevents system sleep')
   await expect(section).toContainText('Closing the lid turns connected screens off')
   await expect(section).toContainText('Connect an iPhone hotspot yourself')
-  await expect(section.locator('#ka-offline')).toHaveAttribute('placeholder', '15')
+  await expect(section).toContainText('If internet stays unavailable for 5 minutes')
+  await expect(section.locator('#ka-offline')).toHaveAttribute('placeholder', '5')
   await expect(section.locator('#ka-ssid')).toHaveCount(0)
   await expect(section.locator('#ka-password')).toHaveCount(0)
   await expect(section.getByRole('button', { name: 'Detect' })).toHaveCount(0)

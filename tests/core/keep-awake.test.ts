@@ -114,7 +114,7 @@ describe('decideKeepAwake', () => {
     battery: { pct: 80, onAc: false },
     batteryFloorPct: 30,
     offlineMinutes: 0,
-    offlineGraceMinutes: 15,
+    offlineGraceMinutes: 5,
     lingerMinutes: 5,
   };
 
@@ -154,9 +154,9 @@ describe('decideKeepAwake', () => {
   });
 
   it('releases once offline past the grace window', () => {
-    expect(decideKeepAwake({ ...base, offlineMinutes: 15 }))
+    expect(decideKeepAwake({ ...base, offlineMinutes: 5 }))
       .toEqual({ awake: false, reason: 'offline-too-long' });
-    expect(decideKeepAwake({ ...base, offlineMinutes: 14 }).awake).toBe(true);
+    expect(decideKeepAwake({ ...base, offlineMinutes: 4 }).awake).toBe(true);
   });
 });
 
@@ -194,32 +194,48 @@ darwinOnly('pollKeepAwakeOnce', () => {
     expect(DEFAULT_BATTERY_FLOOR_PCT).toBe(30);
   });
 
-  it('releases after the offline grace window elapses', async () => {
+  it('releases after the default five-minute offline grace window', async () => {
     await pollKeepAwakeOnce();
     world.online = false;
     await pollKeepAwakeOnce(); // offline clock starts
     expect(getKeepAwakeState().holding).toBe(true);
 
-    world.nowMs += 14 * MINUTE;
+    world.nowMs += 4 * MINUTE;
     await pollKeepAwakeOnce();
     expect(getKeepAwakeState().holding).toBe(true);
 
-    world.nowMs += 2 * MINUTE; // 16 min offline total
+    world.nowMs += 1 * MINUTE; // 5 min offline total
     await pollKeepAwakeOnce();
     expect(getKeepAwakeState().reason).toBe('offline-too-long');
     expect(disableSleepCalls().at(-1)).toBe('0');
-    expect(DEFAULT_OFFLINE_GRACE_MINUTES).toBe(15);
+    expect(DEFAULT_OFFLINE_GRACE_MINUTES).toBe(5);
+  });
+
+  it('respects an explicit longer offline grace from config', async () => {
+    world.config = { enabled: true, offline_grace_minutes: 15 };
+    await pollKeepAwakeOnce();
+    world.online = false;
+    await pollKeepAwakeOnce();
+    world.nowMs += 5 * MINUTE;
+    await pollKeepAwakeOnce();
+    expect(getKeepAwakeState().holding).toBe(true);
+
+    world.nowMs += 10 * MINUTE;
+    await pollKeepAwakeOnce();
+    expect(getKeepAwakeState().reason).toBe('offline-too-long');
   });
 
   it('a moment of connectivity resets the offline clock', async () => {
     world.online = false;
     await pollKeepAwakeOnce();
-    world.nowMs += 10 * MINUTE;
+    world.nowMs += 4 * MINUTE;
     world.online = true;
     await pollKeepAwakeOnce();
+
     world.online = false;
-    world.nowMs += 10 * MINUTE;
-    await pollKeepAwakeOnce(); // only 10 min into the NEW offline stretch
+    await pollKeepAwakeOnce(); // new offline clock starts
+    world.nowMs += 4 * MINUTE;
+    await pollKeepAwakeOnce();
     expect(getKeepAwakeState().holding).toBe(true);
   });
 
