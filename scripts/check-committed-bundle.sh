@@ -42,8 +42,20 @@ for entry in "${ENTRIES[@]}"; do
   [ -f "$TMP/$entry" ] || continue
   # --format=esm matches tsup.config.ts (format: ['esm']) — esbuild's cjs
   # default rejects legal top-level await (false positive, 2026-08-21).
+  #
+  # --log-override:ignored-dynamic-import=error closes the hole that let a broken
+  # HEAD through on 2026-08-22: esbuild SILENTLY tolerates an unresolvable
+  # dynamic import when any enclosing scope has a catch ("dynamic import failures
+  # appear to be handled here"), which is the shape of every lazily-loaded module
+  # in this codebase. A commit whose `await import('../human-inbox/relay.js')`
+  # target was never committed therefore bundled "clean" here while CI's tsc
+  # failed, and main's build gate went red. tsc treats it as an error, so this
+  # gate must too — an optional dependency is a BARE specifier, which
+  # --packages=external already excludes, so only genuinely dangling relative
+  # imports can trip this.
   if ! (cd "$TMP" && "$OLDPWD/$ESBUILD" "$entry" --bundle --platform=node --format=esm \
-        --packages=external --loader:.node=file --outfile=/dev/null 2>"$TMP/err.log"); then
+        --packages=external --loader:.node=file \
+        --log-override:ignored-dynamic-import=error --outfile=/dev/null 2>"$TMP/err.log"); then
     echo ""
     echo "✗ Committed tree (HEAD) fails to bundle at $entry:"
     grep -m 6 -E "ERROR|error" "$TMP/err.log" || tail -6 "$TMP/err.log"
