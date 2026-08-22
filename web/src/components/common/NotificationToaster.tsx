@@ -16,17 +16,25 @@
  * (command / question / plan / file), where it came from (session + host), and
  * the real buttons. A permission toast that only said "Session needs permission
  * approval" forced a session round-trip for a one-word decision.
+ *
+ * An AskUserQuestion is answered IN FULL here — every question, every option,
+ * multi-select, and the per-question free-text "Other" box — through the same
+ * PermissionAnswerForm the panel card uses. The toast used to fall back to an
+ * "Answer…" button that merely opened the center for anything beyond one
+ * single-select question with at most four options, which made the popup a dead
+ * end for exactly the asks that most needed answering.
  */
 
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   useNotifications, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf,
+  linkTargetOf,
   type Notification, type NotificationSeverity,
 } from '@/contexts/notifications';
 import { respondToPermission } from '@/api/sessions';
-import { buildAskUserAnswers } from '@/components/sessions/ask-user-question';
+import { PermissionAnswerForm } from './PermissionAnswerForm';
 import { navigateToTarget } from '@/utils/open-session';
 import { log } from '@/utils/log';
 
@@ -42,11 +50,8 @@ const SEVERITY_ICON: Record<NotificationSeverity, string> = {
 /** How long an answered permission toast stays up before self-dismissing. */
 const RESOLVED_DISMISS_MS = 1500;
 
-/** AskUserQuestion answers inline only when the whole ask fits a toast. */
-const MAX_TOAST_QUESTION_OPTIONS = 4;
-
 export function NotificationToaster() {
-  const { toasts, dismissToast } = useNotifications();
+  const { toasts, dismissToast, pinToast } = useNotifications();
   const navigate = useNavigate();
 
   if (toasts.length === 0) return null;
@@ -61,6 +66,11 @@ export function NotificationToaster() {
               key={toast.id}
               n={toast}
               onDismiss={() => dismissToast(toast.id)}
+              // The toast is now a form; the 15s auto-dismiss must not pull it out
+              // from under someone mid-typing. It asks the OWNER of the timer to
+              // cancel it (see NotificationProvider.pinToast) rather than racing it.
+              onPin={() => pinToast(toast.id)}
+              navigate={navigate}
             />
           );
         }
@@ -126,7 +136,12 @@ export function NotificationToaster() {
  * another surface, turn died) — settle and dismiss instead of re-arming buttons
  * the user would click forever.
  */
-function PermissionToast({ n, onDismiss }: { n: Notification; onDismiss: () => void }) {
+function PermissionToast({ n, onDismiss, onPin, navigate }: {
+  n: Notification;
+  onDismiss: () => void;
+  onPin: () => void;
+  navigate: (to: string) => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState<'allowed' | 'denied' | 'stale' | null>(null);
   const [failed, setFailed] = useState(false);
@@ -168,11 +183,32 @@ function PermissionToast({ n, onDismiss }: { n: Notification; onDismiss: () => v
     }
   };
 
-  /** Hand the ask over to the panel (the only surface with the full answer form). */
+  /** Hand a degraded ask over to the panel (a record we can't answer from here). */
   const openCenter = () => {
     window.dispatchEvent(new CustomEvent('notification:open-center'));
     onDismiss();
   };
+
+  // Navigate to the session AND close the toast. The toast is ephemeral, so
+  // dropping it on navigation is right — but the FEED copy stays exactly as it
+  // was, still pending, because opening a session is not a decision. Only a real
+  // resolution settles a permission (session:permission-resolved stamps the feed).
+  const target = linkTargetOf(n);
+  const openSession = () => {
+    if (!target) return;
+    navigateToTarget(target, navigate);
+    onDismiss();
+  };
+
+  // Pin on the FIRST interaction only (pointerdown, focus, keystroke inside the
+  // toast). A ref, not state: re-rendering the toast to remember "already pinned"
+  // would remount the form's inputs and lose what the user typed.
+  const pinned = useRef(false);
+  const pinOnce = useCallback(() => {
+    if (pinned.current) return;
+    pinned.current = true;
+    onPin();
+  }, [onPin]);
 
   const context = [sessionLabelOf(n), n.host].filter(Boolean).join(' · ');
   // A record with no session/requestId can't be answered from here (legacy or a
@@ -180,27 +216,33 @@ function PermissionToast({ n, onDismiss }: { n: Notification; onDismiss: () => v
   // AskUserQuestion we can't render is the same story for a different reason: a
   // bare allow would report an empty answers map as the user's answer.
   const answerable = !!n.sessionId && !!requestId && !isUnanswerableAsk(n, detail);
-
-  // Single-select, one question, few options → the pills ARE the answer. Anything
-  // richer (multi-select, several questions, a long option list) goes to the panel:
-  // a blanket Approve would send an EMPTY answers map, which tells the model the
-  // user answered nothing — the exact production bug this shape avoids.
-  const inlineQuestion = detail.type === 'question'
-    && detail.questions.length === 1
-    && !detail.questions[0].multiSelect
-    && detail.questions[0].options.length > 0
-    && detail.questions[0].options.length <= MAX_TOAST_QUESTION_OPTIONS
-    ? detail.questions[0]
-    : null;
+  /** The whole ask is answered here now, however many questions it carries. */
+  const questionForm = answerable && detail.type === 'question' ? detail.questions : null;
 
   return (
     <div
       className="notification-toast notification-toast--warning nfc-perm-toast"
       role="alert"
+      // Capture-phase listeners on the wrapper: one place to notice interaction
+      // anywhere inside (pills, the free-text input, the option list), instead of
+      // wiring a handler onto every control the form owns.
+      onPointerDown={pinOnce}
+      onFocusCapture={pinOnce}
+      onKeyDownCapture={pinOnce}
     >
       <div className="notification-toast-header">
         <span className="notification-toast-icon">{SEVERITY_ICON.warning}</span>
         <span className="notification-toast-title">{toolNameOf(n) ?? n.title}</span>
+        {/* Click-through to the session, on every permission toast with one. */}
+        {target && (
+          <button
+            className="nfc-open-session"
+            title="Open the session this came from"
+            onClick={(e) => { e.stopPropagation(); openSession(); }}
+          >
+            Open session ↗
+          </button>
+        )}
         <button
           className="notification-toast-close"
           onClick={onDismiss}
@@ -216,7 +258,9 @@ function PermissionToast({ n, onDismiss }: { n: Notification; onDismiss: () => v
       {detail.type === 'bash' && (
         <code className="nfc-perm-cmd">{detail.command}</code>
       )}
-      {detail.type === 'question' && (
+      {/* Only when the form ISN'T rendering the questions itself — the form prints
+          every question text, so a preview line above it would say it twice. */}
+      {detail.type === 'question' && !questionForm && (
         <div className="nfc-perm-ask">{detail.questions[0]?.question ?? n.body}</div>
       )}
       {detail.type === 'plan' && <div className="nfc-perm-ask">Plan ready for review</div>}
@@ -238,38 +282,28 @@ function PermissionToast({ n, onDismiss }: { n: Notification; onDismiss: () => v
             : settled === 'expired' ? 'Session ended'
             : 'Already answered'}
         </div>
+      ) : questionForm ? (
+        /* The whole ask, answerable in the popup: every question, every option,
+           multi-select, per-question free text. Height-capped + internally
+           scrolled (`scrollable`) so a many-question ask keeps its Submit button
+           on screen inside a 380px top-right toast. */
+        <PermissionAnswerForm
+          questions={questionForm}
+          disabled={busy}
+          resolved={false}
+          scrollable
+          onSubmit={(answers) => void respond(true, { answers })}
+          onDismissQuestions={() => void respond(false, { message: 'User dismissed the questions' })}
+        />
       ) : (
         <div className="nfc-perm-actions">
           {!answerable ? (
+            /* Nothing to answer WITH (no session/requestId), or an AskUserQuestion
+               whose questions never survived the wire — a blanket Approve there
+               would report an empty answers map as the user's answer. The center is
+               the escape hatch: it shows the record's full detail, and for an
+               unanswerable ask it offers the session deep link. */
             <button className="notification-toast-action" onClick={openCenter}>Open</button>
-          ) : inlineQuestion ? (
-            <>
-              {inlineQuestion.options.map((opt) => (
-                <button
-                  key={opt.label}
-                  className="nfc-perm-btn"
-                  disabled={busy}
-                  title={opt.description}
-                  onClick={() => void respond(true, {
-                    answers: buildAskUserAnswers(
-                      [inlineQuestion],
-                      { [inlineQuestion.question]: [opt.label] },
-                      {},
-                    ),
-                  })}
-                >
-                  {opt.label}
-                </button>
-              ))}
-              <button className="nfc-perm-btn nfc-perm-more" disabled={busy} onClick={openCenter}>
-                More&hellip;
-              </button>
-            </>
-          ) : detail.type === 'question' ? (
-            // Never blanket-approve an AskUserQuestion: answering IS the response.
-            <button className="nfc-perm-btn nfc-perm-primary" onClick={openCenter}>
-              Answer&hellip;
-            </button>
           ) : acpOptions.length > 0 ? (
             <>
               {acpOptions.map((o) => {
@@ -306,8 +340,12 @@ function PermissionToast({ n, onDismiss }: { n: Notification; onDismiss: () => v
               </button>
             </>
           )}
-          {failed && <span className="nfc-perm-error">Failed — open the session to respond</span>}
         </div>
+      )}
+      {/* Hoisted out of the actions row: a failed SUBMIT from the answer form
+          above needs the same message, and the form has no actions row of its own. */}
+      {!settled && failed && (
+        <div className="nfc-perm-error nfc-perm-error--block">Failed — open the session to respond</div>
       )}
     </div>
   );

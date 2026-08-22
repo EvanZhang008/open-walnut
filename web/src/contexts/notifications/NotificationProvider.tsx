@@ -47,6 +47,18 @@ interface NotificationContextValue {
   notify: (input: NotificationInput) => void;
   /** Dismiss one toast (does not remove it from the feed). */
   dismissToast: (id: string) => void;
+  /**
+   * Cancel a toast's auto-dismiss timer — the toast then stays until the user
+   * closes it (or the surface dismisses it itself, e.g. an answered permission's
+   * 1.5s settle).
+   *
+   * Exists because the permission toast is now a real FORM: the 15s lifetime that
+   * is right for "read this and move on" yanks the input out from under someone
+   * mid-typing. The timer lives here (one map, cleared on unmount), so the toast
+   * asks the owner to cancel it rather than racing it with a local hack.
+   * Idempotent — a toast calls it on every interaction and only the first does work.
+   */
+  pinToast: (id: string) => void;
   /** Mark all feed entries read (server + local). */
   markAllRead: () => void;
   /**
@@ -145,6 +157,17 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
     });
     const timer = timers.current.get(id);
     if (timer) { clearTimeout(timer); timers.current.delete(id); }
+  }, []);
+
+  // Stop the clock on a toast the user is working in. Deliberately does NOT
+  // release the dedupKey (the toast is still up, so re-toasting the same key
+  // would stack a duplicate on top of the form being filled in) — the key is
+  // freed by whichever removal path eventually runs.
+  const pinToast = useCallback((id: string) => {
+    const timer = timers.current.get(id);
+    if (!timer) return;
+    clearTimeout(timer);
+    timers.current.delete(id);
   }, []);
 
   /** Remove any live toast matching a dedupKey (e.g. permission resolved). */
@@ -504,8 +527,8 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const unreadCount = useMemo(() => feed.filter(f => !f.read).length, [feed]);
 
   const value = useMemo<NotificationContextValue>(() => ({
-    toasts, feed, loaded, unreadCount, notify, dismissToast, markAllRead, dismissFeed,
-  }), [toasts, feed, loaded, unreadCount, notify, dismissToast, markAllRead, dismissFeed]);
+    toasts, feed, loaded, unreadCount, notify, dismissToast, pinToast, markAllRead, dismissFeed,
+  }), [toasts, feed, loaded, unreadCount, notify, dismissToast, pinToast, markAllRead, dismissFeed]);
 
   return (
     <NotificationContext.Provider value={value}>

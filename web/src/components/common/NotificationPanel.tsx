@@ -22,13 +22,11 @@ import { useSystemHealth } from '@/hooks/useSystemHealth';
 import {
   useNotifications, sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
+  linkTargetOf,
   type Notification, type NotificationSection,
 } from '@/contexts/notifications';
 import { respondToPermission } from '@/api/sessions';
-import {
-  buildAskUserAnswers, allAskUserQuestionsAnswered, toggleAskUserSelection,
-  type AskQuestion,
-} from '@/components/sessions/ask-user-question';
+import { PermissionAnswerForm } from './PermissionAnswerForm';
 import { NotificationSystemPane, useQmdStatus, qmdUnhealthy } from './NotificationSystemPane';
 import { navigateToTarget } from '@/utils/open-session';
 import { log } from '@/utils/log';
@@ -313,15 +311,6 @@ function groupKeyOf(n: Notification): string {
   return n.dedupKey;
 }
 
-/** Where tapping a feed entry navigates, iPhone-style. Null → inert card. */
-function linkTargetOf(n: Notification): string | null {
-  if (n.sessionId) return `/sessions?id=${n.sessionId}`;
-  if (n.taskId) return `/tasks/${n.taskId}`;
-  if (n.kind === 'skill') return '/skills';
-  if (n.action?.kind === 'navigate' && n.action.to) return n.action.to;
-  return null;
-}
-
 /**
  * Rich permission card — the whole point of the redesign: decide here instead of
  * opening the session. Renders what is being asked from the server's compacted
@@ -384,6 +373,23 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
       <div className="notification-feed-item-head">
         <span className={`notification-feed-dot notification-feed-dot--${n.severity}`} />
         <span className="notification-feed-item-title">{toolNameOf(n) ?? n.title}</span>
+        {/* Click-through, on EVERY permission card that has a session — pending or
+            settled. The card body stays inert (decision surface, see the class
+            comment), so this small header link is the only way to get from a
+            permission to the session it came from without hunting for the column.
+            stopPropagation so it can never reach an Approve/option handler, and it
+            deliberately does NOT dismiss or resolve the entry: only an actual
+            decision settles a permission. The panel closes so the session column
+            it navigated to is visible. */}
+        {target && (
+          <button
+            className="nfc-open-session"
+            title="Open the session this came from"
+            onClick={(e) => { e.stopPropagation(); onNavigate(target); }}
+          >
+            Open session ↗
+          </button>
+        )}
         <span className="notification-feed-item-time">
           {formatRelative(effectiveTs(n))}
         </span>
@@ -461,7 +467,7 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
 
       {/* The answer form / buttons. */}
       {detail.type === 'question' ? (
-        <AnswerForm
+        <PermissionAnswerForm
           questions={detail.questions}
           disabled={!answerable || busy}
           resolved={!!resolved}
@@ -516,7 +522,11 @@ const PermissionCard = memo(function PermissionCard({ n, onNavigate, onDismiss }
           </button>
         </div>
       )}
-      {respondError && (
+      {/* Gated on !resolved: a request that later settled (the user answered it in
+          the session view, and session:permission-resolved stamped this entry) must
+          not keep advertising an earlier failed attempt from this card. An incoming
+          resolution always wins the display — `resolved` reads n.resolved FIRST. */}
+      {!resolved && respondError && (
         <span className="notification-perm-error">Failed — open the session to respond</span>
       )}
     </div>
@@ -532,76 +542,6 @@ function ContextChips({ n }: { n: Notification }) {
       {label && <span className="nfc-chip">{label}</span>}
       {n.host && <span className="nfc-chip">{n.host}</span>}
       {n.project && <span className="nfc-chip">{n.project}</span>}
-    </div>
-  );
-}
-
-/**
- * Inline AskUserQuestion answer form — the same pure helpers the session card
- * uses (`ask-user-question.ts`), so the `answers` map on the wire is identical.
- * Submit is gated on every question having an answer; free text beats the pills.
- */
-function AnswerForm({ questions, disabled, resolved, onSubmit, onDismissQuestions }: {
-  questions: AskQuestion[];
-  disabled: boolean;
-  resolved: boolean;
-  onSubmit: (answers: Record<string, string>) => void;
-  onDismissQuestions: () => void;
-}) {
-  const [selections, setSelections] = useState<Record<string, string[]>>({});
-  const [otherText, setOtherText] = useState<Record<string, string>>({});
-  const complete = allAskUserQuestionsAnswered(questions, selections, otherText);
-
-  if (resolved) return null;
-
-  return (
-    <div className="nfc-answer">
-      {questions.map((q) => {
-        const picked = selections[q.question] ?? [];
-        return (
-          <div key={q.question} className="nfc-answer-q">
-            {q.header && <div className="nfc-chip">{q.header}</div>}
-            <div className="nfc-answer-text">{q.question}</div>
-            {q.options.length > 0 && (
-              <div className="nfc-answer-opts">
-                {q.options.map((opt) => (
-                  <button
-                    key={opt.label}
-                    className={`nfc-answer-opt${picked.includes(opt.label) ? ' nfc-picked' : ''}`}
-                    title={opt.description}
-                    disabled={disabled}
-                    onClick={() => setSelections(prev => ({
-                      ...prev,
-                      [q.question]: toggleAskUserSelection(prev[q.question], opt.label, q.multiSelect),
-                    }))}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            )}
-            <input
-              className="nfc-answer-input"
-              placeholder={q.options.length > 0 ? 'Other…' : 'Type your answer…'}
-              value={otherText[q.question] ?? ''}
-              disabled={disabled}
-              onChange={(e) => setOtherText(prev => ({ ...prev, [q.question]: e.target.value }))}
-            />
-          </div>
-        );
-      })}
-      <div className="notification-feed-item-actions">
-        <button
-          className="notification-perm-btn approve"
-          disabled={disabled || !complete}
-          onClick={() => onSubmit(buildAskUserAnswers(questions, selections, otherText))}
-        >
-          Submit
-        </button>
-        <button className="notification-perm-btn" disabled={disabled} onClick={onDismissQuestions}>
-          Dismiss
-        </button>
-      </div>
     </div>
   );
 }

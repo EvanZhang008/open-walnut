@@ -95,18 +95,23 @@ function receiptRecords(t: number): FeedRecord[] {
   ]
 }
 
+/** The one PENDING Bash ask both the rail test and the resolution test start from. */
+function pendingBashRecord(t: number): FeedRecord {
+  return {
+    id: 'nfc-perm-bash', kind: 'permission', severity: 'warning',
+    title: 'Bash', body: BASH_COMMAND,
+    timestamp: t - 120_000, read: false,
+    dedupKey: 'perm:pw-nfc-bash', requestId: 'pw-nfc-bash',
+    toolName: 'Bash', sessionId: SESSION_ID,
+    input: { command: BASH_COMMAND, description: 'Clean the demo directory' },
+    host: 'nfc-host', sessionTitle: 'PW NFC fixture session', project: 'Walnut',
+  }
+}
+
 /** Receipts + one PENDING Bash ask + one RESOLVED ask on the same session. */
 function actionableFeed(t: number): FeedRecord[] {
   return [
-    {
-      id: 'nfc-perm-bash', kind: 'permission', severity: 'warning',
-      title: 'Bash', body: BASH_COMMAND,
-      timestamp: t - 120_000, read: false,
-      dedupKey: 'perm:pw-nfc-bash', requestId: 'pw-nfc-bash',
-      toolName: 'Bash', sessionId: SESSION_ID,
-      input: { command: BASH_COMMAND, description: 'Clean the demo directory' },
-      host: 'nfc-host', sessionTitle: 'PW NFC fixture session', project: 'Walnut',
-    },
+    pendingBashRecord(t),
     {
       // Resolved → history: out of Needs Action, and NO approve/deny buttons.
       id: 'nfc-perm-read', kind: 'permission', severity: 'success',
@@ -140,6 +145,55 @@ function askUserQuestionFeed(t: number): FeedRecord[] {
       }],
     },
     reason: 'Need a deployment target',
+    host: 'nfc-host', sessionTitle: 'PW NFC fixture session', project: 'Walnut',
+  }]
+}
+
+/**
+ * The ask the toast used to REFUSE to render: three questions, one of them
+ * multi-select, and one with more options than the retired four-option cap. Every
+ * shape that used to route the user to "Answer…" is present in a single record.
+ */
+const RICH_QUESTIONS = {
+  target: 'Which environments should I deploy to?',
+  reviewers: 'Who reviews the change?',
+  window: 'Anything else I should know?',
+}
+
+function richAskFeed(t: number): FeedRecord[] {
+  return [{
+    id: 'nfc-perm-rich', kind: 'permission', severity: 'warning',
+    title: 'AskUserQuestion', body: RICH_QUESTIONS.target,
+    timestamp: t - 5_000, read: false,
+    dedupKey: 'perm:pw-nfc-rich', requestId: 'pw-nfc-rich',
+    toolName: 'AskUserQuestion', sessionId: SESSION_ID,
+    input: {
+      questions: [
+        {
+          header: 'Targets',
+          question: RICH_QUESTIONS.target,
+          // FIVE options — one more than MAX_TOAST_QUESTION_OPTIONS ever allowed.
+          options: [
+            { label: 'dev' }, { label: 'staging' }, { label: 'canary' },
+            { label: 'prod-west' }, { label: 'prod-east' },
+          ],
+          multiSelect: true,
+        },
+        {
+          header: 'Review',
+          question: RICH_QUESTIONS.reviewers,
+          options: [{ label: 'Nobody' }, { label: 'The on-call' }],
+          multiSelect: false,
+        },
+        {
+          // No options at all: free text is the ONLY way to answer this one.
+          header: 'Notes',
+          question: RICH_QUESTIONS.window,
+          options: [],
+          multiSelect: false,
+        },
+      ],
+    },
     host: 'nfc-host', sessionTitle: 'PW NFC fixture session', project: 'Walnut',
   }]
 }
@@ -243,6 +297,20 @@ async function showSection(panel: Locator, label: string): Promise<void> {
   // aria-current, not aria-selected: the rail is plain buttons on purpose (the
   // ARIA tab pattern would oblige a tabpanel + arrow-key nav + roving tabindex).
   await expect(rail(panel, label)).toHaveAttribute('aria-current', 'true')
+}
+
+/**
+ * The Needs Action badge as a NUMBER (0 when the badge is absent).
+ *
+ * Read rather than equality-asserted wherever a test cares about the DELTA: the
+ * badge counts every pending permission on a SHARED fixture server, so another
+ * spec's live ask legitimately inflates it. "One fewer than before" is the honest
+ * claim; "the badge is gone" is a race.
+ */
+async function actionBadge(panel: Locator): Promise<number> {
+  const badge = rail(panel, 'Needs Action').locator('.nfc-rail-badge')
+  if (await badge.count() === 0) return 0
+  return Number((await badge.textContent())?.replace('+', '') ?? 0)
 }
 
 // ── 1. Rail + detail, counts, rich Bash card, ×N fold ──
@@ -488,7 +556,223 @@ test('permissions and hard errors toast; cron, skills and warnings go to the fee
   await page.screenshot({ path: `${SCREENSHOT_DIR}/feed-only-receipts.png`, fullPage: true })
 })
 
-// ── 5. Real permission: live Codex session → enriched record → toast → approve ──
+// ── 5. The whole ask is answerable IN THE TOAST ──
+
+test('a multi-question, multi-select, free-text ask is answered entirely in the toast', async ({ page }) => {
+  // Deliberately outlives the 15s permission-toast lifetime — the sticky-while-
+  // interacting assertion below waits past it on purpose.
+  test.setTimeout(90_000)
+  let submitted: Record<string, unknown> | undefined
+  await page.route(`**/api/sessions/${SESSION_ID}/permission`, async (route) => {
+    submitted = route.request().postDataJSON() as Record<string, unknown>
+    await route.fulfill({ json: { status: 'resolved', requestId: 'pw-nfc-rich', allow: true } })
+  })
+  await captureWs(page)
+  await stubNotifications(page, [])
+  await loadHome(page)
+  await waitForWs(page)
+
+  await injectEvent(page, 'notification:new', richAskFeed(Date.now())[0])
+
+  const toast = page.locator('.nfc-perm-toast').filter({ hasText: SEED_TAG })
+  await expect(toast).toHaveCount(1)
+
+  // No "Answer…" / "More…" deferral anywhere: the popup IS the answer surface now.
+  await expect(toast.getByRole('button', { name: /Answer/ })).toHaveCount(0)
+  await expect(toast.getByRole('button', { name: /More/ })).toHaveCount(0)
+
+  // Every question, and every option of the five-option one (the old cap was 4).
+  const questions = toast.locator('.nfc-answer-q')
+  await expect(questions).toHaveCount(3)
+  await expect(toast.locator('.nfc-answer-text').nth(0)).toHaveText(RICH_QUESTIONS.target)
+  await expect(toast.locator('.nfc-answer-text').nth(1)).toHaveText(RICH_QUESTIONS.reviewers)
+  await expect(toast.locator('.nfc-answer-text').nth(2)).toHaveText(RICH_QUESTIONS.window)
+  await expect(questions.nth(0).locator('.nfc-answer-opt')).toHaveCount(5)
+  // The header chips ride along, so a question keeps the label the model gave it.
+  await expect(questions.nth(0).locator('.nfc-chip')).toHaveText('Targets')
+  // The free-text-only question renders its input with the standalone placeholder.
+  await expect(questions.nth(2).locator('.nfc-answer-opt')).toHaveCount(0)
+  await expect(questions.nth(2).locator('.nfc-answer-input'))
+    .toHaveAttribute('placeholder', 'Type your answer…')
+
+  // Submit stays gated until EVERY question has an answer — an allow with a
+  // partial answers map still tells the model the user skipped a question.
+  const submit = toast.getByRole('button', { name: 'Submit' })
+  await expect(submit).toBeDisabled()
+
+  // multiSelect really accumulates (two pills stay picked at once).
+  await questions.nth(0).locator('.nfc-answer-opt', { hasText: 'staging' }).click()
+  await questions.nth(0).locator('.nfc-answer-opt', { hasText: 'prod-west' }).click()
+  await expect(questions.nth(0).locator('.nfc-answer-opt.nfc-picked')).toHaveCount(2)
+  await expect(submit).toBeDisabled()
+
+  // Single-select REPLACES rather than accumulating.
+  await questions.nth(1).locator('.nfc-answer-opt', { hasText: 'Nobody' }).click()
+  await questions.nth(1).locator('.nfc-answer-opt', { hasText: 'The on-call' }).click()
+  await expect(questions.nth(1).locator('.nfc-answer-opt.nfc-picked')).toHaveCount(1)
+  await expect(questions.nth(1).locator('.nfc-answer-opt.nfc-picked')).toHaveText('The on-call')
+  await expect(submit).toBeDisabled()
+
+  // The last answer is free text only — and typing must NOT be interrupted by the
+  // 15s auto-dismiss (D: the toast pins itself on first interaction). The clicks
+  // above already pinned it; this fill happens well after that window would have
+  // closed on an unpinned toast, so the toast still being here IS the assertion.
+  await page.waitForTimeout(16_000)
+  await expect(toast).toHaveCount(1)
+  await questions.nth(2).locator('.nfc-answer-input').fill('deploy after the 5pm freeze lifts')
+  await expect(submit).toBeEnabled()
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/toast-full-answer-form.png`, fullPage: true })
+
+  await submit.click()
+  await expect(toast.locator('.nfc-perm-settled')).toHaveText('Approved')
+  // The exact wire payload: multi-select joins with ', ', single-select is the one
+  // label, and the free-text question carries the typed string.
+  expect(submitted).toMatchObject({
+    requestId: 'pw-nfc-rich',
+    allow: true,
+    answers: {
+      [RICH_QUESTIONS.target]: 'staging, prod-west',
+      [RICH_QUESTIONS.reviewers]: 'The on-call',
+      [RICH_QUESTIONS.window]: 'deploy after the 5pm freeze lifts',
+    },
+  })
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/toast-full-answer-submitted.png`, fullPage: true })
+})
+
+// ── 6. Free text BEATS the pills, and it can be typed in the toast ──
+
+test('a free-text answer overrides the picked pill on the same question', async ({ page }) => {
+  let submitted: Record<string, unknown> | undefined
+  await page.route(`**/api/sessions/${SESSION_ID}/permission`, async (route) => {
+    submitted = route.request().postDataJSON() as Record<string, unknown>
+    await route.fulfill({ json: { status: 'resolved', requestId: 'pw-nfc-question', allow: true } })
+  })
+  await captureWs(page)
+  await stubNotifications(page, [])
+  await loadHome(page)
+  await waitForWs(page)
+
+  await injectEvent(page, 'notification:new', askUserQuestionFeed(Date.now())[0])
+  const toast = page.locator('.nfc-perm-toast').filter({ hasText: SEED_TAG })
+  await expect(toast).toHaveCount(1)
+
+  // Pick a pill, THEN type something else. buildAskUserAnswers treats the free
+  // text as a deliberate override, so the pill must not win.
+  await toast.locator('.nfc-answer-opt', { hasText: 'Staging' }).click()
+  await toast.locator('.nfc-answer-input').fill('neither — hold the deploy')
+  await toast.getByRole('button', { name: 'Submit' }).click()
+  await expect(toast.locator('.nfc-perm-settled')).toHaveText('Approved')
+  expect(submitted).toMatchObject({
+    answers: { 'Which deployment?': 'neither — hold the deploy' },
+  })
+})
+
+// ── 7. Resolution sync: approving elsewhere settles every surface ──
+
+test('a session-view approval settles the panel card, the badge and the toast', async ({ page }) => {
+  await captureWs(page)
+  // ONE permission on this session, plus the receipts. Deliberately not
+  // `actionableFeed`: its resolved twin makes the two asks a collapsible GROUP,
+  // whose visible entry is chosen by pendingness — so resolving the one under
+  // observation would swap the rendered card rather than settle it in place.
+  await stubNotifications(page, [pendingBashRecord(Date.now()), ...receiptRecords(Date.now())])
+  await loadHome(page)
+  await waitForWs(page)
+
+  const panel = await openCenter(page)
+  await expect(rail(panel, 'Needs Action')).toHaveAttribute('aria-current', 'true')
+  const badgeBefore = await actionBadge(panel)
+  expect(badgeBefore).toBeGreaterThanOrEqual(1)
+  await expect(seededPermCards(panel).getByRole('button', { name: 'Approve' })).toBeVisible()
+
+  // Watch the card from ALL, where a settled permission still lives — Needs Action
+  // holds only PENDING asks by design (sectionOf), so a card observed from there
+  // would leave the list on resolution instead of visibly settling. Both halves are
+  // asserted: the settled render here, and the Needs Action departure below.
+  await showSection(panel, 'All')
+  const card = seededPermCards(panel).filter({ hasText: 'Bash' })
+  await expect(card).toHaveCount(1)
+  await expect(card.getByRole('button', { name: 'Approve' })).toBeVisible()
+
+  // Also raise a LIVE toast for the same dedupKey, so the toast half of the
+  // convergence is observable (the seeded feed alone never toasts).
+  await injectEvent(page, 'notification:new', {
+    id: 'nfc-perm-bash', kind: 'permission', severity: 'warning',
+    title: 'Bash', body: BASH_COMMAND, timestamp: Date.now(), read: false,
+    dedupKey: 'perm:pw-nfc-bash', requestId: 'pw-nfc-bash', toolName: 'Bash',
+    sessionId: SESSION_ID, input: { command: BASH_COMMAND },
+    host: 'nfc-host', sessionTitle: 'PW NFC fixture session',
+  })
+  const toast = page.locator('.nfc-perm-toast').filter({ hasText: SEED_TAG })
+  await expect(toast).toHaveCount(1)
+
+  // The EXACT frame a session-view approval produces: claude-code-session.ts's
+  // resolvePermissionRequest emits session:permission-resolved with the outcome,
+  // and server.ts relays it to every client. Nothing here clicks this page's own
+  // permission card — the point is that the OTHER surface's decision lands.
+  await injectEvent(page, 'session:permission-resolved', {
+    sessionId: SESSION_ID,
+    requestId: 'pw-nfc-bash',
+    toolName: 'Bash',
+    allowed: true,
+  })
+
+  // 1. The panel card settles, and its answer buttons are gone.
+  await expect(card.locator('.notification-feed-item-resolved')).toHaveText('Approved')
+  await expect(card.getByRole('button', { name: 'Approve' })).toHaveCount(0)
+  await expect(card.getByRole('button', { name: 'Deny' })).toHaveCount(0)
+  // …while the click-through survives resolution: reading the transcript afterwards
+  // is exactly as useful as answering was.
+  await expect(card.getByRole('button', { name: 'Open session ↗' })).toBeVisible()
+  // 2. The live toast for that dedupKey is gone.
+  await expect(toast).toHaveCount(0)
+  // 3. Needs Action decrements — a DELTA, not "the badge is gone": another spec's
+  //    real ask on this shared fixture server can share the count.
+  await expect.poll(() => actionBadge(panel), { timeout: 10_000 }).toBe(badgeBefore - 1)
+  await showSection(panel, 'Needs Action')
+  await expect(seededPermCards(panel).filter({ hasText: 'Bash' })).toHaveCount(0)
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/resolved-elsewhere-converged.png`, fullPage: true })
+})
+
+// ── 8. Open session ↗ navigates WITHOUT settling the notification ──
+
+test('Open session from the panel card navigates and leaves the ask pending', async ({ page }) => {
+  // A pending ask on a session id that does not exist server-side: the column
+  // still opens (SessionPanel renders with data-session-id immediately and only
+  // declares "not found" after its ~15s retry window), which is all this asserts.
+  // Nothing here may resolve the permission — navigation is not a decision.
+  await stubNotifications(page, askUserQuestionFeed(Date.now()))
+  await loadHome(page)
+
+  const panel = await openCenter(page)
+  const card = seededPermCards(panel)
+  await expect(card).toHaveCount(1)
+  await expect(card.getByRole('button', { name: 'Submit' })).toBeVisible()
+
+  await card.getByRole('button', { name: 'Open session ↗' }).click()
+
+  // navigateToTarget rewrites `/sessions?id=…` onto the HOME session columns, so
+  // the proof is a column carrying that session id — not a /sessions URL.
+  await expect(panel).toBeHidden()
+  const column = page.locator(`.main-page-session-column [data-session-id="${SESSION_ID}"]`)
+  await expect(column).toBeVisible({ timeout: 20_000 })
+  expect(new URL(page.url()).pathname).toBe('/')
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/open-session-from-card.png`, fullPage: true })
+
+  // …and the feed entry is UNTOUCHED: still pending, still answerable. This is the
+  // whole point — a click-through that dismissed or settled the ask would silently
+  // drop a session's blocker on the floor.
+  const reopened = await openCenter(page)
+  await expect(rail(reopened, 'Needs Action')).toHaveAttribute('aria-current', 'true')
+  expect(await actionBadge(reopened)).toBeGreaterThanOrEqual(1)
+  const stillPending = seededPermCards(reopened)
+  await expect(stillPending).toHaveCount(1)
+  await expect(stillPending.locator('.notification-feed-item-resolved')).toHaveCount(0)
+  await expect(stillPending.getByRole('button', { name: 'Submit' })).toBeVisible()
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/ask-still-pending-after-navigate.png`, fullPage: true })
+})
+
+// ── 9. Real permission: live Codex session → enriched record → toast → approve ──
 
 test('a real permission ask arrives enriched and is approved from the toast', async ({ page }) => {
   test.setTimeout(120_000)

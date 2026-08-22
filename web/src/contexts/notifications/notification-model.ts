@@ -164,6 +164,23 @@ export function isRejectOption(o: NotificationAcpOption): boolean {
   return o.kind?.startsWith('reject') ?? false;
 }
 
+/**
+ * Where a notification's deep link points, iPhone-style. Null → nothing to open.
+ *
+ * Lives here (not in a surface file) because BOTH the panel card and the
+ * permission toast now offer an "Open session" affordance, and a second copy of
+ * this precedence would drift: a session beats a task beats a kind-specific page
+ * beats the record's own navigate action. `/sessions?id=…` is rewritten to the
+ * home session columns by navigateToTarget — the shape is the link, not the route.
+ */
+export function linkTargetOf(n: Notification): string | null {
+  if (n.sessionId) return `/sessions?id=${n.sessionId}`;
+  if (n.taskId) return `/tasks/${n.taskId}`;
+  if (n.kind === 'skill') return '/skills';
+  if (n.action?.kind === 'navigate' && n.action.to) return n.action.to;
+  return null;
+}
+
 /** Session label for the card/toast context line: friendly title, else short id. */
 export function sessionLabelOf(n: Notification): string | undefined {
   if (n.sessionTitle) return n.sessionTitle;

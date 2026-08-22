@@ -17,6 +17,7 @@ import { describe, it, expect } from 'vitest';
 import {
   sectionOf, sectionCounts, effectiveTs, permissionDetail, requestIdOf,
   toolNameOf, isUnanswerableAsk, validAcpOptions, isRejectOption, sessionLabelOf, formatRelative,
+  linkTargetOf,
 } from '../../web/src/contexts/notifications/notification-model';
 import { SHOULD_TOAST } from '../../web/src/contexts/notifications/types';
 import type { Notification, NotificationKind, NotificationSeverity } from '../../web/src/contexts/notifications/types';
@@ -282,6 +283,47 @@ describe('validAcpOptions / isRejectOption', () => {
     expect(isRejectOption({ kind: 'allow_once' })).toBe(false);
     // No kind at all is not a refusal — the adapter just didn't classify it.
     expect(isRejectOption({ optionId: 'x' })).toBe(false);
+  });
+});
+
+describe('linkTargetOf (the click-through both permission surfaces share)', () => {
+  it('prefers the session — a permission always came from one', () => {
+    // This is the whole point of the affordance: a permission notification must be
+    // openable in the session that is blocked on it, panel card and toast alike.
+    expect(linkTargetOf(n({ kind: 'permission', dedupKey: 'perm:r1', sessionId: 'sess-1' })))
+      .toBe('/sessions?id=sess-1');
+  });
+
+  it('offers the session link for a SETTLED permission too, not just a pending one', () => {
+    // Reading the transcript afterwards is exactly as useful as answering — the
+    // affordance is navigation, and navigation is never a decision.
+    expect(linkTargetOf(n({
+      kind: 'permission', dedupKey: 'perm:r2', sessionId: 'sess-2', resolved: 'allowed',
+    }))).toBe('/sessions?id=sess-2');
+  });
+
+  it('falls back to the task, then a kind-specific page, then the record action', () => {
+    expect(linkTargetOf(n({ kind: 'cron', taskId: 'task-9' }))).toBe('/tasks/task-9');
+    expect(linkTargetOf(n({ kind: 'skill' }))).toBe('/skills');
+    expect(linkTargetOf(n({
+      kind: 'operation-error',
+      action: { label: 'Open Settings', kind: 'navigate', to: '/settings' },
+    }))).toBe('/settings');
+  });
+
+  it('prefers the session over both the task and the action', () => {
+    expect(linkTargetOf(n({
+      kind: 'permission', dedupKey: 'perm:r3', sessionId: 'sess-3', taskId: 'task-3',
+      action: { label: 'Open Settings', kind: 'navigate', to: '/settings' },
+    }))).toBe('/sessions?id=sess-3');
+  });
+
+  it('is null when there is nowhere to go (no affordance rendered at all)', () => {
+    expect(linkTargetOf(n({ kind: 'operation-error' }))).toBeNull();
+    // A callback action is not a navigation target, and a navigate with no `to`
+    // is malformed — neither may produce an "Open session" button that does nothing.
+    expect(linkTargetOf(n({ kind: 'cron', action: { label: 'Do', kind: 'callback' } }))).toBeNull();
+    expect(linkTargetOf(n({ kind: 'cron', action: { label: 'Go', kind: 'navigate' } }))).toBeNull();
   });
 });
 

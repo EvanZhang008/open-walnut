@@ -28617,12 +28617,40 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 /* A permission card is a decision surface, not a link — no hover-navigate. */
 .notification-feed-item.nfc-perm-card { cursor: default; }
 
-/* ── Inline AskUserQuestion answer form (panel) ── */
+/* ── "Open session ↗": the click-through both permission surfaces carry ──
+   Header-row link, sized to disappear next to the title: the card body stays a
+   decision surface, so this is the ONLY navigation affordance on it. Also used in
+   the permission toast header, hence the shared class rather than a card one. */
+.nfc-open-session {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  padding: 0 2px;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.nfc-open-session:hover { text-decoration: underline; }
+
+/* ── AskUserQuestion answer form (shared: panel card + permission toast) ── */
 
 .nfc-answer {
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--border);
+}
+
+/* Toast placement. The toaster column is 380px and top-anchored, so a six-question
+   ask would otherwise run past the bottom of the viewport with Submit below the
+   fold. Cap + scroll internally instead; the pills wrap on their own. */
+.nfc-answer--scroll {
+  max-height: 55vh;
+  overflow-y: auto;
+  /* Room for the scrollbar so it never sits on top of an option pill. */
+  padding-right: 2px;
 }
 
 .nfc-answer-q + .nfc-answer-q {
@@ -28750,7 +28778,6 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 
 .nfc-perm-btn:disabled { opacity: 0.5; cursor: default; }
 .nfc-perm-btn:not(:disabled):hover { opacity: 0.9; }
-.nfc-perm-more { color: var(--fg-muted); }
 
 .nfc-perm-settled {
   font-size: 11.5px;
@@ -28763,3 +28790,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   font-size: 11px;
   color: var(--error);
 }
+
+/* The same message outside the flex actions row (a failed answer-form submit) —
+   flex-basis does nothing there, so it needs its own top margin. */
+.nfc-perm-error--block { margin-top: 6px; }
