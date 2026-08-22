@@ -5,7 +5,10 @@ import {
   type HunkData, type FileData, type ChangeData, type ChangeEventArgs, type EventMap,
 } from 'react-diff-view';
 import 'react-diff-view/style/index.css';
-import { fetchSessionChanges, fetchSessionFileChange, type SessionChangesResult, type SessionFileChange, type SessionDiffBase, type SessionDiffScope } from '@/api/session-changes';
+import { Marked } from 'marked';
+import DOMPurify from 'dompurify';
+import { fetchSessionChanges, fetchSessionFileChange, fetchFileChangeSummary, type SessionChangesResult, type SessionFileChange, type SessionDiffBase, type SessionDiffScope, type FileChangeSummary } from '@/api/session-changes';
+import { ApiError } from '@/api/client';
 import { buildFileData } from '@/components/sessions/diffPatch';
 import { buildDiffTree, flattenFiles, allContainerIds, isMarkdownPath, type DiffTreeNode, type DiffTreeRepoNode } from '@/components/sessions/diffTree';
 import { languageForPath, diffRefractor } from '@/components/sessions/diffHighlight';
@@ -421,10 +424,139 @@ const RenderedMarkdown = memo(function RenderedMarkdown({ blocks, dragging, rend
   );
 });
 
+// ── AI summary strip ──────────────────────────────────────────────────────────
+
+/** Client-side memo of fetched summaries, module-level ON PURPOSE:
+ *  FileDiffPane is keyed on filePath and remounts per file switch, so
+ *  component state can't survive navigation. Capped (FIFO) — the server is
+ *  content-hash cached anyway, so evictions only cost a fast re-fetch. */
+const aiSummaryMemo = new Map<string, FileChangeSummary>();
+const AI_SUMMARY_MEMO_CAP = 200;
+/** Latched when the server answers 503 + {code:'ai_disabled'} (test env / AI
+ *  globally off) — an environment fact, so page-lifetime by design; turning
+ *  the ✦ toggle back on re-probes. Plain 503s (transient content-unavailable)
+ *  must NOT latch. */
+let aiSummaryUnavailable = false;
+
+/** djb2 over the content. Lengths/op-counts alone miss same-length edits
+ *  (x=1 → x=2), which would caption a diff the summary no longer describes.
+ *  O(n), but only computed on file switch (memoized by the caller). */
+function contentDigest(s: string): number {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return h;
+}
+
+function summaryMemoKey(sessionId: string, change: SessionFileChange): string {
+  return `${sessionId}:${change.filePath}:${change.status}:${contentDigest(change.before)}:${contentDigest(change.after)}`;
+}
+
+/** Isolated Marked instance — deliberately NOT the app's global singleton or
+ *  markdownToRichHtml: the global gets retuned app-wide (image-path codespans
+ *  become <img>, task-pill links), and summaries are MODEL output derived from
+ *  arbitrary repo content (prompt-injectable). Tightest posture: plain gfm
+ *  parse + a hard DOMPurify allowlist (no links, no images, no attributes). */
+const summaryMarked = new Marked({ gfm: true, breaks: true });
+const SUMMARY_SANITIZE = { ALLOWED_TAGS: ['p', 'br', 'code', 'em', 'strong'], ALLOWED_ATTR: [] as string[] };
+
+function renderSummaryHtml(md: string): string {
+  try {
+    const raw = summaryMarked.parse(md);
+    return DOMPurify.sanitize(typeof raw === 'string' ? raw : '', SUMMARY_SANITIZE);
+  } catch {
+    return DOMPurify.sanitize(md, SUMMARY_SANITIZE);
+  }
+}
+
+/**
+ * The ✦ strip above a file's diff: one short AI blurb — what this file's
+ * change does and where it sits in the overall changeset. Generation is
+ * server-side (cheap model, content-hash cached); this component only shows a
+ * skeleton while it runs and hides itself quietly when summaries are off or
+ * failing (a review tool must never block on decoration).
+ */
+function AiFileSummary({ sessionId, change }: { sessionId: string; change: SessionFileChange }) {
+  const key = useMemo(() => summaryMemoKey(sessionId, change), [sessionId, change]);
+  const [result, setResult] = useState<FileChangeSummary | null>(() => aiSummaryMemo.get(key) ?? null);
+  const [state, setState] = useState<'loading' | 'done' | 'error' | 'hidden'>(
+    () => (aiSummaryMemo.has(key) ? 'done' : aiSummaryUnavailable ? 'hidden' : 'loading'),
+  );
+  const [retryTick, setRetryTick] = useState(0);
+
+  useEffect(() => {
+    if (aiSummaryMemo.has(key)) { setResult(aiSummaryMemo.get(key)!); setState('done'); return; }
+    if (aiSummaryUnavailable) { setState('hidden'); return; }
+    const ctrl = new AbortController();
+    setState('loading');
+    fetchFileChangeSummary(sessionId, change.filePath, { signal: ctrl.signal })
+      .then((res) => {
+        // Memo set BEFORE the abort bail on purpose: a fetch that lands after
+        // the user switched away still warms the memo for their return.
+        if (aiSummaryMemo.size >= AI_SUMMARY_MEMO_CAP) {
+          const oldest = aiSummaryMemo.keys().next().value;
+          if (oldest !== undefined) aiSummaryMemo.delete(oldest);
+        }
+        aiSummaryMemo.set(key, res);
+        if (ctrl.signal.aborted) return;
+        setResult(res);
+        setState('done');
+      })
+      .catch((err) => {
+        if (ctrl.signal.aborted) return;
+        if (err instanceof ApiError) {
+          // Only the explicit ai_disabled marker means "off for good" — a bare
+          // 503 is a transient content hiccup and must not kill the feature.
+          const code = (err.body as { code?: string } | undefined)?.code;
+          if (err.status === 503 && code === 'ai_disabled') {
+            aiSummaryUnavailable = true;
+            setState('hidden');
+            return;
+          }
+          // 422 = this file is never summarizable (secrets/binary) → no strip,
+          // no retry (retrying can't succeed).
+          if (err.status === 422) {
+            setState('hidden');
+            return;
+          }
+        }
+        log.info('session-changes', 'ai summary fetch failed', { sessionId, filePath: change.filePath, error: String(err) });
+        setState('error');
+      });
+    return () => ctrl.abort();
+  }, [sessionId, change.filePath, key, retryTick]);
+
+  const html = useMemo(() => (result ? renderSummaryHtml(result.summary) : ''), [result]);
+
+  if (state === 'hidden') return null;
+  return (
+    <div className={`session-diff-ai-summary is-${state}`}>
+      <span className="session-diff-ai-icon" aria-hidden>✦</span>
+      {state === 'loading' && (
+        <span className="session-diff-ai-skeleton" role="status" aria-label="Generating AI summary" aria-busy>
+          <span /><span /><span />
+        </span>
+      )}
+      {state === 'done' && result && (
+        <span
+          className="session-diff-ai-text"
+          title={result.cached ? `AI summary (cached) · ${result.model}` : `AI summary · ${result.model}`}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      )}
+      {state === 'error' && (
+        <span className="session-diff-ai-text is-error">
+          AI summary unavailable ·{' '}
+          <button type="button" className="session-diff-ai-retry" onClick={() => setRetryTick((t) => t + 1)}>Retry</button>
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ── Single-file diff (center) ─────────────────────────────────────────────────
 
 function FileDiffPane({
-  change, viewType, rendered, sessionCwd, sessionHost, pending,
+  change, viewType, rendered, sessionCwd, sessionHost, pending, sessionId, aiSummaryOn,
   onAddComment, onSendNow, onCopyComment, onRemoveComment,
 }: {
   change: SessionFileChange;
@@ -432,6 +564,9 @@ function FileDiffPane({
   rendered: boolean;
   sessionCwd?: string;
   sessionHost?: string;
+  sessionId: string;
+  /** The toolbar ✦ toggle — off = no strip AND no fetches. */
+  aiSummaryOn: boolean;
   /** Recorded comments anchored in THIS file (subset of the review batch). */
   pending: PendingComment[];
   /** Record a comment to the pending review batch (the "Add comment" path). */
@@ -826,6 +961,7 @@ function FileDiffPane({
             : 'Click a line — or drag the gutter to select a range — to comment'}
         </span>
       </div>
+      {aiSummaryOn && <AiFileSummary sessionId={sessionId} change={change} />}
       {rendered && renderedBlocks != null ? (
         <RenderedMarkdown blocks={renderedBlocks} dragging={mdDragRange != null} renderRow={renderMarkdownRow} />
       ) : file ? (
@@ -1053,6 +1189,21 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   const [viewType, setViewType] = useState<DiffViewType>(() => {
     try { return (localStorage.getItem('open-walnut-diff-view') as DiffViewType) || 'split'; } catch { return 'split'; }
   });
+  // ✦ AI summaries: on by default. Off = zero fetches. NOT merely per-browser:
+  // the 'open-walnut-' prefix rides ui-prefs-sync, so the choice follows the
+  // user across devices.
+  const [aiSummaryOn, setAiSummaryOn] = useState<boolean>(() => {
+    try { return localStorage.getItem('open-walnut-diff-ai-summary') !== '0'; } catch { return true; }
+  });
+  const toggleAiSummary = useCallback(() => {
+    setAiSummaryOn((prev) => {
+      try { localStorage.setItem('open-walnut-diff-ai-summary', prev ? '0' : '1'); } catch { /* ignore */ }
+      // Turning ON re-probes a latched "AI disabled" — the environment may
+      // have been fixed since (config change, env var cleared).
+      if (!prev) aiSummaryUnavailable = false;
+      return !prev;
+    });
+  }, []);
   const [rendered, setRendered] = useState(false);
   // Base/scope/selected file are remembered per session — coming back to the
   // Changed tab restores the exact view you left (loadDiffMemory above).
@@ -1452,6 +1603,12 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
               disabled={rendered || selectedWholeFile}
             >Unified</button>
           </div>
+          <button
+            className={`session-diff-ai-toggle${aiSummaryOn ? ' is-active' : ''}`}
+            onClick={toggleAiSummary}
+            title={aiSummaryOn ? 'AI summaries on — click to hide' : 'AI summaries off — click to show a short AI blurb per file'}
+            aria-pressed={aiSummaryOn}
+          >✦ AI</button>
           <button className="session-diff-refresh" onClick={() => load(true)} title="Re-scan changes">
             {ICON_REFRESH}
           </button>
@@ -1518,6 +1675,11 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
                 rendered={rendered}
                 sessionCwd={sessionCwd}
                 sessionHost={sessionHost}
+                sessionId={sessionId}
+                // Summaries describe the SESSION-base diff (that's what the
+                // server endpoint reads) — hide the strip under git bases so it
+                // can never caption a different comparison's diff.
+                aiSummaryOn={aiSummaryOn && isSessionBase}
                 pending={pendingForFile}
                 onAddComment={addComment}
                 onSendNow={sendMessage}

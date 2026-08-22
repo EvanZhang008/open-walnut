@@ -25202,10 +25202,78 @@ a.file-link:hover {
   text-align: center;
 }
 
+/* ✦ AI summary strip under the file header (Changed tab) */
+.session-diff-ai-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 14px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg-secondary, var(--card-bg)));
+  border-bottom: 1px solid var(--border);
+  /* Reserve one text line so skeleton → text doesn't shift the diff under the
+     reader; clamp the other way so a chatty model can't push the diff away. */
+  min-height: 36px;
+  max-height: 132px;
+  overflow-y: auto;
+}
+.session-diff-ai-icon { color: var(--accent); flex: 0 0 auto; font-size: 12px; line-height: 1.55; }
+.session-diff-ai-text { min-width: 0; }
+.session-diff-ai-text p { margin: 0 0 4px; }
+.session-diff-ai-text p:last-child { margin-bottom: 0; }
+.session-diff-ai-text code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  padding: 0 4px;
+  border-radius: 4px;
+}
+.session-diff-ai-text.is-error { color: var(--fg-muted); }
+.session-diff-ai-retry {
+  border: none;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12.5px;
+  padding: 0;
+}
+/* Loading shimmer: three fading bars standing in for the sentence lines. */
+.session-diff-ai-skeleton { display: flex; flex-direction: column; gap: 5px; flex: 1; padding: 3px 0; }
+.session-diff-ai-skeleton span {
+  height: 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  animation: walnut-ai-shimmer 1.4s ease-in-out infinite;
+}
+.session-diff-ai-skeleton span:nth-child(1) { width: 70%; }
+.session-diff-ai-skeleton span:nth-child(2) { width: 90%; animation-delay: 0.15s; }
+.session-diff-ai-skeleton span:nth-child(3) { width: 45%; animation-delay: 0.3s; }
 @keyframes walnut-ai-shimmer {
   0%, 100% { opacity: 0.45; }
   50% { opacity: 1; }
 }
+@media (prefers-reduced-motion: reduce) {
+  .session-diff-ai-skeleton span { animation: none; opacity: 0.6; }
+}
+/* Toolbar ✦ toggle */
+.session-diff-ai-toggle {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.session-diff-ai-toggle.is-active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
 /* Rendered-markdown view of a changed .md file */
 .session-diff-rendered {
   padding: 24px 32px 80px;

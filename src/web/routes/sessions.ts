@@ -1342,6 +1342,45 @@ sessionsRouter.get('/:sessionId/changes/file', async (req: Request, res: Respons
   }
 })
 
+// GET /api/sessions/:sessionId/changes/summary?path=<abs> — a short AI summary
+// of ONE changed file (what it does + its role in the changeset). Cache-first
+// (content-hash on disk); a miss makes one cheap fast-model call. Deadlines:
+// content fetch 15s / siblings 2.5s / model 20s inside the core module, plus a
+// 30s overall cap HERE (the content path rides daemon RPCs — house rule:
+// answer degraded, never pin a browser connection). Error contract the client
+// depends on: 503 + {code:'ai_disabled'} is the ONLY signal that permanently
+// hides the feature; 422 = never-summarizable file (hidden, no retry); other
+// statuses show "unavailable · Retry".
+sessionsRouter.get('/:sessionId/changes/summary', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const rawPath = req.query.path
+    const filePath = typeof rawPath === 'string' ? rawPath : ''
+    if (!filePath) { res.status(400).json({ error: 'path query param required (exactly one)' }); return }
+    let deadline: NodeJS.Timeout | undefined
+    try {
+      const { summarizeSessionFileChange } = await import('../../core/diff-summary.js')
+      const timeout = new Promise<never>((_, reject) => {
+        deadline = setTimeout(() => reject(new SessionControlError('Summary timed out', 504)), 30_000)
+      })
+      res.json(await Promise.race([
+        summarizeSessionFileChange(String(req.params.sessionId), filePath),
+        timeout,
+      ]))
+    } catch (err) {
+      // DiffSummaryError extends SessionControlError — one check covers both.
+      if (err instanceof SessionControlError) {
+        res.status(err.statusCode).json({ error: err.message, ...(err.extra ?? {}) })
+        return
+      }
+      throw err
+    } finally {
+      clearTimeout(deadline)
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
 // GET /api/sessions/:sessionId/plan — read plan content for a plan session
 // (or its source plan session). Core logic lives in
 // core/sessions/session-extras.ts (getSessionPlanPayload) — shared with the

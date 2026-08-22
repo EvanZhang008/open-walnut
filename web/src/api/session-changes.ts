@@ -99,6 +99,38 @@ export async function fetchSessionFileChange(
   );
 }
 
+/** AI summary of one changed file (Changed tab's ✦ strip).
+ *  Mirrors the server's DiffSummaryResult DTO 1:1 — keep in sync. */
+export interface FileChangeSummary {
+  filePath: string;
+  relPath: string;
+  /** Short prose (may contain `backtick` identifiers) — complexity-scaled. */
+  summary: string;
+  model: string;
+  /** True when served from the content-hash cache (no model call). */
+  cached: boolean;
+  hash: string;
+}
+
+/**
+ * Fetch the AI summary for one changed file. Server is cache-first; a cold
+ * call takes a few seconds (one cheap model call), so the timeout is generous
+ * and callers show a skeleton meanwhile. 35s = the route's own 30s overall
+ * deadline + margin; while pending this holds one of the browser's 6 fetch
+ * slots, which is safe only because callers abort on unmount/file-switch.
+ */
+export async function fetchFileChangeSummary(
+  sessionId: string,
+  filePath: string,
+  opts?: { signal?: AbortSignal },
+): Promise<FileChangeSummary> {
+  return apiGet<FileChangeSummary>(
+    `/api/sessions/${sessionId}/changes/summary`,
+    { path: filePath },
+    { signal: opts?.signal, timeoutMs: 35_000 },
+  );
+}
+
 /**
  * Lightweight changed-files fetch for quick-access lists (Files tab): same
  * compute/cache as the full call but before/after are stripped server-side
