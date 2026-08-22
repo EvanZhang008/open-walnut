@@ -618,11 +618,23 @@ function FileDiffPane({
   // re-runs this effect until no small between-gap remains (bounded by the
   // number of hunks). The file's head/tail gaps keep their bars: auto-showing
   // dozens of leading imports would be noise, not context.
+  //
+  // triedRef is the no-progress brake: if expandRange can't actually reveal a
+  // range (truncated/partial `before` content) but still returns a fresh hunks
+  // identity, retrying the same range forever would wedge the whole tab in a
+  // render loop. Each range is attempted ONCE per file/source.
+  const autoExpandTriedRef = useRef<Set<string>>(new Set());
+  useEffect(() => { autoExpandTriedRef.current.clear(); }, [change.filePath, change.before]);
   useEffect(() => {
     const gaps = computeExpandGaps(hunks, oldSourceLineCount(change.before));
-    const small = gaps.find((g) => g.hunkIndex > 0 && g.hunkIndex < hunks.length && g.lines <= UNFOLD_CHUNK);
-    if (small) expandRange(small.all[0], small.all[1]);
-  }, [hunks, change.before, expandRange]);
+    const small = gaps.find((g) =>
+      g.hunkIndex > 0 && g.hunkIndex < hunks.length && g.lines <= UNFOLD_CHUNK
+      && !autoExpandTriedRef.current.has(`${g.all[0]}:${g.all[1]}`));
+    if (small) {
+      autoExpandTriedRef.current.add(`${small.all[0]}:${small.all[1]}`);
+      expandRange(small.all[0], small.all[1]);
+    }
+  }, [hunks, change.filePath, change.before, expandRange]);
 
   // Added files have no "before" — a split view would show an empty left pane.
   // Force unified so the whole new file reads as one continuous green column
@@ -1562,25 +1574,14 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     [pending, selectedChange],
   );
 
-  if (loading && !data) {
-    return <div className="session-diff-view session-diff-loading"><LoadingSpinner /></div>;
-  }
-
-  if (error) {
-    return (
-      <div className="session-diff-view session-diff-error">
-        <div className="session-diff-error-box">
-          {ICON_WARNING} <span>Couldn't load changes: {error}</span>
-          <button className="btn btn-sm" onClick={() => load(true)}>Retry</button>
-        </div>
-      </div>
-    );
-  }
-
   const empty = !data || data.fileCount === 0;
 
-  return (
-    <div className="session-diff-view" ref={containerRef} onMouseUp={handleMouseUp}>
+  // The toolbar renders in EVERY state — loading and error included. A git
+  // base on a huge remote repo can take 30s and then 502 (daemon git.diff
+  // timeout); if the spinner/error replaced the toolbar, the Compare picker
+  // would be unreachable and — with base/scope persisted per session — every
+  // re-entry would replay the same doomed fetch with no way out.
+  const toolbar = (
       <div className="session-diff-toolbar">
         {/* VS Code-style layout toggle — same control as the Files tab. */}
         <button
@@ -1594,7 +1595,7 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
           {treeCollapsed ? ICON_PANEL_LEFT : ICON_PANEL_LEFT_FILLED}
         </button>
         <span className="session-diff-toolbar-title">
-          {empty ? 'No file changes' : `${data!.fileCount} file${data!.fileCount === 1 ? '' : 's'} changed`}
+          {data ? (empty ? 'No file changes' : `${data.fileCount} file${data.fileCount === 1 ? '' : 's'} changed`) : (loading ? 'Loading…' : 'Changes')}
           {refreshingBg && <span className="session-diff-refreshing" title="List served from cache — re-scanning in the background">↻</span>}
         </span>
         <div className="session-diff-base-wrap">
@@ -1663,6 +1664,39 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
         </div>
         {barRightSlot}
       </div>
+  );
+
+  if (loading && !data) {
+    return (
+      <div className="session-diff-view" ref={containerRef}>
+        {toolbar}
+        <div className="session-diff-loading"><LoadingSpinner /></div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="session-diff-view session-diff-error" ref={containerRef}>
+        {toolbar}
+        <div className="session-diff-error-box">
+          {ICON_WARNING} <span>Couldn't load changes: {error}</span>
+          <button className="btn btn-sm" onClick={() => load(true)}>Retry</button>
+          {/* Git bases run on the (possibly remote) repo and can time out on
+              huge monorepos — offer the always-works comparison as a way out. */}
+          {base !== 'session' && (
+            <button className="btn btn-sm" onClick={() => { setBase('session'); setScope('session'); }}>
+              View this session's changes instead
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="session-diff-view" ref={containerRef} onMouseUp={handleMouseUp}>
+      {toolbar}
 
       {empty ? (
         <div className="session-diff-empty">
