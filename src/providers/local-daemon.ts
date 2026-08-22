@@ -45,6 +45,29 @@ export function getLocalDaemonBinaryName(
 }
 
 /**
+ * First existing candidate for THIS host's daemon binary, or null when none of
+ * the directories has it (the caller then falls back to the Node source daemon).
+ *
+ * Exact-name match only, on purpose: a Linux host must never execute the darwin
+ * binary sitting next to it. That was the shape of issue #11 — the name was
+ * hardcoded to daemon-darwin-arm64, so a Linux x64 box spawned a Mach-O file,
+ * no port file ever appeared, and every local session failed after the 10s
+ * timeout. "No binary" is a working degraded path (source fallback under node);
+ * "the wrong binary" is a dead end with a confusing error.
+ */
+export function pickDaemonBinary(
+  dirs: string[],
+  binaryName: string,
+  exists: (p: string) => boolean = fs.existsSync,
+): string | null {
+  for (const dir of dirs) {
+    const candidate = path.join(dir, binaryName)
+    if (exists(candidate)) return candidate
+  }
+  return null
+}
+
+/**
  * Parent-liveness contract for spawned daemons.
  *
  * An ISOLATED-dir daemon (Playwright test-server, sandbox, ephemeral demo)
@@ -468,14 +491,11 @@ export class LocalDaemon {
   private findDaemonBinary(): string {
     if (this.overrideBinaryPath) return this.overrideBinaryPath
     // DAEMON_BINARIES_DIR is the canonical build output location
-    const binaryName = getLocalDaemonBinaryName()
-    const candidates = [
-      path.join(DAEMON_BINARIES_DIR, binaryName),
-      path.join(__dirname, '..', '..', 'dist', 'daemon-binaries', binaryName),
-    ]
-    for (const p of candidates) {
-      if (fs.existsSync(p)) return p
-    }
+    const hit = pickDaemonBinary(
+      [DAEMON_BINARIES_DIR, path.join(__dirname, '..', '..', 'dist', 'daemon-binaries')],
+      getLocalDaemonBinaryName(),
+    )
+    if (hit) return hit
     // No compiled binary — the published npm package (bun binaries are ~280MB
     // and excluded from the tarball), or a non-darwin-arm64 host. Materialize
     // the embedded daemon source (same code SSH source-deploys ship to remote

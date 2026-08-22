@@ -54,7 +54,20 @@ No company-internal names, personal info, internal URLs, credentials, or interna
 ```bash
 npm run dev:prod        # Build all → restart 3456 with latest code
 npm run dev:ephemeral   # Ephemeral server (random port, temp data, auto-cleans)
+
+# Verify the deploy script itself WITHOUT deploying: runs every guard, then stops
+# before build / server kill / launch. WALNUT_DEVPROD_PORT is honoured only here.
+WALNUT_DEVPROD_DRY_RUN=1 WALNUT_DEVPROD_PORT=35999 TMPDIR=/tmp/dry bash scripts/dev-prod.sh
 ```
+
+**dev-prod.sh must stay portable.** Issue #11: the server log was pinned to `/private/tmp`,
+a macOS-only path, so a Linux deploy killed the live server and then failed to start its
+replacement. Two rules it now encodes: prove every external prerequisite (a writable log)
+BEFORE the first destructive step, and never assume a macOS-only tool (listener detection
+probes `lsof` → `ss` → `fuser`, and refuses to run when none exists rather than failing
+open and starting a second server against the same data dir). Ratchets:
+`tests/scripts/dev-prod-portability.test.ts` (the dry run executes the whole script, on
+Linux too, in CI's quick tier) and `tests/scripts/cross-platform-ratchet.test.ts`.
 
 **⚠️ Launch dev:prod from a non-niced shell.** A server started from a niced parent (e.g. a
 background agent session) inherits the positive nice and gets scheduler-starved under machine

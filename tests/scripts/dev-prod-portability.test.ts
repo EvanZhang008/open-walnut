@@ -11,10 +11,10 @@
  *      ss or fuser), and never silently fails open — a guard that sees "no
  *      server" when one is running starts a competitor against the same data dir.
  *
- * The script is never EXECUTED here: PORT is hardcoded to production 3456, so a
- * run in a test process could touch the real server. Ordering is asserted
- * statically; the shell logic is exercised by slicing the helper out and running
- * that slice alone.
+ * The script is only executed in DRY-RUN mode (WALNUT_DEVPROD_DRY_RUN=1), which
+ * runs every guard and stops before the build, the server kill and the launch.
+ * A plain run would target production :3456. Ordering of the guards is asserted
+ * statically; individual shell helpers are exercised by slicing them out.
  */
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
@@ -78,6 +78,76 @@ describe('dev-prod.sh server log path', () => {
     const logPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'devprod-log-')), 'server.log')
     const good = runBash(`SERVER_LOG=${logPath}\n${guard}`)
     expect(good.status).toBe(0)
+  })
+})
+
+// The script refuses to deploy from a niced shell (a starved server looks like an
+// app bug). A background agent session can be niced, and it would then fail these
+// runs for a reason that has nothing to do with portability.
+const shellNice = Number(runBash('ps -o ni= -p $$').stdout.trim() || '0')
+// A host with no port probe at all is a legitimate script refusal, not a failure
+// to assert here (the "never falls open" test below covers that path directly).
+const hasProbe = runBash('command -v lsof || command -v ss || command -v fuser').status === 0
+
+describe.skipIf(shellNice > 0 || !hasProbe)('dev-prod.sh dry run (whole script, this OS)', () => {
+  /** A port nothing is listening on right now. */
+  async function freePort(): Promise<number> {
+    const srv = net.createServer()
+    const port = await new Promise<number>((resolve, reject) => {
+      srv.once('error', reject)
+      srv.listen(0, '127.0.0.1', () => resolve((srv.address() as net.AddressInfo).port))
+    })
+    await new Promise<void>((r) => srv.close(() => r()))
+    return port
+  }
+
+  /**
+   * Runs the REAL script through every guard on whatever platform the suite runs
+   * on — macOS locally, Linux in CI. Isolated: a free port, its own TMPDIR (so the
+   * lock and cooldown stamps never touch a real deploy's) and its own log.
+   */
+  async function dryRun(env: Record<string, string> = {}): Promise<{
+    status: number; stdout: string; stderr: string; tmp: string
+  }> {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'devprod-dry-'))
+    const args = Object.entries({
+      WALNUT_DEVPROD_DRY_RUN: '1',
+      WALNUT_DEVPROD_PORT: String(await freePort()),
+      TMPDIR: tmp,
+      WALNUT_SERVER_LOG: path.join(tmp, 'server.log'),
+      ...env,
+    }).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(' ')
+    return { ...runBash(`${args} bash ${JSON.stringify(SCRIPT)}`), tmp }
+  }
+
+  it('passes every guard and stops before anything is deployed', async () => {
+    const r = await dryRun()
+    expect(r.stderr + r.stdout).toMatch(/every guard passed on \w+/)
+    expect(r.stdout).toMatch(/nothing was deployed/)
+    expect(r.status).toBe(0)
+    // No build, no kill, no launch.
+    expect(r.stdout).not.toMatch(/web:build|Server ready|Reaping stray/)
+  })
+
+  it('still fails fast on an unwritable log', async () => {
+    const r = await dryRun({ WALNUT_SERVER_LOG: `/definitely-not-a-dir-${process.pid}/server.log` })
+    expect(r.status).toBe(1)
+    expect(r.stderr).toMatch(/Cannot append to server log/)
+    expect(r.stdout).not.toMatch(/every guard passed/)
+  })
+
+  it('leaves no cooldown stamp and no lock — must not block a real deploy', async () => {
+    const r = await dryRun()
+    expect(r.status).toBe(0)
+    expect(fs.existsSync(path.join(r.tmp, 'open-walnut-dev-prod.last-attempt'))).toBe(false)
+    expect(fs.existsSync(path.join(r.tmp, 'open-walnut-dev-prod.lock'))).toBe(false)
+  })
+
+  it('honours the port override only in dry-run mode', () => {
+    // The override must never let a real deploy start a second server against the
+    // production data dir, so it is read inside the dry-run branch only.
+    const decl = script.slice(0, script.indexOf('LOCK_DIR='))
+    expect(decl).toMatch(/if \[\[ "\$DRY_RUN" == "1" \]\]; then\n\s*PORT="\$\{WALNUT_DEVPROD_PORT:-\$PORT\}"/)
   })
 })
 

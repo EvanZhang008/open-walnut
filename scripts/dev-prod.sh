@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Dry run: execute every guard, then stop before the first mutating step (build,
+# server kill, launchd submit). CI runs this on Linux so a macOS-only assumption
+# in the deploy path fails a push instead of an actual deploy — the class of bug
+# behind issue #11. The port override is honoured ONLY in dry-run: a real deploy
+# on another port would put a second server on the production data dir, which is
+# a task-deletion shape here.
+DRY_RUN="${WALNUT_DEVPROD_DRY_RUN:-0}"
 PORT=3456
+if [[ "$DRY_RUN" == "1" ]]; then
+  PORT="${WALNUT_DEVPROD_PORT:-$PORT}"
+fi
 LOCK_DIR="${TMPDIR:-/tmp}/open-walnut-dev-prod.lock"
 # Plain /tmp, not /private/tmp: on macOS /tmp is a symlink to /private/tmp so this
 # is the same inode as before (existing log, existing fds, unchanged), while Linux
@@ -179,7 +189,8 @@ trap release_lock EXIT
 
 # Arm the attempt cooldown BEFORE anything destructive. Written here (not after a
 # successful deploy) so a run that dies mid-flight still rate-limits its retry.
-date +%s > "$ATTEMPT_STAMP"
+# A dry run deploys nothing, so it must not consume a real deploy's cooldown.
+[[ "$DRY_RUN" == "1" ]] || date +%s > "$ATTEMPT_STAMP"
 
 # $SERVER_LOG is append-only across every deploy and had no bound — it reached
 # 545 MB (2026-07-25), which is both a disk risk and a real cost for the log
@@ -195,6 +206,12 @@ if [[ -f "$SERVER_LOG" ]]; then
     : > "$SERVER_LOG"
     echo "Rotated $SERVER_LOG ($(( 10#$log_bytes / 1024 / 1024 )) MB) → $SERVER_LOG.1"
   fi
+fi
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "[dry-run] every guard passed on $(uname -s) (probe: $PORT_PROBE, log: $SERVER_LOG)."
+  echo "[dry-run] stopping before build, server kill and launch — nothing was deployed."
+  exit 0
 fi
 
 npm run web:build
